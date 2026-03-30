@@ -49,33 +49,45 @@ def test_public_guidance_uses_current_entrypoints_and_canonical_root():
 def test_workspace_local_skill_skeletons_exist_and_stay_public():
     repo = Path(__file__).resolve().parents[1]
     agents_root = repo / ".agents"
-    assert (agents_root / "README.md").exists()
+    agents_readme = (agents_root / "README.md").read_text(encoding="utf-8").lower()
+    assert "/vllm-workspace" in agents_readme
+    assert "tools/vaws.py" in agents_readme
+    assert "./setup" in agents_readme
+    assert "./sync" in agents_readme
+    assert ".workspace.local/" in agents_readme
+    assert ".workspace.local/sessions/<session>/manifest.yaml" in agents_readme
+    assert "/vllm-workspace/.vaws/sessions/<session>/manifest.yaml" in agents_readme
+    assert "/workspace/vllm_workspace" not in agents_readme
 
-    skill_names = (
-        "workspace-bootstrap",
-        "workspace-session-switch",
-        "workspace-sync",
-        "profiling-analysis",
-    )
-    for skill_name in skill_names:
+    expected_skill_content = {
+        "workspace-bootstrap": (
+            "/vllm-workspace",
+            "tools/vaws.py init",
+            "tools/vaws.py doctor",
+        ),
+        "workspace-session-switch": (
+            ".workspace.local/state.json",
+            ".workspace.local/sessions/<session>/manifest.yaml",
+            "/vllm-workspace/.vaws/sessions/<session>/manifest.yaml",
+            "tools/vaws.py session create",
+            "tools/vaws.py session switch",
+        ),
+        "workspace-sync": (
+            "tools/vaws.py sync",
+            "./sync",
+            "origin/main",
+        ),
+        "profiling-analysis": (
+            "/vllm-workspace",
+            "active feature session",
+        ),
+    }
+    for skill_name, required_snippets in expected_skill_content.items():
         skill_path = agents_root / "skills" / skill_name / "SKILL.md"
         assert skill_path.exists()
         text = skill_path.read_text(encoding="utf-8").lower()
         assert "workspace-local" in text
         assert "global skill installer" not in text
         assert "/workspace/vllm_workspace" not in text
-
-
-def test_session_skill_aligns_with_runtime_session_manifest_location():
-    repo = Path(__file__).resolve().parents[1]
-    text = (
-        repo
-        / ".agents"
-        / "skills"
-        / "workspace-session-switch"
-        / "SKILL.md"
-    ).read_text(encoding="utf-8").lower()
-
-    assert ".workspace.local/" in text
-    assert "/vllm-workspace/.vaws/sessions/<session>/manifest.yaml" in text
-    assert ".workspace.local/sessions" not in text
+        for snippet in required_snippets:
+            assert snippet in text
