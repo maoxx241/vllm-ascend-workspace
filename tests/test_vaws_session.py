@@ -87,6 +87,14 @@ def test_session_create_rejects_unsafe_session_name(vaws_repo):
     assert not (vaws_repo / ".workspace.local" / "evil" / "manifest.yaml").exists()
 
 
+def test_session_create_rejects_dot_session_name(vaws_repo):
+    seed_overlay(vaws_repo, target_name="single-default")
+    result = run_vaws(vaws_repo, "session", "create", ".")
+    assert result.returncode == 1
+    output = (result.stdout + result.stderr).lower()
+    assert "invalid session name" in output
+
+
 def test_session_create_fails_when_overlay_state_is_uninitialized(vaws_repo):
     result = run_vaws(vaws_repo, "session", "create", "feat_x")
     assert result.returncode == 1
@@ -123,3 +131,17 @@ def test_session_create_uses_runtime_workspace_root_from_state(vaws_repo):
         / "manifest.yaml"
     )
     assert manifest["workspace_root"] == "/custom-workspace"
+
+
+def test_session_switch_fails_when_overlay_state_is_missing(vaws_repo):
+    seed_session(vaws_repo, "feat_x")
+    state_path = vaws_repo / ".workspace.local" / "state.json"
+    state_path.unlink()
+
+    result = run_vaws(vaws_repo, "session", "switch", "feat_x")
+
+    assert result.returncode == 1
+    output = (result.stdout + result.stderr).lower()
+    assert "bootstrap" in output
+    assert ".workspace.local" in output
+    assert not state_path.exists()

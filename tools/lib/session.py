@@ -13,11 +13,14 @@ def _session_manifest_path(paths: RepoPaths, session_name: str) -> Path:
 def _is_valid_session_name(session_name: str) -> bool:
     if not isinstance(session_name, str):
         return False
-    if not session_name.strip():
+    normalized_name = session_name.strip()
+    if not normalized_name:
         return False
-    if "/" in session_name or "\\" in session_name:
+    if normalized_name == ".":
         return False
-    if ".." in session_name:
+    if "/" in normalized_name or "\\" in normalized_name:
+        return False
+    if ".." in normalized_name:
         return False
     return True
 
@@ -86,10 +89,8 @@ def switch_session(paths: RepoPaths, session_name: str) -> int:
         print(f"unknown session: {session_name}")
         return 1
 
-    try:
-        state = read_state(paths)
-    except RuntimeError as exc:
-        print(str(exc))
+    state = _read_state_for_session_create(paths)
+    if state is None:
         return 1
 
     state["current_session"] = session_name
