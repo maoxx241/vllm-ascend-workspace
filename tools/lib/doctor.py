@@ -23,7 +23,7 @@ def doctor(paths: RepoPaths) -> int:
     state_file = paths.local_overlay / "state.json"
     try:
         json.loads(state_file.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         print("invalid state file: .workspace.local/state.json is not valid JSON")
         return 1
 
