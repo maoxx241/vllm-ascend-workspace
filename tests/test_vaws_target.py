@@ -135,3 +135,39 @@ def test_target_ensure_fails_when_target_runtime_mapping_is_incomplete(vaws_repo
     output = (result.stdout + result.stderr).lower()
     assert "runtime" in output
     assert "incomplete" in output
+
+
+def test_target_ensure_fails_when_target_runtime_ssh_port_is_bool(vaws_repo):
+    seed_overlay(vaws_repo, target_name="single-default")
+
+    targets = yaml.safe_load(
+        (vaws_repo / ".workspace.local" / "targets.yaml").read_text(encoding="utf-8")
+    )
+    targets["targets"]["single-default"]["runtime"]["ssh_port"] = True
+    (vaws_repo / ".workspace.local" / "targets.yaml").write_text(
+        yaml.safe_dump(targets), encoding="utf-8"
+    )
+
+    result = run_vaws(vaws_repo, "target", "ensure", "single-default")
+
+    assert result.returncode == 1
+    output = (result.stdout + result.stderr).lower()
+    assert "ssh_port" in output
+
+
+def test_target_ensure_fails_when_target_runtime_ssh_port_is_out_of_range(vaws_repo):
+    seed_overlay(vaws_repo, target_name="single-default")
+
+    targets = yaml.safe_load(
+        (vaws_repo / ".workspace.local" / "targets.yaml").read_text(encoding="utf-8")
+    )
+    targets["targets"]["single-default"]["runtime"]["ssh_port"] = 70000
+    (vaws_repo / ".workspace.local" / "targets.yaml").write_text(
+        yaml.safe_dump(targets), encoding="utf-8"
+    )
+
+    result = run_vaws(vaws_repo, "target", "ensure", "single-default")
+
+    assert result.returncode == 1
+    output = (result.stdout + result.stderr).lower()
+    assert "ssh_port" in output

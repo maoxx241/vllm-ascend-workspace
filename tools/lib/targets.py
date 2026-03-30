@@ -74,10 +74,17 @@ def ensure_target(paths: RepoPaths, target_name: str) -> int:
             f"target '{target_name}' runtime.container_name must be a non-empty string"
         )
         return 1
-    if not isinstance(persisted_runtime["ssh_port"], int):
+    ssh_port = persisted_runtime["ssh_port"]
+    if isinstance(ssh_port, bool) or not isinstance(ssh_port, int):
         print(
             "invalid target config: "
             f"target '{target_name}' runtime.ssh_port must be an integer"
+        )
+        return 1
+    if ssh_port < 1 or ssh_port > 65535:
+        print(
+            "invalid target config: "
+            f"target '{target_name}' runtime.ssh_port must be in range 1..65535"
         )
         return 1
     if not isinstance(persisted_runtime["bootstrap_mode"], str) or not persisted_runtime[
