@@ -12,6 +12,8 @@ def _read_targets_config(paths: RepoPaths) -> Dict[str, Any]:
         loaded = yaml.safe_load(targets_file.read_text(encoding="utf-8"))
     except OSError as exc:
         raise RuntimeError("cannot read target config: .workspace.local/targets.yaml") from exc
+    except UnicodeDecodeError as exc:
+        raise RuntimeError("invalid target config: .workspace.local/targets.yaml") from exc
     except yaml.YAMLError as exc:
         raise RuntimeError("invalid target config: .workspace.local/targets.yaml") from exc
 
@@ -40,9 +42,11 @@ def ensure_target(paths: RepoPaths, target_name: str) -> int:
         return 1
 
     runtime = target.get("runtime")
-    persisted_runtime = {}
-    if isinstance(runtime, dict):
-        persisted_runtime = dict(runtime)
+    if not isinstance(runtime, dict):
+        print(f"invalid target config: target '{target_name}' missing runtime map")
+        return 1
+
+    persisted_runtime = dict(runtime)
     if not isinstance(persisted_runtime.get("workspace_root"), str):
         persisted_runtime["workspace_root"] = "/vllm-workspace"
 
