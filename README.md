@@ -2,11 +2,11 @@
 
 Public workspace-local control repository for coordinating vLLM and vLLM-Ascend work.
 
-## Stable entrypoints
+## Planned entrypoints
 
-- `tools/vaws.py` is the primary CLI.
-- `./setup` is the compatibility bootstrap entrypoint.
-- `./sync` is the compatibility sync entrypoint.
+- `tools/vaws.py` is the intended primary CLI.
+- `./setup` will act as the bootstrap compatibility entrypoint.
+- `./sync` will act as the compatibility sync entrypoint.
 
 ## Runtime root
 

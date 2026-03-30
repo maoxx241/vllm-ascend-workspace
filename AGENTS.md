@@ -5,8 +5,8 @@ This repository is a public-facing control workspace for vLLM Ascend development
 ## Canonical constants
 
 - Runtime root: `/vllm-workspace`
-- Primary command surface: `tools/vaws.py`
-- Compatibility entrypoints: `./setup`, `./sync`
+- Planned primary command surface: `tools/vaws.py`
+- Planned compatibility entrypoints: `./setup`, `./sync`
 
 ## Commit hygiene
 
