@@ -2,8 +2,8 @@
 
 - Work from the checked-out workspace repository root.
 - Treat `/vllm-workspace` as the canonical runtime root for container actions.
-- Use `tools/vaws.py` as the stable implementation entrypoint.
-- Keep compatibility commands `./setup` and `./sync` as shims.
+- Use `tools/vaws.py` as the planned implementation entrypoint.
+- Keep compatibility commands `./setup` and `./sync` as planned shims.
 - Never embed private credentials, hosts, or local-only filesystem paths in tracked files.
 - Never commit `.workspace.local/` and treat it as local overlay state.
 - Preserve generic defaults that do not assume private environments.

@@ -10,8 +10,8 @@ targets:
   single-default:
     hosts: [host-a]
     runtime:
-      # Baseline package reference; override for local/runtime-specific deployments.
-      image_ref: quay.nju.edu.cn/ascend/vllm-ascend:latest
+      # Baseline package example: quay.nju.edu.cn/ascend/vllm-ascend:latest
+      image_ref: registry.example.com/ascend/vllm-ascend:<tag>
       container_name: vaws-<owner_id>
       ssh_port: 63269
       workspace_root: /vllm-workspace
