@@ -8,6 +8,7 @@ if __package__ in (None, ""):
 
 from tools.lib.config import RepoPaths
 from tools.lib.doctor import doctor, init
+from tools.lib.gitflow import default_base_ref
 from tools.lib.session import create_session, status_session, switch_session
 from tools.lib.targets import ensure_target
 
@@ -17,6 +18,14 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("doctor")
     subparsers.add_parser("init")
+    subparsers.add_parser("sync")
+
+    remotes_parser = subparsers.add_parser("remotes")
+    remotes_subparsers = remotes_parser.add_subparsers(
+        dest="remotes_command",
+        required=True,
+    )
+    remotes_subparsers.add_parser("normalize")
 
     target_parser = subparsers.add_parser("target")
     target_subparsers = target_parser.add_subparsers(dest="target_command", required=True)
@@ -45,6 +54,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         return doctor(paths)
     if args.command == "init":
         return init(paths)
+    if args.command == "sync":
+        print("sync: compatibility command available; no sync actions yet")
+        return 0
+    if args.command == "remotes" and args.remotes_command == "normalize":
+        print(default_base_ref(paths))
+        return 0
     if args.command == "target" and args.target_command == "ensure":
         return ensure_target(paths, args.target_name)
     if args.command == "session" and args.session_command == "create":
