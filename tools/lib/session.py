@@ -10,16 +10,56 @@ def _session_manifest_path(paths: RepoPaths, session_name: str) -> Path:
     return paths.local_overlay / "sessions" / session_name / "manifest.yaml"
 
 
-def create_session(paths: RepoPaths, session_name: str) -> int:
+def _is_valid_session_name(session_name: str) -> bool:
+    if not isinstance(session_name, str):
+        return False
+    if not session_name.strip():
+        return False
+    if "/" in session_name or "\\" in session_name:
+        return False
+    if ".." in session_name:
+        return False
+    return True
+
+
+def _read_state_for_session_create(paths: RepoPaths):
+    if not paths.local_overlay.exists() or not paths.local_overlay.is_dir():
+        print("local overlay is not initialized: run `vaws init` to bootstrap .workspace.local/")
+        return None
+
+    state_file = paths.local_overlay / "state.json"
+    if not state_file.is_file():
+        print(
+            "local overlay is not initialized: run `vaws init` to bootstrap .workspace.local/state.json"
+        )
+        return None
+
     try:
-        state = read_state(paths)
+        return read_state(paths)
     except RuntimeError as exc:
         print(str(exc))
+        return None
+
+
+def create_session(paths: RepoPaths, session_name: str) -> int:
+    if not _is_valid_session_name(session_name):
+        print("invalid session name: must not contain path separators or '..'")
         return 1
+
+    state = _read_state_for_session_create(paths)
+    if state is None:
+        return 1
+
+    runtime = state.get("runtime")
+    workspace_root = "/vllm-workspace"
+    if isinstance(runtime, dict):
+        runtime_workspace_root = runtime.get("workspace_root")
+        if isinstance(runtime_workspace_root, str) and runtime_workspace_root.strip():
+            workspace_root = runtime_workspace_root
 
     manifest = {
         "name": session_name,
-        "workspace_root": "/vllm-workspace",
+        "workspace_root": workspace_root,
         "base_ref": "origin/main",
     }
     current_target = state.get("current_target")
@@ -37,6 +77,10 @@ def create_session(paths: RepoPaths, session_name: str) -> int:
 
 
 def switch_session(paths: RepoPaths, session_name: str) -> int:
+    if not _is_valid_session_name(session_name):
+        print("invalid session name: must not contain path separators or '..'")
+        return 1
+
     manifest_path = _session_manifest_path(paths, session_name)
     if not manifest_path.is_file():
         print(f"unknown session: {session_name}")
