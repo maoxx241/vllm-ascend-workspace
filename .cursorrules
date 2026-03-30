@@ -1,6 +1,6 @@
 # Workspace rules
 
-- Work from the public project root `/vllm-ascend-workspace`.
+- Work from the checked-out workspace repository root.
 - Treat `/vllm-workspace` as the canonical runtime root for container actions.
 - Use `tools/vaws.py` as the stable implementation entrypoint.
 - Keep compatibility commands `./setup` and `./sync` as shims.

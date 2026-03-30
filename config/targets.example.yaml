@@ -1,17 +1,17 @@
 hosts:
-  local-example:
-    host: 192.0.2.10
+  host-a:
+    host: 10.0.0.11
     port: 22
     login_user: root
-    auth_group: example
-    labels: [example, single]
+    auth_group: shared-lab-a
+    labels: [a3, 8npu]
 
 targets:
   single-default:
-    hosts: [local-example]
+    hosts: [host-a]
     runtime:
-      image_ref: quay.io/example/vllm-ascend-runtime:latest
-      container_name: vaws-single
+      image_ref: quay.nju.edu.cn/ascend/vllm-ascend:latest
+      container_name: vaws-<owner_id>
       ssh_port: 63269
       workspace_root: /vllm-workspace
       bootstrap_mode: host-then-container

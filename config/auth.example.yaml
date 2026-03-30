@@ -1,9 +1,11 @@
-git_auth:
-  preferred_transport: ssh
-  fallback: credential_helper
-  forbid_tokens_in_tracked_files: true
-
 host_auth:
-  method: ssh_agent
-  bootstrap_method: host_password_once
-  prefer_agent_forwarding: true
+  mode: bootstrap-password-then-ssh-key
+  credential_groups:
+    shared-lab-a:
+      username: root
+      source: prompt-or-local-secret
+
+git_auth:
+  mode: ssh-agent-forwarding
+  fallback:
+    mode: local-credential-provider-plugin
