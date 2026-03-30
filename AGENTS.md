@@ -5,15 +5,15 @@ This repository is a public-facing control workspace for vLLM Ascend development
 ## Canonical constants
 
 - Runtime root: `/vllm-workspace`
-- Planned primary command surface: `tools/vaws.py`
-- Planned compatibility entrypoints: `./setup`, `./sync`
+- Primary command surface: `tools/vaws.py`
+- Compatibility entrypoints: `./setup`, `./sync`
 
 ## Commit hygiene
 
 - `config/*.example.yaml` are the only tracked config templates for bootstrap guidance.
 - `.workspace.local/` must stay local-only and is never committed.
 - Do not commit credentials, private hosts, private paths, tokens, or keys.
-- `docs/superpowers/` is local process documentation and is not part of the main public repo.
+- `.agents/skills/` contains workspace-local public guidance, not global skill installers.
 
 ## Environment assumptions
 
