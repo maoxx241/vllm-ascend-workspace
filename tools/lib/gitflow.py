@@ -41,12 +41,17 @@ def default_base_ref(paths: RepoPaths) -> str:
     if not isinstance(workspace, dict):
         raise RuntimeError("invalid workspace config: .workspace.local/repos.yaml")
 
-    default_branch = workspace.get("default_branch")
-    if not isinstance(default_branch, str) or not default_branch.strip():
+    if "default_branch" not in workspace:
         return "origin/main"
+    default_branch = workspace["default_branch"]
+    if not isinstance(default_branch, str) or not default_branch.strip():
+        raise RuntimeError("invalid workspace config: .workspace.local/repos.yaml")
 
-    push_remote = workspace.get("push_remote")
-    if not isinstance(push_remote, str) or not push_remote.strip():
+    if "push_remote" not in workspace:
         push_remote = "origin"
+    else:
+        push_remote = workspace["push_remote"]
+        if not isinstance(push_remote, str) or not push_remote.strip():
+            raise RuntimeError("invalid workspace config: .workspace.local/repos.yaml")
 
     return f"{push_remote.strip()}/{default_branch.strip()}"

@@ -70,6 +70,23 @@ def test_remotes_normalize_fails_for_workspace_list(vaws_repo):
     assert "origin/main" not in output
 
 
+def test_remotes_normalize_fails_for_invalid_default_branch_type(vaws_repo):
+    overlay = vaws_repo / ".workspace.local"
+    overlay.mkdir()
+    (overlay / "repos.yaml").write_text(
+        yaml.safe_dump({"workspace": {"default_branch": ["main"]}}),
+        encoding="utf-8",
+    )
+
+    result = run_vaws(vaws_repo, "remotes", "normalize")
+
+    assert result.returncode == 1
+    output = (result.stdout + result.stderr).lower()
+    assert "invalid" in output
+    assert "repos.yaml" in output
+    assert "origin/main" not in output
+
+
 def test_remotes_normalize_fails_for_invalid_utf8_repos_config(vaws_repo):
     overlay = vaws_repo / ".workspace.local"
     overlay.mkdir()

@@ -41,9 +41,9 @@ def test_public_guidance_uses_current_entrypoints_and_canonical_root():
         assert "process docs" not in text
         assert "process documentation" not in text
 
-    assert "reference material" in readme
-    assert "reference material" in agents
-    assert "reference material" in cursorrules
+    assert ".agents/skills/" in readme
+    assert ".agents/skills/" in agents
+    assert ".agents/skills/" in cursorrules
 
 
 def test_workspace_local_skill_skeletons_exist_and_stay_public():
@@ -62,7 +62,7 @@ def test_workspace_local_skill_skeletons_exist_and_stay_public():
         assert skill_path.exists()
         text = skill_path.read_text(encoding="utf-8").lower()
         assert "workspace-local" in text
-        assert "reference material" in text
+        assert "global skill installer" not in text
         assert "/workspace/vllm_workspace" not in text
 
 
