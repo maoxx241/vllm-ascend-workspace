@@ -171,3 +171,21 @@ def test_target_ensure_fails_when_target_runtime_ssh_port_is_out_of_range(vaws_r
     assert result.returncode == 1
     output = (result.stdout + result.stderr).lower()
     assert "ssh_port" in output
+
+
+def test_target_ensure_defaults_blank_workspace_root(vaws_repo):
+    seed_overlay(vaws_repo, target_name="single-default")
+
+    targets = yaml.safe_load(
+        (vaws_repo / ".workspace.local" / "targets.yaml").read_text(encoding="utf-8")
+    )
+    targets["targets"]["single-default"]["runtime"]["workspace_root"] = ""
+    (vaws_repo / ".workspace.local" / "targets.yaml").write_text(
+        yaml.safe_dump(targets), encoding="utf-8"
+    )
+
+    result = run_vaws(vaws_repo, "target", "ensure", "single-default")
+
+    assert result.returncode == 0
+    state = read_json(vaws_repo / ".workspace.local" / "state.json")
+    assert state["runtime"]["workspace_root"] == "/vllm-workspace"

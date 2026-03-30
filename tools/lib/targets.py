@@ -96,7 +96,8 @@ def ensure_target(paths: RepoPaths, target_name: str) -> int:
         )
         return 1
 
-    if not isinstance(persisted_runtime.get("workspace_root"), str):
+    workspace_root = persisted_runtime.get("workspace_root")
+    if not isinstance(workspace_root, str) or not workspace_root.strip():
         persisted_runtime["workspace_root"] = "/vllm-workspace"
 
     try:
