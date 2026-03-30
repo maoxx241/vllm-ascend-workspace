@@ -5,6 +5,8 @@ import yaml
 from .config import RepoPaths
 from .runtime import read_state, write_state
 
+REQUIRED_RUNTIME_FIELDS = ("image_ref", "container_name", "ssh_port", "bootstrap_mode")
+
 
 def _read_targets_config(paths: RepoPaths) -> Dict[str, Any]:
     targets_file = paths.local_overlay / "targets.yaml"
@@ -46,7 +48,47 @@ def ensure_target(paths: RepoPaths, target_name: str) -> int:
         print(f"invalid target config: target '{target_name}' missing runtime map")
         return 1
 
+    missing_runtime_fields = [name for name in REQUIRED_RUNTIME_FIELDS if name not in runtime]
+    if missing_runtime_fields:
+        print(
+            "invalid target config: "
+            f"target '{target_name}' has incomplete runtime config (missing: "
+            f"{', '.join(missing_runtime_fields)})"
+        )
+        return 1
+
     persisted_runtime = dict(runtime)
+    if not isinstance(persisted_runtime["image_ref"], str) or not persisted_runtime[
+        "image_ref"
+    ].strip():
+        print(
+            "invalid target config: "
+            f"target '{target_name}' runtime.image_ref must be a non-empty string"
+        )
+        return 1
+    if not isinstance(persisted_runtime["container_name"], str) or not persisted_runtime[
+        "container_name"
+    ].strip():
+        print(
+            "invalid target config: "
+            f"target '{target_name}' runtime.container_name must be a non-empty string"
+        )
+        return 1
+    if not isinstance(persisted_runtime["ssh_port"], int):
+        print(
+            "invalid target config: "
+            f"target '{target_name}' runtime.ssh_port must be an integer"
+        )
+        return 1
+    if not isinstance(persisted_runtime["bootstrap_mode"], str) or not persisted_runtime[
+        "bootstrap_mode"
+    ].strip():
+        print(
+            "invalid target config: "
+            f"target '{target_name}' runtime.bootstrap_mode must be a non-empty string"
+        )
+        return 1
+
     if not isinstance(persisted_runtime.get("workspace_root"), str):
         persisted_runtime["workspace_root"] = "/vllm-workspace"
 

@@ -101,3 +101,37 @@ def test_target_ensure_fails_when_target_runtime_mapping_is_missing(vaws_repo):
     assert result.returncode == 1
     output = (result.stdout + result.stderr).lower()
     assert "runtime" in output
+
+
+def test_target_ensure_fails_when_target_runtime_mapping_is_incomplete(vaws_repo):
+    seed_overlay(vaws_repo, target_name="single-default")
+
+    targets_with_incomplete_runtime = {
+        "hosts": {
+            "host-a": {
+                "host": "10.0.0.11",
+                "port": 22,
+                "login_user": "root",
+                "auth_group": "shared-lab-a",
+                "labels": ["a3", "8npu"],
+            }
+        },
+        "targets": {
+            "single-default": {
+                "hosts": ["host-a"],
+                "runtime": {
+                    "workspace_root": "/vllm-workspace",
+                },
+            }
+        },
+    }
+    (vaws_repo / ".workspace.local" / "targets.yaml").write_text(
+        yaml.safe_dump(targets_with_incomplete_runtime), encoding="utf-8"
+    )
+
+    result = run_vaws(vaws_repo, "target", "ensure", "single-default")
+
+    assert result.returncode == 1
+    output = (result.stdout + result.stderr).lower()
+    assert "runtime" in output
+    assert "incomplete" in output
