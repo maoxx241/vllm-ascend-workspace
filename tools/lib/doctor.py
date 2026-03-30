@@ -1,3 +1,5 @@
+import json
+
 from .config import RepoPaths
 
 OVERLAY_FILES = ("targets.yaml", "repos.yaml", "auth.yaml", "state.json")
@@ -16,6 +18,13 @@ def doctor(paths: RepoPaths) -> int:
     ]
     if missing_files:
         print(f"missing overlay files: {', '.join(missing_files)}")
+        return 1
+
+    state_file = paths.local_overlay / "state.json"
+    try:
+        json.loads(state_file.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        print("invalid state file: .workspace.local/state.json is not valid JSON")
         return 1
 
     print("doctor: ok")

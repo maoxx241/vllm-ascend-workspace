@@ -31,6 +31,22 @@ def test_doctor_fails_when_required_overlay_files_are_missing(vaws_repo):
     assert "repos.yaml" in output
 
 
+def test_doctor_fails_when_state_json_is_invalid(vaws_repo):
+    overlay = vaws_repo / ".workspace.local"
+    overlay.mkdir()
+    (overlay / "targets.yaml").write_text("", encoding="utf-8")
+    (overlay / "repos.yaml").write_text("", encoding="utf-8")
+    (overlay / "auth.yaml").write_text("", encoding="utf-8")
+    (overlay / "state.json").write_text("{not-json", encoding="utf-8")
+
+    result = run_vaws(vaws_repo, "doctor")
+
+    assert result.returncode == 1
+    output = (result.stdout + result.stderr).lower()
+    assert "state.json" in output
+    assert "invalid" in output
+
+
 def test_init_writes_json_parseable_state_file(vaws_repo):
     result = run_vaws(vaws_repo, "init")
 
