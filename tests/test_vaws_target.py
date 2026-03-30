@@ -49,6 +49,7 @@ def test_target_ensure_records_runtime_endpoint(vaws_repo):
     state = read_json(vaws_repo / ".workspace.local" / "state.json")
     assert state["current_target"] == "single-default"
     assert state["runtime"]["workspace_root"] == "/vllm-workspace"
+    assert state["runtime"]["ssh_port"] == 63269
 
 
 def test_target_ensure_fails_when_target_is_missing(vaws_repo):

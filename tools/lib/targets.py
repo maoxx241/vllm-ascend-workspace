@@ -40,9 +40,11 @@ def ensure_target(paths: RepoPaths, target_name: str) -> int:
         return 1
 
     runtime = target.get("runtime")
-    workspace_root = "/vllm-workspace"
-    if isinstance(runtime, dict) and isinstance(runtime.get("workspace_root"), str):
-        workspace_root = runtime["workspace_root"]
+    persisted_runtime = {}
+    if isinstance(runtime, dict):
+        persisted_runtime = dict(runtime)
+    if not isinstance(persisted_runtime.get("workspace_root"), str):
+        persisted_runtime["workspace_root"] = "/vllm-workspace"
 
     try:
         state = read_state(paths)
@@ -51,7 +53,7 @@ def ensure_target(paths: RepoPaths, target_name: str) -> int:
         return 1
 
     state["current_target"] = target_name
-    state["runtime"] = {"workspace_root": workspace_root}
+    state["runtime"] = persisted_runtime
     write_state(paths, state)
 
     print(f"target ensure: ok ({target_name})")
