@@ -8,6 +8,7 @@ if __package__ in (None, ""):
 
 from tools.lib.config import RepoPaths
 from tools.lib.doctor import doctor, init
+from tools.lib.session import create_session, status_session, switch_session
 from tools.lib.targets import ensure_target
 
 
@@ -21,6 +22,17 @@ def build_parser() -> argparse.ArgumentParser:
     target_subparsers = target_parser.add_subparsers(dest="target_command", required=True)
     ensure_parser = target_subparsers.add_parser("ensure")
     ensure_parser.add_argument("target_name")
+
+    session_parser = subparsers.add_parser("session")
+    session_subparsers = session_parser.add_subparsers(
+        dest="session_command",
+        required=True,
+    )
+    create_parser = session_subparsers.add_parser("create")
+    create_parser.add_argument("session_name")
+    switch_parser = session_subparsers.add_parser("switch")
+    switch_parser.add_argument("session_name")
+    session_subparsers.add_parser("status")
     return parser
 
 
@@ -35,6 +47,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         return init(paths)
     if args.command == "target" and args.target_command == "ensure":
         return ensure_target(paths, args.target_name)
+    if args.command == "session" and args.session_command == "create":
+        return create_session(paths, args.session_name)
+    if args.command == "session" and args.session_command == "switch":
+        return switch_session(paths, args.session_name)
+    if args.command == "session" and args.session_command == "status":
+        return status_session(paths)
 
     parser.error(f"unknown command: {args.command}")
     return 2
