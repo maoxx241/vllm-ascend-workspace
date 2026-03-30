@@ -100,10 +100,8 @@ def switch_session(paths: RepoPaths, session_name: str) -> int:
 
 
 def status_session(paths: RepoPaths) -> int:
-    try:
-        state = read_state(paths)
-    except RuntimeError as exc:
-        print(str(exc))
+    state = _read_state_for_session_create(paths)
+    if state is None:
         return 1
 
     current_session = state.get("current_session")

@@ -145,3 +145,16 @@ def test_session_switch_fails_when_overlay_state_is_missing(vaws_repo):
     assert "bootstrap" in output
     assert ".workspace.local" in output
     assert not state_path.exists()
+
+
+def test_session_status_fails_when_overlay_state_is_missing(vaws_repo):
+    overlay = vaws_repo / ".workspace.local"
+    overlay.mkdir()
+
+    result = run_vaws(vaws_repo, "session", "status")
+
+    assert result.returncode == 1
+    output = (result.stdout + result.stderr).lower()
+    assert "bootstrap" in output
+    assert ".workspace.local" in output
+    assert not (overlay / "state.json").exists()
