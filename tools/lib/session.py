@@ -84,13 +84,13 @@ def switch_session(paths: RepoPaths, session_name: str) -> int:
         print("invalid session name: must not contain path separators or '..'")
         return 1
 
+    state = _read_state_for_session_create(paths)
+    if state is None:
+        return 1
+
     manifest_path = _session_manifest_path(paths, session_name)
     if not manifest_path.is_file():
         print(f"unknown session: {session_name}")
-        return 1
-
-    state = _read_state_for_session_create(paths)
-    if state is None:
         return 1
 
     state["current_session"] = session_name
