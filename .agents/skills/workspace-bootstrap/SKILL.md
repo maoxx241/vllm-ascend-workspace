@@ -13,4 +13,4 @@ Use this skill when initializing or repairing the local workspace overlay.
 - Prefer `config/*.example.yaml` as the public template source.
 - Keep secrets, private hosts, and private paths out of tracked files.
 
-This is workspace-local guidance only.
+This is workspace-local reference material only.

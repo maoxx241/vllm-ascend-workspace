@@ -36,12 +36,14 @@ def test_public_guidance_uses_current_entrypoints_and_canonical_root():
         assert "./sync" in text
         assert "/workspace/vllm_workspace" not in text
 
-    assert "planned entrypoints" not in readme
-    assert "planned implementation entrypoint" not in cursorrules
-    assert "planned compatibility entrypoints" not in cursorrules
-    assert "legacy canonical path references" in readme
-    assert "legacy canonical path references" not in agents
-    assert "legacy canonical path references" not in cursorrules
+    for text in (readme, agents, cursorrules):
+        assert "planned" not in text
+        assert "process docs" not in text
+        assert "process documentation" not in text
+
+    assert "reference material" in readme
+    assert "reference material" in agents
+    assert "reference material" in cursorrules
 
 
 def test_workspace_local_skill_skeletons_exist_and_stay_public():
@@ -60,6 +62,20 @@ def test_workspace_local_skill_skeletons_exist_and_stay_public():
         assert skill_path.exists()
         text = skill_path.read_text(encoding="utf-8").lower()
         assert "workspace-local" in text
-        assert "guidance" in text
-        assert "global skill installer" not in text
+        assert "reference material" in text
         assert "/workspace/vllm_workspace" not in text
+
+
+def test_session_skill_aligns_with_runtime_session_manifest_location():
+    repo = Path(__file__).resolve().parents[1]
+    text = (
+        repo
+        / ".agents"
+        / "skills"
+        / "workspace-session-switch"
+        / "SKILL.md"
+    ).read_text(encoding="utf-8").lower()
+
+    assert ".workspace.local/" in text
+    assert "/vllm-workspace/.vaws/sessions/<session>/manifest.yaml" in text
+    assert ".workspace.local/sessions" not in text

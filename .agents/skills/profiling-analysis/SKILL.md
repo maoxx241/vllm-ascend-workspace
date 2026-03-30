@@ -13,4 +13,4 @@ Use this skill when reviewing profiling output from the workspace runtime.
 - Avoid embedding private hosts, tokens, or local-only paths in shared guidance.
 - Prefer concise findings that map directly to the active feature session.
 
-This is workspace-local guidance only.
+This is workspace-local reference material only.

@@ -13,4 +13,4 @@ Use this skill when synchronizing repo state or compatibility wrappers.
 - Keep tracked files free of private hosts, tokens, and old canonical paths.
 - Use example configs and local overlay files for environment-specific values.
 
-This is workspace-local guidance only.
+This is workspace-local reference material only.

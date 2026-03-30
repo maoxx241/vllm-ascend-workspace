@@ -6,5 +6,5 @@
 - Keep compatibility commands `./setup` and `./sync` available.
 - Never embed private credentials, hosts, or local-only filesystem paths in tracked files.
 - Never commit `.workspace.local/` and treat it as local overlay state.
-- Treat `.agents/skills/` as workspace-local public guidance only.
+- Treat `.agents/skills/` as workspace-local reference material only.
 - Preserve generic defaults that do not assume private environments.

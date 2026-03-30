@@ -13,7 +13,7 @@ This repository is a public-facing control workspace for vLLM Ascend development
 - `config/*.example.yaml` are the only tracked config templates for bootstrap guidance.
 - `.workspace.local/` must stay local-only and is never committed.
 - Do not commit credentials, private hosts, private paths, tokens, or keys.
-- `.agents/skills/` contains workspace-local public guidance, not global skill installers.
+- `.agents/skills/` contains workspace-local reference material, not global skill installers.
 
 ## Environment assumptions
 
