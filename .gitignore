@@ -1,0 +1,5 @@
+.workspace.local/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+docs/superpowers/
