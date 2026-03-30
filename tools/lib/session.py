@@ -3,6 +3,7 @@ from pathlib import Path
 import yaml
 
 from .config import RepoPaths
+from .gitflow import default_base_ref
 from .runtime import read_state, write_state
 
 
@@ -60,10 +61,16 @@ def create_session(paths: RepoPaths, session_name: str) -> int:
         if isinstance(runtime_workspace_root, str) and runtime_workspace_root.strip():
             workspace_root = runtime_workspace_root
 
+    try:
+        base_ref = default_base_ref(paths)
+    except RuntimeError as exc:
+        print(str(exc))
+        return 1
+
     manifest = {
         "name": session_name,
         "workspace_root": workspace_root,
-        "base_ref": "origin/main",
+        "base_ref": base_ref,
     }
     current_target = state.get("current_target")
     if isinstance(current_target, str) and current_target.strip():

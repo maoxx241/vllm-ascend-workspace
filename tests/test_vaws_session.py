@@ -133,6 +133,46 @@ def test_session_create_uses_runtime_workspace_root_from_state(vaws_repo):
     assert manifest["workspace_root"] == "/custom-workspace"
 
 
+def test_session_create_uses_workspace_default_branch_and_push_remote(vaws_repo):
+    seed_overlay(vaws_repo, target_name="single-default")
+    repos_path = vaws_repo / ".workspace.local" / "repos.yaml"
+    repos_path.write_text(
+        yaml.safe_dump(
+            {
+                "workspace": {
+                    "default_branch": "release",
+                    "push_remote": "upstream",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = run_vaws(vaws_repo, "session", "create", "feat_release")
+
+    assert result.returncode == 0
+    manifest = read_yaml(
+        vaws_repo / ".workspace.local" / "sessions" / "feat_release" / "manifest.yaml"
+    )
+    assert manifest["base_ref"] == "upstream/release"
+
+
+def test_session_create_fails_for_corrupted_repos_config(vaws_repo):
+    seed_overlay(vaws_repo, target_name="single-default")
+    repos_path = vaws_repo / ".workspace.local" / "repos.yaml"
+    repos_path.write_text("workspace: [1, 2\n", encoding="utf-8")
+
+    result = run_vaws(vaws_repo, "session", "create", "feat_release")
+
+    assert result.returncode == 1
+    output = (result.stdout + result.stderr).lower()
+    assert "invalid" in output
+    assert "repos.yaml" in output
+    assert not (
+        vaws_repo / ".workspace.local" / "sessions" / "feat_release" / "manifest.yaml"
+    ).exists()
+
+
 def test_session_switch_fails_when_overlay_state_is_missing(vaws_repo):
     seed_session(vaws_repo, "feat_x")
     state_path = vaws_repo / ".workspace.local" / "state.json"

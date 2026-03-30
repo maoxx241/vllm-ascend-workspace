@@ -58,7 +58,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         print("sync: compatibility command available; no sync actions yet")
         return 0
     if args.command == "remotes" and args.remotes_command == "normalize":
-        print(default_base_ref(paths))
+        try:
+            print(default_base_ref(paths))
+        except RuntimeError as exc:
+            print(str(exc))
+            return 1
         return 0
     if args.command == "target" and args.target_command == "ensure":
         return ensure_target(paths, args.target_name)

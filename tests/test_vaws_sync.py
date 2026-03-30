@@ -33,6 +33,43 @@ def test_remotes_normalize_uses_overlay_workspace_default_branch(vaws_repo):
     assert "upstream/release" in result.stdout
 
 
+@pytest.mark.parametrize(
+    ("contents", "expected_message"),
+    [
+        ("workspace: [1, 2\n", "invalid"),
+        ("workspace: [\n", "invalid"),
+    ],
+)
+def test_remotes_normalize_fails_for_corrupted_repos_config(
+    vaws_repo, contents, expected_message
+):
+    overlay = vaws_repo / ".workspace.local"
+    overlay.mkdir()
+    (overlay / "repos.yaml").write_text(contents, encoding="utf-8")
+
+    result = run_vaws(vaws_repo, "remotes", "normalize")
+
+    assert result.returncode == 1
+    output = (result.stdout + result.stderr).lower()
+    assert expected_message in output
+    assert "repos.yaml" in output
+    assert "origin/main" not in output
+
+
+def test_remotes_normalize_fails_for_invalid_utf8_repos_config(vaws_repo):
+    overlay = vaws_repo / ".workspace.local"
+    overlay.mkdir()
+    (overlay / "repos.yaml").write_bytes(b"\xff")
+
+    result = run_vaws(vaws_repo, "remotes", "normalize")
+
+    assert result.returncode == 1
+    output = (result.stdout + result.stderr).lower()
+    assert "invalid" in output
+    assert "repos.yaml" in output
+    assert "origin/main" not in output
+
+
 def test_sync_wrapper_calls_python_entrypoint(repo_root):
     sync_text = (repo_root / "sync").read_text(encoding="utf-8")
     setup_text = (repo_root / "setup").read_text(encoding="utf-8")

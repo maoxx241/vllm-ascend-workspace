@@ -12,11 +12,23 @@ def _read_overlay_repos(paths: RepoPaths) -> Dict[str, Any]:
 
     try:
         loaded = yaml.safe_load(repos_file.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, yaml.YAMLError):
-        return {}
+    except OSError as exc:
+        raise RuntimeError(
+            "cannot read workspace config: .workspace.local/repos.yaml"
+        ) from exc
+    except UnicodeDecodeError as exc:
+        raise RuntimeError(
+            "invalid workspace config: .workspace.local/repos.yaml"
+        ) from exc
+    except yaml.YAMLError as exc:
+        raise RuntimeError(
+            "invalid workspace config: .workspace.local/repos.yaml"
+        ) from exc
 
-    if not isinstance(loaded, dict):
+    if loaded is None:
         return {}
+    if not isinstance(loaded, dict):
+        raise RuntimeError("invalid workspace config: .workspace.local/repos.yaml")
     return loaded
 
 
