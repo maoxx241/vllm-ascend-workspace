@@ -36,8 +36,10 @@ def test_remotes_normalize_uses_overlay_workspace_default_branch(vaws_repo):
 def test_sync_wrapper_calls_python_entrypoint(repo_root):
     sync_text = (repo_root / "sync").read_text(encoding="utf-8")
     setup_text = (repo_root / "setup").read_text(encoding="utf-8")
-    assert "tools/vaws.py" in sync_text
-    assert "tools/vaws.py init" in setup_text
+    normalized_sync = sync_text.replace('"', "")
+    normalized_setup = setup_text.replace('"', "")
+    assert "tools/vaws.py sync" in normalized_sync
+    assert "tools/vaws.py init" in normalized_setup
 
 
 def test_sync_command_returns_success(vaws_repo):
