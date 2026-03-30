@@ -34,9 +34,12 @@ def _read_overlay_repos(paths: RepoPaths) -> Dict[str, Any]:
 
 def default_base_ref(paths: RepoPaths) -> str:
     config = _read_overlay_repos(paths)
-    workspace = config.get("workspace")
-    if not isinstance(workspace, dict):
+    if "workspace" not in config:
         return "origin/main"
+
+    workspace = config["workspace"]
+    if not isinstance(workspace, dict):
+        raise RuntimeError("invalid workspace config: .workspace.local/repos.yaml")
 
     default_branch = workspace.get("default_branch")
     if not isinstance(default_branch, str) or not default_branch.strip():

@@ -173,6 +173,22 @@ def test_session_create_fails_for_corrupted_repos_config(vaws_repo):
     ).exists()
 
 
+def test_session_create_fails_for_workspace_list(vaws_repo):
+    seed_overlay(vaws_repo, target_name="single-default")
+    repos_path = vaws_repo / ".workspace.local" / "repos.yaml"
+    repos_path.write_text("workspace: []\n", encoding="utf-8")
+
+    result = run_vaws(vaws_repo, "session", "create", "feat_release")
+
+    assert result.returncode == 1
+    output = (result.stdout + result.stderr).lower()
+    assert "invalid" in output
+    assert "repos.yaml" in output
+    assert not (
+        vaws_repo / ".workspace.local" / "sessions" / "feat_release" / "manifest.yaml"
+    ).exists()
+
+
 def test_session_switch_fails_when_overlay_state_is_missing(vaws_repo):
     seed_session(vaws_repo, "feat_x")
     state_path = vaws_repo / ".workspace.local" / "state.json"

@@ -56,6 +56,20 @@ def test_remotes_normalize_fails_for_corrupted_repos_config(
     assert "origin/main" not in output
 
 
+def test_remotes_normalize_fails_for_workspace_list(vaws_repo):
+    overlay = vaws_repo / ".workspace.local"
+    overlay.mkdir()
+    (overlay / "repos.yaml").write_text("workspace: []\n", encoding="utf-8")
+
+    result = run_vaws(vaws_repo, "remotes", "normalize")
+
+    assert result.returncode == 1
+    output = (result.stdout + result.stderr).lower()
+    assert "invalid" in output
+    assert "repos.yaml" in output
+    assert "origin/main" not in output
+
+
 def test_remotes_normalize_fails_for_invalid_utf8_repos_config(vaws_repo):
     overlay = vaws_repo / ".workspace.local"
     overlay.mkdir()
