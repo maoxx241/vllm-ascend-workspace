@@ -4,6 +4,7 @@ import json
 import os
 import shlex
 import subprocess
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -904,3 +905,49 @@ def switch_remote_session(ctx: TargetContext, session_name: str, transport: str)
             f"failed to switch remote session '{session_name}': {(result.stderr or result.stdout).strip()}"
         )
     _write_host_runtime_state(ctx, transport, current_session=session_name)
+
+
+def _destroy_simulation_runtime(ctx: TargetContext) -> None:
+    runtime_root = _simulation_runtime_root(ctx)
+    if not runtime_root.exists():
+        return
+    try:
+        parent_dir = runtime_root.parent
+        if not os.access(parent_dir, os.W_OK | os.X_OK):
+            raise RemoteError(
+                f"failed to clean simulation runtime at {runtime_root}: permission denied"
+            )
+        if runtime_root.is_symlink():
+            runtime_root.unlink()
+        else:
+            shutil.rmtree(runtime_root)
+    except OSError as exc:
+        raise RemoteError(
+            f"failed to clean simulation runtime at {runtime_root}: {exc}"
+        ) from exc
+
+
+def _destroy_host_runtime(ctx: TargetContext) -> None:
+    script = "\n".join(
+        [
+            "set -e",
+            f"container_names=$(docker container ls -a --format '{{{{.Names}}}}') || exit 1",
+            f"if printf '%s\\n' \"$container_names\" | grep -Fqx {shlex.quote(ctx.runtime.container_name)}; then",
+            f"  docker rm -f {shlex.quote(ctx.runtime.container_name)} >/dev/null",
+            "fi",
+            f"rm -rf {shlex.quote(ctx.runtime.host_workspace_path)}",
+        ]
+    )
+    result = _run_host_command(ctx, script)
+    if result.returncode != 0:
+        raise RemoteError(
+            f"failed to clean remote runtime for target '{ctx.name}': "
+            f"{(result.stderr or result.stdout).strip()}"
+        )
+
+
+def destroy_runtime(ctx: TargetContext) -> None:
+    if ctx.credential.mode == "local-simulation":
+        _destroy_simulation_runtime(ctx)
+        return
+    _destroy_host_runtime(ctx)

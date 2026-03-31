@@ -2,18 +2,17 @@
 
 Public workspace-local control repository for coordinating vLLM and vLLM-Ascend work.
 
-## Current entrypoints
+## Entry Points
 
 - `tools/vaws.py` is the primary CLI.
 - `./setup` is the bootstrap compatibility entrypoint.
 - `./sync` is the compatibility sync entrypoint.
-- For Codex users, bootstrap should start from natural language requests and the agent should drive the internal command flow.
 
-## Runtime root
+## Runtime Root
 
 - Canonical container/runtime path: `/vllm-workspace`
 
-## Source repos
+## Source Repos
 
 - `vllm/` is tracked as a workspace submodule.
 - `vllm-ascend/` is tracked as a workspace submodule.
@@ -23,9 +22,17 @@ Public workspace-local control repository for coordinating vLLM and vLLM-Ascend 
 - Recursive init matters because `vllm-ascend/` also carries nested submodules.
 - The control repo lives at `/vllm-workspace/workspace`.
 
-## Workspace-local reference
+## Local Overlay
 
-- `.agents/skills/` contains public reference material for workspace-local agents.
 - `.workspace.local/` is local-only overlay state and stays untracked.
 - `.workspace.local/repos.yaml` is the local source of truth for `origin`/`upstream` repo topology.
 - Tracked files must not contain private tokens, private hosts, or legacy path references.
+
+## Agent Workflows
+
+- `.agents/skills/` contains public reference material for workspace-local agents.
+- Bootstrap and workspace repair flow live in `.agents/skills/workspace-bootstrap/`.
+- For Codex bootstrap, the user should start from a natural language request and the agent should route into the bootstrap skill.
+- Guarded deinit/reset flow lives in `.agents/skills/workspace-reset/`.
+- Session switching flow lives in `.agents/skills/workspace-session-switch/`.
+- Sync flow lives in `.agents/skills/workspace-sync/`.
