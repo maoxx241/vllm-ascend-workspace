@@ -8,3 +8,6 @@
 - Never commit `.workspace.local/` and treat it as local overlay state.
 - Treat `.agents/skills/` as workspace-local reference material only.
 - Preserve generic defaults that do not assume private environments.
+- Treat `main` as protected: never edit, commit, or push directly on `main`.
+- If work starts from `main`, branch off to `feature/*` before changing tracked files.
+- Only update `main` through a pull request, and squash PR commits before merge.

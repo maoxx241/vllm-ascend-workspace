@@ -10,3 +10,4 @@ This directory contains public, workspace-local reference material for agents wo
 - Target runtime session manifests: `/vllm-workspace/.vaws/sessions/<session>/manifest.yaml`
 - These files are reference material only.
 - Keep private tokens, private hosts, and legacy path references out of tracked files.
+- Treat `main` as protected: branch from `main`, merge through PR, and squash PR commits before merge.

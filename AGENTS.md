@@ -16,6 +16,10 @@ This repository is a public-facing control workspace for vLLM Ascend development
 - `.workspace.local/` must stay local-only and is never committed.
 - Do not commit credentials, private hosts, private paths, tokens, or keys.
 - `.agents/skills/` contains workspace-local reference material, not global skill installers.
+- `main` is protected: do not edit, commit, or push directly on `main`.
+- If tracked changes are needed while checked out on `main`, create a `feature/*` branch first.
+- Merge back to `main` only through a pull request.
+- Squash the PR branch history into one merge commit before it lands on `main`.
 
 ## Environment assumptions
 

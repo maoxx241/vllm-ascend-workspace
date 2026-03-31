@@ -25,3 +25,10 @@ Public workspace-local control repository for coordinating vLLM and vLLM-Ascend 
 - `.agents/skills/` contains public reference material for workspace-local agents.
 - `.workspace.local/` is local-only overlay state and stays untracked.
 - Tracked files must not contain private tokens, private hosts, or legacy path references.
+
+## Branch policy
+
+- `main` is protected and must stay reviewable.
+- Do not develop, commit, or push directly on `main`.
+- Create a `feature/*` branch for tracked changes, then merge through a pull request.
+- Squash the PR branch history before merge so one PR lands as one commit on `main`.

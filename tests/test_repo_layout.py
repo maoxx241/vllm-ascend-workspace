@@ -56,6 +56,26 @@ def test_public_guidance_uses_current_entrypoints_and_canonical_root():
     assert "submodule" in agents
 
 
+def test_public_guidance_protects_main_branch_and_requires_pr_merge():
+    repo = Path(__file__).resolve().parents[1]
+    readme = (repo / "README.md").read_text(encoding="utf-8").lower()
+    agents = (repo / "AGENTS.md").read_text(encoding="utf-8").lower()
+    cursorrules = (repo / ".cursorrules").read_text(encoding="utf-8").lower()
+    agents_readme = (repo / ".agents" / "README.md").read_text(encoding="utf-8").lower()
+    workspace_sync = (
+        repo / ".agents" / "skills" / "workspace-sync" / "SKILL.md"
+    ).read_text(encoding="utf-8").lower()
+
+    for text in (readme, agents, cursorrules, agents_readme, workspace_sync):
+        assert "main" in text
+        assert "pull request" in text or "pr" in text
+        assert "squash" in text
+
+    assert "do not develop" in readme
+    assert "do not edit, commit, or push directly on `main`" in agents
+    assert "never edit, commit, or push directly on `main`" in cursorrules
+
+
 def test_workspace_submodules_are_declared():
     repo = Path(__file__).resolve().parents[1]
     gitmodules = (repo / ".gitmodules").read_text(encoding="utf-8")
