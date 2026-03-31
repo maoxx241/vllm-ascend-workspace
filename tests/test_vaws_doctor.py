@@ -53,6 +53,47 @@ def test_doctor_fails_when_state_json_is_invalid(vaws_repo):
     assert "invalid" in output
 
 
+def test_doctor_fails_when_state_json_is_not_a_mapping(vaws_repo):
+    overlay = vaws_repo / ".workspace.local"
+    seed_overlay_files(vaws_repo)
+    (overlay / "state.json").write_text("[]\n", encoding="utf-8")
+
+    result = run_vaws(vaws_repo, "doctor")
+
+    assert result.returncode == 1
+    output = (result.stdout + result.stderr).lower()
+    assert "state.json" in output
+    assert "mapping" in output or "object" in output
+
+
+def test_doctor_fails_when_state_json_schema_version_is_missing(vaws_repo):
+    overlay = vaws_repo / ".workspace.local"
+    seed_overlay_files(vaws_repo)
+    (overlay / "state.json").write_text("{}\n", encoding="utf-8")
+
+    result = run_vaws(vaws_repo, "doctor")
+
+    assert result.returncode == 1
+    output = (result.stdout + result.stderr).lower()
+    assert "state.json" in output
+    assert "schema_version" in output
+    assert "missing" in output or "invalid" in output
+
+
+def test_doctor_fails_when_state_json_schema_version_is_unsupported(vaws_repo):
+    overlay = vaws_repo / ".workspace.local"
+    seed_overlay_files(vaws_repo)
+    (overlay / "state.json").write_text('{"schema_version": 2}\n', encoding="utf-8")
+
+    result = run_vaws(vaws_repo, "doctor")
+
+    assert result.returncode == 1
+    output = (result.stdout + result.stderr).lower()
+    assert "state.json" in output
+    assert "schema_version" in output
+    assert "unsupported" in output or "invalid" in output
+
+
 def test_doctor_fails_when_state_json_is_not_utf8(vaws_repo):
     overlay = vaws_repo / ".workspace.local"
     seed_overlay_files(vaws_repo)

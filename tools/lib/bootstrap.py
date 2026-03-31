@@ -9,6 +9,8 @@ from typing import Any, Dict, Optional
 import yaml
 
 from .config import RepoPaths
+from .overlay import ensure_overlay_layout
+from .runtime import ensure_state_schema
 
 COMMUNITY_UPSTREAM_URLS = {
     "vllm": "https://github.com/vllm-project/vllm.git",
@@ -23,8 +25,6 @@ DEFAULT_RUNTIME_SSH_PORT = 63269
 DEFAULT_RUNTIME_WORKSPACE_ROOT = "/vllm-workspace"
 DEFAULT_RUNTIME_BOOTSTRAP_MODE = "host-then-container"
 DEFAULT_SERVER_PORT = 22
-
-OVERLAY_FILES = ("targets.yaml", "repos.yaml", "auth.yaml", "state.json")
 
 
 class BootstrapError(RuntimeError):
@@ -103,15 +103,7 @@ def _ensure_overlay(paths: RepoPaths) -> None:
             "invalid local overlay: .workspace.local/ exists but is not a directory"
         )
 
-    paths.local_overlay.mkdir(parents=True, exist_ok=True)
-    for name in OVERLAY_FILES:
-        file_path = paths.local_overlay / name
-        if file_path.exists():
-            continue
-        if name == "state.json":
-            file_path.write_text("{}\n", encoding="utf-8")
-        else:
-            file_path.write_text("", encoding="utf-8")
+    ensure_overlay_layout(paths)
 
 
 def _load_yaml_mapping(path: Path) -> Dict[str, Any]:
@@ -260,13 +252,8 @@ def _write_auth_yaml(paths: RepoPaths, request: BootstrapRequest) -> None:
 
 
 def _ensure_state_json(paths: RepoPaths) -> None:
-    state_path = paths.local_overlay / "state.json"
-    try:
-        payload = json.loads(state_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-        payload = {}
-    if not isinstance(payload, dict):
-        payload = {}
+    state_path = paths.local_state_file
+    payload = ensure_state_schema(paths)
     state_path.write_text(f"{json.dumps(payload, indent=2)}\n", encoding="utf-8")
 
 

@@ -2,6 +2,7 @@ import json
 from typing import Any, Dict
 
 from .config import RepoPaths
+from .overlay import OVERLAY_SCHEMA_VERSION
 
 
 def read_state(paths: RepoPaths) -> Dict[str, Any]:
@@ -22,7 +23,7 @@ def read_state(paths: RepoPaths) -> Dict[str, Any]:
 def ensure_state_schema(paths: RepoPaths) -> Dict[str, Any]:
     state = read_state(paths)
     if "schema_version" not in state:
-        state["schema_version"] = 1
+        state["schema_version"] = OVERLAY_SCHEMA_VERSION
     return state
 
 

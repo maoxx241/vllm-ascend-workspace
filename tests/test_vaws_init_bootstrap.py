@@ -58,6 +58,31 @@ def test_init_bootstrap_writes_overlay_and_configures_repo_remotes(vaws_repo):
     assert _remote_url(vaws_repo, "vllm-ascend", "upstream") == "https://github.com/vllm-project/vllm-ascend.git"
 
 
+def test_init_bootstrap_creates_overlay_compatible_with_doctor(vaws_repo):
+    result = run_vaws(
+        vaws_repo,
+        "init",
+        "--bootstrap",
+        "--server-host",
+        "173.125.1.2",
+        "--server-user",
+        "root",
+        "--vllm-ascend-origin-url",
+        "git@github.com:alice/vllm-ascend.git",
+        "--vllm-origin-url",
+        "git@github.com:alice/vllm.git",
+        "--git-auth-mode",
+        "ssh-agent",
+    )
+
+    assert result.returncode == 0
+
+    doctor_result = run_vaws(vaws_repo, "doctor")
+
+    assert doctor_result.returncode == 0
+    assert "doctor: ok" in doctor_result.stdout.lower()
+
+
 def test_init_bootstrap_allows_missing_vllm_origin_url(vaws_repo):
     result = run_vaws(
         vaws_repo,

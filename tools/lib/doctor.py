@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Optional
 
 from .config import RepoPaths
-from .overlay import ensure_overlay_layout
+from .overlay import OVERLAY_SCHEMA_VERSION, ensure_overlay_layout
 
 OVERLAY_FILES = ("servers.yaml", "repos.yaml", "auth.yaml", "state.json")
 
@@ -66,9 +66,25 @@ def doctor(paths: RepoPaths) -> int:
 
     state_file = paths.local_state_file
     try:
-        json.loads(state_file.read_text(encoding="utf-8"))
+        state = json.loads(state_file.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         print("invalid state file: .workspace.local/state.json is not valid JSON")
+        return 1
+
+    if not isinstance(state, dict):
+        print("invalid state file: .workspace.local/state.json must be a JSON object")
+        return 1
+
+    schema_version = state.get("schema_version")
+    if isinstance(schema_version, bool) or not isinstance(schema_version, int):
+        print("invalid state file: .workspace.local/state.json missing schema_version")
+        return 1
+    if schema_version != OVERLAY_SCHEMA_VERSION:
+        print(
+            "unsupported schema_version in "
+            ".workspace.local/state.json: "
+            f"{schema_version}"
+        )
         return 1
 
     missing_submodules = _missing_submodules(paths.root)
