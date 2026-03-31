@@ -9,7 +9,7 @@ from .config import RepoPaths
 from .overlay import OVERLAY_SCHEMA_VERSION, ensure_overlay_layout
 
 OVERLAY_FILES = ("servers.yaml", "repos.yaml", "auth.yaml", "state.json")
-BOOTSTRAP_MODES = {"remote-first", "local-only"}
+BOOTSTRAP_MODES = {"remote-first", "server", "local-only"}
 
 
 def _declared_submodule_paths(root: Path):

@@ -64,10 +64,10 @@ def test_init_bootstrap_writes_overlay_and_configures_repo_remotes(vaws_repo):
     assert servers["bootstrap"]["completed"] is True
     assert servers["bootstrap"]["mode"] == "remote-first"
     assert servers["servers"]["host-a"]["host"] == "173.125.1.2"
-    assert servers["servers"]["host-a"]["status"] == "planned"
+    assert servers["servers"]["host-a"]["status"] == "pending"
     assert servers["servers"]["host-a"]["ssh_auth_ref"] == "default-server-auth"
-    assert servers["servers"]["host-a"]["planned_runtime"]["image_ref"] == "quay.nju.edu.cn/ascend/vllm-ascend:latest"
-    assert servers["servers"]["host-a"]["planned_runtime"]["bootstrap_mode"] == "host-then-container"
+    assert servers["servers"]["host-a"]["runtime"]["image_ref"] == "quay.nju.edu.cn/ascend/vllm-ascend:latest"
+    assert servers["servers"]["host-a"]["runtime"]["bootstrap_mode"] == "host-then-container"
 
     targets = yaml.safe_load(
         (vaws_repo / ".workspace.local" / "targets.yaml").read_text()
@@ -89,6 +89,30 @@ def test_init_bootstrap_writes_overlay_and_configures_repo_remotes(vaws_repo):
     assert state["bootstrap"]["completed"] is True
     assert state["bootstrap"]["mode"] == "remote-first"
     assert state["current_target"] == "single-default"
+
+
+def test_init_bootstrap_rolls_back_finalization_failure(vaws_repo, monkeypatch):
+    def fail_finalize(*args, **kwargs):
+        raise bootstrap.BootstrapError("finalization failed")
+
+    monkeypatch.setattr(bootstrap, "_write_bootstrap_state", fail_finalize)
+
+    result = bootstrap.bootstrap_init(
+        RepoPaths(root=vaws_repo),
+        bootstrap.BootstrapRequest(
+            server_host="173.125.1.2",
+            server_user="root",
+            vllm_ascend_origin_url="git@github.com:alice/vllm-ascend.git",
+        ),
+    )
+
+    assert result == 1
+    servers = yaml.safe_load((vaws_repo / ".workspace.local" / "servers.yaml").read_text())
+    assert servers["bootstrap"]["completed"] is False
+    assert servers["bootstrap"]["mode"] == "remote-first"
+
+    state = yaml.safe_load((vaws_repo / ".workspace.local" / "state.json").read_text())
+    assert state.get("bootstrap", {}).get("completed") is False
 
 
 def test_init_bootstrap_refuses_rerun_after_baseline(vaws_repo):
@@ -140,8 +164,8 @@ def test_init_bootstrap_supports_local_only_mode(vaws_repo):
                 "    port: 22",
                 "    login_user: root",
                 "    ssh_auth_ref: default-server-auth",
-                "    status: planned",
-                "    planned_runtime:",
+                "    status: pending",
+                "    runtime:",
                 "      image_ref: quay.nju.edu.cn/ascend/vllm-ascend:latest",
                 "      container_name: vaws-workspace",
                 "      ssh_port: 63269",

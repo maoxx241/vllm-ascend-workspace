@@ -18,6 +18,29 @@ def test_doctor_requires_servers_yaml_instead_of_targets_yaml(vaws_repo):
     assert result.returncode == 0
 
 
+def test_doctor_accepts_legacy_server_bootstrap_mode(vaws_repo):
+    seed_overlay_files(vaws_repo)
+    servers_path = vaws_repo / ".workspace.local" / "servers.yaml"
+    servers_path.write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "bootstrap:",
+                "  completed: true",
+                "  mode: server",
+                "servers: {}",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = run_vaws(vaws_repo, "doctor")
+
+    assert result.returncode == 0
+    assert "doctor: ok" in result.stdout.lower()
+
+
 def test_init_creates_overlay_files(vaws_repo):
     result = run_vaws(vaws_repo, "init")
     assert result.returncode == 0

@@ -27,7 +27,7 @@ DEFAULT_RUNTIME_BOOTSTRAP_MODE = "host-then-container"
 DEFAULT_SERVER_PORT = 22
 DEFAULT_SERVER_AUTH_REF = "default-server-auth"
 DEFAULT_GIT_AUTH_REF = "default-git-auth"
-DEFAULT_SERVER_STATUS = "planned"
+DEFAULT_SERVER_STATUS = "pending"
 BOOTSTRAP_MODE_REMOTE_FIRST = "remote-first"
 BOOTSTRAP_MODE_LOCAL_ONLY = "local-only"
 
@@ -243,7 +243,7 @@ def _bootstrap_servers_config(
             "login_user": request.server_user,
             "ssh_auth_ref": DEFAULT_SERVER_AUTH_REF,
             "status": DEFAULT_SERVER_STATUS,
-            "planned_runtime": {
+            "runtime": {
                 "image_ref": request.runtime_image,
                 "container_name": request.runtime_container,
                 "ssh_port": request.runtime_ssh_port,
@@ -370,8 +370,34 @@ def _write_bootstrap_state(paths: RepoPaths, request: BootstrapRequest) -> None:
         raise BootstrapError(str(exc)) from exc
 
 
-def _finalize_servers_yaml(paths: RepoPaths, request: BootstrapRequest) -> None:
-    _write_servers_yaml(paths, request, completed=True)
+def _finalize_bootstrap(paths: RepoPaths, request: BootstrapRequest) -> None:
+    try:
+        _write_servers_yaml(paths, request, completed=True)
+        _write_bootstrap_state(paths, request)
+        servers_state = _load_yaml_mapping(paths.local_servers_file)
+        state = _read_bootstrap_state(paths)
+        if (
+            state.get("bootstrap", {}).get("completed") is not True
+            or servers_state.get("bootstrap", {}).get("completed") is not True
+        ):
+            raise BootstrapError("bootstrap baseline finalization verification failed")
+    except BootstrapError as exc:
+        rollback_state = _read_bootstrap_state(paths)
+        rollback_state["bootstrap"] = {
+            "completed": False,
+            "mode": _bootstrap_mode(request),
+        }
+        try:
+            write_state(paths, rollback_state)
+        except RuntimeError:
+            pass
+        try:
+            _write_servers_yaml(paths, request, completed=False)
+        except BootstrapError:
+            pass
+        raise
+    except RuntimeError as exc:
+        raise BootstrapError(str(exc)) from exc
 
 
 def _configure_repo_remotes(paths: RepoPaths, request: BootstrapRequest) -> None:
@@ -408,8 +434,7 @@ def bootstrap_init(paths: RepoPaths, request: BootstrapRequest) -> int:
         _write_targets_yaml(paths, request)
         _write_auth_yaml(paths, request)
         _configure_repo_remotes(paths, request)
-        _write_bootstrap_state(paths, request)
-        _finalize_servers_yaml(paths, request)
+        _finalize_bootstrap(paths, request)
     except PreflightError as exc:
         print(str(exc))
         return 1
