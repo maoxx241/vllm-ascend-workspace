@@ -2,29 +2,21 @@
 
 This repository is a public-facing control workspace for vLLM Ascend development workflows.
 
-## Canonical constants
+## Always-On Context
 
 - Runtime root: `/vllm-workspace`
 - Primary command surface: `tools/vaws.py`
 - Compatibility entrypoints: `./setup`, `./sync`
 - Source repos: `vllm/`, `vllm-ascend/` as submodules
 - Clone and refresh sources recursively: `git submodule update --init --recursive`
-- Tracked submodules default to community `upstream` repositories.
-- User-specific `origin` remotes are declared in `.workspace.local/repos.yaml`.
-- For Codex bootstrap, the user should provide natural language input and the agent should perform the internal bootstrap steps.
-
-## Commit hygiene
-
 - `config/*.example.yaml` are the only tracked config templates for bootstrap guidance.
 - `.workspace.local/` must stay local-only and is never committed.
-- `.workspace.local/repos.yaml` is local state for repo topology and remote roles.
 - Do not commit credentials, private hosts, private paths, tokens, or keys.
-- `.agents/skills/` contains workspace-local reference material, not global skill installers.
-- Guarded reset requires `tools/vaws.py reset --prepare` before `tools/vaws.py reset --execute --confirmation-id ... --confirm ...`.
-- Agents must not skip prepare, reuse stale confirmation ids, or fabricate authorization.
-- After a successful reset, restore `origin` and `upstream` on `vllm/` and `vllm-ascend/` back to the community URLs.
 
-## Environment assumptions
+## Workflow Routing
 
-- Do not hardcode environment-specific hostnames or paths.
-- Use placeholder/example values only in tracked files.
+- Keep detailed operational procedures in `.agents/skills/`, not in this file.
+- Use `.agents/skills/workspace-bootstrap/SKILL.md` for bootstrap and bootstrap repair.
+- Use `.agents/skills/workspace-reset/SKILL.md` for guarded reset / deinit.
+- Use `.agents/skills/workspace-session-switch/SKILL.md` for session changes.
+- Use `.agents/skills/workspace-sync/SKILL.md` for sync behavior.

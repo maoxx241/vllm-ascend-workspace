@@ -31,29 +31,29 @@ def test_public_guidance_uses_current_entrypoints_and_canonical_root():
     repo = Path(__file__).resolve().parents[1]
     readme = (repo / "README.md").read_text(encoding="utf-8").lower()
     agents = (repo / "AGENTS.md").read_text(encoding="utf-8").lower()
+    agents_readme = (repo / ".agents" / "README.md").read_text(
+        encoding="utf-8"
+    ).lower()
     cursorrules = (repo / ".cursorrules").read_text(encoding="utf-8").lower()
 
-    for text in (readme, agents, cursorrules):
+    for text in (readme, agents, agents_readme, cursorrules):
         assert "/vllm-workspace" in text
         assert "tools/vaws.py" in text
-        assert "./setup" in text
-        assert "./sync" in text
         assert "/workspace/vllm_workspace" not in text
 
-    for text in (readme, agents, cursorrules):
+    for text in (readme, agents, agents_readme, cursorrules):
         assert "planned" not in text
         assert "process docs" not in text
         assert "process documentation" not in text
 
     assert ".agents/skills/" in readme
-    assert ".agents/skills/" in agents
+    assert ".agents/skills/" in agents_readme
     assert ".agents/skills/" in cursorrules
     assert "vllm/" in readme
     assert "vllm-ascend/" in readme
     assert "submodule" in readme
     assert "vllm/" in agents
     assert "vllm-ascend/" in agents
-    assert "submodule" in agents
 
 
 def test_workspace_submodules_are_declared():
@@ -91,32 +91,51 @@ def test_public_repo_topology_example_stays_public_and_upstream_oriented():
 def test_public_docs_explain_upstream_defaults_and_local_origin_bootstrap():
     repo = Path(__file__).resolve().parents[1]
     readme = (repo / "README.md").read_text(encoding="utf-8").lower()
-    agents = (repo / "AGENTS.md").read_text(encoding="utf-8").lower()
+    bootstrap_skill = (
+        repo / ".agents" / "skills" / "workspace-bootstrap" / "SKILL.md"
+    ).read_text(encoding="utf-8").lower()
     agents_readme = (repo / ".agents" / "README.md").read_text(
         encoding="utf-8"
     ).lower()
 
-    for text in (readme, agents, agents_readme):
+    for text in (readme, bootstrap_skill, agents_readme):
         assert "upstream" in text
         assert "origin" in text
         assert ".workspace.local/repos.yaml" in text
         assert "natural language" in text or "conversational" in text
 
 
-def test_public_guidance_mentions_guarded_reset_workflow():
+def test_agents_md_routes_bootstrap_and_reset_to_skills():
     repo = Path(__file__).resolve().parents[1]
-    readme = (repo / "README.md").read_text(encoding="utf-8").lower()
     agents = (repo / "AGENTS.md").read_text(encoding="utf-8").lower()
-    skill = (
-        repo / ".agents" / "skills" / "workspace-bootstrap" / "SKILL.md"
+    for skill_name in (
+        "workspace-bootstrap",
+        "workspace-reset",
+        "workspace-session-switch",
+        "workspace-sync",
+    ):
+        assert skill_name in agents
+
+    assert "reset --prepare" not in agents
+    assert "reset --execute" not in agents
+    assert "must not skip prepare" not in agents
+    assert "fabricate authorization" not in agents
+    assert "init --bootstrap" not in agents
+
+
+def test_workspace_reset_skill_owns_guarded_reset_procedure():
+    repo = Path(__file__).resolve().parents[1]
+    text = (
+        repo / ".agents" / "skills" / "workspace-reset" / "SKILL.md"
     ).read_text(encoding="utf-8").lower()
 
-    for text in (readme, agents, skill):
-        assert "reset --prepare" in text
-        assert "reset --execute" in text
-        assert "must not skip prepare" in text
-        assert "stale confirmation id" in text or "stale confirmation ids" in text
-        assert "fabricate authorization" in text
+    assert "workspace-local" in text
+    assert "reset --prepare" in text
+    assert "reset --execute" in text
+    assert "must not skip prepare" in text
+    assert "stale confirmation id" in text or "stale confirmation ids" in text
+    assert "fabricate authorization" in text
+    assert "community urls" in text or "community `origin` and `upstream`" in text
 
 
 def test_workspace_local_skill_skeletons_exist_and_stay_public():
@@ -140,6 +159,13 @@ def test_workspace_local_skill_skeletons_exist_and_stay_public():
             "vllm-ascend",
             "optional",
             "tools/vaws.py init --bootstrap",
+        ),
+        "workspace-reset": (
+            "/vllm-workspace",
+            "tools/vaws.py reset --prepare",
+            "tools/vaws.py reset --execute",
+            "stale confirmation id",
+            "community",
         ),
         "workspace-session-switch": (
             ".workspace.local/state.json",
