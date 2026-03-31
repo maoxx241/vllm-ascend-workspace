@@ -1,0 +1,18 @@
+workspace:
+  path: .
+  default_branch: main
+  protected_branches: [main]
+  push_remote: origin
+  upstream_remote: upstream
+
+submodules:
+  vllm:
+    path: vllm
+    default_branch: main
+    push_remote: origin
+    upstream_remote: upstream
+  vllm-ascend:
+    path: vllm-ascend
+    default_branch: main
+    push_remote: origin
+    upstream_remote: upstream
