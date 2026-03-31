@@ -128,6 +128,20 @@ class VerificationResult:
 
 
 @dataclass(frozen=True)
+class CleanupResult:
+    server_name: str
+    status: str
+    detail: str
+
+    def to_mapping(self) -> Dict[str, Any]:
+        return {
+            "server_name": self.server_name,
+            "status": self.status,
+            "detail": self.detail,
+        }
+
+
+@dataclass(frozen=True)
 class TargetContext:
     name: str
     host: HostSpec
@@ -484,6 +498,21 @@ def resolve_server_context(paths: RepoPaths, server_name: str) -> TargetContext:
     )
 
 
+def list_managed_server_names(paths: RepoPaths) -> List[str]:
+    try:
+        config = _load_servers_config(paths)
+    except RemoteError:
+        return []
+    servers = config.get("servers")
+    if not isinstance(servers, dict):
+        return []
+    return sorted(
+        name.strip()
+        for name in servers
+        if isinstance(name, str) and name.strip()
+    )
+
+
 def resolve_target_context(paths: RepoPaths, target_name: str) -> TargetContext:
     legacy_error: Optional[RemoteError] = None
     try:
@@ -533,6 +562,132 @@ def persist_server_verification(
     server_verifications[server_name] = verification.to_mapping()
     state["server_verifications"] = server_verifications
     write_state(paths, state)
+
+
+def _simulation_runtime_status(ctx: TargetContext) -> str:
+    runtime_root = _simulation_runtime_root(ctx)
+    if not runtime_root.exists():
+        return "absent"
+    return "present"
+
+
+def _host_runtime_status(ctx: TargetContext) -> str:
+    probe = subprocess.run(
+        _ssh_base_command(ctx) + ["true"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if probe.returncode != 0:
+        raise RemoteError(
+            f"unable to probe host {ctx.host.host}: {(probe.stderr or probe.stdout or 'SSH probe failed').strip()}"
+        )
+
+    script = "\n".join(
+        [
+            "set -e",
+            f"container_names=$(docker container ls -a --format '{{{{.Names}}}}')",
+            f"if printf '%s\\n' \"$container_names\" | grep -Fqx {shlex.quote(ctx.runtime.container_name)}; then",
+            "  echo present",
+            f"elif [ -e {shlex.quote(ctx.runtime.host_workspace_path)} ]; then",
+            "  echo present",
+            "else",
+            "  echo absent",
+            "fi",
+        ]
+    )
+    result = _run_host_command(ctx, script)
+    if result.returncode != 0:
+        raise RemoteError(
+            f"failed to inspect remote runtime for server '{ctx.name}': {(result.stderr or result.stdout).strip()}"
+        )
+    return result.stdout.strip() or "present"
+
+
+def cleanup_runtime(ctx: TargetContext) -> CleanupResult:
+    if ctx.credential.mode == "local-simulation":
+        if _simulation_runtime_status(ctx) == "absent":
+            return CleanupResult(
+                server_name=ctx.name,
+                status="already_absent",
+                detail="simulation runtime already absent",
+            )
+        try:
+            destroy_runtime(ctx)
+        except RemoteError as exc:
+            return CleanupResult(
+                server_name=ctx.name,
+                status="cleanup_failed",
+                detail=str(exc),
+            )
+        return CleanupResult(
+            server_name=ctx.name,
+            status="removed",
+            detail="simulation runtime removed",
+        )
+
+    try:
+        status = _host_runtime_status(ctx)
+    except RemoteError as exc:
+        message = str(exc)
+        if "probe" in message or "ssh" in message or "authenticate" in message:
+            return CleanupResult(
+                server_name=ctx.name,
+                status="unreachable",
+                detail=message,
+            )
+        return CleanupResult(
+            server_name=ctx.name,
+            status="cleanup_failed",
+            detail=message,
+        )
+
+    if status == "absent":
+        return CleanupResult(
+            server_name=ctx.name,
+            status="already_absent",
+            detail="remote runtime already absent",
+        )
+
+    try:
+        destroy_runtime(ctx)
+    except RemoteError as exc:
+        message = str(exc)
+        if "probe" in message or "ssh" in message or "authenticate" in message:
+            return CleanupResult(
+                server_name=ctx.name,
+                status="unreachable",
+                detail=message,
+            )
+        return CleanupResult(
+            server_name=ctx.name,
+            status="cleanup_failed",
+            detail=message,
+        )
+
+    return CleanupResult(
+        server_name=ctx.name,
+        status="removed",
+        detail="remote runtime removed",
+    )
+
+
+def cleanup_managed_servers(paths: RepoPaths) -> List[CleanupResult]:
+    results: List[CleanupResult] = []
+    for server_name in list_managed_server_names(paths):
+        try:
+            context = resolve_server_context(paths, server_name)
+        except RemoteError as exc:
+            results.append(
+                CleanupResult(
+                    server_name=server_name,
+                    status="cleanup_failed",
+                    detail=str(exc),
+                )
+            )
+            continue
+        results.append(cleanup_runtime(context))
+    return results
 
 
 def _runtime_state_file(runtime_root: Path) -> Path:
