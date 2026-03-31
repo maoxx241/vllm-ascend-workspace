@@ -12,6 +12,12 @@ Public workspace-local control repository for coordinating vLLM and vLLM-Ascend 
 
 - Canonical container/runtime path: `/vllm-workspace`
 
+## Source repos
+
+- `vllm/` is tracked as a workspace submodule.
+- `vllm-ascend/` is tracked as a workspace submodule.
+- The control repo lives at `/vllm-workspace/workspace`.
+
 ## Workspace-local reference
 
 - `.agents/skills/` contains public reference material for workspace-local agents.

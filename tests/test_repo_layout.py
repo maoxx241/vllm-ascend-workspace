@@ -4,6 +4,7 @@ from pathlib import Path
 def test_public_repo_layout_exists():
     repo = Path(__file__).resolve().parents[1]
     assert (repo / ".gitignore").exists()
+    assert (repo / ".gitmodules").exists()
     assert (repo / "README.md").exists()
     assert (repo / "config" / "auth.example.yaml").exists()
     assert (repo / "config" / "repos.example.yaml").exists()
@@ -11,6 +12,8 @@ def test_public_repo_layout_exists():
     assert (repo / "AGENTS.md").exists()
     assert (repo / ".cursorrules").exists()
     assert (repo / "pytest.ini").exists()
+    assert (repo / "vllm").exists()
+    assert (repo / "vllm-ascend").exists()
 
 
 def test_process_docs_are_not_meant_for_main():
@@ -44,6 +47,23 @@ def test_public_guidance_uses_current_entrypoints_and_canonical_root():
     assert ".agents/skills/" in readme
     assert ".agents/skills/" in agents
     assert ".agents/skills/" in cursorrules
+    assert "vllm/" in readme
+    assert "vllm-ascend/" in readme
+    assert "submodule" in readme
+    assert "vllm/" in agents
+    assert "vllm-ascend/" in agents
+    assert "submodule" in agents
+
+
+def test_workspace_submodules_are_declared():
+    repo = Path(__file__).resolve().parents[1]
+    gitmodules = (repo / ".gitmodules").read_text(encoding="utf-8")
+    assert 'submodule "vllm"' in gitmodules
+    assert "path = vllm" in gitmodules
+    assert "git@github.com:maoxx241/vllm.git" in gitmodules
+    assert 'submodule "vllm-ascend"' in gitmodules
+    assert "path = vllm-ascend" in gitmodules
+    assert "git@github.com:maoxx241/vllm-ascend.git" in gitmodules
 
 
 def test_workspace_local_skill_skeletons_exist_and_stay_public():
