@@ -83,6 +83,63 @@ def test_init_bootstrap_creates_overlay_compatible_with_doctor(vaws_repo):
     assert "doctor: ok" in doctor_result.stdout.lower()
 
 
+def test_init_bootstrap_fails_cleanly_for_malformed_state_json(vaws_repo):
+    overlay = vaws_repo / ".workspace.local"
+    overlay.mkdir()
+    (overlay / "state.json").write_text("not valid json", encoding="utf-8")
+
+    result = run_vaws(
+        vaws_repo,
+        "init",
+        "--bootstrap",
+        "--server-host",
+        "173.125.1.2",
+        "--server-user",
+        "root",
+        "--vllm-ascend-origin-url",
+        "git@github.com:alice/vllm-ascend.git",
+    )
+
+    assert result.returncode == 1
+    output = (result.stdout + result.stderr).lower()
+    assert "state.json" in output
+    assert "invalid runtime state" in output or "invalid" in output
+    assert "traceback" not in output
+
+
+def test_init_bootstrap_fails_cleanly_for_unsupported_state_schema_version(vaws_repo):
+    overlay = vaws_repo / ".workspace.local"
+    overlay.mkdir()
+    (overlay / "servers.yaml").write_text("version: 1\nservers: {}\n", encoding="utf-8")
+    (overlay / "auth.yaml").write_text(
+        "version: 1\nssh_auth: {refs: {}}\ngit_auth: {refs: {}}\n",
+        encoding="utf-8",
+    )
+    (overlay / "repos.yaml").write_text(
+        "version: 1\nworkspace: {}\nsubmodules: {}\n",
+        encoding="utf-8",
+    )
+    (overlay / "state.json").write_text('{"schema_version": 2}\n', encoding="utf-8")
+
+    result = run_vaws(
+        vaws_repo,
+        "init",
+        "--bootstrap",
+        "--server-host",
+        "173.125.1.2",
+        "--server-user",
+        "root",
+        "--vllm-ascend-origin-url",
+        "git@github.com:alice/vllm-ascend.git",
+    )
+
+    assert result.returncode == 1
+    output = (result.stdout + result.stderr).lower()
+    assert "schema_version" in output
+    assert "unsupported" in output or "invalid" in output
+    assert "traceback" not in output
+
+
 def test_init_bootstrap_allows_missing_vllm_origin_url(vaws_repo):
     result = run_vaws(
         vaws_repo,

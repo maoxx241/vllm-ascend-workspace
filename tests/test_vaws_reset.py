@@ -391,7 +391,7 @@ def test_reset_execute_removes_local_and_remote_state(vaws_repo):
 
     overlay = vaws_repo / ".workspace.local"
     assert not (overlay / "reset-request.json").exists()
-    assert read_json(overlay / "state.json") == {}
+    assert read_json(overlay / "state.json") == {"schema_version": 1}
     assert not (overlay / "sessions").exists()
     assert (overlay / "targets.yaml").read_text(encoding="utf-8") == ""
     assert (overlay / "auth.yaml").read_text(encoding="utf-8") == ""

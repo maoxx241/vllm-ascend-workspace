@@ -65,6 +65,7 @@ def test_target_ensure_records_runtime_endpoint(vaws_repo):
     result = run_vaws(vaws_repo, "target", "ensure", "single-default")
     assert result.returncode == 0
     state = read_json(vaws_repo / ".workspace.local" / "state.json")
+    assert state["schema_version"] == 1
     assert state["current_target"] == "single-default"
     assert state["runtime"]["workspace_root"] == "/vllm-workspace"
     assert state["runtime"]["ssh_port"] == 63269
@@ -83,6 +84,7 @@ def test_target_ensure_reuses_existing_runtime_container(vaws_repo):
     assert first.returncode == 0
     assert second.returncode == 0
     state = read_json(vaws_repo / ".workspace.local" / "state.json")
+    assert state["schema_version"] == 1
     runtime_root = simulation_root / "host-a" / "vllm-workspace"
     runtime_state = read_json(runtime_root / ".vaws" / "runtime.json")
     assert runtime_state["container"]["created"] is True

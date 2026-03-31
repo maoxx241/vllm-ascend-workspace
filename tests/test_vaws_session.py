@@ -129,7 +129,9 @@ def test_session_switch_updates_current_pointer_and_runtime_symlinks(vaws_repo):
 
     assert result.returncode == 0
     current = read_json(vaws_repo / ".workspace.local" / "state.json")
+    assert current["schema_version"] == 1
     assert current["current_session"] == "feat_y"
+    assert current["current_target"] == "single-default"
     runtime_root = simulation_root / "host-a" / "vllm-workspace"
     assert (runtime_root / ".vaws" / "current").is_symlink()
     assert (runtime_root / ".vaws" / "current").resolve().name == "feat_y"

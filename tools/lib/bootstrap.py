@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -10,7 +9,7 @@ import yaml
 
 from .config import RepoPaths
 from .overlay import ensure_overlay_layout
-from .runtime import ensure_state_schema
+from .runtime import read_state, write_state
 
 COMMUNITY_UPSTREAM_URLS = {
     "vllm": "https://github.com/vllm-project/vllm.git",
@@ -252,9 +251,10 @@ def _write_auth_yaml(paths: RepoPaths, request: BootstrapRequest) -> None:
 
 
 def _ensure_state_json(paths: RepoPaths) -> None:
-    state_path = paths.local_state_file
-    payload = ensure_state_schema(paths)
-    state_path.write_text(f"{json.dumps(payload, indent=2)}\n", encoding="utf-8")
+    try:
+        write_state(paths, read_state(paths))
+    except RuntimeError as exc:
+        raise BootstrapError(str(exc)) from exc
 
 
 def _configure_repo_remotes(paths: RepoPaths, request: BootstrapRequest) -> None:
