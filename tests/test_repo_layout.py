@@ -61,11 +61,10 @@ def test_workspace_submodules_are_declared():
     gitmodules = (repo / ".gitmodules").read_text(encoding="utf-8")
     assert 'submodule "vllm"' in gitmodules
     assert "path = vllm" in gitmodules
-    assert "https://github.com/" in gitmodules
-    assert "vllm.git" in gitmodules
+    assert "https://github.com/vllm-project/vllm.git" in gitmodules
     assert 'submodule "vllm-ascend"' in gitmodules
     assert "path = vllm-ascend" in gitmodules
-    assert "vllm-ascend.git" in gitmodules
+    assert "https://github.com/vllm-project/vllm-ascend.git" in gitmodules
     assert "git@github.com:" not in gitmodules
 
 
@@ -77,6 +76,31 @@ def test_public_docs_explain_recursive_submodule_bootstrap():
     for text in (readme, agents):
         assert "recursive" in text
         assert "submodule update --init --recursive" in text
+
+
+def test_public_repo_topology_example_stays_public_and_upstream_oriented():
+    repo = Path(__file__).resolve().parents[1]
+    repos_example = (repo / "config" / "repos.example.yaml").read_text(
+        encoding="utf-8"
+    )
+    assert "https://github.com/vllm-project/vllm.git" in repos_example
+    assert "https://github.com/vllm-project/vllm-ascend.git" in repos_example
+    assert "git@github.com:" not in repos_example
+
+
+def test_public_docs_explain_upstream_defaults_and_local_origin_bootstrap():
+    repo = Path(__file__).resolve().parents[1]
+    readme = (repo / "README.md").read_text(encoding="utf-8").lower()
+    agents = (repo / "AGENTS.md").read_text(encoding="utf-8").lower()
+    agents_readme = (repo / ".agents" / "README.md").read_text(
+        encoding="utf-8"
+    ).lower()
+
+    for text in (readme, agents, agents_readme):
+        assert "upstream" in text
+        assert "origin" in text
+        assert ".workspace.local/repos.yaml" in text
+        assert "natural language" in text or "conversational" in text
 
 
 def test_workspace_local_skill_skeletons_exist_and_stay_public():
@@ -95,8 +119,11 @@ def test_workspace_local_skill_skeletons_exist_and_stay_public():
     expected_skill_content = {
         "workspace-bootstrap": (
             "/vllm-workspace",
-            "tools/vaws.py init",
-            "tools/vaws.py doctor",
+            "natural language",
+            "server",
+            "vllm-ascend",
+            "optional",
+            "tools/vaws.py init --bootstrap",
         ),
         "workspace-session-switch": (
             ".workspace.local/state.json",
