@@ -27,8 +27,8 @@ DEFAULT_RUNTIME_BOOTSTRAP_MODE = "host-then-container"
 DEFAULT_SERVER_PORT = 22
 DEFAULT_SERVER_AUTH_REF = "default-server-auth"
 DEFAULT_GIT_AUTH_REF = "default-git-auth"
-DEFAULT_SERVER_STATUS = "ready"
-BOOTSTRAP_MODE_SERVER = "server"
+DEFAULT_SERVER_STATUS = "planned"
+BOOTSTRAP_MODE_REMOTE_FIRST = "remote-first"
 BOOTSTRAP_MODE_LOCAL_ONLY = "local-only"
 
 
@@ -111,7 +111,11 @@ def bootstrap_request_from_args(args: Any) -> BootstrapRequest:
 
 
 def _bootstrap_mode(request: BootstrapRequest) -> str:
-    return BOOTSTRAP_MODE_LOCAL_ONLY if request.server_host is None else BOOTSTRAP_MODE_SERVER
+    return (
+        BOOTSTRAP_MODE_LOCAL_ONLY
+        if request.server_host is None
+        else BOOTSTRAP_MODE_REMOTE_FIRST
+    )
 
 
 def _ensure_overlay(paths: RepoPaths) -> None:
@@ -182,125 +186,157 @@ def _ensure_git_remote(repo_path: Path, remote_name: str, url: str) -> None:
 
 
 def _write_repos_yaml(paths: RepoPaths, request: BootstrapRequest) -> None:
-    repos_path = paths.local_overlay / "repos.yaml"
-    config = _load_yaml_mapping(repos_path)
-
-    workspace = dict(config.get("workspace") or {})
-    workspace.update(
+    _write_yaml(
+        paths.local_repos_file,
         {
-            "path": ".",
-            "default_branch": "main",
-            "protected_branches": ["main"],
-            "push_remote": "origin",
-            "upstream_remote": "upstream",
-        }
+            "version": 1,
+            "workspace": {
+                "path": ".",
+                "default_branch": "main",
+                "protected_branches": ["main"],
+                "push_remote": "origin",
+                "upstream_remote": "upstream",
+            },
+            "submodules": {
+                "vllm": {
+                    "path": "vllm",
+                    "default_branch": "main",
+                    "push_remote": "origin",
+                    "upstream_remote": "upstream",
+                    "upstream_url": COMMUNITY_UPSTREAM_URLS["vllm"],
+                },
+                "vllm-ascend": {
+                    "path": "vllm-ascend",
+                    "default_branch": "main",
+                    "push_remote": "origin",
+                    "upstream_remote": "upstream",
+                    "upstream_url": COMMUNITY_UPSTREAM_URLS["vllm-ascend"],
+                    "origin_url": request.vllm_ascend_origin_url,
+                },
+            },
+        },
     )
-    config["workspace"] = workspace
-
-    submodules = dict(config.get("submodules") or {})
-    submodules["vllm"] = {
-        "path": "vllm",
-        "default_branch": "main",
-        "push_remote": "origin",
-        "upstream_remote": "upstream",
-        "upstream_url": COMMUNITY_UPSTREAM_URLS["vllm"],
-    }
     if request.vllm_origin_url:
-        submodules["vllm"]["origin_url"] = request.vllm_origin_url
+        repos_path = paths.local_repos_file
+        config = _load_yaml_mapping(repos_path)
+        config["submodules"]["vllm"]["origin_url"] = request.vllm_origin_url
+        _write_yaml(repos_path, config)
 
-    submodules["vllm-ascend"] = {
-        "path": "vllm-ascend",
-        "default_branch": "main",
-        "push_remote": "origin",
-        "upstream_remote": "upstream",
-        "upstream_url": COMMUNITY_UPSTREAM_URLS["vllm-ascend"],
-        "origin_url": request.vllm_ascend_origin_url,
+
+def _bootstrap_servers_config(
+    request: BootstrapRequest,
+    *,
+    completed: bool,
+) -> Dict[str, Any]:
+    config: Dict[str, Any] = {
+        "version": 1,
+        "bootstrap": {
+            "completed": completed,
+            "mode": _bootstrap_mode(request),
+        },
+        "servers": {},
     }
-    config["submodules"] = submodules
-    _write_yaml(repos_path, config)
-
-
-def _write_servers_yaml(paths: RepoPaths, request: BootstrapRequest) -> None:
-    servers_path = paths.local_servers_file
-    config = _load_yaml_mapping(servers_path)
-    config["version"] = 1
-    config["bootstrap"] = {
-        "completed": True,
-        "mode": _bootstrap_mode(request),
-    }
-
-    servers = dict(config.get("servers") or {})
     if request.server_host is not None:
-        servers[request.host_name] = {
+        config["servers"][request.host_name] = {
             "host": request.server_host,
             "port": request.server_port,
             "login_user": request.server_user,
             "ssh_auth_ref": DEFAULT_SERVER_AUTH_REF,
             "status": DEFAULT_SERVER_STATUS,
+            "planned_runtime": {
+                "image_ref": request.runtime_image,
+                "container_name": request.runtime_container,
+                "ssh_port": request.runtime_ssh_port,
+                "workspace_root": request.runtime_workspace_root,
+                "bootstrap_mode": DEFAULT_RUNTIME_BOOTSTRAP_MODE,
+            },
         }
-    config["servers"] = servers
-    _write_yaml(servers_path, config)
+    return config
+
+
+def _write_servers_yaml(paths: RepoPaths, request: BootstrapRequest, *, completed: bool) -> None:
+    _write_yaml(paths.local_servers_file, _bootstrap_servers_config(request, completed=completed))
 
 
 def _write_targets_yaml(paths: RepoPaths, request: BootstrapRequest) -> None:
+    targets_path = paths.local_targets_file
     if request.server_host is None:
+        _write_yaml(
+            targets_path,
+            {
+                "version": 1,
+                "hosts": {},
+                "targets": {},
+            },
+        )
         return
 
-    targets_path = paths.local_overlay / "targets.yaml"
-    config = _load_yaml_mapping(targets_path)
-    hosts = dict(config.get("hosts") or {})
-    hosts[request.host_name] = {
-        "host": request.server_host,
-        "port": request.server_port,
-        "login_user": request.server_user,
-        "ssh_auth_ref": DEFAULT_SERVER_AUTH_REF,
-    }
-    config["hosts"] = hosts
-
-    targets = dict(config.get("targets") or {})
-    targets[request.target_name] = {
-        "hosts": [request.host_name],
-        "runtime": {
-            "image_ref": request.runtime_image,
-            "container_name": request.runtime_container,
-            "ssh_port": request.runtime_ssh_port,
-            "workspace_root": request.runtime_workspace_root,
-            "bootstrap_mode": DEFAULT_RUNTIME_BOOTSTRAP_MODE,
+    _write_yaml(
+        targets_path,
+        {
+            "version": 1,
+            "hosts": {
+                request.host_name: {
+                    "host": request.server_host,
+                    "port": request.server_port,
+                    "login_user": request.server_user,
+                    "ssh_auth_ref": DEFAULT_SERVER_AUTH_REF,
+                },
+            },
+            "targets": {
+                request.target_name: {
+                    "hosts": [request.host_name],
+                    "runtime": {
+                        "image_ref": request.runtime_image,
+                        "container_name": request.runtime_container,
+                        "ssh_port": request.runtime_ssh_port,
+                        "workspace_root": request.runtime_workspace_root,
+                        "bootstrap_mode": DEFAULT_RUNTIME_BOOTSTRAP_MODE,
+                    },
+                },
+            },
         },
-    }
-    config["targets"] = targets
-    _write_yaml(targets_path, config)
+    )
 
 
 def _write_auth_yaml(paths: RepoPaths, request: BootstrapRequest) -> None:
+    auth_path = paths.local_auth_file
     if request.server_host is None:
+        _write_yaml(
+            auth_path,
+            {
+                "version": 1,
+                "ssh_auth": {"refs": {}},
+                "git_auth": {"refs": {}},
+            },
+        )
         return
 
-    auth_path = paths.local_overlay / "auth.yaml"
-    config = _load_yaml_mapping(auth_path)
-
-    config["version"] = 1
-    config["ssh_auth"] = {
-        "refs": {
-            DEFAULT_SERVER_AUTH_REF: _auth_ref_payload(
-                request.server_auth_mode,
-                username=request.server_user,
-                password_env=request.server_password_env,
-                key_path=request.server_key_path,
-            ),
+    _write_yaml(
+        auth_path,
+        {
+            "version": 1,
+            "ssh_auth": {
+                "refs": {
+                    DEFAULT_SERVER_AUTH_REF: _auth_ref_payload(
+                        request.server_auth_mode,
+                        username=request.server_user,
+                        password_env=request.server_password_env,
+                        key_path=request.server_key_path,
+                    ),
+                },
+            },
+            "git_auth": {
+                "refs": {
+                    DEFAULT_GIT_AUTH_REF: _auth_ref_payload(
+                        request.git_auth_mode,
+                        key_path=request.git_key_path,
+                        token_env=request.git_token_env,
+                    ),
+                },
+            },
         },
-    }
-
-    config["git_auth"] = {
-        "refs": {
-            DEFAULT_GIT_AUTH_REF: _auth_ref_payload(
-                request.git_auth_mode,
-                key_path=request.git_key_path,
-                token_env=request.git_token_env,
-            ),
-        },
-    }
-    _write_yaml(auth_path, config)
+    )
 
 
 def _read_bootstrap_state(paths: RepoPaths) -> Dict[str, Any]:
@@ -334,6 +370,10 @@ def _write_bootstrap_state(paths: RepoPaths, request: BootstrapRequest) -> None:
         raise BootstrapError(str(exc)) from exc
 
 
+def _finalize_servers_yaml(paths: RepoPaths, request: BootstrapRequest) -> None:
+    _write_servers_yaml(paths, request, completed=True)
+
+
 def _configure_repo_remotes(paths: RepoPaths, request: BootstrapRequest) -> None:
     repo_targets = {
         "vllm": {
@@ -364,11 +404,12 @@ def bootstrap_init(paths: RepoPaths, request: BootstrapRequest) -> int:
         _ensure_overlay(paths)
         _ensure_bootstrap_not_completed(paths)
         _write_repos_yaml(paths, request)
-        _write_servers_yaml(paths, request)
+        _write_servers_yaml(paths, request, completed=False)
         _write_targets_yaml(paths, request)
         _write_auth_yaml(paths, request)
         _configure_repo_remotes(paths, request)
         _write_bootstrap_state(paths, request)
+        _finalize_servers_yaml(paths, request)
     except PreflightError as exc:
         print(str(exc))
         return 1

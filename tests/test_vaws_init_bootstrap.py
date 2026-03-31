@@ -62,10 +62,12 @@ def test_init_bootstrap_writes_overlay_and_configures_repo_remotes(vaws_repo):
     servers = yaml.safe_load((vaws_repo / ".workspace.local" / "servers.yaml").read_text())
     assert servers["version"] == 1
     assert servers["bootstrap"]["completed"] is True
-    assert servers["bootstrap"]["mode"] == "server"
+    assert servers["bootstrap"]["mode"] == "remote-first"
     assert servers["servers"]["host-a"]["host"] == "173.125.1.2"
-    assert servers["servers"]["host-a"]["status"] == "ready"
+    assert servers["servers"]["host-a"]["status"] == "planned"
     assert servers["servers"]["host-a"]["ssh_auth_ref"] == "default-server-auth"
+    assert servers["servers"]["host-a"]["planned_runtime"]["image_ref"] == "quay.nju.edu.cn/ascend/vllm-ascend:latest"
+    assert servers["servers"]["host-a"]["planned_runtime"]["bootstrap_mode"] == "host-then-container"
 
     targets = yaml.safe_load(
         (vaws_repo / ".workspace.local" / "targets.yaml").read_text()
@@ -85,7 +87,7 @@ def test_init_bootstrap_writes_overlay_and_configures_repo_remotes(vaws_repo):
     state = yaml.safe_load((vaws_repo / ".workspace.local" / "state.json").read_text())
     assert state["schema_version"] == 1
     assert state["bootstrap"]["completed"] is True
-    assert state["bootstrap"]["mode"] == "server"
+    assert state["bootstrap"]["mode"] == "remote-first"
     assert state["current_target"] == "single-default"
 
 
@@ -123,6 +125,82 @@ def test_init_bootstrap_refuses_rerun_after_baseline(vaws_repo):
 
 
 def test_init_bootstrap_supports_local_only_mode(vaws_repo):
+    overlay = vaws_repo / ".workspace.local"
+    overlay.mkdir()
+    (overlay / "servers.yaml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "bootstrap:",
+                "  completed: false",
+                "  mode: remote-first",
+                "servers:",
+                "  host-a:",
+                "    host: 173.125.1.2",
+                "    port: 22",
+                "    login_user: root",
+                "    ssh_auth_ref: default-server-auth",
+                "    status: planned",
+                "    planned_runtime:",
+                "      image_ref: quay.nju.edu.cn/ascend/vllm-ascend:latest",
+                "      container_name: vaws-workspace",
+                "      ssh_port: 63269",
+                "      workspace_root: /vllm-workspace",
+                "      bootstrap_mode: host-then-container",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (overlay / "targets.yaml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "hosts:",
+                "  host-a:",
+                "    host: 173.125.1.2",
+                "    port: 22",
+                "    login_user: root",
+                "    ssh_auth_ref: default-server-auth",
+                "targets:",
+                "  single-default:",
+                "    hosts:",
+                "      - host-a",
+                "    runtime:",
+                "      image_ref: quay.nju.edu.cn/ascend/vllm-ascend:latest",
+                "      container_name: vaws-workspace",
+                "      ssh_port: 63269",
+                "      workspace_root: /vllm-workspace",
+                "      bootstrap_mode: host-then-container",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (overlay / "auth.yaml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "ssh_auth:",
+                "  refs:",
+                "    default-server-auth:",
+                "      kind: ssh-key",
+                "      username: root",
+                "git_auth:",
+                "  refs:",
+                "    default-git-auth:",
+                "      kind: ssh-agent",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (overlay / "repos.yaml").write_text(
+        "version: 1\nworkspace: {}\nsubmodules: {}\n",
+        encoding="utf-8",
+    )
+    (overlay / "state.json").write_text('{"schema_version": 1}\n', encoding="utf-8")
+
     result = run_vaws(
         vaws_repo,
         "init",
@@ -139,6 +217,14 @@ def test_init_bootstrap_supports_local_only_mode(vaws_repo):
     assert servers["bootstrap"]["completed"] is True
     assert servers["bootstrap"]["mode"] == "local-only"
     assert servers["servers"] == {}
+
+    targets = yaml.safe_load((vaws_repo / ".workspace.local" / "targets.yaml").read_text())
+    assert targets["hosts"] == {}
+    assert targets["targets"] == {}
+
+    auth = yaml.safe_load((vaws_repo / ".workspace.local" / "auth.yaml").read_text())
+    assert auth["ssh_auth"]["refs"] == {}
+    assert auth["git_auth"]["refs"] == {}
 
     state = yaml.safe_load((vaws_repo / ".workspace.local" / "state.json").read_text())
     assert state["bootstrap"]["completed"] is True
@@ -333,6 +419,9 @@ def test_init_bootstrap_fails_cleanly_for_unsupported_state_schema_version(vaws_
     assert "schema_version" in output
     assert "unsupported" in output or "invalid" in output
     assert "traceback" not in output
+    servers = yaml.safe_load((vaws_repo / ".workspace.local" / "servers.yaml").read_text())
+    assert servers["bootstrap"]["completed"] is False
+    assert servers["bootstrap"]["mode"] == "remote-first"
 
 
 def test_init_bootstrap_allows_missing_vllm_origin_url(vaws_repo):
