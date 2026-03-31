@@ -41,21 +41,21 @@ def vaws_repo(tmp_path: Path) -> Path:
             [
                 '[submodule "vllm"]',
                 "\tpath = vllm",
-                "\turl = https://github.com/example/vllm.git",
+                "\turl = https://github.com/vllm-project/vllm.git",
                 "\tbranch = main",
                 '[submodule "vllm-ascend"]',
                 "\tpath = vllm-ascend",
-                "\turl = https://github.com/example/vllm-ascend.git",
+                "\turl = https://github.com/vllm-project/vllm-ascend.git",
                 "\tbranch = main",
                 "",
             ]
         ),
         encoding="utf-8",
     )
-    _init_git_repo(repo / "vllm", "https://github.com/example/vllm.git")
+    _init_git_repo(repo / "vllm", "https://github.com/vllm-project/vllm.git")
     _init_git_repo(
         repo / "vllm-ascend",
-        "https://github.com/example/vllm-ascend.git",
+        "https://github.com/vllm-project/vllm-ascend.git",
     )
     (repo / "vllm-ascend" / ".gitmodules").write_text(
         "\n".join(

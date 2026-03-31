@@ -11,8 +11,10 @@ submodules:
     default_branch: main
     push_remote: origin
     upstream_remote: upstream
+    upstream_url: https://github.com/vllm-project/vllm.git
   vllm-ascend:
     path: vllm-ascend
     default_branch: main
     push_remote: origin
     upstream_remote: upstream
+    upstream_url: https://github.com/vllm-project/vllm-ascend.git
