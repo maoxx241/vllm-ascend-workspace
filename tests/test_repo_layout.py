@@ -158,12 +158,13 @@ def test_workspace_fleet_skill_owns_server_inventory_maintenance():
     ).read_text(encoding="utf-8").lower()
 
     assert "servers.yaml" in text
-    assert "remove" in text
+    assert "remove and repair" in text
     assert "fleet list" in text
     assert "fleet add" in text
     assert "fleet verify" in text
     assert "ssh connectivity is the prerequisite" in text
     assert "remote runtime verification is the success condition" in text
+    assert "fleet remove" not in text
     assert "reset --prepare" not in text
     assert "reset --execute" not in text
 
@@ -194,7 +195,7 @@ def test_workspace_local_skill_skeletons_exist_and_stay_public():
             "tools/vaws.py fleet",
             "servers.yaml",
             "add",
-            "remove",
+            "remove and repair",
             "verify",
             "repair",
         ),
