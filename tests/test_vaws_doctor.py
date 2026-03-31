@@ -1,7 +1,7 @@
 import json
 import shutil
 
-from conftest import run_vaws
+from conftest import run_vaws, seed_overlay_files
 
 
 def test_doctor_reports_missing_overlay(vaws_repo):
@@ -10,10 +10,41 @@ def test_doctor_reports_missing_overlay(vaws_repo):
     assert ".workspace.local" in result.stdout
 
 
+def test_doctor_requires_servers_yaml_instead_of_targets_yaml(vaws_repo):
+    seed_overlay_files(vaws_repo)
+
+    result = run_vaws(vaws_repo, "doctor")
+
+    assert result.returncode == 0
+
+
+def test_doctor_accepts_legacy_server_bootstrap_mode(vaws_repo):
+    seed_overlay_files(vaws_repo)
+    servers_path = vaws_repo / ".workspace.local" / "servers.yaml"
+    servers_path.write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "bootstrap:",
+                "  completed: true",
+                "  mode: server",
+                "servers: {}",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = run_vaws(vaws_repo, "doctor")
+
+    assert result.returncode == 0
+    assert "doctor: ok" in result.stdout.lower()
+
+
 def test_init_creates_overlay_files(vaws_repo):
     result = run_vaws(vaws_repo, "init")
     assert result.returncode == 0
-    assert (vaws_repo / ".workspace.local" / "targets.yaml").exists()
+    assert (vaws_repo / ".workspace.local" / "servers.yaml").exists()
     assert (vaws_repo / ".workspace.local" / "repos.yaml").exists()
     assert (vaws_repo / ".workspace.local" / "auth.yaml").exists()
     assert (vaws_repo / ".workspace.local" / "state.json").exists()
@@ -22,7 +53,7 @@ def test_init_creates_overlay_files(vaws_repo):
 def test_doctor_fails_when_required_overlay_files_are_missing(vaws_repo):
     overlay = vaws_repo / ".workspace.local"
     overlay.mkdir()
-    (overlay / "targets.yaml").write_text("", encoding="utf-8")
+    (overlay / "servers.yaml").write_text("", encoding="utf-8")
 
     result = run_vaws(vaws_repo, "doctor")
 
@@ -34,10 +65,7 @@ def test_doctor_fails_when_required_overlay_files_are_missing(vaws_repo):
 
 def test_doctor_fails_when_state_json_is_invalid(vaws_repo):
     overlay = vaws_repo / ".workspace.local"
-    overlay.mkdir()
-    (overlay / "targets.yaml").write_text("", encoding="utf-8")
-    (overlay / "repos.yaml").write_text("", encoding="utf-8")
-    (overlay / "auth.yaml").write_text("", encoding="utf-8")
+    seed_overlay_files(vaws_repo)
     (overlay / "state.json").write_text("{not-json", encoding="utf-8")
 
     result = run_vaws(vaws_repo, "doctor")
@@ -48,12 +76,50 @@ def test_doctor_fails_when_state_json_is_invalid(vaws_repo):
     assert "invalid" in output
 
 
+def test_doctor_fails_when_state_json_is_not_a_mapping(vaws_repo):
+    overlay = vaws_repo / ".workspace.local"
+    seed_overlay_files(vaws_repo)
+    (overlay / "state.json").write_text("[]\n", encoding="utf-8")
+
+    result = run_vaws(vaws_repo, "doctor")
+
+    assert result.returncode == 1
+    output = (result.stdout + result.stderr).lower()
+    assert "state.json" in output
+    assert "mapping" in output or "object" in output
+
+
+def test_doctor_fails_when_state_json_schema_version_is_missing(vaws_repo):
+    overlay = vaws_repo / ".workspace.local"
+    seed_overlay_files(vaws_repo)
+    (overlay / "state.json").write_text("{}\n", encoding="utf-8")
+
+    result = run_vaws(vaws_repo, "doctor")
+
+    assert result.returncode == 1
+    output = (result.stdout + result.stderr).lower()
+    assert "state.json" in output
+    assert "schema_version" in output
+    assert "missing" in output or "invalid" in output
+
+
+def test_doctor_fails_when_state_json_schema_version_is_unsupported(vaws_repo):
+    overlay = vaws_repo / ".workspace.local"
+    seed_overlay_files(vaws_repo)
+    (overlay / "state.json").write_text('{"schema_version": 2}\n', encoding="utf-8")
+
+    result = run_vaws(vaws_repo, "doctor")
+
+    assert result.returncode == 1
+    output = (result.stdout + result.stderr).lower()
+    assert "state.json" in output
+    assert "schema_version" in output
+    assert "unsupported" in output or "invalid" in output
+
+
 def test_doctor_fails_when_state_json_is_not_utf8(vaws_repo):
     overlay = vaws_repo / ".workspace.local"
-    overlay.mkdir()
-    (overlay / "targets.yaml").write_text("", encoding="utf-8")
-    (overlay / "repos.yaml").write_text("", encoding="utf-8")
-    (overlay / "auth.yaml").write_text("", encoding="utf-8")
+    seed_overlay_files(vaws_repo)
     (overlay / "state.json").write_bytes(b"\xff\xfe")
 
     result = run_vaws(vaws_repo, "doctor")
@@ -97,7 +163,7 @@ def test_init_writes_json_parseable_state_file(vaws_repo):
     state_text = (vaws_repo / ".workspace.local" / "state.json").read_text(
         encoding="utf-8"
     )
-    assert json.loads(state_text) == {}
+    assert json.loads(state_text) == {"schema_version": 1}
 
 
 def test_init_fails_cleanly_when_overlay_path_is_a_file(vaws_repo):

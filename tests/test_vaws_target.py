@@ -65,6 +65,7 @@ def test_target_ensure_records_runtime_endpoint(vaws_repo):
     result = run_vaws(vaws_repo, "target", "ensure", "single-default")
     assert result.returncode == 0
     state = read_json(vaws_repo / ".workspace.local" / "state.json")
+    assert state["schema_version"] == 1
     assert state["current_target"] == "single-default"
     assert state["runtime"]["workspace_root"] == "/vllm-workspace"
     assert state["runtime"]["ssh_port"] == 63269
@@ -83,10 +84,27 @@ def test_target_ensure_reuses_existing_runtime_container(vaws_repo):
     assert first.returncode == 0
     assert second.returncode == 0
     state = read_json(vaws_repo / ".workspace.local" / "state.json")
+    assert state["schema_version"] == 1
     runtime_root = simulation_root / "host-a" / "vllm-workspace"
     runtime_state = read_json(runtime_root / ".vaws" / "runtime.json")
     assert runtime_state["container"]["created"] is True
     assert runtime_state["container"]["reused"] is True
+
+
+def test_target_ensure_fails_cleanly_when_state_schema_version_is_unsupported(vaws_repo):
+    seed_overlay(vaws_repo, target_name="single-default")
+    (vaws_repo / ".workspace.local" / "state.json").write_text(
+        '{"schema_version": 2}\n',
+        encoding="utf-8",
+    )
+
+    result = run_vaws(vaws_repo, "target", "ensure", "single-default")
+
+    assert result.returncode == 1
+    output = (result.stdout + result.stderr).lower()
+    assert "schema_version" in output
+    assert "unsupported" in output or "invalid" in output
+    assert "traceback" not in output
 
 
 def test_target_ensure_fails_when_target_is_missing(vaws_repo):
@@ -245,3 +263,14 @@ def test_target_ensure_fails_when_auth_group_is_missing(vaws_repo):
     output = (result.stdout + result.stderr).lower()
     assert "auth" in output
     assert "missing-group" in output
+
+
+def test_target_ensure_reports_deprecation_and_routing(vaws_repo):
+    seed_overlay(vaws_repo, target_name="single-default")
+
+    result = run_vaws(vaws_repo, "target", "ensure", "single-default")
+
+    assert result.returncode == 0
+    output = (result.stdout + result.stderr).lower()
+    assert "deprecated" in output
+    assert "fleet" in output

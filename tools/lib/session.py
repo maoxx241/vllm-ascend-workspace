@@ -163,7 +163,11 @@ def switch_session(paths: RepoPaths, session_name: str) -> int:
         return 1
 
     state["current_session"] = session_name
-    write_state(paths, state)
+    try:
+        write_state(paths, state)
+    except RuntimeError as exc:
+        print(str(exc))
+        return 1
     print(f"session switch: ok ({session_name})")
     return 0
 

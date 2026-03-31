@@ -1,8 +1,27 @@
+import sys
 import subprocess
+from pathlib import Path
 
 import yaml
 
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 from conftest import run_vaws
+from tools.lib import bootstrap
+from tools.lib import preflight
+from tools.lib.config import RepoPaths
+from tools.lib.preflight import PreflightReport
+from tools.lib.remote import (
+    CredentialGroup,
+    HostSpec,
+    RuntimeSpec,
+    TargetContext,
+    _ssh_base_command,
+    resolve_server_context,
+    resolve_target_context,
+)
 
 
 def _remote_url(repo, relative_path, remote_name):
@@ -43,19 +62,450 @@ def test_init_bootstrap_writes_overlay_and_configures_repo_remotes(vaws_repo):
     assert repos["submodules"]["vllm-ascend"]["origin_url"] == "git@github.com:alice/vllm-ascend.git"
 
     auth = yaml.safe_load((vaws_repo / ".workspace.local" / "auth.yaml").read_text())
-    assert auth["host_auth"]["mode"] == "ssh-key"
-    assert auth["git_auth"]["mode"] == "ssh-agent"
+    assert auth["version"] == 1
+    assert auth["ssh_auth"]["refs"]["default-server-auth"]["kind"] == "ssh-key"
+    assert auth["ssh_auth"]["refs"]["default-server-auth"]["username"] == "root"
+    assert auth["git_auth"]["refs"]["default-git-auth"]["kind"] == "ssh-agent"
+
+    servers = yaml.safe_load((vaws_repo / ".workspace.local" / "servers.yaml").read_text())
+    assert servers["version"] == 1
+    assert servers["bootstrap"]["completed"] is True
+    assert servers["bootstrap"]["mode"] == "remote-first"
+    assert servers["servers"]["host-a"]["host"] == "173.125.1.2"
+    assert servers["servers"]["host-a"]["status"] == "ready"
+    assert servers["servers"]["host-a"]["ssh_auth_ref"] == "default-server-auth"
+    assert servers["servers"]["host-a"]["verification"]["status"] == "ready"
+    assert servers["servers"]["host-a"]["verification"]["checks"][0]["name"] == "inventory"
+    assert servers["servers"]["host-a"]["runtime"]["image_ref"] == "quay.nju.edu.cn/ascend/vllm-ascend:latest"
+    assert servers["servers"]["host-a"]["runtime"]["bootstrap_mode"] == "host-then-container"
+    assert servers["servers"]["host-a"]["runtime"]["host_workspace_path"] == "/root/.vaws/targets/single-default/workspace"
 
     targets = yaml.safe_load(
         (vaws_repo / ".workspace.local" / "targets.yaml").read_text()
     )
     assert targets["hosts"]["host-a"]["host"] == "173.125.1.2"
+    assert targets["hosts"]["host-a"]["ssh_auth_ref"] == "default-server-auth"
+    assert "auth_group" not in targets["hosts"]["host-a"]
     assert targets["targets"]["single-default"]["runtime"]["workspace_root"] == "/vllm-workspace"
+    assert targets["targets"]["single-default"]["runtime"]["host_workspace_path"] == "/root/.vaws/targets/single-default/workspace"
 
     assert _remote_url(vaws_repo, "vllm", "origin") == "git@github.com:alice/vllm.git"
     assert _remote_url(vaws_repo, "vllm", "upstream") == "https://github.com/vllm-project/vllm.git"
     assert _remote_url(vaws_repo, "vllm-ascend", "origin") == "git@github.com:alice/vllm-ascend.git"
     assert _remote_url(vaws_repo, "vllm-ascend", "upstream") == "https://github.com/vllm-project/vllm-ascend.git"
+
+    target_result = run_vaws(vaws_repo, "target", "ensure", "single-default")
+    assert target_result.returncode == 0
+    state = yaml.safe_load((vaws_repo / ".workspace.local" / "state.json").read_text())
+    assert state["schema_version"] == 1
+    assert state["bootstrap"]["completed"] is True
+    assert state["bootstrap"]["mode"] == "remote-first"
+    assert state["current_target"] == "single-default"
+    assert state["server_verifications"]["host-a"]["status"] == "ready"
+
+
+def test_init_bootstrap_rolls_back_finalization_failure(vaws_repo, monkeypatch):
+    def fail_finalize(*args, **kwargs):
+        raise bootstrap.BootstrapError("finalization failed")
+
+    monkeypatch.setattr(bootstrap, "_write_bootstrap_state", fail_finalize)
+
+    result = bootstrap.bootstrap_init(
+        RepoPaths(root=vaws_repo),
+        bootstrap.BootstrapRequest(
+            server_host="173.125.1.2",
+            server_user="root",
+            vllm_ascend_origin_url="git@github.com:alice/vllm-ascend.git",
+        ),
+    )
+
+    assert result == 1
+    servers = yaml.safe_load((vaws_repo / ".workspace.local" / "servers.yaml").read_text())
+    assert servers["bootstrap"]["completed"] is False
+    assert servers["bootstrap"]["mode"] == "remote-first"
+
+    state = yaml.safe_load((vaws_repo / ".workspace.local" / "state.json").read_text())
+    assert state.get("bootstrap", {}).get("completed") is False
+
+
+def test_init_bootstrap_refuses_rerun_after_baseline(vaws_repo):
+    first = run_vaws(
+        vaws_repo,
+        "init",
+        "--bootstrap",
+        "--server-host",
+        "173.125.1.2",
+        "--server-user",
+        "root",
+        "--vllm-ascend-origin-url",
+        "git@github.com:alice/vllm-ascend.git",
+    )
+    assert first.returncode == 0
+
+    second = run_vaws(
+        vaws_repo,
+        "init",
+        "--bootstrap",
+        "--server-host",
+        "173.125.1.2",
+        "--server-user",
+        "root",
+        "--vllm-ascend-origin-url",
+        "git@github.com:alice/vllm-ascend.git",
+    )
+
+    assert second.returncode == 1
+    output = (second.stdout + second.stderr).lower()
+    assert "bootstrap baseline" in output
+    assert "fleet" in output
+    assert "traceback" not in output
+
+
+def test_init_bootstrap_supports_local_only_mode(vaws_repo):
+    overlay = vaws_repo / ".workspace.local"
+    overlay.mkdir()
+    (overlay / "servers.yaml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "bootstrap:",
+                "  completed: false",
+                "  mode: remote-first",
+                "servers:",
+                "  host-a:",
+                "    host: 173.125.1.2",
+                "    port: 22",
+                "    login_user: root",
+                "    ssh_auth_ref: default-server-auth",
+                "    status: pending",
+                "    runtime:",
+                "      image_ref: quay.nju.edu.cn/ascend/vllm-ascend:latest",
+                "      container_name: vaws-workspace",
+                "      ssh_port: 63269",
+                "      workspace_root: /vllm-workspace",
+                "      bootstrap_mode: host-then-container",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (overlay / "targets.yaml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "hosts:",
+                "  host-a:",
+                "    host: 173.125.1.2",
+                "    port: 22",
+                "    login_user: root",
+                "    ssh_auth_ref: default-server-auth",
+                "targets:",
+                "  single-default:",
+                "    hosts:",
+                "      - host-a",
+                "    runtime:",
+                "      image_ref: quay.nju.edu.cn/ascend/vllm-ascend:latest",
+                "      container_name: vaws-workspace",
+                "      ssh_port: 63269",
+                "      workspace_root: /vllm-workspace",
+                "      bootstrap_mode: host-then-container",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (overlay / "auth.yaml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "ssh_auth:",
+                "  refs:",
+                "    default-server-auth:",
+                "      kind: ssh-key",
+                "      username: root",
+                "git_auth:",
+                "  refs:",
+                "    default-git-auth:",
+                "      kind: ssh-agent",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (overlay / "repos.yaml").write_text(
+        "version: 1\nworkspace: {}\nsubmodules: {}\n",
+        encoding="utf-8",
+    )
+    (overlay / "state.json").write_text('{"schema_version": 1}\n', encoding="utf-8")
+
+    result = run_vaws(
+        vaws_repo,
+        "init",
+        "--bootstrap",
+        "--vllm-ascend-origin-url",
+        "git@github.com:alice/vllm-ascend.git",
+    )
+
+    assert result.returncode == 0
+    output = result.stdout.lower()
+    assert "bootstrap ready" in output
+
+    servers = yaml.safe_load((vaws_repo / ".workspace.local" / "servers.yaml").read_text())
+    assert servers["bootstrap"]["completed"] is True
+    assert servers["bootstrap"]["mode"] == "local-only"
+    assert servers["servers"] == {}
+
+    targets = yaml.safe_load((vaws_repo / ".workspace.local" / "targets.yaml").read_text())
+    assert targets["hosts"] == {}
+    assert targets["targets"] == {}
+
+    auth = yaml.safe_load((vaws_repo / ".workspace.local" / "auth.yaml").read_text())
+    assert auth["ssh_auth"]["refs"] == {}
+    assert auth["git_auth"]["refs"] == {}
+
+    state = yaml.safe_load((vaws_repo / ".workspace.local" / "state.json").read_text())
+    assert state["bootstrap"]["completed"] is True
+    assert state["bootstrap"]["mode"] == "local-only"
+
+
+def test_preflight_reports_missing_and_optional_tools(monkeypatch):
+    def fake_which(command):
+        if command == "gh":
+            return None
+        return f"/usr/bin/{command}"
+
+    monkeypatch.setattr(preflight.shutil, "which", fake_which)
+
+    report = preflight.check_local_control_plane_deps()
+
+    assert report.status == "degraded"
+    assert report.installed_required == ("git", "ssh", "python3")
+    assert report.missing_required == ()
+    assert report.installed_recommended == ()
+    assert report.missing_recommended == ("gh",)
+
+
+def test_init_bootstrap_reports_degraded_preflight_state(vaws_repo, monkeypatch, capsys):
+    monkeypatch.setattr(
+        bootstrap,
+        "ensure_local_control_plane_deps",
+        lambda: PreflightReport(
+            status="degraded",
+            installed_required=("git", "ssh", "python3"),
+            missing_required=(),
+            installed_recommended=(),
+            missing_recommended=("gh",),
+        ),
+    )
+
+    request = bootstrap.BootstrapRequest(
+        server_host="173.125.1.2",
+        server_user="root",
+        vllm_ascend_origin_url="git@github.com:alice/vllm-ascend.git",
+    )
+
+    result = bootstrap.bootstrap_init(RepoPaths(root=vaws_repo), request)
+    output = capsys.readouterr().out.lower()
+
+    assert result == 0
+    assert "preflight degraded" in output
+    assert "gh" in output
+    assert "bootstrap ready" in output
+
+
+def test_init_bootstrap_records_needs_repair_when_verification_needs_repair(
+    vaws_repo,
+    monkeypatch,
+    capsys,
+):
+    class FakeVerificationResult:
+        status = "needs_repair"
+        summary = "runtime probe failed"
+
+        def to_mapping(self):
+            return {
+                "status": self.status,
+                "summary": self.summary,
+                "checks": [
+                    {
+                        "name": "runtime_state",
+                        "status": "needs_repair",
+                        "detail": "probe failed",
+                    }
+                ],
+            }
+
+    monkeypatch.setattr(bootstrap, "verify_runtime", lambda *args, **kwargs: FakeVerificationResult(), raising=False)
+
+    request = bootstrap.BootstrapRequest(
+        server_host="173.125.1.2",
+        server_user="root",
+        vllm_ascend_origin_url="git@github.com:alice/vllm-ascend.git",
+    )
+
+    result = bootstrap.bootstrap_init(RepoPaths(root=vaws_repo), request)
+    output = capsys.readouterr().out.lower()
+
+    assert result == 0
+    assert "needs_repair" in output
+
+    servers = yaml.safe_load((vaws_repo / ".workspace.local" / "servers.yaml").read_text())
+    host_a = servers["servers"]["host-a"]
+    assert host_a["status"] == "needs_repair"
+    assert host_a["verification"]["status"] == "needs_repair"
+    assert host_a["verification"]["checks"][0]["detail"] == "probe failed"
+
+    state = yaml.safe_load((vaws_repo / ".workspace.local" / "state.json").read_text())
+    assert state["server_verifications"]["host-a"]["status"] == "needs_repair"
+    assert state["bootstrap"]["completed"] is True
+
+
+def test_preflight_reports_blocked_when_required_tool_missing(monkeypatch):
+    def fake_which(command):
+        if command == "ssh":
+            return None
+        return f"/usr/bin/{command}"
+
+    monkeypatch.setattr(preflight.shutil, "which", fake_which)
+
+    report = preflight.check_local_control_plane_deps()
+
+    assert report.status == "blocked"
+    assert report.installed_required == ("git", "python3")
+    assert report.missing_required == ("ssh",)
+
+
+def test_preflight_treats_running_python_as_installed_python3(monkeypatch):
+    def fake_which(command):
+        if command == "python3":
+            return None
+        return f"/usr/bin/{command}"
+
+    monkeypatch.setattr(preflight.shutil, "which", fake_which)
+    monkeypatch.setattr(preflight.sys, "executable", "/opt/control-plane/bin/python")
+
+    report = preflight.check_local_control_plane_deps()
+
+    assert report.status == "ready"
+    assert "python3" in report.installed_required
+    assert report.missing_required == ()
+
+
+def test_init_bootstrap_creates_overlay_compatible_with_doctor(vaws_repo):
+    result = run_vaws(
+        vaws_repo,
+        "init",
+        "--bootstrap",
+        "--server-host",
+        "173.125.1.2",
+        "--server-user",
+        "root",
+        "--vllm-ascend-origin-url",
+        "git@github.com:alice/vllm-ascend.git",
+        "--vllm-origin-url",
+        "git@github.com:alice/vllm.git",
+        "--git-auth-mode",
+        "ssh-agent",
+    )
+
+    assert result.returncode == 0
+
+    doctor_result = run_vaws(vaws_repo, "doctor")
+
+    assert doctor_result.returncode == 0
+    assert "doctor: ok" in doctor_result.stdout.lower()
+
+
+def test_ssh_base_command_honors_server_key_path():
+    ctx = TargetContext(
+        name="single-default",
+        host=HostSpec(
+            name="host-a",
+            host="173.125.1.2",
+            port=22,
+            login_user="root",
+            auth_group="default",
+        ),
+        credential=CredentialGroup(
+            mode="ssh-key",
+            username="root",
+            key_path="/tmp/control-plane.key",
+        ),
+        runtime=RuntimeSpec(
+            image_ref="image",
+            container_name="container",
+            ssh_port=63269,
+            workspace_root="/vllm-workspace",
+            bootstrap_mode="host-then-container",
+            host_workspace_path="/tmp/workspace",
+            docker_run_args=[],
+        ),
+    )
+
+    command = _ssh_base_command(ctx)
+
+    assert "-i" in command
+    assert "/tmp/control-plane.key" in command
+
+
+def test_init_bootstrap_fails_cleanly_for_malformed_state_json(vaws_repo):
+    overlay = vaws_repo / ".workspace.local"
+    overlay.mkdir()
+    (overlay / "state.json").write_text("not valid json", encoding="utf-8")
+
+    result = run_vaws(
+        vaws_repo,
+        "init",
+        "--bootstrap",
+        "--server-host",
+        "173.125.1.2",
+        "--server-user",
+        "root",
+        "--vllm-ascend-origin-url",
+        "git@github.com:alice/vllm-ascend.git",
+    )
+
+    assert result.returncode == 1
+    output = (result.stdout + result.stderr).lower()
+    assert "state.json" in output
+    assert "invalid runtime state" in output or "invalid" in output
+    assert "traceback" not in output
+
+
+def test_init_bootstrap_fails_cleanly_for_unsupported_state_schema_version(vaws_repo):
+    overlay = vaws_repo / ".workspace.local"
+    overlay.mkdir()
+    (overlay / "servers.yaml").write_text("version: 1\nservers: {}\n", encoding="utf-8")
+    (overlay / "auth.yaml").write_text(
+        "version: 1\nssh_auth: {refs: {}}\ngit_auth: {refs: {}}\n",
+        encoding="utf-8",
+    )
+    (overlay / "repos.yaml").write_text(
+        "version: 1\nworkspace: {}\nsubmodules: {}\n",
+        encoding="utf-8",
+    )
+    (overlay / "state.json").write_text('{"schema_version": 2}\n', encoding="utf-8")
+
+    result = run_vaws(
+        vaws_repo,
+        "init",
+        "--bootstrap",
+        "--server-host",
+        "173.125.1.2",
+        "--server-user",
+        "root",
+        "--vllm-ascend-origin-url",
+        "git@github.com:alice/vllm-ascend.git",
+    )
+
+    assert result.returncode == 1
+    output = (result.stdout + result.stderr).lower()
+    assert "schema_version" in output
+    assert "unsupported" in output or "invalid" in output
+    assert "traceback" not in output
+    servers = yaml.safe_load((vaws_repo / ".workspace.local" / "servers.yaml").read_text())
+    assert servers["bootstrap"]["completed"] is False
+    assert servers["bootstrap"]["mode"] == "remote-first"
 
 
 def test_init_bootstrap_allows_missing_vllm_origin_url(vaws_repo):
@@ -97,7 +547,7 @@ def test_init_bootstrap_requires_vllm_ascend_origin_url(vaws_repo):
     assert "origin" in output
 
 
-def test_init_bootstrap_requires_server_host(vaws_repo):
+def test_init_bootstrap_defaults_to_local_only_without_server_host(vaws_repo):
     result = run_vaws(
         vaws_repo,
         "init",
@@ -108,7 +558,29 @@ def test_init_bootstrap_requires_server_host(vaws_repo):
         "git@github.com:alice/vllm-ascend.git",
     )
 
-    assert result.returncode == 1
-    output = (result.stdout + result.stderr).lower()
-    assert "server" in output
-    assert "host" in output
+    assert result.returncode == 0
+    output = result.stdout.lower()
+    assert "local-only" in output
+    assert "bootstrap ready" in output
+
+
+def test_bootstrap_target_and_server_resolution_share_workspace_root(vaws_repo):
+    result = run_vaws(
+        vaws_repo,
+        "init",
+        "--bootstrap",
+        "--server-host",
+        "173.125.1.2",
+        "--server-user",
+        "root",
+        "--vllm-ascend-origin-url",
+        "git@github.com:alice/vllm-ascend.git",
+    )
+
+    assert result.returncode == 0
+
+    paths = RepoPaths(root=vaws_repo)
+    target_context = resolve_target_context(paths, "single-default")
+    server_context = resolve_server_context(paths, "host-a")
+
+    assert target_context.runtime.host_workspace_path == server_context.runtime.host_workspace_path

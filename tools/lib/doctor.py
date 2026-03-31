@@ -3,9 +3,13 @@ import json
 from pathlib import Path
 from typing import Optional
 
-from .config import RepoPaths
+import yaml
 
-OVERLAY_FILES = ("targets.yaml", "repos.yaml", "auth.yaml", "state.json")
+from .config import RepoPaths
+from .overlay import OVERLAY_SCHEMA_VERSION, ensure_overlay_layout
+
+OVERLAY_FILES = ("servers.yaml", "repos.yaml", "auth.yaml", "state.json")
+BOOTSTRAP_MODES = {"remote-first", "server", "local-only"}
 
 
 def _declared_submodule_paths(root: Path):
@@ -63,11 +67,52 @@ def doctor(paths: RepoPaths) -> int:
         print(f"missing overlay files: {', '.join(missing_files)}")
         return 1
 
-    state_file = paths.local_overlay / "state.json"
+    servers_file = paths.local_servers_file
     try:
-        json.loads(state_file.read_text(encoding="utf-8"))
+        servers_config = yaml.safe_load(servers_file.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, yaml.YAMLError):
+        print("invalid servers file: .workspace.local/servers.yaml is not valid YAML")
+        return 1
+
+    if not isinstance(servers_config, dict):
+        print("invalid servers file: .workspace.local/servers.yaml must be a YAML mapping")
+        return 1
+
+    bootstrap_config = servers_config.get("bootstrap")
+    if bootstrap_config is not None:
+        if not isinstance(bootstrap_config, dict):
+            print("invalid servers file: .workspace.local/servers.yaml bootstrap must be a mapping")
+            return 1
+        mode = bootstrap_config.get("mode")
+        if mode is not None and mode not in BOOTSTRAP_MODES:
+            print("invalid servers file: .workspace.local/servers.yaml bootstrap mode is unsupported")
+            return 1
+        completed = bootstrap_config.get("completed")
+        if completed is not None and not isinstance(completed, bool):
+            print("invalid servers file: .workspace.local/servers.yaml bootstrap completed must be a boolean")
+            return 1
+
+    state_file = paths.local_state_file
+    try:
+        state = json.loads(state_file.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         print("invalid state file: .workspace.local/state.json is not valid JSON")
+        return 1
+
+    if not isinstance(state, dict):
+        print("invalid state file: .workspace.local/state.json must be a JSON object")
+        return 1
+
+    schema_version = state.get("schema_version")
+    if isinstance(schema_version, bool) or not isinstance(schema_version, int):
+        print("invalid state file: .workspace.local/state.json missing schema_version")
+        return 1
+    if schema_version != OVERLAY_SCHEMA_VERSION:
+        print(
+            "unsupported schema_version in "
+            ".workspace.local/state.json: "
+            f"{schema_version}"
+        )
         return 1
 
     missing_submodules = _missing_submodules(paths.root)
@@ -84,14 +129,7 @@ def init(paths: RepoPaths) -> int:
         print("invalid local overlay: .workspace.local/ exists but is not a directory")
         return 1
 
-    paths.local_overlay.mkdir(parents=True, exist_ok=True)
-    for name in OVERLAY_FILES:
-        file_path = paths.local_overlay / name
-        if not file_path.exists():
-            if name == "state.json":
-                file_path.write_text("{}\n", encoding="utf-8")
-            else:
-                file_path.write_text("", encoding="utf-8")
+    ensure_overlay_layout(paths)
 
     print("init: ok")
     return 0

@@ -12,6 +12,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from conftest import run_vaws
+from tools.lib import reset
+from tools.lib.config import RepoPaths
 from tools.lib.remote import (
     CredentialGroup,
     HostSpec,
@@ -57,6 +59,17 @@ def seed_reset_workspace(vaws_repo: Path, target_name: str = "single-default") -
                         }
                     },
                 }
+                ,
+                "ssh_auth": {
+                    "refs": {
+                        "shared-lab-a": {
+                            "kind": "local-simulation",
+                            "username": "root",
+                            "simulation_root": str(simulation_root),
+                        }
+                    }
+                },
+                "git_auth": {"refs": {}},
             }
         ),
         encoding="utf-8",
@@ -153,6 +166,57 @@ def seed_reset_workspace(vaws_repo: Path, target_name: str = "single-default") -
         capture_output=True,
     )
 
+    return simulation_root
+
+
+def seed_reset_workspace_with_servers(vaws_repo: Path) -> Path:
+    simulation_root = seed_reset_workspace(vaws_repo)
+    overlay = vaws_repo / ".workspace.local"
+    (overlay / "servers.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "version": 1,
+                "bootstrap": {
+                    "completed": True,
+                    "mode": "remote-first",
+                },
+                "servers": {
+                    "host-a": {
+                        "host": "127.0.0.1",
+                        "port": 22,
+                        "login_user": "root",
+                        "ssh_auth_ref": "shared-lab-a",
+                        "status": "ready",
+                        "runtime": {
+                            "image_ref": "registry.example.com/ascend/vllm-ascend:test",
+                            "container_name": "vaws-owner",
+                            "ssh_port": 63269,
+                            "workspace_root": "/vllm-workspace",
+                            "bootstrap_mode": "host-then-container",
+                            "host_workspace_path": "/root/.vaws/targets/single-default/workspace",
+                        },
+                    },
+                    "host-b": {
+                        "host": "127.0.0.2",
+                        "port": 22,
+                        "login_user": "root",
+                        "ssh_auth_ref": "shared-lab-a",
+                        "status": "ready",
+                        "runtime": {
+                            "image_ref": "registry.example.com/ascend/vllm-ascend:test",
+                            "container_name": "vaws-backup",
+                            "ssh_port": 63270,
+                            "workspace_root": "/vllm-workspace-backup",
+                            "bootstrap_mode": "host-then-container",
+                            "host_workspace_path": "/root/.vaws/targets/single-backup/workspace",
+                        },
+                    },
+                },
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
     return simulation_root
 
 
@@ -391,7 +455,7 @@ def test_reset_execute_removes_local_and_remote_state(vaws_repo):
 
     overlay = vaws_repo / ".workspace.local"
     assert not (overlay / "reset-request.json").exists()
-    assert read_json(overlay / "state.json") == {}
+    assert read_json(overlay / "state.json") == {"schema_version": 1}
     assert not (overlay / "sessions").exists()
     assert (overlay / "targets.yaml").read_text(encoding="utf-8") == ""
     assert (overlay / "auth.yaml").read_text(encoding="utf-8") == ""
@@ -496,44 +560,92 @@ def test_reset_execute_fails_and_preserves_request_when_sessions_cleanup_fails(
     assert (overlay / "reset-request.json").exists()
 
 
-def test_reset_execute_stops_before_local_cleanup_when_remote_cleanup_fails(
+def test_reset_execute_attempts_cleanup_for_all_managed_servers(
     vaws_repo,
+    monkeypatch,
+    capsys,
 ):
-    simulation_root = seed_reset_workspace(vaws_repo)
-    overlay = vaws_repo / ".workspace.local"
+    seed_reset_workspace_with_servers(vaws_repo)
     assert run_vaws(vaws_repo, "target", "ensure", "single-default").returncode == 0
-    assert run_vaws(vaws_repo, "session", "create", "feat_alpha").returncode == 0
-    assert run_vaws(vaws_repo, "session", "switch", "feat_alpha").returncode == 0
-
     confirmation_id, _ = prepare_reset_confirmation(vaws_repo)
-    runtime_root = simulation_root / "host-a" / "vllm-workspace"
-    runtime_parent = runtime_root.parent
-    original_mode = runtime_parent.stat().st_mode
-    runtime_parent.chmod(original_mode & ~stat.S_IWUSR & ~stat.S_IWGRP & ~stat.S_IWOTH)
 
-    try:
-        result = run_vaws(
-            vaws_repo,
-            "reset",
-            "--execute",
-            "--confirmation-id",
-            confirmation_id,
-            "--confirm",
-            "I authorize wiping local workspace identity and remote runtime",
-        )
-    finally:
-        runtime_parent.chmod(original_mode)
+    calls = []
 
-    assert result.returncode == 1
-    output = (result.stdout + result.stderr).lower()
-    assert "remote" in output or "cleanup" in output
-    assert "permission" in output or "failed" in output
+    class FakeCleanupResult:
+        def __init__(self, server_name: str):
+            self.server_name = server_name
+            self.status = "removed"
+            self.detail = "removed"
 
-    assert read_json(overlay / "state.json")["current_session"] == "feat_alpha"
-    assert (overlay / "sessions" / "feat_alpha" / "manifest.yaml").exists()
-    assert (overlay / "reset-request.json").exists()
-    runtime_root = simulation_root / "host-a" / "vllm-workspace"
-    assert (runtime_root / ".vaws" / "current").exists()
+        def to_mapping(self):
+            return {
+                "server_name": self.server_name,
+                "status": self.status,
+                "detail": self.detail,
+            }
+
+    def fake_cleanup_server_runtime(paths, server_name):
+        calls.append(server_name)
+        return FakeCleanupResult(server_name)
+
+    monkeypatch.setattr(reset, "cleanup_server_runtime", fake_cleanup_server_runtime, raising=False)
+
+    result = reset.execute_reset(
+        RepoPaths(root=vaws_repo),
+        confirmation_id,
+        "I authorize wiping local workspace identity and remote runtime",
+    )
+    output = capsys.readouterr().out.lower()
+
+    assert result == 0
+    assert calls == ["host-a", "host-b"]
+    assert "host-a" in output
+    assert "host-b" in output
+    assert "removed" in output
+
+
+def test_reset_execute_reports_unreachable_servers_but_continues_cleanup(
+    vaws_repo,
+    monkeypatch,
+    capsys,
+):
+    seed_reset_workspace_with_servers(vaws_repo)
+    assert run_vaws(vaws_repo, "target", "ensure", "single-default").returncode == 0
+    confirmation_id, _ = prepare_reset_confirmation(vaws_repo)
+    overlay = vaws_repo / ".workspace.local"
+
+    class FakeCleanupResult:
+        def __init__(self, server_name: str, status: str, detail: str):
+            self.server_name = server_name
+            self.status = status
+            self.detail = detail
+
+        def to_mapping(self):
+            return {
+                "server_name": self.server_name,
+                "status": self.status,
+                "detail": self.detail,
+            }
+
+    def fake_cleanup_server_runtime(paths, server_name):
+        if server_name == "host-a":
+            return FakeCleanupResult(server_name, "removed", "removed")
+        return FakeCleanupResult(server_name, "unreachable", "ssh probe failed")
+
+    monkeypatch.setattr(reset, "cleanup_server_runtime", fake_cleanup_server_runtime, raising=False)
+
+    result = reset.execute_reset(
+        RepoPaths(root=vaws_repo),
+        confirmation_id,
+        "I authorize wiping local workspace identity and remote runtime",
+    )
+    output = capsys.readouterr().out.lower()
+
+    assert result == 0
+    assert "host-b" in output
+    assert "unreachable" in output
+    assert not (overlay / "reset-request.json").exists()
+    assert read_json(overlay / "state.json") == {"schema_version": 1}
 
 
 def test_destroy_runtime_dispatches_host_cleanup(monkeypatch):

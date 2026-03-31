@@ -16,7 +16,8 @@ This repository is a public-facing control workspace for vLLM Ascend development
 ## Workflow Routing
 
 - Keep detailed operational procedures in `.agents/skills/`, not in this file.
-- Use `.agents/skills/workspace-bootstrap/SKILL.md` for bootstrap and bootstrap repair.
-- Use `.agents/skills/workspace-reset/SKILL.md` for guarded reset / deinit.
+- Use `.agents/skills/workspace-bootstrap/SKILL.md` for first-time baseline bootstrap and bootstrap repair.
+- Use `.agents/skills/workspace-fleet/SKILL.md` for post-bootstrap server inventory maintenance.
+- Use `.agents/skills/workspace-reset/SKILL.md` for guarded best-effort reset / deinit cleanup.
 - Use `.agents/skills/workspace-session-switch/SKILL.md` for session changes.
 - Use `.agents/skills/workspace-sync/SKILL.md` for sync behavior.

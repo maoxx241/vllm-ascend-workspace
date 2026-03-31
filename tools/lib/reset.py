@@ -5,11 +5,18 @@ import secrets
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from .bootstrap import COMMUNITY_UPSTREAM_URLS
 from .config import RepoPaths
-from .remote import RemoteError, destroy_runtime, resolve_target_context
+from .remote import (
+    CleanupResult,
+    RemoteError,
+    cleanup_runtime,
+    list_managed_server_names,
+    resolve_server_context,
+    resolve_target_context,
+)
 from .runtime import read_state, write_state
 
 CONFIRMATION_PHRASE = "I authorize wiping local workspace identity and remote runtime"
@@ -103,13 +110,34 @@ def _cleanup_local_state(paths: RepoPaths) -> None:
     paths.local_repos_file.write_text("", encoding="utf-8")
 
 
-def _cleanup_remote_state(request: Dict[str, Any], paths: RepoPaths) -> None:
-    approved_target = request.get("approved_target")
-    if not isinstance(approved_target, str) or not approved_target.strip():
-        return
+def cleanup_server_runtime(paths: RepoPaths, server_name: str) -> CleanupResult:
+    try:
+        context = resolve_server_context(paths, server_name)
+    except RemoteError:
+        context = resolve_target_context(paths, server_name)
+    return cleanup_runtime(context)
 
-    context = resolve_target_context(paths, approved_target.strip())
-    destroy_runtime(context)
+
+def _cleanup_remote_state(request: Dict[str, Any], paths: RepoPaths) -> List[CleanupResult]:
+    server_names = list_managed_server_names(paths)
+    if not server_names:
+        approved_target = request.get("approved_target")
+        if isinstance(approved_target, str) and approved_target.strip():
+            server_names = [approved_target.strip()]
+
+    results: List[CleanupResult] = []
+    for server_name in server_names:
+        try:
+            results.append(cleanup_server_runtime(paths, server_name))
+        except (RemoteError, RuntimeError) as exc:
+            results.append(
+                CleanupResult(
+                    server_name=server_name,
+                    status="cleanup_failed",
+                    detail=str(exc),
+                )
+            )
+    return results
 
 
 def _run_git(repo_path: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -187,11 +215,10 @@ def execute_reset(
         print("reset execute: confirmation phrase must exactly match the approved phrase")
         return 1
 
-    try:
-        _cleanup_remote_state(request, paths)
-    except RemoteError as exc:
-        print(f"reset execute: failed to clean remote runtime: {exc}")
-        return 1
+    remote_results = _cleanup_remote_state(request, paths)
+    for result in remote_results:
+        detail = f" ({result.detail})" if result.detail else ""
+        print(f"reset execute: server {result.server_name}: {result.status}{detail}")
 
     try:
         _cleanup_local_state(paths)
