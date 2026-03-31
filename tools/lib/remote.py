@@ -49,6 +49,7 @@ class HostSpec:
     port: int
     login_user: str
     auth_group: str
+    ssh_auth_ref: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -111,6 +112,16 @@ def _load_auth_config(paths: RepoPaths) -> Dict[str, Any]:
         paths.local_overlay / "auth.yaml",
         "invalid auth config: .workspace.local/auth.yaml",
     )
+
+
+def _host_auth_ref(host_config: Dict[str, Any]) -> Optional[str]:
+    auth_ref = host_config.get("ssh_auth_ref")
+    if isinstance(auth_ref, str) and auth_ref.strip():
+        return auth_ref.strip()
+    auth_group = host_config.get("auth_group")
+    if isinstance(auth_group, str) and auth_group.strip():
+        return auth_group.strip()
+    return None
 
 
 def _credential_group_from_ref(
@@ -238,6 +249,12 @@ def resolve_target_context(paths: RepoPaths, target_name: str) -> TargetContext:
             f"invalid target config: target '{target_name}' references unknown host '{host_name}'"
         )
 
+    ssh_auth_ref = _host_auth_ref(host_config)
+    if not ssh_auth_ref:
+        raise RemoteError(
+            f"invalid target config: host '{host_name}' missing ssh_auth_ref"
+        )
+
     host = HostSpec(
         name=host_name,
         host=_require_non_empty_string(
@@ -253,9 +270,10 @@ def resolve_target_context(paths: RepoPaths, target_name: str) -> TargetContext:
             f"invalid target config: host '{host_name}' missing login_user",
         ),
         auth_group=_require_non_empty_string(
-            host_config.get("auth_group"),
-            f"invalid target config: host '{host_name}' missing auth_group",
+            ssh_auth_ref,
+            f"invalid target config: host '{host_name}' missing ssh_auth_ref",
         ),
+        ssh_auth_ref=ssh_auth_ref,
     )
 
     image_ref = _require_non_empty_string(
@@ -300,20 +318,21 @@ def resolve_target_context(paths: RepoPaths, target_name: str) -> TargetContext:
         )
 
     auth = _load_auth_config(paths)
+    ssh_auth_ref = host.ssh_auth_ref or host.auth_group
     ssh_auth = auth.get("ssh_auth")
     if isinstance(ssh_auth, dict):
         ssh_refs = ssh_auth.get("refs")
         if not isinstance(ssh_refs, dict):
             raise RemoteError("invalid auth config: missing ssh_auth.refs map")
 
-        credential_config = ssh_refs.get(host.auth_group)
+        credential_config = ssh_refs.get(ssh_auth_ref)
         if not isinstance(credential_config, dict):
             raise RemoteError(
-                f"invalid auth config: unknown ssh auth ref '{host.auth_group}'"
+                f"invalid auth config: unknown ssh auth ref '{ssh_auth_ref}'"
             )
         credential = _credential_group_from_ref(
             credential_config,
-            host.auth_group,
+            ssh_auth_ref,
             host.login_user,
         )
     else:
@@ -567,6 +586,8 @@ def _ssh_base_command(
         "-p",
         str(target_port),
     ]
+    if ctx.credential.key_path:
+        command.extend(["-i", ctx.credential.key_path])
     if batch_mode:
         command.extend(["-o", "BatchMode=yes"])
     user = ctx.credential.username if username is None else username

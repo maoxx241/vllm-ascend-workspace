@@ -25,6 +25,8 @@ DEFAULT_RUNTIME_SSH_PORT = 63269
 DEFAULT_RUNTIME_WORKSPACE_ROOT = "/vllm-workspace"
 DEFAULT_RUNTIME_BOOTSTRAP_MODE = "host-then-container"
 DEFAULT_SERVER_PORT = 22
+DEFAULT_SERVER_AUTH_REF = "default-server-auth"
+DEFAULT_GIT_AUTH_REF = "default-git-auth"
 
 
 class BootstrapError(RuntimeError):
@@ -211,7 +213,7 @@ def _write_targets_yaml(paths: RepoPaths, request: BootstrapRequest) -> None:
         "host": request.server_host,
         "port": request.server_port,
         "login_user": request.server_user,
-        "auth_group": request.server_auth_group,
+        "ssh_auth_ref": DEFAULT_SERVER_AUTH_REF,
     }
     config["hosts"] = hosts
 
@@ -237,7 +239,7 @@ def _write_auth_yaml(paths: RepoPaths, request: BootstrapRequest) -> None:
     config["version"] = 1
     config["ssh_auth"] = {
         "refs": {
-            request.server_auth_group: _auth_ref_payload(
+            DEFAULT_SERVER_AUTH_REF: _auth_ref_payload(
                 request.server_auth_mode,
                 username=request.server_user,
                 password_env=request.server_password_env,
@@ -248,7 +250,7 @@ def _write_auth_yaml(paths: RepoPaths, request: BootstrapRequest) -> None:
 
     config["git_auth"] = {
         "refs": {
-            "default": _auth_ref_payload(
+            DEFAULT_GIT_AUTH_REF: _auth_ref_payload(
                 request.git_auth_mode,
                 key_path=request.git_key_path,
                 token_env=request.git_token_env,

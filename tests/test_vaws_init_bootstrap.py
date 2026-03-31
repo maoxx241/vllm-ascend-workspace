@@ -10,6 +10,7 @@ if str(ROOT) not in sys.path:
 
 from conftest import run_vaws
 from tools.lib import preflight
+from tools.lib.remote import CredentialGroup, HostSpec, RuntimeSpec, TargetContext, _ssh_base_command
 
 
 def _remote_url(repo, relative_path, remote_name):
@@ -51,14 +52,16 @@ def test_init_bootstrap_writes_overlay_and_configures_repo_remotes(vaws_repo):
 
     auth = yaml.safe_load((vaws_repo / ".workspace.local" / "auth.yaml").read_text())
     assert auth["version"] == 1
-    assert auth["ssh_auth"]["refs"]["default"]["kind"] == "ssh-key"
-    assert auth["ssh_auth"]["refs"]["default"]["username"] == "root"
-    assert auth["git_auth"]["refs"]["default"]["kind"] == "ssh-agent"
+    assert auth["ssh_auth"]["refs"]["default-server-auth"]["kind"] == "ssh-key"
+    assert auth["ssh_auth"]["refs"]["default-server-auth"]["username"] == "root"
+    assert auth["git_auth"]["refs"]["default-git-auth"]["kind"] == "ssh-agent"
 
     targets = yaml.safe_load(
         (vaws_repo / ".workspace.local" / "targets.yaml").read_text()
     )
     assert targets["hosts"]["host-a"]["host"] == "173.125.1.2"
+    assert targets["hosts"]["host-a"]["ssh_auth_ref"] == "default-server-auth"
+    assert "auth_group" not in targets["hosts"]["host-a"]
     assert targets["targets"]["single-default"]["runtime"]["workspace_root"] == "/vllm-workspace"
 
     assert _remote_url(vaws_repo, "vllm", "origin") == "git@github.com:alice/vllm.git"
@@ -75,7 +78,7 @@ def test_init_bootstrap_writes_overlay_and_configures_repo_remotes(vaws_repo):
 
 def test_preflight_reports_missing_and_optional_tools(monkeypatch):
     def fake_which(command):
-        if command in {"ssh", "gh"}:
+        if command == "gh":
             return None
         return f"/usr/bin/{command}"
 
@@ -83,8 +86,42 @@ def test_preflight_reports_missing_and_optional_tools(monkeypatch):
 
     report = preflight.check_local_control_plane_deps()
 
-    assert report.missing_required == ("ssh",)
+    assert report.status == "degraded"
+    assert report.installed_required == ("git", "ssh", "python3")
+    assert report.missing_required == ()
+    assert report.installed_recommended == ()
     assert report.missing_recommended == ("gh",)
+
+
+def test_preflight_reports_blocked_when_required_tool_missing(monkeypatch):
+    def fake_which(command):
+        if command == "ssh":
+            return None
+        return f"/usr/bin/{command}"
+
+    monkeypatch.setattr(preflight.shutil, "which", fake_which)
+
+    report = preflight.check_local_control_plane_deps()
+
+    assert report.status == "blocked"
+    assert report.installed_required == ("git", "python3")
+    assert report.missing_required == ("ssh",)
+
+
+def test_preflight_treats_running_python_as_installed_python3(monkeypatch):
+    def fake_which(command):
+        if command == "python3":
+            return None
+        return f"/usr/bin/{command}"
+
+    monkeypatch.setattr(preflight.shutil, "which", fake_which)
+    monkeypatch.setattr(preflight.sys, "executable", "/opt/control-plane/bin/python")
+
+    report = preflight.check_local_control_plane_deps()
+
+    assert report.status == "ready"
+    assert "python3" in report.installed_required
+    assert report.missing_required == ()
 
 
 def test_init_bootstrap_creates_overlay_compatible_with_doctor(vaws_repo):
@@ -110,6 +147,38 @@ def test_init_bootstrap_creates_overlay_compatible_with_doctor(vaws_repo):
 
     assert doctor_result.returncode == 0
     assert "doctor: ok" in doctor_result.stdout.lower()
+
+
+def test_ssh_base_command_honors_server_key_path():
+    ctx = TargetContext(
+        name="single-default",
+        host=HostSpec(
+            name="host-a",
+            host="173.125.1.2",
+            port=22,
+            login_user="root",
+            auth_group="default",
+        ),
+        credential=CredentialGroup(
+            mode="ssh-key",
+            username="root",
+            key_path="/tmp/control-plane.key",
+        ),
+        runtime=RuntimeSpec(
+            image_ref="image",
+            container_name="container",
+            ssh_port=63269,
+            workspace_root="/vllm-workspace",
+            bootstrap_mode="host-then-container",
+            host_workspace_path="/tmp/workspace",
+            docker_run_args=[],
+        ),
+    )
+
+    command = _ssh_base_command(ctx)
+
+    assert "-i" in command
+    assert "/tmp/control-plane.key" in command
 
 
 def test_init_bootstrap_fails_cleanly_for_malformed_state_json(vaws_repo):
