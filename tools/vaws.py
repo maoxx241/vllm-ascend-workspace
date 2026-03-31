@@ -23,7 +23,10 @@ def build_parser() -> argparse.ArgumentParser:
     init_parser.add_argument("--bootstrap", action="store_true")
     init_parser.add_argument("--target-name", default="single-default")
     init_parser.add_argument("--host-name", default="host-a")
-    init_parser.add_argument("--server-host")
+    init_parser.add_argument(
+        "--server-host",
+        help="bootstrap server host; omit for local-only baseline",
+    )
     init_parser.add_argument("--server-user", default="root")
     init_parser.add_argument("--server-port", type=int, default=22)
     init_parser.add_argument("--server-auth-mode", default="ssh-key")

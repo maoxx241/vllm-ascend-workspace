@@ -27,6 +27,9 @@ DEFAULT_RUNTIME_BOOTSTRAP_MODE = "host-then-container"
 DEFAULT_SERVER_PORT = 22
 DEFAULT_SERVER_AUTH_REF = "default-server-auth"
 DEFAULT_GIT_AUTH_REF = "default-git-auth"
+DEFAULT_SERVER_STATUS = "ready"
+BOOTSTRAP_MODE_SERVER = "server"
+BOOTSTRAP_MODE_LOCAL_ONLY = "local-only"
 
 
 class BootstrapError(RuntimeError):
@@ -35,7 +38,7 @@ class BootstrapError(RuntimeError):
 
 @dataclass(frozen=True)
 class BootstrapRequest:
-    server_host: str
+    server_host: Optional[str]
     server_user: str
     vllm_ascend_origin_url: str
     server_port: int = DEFAULT_SERVER_PORT
@@ -61,6 +64,14 @@ def _require_non_empty(value: Optional[str], field_name: str) -> str:
     return value.strip()
 
 
+def _optional_non_empty(value: Optional[str], field_name: str) -> Optional[str]:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise BootstrapError(f"invalid bootstrap field: {field_name}")
+    return value.strip()
+
+
 def _require_port(value: Any, field_name: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 1 or value > 65535:
         raise BootstrapError(f"invalid bootstrap field: {field_name}")
@@ -69,7 +80,7 @@ def _require_port(value: Any, field_name: str) -> int:
 
 def bootstrap_request_from_args(args: Any) -> BootstrapRequest:
     return BootstrapRequest(
-        server_host=_require_non_empty(args.server_host, "server host"),
+        server_host=_optional_non_empty(args.server_host, "server host"),
         server_user=_require_non_empty(args.server_user, "server user"),
         vllm_ascend_origin_url=_require_non_empty(
             args.vllm_ascend_origin_url,
@@ -97,6 +108,10 @@ def bootstrap_request_from_args(args: Any) -> BootstrapRequest:
         git_key_path=args.git_key_path,
         git_token_env=args.git_token_env,
     )
+
+
+def _bootstrap_mode(request: BootstrapRequest) -> str:
+    return BOOTSTRAP_MODE_LOCAL_ONLY if request.server_host is None else BOOTSTRAP_MODE_SERVER
 
 
 def _ensure_overlay(paths: RepoPaths) -> None:
@@ -205,7 +220,32 @@ def _write_repos_yaml(paths: RepoPaths, request: BootstrapRequest) -> None:
     _write_yaml(repos_path, config)
 
 
+def _write_servers_yaml(paths: RepoPaths, request: BootstrapRequest) -> None:
+    servers_path = paths.local_servers_file
+    config = _load_yaml_mapping(servers_path)
+    config["version"] = 1
+    config["bootstrap"] = {
+        "completed": True,
+        "mode": _bootstrap_mode(request),
+    }
+
+    servers = dict(config.get("servers") or {})
+    if request.server_host is not None:
+        servers[request.host_name] = {
+            "host": request.server_host,
+            "port": request.server_port,
+            "login_user": request.server_user,
+            "ssh_auth_ref": DEFAULT_SERVER_AUTH_REF,
+            "status": DEFAULT_SERVER_STATUS,
+        }
+    config["servers"] = servers
+    _write_yaml(servers_path, config)
+
+
 def _write_targets_yaml(paths: RepoPaths, request: BootstrapRequest) -> None:
+    if request.server_host is None:
+        return
+
     targets_path = paths.local_overlay / "targets.yaml"
     config = _load_yaml_mapping(targets_path)
     hosts = dict(config.get("hosts") or {})
@@ -233,6 +273,9 @@ def _write_targets_yaml(paths: RepoPaths, request: BootstrapRequest) -> None:
 
 
 def _write_auth_yaml(paths: RepoPaths, request: BootstrapRequest) -> None:
+    if request.server_host is None:
+        return
+
     auth_path = paths.local_overlay / "auth.yaml"
     config = _load_yaml_mapping(auth_path)
 
@@ -260,9 +303,33 @@ def _write_auth_yaml(paths: RepoPaths, request: BootstrapRequest) -> None:
     _write_yaml(auth_path, config)
 
 
-def _ensure_state_json(paths: RepoPaths) -> None:
+def _read_bootstrap_state(paths: RepoPaths) -> Dict[str, Any]:
     try:
-        write_state(paths, read_state(paths))
+        return read_state(paths)
+    except RuntimeError as exc:
+        raise BootstrapError(str(exc)) from exc
+
+
+def _ensure_bootstrap_not_completed(paths: RepoPaths) -> None:
+    state = _read_bootstrap_state(paths)
+    bootstrap_state = state.get("bootstrap")
+    if not isinstance(bootstrap_state, dict):
+        return
+
+    if bootstrap_state.get("completed") is True:
+        raise BootstrapError(
+            "bootstrap baseline already completed; use `vaws fleet` for later server changes"
+        )
+
+
+def _write_bootstrap_state(paths: RepoPaths, request: BootstrapRequest) -> None:
+    try:
+        state = read_state(paths)
+        state["bootstrap"] = {
+            "completed": True,
+            "mode": _bootstrap_mode(request),
+        }
+        write_state(paths, state)
     except RuntimeError as exc:
         raise BootstrapError(str(exc)) from exc
 
@@ -295,11 +362,13 @@ def bootstrap_init(paths: RepoPaths, request: BootstrapRequest) -> int:
     try:
         preflight_report = ensure_local_control_plane_deps()
         _ensure_overlay(paths)
+        _ensure_bootstrap_not_completed(paths)
         _write_repos_yaml(paths, request)
+        _write_servers_yaml(paths, request)
         _write_targets_yaml(paths, request)
         _write_auth_yaml(paths, request)
-        _ensure_state_json(paths)
         _configure_repo_remotes(paths, request)
+        _write_bootstrap_state(paths, request)
     except PreflightError as exc:
         print(str(exc))
         return 1
@@ -310,5 +379,5 @@ def bootstrap_init(paths: RepoPaths, request: BootstrapRequest) -> int:
     if preflight_report.status == "degraded":
         missing = ", ".join(preflight_report.missing_recommended)
         print(f"init: preflight degraded: missing recommended tools: {missing}")
-    print("init: bootstrap ok")
+    print(f"init: bootstrap ok ({_bootstrap_mode(request)})")
     return 0

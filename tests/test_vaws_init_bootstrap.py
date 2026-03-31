@@ -59,6 +59,14 @@ def test_init_bootstrap_writes_overlay_and_configures_repo_remotes(vaws_repo):
     assert auth["ssh_auth"]["refs"]["default-server-auth"]["username"] == "root"
     assert auth["git_auth"]["refs"]["default-git-auth"]["kind"] == "ssh-agent"
 
+    servers = yaml.safe_load((vaws_repo / ".workspace.local" / "servers.yaml").read_text())
+    assert servers["version"] == 1
+    assert servers["bootstrap"]["completed"] is True
+    assert servers["bootstrap"]["mode"] == "server"
+    assert servers["servers"]["host-a"]["host"] == "173.125.1.2"
+    assert servers["servers"]["host-a"]["status"] == "ready"
+    assert servers["servers"]["host-a"]["ssh_auth_ref"] == "default-server-auth"
+
     targets = yaml.safe_load(
         (vaws_repo / ".workspace.local" / "targets.yaml").read_text()
     )
@@ -76,7 +84,65 @@ def test_init_bootstrap_writes_overlay_and_configures_repo_remotes(vaws_repo):
     assert target_result.returncode == 0
     state = yaml.safe_load((vaws_repo / ".workspace.local" / "state.json").read_text())
     assert state["schema_version"] == 1
+    assert state["bootstrap"]["completed"] is True
+    assert state["bootstrap"]["mode"] == "server"
     assert state["current_target"] == "single-default"
+
+
+def test_init_bootstrap_refuses_rerun_after_baseline(vaws_repo):
+    first = run_vaws(
+        vaws_repo,
+        "init",
+        "--bootstrap",
+        "--server-host",
+        "173.125.1.2",
+        "--server-user",
+        "root",
+        "--vllm-ascend-origin-url",
+        "git@github.com:alice/vllm-ascend.git",
+    )
+    assert first.returncode == 0
+
+    second = run_vaws(
+        vaws_repo,
+        "init",
+        "--bootstrap",
+        "--server-host",
+        "173.125.1.2",
+        "--server-user",
+        "root",
+        "--vllm-ascend-origin-url",
+        "git@github.com:alice/vllm-ascend.git",
+    )
+
+    assert second.returncode == 1
+    output = (second.stdout + second.stderr).lower()
+    assert "bootstrap baseline" in output
+    assert "fleet" in output
+    assert "traceback" not in output
+
+
+def test_init_bootstrap_supports_local_only_mode(vaws_repo):
+    result = run_vaws(
+        vaws_repo,
+        "init",
+        "--bootstrap",
+        "--vllm-ascend-origin-url",
+        "git@github.com:alice/vllm-ascend.git",
+    )
+
+    assert result.returncode == 0
+    output = result.stdout.lower()
+    assert "bootstrap ok" in output
+
+    servers = yaml.safe_load((vaws_repo / ".workspace.local" / "servers.yaml").read_text())
+    assert servers["bootstrap"]["completed"] is True
+    assert servers["bootstrap"]["mode"] == "local-only"
+    assert servers["servers"] == {}
+
+    state = yaml.safe_load((vaws_repo / ".workspace.local" / "state.json").read_text())
+    assert state["bootstrap"]["completed"] is True
+    assert state["bootstrap"]["mode"] == "local-only"
 
 
 def test_preflight_reports_missing_and_optional_tools(monkeypatch):
@@ -308,7 +374,7 @@ def test_init_bootstrap_requires_vllm_ascend_origin_url(vaws_repo):
     assert "origin" in output
 
 
-def test_init_bootstrap_requires_server_host(vaws_repo):
+def test_init_bootstrap_defaults_to_local_only_without_server_host(vaws_repo):
     result = run_vaws(
         vaws_repo,
         "init",
@@ -319,7 +385,7 @@ def test_init_bootstrap_requires_server_host(vaws_repo):
         "git@github.com:alice/vllm-ascend.git",
     )
 
-    assert result.returncode == 1
-    output = (result.stdout + result.stderr).lower()
-    assert "server" in output
-    assert "host" in output
+    assert result.returncode == 0
+    output = result.stdout.lower()
+    assert "local-only" in output
+    assert "bootstrap ok" in output

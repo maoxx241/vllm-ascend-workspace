@@ -3,10 +3,13 @@ import json
 from pathlib import Path
 from typing import Optional
 
+import yaml
+
 from .config import RepoPaths
 from .overlay import OVERLAY_SCHEMA_VERSION, ensure_overlay_layout
 
 OVERLAY_FILES = ("servers.yaml", "repos.yaml", "auth.yaml", "state.json")
+BOOTSTRAP_MODES = {"server", "local-only"}
 
 
 def _declared_submodule_paths(root: Path):
@@ -63,6 +66,31 @@ def doctor(paths: RepoPaths) -> int:
     if missing_files:
         print(f"missing overlay files: {', '.join(missing_files)}")
         return 1
+
+    servers_file = paths.local_servers_file
+    try:
+        servers_config = yaml.safe_load(servers_file.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, yaml.YAMLError):
+        print("invalid servers file: .workspace.local/servers.yaml is not valid YAML")
+        return 1
+
+    if not isinstance(servers_config, dict):
+        print("invalid servers file: .workspace.local/servers.yaml must be a YAML mapping")
+        return 1
+
+    bootstrap_config = servers_config.get("bootstrap")
+    if bootstrap_config is not None:
+        if not isinstance(bootstrap_config, dict):
+            print("invalid servers file: .workspace.local/servers.yaml bootstrap must be a mapping")
+            return 1
+        mode = bootstrap_config.get("mode")
+        if mode is not None and mode not in BOOTSTRAP_MODES:
+            print("invalid servers file: .workspace.local/servers.yaml bootstrap mode is unsupported")
+            return 1
+        completed = bootstrap_config.get("completed")
+        if completed is not None and not isinstance(completed, bool):
+            print("invalid servers file: .workspace.local/servers.yaml bootstrap completed must be a boolean")
+            return 1
 
     state_file = paths.local_state_file
     try:
