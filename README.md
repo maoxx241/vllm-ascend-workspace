@@ -28,4 +28,7 @@ Public workspace-local control repository for coordinating vLLM and vLLM-Ascend 
 - `.agents/skills/` contains public reference material for workspace-local agents.
 - `.workspace.local/` is local-only overlay state and stays untracked.
 - `.workspace.local/repos.yaml` is the local source of truth for `origin`/`upstream` repo topology.
+- Guarded reset uses `tools/vaws.py reset --prepare` to mint a fresh confirmation id, then `tools/vaws.py reset --execute --confirmation-id ... --confirm ...` to perform the reset.
+- Agents must not skip prepare, reuse stale confirmation ids, or fabricate authorization.
+- A successful reset restores `origin` and `upstream` on `vllm/` and `vllm-ascend/` to the community URLs.
 - Tracked files must not contain private tokens, private hosts, or legacy path references.

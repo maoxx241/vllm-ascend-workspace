@@ -10,6 +10,7 @@ from tools.lib.bootstrap import bootstrap_init, bootstrap_request_from_args
 from tools.lib.config import RepoPaths
 from tools.lib.doctor import doctor, init
 from tools.lib.gitflow import default_base_ref
+from tools.lib.reset import execute_reset, prepare_reset
 from tools.lib.session import create_session, status_session, switch_session
 from tools.lib.targets import ensure_target
 
@@ -57,6 +58,12 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
     )
     remotes_subparsers.add_parser("normalize")
+
+    reset_parser = subparsers.add_parser("reset")
+    reset_parser.add_argument("--prepare", action="store_true")
+    reset_parser.add_argument("--execute", action="store_true")
+    reset_parser.add_argument("--confirmation-id")
+    reset_parser.add_argument("--confirm")
 
     target_parser = subparsers.add_parser("target")
     target_subparsers = target_parser.add_subparsers(dest="target_command", required=True)
@@ -110,6 +117,16 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(str(exc))
             return 1
         return 0
+    if args.command == "reset":
+        if args.prepare and args.execute:
+            print("reset: choose only one mode, --prepare or --execute")
+            return 1
+        if args.prepare:
+            return prepare_reset(paths)
+        if args.execute:
+            return execute_reset(paths, args.confirmation_id, args.confirm)
+        print("reset: missing mode, use --prepare or --execute")
+        return 1
     if args.command == "target" and args.target_command == "ensure":
         return ensure_target(paths, args.target_name)
     if args.command == "session" and args.session_command == "create":

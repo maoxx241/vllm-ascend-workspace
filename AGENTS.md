@@ -20,6 +20,9 @@ This repository is a public-facing control workspace for vLLM Ascend development
 - `.workspace.local/repos.yaml` is local state for repo topology and remote roles.
 - Do not commit credentials, private hosts, private paths, tokens, or keys.
 - `.agents/skills/` contains workspace-local reference material, not global skill installers.
+- Guarded reset requires `tools/vaws.py reset --prepare` before `tools/vaws.py reset --execute --confirmation-id ... --confirm ...`.
+- Agents must not skip prepare, reuse stale confirmation ids, or fabricate authorization.
+- After a successful reset, restore `origin` and `upstream` on `vllm/` and `vllm-ascend/` back to the community URLs.
 
 ## Environment assumptions
 

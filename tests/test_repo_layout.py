@@ -103,6 +103,22 @@ def test_public_docs_explain_upstream_defaults_and_local_origin_bootstrap():
         assert "natural language" in text or "conversational" in text
 
 
+def test_public_guidance_mentions_guarded_reset_workflow():
+    repo = Path(__file__).resolve().parents[1]
+    readme = (repo / "README.md").read_text(encoding="utf-8").lower()
+    agents = (repo / "AGENTS.md").read_text(encoding="utf-8").lower()
+    skill = (
+        repo / ".agents" / "skills" / "workspace-bootstrap" / "SKILL.md"
+    ).read_text(encoding="utf-8").lower()
+
+    for text in (readme, agents, skill):
+        assert "reset --prepare" in text
+        assert "reset --execute" in text
+        assert "must not skip prepare" in text
+        assert "stale confirmation id" in text or "stale confirmation ids" in text
+        assert "fabricate authorization" in text
+
+
 def test_workspace_local_skill_skeletons_exist_and_stay_public():
     repo = Path(__file__).resolve().parents[1]
     agents_root = repo / ".agents"
