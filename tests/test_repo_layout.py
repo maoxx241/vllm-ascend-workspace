@@ -54,6 +54,8 @@ def test_public_guidance_uses_current_entrypoints_and_canonical_root():
     assert "submodule" in readme
     assert "vllm/" in agents
     assert "vllm-ascend/" in agents
+    assert "fleet" in readme
+    assert "fleet" in agents
 
 
 def test_workspace_submodules_are_declared():
@@ -110,6 +112,7 @@ def test_agents_md_routes_bootstrap_and_reset_to_skills():
     agents = (repo / "AGENTS.md").read_text(encoding="utf-8").lower()
     for skill_name in (
         "workspace-bootstrap",
+        "workspace-fleet",
         "workspace-reset",
         "workspace-session-switch",
         "workspace-sync",
@@ -121,6 +124,7 @@ def test_agents_md_routes_bootstrap_and_reset_to_skills():
     assert "must not skip prepare" not in agents
     assert "fabricate authorization" not in agents
     assert "init --bootstrap" not in agents
+    assert "fleet add" not in agents
 
 
 def test_workspace_reset_skill_owns_guarded_reset_procedure():
@@ -136,6 +140,8 @@ def test_workspace_reset_skill_owns_guarded_reset_procedure():
     assert "stale confirmation id" in text or "stale confirmation ids" in text
     assert "fabricate authorization" in text
     assert "community urls" in text or "community `origin` and `upstream`" in text
+    assert "all managed servers" in text
+    assert "unreachable" in text
 
 
 def test_workspace_local_skill_skeletons_exist_and_stay_public():
@@ -155,10 +161,17 @@ def test_workspace_local_skill_skeletons_exist_and_stay_public():
         "workspace-bootstrap": (
             "/vllm-workspace",
             "natural language",
-            "server",
+            "first-time baseline",
             "vllm-ascend",
             "optional",
             "tools/vaws.py init --bootstrap",
+        ),
+        "workspace-fleet": (
+            "tools/vaws.py fleet",
+            "servers.yaml",
+            "add",
+            "verify",
+            "repair",
         ),
         "workspace-reset": (
             "/vllm-workspace",

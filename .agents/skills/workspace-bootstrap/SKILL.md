@@ -12,6 +12,7 @@ Use this skill when initializing or repairing the local workspace overlay for a 
 - Collect remote server connection details first.
 - Collect `vllm-ascend` repo path or fork URL and Git auth second.
 - Treat `vllm` fork configuration as optional.
+- Use bootstrap only for the first-time baseline; later server changes belong in fleet.
 - Once enough information is available, the agent should run `tools/vaws.py init --bootstrap ...` and then use `tools/vaws.py doctor` for follow-up checks.
 - Treat `.workspace.local/` as local overlay state only.
 - Keep tracked defaults on community `upstream` repositories and store user-specific `origin` topology in `.workspace.local/repos.yaml`.

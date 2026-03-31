@@ -31,8 +31,9 @@ Public workspace-local control repository for coordinating vLLM and vLLM-Ascend 
 ## Agent Workflows
 
 - `.agents/skills/` contains public reference material for workspace-local agents.
-- Bootstrap and workspace repair flow live in `.agents/skills/workspace-bootstrap/`.
+- Bootstrap and first-time baseline flow live in `.agents/skills/workspace-bootstrap/`.
+- Ongoing server inventory maintenance lives in `.agents/skills/workspace-fleet/`.
 - For Codex bootstrap, the user should start from a natural language request and the agent should route into the bootstrap skill.
-- Guarded deinit/reset flow lives in `.agents/skills/workspace-reset/`.
+- Guarded best-effort cleanup flow lives in `.agents/skills/workspace-reset/`.
 - Session switching flow lives in `.agents/skills/workspace-session-switch/`.
 - Sync flow lives in `.agents/skills/workspace-sync/`.

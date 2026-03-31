@@ -6,9 +6,10 @@ This directory contains public, workspace-local reference material for agents wo
 - Primary command surface: `tools/vaws.py`
 - Compatibility entrypoints: `./setup` and `./sync`
 - Workflow skills live under `.agents/skills/`.
-- Bootstrap and repair procedure: `.agents/skills/workspace-bootstrap/`
+- Bootstrap and first-time baseline procedure: `.agents/skills/workspace-bootstrap/`
+- Fleet server maintenance procedure: `.agents/skills/workspace-fleet/`
 - For Codex bootstrap, start from natural language user input and route into the bootstrap skill.
-- Guarded reset and deinit procedure: `.agents/skills/workspace-reset/`
+- Guarded best-effort reset and deinit procedure: `.agents/skills/workspace-reset/`
 - Session switching procedure: `.agents/skills/workspace-session-switch/`
 - Sync procedure: `.agents/skills/workspace-sync/`
 - Local overlay state: `.workspace.local/`
