@@ -141,6 +141,28 @@ def test_session_switch_updates_current_pointer_and_runtime_symlinks(vaws_repo):
     assert (runtime_root / "vllm-ascend").resolve().name == "vllm-ascend"
 
 
+def test_session_switch_fails_cleanly_when_state_schema_version_is_unsupported(vaws_repo):
+    simulation_root = ensure_target(vaws_repo)
+    assert run_vaws(vaws_repo, "session", "create", "feat_x").returncode == 0
+    assert run_vaws(vaws_repo, "session", "create", "feat_y").returncode == 0
+
+    state_path = vaws_repo / ".workspace.local" / "state.json"
+    state = read_json(state_path)
+    state["schema_version"] = 2
+    state_path.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
+
+    result = run_vaws(vaws_repo, "session", "switch", "feat_y")
+
+    assert result.returncode == 1
+    output = (result.stdout + result.stderr).lower()
+    assert "schema_version" in output
+    assert "unsupported" in output or "invalid" in output
+    assert "traceback" not in output
+    current = read_json(state_path)
+    assert current["schema_version"] == 2
+    assert "current_session" not in current
+
+
 def test_session_switch_fails_when_missing(vaws_repo):
     ensure_target(vaws_repo)
     result = run_vaws(vaws_repo, "session", "switch", "missing")

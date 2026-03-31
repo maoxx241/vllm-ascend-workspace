@@ -91,6 +91,22 @@ def test_target_ensure_reuses_existing_runtime_container(vaws_repo):
     assert runtime_state["container"]["reused"] is True
 
 
+def test_target_ensure_fails_cleanly_when_state_schema_version_is_unsupported(vaws_repo):
+    seed_overlay(vaws_repo, target_name="single-default")
+    (vaws_repo / ".workspace.local" / "state.json").write_text(
+        '{"schema_version": 2}\n',
+        encoding="utf-8",
+    )
+
+    result = run_vaws(vaws_repo, "target", "ensure", "single-default")
+
+    assert result.returncode == 1
+    output = (result.stdout + result.stderr).lower()
+    assert "schema_version" in output
+    assert "unsupported" in output or "invalid" in output
+    assert "traceback" not in output
+
+
 def test_target_ensure_fails_when_target_is_missing(vaws_repo):
     seed_overlay(vaws_repo, target_name="single-default")
     result = run_vaws(vaws_repo, "target", "ensure", "unknown")

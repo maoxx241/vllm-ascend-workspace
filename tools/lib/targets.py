@@ -17,6 +17,10 @@ def ensure_target(paths: RepoPaths, target_name: str) -> int:
 
     state["current_target"] = target_name
     state["runtime"] = persisted_runtime
-    write_state(paths, state)
+    try:
+        write_state(paths, state)
+    except RuntimeError as exc:
+        print(str(exc))
+        return 1
     print(f"target ensure: ok ({target_name})")
     return 0
