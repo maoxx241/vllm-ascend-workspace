@@ -8,6 +8,7 @@ if __package__ in (None, ""):
 
 from tools.lib.bootstrap import bootstrap_init, bootstrap_request_from_args
 from tools.lib.config import RepoPaths
+from tools.lib.fleet import add_fleet_server, list_fleet, verify_fleet_server
 from tools.lib.doctor import doctor, init
 from tools.lib.gitflow import default_base_ref
 from tools.lib.reset import execute_reset, prepare_reset
@@ -83,6 +84,33 @@ def build_parser() -> argparse.ArgumentParser:
     switch_parser = session_subparsers.add_parser("switch")
     switch_parser.add_argument("session_name")
     session_subparsers.add_parser("status")
+
+    fleet_parser = subparsers.add_parser("fleet")
+    fleet_subparsers = fleet_parser.add_subparsers(dest="fleet_command", required=True)
+    fleet_subparsers.add_parser("list")
+    fleet_add_parser = fleet_subparsers.add_parser("add")
+    fleet_add_parser.add_argument("server_name")
+    fleet_add_parser.add_argument("--host", required=True)
+    fleet_add_parser.add_argument("--login-user", required=True)
+    fleet_add_parser.add_argument("--port", type=int, default=22)
+    fleet_add_parser.add_argument("--ssh-auth-ref", default="default-server-auth")
+    fleet_add_parser.add_argument("--status", default="pending")
+    fleet_add_parser.add_argument(
+        "--runtime-image",
+        default="quay.nju.edu.cn/ascend/vllm-ascend:latest",
+    )
+    fleet_add_parser.add_argument("--runtime-container", default="vaws-workspace")
+    fleet_add_parser.add_argument("--runtime-ssh-port", type=int, default=63269)
+    fleet_add_parser.add_argument(
+        "--runtime-workspace-root",
+        default="/vllm-workspace",
+    )
+    fleet_add_parser.add_argument(
+        "--runtime-bootstrap-mode",
+        default="host-then-container",
+    )
+    fleet_verify_parser = fleet_subparsers.add_parser("verify")
+    fleet_verify_parser.add_argument("server_name")
     return parser
 
 
@@ -138,6 +166,25 @@ def main(argv: Optional[List[str]] = None) -> int:
         return switch_session(paths, args.session_name)
     if args.command == "session" and args.session_command == "status":
         return status_session(paths)
+    if args.command == "fleet" and args.fleet_command == "list":
+        return list_fleet(paths)
+    if args.command == "fleet" and args.fleet_command == "add":
+        return add_fleet_server(
+            paths,
+            args.server_name,
+            args.host,
+            args.login_user,
+            port=args.port,
+            ssh_auth_ref=args.ssh_auth_ref,
+            status=args.status,
+            runtime_image=args.runtime_image,
+            runtime_container=args.runtime_container,
+            runtime_ssh_port=args.runtime_ssh_port,
+            runtime_workspace_root=args.runtime_workspace_root,
+            runtime_bootstrap_mode=args.runtime_bootstrap_mode,
+        )
+    if args.command == "fleet" and args.fleet_command == "verify":
+        return verify_fleet_server(paths, args.server_name)
 
     parser.error(f"unknown command: {args.command}")
     return 2

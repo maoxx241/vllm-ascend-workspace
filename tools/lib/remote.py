@@ -114,6 +114,13 @@ def _load_auth_config(paths: RepoPaths) -> Dict[str, Any]:
     )
 
 
+def _load_servers_config(paths: RepoPaths) -> Dict[str, Any]:
+    return _read_yaml_mapping(
+        paths.local_servers_file,
+        "invalid server config: .workspace.local/servers.yaml",
+    )
+
+
 def _host_auth_ref(host_config: Dict[str, Any]) -> Optional[str]:
     auth_ref = host_config.get("ssh_auth_ref")
     if isinstance(auth_ref, str) and auth_ref.strip():
@@ -203,7 +210,118 @@ def _legacy_credential_group_from_auth(auth: Dict[str, Any], host: HostSpec) -> 
     )
 
 
-def resolve_target_context(paths: RepoPaths, target_name: str) -> TargetContext:
+def _context_from_inventory_record(
+    paths: RepoPaths,
+    record_kind: str,
+    record_name: str,
+    host_name: str,
+    host_config: Dict[str, Any],
+    runtime: Dict[str, Any],
+) -> TargetContext:
+    ssh_auth_ref = _host_auth_ref(host_config)
+    if not ssh_auth_ref:
+        raise RemoteError(
+            f"invalid {record_kind} config: {record_kind} '{record_name}' missing ssh_auth_ref"
+        )
+
+    host = HostSpec(
+        name=host_name,
+        host=_require_non_empty_string(
+            host_config.get("host"),
+            f"invalid {record_kind} config: host '{host_name}' missing host",
+        ),
+        port=_require_int_in_range(
+            host_config.get("port"),
+            f"invalid {record_kind} config: host '{host_name}' has invalid port",
+        ),
+        login_user=_require_non_empty_string(
+            host_config.get("login_user"),
+            f"invalid {record_kind} config: host '{host_name}' missing login_user",
+        ),
+        auth_group=_require_non_empty_string(
+            ssh_auth_ref,
+            f"invalid {record_kind} config: host '{host_name}' missing ssh_auth_ref",
+        ),
+        ssh_auth_ref=ssh_auth_ref,
+    )
+
+    image_ref = _require_non_empty_string(
+        runtime.get("image_ref"),
+        f"invalid {record_kind} config: {record_kind} '{record_name}' runtime.image_ref must be a non-empty string",
+    )
+    container_name = _require_non_empty_string(
+        runtime.get("container_name"),
+        f"invalid {record_kind} config: {record_kind} '{record_name}' runtime.container_name must be a non-empty string",
+    )
+    ssh_port = _require_int_in_range(
+        runtime.get("ssh_port"),
+        f"invalid {record_kind} config: {record_kind} '{record_name}' runtime.ssh_port must be in range 1..65535",
+    )
+    bootstrap_mode = _require_non_empty_string(
+        runtime.get("bootstrap_mode"),
+        f"invalid {record_kind} config: {record_kind} '{record_name}' runtime.bootstrap_mode must be a non-empty string",
+    )
+
+    workspace_root = runtime.get("workspace_root")
+    if not isinstance(workspace_root, str) or not workspace_root.strip():
+        workspace_root = DEFAULT_WORKSPACE_ROOT
+
+    host_workspace_path = runtime.get("host_workspace_path")
+    if not isinstance(host_workspace_path, str) or not host_workspace_path.strip():
+        host_workspace_path = f"{DEFAULT_HOST_WORKSPACE_BASE}/{record_name}/workspace"
+
+    docker_run_args = runtime.get("docker_run_args", [])
+    if isinstance(docker_run_args, str):
+        docker_args_list = [docker_run_args]
+    elif isinstance(docker_run_args, list) and all(
+        isinstance(item, str) and item.strip() for item in docker_run_args
+    ):
+        docker_args_list = [item.strip() for item in docker_run_args]
+    elif docker_run_args in (None, []):
+        docker_args_list = []
+    else:
+        raise RemoteError(
+            f"invalid {record_kind} config: {record_kind} '{record_name}' runtime.docker_run_args must be a string list"
+        )
+
+    auth = _load_auth_config(paths)
+    ssh_auth_ref = host.ssh_auth_ref or host.auth_group
+    ssh_auth = auth.get("ssh_auth")
+    if isinstance(ssh_auth, dict):
+        ssh_refs = ssh_auth.get("refs")
+        if not isinstance(ssh_refs, dict):
+            raise RemoteError("invalid auth config: missing ssh_auth.refs map")
+
+        credential_config = ssh_refs.get(ssh_auth_ref)
+        if not isinstance(credential_config, dict):
+            raise RemoteError(
+                f"invalid auth config: unknown ssh auth ref '{ssh_auth_ref}'"
+            )
+        credential = _credential_group_from_ref(
+            credential_config,
+            ssh_auth_ref,
+            host.login_user,
+        )
+    else:
+        credential = _legacy_credential_group_from_auth(auth, host)
+
+    return TargetContext(
+        name=record_name,
+        host=host,
+        credential=credential,
+        runtime=RuntimeSpec(
+            image_ref=image_ref,
+            container_name=container_name,
+            ssh_port=ssh_port,
+            workspace_root=workspace_root.strip(),
+            bootstrap_mode=bootstrap_mode,
+            host_workspace_path=host_workspace_path.strip(),
+            docker_run_args=docker_args_list,
+        ),
+    )
+
+
+def _resolve_legacy_target_context(paths: RepoPaths, target_name: str) -> TargetContext:
     config = _load_targets_config(paths)
     targets = config.get("targets")
     if not isinstance(targets, dict):
@@ -249,109 +367,56 @@ def resolve_target_context(paths: RepoPaths, target_name: str) -> TargetContext:
             f"invalid target config: target '{target_name}' references unknown host '{host_name}'"
         )
 
-    ssh_auth_ref = _host_auth_ref(host_config)
-    if not ssh_auth_ref:
+    return _context_from_inventory_record(
+        paths,
+        "target",
+        target_name,
+        host_name,
+        host_config,
+        runtime,
+    )
+
+
+def resolve_server_context(paths: RepoPaths, server_name: str) -> TargetContext:
+    config = _load_servers_config(paths)
+    servers = config.get("servers")
+    if not isinstance(servers, dict):
+        raise RemoteError("invalid server config: missing 'servers' map")
+
+    server = servers.get(server_name)
+    if not isinstance(server, dict):
+        raise RemoteError(f"unknown server: {server_name}")
+
+    runtime = server.get("runtime")
+    if not isinstance(runtime, dict):
         raise RemoteError(
-            f"invalid target config: host '{host_name}' missing ssh_auth_ref"
+            f"invalid server config: server '{server_name}' missing runtime map"
         )
 
-    host = HostSpec(
-        name=host_name,
-        host=_require_non_empty_string(
-            host_config.get("host"),
-            f"invalid target config: host '{host_name}' missing host",
-        ),
-        port=_require_int_in_range(
-            host_config.get("port"),
-            f"invalid target config: host '{host_name}' has invalid port",
-        ),
-        login_user=_require_non_empty_string(
-            host_config.get("login_user"),
-            f"invalid target config: host '{host_name}' missing login_user",
-        ),
-        auth_group=_require_non_empty_string(
-            ssh_auth_ref,
-            f"invalid target config: host '{host_name}' missing ssh_auth_ref",
-        ),
-        ssh_auth_ref=ssh_auth_ref,
+    return _context_from_inventory_record(
+        paths,
+        "server",
+        server_name,
+        server_name,
+        server,
+        runtime,
     )
 
-    image_ref = _require_non_empty_string(
-        runtime.get("image_ref"),
-        f"invalid target config: target '{target_name}' runtime.image_ref must be a non-empty string",
-    )
-    container_name = _require_non_empty_string(
-        runtime.get("container_name"),
-        f"invalid target config: target '{target_name}' runtime.container_name must be a non-empty string",
-    )
-    ssh_port = _require_int_in_range(
-        runtime.get("ssh_port"),
-        f"invalid target config: target '{target_name}' runtime.ssh_port must be in range 1..65535",
-    )
-    bootstrap_mode = _require_non_empty_string(
-        runtime.get("bootstrap_mode"),
-        f"invalid target config: target '{target_name}' runtime.bootstrap_mode must be a non-empty string",
-    )
 
-    workspace_root = runtime.get("workspace_root")
-    if not isinstance(workspace_root, str) or not workspace_root.strip():
-        workspace_root = DEFAULT_WORKSPACE_ROOT
+def resolve_target_context(paths: RepoPaths, target_name: str) -> TargetContext:
+    legacy_error: Optional[RemoteError] = None
+    try:
+        return _resolve_legacy_target_context(paths, target_name)
+    except RemoteError as exc:
+        legacy_error = exc
+        if str(exc) != f"unknown target: {target_name}":
+            raise
 
-    host_workspace_path = runtime.get("host_workspace_path")
-    if not isinstance(host_workspace_path, str) or not host_workspace_path.strip():
-        host_workspace_path = (
-            f"{DEFAULT_HOST_WORKSPACE_BASE}/{target_name}/workspace"
-        )
-
-    docker_run_args = runtime.get("docker_run_args", [])
-    if isinstance(docker_run_args, str):
-        docker_args_list = [docker_run_args]
-    elif isinstance(docker_run_args, list) and all(
-        isinstance(item, str) and item.strip() for item in docker_run_args
-    ):
-        docker_args_list = [item.strip() for item in docker_run_args]
-    elif docker_run_args in (None, []):
-        docker_args_list = []
-    else:
-        raise RemoteError(
-            f"invalid target config: target '{target_name}' runtime.docker_run_args must be a string list"
-        )
-
-    auth = _load_auth_config(paths)
-    ssh_auth_ref = host.ssh_auth_ref or host.auth_group
-    ssh_auth = auth.get("ssh_auth")
-    if isinstance(ssh_auth, dict):
-        ssh_refs = ssh_auth.get("refs")
-        if not isinstance(ssh_refs, dict):
-            raise RemoteError("invalid auth config: missing ssh_auth.refs map")
-
-        credential_config = ssh_refs.get(ssh_auth_ref)
-        if not isinstance(credential_config, dict):
-            raise RemoteError(
-                f"invalid auth config: unknown ssh auth ref '{ssh_auth_ref}'"
-            )
-        credential = _credential_group_from_ref(
-            credential_config,
-            ssh_auth_ref,
-            host.login_user,
-        )
-    else:
-        credential = _legacy_credential_group_from_auth(auth, host)
-
-    return TargetContext(
-        name=target_name,
-        host=host,
-        credential=credential,
-        runtime=RuntimeSpec(
-            image_ref=image_ref,
-            container_name=container_name,
-            ssh_port=ssh_port,
-            workspace_root=workspace_root.strip(),
-            bootstrap_mode=bootstrap_mode,
-            host_workspace_path=host_workspace_path.strip(),
-            docker_run_args=docker_args_list,
-        ),
-    )
+    try:
+        return resolve_server_context(paths, target_name)
+    except RemoteError:
+        assert legacy_error is not None
+        raise legacy_error
 
 
 def _runtime_state_file(runtime_root: Path) -> Path:
@@ -928,6 +993,63 @@ def ensure_runtime(paths: RepoPaths, ctx: TargetContext) -> Dict[str, Any]:
     if ctx.credential.mode == "local-simulation":
         return _ensure_simulation_runtime(paths, ctx)
     return _ensure_host_runtime(paths, ctx)
+
+
+def _verify_simulation_runtime(ctx: TargetContext) -> Dict[str, Any]:
+    runtime_root = _simulation_runtime_root(ctx)
+    runtime_state = _load_runtime_state(runtime_root)
+    if not runtime_state:
+        raise RemoteError(f"missing runtime state for server {ctx.name}")
+
+    endpoint = runtime_state.get("endpoint")
+    if not isinstance(endpoint, dict):
+        raise RemoteError(f"invalid runtime state for server {ctx.name}")
+
+    return {
+        "image_ref": ctx.runtime.image_ref,
+        "container_name": ctx.runtime.container_name,
+        "ssh_port": ctx.runtime.ssh_port,
+        "workspace_root": ctx.runtime.workspace_root,
+        "bootstrap_mode": ctx.runtime.bootstrap_mode,
+        "transport": endpoint.get("transport", "simulation"),
+        "container_endpoint": f"simulation://{ctx.host.name}{ctx.runtime.workspace_root}",
+        "host_name": ctx.host.name,
+        "host": ctx.host.host,
+        "host_port": ctx.host.port,
+        "login_user": ctx.host.login_user,
+        "host_workspace_path": str(runtime_root / "workspace"),
+    }
+
+
+def _verify_host_runtime(ctx: TargetContext) -> Dict[str, Any]:
+    probe = subprocess.run(
+        _ssh_base_command(ctx) + ["true"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if probe.returncode != 0:
+        raise RemoteError(f"unable to verify SSH access to host {ctx.host.host}")
+    return {
+        "image_ref": ctx.runtime.image_ref,
+        "container_name": ctx.runtime.container_name,
+        "ssh_port": ctx.runtime.ssh_port,
+        "workspace_root": ctx.runtime.workspace_root,
+        "bootstrap_mode": ctx.runtime.bootstrap_mode,
+        "transport": "ssh",
+        "container_endpoint": f"ssh://{ctx.credential.username}@{ctx.host.host}:{ctx.runtime.ssh_port}",
+        "host_name": ctx.host.name,
+        "host": ctx.host.host,
+        "host_port": ctx.host.port,
+        "login_user": ctx.host.login_user,
+        "host_workspace_path": ctx.runtime.host_workspace_path,
+    }
+
+
+def verify_runtime(paths: RepoPaths, ctx: TargetContext) -> Dict[str, Any]:
+    if ctx.credential.mode == "local-simulation":
+        return _verify_simulation_runtime(ctx)
+    return _verify_host_runtime(ctx)
 
 
 def create_remote_session(paths: RepoPaths, ctx: TargetContext, manifest: Dict[str, Any], transport: str) -> None:

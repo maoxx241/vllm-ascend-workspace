@@ -263,3 +263,14 @@ def test_target_ensure_fails_when_auth_group_is_missing(vaws_repo):
     output = (result.stdout + result.stderr).lower()
     assert "auth" in output
     assert "missing-group" in output
+
+
+def test_target_ensure_reports_deprecation_and_routing(vaws_repo):
+    seed_overlay(vaws_repo, target_name="single-default")
+
+    result = run_vaws(vaws_repo, "target", "ensure", "single-default")
+
+    assert result.returncode == 0
+    output = (result.stdout + result.stderr).lower()
+    assert "deprecated" in output
+    assert "fleet" in output
