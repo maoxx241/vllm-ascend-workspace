@@ -10,6 +10,7 @@ import yaml
 from .config import RepoPaths
 from .overlay import ensure_overlay_layout
 from .preflight import PreflightError, ensure_local_control_plane_deps
+from .remote import DEFAULT_HOST_WORKSPACE_BASE
 from .runtime import read_state, write_state
 
 COMMUNITY_UPSTREAM_URLS = {
@@ -116,6 +117,10 @@ def _bootstrap_mode(request: BootstrapRequest) -> str:
         if request.server_host is None
         else BOOTSTRAP_MODE_REMOTE_FIRST
     )
+
+
+def _bootstrap_host_workspace_path(request: BootstrapRequest) -> str:
+    return f"{DEFAULT_HOST_WORKSPACE_BASE}/{request.target_name}/workspace"
 
 
 def _ensure_overlay(paths: RepoPaths) -> None:
@@ -249,6 +254,7 @@ def _bootstrap_servers_config(
                 "ssh_port": request.runtime_ssh_port,
                 "workspace_root": request.runtime_workspace_root,
                 "bootstrap_mode": DEFAULT_RUNTIME_BOOTSTRAP_MODE,
+                "host_workspace_path": _bootstrap_host_workspace_path(request),
             },
         }
     return config
@@ -292,6 +298,7 @@ def _write_targets_yaml(paths: RepoPaths, request: BootstrapRequest) -> None:
                         "ssh_port": request.runtime_ssh_port,
                         "workspace_root": request.runtime_workspace_root,
                         "bootstrap_mode": DEFAULT_RUNTIME_BOOTSTRAP_MODE,
+                        "host_workspace_path": _bootstrap_host_workspace_path(request),
                     },
                 },
             },

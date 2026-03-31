@@ -1,3 +1,4 @@
+import json
 import sys
 from pathlib import Path
 
@@ -15,6 +16,7 @@ from tools.lib.config import RepoPaths
 def _write_fleet_overlay(vaws_repo: Path) -> Path:
     seed_overlay_files(vaws_repo)
     overlay = vaws_repo / ".workspace.local"
+    simulation_root = vaws_repo.parent / "simulation-runtime"
     (overlay / "servers.yaml").write_text(
         yaml.safe_dump(
             {
@@ -36,8 +38,9 @@ def _write_fleet_overlay(vaws_repo: Path) -> Path:
                 "ssh_auth": {
                     "refs": {
                         "default-server-auth": {
-                            "kind": "ssh-key",
+                            "kind": "local-simulation",
                             "username": "root",
+                            "simulation_root": str(simulation_root),
                         }
                     }
                 },
@@ -64,10 +67,10 @@ def test_fleet_add_writes_server_inventory_entry(vaws_repo):
         "fleet",
         "add",
         "host-b",
-        "--host",
+        "--server-host",
         "10.0.0.12",
-        "--login-user",
-        "root",
+        "--ssh-auth-ref",
+        "default-server-auth",
     )
 
     assert result.returncode == 0
@@ -80,11 +83,18 @@ def test_fleet_add_writes_server_inventory_entry(vaws_repo):
     assert host_b["port"] == 22
     assert host_b["login_user"] == "root"
     assert host_b["ssh_auth_ref"] == "default-server-auth"
-    assert host_b["status"] == "pending"
+    assert host_b["status"] == "ready"
     assert host_b["runtime"]["image_ref"]
     assert host_b["runtime"]["container_name"]
     assert host_b["runtime"]["ssh_port"] == 63269
     assert host_b["runtime"]["workspace_root"] == "/vllm-workspace"
+    assert host_b["runtime"]["host_workspace_path"].endswith("/host-b/workspace")
+
+    runtime_root = vaws_repo.parent / "simulation-runtime" / "host-b" / "vllm-workspace"
+    runtime_state = json.loads((runtime_root / ".vaws" / "runtime.json").read_text())
+    assert runtime_state["target"] == "host-b"
+    assert runtime_state["container"]["created"] is True
+    assert "reused" in runtime_state["container"]
 
 
 def test_fleet_list_reports_inventory_entries(vaws_repo):
@@ -115,6 +125,28 @@ def test_fleet_list_reports_inventory_entries(vaws_repo):
     output = result.stdout.lower()
     assert "host-a" in output
     assert "pending" in output
+
+
+def test_fleet_add_rejects_invalid_server_port(vaws_repo):
+    _write_fleet_overlay(vaws_repo)
+
+    result = run_vaws(
+        vaws_repo,
+        "fleet",
+        "add",
+        "host-b",
+        "--server-host",
+        "10.0.0.12",
+        "--ssh-auth-ref",
+        "default-server-auth",
+        "--server-port",
+        "70000",
+    )
+
+    assert result.returncode == 1
+    output = (result.stdout + result.stderr).lower()
+    assert "port" in output
+    assert "traceback" not in output
 
 
 def test_fleet_verify_is_read_only(vaws_repo, monkeypatch):

@@ -90,11 +90,10 @@ def build_parser() -> argparse.ArgumentParser:
     fleet_subparsers.add_parser("list")
     fleet_add_parser = fleet_subparsers.add_parser("add")
     fleet_add_parser.add_argument("server_name")
-    fleet_add_parser.add_argument("--host", required=True)
-    fleet_add_parser.add_argument("--login-user", required=True)
-    fleet_add_parser.add_argument("--port", type=int, default=22)
-    fleet_add_parser.add_argument("--ssh-auth-ref", default="default-server-auth")
-    fleet_add_parser.add_argument("--status", default="pending")
+    fleet_add_parser.add_argument("--server-host", required=True)
+    fleet_add_parser.add_argument("--server-user", default="root")
+    fleet_add_parser.add_argument("--server-port", type=int, default=22)
+    fleet_add_parser.add_argument("--ssh-auth-ref", required=True)
     fleet_add_parser.add_argument(
         "--runtime-image",
         default="quay.nju.edu.cn/ascend/vllm-ascend:latest",
@@ -172,11 +171,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         return add_fleet_server(
             paths,
             args.server_name,
-            args.host,
-            args.login_user,
-            port=args.port,
+            args.server_host,
             ssh_auth_ref=args.ssh_auth_ref,
-            status=args.status,
+            server_user=args.server_user,
+            server_port=args.server_port,
             runtime_image=args.runtime_image,
             runtime_container=args.runtime_container,
             runtime_ssh_port=args.runtime_ssh_port,

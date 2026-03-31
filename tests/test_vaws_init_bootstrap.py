@@ -13,7 +13,15 @@ from tools.lib import bootstrap
 from tools.lib import preflight
 from tools.lib.config import RepoPaths
 from tools.lib.preflight import PreflightReport
-from tools.lib.remote import CredentialGroup, HostSpec, RuntimeSpec, TargetContext, _ssh_base_command
+from tools.lib.remote import (
+    CredentialGroup,
+    HostSpec,
+    RuntimeSpec,
+    TargetContext,
+    _ssh_base_command,
+    resolve_server_context,
+    resolve_target_context,
+)
 
 
 def _remote_url(repo, relative_path, remote_name):
@@ -68,6 +76,7 @@ def test_init_bootstrap_writes_overlay_and_configures_repo_remotes(vaws_repo):
     assert servers["servers"]["host-a"]["ssh_auth_ref"] == "default-server-auth"
     assert servers["servers"]["host-a"]["runtime"]["image_ref"] == "quay.nju.edu.cn/ascend/vllm-ascend:latest"
     assert servers["servers"]["host-a"]["runtime"]["bootstrap_mode"] == "host-then-container"
+    assert servers["servers"]["host-a"]["runtime"]["host_workspace_path"] == "/root/.vaws/targets/single-default/workspace"
 
     targets = yaml.safe_load(
         (vaws_repo / ".workspace.local" / "targets.yaml").read_text()
@@ -76,6 +85,7 @@ def test_init_bootstrap_writes_overlay_and_configures_repo_remotes(vaws_repo):
     assert targets["hosts"]["host-a"]["ssh_auth_ref"] == "default-server-auth"
     assert "auth_group" not in targets["hosts"]["host-a"]
     assert targets["targets"]["single-default"]["runtime"]["workspace_root"] == "/vllm-workspace"
+    assert targets["targets"]["single-default"]["runtime"]["host_workspace_path"] == "/root/.vaws/targets/single-default/workspace"
 
     assert _remote_url(vaws_repo, "vllm", "origin") == "git@github.com:alice/vllm.git"
     assert _remote_url(vaws_repo, "vllm", "upstream") == "https://github.com/vllm-project/vllm.git"
@@ -502,3 +512,25 @@ def test_init_bootstrap_defaults_to_local_only_without_server_host(vaws_repo):
     output = result.stdout.lower()
     assert "local-only" in output
     assert "bootstrap ok" in output
+
+
+def test_bootstrap_target_and_server_resolution_share_workspace_root(vaws_repo):
+    result = run_vaws(
+        vaws_repo,
+        "init",
+        "--bootstrap",
+        "--server-host",
+        "173.125.1.2",
+        "--server-user",
+        "root",
+        "--vllm-ascend-origin-url",
+        "git@github.com:alice/vllm-ascend.git",
+    )
+
+    assert result.returncode == 0
+
+    paths = RepoPaths(root=vaws_repo)
+    target_context = resolve_target_context(paths, "single-default")
+    server_context = resolve_server_context(paths, "host-a")
+
+    assert target_context.runtime.host_workspace_path == server_context.runtime.host_workspace_path

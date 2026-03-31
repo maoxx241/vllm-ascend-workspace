@@ -8,13 +8,20 @@ from .bootstrap import (
     DEFAULT_RUNTIME_BOOTSTRAP_MODE,
     DEFAULT_RUNTIME_CONTAINER,
     DEFAULT_RUNTIME_IMAGE,
+    DEFAULT_SERVER_PORT,
     DEFAULT_RUNTIME_SSH_PORT,
     DEFAULT_RUNTIME_WORKSPACE_ROOT,
     DEFAULT_SERVER_AUTH_REF,
     DEFAULT_SERVER_STATUS,
 )
 from .config import RepoPaths
-from .remote import RemoteError, resolve_server_context, verify_runtime
+from .remote import (
+    DEFAULT_HOST_WORKSPACE_BASE,
+    RemoteError,
+    ensure_runtime,
+    resolve_server_context,
+    verify_runtime,
+)
 
 
 class FleetError(RuntimeError):
@@ -57,6 +64,12 @@ def _require_int(value: Any, message: str) -> int:
     return value
 
 
+def _require_port(value: Any, message: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1 or value > 65535:
+        raise FleetError(message)
+    return value
+
+
 def list_fleet(paths: RepoPaths) -> int:
     try:
         config = _read_servers_config(paths)
@@ -91,11 +104,10 @@ def list_fleet(paths: RepoPaths) -> int:
 def add_fleet_server(
     paths: RepoPaths,
     server_name: str,
-    host: str,
-    login_user: str,
-    port: int = 22,
-    ssh_auth_ref: str = DEFAULT_SERVER_AUTH_REF,
-    status: str = DEFAULT_SERVER_STATUS,
+    server_host: str,
+    ssh_auth_ref: str,
+    server_user: str = "root",
+    server_port: int = DEFAULT_SERVER_PORT,
     runtime_image: str = DEFAULT_RUNTIME_IMAGE,
     runtime_container: str = DEFAULT_RUNTIME_CONTAINER,
     runtime_ssh_port: int = DEFAULT_RUNTIME_SSH_PORT,
@@ -104,10 +116,9 @@ def add_fleet_server(
 ) -> int:
     try:
         server_name = _require_non_empty_string(server_name, "missing server name")
-        host = _require_non_empty_string(host, "missing server host")
-        login_user = _require_non_empty_string(login_user, "missing login user")
+        server_host = _require_non_empty_string(server_host, "missing server host")
+        server_user = _require_non_empty_string(server_user, "missing server user")
         ssh_auth_ref = _require_non_empty_string(ssh_auth_ref, "missing ssh auth ref")
-        status = _require_non_empty_string(status, "missing server status")
         runtime_image = _require_non_empty_string(runtime_image, "missing runtime image")
         runtime_container = _require_non_empty_string(
             runtime_container,
@@ -121,8 +132,8 @@ def add_fleet_server(
             runtime_bootstrap_mode,
             "missing runtime bootstrap mode",
         )
-        port = _require_int(port, "invalid port")
-        runtime_ssh_port = _require_int(runtime_ssh_port, "invalid runtime ssh port")
+        server_port = _require_port(server_port, "invalid server port")
+        runtime_ssh_port = _require_port(runtime_ssh_port, "invalid runtime ssh port")
 
         config = _read_servers_config(paths)
         servers = config.get("servers")
@@ -130,20 +141,29 @@ def add_fleet_server(
             raise FleetError("invalid server config: missing 'servers' map")
 
         servers[server_name] = {
-            "host": host,
-            "port": port,
-            "login_user": login_user,
+            "host": server_host,
+            "port": server_port,
+            "login_user": server_user,
             "ssh_auth_ref": ssh_auth_ref,
-            "status": status,
+            "status": DEFAULT_SERVER_STATUS,
             "runtime": {
                 "image_ref": runtime_image,
                 "container_name": runtime_container,
                 "ssh_port": runtime_ssh_port,
                 "workspace_root": runtime_workspace_root,
                 "bootstrap_mode": runtime_bootstrap_mode,
+                "host_workspace_path": f"{DEFAULT_HOST_WORKSPACE_BASE}/{server_name}/workspace",
             },
         }
         config["version"] = 1
+        config["servers"] = servers
+        _write_servers_config(paths, config)
+
+        context = resolve_server_context(paths, server_name)
+        ensure_runtime(paths, context)
+        verify_runtime(paths, context)
+
+        servers[server_name]["status"] = "ready"
         config["servers"] = servers
         _write_servers_config(paths, config)
     except (FleetError, RuntimeError, OSError) as exc:

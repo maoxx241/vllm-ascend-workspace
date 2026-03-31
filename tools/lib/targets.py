@@ -4,6 +4,7 @@ from .remote import (
     ensure_runtime,
     resolve_server_context,
     resolve_target_context,
+    verify_runtime,
 )
 from .runtime import read_state, write_state
 
@@ -13,13 +14,23 @@ def ensure_target(paths: RepoPaths, target_name: str) -> int:
         "target ensure: deprecated shim; use `vaws fleet` for server inventory management"
     )
     try:
+        routed_via = "legacy target config"
+        context = resolve_target_context(paths, target_name)
         try:
-            context = resolve_server_context(paths, target_name)
-            routed_via = "fleet server inventory"
+            server_context = resolve_server_context(paths, context.host.name)
         except RemoteError:
-            context = resolve_target_context(paths, target_name)
-            routed_via = "legacy target config"
-        persisted_runtime = ensure_runtime(paths, context)
+            server_context = None
+
+        if server_context is not None:
+            context = server_context
+            routed_via = "fleet verification behavior"
+            try:
+                persisted_runtime = verify_runtime(paths, context)
+            except RemoteError:
+                persisted_runtime = ensure_runtime(paths, context)
+                persisted_runtime = verify_runtime(paths, context)
+        else:
+            persisted_runtime = ensure_runtime(paths, context)
         state = read_state(paths)
     except RemoteError as exc:
         print(str(exc))
