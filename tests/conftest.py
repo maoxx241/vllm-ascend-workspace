@@ -32,6 +32,27 @@ def _init_git_repo(path: Path, remote_url: str) -> None:
     _run(["git", "update-ref", "refs/remotes/upstream/release", "HEAD"], cwd=path)
 
 
+def seed_overlay_files(repo: Path) -> None:
+    overlay = repo / ".workspace.local"
+    overlay.mkdir(exist_ok=True)
+    (overlay / "servers.yaml").write_text(
+        "version: 1\nservers: {}\n",
+        encoding="utf-8",
+    )
+    (overlay / "auth.yaml").write_text(
+        "version: 1\nssh_auth: {refs: {}}\ngit_auth: {refs: {}}\n",
+        encoding="utf-8",
+    )
+    (overlay / "repos.yaml").write_text(
+        "version: 1\nworkspace: {}\nsubmodules: {}\n",
+        encoding="utf-8",
+    )
+    (overlay / "state.json").write_text(
+        '{"schema_version": 1}\n',
+        encoding="utf-8",
+    )
+
+
 @pytest.fixture
 def vaws_repo(tmp_path: Path) -> Path:
     repo = tmp_path / "repo"

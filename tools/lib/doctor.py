@@ -4,8 +4,9 @@ from pathlib import Path
 from typing import Optional
 
 from .config import RepoPaths
+from .overlay import ensure_overlay_layout
 
-OVERLAY_FILES = ("targets.yaml", "repos.yaml", "auth.yaml", "state.json")
+OVERLAY_FILES = ("servers.yaml", "repos.yaml", "auth.yaml", "state.json")
 
 
 def _declared_submodule_paths(root: Path):
@@ -63,7 +64,7 @@ def doctor(paths: RepoPaths) -> int:
         print(f"missing overlay files: {', '.join(missing_files)}")
         return 1
 
-    state_file = paths.local_overlay / "state.json"
+    state_file = paths.local_state_file
     try:
         json.loads(state_file.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
@@ -84,14 +85,7 @@ def init(paths: RepoPaths) -> int:
         print("invalid local overlay: .workspace.local/ exists but is not a directory")
         return 1
 
-    paths.local_overlay.mkdir(parents=True, exist_ok=True)
-    for name in OVERLAY_FILES:
-        file_path = paths.local_overlay / name
-        if not file_path.exists():
-            if name == "state.json":
-                file_path.write_text("{}\n", encoding="utf-8")
-            else:
-                file_path.write_text("", encoding="utf-8")
+    ensure_overlay_layout(paths)
 
     print("init: ok")
     return 0
