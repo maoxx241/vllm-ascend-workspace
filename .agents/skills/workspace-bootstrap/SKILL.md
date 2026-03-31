@@ -18,8 +18,7 @@ Use this skill when initializing or repairing the local workspace overlay for a 
 - Keep tracked defaults on community `upstream` repositories and store user-specific `origin` topology in `.workspace.local/repos.yaml`.
 - Prefer `config/*.example.yaml` as the public template source.
 - Keep secrets, private hosts, and private paths out of tracked files.
-- Guarded reset is a two-step flow: `tools/vaws.py reset --prepare` first, then `tools/vaws.py reset --execute --confirmation-id ... --confirm ...`.
-- Agents must not skip prepare, reuse stale confirmation ids, or fabricate authorization.
-- After a successful reset, restore `origin` and `upstream` on `vllm/` and `vllm-ascend/` to the community URLs.
+
+Use `.agents/skills/workspace-reset/SKILL.md` for guarded reset and deinit cleanup.
 
 This is workspace-local reference material only.

@@ -8,9 +8,8 @@ description: Use when managing workspace servers after bootstrap, especially for
 Use this skill for post-bootstrap server inventory maintenance.
 
 - Treat `.workspace.local/servers.yaml` as the source of truth for managed servers.
-- Use `tools/vaws.py fleet list` to inspect the current inventory.
-- Use `tools/vaws.py fleet add` to add or realize a managed server.
-- Use `tools/vaws.py fleet verify` to check a server without mutating local inventory.
+- Use `tools/vaws.py fleet add`, `tools/vaws.py fleet remove`, `tools/vaws.py fleet list`, `tools/vaws.py fleet verify`, and repair-oriented follow-up to manage servers.
+- SSH connectivity is the prerequisite for fleet work; remote runtime verification is the success condition.
 - Treat verification gaps as repair signals, not bootstrap failures.
 - Keep server-specific changes out of tracked files; they belong in the local overlay.
 - Use bootstrap only for first-time baseline setup, not for later server changes.

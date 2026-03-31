@@ -106,6 +106,13 @@ def test_public_docs_explain_upstream_defaults_and_local_origin_bootstrap():
         assert ".workspace.local/repos.yaml" in text
         assert "natural language" in text or "conversational" in text
 
+    for forbidden in (
+        "reset --prepare",
+        "reset --execute",
+        "fabricate authorization",
+    ):
+        assert forbidden not in bootstrap_skill
+
 
 def test_agents_md_routes_bootstrap_and_reset_to_skills():
     repo = Path(__file__).resolve().parents[1]
@@ -144,6 +151,23 @@ def test_workspace_reset_skill_owns_guarded_reset_procedure():
     assert "unreachable" in text
 
 
+def test_workspace_fleet_skill_owns_server_inventory_maintenance():
+    repo = Path(__file__).resolve().parents[1]
+    text = (
+        repo / ".agents" / "skills" / "workspace-fleet" / "SKILL.md"
+    ).read_text(encoding="utf-8").lower()
+
+    assert "servers.yaml" in text
+    assert "remove" in text
+    assert "fleet list" in text
+    assert "fleet add" in text
+    assert "fleet verify" in text
+    assert "ssh connectivity is the prerequisite" in text
+    assert "remote runtime verification is the success condition" in text
+    assert "reset --prepare" not in text
+    assert "reset --execute" not in text
+
+
 def test_workspace_local_skill_skeletons_exist_and_stay_public():
     repo = Path(__file__).resolve().parents[1]
     agents_root = repo / ".agents"
@@ -170,6 +194,7 @@ def test_workspace_local_skill_skeletons_exist_and_stay_public():
             "tools/vaws.py fleet",
             "servers.yaml",
             "add",
+            "remove",
             "verify",
             "repair",
         ),
