@@ -293,7 +293,7 @@ def _configure_repo_remotes(paths: RepoPaths, request: BootstrapRequest) -> None
 
 def bootstrap_init(paths: RepoPaths, request: BootstrapRequest) -> int:
     try:
-        ensure_local_control_plane_deps()
+        preflight_report = ensure_local_control_plane_deps()
         _ensure_overlay(paths)
         _write_repos_yaml(paths, request)
         _write_targets_yaml(paths, request)
@@ -307,5 +307,8 @@ def bootstrap_init(paths: RepoPaths, request: BootstrapRequest) -> int:
         print(str(exc))
         return 1
 
+    if preflight_report.status == "degraded":
+        missing = ", ".join(preflight_report.missing_recommended)
+        print(f"init: preflight degraded: missing recommended tools: {missing}")
     print("init: bootstrap ok")
     return 0

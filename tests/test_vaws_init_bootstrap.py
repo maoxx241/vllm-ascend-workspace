@@ -9,7 +9,10 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from conftest import run_vaws
+from tools.lib import bootstrap
 from tools.lib import preflight
+from tools.lib.config import RepoPaths
+from tools.lib.preflight import PreflightReport
 from tools.lib.remote import CredentialGroup, HostSpec, RuntimeSpec, TargetContext, _ssh_base_command
 
 
@@ -91,6 +94,34 @@ def test_preflight_reports_missing_and_optional_tools(monkeypatch):
     assert report.missing_required == ()
     assert report.installed_recommended == ()
     assert report.missing_recommended == ("gh",)
+
+
+def test_init_bootstrap_reports_degraded_preflight_state(vaws_repo, monkeypatch, capsys):
+    monkeypatch.setattr(
+        bootstrap,
+        "ensure_local_control_plane_deps",
+        lambda: PreflightReport(
+            status="degraded",
+            installed_required=("git", "ssh", "python3"),
+            missing_required=(),
+            installed_recommended=(),
+            missing_recommended=("gh",),
+        ),
+    )
+
+    request = bootstrap.BootstrapRequest(
+        server_host="173.125.1.2",
+        server_user="root",
+        vllm_ascend_origin_url="git@github.com:alice/vllm-ascend.git",
+    )
+
+    result = bootstrap.bootstrap_init(RepoPaths(root=vaws_repo), request)
+    output = capsys.readouterr().out.lower()
+
+    assert result == 0
+    assert "preflight degraded" in output
+    assert "gh" in output
+    assert "bootstrap ok" in output
 
 
 def test_preflight_reports_blocked_when_required_tool_missing(monkeypatch):
