@@ -1,8 +1,15 @@
+import sys
 import subprocess
+from pathlib import Path
 
 import yaml
 
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 from conftest import run_vaws
+from tools.lib import preflight
 
 
 def _remote_url(repo, relative_path, remote_name):
@@ -43,8 +50,10 @@ def test_init_bootstrap_writes_overlay_and_configures_repo_remotes(vaws_repo):
     assert repos["submodules"]["vllm-ascend"]["origin_url"] == "git@github.com:alice/vllm-ascend.git"
 
     auth = yaml.safe_load((vaws_repo / ".workspace.local" / "auth.yaml").read_text())
-    assert auth["host_auth"]["mode"] == "ssh-key"
-    assert auth["git_auth"]["mode"] == "ssh-agent"
+    assert auth["version"] == 1
+    assert auth["ssh_auth"]["refs"]["default"]["kind"] == "ssh-key"
+    assert auth["ssh_auth"]["refs"]["default"]["username"] == "root"
+    assert auth["git_auth"]["refs"]["default"]["kind"] == "ssh-agent"
 
     targets = yaml.safe_load(
         (vaws_repo / ".workspace.local" / "targets.yaml").read_text()
@@ -56,6 +65,26 @@ def test_init_bootstrap_writes_overlay_and_configures_repo_remotes(vaws_repo):
     assert _remote_url(vaws_repo, "vllm", "upstream") == "https://github.com/vllm-project/vllm.git"
     assert _remote_url(vaws_repo, "vllm-ascend", "origin") == "git@github.com:alice/vllm-ascend.git"
     assert _remote_url(vaws_repo, "vllm-ascend", "upstream") == "https://github.com/vllm-project/vllm-ascend.git"
+
+    target_result = run_vaws(vaws_repo, "target", "ensure", "single-default")
+    assert target_result.returncode == 0
+    state = yaml.safe_load((vaws_repo / ".workspace.local" / "state.json").read_text())
+    assert state["schema_version"] == 1
+    assert state["current_target"] == "single-default"
+
+
+def test_preflight_reports_missing_and_optional_tools(monkeypatch):
+    def fake_which(command):
+        if command in {"ssh", "gh"}:
+            return None
+        return f"/usr/bin/{command}"
+
+    monkeypatch.setattr(preflight.shutil, "which", fake_which)
+
+    report = preflight.check_local_control_plane_deps()
+
+    assert report.missing_required == ("ssh",)
+    assert report.missing_recommended == ("gh",)
 
 
 def test_init_bootstrap_creates_overlay_compatible_with_doctor(vaws_repo):

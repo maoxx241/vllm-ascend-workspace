@@ -9,6 +9,7 @@ import yaml
 
 from .config import RepoPaths
 from .overlay import ensure_overlay_layout
+from .preflight import PreflightError, ensure_local_control_plane_deps
 from .runtime import read_state, write_state
 
 COMMUNITY_UPSTREAM_URLS = {
@@ -127,6 +128,15 @@ def _write_yaml(path: Path, payload: Dict[str, Any]) -> None:
     )
 
 
+def _auth_ref_payload(kind: str, **fields: Any) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {"kind": kind}
+    for key, value in fields.items():
+        if value is None:
+            continue
+        payload[key] = value
+    return payload
+
+
 def _run_git(repo_path: Path, *args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["git", *args],
@@ -224,29 +234,27 @@ def _write_auth_yaml(paths: RepoPaths, request: BootstrapRequest) -> None:
     auth_path = paths.local_overlay / "auth.yaml"
     config = _load_yaml_mapping(auth_path)
 
-    credential = {
-        "username": request.server_user,
-    }
-    if request.server_password_env:
-        credential["password_env"] = request.server_password_env
-    if request.server_key_path:
-        credential["key_path"] = request.server_key_path
-
-    config["host_auth"] = {
-        "mode": request.server_auth_mode,
-        "credential_groups": {
-            request.server_auth_group: credential,
+    config["version"] = 1
+    config["ssh_auth"] = {
+        "refs": {
+            request.server_auth_group: _auth_ref_payload(
+                request.server_auth_mode,
+                username=request.server_user,
+                password_env=request.server_password_env,
+                key_path=request.server_key_path,
+            ),
         },
     }
 
-    git_auth = {
-        "mode": request.git_auth_mode,
+    config["git_auth"] = {
+        "refs": {
+            "default": _auth_ref_payload(
+                request.git_auth_mode,
+                key_path=request.git_key_path,
+                token_env=request.git_token_env,
+            ),
+        },
     }
-    if request.git_key_path:
-        git_auth["key_path"] = request.git_key_path
-    if request.git_token_env:
-        git_auth["token_env"] = request.git_token_env
-    config["git_auth"] = git_auth
     _write_yaml(auth_path, config)
 
 
@@ -283,12 +291,16 @@ def _configure_repo_remotes(paths: RepoPaths, request: BootstrapRequest) -> None
 
 def bootstrap_init(paths: RepoPaths, request: BootstrapRequest) -> int:
     try:
+        ensure_local_control_plane_deps()
         _ensure_overlay(paths)
         _write_repos_yaml(paths, request)
         _write_targets_yaml(paths, request)
         _write_auth_yaml(paths, request)
         _ensure_state_json(paths)
         _configure_repo_remotes(paths, request)
+    except PreflightError as exc:
+        print(str(exc))
+        return 1
     except BootstrapError as exc:
         print(str(exc))
         return 1

@@ -27,6 +27,8 @@ class CredentialGroup:
     username: str
     password: Optional[str] = None
     password_env: Optional[str] = None
+    key_path: Optional[str] = None
+    token_env: Optional[str] = None
     simulation_root: Optional[Path] = None
 
     @property
@@ -108,6 +110,85 @@ def _load_auth_config(paths: RepoPaths) -> Dict[str, Any]:
     return _read_yaml_mapping(
         paths.local_overlay / "auth.yaml",
         "invalid auth config: .workspace.local/auth.yaml",
+    )
+
+
+def _credential_group_from_ref(
+    ref: Dict[str, Any],
+    ref_name: str,
+    fallback_username: str,
+) -> CredentialGroup:
+    kind = _require_non_empty_string(
+        ref.get("kind"),
+        f"invalid auth config: ssh_auth ref '{ref_name}' missing kind",
+    )
+    username = ref.get("username", fallback_username)
+    if not isinstance(username, str) or not username.strip():
+        raise RemoteError(
+            f"invalid auth config: ssh_auth ref '{ref_name}' missing username"
+        )
+
+    simulation_root = ref.get("simulation_root")
+    simulation_root_path: Optional[Path] = None
+    if kind == "local-simulation":
+        if not isinstance(simulation_root, str) or not simulation_root.strip():
+            raise RemoteError(
+                f"invalid auth config: ssh_auth ref '{ref_name}' missing simulation_root"
+            )
+        simulation_root_path = Path(simulation_root)
+
+    return CredentialGroup(
+        mode=kind.strip(),
+        username=username.strip(),
+        password=ref.get("password"),
+        password_env=ref.get("password_env"),
+        key_path=ref.get("key_path"),
+        token_env=ref.get("token_env"),
+        simulation_root=simulation_root_path,
+    )
+
+
+def _legacy_credential_group_from_auth(auth: Dict[str, Any], host: HostSpec) -> CredentialGroup:
+    host_auth = auth.get("host_auth")
+    if not isinstance(host_auth, dict):
+        raise RemoteError("invalid auth config: missing ssh_auth.refs map")
+
+    mode = host_auth.get("mode", "ssh-key")
+    if not isinstance(mode, str) or not mode.strip():
+        raise RemoteError("invalid auth config: host_auth.mode must be a string")
+
+    credential_groups = host_auth.get("credential_groups")
+    if not isinstance(credential_groups, dict):
+        raise RemoteError("invalid auth config: missing host_auth.credential_groups map")
+
+    credential_config = credential_groups.get(host.auth_group)
+    if not isinstance(credential_config, dict):
+        raise RemoteError(f"invalid auth config: unknown auth group '{host.auth_group}'")
+
+    username = credential_config.get("username", host.login_user)
+    if not isinstance(username, str) or not username.strip():
+        raise RemoteError(
+            f"invalid auth config: auth group '{host.auth_group}' missing username"
+        )
+
+    simulation_root = credential_config.get("simulation_root")
+    if mode == "local-simulation":
+        if not isinstance(simulation_root, str) or not simulation_root.strip():
+            raise RemoteError(
+                f"invalid auth config: auth group '{host.auth_group}' missing simulation_root"
+            )
+        simulation_root_path = Path(simulation_root)
+    else:
+        simulation_root_path = None
+
+    return CredentialGroup(
+        mode=mode.strip(),
+        username=username.strip(),
+        password=credential_config.get("password"),
+        password_env=credential_config.get("password_env"),
+        key_path=credential_config.get("key_path"),
+        token_env=credential_config.get("token_env"),
+        simulation_root=simulation_root_path,
     )
 
 
@@ -219,45 +300,24 @@ def resolve_target_context(paths: RepoPaths, target_name: str) -> TargetContext:
         )
 
     auth = _load_auth_config(paths)
-    host_auth = auth.get("host_auth")
-    if not isinstance(host_auth, dict):
-        raise RemoteError("invalid auth config: missing host_auth map")
+    ssh_auth = auth.get("ssh_auth")
+    if isinstance(ssh_auth, dict):
+        ssh_refs = ssh_auth.get("refs")
+        if not isinstance(ssh_refs, dict):
+            raise RemoteError("invalid auth config: missing ssh_auth.refs map")
 
-    mode = host_auth.get("mode", "ssh-key")
-    if not isinstance(mode, str) or not mode.strip():
-        raise RemoteError("invalid auth config: host_auth.mode must be a string")
-
-    credential_groups = host_auth.get("credential_groups")
-    if not isinstance(credential_groups, dict):
-        raise RemoteError("invalid auth config: missing host_auth.credential_groups map")
-
-    credential_config = credential_groups.get(host.auth_group)
-    if not isinstance(credential_config, dict):
-        raise RemoteError(f"invalid auth config: unknown auth group '{host.auth_group}'")
-
-    username = credential_config.get("username", host.login_user)
-    if not isinstance(username, str) or not username.strip():
-        raise RemoteError(
-            f"invalid auth config: auth group '{host.auth_group}' missing username"
-        )
-
-    simulation_root = credential_config.get("simulation_root")
-    if mode == "local-simulation":
-        if not isinstance(simulation_root, str) or not simulation_root.strip():
+        credential_config = ssh_refs.get(host.auth_group)
+        if not isinstance(credential_config, dict):
             raise RemoteError(
-                f"invalid auth config: auth group '{host.auth_group}' missing simulation_root"
+                f"invalid auth config: unknown ssh auth ref '{host.auth_group}'"
             )
-        simulation_root_path = Path(simulation_root)
+        credential = _credential_group_from_ref(
+            credential_config,
+            host.auth_group,
+            host.login_user,
+        )
     else:
-        simulation_root_path = None
-
-    credential = CredentialGroup(
-        mode=mode.strip(),
-        username=username.strip(),
-        password=credential_config.get("password"),
-        password_env=credential_config.get("password_env"),
-        simulation_root=simulation_root_path,
-    )
+        credential = _legacy_credential_group_from_auth(auth, host)
 
     return TargetContext(
         name=target_name,
