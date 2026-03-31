@@ -2,6 +2,7 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -11,6 +12,13 @@ if str(ROOT) not in sys.path:
 from conftest import run_vaws, seed_overlay_files
 from tools.lib import fleet
 from tools.lib.config import RepoPaths
+from tools.lib.remote import (
+    VerificationCheck,
+    VerificationResult,
+    ensure_runtime,
+    resolve_server_context,
+    verify_runtime,
+)
 
 
 def _write_fleet_overlay(vaws_repo: Path) -> Path:
@@ -75,7 +83,7 @@ def test_fleet_add_writes_server_inventory_entry(vaws_repo):
 
     assert result.returncode == 0
     output = (result.stdout + result.stderr).lower()
-    assert "fleet add: ok" in output
+    assert "fleet add: ready" in output
 
     servers = yaml.safe_load((vaws_repo / ".workspace.local" / "servers.yaml").read_text())
     host_b = servers["servers"]["host-b"]
@@ -89,12 +97,50 @@ def test_fleet_add_writes_server_inventory_entry(vaws_repo):
     assert host_b["runtime"]["ssh_port"] == 63269
     assert host_b["runtime"]["workspace_root"] == "/vllm-workspace"
     assert host_b["runtime"]["host_workspace_path"].endswith("/host-b/workspace")
+    assert host_b["verification"]["status"] == "ready"
+    assert host_b["verification"]["checks"][0]["name"] == "runtime_state"
+    state = json.loads((vaws_repo / ".workspace.local" / "state.json").read_text())
+    assert state["server_verifications"]["host-b"]["status"] == "ready"
 
     runtime_root = vaws_repo.parent / "simulation-runtime" / "host-b" / "vllm-workspace"
     runtime_state = json.loads((runtime_root / ".vaws" / "runtime.json").read_text())
     assert runtime_state["target"] == "host-b"
     assert runtime_state["container"]["created"] is True
     assert "reused" in runtime_state["container"]
+
+
+def test_remote_verify_runtime_returns_explicit_result_shape(vaws_repo):
+    overlay = _write_fleet_overlay(vaws_repo)
+    servers = yaml.safe_load((overlay / "servers.yaml").read_text())
+    servers["servers"]["host-a"] = {
+        "host": "10.0.0.11",
+        "port": 22,
+        "login_user": "root",
+        "ssh_auth_ref": "default-server-auth",
+        "status": "pending",
+        "runtime": {
+            "image_ref": "quay.nju.edu.cn/ascend/vllm-ascend:latest",
+            "container_name": "vaws-workspace",
+            "ssh_port": 63269,
+            "workspace_root": "/vllm-workspace",
+            "bootstrap_mode": "host-then-container",
+        },
+    }
+    overlay.joinpath("servers.yaml").write_text(
+        yaml.safe_dump(servers, sort_keys=False),
+        encoding="utf-8",
+    )
+    paths = RepoPaths(root=vaws_repo)
+    context = resolve_server_context(paths, "host-a")
+    ensure_runtime(paths, context)
+
+    result = verify_runtime(paths, context)
+
+    assert isinstance(result, VerificationResult)
+    assert result.status == "ready"
+    assert result.to_mapping()["status"] == "ready"
+    assert result.to_mapping()["checks"][0]["name"] == "runtime_state"
+    assert result.to_mapping()["runtime"]["host_name"] == "host-a"
 
 
 def test_fleet_list_reports_inventory_entries(vaws_repo):
@@ -149,6 +195,45 @@ def test_fleet_add_rejects_invalid_server_port(vaws_repo):
     assert "traceback" not in output
 
 
+def test_fleet_add_records_needs_repair_when_verification_needs_repair(vaws_repo, monkeypatch):
+    _write_fleet_overlay(vaws_repo)
+
+    class FakeVerificationResult:
+        status = "needs_repair"
+        summary = "runtime probe failed"
+
+        def to_mapping(self):
+            return {
+                "status": self.status,
+                "summary": self.summary,
+                "checks": [
+                    {
+                        "name": "runtime_state",
+                        "status": "needs_repair",
+                        "detail": "probe failed",
+                    }
+                ],
+            }
+
+    monkeypatch.setattr(fleet, "verify_runtime", lambda *args, **kwargs: FakeVerificationResult())
+
+    result = fleet.add_fleet_server(
+        RepoPaths(root=vaws_repo),
+        "host-b",
+        "10.0.0.12",
+        "default-server-auth",
+    )
+    assert result == 0
+    servers = yaml.safe_load((vaws_repo / ".workspace.local" / "servers.yaml").read_text())
+    host_b = servers["servers"]["host-b"]
+    assert host_b["status"] == "needs_repair"
+    assert host_b["verification"]["status"] == "needs_repair"
+    assert host_b["verification"]["checks"][0]["detail"] == "probe failed"
+
+    state = json.loads((vaws_repo / ".workspace.local" / "state.json").read_text())
+    assert state["server_verifications"]["host-b"]["status"] == "needs_repair"
+
+
 def test_fleet_verify_is_read_only(vaws_repo, monkeypatch):
     overlay = _write_fleet_overlay(vaws_repo)
     servers = yaml.safe_load((overlay / "servers.yaml").read_text())
@@ -178,7 +263,28 @@ def test_fleet_verify_is_read_only(vaws_repo, monkeypatch):
 
     def fake_verify_runtime(paths, ctx):
         calls["server"] = ctx.name
-        return {"verified": True}
+        return VerificationResult.ready(
+            summary="runtime verified",
+            runtime={
+                "host_name": ctx.name,
+                "host": ctx.host.host,
+                "host_port": ctx.host.port,
+                "login_user": ctx.host.login_user,
+                "workspace_root": ctx.runtime.workspace_root,
+                "ssh_port": ctx.runtime.ssh_port,
+                "container_name": ctx.runtime.container_name,
+                "image_ref": ctx.runtime.image_ref,
+                "bootstrap_mode": ctx.runtime.bootstrap_mode,
+                "host_workspace_path": ctx.runtime.host_workspace_path,
+            },
+            checks=[
+                VerificationCheck(
+                    name="runtime_state",
+                    status="ready",
+                    detail="runtime state available",
+                )
+            ],
+        )
 
     monkeypatch.setattr(fleet, "verify_runtime", fake_verify_runtime)
 

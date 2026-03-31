@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional
 import yaml
 
 from .config import RepoPaths
+from .runtime import read_state, write_state
 
 DEFAULT_HOST_WORKSPACE_BASE = "/root/.vaws/targets"
 DEFAULT_WORKSPACE_ROOT = "/vllm-workspace"
@@ -61,6 +62,69 @@ class RuntimeSpec:
     bootstrap_mode: str
     host_workspace_path: str
     docker_run_args: List[str]
+
+
+@dataclass(frozen=True)
+class VerificationCheck:
+    name: str
+    status: str
+    detail: Optional[str] = None
+
+    def to_mapping(self) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "name": self.name,
+            "status": self.status,
+        }
+        if self.detail is not None:
+            payload["detail"] = self.detail
+        return payload
+
+
+@dataclass(frozen=True)
+class VerificationResult:
+    status: str
+    summary: str
+    checks: List[VerificationCheck]
+    runtime: Dict[str, Any]
+
+    @classmethod
+    def ready(
+        cls,
+        *,
+        summary: str,
+        runtime: Dict[str, Any],
+        checks: Optional[List[VerificationCheck]] = None,
+    ) -> "VerificationResult":
+        return cls(
+            status="ready",
+            summary=summary,
+            checks=list(checks or []),
+            runtime=dict(runtime),
+        )
+
+    @classmethod
+    def needs_repair(
+        cls,
+        *,
+        summary: str,
+        runtime: Dict[str, Any],
+        checks: List[VerificationCheck],
+    ) -> "VerificationResult":
+        return cls(
+            status="needs_repair",
+            summary=summary,
+            checks=list(checks),
+            runtime=dict(runtime),
+        )
+
+    def to_mapping(self) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "status": self.status,
+            "summary": self.summary,
+            "checks": [check.to_mapping() for check in self.checks],
+            "runtime": dict(self.runtime),
+        }
+        return payload
 
 
 @dataclass(frozen=True)
@@ -321,6 +385,23 @@ def _context_from_inventory_record(
     )
 
 
+def _verification_runtime_payload(ctx: TargetContext, **extra: Any) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {
+        "image_ref": ctx.runtime.image_ref,
+        "container_name": ctx.runtime.container_name,
+        "ssh_port": ctx.runtime.ssh_port,
+        "workspace_root": ctx.runtime.workspace_root,
+        "bootstrap_mode": ctx.runtime.bootstrap_mode,
+        "host_name": ctx.host.name,
+        "host": ctx.host.host,
+        "host_port": ctx.host.port,
+        "login_user": ctx.host.login_user,
+        "host_workspace_path": ctx.runtime.host_workspace_path,
+    }
+    payload.update(extra)
+    return payload
+
+
 def _resolve_legacy_target_context(paths: RepoPaths, target_name: str) -> TargetContext:
     config = _load_targets_config(paths)
     targets = config.get("targets")
@@ -417,6 +498,41 @@ def resolve_target_context(paths: RepoPaths, target_name: str) -> TargetContext:
     except RemoteError:
         assert legacy_error is not None
         raise legacy_error
+
+
+def persist_server_verification(
+    paths: RepoPaths,
+    server_name: str,
+    verification: VerificationResult,
+) -> None:
+    config = _load_servers_config(paths)
+    servers = config.get("servers")
+    if not isinstance(servers, dict):
+        raise RemoteError("invalid server config: missing 'servers' map")
+
+    server = servers.get(server_name)
+    if not isinstance(server, dict):
+        raise RemoteError(f"unknown server: {server_name}")
+
+    server["status"] = verification.status
+    server["verification"] = verification.to_mapping()
+    config["version"] = 1
+    config["servers"] = servers
+    paths.local_servers_file.write_text(
+        yaml.safe_dump(config, sort_keys=False),
+        encoding="utf-8",
+    )
+
+    state = read_state(paths)
+    server_verifications = state.get("server_verifications")
+    if server_verifications is None:
+        server_verifications = {}
+    elif not isinstance(server_verifications, dict):
+        raise RemoteError("invalid runtime state: .workspace.local/state.json")
+
+    server_verifications[server_name] = verification.to_mapping()
+    state["server_verifications"] = server_verifications
+    write_state(paths, state)
 
 
 def _runtime_state_file(runtime_root: Path) -> Path:
@@ -995,33 +1111,63 @@ def ensure_runtime(paths: RepoPaths, ctx: TargetContext) -> Dict[str, Any]:
     return _ensure_host_runtime(paths, ctx)
 
 
-def _verify_simulation_runtime(ctx: TargetContext) -> Dict[str, Any]:
+def _verify_simulation_runtime(ctx: TargetContext) -> VerificationResult:
     runtime_root = _simulation_runtime_root(ctx)
     runtime_state = _load_runtime_state(runtime_root)
     if not runtime_state:
-        raise RemoteError(f"missing runtime state for server {ctx.name}")
+        return VerificationResult.needs_repair(
+            summary=f"missing runtime state for server {ctx.name}",
+            runtime=_verification_runtime_payload(
+                ctx,
+                transport="simulation",
+                container_endpoint=f"simulation://{ctx.host.name}{ctx.runtime.workspace_root}",
+            ),
+            checks=[
+                VerificationCheck(
+                    name="runtime_state",
+                    status="needs_repair",
+                    detail="missing runtime state",
+                )
+            ],
+        )
 
     endpoint = runtime_state.get("endpoint")
     if not isinstance(endpoint, dict):
-        raise RemoteError(f"invalid runtime state for server {ctx.name}")
+        return VerificationResult.needs_repair(
+            summary=f"invalid runtime state for server {ctx.name}",
+            runtime=_verification_runtime_payload(
+                ctx,
+                transport="simulation",
+                container_endpoint=f"simulation://{ctx.host.name}{ctx.runtime.workspace_root}",
+            ),
+            checks=[
+                VerificationCheck(
+                    name="runtime_state",
+                    status="needs_repair",
+                    detail="invalid runtime state",
+                )
+            ],
+        )
 
-    return {
-        "image_ref": ctx.runtime.image_ref,
-        "container_name": ctx.runtime.container_name,
-        "ssh_port": ctx.runtime.ssh_port,
-        "workspace_root": ctx.runtime.workspace_root,
-        "bootstrap_mode": ctx.runtime.bootstrap_mode,
-        "transport": endpoint.get("transport", "simulation"),
-        "container_endpoint": f"simulation://{ctx.host.name}{ctx.runtime.workspace_root}",
-        "host_name": ctx.host.name,
-        "host": ctx.host.host,
-        "host_port": ctx.host.port,
-        "login_user": ctx.host.login_user,
-        "host_workspace_path": str(runtime_root / "workspace"),
-    }
+    return VerificationResult.ready(
+        summary=f"runtime ready for server {ctx.name}",
+        runtime=_verification_runtime_payload(
+            ctx,
+            transport=endpoint.get("transport", "simulation"),
+            container_endpoint=f"simulation://{ctx.host.name}{ctx.runtime.workspace_root}",
+            host_workspace_path=str(runtime_root / "workspace"),
+        ),
+        checks=[
+            VerificationCheck(
+                name="runtime_state",
+                status="ready",
+                detail="runtime state available",
+            )
+        ],
+    )
 
 
-def _verify_host_runtime(ctx: TargetContext) -> Dict[str, Any]:
+def _verify_host_runtime(ctx: TargetContext) -> VerificationResult:
     probe = subprocess.run(
         _ssh_base_command(ctx) + ["true"],
         text=True,
@@ -1029,24 +1175,41 @@ def _verify_host_runtime(ctx: TargetContext) -> Dict[str, Any]:
         check=False,
     )
     if probe.returncode != 0:
-        raise RemoteError(f"unable to verify SSH access to host {ctx.host.host}")
-    return {
-        "image_ref": ctx.runtime.image_ref,
-        "container_name": ctx.runtime.container_name,
-        "ssh_port": ctx.runtime.ssh_port,
-        "workspace_root": ctx.runtime.workspace_root,
-        "bootstrap_mode": ctx.runtime.bootstrap_mode,
-        "transport": "ssh",
-        "container_endpoint": f"ssh://{ctx.credential.username}@{ctx.host.host}:{ctx.runtime.ssh_port}",
-        "host_name": ctx.host.name,
-        "host": ctx.host.host,
-        "host_port": ctx.host.port,
-        "login_user": ctx.host.login_user,
-        "host_workspace_path": ctx.runtime.host_workspace_path,
-    }
+        return VerificationResult.needs_repair(
+            summary=f"unable to verify SSH access to host {ctx.host.host}",
+            runtime=_verification_runtime_payload(
+                ctx,
+                transport="ssh",
+                container_endpoint=(
+                    f"ssh://{ctx.credential.username}@{ctx.host.host}:{ctx.runtime.ssh_port}"
+                ),
+            ),
+            checks=[
+                VerificationCheck(
+                    name="ssh_access",
+                    status="needs_repair",
+                    detail=(probe.stderr or probe.stdout or "SSH probe failed").strip(),
+                )
+            ],
+        )
+    return VerificationResult.ready(
+        summary=f"runtime ready for host {ctx.host.host}",
+        runtime=_verification_runtime_payload(
+            ctx,
+            transport="ssh",
+            container_endpoint=f"ssh://{ctx.credential.username}@{ctx.host.host}:{ctx.runtime.ssh_port}",
+        ),
+        checks=[
+            VerificationCheck(
+                name="ssh_access",
+                status="ready",
+                detail="SSH probe succeeded",
+            )
+        ],
+    )
 
 
-def verify_runtime(paths: RepoPaths, ctx: TargetContext) -> Dict[str, Any]:
+def verify_runtime(paths: RepoPaths, ctx: TargetContext) -> VerificationResult:
     if ctx.credential.mode == "local-simulation":
         return _verify_simulation_runtime(ctx)
     return _verify_host_runtime(ctx)

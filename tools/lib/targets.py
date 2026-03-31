@@ -25,10 +25,14 @@ def ensure_target(paths: RepoPaths, target_name: str) -> int:
             context = server_context
             routed_via = "fleet verification behavior"
             try:
-                persisted_runtime = verify_runtime(paths, context)
+                verification = verify_runtime(paths, context)
+                if verification.status != "ready":
+                    persisted_runtime = ensure_runtime(paths, context)
+                    verification = verify_runtime(paths, context)
+                persisted_runtime = verification.runtime
             except RemoteError:
                 persisted_runtime = ensure_runtime(paths, context)
-                persisted_runtime = verify_runtime(paths, context)
+                persisted_runtime = verify_runtime(paths, context).runtime
         else:
             persisted_runtime = ensure_runtime(paths, context)
         state = read_state(paths)

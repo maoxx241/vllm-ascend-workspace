@@ -19,6 +19,7 @@ from .remote import (
     DEFAULT_HOST_WORKSPACE_BASE,
     RemoteError,
     ensure_runtime,
+    persist_server_verification,
     resolve_server_context,
     verify_runtime,
 )
@@ -161,26 +162,23 @@ def add_fleet_server(
 
         context = resolve_server_context(paths, server_name)
         ensure_runtime(paths, context)
-        verify_runtime(paths, context)
-
-        servers[server_name]["status"] = "ready"
-        config["servers"] = servers
-        _write_servers_config(paths, config)
+        verification = verify_runtime(paths, context)
+        persist_server_verification(paths, server_name, verification)
     except (FleetError, RuntimeError, OSError) as exc:
         print(str(exc))
         return 1
 
-    print(f"fleet add: ok ({server_name})")
+    print(f"fleet add: {verification.status} ({server_name})")
     return 0
 
 
 def verify_fleet_server(paths: RepoPaths, server_name: str) -> int:
     try:
         context = resolve_server_context(paths, server_name)
-        verify_runtime(paths, context)
+        verification = verify_runtime(paths, context)
     except (RemoteError, RuntimeError) as exc:
         print(str(exc))
         return 1
 
-    print(f"fleet verify: ok ({server_name})")
+    print(f"fleet verify: {verification.status} ({server_name})")
     return 0

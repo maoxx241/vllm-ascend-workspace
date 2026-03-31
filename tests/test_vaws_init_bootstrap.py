@@ -72,8 +72,10 @@ def test_init_bootstrap_writes_overlay_and_configures_repo_remotes(vaws_repo):
     assert servers["bootstrap"]["completed"] is True
     assert servers["bootstrap"]["mode"] == "remote-first"
     assert servers["servers"]["host-a"]["host"] == "173.125.1.2"
-    assert servers["servers"]["host-a"]["status"] == "pending"
+    assert servers["servers"]["host-a"]["status"] == "ready"
     assert servers["servers"]["host-a"]["ssh_auth_ref"] == "default-server-auth"
+    assert servers["servers"]["host-a"]["verification"]["status"] == "ready"
+    assert servers["servers"]["host-a"]["verification"]["checks"][0]["name"] == "inventory"
     assert servers["servers"]["host-a"]["runtime"]["image_ref"] == "quay.nju.edu.cn/ascend/vllm-ascend:latest"
     assert servers["servers"]["host-a"]["runtime"]["bootstrap_mode"] == "host-then-container"
     assert servers["servers"]["host-a"]["runtime"]["host_workspace_path"] == "/root/.vaws/targets/single-default/workspace"
@@ -99,6 +101,7 @@ def test_init_bootstrap_writes_overlay_and_configures_repo_remotes(vaws_repo):
     assert state["bootstrap"]["completed"] is True
     assert state["bootstrap"]["mode"] == "remote-first"
     assert state["current_target"] == "single-default"
+    assert state["server_verifications"]["host-a"]["status"] == "ready"
 
 
 def test_init_bootstrap_rolls_back_finalization_failure(vaws_repo, monkeypatch):
@@ -245,7 +248,7 @@ def test_init_bootstrap_supports_local_only_mode(vaws_repo):
 
     assert result.returncode == 0
     output = result.stdout.lower()
-    assert "bootstrap ok" in output
+    assert "bootstrap ready" in output
 
     servers = yaml.safe_load((vaws_repo / ".workspace.local" / "servers.yaml").read_text())
     assert servers["bootstrap"]["completed"] is True
@@ -307,7 +310,54 @@ def test_init_bootstrap_reports_degraded_preflight_state(vaws_repo, monkeypatch,
     assert result == 0
     assert "preflight degraded" in output
     assert "gh" in output
-    assert "bootstrap ok" in output
+    assert "bootstrap ready" in output
+
+
+def test_init_bootstrap_records_needs_repair_when_verification_needs_repair(
+    vaws_repo,
+    monkeypatch,
+    capsys,
+):
+    class FakeVerificationResult:
+        status = "needs_repair"
+        summary = "runtime probe failed"
+
+        def to_mapping(self):
+            return {
+                "status": self.status,
+                "summary": self.summary,
+                "checks": [
+                    {
+                        "name": "runtime_state",
+                        "status": "needs_repair",
+                        "detail": "probe failed",
+                    }
+                ],
+            }
+
+    monkeypatch.setattr(bootstrap, "verify_runtime", lambda *args, **kwargs: FakeVerificationResult(), raising=False)
+
+    request = bootstrap.BootstrapRequest(
+        server_host="173.125.1.2",
+        server_user="root",
+        vllm_ascend_origin_url="git@github.com:alice/vllm-ascend.git",
+    )
+
+    result = bootstrap.bootstrap_init(RepoPaths(root=vaws_repo), request)
+    output = capsys.readouterr().out.lower()
+
+    assert result == 0
+    assert "needs_repair" in output
+
+    servers = yaml.safe_load((vaws_repo / ".workspace.local" / "servers.yaml").read_text())
+    host_a = servers["servers"]["host-a"]
+    assert host_a["status"] == "needs_repair"
+    assert host_a["verification"]["status"] == "needs_repair"
+    assert host_a["verification"]["checks"][0]["detail"] == "probe failed"
+
+    state = yaml.safe_load((vaws_repo / ".workspace.local" / "state.json").read_text())
+    assert state["server_verifications"]["host-a"]["status"] == "needs_repair"
+    assert state["bootstrap"]["completed"] is True
 
 
 def test_preflight_reports_blocked_when_required_tool_missing(monkeypatch):
@@ -511,7 +561,7 @@ def test_init_bootstrap_defaults_to_local_only_without_server_host(vaws_repo):
     assert result.returncode == 0
     output = result.stdout.lower()
     assert "local-only" in output
-    assert "bootstrap ok" in output
+    assert "bootstrap ready" in output
 
 
 def test_bootstrap_target_and_server_resolution_share_workspace_root(vaws_repo):

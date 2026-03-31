@@ -11,6 +11,10 @@ from .config import RepoPaths
 from .overlay import ensure_overlay_layout
 from .preflight import PreflightError, ensure_local_control_plane_deps
 from .remote import DEFAULT_HOST_WORKSPACE_BASE
+from .remote import RemoteError
+from .remote import VerificationCheck, VerificationResult, persist_server_verification
+from .remote import resolve_server_context
+from .remote import TargetContext
 from .runtime import read_state, write_state
 
 COMMUNITY_UPSTREAM_URLS = {
@@ -121,6 +125,36 @@ def _bootstrap_mode(request: BootstrapRequest) -> str:
 
 def _bootstrap_host_workspace_path(request: BootstrapRequest) -> str:
     return f"{DEFAULT_HOST_WORKSPACE_BASE}/{request.target_name}/workspace"
+
+
+def verify_runtime(_paths: RepoPaths, context: TargetContext) -> VerificationResult:
+    runtime = {
+        "image_ref": context.runtime.image_ref,
+        "container_name": context.runtime.container_name,
+        "ssh_port": context.runtime.ssh_port,
+        "workspace_root": context.runtime.workspace_root,
+        "bootstrap_mode": context.runtime.bootstrap_mode,
+        "transport": "bootstrap",
+        "container_endpoint": (
+            f"bootstrap://{context.host.name}/{context.runtime.container_name}"
+        ),
+        "host_name": context.host.name,
+        "host": context.host.host,
+        "host_port": context.host.port,
+        "login_user": context.host.login_user,
+        "host_workspace_path": context.runtime.host_workspace_path,
+    }
+    return VerificationResult.ready(
+        summary=f"bootstrap inventory ready for {context.host.name}",
+        runtime=runtime,
+        checks=[
+            VerificationCheck(
+                name="inventory",
+                status="ready",
+                detail="bootstrap server inventory resolved",
+            )
+        ],
+    )
 
 
 def _ensure_overlay(paths: RepoPaths) -> None:
@@ -377,10 +411,21 @@ def _write_bootstrap_state(paths: RepoPaths, request: BootstrapRequest) -> None:
         raise BootstrapError(str(exc)) from exc
 
 
+def _set_bootstrap_completed(paths: RepoPaths, completed: bool) -> None:
+    servers_state = _load_yaml_mapping(paths.local_servers_file)
+    bootstrap_state = servers_state.get("bootstrap")
+    if not isinstance(bootstrap_state, dict):
+        raise BootstrapError("invalid server config: missing bootstrap map")
+
+    bootstrap_state["completed"] = completed
+    servers_state["bootstrap"] = bootstrap_state
+    _write_yaml(paths.local_servers_file, servers_state)
+
+
 def _finalize_bootstrap(paths: RepoPaths, request: BootstrapRequest) -> None:
     try:
-        _write_servers_yaml(paths, request, completed=True)
         _write_bootstrap_state(paths, request)
+        _set_bootstrap_completed(paths, True)
         servers_state = _load_yaml_mapping(paths.local_servers_file)
         state = _read_bootstrap_state(paths)
         if (
@@ -399,7 +444,7 @@ def _finalize_bootstrap(paths: RepoPaths, request: BootstrapRequest) -> None:
         except RuntimeError:
             pass
         try:
-            _write_servers_yaml(paths, request, completed=False)
+            _set_bootstrap_completed(paths, False)
         except BootstrapError:
             pass
         raise
@@ -441,6 +486,11 @@ def bootstrap_init(paths: RepoPaths, request: BootstrapRequest) -> int:
         _write_targets_yaml(paths, request)
         _write_auth_yaml(paths, request)
         _configure_repo_remotes(paths, request)
+        verification: Optional[VerificationResult] = None
+        if request.server_host is not None:
+            context = resolve_server_context(paths, request.host_name)
+            verification = verify_runtime(paths, context)
+            persist_server_verification(paths, request.host_name, verification)
         _finalize_bootstrap(paths, request)
     except PreflightError as exc:
         print(str(exc))
@@ -448,9 +498,15 @@ def bootstrap_init(paths: RepoPaths, request: BootstrapRequest) -> int:
     except BootstrapError as exc:
         print(str(exc))
         return 1
+    except (RemoteError, RuntimeError) as exc:
+        print(str(exc))
+        return 1
 
     if preflight_report.status == "degraded":
         missing = ", ".join(preflight_report.missing_recommended)
         print(f"init: preflight degraded: missing recommended tools: {missing}")
-    print(f"init: bootstrap ok ({_bootstrap_mode(request)})")
+    bootstrap_status = (
+        verification.status if request.server_host is not None else "ready"
+    )
+    print(f"init: bootstrap {bootstrap_status} ({_bootstrap_mode(request)})")
     return 0
