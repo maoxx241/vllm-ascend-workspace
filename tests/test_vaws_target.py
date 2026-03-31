@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import yaml
 
@@ -9,11 +10,27 @@ def read_json(path):
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def seed_overlay(vaws_repo, target_name="single-default"):
+def seed_overlay(vaws_repo, target_name="single-default") -> Path:
     overlay = vaws_repo / ".workspace.local"
     overlay.mkdir()
     (overlay / "repos.yaml").write_text("", encoding="utf-8")
-    (overlay / "auth.yaml").write_text("", encoding="utf-8")
+    simulation_root = vaws_repo.parent / "simulation-runtime"
+    (overlay / "auth.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "host_auth": {
+                    "mode": "local-simulation",
+                    "credential_groups": {
+                        "shared-lab-a": {
+                            "username": "root",
+                            "simulation_root": str(simulation_root),
+                        }
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
     (overlay / "state.json").write_text("{}\n", encoding="utf-8")
 
     targets = {
@@ -40,16 +57,36 @@ def seed_overlay(vaws_repo, target_name="single-default"):
         },
     }
     (overlay / "targets.yaml").write_text(yaml.safe_dump(targets), encoding="utf-8")
+    return simulation_root
 
 
 def test_target_ensure_records_runtime_endpoint(vaws_repo):
-    seed_overlay(vaws_repo, target_name="single-default")
+    simulation_root = seed_overlay(vaws_repo, target_name="single-default")
     result = run_vaws(vaws_repo, "target", "ensure", "single-default")
     assert result.returncode == 0
     state = read_json(vaws_repo / ".workspace.local" / "state.json")
     assert state["current_target"] == "single-default"
     assert state["runtime"]["workspace_root"] == "/vllm-workspace"
     assert state["runtime"]["ssh_port"] == 63269
+    assert state["runtime"]["container_endpoint"].startswith("simulation://")
+    runtime_root = simulation_root / "host-a" / "vllm-workspace"
+    assert (runtime_root / ".vaws" / "runtime.json").exists()
+    assert (runtime_root / "workspace").is_symlink()
+
+
+def test_target_ensure_reuses_existing_runtime_container(vaws_repo):
+    simulation_root = seed_overlay(vaws_repo, target_name="single-default")
+
+    first = run_vaws(vaws_repo, "target", "ensure", "single-default")
+    second = run_vaws(vaws_repo, "target", "ensure", "single-default")
+
+    assert first.returncode == 0
+    assert second.returncode == 0
+    state = read_json(vaws_repo / ".workspace.local" / "state.json")
+    runtime_root = simulation_root / "host-a" / "vllm-workspace"
+    runtime_state = read_json(runtime_root / ".vaws" / "runtime.json")
+    assert runtime_state["container"]["created"] is True
+    assert runtime_state["container"]["reused"] is True
 
 
 def test_target_ensure_fails_when_target_is_missing(vaws_repo):
@@ -189,3 +226,22 @@ def test_target_ensure_defaults_blank_workspace_root(vaws_repo):
     assert result.returncode == 0
     state = read_json(vaws_repo / ".workspace.local" / "state.json")
     assert state["runtime"]["workspace_root"] == "/vllm-workspace"
+
+
+def test_target_ensure_fails_when_auth_group_is_missing(vaws_repo):
+    seed_overlay(vaws_repo, target_name="single-default")
+
+    targets = yaml.safe_load(
+        (vaws_repo / ".workspace.local" / "targets.yaml").read_text(encoding="utf-8")
+    )
+    targets["hosts"]["host-a"]["auth_group"] = "missing-group"
+    (vaws_repo / ".workspace.local" / "targets.yaml").write_text(
+        yaml.safe_dump(targets), encoding="utf-8"
+    )
+
+    result = run_vaws(vaws_repo, "target", "ensure", "single-default")
+
+    assert result.returncode == 1
+    output = (result.stdout + result.stderr).lower()
+    assert "auth" in output
+    assert "missing-group" in output

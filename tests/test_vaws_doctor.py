@@ -1,4 +1,5 @@
 import json
+import shutil
 
 from conftest import run_vaws
 
@@ -62,6 +63,31 @@ def test_doctor_fails_when_state_json_is_not_utf8(vaws_repo):
     assert "state.json" in output
     assert "invalid" in output
     assert "traceback" not in output
+
+
+def test_doctor_fails_when_recursive_submodule_is_missing(vaws_repo):
+    result = run_vaws(vaws_repo, "init")
+    assert result.returncode == 0
+    catlass_root = vaws_repo / "vllm-ascend" / "csrc" / "third_party" / "catlass"
+    git_marker = catlass_root / ".git"
+    shutil.rmtree(git_marker)
+
+    result = run_vaws(vaws_repo, "doctor")
+
+    assert result.returncode == 1
+    output = (result.stdout + result.stderr).lower()
+    assert "submodule" in output
+    assert "catlass" in output
+
+
+def test_doctor_succeeds_for_initialized_overlay_and_recursive_submodules(vaws_repo):
+    result = run_vaws(vaws_repo, "init")
+    assert result.returncode == 0
+
+    result = run_vaws(vaws_repo, "doctor")
+
+    assert result.returncode == 0
+    assert "doctor: ok" in result.stdout.lower()
 
 
 def test_init_writes_json_parseable_state_file(vaws_repo):

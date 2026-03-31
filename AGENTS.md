@@ -8,6 +8,7 @@ This repository is a public-facing control workspace for vLLM Ascend development
 - Primary command surface: `tools/vaws.py`
 - Compatibility entrypoints: `./setup`, `./sync`
 - Source repos: `vllm/`, `vllm-ascend/` as submodules
+- Clone and refresh sources recursively: `git submodule update --init --recursive`
 
 ## Commit hygiene
 

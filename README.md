@@ -16,6 +16,8 @@ Public workspace-local control repository for coordinating vLLM and vLLM-Ascend 
 
 - `vllm/` is tracked as a workspace submodule.
 - `vllm-ascend/` is tracked as a workspace submodule.
+- Bootstrap the sources with `git clone --recursive` or `git submodule update --init --recursive`.
+- Recursive init matters because `vllm-ascend/` also carries nested submodules.
 - The control repo lives at `/vllm-workspace/workspace`.
 
 ## Workspace-local reference

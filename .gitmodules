@@ -1,8 +1,8 @@
 [submodule "vllm-ascend"]
 	path = vllm-ascend
-	url = git@github.com:maoxx241/vllm-ascend.git
+	url = https://github.com/maoxx241/vllm-ascend.git
 	branch = main
 [submodule "vllm"]
 	path = vllm
-	url = git@github.com:maoxx241/vllm.git
+	url = https://github.com/maoxx241/vllm.git
 	branch = main

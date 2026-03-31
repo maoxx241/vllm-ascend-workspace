@@ -20,6 +20,7 @@ def test_process_docs_are_not_meant_for_main():
     repo = Path(__file__).resolve().parents[1]
     ignore_text = (repo / ".gitignore").read_text(encoding="utf-8")
     assert ".workspace.local/" in ignore_text
+    assert ".DS_Store" in ignore_text
     assert "__pycache__/" in ignore_text
     assert "*.py[cod]" in ignore_text
     assert ".pytest_cache/" in ignore_text
@@ -60,10 +61,22 @@ def test_workspace_submodules_are_declared():
     gitmodules = (repo / ".gitmodules").read_text(encoding="utf-8")
     assert 'submodule "vllm"' in gitmodules
     assert "path = vllm" in gitmodules
-    assert "git@github.com:maoxx241/vllm.git" in gitmodules
+    assert "https://github.com/" in gitmodules
+    assert "vllm.git" in gitmodules
     assert 'submodule "vllm-ascend"' in gitmodules
     assert "path = vllm-ascend" in gitmodules
-    assert "git@github.com:maoxx241/vllm-ascend.git" in gitmodules
+    assert "vllm-ascend.git" in gitmodules
+    assert "git@github.com:" not in gitmodules
+
+
+def test_public_docs_explain_recursive_submodule_bootstrap():
+    repo = Path(__file__).resolve().parents[1]
+    readme = (repo / "README.md").read_text(encoding="utf-8").lower()
+    agents = (repo / "AGENTS.md").read_text(encoding="utf-8").lower()
+
+    for text in (readme, agents):
+        assert "recursive" in text
+        assert "submodule update --init --recursive" in text
 
 
 def test_workspace_local_skill_skeletons_exist_and_stay_public():

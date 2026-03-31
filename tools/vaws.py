@@ -18,7 +18,12 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("doctor")
     subparsers.add_parser("init")
-    subparsers.add_parser("sync")
+    sync_parser = subparsers.add_parser("sync")
+    sync_subparsers = sync_parser.add_subparsers(dest="sync_command")
+    sync_start_parser = sync_subparsers.add_parser("start")
+    sync_start_parser.add_argument("session_name")
+    sync_subparsers.add_parser("status")
+    sync_subparsers.add_parser("done")
 
     remotes_parser = subparsers.add_parser("remotes")
     remotes_subparsers = remotes_parser.add_subparsers(
@@ -55,8 +60,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.command == "init":
         return init(paths)
     if args.command == "sync":
-        print("sync: compatibility command available; no sync actions yet")
-        return 0
+        if args.sync_command in (None, "status"):
+            return status_session(paths)
+        if args.sync_command == "start":
+            if create_session(paths, args.session_name) != 0:
+                return 1
+            return switch_session(paths, args.session_name)
+        if args.sync_command == "done":
+            print("sync done: compatibility command reserved for archive/finish")
+            return 0
+        parser.error(f"unknown sync command: {args.sync_command}")
     if args.command == "remotes" and args.remotes_command == "normalize":
         try:
             print(default_base_ref(paths))
