@@ -31,12 +31,12 @@ Public workspace-local control repository for coordinating vLLM and vLLM-Ascend 
 
 ## Agent Workflows
 
-- `.agents/skills/` contains the shared workspace-local contracts for bootstrap, fleet, reset, session-switch, and sync.
+- `.agents/skills/` contains the shared workspace-local contracts for staged init, foundation, git profile, fleet, reset, session-switch, and sync.
 - `AGENTS.md` is the Codex adapter.
 - `CLAUDE.md` is the Claude Code adapter.
 - `.cursorrules` is the Cursor adapter.
 - Exact internal routing is kept in skill-local `references/internal-routing.md` files and is not the public workflow surface.
-- Bootstrap and first baseline flow live in `.agents/skills/workspace-bootstrap/`.
+- Staged initialization routes through `.agents/skills/workspace-init/`, `.agents/skills/workspace-foundation/`, and `.agents/skills/workspace-git-profile/`.
 - Ongoing server inventory management lives in `.agents/skills/workspace-fleet/`.
 - Guarded best-effort cleanup flow lives in `.agents/skills/workspace-reset/`.
 - Session lifecycle flow lives in `.agents/skills/workspace-session-switch/`.

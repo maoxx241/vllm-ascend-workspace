@@ -8,9 +8,12 @@ if __package__ in (None, ""):
 
 from tools.lib.bootstrap import bootstrap_init, bootstrap_request_from_args
 from tools.lib.config import RepoPaths
+from tools.lib.git_profile import git_profile
+from tools.lib.foundation import run_foundation
 from tools.lib.fleet import add_fleet_server, list_fleet, verify_fleet_server
-from tools.lib.doctor import doctor, init
+from tools.lib.doctor import doctor
 from tools.lib.gitflow import default_base_ref
+from tools.lib.init_flow import init_request_from_args, run_init
 from tools.lib.reset import execute_reset, prepare_reset
 from tools.lib.session import create_session, status_session, switch_session
 from tools.lib.targets import ensure_target
@@ -20,6 +23,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="vaws")
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("doctor")
+    subparsers.add_parser("foundation")
     init_parser = subparsers.add_parser("init")
     init_parser.add_argument("--bootstrap", action="store_true")
     init_parser.add_argument("--target-name", default="single-default")
@@ -28,12 +32,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--server-host",
         help="bootstrap server host; omit for local-only baseline",
     )
+    init_parser.add_argument("--server-name")
     init_parser.add_argument("--server-user", default="root")
     init_parser.add_argument("--server-port", type=int, default=22)
     init_parser.add_argument("--server-auth-mode", default="ssh-key")
     init_parser.add_argument("--server-auth-group", default="default")
     init_parser.add_argument("--server-password-env")
     init_parser.add_argument("--server-key-path")
+    init_parser.add_argument("--local-only", action="store_true")
     init_parser.add_argument(
         "--runtime-image",
         default="quay.nju.edu.cn/ascend/vllm-ascend:latest",
@@ -49,6 +55,9 @@ def build_parser() -> argparse.ArgumentParser:
     init_parser.add_argument("--git-auth-mode", default="ssh-key")
     init_parser.add_argument("--git-key-path")
     init_parser.add_argument("--git-token-env")
+    git_profile_parser = subparsers.add_parser("git-profile")
+    git_profile_parser.add_argument("--vllm-origin-url")
+    git_profile_parser.add_argument("--vllm-ascend-origin-url")
     sync_parser = subparsers.add_parser("sync")
     sync_subparsers = sync_parser.add_subparsers(dest="sync_command")
     sync_start_parser = sync_subparsers.add_parser("start")
@@ -120,6 +129,8 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if args.command == "doctor":
         return doctor(paths)
+    if args.command == "foundation":
+        return run_foundation(paths)
     if args.command == "init":
         if args.bootstrap:
             try:
@@ -128,7 +139,13 @@ def main(argv: Optional[List[str]] = None) -> int:
                 print(str(exc))
                 return 1
             return bootstrap_init(paths, request)
-        return init(paths)
+        return run_init(paths, init_request_from_args(args))
+    if args.command == "git-profile":
+        return git_profile(
+            paths,
+            vllm_origin_url=args.vllm_origin_url,
+            vllm_ascend_origin_url=args.vllm_ascend_origin_url,
+        )
     if args.command == "sync":
         if args.sync_command in (None, "status"):
             return status_session(paths)

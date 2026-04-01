@@ -14,6 +14,8 @@ Use this file only after the fleet contract has been selected.
 
 ## Internal Behavior Notes
 
+- first-server runtime handoff and later server attachment use the same fleet path
+- lifecycle readiness for fleet attachment and maintenance requires both `lifecycle.foundation.status == ready` and `lifecycle.git_profile.status == ready`
 - when `--ssh-auth-ref` is omitted and exactly one safe profile exists, infer it
 - when multiple safe profiles exist, stop and ask for clarification
 - inventory state remains local-only

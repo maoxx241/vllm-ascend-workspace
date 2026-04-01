@@ -1,13 +1,13 @@
 ---
 name: workspace-reset
-description: Use when the user explicitly wants destructive teardown, deinitialization, or a return to a near post-clone workspace state.
+description: Use when the user explicitly wants destructive teardown, deinitialization, or a return to a near post-clone workspace state after lifecycle-managed setup exists.
 ---
 
 # Workspace Reset
 
 ## Overview
 
-Use this skill for explicit guarded destructive teardown in the workspace lifecycle. It owns reset semantics, authorization friction, and best-effort cleanup reporting.
+Use this skill for explicit guarded destructive teardown in the workspace lifecycle. It owns reset semantics, authorization friction, and lifecycle-owned cleanup reporting.
 
 If exact internal routing details are required, see `references/internal-routing.md`.
 
@@ -16,7 +16,7 @@ If exact internal routing details are required, see `references/internal-routing
 ### Intent Signals
 
 - The user explicitly wants this workspace reset or deinitialized.
-- The user wants to clear bootstrap state and managed runtime state.
+- The user wants to clear lifecycle state and managed runtime state.
 - The user wants a near post-clone state for repeated bootstrap testing.
 
 ### Examples Include, But Are Not Limited To:
@@ -27,8 +27,8 @@ If exact internal routing details are required, see `references/internal-routing
 
 ### Do Not Use
 
-- Ordinary server repair belongs to `workspace-fleet`.
-- First setup belongs to `workspace-bootstrap`.
+- Ordinary server management belongs to `workspace-fleet`.
+- First setup belongs to `workspace-init`.
 - Session switching belongs to `workspace-session-switch`.
 
 ## User-Visible Output Contract
@@ -48,11 +48,12 @@ If exact internal routing details are required, see `references/internal-routing
 
 - Treat reset as high-friction by default.
 - Clean all managed servers on a best-effort basis.
-- Preserve the guarded two-phase internal flow even when the user-facing explanation stays high-level.
+- Preserve the guarded two-phase internal flow even when the user-facing explanation stays high level.
+- Treat lifecycle-owned managed-server cleanup as part of reset, not fleet.
 
 ## Cross-Skill Boundary
 
-- First setup belongs to `workspace-bootstrap`.
+- First setup belongs to `workspace-init`.
 - Post-bootstrap server maintenance belongs to `workspace-fleet`.
 - Session switching belongs to `workspace-session-switch`.
 
@@ -71,7 +72,7 @@ If exact internal routing details are required, see `references/internal-routing
 ## Common Mistakes
 
 - Treating reset as routine cleanup.
-- Explaining reset through overlay-file mutations.
+- Explaining reset through overlay file mutations.
 - Hiding unreachable cleanup outcomes.
 
 ## Red Flags

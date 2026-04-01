@@ -52,6 +52,14 @@ def _missing_submodules(root: Path, prefix: Optional[Path] = None):
     return missing
 
 
+def _validate_lifecycle_shape(state: dict) -> None:
+    lifecycle = state.get("lifecycle")
+    if lifecycle is not None and not isinstance(lifecycle, dict):
+        raise ValueError(
+            "invalid state file: .workspace.local/state.json lifecycle must be an object"
+        )
+
+
 def doctor(paths: RepoPaths) -> int:
     if not paths.local_overlay.exists():
         print("missing local overlay: .workspace.local/")
@@ -101,6 +109,12 @@ def doctor(paths: RepoPaths) -> int:
 
     if not isinstance(state, dict):
         print("invalid state file: .workspace.local/state.json must be a JSON object")
+        return 1
+
+    try:
+        _validate_lifecycle_shape(state)
+    except ValueError as exc:
+        print(str(exc))
         return 1
 
     schema_version = state.get("schema_version")

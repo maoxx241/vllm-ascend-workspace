@@ -3,17 +3,32 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 FIRST_CLASS_SKILLS = {
-    "workspace-bootstrap": {
+    "workspace-init": {
         "intent_groups": (
-            ("first usable workspace baseline", "initialize this workspace for the first time"),
-            ("first development server", "development server attached"),
+            ("first-time initialization", "first usable workspace baseline"),
+            ("staged re-initialization", "recovering after reset"),
+            ("examples include, but are not limited to:",),
+        ),
+    },
+    "workspace-foundation": {
+        "intent_groups": (
+            ("local prerequisite", "control-plane readiness"),
+            ("foundation checks", "missing gh"),
+            ("examples include, but are not limited to:",),
+        ),
+    },
+    "workspace-git-profile": {
+        "intent_groups": (
+            ("git identity", "fork topology"),
+            ("repo remotes", "personalized git setup"),
             ("examples include, but are not limited to:",),
         ),
     },
     "workspace-fleet": {
         "intent_groups": (
             ("additional managed server", "additional server"),
-            ("post-bootstrap", "after baseline"),
+            ("first server handoff", "post-bootstrap"),
+            ("foundation and git-profile readiness",),
             ("examples include, but are not limited to:",),
         ),
     },
@@ -28,6 +43,7 @@ FIRST_CLASS_SKILLS = {
         "intent_groups": (
             ("create a new feature session", "new feature session"),
             ("switch the active session", "active session"),
+            ("compatible legacy target handoff",),
             ("examples include, but are not limited to:",),
         ),
     },
@@ -35,6 +51,15 @@ FIRST_CLASS_SKILLS = {
         "intent_groups": (
             ("sync repository or session state", "repository or session state"),
             ("check current sync status", "current sync status"),
+            ("examples include, but are not limited to:",),
+        ),
+    },
+}
+COMPATIBILITY_SKILLS = {
+    "workspace-bootstrap": {
+        "intent_groups": (
+            ("compatibility alias", "legacy bootstrap"),
+            ("route that request to workspace-init", "workspace-init"),
             ("examples include, but are not limited to:",),
         ),
     },
@@ -60,11 +85,14 @@ FORBIDDEN_DESCRIPTION_TERMS = (
     "fleet verify",
     "session create",
     "session switch",
+    "./sync",
+    "./setup",
 )
 PUBLIC_BODY_FORBIDDEN_TERMS = (
     "tools/vaws.py ",
     "./sync",
     "./setup",
+    "workspace-bootstrap",
 )
 
 
@@ -142,3 +170,11 @@ def test_never_expose_sections_contain_concrete_hidden_items():
         body = _section_body(skill_name, "## Never Expose").lower()
         assert "-" in body
         assert "raw" in body or "internal" in body or "overlay" in body or "secret" in body
+
+
+def test_bootstrap_is_only_a_compatibility_alias():
+    text = _skill_text("workspace-bootstrap").lower()
+    assert "compatibility alias" in text
+    assert "workspace-init" in text
+    assert "first usable workspace baseline" not in text
+    assert "first baseline" not in text

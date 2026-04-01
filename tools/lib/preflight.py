@@ -69,7 +69,6 @@ def ensure_local_control_plane_deps() -> PreflightReport:
     report = check_local_control_plane_deps()
     if report.status == "blocked":
         raise PreflightError(
-            "missing local control-plane dependencies: "
-            + ", ".join(report.missing_required)
+            f"missing local control-plane dependencies: {', '.join(report.missing_required)}"
         )
     return report

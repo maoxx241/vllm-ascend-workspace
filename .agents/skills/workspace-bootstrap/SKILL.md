@@ -1,13 +1,13 @@
 ---
 name: workspace-bootstrap
-description: Use when the user wants the first usable baseline for this workspace, needs the first development server attached, or needs to recover an incomplete first bootstrap.
+description: Use when older workspace guidance still mentions bootstrap or asks to route that intent into workspace-init.
 ---
 
 # Workspace Bootstrap
 
 ## Overview
 
-Use this skill for the first usable workspace baseline. It owns bootstrap intent and bootstrap-facing user semantics for the workspace lifecycle.
+Compatibility alias for legacy bootstrap wording. It forwards bootstrap intent to `workspace-init` semantics instead of owning a separate lifecycle path.
 
 If exact internal routing details are required, see `references/internal-routing.md`.
 
@@ -15,68 +15,67 @@ If exact internal routing details are required, see `references/internal-routing
 
 ### Intent Signals
 
-- The user wants to initialize this workspace for the first time.
-- The user wants the first development server attached to this workspace.
-- The user wants a local-only baseline because no remote server is available.
-- The user wants to recover an incomplete first baseline.
+- The user still says bootstrap.
+- Older workspace guidance refers to staged init with bootstrap language.
+- A compatibility shim is needed for legacy prompts or docs.
 
 ### Examples Include, But Are Not Limited To:
 
-- `帮我初始化这个仓库`
-- `先把这个 workspace 跑起来`
-- `没有远端机器，先本地初始化`
+- `这个老流程里还在说 bootstrap`
+- `把旧版 workspace 初始化说法接过来`
+- `按兼容方式理解这次初始化`
 
 ### Do Not Use
 
-- Adding or repairing later servers belongs to `workspace-fleet`.
-- Explicit teardown belongs to `workspace-reset`.
-- Session switching belongs to `workspace-session-switch`.
+- First-time orchestration belongs to `workspace-init`.
+- Local readiness belongs to `workspace-foundation`.
+- Git profile belongs to `workspace-git-profile`.
 
 ## User-Visible Output Contract
 
-- Report whether the workspace is `ready`, `needs_input`, `blocked`, or `needs_repair`.
-- Explain whether a first usable baseline now exists.
-- Say whether the result is remote-first or local-only in user language.
+- Report the request using `workspace-init` semantics.
+- Explain that this is a compatibility alias when relevant.
+- Keep the response centered on the actual lifecycle outcome, not on the alias itself.
 
 ## Never Expose
 
-- overlay file paths as public workflow steps
-- raw password values, raw token values, or secret-bearing shell commands
-- private hosts or private local filesystem paths
+- internal overlay mutation steps
+- raw secret values or secret-bearing handles
+- private filesystem paths from lifecycle state
 
 ## Default Inference Rules
 
-- Prefer remote-first when the user provides a server.
-- Fall back to local-only only when the user explicitly wants it or has no remote server.
-- Treat `vllm-ascend` origin ownership as required for personalized development.
-- Treat `vllm` origin ownership as optional.
+- Prefer the staged init interpretation when the request is ambiguous.
+- Keep legacy bootstrap wording mapped to first-time initialization semantics.
+- Treat later server attachment as fleet-owned, not bootstrap-owned.
 
 ## Cross-Skill Boundary
 
-- Post-bootstrap server inventory work belongs to `workspace-fleet`.
-- Explicit teardown belongs to `workspace-reset`.
-- Feature session changes belong to `workspace-session-switch`.
+- `workspace-init` owns staged workspace orchestration.
+- `workspace-foundation` owns local prerequisite readiness.
+- `workspace-git-profile` owns repository topology and auth-ready remotes.
+- `workspace-fleet` owns managed server attachment.
 
 ## Failure Handling Notes
 
-- If the first baseline already exists, route to `workspace-fleet` instead of retrying bootstrap blindly.
-- If required auth or ownership information is missing, return `needs_input`.
-- If runtime verification is incomplete, return `needs_repair`.
+- Do not invent a separate bootstrap runtime path.
+- Route missing local readiness to foundation instead of expanding the alias.
+- Route server attachment work to fleet.
 
 ## Security Notes
 
-- Secret handles must be pre-staged outside the agent transcript path.
-- Never ask the user to echo or paste secrets into shell commands.
-- Never expose private hosts or private paths in tracked docs.
+- Do not ask for pasted raw secrets when staged handles are available.
+- Keep secret resolution internal to the workspace lifecycle.
+- Never expose private hosts, tokens, or paths in the public contract.
 
 ## Common Mistakes
 
-- Treating later machine additions as bootstrap work.
-- Explaining bootstrap through internal files or command flags.
-- Claiming bootstrap is ready before a first usable baseline actually exists.
+- Treating the alias as a separate lifecycle.
+- Reintroducing bootstrap-era wording as if it were first-class.
+- Folding server attachment or repo topology into the alias.
 
 ## Red Flags
 
-- explaining bootstrap with CLI syntax instead of lifecycle semantics
-- routing a post-bootstrap machine request back into bootstrap
-- asking the user to edit local overlay files directly
+- routing first-time setup away from `workspace-init`
+- exposing secret or overlay details in public guidance
+- claiming a bootstrap-specific runtime path exists

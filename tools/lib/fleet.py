@@ -11,10 +11,10 @@ from .bootstrap import (
     DEFAULT_SERVER_PORT,
     DEFAULT_RUNTIME_SSH_PORT,
     DEFAULT_RUNTIME_WORKSPACE_ROOT,
-    DEFAULT_SERVER_AUTH_REF,
     DEFAULT_SERVER_STATUS,
 )
 from .config import RepoPaths
+from .lifecycle_state import MANAGED_SERVER_HANDOFF_KIND, record_runtime_handoff
 from .remote import (
     DEFAULT_HOST_WORKSPACE_BASE,
     RemoteError,
@@ -24,6 +24,7 @@ from .remote import (
     resolve_server_context,
     verify_runtime,
 )
+from .runtime import read_state
 
 
 class FleetError(RuntimeError):
@@ -33,7 +34,9 @@ class FleetError(RuntimeError):
 def _read_servers_config(paths: RepoPaths) -> Dict[str, Any]:
     servers_file = paths.local_servers_file
     if not servers_file.is_file():
-        raise FleetError("missing server inventory: run `vaws init --bootstrap` first")
+        raise FleetError(
+            "missing server inventory: run staged init or `vaws foundation` first"
+        )
 
     try:
         loaded = yaml.safe_load(servers_file.read_text(encoding="utf-8"))
@@ -54,28 +57,39 @@ def _write_servers_config(paths: RepoPaths, config: Dict[str, Any]) -> None:
     )
 
 
-def _require_bootstrap_completed(config: Dict[str, Any]) -> None:
-    bootstrap = config.get("bootstrap")
-    if not isinstance(bootstrap, dict) or bootstrap.get("completed") is not True:
-        raise FleetError("missing bootstrap baseline: run `vaws init --bootstrap` first")
-
-
 def _require_non_empty_string(value: Any, message: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise FleetError(message)
     return value.strip()
 
 
-def _require_int(value: Any, message: str) -> int:
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise FleetError(message)
-    return value
-
-
 def _require_port(value: Any, message: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 1 or value > 65535:
         raise FleetError(message)
     return value
+
+
+def _require_lifecycle_ready(paths: RepoPaths) -> None:
+    state = read_state(paths)
+    lifecycle = state.get("lifecycle")
+    if not isinstance(lifecycle, dict):
+        raise FleetError(
+            "missing lifecycle readiness: run `vaws foundation` and `vaws git-profile` first"
+        )
+
+    foundation = lifecycle.get("foundation")
+    foundation_status = foundation.get("status") if isinstance(foundation, dict) else None
+    if foundation_status not in {"ready", "degraded"}:
+        raise FleetError(
+            "foundation lifecycle must be ready or degraded before `vaws fleet add`"
+        )
+
+    git_profile = lifecycle.get("git_profile")
+    git_profile_status = git_profile.get("status") if isinstance(git_profile, dict) else None
+    if git_profile_status != "ready":
+        raise FleetError(
+            "git_profile lifecycle must be ready before `vaws fleet add`"
+        )
 
 
 def _single_auth_ref_name(ref_names: list[str]) -> str:
@@ -96,21 +110,7 @@ def _resolve_ssh_auth_ref(paths: RepoPaths, ssh_auth_ref: Optional[str]) -> str:
     auth = _load_auth_config(paths)
     ssh_auth = auth.get("ssh_auth")
     if not isinstance(ssh_auth, dict):
-        host_auth = auth.get("host_auth")
-        if not isinstance(host_auth, dict):
-            raise FleetError("invalid auth config: missing ssh_auth.refs map")
-
-        credential_groups = host_auth.get("credential_groups")
-        if not isinstance(credential_groups, dict):
-            raise FleetError("invalid auth config: missing host_auth.credential_groups map")
-
-        ref_names = sorted(
-            ref_name.strip()
-            for ref_name in credential_groups
-            if isinstance(ref_name, str) and ref_name.strip()
-        )
-        return _single_auth_ref_name(ref_names)
-
+        raise FleetError("invalid auth config: missing ssh_auth.refs map")
     refs = ssh_auth.get("refs")
     if not isinstance(refs, dict):
         raise FleetError("invalid auth config: missing ssh_auth.refs map")
@@ -188,10 +188,10 @@ def add_fleet_server(
         runtime_ssh_port = _require_port(runtime_ssh_port, "invalid runtime ssh port")
 
         config = _read_servers_config(paths)
-        _require_bootstrap_completed(config)
         servers = config.get("servers")
         if not isinstance(servers, dict):
             raise FleetError("invalid server config: missing 'servers' map")
+        _require_lifecycle_ready(paths)
         ssh_auth_ref = _resolve_ssh_auth_ref(paths, ssh_auth_ref)
 
         servers[server_name] = {
@@ -217,6 +217,16 @@ def add_fleet_server(
         ensure_runtime(paths, context)
         verification = verify_runtime(paths, context)
         persist_server_verification(paths, server_name, verification)
+        if verification.status == "ready":
+            record_runtime_handoff(
+                paths,
+                current_target=server_name,
+                handoff_kind=MANAGED_SERVER_HANDOFF_KIND,
+                runtime=verification.runtime,
+            )
+        else:
+            print(f"fleet add: {verification.status} ({server_name})")
+            return 1
     except (FleetError, RuntimeError, OSError) as exc:
         print(str(exc))
         return 1
@@ -229,6 +239,17 @@ def verify_fleet_server(paths: RepoPaths, server_name: str) -> int:
     try:
         context = resolve_server_context(paths, server_name)
         verification = verify_runtime(paths, context)
+        persist_server_verification(paths, server_name, verification)
+        if verification.status == "ready":
+            record_runtime_handoff(
+                paths,
+                current_target=server_name,
+                handoff_kind=MANAGED_SERVER_HANDOFF_KIND,
+                runtime=verification.runtime,
+            )
+        else:
+            print(f"fleet verify: {verification.status} ({server_name})")
+            return 1
     except (RemoteError, RuntimeError) as exc:
         print(str(exc))
         return 1

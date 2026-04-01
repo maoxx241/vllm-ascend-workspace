@@ -1,13 +1,13 @@
 ---
 name: workspace-session-switch
-description: Use when the user wants to create, change, or inspect the active feature session for this workspace.
+description: Use when the user wants to create, change, or inspect the active feature session for this workspace after fleet-owned handoff or a compatible legacy target handoff exists.
 ---
 
 # Workspace Session Switch
 
 ## Overview
 
-Use this skill for active feature-session lifecycle semantics. It owns session creation, session switching, and “which session am I on” requests in the workspace lifecycle.
+Use this skill for active feature-session lifecycle semantics. It owns session creation, session switching, and “which session am I on” requests after fleet has established the current target or a compatible legacy target handoff.
 
 If exact internal routing details are required, see `references/internal-routing.md`.
 
@@ -18,6 +18,7 @@ If exact internal routing details are required, see `references/internal-routing
 - The user wants to create a new feature session.
 - The user wants to switch the active session.
 - The user wants to know which session is currently active.
+- The user has a fleet-owned current target or a compatible legacy target handoff and wants session lifecycle work.
 
 ### Examples Include, But Are Not Limited To:
 
@@ -27,7 +28,7 @@ If exact internal routing details are required, see `references/internal-routing
 
 ### Do Not Use
 
-- First setup belongs to `workspace-bootstrap`.
+- First setup belongs to `workspace-init`.
 - Server inventory work belongs to `workspace-fleet`.
 - Repository or session sync belongs to `workspace-sync`.
 
@@ -45,10 +46,11 @@ If exact internal routing details are required, see `references/internal-routing
 
 - Reuse the requested session name when it is safe and explicit.
 - Ask for clarification when the target session name is ambiguous.
+- Treat the fleet-owned current target or a compatible legacy target handoff as the session-switch precondition.
 
 ## Cross-Skill Boundary
 
-- Bootstrap belongs to `workspace-bootstrap`.
+- Init belongs to `workspace-init`.
 - Fleet server management belongs to `workspace-fleet`.
 - Sync belongs to `workspace-sync`.
 - Destructive teardown belongs to `workspace-reset`.
@@ -57,6 +59,7 @@ If exact internal routing details are required, see `references/internal-routing
 
 - Reject unsafe or invalid session names clearly.
 - If the target session does not exist, explain whether creation is required.
+- If the current target is missing, say that fleet handoff or compatible legacy target handoff is required first.
 
 ## Security Notes
 
