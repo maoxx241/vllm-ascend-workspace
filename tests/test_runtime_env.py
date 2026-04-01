@@ -1,3 +1,4 @@
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -121,3 +122,56 @@ def test_ensure_runtime_environment_runs_first_install_commands(vaws_repo, monke
     assert "pip install -e . --no-build-isolation" in captured["script"]
     assert "pip install -r requirements.txt" in captured["script"]
     assert "pip install -v -e . --no-build-isolation" in captured["script"]
+
+
+def test_ensure_runtime_environment_shell_quotes_workspace_paths(vaws_repo, monkeypatch):
+    paths = RepoPaths(root=vaws_repo)
+    desired = resolve_repo_targets(
+        paths,
+        vllm_upstream_tag=None,
+        vllm_ascend_upstream_branch="main",
+    )
+    captured = {}
+    workspace_root = "/tmp/work space; echo pwned"
+
+    def fake_run_runtime_command(ctx, transport, script):
+        captured["script"] = script
+        return subprocess.CompletedProcess(["bash"], 0, "", "")
+
+    monkeypatch.setattr(
+        "tools.lib.runtime_env.resolve_server_context",
+        lambda _paths, _server_name: TargetContext(
+            name="lab-a",
+            host=HostSpec(
+                name="lab-a",
+                host="10.0.0.12",
+                port=22,
+                login_user="root",
+                auth_group="default-server-auth",
+                ssh_auth_ref="default-server-auth",
+            ),
+            credential=CredentialGroup(mode="ssh-key", username="root"),
+            runtime=RuntimeSpec(
+                image_ref="image",
+                container_name="container",
+                ssh_port=63269,
+                workspace_root=workspace_root,
+                bootstrap_mode="host-then-container",
+                host_workspace_path="/root/.vaws/targets/lab-a/workspace",
+                docker_run_args=[],
+            ),
+        ),
+    )
+    monkeypatch.setattr("tools.lib.runtime_env.run_runtime_command", fake_run_runtime_command)
+
+    result = ensure_runtime_environment(paths, "lab-a", desired)
+
+    assert result.status == "ready"
+    assert f"cd {shlex.quote(f'{workspace_root}/workspace')}" in captured["script"]
+    assert (
+        "source "
+        f"{shlex.quote(f'{workspace_root}/workspace/vllm-ascend/vllm_ascend/_cann_ops_custom/vendors/vllm-ascend/bin/set_env.bash')}"
+        in captured["script"]
+    )
+    assert f"cd {shlex.quote(f'{workspace_root}/workspace/vllm')}" in captured["script"]
+    assert f"cd {shlex.quote(f'{workspace_root}/workspace/vllm-ascend')}" in captured["script"]

@@ -38,33 +38,35 @@ def _requested_targets(paths: RepoPaths, request: AcceptanceRequest) -> Workspac
 
 
 def ensure_remote_baseline_for_acceptance(paths: RepoPaths, request: AcceptanceRequest) -> int:
-    baseline = resolve_repo_targets(
-        paths,
-        vllm_upstream_tag=None,
-        vllm_upstream_branch="main",
-        vllm_ascend_upstream_branch="main",
-        fetch_missing=True,
-    )
-    result = ensure_code_parity(paths, request.server_name, baseline)
-    print(result.summary)
-    if result.status != "ready":
+    try:
+        baseline = resolve_repo_targets(
+            paths,
+            vllm_upstream_tag=None,
+            vllm_upstream_branch="main",
+            vllm_ascend_upstream_branch="main",
+            fetch_missing=True,
+        )
+        result = ensure_code_parity(paths, request.server_name, baseline)
+        print(result.summary)
+        if result.status != "ready":
+            return 1
+        env_result = ensure_runtime_environment(paths, request.server_name, baseline)
+        print(env_result.summary)
+        return 0 if env_result.status == "ready" else 1
+    except RuntimeError as exc:
+        print(str(exc))
         return 1
-    env_result = ensure_runtime_environment(paths, request.server_name, baseline)
-    print(env_result.summary)
-    return 0 if env_result.status == "ready" else 1
 
 
 def materialize_requested_targets_for_acceptance(
     paths: RepoPaths,
     request: AcceptanceRequest,
 ) -> WorkspaceTargets:
-    if request.vllm_upstream_tag or request.vllm_ascend_upstream_branch:
-        return materialize_workspace_targets(
-            paths,
-            vllm_upstream_tag=request.vllm_upstream_tag,
-            vllm_ascend_upstream_branch=request.vllm_ascend_upstream_branch,
-        )
-    return _requested_targets(paths, request)
+    return materialize_workspace_targets(
+        paths,
+        vllm_upstream_tag=request.vllm_upstream_tag,
+        vllm_ascend_upstream_branch=request.vllm_ascend_upstream_branch,
+    )
 
 
 def ensure_code_parity_for_acceptance(
@@ -101,13 +103,17 @@ def run_acceptance(root: Path, request: AcceptanceRequest) -> int:
         vllm_origin_url=request.vllm_origin_url,
         vllm_ascend_origin_url=request.vllm_ascend_origin_url,
     )
-    if run_init(paths, init_request) != 0:
+    try:
+        if run_init(paths, init_request) != 0:
+            return 1
+        if ensure_remote_baseline_for_acceptance(paths, request) != 0:
+            return 1
+        desired = materialize_requested_targets_for_acceptance(paths, request)
+        if ensure_code_parity_for_acceptance(paths, request, desired) != 0:
+            return 1
+        if ensure_runtime_environment_for_acceptance(paths, request, desired) != 0:
+            return 1
+        return run_benchmark_for_acceptance(paths, request)
+    except RuntimeError as exc:
+        print(str(exc))
         return 1
-    if ensure_remote_baseline_for_acceptance(paths, request) != 0:
-        return 1
-    desired = materialize_requested_targets_for_acceptance(paths, request)
-    if ensure_code_parity_for_acceptance(paths, request, desired) != 0:
-        return 1
-    if ensure_runtime_environment_for_acceptance(paths, request, desired) != 0:
-        return 1
-    return run_benchmark_for_acceptance(paths, request)

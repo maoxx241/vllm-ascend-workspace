@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shlex
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Tuple
@@ -72,22 +73,31 @@ def build_benchmark_command(
     output_path: str,
 ) -> str:
     remote_script_path = _remote_asset_path(preset.script_path, workspace_root)
+    workspace_path = shlex.quote(f"{workspace_root}/workspace")
+    env_script_path = shlex.quote(
+        f"{workspace_root}/workspace/vllm-ascend/vllm_ascend/_cann_ops_custom/vendors/vllm-ascend/bin/set_env.bash"
+    )
+    vllm_ascend_path = shlex.quote(f"{workspace_root}/workspace/vllm-ascend")
     return "\n".join(
         [
             "set -euo pipefail",
-            f"cd {workspace_root}/workspace",
+            f"cd {workspace_path}",
             "source /usr/local/Ascend/ascend-toolkit/set_env.sh",
             "source /usr/local/Ascend/nnal/atb/set_env.sh",
-            f"source {workspace_root}/workspace/vllm-ascend/vllm_ascend/_cann_ops_custom/vendors/vllm-ascend/bin/set_env.bash",
+            f"source {env_script_path}",
             "export PATH=/usr/local/python3.11.14/bin:$PATH",
             "export PYTHON=/usr/local/python3.11.14/bin/python3",
             "export PIP=/usr/local/python3.11.14/bin/pip",
             "export VLLM_WORKER_MULTIPROC_METHOD=spawn",
             "export OMP_NUM_THREADS=1",
             "export MKL_NUM_THREADS=1",
-            f"export ASCEND_RT_VISIBLE_DEVICES={visible_devices}",
-            "cd /vllm-workspace/workspace/vllm-ascend",
-            f"/usr/local/python3.11.14/bin/python3 {remote_script_path} --model-path {preset.model_path} >{output_path} 2>&1",
+            f"export ASCEND_RT_VISIBLE_DEVICES={shlex.quote(visible_devices)}",
+            f"cd {vllm_ascend_path}",
+            (
+                "/usr/local/python3.11.14/bin/python3 "
+                f"{shlex.quote(remote_script_path)} --model-path "
+                f"{shlex.quote(preset.model_path)} >{shlex.quote(output_path)} 2>&1"
+            ),
         ]
     )
 
@@ -107,7 +117,8 @@ def _extract_remote_marker_block(paths: RepoPaths, server_name: str, output_path
     ctx = resolve_server_context(paths, server_name)
     transport = _current_runtime_transport(paths, server_name)
     script = (
-        f"sed -n '/MARKDOWN_ROWS_BEGIN/,/MARKDOWN_ROWS_END/p' {output_path}"
+        "sed -n '/MARKDOWN_ROWS_BEGIN/,/MARKDOWN_ROWS_END/p' "
+        f"{shlex.quote(output_path)}"
     )
     result = run_runtime_command(ctx, transport, script)
     if result.returncode != 0:
@@ -132,15 +143,19 @@ def run_benchmark_preset(paths: RepoPaths, server_name: str, preset_name: str) -
         return 1
 
     marker_block = _extract_remote_marker_block(paths, server_name, output_path)
+    state = read_state(paths)
+    benchmark_runs = state.get("benchmark_runs")
+    if not isinstance(benchmark_runs, dict):
+        benchmark_runs = {}
+    benchmark_runs = dict(benchmark_runs)
+    benchmark_runs[preset.name] = {
+        "server_name": server_name,
+        "output_path": output_path,
+        "marker_block": marker_block,
+    }
     update_state(
         paths,
-        benchmark_runs={
-            preset.name: {
-                "server_name": server_name,
-                "output_path": output_path,
-                "marker_block": marker_block,
-            }
-        },
+        benchmark_runs=benchmark_runs,
     )
     print(marker_block)
     return 0

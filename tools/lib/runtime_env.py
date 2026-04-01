@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shlex
 import subprocess
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -94,21 +95,27 @@ def _repo_reinstall_required(
 
 
 def _install_script(workspace_root: str) -> str:
+    workspace_path = shlex.quote(f"{workspace_root}/workspace")
+    env_script_path = shlex.quote(
+        f"{workspace_root}/workspace/vllm-ascend/vllm_ascend/_cann_ops_custom/vendors/vllm-ascend/bin/set_env.bash"
+    )
+    vllm_path = shlex.quote(f"{workspace_root}/workspace/vllm")
+    vllm_ascend_path = shlex.quote(f"{workspace_root}/workspace/vllm-ascend")
     return "\n".join(
         [
             "set -euo pipefail",
-            f"cd {workspace_root}/workspace",
+            f"cd {workspace_path}",
             "source /usr/local/Ascend/ascend-toolkit/set_env.sh",
             "source /usr/local/Ascend/nnal/atb/set_env.sh",
-            f"source {workspace_root}/workspace/vllm-ascend/vllm_ascend/_cann_ops_custom/vendors/vllm-ascend/bin/set_env.bash",
+            f"source {env_script_path}",
             f"export PATH={Path(PYTHON_BIN).parent}:$PATH",
             f"export PYTHON={PYTHON_BIN}",
             f"export PIP={PIP_BIN}",
             f"{PIP_BIN} uninstall -y vllm vllm-ascend || true",
-            f"cd {workspace_root}/workspace/vllm",
+            f"cd {vllm_path}",
             "export VLLM_TARGET_DEVICE=empty",
             f"{PIP_BIN} install -e . --no-build-isolation",
-            f"cd {workspace_root}/workspace/vllm-ascend",
+            f"cd {vllm_ascend_path}",
             f"{PIP_BIN} install -r requirements.txt",
             f"{PIP_BIN} install -v -e . --no-build-isolation",
         ]
