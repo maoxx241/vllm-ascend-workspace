@@ -98,11 +98,12 @@ def test_first_contact_docs_keep_repo_context_without_legacy_workflow_map():
         assert "vllm-ascend/" in text
         assert "recursive" in text
         assert "submodule update --init --recursive" in text
+        assert ".workspace.local/" not in text
+        assert ".workspace.local/repos.yaml" not in text
 
     for text in (readme, agents_readme):
         assert "upstream" in text
         assert "origin" in text
-        assert ".workspace.local/repos.yaml" in text
         assert ".agents/skills/" in text
 
 

@@ -47,6 +47,8 @@ def test_adapters_do_not_center_cli_or_internal_procedure_tokens():
         "tools/vaws.py",
         "./setup",
         "./sync",
+        ".workspace.local/",
+        ".workspace.local/repos.yaml",
         "init --bootstrap",
         "fleet add",
         "fleet verify",

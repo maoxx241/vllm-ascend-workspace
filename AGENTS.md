@@ -7,8 +7,8 @@ This repository is an agent-first scaffold for vLLM Ascend development work.
 - Canonical runtime root: `/vllm-workspace`
 - Source repos: `vllm/`, `vllm-ascend/` as submodules
 - Clone and refresh sources recursively: `git submodule update --init --recursive`
-- `origin` and `upstream` repo topology is tracked through `.workspace.local/repos.yaml`
-- `.workspace.local/` is local-only overlay state and must never be committed
+- `origin` and `upstream` repo topology is maintained as local workspace state
+- Local workspace state must never be committed
 - Never commit credentials, private hosts, private paths, tokens, or keys
 
 ## Public Skills

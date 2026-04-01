@@ -7,8 +7,8 @@ This repository keeps its workflow contract inside the workspace.
 - Canonical runtime root: `/vllm-workspace`
 - Source repos: `vllm/`, `vllm-ascend/` as submodules
 - Clone and refresh sources recursively: `git submodule update --init --recursive`
-- `origin` and `upstream` repo topology is tracked through `.workspace.local/repos.yaml`
-- `.workspace.local/` is local-only overlay state and must never be committed
+- `origin` and `upstream` repo topology is maintained as local workspace state
+- Local workspace state must never be committed
 
 ## Public Skills
 

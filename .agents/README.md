@@ -6,8 +6,8 @@ This directory contains the shared workspace-local contract layer for agents wor
 - Source repos: `vllm/`, `vllm-ascend/` as submodules
 - Clone and refresh sources recursively: `git submodule update --init --recursive`
 - Shared public contracts live under `.agents/skills/`
-- `.workspace.local/` is local-only overlay state
-- Local `origin` and `upstream` repository topology lives in `.workspace.local/repos.yaml`
+- Local overlay state stays untracked
+- Local `origin` and `upstream` repository topology stays in workspace-local state
 
 ## Public Skills
 
