@@ -64,7 +64,53 @@ def _remote_url(repo_path: Path, remote_name: str) -> str:
     return _git(repo_path, "remote", "get-url", remote_name)
 
 
-def _resolve_commit(repo_path: Path, ref_name: str) -> str:
+def _ref_exists(repo_path: Path, ref_name: str) -> bool:
+    result = subprocess.run(
+        ["git", "rev-parse", "--verify", "--quiet", f"{ref_name}^{{commit}}"],
+        cwd=repo_path,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    return result.returncode == 0
+
+
+def _fetch_explicit_ref(repo_path: Path, remote_name: str, ref_name: str) -> None:
+    if ref_name.startswith("refs/tags/"):
+        tag_name = ref_name.removeprefix("refs/tags/")
+        _git(
+            repo_path,
+            "fetch",
+            remote_name,
+            f"refs/tags/{tag_name}:refs/tags/{tag_name}",
+        )
+        return
+
+    remote_prefix = f"refs/remotes/{remote_name}/"
+    if ref_name.startswith(remote_prefix):
+        branch_name = ref_name.removeprefix(remote_prefix)
+        _git(
+            repo_path,
+            "fetch",
+            remote_name,
+            f"refs/heads/{branch_name}:{ref_name}",
+        )
+        return
+
+    _git(repo_path, "fetch", remote_name)
+
+
+def _resolve_commit(
+    repo_path: Path,
+    ref_name: str,
+    *,
+    remote_name: str | None,
+    fetch_missing: bool,
+) -> str:
+    if not _ref_exists(repo_path, ref_name):
+        if not fetch_missing or remote_name is None:
+            return _git(repo_path, "rev-parse", f"{ref_name}^{{commit}}")
+        _fetch_explicit_ref(repo_path, remote_name, ref_name)
     return _git(repo_path, "rev-parse", f"{ref_name}^{{commit}}")
 
 
@@ -81,6 +127,7 @@ def _resolve_repo_target(
     repo_name: str,
     remote_name: str | None = None,
     ref_name: str | None = None,
+    fetch_missing: bool = False,
 ) -> RepoTarget:
     branch_name = _current_branch(repo_path)
     resolved_remote_name = remote_name
@@ -99,17 +146,28 @@ def _resolve_repo_target(
         upstream_url=_remote_url(repo_path, "upstream"),
         remote_name=resolved_remote_name,
         ref_name=resolved_ref_name,
-        commit=_resolve_commit(repo_path, resolved_ref_name),
+        commit=_resolve_commit(
+            repo_path,
+            resolved_ref_name,
+            remote_name=resolved_remote_name,
+            fetch_missing=fetch_missing,
+        ),
         branch_name=branch_name,
     )
+
+
+def _checkout_detached(repo_path: Path, commit: str) -> None:
+    _git(repo_path, "checkout", "--detach", commit)
 
 
 def resolve_repo_targets(
     paths: RepoPaths,
     *,
     vllm_upstream_tag: str | None,
+    vllm_upstream_branch: str | None = None,
     vllm_ascend_upstream_branch: str | None,
     require_feature_branch: bool = False,
+    fetch_missing: bool = False,
 ) -> WorkspaceTargets:
     workspace_branch = _current_branch(paths.root)
     if require_feature_branch and workspace_branch in {"main", "master"}:
@@ -122,13 +180,23 @@ def resolve_repo_targets(
         repo_name="workspace",
         remote_name="origin",
         ref_name=f"refs/heads/{workspace_branch}" if workspace_branch else None,
+        fetch_missing=fetch_missing,
     )
 
     vllm = _resolve_repo_target(
         paths.root / "vllm",
         repo_name="vllm",
-        remote_name="upstream" if vllm_upstream_tag else None,
-        ref_name=f"refs/tags/{vllm_upstream_tag}" if vllm_upstream_tag else None,
+        remote_name="upstream" if (vllm_upstream_tag or vllm_upstream_branch) else None,
+        ref_name=(
+            f"refs/tags/{vllm_upstream_tag}"
+            if vllm_upstream_tag
+            else (
+                f"refs/remotes/upstream/{vllm_upstream_branch}"
+                if vllm_upstream_branch
+                else None
+            )
+        ),
+        fetch_missing=fetch_missing,
     )
 
     vllm_ascend = _resolve_repo_target(
@@ -140,6 +208,7 @@ def resolve_repo_targets(
             if vllm_ascend_upstream_branch
             else None
         ),
+        fetch_missing=fetch_missing,
     )
 
     return WorkspaceTargets(
@@ -147,3 +216,22 @@ def resolve_repo_targets(
         vllm=vllm,
         vllm_ascend=vllm_ascend,
     )
+
+
+def materialize_workspace_targets(
+    paths: RepoPaths,
+    *,
+    vllm_upstream_tag: str | None,
+    vllm_ascend_upstream_branch: str | None,
+    vllm_upstream_branch: str | None = None,
+) -> WorkspaceTargets:
+    targets = resolve_repo_targets(
+        paths,
+        vllm_upstream_tag=vllm_upstream_tag,
+        vllm_upstream_branch=vllm_upstream_branch,
+        vllm_ascend_upstream_branch=vllm_ascend_upstream_branch,
+        fetch_missing=True,
+    )
+    _checkout_detached(paths.root / "vllm", targets.vllm.commit)
+    _checkout_detached(paths.root / "vllm-ascend", targets.vllm_ascend.commit)
+    return targets

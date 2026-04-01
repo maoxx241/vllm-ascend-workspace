@@ -14,8 +14,20 @@ def test_acceptance_run_calls_init_then_parity_then_benchmark(monkeypatch, vaws_
 
     monkeypatch.setattr("tools.lib.acceptance.run_init", lambda paths, request: calls.append("init") or 0)
     monkeypatch.setattr(
+        "tools.lib.acceptance.ensure_remote_baseline_for_acceptance",
+        lambda paths, request: calls.append("baseline") or 0,
+    )
+    monkeypatch.setattr(
+        "tools.lib.acceptance.materialize_requested_targets_for_acceptance",
+        lambda paths, request: calls.append("targets") or None,
+    )
+    monkeypatch.setattr(
         "tools.lib.acceptance.ensure_code_parity_for_acceptance",
-        lambda paths, request: calls.append("parity") or 0,
+        lambda paths, request, desired: calls.append("parity") or 0,
+    )
+    monkeypatch.setattr(
+        "tools.lib.acceptance.ensure_runtime_environment_for_acceptance",
+        lambda paths, request, desired: calls.append("env") or 0,
     )
     monkeypatch.setattr(
         "tools.lib.acceptance.run_benchmark_for_acceptance",
@@ -38,7 +50,7 @@ def test_acceptance_run_calls_init_then_parity_then_benchmark(monkeypatch, vaws_
     )
 
     assert result == 0
-    assert calls == ["init", "parity", "benchmark"]
+    assert calls == ["init", "baseline", "targets", "parity", "env", "benchmark"]
 
 
 def test_acceptance_run_stops_before_benchmark_when_parity_fails(monkeypatch, vaws_repo):
@@ -46,8 +58,20 @@ def test_acceptance_run_stops_before_benchmark_when_parity_fails(monkeypatch, va
 
     monkeypatch.setattr("tools.lib.acceptance.run_init", lambda paths, request: calls.append("init") or 0)
     monkeypatch.setattr(
+        "tools.lib.acceptance.ensure_remote_baseline_for_acceptance",
+        lambda paths, request: calls.append("baseline") or 0,
+    )
+    monkeypatch.setattr(
+        "tools.lib.acceptance.materialize_requested_targets_for_acceptance",
+        lambda paths, request: calls.append("targets") or None,
+    )
+    monkeypatch.setattr(
         "tools.lib.acceptance.ensure_code_parity_for_acceptance",
-        lambda paths, request: calls.append("parity") or 1,
+        lambda paths, request, desired: calls.append("parity") or 1,
+    )
+    monkeypatch.setattr(
+        "tools.lib.acceptance.ensure_runtime_environment_for_acceptance",
+        lambda paths, request, desired: calls.append("env") or 0,
     )
     monkeypatch.setattr(
         "tools.lib.acceptance.run_benchmark_for_acceptance",
@@ -70,7 +94,7 @@ def test_acceptance_run_stops_before_benchmark_when_parity_fails(monkeypatch, va
     )
 
     assert result == 1
-    assert calls == ["init", "parity"]
+    assert calls == ["init", "baseline", "targets", "parity"]
 
 
 def test_acceptance_cli_run_delegates_to_backend(monkeypatch, vaws_repo):
