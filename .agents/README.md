@@ -1,21 +1,18 @@
 # Workspace-Local Agent Guidance
 
-This directory contains public, workspace-local reference material for agents working in `vllm-ascend-workspace`.
+This directory contains the shared workspace-local contract layer for agents working in `vllm-ascend-workspace`.
 
 - Canonical runtime root: `/vllm-workspace`
-- Primary command surface: `tools/vaws.py`
+- Primary implementation surface: `tools/vaws.py`
 - Compatibility entrypoints: `./setup` and `./sync`
-- Workflow skills live under `.agents/skills/`.
-- Bootstrap and first-time baseline procedure: `.agents/skills/workspace-bootstrap/`
-- Fleet server maintenance procedure: `.agents/skills/workspace-fleet/`
-- For Codex bootstrap, start from natural language user input and route into the bootstrap skill.
-- Guarded best-effort reset and deinit procedure: `.agents/skills/workspace-reset/`
-- Session switching procedure: `.agents/skills/workspace-session-switch/`
-- Sync procedure: `.agents/skills/workspace-sync/`
-- Local overlay state: `.workspace.local/`
-- `.workspace.local/repos.yaml` stores local `origin`/`upstream` repo topology.
-- Tracked repo defaults stay on community `upstream` repositories; user forks are configured locally.
-- Current control-plane session manifests: `.workspace.local/sessions/<session>/manifest.yaml`
-- Target runtime session manifests: `/vllm-workspace/.vaws/sessions/<session>/manifest.yaml`
-- These files are reference material only.
-- Keep private tokens, private hosts, and legacy path references out of tracked files.
+- Shared public contracts live under `.agents/skills/`
+- Exact internal routing notes live under each skill’s `references/` directory
+- First baseline contract: `.agents/skills/workspace-bootstrap/`
+- Post-bootstrap server management contract: `.agents/skills/workspace-fleet/`
+- Destructive teardown contract: `.agents/skills/workspace-reset/`
+- Session lifecycle contract: `.agents/skills/workspace-session-switch/`
+- Session-oriented compatibility sync contract: `.agents/skills/workspace-sync/`
+- `.workspace.local/` is local-only overlay state
+- Local `origin` / `upstream` repository topology lives in `.workspace.local/repos.yaml`
+- Bootstrap starts from natural language user intent and resolves through shared contracts instead of direct CLI phrasebooks
+- Keep private tokens, private hosts, and legacy path references out of tracked files
