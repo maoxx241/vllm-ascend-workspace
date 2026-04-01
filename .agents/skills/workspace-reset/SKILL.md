@@ -1,35 +1,36 @@
 ---
 name: workspace-reset
-description: Use when the user explicitly wants destructive teardown, deinitialization, or a return to a near post-clone workspace state after lifecycle-managed setup exists.
+description: Use when the user explicitly wants destructive teardown, deinitialization, or a return to a near post-clone workspace state for this workspace.
 ---
 
 # Workspace Reset
 
 ## Overview
 
-Use this skill for explicit guarded destructive teardown in the workspace lifecycle. It owns reset semantics, authorization friction, and lifecycle-owned cleanup reporting.
+Use this skill for explicit destructive teardown of workspace-managed state. It owns reset authorization, teardown reporting, and the difference between full cleanup and partial cleanup.
 
-If exact internal routing details are required, see `references/internal-routing.md`.
+If exact internal routing details are required after this skill is selected, see `references/internal-routing.md`.
 
 ## When to Use
 
 ### Intent Signals
 
-- The user explicitly wants this workspace reset or deinitialized.
-- The user wants to clear lifecycle state and managed runtime state.
-- The user wants a near post-clone state for repeated bootstrap testing.
+- The user explicitly wants destructive teardown for this workspace.
+- The user wants to deinitialize the workspace and return to a near post-clone state.
+- The user wants setup traces removed before rebuilding the environment.
 
 ### Examples Include, But Are Not Limited To:
 
 - `把这个 workspace 重置掉`
 - `把环境回到刚 clone 的状态`
-- `把现在这套 bootstrap 痕迹都清干净`
+- `把初始化痕迹都清干净`
+- `reset this workspace`
 
 ### Do Not Use
 
-- Ordinary server management belongs to `workspace-fleet`.
-- First setup belongs to `workspace-init`.
-- Session switching belongs to `workspace-session-switch`.
+- Ordinary machine attach, verify, or removal work belongs to `machine-management`.
+- First-time setup belongs to `workspace-init`.
+- Benchmark execution belongs to `benchmark`.
 
 ## User-Visible Output Contract
 
@@ -47,21 +48,22 @@ If exact internal routing details are required, see `references/internal-routing
 ## Default Inference Rules
 
 - Treat reset as high-friction by default.
-- Clean all managed servers on a best-effort basis.
-- Preserve the guarded two-phase internal flow even when the user-facing explanation stays high level.
-- Treat lifecycle-owned managed-server cleanup as part of reset, not fleet.
+- Clean workspace-managed machine state on a best-effort basis.
+- Preserve explicit authorization even when the user-facing explanation stays high level.
+- Treat partial cleanup as partial, not as success.
 
 ## Cross-Skill Boundary
 
-- First setup belongs to `workspace-init`.
-- Post-bootstrap server maintenance belongs to `workspace-fleet`.
-- Session switching belongs to `workspace-session-switch`.
+- `workspace-init` owns first-time setup.
+- `machine-management` owns ordinary machine attach, verify, and removal work.
+- `benchmark` owns benchmark execution.
+- `workspace-reset` owns explicit destructive teardown.
 
 ## Failure Handling Notes
 
-- Never skip the internal prepare phase.
-- Never reuse stale authorization state.
+- Never skip explicit authorization for destructive teardown.
 - If cleanup is incomplete, report a partial result instead of pretending full success.
+- Distinguish blocked teardown from reachable teardown that only completed partially.
 
 ## Security Notes
 
@@ -71,7 +73,7 @@ If exact internal routing details are required, see `references/internal-routing
 
 ## Common Mistakes
 
-- Treating reset as routine cleanup.
+- Treating reset as routine maintenance.
 - Explaining reset through overlay file mutations.
 - Hiding unreachable cleanup outcomes.
 

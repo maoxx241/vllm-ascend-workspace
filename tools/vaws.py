@@ -17,6 +17,8 @@ from tools.lib.init_flow import init_request_from_args, run_init
 from tools.lib.reset import execute_reset, prepare_reset
 from tools.lib.session import create_session, status_session, switch_session
 from tools.lib.targets import ensure_target
+from tools.lib.benchmark import run_benchmark_preset
+from tools.lib.acceptance import AcceptanceRequest, run_acceptance
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -119,6 +121,29 @@ def build_parser() -> argparse.ArgumentParser:
     )
     fleet_verify_parser = fleet_subparsers.add_parser("verify")
     fleet_verify_parser.add_argument("server_name")
+    benchmark_parser = subparsers.add_parser("benchmark")
+    benchmark_subparsers = benchmark_parser.add_subparsers(
+        dest="benchmark_command",
+        required=True,
+    )
+    benchmark_run_parser = benchmark_subparsers.add_parser("run")
+    benchmark_run_parser.add_argument("--server-name", required=True)
+    benchmark_run_parser.add_argument("--preset", required=True)
+    acceptance_parser = subparsers.add_parser("acceptance")
+    acceptance_subparsers = acceptance_parser.add_subparsers(
+        dest="acceptance_command",
+        required=True,
+    )
+    acceptance_run_parser = acceptance_subparsers.add_parser("run")
+    acceptance_run_parser.add_argument("--server-name", required=True)
+    acceptance_run_parser.add_argument("--server-host", required=True)
+    acceptance_run_parser.add_argument("--server-user", default="root")
+    acceptance_run_parser.add_argument("--server-password-env")
+    acceptance_run_parser.add_argument("--vllm-origin-url")
+    acceptance_run_parser.add_argument("--vllm-ascend-origin-url")
+    acceptance_run_parser.add_argument("--vllm-upstream-tag")
+    acceptance_run_parser.add_argument("--vllm-ascend-upstream-branch", default="main")
+    acceptance_run_parser.add_argument("--benchmark-preset", default="qwen3-35b-tp4")
     return parser
 
 
@@ -200,6 +225,23 @@ def main(argv: Optional[List[str]] = None) -> int:
         )
     if args.command == "fleet" and args.fleet_command == "verify":
         return verify_fleet_server(paths, args.server_name)
+    if args.command == "benchmark" and args.benchmark_command == "run":
+        return run_benchmark_preset(paths, args.server_name, args.preset)
+    if args.command == "acceptance" and args.acceptance_command == "run":
+        return run_acceptance(
+            paths.root,
+            AcceptanceRequest(
+                server_name=args.server_name,
+                server_host=args.server_host,
+                server_user=args.server_user,
+                server_password_env=args.server_password_env,
+                vllm_origin_url=args.vllm_origin_url,
+                vllm_ascend_origin_url=args.vllm_ascend_origin_url,
+                vllm_upstream_tag=args.vllm_upstream_tag,
+                vllm_ascend_upstream_branch=args.vllm_ascend_upstream_branch,
+                benchmark_preset=args.benchmark_preset,
+            ),
+        )
 
     parser.error(f"unknown command: {args.command}")
     return 2

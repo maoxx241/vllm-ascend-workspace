@@ -1,28 +1,24 @@
 # AGENTS
 
-This repository is a public-facing control workspace for vLLM Ascend development workflows.
+This repository is an agent-first scaffold for vLLM Ascend development work.
 
 ## Always-On Context
 
-- Runtime root: `/vllm-workspace`
-- Primary implementation surface: `tools/vaws.py`
-- Compatibility entrypoints: `./setup`, `./sync`
+- Canonical runtime root: `/vllm-workspace`
 - Source repos: `vllm/`, `vllm-ascend/` as submodules
 - Clone and refresh sources recursively: `git submodule update --init --recursive`
-- `.workspace.local/` is local-only overlay state and must never be committed
+- `origin` and `upstream` repo topology is maintained as local workspace state
+- Local workspace state must never be committed
 - Never commit credentials, private hosts, private paths, tokens, or keys
 
-## Workflow Routing
+## Public Skills
 
-- Use `.agents/skills/workspace-init/SKILL.md` for staged workspace initialization
-- Use `.agents/skills/workspace-foundation/SKILL.md` for local prerequisite readiness
-- Use `.agents/skills/workspace-git-profile/SKILL.md` for repository identity and fork topology
-- Use `.agents/skills/workspace-fleet/SKILL.md` for managed server lifecycle
-- Use `.agents/skills/workspace-reset/SKILL.md` for explicit destructive teardown
-- Use `.agents/skills/workspace-session-switch/SKILL.md` for session lifecycle intent
-- Use `.agents/skills/workspace-sync/SKILL.md` for sync status and compatibility sync intent
+- Use `.agents/skills/workspace-init/SKILL.md` for first-time setup or recovery setup.
+- Use `.agents/skills/machine-management/SKILL.md` to attach, verify, or remove machines.
+- Use `.agents/skills/benchmark/SKILL.md` to run benchmark workflows on a ready environment.
+- Use `.agents/skills/workspace-reset/SKILL.md` only for explicit destructive teardown.
 
-## Adapter Boundary
+## Skill Boundary
 
-- Treat shared `SKILL.md` files as the public contract layer
-- Treat skill-local routing references as internal execution notes, not public workflow docs
+- Treat shared `SKILL.md` files as the public contract layer.
+- Treat skill-local routing references as internal execution notes, not public workflow docs.

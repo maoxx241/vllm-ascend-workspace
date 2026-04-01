@@ -5,61 +5,29 @@ ROOT = Path(__file__).resolve().parents[1]
 FIRST_CLASS_SKILLS = {
     "workspace-init": {
         "intent_groups": (
-            ("first-time initialization", "first usable workspace baseline"),
-            ("staged re-initialization", "recovering after reset"),
+            ("first-time setup", "prepare this repo for development"),
+            ("git setup", "first machine"),
             ("examples include, but are not limited to:",),
         ),
     },
-    "workspace-foundation": {
+    "machine-management": {
         "intent_groups": (
-            ("local prerequisite", "control-plane readiness"),
-            ("foundation checks", "missing gh"),
+            ("attach a machine", "verify whether a machine is ready"),
+            ("remove a machine", "machine attach"),
             ("examples include, but are not limited to:",),
         ),
     },
-    "workspace-git-profile": {
+    "benchmark": {
         "intent_groups": (
-            ("git identity", "fork topology"),
-            ("repo remotes", "personalized git setup"),
-            ("examples include, but are not limited to:",),
-        ),
-    },
-    "workspace-fleet": {
-        "intent_groups": (
-            ("additional managed server", "additional server"),
-            ("first server handoff", "post-bootstrap"),
-            ("foundation and git-profile readiness",),
+            ("run benchmark", "benchmark execution"),
+            ("ready environment", "qwen3 35b tp4"),
             ("examples include, but are not limited to:",),
         ),
     },
     "workspace-reset": {
         "intent_groups": (
-            ("reset or deinitialized", "reset this workspace"),
-            ("near post-clone state", "post-clone state"),
-            ("examples include, but are not limited to:",),
-        ),
-    },
-    "workspace-session-switch": {
-        "intent_groups": (
-            ("create a new feature session", "new feature session"),
-            ("switch the active session", "active session"),
-            ("compatible legacy target handoff",),
-            ("examples include, but are not limited to:",),
-        ),
-    },
-    "workspace-sync": {
-        "intent_groups": (
-            ("sync repository or session state", "repository or session state"),
-            ("check current sync status", "current sync status"),
-            ("examples include, but are not limited to:",),
-        ),
-    },
-}
-COMPATIBILITY_SKILLS = {
-    "workspace-bootstrap": {
-        "intent_groups": (
-            ("compatibility alias", "legacy bootstrap"),
-            ("route that request to workspace-init", "workspace-init"),
+            ("destructive teardown", "reset this workspace"),
+            ("post-clone state", "explicit destructive teardown"),
             ("examples include, but are not limited to:",),
         ),
     },
@@ -93,6 +61,19 @@ PUBLIC_BODY_FORBIDDEN_TERMS = (
     "./sync",
     "./setup",
     "workspace-bootstrap",
+    "workspace-foundation",
+    "workspace-git-profile",
+    "workspace-fleet",
+    "workspace-session-switch",
+    "workspace-sync",
+)
+LEGACY_DISCOVERABLE_SKILLS = (
+    "workspace-foundation",
+    "workspace-git-profile",
+    "workspace-fleet",
+    "workspace-session-switch",
+    "workspace-sync",
+    "workspace-bootstrap",
 )
 
 
@@ -125,6 +106,7 @@ def _section_body(skill_name: str, header: str) -> str:
 def test_first_class_workspace_skills_share_canonical_sections():
     for skill_name in FIRST_CLASS_SKILLS:
         text = _skill_text(skill_name)
+        assert "internal-routing.md" in text
         for section in REQUIRED_SECTIONS:
             assert section in text, f"{skill_name} missing section: {section}"
 
@@ -134,7 +116,9 @@ def test_first_class_workspace_skill_descriptions_are_trigger_only():
         description = _description_line(skill_name)
         assert "description: use when" in description
         for forbidden in FORBIDDEN_DESCRIPTION_TERMS:
-            assert forbidden not in description, f"{skill_name} leaked {forbidden} into description"
+            assert forbidden not in description, (
+                f"{skill_name} leaked {forbidden} into description"
+            )
 
 
 def test_when_to_use_sections_are_intent_led_and_non_exhaustive():
@@ -146,7 +130,7 @@ def test_when_to_use_sections_are_intent_led_and_non_exhaustive():
             )
 
 
-def test_public_contract_sections_do_not_embed_internal_command_syntax():
+def test_public_contract_sections_do_not_embed_internal_command_syntax_or_legacy_skills():
     public_sections = (
         "## Overview",
         "## When to Use",
@@ -162,19 +146,23 @@ def test_public_contract_sections_do_not_embed_internal_command_syntax():
         for header in public_sections:
             body = _section_body(skill_name, header).lower()
             for forbidden in PUBLIC_BODY_FORBIDDEN_TERMS:
-                assert forbidden not in body, f"{skill_name} leaked {forbidden} into {header}"
+                assert forbidden not in body, (
+                    f"{skill_name} leaked {forbidden} into {header}"
+                )
 
 
 def test_never_expose_sections_contain_concrete_hidden_items():
     for skill_name in FIRST_CLASS_SKILLS:
         body = _section_body(skill_name, "## Never Expose").lower()
         assert "-" in body
-        assert "raw" in body or "internal" in body or "overlay" in body or "secret" in body
+        assert (
+            "raw" in body
+            or "internal" in body
+            or "overlay" in body
+            or "secret" in body
+        )
 
 
-def test_bootstrap_is_only_a_compatibility_alias():
-    text = _skill_text("workspace-bootstrap").lower()
-    assert "compatibility alias" in text
-    assert "workspace-init" in text
-    assert "first usable workspace baseline" not in text
-    assert "first baseline" not in text
+def test_legacy_discoverable_skill_roots_are_absent():
+    for skill_name in LEGACY_DISCOVERABLE_SKILLS:
+        assert not (ROOT / ".agents" / "skills" / skill_name).exists()
