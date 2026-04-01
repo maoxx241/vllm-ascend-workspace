@@ -2,15 +2,10 @@
 
 - Work from the checked-out workspace repository root.
 - Treat `/vllm-workspace` as the canonical runtime root.
-- Keep `tools/vaws.py` as the internal implementation surface.
-- Keep `./setup` and `./sync` available as compatibility entrypoints.
-- Treat `.agents/skills/workspace-init/SKILL.md` as the staged workspace initialization contract.
-- Treat `.agents/skills/workspace-foundation/SKILL.md` as the local prerequisite readiness contract.
-- Treat `.agents/skills/workspace-git-profile/SKILL.md` as the repository identity and fork topology contract.
-- Treat `.agents/skills/workspace-fleet/SKILL.md` as the managed server lifecycle contract.
+- Treat `.agents/skills/workspace-init/SKILL.md` as the first-time setup and recovery contract.
+- Treat `.agents/skills/machine-management/SKILL.md` as the machine attach, verify, and removal contract.
+- Treat `.agents/skills/benchmark/SKILL.md` as the benchmark contract.
 - Treat `.agents/skills/workspace-reset/SKILL.md` as the destructive teardown contract.
-- Treat `.agents/skills/workspace-session-switch/SKILL.md` as the session lifecycle contract.
-- Treat `.agents/skills/workspace-sync/SKILL.md` as the session-oriented compatibility sync contract.
 - Treat skill-local routing references as internal execution notes, not public workflow steps.
 - Never expose overlay file paths as public workflow steps.
 - Never emit shell commands that inline raw secret values.

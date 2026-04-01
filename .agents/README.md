@@ -3,19 +3,22 @@
 This directory contains the shared workspace-local contract layer for agents working in `vllm-ascend-workspace`.
 
 - Canonical runtime root: `/vllm-workspace`
-- Primary implementation surface: `tools/vaws.py`
-- Compatibility entrypoints: `./setup` and `./sync`
+- Source repos: `vllm/`, `vllm-ascend/` as submodules
+- Clone and refresh sources recursively: `git submodule update --init --recursive`
 - Shared public contracts live under `.agents/skills/`
-- Exact internal routing notes live under each skill’s `references/` directory
-- Staged init contract: `.agents/skills/workspace-init/`
-- Local readiness contract: `.agents/skills/workspace-foundation/`
-- Git profile contract: `.agents/skills/workspace-git-profile/`
-- Post-staged server management contract: `.agents/skills/workspace-fleet/`
-- Destructive teardown contract: `.agents/skills/workspace-reset/`
-- Session lifecycle contract: `.agents/skills/workspace-session-switch/`
-- Session-oriented compatibility sync contract: `.agents/skills/workspace-sync/`
-- Legacy bootstrap wording routes through the staged init flow instead of a separate workflow.
 - `.workspace.local/` is local-only overlay state
-- Local `origin` / `upstream` repository topology lives in `.workspace.local/repos.yaml`
-- Bootstrap starts from natural language user intent and resolves through shared contracts instead of direct CLI phrasebooks
-- Keep private tokens, private hosts, and legacy path references out of tracked files
+- Local `origin` and `upstream` repository topology lives in `.workspace.local/repos.yaml`
+
+## Public Skills
+
+- `.agents/skills/workspace-init/` prepares the repo for development.
+- `.agents/skills/machine-management/` handles machine attach, verify, and removal requests.
+- `.agents/skills/benchmark/` handles benchmark execution requests.
+- `.agents/skills/workspace-reset/` handles explicit destructive teardown.
+- `.agents/skills/profiling-analysis/` remains available as a domain-specific skill.
+
+## Boundary
+
+- Shared `SKILL.md` files are the public contract layer.
+- Skill-local routing references stay internal.
+- Keep private tokens, private hosts, and private path references out of tracked files.

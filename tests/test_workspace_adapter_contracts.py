@@ -2,6 +2,24 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+ADAPTER_FILES = ("AGENTS.md", "CLAUDE.md", ".cursorrules")
+PUBLIC_SKILL_ROUTES = (
+    ".agents/skills/workspace-init/skill.md",
+    ".agents/skills/machine-management/skill.md",
+    ".agents/skills/benchmark/skill.md",
+    ".agents/skills/workspace-reset/skill.md",
+)
+LEGACY_PUBLIC_VOCAB = (
+    "workspace-foundation",
+    "workspace-git-profile",
+    "workspace-fleet",
+    "workspace-session-switch",
+    "workspace-sync",
+    "workspace-bootstrap",
+    "fleet",
+    "session",
+    "sync",
+)
 
 
 def _text(path: str) -> str:
@@ -14,27 +32,21 @@ def test_first_class_adapter_files_exist():
     assert (ROOT / ".cursorrules").exists()
 
 
-def test_adapters_route_to_all_first_class_workspace_skills():
-    expected_routes = (
-        ".agents/skills/workspace-init/skill.md",
-        ".agents/skills/workspace-foundation/skill.md",
-        ".agents/skills/workspace-git-profile/skill.md",
-        ".agents/skills/workspace-fleet/skill.md",
-        ".agents/skills/workspace-reset/skill.md",
-        ".agents/skills/workspace-session-switch/skill.md",
-        ".agents/skills/workspace-sync/skill.md",
-    )
-    for path in ("AGENTS.md", "CLAUDE.md", ".cursorrules"):
+def test_adapters_route_to_new_public_skills_only():
+    for path in ADAPTER_FILES:
         text = _text(path)
-        for route in expected_routes:
-            assert route in text
+        for route in PUBLIC_SKILL_ROUTES:
+            assert route in text, f"{path} missing route {route}"
+        for forbidden in LEGACY_PUBLIC_VOCAB:
+            assert forbidden not in text, f"{path} leaked {forbidden}"
 
 
-def test_adapters_do_not_link_to_internal_routing_files_or_procedure_tokens():
+def test_adapters_do_not_center_cli_or_internal_procedure_tokens():
     forbidden_terms = (
         "internal-routing.md",
-        "workspace-bootstrap",
-        "bootstrap",
+        "tools/vaws.py",
+        "./setup",
+        "./sync",
         "init --bootstrap",
         "fleet add",
         "fleet verify",
@@ -42,8 +54,10 @@ def test_adapters_do_not_link_to_internal_routing_files_or_procedure_tokens():
         "reset --execute",
         "session create",
         "session switch",
+        "acceptance run",
+        "benchmark run",
     )
-    for path in ("AGENTS.md", "CLAUDE.md", ".cursorrules"):
+    for path in ADAPTER_FILES:
         text = _text(path)
         for term in forbidden_terms:
-            assert term not in text
+            assert term not in text, f"{path} leaked {term}"
