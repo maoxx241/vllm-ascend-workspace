@@ -1,81 +1,83 @@
 ---
 name: workspace-init
-description: Use when the user wants a first-time workspace baseline, staged re-initialization after reset, or recovery from a partially completed setup.
+description: Use when the user wants first-time setup, recovery setup after reset or partial failure, or to prepare this repo for development with Git setup and optional first-machine setup.
 ---
 
 # Workspace Init
 
 ## Overview
 
-Coordinate staged workspace initialization as one lifecycle, with foundation, git profile, and fleet handled as separate ownership boundaries.
+Prepare this workspace for development as one user-visible capability. This includes Git setup, repo topology preparation, and optional first-machine setup without requiring the user to learn internal lifecycle terms.
 
-If exact internal routing details are required, see `references/internal-routing.md`.
+If exact internal routing details are required after this skill is selected, see `references/internal-routing.md`.
 
 ## When to Use
 
 ### Intent Signals
 
-- The user wants first-time initialization for this workspace.
-- The user wants staged re-initialization after reset or partial failure.
-- The user wants a first usable baseline that may still need follow-up lifecycle work.
+- The user wants first-time setup for this workspace.
+- The user wants to prepare this repo for development.
+- The user wants Git setup and optional first-machine setup handled together.
+- The user wants recovery setup after reset or partial failure.
 
 ### Examples Include, But Are Not Limited To:
 
-- `先把这个 workspace 按 staged 流程跑起来`
-- `把初始化拆成基础检查、Git 配置和 server 接入`
-- `刚 reset 完，重新走一遍初始化`
+- `初始化这个 workspace`
+- `把这个仓库准备成可开发状态`
+- `第一次把 Git 和机器都配好`
+- `prepare this repo for development`
 
 ### Do Not Use
 
-- Local prerequisite checks without orchestration belong to `workspace-foundation`.
-- Git identity or fork topology preparation belongs to `workspace-git-profile`.
-- Managed server attachment belongs to `workspace-fleet`.
+- Later machine attach, verify, or removal work belongs to `machine-management`.
+- Benchmark execution belongs to `benchmark`.
+- Destructive teardown belongs to `workspace-reset`.
 
 ## User-Visible Output Contract
 
 - Report whether initialization is `ready`, `needs_input`, `needs_repair`, or `blocked`.
-- Explain whether the workspace now has a usable baseline.
-- Say whether the outcome is fully staged, partially staged, or waiting on input.
+- Explain whether Git setup and any requested first-machine setup are complete.
+- Say plainly what missing input or repair step is still preventing a usable development baseline.
 
 ## Never Expose
 
-- internal overlay mutation steps
 - raw secret values or secret-bearing handles
-- private filesystem paths from lifecycle state
+- internal overlay mutation steps
+- private hosts, private filesystem paths, or private cache locations
 
 ## Default Inference Rules
 
-- Prefer remote-first when a usable server is supplied.
-- Fall back to local-only only when remote attachment is unavailable or explicitly not requested.
-- Treat first usable baseline and later server attachment as separate lifecycle responsibilities.
+- Reuse an already ready Git and machine baseline when it still matches the request.
+- Handle Git setup before trying to materialize a first-machine baseline.
+- Stop and ask for missing required input instead of silently inventing a baseline.
 
 ## Cross-Skill Boundary
 
-- Foundation owns local prerequisite readiness.
-- Git profile owns repository identity and fork topology.
-- Fleet owns server attachment and runtime handoff.
-- Reset owns destructive teardown.
+- `workspace-init` owns first-time Git setup and optional first-machine setup.
+- `machine-management` owns later machine attach, verify, and removal work.
+- `benchmark` owns benchmark execution after the environment is ready.
+- `workspace-reset` owns explicit destructive teardown.
 
 ## Failure Handling Notes
 
-- Stop when required local or remote inputs are missing.
-- Do not invent a first baseline if foundation or git profile is still incomplete.
-- Route later server attachment work to fleet instead of retrying init as a separate runtime path.
+- Do not claim the workspace is ready if Git setup is incomplete.
+- Do not claim the workspace is ready if a requested first machine is still blocked or broken.
+- Surface missing input and repairable problems as targeted next steps rather than generic failure text.
 
 ## Security Notes
 
-- Do not ask for pasted raw secrets when staged handles are available.
-- Keep secret resolution internal to the workspace lifecycle.
-- Never expose private hosts, tokens, or paths in the public contract.
+- Never ask the user to paste raw credentials into the transcript when an existing secret handle or SSH path should be used.
+- Keep secret resolution and machine auth details inside the workspace boundary.
+- Never expose private hosts, tokens, or key material in normal user-facing output.
 
 ## Common Mistakes
 
-- Treating init as a monolithic runtime implementation.
-- Folding repository topology or server attachment into one step.
-- Reusing bootstrap wording as if it were a separate lifecycle.
+- Treating init as a command wrapper instead of a user-visible capability.
+- Splitting Git setup and first-machine setup into separate public workflows.
+- Pretending partial setup is a complete development baseline.
 
 ## Red Flags
 
-- routing first-server attachment outside fleet
-- exposing secret or overlay details in public guidance
-- claiming a usable baseline before the staged flow is complete
+- routing first-time machine setup into a later maintenance workflow
+- exposing overlay or secret details in public guidance
+- claiming readiness before the requested development baseline exists

@@ -2,22 +2,24 @@
 
 Public contract: `../SKILL.md`
 
-Use this file only after the reset contract has been selected.
+Use this file only after the public `workspace-reset` contract has been selected.
 
-## Command Mapping
+## Internal Delegation
 
-- prepare: `tools/vaws.py reset --prepare`
-- execute: `tools/vaws.py reset --execute --confirmation-id <id> --confirm <phrase>`
+### Public Action -> Internal Contract
 
-## Internal Behavior Notes
+- `workspace-reset` -> `workspace-reset`, `machine-runtime`
 
-- preserve the guarded two-phase reset flow
-- require `--confirmation-id <id>` and `--confirm <phrase>` for execute
-- clear all managed servers on a best-effort basis
-- downgrade the user-visible result to `partial` whenever any per-server cleanup result is `unreachable` or `cleanup_failed`, even if the command itself completes
-- restore repo remotes to community defaults
-- treat stale authorization state as invalid
-- derive cleanup ownership from lifecycle state and current target handoff kind rather than bootstrap.completed
+### Internal Contract -> Backend
+
+- `workspace-reset` -> `tools/lib/reset.py::prepare_reset()` and the tracked reset authorization flow under `tools/vaws.py`
+- `machine-runtime` -> persisted machine state in `tools/lib/runtime.py` plus machine cleanup performed during `tools/lib/reset.py`
+
+## Action Routing
+
+- `reset this workspace`
+  - internal contracts: `workspace-reset`, `machine-runtime`
+  - backend entrypoints: `tools/lib/reset.py::prepare_reset()` followed by the reset execute flow under `tools/vaws.py`
 
 ## Internal State Touched
 

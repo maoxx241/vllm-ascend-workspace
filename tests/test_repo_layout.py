@@ -103,6 +103,18 @@ def test_profiling_analysis_remains_discoverable_during_public_surface_migration
     assert profiling_skill.exists()
 
 
+def test_public_skill_roots_and_internal_routing_refs_use_delegation_shape():
+    for skill_name in PUBLIC_SKILLS:
+        skill_root = ROOT / ".agents" / "skills" / skill_name
+        assert (skill_root / "SKILL.md").exists()
+        routing_ref = skill_root / "references" / "internal-routing.md"
+        assert routing_ref.exists()
+        text = routing_ref.read_text(encoding="utf-8").lower()
+        assert "## internal delegation" in text
+        assert "public action -> internal contract" in text
+        assert "internal contract -> backend" in text
+
+
 def test_workspace_submodules_are_declared():
     gitmodules = (ROOT / ".gitmodules").read_text(encoding="utf-8")
     assert 'submodule "vllm"' in gitmodules
