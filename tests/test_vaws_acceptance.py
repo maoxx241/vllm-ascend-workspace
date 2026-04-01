@@ -107,3 +107,18 @@ def test_acceptance_cli_run_delegates_to_backend(monkeypatch, vaws_repo):
     assert calls["root"] == str(vaws_repo)
     assert calls["request"].server_name == "lab-a"
     assert calls["request"].benchmark_preset == "qwen3-35b-tp4"
+
+
+def test_real_acceptance_runbook_exists():
+    path = (
+        ROOT
+        / "docs"
+        / "superpowers"
+        / "runbooks"
+        / "2026-04-01-real-e2e-acceptance.md"
+    )
+    text = path.read_text(encoding="utf-8")
+    assert "vaws.py acceptance run" in text
+    assert "VAWS_SERVER_PASSWORD" in text
+    assert "qwen3-35b-tp4" in text
+    assert "173.131.1.2" not in text
