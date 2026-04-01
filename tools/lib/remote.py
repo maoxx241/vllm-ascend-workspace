@@ -1066,10 +1066,7 @@ def _run_host_command(ctx: TargetContext, script: str) -> subprocess.CompletedPr
 
 
 def _ensure_host_path(ctx: TargetContext) -> None:
-    script = (
-        f"mkdir -p {shlex.quote(ctx.runtime.host_workspace_path)} && "
-        f"find {shlex.quote(ctx.runtime.host_workspace_path)} -mindepth 1 -maxdepth 1 -exec rm -rf -- {{}} +"
-    )
+    script = f"mkdir -p {shlex.quote(ctx.runtime.host_workspace_path)}"
     result = _run_host_command(ctx, script)
     if result.returncode != 0:
         raise RemoteError(
@@ -1308,7 +1305,7 @@ def _write_host_runtime_state(ctx: TargetContext, transport: str, current_sessio
 
 
 def _ensure_host_runtime(paths: RepoPaths, ctx: TargetContext) -> Dict[str, Any]:
-    _stream_repo_to_host(paths, ctx)
+    _ensure_host_path(ctx)
     reused = _ensure_host_container(ctx)
     transport = _bootstrap_container_runtime(ctx)
     _write_host_runtime_state(ctx, transport)
@@ -1449,6 +1446,14 @@ def verify_runtime(paths: RepoPaths, ctx: TargetContext) -> VerificationResult:
     if ctx.credential.mode == "local-simulation":
         return _verify_simulation_runtime(ctx)
     return _verify_host_runtime(ctx)
+
+
+def run_runtime_command(
+    ctx: TargetContext,
+    transport: str,
+    script: str,
+) -> subprocess.CompletedProcess[str]:
+    return _run_container_command(ctx, transport, script)
 
 
 def create_remote_session(paths: RepoPaths, ctx: TargetContext, manifest: Dict[str, Any], transport: str) -> None:
