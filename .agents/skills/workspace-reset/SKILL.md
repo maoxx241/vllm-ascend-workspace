@@ -1,20 +1,81 @@
 ---
 name: workspace-reset
-description: Use when resetting or deinitializing this workspace after an explicit user request, especially when the agent must clear local overlay identity and remote runtime state without skipping the guarded confirmation flow.
+description: Use when the user explicitly wants destructive teardown, deinitialization, or a return to a near post-clone workspace state.
 ---
 
 # Workspace Reset
 
-Use this skill when a user explicitly asks to reset, deinitialize, or return this workspace to a near post-clone state.
+## Overview
 
-- Keep the canonical runtime root at `/vllm-workspace`.
-- Treat reset as a guarded two-step flow: run `tools/vaws.py reset --prepare` first, then `tools/vaws.py reset --execute --confirmation-id ... --confirm ...`.
-- Show the destruction summary from `reset --prepare` before executing the destructive step.
-- Agents must not skip prepare, reuse stale confirmation ids, or fabricate authorization.
-- Reset is expected to clear local workspace identity and clean all managed servers in `.workspace.local/servers.yaml` on a best-effort basis.
-- Unreachable servers should be reported, not treated as a hard stop.
-- After remote cleanup attempts, local overlay cleanup should still run.
-- After a successful reset, restore `origin` and `upstream` on `vllm/` and `vllm-ascend/` to the community URLs.
-- Keep private hosts, tokens, and user-specific paths out of tracked files.
+Use this skill for explicit guarded destructive teardown in the workspace lifecycle. It owns reset semantics, authorization friction, and best-effort cleanup reporting.
 
-This is workspace-local reference material only.
+If exact internal routing details are required, see `references/internal-routing.md`.
+
+## When to Use
+
+### Intent Signals
+
+- The user explicitly wants this workspace reset or deinitialized.
+- The user wants to clear bootstrap state and managed runtime state.
+- The user wants a near post-clone state for repeated bootstrap testing.
+
+### Examples Include, But Are Not Limited To:
+
+- `把这个 workspace 重置掉`
+- `把环境回到刚 clone 的状态`
+- `把现在这套 bootstrap 痕迹都清干净`
+
+### Do Not Use
+
+- Ordinary server repair belongs to `workspace-fleet`.
+- First setup belongs to `workspace-bootstrap`.
+- Session switching belongs to `workspace-session-switch`.
+
+## User-Visible Output Contract
+
+- Show a destruction summary before any destructive action.
+- Ask for explicit authorization before teardown proceeds.
+- Report the final result as `ready`, `partial`, `blocked`, or `failed`.
+- Say plainly when some cleanup steps were unreachable or incomplete.
+
+## Never Expose
+
+- raw confirmation tokens or internal reset records as normal user guidance
+- fabricated authorization
+- raw private hosts, secrets, or internal cleanup paths
+
+## Default Inference Rules
+
+- Treat reset as high-friction by default.
+- Clean all managed servers on a best-effort basis.
+- Preserve the guarded two-phase internal flow even when the user-facing explanation stays high-level.
+
+## Cross-Skill Boundary
+
+- First setup belongs to `workspace-bootstrap`.
+- Post-bootstrap server maintenance belongs to `workspace-fleet`.
+- Session switching belongs to `workspace-session-switch`.
+
+## Failure Handling Notes
+
+- Never skip the internal prepare phase.
+- Never reuse stale authorization state.
+- If cleanup is incomplete, report a partial result instead of pretending full success.
+
+## Security Notes
+
+- Never fabricate authorization on the user's behalf.
+- Never compress reset into a silent one-step action.
+- Never expose raw secrets or private hosts in user-facing output.
+
+## Common Mistakes
+
+- Treating reset as routine cleanup.
+- Explaining reset through overlay-file mutations.
+- Hiding unreachable cleanup outcomes.
+
+## Red Flags
+
+- asking the user for internal token syntax
+- claiming success when teardown was only partial
+- using reset language for ordinary maintenance work

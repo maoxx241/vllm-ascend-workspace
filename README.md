@@ -27,13 +27,17 @@ Public workspace-local control repository for coordinating vLLM and vLLM-Ascend 
 - `.workspace.local/` is local-only overlay state and stays untracked.
 - `.workspace.local/repos.yaml` is the local source of truth for `origin`/`upstream` repo topology.
 - Tracked files must not contain private tokens, private hosts, or legacy path references.
+- Bootstrap starts from natural language workspace requests and resolves them against the tracked `upstream` defaults plus local `origin` overlay data.
 
 ## Agent Workflows
 
-- `.agents/skills/` contains public reference material for workspace-local agents.
-- Bootstrap and first-time baseline flow live in `.agents/skills/workspace-bootstrap/`.
-- Ongoing server inventory maintenance lives in `.agents/skills/workspace-fleet/`.
-- For Codex bootstrap, the user should start from a natural language request and the agent should route into the bootstrap skill.
+- `.agents/skills/` contains the shared workspace-local contracts for bootstrap, fleet, reset, session-switch, and sync.
+- `AGENTS.md` is the Codex adapter.
+- `CLAUDE.md` is the Claude Code adapter.
+- `.cursorrules` is the Cursor adapter.
+- Exact internal routing is kept in skill-local `references/internal-routing.md` files and is not the public workflow surface.
+- Bootstrap and first baseline flow live in `.agents/skills/workspace-bootstrap/`.
+- Ongoing server inventory management lives in `.agents/skills/workspace-fleet/`.
 - Guarded best-effort cleanup flow lives in `.agents/skills/workspace-reset/`.
-- Session switching flow lives in `.agents/skills/workspace-session-switch/`.
-- Sync flow lives in `.agents/skills/workspace-sync/`.
+- Session lifecycle flow lives in `.agents/skills/workspace-session-switch/`.
+- Session-oriented compatibility sync flow lives in `.agents/skills/workspace-sync/`.

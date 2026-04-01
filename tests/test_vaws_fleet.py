@@ -67,6 +67,47 @@ def _write_fleet_overlay(vaws_repo: Path) -> Path:
     return overlay
 
 
+def _write_ssh_auth_refs(vaws_repo: Path, *ref_names: str) -> None:
+    overlay = vaws_repo / ".workspace.local"
+    auth = yaml.safe_load((overlay / "auth.yaml").read_text(encoding="utf-8"))
+    simulation_root = vaws_repo.parent / "simulation-runtime"
+    auth["ssh_auth"]["refs"] = {
+        ref_name: {
+            "kind": "local-simulation",
+            "username": "root",
+            "simulation_root": str(simulation_root),
+        }
+        for ref_name in ref_names
+    }
+    (overlay / "auth.yaml").write_text(
+        yaml.safe_dump(auth, sort_keys=False),
+        encoding="utf-8",
+    )
+
+
+def _write_legacy_host_auth(vaws_repo: Path, *group_names: str) -> None:
+    overlay = vaws_repo / ".workspace.local"
+    simulation_root = vaws_repo.parent / "simulation-runtime"
+    (overlay / "auth.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "host_auth": {
+                    "mode": "local-simulation",
+                    "credential_groups": {
+                        group_name: {
+                            "username": "root",
+                            "simulation_root": str(simulation_root),
+                        }
+                        for group_name in group_names
+                    },
+                }
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+
 def test_fleet_add_writes_server_inventory_entry(vaws_repo):
     _write_fleet_overlay(vaws_repo)
 
@@ -107,6 +148,151 @@ def test_fleet_add_writes_server_inventory_entry(vaws_repo):
     assert runtime_state["target"] == "host-b"
     assert runtime_state["container"]["created"] is True
     assert "reused" in runtime_state["container"]
+
+
+def test_fleet_add_infers_single_available_ssh_auth_ref(vaws_repo):
+    _write_fleet_overlay(vaws_repo)
+    _write_ssh_auth_refs(vaws_repo, "lab-sim")
+
+    result = run_vaws(
+        vaws_repo,
+        "fleet",
+        "add",
+        "host-b",
+        "--server-host",
+        "10.0.0.12",
+    )
+
+    assert result.returncode == 0
+    servers = yaml.safe_load((vaws_repo / ".workspace.local" / "servers.yaml").read_text())
+    assert servers["servers"]["host-b"]["ssh_auth_ref"] == "lab-sim"
+
+
+def test_fleet_add_requires_bootstrap_before_auth_resolution(vaws_repo):
+    result = run_vaws(
+        vaws_repo,
+        "fleet",
+        "add",
+        "host-b",
+        "--server-host",
+        "10.0.0.12",
+    )
+
+    assert result.returncode == 1
+    output = (result.stdout + result.stderr).lower()
+    assert "bootstrap" in output
+    assert "init --bootstrap" in output
+    assert "auth config" not in output
+
+
+def test_fleet_add_requires_completed_bootstrap_baseline(vaws_repo):
+    _write_fleet_overlay(vaws_repo)
+    overlay = vaws_repo / ".workspace.local"
+    servers = yaml.safe_load((overlay / "servers.yaml").read_text(encoding="utf-8"))
+    servers["bootstrap"]["completed"] = False
+    (overlay / "servers.yaml").write_text(
+        yaml.safe_dump(servers, sort_keys=False),
+        encoding="utf-8",
+    )
+
+    result = run_vaws(
+        vaws_repo,
+        "fleet",
+        "add",
+        "host-b",
+        "--server-host",
+        "10.0.0.12",
+    )
+
+    assert result.returncode == 1
+    output = (result.stdout + result.stderr).lower()
+    assert "bootstrap" in output
+    assert "init --bootstrap" in output
+
+
+def test_fleet_add_requires_bootstrap_map_in_server_inventory(vaws_repo):
+    _write_fleet_overlay(vaws_repo)
+    overlay = vaws_repo / ".workspace.local"
+    servers = yaml.safe_load((overlay / "servers.yaml").read_text(encoding="utf-8"))
+    servers.pop("bootstrap", None)
+    (overlay / "servers.yaml").write_text(
+        yaml.safe_dump(servers, sort_keys=False),
+        encoding="utf-8",
+    )
+
+    result = run_vaws(
+        vaws_repo,
+        "fleet",
+        "add",
+        "host-b",
+        "--server-host",
+        "10.0.0.12",
+    )
+
+    assert result.returncode == 1
+    output = (result.stdout + result.stderr).lower()
+    assert "bootstrap" in output
+    assert "init --bootstrap" in output
+
+
+def test_fleet_add_infers_single_legacy_host_auth_group(vaws_repo):
+    _write_fleet_overlay(vaws_repo)
+    _write_legacy_host_auth(vaws_repo, "shared-lab-a")
+
+    result = run_vaws(
+        vaws_repo,
+        "fleet",
+        "add",
+        "host-b",
+        "--server-host",
+        "10.0.0.12",
+    )
+
+    assert result.returncode == 0
+    servers = yaml.safe_load((vaws_repo / ".workspace.local" / "servers.yaml").read_text())
+    assert servers["servers"]["host-b"]["ssh_auth_ref"] == "shared-lab-a"
+
+
+def test_fleet_add_requires_explicit_ssh_auth_ref_when_multiple_legacy_groups_exist(vaws_repo):
+    _write_fleet_overlay(vaws_repo)
+    _write_legacy_host_auth(vaws_repo, "shared-lab-a", "shared-lab-b")
+
+    result = run_vaws(
+        vaws_repo,
+        "fleet",
+        "add",
+        "host-b",
+        "--server-host",
+        "10.0.0.12",
+    )
+
+    assert result.returncode == 1
+    output = (result.stdout + result.stderr).lower()
+    assert "multiple" in output
+    assert "ssh auth ref" in output
+    assert "shared-lab-a" in output
+    assert "shared-lab-b" in output
+
+
+def test_fleet_add_requires_explicit_ssh_auth_ref_when_multiple_refs_exist(vaws_repo):
+    _write_fleet_overlay(vaws_repo)
+    _write_ssh_auth_refs(vaws_repo, "lab-a", "lab-b")
+
+    result = run_vaws(
+        vaws_repo,
+        "fleet",
+        "add",
+        "host-b",
+        "--server-host",
+        "10.0.0.12",
+    )
+
+    assert result.returncode == 1
+    output = (result.stdout + result.stderr).lower()
+    assert "multiple" in output
+    assert "ssh auth ref" in output
+    assert "lab-a" in output
+    assert "lab-b" in output
 
 
 def test_remote_verify_runtime_returns_explicit_result_shape(vaws_repo):

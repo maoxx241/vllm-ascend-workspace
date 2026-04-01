@@ -1,10 +1,14 @@
 # Workspace rules
 
 - Work from the checked-out workspace repository root.
-- Treat `/vllm-workspace` as the canonical runtime root for container actions.
-- Use `tools/vaws.py` as the implementation entrypoint.
-- Keep compatibility commands `./setup` and `./sync` available.
-- Never embed private credentials, hosts, or local-only filesystem paths in tracked files.
-- Never commit `.workspace.local/` and treat it as local overlay state.
-- Treat `.agents/skills/` as workspace-local reference material only.
-- Preserve generic defaults that do not assume private environments.
+- Treat `/vllm-workspace` as the canonical runtime root.
+- Keep `tools/vaws.py` as the internal implementation surface.
+- Keep `./setup` and `./sync` available as compatibility entrypoints.
+- Treat `.agents/skills/workspace-bootstrap/SKILL.md` as the first baseline bootstrap contract.
+- Treat `.agents/skills/workspace-fleet/SKILL.md` as the post-bootstrap server management contract.
+- Treat `.agents/skills/workspace-reset/SKILL.md` as the destructive teardown contract.
+- Treat `.agents/skills/workspace-session-switch/SKILL.md` as the session lifecycle contract.
+- Treat `.agents/skills/workspace-sync/SKILL.md` as the session-oriented compatibility sync contract.
+- Treat skill-local routing references as internal execution notes, not public workflow steps.
+- Never expose overlay file paths as public workflow steps.
+- Never emit shell commands that inline raw secret values.

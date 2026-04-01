@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import yaml
 
@@ -18,6 +18,7 @@ from .config import RepoPaths
 from .remote import (
     DEFAULT_HOST_WORKSPACE_BASE,
     RemoteError,
+    _load_auth_config,
     ensure_runtime,
     persist_server_verification,
     resolve_server_context,
@@ -53,6 +54,12 @@ def _write_servers_config(paths: RepoPaths, config: Dict[str, Any]) -> None:
     )
 
 
+def _require_bootstrap_completed(config: Dict[str, Any]) -> None:
+    bootstrap = config.get("bootstrap")
+    if not isinstance(bootstrap, dict) or bootstrap.get("completed") is not True:
+        raise FleetError("missing bootstrap baseline: run `vaws init --bootstrap` first")
+
+
 def _require_non_empty_string(value: Any, message: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise FleetError(message)
@@ -69,6 +76,51 @@ def _require_port(value: Any, message: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 1 or value > 65535:
         raise FleetError(message)
     return value
+
+
+def _single_auth_ref_name(ref_names: list[str]) -> str:
+    if not ref_names:
+        raise FleetError("missing ssh auth ref")
+    if len(ref_names) > 1:
+        raise FleetError(
+            "multiple ssh auth refs configured: "
+            f"{', '.join(ref_names)}; pass --ssh-auth-ref"
+        )
+    return ref_names[0]
+
+
+def _resolve_ssh_auth_ref(paths: RepoPaths, ssh_auth_ref: Optional[str]) -> str:
+    if ssh_auth_ref is not None:
+        return _require_non_empty_string(ssh_auth_ref, "missing ssh auth ref")
+
+    auth = _load_auth_config(paths)
+    ssh_auth = auth.get("ssh_auth")
+    if not isinstance(ssh_auth, dict):
+        host_auth = auth.get("host_auth")
+        if not isinstance(host_auth, dict):
+            raise FleetError("invalid auth config: missing ssh_auth.refs map")
+
+        credential_groups = host_auth.get("credential_groups")
+        if not isinstance(credential_groups, dict):
+            raise FleetError("invalid auth config: missing host_auth.credential_groups map")
+
+        ref_names = sorted(
+            ref_name.strip()
+            for ref_name in credential_groups
+            if isinstance(ref_name, str) and ref_name.strip()
+        )
+        return _single_auth_ref_name(ref_names)
+
+    refs = ssh_auth.get("refs")
+    if not isinstance(refs, dict):
+        raise FleetError("invalid auth config: missing ssh_auth.refs map")
+
+    ref_names = sorted(
+        ref_name.strip()
+        for ref_name in refs
+        if isinstance(ref_name, str) and ref_name.strip()
+    )
+    return _single_auth_ref_name(ref_names)
 
 
 def list_fleet(paths: RepoPaths) -> int:
@@ -106,7 +158,7 @@ def add_fleet_server(
     paths: RepoPaths,
     server_name: str,
     server_host: str,
-    ssh_auth_ref: str,
+    ssh_auth_ref: Optional[str] = None,
     server_user: str = "root",
     server_port: int = DEFAULT_SERVER_PORT,
     runtime_image: str = DEFAULT_RUNTIME_IMAGE,
@@ -119,7 +171,6 @@ def add_fleet_server(
         server_name = _require_non_empty_string(server_name, "missing server name")
         server_host = _require_non_empty_string(server_host, "missing server host")
         server_user = _require_non_empty_string(server_user, "missing server user")
-        ssh_auth_ref = _require_non_empty_string(ssh_auth_ref, "missing ssh auth ref")
         runtime_image = _require_non_empty_string(runtime_image, "missing runtime image")
         runtime_container = _require_non_empty_string(
             runtime_container,
@@ -137,9 +188,11 @@ def add_fleet_server(
         runtime_ssh_port = _require_port(runtime_ssh_port, "invalid runtime ssh port")
 
         config = _read_servers_config(paths)
+        _require_bootstrap_completed(config)
         servers = config.get("servers")
         if not isinstance(servers, dict):
             raise FleetError("invalid server config: missing 'servers' map")
+        ssh_auth_ref = _resolve_ssh_auth_ref(paths, ssh_auth_ref)
 
         servers[server_name] = {
             "host": server_host,

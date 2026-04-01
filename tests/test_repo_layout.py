@@ -10,6 +10,7 @@ def test_public_repo_layout_exists():
     assert (repo / "config" / "repos.example.yaml").exists()
     assert (repo / "config" / "targets.example.yaml").exists()
     assert (repo / "AGENTS.md").exists()
+    assert (repo / "CLAUDE.md").exists()
     assert (repo / ".cursorrules").exists()
     assert (repo / "pytest.ini").exists()
     assert (repo / "vllm").exists()
@@ -100,11 +101,13 @@ def test_public_docs_explain_upstream_defaults_and_local_origin_bootstrap():
         encoding="utf-8"
     ).lower()
 
-    for text in (readme, bootstrap_skill, agents_readme):
+    for text in (readme, agents_readme):
         assert "upstream" in text
         assert "origin" in text
         assert ".workspace.local/repos.yaml" in text
         assert "natural language" in text or "conversational" in text
+
+    assert "origin ownership" in bootstrap_skill
 
     for forbidden in (
         "reset --prepare",
@@ -133,102 +136,80 @@ def test_agents_md_routes_bootstrap_and_reset_to_skills():
     assert "init --bootstrap" not in agents
     assert "fleet add" not in agents
 
-
-def test_workspace_reset_skill_owns_guarded_reset_procedure():
+def test_first_class_workspace_skills_and_internal_routing_refs_exist():
     repo = Path(__file__).resolve().parents[1]
-    text = (
-        repo / ".agents" / "skills" / "workspace-reset" / "SKILL.md"
-    ).read_text(encoding="utf-8").lower()
-
-    assert "workspace-local" in text
-    assert "reset --prepare" in text
-    assert "reset --execute" in text
-    assert "must not skip prepare" in text
-    assert "stale confirmation id" in text or "stale confirmation ids" in text
-    assert "fabricate authorization" in text
-    assert "community urls" in text or "community `origin` and `upstream`" in text
-    assert "all managed servers" in text
-    assert "unreachable" in text
+    for skill_name in (
+        "workspace-bootstrap",
+        "workspace-fleet",
+        "workspace-reset",
+        "workspace-session-switch",
+        "workspace-sync",
+    ):
+        skill_root = repo / ".agents" / "skills" / skill_name
+        assert (skill_root / "SKILL.md").exists()
+        assert (skill_root / "references" / "internal-routing.md").exists()
 
 
-def test_workspace_fleet_skill_owns_server_inventory_maintenance():
+def test_internal_routing_refs_contain_command_mapping_and_related_tests():
     repo = Path(__file__).resolve().parents[1]
-    text = (
-        repo / ".agents" / "skills" / "workspace-fleet" / "SKILL.md"
-    ).read_text(encoding="utf-8").lower()
+    for skill_name in (
+        "workspace-bootstrap",
+        "workspace-fleet",
+        "workspace-reset",
+        "workspace-session-switch",
+        "workspace-sync",
+    ):
+        text = (
+            repo / ".agents" / "skills" / skill_name / "references" / "internal-routing.md"
+        ).read_text(encoding="utf-8").lower()
+        assert "## command mapping" in text
+        assert "## related tests" in text
+        assert "tools/vaws.py" in text or "./sync" in text or "./setup" in text
 
-    assert "servers.yaml" in text
-    assert "remove and repair" in text
-    assert "fleet list" in text
-    assert "fleet add" in text
-    assert "fleet verify" in text
-    assert "ssh connectivity is the prerequisite" in text
-    assert "remote runtime verification is the success condition" in text
-    assert "fleet remove" not in text
-    assert "reset --prepare" not in text
-    assert "reset --execute" not in text
 
-
-def test_workspace_local_skill_skeletons_exist_and_stay_public():
+def test_first_class_workspace_skills_share_contract_shape():
     repo = Path(__file__).resolve().parents[1]
-    agents_root = repo / ".agents"
-    agents_readme = (agents_root / "README.md").read_text(encoding="utf-8").lower()
-    assert "/vllm-workspace" in agents_readme
-    assert "tools/vaws.py" in agents_readme
-    assert "./setup" in agents_readme
-    assert "./sync" in agents_readme
-    assert ".workspace.local/" in agents_readme
-    assert ".workspace.local/sessions/<session>/manifest.yaml" in agents_readme
-    assert "/vllm-workspace/.vaws/sessions/<session>/manifest.yaml" in agents_readme
-    assert "/workspace/vllm_workspace" not in agents_readme
+    required_headers = (
+        "## overview",
+        "## when to use",
+        "## user-visible output contract",
+        "## never expose",
+        "## default inference rules",
+        "## cross-skill boundary",
+        "## failure handling notes",
+        "## security notes",
+        "## common mistakes",
+        "## red flags",
+    )
+    for skill_name in (
+        "workspace-bootstrap",
+        "workspace-fleet",
+        "workspace-reset",
+        "workspace-session-switch",
+        "workspace-sync",
+    ):
+        text = (
+            repo / ".agents" / "skills" / skill_name / "SKILL.md"
+        ).read_text(encoding="utf-8").lower()
+        assert "description: use when" in text
+        assert "examples include, but are not limited to:" in text
+        assert "internal-routing.md" in text
+        for header in required_headers:
+            assert header in text
 
-    expected_skill_content = {
-        "workspace-bootstrap": (
-            "/vllm-workspace",
-            "natural language",
-            "first-time baseline",
-            "vllm-ascend",
-            "optional",
-            "tools/vaws.py init --bootstrap",
-        ),
-        "workspace-fleet": (
-            "tools/vaws.py fleet",
-            "servers.yaml",
-            "add",
-            "remove and repair",
-            "verify",
-            "repair",
-        ),
-        "workspace-reset": (
-            "/vllm-workspace",
-            "tools/vaws.py reset --prepare",
-            "tools/vaws.py reset --execute",
-            "stale confirmation id",
-            "community",
-        ),
-        "workspace-session-switch": (
-            ".workspace.local/state.json",
-            ".workspace.local/sessions/<session>/manifest.yaml",
-            "/vllm-workspace/.vaws/sessions/<session>/manifest.yaml",
-            "tools/vaws.py session create",
-            "tools/vaws.py session switch",
-        ),
-        "workspace-sync": (
-            "tools/vaws.py sync",
-            "./sync",
-            "origin/main",
-        ),
-        "profiling-analysis": (
-            "/vllm-workspace",
-            "active feature session",
-        ),
-    }
-    for skill_name, required_snippets in expected_skill_content.items():
-        skill_path = agents_root / "skills" / skill_name / "SKILL.md"
-        assert skill_path.exists()
-        text = skill_path.read_text(encoding="utf-8").lower()
-        assert "workspace-local" in text
-        assert "global skill installer" not in text
-        assert "/workspace/vllm_workspace" not in text
-        for snippet in required_snippets:
-            assert snippet in text
+
+def test_public_workspace_skill_contracts_do_not_require_exact_cli_syntax():
+    repo = Path(__file__).resolve().parents[1]
+    for skill_name in (
+        "workspace-bootstrap",
+        "workspace-fleet",
+        "workspace-reset",
+        "workspace-session-switch",
+        "workspace-sync",
+    ):
+        text = (
+            repo / ".agents" / "skills" / skill_name / "SKILL.md"
+        ).read_text(encoding="utf-8").lower()
+        assert "tools/vaws.py " not in text
+        assert "./sync" not in text
+        assert "./setup" not in text

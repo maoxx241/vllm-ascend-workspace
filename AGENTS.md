@@ -5,19 +5,22 @@ This repository is a public-facing control workspace for vLLM Ascend development
 ## Always-On Context
 
 - Runtime root: `/vllm-workspace`
-- Primary command surface: `tools/vaws.py`
+- Primary implementation surface: `tools/vaws.py`
 - Compatibility entrypoints: `./setup`, `./sync`
 - Source repos: `vllm/`, `vllm-ascend/` as submodules
 - Clone and refresh sources recursively: `git submodule update --init --recursive`
-- `config/*.example.yaml` are the only tracked config templates for bootstrap guidance.
-- `.workspace.local/` must stay local-only and is never committed.
-- Do not commit credentials, private hosts, private paths, tokens, or keys.
+- `.workspace.local/` is local-only overlay state and must never be committed
+- Never commit credentials, private hosts, private paths, tokens, or keys
 
 ## Workflow Routing
 
-- Keep detailed operational procedures in `.agents/skills/`, not in this file.
-- Use `.agents/skills/workspace-bootstrap/SKILL.md` for first-time baseline bootstrap and bootstrap repair.
-- Use `.agents/skills/workspace-fleet/SKILL.md` for post-bootstrap server inventory maintenance.
-- Use `.agents/skills/workspace-reset/SKILL.md` for guarded best-effort reset / deinit cleanup.
-- Use `.agents/skills/workspace-session-switch/SKILL.md` for session changes.
-- Use `.agents/skills/workspace-sync/SKILL.md` for sync behavior.
+- Use `.agents/skills/workspace-bootstrap/SKILL.md` for first baseline bootstrap intent
+- Use `.agents/skills/workspace-fleet/SKILL.md` for post-bootstrap server management
+- Use `.agents/skills/workspace-reset/SKILL.md` for explicit destructive teardown
+- Use `.agents/skills/workspace-session-switch/SKILL.md` for session lifecycle intent
+- Use `.agents/skills/workspace-sync/SKILL.md` for sync status and compatibility sync intent
+
+## Adapter Boundary
+
+- Treat shared `SKILL.md` files as the public contract layer
+- Treat skill-local routing references as internal execution notes, not public workflow docs

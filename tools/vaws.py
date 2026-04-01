@@ -93,7 +93,7 @@ def build_parser() -> argparse.ArgumentParser:
     fleet_add_parser.add_argument("--server-host", required=True)
     fleet_add_parser.add_argument("--server-user", default="root")
     fleet_add_parser.add_argument("--server-port", type=int, default=22)
-    fleet_add_parser.add_argument("--ssh-auth-ref", required=True)
+    fleet_add_parser.add_argument("--ssh-auth-ref")
     fleet_add_parser.add_argument(
         "--runtime-image",
         default="quay.nju.edu.cn/ascend/vllm-ascend:latest",

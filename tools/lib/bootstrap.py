@@ -10,6 +10,7 @@ import yaml
 from .config import RepoPaths
 from .overlay import ensure_overlay_layout
 from .preflight import PreflightError, ensure_local_control_plane_deps
+from .secret_boundary import SecretBoundaryError, ensure_bootstrap_secret_refs
 from .remote import DEFAULT_HOST_WORKSPACE_BASE
 from .remote import RemoteError
 from .remote import VerificationCheck, VerificationResult, persist_server_verification
@@ -481,6 +482,12 @@ def bootstrap_init(paths: RepoPaths, request: BootstrapRequest) -> int:
         preflight_report = ensure_local_control_plane_deps()
         _ensure_overlay(paths)
         _ensure_bootstrap_not_completed(paths)
+        ensure_bootstrap_secret_refs(
+            server_auth_mode=request.server_auth_mode,
+            server_password_env=request.server_password_env,
+            git_auth_mode=request.git_auth_mode,
+            git_token_env=request.git_token_env,
+        )
         _write_repos_yaml(paths, request)
         _write_servers_yaml(paths, request, completed=False)
         _write_targets_yaml(paths, request)
@@ -492,7 +499,7 @@ def bootstrap_init(paths: RepoPaths, request: BootstrapRequest) -> int:
             verification = verify_runtime(paths, context)
             persist_server_verification(paths, request.host_name, verification)
         _finalize_bootstrap(paths, request)
-    except PreflightError as exc:
+    except (PreflightError, SecretBoundaryError) as exc:
         print(str(exc))
         return 1
     except BootstrapError as exc:

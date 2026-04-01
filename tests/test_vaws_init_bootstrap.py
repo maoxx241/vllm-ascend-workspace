@@ -584,3 +584,48 @@ def test_bootstrap_target_and_server_resolution_share_workspace_root(vaws_repo):
     server_context = resolve_server_context(paths, "host-a")
 
     assert target_context.runtime.host_workspace_path == server_context.runtime.host_workspace_path
+
+
+def test_init_bootstrap_rejects_missing_pre_staged_password_handle(vaws_repo):
+    result = run_vaws(
+        vaws_repo,
+        "init",
+        "--bootstrap",
+        "--server-host",
+        "173.125.1.2",
+        "--server-user",
+        "root",
+        "--server-auth-mode",
+        "password",
+        "--server-password-env",
+        "SERVER_PASSWORD",
+        "--vllm-ascend-origin-url",
+        "git@github.com:alice/vllm-ascend.git",
+    )
+
+    assert result.returncode == 1
+    output = (result.stdout + result.stderr).lower()
+    assert "pre-stage" in output
+    assert "server_password" in output
+
+
+def test_init_bootstrap_rejects_invalid_secret_handle_name(vaws_repo):
+    result = run_vaws(
+        vaws_repo,
+        "init",
+        "--bootstrap",
+        "--server-host",
+        "173.125.1.2",
+        "--server-user",
+        "root",
+        "--server-auth-mode",
+        "password",
+        "--server-password-env",
+        "bad-name",
+        "--vllm-ascend-origin-url",
+        "git@github.com:alice/vllm-ascend.git",
+    )
+
+    assert result.returncode == 1
+    output = (result.stdout + result.stderr).lower()
+    assert "invalid secret handle" in output
