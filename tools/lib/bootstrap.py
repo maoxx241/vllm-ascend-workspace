@@ -9,12 +9,8 @@ import yaml
 
 from .config import RepoPaths
 from .overlay import ensure_overlay_layout
-from .preflight import PreflightError, ensure_local_control_plane_deps
-from .secret_boundary import SecretBoundaryError, ensure_bootstrap_secret_refs
 from .remote import DEFAULT_HOST_WORKSPACE_BASE
-from .remote import RemoteError
-from .remote import VerificationCheck, VerificationResult, persist_server_verification
-from .remote import resolve_server_context
+from .remote import VerificationCheck, VerificationResult
 from .remote import TargetContext
 from .runtime import read_state, write_state
 
@@ -128,6 +124,53 @@ def _bootstrap_host_workspace_path(request: BootstrapRequest) -> str:
     return f"{DEFAULT_HOST_WORKSPACE_BASE}/{request.target_name}/workspace"
 
 
+def _staged_init_request(request: BootstrapRequest) -> Any:
+    from .init_flow import InitRequest
+
+    return InitRequest(
+        server_host=request.server_host,
+        server_name=request.host_name if request.server_host is not None else None,
+        local_only=request.server_host is None,
+        server_user=request.server_user,
+        server_port=request.server_port,
+        server_auth_mode=request.server_auth_mode,
+        server_password_env=request.server_password_env,
+        server_key_path=request.server_key_path,
+        runtime_image=request.runtime_image,
+        runtime_container=request.runtime_container,
+        runtime_ssh_port=request.runtime_ssh_port,
+        runtime_workspace_root=request.runtime_workspace_root,
+        runtime_bootstrap_mode=DEFAULT_RUNTIME_BOOTSTRAP_MODE,
+        vllm_origin_url=request.vllm_origin_url,
+        vllm_ascend_origin_url=request.vllm_ascend_origin_url,
+        git_auth_mode=request.git_auth_mode,
+        git_key_path=request.git_key_path,
+        git_token_env=request.git_token_env,
+    )
+
+
+def _run_staged_init(paths: RepoPaths, request: Any) -> int:
+    from .init_flow import run_init
+
+    return run_init(paths, request)
+
+
+def _preserve_requested_git_auth(paths: RepoPaths, request: BootstrapRequest) -> None:
+    if (
+        request.git_key_path is None
+        and request.git_token_env is None
+        and request.git_auth_mode not in {"token"}
+    ):
+        return
+
+    write_git_auth_ref(
+        paths,
+        git_auth_mode=request.git_auth_mode,
+        git_key_path=request.git_key_path,
+        git_token_env=request.git_token_env,
+    )
+
+
 def verify_runtime(_paths: RepoPaths, context: TargetContext) -> VerificationResult:
     runtime = {
         "image_ref": context.runtime.image_ref,
@@ -198,6 +241,166 @@ def _auth_ref_payload(kind: str, **fields: Any) -> Dict[str, Any]:
     return payload
 
 
+def _load_auth_mapping(paths: RepoPaths) -> Dict[str, Any]:
+    return _load_yaml_mapping(paths.local_auth_file)
+
+
+def _auth_namespace_refs(auth: Dict[str, Any], namespace: str) -> Dict[str, Any]:
+    section = auth.get(namespace)
+    if section is None:
+        section = {"refs": {}}
+        auth[namespace] = section
+    if not isinstance(section, dict):
+        raise BootstrapError(f"invalid auth file: .workspace.local/auth.yaml {namespace}")
+
+    refs = section.get("refs")
+    if refs is None:
+        refs = {}
+        section["refs"] = refs
+    if not isinstance(refs, dict):
+        raise BootstrapError(f"invalid auth file: .workspace.local/auth.yaml {namespace}.refs")
+    return refs
+
+
+def _repo_topology_payload(
+    *,
+    vllm_origin_url: Optional[str],
+    vllm_ascend_origin_url: str,
+) -> Dict[str, Any]:
+    topology: Dict[str, Any] = {
+        "version": 1,
+        "workspace": {
+            "path": ".",
+            "default_branch": "main",
+            "protected_branches": ["main"],
+            "push_remote": "origin",
+            "upstream_remote": "upstream",
+        },
+        "submodules": {
+            "vllm": {
+                "path": "vllm",
+                "default_branch": "main",
+                "push_remote": "origin",
+                "upstream_remote": "upstream",
+                "upstream_url": COMMUNITY_UPSTREAM_URLS["vllm"],
+            },
+            "vllm-ascend": {
+                "path": "vllm-ascend",
+                "default_branch": "main",
+                "push_remote": "origin",
+                "upstream_remote": "upstream",
+                "upstream_url": COMMUNITY_UPSTREAM_URLS["vllm-ascend"],
+                "origin_url": vllm_ascend_origin_url,
+            },
+        },
+    }
+    if vllm_origin_url:
+        topology["submodules"]["vllm"]["origin_url"] = vllm_origin_url
+    return topology
+
+
+def load_existing_repo_topology(paths: RepoPaths) -> Dict[str, Any]:
+    return _load_yaml_mapping(paths.local_repos_file)
+
+
+def topology_is_ready(paths: RepoPaths) -> bool:
+    topology = load_existing_repo_topology(paths)
+    if not topology:
+        return False
+
+    workspace = topology.get("workspace")
+    submodules = topology.get("submodules")
+    if not isinstance(workspace, dict) or not isinstance(submodules, dict):
+        return False
+
+    for repo_name in ("vllm", "vllm-ascend"):
+        repo_config = submodules.get(repo_name)
+        if not isinstance(repo_config, dict):
+            return False
+
+        repo_path_value = repo_config.get("path")
+        if not isinstance(repo_path_value, str) or not repo_path_value.strip():
+            return False
+
+        repo_path = paths.root / repo_path_value.strip()
+        if not repo_path.is_dir():
+            return False
+
+        expected_upstream = repo_config.get("upstream_url")
+        if not isinstance(expected_upstream, str) or not expected_upstream.strip():
+            return False
+
+        if _git_remote_url(repo_path, "upstream") != expected_upstream.strip():
+            return False
+        expected_origin = repo_config.get("origin_url")
+        if repo_name == "vllm" and expected_origin is None:
+            continue
+        if (
+            repo_name == "vllm-ascend"
+            and expected_origin == COMMUNITY_UPSTREAM_URLS["vllm-ascend"]
+        ):
+            return False
+        if not isinstance(expected_origin, str) or not expected_origin.strip():
+            return False
+        if _git_remote_url(repo_path, "origin") != expected_origin.strip():
+            return False
+
+    return True
+
+
+def write_repo_topology(
+    paths: RepoPaths,
+    *,
+    vllm_origin_url: Optional[str],
+    vllm_ascend_origin_url: str,
+) -> None:
+    _write_yaml(
+        paths.local_repos_file,
+        _repo_topology_payload(
+            vllm_origin_url=vllm_origin_url,
+            vllm_ascend_origin_url=vllm_ascend_origin_url,
+        ),
+    )
+
+
+def write_server_auth_ref(
+    paths: RepoPaths,
+    *,
+    server_auth_mode: str,
+    server_user: str,
+    server_password_env: Optional[str],
+    server_key_path: Optional[str],
+) -> None:
+    auth = _load_auth_mapping(paths)
+    auth.setdefault("version", 1)
+    ssh_refs = _auth_namespace_refs(auth, "ssh_auth")
+    ssh_refs[DEFAULT_SERVER_AUTH_REF] = _auth_ref_payload(
+        server_auth_mode,
+        username=server_user,
+        password_env=server_password_env,
+        key_path=server_key_path,
+    )
+    _write_yaml(paths.local_auth_file, auth)
+
+
+def write_git_auth_ref(
+    paths: RepoPaths,
+    *,
+    git_auth_mode: str,
+    git_key_path: Optional[str],
+    git_token_env: Optional[str],
+) -> None:
+    auth = _load_auth_mapping(paths)
+    auth.setdefault("version", 1)
+    git_refs = _auth_namespace_refs(auth, "git_auth")
+    git_refs[DEFAULT_GIT_AUTH_REF] = _auth_ref_payload(
+        git_auth_mode,
+        key_path=git_key_path,
+        token_env=git_token_env,
+    )
+    _write_yaml(paths.local_auth_file, auth)
+
+
 def _run_git(repo_path: Path, *args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["git", *args],
@@ -206,6 +409,13 @@ def _run_git(repo_path: Path, *args: str) -> subprocess.CompletedProcess[str]:
         capture_output=True,
         check=False,
     )
+
+
+def _git_remote_url(repo_path: Path, remote_name: str) -> Optional[str]:
+    probe = _run_git(repo_path, "remote", "get-url", remote_name)
+    if probe.returncode != 0:
+        return None
+    return probe.stdout.strip()
 
 
 def _ensure_git_remote(repo_path: Path, remote_name: str, url: str) -> None:
@@ -226,41 +436,11 @@ def _ensure_git_remote(repo_path: Path, remote_name: str, url: str) -> None:
 
 
 def _write_repos_yaml(paths: RepoPaths, request: BootstrapRequest) -> None:
-    _write_yaml(
-        paths.local_repos_file,
-        {
-            "version": 1,
-            "workspace": {
-                "path": ".",
-                "default_branch": "main",
-                "protected_branches": ["main"],
-                "push_remote": "origin",
-                "upstream_remote": "upstream",
-            },
-            "submodules": {
-                "vllm": {
-                    "path": "vllm",
-                    "default_branch": "main",
-                    "push_remote": "origin",
-                    "upstream_remote": "upstream",
-                    "upstream_url": COMMUNITY_UPSTREAM_URLS["vllm"],
-                },
-                "vllm-ascend": {
-                    "path": "vllm-ascend",
-                    "default_branch": "main",
-                    "push_remote": "origin",
-                    "upstream_remote": "upstream",
-                    "upstream_url": COMMUNITY_UPSTREAM_URLS["vllm-ascend"],
-                    "origin_url": request.vllm_ascend_origin_url,
-                },
-            },
-        },
+    write_repo_topology(
+        paths,
+        vllm_origin_url=request.vllm_origin_url,
+        vllm_ascend_origin_url=request.vllm_ascend_origin_url,
     )
-    if request.vllm_origin_url:
-        repos_path = paths.local_repos_file
-        config = _load_yaml_mapping(repos_path)
-        config["submodules"]["vllm"]["origin_url"] = request.vllm_origin_url
-        _write_yaml(repos_path, config)
 
 
 def _bootstrap_servers_config(
@@ -354,30 +534,18 @@ def _write_auth_yaml(paths: RepoPaths, request: BootstrapRequest) -> None:
         )
         return
 
-    _write_yaml(
-        auth_path,
-        {
-            "version": 1,
-            "ssh_auth": {
-                "refs": {
-                    DEFAULT_SERVER_AUTH_REF: _auth_ref_payload(
-                        request.server_auth_mode,
-                        username=request.server_user,
-                        password_env=request.server_password_env,
-                        key_path=request.server_key_path,
-                    ),
-                },
-            },
-            "git_auth": {
-                "refs": {
-                    DEFAULT_GIT_AUTH_REF: _auth_ref_payload(
-                        request.git_auth_mode,
-                        key_path=request.git_key_path,
-                        token_env=request.git_token_env,
-                    ),
-                },
-            },
-        },
+    write_server_auth_ref(
+        paths,
+        server_auth_mode=request.server_auth_mode,
+        server_user=request.server_user,
+        server_password_env=request.server_password_env,
+        server_key_path=request.server_key_path,
+    )
+    write_git_auth_ref(
+        paths,
+        git_auth_mode=request.git_auth_mode,
+        git_key_path=request.git_key_path,
+        git_token_env=request.git_token_env,
     )
 
 
@@ -453,17 +621,22 @@ def _finalize_bootstrap(paths: RepoPaths, request: BootstrapRequest) -> None:
         raise BootstrapError(str(exc)) from exc
 
 
-def _configure_repo_remotes(paths: RepoPaths, request: BootstrapRequest) -> None:
+def configure_repo_remotes(
+    paths: RepoPaths,
+    *,
+    vllm_origin_url: Optional[str],
+    vllm_ascend_origin_url: str,
+) -> None:
     repo_targets = {
         "vllm": {
             "path": paths.root / "vllm",
             "upstream": COMMUNITY_UPSTREAM_URLS["vllm"],
-            "origin": request.vllm_origin_url,
+            "origin": vllm_origin_url,
         },
         "vllm-ascend": {
             "path": paths.root / "vllm-ascend",
             "upstream": COMMUNITY_UPSTREAM_URLS["vllm-ascend"],
-            "origin": request.vllm_ascend_origin_url,
+            "origin": vllm_ascend_origin_url,
         },
     }
 
@@ -473,47 +646,16 @@ def _configure_repo_remotes(paths: RepoPaths, request: BootstrapRequest) -> None
         origin_url = config["origin"]
         if origin_url:
             _ensure_git_remote(repo_path, "origin", origin_url)
-        elif repo_name == "vllm":
-            _ensure_git_remote(repo_path, "origin", config["upstream"])
 
 
 def bootstrap_init(paths: RepoPaths, request: BootstrapRequest) -> int:
     try:
-        preflight_report = ensure_local_control_plane_deps()
-        _ensure_overlay(paths)
-        _ensure_bootstrap_not_completed(paths)
-        ensure_bootstrap_secret_refs(
-            server_auth_mode=request.server_auth_mode,
-            server_password_env=request.server_password_env,
-            git_auth_mode=request.git_auth_mode,
-            git_token_env=request.git_token_env,
-        )
-        _write_repos_yaml(paths, request)
-        _write_servers_yaml(paths, request, completed=False)
-        _write_targets_yaml(paths, request)
-        _write_auth_yaml(paths, request)
-        _configure_repo_remotes(paths, request)
-        verification: Optional[VerificationResult] = None
-        if request.server_host is not None:
-            context = resolve_server_context(paths, request.host_name)
-            verification = verify_runtime(paths, context)
-            persist_server_verification(paths, request.host_name, verification)
-        _finalize_bootstrap(paths, request)
-    except (PreflightError, SecretBoundaryError) as exc:
-        print(str(exc))
-        return 1
+        staged_request = _staged_init_request(request)
+        result = _run_staged_init(paths, staged_request)
+        if result != 0:
+            return result
+        _preserve_requested_git_auth(paths, request)
+        return 0
     except BootstrapError as exc:
         print(str(exc))
         return 1
-    except (RemoteError, RuntimeError) as exc:
-        print(str(exc))
-        return 1
-
-    if preflight_report.status == "degraded":
-        missing = ", ".join(preflight_report.missing_recommended)
-        print(f"init: preflight degraded: missing recommended tools: {missing}")
-    bootstrap_status = (
-        verification.status if request.server_host is not None else "ready"
-    )
-    print(f"init: bootstrap {bootstrap_status} ({_bootstrap_mode(request)})")
-    return 0

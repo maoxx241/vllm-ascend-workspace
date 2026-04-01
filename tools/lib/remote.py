@@ -22,6 +22,15 @@ class RemoteError(RuntimeError):
     """Remote bootstrap or runtime materialization failure."""
 
 
+def can_fallback_to_legacy_target(exc: "RemoteError") -> bool:
+    message = str(exc)
+    return (
+        message.startswith("unknown server:")
+        or message.startswith("invalid server config: .workspace.local/servers.yaml")
+        or message.startswith("invalid server config: missing 'servers' map")
+    )
+
+
 @dataclass(frozen=True)
 class CredentialGroup:
     mode: str
@@ -209,6 +218,45 @@ def _host_auth_ref(host_config: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+def _host_ssh_auth_ref(host_config: Dict[str, Any]) -> Optional[str]:
+    auth_ref = host_config.get("ssh_auth_ref")
+    if isinstance(auth_ref, str) and auth_ref.strip():
+        return auth_ref.strip()
+    return None
+
+
+def _modern_auth_ref_names(auth: Dict[str, Any]) -> List[str]:
+    ssh_auth = auth.get("ssh_auth")
+    if not isinstance(ssh_auth, dict):
+        return []
+
+    refs = ssh_auth.get("refs")
+    if not isinstance(refs, dict):
+        return []
+
+    return sorted(
+        ref_name.strip()
+        for ref_name in refs
+        if isinstance(ref_name, str) and ref_name.strip()
+    )
+
+
+def _legacy_auth_ref_names(auth: Dict[str, Any]) -> List[str]:
+    host_auth = auth.get("host_auth")
+    if not isinstance(host_auth, dict):
+        return []
+
+    credential_groups = host_auth.get("credential_groups")
+    if not isinstance(credential_groups, dict):
+        return []
+
+    return sorted(
+        ref_name.strip()
+        for ref_name in credential_groups
+        if isinstance(ref_name, str) and ref_name.strip()
+    )
+
+
 def _credential_group_from_ref(
     ref: Dict[str, Any],
     ref_name: str,
@@ -241,6 +289,30 @@ def _credential_group_from_ref(
         key_path=ref.get("key_path"),
         token_env=ref.get("token_env"),
         simulation_root=simulation_root_path,
+    )
+
+
+def _modern_credential_group_from_auth(
+    auth: Dict[str, Any],
+    host: HostSpec,
+    ssh_auth_ref: str,
+) -> CredentialGroup:
+    ssh_auth_refs = _modern_auth_ref_names(auth)
+    if not ssh_auth_refs:
+        raise RemoteError("invalid auth config: missing ssh_auth.refs map")
+
+    ssh_auth = auth.get("ssh_auth")
+    assert isinstance(ssh_auth, dict)
+    ssh_refs = ssh_auth.get("refs")
+    assert isinstance(ssh_refs, dict)
+    credential_config = ssh_refs.get(ssh_auth_ref)
+    if not isinstance(credential_config, dict):
+        raise RemoteError(f"invalid auth config: unknown ssh auth ref '{ssh_auth_ref}'")
+
+    return _credential_group_from_ref(
+        credential_config,
+        ssh_auth_ref,
+        host.login_user,
     )
 
 
@@ -295,8 +367,13 @@ def _context_from_inventory_record(
     host_name: str,
     host_config: Dict[str, Any],
     runtime: Dict[str, Any],
+    *,
+    legacy_auth: bool = False,
 ) -> TargetContext:
-    ssh_auth_ref = _host_auth_ref(host_config)
+    explicit_ssh_auth_ref = _host_ssh_auth_ref(host_config)
+    ssh_auth_ref = explicit_ssh_auth_ref
+    if not ssh_auth_ref and legacy_auth:
+        ssh_auth_ref = _host_auth_ref(host_config)
     if not ssh_auth_ref:
         raise RemoteError(
             f"invalid {record_kind} config: {record_kind} '{record_name}' missing ssh_auth_ref"
@@ -363,25 +440,12 @@ def _context_from_inventory_record(
         )
 
     auth = _load_auth_config(paths)
-    ssh_auth_ref = host.ssh_auth_ref or host.auth_group
-    ssh_auth = auth.get("ssh_auth")
-    if isinstance(ssh_auth, dict):
-        ssh_refs = ssh_auth.get("refs")
-        if not isinstance(ssh_refs, dict):
-            raise RemoteError("invalid auth config: missing ssh_auth.refs map")
-
-        credential_config = ssh_refs.get(ssh_auth_ref)
-        if not isinstance(credential_config, dict):
-            raise RemoteError(
-                f"invalid auth config: unknown ssh auth ref '{ssh_auth_ref}'"
-            )
-        credential = _credential_group_from_ref(
-            credential_config,
-            ssh_auth_ref,
-            host.login_user,
-        )
-    else:
+    if legacy_auth and explicit_ssh_auth_ref:
+        credential = _modern_credential_group_from_auth(auth, host, explicit_ssh_auth_ref)
+    elif legacy_auth:
         credential = _legacy_credential_group_from_auth(auth, host)
+    else:
+        credential = _modern_credential_group_from_auth(auth, host, ssh_auth_ref)
 
     return TargetContext(
         name=record_name,
@@ -469,6 +533,7 @@ def _resolve_legacy_target_context(paths: RepoPaths, target_name: str) -> Target
         host_name,
         host_config,
         runtime,
+        legacy_auth=True,
     )
 
 
@@ -499,13 +564,12 @@ def resolve_server_context(paths: RepoPaths, server_name: str) -> TargetContext:
 
 
 def list_managed_server_names(paths: RepoPaths) -> List[str]:
-    try:
-        config = _load_servers_config(paths)
-    except RemoteError:
+    if not paths.local_servers_file.exists():
         return []
+    config = _load_servers_config(paths)
     servers = config.get("servers")
     if not isinstance(servers, dict):
-        return []
+        raise RemoteError("invalid server config: missing 'servers' map")
     return sorted(
         name.strip()
         for name in servers
@@ -514,19 +578,7 @@ def list_managed_server_names(paths: RepoPaths) -> List[str]:
 
 
 def resolve_target_context(paths: RepoPaths, target_name: str) -> TargetContext:
-    legacy_error: Optional[RemoteError] = None
-    try:
-        return _resolve_legacy_target_context(paths, target_name)
-    except RemoteError as exc:
-        legacy_error = exc
-        if str(exc) != f"unknown target: {target_name}":
-            raise
-
-    try:
-        return resolve_server_context(paths, target_name)
-    except RemoteError:
-        assert legacy_error is not None
-        raise legacy_error
+    return _resolve_legacy_target_context(paths, target_name)
 
 
 def persist_server_verification(

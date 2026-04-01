@@ -1,13 +1,13 @@
 ---
 name: workspace-fleet
-description: Use when the user wants to manage additional servers after the first workspace baseline already exists, including attach, verify, list, or clearly blocked unsupported maintenance requests.
+description: Use when the user wants to attach, verify, list, or otherwise manage workspace servers after foundation and git-profile readiness exist, including first-server runtime handoff.
 ---
 
 # Workspace Fleet
 
 ## Overview
 
-Use this skill for post-bootstrap server inventory management. It owns the lifecycle of additional managed servers after the first baseline exists.
+Use this skill for managed server inventory and runtime handoff. It owns first-server attachment and later server attachment as the same fleet lifecycle once foundation and git-profile readiness are both complete.
 
 If exact internal routing details are required, see `references/internal-routing.md`.
 
@@ -15,10 +15,10 @@ If exact internal routing details are required, see `references/internal-routing
 
 ### Intent Signals
 
-- The user wants to attach an additional managed server after baseline bootstrap.
+- The user wants to attach an additional managed server after foundation and git-profile readiness exist.
 - The user wants to verify or list a managed server.
-- The user asks for post-bootstrap maintenance that may not have a sanctioned implementation path yet.
-- The user wants to know whether a post-bootstrap server is usable for this workspace.
+- The user wants first server handoff after foundation and git-profile readiness is complete.
+- The user wants to know whether a managed server is usable for this workspace.
 
 ### Examples Include, But Are Not Limited To:
 
@@ -28,16 +28,18 @@ If exact internal routing details are required, see `references/internal-routing
 
 ### Do Not Use
 
-- The first baseline belongs to `workspace-bootstrap`.
+- First-time orchestration belongs to `workspace-init`.
+- Foundation readiness belongs to `workspace-foundation`.
+- Git profile readiness belongs to `workspace-git-profile`.
 - Explicit teardown belongs to `workspace-reset`.
 - Session switching belongs to `workspace-session-switch`.
 
 ## User-Visible Output Contract
 
 - Report whether the requested server operation is `ready`, `partial`, `needs_repair`, or `blocked`.
-- Explain what changed in server terms.
+- Explain what changed in managed server terms.
 - Keep read-only verification distinct from any state-changing request.
-- Surface unsupported post-bootstrap maintenance requests as `blocked` and say plainly that no sanctioned implementation path exists yet.
+- Surface unsupported maintenance requests as `blocked` and say plainly that no sanctioned implementation path exists yet.
 
 ## Never Expose
 
@@ -50,17 +52,20 @@ If exact internal routing details are required, see `references/internal-routing
 - Reuse the single configured SSH auth profile when exactly one safe profile exists.
 - Ask for clarification when multiple profiles exist and the correct one cannot be inferred safely.
 - Treat verify as read-only.
+- Treat first-server attachment and later attachment through the same fleet ownership boundary.
 - Do not improvise repair or removal behavior when no sanctioned implementation path exists.
 
 ## Cross-Skill Boundary
 
-- First baseline work belongs to `workspace-bootstrap`.
+- First-time orchestration belongs to `workspace-init`.
+- Local readiness belongs to `workspace-foundation`.
+- Git topology belongs to `workspace-git-profile`.
 - Explicit teardown belongs to `workspace-reset`.
 - Session changes and sync do not belong to this skill.
 
 ## Failure Handling Notes
 
-- If baseline bootstrap never completed, route back to `workspace-bootstrap`.
+- If foundation or git-profile readiness never completed, route back to `workspace-init`.
 - If a server cannot be reached, return `needs_repair` or `blocked` instead of silently skipping it.
 - If some requested changes succeed and others fail, return `partial`.
 - If the user requests unsupported maintenance, return `blocked` instead of inventing a workflow.
@@ -73,7 +78,7 @@ If exact internal routing details are required, see `references/internal-routing
 
 ## Common Mistakes
 
-- Treating fleet work as a bootstrap rerun.
+- Treating fleet work as an init rerun.
 - Explaining server inventory through YAML file edits.
 - Improvising unsupported repair or removal behavior.
 

@@ -16,7 +16,9 @@ def test_first_class_adapter_files_exist():
 
 def test_adapters_route_to_all_first_class_workspace_skills():
     expected_routes = (
-        ".agents/skills/workspace-bootstrap/skill.md",
+        ".agents/skills/workspace-init/skill.md",
+        ".agents/skills/workspace-foundation/skill.md",
+        ".agents/skills/workspace-git-profile/skill.md",
         ".agents/skills/workspace-fleet/skill.md",
         ".agents/skills/workspace-reset/skill.md",
         ".agents/skills/workspace-session-switch/skill.md",
@@ -31,6 +33,8 @@ def test_adapters_route_to_all_first_class_workspace_skills():
 def test_adapters_do_not_link_to_internal_routing_files_or_procedure_tokens():
     forbidden_terms = (
         "internal-routing.md",
+        "workspace-bootstrap",
+        "bootstrap",
         "init --bootstrap",
         "fleet add",
         "fleet verify",

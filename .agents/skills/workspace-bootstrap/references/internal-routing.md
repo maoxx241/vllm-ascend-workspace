@@ -2,30 +2,27 @@
 
 Public contract: `../SKILL.md`
 
-Use this file only after the public bootstrap contract has been selected.
+Use this file only after the compatibility alias has been selected.
 
 ## Command Mapping
 
-- Primary entrypoint: `tools/vaws.py init --bootstrap`
-- Supporting verification command: `tools/vaws.py doctor`
+- compatibility alias: `tools/vaws.py init --bootstrap`
+- primary staged route: `tools/vaws.py init`
 
-## Internal Inputs
+## Internal Behavior Notes
 
-- first remote server details, or explicit local-only intent
-- `vllm-ascend` origin URL
-- optional `vllm` origin URL
-- pre-staged auth handles or safe auth refs
+- keep bootstrap wording mapped to staged init semantics
+- do not create a separate bootstrap runtime implementation
+- defer local readiness, git topology, and server attachment to their first-class skills
 
 ## Internal State Touched
 
+- `.workspace.local/state.json`
 - `.workspace.local/repos.yaml`
 - `.workspace.local/auth.yaml`
 - `.workspace.local/servers.yaml`
 - `.workspace.local/targets.yaml`
-- `.workspace.local/state.json`
-- git remotes under `vllm/` and `vllm-ascend/`
 
 ## Related Tests
 
 - `tests/test_vaws_init_bootstrap.py`
-- `tests/test_secret_boundary.py`

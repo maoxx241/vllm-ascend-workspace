@@ -1,6 +1,6 @@
 ---
 name: workspace-sync
-description: Use when the user wants to check sync status, start or finish the session-oriented compatibility sync flow, or discuss sync in workspace lifecycle terms without internal command wiring.
+description: Use when the user wants to check sync status, start or finish the session-oriented compatibility sync flow, or discuss sync around an active session without internal command wiring.
 ---
 
 # Workspace Sync
@@ -18,6 +18,7 @@ If exact internal routing details are required, see `references/internal-routing
 - The user wants to check current sync status.
 - The user wants to start the compatibility sync flow for a session.
 - The user wants to finish the compatibility sync flow cleanly.
+- The user wants to sync repository or session state around the active session.
 
 ### Examples Include, But Are Not Limited To:
 
@@ -27,7 +28,7 @@ If exact internal routing details are required, see `references/internal-routing
 
 ### Do Not Use
 
-- Bootstrap belongs to `workspace-bootstrap`.
+- Init belongs to `workspace-init`.
 - Additional server management belongs to `workspace-fleet`.
 - Session creation or switching belongs to `workspace-session-switch`.
 - Destructive teardown belongs to `workspace-reset`.
@@ -48,10 +49,11 @@ If exact internal routing details are required, see `references/internal-routing
 
 - Prefer the current active session when status or done can be resolved safely from workspace state.
 - Ask for clarification when a sync start request does not identify the target session clearly.
+- Treat sync start as session-oriented compatibility flow, not as bootstrap or server attachment.
 
 ## Cross-Skill Boundary
 
-- Bootstrap belongs to `workspace-bootstrap`.
+- Init belongs to `workspace-init`.
 - Server management belongs to `workspace-fleet`.
 - Session selection belongs to `workspace-session-switch`.
 - Teardown belongs to `workspace-reset`.
@@ -61,6 +63,7 @@ If exact internal routing details are required, see `references/internal-routing
 - If sync cannot proceed, report the blocking reason plainly.
 - If sync is partial, say what remains unresolved.
 - If a sync start request lacks a usable session target, stop and ask instead of improvising.
+- If no current session exists, use the active session or target selection skills first.
 
 ## Security Notes
 

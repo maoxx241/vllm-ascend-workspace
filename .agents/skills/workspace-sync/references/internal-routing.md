@@ -17,6 +17,7 @@ Use this file only after the sync contract has been selected.
 - `sync start` creates and switches to the target session
 - `sync done` is a reserved compatibility completion step
 - compatibility behavior stays internal
+- sync is session-oriented and does not own init or fleet responsibilities
 
 ## Related Tests
 

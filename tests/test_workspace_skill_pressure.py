@@ -3,20 +3,40 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SCENARIOS = {
-    "workspace-bootstrap": {
+    "workspace-init": {
         "intent_groups": (
-            ("first usable workspace baseline", "initialize this workspace for the first time"),
-            ("first development server", "development server attached"),
+            ("first usable workspace baseline", "first-time initialization"),
+            ("staged re-initialization", "recovering after reset"),
         ),
         "pressure_only_variants": (
             "把第一套开发环境先搭起来",
             "先把仓库基础环境准备好",
         ),
     },
+    "workspace-foundation": {
+        "intent_groups": (
+            ("local prerequisite", "control-plane readiness"),
+            ("foundation checks", "missing gh"),
+        ),
+        "pressure_only_variants": (
+            "先检查本地前置依赖",
+            "把控制平面依赖状态看一下",
+        ),
+    },
+    "workspace-git-profile": {
+        "intent_groups": (
+            ("git identity", "fork topology"),
+            ("repo remotes", "personalized git setup"),
+        ),
+        "pressure_only_variants": (
+            "把这套仓库的 fork 和远端配置好",
+            "先把 Git 侧身份和 topology 准备好",
+        ),
+    },
     "workspace-fleet": {
         "intent_groups": (
             ("additional managed server", "additional server"),
-            ("post-bootstrap", "after baseline"),
+            ("first server handoff", "post-bootstrap"),
         ),
         "pressure_only_variants": (
             "把另一台开发机挂上来",

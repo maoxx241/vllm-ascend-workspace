@@ -117,6 +117,22 @@ def test_doctor_fails_when_state_json_schema_version_is_unsupported(vaws_repo):
     assert "unsupported" in output or "invalid" in output
 
 
+def test_doctor_fails_when_lifecycle_is_not_a_mapping(vaws_repo):
+    overlay = vaws_repo / ".workspace.local"
+    seed_overlay_files(vaws_repo)
+    (overlay / "state.json").write_text(
+        '{"schema_version": 1, "lifecycle": []}\n',
+        encoding="utf-8",
+    )
+
+    result = run_vaws(vaws_repo, "doctor")
+
+    assert result.returncode == 1
+    output = (result.stdout + result.stderr).lower()
+    assert "lifecycle" in output
+    assert "mapping" in output or "object" in output
+
+
 def test_doctor_fails_when_state_json_is_not_utf8(vaws_repo):
     overlay = vaws_repo / ".workspace.local"
     seed_overlay_files(vaws_repo)
@@ -163,7 +179,9 @@ def test_init_writes_json_parseable_state_file(vaws_repo):
     state_text = (vaws_repo / ".workspace.local" / "state.json").read_text(
         encoding="utf-8"
     )
-    assert json.loads(state_text) == {"schema_version": 1}
+    state = json.loads(state_text)
+    assert state["schema_version"] == 1
+    assert state["lifecycle"]["requested_mode"] == "local-only"
 
 
 def test_init_fails_cleanly_when_overlay_path_is_a_file(vaws_repo):

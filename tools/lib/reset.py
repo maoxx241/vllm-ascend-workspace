@@ -9,9 +9,15 @@ from typing import Any, Dict, List, Optional
 
 from .bootstrap import COMMUNITY_UPSTREAM_URLS
 from .config import RepoPaths
+from .lifecycle_state import (
+    LEGACY_TARGET_HANDOFF_KIND,
+    MANAGED_SERVER_HANDOFF_KIND,
+    infer_current_target_kind,
+)
 from .remote import (
     CleanupResult,
     RemoteError,
+    can_fallback_to_legacy_target,
     cleanup_runtime,
     list_managed_server_names,
     resolve_server_context,
@@ -63,10 +69,56 @@ def _current_target_from_state(paths: RepoPaths) -> Optional[str]:
     return None
 
 
+def _current_target_kind_from_state(paths: RepoPaths) -> Optional[str]:
+    state = read_state(paths)
+    current_target_kind = state.get("current_target_kind")
+    if isinstance(current_target_kind, str) and current_target_kind.strip():
+        return current_target_kind.strip()
+    current_target = state.get("current_target")
+    if not isinstance(current_target, str) or not current_target.strip():
+        return None
+    runtime = state.get("runtime")
+    inferred_kind = infer_current_target_kind(
+        paths,
+        current_target.strip(),
+        runtime if isinstance(runtime, dict) else None,
+    )
+    if inferred_kind is None:
+        raise RuntimeError(
+            "missing current target handoff kind: rerun `vaws fleet add <server>` or `vaws target ensure <target>`"
+        )
+    return inferred_kind
+def _cleanup_managed_server_runtime(paths: RepoPaths, server_name: str) -> CleanupResult:
+    context = resolve_server_context(paths, server_name)
+    return cleanup_runtime(context)
+
+
+def cleanup_target_runtime(paths: RepoPaths, target_name: str) -> CleanupResult:
+    context = resolve_target_context(paths, target_name)
+    return cleanup_runtime(context)
+
+
+def _cleanup_approved_target_runtime(
+    paths: RepoPaths,
+    target_name: str,
+    *,
+    handoff_kind: Optional[str],
+) -> CleanupResult:
+    if handoff_kind == MANAGED_SERVER_HANDOFF_KIND:
+        return _cleanup_managed_server_runtime(paths, target_name)
+    if handoff_kind == LEGACY_TARGET_HANDOFF_KIND:
+        return cleanup_target_runtime(paths, target_name)
+    return cleanup_server_runtime(paths, target_name)
+
+
 def _print_prepare_summary(confirmation_id: str) -> None:
-    print("reset prepare: this request records approval to wipe local workspace identity and remote runtime context")
-    print("reset prepare: reset execute will clean the active remote runtime first, then clear local overlay state")
-    print("reset prepare: local overlay state includes .workspace.local/state.json, .workspace.local/sessions/, .workspace.local/targets.yaml, .workspace.local/auth.yaml, and .workspace.local/repos.yaml")
+    print(
+        "reset prepare: this request records approval to wipe local workspace identity, managed servers, and approved-target cleanup"
+    )
+    print(
+        "reset prepare: reset execute will perform managed-server cleanup first, then approved-target cleanup if needed, before clearing local overlay state"
+    )
+    print("reset prepare: local overlay state includes .workspace.local/state.json, .workspace.local/sessions/, .workspace.local/servers.yaml, .workspace.local/targets.yaml, .workspace.local/auth.yaml, and .workspace.local/repos.yaml")
     print(f"reset prepare: confirmation id: {confirmation_id}")
     print(f"reset prepare: confirm with: {CONFIRMATION_PHRASE}")
 
@@ -81,8 +133,11 @@ def prepare_reset(paths: RepoPaths) -> int:
             "confirmation_phrase": CONFIRMATION_PHRASE,
         }
         approved_target = _current_target_from_state(paths)
+        approved_target_kind = _current_target_kind_from_state(paths)
         if approved_target:
             request["approved_target"] = approved_target
+        if approved_target_kind:
+            request["approved_target_kind"] = approved_target_kind
         paths.reset_request_file.write_text(
             json.dumps(request, indent=2) + "\n",
             encoding="utf-8",
@@ -106,6 +161,7 @@ def _cleanup_local_state(paths: RepoPaths) -> None:
             raise RuntimeError("failed to clean local workspace: .workspace.local/sessions is not a directory")
         shutil.rmtree(sessions_path)
     paths.local_targets_file.write_text("", encoding="utf-8")
+    paths.local_servers_file.write_text("version: 1\nservers: {}\n", encoding="utf-8")
     paths.local_auth_file.write_text("", encoding="utf-8")
     paths.local_repos_file.write_text("", encoding="utf-8")
 
@@ -113,22 +169,30 @@ def _cleanup_local_state(paths: RepoPaths) -> None:
 def cleanup_server_runtime(paths: RepoPaths, server_name: str) -> CleanupResult:
     try:
         context = resolve_server_context(paths, server_name)
-    except RemoteError:
+    except RemoteError as exc:
+        if not can_fallback_to_legacy_target(exc):
+            raise
         context = resolve_target_context(paths, server_name)
     return cleanup_runtime(context)
 
 
 def _cleanup_remote_state(request: Dict[str, Any], paths: RepoPaths) -> List[CleanupResult]:
     server_names = list_managed_server_names(paths)
-    if not server_names:
-        approved_target = request.get("approved_target")
-        if isinstance(approved_target, str) and approved_target.strip():
-            server_names = [approved_target.strip()]
+    approved_target = request.get("approved_target")
+    approved_target_kind = request.get("approved_target_kind")
+    if isinstance(approved_target, str) and approved_target.strip():
+        approved_target = approved_target.strip()
+    if isinstance(approved_target_kind, str) and approved_target_kind.strip():
+        approved_target_kind = approved_target_kind.strip()
+    else:
+        approved_target_kind = _current_target_kind_from_state(paths)
 
     results: List[CleanupResult] = []
+    cleaned_managed_servers = set()
     for server_name in server_names:
         try:
-            results.append(cleanup_server_runtime(paths, server_name))
+            results.append(_cleanup_managed_server_runtime(paths, server_name))
+            cleaned_managed_servers.add(server_name)
         except (RemoteError, RuntimeError) as exc:
             results.append(
                 CleanupResult(
@@ -137,6 +201,41 @@ def _cleanup_remote_state(request: Dict[str, Any], paths: RepoPaths) -> List[Cle
                     detail=str(exc),
                 )
             )
+    if isinstance(approved_target, str) and approved_target.strip():
+        if approved_target_kind is None:
+            raise RuntimeError(
+                "missing approved target handoff kind: rerun `vaws reset --prepare` first"
+            )
+        if approved_target_kind == MANAGED_SERVER_HANDOFF_KIND:
+            if approved_target not in cleaned_managed_servers:
+                try:
+                    results.append(_cleanup_managed_server_runtime(paths, approved_target))
+                except (RemoteError, RuntimeError) as exc:
+                    results.append(
+                        CleanupResult(
+                            server_name=approved_target,
+                            status="cleanup_failed",
+                            detail=str(exc),
+                        )
+                    )
+            return results
+        if approved_target_kind == LEGACY_TARGET_HANDOFF_KIND:
+            try:
+                results.append(
+                    _cleanup_approved_target_runtime(
+                        paths,
+                        approved_target,
+                        handoff_kind=approved_target_kind,
+                    )
+                )
+            except (RemoteError, RuntimeError) as exc:
+                results.append(
+                    CleanupResult(
+                        server_name=approved_target,
+                        status="cleanup_failed",
+                        detail=str(exc),
+                    )
+                )
     return results
 
 
@@ -215,7 +314,11 @@ def execute_reset(
         print("reset execute: confirmation phrase must exactly match the approved phrase")
         return 1
 
-    remote_results = _cleanup_remote_state(request, paths)
+    try:
+        remote_results = _cleanup_remote_state(request, paths)
+    except (RemoteError, RuntimeError) as exc:
+        print(f"reset execute: failed to clean remote runtime: {exc}")
+        return 1
     for result in remote_results:
         detail = f" ({result.detail})" if result.detail else ""
         print(f"reset execute: server {result.server_name}: {result.status}{detail}")

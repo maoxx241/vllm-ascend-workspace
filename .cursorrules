@@ -4,8 +4,10 @@
 - Treat `/vllm-workspace` as the canonical runtime root.
 - Keep `tools/vaws.py` as the internal implementation surface.
 - Keep `./setup` and `./sync` available as compatibility entrypoints.
-- Treat `.agents/skills/workspace-bootstrap/SKILL.md` as the first baseline bootstrap contract.
-- Treat `.agents/skills/workspace-fleet/SKILL.md` as the post-bootstrap server management contract.
+- Treat `.agents/skills/workspace-init/SKILL.md` as the staged workspace initialization contract.
+- Treat `.agents/skills/workspace-foundation/SKILL.md` as the local prerequisite readiness contract.
+- Treat `.agents/skills/workspace-git-profile/SKILL.md` as the repository identity and fork topology contract.
+- Treat `.agents/skills/workspace-fleet/SKILL.md` as the managed server lifecycle contract.
 - Treat `.agents/skills/workspace-reset/SKILL.md` as the destructive teardown contract.
 - Treat `.agents/skills/workspace-session-switch/SKILL.md` as the session lifecycle contract.
 - Treat `.agents/skills/workspace-sync/SKILL.md` as the session-oriented compatibility sync contract.

@@ -47,6 +47,12 @@ def test_public_guidance_uses_current_entrypoints_and_canonical_root():
         assert "process docs" not in text
         assert "process documentation" not in text
 
+    for text in (readme, agents_readme):
+        assert "workspace-init" in text
+        assert "workspace-foundation" in text
+        assert "workspace-git-profile" in text
+        assert "workspace-bootstrap" not in text
+
     assert ".agents/skills/" in readme
     assert ".agents/skills/" in agents_readme
     assert ".agents/skills/" in cursorrules
@@ -91,9 +97,12 @@ def test_public_repo_topology_example_stays_public_and_upstream_oriented():
     assert "git@github.com:" not in repos_example
 
 
-def test_public_docs_explain_upstream_defaults_and_local_origin_bootstrap():
+def test_public_docs_explain_upstream_defaults_and_staged_init_routing():
     repo = Path(__file__).resolve().parents[1]
     readme = (repo / "README.md").read_text(encoding="utf-8").lower()
+    init_skill = (repo / ".agents" / "skills" / "workspace-init" / "SKILL.md").read_text(
+        encoding="utf-8"
+    ).lower()
     bootstrap_skill = (
         repo / ".agents" / "skills" / "workspace-bootstrap" / "SKILL.md"
     ).read_text(encoding="utf-8").lower()
@@ -106,8 +115,16 @@ def test_public_docs_explain_upstream_defaults_and_local_origin_bootstrap():
         assert "origin" in text
         assert ".workspace.local/repos.yaml" in text
         assert "natural language" in text or "conversational" in text
+        assert "workspace-init" in text
+        assert "workspace-foundation" in text
+        assert "workspace-git-profile" in text
+        assert "workspace-bootstrap" not in text
 
-    assert "origin ownership" in bootstrap_skill
+    assert "staged" in init_skill
+    assert "workspace-foundation" in init_skill
+    assert "workspace-git-profile" in init_skill
+    assert "compatibility alias" in bootstrap_skill
+    assert "workspace-init" in bootstrap_skill
 
     for forbidden in (
         "reset --prepare",
@@ -117,11 +134,13 @@ def test_public_docs_explain_upstream_defaults_and_local_origin_bootstrap():
         assert forbidden not in bootstrap_skill
 
 
-def test_agents_md_routes_bootstrap_and_reset_to_skills():
+def test_agents_md_routes_first_class_workspace_skills():
     repo = Path(__file__).resolve().parents[1]
     agents = (repo / "AGENTS.md").read_text(encoding="utf-8").lower()
     for skill_name in (
-        "workspace-bootstrap",
+        "workspace-init",
+        "workspace-foundation",
+        "workspace-git-profile",
         "workspace-fleet",
         "workspace-reset",
         "workspace-session-switch",
@@ -129,6 +148,7 @@ def test_agents_md_routes_bootstrap_and_reset_to_skills():
     ):
         assert skill_name in agents
 
+    assert "workspace-bootstrap" not in agents
     assert "reset --prepare" not in agents
     assert "reset --execute" not in agents
     assert "must not skip prepare" not in agents
@@ -139,7 +159,9 @@ def test_agents_md_routes_bootstrap_and_reset_to_skills():
 def test_first_class_workspace_skills_and_internal_routing_refs_exist():
     repo = Path(__file__).resolve().parents[1]
     for skill_name in (
-        "workspace-bootstrap",
+        "workspace-init",
+        "workspace-foundation",
+        "workspace-git-profile",
         "workspace-fleet",
         "workspace-reset",
         "workspace-session-switch",
@@ -149,10 +171,17 @@ def test_first_class_workspace_skills_and_internal_routing_refs_exist():
         assert (skill_root / "SKILL.md").exists()
         assert (skill_root / "references" / "internal-routing.md").exists()
 
+    bootstrap_root = repo / ".agents" / "skills" / "workspace-bootstrap"
+    assert (bootstrap_root / "SKILL.md").exists()
+    assert (bootstrap_root / "references" / "internal-routing.md").exists()
+
 
 def test_internal_routing_refs_contain_command_mapping_and_related_tests():
     repo = Path(__file__).resolve().parents[1]
     for skill_name in (
+        "workspace-init",
+        "workspace-foundation",
+        "workspace-git-profile",
         "workspace-bootstrap",
         "workspace-fleet",
         "workspace-reset",
@@ -182,7 +211,9 @@ def test_first_class_workspace_skills_share_contract_shape():
         "## red flags",
     )
     for skill_name in (
-        "workspace-bootstrap",
+        "workspace-init",
+        "workspace-foundation",
+        "workspace-git-profile",
         "workspace-fleet",
         "workspace-reset",
         "workspace-session-switch",
@@ -201,7 +232,9 @@ def test_first_class_workspace_skills_share_contract_shape():
 def test_public_workspace_skill_contracts_do_not_require_exact_cli_syntax():
     repo = Path(__file__).resolve().parents[1]
     for skill_name in (
-        "workspace-bootstrap",
+        "workspace-init",
+        "workspace-foundation",
+        "workspace-git-profile",
         "workspace-fleet",
         "workspace-reset",
         "workspace-session-switch",

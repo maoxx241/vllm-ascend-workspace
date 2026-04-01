@@ -12,8 +12,10 @@ This repository keeps its workflow contract inside the workspace. Do not rely on
 
 ## Workflow Routing
 
-- Route first baseline initialization to `.agents/skills/workspace-bootstrap/SKILL.md`
-- Route post-bootstrap server management to `.agents/skills/workspace-fleet/SKILL.md`
+- Route staged initialization to `.agents/skills/workspace-init/SKILL.md`
+- Route local prerequisite readiness to `.agents/skills/workspace-foundation/SKILL.md`
+- Route repository identity and fork topology to `.agents/skills/workspace-git-profile/SKILL.md`
+- Route managed server lifecycle to `.agents/skills/workspace-fleet/SKILL.md`
 - Route destructive teardown to `.agents/skills/workspace-reset/SKILL.md`
 - Route session lifecycle changes to `.agents/skills/workspace-session-switch/SKILL.md`
 - Route sync status and compatibility sync flow to `.agents/skills/workspace-sync/SKILL.md`

@@ -7,8 +7,19 @@ import yaml
 
 from .config import RepoPaths
 from .gitflow import base_ref_for_repo
-from .remote import RemoteError, create_remote_session, resolve_target_context, switch_remote_session
+from .remote import (
+    RemoteError,
+    create_remote_session,
+    resolve_server_context,
+    resolve_target_context,
+    switch_remote_session,
+)
 from .runtime import read_state, write_state
+from .lifecycle_state import (
+    LEGACY_TARGET_HANDOFF_KIND,
+    MANAGED_SERVER_HANDOFF_KIND,
+    infer_current_target_kind,
+)
 
 
 def _session_manifest_path(paths: RepoPaths, session_name: str) -> Path:
@@ -50,9 +61,7 @@ def _read_state_for_session(paths: RepoPaths):
 
 
 def _build_manifest(paths: RepoPaths, session_name: str, state: Dict[str, Any]) -> Dict[str, Any]:
-    current_target = state.get("current_target")
-    if not isinstance(current_target, str) or not current_target.strip():
-        raise RemoteError("no current target: run `vaws target ensure <target>` first")
+    current_target = _current_target_from_state(state)
 
     runtime = state.get("runtime")
     workspace_root = "/vllm-workspace"
@@ -98,10 +107,40 @@ def _build_manifest(paths: RepoPaths, session_name: str, state: Dict[str, Any]) 
 
 
 def _target_context_from_state(paths: RepoPaths, state: Dict[str, Any]):
+    target_name = _current_target_from_state(state)
+    handoff_kind = _current_target_kind_from_state(paths, state)
+    if handoff_kind == MANAGED_SERVER_HANDOFF_KIND:
+        return resolve_server_context(paths, target_name)
+    if handoff_kind == LEGACY_TARGET_HANDOFF_KIND:
+        return resolve_target_context(paths, target_name)
+    raise RemoteError(
+        "missing current target handoff kind: rerun `vaws fleet add <server>` or `vaws target ensure <target>`"
+    )
+
+
+def _current_target_from_state(state: Dict[str, Any]) -> str:
     current_target = state.get("current_target")
     if not isinstance(current_target, str) or not current_target.strip():
-        raise RemoteError("no current target: run `vaws target ensure <target>` first")
-    return resolve_target_context(paths, current_target)
+        raise RemoteError("no current target: run `vaws fleet add <server>` first")
+    return current_target.strip()
+
+
+def _current_target_kind_from_state(paths: RepoPaths, state: Dict[str, Any]) -> str:
+    current_target_kind = state.get("current_target_kind")
+    if not isinstance(current_target_kind, str) or not current_target_kind.strip():
+        current_target = _current_target_from_state(state)
+        runtime = state.get("runtime")
+        inferred_kind = infer_current_target_kind(
+            paths,
+            current_target,
+            runtime if isinstance(runtime, dict) else None,
+        )
+        if inferred_kind is None:
+            raise RemoteError(
+                "missing current target handoff kind: rerun `vaws fleet add <server>` or `vaws target ensure <target>`"
+            )
+        return inferred_kind
+    return current_target_kind.strip()
 
 
 def create_session(paths: RepoPaths, session_name: str) -> int:

@@ -17,6 +17,7 @@ Use this file only after the reset contract has been selected.
 - downgrade the user-visible result to `partial` whenever any per-server cleanup result is `unreachable` or `cleanup_failed`, even if the command itself completes
 - restore repo remotes to community defaults
 - treat stale authorization state as invalid
+- derive cleanup ownership from lifecycle state and current target handoff kind rather than bootstrap.completed
 
 ## Internal State Touched
 
