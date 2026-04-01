@@ -1185,13 +1185,34 @@ def _run_docker_exec(ctx: TargetContext, script: str) -> subprocess.CompletedPro
 
 
 def _probe_container_ssh(ctx: TargetContext) -> bool:
+    status, _detail = _probe_container_ssh_transport(ctx)
+    return status == "ready"
+
+
+def _probe_container_ssh_transport(ctx: TargetContext) -> tuple[str, str]:
     probe = subprocess.run(
         _ssh_base_command(ctx, port=ctx.runtime.ssh_port, username="root") + ["true"],
         text=True,
         capture_output=True,
         check=False,
     )
-    return probe.returncode == 0
+    if probe.returncode == 0:
+        return "ready", "container SSH probe succeeded"
+    return "needs_repair", (
+        probe.stderr or probe.stdout or "container SSH probe failed"
+    ).strip()
+
+
+def _probe_docker_exec_transport(ctx: TargetContext) -> tuple[str, str]:
+    try:
+        probe = _run_docker_exec(ctx, "true")
+    except RemoteError as exc:
+        return "needs_repair", str(exc)
+    if probe.returncode == 0:
+        return "ready", "docker exec probe succeeded"
+    return "needs_repair", (
+        probe.stderr or probe.stdout or "docker exec probe failed"
+    ).strip()
 
 
 def _bootstrap_container_runtime(ctx: TargetContext) -> str:
@@ -1375,44 +1396,52 @@ def _verify_simulation_runtime(ctx: TargetContext) -> VerificationResult:
 
 
 def _verify_host_runtime(ctx: TargetContext) -> VerificationResult:
-    probe = subprocess.run(
-        _ssh_base_command(ctx) + ["true"],
-        text=True,
-        capture_output=True,
-        check=False,
+    container_ssh_status, container_ssh_detail = _probe_container_ssh_transport(ctx)
+    container_ssh_check = VerificationCheck(
+        name="container_ssh",
+        status=container_ssh_status,
+        detail=container_ssh_detail,
     )
-    if probe.returncode != 0:
-        return VerificationResult.needs_repair(
-            summary=f"unable to verify SSH access to host {ctx.host.host}",
+    if container_ssh_status == "ready":
+        return VerificationResult.ready(
+            summary=f"runtime ready for host {ctx.host.host} via container ssh",
             runtime=_verification_runtime_payload(
                 ctx,
-                transport="ssh",
+                transport="container-ssh",
+                container_endpoint=f"ssh://root@{ctx.host.host}:{ctx.runtime.ssh_port}",
+            ),
+            checks=[container_ssh_check],
+        )
+
+    docker_exec_status, docker_exec_detail = _probe_docker_exec_transport(ctx)
+    docker_exec_check = VerificationCheck(
+        name="docker_exec",
+        status=docker_exec_status,
+        detail=docker_exec_detail,
+    )
+    if docker_exec_status == "ready":
+        return VerificationResult.ready(
+            summary=f"runtime ready for host {ctx.host.host} via docker exec",
+            runtime=_verification_runtime_payload(
+                ctx,
+                transport="docker-exec",
                 container_endpoint=(
-                    f"ssh://{ctx.credential.username}@{ctx.host.host}:{ctx.runtime.ssh_port}"
+                    f"docker-exec://{ctx.credential.username}@{ctx.host.host}/{ctx.runtime.container_name}"
                 ),
             ),
-            checks=[
-                VerificationCheck(
-                    name="ssh_access",
-                    status="needs_repair",
-                    detail=(probe.stderr or probe.stdout or "SSH probe failed").strip(),
-                )
-            ],
+            checks=[container_ssh_check, docker_exec_check],
         )
-    return VerificationResult.ready(
-        summary=f"runtime ready for host {ctx.host.host}",
+
+    return VerificationResult.needs_repair(
+        summary=f"runtime unavailable for host {ctx.host.host}",
         runtime=_verification_runtime_payload(
             ctx,
-            transport="ssh",
-            container_endpoint=f"ssh://{ctx.credential.username}@{ctx.host.host}:{ctx.runtime.ssh_port}",
+            transport="unknown",
+            container_endpoint=(
+                f"docker-exec://{ctx.credential.username}@{ctx.host.host}/{ctx.runtime.container_name}"
+            ),
         ),
-        checks=[
-            VerificationCheck(
-                name="ssh_access",
-                status="ready",
-                detail="SSH probe succeeded",
-            )
-        ],
+        checks=[container_ssh_check, docker_exec_check],
     )
 
 
