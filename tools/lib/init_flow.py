@@ -35,6 +35,8 @@ from .secret_boundary import (
     require_pre_staged_env_handle,
 )
 from .runtime import read_state
+from .runtime import update_state
+from .repo_targets import resolve_repo_targets
 
 
 @dataclass(frozen=True)
@@ -54,9 +56,12 @@ class InitRequest:
     runtime_bootstrap_mode: str = DEFAULT_RUNTIME_BOOTSTRAP_MODE
     vllm_origin_url: Optional[str] = None
     vllm_ascend_origin_url: Optional[str] = None
+    vllm_upstream_tag: Optional[str] = None
+    vllm_ascend_upstream_branch: Optional[str] = None
     git_auth_mode: str = "ssh-key"
     git_key_path: Optional[str] = None
     git_token_env: Optional[str] = None
+    require_feature_branch: bool = False
 
 
 def _optional_non_empty(value: Optional[str]) -> Optional[str]:
@@ -83,9 +88,14 @@ def init_request_from_args(args: Any) -> InitRequest:
         runtime_bootstrap_mode=DEFAULT_RUNTIME_BOOTSTRAP_MODE,
         vllm_origin_url=_optional_non_empty(args.vllm_origin_url),
         vllm_ascend_origin_url=_optional_non_empty(args.vllm_ascend_origin_url),
+        vllm_upstream_tag=_optional_non_empty(getattr(args, "vllm_upstream_tag", None)),
+        vllm_ascend_upstream_branch=_optional_non_empty(
+            getattr(args, "vllm_ascend_upstream_branch", None)
+        ),
         git_auth_mode=args.git_auth_mode,
         git_key_path=args.git_key_path,
         git_token_env=args.git_token_env,
+        require_feature_branch=bool(getattr(args, "require_feature_branch", False)),
     )
 
 
@@ -298,6 +308,16 @@ def _git_profile_needs_input(paths: RepoPaths) -> bool:
     return git_profile_state.get("status") == "needs_input"
 
 
+def _record_repo_targets(paths: RepoPaths, request: InitRequest) -> None:
+    targets = resolve_repo_targets(
+        paths,
+        vllm_upstream_tag=request.vllm_upstream_tag,
+        vllm_ascend_upstream_branch=request.vllm_ascend_upstream_branch,
+        require_feature_branch=request.require_feature_branch,
+    )
+    update_state(paths, repo_targets=targets.to_mapping())
+
+
 def run_init(paths: RepoPaths, request: InitRequest) -> int:
     try:
         _ensure_overlay(paths)
@@ -327,6 +347,7 @@ def run_init(paths: RepoPaths, request: InitRequest) -> int:
 
         _ensure_requested_git_auth_secret_refs(request)
         _preserve_requested_git_auth(paths, request)
+        _record_repo_targets(paths, request)
 
         if requested_mode == BOOTSTRAP_MODE_LOCAL_ONLY:
             print("init: ready (local-only)")

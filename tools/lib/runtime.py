@@ -52,3 +52,10 @@ def write_state(paths: RepoPaths, state: Dict[str, Any]) -> None:
         json.dumps(normalized_state, indent=2) + "\n",
         encoding="utf-8",
     )
+
+
+def update_state(paths: RepoPaths, **updates: Any) -> Dict[str, Any]:
+    state = read_state(paths)
+    state.update(updates)
+    write_state(paths, state)
+    return state

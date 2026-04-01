@@ -73,6 +73,13 @@ def vaws_repo(tmp_path: Path) -> Path:
         ),
         encoding="utf-8",
     )
+    _init_git_repo(repo, "https://github.com/example/vllm-ascend-workspace.git")
+    _run(["git", "add", ".gitmodules"], cwd=repo)
+    _run(["git", "commit", "-m", "add gitmodules"], cwd=repo)
+    _run(["git", "update-ref", "refs/remotes/origin/main", "HEAD"], cwd=repo)
+    _run(["git", "update-ref", "refs/remotes/origin/release", "HEAD"], cwd=repo)
+    _run(["git", "update-ref", "refs/remotes/upstream/main", "HEAD"], cwd=repo)
+    _run(["git", "update-ref", "refs/remotes/upstream/release", "HEAD"], cwd=repo)
     _init_git_repo(repo / "vllm", "https://github.com/vllm-project/vllm.git")
     _init_git_repo(
         repo / "vllm-ascend",
