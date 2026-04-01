@@ -67,6 +67,14 @@ PUBLIC_BODY_FORBIDDEN_TERMS = (
     "workspace-session-switch",
     "workspace-sync",
 )
+LEGACY_DISCOVERABLE_SKILLS = (
+    "workspace-foundation",
+    "workspace-git-profile",
+    "workspace-fleet",
+    "workspace-session-switch",
+    "workspace-sync",
+    "workspace-bootstrap",
+)
 
 
 def _skill_text(skill_name: str) -> str:
@@ -153,3 +161,8 @@ def test_never_expose_sections_contain_concrete_hidden_items():
             or "overlay" in body
             or "secret" in body
         )
+
+
+def test_legacy_discoverable_skill_roots_are_absent():
+    for skill_name in LEGACY_DISCOVERABLE_SKILLS:
+        assert not (ROOT / ".agents" / "skills" / skill_name).exists()

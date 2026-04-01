@@ -26,6 +26,14 @@ LEGACY_PUBLIC_VOCAB = (
     "session",
     "sync",
 )
+LEGACY_DISCOVERABLE_SKILLS = (
+    "workspace-foundation",
+    "workspace-git-profile",
+    "workspace-fleet",
+    "workspace-session-switch",
+    "workspace-sync",
+    "workspace-bootstrap",
+)
 
 
 def _text(path: str) -> str:
@@ -101,6 +109,11 @@ def test_first_contact_docs_keep_repo_context_without_legacy_workflow_map():
 def test_profiling_analysis_remains_discoverable_during_public_surface_migration():
     profiling_skill = ROOT / ".agents" / "skills" / "profiling-analysis" / "SKILL.md"
     assert profiling_skill.exists()
+
+
+def test_legacy_discoverable_lifecycle_skills_are_removed():
+    for skill_name in LEGACY_DISCOVERABLE_SKILLS:
+        assert not (ROOT / ".agents" / "skills" / skill_name).exists()
 
 
 def test_public_skill_roots_and_internal_routing_refs_use_delegation_shape():
