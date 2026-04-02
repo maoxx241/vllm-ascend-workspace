@@ -20,12 +20,13 @@ def test_public_top_level_commands_match_canonical_surface():
     parser = vaws.build_parser()
     choices = _subparser_choices(parser)
 
-    assert {"init", "machine", "serving", "benchmark", "reset", "doctor", "internal"} == set(choices)
+    assert {"init", "machine", "serving", "benchmark", "reset", "doctor"} == set(choices)
     assert "foundation" not in choices
     assert "git-profile" not in choices
     assert "fleet" not in choices
     assert "target" not in choices
     assert "sync" not in choices
+    assert "internal" not in choices
 
 
 def test_reset_uses_subcommands_not_boolean_flags():
@@ -33,14 +34,6 @@ def test_reset_uses_subcommands_not_boolean_flags():
     args = parser.parse_args(["reset", "prepare"])
     assert args.command == "reset"
     assert args.reset_command == "prepare"
-
-
-def test_internal_remotes_normalize_parses():
-    parser = vaws.build_parser()
-    args = parser.parse_args(["internal", "remotes", "normalize"])
-    assert args.command == "internal"
-    assert args.internal_command == "remotes"
-    assert args.remotes_command == "normalize"
 
 
 def test_canonical_code_paths_do_not_import_retired_modules():

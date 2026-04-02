@@ -7,7 +7,6 @@ Use this file only after the public `benchmark` contract has been selected.
 ## Sanctioned Adapter Surface
 
 - Ordinary execution surface: `tools/vaws.py benchmark run`
-- Compatibility-only adapter: `tools/vaws.py internal acceptance run` may consume ready capabilities during migration, but it is not the public benchmark surface.
 - Do not route a normal agent directly to `tools/lib/*.py`; library modules remain implementation owners behind the sanctioned adapter surface.
 
 ## Internal Delegation
@@ -42,6 +41,5 @@ Use this file only after the public `benchmark` contract has been selected.
 ## Related Tests
 
 - `tests/test_vaws_benchmark.py`
-- `tests/test_vaws_acceptance.py`
 - `tests/test_workspace_skill_contracts.py`
 - `tests/test_workspace_skill_routing_contracts.py`

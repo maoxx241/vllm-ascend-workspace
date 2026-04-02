@@ -35,9 +35,5 @@ class RepoPaths:
         return self.local_overlay / "repos.yaml"
 
     @property
-    def local_sessions_dir(self) -> Path:
-        return self.local_overlay / "sessions"
-
-    @property
     def reset_request_file(self) -> Path:
         return self.local_overlay / "reset-request.json"

@@ -764,31 +764,6 @@ def _runtime_state_file(runtime_root: Path) -> Path:
     return runtime_root / ".vaws" / "runtime.json"
 
 
-def _runtime_wrapper_text(workspace_root: str) -> str:
-    return "\n".join(
-        [
-            "#!/usr/bin/env bash",
-            "set -euo pipefail",
-            'session_name="${1:-}"',
-            'if [ -z "${session_name}" ]; then',
-            '  echo "usage: enter-env <session> -- <command>" >&2',
-            "  exit 2",
-            "fi",
-            "shift",
-            'if [ "${1:-}" = "--" ]; then',
-            "  shift",
-            "fi",
-            f'venv_path="{workspace_root}/.vaws/sessions/${{session_name}}/.venv"',
-            'if [ ! -x "${venv_path}/bin/python" ]; then',
-            '  python3 -m venv "${venv_path}"',
-            "fi",
-            'source "${venv_path}/bin/activate"',
-            'exec "$@"',
-            "",
-        ]
-    )
-
-
 def _ensure_symlink(link_path: Path, target_path: Path) -> None:
     if link_path.is_symlink():
         if link_path.resolve() == target_path.resolve():
@@ -809,47 +784,6 @@ def _ensure_symlink(link_path: Path, target_path: Path) -> None:
             link_path.unlink()
     link_path.parent.mkdir(parents=True, exist_ok=True)
     link_path.symlink_to(target_path)
-
-
-def _is_git_repo(path: Path) -> bool:
-    return (path / ".git").exists()
-
-
-def _ensure_local_worktree(
-    source_repo: Path,
-    destination: Path,
-    branch: str,
-    base_ref: str,
-) -> None:
-    if _is_git_repo(destination):
-        return
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    if not _is_git_repo(source_repo):
-        destination.mkdir(parents=True, exist_ok=True)
-        return
-
-    result = subprocess.run(
-        [
-            "git",
-            "-C",
-            str(source_repo),
-            "worktree",
-            "add",
-            "--force",
-            "-B",
-            branch,
-            str(destination),
-            base_ref,
-        ],
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        raise RemoteError(
-            f"failed to materialize worktree {destination.name}: "
-            f"{(result.stderr or result.stdout).strip()}"
-        )
 
 
 def _simulation_runtime_root(ctx: TargetContext) -> Path:
@@ -878,14 +812,6 @@ def _ensure_simulation_runtime(paths: RepoPaths, ctx: TargetContext) -> Dict[str
     runtime_root = _simulation_runtime_root(ctx)
     reused = runtime_root.exists()
     (runtime_root / ".vaws" / "targets").mkdir(parents=True, exist_ok=True)
-    (runtime_root / ".vaws" / "sessions").mkdir(parents=True, exist_ok=True)
-    wrapper_path = runtime_root / ".vaws" / "bin" / "enter-env"
-    wrapper_path.parent.mkdir(parents=True, exist_ok=True)
-    wrapper_path.write_text(
-        _runtime_wrapper_text(ctx.runtime.workspace_root),
-        encoding="utf-8",
-    )
-    wrapper_path.chmod(0o755)
 
     control_repo_path = runtime_root / "workspace"
     _ensure_symlink(control_repo_path, paths.root)
@@ -923,45 +849,6 @@ def _ensure_simulation_runtime(paths: RepoPaths, ctx: TargetContext) -> Dict[str
         "login_user": ctx.host.login_user,
         "host_workspace_path": str(control_repo_path),
     }
-
-
-def _ensure_simulation_session(paths: RepoPaths, ctx: TargetContext, manifest: Dict[str, Any]) -> None:
-    runtime_root = _simulation_runtime_root(ctx)
-    session_name = manifest["name"]
-    session_root = runtime_root / ".vaws" / "sessions" / session_name
-    session_root.mkdir(parents=True, exist_ok=True)
-    (session_root / ".venv").mkdir(parents=True, exist_ok=True)
-    (session_root / "manifest.yaml").write_text(
-        yaml.safe_dump(manifest, sort_keys=False),
-        encoding="utf-8",
-    )
-    control_repo = runtime_root / "workspace"
-    _ensure_local_worktree(
-        control_repo / "vllm",
-        session_root / "vllm",
-        manifest["vllm_ref"]["branch"],
-        manifest["vllm_ref"]["base_ref"],
-    )
-    _ensure_local_worktree(
-        control_repo / "vllm-ascend",
-        session_root / "vllm-ascend",
-        manifest["vllm_ascend_ref"]["branch"],
-        manifest["vllm_ascend_ref"]["base_ref"],
-    )
-
-
-def _switch_simulation_session(ctx: TargetContext, session_name: str) -> None:
-    runtime_root = _simulation_runtime_root(ctx)
-    session_root = runtime_root / ".vaws" / "sessions" / session_name
-    if not session_root.is_dir():
-        raise RemoteError(f"unknown session: {session_name}")
-
-    _ensure_symlink(runtime_root / ".vaws" / "current", session_root)
-    _ensure_symlink(runtime_root / "vllm", session_root / "vllm")
-    _ensure_symlink(runtime_root / "vllm-ascend", session_root / "vllm-ascend")
-    runtime_state = _load_runtime_state(runtime_root)
-    runtime_state["current_session"] = session_name
-    _write_runtime_state(runtime_root, runtime_state)
 
 
 def _find_public_key_path() -> Path:
@@ -1367,18 +1254,11 @@ def _probe_docker_exec_transport(ctx: TargetContext) -> tuple[str, str]:
 
 def _bootstrap_container_runtime(ctx: TargetContext) -> str:
     public_key = _find_public_key_path().read_text(encoding="utf-8").strip()
-    wrapper_text = _runtime_wrapper_text(ctx.runtime.workspace_root)
     bootstrap_script = "\n".join(
         [
             "set -euo pipefail",
             f"mkdir -p {shlex.quote(ctx.runtime.workspace_root)}",
             f"mkdir -p {shlex.quote(ctx.runtime.workspace_root + '/.vaws/targets')}",
-            f"mkdir -p {shlex.quote(ctx.runtime.workspace_root + '/.vaws/sessions')}",
-            f"mkdir -p {shlex.quote(ctx.runtime.workspace_root + '/.vaws/bin')}",
-            f"cat > {shlex.quote(ctx.runtime.workspace_root + '/.vaws/bin/enter-env')} <<'EOF'",
-            wrapper_text.rstrip(),
-            "EOF",
-            f"chmod +x {shlex.quote(ctx.runtime.workspace_root + '/.vaws/bin/enter-env')}",
             f"git config --global --add safe.directory {shlex.quote(ctx.runtime.workspace_root + '/workspace')}",
             f"git config --global --add safe.directory {shlex.quote(ctx.runtime.workspace_root + '/workspace/vllm')}",
             f"git config --global --add safe.directory {shlex.quote(ctx.runtime.workspace_root + '/workspace/vllm-ascend')}",
@@ -1436,7 +1316,7 @@ def _run_container_command(
     return _run_docker_exec(ctx, script)
 
 
-def _write_host_runtime_state(ctx: TargetContext, transport: str, current_session: Optional[str] = None) -> None:
+def _write_host_runtime_state(ctx: TargetContext, transport: str) -> None:
     runtime_state = {
         "target": ctx.name,
         "workspace_root": ctx.runtime.workspace_root,
@@ -1452,8 +1332,6 @@ def _write_host_runtime_state(ctx: TargetContext, transport: str, current_sessio
             "port": ctx.runtime.ssh_port,
         },
     }
-    if current_session:
-        runtime_state["current_session"] = current_session
     script = "\n".join(
         [
             "set -e",
@@ -1632,64 +1510,6 @@ def run_detached_runtime_command(
         ]
     )
     return run_runtime_command(ctx, transport, wrapped)
-
-
-def create_remote_session(paths: RepoPaths, ctx: TargetContext, manifest: Dict[str, Any], transport: str) -> None:
-    if ctx.credential.mode == "local-simulation":
-        _ensure_simulation_session(paths, ctx, manifest)
-        return
-
-    session_name = manifest["name"]
-    session_root = f"{ctx.runtime.workspace_root}/.vaws/sessions/{session_name}"
-    manifest_text = yaml.safe_dump(manifest, sort_keys=False).rstrip()
-    script = "\n".join(
-        [
-            "set -e",
-            f"mkdir -p {shlex.quote(session_root)}",
-            f"mkdir -p {shlex.quote(session_root + '/.venv')}",
-            f"cat > {shlex.quote(session_root + '/manifest.yaml')} <<'EOF'",
-            manifest_text,
-            "EOF",
-            f"if [ ! -e {shlex.quote(session_root + '/vllm/.git')} ] && [ ! -f {shlex.quote(session_root + '/vllm/.git')} ]; then",
-            f"  rm -rf {shlex.quote(session_root + '/vllm')}",
-            f"  git -C {shlex.quote(ctx.runtime.workspace_root + '/workspace/vllm')} worktree add --force -B {shlex.quote(manifest['vllm_ref']['branch'])} {shlex.quote(session_root + '/vllm')} {shlex.quote(manifest['vllm_ref']['base_ref'])}",
-            "fi",
-            f"if [ ! -e {shlex.quote(session_root + '/vllm-ascend/.git')} ] && [ ! -f {shlex.quote(session_root + '/vllm-ascend/.git')} ]; then",
-            f"  rm -rf {shlex.quote(session_root + '/vllm-ascend')}",
-            f"  git -C {shlex.quote(ctx.runtime.workspace_root + '/workspace/vllm-ascend')} worktree add --force -B {shlex.quote(manifest['vllm_ascend_ref']['branch'])} {shlex.quote(session_root + '/vllm-ascend')} {shlex.quote(manifest['vllm_ascend_ref']['base_ref'])}",
-            "fi",
-        ]
-    )
-    result = _run_container_command(ctx, transport, script)
-    if result.returncode != 0:
-        raise RemoteError(
-            f"failed to materialize remote session '{session_name}': {(result.stderr or result.stdout).strip()}"
-        )
-
-
-def switch_remote_session(ctx: TargetContext, session_name: str, transport: str) -> None:
-    if ctx.credential.mode == "local-simulation":
-        _switch_simulation_session(ctx, session_name)
-        return
-
-    session_root = f"{ctx.runtime.workspace_root}/.vaws/sessions/{session_name}"
-    script = "\n".join(
-        [
-            "set -e",
-            f"test -d {shlex.quote(session_root)}",
-            f"ln -sfn {shlex.quote(session_root)} {shlex.quote(ctx.runtime.workspace_root + '/.vaws/current')}",
-            f"rm -rf {shlex.quote(ctx.runtime.workspace_root + '/vllm')}",
-            f"rm -rf {shlex.quote(ctx.runtime.workspace_root + '/vllm-ascend')}",
-            f"ln -sfn {shlex.quote(ctx.runtime.workspace_root + '/.vaws/current/vllm')} {shlex.quote(ctx.runtime.workspace_root + '/vllm')}",
-            f"ln -sfn {shlex.quote(ctx.runtime.workspace_root + '/.vaws/current/vllm-ascend')} {shlex.quote(ctx.runtime.workspace_root + '/vllm-ascend')}",
-        ]
-    )
-    result = _run_container_command(ctx, transport, script)
-    if result.returncode != 0:
-        raise RemoteError(
-            f"failed to switch remote session '{session_name}': {(result.stderr or result.stdout).strip()}"
-        )
-    _write_host_runtime_state(ctx, transport, current_session=session_name)
 
 
 def _destroy_simulation_runtime(ctx: TargetContext) -> None:
