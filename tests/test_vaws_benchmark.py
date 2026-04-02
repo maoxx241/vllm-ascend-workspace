@@ -6,6 +6,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from tools.lib.capability_state import write_capability_leaf
 from tools.lib.benchmark import (
     _extract_remote_marker_block,
     BenchmarkPreset,
@@ -88,10 +89,15 @@ def test_build_benchmark_command_shell_quotes_runtime_paths_and_arguments():
 def test_extract_remote_marker_block_quotes_output_path(monkeypatch, vaws_repo):
     paths = RepoPaths(root=vaws_repo)
     seed_overlay_files(vaws_repo)
-    update_state(
+    write_capability_leaf(
         paths,
-        current_target="lab-a",
-        runtime={"transport": "ssh"},
+        ("servers", "lab-a", "container_access"),
+        {
+            "status": "ready",
+            "detail": "container ssh ok",
+            "observed_at": "2026-04-01T12:00:00Z",
+            "evidence_source": "machine-management",
+        },
     )
     captured = {}
 
@@ -134,7 +140,7 @@ def test_extract_remote_marker_block_quotes_output_path(monkeypatch, vaws_repo):
     )
 
     assert result == "rows"
-    assert captured["transport"] == "ssh"
+    assert captured["transport"] == "container-ssh"
     assert captured["script"] == (
         "sed -n '/MARKDOWN_ROWS_BEGIN/,/MARKDOWN_ROWS_END/p' "
         f"{shlex.quote('/tmp/results dir/output; rm -rf /tmp/nope')}"
@@ -152,6 +158,16 @@ def test_run_benchmark_preset_merges_existing_benchmark_runs(monkeypatch, vaws_r
                 "output_path": "/tmp/older.out",
                 "marker_block": "older rows",
             }
+        },
+    )
+    write_capability_leaf(
+        paths,
+        ("servers", "lab-a", "container_access"),
+        {
+            "status": "ready",
+            "detail": "container ssh ok",
+            "observed_at": "2026-04-01T12:00:00Z",
+            "evidence_source": "machine-management",
         },
     )
 
@@ -179,7 +195,6 @@ def test_run_benchmark_preset_merges_existing_benchmark_runs(monkeypatch, vaws_r
             ),
         ),
     )
-    monkeypatch.setattr("tools.lib.benchmark._current_runtime_transport", lambda *_args: "docker-exec")
     monkeypatch.setattr(
         "tools.lib.benchmark.run_runtime_command",
         lambda *_args: type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})(),
@@ -196,6 +211,15 @@ def test_run_benchmark_preset_merges_existing_benchmark_runs(monkeypatch, vaws_r
     benchmark_runs = read_state(paths)["benchmark_runs"]
     assert benchmark_runs["older-run"]["output_path"] == "/tmp/older.out"
     assert benchmark_runs["qwen3-35b-tp4"]["server_name"] == "lab-a"
+
+
+def test_run_benchmark_preset_requires_container_ssh(vaws_repo, capsys):
+    paths = RepoPaths(root=vaws_repo)
+
+    result = run_benchmark_preset(paths, "lab-a", "qwen3-35b-tp4")
+
+    assert result == 1
+    assert "container_ssh" in capsys.readouterr().out
 
 
 def test_benchmark_cli_run_delegates_to_backend(monkeypatch, vaws_repo):

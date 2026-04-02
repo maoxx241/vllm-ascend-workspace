@@ -7,7 +7,6 @@ from typing import Optional
 from .benchmark import run_benchmark_preset
 from .code_parity import ensure_code_parity
 from .config import RepoPaths
-from .init_flow import InitRequest, run_init
 from .repo_targets import (
     WorkspaceTargets,
     materialize_workspace_targets,
@@ -19,9 +18,6 @@ from .runtime_env import ensure_runtime_environment
 @dataclass(frozen=True)
 class AcceptanceRequest:
     server_name: str
-    server_host: str
-    server_user: str
-    server_password_env: Optional[str]
     vllm_origin_url: Optional[str]
     vllm_ascend_origin_url: Optional[str]
     vllm_upstream_tag: Optional[str]
@@ -95,17 +91,7 @@ def run_benchmark_for_acceptance(paths: RepoPaths, request: AcceptanceRequest) -
 
 def run_acceptance(root: Path, request: AcceptanceRequest) -> int:
     paths = RepoPaths(root=root)
-    init_request = InitRequest(
-        server_host=request.server_host,
-        server_name=request.server_name,
-        server_user=request.server_user,
-        server_password_env=request.server_password_env,
-        vllm_origin_url=request.vllm_origin_url,
-        vllm_ascend_origin_url=request.vllm_ascend_origin_url,
-    )
     try:
-        if run_init(paths, init_request) != 0:
-            return 1
         if ensure_remote_baseline_for_acceptance(paths, request) != 0:
             return 1
         desired = materialize_requested_targets_for_acceptance(paths, request)

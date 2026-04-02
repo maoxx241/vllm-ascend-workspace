@@ -9,12 +9,20 @@ FIRST_CLASS_SKILLS = {
             ("git setup", "first machine"),
             ("examples include, but are not limited to:",),
         ),
+        "description_groups": (
+            ("first-time",),
+            ("recovery",),
+        ),
     },
     "machine-management": {
         "intent_groups": (
             ("attach a machine", "verify whether a machine is ready"),
             ("remove a machine", "machine attach"),
             ("examples include, but are not limited to:",),
+        ),
+        "description_groups": (
+            ("after setup",),
+            ("ongoing",),
         ),
     },
     "benchmark": {
@@ -36,10 +44,13 @@ REQUIRED_SECTIONS = (
     "## Overview",
     "## When to Use",
     "## User-Visible Output Contract",
+    "## Auth Boundary",
     "## Never Expose",
+    "## Required Capabilities",
     "## Default Inference Rules",
     "## Cross-Skill Boundary",
     "## Failure Handling Notes",
+    "## Failure Routing",
     "## Security Notes",
     "## Common Mistakes",
     "## Red Flags",
@@ -121,6 +132,22 @@ def test_first_class_workspace_skill_descriptions_are_trigger_only():
             )
 
 
+def test_workspace_init_and_machine_management_descriptions_encode_trigger_split():
+    for skill_name in ("workspace-init", "machine-management"):
+        description = _description_line(skill_name)
+        for group in FIRST_CLASS_SKILLS[skill_name]["description_groups"]:
+            assert any(marker.lower() in description for marker in group), (
+                f"{skill_name} missing description signal group: {group}"
+            )
+
+
+def test_machine_management_skill_mentions_machine_vocabulary():
+    text = _skill_text("machine-management").lower()
+    assert "machine add" in text
+    assert "fleet add" not in text
+    assert "fleet verify" not in text
+
+
 def test_when_to_use_sections_are_intent_led_and_non_exhaustive():
     for skill_name, expectations in FIRST_CLASS_SKILLS.items():
         when_to_use = _section_body(skill_name, "## When to Use").lower()
@@ -161,6 +188,108 @@ def test_never_expose_sections_contain_concrete_hidden_items():
             or "overlay" in body
             or "secret" in body
         )
+
+
+def test_auth_boundary_sections_encode_allowed_and_forbidden_prompts():
+    expected_markers = {
+        "workspace-init": (
+            "github login",
+            "server password",
+            "optional first-machine",
+            "needs_input",
+        ),
+        "machine-management": (
+            "bare-metal",
+            "password bootstrap",
+            "github login",
+            "container password",
+        ),
+        "benchmark": (
+            "allowed: none",
+            "forbidden",
+            "auth prompt",
+            "machine-management",
+        ),
+        "workspace-reset": (
+            "allowed: none",
+            "forbidden",
+            "auth prompt",
+            "blocked",
+        ),
+    }
+    for skill_name, markers in expected_markers.items():
+        body = _section_body(skill_name, "## Auth Boundary").lower()
+        for marker in markers:
+            assert marker in body, f"{skill_name} missing auth marker: {marker}"
+
+
+def test_required_capabilities_sections_name_canonical_capability_leaves():
+    expected_markers = {
+        "workspace-init": (
+            "git_auth",
+            "repo_topology",
+            "host_access",
+            "container_access",
+        ),
+        "machine-management": (
+            "host_access",
+            "container_access",
+            "code_parity",
+            "runtime_env",
+        ),
+        "benchmark": (
+            "git_auth",
+            "repo_topology",
+            "host_access",
+            "container_access",
+            "code_parity",
+            "runtime_env",
+        ),
+        "workspace-reset": (
+            "known_hosts",
+            "servers",
+            "sessions",
+            "targets",
+        ),
+    }
+    for skill_name, markers in expected_markers.items():
+        body = _section_body(skill_name, "## Required Capabilities").lower()
+        for marker in markers:
+            assert marker in body, (
+                f"{skill_name} missing required capability marker: {marker}"
+            )
+
+
+def test_failure_routing_sections_redirect_to_canonical_skills():
+    expected_markers = {
+        "workspace-init": (
+            "git_auth",
+            "repo_topology",
+            "machine-management",
+        ),
+        "machine-management": (
+            "workspace-init",
+            "host_access",
+            "container_access",
+        ),
+        "benchmark": (
+            "workspace-init",
+            "machine-management",
+            "runtime_env",
+            "code_parity",
+        ),
+        "workspace-reset": (
+            "workspace-reset",
+            "partial",
+            "machine-management",
+        ),
+    }
+    for skill_name, markers in expected_markers.items():
+        body = _section_body(skill_name, "## Failure Routing").lower()
+        for marker in markers:
+            assert marker in body, (
+                f"{skill_name} missing failure routing marker: {marker}"
+            )
 
 
 def test_legacy_discoverable_skill_roots_are_absent():

@@ -48,7 +48,7 @@ def seed_overlay_files(repo: Path) -> None:
         encoding="utf-8",
     )
     (overlay / "state.json").write_text(
-        '{"schema_version": 1}\n',
+        '{"schema_version": 2, "servers": {}}\n',
         encoding="utf-8",
     )
 

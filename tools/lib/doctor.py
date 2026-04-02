@@ -1,15 +1,15 @@
 import configparser
-import json
+import subprocess
 from pathlib import Path
-from typing import Optional
+from typing import Dict, Optional
 
 import yaml
 
+from .capability_state import diagnose_state_residue, read_capability_state
 from .config import RepoPaths
-from .overlay import OVERLAY_SCHEMA_VERSION, ensure_overlay_layout
+from .overlay import ensure_overlay_layout
 
 OVERLAY_FILES = ("servers.yaml", "repos.yaml", "auth.yaml", "state.json")
-BOOTSTRAP_MODES = {"remote-first", "server", "local-only"}
 
 
 def _declared_submodule_paths(root: Path):
@@ -52,12 +52,57 @@ def _missing_submodules(root: Path, prefix: Optional[Path] = None):
     return missing
 
 
-def _validate_lifecycle_shape(state: dict) -> None:
-    lifecycle = state.get("lifecycle")
-    if lifecycle is not None and not isinstance(lifecycle, dict):
-        raise ValueError(
-            "invalid state file: .workspace.local/state.json lifecycle must be an object"
-        )
+def _git_remote_url(repo_path: Path, remote_name: str) -> Optional[str]:
+    result = subprocess.run(
+        ["git", "remote", "get-url", remote_name],
+        cwd=repo_path,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return None
+    value = result.stdout.strip()
+    return value or None
+
+
+def _is_placeholder_remote(url: Optional[str]) -> bool:
+    if not isinstance(url, str) or not url.strip():
+        return True
+    stripped = url.strip().lower()
+    return "your-org/" in stripped or "your-org:" in stripped or "example/" in stripped
+
+
+def _has_placeholder_workspace_remote(paths: RepoPaths) -> bool:
+    return _is_placeholder_remote(_git_remote_url(paths.root, "origin")) or _is_placeholder_remote(
+        _git_remote_url(paths.root, "upstream")
+    )
+
+
+def _load_yaml_mapping(path: Path, invalid_message: str) -> Dict[str, object]:
+    try:
+        loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, yaml.YAMLError):
+        raise RuntimeError(invalid_message)
+    if not isinstance(loaded, dict):
+        raise RuntimeError(invalid_message)
+    return loaded
+
+
+def _legacy_inventory_residue(paths: RepoPaths, servers_config: Dict[str, object]) -> list[str]:
+    residue = list(diagnose_state_residue(paths))
+    if paths.local_targets_file.exists():
+        residue.append("legacy overlay residue: .workspace.local/targets.yaml")
+
+    if "bootstrap" in servers_config:
+        residue.append("legacy server inventory residue: bootstrap")
+
+    servers = servers_config.get("servers")
+    if isinstance(servers, dict):
+        for server_name, server in servers.items():
+            if isinstance(server, dict) and "verification" in server:
+                residue.append(f"legacy server inventory residue: servers.{server_name}.verification")
+    return residue
 
 
 def doctor(paths: RepoPaths) -> int:
@@ -75,58 +120,35 @@ def doctor(paths: RepoPaths) -> int:
         print(f"missing overlay files: {', '.join(missing_files)}")
         return 1
 
-    servers_file = paths.local_servers_file
     try:
-        servers_config = yaml.safe_load(servers_file.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, yaml.YAMLError):
-        print("invalid servers file: .workspace.local/servers.yaml is not valid YAML")
-        return 1
-
-    if not isinstance(servers_config, dict):
-        print("invalid servers file: .workspace.local/servers.yaml must be a YAML mapping")
-        return 1
-
-    bootstrap_config = servers_config.get("bootstrap")
-    if bootstrap_config is not None:
-        if not isinstance(bootstrap_config, dict):
-            print("invalid servers file: .workspace.local/servers.yaml bootstrap must be a mapping")
-            return 1
-        mode = bootstrap_config.get("mode")
-        if mode is not None and mode not in BOOTSTRAP_MODES:
-            print("invalid servers file: .workspace.local/servers.yaml bootstrap mode is unsupported")
-            return 1
-        completed = bootstrap_config.get("completed")
-        if completed is not None and not isinstance(completed, bool):
-            print("invalid servers file: .workspace.local/servers.yaml bootstrap completed must be a boolean")
-            return 1
-
-    state_file = paths.local_state_file
-    try:
-        state = json.loads(state_file.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-        print("invalid state file: .workspace.local/state.json is not valid JSON")
-        return 1
-
-    if not isinstance(state, dict):
-        print("invalid state file: .workspace.local/state.json must be a JSON object")
-        return 1
-
-    try:
-        _validate_lifecycle_shape(state)
-    except ValueError as exc:
+        servers_config = _load_yaml_mapping(
+            paths.local_servers_file,
+            "invalid servers file: .workspace.local/servers.yaml must be a YAML mapping",
+        )
+        _load_yaml_mapping(
+            paths.local_auth_file,
+            "invalid auth file: .workspace.local/auth.yaml must be a YAML mapping",
+        )
+        _load_yaml_mapping(
+            paths.local_repos_file,
+            "invalid repos file: .workspace.local/repos.yaml must be a YAML mapping",
+        )
+    except RuntimeError as exc:
         print(str(exc))
         return 1
 
-    schema_version = state.get("schema_version")
-    if isinstance(schema_version, bool) or not isinstance(schema_version, int):
-        print("invalid state file: .workspace.local/state.json missing schema_version")
-        return 1
-    if schema_version != OVERLAY_SCHEMA_VERSION:
-        print(
-            "unsupported schema_version in "
-            ".workspace.local/state.json: "
-            f"{schema_version}"
-        )
+    problems = _legacy_inventory_residue(paths, servers_config)
+    if _has_placeholder_workspace_remote(paths):
+        problems.append("placeholder_workspace_remote")
+
+    if not problems:
+        try:
+            read_capability_state(paths)
+        except RuntimeError as exc:
+            problems.append(str(exc))
+
+    if problems:
+        print("\n".join(problems))
         return 1
 
     missing_submodules = _missing_submodules(paths.root)

@@ -1,6 +1,8 @@
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -10,10 +12,25 @@ from tools.lib.config import RepoPaths
 from tools.vaws import main as vaws_main
 
 
-def test_acceptance_run_calls_init_then_parity_then_benchmark(monkeypatch, vaws_repo):
+def _acceptance_request() -> AcceptanceRequest:
+    return AcceptanceRequest(
+        server_name="lab-a",
+        vllm_origin_url=None,
+        vllm_ascend_origin_url=None,
+        vllm_upstream_tag="0.18.0",
+        vllm_ascend_upstream_branch="main",
+        benchmark_preset="qwen3-35b-tp4",
+    )
+
+
+def test_acceptance_run_uses_existing_capabilities_without_init(monkeypatch, vaws_repo):
     calls = []
 
-    monkeypatch.setattr("tools.lib.acceptance.run_init", lambda paths, request: calls.append("init") or 0)
+    monkeypatch.setattr(
+        "tools.lib.acceptance.run_init",
+        lambda *_args, **_kwargs: pytest.fail("acceptance must not call init"),
+        raising=False,
+    )
     monkeypatch.setattr(
         "tools.lib.acceptance.ensure_remote_baseline_for_acceptance",
         lambda paths, request: calls.append("baseline") or 0,
@@ -35,29 +52,20 @@ def test_acceptance_run_calls_init_then_parity_then_benchmark(monkeypatch, vaws_
         lambda paths, request: calls.append("benchmark") or 0,
     )
 
-    result = run_acceptance(
-        Path(vaws_repo),
-        AcceptanceRequest(
-            server_name="lab-a",
-            server_host="10.0.0.12",
-            server_user="root",
-            server_password_env="VAWS_SERVER_PASSWORD",
-            vllm_origin_url=None,
-            vllm_ascend_origin_url=None,
-            vllm_upstream_tag="0.18.0",
-            vllm_ascend_upstream_branch="main",
-            benchmark_preset="qwen3-35b-tp4",
-        ),
-    )
+    result = run_acceptance(Path(vaws_repo), _acceptance_request())
 
     assert result == 0
-    assert calls == ["init", "baseline", "targets", "parity", "env", "benchmark"]
+    assert calls == ["baseline", "targets", "parity", "env", "benchmark"]
 
 
 def test_acceptance_run_stops_before_benchmark_when_parity_fails(monkeypatch, vaws_repo):
     calls = []
 
-    monkeypatch.setattr("tools.lib.acceptance.run_init", lambda paths, request: calls.append("init") or 0)
+    monkeypatch.setattr(
+        "tools.lib.acceptance.run_init",
+        lambda *_args, **_kwargs: pytest.fail("acceptance must not call init"),
+        raising=False,
+    )
     monkeypatch.setattr(
         "tools.lib.acceptance.ensure_remote_baseline_for_acceptance",
         lambda paths, request: calls.append("baseline") or 0,
@@ -79,23 +87,10 @@ def test_acceptance_run_stops_before_benchmark_when_parity_fails(monkeypatch, va
         lambda paths, request: calls.append("benchmark") or 0,
     )
 
-    result = run_acceptance(
-        Path(vaws_repo),
-        AcceptanceRequest(
-            server_name="lab-a",
-            server_host="10.0.0.12",
-            server_user="root",
-            server_password_env="VAWS_SERVER_PASSWORD",
-            vllm_origin_url=None,
-            vllm_ascend_origin_url=None,
-            vllm_upstream_tag="0.18.0",
-            vllm_ascend_upstream_branch="main",
-            benchmark_preset="qwen3-35b-tp4",
-        ),
-    )
+    result = run_acceptance(Path(vaws_repo), _acceptance_request())
 
     assert result == 1
-    assert calls == ["init", "baseline", "targets", "parity"]
+    assert calls == ["baseline", "targets", "parity"]
 
 
 def test_ensure_remote_baseline_for_acceptance_returns_clean_error_on_runtime_failure(
@@ -104,17 +99,6 @@ def test_ensure_remote_baseline_for_acceptance_returns_clean_error_on_runtime_fa
     capsys,
 ):
     paths = RepoPaths(root=vaws_repo)
-    request = AcceptanceRequest(
-        server_name="lab-a",
-        server_host="10.0.0.12",
-        server_user="root",
-        server_password_env="VAWS_SERVER_PASSWORD",
-        vllm_origin_url=None,
-        vllm_ascend_origin_url=None,
-        vllm_upstream_tag="0.18.0",
-        vllm_ascend_upstream_branch="main",
-        benchmark_preset="qwen3-35b-tp4",
-    )
 
     monkeypatch.setattr("tools.lib.acceptance.resolve_repo_targets", lambda *args, **kwargs: object())
     monkeypatch.setattr(
@@ -122,14 +106,13 @@ def test_ensure_remote_baseline_for_acceptance_returns_clean_error_on_runtime_fa
         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("remote command failed")),
     )
 
-    result = ensure_remote_baseline_for_acceptance(paths, request)
+    result = ensure_remote_baseline_for_acceptance(paths, _acceptance_request())
 
     assert result == 1
     assert capsys.readouterr().out.strip() == "remote command failed"
 
 
 def test_acceptance_run_returns_clean_error_when_late_step_raises(monkeypatch, vaws_repo, capsys):
-    monkeypatch.setattr("tools.lib.acceptance.run_init", lambda paths, request: 0)
     monkeypatch.setattr(
         "tools.lib.acceptance.ensure_remote_baseline_for_acceptance",
         lambda paths, request: 0,
@@ -143,26 +126,13 @@ def test_acceptance_run_returns_clean_error_when_late_step_raises(monkeypatch, v
         lambda paths, request, desired: (_ for _ in ()).throw(RuntimeError("late parity failure")),
     )
 
-    result = run_acceptance(
-        Path(vaws_repo),
-        AcceptanceRequest(
-            server_name="lab-a",
-            server_host="10.0.0.12",
-            server_user="root",
-            server_password_env="VAWS_SERVER_PASSWORD",
-            vllm_origin_url=None,
-            vllm_ascend_origin_url=None,
-            vllm_upstream_tag="0.18.0",
-            vllm_ascend_upstream_branch="main",
-            benchmark_preset="qwen3-35b-tp4",
-        ),
-    )
+    result = run_acceptance(Path(vaws_repo), _acceptance_request())
 
     assert result == 1
     assert capsys.readouterr().out.strip() == "late parity failure"
 
 
-def test_acceptance_cli_run_delegates_to_backend(monkeypatch, vaws_repo):
+def test_internal_acceptance_cli_run_delegates_to_backend(monkeypatch, vaws_repo):
     calls = {}
     monkeypatch.chdir(vaws_repo)
 
@@ -175,14 +145,11 @@ def test_acceptance_cli_run_delegates_to_backend(monkeypatch, vaws_repo):
 
     result = vaws_main(
         [
+            "internal",
             "acceptance",
             "run",
             "--server-name",
             "lab-a",
-            "--server-host",
-            "10.0.0.12",
-            "--server-password-env",
-            "VAWS_SERVER_PASSWORD",
             "--vllm-upstream-tag",
             "0.18.0",
             "--vllm-ascend-upstream-branch",
@@ -207,7 +174,9 @@ def test_real_acceptance_runbook_exists():
         / "2026-04-01-real-e2e-acceptance.md"
     )
     text = path.read_text(encoding="utf-8")
-    assert "vaws.py acceptance run" in text
-    assert "VAWS_SERVER_PASSWORD" in text
+    assert "vaws.py internal acceptance run" in text
+    assert "vaws.py init" in text
+    assert "machine verify" in text
+    assert "VAWS_SERVER_PASSWORD" not in text
     assert "qwen3-35b-tp4" in text
     assert "173.131.1.2" not in text

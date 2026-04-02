@@ -4,7 +4,10 @@ from dataclasses import dataclass
 from typing import Tuple
 
 REQUIRED_COMMANDS = ("git", "ssh", "python3")
-RECOMMENDED_COMMANDS = ("gh",)
+RECOMMENDED_COMMANDS = ()
+PROVIDER_REQUIRED_COMMANDS = {
+    "github-cli": ("gh",),
+}
 
 
 class PreflightError(RuntimeError):
@@ -26,10 +29,11 @@ def _python3_is_available() -> bool:
     return bool(sys.executable)
 
 
-def check_local_control_plane_deps() -> PreflightReport:
+def check_local_control_plane_deps(*, git_provider: str = "github-cli") -> PreflightReport:
+    required_commands = REQUIRED_COMMANDS + PROVIDER_REQUIRED_COMMANDS.get(git_provider, ())
     installed_required = []
     missing_required = []
-    for command in REQUIRED_COMMANDS:
+    for command in required_commands:
         if command == "python3":
             if _python3_is_available():
                 installed_required.append(command)

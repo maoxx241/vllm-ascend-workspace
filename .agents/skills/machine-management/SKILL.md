@@ -1,6 +1,6 @@
 ---
 name: machine-management
-description: Use when the user wants to attach a machine, verify whether a machine is ready, or remove a machine from this workspace.
+description: Use when the user wants after setup or ongoing machine attach, verification, repair, or removal work for this workspace.
 ---
 
 # Machine Management
@@ -8,6 +8,7 @@ description: Use when the user wants to attach a machine, verify whether a machi
 ## Overview
 
 Manage machines for this workspace after first-time setup. This skill handles machine attach, readiness verification, and removal without exposing inventory internals or backend transport details.
+It is the public contract behind the `machine add`, `machine verify`, and `machine remove` command family.
 
 If exact internal routing details are required after this skill is selected, see `references/internal-routing.md`.
 
@@ -39,16 +40,29 @@ If exact internal routing details are required after this skill is selected, see
 - Explain whether the machine is attached, reusable, or removed.
 - Keep the result framed as workspace machine readiness, not as raw inventory file editing.
 
+## Auth Boundary
+
+- Allowed: one bare-metal attach password bootstrap when establishing host key-based access for a newly added machine.
+- Forbidden: GitHub login prompts, repeated server password prompts after key bootstrap, and any container password prompt.
+- On any unexpected auth prompt, fail closed with `needs_input` or `needs_repair` and keep repair routing inside `machine-management`.
+
 ## Never Expose
 
 - raw passwords, tokens, or key material
 - internal inventory records or lock paths
 - private host metadata or storage-root internals unless the user explicitly asks
 
+## Required Capabilities
+
+- `machine-management` consumes and repairs `servers.<target>.host_access` and `servers.<target>.container_access`.
+- When needed for an already attached machine, it may also repair `servers.<target>.code_parity` and `servers.<target>.runtime_env`.
+- Optional cross-machine connectivity belongs in `servers.<target>.peer_mesh`, but degraded peer mesh does not block single-machine readiness.
+
 ## Default Inference Rules
 
 - Reuse an already attached and ready machine when it matches the request.
 - Prefer steady-state public-key access after first attachment succeeds.
+- Use this skill for after setup or ongoing machine maintenance once a workspace baseline already exists.
 - Treat verification and repair as part of the same maintenance capability when the machine is already known.
 
 ## Cross-Skill Boundary
@@ -63,6 +77,12 @@ If exact internal routing details are required after this skill is selected, see
 - Stop when required machine input is missing or unsafe to infer.
 - Do not claim a machine is ready if runtime verification fails.
 - When removal is partial, report what remains instead of pretending success.
+
+## Failure Routing
+
+- If `git_auth` or `repo_topology` is missing, redirect to `workspace-init` before continuing machine-specific work.
+- If `host_access`, `container_access`, `code_parity`, or `runtime_env` is missing or broken, keep repair routing in `machine-management`.
+- If only `peer_mesh` is degraded, report it as optional degradation without downgrading a single-machine ready baseline.
 
 ## Security Notes
 
