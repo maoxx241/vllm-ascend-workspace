@@ -2,22 +2,20 @@
 
 Use this runbook to execute the first real-host happy path without exposing raw secrets in tracked docs.
 
-## Pre-stage The Password
+## Prepare The Workspace First
 
-The password must be staged outside the agent session:
+Run setup before acceptance. `internal acceptance run` no longer performs setup or password bootstrap:
 
 ```bash
-export VAWS_SERVER_PASSWORD='<pre-staged outside agent session>'
+python /Users/maoxx241/code/vllm-ascend-workspace/tools/vaws.py init
+python /Users/maoxx241/code/vllm-ascend-workspace/tools/vaws.py machine verify <server-name>
 ```
 
 ## Run The End-To-End Acceptance Flow
 
 ```bash
-python /Users/maoxx241/code/vllm-ascend-workspace/tools/vaws.py acceptance run \
+python /Users/maoxx241/code/vllm-ascend-workspace/tools/vaws.py internal acceptance run \
   --server-name <server-name> \
-  --server-host <server-host> \
-  --server-user root \
-  --server-password-env VAWS_SERVER_PASSWORD \
   --vllm-upstream-tag 0.18.0 \
   --vllm-ascend-upstream-branch main \
   --benchmark-preset qwen3-35b-tp4
@@ -25,7 +23,6 @@ python /Users/maoxx241/code/vllm-ascend-workspace/tools/vaws.py acceptance run \
 
 Expected outcomes:
 
-- `init` returns success or an idempotent ready result
 - runtime verification records the true transport
 - code parity reports the remote code matches the local target state
 - benchmark writes a remote log and prints extracted markers
@@ -33,7 +30,7 @@ Expected outcomes:
 ## Verify Runtime And Benchmark Separately
 
 ```bash
-python /Users/maoxx241/code/vllm-ascend-workspace/tools/vaws.py fleet verify <server-name>
+python /Users/maoxx241/code/vllm-ascend-workspace/tools/vaws.py machine verify <server-name>
 python /Users/maoxx241/code/vllm-ascend-workspace/tools/vaws.py benchmark run \
   --server-name <server-name> \
   --preset qwen3-35b-tp4

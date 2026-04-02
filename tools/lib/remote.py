@@ -2,35 +2,29 @@ from __future__ import annotations
 
 import json
 import os
+import random
+import re
 import shlex
 import subprocess
 import shutil
+from datetime import datetime, timezone
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import yaml
 
+from .capability_state import read_capability_state, write_capability_leaf, write_capability_state
 from .config import RepoPaths
-from .runtime import read_state, write_state
 
 DEFAULT_HOST_WORKSPACE_BASE = "/root/.vaws/targets"
 DEFAULT_WORKSPACE_ROOT = "/vllm-workspace"
+RUNTIME_PORT_MIN = 40000
+RUNTIME_PORT_MAX = 54999
 
 
 class RemoteError(RuntimeError):
     """Remote bootstrap or runtime materialization failure."""
-
-
-def can_fallback_to_legacy_target(exc: "RemoteError") -> bool:
-    message = str(exc)
-    return (
-        message.startswith("unknown server:")
-        or message.startswith("invalid server config: .workspace.local/servers.yaml")
-        or message.startswith("invalid server config: missing 'servers' map")
-    )
-
-
 @dataclass(frozen=True)
 class CredentialGroup:
     mode: str
@@ -158,6 +152,42 @@ class TargetContext:
     runtime: RuntimeSpec
 
 
+def _list_listening_ports() -> set[int]:
+    commands = (
+        ["ss", "-H", "-tln"],
+        ["lsof", "-nP", "-iTCP", "-sTCP:LISTEN"],
+    )
+    port_pattern = re.compile(r":(\d+)\b")
+    for command in commands:
+        try:
+            result = subprocess.run(
+                command,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+        except OSError:
+            continue
+        if result.returncode != 0:
+            continue
+        ports = {
+            int(match.group(1))
+            for match in port_pattern.finditer(result.stdout or "")
+        }
+        if ports:
+            return ports
+    return set()
+
+
+def allocate_runtime_ssh_port(occupied: Optional[set[int]] = None) -> int:
+    occupied_ports = set(_list_listening_ports() if occupied is None else occupied)
+    for _ in range(32):
+        candidate = random.randint(RUNTIME_PORT_MIN, RUNTIME_PORT_MAX)
+        if candidate not in occupied_ports:
+            return candidate
+    raise RemoteError("unable to allocate runtime ssh port")
+
+
 def _read_yaml_mapping(path: Path, invalid_message: str) -> Dict[str, Any]:
     try:
         loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
@@ -185,15 +215,6 @@ def _require_int_in_range(value: Any, message: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 1 or value > 65535:
         raise RemoteError(message)
     return value
-
-
-def _load_targets_config(paths: RepoPaths) -> Dict[str, Any]:
-    return _read_yaml_mapping(
-        paths.local_overlay / "targets.yaml",
-        "invalid target config: .workspace.local/targets.yaml",
-    )
-
-
 def _load_auth_config(paths: RepoPaths) -> Dict[str, Any]:
     return _read_yaml_mapping(
         paths.local_overlay / "auth.yaml",
@@ -206,18 +227,6 @@ def _load_servers_config(paths: RepoPaths) -> Dict[str, Any]:
         paths.local_servers_file,
         "invalid server config: .workspace.local/servers.yaml",
     )
-
-
-def _host_auth_ref(host_config: Dict[str, Any]) -> Optional[str]:
-    auth_ref = host_config.get("ssh_auth_ref")
-    if isinstance(auth_ref, str) and auth_ref.strip():
-        return auth_ref.strip()
-    auth_group = host_config.get("auth_group")
-    if isinstance(auth_group, str) and auth_group.strip():
-        return auth_group.strip()
-    return None
-
-
 def _host_ssh_auth_ref(host_config: Dict[str, Any]) -> Optional[str]:
     auth_ref = host_config.get("ssh_auth_ref")
     if isinstance(auth_ref, str) and auth_ref.strip():
@@ -239,24 +248,6 @@ def _modern_auth_ref_names(auth: Dict[str, Any]) -> List[str]:
         for ref_name in refs
         if isinstance(ref_name, str) and ref_name.strip()
     )
-
-
-def _legacy_auth_ref_names(auth: Dict[str, Any]) -> List[str]:
-    host_auth = auth.get("host_auth")
-    if not isinstance(host_auth, dict):
-        return []
-
-    credential_groups = host_auth.get("credential_groups")
-    if not isinstance(credential_groups, dict):
-        return []
-
-    return sorted(
-        ref_name.strip()
-        for ref_name in credential_groups
-        if isinstance(ref_name, str) and ref_name.strip()
-    )
-
-
 def _credential_group_from_ref(
     ref: Dict[str, Any],
     ref_name: str,
@@ -314,52 +305,6 @@ def _modern_credential_group_from_auth(
         ssh_auth_ref,
         host.login_user,
     )
-
-
-def _legacy_credential_group_from_auth(auth: Dict[str, Any], host: HostSpec) -> CredentialGroup:
-    host_auth = auth.get("host_auth")
-    if not isinstance(host_auth, dict):
-        raise RemoteError("invalid auth config: missing ssh_auth.refs map")
-
-    mode = host_auth.get("mode", "ssh-key")
-    if not isinstance(mode, str) or not mode.strip():
-        raise RemoteError("invalid auth config: host_auth.mode must be a string")
-
-    credential_groups = host_auth.get("credential_groups")
-    if not isinstance(credential_groups, dict):
-        raise RemoteError("invalid auth config: missing host_auth.credential_groups map")
-
-    credential_config = credential_groups.get(host.auth_group)
-    if not isinstance(credential_config, dict):
-        raise RemoteError(f"invalid auth config: unknown auth group '{host.auth_group}'")
-
-    username = credential_config.get("username", host.login_user)
-    if not isinstance(username, str) or not username.strip():
-        raise RemoteError(
-            f"invalid auth config: auth group '{host.auth_group}' missing username"
-        )
-
-    simulation_root = credential_config.get("simulation_root")
-    if mode == "local-simulation":
-        if not isinstance(simulation_root, str) or not simulation_root.strip():
-            raise RemoteError(
-                f"invalid auth config: auth group '{host.auth_group}' missing simulation_root"
-            )
-        simulation_root_path = Path(simulation_root)
-    else:
-        simulation_root_path = None
-
-    return CredentialGroup(
-        mode=mode.strip(),
-        username=username.strip(),
-        password=credential_config.get("password"),
-        password_env=credential_config.get("password_env"),
-        key_path=credential_config.get("key_path"),
-        token_env=credential_config.get("token_env"),
-        simulation_root=simulation_root_path,
-    )
-
-
 def _context_from_inventory_record(
     paths: RepoPaths,
     record_kind: str,
@@ -367,13 +312,9 @@ def _context_from_inventory_record(
     host_name: str,
     host_config: Dict[str, Any],
     runtime: Dict[str, Any],
-    *,
-    legacy_auth: bool = False,
 ) -> TargetContext:
     explicit_ssh_auth_ref = _host_ssh_auth_ref(host_config)
     ssh_auth_ref = explicit_ssh_auth_ref
-    if not ssh_auth_ref and legacy_auth:
-        ssh_auth_ref = _host_auth_ref(host_config)
     if not ssh_auth_ref:
         raise RemoteError(
             f"invalid {record_kind} config: {record_kind} '{record_name}' missing ssh_auth_ref"
@@ -440,12 +381,7 @@ def _context_from_inventory_record(
         )
 
     auth = _load_auth_config(paths)
-    if legacy_auth and explicit_ssh_auth_ref:
-        credential = _modern_credential_group_from_auth(auth, host, explicit_ssh_auth_ref)
-    elif legacy_auth:
-        credential = _legacy_credential_group_from_auth(auth, host)
-    else:
-        credential = _modern_credential_group_from_auth(auth, host, ssh_auth_ref)
+    credential = _modern_credential_group_from_auth(auth, host, ssh_auth_ref)
 
     return TargetContext(
         name=record_name,
@@ -478,65 +414,6 @@ def _verification_runtime_payload(ctx: TargetContext, **extra: Any) -> Dict[str,
     }
     payload.update(extra)
     return payload
-
-
-def _resolve_legacy_target_context(paths: RepoPaths, target_name: str) -> TargetContext:
-    config = _load_targets_config(paths)
-    targets = config.get("targets")
-    if not isinstance(targets, dict):
-        raise RemoteError("invalid target config: missing 'targets' map")
-
-    target = targets.get(target_name)
-    if not isinstance(target, dict):
-        raise RemoteError(f"unknown target: {target_name}")
-
-    runtime = target.get("runtime")
-    if not isinstance(runtime, dict):
-        raise RemoteError(
-            f"invalid target config: target '{target_name}' missing runtime map"
-        )
-    required_runtime_fields = ("image_ref", "container_name", "ssh_port", "bootstrap_mode")
-    missing_runtime_fields = [name for name in required_runtime_fields if name not in runtime]
-    if missing_runtime_fields:
-        raise RemoteError(
-            "invalid target config: "
-            f"target '{target_name}' has incomplete runtime config (missing: "
-            f"{', '.join(missing_runtime_fields)})"
-        )
-
-    hosts = config.get("hosts")
-    if not isinstance(hosts, dict):
-        raise RemoteError("invalid target config: missing 'hosts' map")
-
-    target_hosts = target.get("hosts")
-    if not isinstance(target_hosts, list) or not target_hosts:
-        raise RemoteError(
-            f"invalid target config: target '{target_name}' missing non-empty hosts list"
-        )
-
-    host_name = target_hosts[0]
-    if not isinstance(host_name, str) or not host_name.strip():
-        raise RemoteError(
-            f"invalid target config: target '{target_name}' has invalid host entry"
-        )
-
-    host_config = hosts.get(host_name)
-    if not isinstance(host_config, dict):
-        raise RemoteError(
-            f"invalid target config: target '{target_name}' references unknown host '{host_name}'"
-        )
-
-    return _context_from_inventory_record(
-        paths,
-        "target",
-        target_name,
-        host_name,
-        host_config,
-        runtime,
-        legacy_auth=True,
-    )
-
-
 def resolve_server_context(paths: RepoPaths, server_name: str) -> TargetContext:
     config = _load_servers_config(paths)
     servers = config.get("servers")
@@ -575,12 +452,6 @@ def list_managed_server_names(paths: RepoPaths) -> List[str]:
         for name in servers
         if isinstance(name, str) and name.strip()
     )
-
-
-def resolve_target_context(paths: RepoPaths, target_name: str) -> TargetContext:
-    return _resolve_legacy_target_context(paths, target_name)
-
-
 def persist_server_verification(
     paths: RepoPaths,
     server_name: str,
@@ -596,24 +467,171 @@ def persist_server_verification(
         raise RemoteError(f"unknown server: {server_name}")
 
     server["status"] = verification.status
-    server["verification"] = verification.to_mapping()
+    server.pop("verification", None)
     config["version"] = 1
     config["servers"] = servers
     paths.local_servers_file.write_text(
         yaml.safe_dump(config, sort_keys=False),
         encoding="utf-8",
     )
-
-    state = read_state(paths)
-    server_verifications = state.get("server_verifications")
-    if server_verifications is None:
-        server_verifications = {}
-    elif not isinstance(server_verifications, dict):
+    state = read_capability_state(paths)
+    servers_state = state.setdefault("servers", {})
+    if not isinstance(servers_state, dict):
         raise RemoteError("invalid runtime state: .workspace.local/state.json")
+    server_state = servers_state.setdefault(server_name, {})
+    if not isinstance(server_state, dict):
+        server_state = {}
+        servers_state[server_name] = server_state
+    server_state["container_access"] = {
+        "status": verification.status,
+        "mode": "ssh-key",
+        "detail": verification.summary,
+        "observed_at": _observed_at(),
+        "evidence_source": "machine-management",
+    }
+    if verification.status == "ready":
+        server_state["host_access"] = {
+            "status": "ready",
+            "mode": "ssh-key",
+            "detail": "host ssh ready",
+            "observed_at": _observed_at(),
+            "evidence_source": "machine-management",
+        }
+        state["current_server"] = server_name
+        state.pop("current_session", None)
+    write_capability_state(paths, state)
 
-    server_verifications[server_name] = verification.to_mapping()
-    state["server_verifications"] = server_verifications
-    write_state(paths, state)
+
+def _observed_at() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _peer_mesh_leaf(status: str, detail: str) -> Dict[str, Any]:
+    return {
+        "status": status,
+        "detail": detail,
+        "observed_at": _observed_at(),
+        "evidence_source": "machine-management",
+    }
+
+
+def list_ready_servers(paths: RepoPaths) -> List[str]:
+    state = read_capability_state(paths)
+    servers = state.get("servers")
+    if not isinstance(servers, dict):
+        return []
+    ready = []
+    for server_name, payload in servers.items():
+        if not isinstance(server_name, str) or not server_name.strip():
+            continue
+        container_access = payload.get("container_access") if isinstance(payload, dict) else None
+        if isinstance(container_access, dict) and container_access.get("status") == "ready":
+            ready.append(server_name.strip())
+    return sorted(ready)
+
+
+def _probe_peer_connectivity(paths: RepoPaths, server_name: str, peer_name: str) -> bool:
+    ctx = resolve_server_context(paths, server_name)
+    peer_ctx = resolve_server_context(paths, peer_name)
+    script = (
+        "set -e\n"
+        f"ping -c 1 -W 1 {shlex.quote(peer_ctx.host.host)} >/dev/null 2>&1"
+    )
+    result = run_runtime_command(ctx, "container-ssh", script)
+    return result.returncode == 0
+
+
+def _read_container_public_key(paths: RepoPaths, server_name: str) -> str:
+    ctx = resolve_server_context(paths, server_name)
+    result = run_runtime_command(
+        ctx,
+        "container-ssh",
+        "set -euo pipefail\ncat /root/.ssh/id_ed25519.pub",
+    )
+    if result.returncode != 0:
+        raise RemoteError((result.stderr or result.stdout).strip())
+    public_key = result.stdout.strip()
+    if not public_key:
+        raise RemoteError(f"missing container public key for server '{server_name}'")
+    return public_key
+
+
+def _install_peer_authorized_key(paths: RepoPaths, server_name: str, peer_name: str) -> None:
+    ctx = resolve_server_context(paths, server_name)
+    peer_key = _read_container_public_key(paths, peer_name)
+    script = "\n".join(
+        [
+            "set -euo pipefail",
+            "mkdir -p /root/.ssh",
+            "chmod 700 /root/.ssh",
+            "touch /root/.ssh/authorized_keys",
+            "chmod 600 /root/.ssh/authorized_keys",
+            f"grep -qxF {shlex.quote(peer_key)} /root/.ssh/authorized_keys || "
+            f"printf '%s\\n' {shlex.quote(peer_key)} >> /root/.ssh/authorized_keys",
+        ]
+    )
+    result = run_runtime_command(ctx, "container-ssh", script)
+    if result.returncode != 0:
+        raise RemoteError((result.stderr or result.stdout).strip())
+
+
+def _warm_peer_known_hosts(paths: RepoPaths, server_name: str, peer_name: str) -> None:
+    ctx = resolve_server_context(paths, server_name)
+    peer_ctx = resolve_server_context(paths, peer_name)
+    script = "\n".join(
+        [
+            "set -euo pipefail",
+            "mkdir -p /root/.ssh",
+            "touch /root/.ssh/known_hosts",
+            "chmod 600 /root/.ssh/known_hosts",
+            f"ssh-keyscan -p {peer_ctx.runtime.ssh_port} {shlex.quote(peer_ctx.host.host)} "
+            "2>/dev/null >> /root/.ssh/known_hosts",
+        ]
+    )
+    result = run_runtime_command(ctx, "container-ssh", script)
+    if result.returncode != 0:
+        raise RemoteError((result.stderr or result.stdout).strip())
+
+
+def reconcile_peer_mesh(paths: RepoPaths, server_name: str) -> None:
+    peers = [peer_name for peer_name in list_ready_servers(paths) if peer_name != server_name]
+    if not peers:
+        write_capability_leaf(
+            paths,
+            ("servers", server_name, "peer_mesh"),
+            _peer_mesh_leaf("ready", "no other ready peers"),
+        )
+        return
+
+    any_success = False
+    any_degraded = False
+    for peer_name in peers:
+        try:
+            if not _probe_peer_connectivity(paths, server_name, peer_name):
+                any_degraded = True
+                continue
+            _install_peer_authorized_key(paths, server_name, peer_name)
+            _install_peer_authorized_key(paths, peer_name, server_name)
+            _warm_peer_known_hosts(paths, server_name, peer_name)
+            _warm_peer_known_hosts(paths, peer_name, server_name)
+            any_success = True
+        except (RemoteError, RuntimeError):
+            any_degraded = True
+
+    if any_degraded:
+        write_capability_leaf(
+            paths,
+            ("servers", server_name, "peer_mesh"),
+            _peer_mesh_leaf("degraded_optional", "one or more peers were unreachable"),
+        )
+        return
+
+    if any_success:
+        write_capability_leaf(
+            paths,
+            ("servers", server_name, "peer_mesh"),
+            _peer_mesh_leaf("ready", "peer mesh reconciled"),
+        )
 
 
 def _simulation_runtime_status(ctx: TargetContext) -> str:
@@ -983,7 +1001,7 @@ def _ssh_base_command(
     return command
 
 
-def _ensure_host_ssh_access(ctx: TargetContext) -> None:
+def _verify_host_ssh_key_login(ctx: TargetContext) -> None:
     probe = subprocess.run(
         _ssh_base_command(ctx) + ["true"],
         text=True,
@@ -992,7 +1010,13 @@ def _ensure_host_ssh_access(ctx: TargetContext) -> None:
     )
     if probe.returncode == 0:
         return
+    raise RemoteError(
+        f"unable to verify SSH key access to host {ctx.host.host}: "
+        f"{(probe.stderr or probe.stdout or 'SSH probe failed').strip()}"
+    )
 
+
+def _install_local_public_key_on_host(ctx: TargetContext) -> None:
     password = ctx.credential.resolved_password
     if not password:
         raise RemoteError(
@@ -1045,18 +1069,68 @@ def _ensure_host_ssh_access(ctx: TargetContext) -> None:
     if child.exitstatus not in (0, None) and child.signalstatus is None:
         raise RemoteError(f"failed to install local SSH key on host {ctx.host.host}")
 
-    verify = subprocess.run(
+
+def _promote_host_auth_ref_to_ssh_key(paths: RepoPaths, ctx: TargetContext) -> None:
+    if ctx.credential.mode != "password" or not ctx.host.ssh_auth_ref:
+        return
+
+    auth = _load_auth_config(paths)
+    ssh_auth = auth.get("ssh_auth")
+    if not isinstance(ssh_auth, dict):
+        raise RemoteError("invalid auth config: missing ssh_auth.refs map")
+    refs = ssh_auth.get("refs")
+    if not isinstance(refs, dict):
+        raise RemoteError("invalid auth config: missing ssh_auth.refs map")
+    auth_ref = refs.get(ctx.host.ssh_auth_ref)
+    if not isinstance(auth_ref, dict):
+        raise RemoteError(
+            f"invalid auth config: unknown ssh auth ref '{ctx.host.ssh_auth_ref}'"
+        )
+
+    promoted: Dict[str, Any] = {
+        "kind": "ssh-key",
+        "username": ctx.credential.username,
+    }
+    if ctx.credential.key_path:
+        promoted["key_path"] = ctx.credential.key_path
+    refs[ctx.host.ssh_auth_ref] = promoted
+    paths.local_auth_file.write_text(
+        yaml.safe_dump(auth, sort_keys=False),
+        encoding="utf-8",
+    )
+
+
+def _ensure_host_ssh_access(
+    ctx: TargetContext,
+    *,
+    allow_password_bootstrap: bool = False,
+) -> bool:
+    probe = subprocess.run(
         _ssh_base_command(ctx) + ["true"],
         text=True,
         capture_output=True,
         check=False,
     )
-    if verify.returncode != 0:
-        raise RemoteError(f"unable to verify SSH key access to host {ctx.host.host}")
+    if probe.returncode == 0:
+        return False
+
+    if not allow_password_bootstrap:
+        detail = (probe.stderr or probe.stdout or "SSH probe failed").strip()
+        if ctx.credential.mode == "password" or ctx.credential.resolved_password:
+            raise RemoteError(
+                f"server password bootstrap not allowed for host {ctx.host.host} in this flow: {detail}"
+            )
+        raise RemoteError(
+            f"unable to verify SSH key access to host {ctx.host.host}: {detail}"
+        )
+
+    _install_local_public_key_on_host(ctx)
+    _verify_host_ssh_key_login(ctx)
+    return True
 
 
 def _run_host_command(ctx: TargetContext, script: str) -> subprocess.CompletedProcess[str]:
-    _ensure_host_ssh_access(ctx)
+    _ensure_host_ssh_access(ctx, allow_password_bootstrap=False)
     return subprocess.run(
         _ssh_base_command(ctx) + [f"bash -lc {shlex.quote(script)}"],
         text=True,
@@ -1144,6 +1218,79 @@ def _docker_run_command(ctx: TargetContext) -> str:
     return shlex.join(base_args)
 
 
+def _inspect_container_contract(ctx: TargetContext) -> Dict[str, Any]:
+    inspect_result = _run_host_command(
+        ctx,
+        f"docker inspect {shlex.quote(ctx.runtime.container_name)}",
+    )
+    if inspect_result.returncode != 0:
+        raise RemoteError(
+            f"failed to inspect container '{ctx.runtime.container_name}': "
+            f"{(inspect_result.stderr or inspect_result.stdout).strip()}"
+        )
+
+    try:
+        payload = json.loads(inspect_result.stdout or "[]")[0]
+    except (IndexError, json.JSONDecodeError) as exc:
+        raise RemoteError(
+            f"invalid container inspection output for '{ctx.runtime.container_name}'"
+        ) from exc
+
+    mounts = sorted(
+        f"{mount.get('Source', '')}:{mount.get('Destination', '')}"
+        for mount in payload.get("Mounts", [])
+        if isinstance(mount, dict)
+    )
+    sshd_config = ""
+    state = payload.get("State")
+    if isinstance(state, dict) and state.get("Running") is True:
+        sshd_probe = _run_docker_exec(
+            ctx,
+            "cat /etc/ssh/sshd_config 2>/dev/null || true",
+        )
+        if sshd_probe.returncode == 0:
+            sshd_config = sshd_probe.stdout or ""
+
+    return {
+        "image": payload.get("Config", {}).get("Image"),
+        "network_mode": payload.get("HostConfig", {}).get("NetworkMode"),
+        "mounts": mounts,
+        "sshd_config": sshd_config,
+    }
+
+
+def _container_requires_rebuild(ctx: TargetContext) -> bool:
+    contract = _inspect_container_contract(ctx)
+    expected_mount = f"{ctx.runtime.host_workspace_path}:{ctx.runtime.workspace_root}/workspace"
+    if contract.get("image") != ctx.runtime.image_ref:
+        return True
+    if contract.get("network_mode") != "host":
+        return True
+    mounts = contract.get("mounts")
+    if not isinstance(mounts, list) or expected_mount not in mounts:
+        return True
+    sshd_config = str(contract.get("sshd_config", "")).lower()
+    required_sshd_lines = (
+        f"port {ctx.runtime.ssh_port}".lower(),
+        "permitrootlogin prohibit-password",
+        "passwordauthentication no",
+        "kbdinteractiveauthentication no",
+    )
+    return not sshd_config or not all(line in sshd_config for line in required_sshd_lines)
+
+
+def _remove_host_container(ctx: TargetContext) -> None:
+    remove = _run_host_command(
+        ctx,
+        f"docker rm -f {shlex.quote(ctx.runtime.container_name)} >/dev/null",
+    )
+    if remove.returncode != 0:
+        raise RemoteError(
+            f"failed to remove container '{ctx.runtime.container_name}': "
+            f"{(remove.stderr or remove.stdout).strip()}"
+        )
+
+
 def _ensure_host_container(ctx: TargetContext) -> bool:
     inspect = _run_host_command(
         ctx,
@@ -1151,8 +1298,11 @@ def _ensure_host_container(ctx: TargetContext) -> bool:
     )
     running_state = (inspect.stdout or "").strip()
     if running_state == "true":
-        return True
-    if running_state == "false":
+        if _container_requires_rebuild(ctx):
+            _remove_host_container(ctx)
+        else:
+            return True
+    elif running_state == "false":
         start = _run_host_command(
             ctx,
             f"docker start {shlex.quote(ctx.runtime.container_name)} >/dev/null",
@@ -1162,7 +1312,10 @@ def _ensure_host_container(ctx: TargetContext) -> bool:
                 f"failed to start existing container '{ctx.runtime.container_name}': "
                 f"{(start.stderr or start.stdout).strip()}"
             )
-        return True
+        if _container_requires_rebuild(ctx):
+            _remove_host_container(ctx)
+        else:
+            return True
 
     create = _run_host_command(ctx, _docker_run_command(ctx))
     if create.returncode != 0:
@@ -1217,7 +1370,7 @@ def _bootstrap_container_runtime(ctx: TargetContext) -> str:
     wrapper_text = _runtime_wrapper_text(ctx.runtime.workspace_root)
     bootstrap_script = "\n".join(
         [
-            "set -e",
+            "set -euo pipefail",
             f"mkdir -p {shlex.quote(ctx.runtime.workspace_root)}",
             f"mkdir -p {shlex.quote(ctx.runtime.workspace_root + '/.vaws/targets')}",
             f"mkdir -p {shlex.quote(ctx.runtime.workspace_root + '/.vaws/sessions')}",
@@ -1229,19 +1382,32 @@ def _bootstrap_container_runtime(ctx: TargetContext) -> str:
             f"git config --global --add safe.directory {shlex.quote(ctx.runtime.workspace_root + '/workspace')}",
             f"git config --global --add safe.directory {shlex.quote(ctx.runtime.workspace_root + '/workspace/vllm')}",
             f"git config --global --add safe.directory {shlex.quote(ctx.runtime.workspace_root + '/workspace/vllm-ascend')}",
+            "apt-get -o Acquire::Check-Date=false -o Acquire::Check-Valid-Until=false update",
+            "DEBIAN_FRONTEND=noninteractive apt-get install -y --fix-missing openssh-server",
+            "DEBIAN_FRONTEND=noninteractive apt-get install -y --fix-missing openssh-client",
+            "DEBIAN_FRONTEND=noninteractive apt-get install -y --fix-missing ssh",
             "mkdir -p /root/.ssh",
             "chmod 700 /root/.ssh",
             "touch /root/.ssh/authorized_keys",
             "chmod 600 /root/.ssh/authorized_keys",
             f"grep -qxF {shlex.quote(public_key)} /root/.ssh/authorized_keys || printf '%s\\n' {shlex.quote(public_key)} >> /root/.ssh/authorized_keys",
-            "if command -v sshd >/dev/null 2>&1 || [ -x /usr/sbin/sshd ]; then",
-            "  mkdir -p /var/run/sshd",
-            "  if [ -f /etc/ssh/sshd_config ] && ! grep -q '^Port "
-            f"{ctx.runtime.ssh_port}$' /etc/ssh/sshd_config; then",
-            f"    printf '\\nPort {ctx.runtime.ssh_port}\\nPermitRootLogin yes\\nPubkeyAuthentication yes\\nPasswordAuthentication yes\\n' >> /etc/ssh/sshd_config",
-            "  fi",
-            f"  (sshd -p {ctx.runtime.ssh_port} || /usr/sbin/sshd -p {ctx.runtime.ssh_port}) >/dev/null 2>&1 || true",
-            "fi",
+            "ssh-keygen -A",
+            "if [ ! -f /root/.ssh/id_ed25519 ]; then ssh-keygen -t ed25519 -N '' -f /root/.ssh/id_ed25519 >/dev/null; fi",
+            "mkdir -p /run/sshd /var/run/sshd",
+            "cat > /etc/ssh/sshd_config <<'EOF'",
+            f"Port {ctx.runtime.ssh_port}",
+            "PermitRootLogin prohibit-password",
+            "PubkeyAuthentication yes",
+            "PasswordAuthentication no",
+            "KbdInteractiveAuthentication no",
+            "ChallengeResponseAuthentication no",
+            "UsePAM yes",
+            "PidFile /var/run/sshd.pid",
+            "AuthorizedKeysFile .ssh/authorized_keys",
+            "EOF",
+            f"pkill -f 'sshd -p {ctx.runtime.ssh_port}' >/dev/null 2>&1 || true",
+            f"(sshd -t && sshd -p {ctx.runtime.ssh_port}) >/dev/null 2>&1 || "
+            f"(/usr/sbin/sshd -t && /usr/sbin/sshd -p {ctx.runtime.ssh_port}) >/dev/null 2>&1",
         ]
     )
     result = _run_docker_exec(ctx, bootstrap_script)
@@ -1333,6 +1499,8 @@ def _ensure_host_runtime(paths: RepoPaths, ctx: TargetContext) -> Dict[str, Any]
 def ensure_runtime(paths: RepoPaths, ctx: TargetContext) -> Dict[str, Any]:
     if ctx.credential.mode == "local-simulation":
         return _ensure_simulation_runtime(paths, ctx)
+    _ensure_host_ssh_access(ctx, allow_password_bootstrap=True)
+    _promote_host_auth_ref_to_ssh_key(paths, ctx)
     return _ensure_host_runtime(paths, ctx)
 
 
@@ -1413,30 +1581,20 @@ def _verify_host_runtime(ctx: TargetContext) -> VerificationResult:
     docker_exec_status, docker_exec_detail = _probe_docker_exec_transport(ctx)
     docker_exec_check = VerificationCheck(
         name="docker_exec",
-        status=docker_exec_status,
-        detail=docker_exec_detail,
+        status="available" if docker_exec_status == "ready" else docker_exec_status,
+        detail=(
+            "repair-only transport available via docker exec"
+            if docker_exec_status == "ready"
+            else docker_exec_detail
+        ),
     )
-    if docker_exec_status == "ready":
-        return VerificationResult.ready(
-            summary=f"runtime ready for host {ctx.host.host} via docker exec",
-            runtime=_verification_runtime_payload(
-                ctx,
-                transport="docker-exec",
-                container_endpoint=(
-                    f"docker-exec://{ctx.credential.username}@{ctx.host.host}/{ctx.runtime.container_name}"
-                ),
-            ),
-            checks=[container_ssh_check, docker_exec_check],
-        )
 
     return VerificationResult.needs_repair(
-        summary=f"runtime unavailable for host {ctx.host.host}",
+        summary=f"container SSH is not ready for host {ctx.host.host}",
         runtime=_verification_runtime_payload(
             ctx,
-            transport="unknown",
-            container_endpoint=(
-                f"docker-exec://{ctx.credential.username}@{ctx.host.host}/{ctx.runtime.container_name}"
-            ),
+            transport="container-ssh",
+            container_endpoint=f"ssh://root@{ctx.host.host}:{ctx.runtime.ssh_port}",
         ),
         checks=[container_ssh_check, docker_exec_check],
     )

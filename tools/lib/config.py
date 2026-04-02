@@ -15,6 +15,10 @@ class RepoPaths:
         return self.local_overlay / "state.json"
 
     @property
+    def state_lock_file(self) -> Path:
+        return self.local_overlay / "state.lock"
+
+    @property
     def local_servers_file(self) -> Path:
         return self.local_overlay / "servers.yaml"
 

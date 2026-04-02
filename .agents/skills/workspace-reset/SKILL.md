@@ -39,11 +39,23 @@ If exact internal routing details are required after this skill is selected, see
 - Report the final result as `ready`, `partial`, `blocked`, or `failed`.
 - Say plainly when some cleanup steps were unreachable or incomplete.
 
+## Auth Boundary
+
+- Allowed: none.
+- Forbidden: any Git auth prompt, server auth prompt, or container auth prompt during reset work.
+- On any unexpected auth prompt, fail closed as `blocked` or `failed` and do not open a new auth flow inside reset.
+
 ## Never Expose
 
 - raw confirmation tokens or internal reset records as normal user guidance
 - fabricated authorization
 - raw private hosts, secrets, or internal cleanup paths
+
+## Required Capabilities
+
+- `workspace-reset` is responsible for destructive effects over workspace-managed `servers`, `targets`, `sessions`, and local cleanup traces.
+- Reset closure includes `known_hosts` cleanup for workspace-managed hosts and runtime SSH ports.
+- Reset does not require `git_auth` to succeed, and it must not delete the user's global GitHub login state.
 
 ## Default Inference Rules
 
@@ -64,6 +76,12 @@ If exact internal routing details are required after this skill is selected, see
 - Never skip explicit authorization for destructive teardown.
 - If cleanup is incomplete, report a partial result instead of pretending full success.
 - Distinguish blocked teardown from reachable teardown that only completed partially.
+
+## Failure Routing
+
+- Missing authorization or reset-only bookkeeping failures stay in `workspace-reset`.
+- If surviving machine state later needs targeted repair, route that follow-up to `machine-management` instead of disguising it as reset success.
+- Keep partial cleanup reported as `partial`; do not reroute mid-reset into a hidden repair workflow.
 
 ## Security Notes
 

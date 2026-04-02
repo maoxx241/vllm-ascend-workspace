@@ -7,6 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from tools.lib.capability_state import write_capability_leaf
 from tools.lib.config import RepoPaths
 from tools.lib.remote import CredentialGroup, HostSpec, RuntimeSpec, TargetContext
 from tools.lib.repo_targets import resolve_repo_targets
@@ -80,6 +81,16 @@ def test_ensure_runtime_environment_runs_first_install_commands(vaws_repo, monke
         vllm_upstream_tag=None,
         vllm_ascend_upstream_branch="main",
     )
+    write_capability_leaf(
+        paths,
+        ("servers", "lab-a", "container_access"),
+        {
+            "status": "ready",
+            "detail": "container ssh ok",
+            "observed_at": "2026-04-01T12:00:00Z",
+            "evidence_source": "machine-management",
+        },
+    )
     captured = {}
 
     def fake_run_runtime_command(ctx, transport, script):
@@ -116,7 +127,7 @@ def test_ensure_runtime_environment_runs_first_install_commands(vaws_repo, monke
     result = ensure_runtime_environment(paths, "lab-a", desired)
 
     assert result.status == "ready"
-    assert captured["transport"] == "docker-exec"
+    assert captured["transport"] == "container-ssh"
     assert "pip uninstall -y vllm vllm-ascend || true" in captured["script"]
     assert "export VLLM_TARGET_DEVICE=empty" in captured["script"]
     assert "pip install -e . --no-build-isolation" in captured["script"]
@@ -130,6 +141,16 @@ def test_ensure_runtime_environment_shell_quotes_workspace_paths(vaws_repo, monk
         paths,
         vllm_upstream_tag=None,
         vllm_ascend_upstream_branch="main",
+    )
+    write_capability_leaf(
+        paths,
+        ("servers", "lab-a", "container_access"),
+        {
+            "status": "ready",
+            "detail": "container ssh ok",
+            "observed_at": "2026-04-01T12:00:00Z",
+            "evidence_source": "machine-management",
+        },
     )
     captured = {}
     workspace_root = "/tmp/work space; echo pwned"
@@ -175,3 +196,17 @@ def test_ensure_runtime_environment_shell_quotes_workspace_paths(vaws_repo, monk
     )
     assert f"cd {shlex.quote(f'{workspace_root}/workspace/vllm')}" in captured["script"]
     assert f"cd {shlex.quote(f'{workspace_root}/workspace/vllm-ascend')}" in captured["script"]
+
+
+def test_ensure_runtime_environment_refuses_non_ssh_transport(vaws_repo):
+    paths = RepoPaths(root=vaws_repo)
+    desired = resolve_repo_targets(
+        paths,
+        vllm_upstream_tag=None,
+        vllm_ascend_upstream_branch="main",
+    )
+
+    result = ensure_runtime_environment(paths, "lab-a", desired)
+
+    assert result.status == "needs_repair"
+    assert "container_ssh" in result.summary

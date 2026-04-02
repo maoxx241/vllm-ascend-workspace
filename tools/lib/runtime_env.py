@@ -9,7 +9,7 @@ from typing import Any, Dict
 from .config import RepoPaths
 from .remote import resolve_server_context, run_runtime_command
 from .repo_targets import WorkspaceTargets
-from .runtime import read_state, update_state
+from .runtime import read_state, require_container_ssh_transport, update_state
 
 PYTHON_BIN = "/usr/local/python3.11.14/bin/python3"
 PIP_BIN = "/usr/local/python3.11.14/bin/pip"
@@ -46,17 +46,6 @@ class RuntimeEnvironmentResult:
 
     def to_mapping(self) -> Dict[str, Any]:
         return asdict(self)
-
-
-def _current_runtime_transport(paths: RepoPaths, server_name: str) -> str:
-    state = read_state(paths)
-    current_target = state.get("current_target")
-    runtime = state.get("runtime")
-    if current_target == server_name and isinstance(runtime, dict):
-        transport = runtime.get("transport")
-        if isinstance(transport, str) and transport.strip():
-            return transport.strip()
-    return "docker-exec"
 
 
 def _git_changed_paths(repo_path: Path, previous_commit: str, current_commit: str) -> list[str]:
@@ -165,6 +154,18 @@ def ensure_runtime_environment(
         desired.vllm_ascend.commit,
     )
 
+    try:
+        transport = require_container_ssh_transport(paths, server_name)
+    except RuntimeError as exc:
+        env_result = RuntimeEnvironmentResult(
+            status="needs_repair",
+            summary=str(exc),
+            installed=False,
+            rebuilt=False,
+        )
+        _persist_runtime_environment(paths, server_name, desired, env_result)
+        return env_result
+
     if not needs_rebuild:
         result = RuntimeEnvironmentResult(
             status="ready",
@@ -176,7 +177,6 @@ def ensure_runtime_environment(
         return result
 
     ctx = resolve_server_context(paths, server_name)
-    transport = _current_runtime_transport(paths, server_name)
     result = run_runtime_command(ctx, transport, _install_script(ctx.runtime.workspace_root))
     if result.returncode != 0:
         raise RuntimeError((result.stderr or result.stdout).strip())

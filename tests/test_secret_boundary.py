@@ -37,6 +37,7 @@ def test_ensure_bootstrap_secret_refs_allows_pre_staged_password(monkeypatch):
     ensure_bootstrap_secret_refs(
         server_auth_mode="password",
         server_password_env="SERVER_PASSWORD",
+        server_password_scope="machine-management:attach",
         git_auth_mode="ssh-agent",
         git_token_env=None,
     )

@@ -124,9 +124,10 @@ def test_public_skill_roots_and_internal_routing_refs_use_delegation_shape():
         routing_ref = skill_root / "references" / "internal-routing.md"
         assert routing_ref.exists()
         text = routing_ref.read_text(encoding="utf-8").lower()
+        assert "## sanctioned adapter surface" in text
         assert "## internal delegation" in text
         assert "public action -> internal contract" in text
-        assert "internal contract -> backend" in text
+        assert "internal contract -> implementation owner" in text
 
 
 def test_workspace_submodules_are_declared():
@@ -144,6 +145,7 @@ def test_public_repo_topology_example_stays_public_and_upstream_oriented():
     repos_example = (ROOT / "config" / "repos.example.yaml").read_text(
         encoding="utf-8"
     )
+    assert "protected_branches" in repos_example
     assert "https://github.com/vllm-project/vllm.git" in repos_example
     assert "https://github.com/vllm-project/vllm-ascend.git" in repos_example
     assert "git@github.com:" not in repos_example

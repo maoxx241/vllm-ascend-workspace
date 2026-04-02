@@ -4,29 +4,34 @@ Public contract: `../SKILL.md`
 
 Use this file only after the public `workspace-init` contract has been selected.
 
+## Sanctioned Adapter Surface
+
+- Ordinary execution surface: `tools/vaws.py init`
+- Diagnostic companion surface: `tools/vaws.py doctor`
+- Do not route a normal agent directly to `tools/lib/*.py`; library modules remain implementation owners behind the sanctioned adapter surface.
+
 ## Internal Delegation
 
 ### Public Action -> Internal Contract
 
-- `workspace-init` -> `foundation`, `git-profile`, `machine-runtime`, `storage-root`, `code-parity`, `runtime-environment`
+- `workspace-init` -> `git-auth`, `repo-topology`, `machine-runtime`, `code-parity`, `runtime-environment`
 
-### Internal Contract -> Backend
+### Internal Contract -> Implementation Owner
 
-- `foundation` -> `tools/lib/preflight.py::ensure_local_control_plane_deps()` and `tools/lib/foundation.py::run_foundation()`
-- `git-profile` -> `tools/lib/git_profile.py::git_profile()` and `tools/lib/repo_targets.py::resolve_repo_targets()`
-- `machine-runtime` -> `tools/lib/fleet.py::add_fleet_server()`, `tools/lib/remote.py::ensure_runtime()`, and `tools/lib/remote.py::verify_runtime()`
-- `storage-root` -> current remote runtime bootstrap flow in `tools/lib/remote.py` plus persisted runtime state in `tools/lib/runtime.py`
-- `code-parity` -> `tools/lib/repo_targets.py::resolve_repo_targets()`, `tools/lib/code_parity.py::verify_code_parity()`, and `tools/lib/code_parity.py::ensure_code_parity()`
-- `runtime-environment` -> `tools/lib/runtime_env.py::ensure_runtime_environment()`
+- `git-auth` -> implemented by `tools/lib/git_auth.py`
+- `repo-topology` -> implemented by `tools/lib/repo_topology.py`
+- `machine-runtime` -> implemented by `tools/lib/init_flow.py`, `tools/lib/machine.py`, and `tools/lib/remote.py`
+- `code-parity` -> implemented by `tools/lib/code_parity.py`
+- `runtime-environment` -> implemented by `tools/lib/runtime_env.py`
 
 ## Action Routing
 
 - `prepare this repo for development`
-  - internal contracts: `foundation`, `git-profile`, `machine-runtime`, `storage-root`
-  - backend entrypoints: `tools/lib/init_flow.py::run_init()` plus the delegated modules above
+  - sanctioned adapter: `tools/vaws.py init`
+  - internal contracts: `git-auth`, `repo-topology`
 - `first-time Git setup and first-machine setup`
-  - internal contracts: `git-profile`, `machine-runtime`, `code-parity`, `runtime-environment`
-  - backend entrypoints: `tools/lib/init_flow.py::run_init()`, `tools/lib/code_parity.py::ensure_code_parity()`, `tools/lib/runtime_env.py::ensure_runtime_environment()`
+  - sanctioned adapter: `tools/vaws.py init`
+  - internal contracts: `git-auth`, `repo-topology`, `machine-runtime`, `code-parity`, `runtime-environment`
 
 ## Internal State Touched
 
@@ -34,9 +39,10 @@ Use this file only after the public `workspace-init` contract has been selected.
 - `.workspace.local/repos.yaml`
 - `.workspace.local/auth.yaml`
 - `.workspace.local/servers.yaml`
-- `.workspace.local/targets.yaml`
 
 ## Related Tests
 
 - `tests/test_vaws_init.py`
-- `tests/test_vaws_init_bootstrap.py`
+- `tests/test_repo_layout.py`
+- `tests/test_workspace_skill_contracts.py`
+- `tests/test_workspace_skill_routing_contracts.py`

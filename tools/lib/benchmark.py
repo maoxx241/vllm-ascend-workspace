@@ -7,7 +7,7 @@ from typing import Dict, Tuple
 
 from .config import RepoPaths
 from .remote import resolve_server_context, run_runtime_command
-from .runtime import read_state, update_state
+from .runtime import read_state, require_container_ssh_transport, update_state
 
 
 @dataclass(frozen=True)
@@ -102,20 +102,9 @@ def build_benchmark_command(
     )
 
 
-def _current_runtime_transport(paths: RepoPaths, server_name: str) -> str:
-    state = read_state(paths)
-    current_target = state.get("current_target")
-    runtime = state.get("runtime")
-    if current_target == server_name and isinstance(runtime, dict):
-        transport = runtime.get("transport")
-        if isinstance(transport, str) and transport.strip():
-            return transport.strip()
-    return "docker-exec"
-
-
 def _extract_remote_marker_block(paths: RepoPaths, server_name: str, output_path: str) -> str:
     ctx = resolve_server_context(paths, server_name)
-    transport = _current_runtime_transport(paths, server_name)
+    transport = require_container_ssh_transport(paths, server_name)
     script = (
         "sed -n '/MARKDOWN_ROWS_BEGIN/,/MARKDOWN_ROWS_END/p' "
         f"{shlex.quote(output_path)}"
@@ -128,8 +117,12 @@ def _extract_remote_marker_block(paths: RepoPaths, server_name: str, output_path
 
 def run_benchmark_preset(paths: RepoPaths, server_name: str, preset_name: str) -> int:
     preset = get_benchmark_preset(preset_name)
+    try:
+        transport = require_container_ssh_transport(paths, server_name)
+    except RuntimeError as exc:
+        print(str(exc))
+        return 1
     ctx = resolve_server_context(paths, server_name)
-    transport = _current_runtime_transport(paths, server_name)
     output_path = f"/tmp/{preset.name}.out"
     command = build_benchmark_command(
         preset,

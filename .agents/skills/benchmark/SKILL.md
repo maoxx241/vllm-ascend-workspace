@@ -38,11 +38,26 @@ If exact internal routing details are required after this skill is selected, see
 - Report the benchmark preset, target machine, and key result summary.
 - Stop and explain the blocking reason if code parity or runtime readiness is missing.
 
+## Auth Boundary
+
+- Allowed: none.
+- Forbidden: any Git auth prompt, server auth prompt, or container auth prompt during benchmark work.
+- On any unexpected auth prompt, fail closed with `needs_input` or `needs_repair` and redirect to `workspace-init` or `machine-management` based on the failing capability.
+
 ## Never Expose
 
 - raw secret values or private host metadata
 - internal cache paths or temporary benchmark staging details
 - backend-only command plumbing as if it were the public workflow
+
+## Required Capabilities
+
+- `git_auth=ready`
+- `repo_topology=ready`
+- `servers.<target>.host_access=ready`
+- `servers.<target>.container_access=ready`
+- `servers.<target>.code_parity=ready`
+- `servers.<target>.runtime_env=ready`
 
 ## Default Inference Rules
 
@@ -62,6 +77,12 @@ If exact internal routing details are required after this skill is selected, see
 - Refuse to run when machine readiness is missing or broken.
 - Refuse to run when code parity is missing or stale.
 - Report the blocking condition before any benchmark output is presented as valid.
+
+## Failure Routing
+
+- If `git_auth` or `repo_topology` is not ready, redirect to `workspace-init`.
+- If `servers.<target>.host_access`, `servers.<target>.container_access`, `servers.<target>.code_parity`, or `servers.<target>.runtime_env` is not ready, redirect to `machine-management`.
+- Do not retry benchmark execution through an auth prompt or an implicit setup path.
 
 ## Security Notes
 

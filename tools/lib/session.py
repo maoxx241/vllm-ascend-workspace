@@ -7,19 +7,8 @@ import yaml
 
 from .config import RepoPaths
 from .gitflow import base_ref_for_repo
-from .remote import (
-    RemoteError,
-    create_remote_session,
-    resolve_server_context,
-    resolve_target_context,
-    switch_remote_session,
-)
+from .remote import RemoteError, create_remote_session, resolve_server_context, switch_remote_session
 from .runtime import read_state, write_state
-from .lifecycle_state import (
-    LEGACY_TARGET_HANDOFF_KIND,
-    MANAGED_SERVER_HANDOFF_KIND,
-    infer_current_target_kind,
-)
 
 
 def _session_manifest_path(paths: RepoPaths, session_name: str) -> Path:
@@ -43,14 +32,12 @@ def _is_valid_session_name(session_name: str) -> bool:
 
 def _read_state_for_session(paths: RepoPaths):
     if not paths.local_overlay.exists() or not paths.local_overlay.is_dir():
-        print("local overlay is not initialized: run `vaws init` to bootstrap .workspace.local/")
+        print("local overlay is not initialized: run `vaws init` first")
         return None
 
     state_file = paths.local_overlay / "state.json"
     if not state_file.is_file():
-        print(
-            "local overlay is not initialized: run `vaws init` to bootstrap .workspace.local/state.json"
-        )
+        print("local overlay is not initialized: run `vaws init` first")
         return None
 
     try:
@@ -60,24 +47,49 @@ def _read_state_for_session(paths: RepoPaths):
         return None
 
 
-def _build_manifest(paths: RepoPaths, session_name: str, state: Dict[str, Any]) -> Dict[str, Any]:
-    current_target = _current_target_from_state(state)
+def _current_server_from_state(state: Dict[str, Any]) -> str:
+    current_server = state.get("current_server")
+    if not isinstance(current_server, str) or not current_server.strip():
+        raise RemoteError(
+            "no current server: run `vaws machine add <server>` or `vaws machine verify <server>` first"
+        )
+    return current_server.strip()
 
-    runtime = state.get("runtime")
-    workspace_root = "/vllm-workspace"
-    transport = "docker-exec"
-    if isinstance(runtime, dict):
-        runtime_workspace_root = runtime.get("workspace_root")
-        if isinstance(runtime_workspace_root, str) and runtime_workspace_root.strip():
-            workspace_root = runtime_workspace_root
-        runtime_transport = runtime.get("transport")
-        if isinstance(runtime_transport, str) and runtime_transport.strip():
-            transport = runtime_transport
 
+def _require_ready_container_access(state: Dict[str, Any], server_name: str) -> None:
+    servers = state.get("servers")
+    if not isinstance(servers, dict):
+        raise RemoteError(
+            f"server '{server_name}' is not ready: run `vaws machine verify {server_name}` first"
+        )
+    server_state = servers.get(server_name)
+    if not isinstance(server_state, dict):
+        raise RemoteError(
+            f"server '{server_name}' is not ready: run `vaws machine verify {server_name}` first"
+        )
+    container_access = server_state.get("container_access")
+    if not isinstance(container_access, dict) or container_access.get("status") != "ready":
+        raise RemoteError(
+            f"server '{server_name}' is not ready: run `vaws machine verify {server_name}` first"
+        )
+
+
+def _session_transport(mode: str) -> str:
+    if mode == "local-simulation":
+        return "simulation"
+    return "container-ssh"
+
+
+def _build_manifest(
+    paths: RepoPaths,
+    session_name: str,
+    server_name: str,
+    workspace_root: str,
+) -> Dict[str, Any]:
     branch_name = f"feature/{session_name}"
-    manifest = {
+    return {
         "name": session_name,
-        "target": current_target,
+        "target": server_name,
         "workspace_ref": {
             "branch": branch_name,
             "base_ref": base_ref_for_repo(paths, "workspace"),
@@ -101,46 +113,7 @@ def _build_manifest(paths: RepoPaths, session_name: str, state: Dict[str, Any]) 
                 "vllm_ascend": f"{workspace_root}/.vaws/sessions/{session_name}/vllm-ascend",
             },
         },
-        "_transport": transport,
     }
-    return manifest
-
-
-def _target_context_from_state(paths: RepoPaths, state: Dict[str, Any]):
-    target_name = _current_target_from_state(state)
-    handoff_kind = _current_target_kind_from_state(paths, state)
-    if handoff_kind == MANAGED_SERVER_HANDOFF_KIND:
-        return resolve_server_context(paths, target_name)
-    if handoff_kind == LEGACY_TARGET_HANDOFF_KIND:
-        return resolve_target_context(paths, target_name)
-    raise RemoteError(
-        "missing current target handoff kind: rerun `vaws fleet add <server>` or `vaws target ensure <target>`"
-    )
-
-
-def _current_target_from_state(state: Dict[str, Any]) -> str:
-    current_target = state.get("current_target")
-    if not isinstance(current_target, str) or not current_target.strip():
-        raise RemoteError("no current target: run `vaws fleet add <server>` first")
-    return current_target.strip()
-
-
-def _current_target_kind_from_state(paths: RepoPaths, state: Dict[str, Any]) -> str:
-    current_target_kind = state.get("current_target_kind")
-    if not isinstance(current_target_kind, str) or not current_target_kind.strip():
-        current_target = _current_target_from_state(state)
-        runtime = state.get("runtime")
-        inferred_kind = infer_current_target_kind(
-            paths,
-            current_target,
-            runtime if isinstance(runtime, dict) else None,
-        )
-        if inferred_kind is None:
-            raise RemoteError(
-                "missing current target handoff kind: rerun `vaws fleet add <server>` or `vaws target ensure <target>`"
-            )
-        return inferred_kind
-    return current_target_kind.strip()
 
 
 def create_session(paths: RepoPaths, session_name: str) -> int:
@@ -153,10 +126,11 @@ def create_session(paths: RepoPaths, session_name: str) -> int:
         return 1
 
     try:
-        manifest = _build_manifest(paths, session_name, state)
-        context = _target_context_from_state(paths, state)
-        transport = manifest.pop("_transport")
-        create_remote_session(paths, context, manifest, transport)
+        server_name = _current_server_from_state(state)
+        _require_ready_container_access(state, server_name)
+        context = resolve_server_context(paths, server_name)
+        manifest = _build_manifest(paths, session_name, server_name, context.runtime.workspace_root)
+        create_remote_session(paths, context, manifest, _session_transport(context.credential.mode))
     except RemoteError as exc:
         print(str(exc))
         return 1
@@ -189,14 +163,10 @@ def switch_session(paths: RepoPaths, session_name: str) -> int:
         return 1
 
     try:
-        context = _target_context_from_state(paths, state)
-        runtime = state.get("runtime", {})
-        transport = "docker-exec"
-        if isinstance(runtime, dict):
-            runtime_transport = runtime.get("transport")
-            if isinstance(runtime_transport, str) and runtime_transport.strip():
-                transport = runtime_transport
-        switch_remote_session(context, session_name, transport)
+        server_name = _current_server_from_state(state)
+        _require_ready_container_access(state, server_name)
+        context = resolve_server_context(paths, server_name)
+        switch_remote_session(context, session_name, _session_transport(context.credential.mode))
     except RemoteError as exc:
         print(str(exc))
         return 1
@@ -216,11 +186,11 @@ def status_session(paths: RepoPaths) -> int:
     if state is None:
         return 1
 
-    current_target = state.get("current_target")
-    if isinstance(current_target, str) and current_target.strip():
-        print(f"current target: {current_target}")
+    current_server = state.get("current_server")
+    if isinstance(current_server, str) and current_server.strip():
+        print(f"current server: {current_server}")
     else:
-        print("current target: none")
+        print("current server: none")
 
     current_session = state.get("current_session")
     if isinstance(current_session, str) and current_session.strip():

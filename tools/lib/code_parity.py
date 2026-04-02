@@ -5,9 +5,9 @@ from dataclasses import asdict, dataclass
 from typing import Any, Dict, List
 
 from .config import RepoPaths
-from .remote import RemoteError, resolve_server_context, run_runtime_command
+from .remote import _stream_repo_to_host, resolve_server_context, run_runtime_command
 from .repo_targets import WorkspaceTargets
-from .runtime import read_state, update_state
+from .runtime import read_state, require_container_ssh_transport, update_state
 
 
 @dataclass(frozen=True)
@@ -35,42 +35,21 @@ def build_materialization_script(desired: WorkspaceTargets, *, workspace_root: s
     return "\n".join(
         [
             "set -euo pipefail",
-            f"mkdir -p {shlex.quote(workspace_root)}",
-            f"if [ ! -e {shlex.quote(workspace_path + '/.git')} ] && [ ! -d {shlex.quote(workspace_path + '/.git')} ]; then",
-            f"  git clone --recursive {shlex.quote(desired.workspace.origin_url)} {shlex.quote(workspace_path)}",
-            "fi",
-            f"git -C {shlex.quote(workspace_path)} remote set-url origin {shlex.quote(desired.workspace.origin_url)}",
-            f"git -C {shlex.quote(workspace_path)} remote set-url upstream {shlex.quote(desired.workspace.upstream_url)}",
-            f"git -C {shlex.quote(workspace_path)} fetch --all --tags",
             f"git -C {shlex.quote(workspace_path)} checkout --detach {shlex.quote(desired.workspace.commit)}",
-            f"git -C {shlex.quote(workspace_path)} submodule sync --recursive",
-            f"git -C {shlex.quote(workspace_path)} submodule update --init --recursive",
-            f"git -C {shlex.quote(workspace_path + '/vllm')} remote set-url origin {shlex.quote(desired.vllm.origin_url)}",
-            f"git -C {shlex.quote(workspace_path + '/vllm')} remote set-url upstream {shlex.quote(desired.vllm.upstream_url)}",
-            f"git -C {shlex.quote(workspace_path + '/vllm')} fetch --all --tags",
             f"git -C {shlex.quote(workspace_path + '/vllm')} checkout --detach {shlex.quote(desired.vllm.commit)}",
-            f"git -C {shlex.quote(workspace_path + '/vllm-ascend')} remote set-url origin {shlex.quote(desired.vllm_ascend.origin_url)}",
-            f"git -C {shlex.quote(workspace_path + '/vllm-ascend')} remote set-url upstream {shlex.quote(desired.vllm_ascend.upstream_url)}",
-            f"git -C {shlex.quote(workspace_path + '/vllm-ascend')} fetch --all --tags",
             f"git -C {shlex.quote(workspace_path + '/vllm-ascend')} checkout --detach {shlex.quote(desired.vllm_ascend.commit)}",
         ]
     )
 
 
-def _current_runtime_transport(paths: RepoPaths, server_name: str) -> str:
-    state = read_state(paths)
-    current_target = state.get("current_target")
-    runtime = state.get("runtime")
-    if current_target == server_name and isinstance(runtime, dict):
-        transport = runtime.get("transport")
-        if isinstance(transport, str) and transport.strip():
-            return transport.strip()
-    return "docker-exec"
+def sync_workspace_mirror(paths: RepoPaths, server_name: str) -> None:
+    ctx = resolve_server_context(paths, server_name)
+    _stream_repo_to_host(paths, ctx)
 
 
 def _collect_remote_git_state(paths: RepoPaths, server_name: str) -> Dict[str, Any]:
     ctx = resolve_server_context(paths, server_name)
-    transport = _current_runtime_transport(paths, server_name)
+    transport = require_container_ssh_transport(paths, server_name)
     workspace_path = f"{ctx.runtime.workspace_root}/workspace"
     script = "\n".join(
         [
@@ -152,7 +131,8 @@ def ensure_code_parity(
     desired: WorkspaceTargets,
 ) -> CodeParityResult:
     ctx = resolve_server_context(paths, server_name)
-    transport = _current_runtime_transport(paths, server_name)
+    sync_workspace_mirror(paths, server_name)
+    transport = require_container_ssh_transport(paths, server_name)
     script = build_materialization_script(
         desired,
         workspace_root=ctx.runtime.workspace_root,

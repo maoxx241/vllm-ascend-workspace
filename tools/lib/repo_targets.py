@@ -4,6 +4,7 @@ import subprocess
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from .branch_context import require_feature_branch as require_workspace_feature_branch
 from .config import RepoPaths
 
 
@@ -169,11 +170,10 @@ def resolve_repo_targets(
     require_feature_branch: bool = False,
     fetch_missing: bool = False,
 ) -> WorkspaceTargets:
+    if require_feature_branch:
+        require_workspace_feature_branch(paths)
+
     workspace_branch = _current_branch(paths.root)
-    if require_feature_branch and workspace_branch in {"main", "master"}:
-        raise RuntimeError(
-            "workspace is still on a protected branch; create a feature branch first"
-        )
 
     workspace = _resolve_repo_target(
         paths.root,

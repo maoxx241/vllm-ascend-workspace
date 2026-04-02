@@ -39,16 +39,30 @@ If exact internal routing details are required after this skill is selected, see
 - Explain whether Git setup and any requested first-machine setup are complete.
 - Say plainly what missing input or repair step is still preventing a usable development baseline.
 
+## Auth Boundary
+
+- Allowed: GitHub login bootstrap, plus an optional first-machine bare-metal password bootstrap when init is explicitly establishing the first machine.
+- Forbidden: server password prompts outside the optional first-machine attach flow, repeated Git auth prompts after login succeeds, and any container password prompt.
+- On any unexpected auth prompt, fail closed with `needs_input` or `needs_repair` and keep the repair entry in `workspace-init`.
+
 ## Never Expose
 
 - raw secret values or secret-bearing handles
 - internal overlay mutation steps
 - private hosts, private filesystem paths, or private cache locations
 
+## Required Capabilities
+
+- `workspace-init` is responsible for producing `git_auth=ready` and `repo_topology=ready`.
+- When the user requests a first machine, `workspace-init` may also establish `servers.<target>.host_access=ready` and `servers.<target>.container_access=ready`.
+- Local-only init does not require an existing machine baseline.
+
 ## Default Inference Rules
 
 - Reuse an already ready Git and machine baseline when it still matches the request.
 - Handle Git setup before trying to materialize a first-machine baseline.
+- If no machine baseline exists yet, treat setup or first attach intent as `workspace-init`.
+- If setup already exists, later attach, verify, and removal work belongs to `machine-management`.
 - Stop and ask for missing required input instead of silently inventing a baseline.
 
 ## Cross-Skill Boundary
@@ -63,6 +77,12 @@ If exact internal routing details are required after this skill is selected, see
 - Do not claim the workspace is ready if Git setup is incomplete.
 - Do not claim the workspace is ready if a requested first machine is still blocked or broken.
 - Surface missing input and repairable problems as targeted next steps rather than generic failure text.
+
+## Failure Routing
+
+- If `git_auth` or `repo_topology` is missing or broken, stay in `workspace-init` and repair the workspace baseline there.
+- If the optional first-machine flow fails on `host_access`, `container_access`, `code_parity`, or `runtime_env`, return `needs_input` or `needs_repair` and route the machine-specific repair work to `machine-management`.
+- Do not turn an auth or topology failure into a fake ready local-only baseline.
 
 ## Security Notes
 

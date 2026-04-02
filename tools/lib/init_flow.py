@@ -5,38 +5,28 @@ from typing import Any, Dict, Optional
 
 import yaml
 
-from .bootstrap import (
-    BOOTSTRAP_MODE_LOCAL_ONLY,
-    BOOTSTRAP_MODE_REMOTE_FIRST,
-    BootstrapError,
+from .capability_state import read_capability_state, write_capability_state
+from .config import RepoPaths
+from .git_auth import ensure_git_auth_ready
+from .machine import (
     DEFAULT_RUNTIME_BOOTSTRAP_MODE,
     DEFAULT_RUNTIME_CONTAINER,
     DEFAULT_RUNTIME_IMAGE,
     DEFAULT_RUNTIME_SSH_PORT,
     DEFAULT_RUNTIME_WORKSPACE_ROOT,
-    DEFAULT_SERVER_AUTH_REF,
     DEFAULT_SERVER_PORT,
-    _ensure_overlay,
-    write_git_auth_ref,
-    write_server_auth_ref,
+    add_machine,
 )
-from .config import RepoPaths
-from .fleet import add_fleet_server
-from .foundation import run_foundation
-from .git_profile import git_profile
-from .lifecycle_state import (
-    MANAGED_SERVER_HANDOFF_KIND,
-    record_requested_mode,
-    record_runtime_handoff,
-)
-from .secret_boundary import (
-    SecretBoundaryError,
-    ensure_bootstrap_secret_refs,
-    require_pre_staged_env_handle,
-)
-from .runtime import read_state
-from .runtime import update_state
+from .overlay import ensure_overlay_layout
 from .repo_targets import resolve_repo_targets
+from .repo_topology import ensure_repo_topology_ready
+from .runtime import read_state, update_state
+from .secret_boundary import SecretBoundaryError, ensure_bootstrap_secret_refs
+
+DEFAULT_SERVER_AUTH_REF = "default-server-auth"
+DEFAULT_GIT_AUTH_REF = "default-github-cli"
+REQUEST_MODE_LOCAL_ONLY = "local-only"
+REQUEST_MODE_REMOTE_FIRST = "remote-first"
 
 
 @dataclass(frozen=True)
@@ -58,9 +48,6 @@ class InitRequest:
     vllm_ascend_origin_url: Optional[str] = None
     vllm_upstream_tag: Optional[str] = None
     vllm_ascend_upstream_branch: Optional[str] = None
-    git_auth_mode: str = "ssh-key"
-    git_key_path: Optional[str] = None
-    git_token_env: Optional[str] = None
     require_feature_branch: bool = False
 
 
@@ -73,40 +60,41 @@ def _optional_non_empty(value: Optional[str]) -> Optional[str]:
 
 def init_request_from_args(args: Any) -> InitRequest:
     return InitRequest(
-        server_host=_optional_non_empty(args.server_host),
+        server_host=_optional_non_empty(getattr(args, "server_host", None)),
         server_name=_optional_non_empty(getattr(args, "server_name", None)),
         local_only=bool(getattr(args, "local_only", False)),
-        server_user=args.server_user,
-        server_port=args.server_port,
-        server_auth_mode=args.server_auth_mode,
-        server_password_env=args.server_password_env,
-        server_key_path=args.server_key_path,
-        runtime_image=args.runtime_image,
-        runtime_container=args.runtime_container,
-        runtime_ssh_port=args.runtime_ssh_port,
-        runtime_workspace_root=args.runtime_workspace_root,
-        runtime_bootstrap_mode=DEFAULT_RUNTIME_BOOTSTRAP_MODE,
-        vllm_origin_url=_optional_non_empty(args.vllm_origin_url),
-        vllm_ascend_origin_url=_optional_non_empty(args.vllm_ascend_origin_url),
+        server_user=getattr(args, "server_user", "root"),
+        server_port=getattr(args, "server_port", DEFAULT_SERVER_PORT),
+        server_auth_mode=getattr(args, "server_auth_mode", "ssh-key"),
+        server_password_env=_optional_non_empty(getattr(args, "server_password_env", None)),
+        server_key_path=_optional_non_empty(getattr(args, "server_key_path", None)),
+        runtime_image=getattr(args, "runtime_image", DEFAULT_RUNTIME_IMAGE),
+        runtime_container=getattr(args, "runtime_container", DEFAULT_RUNTIME_CONTAINER),
+        runtime_ssh_port=getattr(args, "runtime_ssh_port", DEFAULT_RUNTIME_SSH_PORT),
+        runtime_workspace_root=getattr(args, "runtime_workspace_root", DEFAULT_RUNTIME_WORKSPACE_ROOT),
+        runtime_bootstrap_mode=getattr(
+            args,
+            "runtime_bootstrap_mode",
+            DEFAULT_RUNTIME_BOOTSTRAP_MODE,
+        ),
+        vllm_origin_url=_optional_non_empty(getattr(args, "vllm_origin_url", None)),
+        vllm_ascend_origin_url=_optional_non_empty(getattr(args, "vllm_ascend_origin_url", None)),
         vllm_upstream_tag=_optional_non_empty(getattr(args, "vllm_upstream_tag", None)),
         vllm_ascend_upstream_branch=_optional_non_empty(
             getattr(args, "vllm_ascend_upstream_branch", None)
         ),
-        git_auth_mode=args.git_auth_mode,
-        git_key_path=args.git_key_path,
-        git_token_env=args.git_token_env,
         require_feature_branch=bool(getattr(args, "require_feature_branch", False)),
     )
 
 
 def _requested_mode(request: InitRequest) -> str:
     if request.local_only or request.server_host is None:
-        return BOOTSTRAP_MODE_LOCAL_ONLY
-    return BOOTSTRAP_MODE_REMOTE_FIRST
+        return REQUEST_MODE_LOCAL_ONLY
+    return REQUEST_MODE_REMOTE_FIRST
 
 
 def _resolved_server_name(request: InitRequest) -> Optional[str]:
-    if _requested_mode(request) != BOOTSTRAP_MODE_REMOTE_FIRST:
+    if _requested_mode(request) != REQUEST_MODE_REMOTE_FIRST:
         return None
     return _optional_non_empty(request.server_name) or request.server_host
 
@@ -117,12 +105,60 @@ def _read_yaml_mapping(path) -> Dict[str, Any]:
     try:
         loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
-        raise BootstrapError(f"invalid init state: {path.name}") from exc
+        raise RuntimeError(f"invalid init state: {path.name}") from exc
     if loaded is None:
         return {}
     if not isinstance(loaded, dict):
-        raise BootstrapError(f"invalid init state: {path.name}")
+        raise RuntimeError(f"invalid init state: {path.name}")
     return loaded
+
+
+def _write_auth_config(paths: RepoPaths, auth_config: Dict[str, Any]) -> None:
+    paths.local_auth_file.parent.mkdir(parents=True, exist_ok=True)
+    paths.local_auth_file.write_text(
+        yaml.safe_dump(auth_config, sort_keys=False),
+        encoding="utf-8",
+    )
+
+
+def _load_auth_config(paths: RepoPaths) -> Dict[str, Any]:
+    auth_config = _read_yaml_mapping(paths.local_auth_file)
+    auth_config.setdefault("version", 1)
+    git_auth = auth_config.setdefault("git_auth", {})
+    if not isinstance(git_auth, dict):
+        git_auth = {}
+        auth_config["git_auth"] = git_auth
+    git_auth.setdefault("refs", {})
+    ssh_auth = auth_config.setdefault("ssh_auth", {})
+    if not isinstance(ssh_auth, dict):
+        ssh_auth = {}
+        auth_config["ssh_auth"] = ssh_auth
+    ssh_auth.setdefault("refs", {})
+    return auth_config
+
+
+def _write_git_auth_provider(paths: RepoPaths) -> None:
+    auth_config = _load_auth_config(paths)
+    refs = auth_config["git_auth"]["refs"]
+    refs[DEFAULT_GIT_AUTH_REF] = {
+        "kind": "github-cli",
+    }
+    _write_auth_config(paths, auth_config)
+
+
+def _write_server_auth_ref(paths: RepoPaths, request: InitRequest) -> None:
+    auth_config = _load_auth_config(paths)
+    refs = auth_config["ssh_auth"]["refs"]
+    payload: Dict[str, Any] = {
+        "kind": request.server_auth_mode,
+        "username": request.server_user,
+    }
+    if request.server_password_env:
+        payload["password_env"] = request.server_password_env
+    if request.server_key_path:
+        payload["key_path"] = request.server_key_path
+    refs[DEFAULT_SERVER_AUTH_REF] = payload
+    _write_auth_config(paths, auth_config)
 
 
 def _server_is_ready(paths: RepoPaths, *, server_name: str, server_host: str) -> bool:
@@ -136,23 +172,13 @@ def _server_is_ready(paths: RepoPaths, *, server_name: str, server_host: str) ->
         return False
     if server.get("host") != server_host:
         return False
-
-    verification = server.get("verification")
-    server_status = server.get("status")
-    verification_status = (
-        verification.get("status") if isinstance(verification, dict) else None
-    )
-    if server_status != "ready" or verification_status != "ready":
+    if server.get("status") != "ready":
         return False
 
     state = read_state(paths)
-    server_verifications = state.get("server_verifications")
-    if not isinstance(server_verifications, dict):
-        return False
-    persisted = server_verifications.get(server_name)
-    if not isinstance(persisted, dict):
-        return False
-    return persisted.get("status") == "ready"
+    server_state = state.get("servers", {}).get(server_name) if isinstance(state.get("servers"), dict) else None
+    container_access = server_state.get("container_access") if isinstance(server_state, dict) else None
+    return isinstance(container_access, dict) and container_access.get("status") == "ready"
 
 
 def _server_matches_request(
@@ -237,38 +263,9 @@ def _resolved_ready_server_name(
     return None
 
 
-def _runtime_for_ready_server(paths: RepoPaths, server_name: str) -> Dict[str, Any]:
-    state = read_state(paths)
-    server_verifications = state.get("server_verifications")
-    if isinstance(server_verifications, dict):
-        persisted = server_verifications.get(server_name)
-        if isinstance(persisted, dict):
-            runtime = persisted.get("runtime")
-            if isinstance(runtime, dict):
-                return dict(runtime)
-
-    servers_config = _read_yaml_mapping(paths.local_servers_file)
-    servers = servers_config.get("servers")
-    if isinstance(servers, dict):
-        server = servers.get(server_name)
-        if isinstance(server, dict):
-            verification = server.get("verification")
-            if isinstance(verification, dict):
-                runtime = verification.get("runtime")
-                if isinstance(runtime, dict):
-                    return dict(runtime)
-
-    raise BootstrapError(f"missing ready runtime handoff for existing server: {server_name}")
-
-
 def _requested_server_auth_matches(paths: RepoPaths, request: InitRequest) -> bool:
-    auth_config = _read_yaml_mapping(paths.local_auth_file)
-    ssh_auth = auth_config.get("ssh_auth")
-    if not isinstance(ssh_auth, dict):
-        return False
-    refs = ssh_auth.get("refs")
-    if not isinstance(refs, dict):
-        return False
+    auth_config = _load_auth_config(paths)
+    refs = auth_config["ssh_auth"]["refs"]
     auth_ref = refs.get(DEFAULT_SERVER_AUTH_REF)
     if not isinstance(auth_ref, dict):
         return False
@@ -278,34 +275,6 @@ def _requested_server_auth_matches(paths: RepoPaths, request: InitRequest) -> bo
         and auth_ref.get("password_env") == request.server_password_env
         and auth_ref.get("key_path") == request.server_key_path
     )
-
-
-def _preserve_requested_git_auth(paths: RepoPaths, request: InitRequest) -> None:
-    write_git_auth_ref(
-        paths,
-        git_auth_mode=request.git_auth_mode,
-        git_key_path=request.git_key_path,
-        git_token_env=request.git_token_env,
-    )
-
-
-def _ensure_requested_git_auth_secret_refs(request: InitRequest) -> None:
-    if request.git_auth_mode == "token":
-        require_pre_staged_env_handle(
-            request.git_token_env,
-            field_label="git token",
-        )
-
-
-def _git_profile_needs_input(paths: RepoPaths) -> bool:
-    state = read_state(paths)
-    lifecycle = state.get("lifecycle")
-    if not isinstance(lifecycle, dict):
-        return False
-    git_profile_state = lifecycle.get("git_profile")
-    if not isinstance(git_profile_state, dict):
-        return False
-    return git_profile_state.get("status") == "needs_input"
 
 
 def _record_repo_targets(paths: RepoPaths, request: InitRequest) -> None:
@@ -320,44 +289,30 @@ def _record_repo_targets(paths: RepoPaths, request: InitRequest) -> None:
 
 def run_init(paths: RepoPaths, request: InitRequest) -> int:
     try:
-        _ensure_overlay(paths)
-        requested_mode = _requested_mode(request)
-        record_requested_mode(paths, requested_mode)
+        ensure_overlay_layout(paths)
 
-        if run_foundation(paths) != 0:
+        git_auth_result = ensure_git_auth_ready(paths)
+        if git_auth_result["status"] != "ready":
+            print(f"init: {git_auth_result['status']}: {git_auth_result['detail']}")
             return 1
 
-        git_profile_result = git_profile(
-                paths,
-                vllm_origin_url=request.vllm_origin_url,
-                vllm_ascend_origin_url=request.vllm_ascend_origin_url,
-            )
-        if git_profile_result != 0:
-            if (
-                requested_mode == BOOTSTRAP_MODE_LOCAL_ONLY
-                and request.vllm_origin_url is None
-                and request.vllm_ascend_origin_url is None
-                and _git_profile_needs_input(paths)
-            ):
-                _ensure_requested_git_auth_secret_refs(request)
-                _preserve_requested_git_auth(paths, request)
-                print("init: ready (local-only)")
-                return 0
+        topology_result = ensure_repo_topology_ready(paths)
+        if topology_result["status"] != "ready":
+            print(f"init: {topology_result['status']}: {topology_result['detail']}")
             return 1
 
-        _ensure_requested_git_auth_secret_refs(request)
-        _preserve_requested_git_auth(paths, request)
+        _write_git_auth_provider(paths)
         _record_repo_targets(paths, request)
 
-        if requested_mode == BOOTSTRAP_MODE_LOCAL_ONLY:
+        if _requested_mode(request) == REQUEST_MODE_LOCAL_ONLY:
             print("init: ready (local-only)")
             return 0
 
         if request.server_host is None:
-            raise BootstrapError("missing server host for remote-first init")
+            raise RuntimeError("missing server host for remote-first init")
         server_name = _resolved_server_name(request)
         if server_name is None:
-            raise BootstrapError("missing server name for remote-first init")
+            raise RuntimeError("missing server name for remote-first init")
 
         ready_server_name = _resolved_ready_server_name(
             paths,
@@ -369,39 +324,27 @@ def run_init(paths: RepoPaths, request: InitRequest) -> int:
                 ensure_bootstrap_secret_refs(
                     server_auth_mode=request.server_auth_mode,
                     server_password_env=request.server_password_env,
-                    git_auth_mode=request.git_auth_mode,
-                    git_token_env=request.git_token_env,
+                    server_password_scope="workspace-init:first-machine-attach",
+                    git_auth_mode="github-cli",
+                    git_token_env=None,
                 )
-                write_server_auth_ref(
-                    paths,
-                    server_auth_mode=request.server_auth_mode,
-                    server_user=request.server_user,
-                    server_password_env=request.server_password_env,
-                    server_key_path=request.server_key_path,
-                )
-            record_runtime_handoff(
-                paths,
-                current_target=ready_server_name,
-                handoff_kind=MANAGED_SERVER_HANDOFF_KIND,
-                runtime=_runtime_for_ready_server(paths, ready_server_name),
-            )
+                _write_server_auth_ref(paths, request)
+            state = read_capability_state(paths)
+            state["current_server"] = ready_server_name
+            state.pop("current_session", None)
+            write_capability_state(paths, state)
             print(f"init: ready (existing {ready_server_name})")
             return 0
 
         ensure_bootstrap_secret_refs(
             server_auth_mode=request.server_auth_mode,
             server_password_env=request.server_password_env,
-            git_auth_mode=request.git_auth_mode,
-            git_token_env=request.git_token_env,
+            server_password_scope="workspace-init:first-machine-attach",
+            git_auth_mode="github-cli",
+            git_token_env=None,
         )
-        write_server_auth_ref(
-            paths,
-            server_auth_mode=request.server_auth_mode,
-            server_user=request.server_user,
-            server_password_env=request.server_password_env,
-            server_key_path=request.server_key_path,
-        )
-        return add_fleet_server(
+        _write_server_auth_ref(paths, request)
+        return add_machine(
             paths,
             server_name,
             request.server_host,
@@ -414,6 +357,6 @@ def run_init(paths: RepoPaths, request: InitRequest) -> int:
             runtime_workspace_root=request.runtime_workspace_root,
             runtime_bootstrap_mode=request.runtime_bootstrap_mode,
         )
-    except (BootstrapError, SecretBoundaryError, RuntimeError) as exc:
+    except (SecretBoundaryError, RuntimeError) as exc:
         print(str(exc))
         return 1
