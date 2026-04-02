@@ -13,8 +13,9 @@ from tools.lib.machine import add_machine, list_machines, remove_machine, verify
 from tools.lib.repo_topology import normalize_remotes
 from tools.lib.reset import execute_reset, prepare_reset
 from tools.lib.session import create_session, status_session, switch_session
-from tools.lib.benchmark import run_benchmark_preset
+from tools.lib.benchmark import run_benchmark
 from tools.lib.acceptance import AcceptanceRequest, run_acceptance
+from tools.lib.serving import list_services, start_service, status_service, stop_service
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -92,6 +93,22 @@ def build_parser() -> argparse.ArgumentParser:
     machine_remove_parser = machine_subparsers.add_parser("remove", help="remove a machine from this workspace")
     machine_remove_parser.add_argument("server_name")
 
+    serving_parser = subparsers.add_parser(
+        "serving",
+        help="start, inspect, list, or stop explicit model services",
+    )
+    serving_subparsers = serving_parser.add_subparsers(dest="serving_command", required=True)
+    serving_subparsers.add_parser("list", help="list explicit services in this workspace")
+    serving_start_parser = serving_subparsers.add_parser("start", help="start an explicit service")
+    serving_start_parser.add_argument("--server-name", required=True)
+    serving_start_parser.add_argument("--preset", required=True)
+    serving_start_parser.add_argument("--weights-path", required=True)
+    serving_start_parser.add_argument("--api-key-env")
+    serving_status_parser = serving_subparsers.add_parser("status", help="inspect one service")
+    serving_status_parser.add_argument("service_id")
+    serving_stop_parser = serving_subparsers.add_parser("stop", help="stop one explicit service")
+    serving_stop_parser.add_argument("service_id")
+
     benchmark_parser = subparsers.add_parser(
         "benchmark",
         help="run benchmark workflows on a ready machine",
@@ -103,6 +120,8 @@ def build_parser() -> argparse.ArgumentParser:
     benchmark_run_parser = benchmark_subparsers.add_parser("run")
     benchmark_run_parser.add_argument("--server-name", required=True)
     benchmark_run_parser.add_argument("--preset", required=True)
+    benchmark_run_parser.add_argument("--weights-path")
+    benchmark_run_parser.add_argument("--service-id")
 
     internal_parser = subparsers.add_parser("internal", help=argparse.SUPPRESS)
     internal_subparsers = internal_parser.add_subparsers(
@@ -135,7 +154,8 @@ def build_parser() -> argparse.ArgumentParser:
     acceptance_run_parser.add_argument("--vllm-ascend-origin-url")
     acceptance_run_parser.add_argument("--vllm-upstream-tag")
     acceptance_run_parser.add_argument("--vllm-ascend-upstream-branch", default="main")
-    acceptance_run_parser.add_argument("--benchmark-preset", default="qwen3-35b-tp4")
+    acceptance_run_parser.add_argument("--weights-path", required=True)
+    acceptance_run_parser.add_argument("--benchmark-preset", default="qwen3_5_35b_tp4_perf")
 
     internal_remotes_parser = internal_subparsers.add_parser("remotes", help=argparse.SUPPRESS)
     internal_remotes_subparsers = internal_remotes_parser.add_subparsers(
@@ -188,8 +208,18 @@ def main(argv: Optional[List[str]] = None) -> int:
         if args.machine_command == "remove":
             return remove_machine(paths, args.server_name)
         parser.error(f"unknown machine command: {args.machine_command}")
+    if args.command == "serving":
+        if args.serving_command == "list":
+            return list_services(paths)
+        if args.serving_command == "start":
+            return start_service(paths, args.server_name, args.preset, args.weights_path, args.api_key_env)
+        if args.serving_command == "status":
+            return status_service(paths, args.service_id)
+        if args.serving_command == "stop":
+            return stop_service(paths, args.service_id)
+        parser.error(f"unknown serving command: {args.serving_command}")
     if args.command == "benchmark" and args.benchmark_command == "run":
-        return run_benchmark_preset(paths, args.server_name, args.preset)
+        return run_benchmark(paths, args.server_name, args.preset, args.weights_path, args.service_id)
     if args.command == "internal":
         if args.internal_command == "session" and args.session_command == "create":
             return create_session(paths, args.session_name)
@@ -207,6 +237,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                     vllm_upstream_tag=args.vllm_upstream_tag,
                     vllm_ascend_upstream_branch=args.vllm_ascend_upstream_branch,
                     benchmark_preset=args.benchmark_preset,
+                    weights_path=args.weights_path,
                 ),
             )
         if args.internal_command == "remotes" and args.remotes_command == "normalize":

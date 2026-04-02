@@ -23,10 +23,20 @@ SCENARIOS = {
             "这台新 server 也纳入当前 workspace",
         ),
     },
+    "serving": {
+        "intent_groups": (
+            ("start service", "status service"),
+            ("list services", "stop service"),
+        ),
+        "pressure_only_variants": (
+            "先把模型服务起起来，我后面再跑 benchmark",
+            "把当前代码对应的服务先拉起来",
+        ),
+    },
     "benchmark": {
         "intent_groups": (
             ("run benchmark", "benchmark execution"),
-            ("qwen3 35b tp4", "ready environment"),
+            ("service session", "ready environment"),
         ),
         "pressure_only_variants": (
             "把 qwen3.5 35b 的压测跑起来",

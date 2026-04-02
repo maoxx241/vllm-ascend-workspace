@@ -67,7 +67,12 @@ def test_read_state_returns_schema_v2_shell_when_state_missing(tmp_path):
 
     state = read_state(paths)
 
-    assert state == {"schema_version": 2, "servers": {}}
+    assert state == {
+        "schema_version": 3,
+        "servers": {},
+        "services": {},
+        "benchmark_runs": {},
+    }
 
 
 def test_diagnose_state_residue_reports_retired_keys_without_raising(tmp_path):

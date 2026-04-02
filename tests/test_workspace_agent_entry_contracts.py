@@ -12,6 +12,7 @@ ENTRY_FILES = (
 PUBLIC_SKILLS = (
     "workspace-init",
     "machine-management",
+    "serving",
     "benchmark",
     "workspace-reset",
 )

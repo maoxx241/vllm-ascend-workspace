@@ -30,6 +30,9 @@ Use this file only after the public `machine-management` contract has been selec
 - `check whether this machine is ready`
   - sanctioned adapter: `tools/vaws.py machine verify`
   - internal contracts: `machine-runtime`, `code-parity`, `runtime-environment`
+- `repair machine readiness without touching service lifecycle`
+  - sanctioned adapter: `tools/vaws.py machine verify`
+  - internal contracts: `machine-runtime`, `code-parity`, `runtime-environment`
 - `list attached machines`
   - sanctioned adapter: `tools/vaws.py machine list`
   - internal contracts: `machine-runtime`

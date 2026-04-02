@@ -20,7 +20,7 @@ def test_public_top_level_commands_match_canonical_surface():
     parser = vaws.build_parser()
     choices = _subparser_choices(parser)
 
-    assert {"init", "machine", "benchmark", "reset", "doctor", "internal"} == set(choices)
+    assert {"init", "machine", "serving", "benchmark", "reset", "doctor", "internal"} == set(choices)
     assert "foundation" not in choices
     assert "git-profile" not in choices
     assert "fleet" not in choices

@@ -13,7 +13,8 @@ This directory contains the shared workspace-local contract layer for agents wor
 
 - `.agents/skills/workspace-init/` prepares the repo for development.
 - `.agents/skills/machine-management/` handles machine attach, verify, and removal requests.
-- `.agents/skills/benchmark/` handles benchmark execution requests.
+- `.agents/skills/serving/` handles model-serving start, status, list, and stop requests.
+- `.agents/skills/benchmark/` handles benchmark execution requests against a model service.
 - `.agents/skills/workspace-reset/` handles explicit destructive teardown.
 - `.agents/skills/profiling-analysis/` remains available as a domain-specific skill.
 
