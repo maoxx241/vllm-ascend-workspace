@@ -25,10 +25,17 @@ FIRST_CLASS_SKILLS = {
             ("ongoing",),
         ),
     },
+    "serving": {
+        "intent_groups": (
+            ("start service", "status service"),
+            ("list services", "stop service"),
+            ("examples include, but are not limited to:",),
+        ),
+    },
     "benchmark": {
         "intent_groups": (
             ("run benchmark", "benchmark execution"),
-            ("ready environment", "qwen3 35b tp4"),
+            ("ready environment", "service session"),
             ("examples include, but are not limited to:",),
         ),
     },
@@ -146,6 +153,7 @@ def test_machine_management_skill_mentions_machine_vocabulary():
     assert "machine add" in text
     assert "fleet add" not in text
     assert "fleet verify" not in text
+    assert "machine ready does not imply service ready" in text
 
 
 def test_when_to_use_sections_are_intent_led_and_non_exhaustive():
@@ -204,11 +212,17 @@ def test_auth_boundary_sections_encode_allowed_and_forbidden_prompts():
             "github login",
             "container password",
         ),
-        "benchmark": (
+        "serving": (
             "allowed: none",
             "forbidden",
             "auth prompt",
             "machine-management",
+        ),
+        "benchmark": (
+            "allowed: none",
+            "forbidden",
+            "auth prompt",
+            "temporary or explicit service session",
         ),
         "workspace-reset": (
             "allowed: none",
@@ -237,6 +251,12 @@ def test_required_capabilities_sections_name_canonical_capability_leaves():
             "code_parity",
             "runtime_env",
         ),
+        "serving": (
+            "host_access",
+            "container_access",
+            "code_parity",
+            "runtime_env",
+        ),
         "benchmark": (
             "git_auth",
             "repo_topology",
@@ -244,6 +264,7 @@ def test_required_capabilities_sections_name_canonical_capability_leaves():
             "container_access",
             "code_parity",
             "runtime_env",
+            "service",
         ),
         "workspace-reset": (
             "known_hosts",
@@ -272,9 +293,15 @@ def test_failure_routing_sections_redirect_to_canonical_skills():
             "host_access",
             "container_access",
         ),
+        "serving": (
+            "machine-management",
+            "code_parity",
+            "runtime_env",
+        ),
         "benchmark": (
             "workspace-init",
             "machine-management",
+            "serving",
             "runtime_env",
             "code_parity",
         ),

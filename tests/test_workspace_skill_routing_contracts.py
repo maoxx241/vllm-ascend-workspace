@@ -5,6 +5,7 @@ ROOT = Path(__file__).resolve().parents[1]
 FIRST_CLASS_SKILLS = (
     "workspace-init",
     "machine-management",
+    "serving",
     "benchmark",
     "workspace-reset",
 )
@@ -83,6 +84,7 @@ def test_routing_files_reference_canonical_adapters():
     expectations = {
         "workspace-init": ("tools/vaws.py init", "tools/vaws.py doctor"),
         "machine-management": ("tools/vaws.py machine add", "tools/vaws.py machine verify"),
+        "serving": ("tools/vaws.py serving start", "tools/vaws.py serving stop"),
         "benchmark": ("tools/vaws.py benchmark run", "tools/vaws.py internal acceptance run"),
         "workspace-reset": ("tools/vaws.py reset prepare", "tools/vaws.py reset execute"),
     }

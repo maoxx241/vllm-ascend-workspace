@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from .benchmark import run_benchmark_preset
+from .benchmark import run_benchmark
 from .code_parity import ensure_code_parity
 from .config import RepoPaths
 from .repo_targets import (
@@ -23,6 +23,7 @@ class AcceptanceRequest:
     vllm_upstream_tag: Optional[str]
     vllm_ascend_upstream_branch: str
     benchmark_preset: str
+    weights_path: str | None = None
 
 
 def _requested_targets(paths: RepoPaths, request: AcceptanceRequest) -> WorkspaceTargets:
@@ -86,7 +87,13 @@ def ensure_runtime_environment_for_acceptance(
 
 
 def run_benchmark_for_acceptance(paths: RepoPaths, request: AcceptanceRequest) -> int:
-    return run_benchmark_preset(paths, request.server_name, request.benchmark_preset)
+    return run_benchmark(
+        paths,
+        server_name=request.server_name,
+        preset_name=request.benchmark_preset,
+        weights_path=request.weights_path,
+        service_id=None,
+    )
 
 
 def run_acceptance(root: Path, request: AcceptanceRequest) -> int:

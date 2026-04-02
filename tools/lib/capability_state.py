@@ -9,7 +9,7 @@ from typing import Any, Dict, Iterator, Sequence
 
 from .config import RepoPaths
 
-CAPABILITY_STATE_SCHEMA_VERSION = 2
+CAPABILITY_STATE_SCHEMA_VERSION = 3
 RETIRED_STATE_KEYS = {
     "lifecycle",
     "requested_mode",
@@ -25,6 +25,8 @@ def default_capability_state() -> dict[str, object]:
     return {
         "schema_version": CAPABILITY_STATE_SCHEMA_VERSION,
         "servers": {},
+        "services": {},
+        "benchmark_runs": {},
     }
 
 
@@ -66,7 +68,11 @@ def _validate_capability_state(state: Dict[str, Any]) -> Dict[str, Any]:
     schema_version = normalized.get("schema_version", CAPABILITY_STATE_SCHEMA_VERSION)
     if isinstance(schema_version, bool) or not isinstance(schema_version, int):
         raise RuntimeError("invalid runtime state: .workspace.local/state.json")
-    if schema_version != CAPABILITY_STATE_SCHEMA_VERSION:
+    if schema_version == 2:
+        normalized["schema_version"] = CAPABILITY_STATE_SCHEMA_VERSION
+        normalized.setdefault("services", {})
+        normalized.setdefault("benchmark_runs", {})
+    elif schema_version != CAPABILITY_STATE_SCHEMA_VERSION:
         raise RuntimeError(f"unsupported runtime state schema_version: {schema_version}")
 
     for key in RETIRED_STATE_KEYS:
@@ -74,11 +80,20 @@ def _validate_capability_state(state: Dict[str, Any]) -> Dict[str, Any]:
             raise RuntimeError(f"retired state key present: {key}")
 
     normalized["schema_version"] = CAPABILITY_STATE_SCHEMA_VERSION
-    servers = normalized.get("servers")
-    if servers is None:
-        normalized["servers"] = {}
-    elif not isinstance(servers, dict):
-        raise RuntimeError("invalid runtime state: servers must be an object")
+    for top_level in (
+        "servers",
+        "services",
+        "benchmark_runs",
+        "code_parity",
+        "runtime_environment",
+    ):
+        value = normalized.get(top_level)
+        if value is None:
+            if top_level in {"code_parity", "runtime_environment"}:
+                continue
+            normalized[top_level] = {}
+        elif not isinstance(value, dict):
+            raise RuntimeError(f"invalid runtime state: {top_level} must be an object")
     return normalized
 
 
@@ -96,7 +111,7 @@ def diagnose_state_residue(paths: RepoPaths) -> list[str]:
         return residue
 
     schema_version = payload.get("schema_version")
-    if schema_version != CAPABILITY_STATE_SCHEMA_VERSION:
+    if schema_version not in {2, CAPABILITY_STATE_SCHEMA_VERSION}:
         residue.append(f"state.json has unsupported schema_version: {schema_version}")
     for key in RETIRED_STATE_KEYS:
         if key in payload:
@@ -142,3 +157,24 @@ def write_capability_leaf(
             cursor = child
         cursor[leaf_path[-1]] = dict(payload)
         return write_capability_state(paths, state)
+
+
+def upsert_service_session(paths: RepoPaths, session: Dict[str, Any]) -> Dict[str, Any]:
+    if "service_id" not in session:
+        raise RuntimeError("service session missing service_id")
+    return write_capability_leaf(paths, ("services", str(session["service_id"])), session)
+
+
+def remove_service_session(paths: RepoPaths, service_id: str) -> Dict[str, Any]:
+    with locked_capability_state(paths):
+        state = read_capability_state(paths)
+        services = state.get("services")
+        if not isinstance(services, dict):
+            services = {}
+            state["services"] = services
+        services.pop(service_id, None)
+        return write_capability_state(paths, state)
+
+
+def record_benchmark_run(paths: RepoPaths, run_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    return write_capability_leaf(paths, ("benchmark_runs", run_id), payload)

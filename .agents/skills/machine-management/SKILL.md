@@ -39,6 +39,7 @@ If exact internal routing details are required after this skill is selected, see
 - Report whether the requested machine is `ready`, `needs_input`, `needs_repair`, or `blocked`.
 - Explain whether the machine is attached, reusable, or removed.
 - Keep the result framed as workspace machine readiness, not as raw inventory file editing.
+- Make it explicit that machine ready does not imply service ready.
 
 ## Auth Boundary
 
@@ -69,6 +70,7 @@ If exact internal routing details are required after this skill is selected, see
 
 - `workspace-init` owns first-time Git setup and optional first-machine setup.
 - `machine-management` owns later machine attach, verify, and removal work.
+- `serving` owns service session lifecycle after the machine is ready.
 - `benchmark` owns benchmark execution after the machine is ready.
 - `workspace-reset` owns explicit destructive teardown.
 
@@ -94,6 +96,7 @@ If exact internal routing details are required after this skill is selected, see
 
 - Treating machine maintenance as a generic SSH command wrapper.
 - Re-attaching a machine instead of verifying or repairing an existing one.
+- Treating a machine-ready result as if it also guaranteed service readiness.
 - Explaining machine readiness in terms of raw state files or container internals.
 
 ## Red Flags

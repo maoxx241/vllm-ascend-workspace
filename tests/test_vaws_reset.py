@@ -116,7 +116,7 @@ def test_reset_execute_removes_retired_targets_file_and_current_selection(vaws_r
     assert reset.execute_reset(paths, "reset-1", reset.CONFIRMATION_PHRASE) == 0
 
     state = read_state(paths)
-    assert state == {"schema_version": 2, "servers": {}}
+    assert state == {"schema_version": 3, "servers": {}, "services": {}, "benchmark_runs": {}}
     assert not paths.local_targets_file.exists()
     assert not paths.reset_request_file.exists()
 

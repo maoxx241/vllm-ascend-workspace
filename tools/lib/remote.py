@@ -1614,6 +1614,26 @@ def run_runtime_command(
     return _run_container_command(ctx, transport, script)
 
 
+def run_detached_runtime_command(
+    ctx: TargetContext,
+    transport: str,
+    command: str,
+    *,
+    log_path: str,
+    pid_path: str,
+) -> subprocess.CompletedProcess[str]:
+    wrapped = "\n".join(
+        [
+            "set -euo pipefail",
+            f"mkdir -p {shlex.quote(str(Path(log_path).parent))}",
+            f"nohup bash -lc {shlex.quote(command)} > {shlex.quote(log_path)} 2>&1 < /dev/null &",
+            f"echo $! > {shlex.quote(pid_path)}",
+            f"cat {shlex.quote(pid_path)}",
+        ]
+    )
+    return run_runtime_command(ctx, transport, wrapped)
+
+
 def create_remote_session(paths: RepoPaths, ctx: TargetContext, manifest: Dict[str, Any], transport: str) -> None:
     if ctx.credential.mode == "local-simulation":
         _ensure_simulation_session(paths, ctx, manifest)

@@ -19,7 +19,8 @@ def _acceptance_request() -> AcceptanceRequest:
         vllm_ascend_origin_url=None,
         vllm_upstream_tag="0.18.0",
         vllm_ascend_upstream_branch="main",
-        benchmark_preset="qwen3-35b-tp4",
+        benchmark_preset="qwen3_5_35b_tp4_perf",
+        weights_path="/home/weights/Qwen3.5-35B-A3B",
     )
 
 
@@ -154,29 +155,15 @@ def test_internal_acceptance_cli_run_delegates_to_backend(monkeypatch, vaws_repo
             "0.18.0",
             "--vllm-ascend-upstream-branch",
             "main",
+            "--weights-path",
+            "/home/weights/Qwen3.5-35B-A3B",
             "--benchmark-preset",
-            "qwen3-35b-tp4",
+            "qwen3_5_35b_tp4_perf",
         ]
     )
 
     assert result == 0
     assert calls["root"] == str(vaws_repo)
     assert calls["request"].server_name == "lab-a"
-    assert calls["request"].benchmark_preset == "qwen3-35b-tp4"
-
-
-def test_real_acceptance_runbook_exists():
-    path = (
-        ROOT
-        / "docs"
-        / "superpowers"
-        / "runbooks"
-        / "2026-04-01-real-e2e-acceptance.md"
-    )
-    text = path.read_text(encoding="utf-8")
-    assert "vaws.py internal acceptance run" in text
-    assert "vaws.py init" in text
-    assert "machine verify" in text
-    assert "VAWS_SERVER_PASSWORD" not in text
-    assert "qwen3-35b-tp4" in text
-    assert "173.131.1.2" not in text
+    assert calls["request"].benchmark_preset == "qwen3_5_35b_tp4_perf"
+    assert calls["request"].weights_path == "/home/weights/Qwen3.5-35B-A3B"

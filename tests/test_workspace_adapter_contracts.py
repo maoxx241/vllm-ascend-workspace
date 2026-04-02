@@ -6,6 +6,7 @@ ADAPTER_FILES = ("AGENTS.md", "CLAUDE.md", ".cursorrules")
 PUBLIC_SKILL_ROUTES = (
     ".agents/skills/workspace-init/skill.md",
     ".agents/skills/machine-management/skill.md",
+    ".agents/skills/serving/skill.md",
     ".agents/skills/benchmark/skill.md",
     ".agents/skills/workspace-reset/skill.md",
 )

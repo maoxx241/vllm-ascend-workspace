@@ -12,6 +12,7 @@ ENTRY_DOCS = (
 PUBLIC_SKILLS = (
     "workspace-init",
     "machine-management",
+    "serving",
     "benchmark",
     "workspace-reset",
 )
@@ -149,3 +150,13 @@ def test_public_repo_topology_example_stays_public_and_upstream_oriented():
     assert "https://github.com/vllm-project/vllm.git" in repos_example
     assert "https://github.com/vllm-project/vllm-ascend.git" in repos_example
     assert "git@github.com:" not in repos_example
+
+
+def test_serving_and_benchmark_runbooks_live_with_assets():
+    assert (ROOT / "serving" / "topologies" / "single-node-replica" / "RUNBOOK.md").exists()
+    assert (ROOT / "benchmarking" / "probes" / "performance" / "RUNBOOK.md").exists()
+    assert not (ROOT / "docs" / "superpowers" / "runbooks").exists()
+
+
+def test_old_gdn_asset_path_is_not_the_canonical_execution_surface():
+    assert not (ROOT / "benchmarking" / "serving" / "gdn" / "qwen3_5" / "qwen35_gdn_chunk_perf.py").exists()

@@ -65,12 +65,15 @@ def test_internal_acceptance_run_delegates_to_backend(monkeypatch, vaws_repo):
             "0.18.0",
             "--vllm-ascend-upstream-branch",
             "main",
+            "--weights-path",
+            "/home/weights/qwen3_5_35b",
             "--benchmark-preset",
-            "qwen3-35b-tp4",
+            "qwen3_5_35b_tp4_perf",
         ]
     )
 
     assert result == 0
     assert calls["root"] == str(vaws_repo)
     assert calls["request"].server_name == "lab-a"
-    assert calls["request"].benchmark_preset == "qwen3-35b-tp4"
+    assert calls["request"].weights_path == "/home/weights/qwen3_5_35b"
+    assert calls["request"].benchmark_preset == "qwen3_5_35b_tp4_perf"

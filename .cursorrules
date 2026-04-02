@@ -4,6 +4,7 @@
 - Treat `/vllm-workspace` as the canonical runtime root.
 - Treat `.agents/skills/workspace-init/SKILL.md` as the first-time setup and recovery contract.
 - Treat `.agents/skills/machine-management/SKILL.md` as the machine attach, verify, and removal contract.
+- Treat `.agents/skills/serving/SKILL.md` as the service lifecycle contract.
 - Treat `.agents/skills/benchmark/SKILL.md` as the benchmark contract.
 - Treat `.agents/skills/workspace-reset/SKILL.md` as the destructive teardown contract.
 - Treat skill-local routing references as internal execution notes, not public workflow steps.
