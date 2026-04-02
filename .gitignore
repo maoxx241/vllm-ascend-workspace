@@ -1,4 +1,5 @@
 .workspace.local/
+.claude/
 .DS_Store
 __pycache__/
 *.py[cod]

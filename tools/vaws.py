@@ -10,11 +10,8 @@ from tools.lib.config import RepoPaths
 from tools.lib.doctor import doctor
 from tools.lib.init_flow import init_request_from_args, run_init
 from tools.lib.machine import add_machine, list_machines, remove_machine, verify_machine
-from tools.lib.repo_topology import normalize_remotes
 from tools.lib.reset import execute_reset, prepare_reset
-from tools.lib.session import create_session, status_session, switch_session
 from tools.lib.benchmark import run_benchmark
-from tools.lib.acceptance import AcceptanceRequest, run_acceptance
 from tools.lib.serving import list_services, start_service, status_service, stop_service
 
 
@@ -123,52 +120,7 @@ def build_parser() -> argparse.ArgumentParser:
     benchmark_run_parser.add_argument("--weights-path")
     benchmark_run_parser.add_argument("--service-id")
 
-    internal_parser = subparsers.add_parser("internal", help=argparse.SUPPRESS)
-    internal_subparsers = internal_parser.add_subparsers(
-        dest="internal_command",
-        required=True,
-    )
-    internal_session_parser = internal_subparsers.add_parser("session", help=argparse.SUPPRESS)
-    internal_session_subparsers = internal_session_parser.add_subparsers(
-        dest="session_command",
-        required=True,
-    )
-    internal_session_create_parser = internal_session_subparsers.add_parser(
-        "create", help=argparse.SUPPRESS
-    )
-    internal_session_create_parser.add_argument("session_name")
-    internal_session_switch_parser = internal_session_subparsers.add_parser(
-        "switch", help=argparse.SUPPRESS
-    )
-    internal_session_switch_parser.add_argument("session_name")
-    internal_session_subparsers.add_parser("status", help=argparse.SUPPRESS)
-
-    internal_acceptance_parser = internal_subparsers.add_parser("acceptance", help=argparse.SUPPRESS)
-    internal_acceptance_subparsers = internal_acceptance_parser.add_subparsers(
-        dest="acceptance_command",
-        required=True,
-    )
-    acceptance_run_parser = internal_acceptance_subparsers.add_parser("run", help=argparse.SUPPRESS)
-    acceptance_run_parser.add_argument("--server-name", required=True)
-    acceptance_run_parser.add_argument("--vllm-origin-url")
-    acceptance_run_parser.add_argument("--vllm-ascend-origin-url")
-    acceptance_run_parser.add_argument("--vllm-upstream-tag")
-    acceptance_run_parser.add_argument("--vllm-ascend-upstream-branch", default="main")
-    acceptance_run_parser.add_argument("--weights-path", required=True)
-    acceptance_run_parser.add_argument("--benchmark-preset", default="qwen3_5_35b_tp4_perf")
-
-    internal_remotes_parser = internal_subparsers.add_parser("remotes", help=argparse.SUPPRESS)
-    internal_remotes_subparsers = internal_remotes_parser.add_subparsers(
-        dest="remotes_command",
-        required=True,
-    )
-    internal_remotes_subparsers.add_parser("normalize", help=argparse.SUPPRESS)
     return parser
-
-
-def _dispatch_internal_placeholder(_args: argparse.Namespace) -> int:
-    print("internal adapter not wired yet: continue with Tasks 3-5")
-    return 1
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -220,29 +172,6 @@ def main(argv: Optional[List[str]] = None) -> int:
         parser.error(f"unknown serving command: {args.serving_command}")
     if args.command == "benchmark" and args.benchmark_command == "run":
         return run_benchmark(paths, args.server_name, args.preset, args.weights_path, args.service_id)
-    if args.command == "internal":
-        if args.internal_command == "session" and args.session_command == "create":
-            return create_session(paths, args.session_name)
-        if args.internal_command == "session" and args.session_command == "switch":
-            return switch_session(paths, args.session_name)
-        if args.internal_command == "session" and args.session_command == "status":
-            return status_session(paths)
-        if args.internal_command == "acceptance" and args.acceptance_command == "run":
-            return run_acceptance(
-                paths.root,
-                AcceptanceRequest(
-                    server_name=args.server_name,
-                    vllm_origin_url=args.vllm_origin_url,
-                    vllm_ascend_origin_url=args.vllm_ascend_origin_url,
-                    vllm_upstream_tag=args.vllm_upstream_tag,
-                    vllm_ascend_upstream_branch=args.vllm_ascend_upstream_branch,
-                    benchmark_preset=args.benchmark_preset,
-                    weights_path=args.weights_path,
-                ),
-            )
-        if args.internal_command == "remotes" and args.remotes_command == "normalize":
-            return normalize_remotes(paths)
-        return _dispatch_internal_placeholder(args)
 
     parser.error(f"unknown command: {args.command}")
     return 2

@@ -58,7 +58,7 @@ def _print_prepare_summary(confirmation_id: str) -> None:
         "reset prepare: reset execute will perform managed-server cleanup before clearing local overlay state"
     )
     print(
-        "reset prepare: local overlay state includes .workspace.local/state.json, .workspace.local/sessions/, .workspace.local/servers.yaml, .workspace.local/auth.yaml, .workspace.local/repos.yaml, and any retired residue such as .workspace.local/targets.yaml"
+        "reset prepare: local overlay state includes .workspace.local/state.json, .workspace.local/servers.yaml, .workspace.local/auth.yaml, .workspace.local/repos.yaml, and any retired residue such as .workspace.local/targets.yaml"
     )
     print(f"reset prepare: confirmation id: {confirmation_id}")
     print(f"reset prepare: confirm with: {CONFIRMATION_PHRASE}")
@@ -93,10 +93,6 @@ def prepare_reset(paths: RepoPaths) -> int:
 
 def _cleanup_local_state(paths: RepoPaths) -> None:
     write_state(paths, {})
-    if paths.local_sessions_dir.exists():
-        if not paths.local_sessions_dir.is_dir():
-            raise RuntimeError("failed to clean local workspace: .workspace.local/sessions is not a directory")
-        shutil.rmtree(paths.local_sessions_dir)
     if paths.local_targets_file.exists():
         if paths.local_targets_file.is_dir():
             raise RuntimeError("failed to clean local workspace: .workspace.local/targets.yaml is not a file")

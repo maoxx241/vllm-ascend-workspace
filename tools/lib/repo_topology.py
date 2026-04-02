@@ -4,8 +4,6 @@ import subprocess
 from datetime import datetime, timezone
 from typing import Any, Dict
 
-import yaml
-
 from .capability_state import read_capability_state, write_capability_state
 from .config import RepoPaths
 
@@ -69,22 +67,3 @@ def ensure_repo_topology_ready(paths: RepoPaths) -> Dict[str, Any]:
     state["repo_topology"] = payload
     write_capability_state(paths, state)
     return payload
-
-
-def _load_protected_branches(paths: RepoPaths) -> list[str]:
-    try:
-        loaded = yaml.safe_load(paths.local_repos_file.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, yaml.YAMLError):
-        return ["main"]
-    workspace = loaded.get("workspace") if isinstance(loaded, dict) else None
-    protected = workspace.get("protected_branches") if isinstance(workspace, dict) else None
-    if not isinstance(protected, list):
-        return ["main"]
-    values = [branch.strip() for branch in protected if isinstance(branch, str) and branch.strip()]
-    return values or ["main"]
-
-
-def normalize_remotes(paths: RepoPaths) -> int:
-    protected_branches = _load_protected_branches(paths)
-    print(f"remotes normalize: protected branches = {', '.join(protected_branches)}")
-    return 0
