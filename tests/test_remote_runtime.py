@@ -7,15 +7,9 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from tools.lib.config import RepoPaths
-from tools.lib.remote import (
-    _bootstrap_container_runtime,
-    CredentialGroup,
-    HostSpec,
-    RuntimeSpec,
-    TargetContext,
-    VerificationResult,
-    verify_runtime,
-)
+from tools.lib.remote_types import CredentialGroup, HostSpec, RuntimeSpec, TargetContext, VerificationResult
+from tools.lib.runtime_bootstrap import verify_runtime
+from tools.lib.runtime_transport import bootstrap_container_runtime
 
 
 def _host_ctx() -> TargetContext:
@@ -58,10 +52,10 @@ def test_verify_runtime_reports_needs_repair_when_only_docker_exec_works(
         return ("ready", "docker exec ok")
 
     monkeypatch.setattr(
-        "tools.lib.remote._probe_container_ssh_transport",
+        "tools.lib.runtime_bootstrap.probe_container_ssh_transport",
         fake_probe_container_ssh,
     )
-    monkeypatch.setattr("tools.lib.remote._probe_docker_exec_transport", fake_probe_docker_exec)
+    monkeypatch.setattr("tools.lib.runtime_bootstrap.probe_docker_exec_transport", fake_probe_docker_exec)
 
     result = verify_runtime(RepoPaths(root=Path(tmp_path)), ctx)
 
@@ -80,10 +74,10 @@ def test_container_bootstrap_writes_key_only_sshd_config(monkeypatch):
         recorded["script"] = script
         return subprocess.CompletedProcess(["docker"], 0, "", "")
 
-    monkeypatch.setattr("tools.lib.remote._run_docker_exec", fake_run_docker_exec)
-    monkeypatch.setattr("tools.lib.remote._probe_container_ssh", lambda _ctx: True)
+    monkeypatch.setattr("tools.lib.runtime_transport.run_docker_exec", fake_run_docker_exec)
+    monkeypatch.setattr("tools.lib.runtime_transport.probe_container_ssh", lambda _ctx: True)
 
-    transport = _bootstrap_container_runtime(ctx)
+    transport = bootstrap_container_runtime(ctx)
 
     assert transport == "container-ssh"
     script = recorded["script"]
@@ -100,11 +94,11 @@ def test_verify_runtime_does_not_claim_ready_when_all_host_transports_fail(
 ):
     ctx = _host_ctx()
     monkeypatch.setattr(
-        "tools.lib.remote._probe_container_ssh_transport",
+        "tools.lib.runtime_bootstrap.probe_container_ssh_transport",
         lambda _ctx: ("needs_repair", "connection refused"),
     )
     monkeypatch.setattr(
-        "tools.lib.remote._probe_docker_exec_transport",
+        "tools.lib.runtime_bootstrap.probe_docker_exec_transport",
         lambda _ctx: ("needs_repair", "container missing"),
     )
 

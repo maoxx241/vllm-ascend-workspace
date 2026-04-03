@@ -7,9 +7,7 @@ description: Use when the user wants to start service, status service, list serv
 
 ## Overview
 
-Manage model-serving sessions for this workspace after machine readiness exists. This skill owns service deployment shape, service session lifecycle, and online service identity without turning serving work into machine maintenance or benchmark execution.
-
-If exact internal routing details are required after this skill is selected, see `references/internal-routing.md`.
+Manage explicit model-serving lifecycle on a ready machine. This skill owns service identity, reuse-vs-launch decisions, and service session lifecycle; it does not own machine attach or benchmark execution.
 
 ## When to Use
 
@@ -27,12 +25,28 @@ If exact internal routing details are required after this skill is selected, see
 - `list services on the ready machine`
 - `stop service after validation`
 
-### Do Not Use
+## Quick Triage
 
-- First-time setup belongs to `workspace-init`.
-- Machine attach, verify, and removal work belong to `machine-management`.
-- Benchmark probe execution and result reporting belong to `benchmark`.
-- Destructive teardown belongs to `workspace-reset`.
+- Confirm the request is about service lifecycle, not machine attach or benchmark execution.
+- Use `serving.list_sessions` or `serving.describe_session` to inspect exact reuse candidates before launching anything.
+- If machine readiness is uncertain, confirm `machine.probe_host_ssh` and `runtime.probe_container_transport` before touching service lifecycle.
+- Check `code_parity` and `runtime_env` before reusing or launching a service.
+
+## Default Recipe
+
+- Discovery family: `.agents/discovery/families/serving-lifecycle.yaml`
+- Inspect existing sessions first with `serving.list_sessions` or `serving.describe_session` when reuse is plausible.
+- Reuse only when the existing service identity and fingerprint still match the request.
+- Launch recipe: `serving.launch_service` -> `serving.probe_readiness` -> `serving.describe_session`
+- Inspection recipe: `serving.describe_session` or `serving.list_sessions`
+- Stop recipe: `serving.stop_service`
+
+## Stop Conditions
+
+- Stop on fingerprint mismatch instead of reusing stale service state.
+- Stop on unavailable transport instead of pretending launch can continue.
+- Stop on readiness timeout instead of reporting a maybe-ready service.
+- Stop on machine-not-ready prerequisites and hand that repair back to `machine-management`.
 
 ## User-Visible Output Contract
 
@@ -44,7 +58,7 @@ If exact internal routing details are required after this skill is selected, see
 
 - Allowed: none.
 - Forbidden: any Git auth prompt, server auth prompt, container auth prompt, or benchmark-time auth prompt during serving work.
-- On any unexpected auth prompt, fail closed with `needs_input` or `needs_repair` and redirect machine repair back to `machine-management`.
+- On any unexpected auth prompt, fail closed with `needs_input` or `needs_repair` and redirect machine repair to `machine-management`.
 
 ## Never Expose
 
@@ -52,55 +66,22 @@ If exact internal routing details are required after this skill is selected, see
 - internal PID files, lock files, or detached process plumbing
 - backend-only launch plumbing as if it were the public workflow
 
-## Required Capabilities
-
-- `git_auth=ready`
-- `repo_topology=ready`
-- `servers.<target>.host_access=ready`
-- `servers.<target>.container_access=ready`
-- `servers.<target>.code_parity=ready`
-- `servers.<target>.runtime_env=ready`
-
-## Default Inference Rules
-
-- Reuse an explicit service session only when its machine, code fingerprint, model alias, and service configuration still exactly match the request.
-- Prefer a single clear service identity over implicit host-port guessing.
-- Ask for missing target machine, weight location, or served model details instead of inventing them.
-
 ## Cross-Skill Boundary
 
 - `workspace-init` owns first-time setup.
 - `machine-management` owns machine attach, verify, and removal work.
-- `serving` owns service session start, status, list, and stop work.
-- `benchmark` consumes a temporary or explicit service session for probe execution.
+- `serving` owns service launch, readiness, description, listing, reuse decisions, and stop work.
+- `benchmark` owns probe execution after a suitable service exists.
 - `workspace-reset` owns explicit destructive teardown.
-
-## Failure Handling Notes
-
-- Refuse to claim service readiness when the machine baseline is missing or broken.
-- Refuse to reuse a stale or fingerprint-mismatched service session.
-- Keep service lifecycle failures visible instead of collapsing them into generic machine readiness text.
-
-## Failure Routing
-
-- If `git_auth` or `repo_topology` is not ready, redirect to `workspace-init`.
-- If `servers.<target>.host_access`, `servers.<target>.container_access`, `servers.<target>.code_parity`, or `servers.<target>.runtime_env` is not ready, redirect to `machine-management`.
-- If the request is really benchmark execution rather than service lifecycle work, redirect to `benchmark`.
-
-## Security Notes
-
-- Never expose private hosts, secrets, or key material in public guidance.
-- Keep detached process management and secret resolution inside the workspace boundary.
-- Treat service session records as internal control-plane state, not as user-facing workflow steps.
 
 ## Common Mistakes
 
 - Treating serving as machine maintenance.
-- Treating serving as a generic shell wrapper.
-- Reusing a stale service session without checking its exact fingerprint.
+- Launching blindly instead of checking whether reuse is exact and safe.
+- Reusing a stale service session without checking the fingerprint.
 
 ## Red Flags
 
 - claiming service readiness from machine readiness alone
-- guessing a service identity from host and port without registry evidence
+- guessing a service identity from host and port without session evidence
 - routing routine service lifecycle work through benchmark execution

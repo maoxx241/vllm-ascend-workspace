@@ -1,15 +1,13 @@
 ---
 name: workspace-init
-description: Use when the user wants first-time setup, recovery setup after reset or partial failure, or to prepare this repo for development with Git setup and optional first-machine setup.
+description: Use when the user wants first-time setup, recovery setup after reset or partial failure, or to establish this repo's local foundation with an optional first-machine baseline.
 ---
 
 # Workspace Init
 
 ## Overview
 
-Prepare this workspace for development as one user-visible capability. This includes Git setup, repo topology preparation, and optional first-machine setup without requiring the user to learn internal lifecycle terms.
-
-If exact internal routing details are required after this skill is selected, see `references/internal-routing.md`.
+Prepare this workspace for development as one user-visible baseline. `workspace-init` owns first-time setup and recovery setup, with local foundation probes first and optional first-machine handling only when the user explicitly asked for a first machine.
 
 ## When to Use
 
@@ -17,33 +15,48 @@ If exact internal routing details are required after this skill is selected, see
 
 - The user wants first-time setup for this workspace.
 - The user wants to prepare this repo for development.
-- The user wants Git setup and optional first-machine setup handled together.
+- The user wants the repo foundation established first and an optional first machine checked afterward.
 - The user wants recovery setup after reset or partial failure.
 
 ### Examples Include, But Are Not Limited To:
 
 - `初始化这个 workspace`
 - `把这个仓库准备成可开发状态`
-- `第一次把 Git 和机器都配好`
+- `先把仓库基础配好，再看第一台机器`
 - `prepare this repo for development`
 
-### Do Not Use
+## Quick Triage
 
-- Later machine attach, verify, or removal work belongs to `machine-management`.
-- Benchmark execution belongs to `benchmark`.
-- Destructive teardown belongs to `workspace-reset`.
+- Start with `workspace.probe_config_validity`, `workspace.probe_git_auth`, `workspace.probe_repo_topology`, and `workspace.probe_submodules`.
+- Use `workspace.diagnose_workspace` when local foundation probes disagree or only partial residue is visible.
+- If the user asked for a first machine, inspect inventory first with `machine.describe_server` or `machine.list_servers` before inventing new machine state.
+- Treat optional first-machine setup as a second stage after the local foundation is ready.
+
+## Default Recipe
+
+- Discovery families: `.agents/discovery/families/workspace-foundation.yaml`, `.agents/discovery/families/workspace-diagnostics.yaml`, and when a first machine is requested `.agents/discovery/families/machine-inventory.yaml` plus `.agents/discovery/families/machine-runtime.yaml`
+- Local baseline ladder: `workspace.probe_config_validity` -> `workspace.probe_git_auth` -> `workspace.probe_repo_topology` -> `workspace.probe_submodules` -> `workspace.describe_repo_targets`
+- Diagnose ambiguous or partial local failures with `workspace.diagnose_workspace`.
+- Optional first-machine ladder when the user explicitly wants it: `machine.register_server` -> `machine.probe_host_ssh` -> `runtime.probe_container_transport`
+- Repair the first-machine path only after failing probes: `machine.bootstrap_host_ssh` -> `machine.sync_workspace_mirror` -> `runtime.reconcile_container` -> `runtime.bootstrap_container_transport`
+
+## Stop Conditions
+
+- Stop on missing git identity instead of pretending the workspace is ready.
+- Stop on missing machine inventory or machine auth when the user explicitly asked for a first machine.
+- Stop on partial first-machine readiness; do not downgrade it into a fake local-only success.
 
 ## User-Visible Output Contract
 
 - Report whether initialization is `ready`, `needs_input`, `needs_repair`, or `blocked`.
-- Explain whether Git setup and any requested first-machine setup are complete.
+- Explain whether Git setup and any requested first machine setup are complete.
 - Say plainly what missing input or repair step is still preventing a usable development baseline.
 
 ## Auth Boundary
 
-- Allowed: GitHub login bootstrap, plus an optional first-machine bare-metal password bootstrap when init is explicitly establishing the first machine.
-- Forbidden: server password prompts outside the optional first-machine attach flow, repeated Git auth prompts after login succeeds, and any container password prompt.
-- On any unexpected auth prompt, fail closed with `needs_input` or `needs_repair` and keep the repair entry in `workspace-init`.
+- Allowed: GitHub login bootstrap, plus an optional first-machine bare-metal server password bootstrap when init is explicitly establishing the first machine.
+- Forbidden: server password prompts outside the optional first-machine path, repeated GitHub login prompts after success, and any container auth prompt.
+- On any unexpected auth prompt, fail closed with `needs_input` or `needs_repair`.
 
 ## Never Expose
 
@@ -51,53 +64,22 @@ If exact internal routing details are required after this skill is selected, see
 - internal overlay mutation steps
 - private hosts, private filesystem paths, or private cache locations
 
-## Required Capabilities
-
-- `workspace-init` is responsible for producing `git_auth=ready` and `repo_topology=ready`.
-- When the user requests a first machine, `workspace-init` may also establish `servers.<target>.host_access=ready` and `servers.<target>.container_access=ready`.
-- Local-only init does not require an existing machine baseline.
-
-## Default Inference Rules
-
-- Reuse an already ready Git and machine baseline when it still matches the request.
-- Handle Git setup before trying to materialize a first-machine baseline.
-- If no machine baseline exists yet, treat setup or first attach intent as `workspace-init`.
-- If setup already exists, later attach, verify, and removal work belongs to `machine-management`.
-- Stop and ask for missing required input instead of silently inventing a baseline.
-
 ## Cross-Skill Boundary
 
-- `workspace-init` owns first-time Git setup and optional first-machine setup.
-- `machine-management` owns later machine attach, verify, and removal work.
+- `workspace-init` owns first-time setup, recovery setup, and the decision order around `git_auth`, `repo_topology`, and optional first machine setup.
+- `machine-management` owns later attach, verify, repair, and removal work after the baseline exists.
+- `serving` owns service session lifecycle after the machine is ready.
 - `benchmark` owns benchmark execution after the environment is ready.
 - `workspace-reset` owns explicit destructive teardown.
 
-## Failure Handling Notes
-
-- Do not claim the workspace is ready if Git setup is incomplete.
-- Do not claim the workspace is ready if a requested first machine is still blocked or broken.
-- Surface missing input and repairable problems as targeted next steps rather than generic failure text.
-
-## Failure Routing
-
-- If `git_auth` or `repo_topology` is missing or broken, stay in `workspace-init` and repair the workspace baseline there.
-- If the optional first-machine flow fails on `host_access`, `container_access`, `code_parity`, or `runtime_env`, return `needs_input` or `needs_repair` and route the machine-specific repair work to `machine-management`.
-- Do not turn an auth or topology failure into a fake ready local-only baseline.
-
-## Security Notes
-
-- Never ask the user to paste raw credentials into the transcript when an existing secret handle or SSH path should be used.
-- Keep secret resolution and machine auth details inside the workspace boundary.
-- Never expose private hosts, tokens, or key material in normal user-facing output.
-
 ## Common Mistakes
 
-- Treating init as a command wrapper instead of a user-visible capability.
-- Splitting Git setup and first-machine setup into separate public workflows.
+- Treating init as a command wrapper instead of a baseline-establishing skill.
+- Starting first machine work before `git_auth` and `repo_topology` are ready.
 - Pretending partial setup is a complete development baseline.
 
 ## Red Flags
 
-- routing first-time machine setup into a later maintenance workflow
-- exposing overlay or secret details in public guidance
-- claiming readiness before the requested development baseline exists
+- routing first machine setup into later maintenance work
+- claiming readiness before the requested baseline exists
+- fabricating a local-only ready result when the requested first machine is still blocked

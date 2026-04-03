@@ -1,0 +1,36 @@
+version: 1
+family_id: workspace-diagnostics
+summary: Pure workspace diagnostics for overlay health and live workspace readiness without generic state residue inspection.
+tools:
+  - tool_id: workspace.diagnose_overlay
+    path: tools/atomic/workspace_diagnose_overlay.py
+    action_kind: probe
+    idempotent: true
+    outputs_required:
+      - status
+      - observations
+    outputs_optional:
+      - reason
+      - next_probes
+      - idempotent
+      - payload
+  - tool_id: workspace.diagnose_workspace
+    path: tools/atomic/workspace_diagnose_workspace.py
+    action_kind: probe
+    idempotent: true
+    outputs_required:
+      - status
+      - observations
+    outputs_optional:
+      - reason
+      - next_probes
+      - idempotent
+      - payload
+recipes:
+  - recipe_id: workspace-diagnostics-triage
+    summary: diagnose overlay first, then diagnose live workspace readiness and report only concrete repair blockers
+    stop_conditions:
+      - overlay config files are missing or invalid
+    escalation_points:
+      - placeholder remotes persist after repair
+      - recursive submodules are absent

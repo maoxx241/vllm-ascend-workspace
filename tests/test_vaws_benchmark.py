@@ -1,52 +1,34 @@
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from tools.lib.benchmark import run_benchmark
 from tools.lib.config import RepoPaths
+from tools.lib.vaws_benchmark import run_benchmark
 from tools.vaws import main as vaws_main
 
 
-def test_run_benchmark_starts_and_stops_temporary_service(monkeypatch, tmp_path):
+def test_run_benchmark_requires_explicit_service_id(monkeypatch, tmp_path, capsys):
     paths = RepoPaths(root=tmp_path)
-    started = {}
-    stopped = []
-
-    monkeypatch.setattr(
-        "tools.lib.benchmark.start_temporary_service",
-        lambda *args, **kwargs: started.update(kwargs)
-        or {"service_id": "svc-temp", "server_name": "box-a"},
-    )
-    monkeypatch.setattr(
-        "tools.lib.benchmark.stop_service_by_id",
-        lambda paths, service_id: stopped.append(service_id),
-    )
-    monkeypatch.setattr(
-        "tools.lib.benchmark.run_benchmark_probe",
-        lambda *args, **kwargs: {"summary": "ok", "result_path": "/tmp/result.json"},
-    )
-    monkeypatch.setattr("tools.lib.benchmark.record_benchmark_run", lambda *args, **kwargs: None)
 
     rc = run_benchmark(
         paths,
         server_name="box-a",
         preset_name="qwen3_5_35b_tp4_perf",
-        weights_path="/home/weights/Qwen3.5-35B-A3B",
         service_id=None,
     )
 
-    assert rc == 0
-    assert started["lifecycle"] == "benchmark-temporary"
-    assert stopped == ["svc-temp"]
+    assert rc == 1
+    assert "service-id" in capsys.readouterr().out.lower()
 
 
 def test_run_benchmark_rejects_mismatched_explicit_service(monkeypatch, tmp_path):
     paths = RepoPaths(root=tmp_path)
     monkeypatch.setattr(
-        "tools.lib.benchmark.load_service_session",
+        "tools.lib.vaws_benchmark.load_service_session",
         lambda paths, service_id: {
             "service_id": service_id,
             "server_name": "box-a",
@@ -54,15 +36,14 @@ def test_run_benchmark_rejects_mismatched_explicit_service(monkeypatch, tmp_path
         },
     )
     monkeypatch.setattr(
-        "tools.lib.benchmark.current_code_fingerprint",
-        lambda paths, server_name: {"workspace": "new"},
+        "tools.lib.vaws_benchmark.service_is_reusable",
+        lambda paths, server_name, service: False,
     )
 
     rc = run_benchmark(
         paths,
         server_name="box-a",
         preset_name="qwen3_5_35b_tp4_perf",
-        weights_path=None,
         service_id="svc-explicit",
     )
 
@@ -73,15 +54,15 @@ def test_benchmark_cli_run_delegates_to_backend(monkeypatch, vaws_repo):
     calls = {}
     monkeypatch.chdir(vaws_repo)
 
-    def fake_run(paths, server_name, preset_name, weights_path, service_id):
+    def fake_run(paths, args):
         calls["root"] = str(paths.root)
-        calls["server_name"] = server_name
-        calls["preset_name"] = preset_name
-        calls["weights_path"] = weights_path
-        calls["service_id"] = service_id
+        calls["benchmark_command"] = args.benchmark_command
+        calls["server_name"] = args.server_name
+        calls["preset_name"] = args.preset
+        calls["service_id"] = args.service_id
         return 0
 
-    monkeypatch.setattr("tools.vaws.run_benchmark", fake_run)
+    monkeypatch.setattr("tools.vaws.vaws_benchmark", SimpleNamespace(run=fake_run), raising=False)
 
     result = vaws_main(
         [
@@ -91,16 +72,16 @@ def test_benchmark_cli_run_delegates_to_backend(monkeypatch, vaws_repo):
             "lab-a",
             "--preset",
             "qwen3_5_35b_tp4_perf",
-            "--weights-path",
-            "/home/weights/Qwen3.5-35B-A3B",
+            "--service-id",
+            "svc-123",
         ]
     )
 
     assert result == 0
     assert calls == {
         "root": str(vaws_repo),
+        "benchmark_command": "run",
         "server_name": "lab-a",
         "preset_name": "qwen3_5_35b_tp4_perf",
-        "weights_path": "/home/weights/Qwen3.5-35B-A3B",
-        "service_id": None,
+        "service_id": "svc-123",
     }

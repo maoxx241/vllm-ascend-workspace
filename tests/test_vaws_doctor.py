@@ -1,8 +1,17 @@
 import json
 import shutil
 import subprocess
+import sys
+from pathlib import Path
+from types import SimpleNamespace
 
 from conftest import run_vaws
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from tools import vaws
 
 PLACEHOLDER_WORKSPACE_URL = "git@github.com:your-org/vllm-ascend-workspace.git"
 
@@ -29,10 +38,6 @@ def _seed_canonical_overlay(vaws_repo) -> None:
         "version: 1\nworkspace:\n  protected_branches: [main]\nsubmodules: {}\n",
         encoding="utf-8",
     )
-    (overlay / "state.json").write_text(
-        json.dumps({"schema_version": 2, "servers": {}}, indent=2) + "\n",
-        encoding="utf-8",
-    )
     _set_remote(vaws_repo, "origin", "https://github.com/alice/vllm-ascend-workspace.git")
     _set_remote(vaws_repo, "upstream", "https://github.com/vllm-project/vllm-ascend-workspace.git")
 
@@ -43,63 +48,30 @@ def test_doctor_reports_missing_overlay(vaws_repo):
     assert ".workspace.local" in result.stdout
 
 
-def test_doctor_reports_targets_yaml_as_legacy_residue(vaws_repo):
-    _seed_canonical_overlay(vaws_repo)
-    (vaws_repo / ".workspace.local" / "targets.yaml").write_text(
-        "current_target: legacy-box\n",
-        encoding="utf-8",
+def test_doctor_cli_dispatches_to_compat_adapter(monkeypatch, vaws_repo):
+    called = {}
+    monkeypatch.chdir(vaws_repo)
+    monkeypatch.setattr(
+        vaws,
+        "doctor",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("legacy doctor path called")),
+        raising=False,
     )
 
-    result = run_vaws(vaws_repo, "doctor")
+    def fake_run(paths):
+        called["root"] = str(paths.root)
+        return 0
 
-    assert result.returncode == 1
-    output = result.stdout + result.stderr
-    assert "targets.yaml" in output
-    assert "legacy" in output.lower() or "retired" in output.lower()
+    monkeypatch.setattr(vaws, "vaws_doctor", SimpleNamespace(run=fake_run), raising=False)
 
-
-def test_doctor_reports_retired_state_keys(vaws_repo):
-    _seed_canonical_overlay(vaws_repo)
-    (vaws_repo / ".workspace.local" / "state.json").write_text(
-        '{"schema_version": 1, "lifecycle": {"foundation": {"status": "ready"}}}\n',
-        encoding="utf-8",
-    )
-
-    result = run_vaws(vaws_repo, "doctor")
-
-    assert result.returncode == 1
-    output = (result.stdout + result.stderr).lower()
-    assert "schema_version" in output
-    assert "retired key" in output
-    assert "lifecycle" in output
+    assert vaws.main(["doctor"]) == 0
+    assert called == {"root": str(vaws_repo)}
 
 
-def test_doctor_reports_legacy_server_inventory_residue(vaws_repo):
+def test_doctor_reports_invalid_servers_inventory(vaws_repo):
     _seed_canonical_overlay(vaws_repo)
     (vaws_repo / ".workspace.local" / "servers.yaml").write_text(
-        "\n".join(
-            [
-                "version: 1",
-                "bootstrap:",
-                "  completed: true",
-                "  mode: remote-first",
-                "servers:",
-                "  lab-a:",
-                "    host: 10.0.0.12",
-                "    port: 22",
-                "    login_user: root",
-                "    ssh_auth_ref: shared-lab-a",
-                "    runtime:",
-                "      image_ref: quay.nju.edu.cn/ascend/vllm-ascend:latest",
-                "      container_name: vaws-workspace",
-                "      ssh_port: 41001",
-                "      workspace_root: /vllm-workspace",
-                "      bootstrap_mode: host-then-container",
-                "    verification:",
-                "      status: ready",
-                "",
-            ]
-        ),
+        "not: [valid\n",
         encoding="utf-8",
     )
 
@@ -107,8 +79,8 @@ def test_doctor_reports_legacy_server_inventory_residue(vaws_repo):
 
     assert result.returncode == 1
     output = (result.stdout + result.stderr).lower()
-    assert "bootstrap" in output
-    assert "verification" in output
+    assert "invalid" in output
+    assert "servers.yaml" in output
 
 
 def test_doctor_reports_placeholder_workspace_remote(vaws_repo):
@@ -119,7 +91,8 @@ def test_doctor_reports_placeholder_workspace_remote(vaws_repo):
 
     assert result.returncode == 1
     output = result.stdout + result.stderr
-    assert "placeholder_workspace_remote" in output
+    assert "placeholder" in output.lower()
+    assert "remote" in output.lower()
 
 
 def test_doctor_fails_when_recursive_submodule_is_missing(vaws_repo):
@@ -134,6 +107,16 @@ def test_doctor_fails_when_recursive_submodule_is_missing(vaws_repo):
     output = (result.stdout + result.stderr).lower()
     assert "submodule" in output
     assert "catlass" in output
+
+
+def test_doctor_no_longer_requires_state_json(vaws_repo):
+    _seed_canonical_overlay(vaws_repo)
+    assert not (vaws_repo / ".workspace.local" / "state.json").exists()
+
+    result = run_vaws(vaws_repo, "doctor")
+
+    assert result.returncode == 0
+    assert "doctor: ok" in result.stdout.lower()
 
 
 def test_doctor_succeeds_for_canonical_overlay_and_recursive_submodules(vaws_repo):

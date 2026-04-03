@@ -16,6 +16,7 @@ PUBLIC_SKILLS = (
     "benchmark",
     "workspace-reset",
 )
+DISCOVERY_ROUTE = ".agents/discovery/README.md"
 FORBIDDEN_TERMS = (
     "tools/vaws.py",
     "./setup",
@@ -31,6 +32,10 @@ FORBIDDEN_TERMS = (
     "workspace-bootstrap",
     "--help",
 )
+SKILL_FIRST_MARKERS = (
+    "read the matched public `skill.md` first",
+    "when the skill leaves tool selection open",
+)
 
 
 def _text(path: str) -> str:
@@ -44,8 +49,11 @@ def test_first_contact_surface_does_not_require_cli_or_overlay_internals():
             assert forbidden not in text, f"{path} leaked {forbidden}"
 
 
-def test_entry_surface_routes_a_fresh_agent_to_new_public_skills():
+def test_entry_surface_routes_a_fresh_agent_to_skill_first_then_discovery():
     for path in ENTRY_FILES:
         text = _text(path)
+        assert DISCOVERY_ROUTE.lower() in text
         for skill_name in PUBLIC_SKILLS:
             assert skill_name in text, f"{path} missing {skill_name}"
+        for marker in SKILL_FIRST_MARKERS:
+            assert marker in text, f"{path} missing skill-first marker: {marker}"

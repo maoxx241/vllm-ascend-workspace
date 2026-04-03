@@ -1,0 +1,41 @@
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+from typing import Optional
+
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from tools.lib.agent_contract import validate_tool_result
+from tools.lib.config import RepoPaths
+from tools.lib.workspace_diagnostics import diagnose_overlay
+
+
+def diagnose_overlay_tool(paths: RepoPaths) -> dict[str, object]:
+    payload = diagnose_overlay(paths)
+    result = {
+        "status": payload["status"],
+        "observations": list(payload["observations"]),
+        "payload": payload,
+        "idempotent": True,
+    }
+    if payload["status"] != "ready":
+        result["reason"] = str(payload["summary"])
+        result["next_probes"] = ["workspace.diagnose_overlay"]
+    return validate_tool_result(result, action_kind="probe")
+
+
+def main(argv: Optional[list[str]] = None) -> int:
+    parser = argparse.ArgumentParser(prog="workspace.diagnose_overlay")
+    parser.parse_args(argv)
+    result = diagnose_overlay_tool(RepoPaths(root=Path.cwd()))
+    json.dump(result, sys.stdout)
+    sys.stdout.write("\n")
+    return 0 if result["status"] == "ready" else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

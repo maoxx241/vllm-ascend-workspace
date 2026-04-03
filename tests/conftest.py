@@ -47,10 +47,6 @@ def seed_overlay_files(repo: Path) -> None:
         "version: 1\nworkspace: {}\nsubmodules: {}\n",
         encoding="utf-8",
     )
-    (overlay / "state.json").write_text(
-        '{"schema_version": 2, "servers": {}}\n',
-        encoding="utf-8",
-    )
 
 
 @pytest.fixture

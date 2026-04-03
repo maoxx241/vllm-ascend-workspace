@@ -2,11 +2,11 @@
 
 Public contract: `../SKILL.md`
 
-Use this file only after the public `workspace-reset` contract has been selected.
+This file is a maintainer backstop. The public `SKILL.md` is the normal execution surface, and agents should not need this file to understand the default public recipe.
 
 ## Sanctioned Adapter Surface
 
-- Ordinary execution surface: `tools/vaws.py reset prepare` followed by `tools/vaws.py reset execute`
+- Ordinary execution surface: `tools/vaws.py reset prepare` plus `.agents/discovery/families/reset-cleanup.yaml`
 - Diagnostic companion surface: `tools/vaws.py doctor`
 - Do not route a normal agent directly to `tools/lib/*.py`; library modules remain implementation owners behind the sanctioned adapter surface.
 
@@ -14,28 +14,29 @@ Use this file only after the public `workspace-reset` contract has been selected
 
 ### Public Action -> Internal Contract
 
-- `workspace-reset` -> `workspace-reset`, `machine-runtime`
+- `workspace-reset` -> `reset-cleanup`
 
 ### Internal Contract -> Implementation Owner
 
-- `workspace-reset` -> implemented by `tools/lib/reset.py`
-- `machine-runtime` -> implemented by `tools/lib/runtime.py` and `tools/lib/reset.py`
+- `reset-cleanup` -> `tools/atomic/reset_prepare_request.py`, `tools/atomic/reset_cleanup_remote_runtime.py`, `tools/atomic/reset_cleanup_overlay.py`, `tools/atomic/reset_cleanup_known_hosts.py`, `tools/atomic/reset_restore_public_remotes.py`
 
 ## Action Routing
 
 - `reset this workspace`
-  - sanctioned adapter: `tools/vaws.py reset prepare` then `tools/vaws.py reset execute`
-  - internal contracts: `workspace-reset`, `machine-runtime`
+  - sanctioned adapter: `tools/vaws.py reset prepare`
+  - discovery family: `.agents/discovery/families/reset-cleanup.yaml`
+  - destructive sequence: `reset.prepare_request` -> `reset.cleanup_remote_runtime` -> `reset.cleanup_overlay` -> `reset.cleanup_known_hosts` -> `reset.restore_public_remotes`
+- `diagnose why reset cannot finish`
+  - sanctioned adapter: `tools/vaws.py doctor`
+  - discovery families: `.agents/discovery/families/workspace-diagnostics.yaml`, `.agents/discovery/families/reset-cleanup.yaml`
 
 ## Internal State Touched
 
 - `.workspace.local/servers.yaml`
 - `.workspace.local/auth.yaml`
 - `.workspace.local/repos.yaml`
-- `.workspace.local/targets.yaml`
-- `.workspace.local/state.json`
-- `.workspace.local/sessions/`
 - `.workspace.local/reset-request.json`
+- `.workspace.local/benchmark-runs/`
 - git remotes under `vllm/` and `vllm-ascend/`
 
 ## Related Tests

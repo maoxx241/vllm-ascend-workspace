@@ -235,3 +235,18 @@ def materialize_workspace_targets(
     _checkout_detached(paths.root / "vllm", targets.vllm.commit)
     _checkout_detached(paths.root / "vllm-ascend", targets.vllm_ascend.commit)
     return targets
+
+
+def describe_repo_targets(paths: RepoPaths) -> dict[str, object]:
+    targets = resolve_repo_targets(
+        paths,
+        vllm_upstream_tag=None,
+        vllm_upstream_branch=None,
+        vllm_ascend_upstream_branch=None,
+        fetch_missing=False,
+    )
+    return {
+        "workspace": targets.workspace.to_mapping(),
+        "vllm": targets.vllm.to_mapping(),
+        "vllm_ascend": targets.vllm_ascend.to_mapping(),
+    }

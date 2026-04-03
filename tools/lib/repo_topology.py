@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import configparser
 import subprocess
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict
 
-from .capability_state import read_capability_state, write_capability_state
 from .config import RepoPaths
 
 
@@ -47,23 +48,82 @@ def _is_placeholder_remote(url: Any) -> bool:
     return "your-org" in normalized or "example/" in normalized
 
 
-def ensure_repo_topology_ready(paths: RepoPaths) -> Dict[str, Any]:
+def _declared_submodule_paths(root: Path) -> list[Path] | None:
+    gitmodules = root / ".gitmodules"
+    if not gitmodules.is_file():
+        return None
+
+    parser = configparser.ConfigParser()
+    try:
+        parser.read(gitmodules, encoding="utf-8")
+    except configparser.Error:
+        return []
+
+    paths: list[Path] = []
+    for section in parser.sections():
+        if not section.startswith("submodule "):
+            continue
+        path_value = parser.get(section, "path", fallback="").strip()
+        if path_value:
+            paths.append(Path(path_value))
+    return paths
+
+
+def _missing_submodules(root: Path, prefix: Path | None = None) -> list[str]:
+    declared = _declared_submodule_paths(root)
+    if declared is None:
+        if prefix is None:
+            return [".gitmodules"]
+        return []
+
+    missing: list[str] = []
+    for relative_path in declared:
+        full_path = root / relative_path
+        display_path = relative_path if prefix is None else prefix / relative_path
+        if not full_path.exists() or not (full_path / ".git").exists():
+            missing.append(str(display_path))
+            continue
+        missing.extend(_missing_submodules(full_path, display_path))
+    return missing
+
+
+def probe_repo_topology(paths: RepoPaths) -> Dict[str, Any]:
     remotes = _workspace_remote_urls(paths)
     if _is_placeholder_remote(remotes.get("origin")) or _is_placeholder_remote(remotes.get("upstream")):
-        payload = {
+        return {
             "status": "needs_repair",
             "detail": "workspace root remotes are placeholder or incomplete",
             "observed_at": _observed_at(),
             "evidence_source": "workspace-init",
+            "remotes": remotes,
         }
-    else:
-        payload = {
-            "status": "ready",
-            "detail": "workspace root and submodule remotes verified",
+    return {
+        "status": "ready",
+        "detail": "workspace root remotes verified",
+        "observed_at": _observed_at(),
+        "evidence_source": "workspace-init",
+        "remotes": remotes,
+    }
+
+
+def probe_submodules(paths: RepoPaths) -> Dict[str, Any]:
+    missing = _missing_submodules(paths.root)
+    if missing:
+        return {
+            "status": "needs_repair",
+            "detail": f"missing initialized submodules: {', '.join(missing)}",
             "observed_at": _observed_at(),
             "evidence_source": "workspace-init",
+            "missing_submodules": missing,
         }
-    state = read_capability_state(paths)
-    state["repo_topology"] = payload
-    write_capability_state(paths, state)
-    return payload
+    return {
+        "status": "ready",
+        "detail": "declared recursive submodules are present",
+        "observed_at": _observed_at(),
+        "evidence_source": "workspace-init",
+        "missing_submodules": [],
+    }
+
+
+def ensure_repo_topology_ready(paths: RepoPaths) -> Dict[str, Any]:
+    return probe_repo_topology(paths)

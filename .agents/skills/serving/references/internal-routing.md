@@ -2,7 +2,7 @@
 
 Public contract: `../SKILL.md`
 
-Use this file only after the public `serving` contract has been selected.
+This file is a maintainer backstop. The public `SKILL.md` is the normal execution surface, and agents should not need this file to understand the default public recipe.
 
 ## Sanctioned Adapter Surface
 
@@ -14,34 +14,43 @@ Use this file only after the public `serving` contract has been selected.
 
 ### Public Action -> Internal Contract
 
-- `serving` -> `branch-context`, `code-parity`, `runtime-environment`, `serving-session`
+- `serving` -> `branch-context`, `code-parity`, `runtime-environment`, `serving-lifecycle`
 
 ### Internal Contract -> Implementation Owner
 
 - `branch-context` -> implemented by `tools/lib/branch_context.py`
 - `code-parity` -> implemented by `tools/lib/code_parity.py`
 - `runtime-environment` -> implemented by `tools/lib/runtime_env.py`
-- `serving-session` -> implemented by `tools/lib/serving.py`
+- `serving-lifecycle` -> discovery family `.agents/discovery/families/serving-lifecycle.yaml`
+- `serving-session-cache` -> implemented by `tools/lib/serving_session.py`
+- `serving-lifecycle-helper` -> implemented by `tools/lib/serving_lifecycle.py`
 
 ## Action Routing
 
 - `start service for this model on the ready machine`
   - sanctioned adapter: `tools/vaws.py serving start`
-  - internal contracts: `branch-context`, `code-parity`, `runtime-environment`, `serving-session`
+  - family manifest: `.agents/discovery/families/serving-lifecycle.yaml`
+  - lifecycle ladder: `serving.launch_service` -> `serving.probe_readiness` -> `serving.describe_session`
+  - internal contracts: `branch-context`, `code-parity`, `runtime-environment`, `serving-lifecycle`
 - `status service by service id`
   - sanctioned adapter: `tools/vaws.py serving status`
-  - internal contracts: `serving-session`
+  - family manifest: `.agents/discovery/families/serving-lifecycle.yaml`
+  - atomic tools: `serving.describe_session`
+  - internal contracts: `serving-lifecycle`
 - `list services for this workspace`
   - sanctioned adapter: `tools/vaws.py serving list`
-  - internal contracts: `serving-session`
+  - family manifest: `.agents/discovery/families/serving-lifecycle.yaml`
+  - atomic tools: `serving.list_sessions`
+  - internal contracts: `serving-lifecycle`
 - `stop service after validation or cleanup`
   - sanctioned adapter: `tools/vaws.py serving stop`
-  - internal contracts: `serving-session`
+  - family manifest: `.agents/discovery/families/serving-lifecycle.yaml`
+  - atomic tools: `serving.stop_service`
+  - internal contracts: `serving-lifecycle`
 
 ## Internal State Touched
 
-- `.workspace.local/state.json`
-- `serving/`
+- remote service manifests under `/vllm-workspace/artifacts/services/`
 
 ## Related Tests
 

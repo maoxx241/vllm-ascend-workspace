@@ -1,0 +1,71 @@
+version: 1
+family_id: workspace-foundation
+summary: Probe-first workspace foundation tools for overlay validity, git auth, repo topology, submodule integrity, and live repo target description.
+tools:
+  - tool_id: workspace.probe_config_validity
+    path: tools/atomic/workspace_probe_config_validity.py
+    action_kind: probe
+    idempotent: true
+    outputs_required:
+      - status
+      - observations
+    outputs_optional:
+      - reason
+      - next_probes
+      - idempotent
+      - payload
+  - tool_id: workspace.probe_git_auth
+    path: tools/atomic/workspace_probe_git_auth.py
+    action_kind: probe
+    idempotent: true
+    outputs_required:
+      - status
+      - observations
+    outputs_optional:
+      - reason
+      - next_probes
+      - idempotent
+      - payload
+  - tool_id: workspace.probe_repo_topology
+    path: tools/atomic/workspace_probe_repo_topology.py
+    action_kind: probe
+    idempotent: true
+    outputs_required:
+      - status
+      - observations
+    outputs_optional:
+      - reason
+      - next_probes
+      - idempotent
+      - payload
+  - tool_id: workspace.probe_submodules
+    path: tools/atomic/workspace_probe_submodules.py
+    action_kind: probe
+    idempotent: true
+    outputs_required:
+      - status
+      - observations
+    outputs_optional:
+      - reason
+      - next_probes
+      - idempotent
+      - payload
+  - tool_id: workspace.describe_repo_targets
+    path: tools/atomic/workspace_describe_repo_targets.py
+    action_kind: probe
+    idempotent: true
+    outputs_required:
+      - status
+      - observations
+    outputs_optional:
+      - idempotent
+      - payload
+recipes:
+  - recipe_id: workspace-foundation-triage
+    summary: validate overlay files first, then check git auth, root remotes, recursive submodules, and current repo targets
+    stop_conditions:
+      - overlay files are missing or invalid
+      - git auth is unavailable and interactive recovery is required
+    escalation_points:
+      - root remotes are placeholder or missing
+      - recursive submodules are absent
