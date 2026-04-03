@@ -7,9 +7,7 @@ description: Use when the user explicitly wants destructive teardown, deinitiali
 
 ## Overview
 
-Use this skill for explicit destructive teardown of workspace-managed state. It owns reset authorization, teardown reporting, and the difference between full cleanup and partial cleanup.
-
-If exact internal routing details are required after this skill is selected, see `references/internal-routing.md`.
+Use this skill for high-friction destructive teardown of workspace-managed state. It owns destructive preview, explicit authorization, discovery-backed cleanup composition, and partial-cleanup reporting.
 
 ## When to Use
 
@@ -26,11 +24,27 @@ If exact internal routing details are required after this skill is selected, see
 - `把初始化痕迹都清干净`
 - `reset this workspace`
 
-### Do Not Use
+## Quick Triage
 
-- Ordinary machine attach, verify, or removal work belongs to `machine-management`.
-- First-time setup belongs to `workspace-init`.
-- Benchmark execution belongs to `benchmark`.
+- Identify the destruction scope up front: `servers`, `auth`, `repos`, `known_hosts`, and local benchmark artifacts.
+- Separate explicit destructive reset from targeted maintenance or normal removal work.
+- Prepare a preview first with `reset.prepare_request`.
+- Treat remote cleanup, overlay cleanup, known_hosts cleanup, and remote restoration as explicit separate steps.
+- Treat unreachable remote cleanup as a reporting problem, not as permission to hide leftover state.
+
+## Default Recipe
+
+- Discovery family: `.agents/discovery/families/reset-cleanup.yaml`
+- Preview and authorization step: `reset.prepare_request`
+- Destructive cleanup sequence: `reset.cleanup_remote_runtime` -> `reset.cleanup_overlay` -> `reset.cleanup_known_hosts` -> `reset.restore_public_remotes`
+- Execute teardown only after the preview and authorization are both complete.
+- Report `partial` when cleanup finishes unevenly or some targets are unreachable.
+
+## Stop Conditions
+
+- Stop on missing authorization.
+- Stop on unreachable cleanup that prevents full teardown, then report it as partial or blocked.
+- Stop on any attempt to open a fresh auth flow during reset.
 
 ## User-Visible Output Contract
 
@@ -51,49 +65,19 @@ If exact internal routing details are required after this skill is selected, see
 - fabricated authorization
 - raw private hosts, secrets, or internal cleanup paths
 
-## Required Capabilities
-
-- `workspace-reset` is responsible for destructive effects over workspace-managed `servers`, `targets`, `sessions`, and local cleanup traces.
-- Reset closure includes `known_hosts` cleanup for workspace-managed hosts and runtime SSH ports.
-- Reset does not require `git_auth` to succeed, and it must not delete the user's global GitHub login state.
-
-## Default Inference Rules
-
-- Treat reset as high-friction by default.
-- Clean workspace-managed machine state on a best-effort basis.
-- Preserve explicit authorization even when the user-facing explanation stays high level.
-- Treat partial cleanup as partial, not as success.
-
 ## Cross-Skill Boundary
 
 - `workspace-init` owns first-time setup.
 - `machine-management` owns ordinary machine attach, verify, and removal work.
+- `serving` owns service lifecycle.
 - `benchmark` owns benchmark execution.
 - `workspace-reset` owns explicit destructive teardown.
-
-## Failure Handling Notes
-
-- Never skip explicit authorization for destructive teardown.
-- If cleanup is incomplete, report a partial result instead of pretending full success.
-- Distinguish blocked teardown from reachable teardown that only completed partially.
-
-## Failure Routing
-
-- Missing authorization or reset-only bookkeeping failures stay in `workspace-reset`.
-- If surviving machine state later needs targeted repair, route that follow-up to `machine-management` instead of disguising it as reset success.
-- Keep partial cleanup reported as `partial`; do not reroute mid-reset into a hidden repair workflow.
-
-## Security Notes
-
-- Never fabricate authorization on the user's behalf.
-- Never compress reset into a silent one-step action.
-- Never expose raw secrets or private hosts in user-facing output.
 
 ## Common Mistakes
 
 - Treating reset as routine maintenance.
-- Explaining reset through overlay file mutations.
-- Hiding unreachable cleanup outcomes.
+- Collapsing preview and execution into one hidden step.
+- Hiding incomplete cleanup outcomes.
 
 ## Red Flags
 

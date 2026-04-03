@@ -3,15 +3,36 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from tools.lib.capability_state import write_capability_leaf
+from tools.lib.code_parity import CodeParityResult
 from tools.lib.config import RepoPaths
-from tools.lib.remote import CredentialGroup, HostSpec, RuntimeSpec, TargetContext
+from tools.lib.remote_types import CredentialGroup, HostSpec, RemoteError, RuntimeSpec, TargetContext
 from tools.lib.repo_targets import resolve_repo_targets
 from tools.lib.runtime_env import _repo_reinstall_required, ensure_runtime_environment
+
+
+def _generic_state_file(repo_root: Path) -> Path:
+    return repo_root / ".workspace.local" / "state.json"
+
+
+def _parity_result(status: str, summary: str) -> CodeParityResult:
+    return CodeParityResult(
+        status=status,
+        summary=summary,
+        mismatches=[] if status == "ready" else ["workspace"],
+        desired_state={},
+        remote_state={},
+    )
+
+
+def test_runtime_env_module_does_not_persist_generic_state():
+    source = (ROOT / "tools/lib/runtime_env.py").read_text(encoding="utf-8")
+    assert "capability_state" not in source
 
 
 def test_repo_reinstall_required_skips_python_only_changes(vaws_repo):
@@ -81,16 +102,6 @@ def test_ensure_runtime_environment_runs_first_install_commands(vaws_repo, monke
         vllm_upstream_tag=None,
         vllm_ascend_upstream_branch="main",
     )
-    write_capability_leaf(
-        paths,
-        ("servers", "lab-a", "container_access"),
-        {
-            "status": "ready",
-            "detail": "container ssh ok",
-            "observed_at": "2026-04-01T12:00:00Z",
-            "evidence_source": "machine-management",
-        },
-    )
     captured = {}
 
     def fake_run_runtime_command(ctx, transport, script):
@@ -122,7 +133,18 @@ def test_ensure_runtime_environment_runs_first_install_commands(vaws_repo, monke
             ),
         ),
     )
-    monkeypatch.setattr("tools.lib.runtime_env.run_runtime_command", fake_run_runtime_command)
+    monkeypatch.setattr(
+        "tools.lib.runtime_env.resolve_available_runtime_transport",
+        lambda _ctx: "container-ssh",
+    )
+    monkeypatch.setattr(
+        "tools.lib.runtime_env.verify_code_parity",
+        lambda *_args, **_kwargs: _parity_result(
+            "needs_repair",
+            "remote code parity mismatch for lab-a: workspace",
+        ),
+    )
+    monkeypatch.setattr("tools.lib.runtime_env.run_container_command", fake_run_runtime_command)
 
     result = ensure_runtime_environment(paths, "lab-a", desired)
 
@@ -133,6 +155,7 @@ def test_ensure_runtime_environment_runs_first_install_commands(vaws_repo, monke
     assert "pip install -e . --no-build-isolation" in captured["script"]
     assert "pip install -r requirements.txt" in captured["script"]
     assert "pip install -v -e . --no-build-isolation" in captured["script"]
+    assert not _generic_state_file(vaws_repo).exists()
 
 
 def test_ensure_runtime_environment_shell_quotes_workspace_paths(vaws_repo, monkeypatch):
@@ -141,16 +164,6 @@ def test_ensure_runtime_environment_shell_quotes_workspace_paths(vaws_repo, monk
         paths,
         vllm_upstream_tag=None,
         vllm_ascend_upstream_branch="main",
-    )
-    write_capability_leaf(
-        paths,
-        ("servers", "lab-a", "container_access"),
-        {
-            "status": "ready",
-            "detail": "container ssh ok",
-            "observed_at": "2026-04-01T12:00:00Z",
-            "evidence_source": "machine-management",
-        },
     )
     captured = {}
     workspace_root = "/tmp/work space; echo pwned"
@@ -183,7 +196,18 @@ def test_ensure_runtime_environment_shell_quotes_workspace_paths(vaws_repo, monk
             ),
         ),
     )
-    monkeypatch.setattr("tools.lib.runtime_env.run_runtime_command", fake_run_runtime_command)
+    monkeypatch.setattr(
+        "tools.lib.runtime_env.resolve_available_runtime_transport",
+        lambda _ctx: "container-ssh",
+    )
+    monkeypatch.setattr(
+        "tools.lib.runtime_env.verify_code_parity",
+        lambda *_args, **_kwargs: _parity_result(
+            "needs_repair",
+            "remote code parity mismatch for lab-a: workspace",
+        ),
+    )
+    monkeypatch.setattr("tools.lib.runtime_env.run_container_command", fake_run_runtime_command)
 
     result = ensure_runtime_environment(paths, "lab-a", desired)
 
@@ -196,17 +220,113 @@ def test_ensure_runtime_environment_shell_quotes_workspace_paths(vaws_repo, monk
     )
     assert f"cd {shlex.quote(f'{workspace_root}/workspace/vllm')}" in captured["script"]
     assert f"cd {shlex.quote(f'{workspace_root}/workspace/vllm-ascend')}" in captured["script"]
+    assert not _generic_state_file(vaws_repo).exists()
 
 
-def test_ensure_runtime_environment_refuses_non_ssh_transport(vaws_repo):
+def test_ensure_runtime_environment_refuses_non_ssh_transport(vaws_repo, monkeypatch):
     paths = RepoPaths(root=vaws_repo)
     desired = resolve_repo_targets(
         paths,
         vllm_upstream_tag=None,
         vllm_ascend_upstream_branch="main",
     )
+    monkeypatch.setattr(
+        "tools.lib.runtime_env.resolve_server_context",
+        lambda _paths, _server_name: TargetContext(
+            name="lab-a",
+            host=HostSpec(
+                name="lab-a",
+                host="10.0.0.12",
+                port=22,
+                login_user="root",
+                auth_group="default-server-auth",
+                ssh_auth_ref="default-server-auth",
+            ),
+            credential=CredentialGroup(mode="ssh-key", username="root"),
+            runtime=RuntimeSpec(
+                image_ref="image",
+                container_name="container",
+                ssh_port=63269,
+                workspace_root="/vllm-workspace",
+                bootstrap_mode="host-then-container",
+                host_workspace_path="/root/.vaws/targets/lab-a/workspace",
+                docker_run_args=[],
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        "tools.lib.runtime_env.resolve_available_runtime_transport",
+        lambda _ctx: (_ for _ in ()).throw(RemoteError("container_ssh not ready for lab-a")),
+    )
+    monkeypatch.setattr(
+        "tools.lib.runtime_env.verify_code_parity",
+        lambda *_args, **_kwargs: _parity_result(
+            "ready",
+            "remote code parity ready for lab-a",
+        ),
+    )
 
     result = ensure_runtime_environment(paths, "lab-a", desired)
 
     assert result.status == "needs_repair"
     assert "container_ssh" in result.summary
+
+
+def test_ensure_runtime_environment_uses_live_transport_without_cached_state(vaws_repo, monkeypatch):
+    paths = RepoPaths(root=vaws_repo)
+    desired = resolve_repo_targets(
+        paths,
+        vllm_upstream_tag=None,
+        vllm_ascend_upstream_branch="main",
+    )
+    captured = {}
+
+    def fake_run_runtime_command(ctx, transport, script):
+        captured["transport"] = transport
+        captured["script"] = script
+        return subprocess.CompletedProcess(["bash"], 0, "", "")
+
+    monkeypatch.setattr(
+        "tools.lib.runtime_env.resolve_server_context",
+        lambda _paths, _server_name: TargetContext(
+            name="lab-a",
+            host=HostSpec(
+                name="lab-a",
+                host="10.0.0.12",
+                port=22,
+                login_user="root",
+                auth_group="default-server-auth",
+                ssh_auth_ref="default-server-auth",
+            ),
+            credential=CredentialGroup(mode="ssh-key", username="root"),
+            runtime=RuntimeSpec(
+                image_ref="image",
+                container_name="container",
+                ssh_port=63269,
+                workspace_root="/vllm-workspace",
+                bootstrap_mode="host-then-container",
+                host_workspace_path="/root/.vaws/targets/lab-a/workspace",
+                docker_run_args=[],
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        "tools.lib.runtime_env.resolve_available_runtime_transport",
+        lambda _ctx: "container-ssh",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "tools.lib.runtime_env.verify_code_parity",
+        lambda *_args, **_kwargs: _parity_result(
+            "needs_repair",
+            "remote code parity mismatch for lab-a: workspace",
+        ),
+    )
+    monkeypatch.setattr("tools.lib.runtime_env.run_container_command", fake_run_runtime_command)
+
+    result = ensure_runtime_environment(paths, "lab-a", desired)
+
+    if result.status != "ready":
+        pytest.fail(f"live runtime transport should bypass cached state gate, got: {result.status} / {result.summary}")
+    assert captured["transport"] == "container-ssh"
+    assert not _generic_state_file(vaws_repo).exists()

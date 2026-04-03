@@ -6,10 +6,12 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Dict
 
+from .code_parity import verify_code_parity
 from .config import RepoPaths
-from .remote import resolve_server_context, run_runtime_command
+from .remote_types import RemoteError
 from .repo_targets import WorkspaceTargets
-from .runtime import read_state, require_container_ssh_transport, update_state
+from .runtime_transport import resolve_available_runtime_transport, run_container_command
+from .target_context import resolve_server_context
 
 PYTHON_BIN = "/usr/local/python3.11.14/bin/python3"
 PIP_BIN = "/usr/local/python3.11.14/bin/pip"
@@ -111,85 +113,40 @@ def _install_script(workspace_root: str) -> str:
     )
 
 
-def _persist_runtime_environment(
-    paths: RepoPaths,
-    server_name: str,
-    desired: WorkspaceTargets,
-    result: RuntimeEnvironmentResult,
-) -> None:
-    state = read_state(paths)
-    existing = state.get("runtime_environment")
-    if not isinstance(existing, dict):
-        existing = {}
-    existing[server_name] = {
-        "status": result.status,
-        "summary": result.summary,
-        "workspace_commit": desired.workspace.commit,
-        "vllm_commit": desired.vllm.commit,
-        "vllm_ascend_commit": desired.vllm_ascend.commit,
-        "installed": result.installed,
-        "rebuilt": result.rebuilt,
-    }
-    update_state(paths, runtime_environment=existing)
-
-
 def ensure_runtime_environment(
     paths: RepoPaths,
     server_name: str,
     desired: WorkspaceTargets,
 ) -> RuntimeEnvironmentResult:
-    state = read_state(paths)
-    runtime_environment = state.get("runtime_environment")
-    previous = runtime_environment.get(server_name) if isinstance(runtime_environment, dict) else None
-    previous_vllm = previous.get("vllm_commit") if isinstance(previous, dict) else None
-    previous_vllm_ascend = previous.get("vllm_ascend_commit") if isinstance(previous, dict) else None
-    first_install = not isinstance(previous, dict)
-    needs_rebuild = first_install or _repo_reinstall_required(
-        paths.root / "vllm",
-        previous_vllm,
-        desired.vllm.commit,
-    ) or _repo_reinstall_required(
-        paths.root / "vllm-ascend",
-        previous_vllm_ascend,
-        desired.vllm_ascend.commit,
-    )
+    parity = verify_code_parity(paths, server_name, desired)
+    needs_rebuild = parity.status != "ready"
 
+    ctx = resolve_server_context(paths, server_name)
     try:
-        transport = require_container_ssh_transport(paths, server_name)
-    except RuntimeError as exc:
-        env_result = RuntimeEnvironmentResult(
+        transport = resolve_available_runtime_transport(ctx)
+    except RemoteError as exc:
+        return RuntimeEnvironmentResult(
             status="needs_repair",
             summary=str(exc),
             installed=False,
             rebuilt=False,
         )
-        _persist_runtime_environment(paths, server_name, desired, env_result)
-        return env_result
 
     if not needs_rebuild:
-        result = RuntimeEnvironmentResult(
+        return RuntimeEnvironmentResult(
             status="ready",
             summary=f"runtime environment already ready for {server_name}",
             installed=False,
             rebuilt=False,
         )
-        _persist_runtime_environment(paths, server_name, desired, result)
-        return result
 
-    ctx = resolve_server_context(paths, server_name)
-    result = run_runtime_command(ctx, transport, _install_script(ctx.runtime.workspace_root))
+    result = run_container_command(ctx, transport, _install_script(ctx.runtime.workspace_root))
     if result.returncode != 0:
         raise RuntimeError((result.stderr or result.stdout).strip())
 
-    env_result = RuntimeEnvironmentResult(
+    return RuntimeEnvironmentResult(
         status="ready",
-        summary=(
-            f"runtime environment bootstrapped for {server_name}"
-            if first_install
-            else f"runtime environment rebuilt for {server_name}"
-        ),
-        installed=first_install,
-        rebuilt=not first_install,
+        summary=f"runtime environment rebuilt for {server_name}",
+        installed=True,
+        rebuilt=True,
     )
-    _persist_runtime_environment(paths, server_name, desired, env_result)
-    return env_result

@@ -11,12 +11,17 @@ This directory contains the shared workspace-local contract layer for agents wor
 
 ## Public Skills
 
-- `.agents/skills/workspace-init/` prepares the repo for development.
+- `.agents/skills/workspace-init/` prepares the local repo foundation for development and can extend that baseline to an optional first machine.
 - `.agents/skills/machine-management/` handles machine attach, verify, and removal requests.
 - `.agents/skills/serving/` handles model-serving start, status, list, and stop requests.
-- `.agents/skills/benchmark/` handles benchmark execution requests against a model service.
+- `.agents/skills/benchmark/` handles benchmark execution requests against an explicit ready model service.
 - `.agents/skills/workspace-reset/` handles explicit destructive teardown.
 - `.agents/skills/profiling-analysis/` remains available as a domain-specific skill.
+
+## Discovery
+
+- Read the matched public `SKILL.md` first.
+- When the skill leaves tool selection open, start at `.agents/discovery/README.md` before reading internal libraries.
 
 ## Boundary
 

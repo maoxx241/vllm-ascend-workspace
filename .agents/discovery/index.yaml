@@ -1,0 +1,78 @@
+version: 1
+contract_path: docs/superpowers/contracts/2026-04-02-agent-tooling-foundation.md
+namespace_decisions:
+  vaws:
+    status: thin-compatibility-wrapper
+    rule: do not add new workflow ownership to vaws
+families:
+  - family_id: workspace-foundation
+    path: .agents/discovery/families/workspace-foundation.yaml
+    problem_classes:
+      - workspace overlay validity
+      - git auth readiness
+      - repo topology probe
+      - submodule integrity
+  - family_id: workspace-diagnostics
+    path: .agents/discovery/families/workspace-diagnostics.yaml
+    problem_classes:
+      - workspace diagnostics
+      - overlay diagnosis
+      - live workspace diagnosis
+  - family_id: machine-inventory
+    path: .agents/discovery/families/machine-inventory.yaml
+    problem_classes:
+      - machine inventory registration
+      - machine inventory inspection
+      - machine inventory removal
+  - family_id: reset-cleanup
+    path: .agents/discovery/families/reset-cleanup.yaml
+    problem_classes:
+      - reset request recording
+      - remote runtime cleanup
+      - overlay cleanup
+      - known hosts cleanup
+      - remote restoration
+  - family_id: machine-runtime
+    path: .agents/discovery/families/machine-runtime.yaml
+    problem_classes:
+      - machine attach
+      - machine verify
+      - runtime transport probe
+  - family_id: serving-lifecycle
+    path: .agents/discovery/families/serving-lifecycle.yaml
+    problem_classes:
+      - service launch
+      - service readiness probe
+      - service stop
+  - family_id: benchmark-execution
+    path: .agents/discovery/families/benchmark-execution.yaml
+    problem_classes:
+      - benchmark preset inspection
+      - benchmark run execution
+      - benchmark result inspection
+skill_routes:
+  - skill_name: workspace-init
+    skill_path: .agents/skills/workspace-init/SKILL.md
+    family_ids:
+      - workspace-foundation
+      - workspace-diagnostics
+      - machine-inventory
+      - machine-runtime
+  - skill_name: machine-management
+    skill_path: .agents/skills/machine-management/SKILL.md
+    family_ids:
+      - machine-inventory
+      - machine-runtime
+  - skill_name: serving
+    skill_path: .agents/skills/serving/SKILL.md
+    family_ids:
+      - serving-lifecycle
+  - skill_name: benchmark
+    skill_path: .agents/skills/benchmark/SKILL.md
+    family_ids:
+      - serving-lifecycle
+      - benchmark-execution
+  - skill_name: workspace-reset
+    skill_path: .agents/skills/workspace-reset/SKILL.md
+    family_ids:
+      - reset-cleanup

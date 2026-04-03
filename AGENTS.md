@@ -13,11 +13,16 @@ This repository is an agent-first scaffold for vLLM Ascend development work.
 
 ## Public Skills
 
-- Use `.agents/skills/workspace-init/SKILL.md` for first-time setup or recovery setup.
+- Use `.agents/skills/workspace-init/SKILL.md` for first-time setup, recovery setup, or local foundation plus optional first-machine setup.
 - Use `.agents/skills/machine-management/SKILL.md` to attach, verify, or remove machines.
 - Use `.agents/skills/serving/SKILL.md` to start, inspect, list, or stop model services on a ready machine.
-- Use `.agents/skills/benchmark/SKILL.md` to run benchmark workflows against a ready environment and model service.
+- Use `.agents/skills/benchmark/SKILL.md` to run benchmark workflows against an explicit ready model service.
 - Use `.agents/skills/workspace-reset/SKILL.md` only for explicit destructive teardown.
+
+## Discovery
+
+- Read the matched public `SKILL.md` first.
+- When the skill leaves tool selection open, start at `.agents/discovery/README.md` before reading internal libraries.
 
 ## Skill Boundary
 

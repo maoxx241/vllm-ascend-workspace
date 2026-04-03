@@ -78,6 +78,7 @@ def test_first_contact_docs_use_canonical_runtime_root_and_skill_first_surface()
         assert "tools/vaws.py" not in text
         assert "./setup" not in text
         assert "./sync" not in text
+        assert "read the matched public `skill.md` first" in text
 
 
 def test_first_contact_docs_route_only_to_public_skills():
@@ -106,6 +107,7 @@ def test_first_contact_docs_keep_repo_context_without_legacy_workflow_map():
         assert "upstream" in text
         assert "origin" in text
         assert ".agents/skills/" in text
+        assert ".agents/discovery/readme.md" in text
 
 
 def test_profiling_analysis_remains_discoverable_during_public_surface_migration():
@@ -118,7 +120,7 @@ def test_legacy_discoverable_lifecycle_skills_are_removed():
         assert not (ROOT / ".agents" / "skills" / skill_name).exists()
 
 
-def test_public_skill_roots_and_internal_routing_refs_use_delegation_shape():
+def test_public_skill_roots_and_internal_routing_refs_use_backstop_shape():
     for skill_name in PUBLIC_SKILLS:
         skill_root = ROOT / ".agents" / "skills" / skill_name
         assert (skill_root / "SKILL.md").exists()
@@ -129,6 +131,7 @@ def test_public_skill_roots_and_internal_routing_refs_use_delegation_shape():
         assert "## internal delegation" in text
         assert "public action -> internal contract" in text
         assert "internal contract -> implementation owner" in text
+        assert "maintainer backstop" in text
 
 
 def test_workspace_submodules_are_declared():
@@ -153,10 +156,14 @@ def test_public_repo_topology_example_stays_public_and_upstream_oriented():
 
 
 def test_serving_and_benchmark_runbooks_live_with_assets():
-    assert (ROOT / "serving" / "topologies" / "single-node-replica" / "RUNBOOK.md").exists()
+    assert (
+        ROOT / "serving" / "topologies" / "single-node-replica" / "RUNBOOK.md"
+    ).exists()
     assert (ROOT / "benchmarking" / "probes" / "performance" / "RUNBOOK.md").exists()
     assert not (ROOT / "docs" / "superpowers" / "runbooks").exists()
 
 
 def test_old_gdn_asset_path_is_not_the_canonical_execution_surface():
-    assert not (ROOT / "benchmarking" / "serving" / "gdn" / "qwen3_5" / "qwen35_gdn_chunk_perf.py").exists()
+    assert not (
+        ROOT / "benchmarking" / "serving" / "gdn" / "qwen3_5" / "qwen35_gdn_chunk_perf.py"
+    ).exists()

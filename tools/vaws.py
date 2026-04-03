@@ -7,42 +7,19 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from tools.lib.config import RepoPaths
-from tools.lib.doctor import doctor
-from tools.lib.init_flow import init_request_from_args, run_init
-from tools.lib.machine import add_machine, list_machines, remove_machine, verify_machine
-from tools.lib.reset import execute_reset, prepare_reset
-from tools.lib.benchmark import run_benchmark
-from tools.lib.serving import list_services, start_service, status_service, stop_service
+from tools.lib import (
+    vaws_benchmark,
+    vaws_doctor,
+    vaws_machine,
+    vaws_reset,
+    vaws_serving,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="vaws")
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("doctor", help="inspect canonical workspace state and report residue")
-    init_parser = subparsers.add_parser("init", help="prepare this workspace for development")
-    init_parser.add_argument(
-        "--server-host",
-        help="machine host for first-machine setup; omit for local-only baseline",
-    )
-    init_parser.add_argument("--server-name")
-    init_parser.add_argument("--server-user", default="root")
-    init_parser.add_argument("--server-port", type=int, default=22)
-    init_parser.add_argument("--server-auth-mode", default="ssh-key")
-    init_parser.add_argument("--server-password-env")
-    init_parser.add_argument("--server-key-path")
-    init_parser.add_argument("--local-only", action="store_true")
-    init_parser.add_argument(
-        "--runtime-image",
-        default="quay.nju.edu.cn/ascend/vllm-ascend:latest",
-    )
-    init_parser.add_argument("--runtime-container", default="vaws-workspace")
-    init_parser.add_argument("--runtime-ssh-port", type=int, default=63269)
-    init_parser.add_argument(
-        "--runtime-workspace-root",
-        default="/vllm-workspace",
-    )
-    init_parser.add_argument("--vllm-origin-url")
-    init_parser.add_argument("--vllm-ascend-origin-url")
     reset_parser = subparsers.add_parser(
         "reset",
         help="prepare or execute destructive workspace teardown",
@@ -52,12 +29,6 @@ def build_parser() -> argparse.ArgumentParser:
         "prepare",
         help="record reset authorization and preview destructive scope",
     )
-    reset_execute_parser = reset_subparsers.add_parser(
-        "execute",
-        help="execute destructive workspace teardown after confirmation",
-    )
-    reset_execute_parser.add_argument("--confirmation-id")
-    reset_execute_parser.add_argument("--confirm")
 
     machine_parser = subparsers.add_parser(
         "machine",
@@ -108,7 +79,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     benchmark_parser = subparsers.add_parser(
         "benchmark",
-        help="run benchmark workflows on a ready machine",
+        help="run benchmark workflows against an explicit ready service",
     )
     benchmark_subparsers = benchmark_parser.add_subparsers(
         dest="benchmark_command",
@@ -117,8 +88,7 @@ def build_parser() -> argparse.ArgumentParser:
     benchmark_run_parser = benchmark_subparsers.add_parser("run")
     benchmark_run_parser.add_argument("--server-name", required=True)
     benchmark_run_parser.add_argument("--preset", required=True)
-    benchmark_run_parser.add_argument("--weights-path")
-    benchmark_run_parser.add_argument("--service-id")
+    benchmark_run_parser.add_argument("--service-id", required=True)
 
     return parser
 
@@ -129,49 +99,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     paths = RepoPaths(root=Path.cwd())
 
     if args.command == "doctor":
-        return doctor(paths)
-    if args.command == "init":
-        return run_init(paths, init_request_from_args(args))
+        return vaws_doctor.run(paths)
     if args.command == "reset":
-        if args.reset_command == "prepare":
-            return prepare_reset(paths)
-        if args.reset_command == "execute":
-            return execute_reset(paths, args.confirmation_id, args.confirm)
-        parser.error(f"unknown reset command: {args.reset_command}")
+        return vaws_reset.run(paths, args)
     if args.command == "machine":
-        if args.machine_command == "list":
-            return list_machines(paths)
-        if args.machine_command == "add":
-            return add_machine(
-                paths,
-                args.server_name,
-                args.server_host,
-                ssh_auth_ref=args.ssh_auth_ref,
-                server_user=args.server_user,
-                server_port=args.server_port,
-                runtime_image=args.runtime_image,
-                runtime_container=args.runtime_container,
-                runtime_ssh_port=args.runtime_ssh_port,
-                runtime_workspace_root=args.runtime_workspace_root,
-                runtime_bootstrap_mode=args.runtime_bootstrap_mode,
-            )
-        if args.machine_command == "verify":
-            return verify_machine(paths, args.server_name)
-        if args.machine_command == "remove":
-            return remove_machine(paths, args.server_name)
-        parser.error(f"unknown machine command: {args.machine_command}")
+        return vaws_machine.run(paths, args)
     if args.command == "serving":
-        if args.serving_command == "list":
-            return list_services(paths)
-        if args.serving_command == "start":
-            return start_service(paths, args.server_name, args.preset, args.weights_path, args.api_key_env)
-        if args.serving_command == "status":
-            return status_service(paths, args.service_id)
-        if args.serving_command == "stop":
-            return stop_service(paths, args.service_id)
-        parser.error(f"unknown serving command: {args.serving_command}")
-    if args.command == "benchmark" and args.benchmark_command == "run":
-        return run_benchmark(paths, args.server_name, args.preset, args.weights_path, args.service_id)
+        return vaws_serving.run(paths, args)
+    if args.command == "benchmark":
+        return vaws_benchmark.run(paths, args)
 
     parser.error(f"unknown command: {args.command}")
     return 2

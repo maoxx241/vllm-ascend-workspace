@@ -6,16 +6,13 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from tools.lib.remote import (
+from tools.lib.remote_types import CredentialGroup, HostSpec, RuntimeSpec, TargetContext
+from tools.lib.runtime_bootstrap import (
     RUNTIME_PORT_MAX,
     RUNTIME_PORT_MIN,
-    CredentialGroup,
-    HostSpec,
-    RuntimeSpec,
-    TargetContext,
-    _container_requires_rebuild,
     allocate_runtime_ssh_port,
 )
+from tools.lib.runtime_container import container_requires_rebuild
 
 
 def _host_ctx() -> TargetContext:
@@ -48,8 +45,8 @@ def _host_ctx() -> TargetContext:
 
 def test_allocate_runtime_ssh_port_picks_free_high_port(monkeypatch):
     sequence = iter([40001, 40002, 42321])
-    monkeypatch.setattr("tools.lib.remote._list_listening_ports", lambda: {40001, 40002})
-    monkeypatch.setattr("tools.lib.remote.random.randint", lambda _lo, _hi: next(sequence))
+    monkeypatch.setattr("tools.lib.runtime_bootstrap._list_listening_ports", lambda: {40001, 40002})
+    monkeypatch.setattr("tools.lib.runtime_bootstrap.random.randint", lambda _lo, _hi: next(sequence))
 
     port = allocate_runtime_ssh_port()
 
@@ -60,7 +57,7 @@ def test_allocate_runtime_ssh_port_picks_free_high_port(monkeypatch):
 def test_container_requires_rebuild_when_network_mode_drifted(monkeypatch):
     ctx = _host_ctx()
     monkeypatch.setattr(
-        "tools.lib.remote._inspect_container_contract",
+        "tools.lib.runtime_container.inspect_container_contract",
         lambda _ctx: {
             "image": ctx.runtime.image_ref,
             "network_mode": "bridge",
@@ -76,4 +73,4 @@ def test_container_requires_rebuild_when_network_mode_drifted(monkeypatch):
         },
     )
 
-    assert _container_requires_rebuild(ctx) is True
+    assert container_requires_rebuild(ctx) is True

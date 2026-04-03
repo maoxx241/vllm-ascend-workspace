@@ -5,9 +5,10 @@ from dataclasses import asdict, dataclass
 from typing import Any, Dict, List
 
 from .config import RepoPaths
-from .remote import _stream_repo_to_host, resolve_server_context, run_runtime_command
 from .repo_targets import WorkspaceTargets
-from .runtime import read_state, require_container_ssh_transport, update_state
+from .runtime_container import sync_workspace_mirror as sync_host_workspace_mirror
+from .runtime_transport import resolve_available_runtime_transport, run_container_command
+from .target_context import resolve_server_context
 
 
 @dataclass(frozen=True)
@@ -44,12 +45,12 @@ def build_materialization_script(desired: WorkspaceTargets, *, workspace_root: s
 
 def sync_workspace_mirror(paths: RepoPaths, server_name: str) -> None:
     ctx = resolve_server_context(paths, server_name)
-    _stream_repo_to_host(paths, ctx)
+    sync_host_workspace_mirror(str(paths.root), ctx)
 
 
 def _collect_remote_git_state(paths: RepoPaths, server_name: str) -> Dict[str, Any]:
     ctx = resolve_server_context(paths, server_name)
-    transport = require_container_ssh_transport(paths, server_name)
+    transport = resolve_available_runtime_transport(ctx)
     workspace_path = f"{ctx.runtime.workspace_root}/workspace"
     script = "\n".join(
         [
@@ -66,7 +67,7 @@ def _collect_remote_git_state(paths: RepoPaths, server_name: str) -> Dict[str, A
             "done",
         ]
     )
-    result = run_runtime_command(ctx, transport, script)
+    result = run_container_command(ctx, transport, script)
     if result.returncode != 0:
         raise RuntimeError((result.stderr or result.stdout).strip())
 
@@ -77,15 +78,6 @@ def _collect_remote_git_state(paths: RepoPaths, server_name: str) -> Dict[str, A
         name, commit = line.split("\t", 1)
         remote_state[name] = {"commit": commit}
     return remote_state
-
-
-def _persist_code_parity(paths: RepoPaths, server_name: str, result: CodeParityResult) -> None:
-    state = read_state(paths)
-    existing = state.get("code_parity")
-    if not isinstance(existing, dict):
-        existing = {}
-    existing[server_name] = result.to_mapping()
-    update_state(paths, code_parity=existing)
 
 
 def verify_code_parity(
@@ -121,7 +113,6 @@ def verify_code_parity(
             remote_state=remote_state,
         )
 
-    _persist_code_parity(paths, server_name, result)
     return result
 
 
@@ -132,12 +123,12 @@ def ensure_code_parity(
 ) -> CodeParityResult:
     ctx = resolve_server_context(paths, server_name)
     sync_workspace_mirror(paths, server_name)
-    transport = require_container_ssh_transport(paths, server_name)
+    transport = resolve_available_runtime_transport(ctx)
     script = build_materialization_script(
         desired,
         workspace_root=ctx.runtime.workspace_root,
     )
-    result = run_runtime_command(ctx, transport, script)
+    result = run_container_command(ctx, transport, script)
     if result.returncode != 0:
         raise RuntimeError((result.stderr or result.stdout).strip())
     return verify_code_parity(paths, server_name, desired)

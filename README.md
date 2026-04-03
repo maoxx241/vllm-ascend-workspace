@@ -24,12 +24,17 @@ Public workspace-local scaffold for coordinating vLLM and vLLM-Ascend developmen
 
 ## Public Skills
 
-- `.agents/skills/workspace-init/` prepares the repo for development, including Git setup and optional first machine setup.
+- `.agents/skills/workspace-init/` prepares the repo foundation for development and can extend that baseline to an optional first machine.
 - `.agents/skills/machine-management/` attaches, verifies, and removes machines.
 - `.agents/skills/serving/` starts, inspects, lists, and stops model services.
-- `.agents/skills/benchmark/` runs benchmark workflows against a ready environment and model service.
+- `.agents/skills/benchmark/` runs benchmark workflows against an explicit ready model service.
 - `.agents/skills/workspace-reset/` handles explicit destructive teardown.
 - `.agents/skills/profiling-analysis/` remains available as an orthogonal domain skill.
+
+## Agent Discovery
+
+- Read the matched public `SKILL.md` first.
+- When the skill leaves tool selection open, start at `.agents/discovery/README.md` before reading internal libraries.
 
 ## Adapters
 
