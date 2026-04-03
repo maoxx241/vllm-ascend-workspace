@@ -3,6 +3,7 @@
 Public contract: `../SKILL.md`
 
 This file is a maintainer backstop. The public `SKILL.md` is the normal execution surface, and agents should not need this file to understand the default public recipe.
+Use this file only for ambiguous routing, routing-maintenance work, or contract audits. Normal execution should stop at the public `SKILL.md` unless the next tool is genuinely unclear.
 
 ## Sanctioned Adapter Surface
 
@@ -30,6 +31,7 @@ This file is a maintainer backstop. The public `SKILL.md` is the normal executio
   - local foundation ladder: `workspace.probe_config_validity` -> `workspace.probe_git_auth` -> `workspace.probe_repo_topology` -> `workspace.probe_submodules` -> `workspace.describe_repo_targets`
 - `first-time Git setup and first-machine setup`
   - discovery families: `.agents/discovery/families/workspace-foundation.yaml`, `.agents/discovery/families/machine-inventory.yaml`, `.agents/discovery/families/machine-runtime.yaml`
+  - inventory probes: `machine.describe_server`, `machine.list_servers`
   - first-machine ladder: `machine.register_server` -> `machine.probe_host_ssh` -> `runtime.probe_container_transport`
   - repair ladder: `machine.bootstrap_host_ssh` -> `machine.sync_workspace_mirror` -> `runtime.reconcile_container` -> `runtime.bootstrap_container_transport`
 - `diagnose why init cannot finish`

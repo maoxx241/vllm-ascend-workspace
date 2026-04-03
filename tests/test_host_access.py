@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from tools.lib.host_access import ensure_host_ssh_access, run_host_command
+from tools.lib.host_access import ensure_host_ssh_access, run_host_command, ssh_base_command
 from tools.lib.remote_types import CredentialGroup, HostSpec, RuntimeSpec, TargetContext
 
 
@@ -87,3 +87,18 @@ def test_run_host_command_uses_public_ensure_host_access(monkeypatch):
     assert captured["ensure"] is False
     assert "ssh" in captured["command"][0]
     assert result.returncode == 0
+
+
+def test_ssh_base_command_uses_error_only_logging():
+    command = ssh_base_command(_ctx())
+
+    assert command[:8] == [
+        "ssh",
+        "-o",
+        "StrictHostKeyChecking=no",
+        "-o",
+        "UserKnownHostsFile=/dev/null",
+        "-o",
+        "LogLevel=ERROR",
+        "-p",
+    ]

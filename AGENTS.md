@@ -22,7 +22,7 @@ This repository is an agent-first scaffold for vLLM Ascend development work.
 ## Discovery
 
 - Read the matched public `SKILL.md` first.
-- When the skill leaves tool selection open, start at `.agents/discovery/README.md` before reading internal libraries.
+- Open `.agents/discovery/README.md` only when the matched skill or its linked reference does not identify the next tool, or when probe results disagree and the next step is ambiguous.
 
 ## Skill Boundary
 

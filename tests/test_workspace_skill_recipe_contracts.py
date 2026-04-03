@@ -86,10 +86,10 @@ DISCOVERY_BACKED_SKILL_RECIPES = {
 }
 
 
-def _skill_text(skill_name: str) -> str:
-    return (ROOT / ".agents" / "skills" / skill_name / "SKILL.md").read_text(
-        encoding="utf-8"
-    ).lower()
+def _routing_text(skill_name: str) -> str:
+    return (
+        ROOT / ".agents" / "skills" / skill_name / "references" / "internal-routing.md"
+    ).read_text(encoding="utf-8").lower()
 
 
 def _manifest(path: str) -> dict:
@@ -109,9 +109,9 @@ def test_discovery_backed_skill_recipe_manifests_cover_expected_tool_ids():
             )
 
 
-def test_public_skill_bodies_reference_discovery_families_and_tool_ids():
+def test_internal_routing_files_reference_discovery_families_and_tool_ids():
     for skill_name, recipe in DISCOVERY_BACKED_SKILL_RECIPES.items():
-        text = _skill_text(skill_name)
+        text = _routing_text(skill_name)
         for family_path in recipe["family_paths"]:
             assert family_path.lower() in text, (
                 f"{skill_name} missing discovery family path {family_path}"

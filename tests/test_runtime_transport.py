@@ -4,11 +4,13 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from tools.lib.remote_types import CredentialGroup, HostSpec, RuntimeSpec, TargetContext
+from tools.lib.remote_types import CredentialGroup, HostSpec, RemoteError, RuntimeSpec, TargetContext
 from tools.lib.runtime_transport import (
     bootstrap_container_runtime,
     probe_container_ssh_transport,
@@ -70,6 +72,59 @@ def test_bootstrap_container_runtime_returns_container_ssh_when_probe_succeeds(m
 
     assert bootstrap_container_runtime(_ctx()) == "container-ssh"
     assert "PasswordAuthentication no" in recorded["script"]
+
+
+def test_bootstrap_container_runtime_uses_precise_sshd_kill_and_absolute_path(monkeypatch):
+    recorded: dict[str, str] = {}
+    monkeypatch.setattr(
+        "tools.lib.runtime_transport.find_public_key_path",
+        lambda: Path("/tmp/id_rsa.pub"),
+    )
+    monkeypatch.setattr(
+        "pathlib.Path.read_text",
+        lambda self, encoding="utf-8": "ssh-ed25519 AAAA test",
+    )
+
+    def fake_run_docker_exec(_ctx, script):
+        recorded["script"] = script
+        return subprocess.CompletedProcess(["docker"], 0, "", "")
+
+    monkeypatch.setattr("tools.lib.runtime_transport.run_docker_exec", fake_run_docker_exec)
+    monkeypatch.setattr("tools.lib.runtime_transport.probe_container_ssh", lambda _ctx: True)
+
+    assert bootstrap_container_runtime(_ctx()) == "container-ssh"
+    assert "pkill -f" not in recorded["script"]
+    assert "pgrep -a -x sshd" in recorded["script"]
+    assert "/usr/sbin/sshd -t" in recorded["script"]
+    assert "sshd -t && sshd -p" not in recorded["script"]
+
+
+def test_bootstrap_container_runtime_reports_return_code_and_streams(monkeypatch):
+    monkeypatch.setattr(
+        "tools.lib.runtime_transport.find_public_key_path",
+        lambda: Path("/tmp/id_rsa.pub"),
+    )
+    monkeypatch.setattr(
+        "pathlib.Path.read_text",
+        lambda self, encoding="utf-8": "ssh-ed25519 AAAA test",
+    )
+    monkeypatch.setattr(
+        "tools.lib.runtime_transport.run_docker_exec",
+        lambda _ctx, script: subprocess.CompletedProcess(
+            ["docker"],
+            143,
+            "stdout marker",
+            "stderr marker",
+        ),
+    )
+
+    with pytest.raises(RemoteError) as excinfo:
+        bootstrap_container_runtime(_ctx())
+
+    message = str(excinfo.value)
+    assert "rc=143" in message
+    assert "stderr=stderr marker" in message
+    assert "stdout=stdout marker" in message
 
 
 def test_resolve_available_runtime_transport_prefers_container_ssh(monkeypatch):
