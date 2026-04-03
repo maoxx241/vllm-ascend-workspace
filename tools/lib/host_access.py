@@ -54,6 +54,8 @@ def ssh_base_command(
         "StrictHostKeyChecking=no",
         "-o",
         "UserKnownHostsFile=/dev/null",
+        "-o",
+        "LogLevel=ERROR",
         "-p",
         str(target_port),
     ]

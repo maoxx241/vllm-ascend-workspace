@@ -89,6 +89,24 @@ def test_container_bootstrap_writes_key_only_sshd_config(monkeypatch):
     assert "PermitRootLogin prohibit-password" in script
 
 
+def test_container_bootstrap_uses_absolute_sshd_binary(monkeypatch):
+    ctx = _host_ctx()
+    recorded = {}
+
+    def fake_run_docker_exec(_ctx, script):
+        recorded["script"] = script
+        return subprocess.CompletedProcess(["docker"], 0, "", "")
+
+    monkeypatch.setattr("tools.lib.runtime_transport.run_docker_exec", fake_run_docker_exec)
+    monkeypatch.setattr("tools.lib.runtime_transport.probe_container_ssh", lambda _ctx: True)
+
+    transport = bootstrap_container_runtime(ctx)
+
+    assert transport == "container-ssh"
+    assert "/usr/sbin/sshd -t" in recorded["script"]
+    assert "pkill -f" not in recorded["script"]
+
+
 def test_verify_runtime_does_not_claim_ready_when_all_host_transports_fail(
     monkeypatch, tmp_path
 ):

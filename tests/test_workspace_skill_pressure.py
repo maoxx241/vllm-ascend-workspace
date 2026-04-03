@@ -122,6 +122,17 @@ SCENARIOS = {
         ),
     },
 }
+EXTRA_PRESSURE_MARKERS = {
+    "workspace-init": (
+        "do not start at `.agents/discovery/readme.md`",
+        "do not read `tools/lib/*.py` until a named atomic tool fails",
+    ),
+    "machine-management": (
+        "do not start at `.agents/discovery/readme.md`",
+        "runtime-bootstrap-triage.md",
+        "do not read `tools/lib/*.py` until a named atomic tool fails",
+    ),
+}
 
 
 def _skill_text(skill_name: str) -> str:
@@ -171,3 +182,10 @@ def test_pressure_scenarios_require_usable_guidance_and_no_phrase_copying():
             assert phrase.lower() not in text, (
                 f"{skill_name} copied pressure-only variant {phrase!r} into the contract body"
             )
+
+
+def test_pressure_scenarios_guard_against_premature_discovery_and_source_fanout():
+    for skill_name, markers in EXTRA_PRESSURE_MARKERS.items():
+        text = _skill_text(skill_name)
+        for marker in markers:
+            assert marker in text, f"{skill_name} missing pressure guard: {marker}"

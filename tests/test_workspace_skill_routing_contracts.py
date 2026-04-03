@@ -49,6 +49,14 @@ def test_internal_routing_files_declare_secondary_maintainer_role():
         assert "agents should not need this file" in lowered
 
 
+def test_internal_routing_files_are_detailed_backstops_not_first_hops():
+    for skill_name in FIRST_CLASS_SKILLS:
+        text = _routing_text(skill_name).lower()
+        assert "maintainer backstop" in text
+        assert "agents should not need this file" in text
+        assert "ambiguous routing" in text or "fallback" in text
+
+
 def test_action_routing_stays_on_truthful_compatibility_and_discovery_surfaces():
     for skill_name in FIRST_CLASS_SKILLS:
         body = _routing_section(skill_name, "## Action Routing").lower()

@@ -8,7 +8,7 @@
 - Treat `.agents/skills/benchmark/SKILL.md` as the benchmark contract.
 - Treat `.agents/skills/workspace-reset/SKILL.md` as the destructive teardown contract.
 - Read the matched public `SKILL.md` first.
-- When the skill leaves tool selection open, start at `.agents/discovery/README.md` before reading internal libraries.
+- Open `.agents/discovery/README.md` only when the matched skill or its linked reference does not identify the next tool, or when probe results disagree and the next step is ambiguous.
 - Treat skill-local routing references as internal execution notes, not public workflow steps.
 - Never expose overlay file paths as public workflow steps.
 - Never emit shell commands that inline raw secret values.

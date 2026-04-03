@@ -81,7 +81,6 @@ PUBLIC_BODY_FORBIDDEN_TERMS = (
     "workspace-fleet",
     "workspace-session-switch",
     "workspace-sync",
-    "internal-routing.md",
 )
 PUBLIC_SECTIONS_WITHOUT_INTERNALS = (
     "## Overview",
@@ -252,6 +251,18 @@ STOP_CONDITION_MARKERS = {
         "partial",
     ),
 }
+MINIMAL_READ_PATH_MARKERS = {
+    "workspace-init": (
+        "do not start at `.agents/discovery/readme.md`",
+        "references/internal-routing.md",
+        "do not read `tools/lib/*.py` until a named atomic tool fails",
+    ),
+    "machine-management": (
+        "do not start at `.agents/discovery/readme.md`",
+        "references/internal-routing.md",
+        "runtime-bootstrap-triage.md",
+    ),
+}
 
 
 def _skill_text(skill_name: str) -> str:
@@ -283,7 +294,6 @@ def _section_body(skill_name: str, header: str) -> str:
 def test_first_class_workspace_skills_share_judgment_sections():
     for skill_name in FIRST_CLASS_SKILLS:
         text = _skill_text(skill_name)
-        assert "internal-routing.md" not in text.lower()
         for section in REQUIRED_PUBLIC_SECTIONS:
             assert section in text, f"{skill_name} missing section: {section}"
 
@@ -393,3 +403,10 @@ def test_cross_skill_boundary_and_stop_conditions_encode_safe_handoffs():
             assert marker in stops, (
                 f"{skill_name} missing stop-condition marker: {marker}"
             )
+
+
+def test_public_skill_bodies_define_minimal_read_paths_and_discovery_fallback():
+    for skill_name, markers in MINIMAL_READ_PATH_MARKERS.items():
+        text = _skill_text(skill_name).lower()
+        for marker in markers:
+            assert marker.lower() in text, f"{skill_name} missing marker: {marker}"

@@ -121,7 +121,9 @@ def test_benchmark_family_recipe_requires_explicit_service_and_no_temporary_serv
     assert "weights_path" not in manifest
 
 
-def test_first_contact_surface_points_agents_to_discovery_readme():
+def test_first_contact_surface_points_to_discovery_as_fallback_only():
     for relative_path in ("AGENTS.md", "CLAUDE.md", ".cursorrules", "README.md", ".agents/README.md"):
         text = (ROOT / relative_path).read_text(encoding="utf-8").lower()
         assert ".agents/discovery/readme.md" in text
+        assert "only when" in text
+        assert "start at .agents/discovery/readme.md" not in text

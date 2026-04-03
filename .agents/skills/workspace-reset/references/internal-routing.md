@@ -3,6 +3,7 @@
 Public contract: `../SKILL.md`
 
 This file is a maintainer backstop. The public `SKILL.md` is the normal execution surface, and agents should not need this file to understand the default public recipe.
+Use this file only for ambiguous routing, routing-maintenance work, or contract audits. Normal execution should stop at the public `SKILL.md` unless the next tool is genuinely unclear.
 
 ## Sanctioned Adapter Surface
 

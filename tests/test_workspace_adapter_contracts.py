@@ -24,7 +24,7 @@ LEGACY_PUBLIC_VOCAB = (
 )
 SKILL_FIRST_MARKERS = (
     "read the matched public `skill.md` first",
-    "when the skill leaves tool selection open",
+    "only when the matched skill or its linked reference does not identify the next tool",
 )
 
 

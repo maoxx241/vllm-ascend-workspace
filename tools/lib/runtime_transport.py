@@ -37,6 +37,17 @@ def probe_container_ssh(ctx: TargetContext) -> bool:
     return status == "ready"
 
 
+def _format_remote_failure(result: subprocess.CompletedProcess[str]) -> str:
+    parts = [f"rc={result.returncode}"]
+    stderr = (result.stderr or "").strip()
+    stdout = (result.stdout or "").strip()
+    if stderr:
+        parts.append(f"stderr={stderr}")
+    if stdout:
+        parts.append(f"stdout={stdout}")
+    return "; ".join(parts)
+
+
 def bootstrap_container_runtime(ctx: TargetContext) -> str:
     public_key = find_public_key_path().read_text(encoding="utf-8").strip()
     bootstrap_script = "\n".join(
@@ -70,15 +81,15 @@ def bootstrap_container_runtime(ctx: TargetContext) -> str:
             "PidFile /var/run/sshd.pid",
             "AuthorizedKeysFile .ssh/authorized_keys",
             "EOF",
-            f"pkill -f 'sshd -p {ctx.runtime.ssh_port}' >/dev/null 2>&1 || true",
-            f"(sshd -t && sshd -p {ctx.runtime.ssh_port}) >/dev/null 2>&1 || "
-            f"(/usr/sbin/sshd -t && /usr/sbin/sshd -p {ctx.runtime.ssh_port}) >/dev/null 2>&1",
+            f"pgrep -a -x sshd | grep ' -p {ctx.runtime.ssh_port}' | awk '{{print $1}}' | xargs -r kill 2>/dev/null || true",
+            "/usr/sbin/sshd -t",
+            f"/usr/sbin/sshd -p {ctx.runtime.ssh_port}",
         ]
     )
     result = run_docker_exec(ctx, bootstrap_script)
     if result.returncode != 0:
         raise RemoteError(
-            f"failed to bootstrap runtime inside container: {(result.stderr or result.stdout).strip()}"
+            f"failed to bootstrap runtime inside container: {_format_remote_failure(result)}"
         )
     if probe_container_ssh(ctx):
         return "container-ssh"
