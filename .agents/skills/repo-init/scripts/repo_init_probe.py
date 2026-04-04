@@ -12,6 +12,7 @@ It never mutates the repository.
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import pathlib
@@ -420,7 +421,109 @@ def tool_state() -> Dict[str, Optional[str]]:
     return {name: which(name) for name in names}
 
 
+def compact_repo_summary(repo: Dict[str, Any]) -> Dict[str, Any]:
+    branch = repo.get("branch") or {}
+    worktree = repo.get("worktree") or {}
+    remotes = repo.get("remotes") or {}
+    origin = remotes.get("origin") or {}
+    upstream = remotes.get("upstream") or {}
+    summary: Dict[str, Any] = {
+        "path": repo.get("path"),
+        "exists": repo.get("exists"),
+        "initialized": repo.get("initialized"),
+    }
+    if repo.get("error"):
+        summary["error"] = repo.get("error")
+        return summary
+
+    summary.update(
+        {
+            "current_branch": branch.get("current_branch"),
+            "tracking_branch": branch.get("tracking_branch"),
+            "detached_head": branch.get("detached_head"),
+            "dirty": worktree.get("dirty"),
+            "dirty_entries": worktree.get("entry_count"),
+            "origin_repo": origin.get("fetch_repo"),
+            "origin_kind": repo.get("origin_kind"),
+            "upstream_repo": upstream.get("fetch_repo"),
+            "upstream_kind": repo.get("upstream_kind"),
+        }
+    )
+    return summary
+
+
+def compact_submodule_summary(rows: List[Dict[str, str]]) -> Dict[str, Any]:
+    issues: List[Dict[str, str]] = []
+    for row in rows:
+        state = row.get("state")
+        if state and state != " ":
+            issues.append(
+                {
+                    "path": row.get("path", ""),
+                    "state": state,
+                    "detail": row.get("detail", ""),
+                }
+            )
+        if row.get("error"):
+            issues.append({"error": row["error"]})
+    return {
+        "count": len(rows),
+        "needs_attention": issues,
+    }
+
+
+def compact_fork_summary(forks: Dict[str, Any]) -> Dict[str, Any]:
+    summary: Dict[str, Any] = {}
+    for role, info in forks.items():
+        summary[role] = {
+            "exists": info.get("exists"),
+            "full_name": info.get("full_name"),
+            "parent_full_name": info.get("parent_full_name"),
+            "default_branch": info.get("default_branch"),
+        }
+    return summary
+
+
+def compact_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    gh = payload.get("gh") or {}
+    compact: Dict[str, Any] = {
+        "platform": {
+            "kind": payload.get("platform", {}).get("kind"),
+            "machine": payload.get("platform", {}).get("machine"),
+        },
+        "repo_root": payload.get("repo_root"),
+        "gh": {
+            "installed": gh.get("installed"),
+            "logged_in": gh.get("logged_in"),
+            "user_login": gh.get("user_login"),
+            "git_protocol": gh.get("git_protocol"),
+        },
+        "gh_install_plan": {
+            "preferred": payload.get("gh_install_plan", {}).get("preferred", {}).get("label"),
+            "fallback": payload.get("gh_install_plan", {}).get("fallback", {}).get("label"),
+        },
+        "submodules": compact_submodule_summary(payload.get("submodules") or []),
+        "repos": {
+            role: compact_repo_summary(repo)
+            for role, repo in (payload.get("repos") or {}).items()
+        },
+        "forks": compact_fork_summary(payload.get("forks") or {}),
+    }
+    return compact
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Read-only probe for repo-init")
+    parser.add_argument(
+        "--compact",
+        action="store_true",
+        help="print a compact summary instead of the full raw payload",
+    )
+    return parser.parse_args()
+
+
 def main() -> None:
+    args = parse_args()
     platform_info = detect_platform()
     root = git_root()
     gh_state = gh_login()
@@ -449,6 +552,9 @@ def main() -> None:
         payload["forks"] = gh_fork_info(user_login)
     else:
         payload["forks"] = {}
+
+    if args.compact:
+        payload = compact_payload(payload)
 
     json.dump(payload, sys.stdout, indent=2, sort_keys=True)
     sys.stdout.write("\n")

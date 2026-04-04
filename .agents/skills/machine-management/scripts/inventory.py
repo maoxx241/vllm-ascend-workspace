@@ -24,11 +24,30 @@ class InventoryError(RuntimeError):
     pass
 
 
+BOOTSTRAP_METHOD_ALIASES = {
+    "ssh": "ssh",
+    "key": "ssh",
+    "password-once": "password-once",
+    "password_once": "password-once",
+    "password": "password-once",
+}
+
+
 @dataclass(frozen=True)
 class MachineId:
     alias: str
     host_ip: str
 
+
+
+def normalize_bootstrap_method(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = BOOTSTRAP_METHOD_ALIASES.get(value)
+    if normalized is None:
+        choices = ", ".join(sorted(BOOTSTRAP_METHOD_ALIASES))
+        raise InventoryError(f"unsupported bootstrap_method {value!r}; expected one of: {choices}")
+    return normalized
 
 
 def _empty_inventory() -> dict[str, Any]:
@@ -99,11 +118,9 @@ def _validate_record(record: Any, where: str = "record") -> None:
     if not isinstance(workdir, str) or not workdir.strip():
         raise InventoryError(f"{where}.container.workdir must be a non-empty string")
 
-    bootstrap_method = record.get("bootstrap_method")
-    if bootstrap_method is not None and bootstrap_method not in {"ssh", "password-once"}:
-        raise InventoryError(
-            f"{where}.bootstrap_method must be 'ssh', 'password-once', or omitted"
-        )
+    bootstrap_method = normalize_bootstrap_method(record.get("bootstrap_method"))
+    if bootstrap_method is not None:
+        record["bootstrap_method"] = bootstrap_method
 
     for key in ("managed_by_skill", "created_by_skill"):
         value = record.get(key)
@@ -201,7 +218,7 @@ def cmd_put(args: argparse.Namespace) -> int:
             "image": args.image,
             "workdir": args.workdir,
         },
-        "bootstrap_method": args.bootstrap_method,
+        "bootstrap_method": normalize_bootstrap_method(args.bootstrap_method),
         "managed_by_skill": True,
         "created_by_skill": args.created_by_skill,
         "last_verified_at": args.last_verified_at,
@@ -293,8 +310,9 @@ def build_parser() -> argparse.ArgumentParser:
     put_cmd.add_argument("--workdir", default="/vllm-workspace")
     put_cmd.add_argument(
         "--bootstrap-method",
-        choices=["ssh", "password-once"],
+        choices=sorted(BOOTSTRAP_METHOD_ALIASES),
         required=True,
+        help="bootstrap method; 'key' normalizes to 'ssh', 'password' to 'password-once'",
     )
     put_cmd.add_argument(
         "--created-by-skill",
