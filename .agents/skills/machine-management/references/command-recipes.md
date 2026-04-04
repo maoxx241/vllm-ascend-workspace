@@ -4,17 +4,30 @@ These are fallback patterns. Prefer the helper scripts in `scripts/` and `.agent
 
 ## Local profile and inventory
 
+macOS / Linux / WSL:
+
 ```bash
 python3 .agents/scripts/workspace_profile.py summary
 python3 .agents/skills/machine-management/scripts/inventory.py summary
 ```
 
-Create or reuse a collision-safe local machine profile:
+Windows:
+
+```powershell
+py -3 .agents/scripts/workspace_profile.py summary
+py -3 .agents/skills/machine-management/scripts/inventory.py summary
+```
+
+Create or reuse a collision-safe local machine profile after the user chose a specific name:
 
 ```bash
 python3 .agents/scripts/workspace_profile.py ensure --username alice123
-# or
-python3 .agents/scripts/workspace_profile.py ensure
+```
+
+Create a default/random profile only after the user explicitly accepted that option:
+
+```bash
+python3 .agents/scripts/workspace_profile.py ensure --generate
 ```
 
 ## Probe one host
@@ -24,32 +37,44 @@ python3 .agents/skills/machine-management/scripts/manage_machine.py probe-host \
   --host 173.125.1.2
 ```
 
-## First interactive host bootstrap
+## First host bootstrap with a supplied password
 
-Preferred helper:
+Prefer a hidden env var when the tool can set it without echoing the secret.
+
+POSIX example:
+
+```bash
+export VAWS_SSH_PASSWORD='YOUR_PASSWORD'
+python3 .agents/skills/machine-management/scripts/manage_machine.py bootstrap-host-key \
+  --host 173.125.1.2 \
+  --password-env VAWS_SSH_PASSWORD
+unset VAWS_SSH_PASSWORD
+```
+
+PowerShell example:
+
+```powershell
+$env:VAWS_SSH_PASSWORD = 'YOUR_PASSWORD'
+py -3 .agents/skills/machine-management/scripts/manage_machine.py bootstrap-host-key `
+  --host 173.125.1.2 `
+  --password-env VAWS_SSH_PASSWORD
+Remove-Item Env:VAWS_SSH_PASSWORD
+```
+
+When the agent cannot hide env or stdin and the user already supplied the password in the current chat, the literal flag is allowed as a last resort:
 
 ```bash
 python3 .agents/skills/machine-management/scripts/manage_machine.py bootstrap-host-key \
-  --host 173.125.1.2
+  --host 173.125.1.2 \
+  --password 'YOUR_PASSWORD_ALREADY_IN_CHAT'
 ```
 
-If the execution environment cannot surface an interactive password prompt, print the exact command instead:
+Manual fallback only when needed:
 
 ```bash
 python3 .agents/skills/machine-management/scripts/manage_machine.py bootstrap-host-key \
   --host 173.125.1.2 \
   --print-command
-```
-
-Raw fallback only when the helper is unavailable:
-
-```bash
-ssh -p 22 root@173.125.1.2
-mkdir -p /root/.ssh && chmod 700 /root/.ssh
-cat >> /root/.ssh/authorized_keys <<'KEY'
-<LOCAL_PUBLIC_KEY_LINE>
-KEY
-chmod 600 /root/.ssh/authorized_keys
 ```
 
 ## Bootstrap or repair one managed container

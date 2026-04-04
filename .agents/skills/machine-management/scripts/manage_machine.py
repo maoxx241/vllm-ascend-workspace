@@ -10,10 +10,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import pathlib
+import re
 import shlex
 import shutil
 import subprocess
+import sys
+import tempfile
 from dataclasses import dataclass
 from typing import Any, Sequence
 
@@ -25,6 +29,8 @@ DEFAULT_HOST_PORT = 22
 DEFAULT_PORT_RANGE = "46000:46999"
 DEFAULT_KNOWN_HOSTS = pathlib.Path.home() / ".ssh" / "known_hosts"
 SENTINEL = "__VAWS_JSON__="
+DEFAULT_PASSWORD_ENV = "VAWS_SSH_PASSWORD"
+ENV_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 class MachineManagementError(RuntimeError):
@@ -47,6 +53,8 @@ def run_local(
     *,
     input_text: str | None = None,
     check: bool = False,
+    env: dict[str, str] | None = None,
+    stdin_source: int | None = None,
 ) -> subprocess.CompletedProcess[str]:
     try:
         proc = subprocess.run(
@@ -57,6 +65,8 @@ def run_local(
             text=True,
             encoding="utf-8",
             errors="replace",
+            env=env,
+            stdin=stdin_source,
         )
     except FileNotFoundError as exc:
         raise MachineManagementError(f"required local command not found: {cmd[0]}") from exc
@@ -75,7 +85,10 @@ def run_local_interactive(cmd: Sequence[str]) -> int:
 
 
 def shell_join(cmd: Sequence[str]) -> str:
-    return shlex.join(list(cmd))
+    items = list(cmd)
+    if os.name == "nt":
+        return subprocess.list2cmdline(items)
+    return shlex.join(items)
 
 
 def ssh_command(
@@ -83,6 +96,7 @@ def ssh_command(
     *,
     batch_mode: bool = True,
     extra_options: Sequence[str] = (),
+    identity_file: pathlib.Path | None = None,
 ) -> list[str]:
     command = [
         "ssh",
@@ -95,10 +109,105 @@ def ssh_command(
         "-o",
         "ConnectTimeout=10",
     ]
+    if identity_file is not None:
+        command.extend(["-i", str(identity_file), "-o", "IdentitiesOnly=yes"])
     for option in extra_options:
         command.extend(["-o", option])
     command.extend(["-p", str(target.port), f"{target.user}@{target.host}"])
     return command
+
+
+def validate_env_name(name: str) -> str:
+    if not ENV_NAME_PATTERN.fullmatch(name):
+        raise MachineManagementError(f"invalid environment variable name: {name!r}")
+    return name
+
+
+def private_key_for_public_key(path: pathlib.Path | None) -> pathlib.Path | None:
+    if path is None:
+        return None
+    candidate = path.with_suffix("") if path.suffix == ".pub" else path
+    if candidate.exists():
+        return candidate.resolve()
+    return None
+
+
+def read_password_value(args: argparse.Namespace) -> tuple[str | None, str | None, str]:
+    if getattr(args, "password", None) is not None:
+        return args.password, "literal", DEFAULT_PASSWORD_ENV
+    if getattr(args, "password_env", None):
+        env_name = validate_env_name(args.password_env)
+        value = os.environ.get(env_name)
+        if value is None:
+            raise MachineManagementError(f"environment variable {env_name!r} is not set")
+        return value, f"env:{env_name}", env_name
+    if getattr(args, "password_stdin", False):
+        value = sys.stdin.read()
+        if value is None:
+            value = ""
+        value = value.rstrip("\r\n")
+        if not value:
+            raise MachineManagementError("no password was received on stdin")
+        return value, "stdin", DEFAULT_PASSWORD_ENV
+    return None, None, DEFAULT_PASSWORD_ENV
+
+
+def build_authorized_keys_remote_command(public_key: str) -> str:
+    quoted_key = shlex.quote(public_key)
+    return (
+        "umask 077; "
+        "mkdir -p ~/.ssh && touch ~/.ssh/authorized_keys; "
+        "chmod 700 ~/.ssh; "
+        "chmod 600 ~/.ssh/authorized_keys; "
+        f"grep -qxF {quoted_key} ~/.ssh/authorized_keys 2>/dev/null || "
+        f"printf '%s\n' {quoted_key} >> ~/.ssh/authorized_keys"
+    )
+
+
+def write_askpass_helper(temp_dir: pathlib.Path, env_name: str) -> pathlib.Path:
+    env_name = validate_env_name(env_name)
+    if os.name == "nt":
+        helper_py = temp_dir / "askpass.py"
+        helper_py.write_text(
+            "import os, sys\n"
+            f"sys.stdout.write(os.environ.get({env_name!r}, '') + '\n')\n",
+            encoding="utf-8",
+        )
+        helper = temp_dir / "askpass.cmd"
+        helper.write_text(
+            "@echo off\r\n"
+            "setlocal\r\n"
+            f"\"{sys.executable}\" \"{helper_py}\"\r\n",
+            encoding="utf-8",
+        )
+    else:
+        helper = temp_dir / "askpass.sh"
+        helper.write_text(
+            f"#!/bin/sh\nprintf '%s\\n' \"${{{env_name}}}\"\n",
+            encoding="utf-8",
+        )
+        helper.chmod(0o700)
+    return helper
+
+
+def run_with_askpass(
+    cmd: Sequence[str],
+    *,
+    password: str,
+    env_name: str = DEFAULT_PASSWORD_ENV,
+) -> subprocess.CompletedProcess[str]:
+    env_name = validate_env_name(env_name)
+    temp_dir = pathlib.Path(tempfile.mkdtemp(prefix="vaws-askpass-"))
+    try:
+        helper = write_askpass_helper(temp_dir, env_name)
+        env = os.environ.copy()
+        env[env_name] = password
+        env["SSH_ASKPASS"] = str(helper)
+        env["SSH_ASKPASS_REQUIRE"] = "force"
+        env.setdefault("DISPLAY", "vaws:0")
+        return run_local(cmd, env=env, stdin_source=subprocess.DEVNULL)
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 @dataclass
@@ -771,9 +880,15 @@ def host_target(args: argparse.Namespace) -> SshTarget:
     return SshTarget(host=args.host, user=args.user, port=args.host_port)
 
 
-def check_direct_ssh(target: SshTarget) -> dict[str, Any]:
+def check_direct_ssh(
+    target: SshTarget,
+    *,
+    identity_file: pathlib.Path | None = None,
+) -> dict[str, Any]:
     try:
-        result = run_local(ssh_command(target, batch_mode=True) + ["printf", "ok"])
+        result = run_local(
+            ssh_command(target, batch_mode=True, identity_file=identity_file) + ["printf", "ok"]
+        )
     except MachineManagementError as exc:
         return {
             "ok": False,
@@ -786,6 +901,7 @@ def check_direct_ssh(target: SshTarget) -> dict[str, Any]:
         "returncode": result.returncode,
         "stdout": result.stdout.strip(),
         "stderr": result.stderr.strip(),
+        "identity_file": str(identity_file) if identity_file is not None else None,
     }
 
 
@@ -795,40 +911,8 @@ def build_bootstrap_host_key_command(
     key_path: pathlib.Path,
     public_key: str,
 ) -> tuple[str, list[str]]:
-    if shutil.which("ssh-copy-id"):
-        return (
-            "ssh-copy-id",
-            [
-                "ssh-copy-id",
-                "-i",
-                str(key_path),
-                "-o",
-                "StrictHostKeyChecking=accept-new",
-                "-o",
-                "LogLevel=ERROR",
-                "-o",
-                "ConnectTimeout=10",
-                "-o",
-                "PreferredAuthentications=password,keyboard-interactive",
-                "-o",
-                "PubkeyAuthentication=no",
-                "-o",
-                "NumberOfPasswordPrompts=1",
-                "-p",
-                str(target.port),
-                f"{target.user}@{target.host}",
-            ],
-        )
-
-    quoted_key = shlex.quote(public_key)
-    remote_cmd = (
-        "umask 077; "
-        "mkdir -p ~/.ssh && touch ~/.ssh/authorized_keys; "
-        "chmod 700 ~/.ssh; "
-        "chmod 600 ~/.ssh/authorized_keys; "
-        f"grep -qxF {quoted_key} ~/.ssh/authorized_keys 2>/dev/null || "
-        f"printf '%s\\n' {quoted_key} >> ~/.ssh/authorized_keys"
-    )
+    del key_path
+    remote_cmd = build_authorized_keys_remote_command(public_key)
     command = ssh_command(
         target,
         batch_mode=False,
@@ -844,8 +928,10 @@ def build_bootstrap_host_key_command(
 def cmd_bootstrap_host_key(args: argparse.Namespace) -> int:
     target = host_target(args)
     key_path = find_public_key(args.public_key_file)
+    private_key = private_key_for_public_key(key_path)
     public_key = load_public_key(key_path)
-    before = check_direct_ssh(target)
+    password, password_source, password_env_name = read_password_value(args)
+    before = check_direct_ssh(target, identity_file=private_key)
     tool_name, command = build_bootstrap_host_key_command(
         target,
         key_path=key_path,
@@ -854,10 +940,13 @@ def cmd_bootstrap_host_key(args: argparse.Namespace) -> int:
     payload: dict[str, Any] = {
         "target": {"host": target.host, "user": target.user, "host_port": target.port},
         "public_key_file": str(key_path),
+        "private_key_file": str(private_key) if private_key is not None else None,
         "precheck": before,
-        "interactive_tool": tool_name,
-        "interactive_command": shell_join(command),
-        "needs_interactive_terminal": True,
+        "bootstrap_tool": tool_name,
+        "bootstrap_command": shell_join(command),
+        "password_mode": password_source,
+        "needs_interactive_terminal": password is None,
+        "password_automation": "ssh-askpass" if password is not None else None,
     }
     if before["ok"]:
         payload.update({"success": True, "executed": False, "result": "already-configured"})
@@ -869,13 +958,37 @@ def cmd_bootstrap_host_key(args: argparse.Namespace) -> int:
             "success": True,
             "executed": False,
             "result": "command-preview",
-            "message": "run the interactive command in a terminal and enter the host password when prompted",
+            "message": "run the bootstrap command once if you want to handle the password manually",
         })
         print_json(payload)
         return 0
 
+    if password is not None:
+        proc = run_with_askpass(command, password=password, env_name=password_env_name)
+        after = check_direct_ssh(target, identity_file=private_key)
+        payload.update(
+            {
+                "executed": True,
+                "command_returncode": proc.returncode,
+                "postcheck": after,
+                "success": after["ok"],
+                "result": "bootstrapped" if after["ok"] else "failed",
+                "mode": "noninteractive-password",
+                "stdout_tail": compact_failure_tail(proc.stdout),
+                "stderr_tail": compact_failure_tail(proc.stderr),
+            }
+        )
+        if not after["ok"]:
+            payload["error"] = (
+                "password-based host bootstrap did not establish key-based SSH; verify the supplied password, username, and host password-login policy"
+            )
+            print_json(payload)
+            return 2
+        print_json(payload)
+        return 0
+
     returncode = run_local_interactive(command)
-    after = check_direct_ssh(target)
+    after = check_direct_ssh(target, identity_file=private_key)
     payload.update(
         {
             "executed": True,
@@ -883,6 +996,7 @@ def cmd_bootstrap_host_key(args: argparse.Namespace) -> int:
             "postcheck": after,
             "success": after["ok"],
             "result": "bootstrapped" if after["ok"] else "failed",
+            "mode": "interactive-terminal",
         }
     )
     if not after["ok"]:
@@ -917,6 +1031,7 @@ def cmd_probe_host(args: argparse.Namespace) -> int:
 def cmd_bootstrap_container(args: argparse.Namespace) -> int:
     target = host_target(args)
     key_path = find_public_key(args.public_key_file)
+    private_key = private_key_for_public_key(key_path)
     public_key = load_public_key(key_path)
     result = run_remote_script(
         target,
@@ -934,11 +1049,13 @@ def cmd_bootstrap_container(args: argparse.Namespace) -> int:
     payload = assert_remote_success(result)
 
     ssh_check = check_direct_ssh(
-        SshTarget(host=args.host, user="root", port=args.container_ssh_port)
+        SshTarget(host=args.host, user="root", port=args.container_ssh_port),
+        identity_file=private_key,
     )
     payload.update(
         {
             "public_key_file": str(key_path),
+            "private_key_file": str(private_key) if private_key is not None else None,
             "namespace": args.namespace or None,
             "direct_container_ssh": ssh_check,
             "target": {
@@ -950,7 +1067,10 @@ def cmd_bootstrap_container(args: argparse.Namespace) -> int:
         }
     )
     if not ssh_check["ok"]:
-        raise MachineManagementError(json.dumps(payload, ensure_ascii=False))
+        payload["success"] = False
+        payload["error"] = "container SSH did not come up after bootstrap"
+        print_json(payload)
+        return 2
 
     print_json(payload)
     return 0
@@ -983,11 +1103,17 @@ def cmd_smoke(args: argparse.Namespace) -> int:
 def cmd_verify_machine(args: argparse.Namespace) -> int:
     host = host_target(args)
     container = container_target(args)
-    host_check = check_direct_ssh(host)
-    container_check = check_direct_ssh(container)
+    identity_file = None
+    try:
+        identity_file = private_key_for_public_key(find_public_key(None))
+    except MachineManagementError:
+        identity_file = None
+    host_check = check_direct_ssh(host, identity_file=identity_file)
+    container_check = check_direct_ssh(container, identity_file=identity_file)
     result: dict[str, Any] = {
         "host": {"host": host.host, "user": host.user, "port": host.port},
         "container": {"host": container.host, "user": container.user, "port": container.port},
+        "identity_file": str(identity_file) if identity_file is not None else None,
         "host_ssh": host_check,
         "container_ssh": container_check,
     }
@@ -1144,18 +1270,32 @@ def build_parser() -> argparse.ArgumentParser:
 
     host_bootstrap = subparsers.add_parser(
         "bootstrap-host-key",
-        help="run one interactive host-key bootstrap; the terminal prompts for the host password",
+        help="bootstrap host key auth; use a supplied password non-interactively when available, otherwise fall back to an interactive prompt",
     )
     add_host_args(host_bootstrap)
     host_bootstrap.add_argument(
         "--public-key-file",
         help="local SSH public key to install on the host; defaults to ~/.ssh/id_ed25519.pub if present",
     )
+    password_group = host_bootstrap.add_mutually_exclusive_group()
+    password_group.add_argument(
+        "--password",
+        help="host password already supplied by the user in the current chat; convenient but exposes the value to process args and command logs",
+    )
+    password_group.add_argument(
+        "--password-env",
+        help="read the host password from one environment variable and keep it out of command args",
+    )
+    password_group.add_argument(
+        "--password-stdin",
+        action="store_true",
+        help="read the host password from standard input",
+    )
     host_bootstrap.add_argument(
         "--print-command",
         action=argparse.BooleanOptionalAction,
         default=False,
-        help="print the exact interactive command instead of running it",
+        help="print the exact bootstrap command instead of running it",
     )
     host_bootstrap.set_defaults(func=cmd_bootstrap_host_key)
 

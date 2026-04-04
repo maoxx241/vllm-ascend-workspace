@@ -54,6 +54,7 @@ def cmd_ensure(args: argparse.Namespace) -> int:
         path=args.profile_path,
         machine_username=args.username,
         allow_update=args.allow_update,
+        generate=args.generate,
     )
     payload = {
         "success": True,
@@ -86,9 +87,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     ensure = subparsers.add_parser(
         "ensure",
-        help="ensure the local workspace machine profile exists; generates a default when --username is omitted",
+        help="ensure the local workspace machine profile exists; use --username or --generate when the profile is missing",
     )
     ensure.add_argument("--username", help="letters and digits only; case-insensitive")
+    ensure.add_argument(
+        "--generate",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="generate a default machine username when the profile is missing; only use after the user accepted the default option",
+    )
     ensure.add_argument(
         "--allow-update",
         action=argparse.BooleanOptionalAction,

@@ -493,6 +493,7 @@ def compact_fork_summary(forks: Dict[str, Any]) -> Dict[str, Any]:
 def compact_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     gh = payload.get("gh") or {}
     profile = payload.get("workspace_profile") or {}
+    compact_submodules = compact_submodule_summary(payload.get("submodules") or [])
     compact: Dict[str, Any] = {
         "platform": {
             "kind": payload.get("platform", {}).get("kind"),
@@ -501,6 +502,8 @@ def compact_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         "repo_root": payload.get("repo_root"),
         "workspace_profile": {
             "exists": profile.get("exists"),
+            "choice_required": profile.get("choice_required"),
+            "username_rules": profile.get("username_rules"),
             "machine_username": profile.get("machine_username"),
             "container_name": profile.get("container_name"),
             "source": profile.get("source"),
@@ -515,12 +518,29 @@ def compact_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
             "preferred": payload.get("gh_install_plan", {}).get("preferred", {}).get("label"),
             "fallback": payload.get("gh_install_plan", {}).get("fallback", {}).get("label"),
         },
-        "submodules": compact_submodule_summary(payload.get("submodules") or []),
+        "submodules": compact_submodules,
         "repos": {
             role: compact_repo_summary(repo)
             for role, repo in (payload.get("repos") or {}).items()
         },
         "forks": compact_fork_summary(payload.get("forks") or {}),
+        "decision_checkpoint": {
+            "required_for_broad_init": True,
+            "machine_username": {
+                "required": bool(profile.get("choice_required")),
+                "username_rules": profile.get("username_rules"),
+                "default_random_allowed": True,
+                "default_random_requires_explicit_user_consent": True,
+            },
+            "repo_topology": {
+                "required": True,
+                "options": ["keep-current", "recommended-fork-mode", "community-only"],
+            },
+            "submodules": {
+                "required": True,
+                "initialized": compact_submodules.get("all_initialized"),
+            },
+        },
     }
     return compact
 

@@ -6,16 +6,10 @@ This repository is a composable scaffold for local `vllm` + `vllm-ascend` develo
 
 Repo-local skills live under `.agents/skills/`.
 
-- `repo-init`: initialize this workspace after clone, including `gh`, GitHub auth, recursive submodules, optional fork / remote topology, and the local workspace machine profile used later by machine-management.
+- `repo-init`: initialize the workspace after clone, including `gh`, GitHub auth, recursive submodules, optional fork / remote topology, and the local workspace machine profile used later by machine-management.
 - `machine-management`: add, verify, repair, or remove a workspace-managed remote NPU machine and its managed container.
 
 Both skills are optional. Do not force them as a gate before normal coding, docs work, serving, benchmarking, or unrelated Git / SSH tasks.
-
-## What belongs here vs. in a skill
-
-Keep `AGENTS.md` focused on repo-wide rules that should apply before any task starts.
-
-Put detailed step-by-step workflows, long examples, fallback procedures, and command recipes inside the relevant skill package instead of here.
 
 ## Repo-wide operating rules
 
@@ -29,6 +23,15 @@ Put detailed step-by-step workflows, long examples, fallback procedures, and com
 - Prefer concise machine-readable summaries over long raw command logs.
 - When a command is noisy, capture the log and report only a compact summary plus a short failure tail.
 - Preserve user choices and extra remotes unless the user explicitly asks to replace them.
+
+## Mandatory decision gates
+
+- Never call `.agents/scripts/workspace_profile.py ensure` on a missing profile without either `--username` or `--generate`.
+- During `repo-init`, after the probe and before any mutation, stop for one decision checkpoint that covers:
+  - machine username choice for broad init when the profile is missing
+  - repo topology choice: keep current, recommended fork mode, or community-only
+  - whether to initialize submodules now
+- During `machine-management`, if host key SSH is missing and the user already supplied the host password in the request, prefer a one-shot scripted bootstrap first. Do not immediately bounce the user to a manual terminal command.
 
 ## Skill routing
 

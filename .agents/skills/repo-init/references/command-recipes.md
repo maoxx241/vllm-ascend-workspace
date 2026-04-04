@@ -1,101 +1,80 @@
 # Repo-init command recipes
 
-These are fallback patterns. Prefer the helper scripts when possible.
+Prefer the helper scripts in `scripts/` and `.agents/scripts/` when possible.
 
 ## Probe
+
+macOS / Linux / WSL:
 
 ```bash
 python3 .agents/skills/repo-init/scripts/repo_init_probe.py --compact
 ```
 
-## Workspace machine profile
+Windows:
 
-Inspect the local profile:
-
-```bash
-python3 .agents/scripts/workspace_profile.py summary
+```powershell
+py -3 .agents/skills/repo-init/scripts/repo_init_probe.py --compact
 ```
 
-Create it with an explicit user-chosen machine username:
+## Local machine profile
+
+Validate one user-provided name:
+
+```bash
+python3 .agents/scripts/workspace_profile.py validate alice123
+```
+
+Create a specific profile after the user chose a name:
 
 ```bash
 python3 .agents/scripts/workspace_profile.py ensure --username alice123
 ```
 
-Create it with an auto-generated default:
+Create a default/random profile only after the user explicitly accepted that option:
 
 ```bash
-python3 .agents/scripts/workspace_profile.py ensure
+python3 .agents/scripts/workspace_profile.py ensure --generate
 ```
 
-## Quiet remote comparison
-
-Compare only `main` heads without broad pruning:
-
-```bash
-git -C vllm ls-remote --heads origin main
-git -C vllm ls-remote --heads upstream main
-```
-
-Or use the helper:
-
-```bash
-python3 .agents/skills/repo-init/scripts/repo_topology.py compare-main --repo vllm
-```
-
-## Configure remotes
-
-Helper first:
-
-```bash
-python3 .agents/skills/repo-init/scripts/repo_topology.py configure \
-  --repo vllm \
-  --origin-url git@github.com:USER/vllm.git \
-  --upstream-url git@github.com:vllm-project/vllm.git
-```
-
-Raw fallback:
-
-```bash
-git -C vllm remote set-url origin git@github.com:USER/vllm.git
-git -C vllm remote add upstream git@github.com:vllm-project/vllm.git
-```
-
-## Recursive submodules
+## Submodules
 
 ```bash
 git submodule sync --recursive
 git submodule update --init --recursive
 ```
 
-## Ensure local `main` tracking quietly
+## Quiet main comparison
 
-Helper first:
+```bash
+python3 .agents/skills/repo-init/scripts/repo_topology.py compare-main --repo .
+python3 .agents/skills/repo-init/scripts/repo_topology.py compare-main --repo vllm
+python3 .agents/skills/repo-init/scripts/repo_topology.py compare-main --repo vllm-ascend
+```
+
+## Remote configuration
+
+Workspace example:
+
+```bash
+python3 .agents/skills/repo-init/scripts/repo_topology.py configure \
+  --repo . \
+  --origin-url git@github.com:USER/vllm-ascend-workspace.git \
+  --upstream-url git@github.com:maoxx241/vllm-ascend-workspace.git
+```
+
+`vllm-ascend` example:
+
+```bash
+python3 .agents/skills/repo-init/scripts/repo_topology.py configure \
+  --repo vllm-ascend \
+  --origin-url git@github.com:USER/vllm-ascend.git \
+  --upstream-url git@github.com:vllm-project/vllm-ascend.git
+```
+
+## Branch tracking
 
 ```bash
 python3 .agents/skills/repo-init/scripts/repo_topology.py ensure-main \
-  --repo vllm \
+  --repo vllm-ascend \
   --remote origin
-```
-
-Raw fallback:
-
-```bash
-git -C vllm fetch --quiet --no-tags origin refs/heads/main:refs/remotes/origin/main
-git -C vllm switch main || git -C vllm switch -c main --track origin/main
-git -C vllm branch --set-upstream-to=origin/main main
-git -C vllm pull --ff-only
-```
-
-## Sync a fork only with approval
-
-```bash
-gh repo sync USER/vllm --source vllm-project/vllm
-gh repo sync USER/vllm-ascend --source vllm-project/vllm-ascend
-```
-
-## Set default PR target repo
-
-```bash
-gh repo set-default upstream
 ```

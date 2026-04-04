@@ -148,6 +148,7 @@ def ensure_profile(
     path: Path = PROFILE_PATH,
     machine_username: str | None = None,
     allow_update: bool = False,
+    generate: bool = False,
 ) -> tuple[dict[str, Any], str]:
     path = path.expanduser().resolve()
     existing = load_profile(path)
@@ -167,6 +168,11 @@ def ensure_profile(
         updated["source"] = "user"
         updated["updated_at"] = utc_now_iso()
         return save_profile(updated, path=path), "updated"
+
+    if machine_username is None and not generate:
+        raise WorkspaceStateError(
+            "machine profile is missing; ask the user for a machine username or rerun with --generate after they accept the default"
+        )
 
     existing_names: set[str] = set()
     normalized_name = (
@@ -194,6 +200,8 @@ def profile_summary(path: Path = PROFILE_PATH) -> dict[str, Any]:
         "inventory_path": str(INVENTORY_PATH),
         "legacy_inventory_path": str(LEGACY_INVENTORY_PATH),
         "exists": path.exists(),
+        "choice_required": not path.exists(),
+        "username_rules": "3-32 chars, lowercase English letters and digits only",
         "machine_username": None,
         "container_name": None,
         "source": None,

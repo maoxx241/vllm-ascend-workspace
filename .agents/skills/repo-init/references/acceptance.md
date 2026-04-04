@@ -32,12 +32,22 @@ A successful run should satisfy all applicable items below.
 - never writes personal remotes, secrets, or machine profile state into tracked files
 - preserves extra remotes
 
+### Decision checkpoint
+
+- for broad init, the skill stops after the first probe summary and asks for:
+  - machine username choice if the profile is missing
+  - repo topology choice
+  - submodule-init choice
+- the skill does not silently assume a generated username for broad init
+- the skill does not silently apply the recommended topology when the user only asked for generic init
+
 ### Local machine profile
 
 - broad workspace init reuses or creates `.vaws-local/machine-profile.json`
 - machine usernames accept English letters and digits only
 - profile creation normalizes usernames to lowercase
-- blank input generates a default machine username
+- default/random creation happens only after explicit user consent
+- `workspace_profile.py ensure` on a missing profile fails unless `--username` or `--generate` is provided
 - narrow Git-only tasks do not force profile creation
 
 ### Tooling and auth
@@ -49,7 +59,7 @@ A successful run should satisfy all applicable items below.
 
 ### Submodules and topology
 
-- initializes submodules recursively
+- initializes submodules recursively when the user approved it
 - preserves nonstandard remotes
 - keeps tracked files on community URLs
 - uses quiet remote comparison instead of broad prune-heavy fetches
