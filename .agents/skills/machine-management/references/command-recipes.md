@@ -82,8 +82,8 @@ python3 .agents/skills/machine-management/scripts/manage_machine.py bootstrap-ho
 ```bash
 python3 .agents/skills/machine-management/scripts/manage_machine.py bootstrap-container \
   --host 173.125.1.2 \
-  --container-name vaws-alice123 \
-  --container-ssh-port 46671 \
+  --name vaws-alice123 \
+  --port 46671 \
   --namespace alice123
 ```
 
@@ -92,7 +92,7 @@ python3 .agents/skills/machine-management/scripts/manage_machine.py bootstrap-co
 ```bash
 python3 .agents/skills/machine-management/scripts/manage_machine.py smoke \
   --host 173.125.1.2 \
-  --container-ssh-port 46671
+  --port 46671
 ```
 
 ## Verify a machine read-only
@@ -100,29 +100,29 @@ python3 .agents/skills/machine-management/scripts/manage_machine.py smoke \
 ```bash
 python3 .agents/skills/machine-management/scripts/manage_machine.py verify-machine \
   --host 173.125.1.2 \
-  --container-ssh-port 46671
+  --port 46671
 ```
 
 ## Write inventory after success
 
+Prefer the forgiving `upsert` surface and the short aliases when the caller already knows the final container identity:
+
 ```bash
-python3 .agents/skills/machine-management/scripts/inventory.py put \
+python3 .agents/skills/machine-management/scripts/inventory.py upsert \
   --alias 173.125.1.2 \
-  --namespace alice123 \
-  --host-ip 173.125.1.2 \
-  --container-name vaws-alice123 \
-  --container-ssh-port 46671 \
-  --bootstrap-method ssh \
+  --machine-username alice123 \
+  --host 173.125.1.2 \
+  --name vaws-alice123 \
+  --container-port 46671 \
   --last-verified-at "2026-04-04T09:22:03Z"
 ```
 
-Compatibility alias:
+Notes:
 
-```bash
-python3 .agents/skills/machine-management/scripts/inventory.py put ... --bootstrap-method key
-```
-
-The helper normalizes `key` to stored value `ssh`.
+- `--bootstrap-method` is optional. New records default to `ssh`; updates preserve the existing stored value.
+- compatibility aliases still work, for example `--namespace`, `--host-ip`, `--container-name`, and `--container-ssh-port`
+- when you do want to record the first host bootstrap as password-assisted, pass `--bootstrap-method password-once`
+- `key` still normalizes to stored value `ssh`
 
 ## Mesh trust
 
@@ -131,7 +131,7 @@ Export a mesh key:
 ```bash
 python3 .agents/skills/machine-management/scripts/manage_machine.py mesh-export-key \
   --host 173.125.1.2 \
-  --container-ssh-port 46671 \
+  --port 46671 \
   --comment vaws-mesh:173.125.1.2
 ```
 
@@ -140,7 +140,7 @@ Add a peer:
 ```bash
 python3 .agents/skills/machine-management/scripts/manage_machine.py mesh-add-peer \
   --host 173.131.1.2 \
-  --container-ssh-port 46768 \
+  --port 46768 \
   --peer-public-key 'ssh-ed25519 AAAA... vaws-mesh:173.125.1.2' \
   --peer-host 173.125.1.2 \
   --peer-port 46671
@@ -151,7 +151,7 @@ Remove a peer:
 ```bash
 python3 .agents/skills/machine-management/scripts/manage_machine.py mesh-remove-peer \
   --host 173.131.1.2 \
-  --container-ssh-port 46768 \
+  --port 46768 \
   --peer-comment vaws-mesh:173.125.1.2 \
   --peer-host 173.125.1.2 \
   --peer-port 46671
@@ -162,8 +162,8 @@ python3 .agents/skills/machine-management/scripts/manage_machine.py mesh-remove-
 ```bash
 python3 .agents/skills/machine-management/scripts/manage_machine.py remove-container \
   --host 173.125.1.2 \
-  --container-name vaws-alice123 \
-  --container-ssh-port 46671 \
+  --name vaws-alice123 \
+  --port 46671 \
   --clean-local-known-hosts
 
 python3 .agents/skills/machine-management/scripts/inventory.py remove 173.125.1.2

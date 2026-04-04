@@ -36,6 +36,7 @@ Ready does **not** imply code sync, rebuild, serving, or benchmark readiness.
 - Keep mutations bounded to the requested machine.
 - Treat the bare-metal host as a maintenance plane, not a developer workspace.
 - Prefer helper scripts in `scripts/` and `.agents/scripts/` over ad-hoc SSH heredocs.
+- Keep helper CLIs forgiving: accept common flag aliases and avoid requiring metadata that can be inferred safely.
 - Never use `scp`, `sftp`, `sshpass`, or `expect` in this workflow.
 - Never write passwords or tokens into tracked files or `.vaws-local/`.
 - On a missing local machine profile, never call `workspace_profile.py ensure` bare. Use either:
@@ -74,8 +75,14 @@ Inventory helper:
 
 - `python3 .agents/skills/machine-management/scripts/inventory.py summary`
 - `python3 .agents/skills/machine-management/scripts/inventory.py get <alias-or-ip>`
-- `python3 .agents/skills/machine-management/scripts/inventory.py put ...`
+- `python3 .agents/skills/machine-management/scripts/inventory.py put ...` or `upsert ...`
 - `python3 .agents/skills/machine-management/scripts/inventory.py remove <alias-or-ip>`
+
+Common ergonomic aliases intentionally accepted by the machine-management helpers:
+
+- inventory record writes: `--host` = `--host-ip`, `--user` = `--host-user`, `--machine-username` = `--namespace`, `--name` = `--container-name`, `--container-port` = `--container-ssh-port`
+- container-oriented checks: `--port` or `--container-port` = `--container-ssh-port`
+- `inventory.py put` defaults `--bootstrap-method` to `ssh` for new records and preserves the stored value when updating
 
 Remote-machine helper:
 
@@ -168,7 +175,7 @@ Proceed in this order:
 5. decide the container name from the local machine profile and choose a free high SSH port
 6. run `bootstrap-container`
 7. run `smoke`
-8. persist the record with `inventory.py put`
+8. persist the record with `inventory.py put` or `inventory.py upsert`
 9. best-effort mesh the new container with existing managed containers
 
 ### 6. Verify workflow
@@ -203,6 +210,7 @@ Do not remove host firewall rules or host-level `authorized_keys` entries.
 ## Stable implementation notes
 
 - Use the dedicated container SSH config `/etc/ssh/sshd_vaws_config` instead of editing `/etc/ssh/sshd_config` inline.
+- Quote remote-script arguments that may contain spaces, especially SSH public keys and mesh peer keys, before sending them through `ssh`.
 - Ensure `/run/sshd` exists before starting the dedicated `sshd`.
 - For smoke tests, do not pin a Python patch version. Discover the highest available `/usr/local/python*/bin/python3`, then fall back to `python3`.
 - Source only environment scripts that actually exist.

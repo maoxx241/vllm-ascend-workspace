@@ -30,6 +30,7 @@ These should not trigger `machine-management` unless machine readiness is the ob
 - the skill prefers helper scripts over long inline SSH heredocs
 - the skill does not use `scp`, `sftp`, `sshpass`, or `expect`
 - the final report is compact and evidence-based
+- helper CLIs are tolerant of the most natural flag spellings instead of requiring one fragile canonical spelling
 
 ### Local machine profile
 
@@ -50,9 +51,13 @@ These should not trigger `machine-management` unless machine readiness is the ob
 - the managed container uses host networking, required devices, required Ascend mounts, and `/vllm-workspace` as the workdir
 - the skill configures a dedicated container `sshd` on a high port without brittle inline edits to `/etc/ssh/sshd_config`
 - the container bootstrap ensures `/run/sshd` exists
+- space-containing remote arguments such as SSH public keys and mesh peer keys survive the SSH hop intact
+- `bootstrap-container` no longer needs an out-of-band manual key copy when host key auth is already healthy
 - the skill verifies direct local -> container SSH
 - the skill runs the smoke test successfully before claiming readiness
 - the skill persists final alias, namespace, host identity, container name, image, and SSH port into inventory
+- inventory writes succeed with the shorter alias flags (`--host`, `--user`, `--machine-username`, `--name`, `--container-port`)
+- inventory writes succeed without an explicit `--bootstrap-method` for a new record
 
 ### Verify
 

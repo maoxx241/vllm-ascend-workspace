@@ -20,6 +20,7 @@ Both skills are optional. Do not force them as a gate before normal coding, docs
   - `https://github.com/vllm-project/vllm.git`
   - `https://github.com/vllm-project/vllm-ascend.git`
 - Prefer helper scripts under `.agents/skills/*/scripts/` and `.agents/scripts/` for deterministic work.
+- Keep helper CLIs ergonomic: accept common aliases, disable brittle prefix-abbreviation behavior, and default metadata that can be inferred safely.
 - Prefer concise machine-readable summaries over long raw command logs.
 - When a command is noisy, capture the log and report only a compact summary plus a short failure tail.
 - Preserve user choices and extra remotes unless the user explicitly asks to replace them.

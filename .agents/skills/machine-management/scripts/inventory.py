@@ -41,6 +41,8 @@ BOOTSTRAP_METHOD_ALIASES = {
     "password_once": "password-once",
     "password": "password-once",
 }
+DEFAULT_BOOTSTRAP_METHOD = "ssh"
+INPUT_BOOTSTRAP_METHOD_CHOICES = ["auto", *sorted(BOOTSTRAP_METHOD_ALIASES)]
 
 
 def normalize_bootstrap_method(value: str | None) -> str | None:
@@ -50,6 +52,16 @@ def normalize_bootstrap_method(value: str | None) -> str | None:
     if normalized is None:
         choices = ", ".join(sorted(BOOTSTRAP_METHOD_ALIASES))
         raise InventoryError(f"unsupported bootstrap_method {value!r}; expected one of: {choices}")
+    return normalized
+
+
+def resolve_bootstrap_method(value: str | None, existing_record: dict[str, Any] | None = None) -> str:
+    if value in {None, "", "auto"}:
+        existing = normalize_bootstrap_method(existing_record.get("bootstrap_method")) if existing_record else None
+        return existing or DEFAULT_BOOTSTRAP_METHOD
+    normalized = normalize_bootstrap_method(value)
+    if normalized is None:
+        raise InventoryError("bootstrap method could not be resolved")
     return normalized
 
 
@@ -240,7 +252,7 @@ def cmd_put(args: argparse.Namespace) -> int:
             "image": args.image,
             "workdir": args.workdir,
         },
-        "bootstrap_method": normalize_bootstrap_method(args.bootstrap_method),
+        "bootstrap_method": resolve_bootstrap_method(args.bootstrap_method, existing_record=target),
         "managed_by_skill": True,
         "created_by_skill": args.created_by_skill,
         "last_verified_at": args.last_verified_at,
@@ -301,7 +313,7 @@ def cmd_remove(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     parser.add_argument(
         "--inventory",
         type=Path,
@@ -309,7 +321,11 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"inventory path (default: {DEFAULT_PATH})",
     )
 
-    subparsers = parser.add_subparsers(dest="command", required=True)
+    subparsers = parser.add_subparsers(
+        dest="command",
+        required=True,
+        parser_class=lambda *args, **kwargs: argparse.ArgumentParser(*args, allow_abbrev=False, **kwargs),
+    )
 
     summary = subparsers.add_parser("summary", help="print a concise inventory summary")
     summary.set_defaults(func=cmd_summary)
@@ -320,12 +336,25 @@ def build_parser() -> argparse.ArgumentParser:
 
     put_cmd = subparsers.add_parser("put", help="insert or update one machine record")
     put_cmd.add_argument("--alias", required=True)
-    put_cmd.add_argument("--namespace", help="stable workspace machine username used for collision-safe naming")
-    put_cmd.add_argument("--host-ip", required=True)
-    put_cmd.add_argument("--host-port", type=int, default=22)
-    put_cmd.add_argument("--host-user", default="root")
-    put_cmd.add_argument("--container-name", required=True)
-    put_cmd.add_argument("--container-ssh-port", type=int, required=True)
+    put_cmd.add_argument(
+        "--namespace",
+        "--machine-username",
+        "--username",
+        dest="namespace",
+        help="stable workspace machine username used for collision-safe naming",
+    )
+    put_cmd.add_argument("--host-ip", "--host", dest="host_ip", required=True)
+    put_cmd.add_argument("--host-port", "--host-ssh-port", dest="host_port", type=int, default=22)
+    put_cmd.add_argument("--host-user", "--user", dest="host_user", default="root")
+    put_cmd.add_argument("--container-name", "--name", dest="container_name", required=True)
+    put_cmd.add_argument(
+        "--container-ssh-port",
+        "--container-port",
+        "--port",
+        dest="container_ssh_port",
+        type=int,
+        required=True,
+    )
     put_cmd.add_argument(
         "--image",
         default="quay.nju.edu.cn/ascend/vllm-ascend:latest",
@@ -333,9 +362,12 @@ def build_parser() -> argparse.ArgumentParser:
     put_cmd.add_argument("--workdir", default="/vllm-workspace")
     put_cmd.add_argument(
         "--bootstrap-method",
-        choices=sorted(BOOTSTRAP_METHOD_ALIASES),
-        required=True,
-        help="bootstrap method; 'key' normalizes to 'ssh', 'password' to 'password-once'",
+        choices=INPUT_BOOTSTRAP_METHOD_CHOICES,
+        default="auto",
+        help=(
+            "bootstrap method; defaults to 'ssh' for new records and reuses the existing value when updating. "
+            "'key' normalizes to 'ssh', 'password' to 'password-once'"
+        ),
     )
     put_cmd.add_argument(
         "--created-by-skill",
@@ -345,6 +377,50 @@ def build_parser() -> argparse.ArgumentParser:
     )
     put_cmd.add_argument("--last-verified-at")
     put_cmd.set_defaults(func=cmd_put)
+
+    upsert_cmd = subparsers.add_parser("upsert", help="alias of put; insert or update one machine record")
+    upsert_cmd.add_argument("--alias", required=True)
+    upsert_cmd.add_argument(
+        "--namespace",
+        "--machine-username",
+        "--username",
+        dest="namespace",
+        help="stable workspace machine username used for collision-safe naming",
+    )
+    upsert_cmd.add_argument("--host-ip", "--host", dest="host_ip", required=True)
+    upsert_cmd.add_argument("--host-port", "--host-ssh-port", dest="host_port", type=int, default=22)
+    upsert_cmd.add_argument("--host-user", "--user", dest="host_user", default="root")
+    upsert_cmd.add_argument("--container-name", "--name", dest="container_name", required=True)
+    upsert_cmd.add_argument(
+        "--container-ssh-port",
+        "--container-port",
+        "--port",
+        dest="container_ssh_port",
+        type=int,
+        required=True,
+    )
+    upsert_cmd.add_argument(
+        "--image",
+        default="quay.nju.edu.cn/ascend/vllm-ascend:latest",
+    )
+    upsert_cmd.add_argument("--workdir", default="/vllm-workspace")
+    upsert_cmd.add_argument(
+        "--bootstrap-method",
+        choices=INPUT_BOOTSTRAP_METHOD_CHOICES,
+        default="auto",
+        help=(
+            "bootstrap method; defaults to 'ssh' for new records and reuses the existing value when updating. "
+            "'key' normalizes to 'ssh', 'password' to 'password-once'"
+        ),
+    )
+    upsert_cmd.add_argument(
+        "--created-by-skill",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="mark whether the container was created by the skill (default: true)",
+    )
+    upsert_cmd.add_argument("--last-verified-at")
+    upsert_cmd.set_defaults(func=cmd_put)
 
     remove = subparsers.add_parser("remove", help="remove one machine record by alias or host IP")
     remove.add_argument("identifier", help="machine alias or host IP")

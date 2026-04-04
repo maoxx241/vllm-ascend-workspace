@@ -51,6 +51,18 @@ Compatibility rule:
 
 For compatibility, `inventory.py put --bootstrap-method key` normalizes to `ssh`.
 
+CLI ergonomics rules:
+
+- disable argparse prefix abbreviation for helper scripts so mistyped flags fail clearly
+- accept common aliases on inventory writes:
+  - `--host` = `--host-ip`
+  - `--user` = `--host-user`
+  - `--machine-username` or `--username` = `--namespace`
+  - `--name` = `--container-name`
+  - `--container-port` = `--container-ssh-port`
+- `inventory.py put` / `upsert` should default `bootstrap_method` to `ssh` for a new record and preserve the stored value when updating unless the caller overrides it explicitly
+
+
 ## Namespace and container naming contract
 
 The local machine profile provides a stable workspace machine username / namespace.
@@ -144,6 +156,8 @@ The managed config must enforce:
 - dedicated PID file
 
 The container bootstrap must ensure `/run/sshd` exists before starting the dedicated daemon.
+Remote-script arguments that may contain spaces, such as SSH public keys or mesh peer keys, must survive the local -> ssh -> remote-shell hop intact. Do not rely on raw argv joining for those values.
+
 
 ## Smoke contract
 
