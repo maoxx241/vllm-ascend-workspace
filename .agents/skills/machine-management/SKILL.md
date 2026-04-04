@@ -18,10 +18,12 @@ Ready does **not** imply code sync, rebuild, serving, or benchmark readiness.
 
 A successful run leaves the workspace in a predictable local state:
 
-- `.machine-inventory.json` records the managed machine locally.
+- `.vaws-local/machine-profile.json` records the stable local machine username / namespace.
+- `.vaws-local/machine-inventory.json` records the managed machine locally.
 - host SSH uses key auth after the initial bootstrap.
 - the managed container uses host networking and `/vllm-workspace`.
 - the managed container accepts direct SSH as `root@HOST -p CONTAINER_SSH_PORT`.
+- the managed container name is collision-safe, derived from the local machine profile, for example `vaws-alice123`.
 - the managed container passes the NPU smoke test.
 - peer managed containers are mesh-connected when reachable.
 
@@ -31,6 +33,7 @@ A successful run leaves the workspace in a predictable local state:
 - the user asks whether a managed machine is ready
 - the user asks to repair host SSH, container SSH, or managed-container drift
 - the user asks to remove a managed machine
+- repo-init was skipped and the local machine profile is still missing
 
 ## Do not use this skill when
 
@@ -45,23 +48,39 @@ A successful run leaves the workspace in a predictable local state:
 - Be idempotent and conservative.
 - Keep mutations bounded to the requested machine.
 - Treat the bare-metal host as a maintenance plane, not a developer workspace.
-- Prefer helper scripts in `scripts/` over ad-hoc SSH heredocs.
+- Prefer helper scripts in `scripts/` and `.agents/scripts/` over ad-hoc SSH heredocs.
 - Never use `scp`, `sftp`, `sshpass`, or `expect` in this workflow.
 - Never write secrets or passwords to disk.
+- Never pass host passwords through shell arguments, env vars, or temporary files.
 
 ## Local state
 
-Local machine state lives only in the repo-root file `.machine-inventory.json`.
+Local workspace-machine state lives under `.vaws-local/`:
+
+- `.vaws-local/machine-profile.json`
+- `.vaws-local/machine-inventory.json`
+
+Compatibility note:
+
+- the helper still reads legacy repo-root `.machine-inventory.json` when the new path does not exist yet
+- the next successful inventory write migrates state to `.vaws-local/machine-inventory.json`
 
 Inspect it first:
 
 ```bash
+python3 .agents/scripts/workspace_profile.py summary
 python3 .agents/skills/machine-management/scripts/inventory.py summary
 ```
 
-Prefer helper-script writes over hand-editing. Canonical stored `bootstrap_method` values are `ssh` and `password-once`. The helper also accepts `key` as a compatibility alias and normalizes it to `ssh`.
+Prefer helper-script writes over hand-editing. Canonical stored `bootstrap_method` values are `ssh` and `password-once`. The inventory helper also accepts `key` as a compatibility alias and normalizes it to `ssh`.
 
 ## Script-first entry points
+
+Shared profile helper:
+
+- `python3 .agents/scripts/workspace_profile.py summary`
+- `python3 .agents/scripts/workspace_profile.py ensure --username <letters-or-digits>`
+- `python3 .agents/scripts/workspace_profile.py ensure`  # auto-generate if missing
 
 Inventory helper:
 
@@ -73,7 +92,8 @@ Inventory helper:
 Remote-machine helper:
 
 - `python3 .agents/skills/machine-management/scripts/manage_machine.py probe-host --host <ip>`
-- `python3 .agents/skills/machine-management/scripts/manage_machine.py bootstrap-container --host <ip> --container-name <name> --container-ssh-port <port>`
+- `python3 .agents/skills/machine-management/scripts/manage_machine.py bootstrap-host-key --host <ip>`
+- `python3 .agents/skills/machine-management/scripts/manage_machine.py bootstrap-container --host <ip> --container-name <name> --container-ssh-port <port> --namespace <machine-username>`
 - `python3 .agents/skills/machine-management/scripts/manage_machine.py smoke --host <ip> --container-ssh-port <port>`
 - `python3 .agents/skills/machine-management/scripts/manage_machine.py verify-machine --host <ip> --container-ssh-port <port>`
 - `python3 .agents/skills/machine-management/scripts/manage_machine.py mesh-export-key ...`
@@ -114,10 +134,28 @@ Classify the request as one of:
 
 Resolve the target by alias or host IP. If an inventory record already exists for the same alias or host IP, pivot from blind add to verify-or-repair instead of creating a duplicate record.
 
-### 2. Probe first
+### 2. Ensure the local machine profile
+
+Inspect the local workspace machine profile first.
+
+Rules:
+
+- if a profile already exists, reuse it
+- if it is missing and the user is doing machine setup, ask once whether they want a specific machine username
+- accept English letters and digits only
+- normalize to lowercase
+- reject symbols and spaces
+- if the user leaves it blank or does not care, auto-generate one with `workspace_profile.py ensure`
+
+Use the resulting machine username as the stable namespace for collision-sensitive identifiers. For new containers, derive the name from that profile, for example `vaws-alice123`.
+
+If inventory already records a container name for the target machine, keep using the recorded name even if the current local profile later changes.
+
+### 3. Probe first
 
 Before any mutation, inspect:
 
+- local machine profile state
 - local inventory state
 - whether a local public key already exists
 - whether host SSH by key already works
@@ -125,35 +163,44 @@ Before any mutation, inspect:
 - whether a free high SSH port exists
 - whether a managed container already exists
 
-Use `inventory.py` and `manage_machine.py probe-host` for these checks.
+Use `workspace_profile.py`, `inventory.py`, and `manage_machine.py probe-host` for these checks.
 
-### 3. Host auth boundary
+### 4. Host auth boundary
 
 Password policy:
 
-- Allowed: one bare-metal password-authenticated SSH session during the first add of a new machine.
-- Forbidden: repeated server password prompts after the initial bootstrap, any container password prompt, or any password automation.
+- allowed: one bare-metal password-authenticated SSH session during the first add of a new machine
+- forbidden: repeated server password prompts after the initial bootstrap, any container password prompt, or any password automation
 
 If host key auth already works, do not use the password even if the user provided one.
 
 If host key auth does not work and the request is verify-only, stop with `needs_input` instead of mutating.
 
-### 4. Add or attach workflow
+When password bootstrap is required:
+
+- prefer `manage_machine.py bootstrap-host-key`
+- let the terminal prompt handle the password interactively
+- do not echo the password back to the user
+- do not pass the password through shell args, env vars, or heredocs
+- if the environment cannot surface an interactive prompt, use `bootstrap-host-key --print-command` and ask the user to run that exact foreground command once
+
+### 5. Add or attach workflow
 
 Proceed in this order:
 
-1. Ensure a local public key exists.
-2. If needed, do the single interactive host bootstrap to append the local public key to `root`’s `authorized_keys` on the host.
-3. Run `manage_machine.py probe-host`.
-4. Decide the container name and high SSH port.
-5. Run `manage_machine.py bootstrap-container`.
-6. Run `manage_machine.py smoke`.
-7. Persist the record with `inventory.py put`.
-8. Best-effort mesh the new container with existing managed containers.
+1. ensure a local machine profile exists
+2. ensure a local public key exists
+3. if needed, do the single interactive host bootstrap with `bootstrap-host-key`
+4. run `manage_machine.py probe-host`
+5. decide the container name from the local machine profile and choose a free high SSH port
+6. run `manage_machine.py bootstrap-container`
+7. run `manage_machine.py smoke`
+8. persist the record with `inventory.py put`
+9. best-effort mesh the new container with existing managed containers
 
 After direct local -> container SSH works, stop using the bare-metal host except when container SSH later breaks.
 
-### 5. Verify workflow
+### 6. Verify workflow
 
 For verify-only requests:
 
@@ -161,7 +208,7 @@ For verify-only requests:
 - prefer `manage_machine.py verify-machine`
 - do not silently repair drift
 
-### 6. Repair workflow
+### 7. Repair workflow
 
 Prefer non-destructive repair:
 
@@ -170,7 +217,7 @@ Prefer non-destructive repair:
 - rerun `smoke`
 - do not recreate or delete a container unless the user explicitly asked for destructive repair
 
-### 7. Remove workflow
+### 8. Remove workflow
 
 Proceed in this order:
 
@@ -190,10 +237,11 @@ Do not remove host firewall rules or host-level `authorized_keys` entries.
 - Preseed `PATH` and `LD_LIBRARY_PATH` before sourcing env scripts under `set -u`.
 - Prefix `LD_LIBRARY_PATH` with `/usr/local/Ascend/driver/lib64/driver:/usr/local/Ascend/driver/lib64`.
 - Do not add Ascend `devlib` paths by default; they caused ABI drift in the recorded session.
+- New containers should label the namespace so later inspection stays explainable.
 
 ## Output discipline
 
 - Prefer helper-script JSON over long raw logs.
 - Redirect noisy package-manager output to a temp log and show only a short failure tail.
 - Summarize banners and repetitive SSH noise instead of replaying them.
-- Keep the final report compact: outcome, evidence, inventory state, and remaining manual action.
+- Keep the final report compact: outcome, evidence, local profile state, inventory state, and remaining manual action.

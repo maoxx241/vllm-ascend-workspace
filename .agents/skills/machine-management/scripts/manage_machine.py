@@ -11,6 +11,8 @@ from __future__ import annotations
 import argparse
 import json
 import pathlib
+import shlex
+import shutil
 import subprocess
 from dataclasses import dataclass
 from typing import Any, Sequence
@@ -46,23 +48,43 @@ def run_local(
     input_text: str | None = None,
     check: bool = False,
 ) -> subprocess.CompletedProcess[str]:
-    proc = subprocess.run(
-        list(cmd),
-        input=input_text,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-    )
+    try:
+        proc = subprocess.run(
+            list(cmd),
+            input=input_text,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+    except FileNotFoundError as exc:
+        raise MachineManagementError(f"required local command not found: {cmd[0]}") from exc
     if check and proc.returncode != 0:
         detail = proc.stderr.strip() or proc.stdout.strip() or "command failed"
         raise MachineManagementError(detail)
     return proc
 
 
-def ssh_command(target: SshTarget, *, batch_mode: bool = True) -> list[str]:
-    return [
+def run_local_interactive(cmd: Sequence[str]) -> int:
+    try:
+        proc = subprocess.run(list(cmd))
+    except FileNotFoundError as exc:
+        raise MachineManagementError(f"required local command not found: {cmd[0]}") from exc
+    return proc.returncode
+
+
+def shell_join(cmd: Sequence[str]) -> str:
+    return shlex.join(list(cmd))
+
+
+def ssh_command(
+    target: SshTarget,
+    *,
+    batch_mode: bool = True,
+    extra_options: Sequence[str] = (),
+) -> list[str]:
+    command = [
         "ssh",
         "-o",
         f"BatchMode={'yes' if batch_mode else 'no'}",
@@ -72,10 +94,11 @@ def ssh_command(target: SshTarget, *, batch_mode: bool = True) -> list[str]:
         "LogLevel=ERROR",
         "-o",
         "ConnectTimeout=10",
-        "-p",
-        str(target.port),
-        f"{target.user}@{target.host}",
     ]
+    for option in extra_options:
+        command.extend(["-o", option])
+    command.extend(["-p", str(target.port), f"{target.user}@{target.host}"])
+    return command
 
 
 @dataclass
@@ -116,13 +139,28 @@ def run_remote_script(
     )
 
 
+def compact_failure_tail(text: str, *, max_lines: int = 20, max_chars: int = 1600) -> str:
+    stripped = text.strip()
+    if not stripped:
+        return ""
+    lines = stripped.splitlines()
+    tail = "\n".join(lines[-max_lines:])
+    if len(tail) > max_chars:
+        tail = tail[-max_chars:]
+    return tail
+
+
 def assert_remote_success(result: RemoteResult, *, require_payload: bool = True) -> dict[str, Any]:
     if require_payload and result.payload is None:
         detail = result.stderr.strip() or result.stdout.strip() or "remote command produced no JSON payload"
         raise MachineManagementError(detail)
     if result.returncode != 0:
+        stderr_tail = compact_failure_tail(result.stderr)
         if result.payload and result.payload.get("error"):
-            raise MachineManagementError(str(result.payload["error"]))
+            base = str(result.payload["error"])
+            if stderr_tail:
+                raise MachineManagementError(f"{base}\n--- stderr tail ---\n{stderr_tail}")
+            raise MachineManagementError(base)
         detail = result.stderr.strip() or result.stdout.strip() or "remote command failed"
         raise MachineManagementError(detail)
     return result.payload or {}
@@ -295,6 +333,7 @@ port="$2"
 image="$3"
 workdir="$4"
 pubkey="$5"
+namespace="${6:-}"
 
 emit_json() {
   python3 - "$1" <<'PY'
@@ -377,6 +416,7 @@ else
     --label com.vaws.managed=true \
     --label com.vaws.container_ssh_port="$port" \
     --label com.vaws.workdir="$workdir" \
+    --label com.vaws.namespace="$namespace" \
     -w "$workdir" \
     --device=/dev/davinci_manager \
     --device=/dev/hisi_hdc \
@@ -422,6 +462,7 @@ if ! grep -qxF "$pubkey" /root/.ssh/authorized_keys 2>/dev/null; then
   printf '%s\n' "$pubkey" >> /root/.ssh/authorized_keys
 fi
 chmod 600 /root/.ssh/authorized_keys
+install -d -m 0755 /run/sshd
 ssh-keygen -A >/dev/null 2>&1 || true
 cat > /etc/ssh/sshd_vaws_config <<EOF
 Port ${port}
@@ -466,16 +507,17 @@ elif command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 
   firewall="firewalld"
 fi
 
-payload=$(python3 - <<'PY' "$container" "$port" "$image" "$workdir" "$created" "$started" "$pulled" "$installed_ssh" "$firewall" "${actions[*]}"
+payload=$(python3 - <<'PY' "$container" "$port" "$image" "$workdir" "$namespace" "$created" "$started" "$pulled" "$installed_ssh" "$firewall" "${actions[*]}"
 import json
 import sys
-container, port, image, workdir, created, started, pulled, installed_ssh, firewall, actions = sys.argv[1:]
+container, port, image, workdir, namespace, created, started, pulled, installed_ssh, firewall, actions = sys.argv[1:]
 print(json.dumps({
     "success": True,
     "container": container,
     "container_ssh_port": int(port),
     "image": image,
     "workdir": workdir,
+    "namespace": namespace or None,
     "created": created == "true",
     "started_existing": started == "true",
     "pulled_image": pulled == "true",
@@ -730,13 +772,128 @@ def host_target(args: argparse.Namespace) -> SshTarget:
 
 
 def check_direct_ssh(target: SshTarget) -> dict[str, Any]:
-    result = run_local(ssh_command(target, batch_mode=True) + ["printf", "ok"])
+    try:
+        result = run_local(ssh_command(target, batch_mode=True) + ["printf", "ok"])
+    except MachineManagementError as exc:
+        return {
+            "ok": False,
+            "returncode": None,
+            "stdout": "",
+            "stderr": str(exc),
+        }
     return {
         "ok": result.returncode == 0 and result.stdout.endswith("ok"),
         "returncode": result.returncode,
         "stdout": result.stdout.strip(),
         "stderr": result.stderr.strip(),
     }
+
+
+def build_bootstrap_host_key_command(
+    target: SshTarget,
+    *,
+    key_path: pathlib.Path,
+    public_key: str,
+) -> tuple[str, list[str]]:
+    if shutil.which("ssh-copy-id"):
+        return (
+            "ssh-copy-id",
+            [
+                "ssh-copy-id",
+                "-i",
+                str(key_path),
+                "-o",
+                "StrictHostKeyChecking=accept-new",
+                "-o",
+                "LogLevel=ERROR",
+                "-o",
+                "ConnectTimeout=10",
+                "-o",
+                "PreferredAuthentications=password,keyboard-interactive",
+                "-o",
+                "PubkeyAuthentication=no",
+                "-o",
+                "NumberOfPasswordPrompts=1",
+                "-p",
+                str(target.port),
+                f"{target.user}@{target.host}",
+            ],
+        )
+
+    quoted_key = shlex.quote(public_key)
+    remote_cmd = (
+        "umask 077; "
+        "mkdir -p ~/.ssh && touch ~/.ssh/authorized_keys; "
+        "chmod 700 ~/.ssh; "
+        "chmod 600 ~/.ssh/authorized_keys; "
+        f"grep -qxF {quoted_key} ~/.ssh/authorized_keys 2>/dev/null || "
+        f"printf '%s\\n' {quoted_key} >> ~/.ssh/authorized_keys"
+    )
+    command = ssh_command(
+        target,
+        batch_mode=False,
+        extra_options=(
+            "PreferredAuthentications=password,keyboard-interactive",
+            "PubkeyAuthentication=no",
+            "NumberOfPasswordPrompts=1",
+        ),
+    ) + ["sh", "-c", remote_cmd]
+    return "ssh", command
+
+
+def cmd_bootstrap_host_key(args: argparse.Namespace) -> int:
+    target = host_target(args)
+    key_path = find_public_key(args.public_key_file)
+    public_key = load_public_key(key_path)
+    before = check_direct_ssh(target)
+    tool_name, command = build_bootstrap_host_key_command(
+        target,
+        key_path=key_path,
+        public_key=public_key,
+    )
+    payload: dict[str, Any] = {
+        "target": {"host": target.host, "user": target.user, "host_port": target.port},
+        "public_key_file": str(key_path),
+        "precheck": before,
+        "interactive_tool": tool_name,
+        "interactive_command": shell_join(command),
+        "needs_interactive_terminal": True,
+    }
+    if before["ok"]:
+        payload.update({"success": True, "executed": False, "result": "already-configured"})
+        print_json(payload)
+        return 0
+
+    if args.print_command:
+        payload.update({
+            "success": True,
+            "executed": False,
+            "result": "command-preview",
+            "message": "run the interactive command in a terminal and enter the host password when prompted",
+        })
+        print_json(payload)
+        return 0
+
+    returncode = run_local_interactive(command)
+    after = check_direct_ssh(target)
+    payload.update(
+        {
+            "executed": True,
+            "command_returncode": returncode,
+            "postcheck": after,
+            "success": after["ok"],
+            "result": "bootstrapped" if after["ok"] else "failed",
+        }
+    )
+    if not after["ok"]:
+        payload["error"] = (
+            "interactive host bootstrap did not establish key-based SSH; verify the host password, username, and password-login policy"
+        )
+        print_json(payload)
+        return 2
+
+    print_json(payload)
+    return 0
 
 
 def cmd_probe_host(args: argparse.Namespace) -> int:
@@ -770,6 +927,7 @@ def cmd_bootstrap_container(args: argparse.Namespace) -> int:
             args.image,
             args.workdir,
             public_key,
+            args.namespace or "",
         ],
         batch_mode=True,
     )
@@ -781,6 +939,7 @@ def cmd_bootstrap_container(args: argparse.Namespace) -> int:
     payload.update(
         {
             "public_key_file": str(key_path),
+            "namespace": args.namespace or None,
             "direct_container_ssh": ssh_check,
             "target": {
                 "host": target.host,
@@ -983,12 +1142,30 @@ def build_parser() -> argparse.ArgumentParser:
     probe.add_argument("--managed-prefix", default="vaws-", help="managed container name prefix (default: vaws-)")
     probe.set_defaults(func=cmd_probe_host)
 
+    host_bootstrap = subparsers.add_parser(
+        "bootstrap-host-key",
+        help="run one interactive host-key bootstrap; the terminal prompts for the host password",
+    )
+    add_host_args(host_bootstrap)
+    host_bootstrap.add_argument(
+        "--public-key-file",
+        help="local SSH public key to install on the host; defaults to ~/.ssh/id_ed25519.pub if present",
+    )
+    host_bootstrap.add_argument(
+        "--print-command",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="print the exact interactive command instead of running it",
+    )
+    host_bootstrap.set_defaults(func=cmd_bootstrap_host_key)
+
     bootstrap = subparsers.add_parser("bootstrap-container", help="create or repair the managed container and dedicated sshd")
     add_host_args(bootstrap)
     bootstrap.add_argument("--container-name", required=True, help="container name to create or reuse")
     bootstrap.add_argument("--container-ssh-port", type=int, required=True, help="high non-default SSH port for the managed container")
     bootstrap.add_argument("--image", default=DEFAULT_IMAGE, help=f"image name (default: {DEFAULT_IMAGE})")
     bootstrap.add_argument("--workdir", default=DEFAULT_WORKDIR, help=f"container workdir (default: {DEFAULT_WORKDIR})")
+    bootstrap.add_argument("--namespace", help="stable workspace machine username used for collision-safe container naming")
     bootstrap.add_argument("--public-key-file", help="local SSH public key to add to the container; defaults to ~/.ssh/id_ed25519.pub if present")
     bootstrap.set_defaults(func=cmd_bootstrap_container)
 

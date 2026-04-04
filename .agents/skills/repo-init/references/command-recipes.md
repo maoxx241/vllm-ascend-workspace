@@ -1,11 +1,31 @@
 # Repo-init command recipes
 
-These are fallback patterns. Prefer the helper scripts in `scripts/` when possible.
+These are fallback patterns. Prefer the helper scripts when possible.
 
 ## Probe
 
 ```bash
 python3 .agents/skills/repo-init/scripts/repo_init_probe.py --compact
+```
+
+## Workspace machine profile
+
+Inspect the local profile:
+
+```bash
+python3 .agents/scripts/workspace_profile.py summary
+```
+
+Create it with an explicit user-chosen machine username:
+
+```bash
+python3 .agents/scripts/workspace_profile.py ensure --username alice123
+```
+
+Create it with an auto-generated default:
+
+```bash
+python3 .agents/scripts/workspace_profile.py ensure
 ```
 
 ## Quiet remote comparison
