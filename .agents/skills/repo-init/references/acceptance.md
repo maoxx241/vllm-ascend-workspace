@@ -88,4 +88,3 @@ Review these files together after every substantial skill edit:
 - `.agents/skills/repo-init/SKILL.md`
 - `.agents/skills/repo-init/references/behavior.md`
 - `.agents/skills/repo-init/references/command-recipes.md`
-- `.claude/skills/repo-init/SKILL.md`
