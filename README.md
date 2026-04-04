@@ -1,44 +1,110 @@
 # vllm-ascend-workspace
 
-Public workspace-local scaffold for coordinating vLLM and vLLM-Ascend development with agent-driven workflows.
+`vllm-ascend-workspace` is a composable, agent-first scaffold for developing against three repositories at once:
 
-## Runtime Root
+- the workspace control repository
+- `vllm/`
+- `vllm-ascend/`
 
-- Canonical container and runtime path: `/vllm-workspace`
+The repository is intentionally **not** a mandatory workflow. Developers can use only the pieces they want. The only bundled skill in this package is `repo-init`, which prepares the local clone for development when the developer asks for it.
 
-## Source Repos
+## Design goals
 
-- `vllm/` is tracked as a workspace submodule.
-- `vllm-ascend/` is tracked as a workspace submodule.
-- Tracked submodule defaults point at community `upstream` repositories.
-- User-owned `origin` remotes live in local workspace state, not in tracked files.
-- Clone and refresh sources recursively with `git submodule update --init --recursive`.
-- Recursive submodule checkout matters because `vllm-ascend/` also carries nested submodules.
-- The control repo lives at `/vllm-workspace/workspace`.
+- Keep the tracked repository state public-safe and community-oriented.
+- Keep user-specific remotes, forks, auth state, and credentials in **local** machine state only.
+- Make initialization optional, conservative, and repeatable.
+- Let agents drive setup in natural language instead of making the developer compose shell commands by hand.
+- Preserve user freedom to add custom remotes such as `upstream2`, keep community-only mode, or skip any suggested step.
 
-## Local Overlay
+## Tracked repository model
 
-- Local overlay state stays untracked.
-- `origin` and `upstream` repo topology comes from local workspace state, not tracked files.
-- Tracked files must not contain private tokens, private hosts, or private path references.
+This repository expects two Git submodules:
 
-## Public Skills
+- `vllm/` -> `https://github.com/vllm-project/vllm.git`
+- `vllm-ascend/` -> `https://github.com/vllm-project/vllm-ascend.git`
 
-- `.agents/skills/workspace-init/` prepares the repo foundation for development and can extend that baseline to an optional first machine.
-- `.agents/skills/machine-management/` attaches, verifies, and removes machines.
-- `.agents/skills/serving/` starts, inspects, lists, and stops model services.
-- `.agents/skills/benchmark/` runs benchmark workflows against an explicit ready model service.
-- `.agents/skills/workspace-reset/` handles explicit destructive teardown.
-- `.agents/skills/profiling-analysis/` remains available as an orthogonal domain skill.
+The tracked `.gitmodules` file should always stay pointed at the community repositories on `main`. Personal forks are a **local runtime concern**, not a tracked file concern.
 
-## Agent Discovery
+## What `repo-init` does
 
-- Read the matched public `SKILL.md` first.
-- Open `.agents/discovery/README.md` only when the matched skill or its linked reference does not identify the next tool, or when probe results disagree and the next step is ambiguous.
+When invoked, `repo-init` can:
 
-## Adapters
+1. detect the machine, shell, OS, package managers, GitHub CLI state, GitHub auth state, and current remote topology
+2. install `gh` on macOS, Ubuntu, WSL, or Windows
+3. support headless auth flows and prefer SSH when possible
+4. initialize submodules recursively
+5. inspect whether the logged-in user has forks of:
+   - `maoxx241/vllm-ascend-workspace`
+   - `vllm-project/vllm`
+   - `vllm-project/vllm-ascend`
+6. optionally create or adopt forks and wire local remotes into the recommended topology
+7. optionally sync user forks to the latest community `main`
+8. optionally place local `main` branches on the expected tracking branch for active development
 
-- `AGENTS.md` is the Codex adapter.
-- `CLAUDE.md` is the Claude Code adapter.
-- `.cursorrules` is the Cursor adapter.
-- `.agents/README.md` explains the shared workspace-local skill layer.
+`repo-init` is **idempotent** and **conservative**:
+- it asks before installing tools
+- it asks before logging into GitHub
+- it asks before generating or uploading SSH keys
+- it asks before forking repositories
+- it asks before renaming or replacing remotes
+- it asks before syncing forks or resetting branches
+
+If the developer declines any step, the skill should stop at the last safe state and report a partial but valid result.
+
+## Recommended remote topology
+
+The skill treats the following as the recommended end state, but never as a hard requirement.
+
+| Repository | Recommended `origin` | Recommended `upstream` | Notes |
+| --- | --- | --- | --- |
+| workspace | user fork, if the user wants one | `maoxx241/vllm-ascend-workspace` | If the clone is already the user fork, offer to add `upstream`. |
+| `vllm` | user fork, if one exists and the user wants to use it | `vllm-project/vllm` | Community-only mode is valid. |
+| `vllm-ascend` | user fork | `vllm-project/vllm-ascend` | A personal fork is recommended for PR-oriented work. |
+
+A user may keep extra remotes such as `upstream2`; `repo-init` must preserve them.
+
+## Recommended branch placement
+
+The skill should optimize for the developer-facing state instead of preserving a detached submodule checkout forever.
+
+- `workspace`: keep the current branch unless the user explicitly wants branch movement.
+- `vllm`: prefer a local `main` tracking the chosen working remote's `main`.
+- `vllm-ascend`: prefer a local `main` tracking the chosen working remote's `main`.
+
+If the relevant worktree is dirty, the skill must ask before changing branches, rebasing, syncing, or resetting.
+
+## Quick usage
+
+Example prompts for an agent:
+
+- “Initialize this workspace for vLLM Ascend development.”
+- “Run repo-init and set me up for PR work.”
+- “Only install GitHub CLI and log me in. Do not touch remotes.”
+- “Initialize submodules recursively and move `vllm-ascend` to my fork.”
+- “Run repo-init in community-only mode. Do not create any forks.”
+
+## Repository layout
+
+```text
+.
+├── .agents/
+│   ├── README.md
+│   └── skills/
+│       └── repo-init/
+│           ├── SKILL.md
+│           ├── references/
+│           └── scripts/
+├── .claude/
+│   └── skills/
+│       └── repo-init/
+├── .gitmodules
+├── AGENTS.md
+├── CLAUDE.md
+└── README.md
+```
+
+## Source of truth
+
+- Codex repo-local skills live under `.agents/skills/`.
+- Claude project skills live under `.claude/skills/`.
+- In this repository, `.agents/skills/repo-init/` is the source of truth and `.claude/skills/repo-init/` is a project adapter with matching behavior.

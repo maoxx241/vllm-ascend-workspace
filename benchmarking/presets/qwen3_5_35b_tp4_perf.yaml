@@ -1,7 +1,0 @@
-serving_preset: qwen3_5_35b_tp4
-probe_runner: vllm-bench-serve
-request_family: openai-chat
-dataset_name: random
-num_prompts: 200
-random_input_len: 1024
-random_output_len: 128

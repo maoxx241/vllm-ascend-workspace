@@ -1,6 +1,0 @@
-runner_kind: generate
-chat_capable: true
-serve_args:
-  trust_remote_code: true
-additional_config:
-  enable_cpu_binding: true

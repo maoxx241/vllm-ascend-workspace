@@ -1,30 +1,56 @@
-# AGENTS
+# Repository instructions
 
-This repository is an agent-first scaffold for vLLM Ascend development work.
+This repository is a composable scaffold for local `vllm` + `vllm-ascend` development. It is not a mandatory workflow engine.
 
-## Always-On Context
+## Skills
 
-- Canonical runtime root: `/vllm-workspace`
-- Source repos: `vllm/`, `vllm-ascend/` as submodules
-- Clone and refresh sources recursively: `git submodule update --init --recursive`
-- `origin` and `upstream` repo topology is maintained as local workspace state
-- Local workspace state must never be committed
-- Never commit credentials, private hosts, private paths, tokens, or keys
+- Repo-local skills live under `.agents/skills/`.
+- `repo-init` is the only bundled skill in this package.
+- `repo-init` is optional. Do not force it as a gate before ordinary exploration, coding, docs work, benchmarking, or serving tasks.
+- Use `repo-init` when:
+  - the user explicitly asks to initialize the repository after clone
+  - the user asks to install or configure `gh`
+  - the user asks to sign into GitHub
+  - the user asks to initialize recursive submodules
+  - the user asks to configure forks or remotes for the workspace, `vllm`, or `vllm-ascend`
+  - missing GitHub auth, missing recursive submodules, or broken remote topology is the clear blocker for the requested work
+- Do not use `repo-init` for unrelated Git operations, normal feature work, or runtime tasks.
 
-## Public Skills
+## Operating rules for `repo-init`
 
-- Use `.agents/skills/workspace-init/SKILL.md` for first-time setup, recovery setup, or local foundation plus optional first-machine setup.
-- Use `.agents/skills/machine-management/SKILL.md` to attach, verify, or remove machines.
-- Use `.agents/skills/serving/SKILL.md` to start, inspect, list, or stop model services on a ready machine.
-- Use `.agents/skills/benchmark/SKILL.md` to run benchmark workflows against an explicit ready model service.
-- Use `.agents/skills/workspace-reset/SKILL.md` only for explicit destructive teardown.
+- Stay idempotent and conservative.
+- Ask before any environment-changing action:
+  - installing tools
+  - authenticating `gh`
+  - generating or uploading SSH keys
+  - forking repositories
+  - renaming, deleting, or replacing remotes
+  - syncing forks
+  - moving branches
+  - hard resetting branches
+- Allow the user to decline any step without failing the whole run.
+- Preserve extra remotes such as `upstream2`.
+- Never store user-specific remotes, SSH private keys, personal access tokens, or host-specific secrets in tracked files.
+- Prefer SSH for GitHub Git operations when possible.
+- Support headless GitHub auth flows.
+- If local privilege is missing, hand the user the prepared fallback script and command instead of trying to force a system install.
 
-## Discovery
+## Repository model
 
-- Read the matched public `SKILL.md` first.
-- Open `.agents/discovery/README.md` only when the matched skill or its linked reference does not identify the next tool, or when probe results disagree and the next step is ambiguous.
+- `.gitmodules` must keep community URLs on `main`:
+  - `https://github.com/vllm-project/vllm.git`
+  - `https://github.com/vllm-project/vllm-ascend.git`
+- Personal forks are local runtime state, not tracked state.
+- `vllm-ascend` personal forks are recommended for PR work.
+- `vllm` personal forks are optional.
+- workspace personal forks are optional.
+- The skill should optimize for the developer-visible repository state, not for preserving a detached submodule checkout forever.
 
-## Skill Boundary
+## Validation
 
-- Treat shared `SKILL.md` files as the public contract layer.
-- Treat skill-local routing references as internal execution notes, not public workflow docs.
+When you change the skill, review:
+- `.agents/skills/repo-init/SKILL.md`
+- `.agents/skills/repo-init/references/behavior.md`
+- `.agents/skills/repo-init/references/acceptance.md`
+
+Keep `.claude/skills/repo-init/SKILL.md` behavior-aligned with the Codex version.
