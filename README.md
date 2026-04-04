@@ -94,17 +94,12 @@ Example prompts for an agent:
 │           ├── SKILL.md
 │           ├── references/
 │           └── scripts/
-├── .claude/
-│   └── skills/
-│       └── repo-init/
 ├── .gitmodules
 ├── AGENTS.md
-├── CLAUDE.md
 └── README.md
 ```
 
 ## Source of truth
 
 - Codex repo-local skills live under `.agents/skills/`.
-- Claude project skills live under `.claude/skills/`.
-- In this repository, `.agents/skills/repo-init/` is the source of truth and `.claude/skills/repo-init/` is a project adapter with matching behavior.
+
