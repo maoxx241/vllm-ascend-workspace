@@ -91,6 +91,11 @@ def shell_join(cmd: Sequence[str]) -> str:
     return shlex.join(items)
 
 
+def remote_shell_command(argv: Sequence[str]) -> str:
+    items = [str(item) for item in argv]
+    return " ".join(shlex.quote(item) for item in items)
+
+
 def ssh_command(
     target: SshTarget,
     *,
@@ -237,7 +242,8 @@ def run_remote_script(
     args: Sequence[str] = (),
     batch_mode: bool = True,
 ) -> RemoteResult:
-    cmd = ssh_command(target, batch_mode=batch_mode) + ["bash", "-s", "--", *args]
+    remote_cmd = remote_shell_command(["bash", "-s", "--", *args])
+    cmd = ssh_command(target, batch_mode=batch_mode) + [remote_cmd]
     proc = run_local(cmd, input_text=script)
     return RemoteResult(
         target=target,
@@ -1248,18 +1254,37 @@ def cmd_remove_container(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
-    subparsers = parser.add_subparsers(dest="command", required=True)
+    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
+    subparsers = parser.add_subparsers(
+        dest="command",
+        required=True,
+        parser_class=lambda *args, **kwargs: argparse.ArgumentParser(*args, allow_abbrev=False, **kwargs),
+    )
 
     def add_host_args(p: argparse.ArgumentParser) -> None:
         p.add_argument("--host", required=True, help="host IP or DNS name")
-        p.add_argument("--user", default=DEFAULT_HOST_USER, help=f"SSH user (default: {DEFAULT_HOST_USER})")
-        p.add_argument("--host-port", type=int, default=DEFAULT_HOST_PORT, help=f"host SSH port (default: {DEFAULT_HOST_PORT})")
+        p.add_argument("--user", dest="user", default=DEFAULT_HOST_USER, help=f"SSH user (default: {DEFAULT_HOST_USER})")
+        p.add_argument(
+            "--host-port",
+            "--host-ssh-port",
+            dest="host_port",
+            type=int,
+            default=DEFAULT_HOST_PORT,
+            help=f"host SSH port (default: {DEFAULT_HOST_PORT})",
+        )
 
     def add_container_args(p: argparse.ArgumentParser) -> None:
         p.add_argument("--host", required=True, help="host IP or DNS name")
-        p.add_argument("--user", default=DEFAULT_HOST_USER, help=f"SSH user (default: {DEFAULT_HOST_USER})")
-        p.add_argument("--container-ssh-port", type=int, required=True, help="direct SSH port exposed by the managed container")
+        p.add_argument("--user", dest="user", default=DEFAULT_HOST_USER, help=f"SSH user (default: {DEFAULT_HOST_USER})")
+        p.add_argument(
+            "--container-ssh-port",
+            "--container-port",
+            "--port",
+            dest="container_ssh_port",
+            type=int,
+            required=True,
+            help="direct SSH port exposed by the managed container",
+        )
 
     probe = subparsers.add_parser("probe-host", help="probe host prerequisites and choose a free high SSH port")
     add_host_args(probe)
@@ -1301,8 +1326,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     bootstrap = subparsers.add_parser("bootstrap-container", help="create or repair the managed container and dedicated sshd")
     add_host_args(bootstrap)
-    bootstrap.add_argument("--container-name", required=True, help="container name to create or reuse")
-    bootstrap.add_argument("--container-ssh-port", type=int, required=True, help="high non-default SSH port for the managed container")
+    bootstrap.add_argument("--container-name", "--name", dest="container_name", required=True, help="container name to create or reuse")
+    bootstrap.add_argument(
+        "--container-ssh-port",
+        "--container-port",
+        "--port",
+        dest="container_ssh_port",
+        type=int,
+        required=True,
+        help="high non-default SSH port for the managed container",
+    )
     bootstrap.add_argument("--image", default=DEFAULT_IMAGE, help=f"image name (default: {DEFAULT_IMAGE})")
     bootstrap.add_argument("--workdir", default=DEFAULT_WORKDIR, help=f"container workdir (default: {DEFAULT_WORKDIR})")
     bootstrap.add_argument("--namespace", help="stable workspace machine username used for collision-safe container naming")
@@ -1316,7 +1349,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     verify = subparsers.add_parser("verify-machine", help="check host SSH, container SSH, and smoke readiness together")
     add_container_args(verify)
-    verify.add_argument("--host-port", type=int, default=DEFAULT_HOST_PORT, help=f"host SSH port (default: {DEFAULT_HOST_PORT})")
+    verify.add_argument(
+        "--host-port",
+        "--host-ssh-port",
+        dest="host_port",
+        type=int,
+        default=DEFAULT_HOST_PORT,
+        help=f"host SSH port (default: {DEFAULT_HOST_PORT})",
+    )
     verify.add_argument("--python", help="optional explicit python path inside the container")
     verify.set_defaults(func=cmd_verify_machine)
 
@@ -1341,14 +1381,29 @@ def build_parser() -> argparse.ArgumentParser:
 
     clean_known_hosts = subparsers.add_parser("clean-local-known-hosts", help="remove one managed container endpoint from local known_hosts")
     clean_known_hosts.add_argument("--host", required=True, help="host IP or DNS name")
-    clean_known_hosts.add_argument("--container-ssh-port", type=int, required=True, help="managed container SSH port")
+    clean_known_hosts.add_argument(
+        "--container-ssh-port",
+        "--container-port",
+        "--port",
+        dest="container_ssh_port",
+        type=int,
+        required=True,
+        help="managed container SSH port",
+    )
     clean_known_hosts.add_argument("--known-hosts", default=str(DEFAULT_KNOWN_HOSTS), help=f"known_hosts path (default: {DEFAULT_KNOWN_HOSTS})")
     clean_known_hosts.set_defaults(func=cmd_clean_local_known_hosts)
 
     remove = subparsers.add_parser("remove-container", help="remove a managed container from the host")
     add_host_args(remove)
-    remove.add_argument("--container-name", required=True, help="container name to remove")
-    remove.add_argument("--container-ssh-port", type=int, help="container SSH port for optional local known_hosts cleanup")
+    remove.add_argument("--container-name", "--name", dest="container_name", required=True, help="container name to remove")
+    remove.add_argument(
+        "--container-ssh-port",
+        "--container-port",
+        "--port",
+        dest="container_ssh_port",
+        type=int,
+        help="container SSH port for optional local known_hosts cleanup",
+    )
     remove.add_argument("--known-hosts", default=str(DEFAULT_KNOWN_HOSTS), help=f"known_hosts path (default: {DEFAULT_KNOWN_HOSTS})")
     remove.add_argument(
         "--clean-local-known-hosts",

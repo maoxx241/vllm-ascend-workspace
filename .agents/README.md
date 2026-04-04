@@ -14,6 +14,8 @@ This directory contains the repository-local skill layer for Codex, Claude Code,
 
 When a workflow has deterministic shell, SSH, Git, or local-state mechanics, prefer the helper script instead of rebuilding the command inline in the conversation.
 
+When you add or revise a helper script, keep the CLI alias-tolerant and give safe defaults for metadata that can be inferred. The goal is to reduce agent parameter brittleness, not to force one exact flag spelling.
+
 Current primary helpers:
 
 - `repo-init/scripts/repo_init_probe.py`
