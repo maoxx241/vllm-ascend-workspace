@@ -1,30 +1,19 @@
-# Workspace-Local Agent Guidance
+# Repo-local skills
 
-This directory contains the shared workspace-local contract layer for agents working in `vllm-ascend-workspace`.
+This directory contains the repository-local skill layer for Codex and other agent tooling.
 
-- Canonical runtime root: `/vllm-workspace`
-- Source repos: `vllm/`, `vllm-ascend/` as submodules
-- Clone and refresh sources recursively: `git submodule update --init --recursive`
-- Shared public contracts live under `.agents/skills/`
-- Local overlay state stays untracked
-- Local `origin` and `upstream` repository topology stays in workspace-local state
+## Layout
 
-## Public Skills
+- `.agents/skills/repo-init/` is the source-of-truth skill package for repository initialization.
+- `.claude/skills/repo-init/` is the Claude project-skill adapter.
+- `AGENTS.md` carries repository-wide operating rules.
+- `CLAUDE.md` carries Claude-specific project memory.
 
-- `.agents/skills/workspace-init/` prepares the local repo foundation for development and can extend that baseline to an optional first machine.
-- `.agents/skills/machine-management/` handles machine attach, verify, and removal requests.
-- `.agents/skills/serving/` handles model-serving start, status, list, and stop requests.
-- `.agents/skills/benchmark/` handles benchmark execution requests against an explicit ready model service.
-- `.agents/skills/workspace-reset/` handles explicit destructive teardown.
-- `.agents/skills/profiling-analysis/` remains available as a domain-specific skill.
+## Maintenance rule
 
-## Discovery
+If you change the behavior of `repo-init`, update both:
 
-- Read the matched public `SKILL.md` first.
-- Open `.agents/discovery/README.md` only when the matched skill or its linked reference does not identify the next tool, or when probe results disagree and the next step is ambiguous.
+- `.agents/skills/repo-init/SKILL.md`
+- `.claude/skills/repo-init/SKILL.md`
 
-## Boundary
-
-- Shared `SKILL.md` files are the public contract layer.
-- Skill-local routing references stay internal.
-- Keep private tokens, private hosts, and private path references out of tracked files.
+Keep the references and scripts under `.agents/skills/repo-init/` as the canonical supporting files.
