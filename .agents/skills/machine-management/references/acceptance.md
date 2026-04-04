@@ -36,17 +36,20 @@ These should not trigger `machine-management` unless machine readiness is the ob
 - the skill reuses or creates `.vaws-local/machine-profile.json`
 - new machine usernames accept letters and digits only
 - usernames normalize to lowercase
-- blank input generates a default namespace
+- default/random generation happens only after explicit user consent
+- `workspace_profile.py ensure` on a missing profile fails unless `--username` or `--generate` is provided
 - new managed container names derive from that namespace instead of a single global fixed name
 
 ### Add / attach
 
 - the skill prefers host key SSH first and uses a password only for the first bootstrap of a new machine
-- password bootstrap uses `bootstrap-host-key` or an equivalent single foreground interactive step
-- the skill never passes the password via shell args, files, env vars, or password automation
+- if the user already supplied the host password in the request, the skill prefers scripted bootstrap before asking the user to run a manual command
+- the primary bootstrap path does not depend on `ssh-copy-id`
+- `--print-command` remains a fallback, not the default
 - the skill checks Docker and required Ascend/NPU prerequisites before container creation
 - the managed container uses host networking, required devices, required Ascend mounts, and `/vllm-workspace` as the workdir
 - the skill configures a dedicated container `sshd` on a high port without brittle inline edits to `/etc/ssh/sshd_config`
+- the container bootstrap ensures `/run/sshd` exists
 - the skill verifies direct local -> container SSH
 - the skill runs the smoke test successfully before claiming readiness
 - the skill persists final alias, namespace, host identity, container name, image, and SSH port into inventory

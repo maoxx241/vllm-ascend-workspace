@@ -32,6 +32,7 @@ Rules:
 - alias and host IP must not resolve to different records
 - machine username must be letters and digits only, normalized to lowercase
 - v1 supports one managed workspace container per host
+- on a missing profile, `workspace_profile.py ensure` must use either `--username` or `--generate`
 
 Relevant files:
 
@@ -59,7 +60,7 @@ Rules:
 - create or reuse the profile before new-machine setup
 - accept letters and digits only
 - normalize to lowercase
-- blank input means auto-generate a default such as `agent7k2p9x`
+- default/random is valid only after the user explicitly accepts it
 - derive new container names from the namespace, for example `vaws-alice123`
 - if inventory already records a container name for a managed machine, keep using the recorded name for that machine
 
@@ -79,9 +80,9 @@ All of the following are true:
 Use this when the request is blocked by missing input or by an auth boundary the skill is not allowed to bypass, for example:
 
 - no local public key exists
-- password bootstrap is needed but no interactive terminal is available
 - verify-only was requested, but repair would be required
 - the user wants a specific machine username but has not chosen one yet
+- host key SSH is missing and no approved bootstrap path is available
 
 ### `needs_repair`
 
@@ -107,7 +108,8 @@ After host key auth is established:
 
 - stop using the password
 - never use a container password
-- never automate passwords with `sshpass`, `expect`, files, env vars, or heredoc injection
+- never use `sshpass` or `expect`
+- never persist the password into tracked files or `.vaws-local/`
 
 Preferred helper:
 
@@ -115,9 +117,12 @@ Preferred helper:
 
 Rules for that step:
 
-- run it in the foreground so the terminal can prompt for the password
-- do not echo the password into the transcript
-- if interactive execution is impossible, use `--print-command` and ask the user to run it once themselves
+- if the user already supplied a password in the request, prefer the scripted one-shot path first
+- prefer `--password-env` or `--password-stdin` when the tool can hide the secret
+- allow `--password` only when the user already exposed the password in the current chat and the tool cannot hide stdin/env
+- keep `--print-command` as a fallback, not the default
+- interactive terminal prompting is fallback behavior, not the primary path
+- avoid `ssh-copy-id` as the primary mechanism because it is not consistently available across platforms
 
 ## Container SSH contract
 
@@ -137,6 +142,8 @@ The managed config must enforce:
 - root key login
 - password auth disabled
 - dedicated PID file
+
+The container bootstrap must ensure `/run/sshd` exists before starting the dedicated daemon.
 
 ## Smoke contract
 

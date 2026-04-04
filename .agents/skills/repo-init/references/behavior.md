@@ -24,10 +24,11 @@ Rules:
 
 - keep the directory untracked
 - create the machine profile during broad workspace init, not for every narrow Git-only task
-- machine username must be letters and digits only
+- machine usernames must be letters and digits only
 - normalize machine usernames to lowercase
-- blank user input means generate a default such as `agent7k2p9x`
+- blank / default is valid only after the user explicitly accepts the default/random option
 - do not rewrite an existing machine profile unless the user explicitly asked for that change
+- on a missing profile, `workspace_profile.py ensure` must use either `--username` or `--generate`
 
 ## Stage model
 
@@ -47,28 +48,25 @@ Use `repo_init_probe.py` to collect:
 - repo remote topology for `workspace`, `vllm`, and `vllm-ascend`
 - whether matching personal forks appear to exist
 
-### Stage 2: summarize and ask
+### Stage 2: mandatory decision checkpoint
 
-Before mutating, summarize only the compact state the user needs to approve the next change.
+Before mutating a broad init or any topology-changing task, stop once and ask a grouped question.
 
-Group approvals by:
+That question must cover:
 
-- local machine profile creation or change
-- `gh` install / upgrade
-- GitHub auth
-- recursive submodules
-- remote rewiring
-- branch movement / tracking
-- fork sync
+- machine username choice when the profile is missing
+- repo topology mode: keep current, recommended fork mode, or community-only
+- whether to initialize submodules now
+
+Do not silently generate a username and do not silently rewire remotes when the user only asked for generic init.
 
 ### Stage 3: ensure local machine profile when relevant
 
 During broad workspace init:
 
 - inspect the profile first with `workspace_profile.py summary`
-- if missing, ask once for a machine username
-- if the user leaves it blank, call `workspace_profile.py ensure` with no username
-- if the user provided a valid value, call `workspace_profile.py ensure --username ...`
+- if missing and the user chose a specific name, call `workspace_profile.py ensure --username ...`
+- if missing and the user explicitly accepted the default/random option, call `workspace_profile.py ensure --generate`
 - do not change an existing profile unless the user explicitly asked to change it
 
 For narrow Git-only tasks, skip this stage.
@@ -94,6 +92,7 @@ Rules:
 - add `upstream` only when it helps the chosen workflow
 - `vllm` user fork is optional
 - `vllm-ascend` user fork is recommended but not mandatory
+- if the user chose “keep current”, do not rewrite remotes just because the recommended topology differs
 
 ### Stage 7: main-branch comparison and tracking
 
@@ -131,6 +130,6 @@ A successful run usually ends with:
 - the local machine profile present when broad init asked for it
 - `gh` installed or a fallback provided
 - GitHub auth valid
-- recursive submodules initialized
+- recursive submodules initialized when the user approved it
 - remotes matching the user’s selected topology
 - local `main` tracking the selected working remote where the user approved branch movement

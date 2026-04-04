@@ -8,7 +8,7 @@ This directory contains the repository-local skill layer for Codex, Claude Code,
 - `.agents/skills/machine-management/` is the source-of-truth skill package for remote machine attach, verify, repair, and removal workflows.
 - `.agents/scripts/workspace_profile.py` is the shared helper for the local workspace machine profile.
 - `.agents/lib/vaws_local_state.py` is the shared library for untracked local runtime state.
-- `AGENTS.md` carries repository-wide routing and operating rules.
+- `AGENTS.md` carries repository-wide routing rules and mandatory decision gates.
 
 ## Script-first convention
 
@@ -32,6 +32,11 @@ Untracked workspace-local state lives under `.vaws-local/`:
 - `.vaws-local/machine-inventory.json`
 
 The legacy repo-root `.machine-inventory.json` is compatibility input only and should not be reintroduced as the primary path.
+
+Key guardrail:
+
+- on a missing machine profile, `workspace_profile.py ensure` now requires either `--username` or `--generate`
+- this prevents silent default usernames during broad init or first machine attach
 
 ## Maintenance rule
 
