@@ -1,180 +1,103 @@
 # Repo-init behavior reference
 
-This file is the detailed contract for the `repo-init` skill.
+This file defines the durable behavior of `repo-init`.
 
 ## Core contract
 
-`repo-init` prepares a cloned workspace for development. It is optional, repeatable, and conservative.
-
-The skill must never:
-
-- write personal remotes into tracked files
-- write credentials into tracked files
-- force repository initialization before unrelated work
-- silently remove extra remotes
-- silently reset user branches
+- Probe first.
+- Ask before each mutation category.
+- Preserve user choices and extra remotes.
+- Keep user-specific topology local, not tracked.
+- Prefer helper scripts to raw shell.
+- Prefer quiet single-branch comparisons over broad ref pruning.
 
 ## Stage model
 
 ### Stage 0: applicability
 
-Confirm that the current repository is the workspace control repo or that the user explicitly wants to apply the same initialization pattern here.
+Use `repo-init` only for workspace setup, GitHub auth / CLI setup, recursive submodules, and fork / remote topology.
 
-### Stage 1: state probe
+### Stage 1: read-only probe
+
+Use `repo_init_probe.py` to collect:
+
+- platform and package-manager availability
+- `gh` install state
+- GitHub auth state and login
+- submodule status
+- repo remote topology for `workspace`, `vllm`, and `vllm-ascend`
+- whether matching personal forks appear to exist
+
+### Stage 2: summarize and ask
+
+Before mutating, summarize only the compact state the user needs to approve the next change.
+
+Group approvals by:
+
+- `gh` install / upgrade
+- GitHub auth
+- recursive submodules
+- remote rewiring
+- branch movement / tracking
+- fork sync
+
+### Stage 3: ensure tooling and auth
+
+- Prefer official install paths when privilege exists.
+- Use the bundled fallback installers when privilege does not exist.
+- Verify auth with `gh auth status` and `gh api user --jq .login`.
+- Prefer SSH for Git operations when feasible.
+
+### Stage 4: submodules
+
+Always use recursive sync + init for this repo.
+
+### Stage 5: topology
+
+Use `repo_topology.py configure` for remote mutations.
+
+Rules:
+
+- do not delete nonstandard remotes
+- add `upstream` only when it helps the chosen workflow
+- `vllm` user fork is optional
+- `vllm-ascend` user fork is recommended but not mandatory
+
+### Stage 6: main-branch comparison and tracking
+
+Use `repo_topology.py compare-main` for branch-head comparison.
+
+Use `repo_topology.py ensure-main` for local `main` tracking.
+
+Rules:
+
+- do not use `git fetch --prune` only to inspect divergence
+- fetch only the branch that matters
+- if the worktree is dirty, ask before switching branches or pulling
+- do not hard reset without explicit approval
+
+### Stage 7: optional fork sync
+
+Only sync a user fork when the user explicitly approves it.
 
 Preferred command:
 
 ```bash
-python3 .agents/skills/repo-init/scripts/repo_init_probe.py
+gh repo sync USER/REPO --source OWNER/REPO
 ```
 
-The probe is read-only. Use it first whenever possible.
+## Quiet-output rules
 
-### Stage 2: mutation boundaries
+- `git fetch --prune` is too noisy for inspection because deleted fork refs can flood the transcript.
+- Prefer `git ls-remote --heads <remote> main` or the helper script.
+- When a command is noisy, capture it to a log and show a concise summary or short tail.
 
-Ask before each mutation category:
+## Canonical success shape
 
-| Category | Ask first |
-| --- | --- |
-| install `gh` | yes |
-| install Homebrew | yes |
-| authenticate GitHub | yes |
-| create or upload SSH keys | yes |
-| initialize recursive submodules | yes |
-| fork repos | yes |
-| rename or replace remotes | yes |
-| sync forks | yes |
-| move branches | yes |
-| hard reset any branch | yes |
+A successful run usually ends with:
 
-### Stage 3: GitHub CLI installation
-
-Preferred strategies by platform:
-
-| Platform | Preferred strategy |
-| --- | --- |
-| macOS | Homebrew |
-| Ubuntu | official GitHub CLI Debian repo |
-| WSL | official GitHub CLI Debian repo inside the Linux environment |
-| Windows | `winget` |
-
-If the machine lacks the needed privilege, do not abandon the run. Instead:
-
-- explain the limitation
-- hand the user the prepared fallback command
-- continue with the rest of the read-only diagnosis if possible
-
-### Stage 4: auth
-
-Preferred auth order:
-
-1. `github.com`
-2. SSH git protocol
-3. `gh auth login` web/device flow
-4. headless token flow when browser/device flow is not workable
-
-The skill should use `gh` because the same CLI is useful later for:
-- forking
-- sync
-- PR creation
-- default repo selection
-
-### Stage 5: recursive submodules
-
-Always do both:
-
-```bash
-git submodule sync --recursive
-git submodule update --init --recursive
-```
-
-`vllm-ascend` may have nested submodules. This repository should never be considered fully initialized after only a non-recursive submodule update.
-
-## Remote decision table
-
-### workspace
-
-Expected community upstream:
-
-- `maoxx241/vllm-ascend-workspace`
-
-Rules:
-
-- If the user clone is already their fork, offer to add community `upstream`.
-- If the user has a fork and is currently on the community repo, offer to switch `origin` to the user's fork.
-- If there is no user fork, leaving the current remote layout unchanged is valid.
-
-### `vllm`
-
-Expected community upstream:
-
-- `vllm-project/vllm`
-
-Rules:
-
-- user fork is optional
-- if a user fork exists, offer to use it as `origin`
-- if no user fork exists, community-only mode is valid
-- if the user fork lags the community default branch, ask before syncing it
-
-### `vllm-ascend`
-
-Expected community upstream:
-
-- `vllm-project/vllm-ascend`
-
-Rules:
-
-- user fork is recommended
-- if no user fork exists, recommend creating one
-- if the user declines, preserve community-only mode
-- if the user fork lags the community default branch, ask before syncing it
-
-## Branch-placement rules
-
-`repo-init` should optimize for a development-friendly local state:
-
-- `workspace`: usually keep the current branch unless the user wants something else
-- `vllm`: prefer local `main` tracking the working remote's `main`
-- `vllm-ascend`: prefer local `main` tracking the working remote's `main`
-
-Safety rules:
-
-- if the worktree is dirty, ask before moving branches
-- if the branch does not exist locally, create it from the approved remote
-- prefer `git pull --ff-only`
-- do not use `git reset --hard` unless the user explicitly approves it
-
-## `gh` default repo
-
-When both `origin` and `upstream` exist, use `gh repo set-default upstream` unless the user asks for another default. This matches the usual “push branch to fork, PR to upstream” flow.
-
-## Community-only mode
-
-Community-only mode is a valid end state.
-
-It means:
-
-- no personal fork is required
-- `origin` may remain pointed at the community repo
-- `upstream` may be absent
-- the skill still succeeds, but should report that PR-oriented fork workflows are limited
-
-## Extra remotes
-
-Extra remotes such as `upstream2`, `partner`, or `mirror` are normal.
-
-The skill should:
-
-- preserve them
-- mention them in summaries when relevant
-- never remove them unless the user explicitly asks
-
-## No-admin fallback
-
-If `gh` installation cannot be completed with system privilege:
-
-- POSIX: hand off `.agents/skills/repo-init/scripts/install_gh_user.py`
-- Windows: hand off `.agents/skills/repo-init/scripts/install-gh-user.ps1`
-
-The skill should explicitly say the handoff happened and should not claim the machine is already fully prepared until the user has run the fallback installer.
+- `gh` installed or a fallback provided
+- GitHub auth valid
+- recursive submodules initialized
+- remotes matching the user’s selected topology
+- local `main` tracking the selected working remote where the user approved branch movement

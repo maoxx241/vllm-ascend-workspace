@@ -2,13 +2,13 @@
 
 This file is the detailed contract for the `machine-management` skill.
 
-## Core contract
+## Ownership boundary
 
-`machine-management` owns the remote-machine layer for this workspace:
+This skill owns the remote-machine layer for this workspace:
 
-- add a host to the local workspace inventory
-- create or adopt exactly one managed workspace container on that host
-- verify readiness of the managed container
+- add a host to local inventory
+- create or adopt one managed workspace container on that host
+- verify readiness
 - repair bounded host/container drift
 - remove the managed container and clean mesh trust
 
@@ -16,29 +16,29 @@ It does **not** own:
 
 - code sync into the container
 - replacing `vllm` or `vllm-ascend` source trees
-- rebuilding Python packages or native extensions
-- model serving lifecycle
-- benchmarking lifecycle
+- rebuilding packages or native extensions
+- model serving or benchmarking
 
 ## Local state contract
 
-The repo-root file `.machine-inventory.json` is the canonical local state file for managed machines.
+`.machine-inventory.json` is the canonical local state file.
 
 Rules:
 
-- Keep it local and untracked.
-- Read it before mutating remote state.
-- Write it after successful add, successful repair that changes identity metadata, and successful remove.
-- Alias and host IP must not resolve to different records.
-- v1 supports one managed workspace container per host.
+- keep it local and untracked
+- read it before mutating remote state
+- write it after successful add, identity-changing repair, or remove
+- alias and host IP must not resolve to different records
+- v1 supports one managed workspace container per host
 
-Preferred helper:
+`inventory.py` stores canonical `bootstrap_method` values as:
 
-```bash
-python3 .agents/skills/machine-management/scripts/inventory.py summary
-```
+- `ssh`
+- `password-once`
 
-## Ready vs. not-ready contract
+For compatibility, `inventory.py put --bootstrap-method key` normalizes to `ssh`.
+
+## Ready vs not-ready
 
 ### `ready`
 
@@ -46,216 +46,98 @@ All of the following are true:
 
 - host key SSH works
 - direct container SSH works
-- the recorded container exists and matches the inventory identity
-- pinned Python exists in the container
-- required Ascend environment setup exists in the container
-- NPU smoke test succeeds inside the container
+- the recorded container exists and matches inventory identity
+- the smoke test succeeds inside the container
 
 ### `needs_input`
 
-Use this when the request is blocked by missing user-provided input or by an auth boundary that the skill is not allowed to bypass, for example:
+Use this when the request is blocked by missing input or by an auth boundary the skill is not allowed to bypass, for example:
 
 - no local public key exists
 - password bootstrap is needed but no password was provided
-- the runtime cannot safely perform the one allowed interactive password SSH bootstrap
-- destructive container recreation would be required but the user did not ask for it
+- verify-only was requested, but repair would be required
 
 ### `needs_repair`
 
-Use this when a managed record exists but one or more fixable layers drifted:
+Use this when the machine is managed but direct readiness checks fail and repair is appropriate, for example:
 
-- host key SSH drifted
-- container SSH drifted
-- firewall no longer exposes the recorded port
-- mesh trust drifted
-- smoke test fails in an otherwise reachable container
+- host key SSH works but container SSH fails
+- container SSH works but smoke fails
+- inventory and actual container identity drifted
 
 ### `blocked`
 
-Use this when prerequisites are missing or unreachable:
+Use this when the host or image prerequisites fail, for example:
 
-- host unreachable
-- Docker missing
-- required NPU device nodes missing
-- required Ascend mounts missing
-- no usable image mirror and image absent locally
-- no free high container SSH port available
+- Docker is missing or unusable
+- required Ascend/NPU devices or mounts are absent
+- image pull is needed but fails
 
-### `removed`
+## Host auth contract
 
-Use this when the inventory record is removed and the managed container is deleted or already absent.
+The only allowed password use is one initial host bootstrap for a new machine.
 
-## Stage model
+After host key auth is established:
 
-### Stage 0: resolve intent
-
-Classify the request as add / verify / repair / remove.
-
-- “configure/add this server” -> add
-- “is this server ready?” -> verify
-- “fix this managed machine” -> repair
-- “remove/delete this server” -> remove
-
-### Stage 1: inspect inventory and local key state
-
-Required local checks:
-
-- inventory summary
-- target record lookup by alias or host IP
-- local public key presence
-- local `known_hosts` entries for the target endpoint when relevant
-
-### Stage 2: host transport probe
-
-Probe host SSH by key first.
-
-Rules:
-
-- If key auth works, use it.
-- If key auth fails during add and a password is available, one interactive password SSH bootstrap is allowed.
-- If key auth fails during verify, do not mutate.
-- If a password is wrong, stop instead of retrying blindly.
-
-### Stage 3: host prerequisite probe
-
-Required checks before container creation:
-
-- Docker exists and can run containers.
-- required devices exist:
-  - `/dev/davinci_manager`
-  - `/dev/hisi_hdc`
-  - `/dev/devmm_svm`
-- required host mounts exist:
-  - `/usr/local/Ascend/driver`
-  - `/usr/local/dcmi`
-  - `/usr/local/bin/npu-smi`
-  - `/usr/local/sbin`
-  - `/usr/share/zoneinfo/Asia/Shanghai`
-- chosen image is available locally or pullable from `quay.nju.edu.cn/ascend/vllm-ascend`
-
-If Docker is missing, the skill must not attempt host package-manager installs in v1.
-
-## Container contract
-
-### Required runtime recipe
-
-The managed container must use:
-
-- `--network host`
-- `--privileged=true`
-- `--shm-size=500g`
-- workdir `/vllm-workspace`
-- entrypoint `bash`
-- the required NPU device nodes
-- the required Ascend/system mounts
-- the `Asia/Shanghai` timezone bind mount
-
-### Data mounts
-
-The default candidate bind mounts are:
-
-- `/home`
-- `/tmp`
-- `/weight`
-- `/data`
-- `/mnt`
-
-Rules:
-
-- include the candidate path when it exists on the host
-- use `df -h` when you need to discover additional large shared mount points
-- do not fail only because one optional data mount is absent
-
-### Proxy pass-through
-
-Pass proxy env vars through to the container only when:
-
-- the host already has proxy env vars set, and
-- the proxy is demonstrably useful
-
-Preferred proxy decision rule:
-
-1. with proxy vars disabled, `curl` to Baidu should still work and `curl` to Google may fail
-2. with proxy vars enabled, `curl` to Google should succeed
-3. if the proxy does not improve outbound reachability, do not pass it through
+- stop using the password
+- never use a container password
+- never automate passwords with `sshpass`, `expect`, files, or env scripts
 
 ## Container SSH contract
 
-The managed container must expose SSH on a non-default high port and support root key login.
+The helper uses a dedicated config file:
 
-Rules:
+- `/etc/ssh/sshd_vaws_config`
 
-- choose an unused port from `46000-46999`
-- disable password auth inside the container
-- permit root login by key
-- install both `openssh-server` and `openssh-client`
-- start `sshd` explicitly; do not assume systemd exists inside the container
-- once direct container SSH works, prefer local -> container SSH over host + `docker exec`
+Why:
 
-## Python and env contract
+- it avoids brittle inline edits to distro `sshd_config`
+- it avoids the `Port 22` collision on host-network containers
+- it keeps the managed `sshd` restart path deterministic
 
-Use the preinstalled container Python. Do not install a new Python runtime.
+The managed config must enforce:
 
-Expected container environment:
+- high non-default port
+- root key login
+- password auth disabled
+- dedicated PID file
 
-```bash
-source /usr/local/Ascend/ascend-toolkit/set_env.sh
-source /usr/local/Ascend/nnal/atb/set_env.sh
-source /vllm-workspace/vllm-ascend/vllm_ascend/_cann_ops_custom/vendors/vllm-ascend/bin/set_env.bash
-export PATH=/usr/local/python3.11.14/bin:$PATH
-export PYTHON=/usr/local/python3.11.14/bin/python3
-export PIP=/usr/local/python3.11.14/bin/pip
-export VLLM_WORKER_MULTIPROC_METHOD=spawn
-export OMP_NUM_THREADS=1
-export MKL_NUM_THREADS=1
-```
+## Smoke contract
 
-Readiness depends on this environment plus the NPU smoke test.
+The smoke path must remain dynamic and conservative:
+
+- discover Python instead of hard-coding `python3.11.x`
+- source only existing env scripts
+- preseed `PATH` and `LD_LIBRARY_PATH`
+- prefix driver library paths:
+  - `/usr/local/Ascend/driver/lib64/driver`
+  - `/usr/local/Ascend/driver/lib64`
+- do not add toolkit `devlib` by default
+
+The recorded session showed that adding `devlib` advanced past one missing-library error but introduced ABI mismatch. Driver-library prefixing alone was the stable fix.
 
 ## Mesh contract
 
-Managed containers should trust each other by key when connectivity permits.
+Use stable key comments such as `vaws-mesh:<alias-or-ip>` so later cleanup is deterministic.
 
-Rules:
+Best-effort behavior:
 
-- generate a container-local mesh key only inside the managed container when needed
-- use a stable comment like `vaws-mesh:<alias>` on the container public key
-- add that key to peer managed containers’ `authorized_keys`
-- add peer endpoints to managed containers’ `known_hosts`
-- skip peers that are not reachable instead of failing the primary request
-- on removal, delete only the departing mesh key lines and the departing container endpoint records
+- generate a container-local mesh key if absent
+- append peer keys idempotently
+- add peer endpoints to container `known_hosts`
+- skip unreachable peers without failing the primary request
 
-Never touch host-level trust as part of mesh maintenance.
+## Removal contract
 
-## Remove contract
+Removal must be bounded:
 
-A remove request has two distinct success paths:
+- remove only the inventory-recorded container
+- remove the local container endpoint from local `known_hosts`
+- best-effort remove mesh trust from peers
+- remove the inventory record
 
-1. recorded container exists -> delete the recorded managed container, clean local and peer container trust, remove inventory record
-2. recorded container already absent -> treat as drift cleanup, clean local and peer container trust if possible, remove inventory record
+Do **not**:
 
-The skill must not:
-
+- remove host firewall rules
+- remove host-level `authorized_keys`
 - guess at unmanaged containers
-- delete containers that are not recorded as skill-managed
-- remove host firewall rules in v1
-- remove host `authorized_keys` entries
-
-## Stop conditions
-
-Stop and report immediately when:
-
-- auth boundaries are violated
-- the request would need destructive recreation that the user did not ask for
-- the host is unreachable
-- Docker is missing
-- the image mirror is unreachable and the image is not already present
-- a local state conflict maps one alias to one record and the same host IP to another record
-
-## Cross-skill boundary
-
-- `repo-init` owns local repository bootstrap.
-- `machine-management` owns remote machine attach / verify / repair / remove.
-- A future code-sync or build skill should own source replacement and package rebuilds.
-- A future serving skill should own service lifecycle after a machine is ready.
-- A future benchmark skill should own benchmark runs after a service is ready.
