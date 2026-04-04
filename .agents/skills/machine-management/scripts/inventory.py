@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Manage local machine inventory for vllm-ascend-workspace.
 
-This helper keeps the repo-root `.machine-inventory.json` file consistent.
-It is intentionally small and dependency-free so agent workflows can rely on it.
+The canonical inventory now lives under `.vaws-local/machine-inventory.json`.
+For compatibility, the helper will read the legacy repo-root
+`.machine-inventory.json` when the new path does not exist yet.
 """
 
 from __future__ import annotations
@@ -10,14 +11,23 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+LIB_DIR = Path(__file__).resolve().parents[3] / "lib"
+if str(LIB_DIR) not in sys.path:
+    sys.path.insert(0, str(LIB_DIR))
+
+from vaws_local_state import (  # noqa: E402
+    INVENTORY_PATH as DEFAULT_PATH,
+    LEGACY_INVENTORY_PATH,
+    ensure_state_dir,
+    resolve_inventory_read_path,
+    same_path,
+    validate_machine_username,
+)
+
 SCHEMA_VERSION = 1
-DEFAULT_FILENAME = ".machine-inventory.json"
-ROOT = Path(__file__).resolve().parents[4]
-DEFAULT_PATH = ROOT / DEFAULT_FILENAME
 
 
 class InventoryError(RuntimeError):
@@ -33,13 +43,6 @@ BOOTSTRAP_METHOD_ALIASES = {
 }
 
 
-@dataclass(frozen=True)
-class MachineId:
-    alias: str
-    host_ip: str
-
-
-
 def normalize_bootstrap_method(value: str | None) -> str | None:
     if value is None:
         return None
@@ -52,7 +55,6 @@ def normalize_bootstrap_method(value: str | None) -> str | None:
 
 def _empty_inventory() -> dict[str, Any]:
     return {"schema_version": SCHEMA_VERSION, "machines": []}
-
 
 
 def load_inventory(path: Path) -> dict[str, Any]:
@@ -76,10 +78,9 @@ def load_inventory(path: Path) -> dict[str, Any]:
     return data
 
 
-
 def save_inventory(path: Path, inventory: dict[str, Any]) -> None:
+    ensure_state_dir(path.parent)
     path.write_text(json.dumps(inventory, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-
 
 
 def _validate_record(record: Any, where: str = "record") -> None:
@@ -88,6 +89,12 @@ def _validate_record(record: Any, where: str = "record") -> None:
     alias = record.get("alias")
     if not isinstance(alias, str) or not alias.strip():
         raise InventoryError(f"{where}.alias must be a non-empty string")
+
+    namespace = record.get("namespace")
+    if namespace is not None:
+        if not isinstance(namespace, str) or not namespace.strip():
+            raise InventoryError(f"{where}.namespace must be a non-empty string when present")
+        record["namespace"] = validate_machine_username(namespace)
 
     host = record.get("host")
     if not isinstance(host, dict):
@@ -132,19 +139,18 @@ def _validate_record(record: Any, where: str = "record") -> None:
         raise InventoryError(f"{where}.last_verified_at must be a string when present")
 
 
-
-def _iter_machine_ids(inventory: dict[str, Any]) -> list[MachineId]:
-    return [
-        MachineId(alias=record["alias"], host_ip=record["host"]["ip"])
-        for record in inventory["machines"]
-    ]
-
-
-
-def _find_matches(inventory: dict[str, Any], identifier: str | None = None, *, alias: str | None = None, host_ip: str | None = None) -> list[dict[str, Any]]:
+def _find_matches(
+    inventory: dict[str, Any],
+    identifier: str | None = None,
+    *,
+    alias: str | None = None,
+    host_ip: str | None = None,
+) -> list[dict[str, Any]]:
     matches: list[dict[str, Any]] = []
     for record in inventory["machines"]:
-        if identifier is not None and (record["alias"] == identifier or record["host"]["ip"] == identifier):
+        if identifier is not None and (
+            record["alias"] == identifier or record["host"]["ip"] == identifier
+        ):
             matches.append(record)
             continue
         if alias is not None and record["alias"] == alias:
@@ -155,15 +161,29 @@ def _find_matches(inventory: dict[str, Any], identifier: str | None = None, *, a
     return matches
 
 
+def preferred_inventory_path(path: Path) -> Path:
+    return path.expanduser().resolve()
+
+
+def read_inventory_path(path: Path) -> Path:
+    requested = preferred_inventory_path(path)
+    return resolve_inventory_read_path(requested)
+
 
 def cmd_summary(args: argparse.Namespace) -> int:
-    inventory = load_inventory(args.inventory)
+    requested_path = preferred_inventory_path(args.inventory)
+    active_path = read_inventory_path(requested_path)
+    inventory = load_inventory(active_path)
     summary = {
         "schema_version": inventory["schema_version"],
+        "inventory": str(active_path),
+        "preferred_inventory": str(requested_path),
+        "legacy_inventory": str(LEGACY_INVENTORY_PATH),
         "count": len(inventory["machines"]),
         "machines": [
             {
                 "alias": record["alias"],
+                "namespace": record.get("namespace"),
                 "host": f"{record['host']['user']}@{record['host']['ip']}:{record['host']['port']}",
                 "container": record["container"]["name"],
                 "container_ssh_port": record["container"]["ssh_port"],
@@ -177,9 +197,8 @@ def cmd_summary(args: argparse.Namespace) -> int:
     return 0
 
 
-
 def cmd_get(args: argparse.Namespace) -> int:
-    inventory = load_inventory(args.inventory)
+    inventory = load_inventory(read_inventory_path(args.inventory))
     matches = _find_matches(inventory, identifier=args.identifier)
     if not matches:
         raise InventoryError(f"no machine found for identifier: {args.identifier}")
@@ -191,9 +210,10 @@ def cmd_get(args: argparse.Namespace) -> int:
     return 0
 
 
-
 def cmd_put(args: argparse.Namespace) -> int:
-    inventory = load_inventory(args.inventory)
+    requested_path = preferred_inventory_path(args.inventory)
+    active_path = read_inventory_path(requested_path)
+    inventory = load_inventory(active_path)
     alias_matches = _find_matches(inventory, alias=args.alias)
     ip_matches = _find_matches(inventory, host_ip=args.host_ip)
 
@@ -205,8 +225,10 @@ def cmd_put(args: argparse.Namespace) -> int:
         )
 
     target = alias_record or ip_record
+    namespace = validate_machine_username(args.namespace) if args.namespace else None
     record = {
         "alias": args.alias,
+        "namespace": namespace,
         "host": {
             "ip": args.host_ip,
             "port": args.host_port,
@@ -223,6 +245,8 @@ def cmd_put(args: argparse.Namespace) -> int:
         "created_by_skill": args.created_by_skill,
         "last_verified_at": args.last_verified_at,
     }
+    if namespace is None:
+        record.pop("namespace")
     _validate_record(record)
 
     if target is None:
@@ -233,25 +257,25 @@ def cmd_put(args: argparse.Namespace) -> int:
         target.update(record)
         action = "updated"
 
-    save_inventory(args.inventory, inventory)
-    print(
-        json.dumps(
-            {
-                "result": action,
-                "alias": record["alias"],
-                "host_ip": record["host"]["ip"],
-                "inventory": str(args.inventory),
-            },
-            indent=2,
-            ensure_ascii=False,
-        )
-    )
+    save_inventory(requested_path, inventory)
+    payload = {
+        "result": action,
+        "alias": record["alias"],
+        "namespace": record.get("namespace"),
+        "host_ip": record["host"]["ip"],
+        "inventory": str(requested_path),
+    }
+    if not same_path(active_path, requested_path):
+        payload["loaded_from"] = str(active_path)
+        payload["migrated_from_legacy"] = same_path(active_path, LEGACY_INVENTORY_PATH)
+    print(json.dumps(payload, indent=2, ensure_ascii=False))
     return 0
 
 
-
 def cmd_remove(args: argparse.Namespace) -> int:
-    inventory = load_inventory(args.inventory)
+    requested_path = preferred_inventory_path(args.inventory)
+    active_path = read_inventory_path(requested_path)
+    inventory = load_inventory(active_path)
     matches = _find_matches(inventory, identifier=args.identifier)
     if not matches:
         raise InventoryError(f"no machine found for identifier: {args.identifier}")
@@ -261,21 +285,19 @@ def cmd_remove(args: argparse.Namespace) -> int:
         )
     target = matches[0]
     inventory["machines"] = [record for record in inventory["machines"] if record is not target]
-    save_inventory(args.inventory, inventory)
-    print(
-        json.dumps(
-            {
-                "result": "removed",
-                "alias": target["alias"],
-                "host_ip": target["host"]["ip"],
-                "inventory": str(args.inventory),
-            },
-            indent=2,
-            ensure_ascii=False,
-        )
-    )
+    save_inventory(requested_path, inventory)
+    payload = {
+        "result": "removed",
+        "alias": target["alias"],
+        "namespace": target.get("namespace"),
+        "host_ip": target["host"]["ip"],
+        "inventory": str(requested_path),
+    }
+    if not same_path(active_path, requested_path):
+        payload["loaded_from"] = str(active_path)
+        payload["migrated_from_legacy"] = same_path(active_path, LEGACY_INVENTORY_PATH)
+    print(json.dumps(payload, indent=2, ensure_ascii=False))
     return 0
-
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -298,6 +320,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     put_cmd = subparsers.add_parser("put", help="insert or update one machine record")
     put_cmd.add_argument("--alias", required=True)
+    put_cmd.add_argument("--namespace", help="stable workspace machine username used for collision-safe naming")
     put_cmd.add_argument("--host-ip", required=True)
     put_cmd.add_argument("--host-port", type=int, default=22)
     put_cmd.add_argument("--host-user", default="root")
@@ -328,7 +351,6 @@ def build_parser() -> argparse.ArgumentParser:
     remove.set_defaults(func=cmd_remove)
 
     return parser
-
 
 
 def main(argv: list[str] | None = None) -> int:

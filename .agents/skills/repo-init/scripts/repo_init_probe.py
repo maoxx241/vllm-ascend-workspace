@@ -24,6 +24,12 @@ import sys
 from dataclasses import asdict, dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
+LIB_DIR = pathlib.Path(__file__).resolve().parents[3] / "lib"
+if str(LIB_DIR) not in sys.path:
+    sys.path.insert(0, str(LIB_DIR))
+
+from vaws_local_state import profile_summary  # noqa: E402
+
 COMMUNITY = {
     "workspace": "maoxx241/vllm-ascend-workspace",
     "vllm": "vllm-project/vllm",
@@ -486,12 +492,19 @@ def compact_fork_summary(forks: Dict[str, Any]) -> Dict[str, Any]:
 
 def compact_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     gh = payload.get("gh") or {}
+    profile = payload.get("workspace_profile") or {}
     compact: Dict[str, Any] = {
         "platform": {
             "kind": payload.get("platform", {}).get("kind"),
             "machine": payload.get("platform", {}).get("machine"),
         },
         "repo_root": payload.get("repo_root"),
+        "workspace_profile": {
+            "exists": profile.get("exists"),
+            "machine_username": profile.get("machine_username"),
+            "container_name": profile.get("container_name"),
+            "source": profile.get("source"),
+        },
         "gh": {
             "installed": gh.get("installed"),
             "logged_in": gh.get("logged_in"),
@@ -532,6 +545,7 @@ def main() -> None:
     payload: Dict[str, Any] = {
         "platform": platform_info,
         "tools": tool_state(),
+        "workspace_profile": profile_summary(),
         "gh": gh_state,
         "gh_install_plan": gh_install_plan(platform_info),
         "repo_root": str(root) if root else None,

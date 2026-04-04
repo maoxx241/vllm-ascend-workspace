@@ -6,6 +6,7 @@ This file is the detailed contract for the `machine-management` skill.
 
 This skill owns the remote-machine layer for this workspace:
 
+- ensure the local workspace machine profile exists when needed
 - add a host to local inventory
 - create or adopt one managed workspace container on that host
 - verify readiness
@@ -21,7 +22,7 @@ It does **not** own:
 
 ## Local state contract
 
-`.machine-inventory.json` is the canonical local state file.
+Repo-local runtime state lives under `.vaws-local/`.
 
 Rules:
 
@@ -29,7 +30,18 @@ Rules:
 - read it before mutating remote state
 - write it after successful add, identity-changing repair, or remove
 - alias and host IP must not resolve to different records
+- machine username must be letters and digits only, normalized to lowercase
 - v1 supports one managed workspace container per host
+
+Relevant files:
+
+- `.vaws-local/machine-profile.json`
+- `.vaws-local/machine-inventory.json`
+
+Compatibility rule:
+
+- read legacy repo-root `.machine-inventory.json` when the new path is still absent
+- migrate to `.vaws-local/machine-inventory.json` on the next successful inventory write
 
 `inventory.py` stores canonical `bootstrap_method` values as:
 
@@ -37,6 +49,19 @@ Rules:
 - `password-once`
 
 For compatibility, `inventory.py put --bootstrap-method key` normalizes to `ssh`.
+
+## Namespace and container naming contract
+
+The local machine profile provides a stable workspace machine username / namespace.
+
+Rules:
+
+- create or reuse the profile before new-machine setup
+- accept letters and digits only
+- normalize to lowercase
+- blank input means auto-generate a default such as `agent7k2p9x`
+- derive new container names from the namespace, for example `vaws-alice123`
+- if inventory already records a container name for a managed machine, keep using the recorded name for that machine
 
 ## Ready vs not-ready
 
@@ -54,8 +79,9 @@ All of the following are true:
 Use this when the request is blocked by missing input or by an auth boundary the skill is not allowed to bypass, for example:
 
 - no local public key exists
-- password bootstrap is needed but no password was provided
+- password bootstrap is needed but no interactive terminal is available
 - verify-only was requested, but repair would be required
+- the user wants a specific machine username but has not chosen one yet
 
 ### `needs_repair`
 
@@ -81,7 +107,17 @@ After host key auth is established:
 
 - stop using the password
 - never use a container password
-- never automate passwords with `sshpass`, `expect`, files, or env scripts
+- never automate passwords with `sshpass`, `expect`, files, env vars, or heredoc injection
+
+Preferred helper:
+
+- `manage_machine.py bootstrap-host-key`
+
+Rules for that step:
+
+- run it in the foreground so the terminal can prompt for the password
+- do not echo the password into the transcript
+- if interactive execution is impossible, use `--print-command` and ask the user to run it once themselves
 
 ## Container SSH contract
 

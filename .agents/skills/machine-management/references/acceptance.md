@@ -25,43 +25,53 @@ These should not trigger `machine-management` unless machine readiness is the ob
 
 ### Universal
 
-- The skill reads local inventory before mutating remote state.
-- The skill uses `.machine-inventory.json` as the local state file.
-- The skill prefers helper scripts over long inline SSH heredocs.
-- The skill does not use `scp`, `sftp`, `sshpass`, or `expect`.
-- The final report is compact and evidence-based.
+- the skill reads local profile and inventory state before mutating remote state
+- the skill uses `.vaws-local/` as the canonical local runtime-state directory
+- the skill prefers helper scripts over long inline SSH heredocs
+- the skill does not use `scp`, `sftp`, `sshpass`, or `expect`
+- the final report is compact and evidence-based
+
+### Local machine profile
+
+- the skill reuses or creates `.vaws-local/machine-profile.json`
+- new machine usernames accept letters and digits only
+- usernames normalize to lowercase
+- blank input generates a default namespace
+- new managed container names derive from that namespace instead of a single global fixed name
 
 ### Add / attach
 
-- The skill prefers host key SSH first and uses a password only for the first bootstrap of a new machine.
-- The skill checks Docker and required Ascend/NPU prerequisites before container creation.
-- The managed container uses host networking, required devices, required Ascend mounts, and `/vllm-workspace` as the workdir.
-- The skill configures a dedicated container `sshd` on a high port without brittle inline edits to `/etc/ssh/sshd_config`.
-- The skill verifies direct local -> container SSH.
-- The skill runs the smoke test successfully before claiming readiness.
-- The skill persists final alias, host identity, container name, image, and SSH port into inventory.
+- the skill prefers host key SSH first and uses a password only for the first bootstrap of a new machine
+- password bootstrap uses `bootstrap-host-key` or an equivalent single foreground interactive step
+- the skill never passes the password via shell args, files, env vars, or password automation
+- the skill checks Docker and required Ascend/NPU prerequisites before container creation
+- the managed container uses host networking, required devices, required Ascend mounts, and `/vllm-workspace` as the workdir
+- the skill configures a dedicated container `sshd` on a high port without brittle inline edits to `/etc/ssh/sshd_config`
+- the skill verifies direct local -> container SSH
+- the skill runs the smoke test successfully before claiming readiness
+- the skill persists final alias, namespace, host identity, container name, image, and SSH port into inventory
 
 ### Verify
 
-- Verify-only runs are read-only.
-- A `ready` report requires host SSH, container SSH, and a passing smoke test.
-- The skill does not silently repair drift during verify-only requests.
+- verify-only runs are read-only
+- a `ready` report requires host SSH, container SSH, and a passing smoke test
+- the skill does not silently repair drift during verify-only requests
 
 ### Repair
 
-- The skill prefers non-destructive repairs first.
-- The skill uses the bare-metal host only when container SSH is broken.
-- The skill does not recreate or delete a container unless the user explicitly asked for destructive repair.
-- The smoke path stays dynamic: no pinned Python patch version, no unconditional vendor `set_env.bash`, no default `devlib` injection.
+- the skill prefers non-destructive repairs first
+- the skill uses the bare-metal host only when container SSH is broken
+- the skill does not recreate or delete a container unless the user explicitly asked for destructive repair
+- the smoke path stays dynamic: no pinned Python patch version, no unconditional vendor `set_env.bash`, no default `devlib` injection
 
 ### Remove
 
-- The skill removes only the container recorded in inventory as skill-managed.
-- If the recorded container is already absent, removal still succeeds as drift cleanup.
-- The skill removes the local endpoint from `known_hosts`.
-- The skill best-effort removes the departing mesh key and endpoint from peers.
-- The skill removes the machine record from inventory.
-- The skill does not remove host firewall rules or host-level `authorized_keys` entries.
+- the skill removes only the container recorded in inventory as skill-managed
+- if the recorded container is already absent, removal still succeeds as drift cleanup
+- the skill removes the local endpoint from `known_hosts`
+- the skill best-effort removes the departing mesh key and endpoint from peers
+- the skill removes the machine record from inventory
+- the skill does not remove host firewall rules or host-level `authorized_keys` entries
 
 ## Manual regression checklist
 
@@ -73,3 +83,5 @@ Review these files together after every substantial skill edit:
 - `.agents/skills/machine-management/references/acceptance.md`
 - `.agents/skills/machine-management/scripts/manage_machine.py`
 - `.agents/skills/machine-management/scripts/inventory.py`
+- `.agents/scripts/workspace_profile.py`
+- `.agents/lib/vaws_local_state.py`
