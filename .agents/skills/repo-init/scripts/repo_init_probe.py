@@ -30,6 +30,11 @@ if str(LIB_DIR) not in sys.path:
 
 from vaws_local_state import profile_summary  # noqa: E402
 
+from _profile_choice_common import (  # noqa: E402
+    detect_git_username_candidate,
+    fixed_machine_username_question,
+)
+
 COMMUNITY = {
     "workspace": "maoxx241/vllm-ascend-workspace",
     "vllm": "vllm-project/vllm",
@@ -44,6 +49,8 @@ REPO_PATHS = {
 
 
 def run(cmd: List[str], cwd: Optional[pathlib.Path] = None) -> Tuple[int, str, str]:
+    if cmd and cmd[0] == "git":
+        cmd = ["git", "-c", "safe.directory=*", *cmd[1:]]
     proc = subprocess.run(
         cmd,
         cwd=str(cwd) if cwd else None,
@@ -494,6 +501,10 @@ def compact_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     gh = payload.get("gh") or {}
     profile = payload.get("workspace_profile") or {}
     compact_submodules = compact_submodule_summary(payload.get("submodules") or [])
+    repo_root_value = payload.get("repo_root")
+    repo_root = pathlib.Path(repo_root_value) if isinstance(repo_root_value, str) and repo_root_value else None
+    machine_username_question = fixed_machine_username_question(repo_root)
+    detected_git_username = detect_git_username_candidate(repo_root)
     compact: Dict[str, Any] = {
         "platform": {
             "kind": payload.get("platform", {}).get("kind"),
@@ -504,6 +515,7 @@ def compact_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
             "exists": profile.get("exists"),
             "choice_required": profile.get("choice_required"),
             "username_rules": profile.get("username_rules"),
+            "default_generated_pattern": profile.get("default_generated_pattern"),
             "machine_username": profile.get("machine_username"),
             "container_name": profile.get("container_name"),
             "source": profile.get("source"),
@@ -529,8 +541,12 @@ def compact_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
             "machine_username": {
                 "required": bool(profile.get("choice_required")),
                 "username_rules": profile.get("username_rules"),
+                "default_generated_pattern": profile.get("default_generated_pattern"),
                 "default_random_allowed": True,
                 "default_random_requires_explicit_user_consent": True,
+                "fixed_options_only": True,
+                "detected_git_username": detected_git_username,
+                "question_template": machine_username_question,
             },
             "repo_topology": {
                 "required": True,

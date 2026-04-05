@@ -38,16 +38,23 @@ A successful run should satisfy all applicable items below.
   - machine username choice if the profile is missing
   - repo topology choice
   - submodule-init choice
+- the machine-username branch uses exactly three options:
+  - `git-username`
+  - `random`
+  - `custom`
 - the skill does not silently assume a generated username for broad init
 - the skill does not silently apply the recommended topology when the user only asked for generic init
+- if the user picks `custom`, the skill asks one follow-up text question for the literal username before mutating
+- the skill does not silently replace `custom` with the detected Git username
 
 ### Local machine profile
 
 - broad workspace init reuses or creates `.vaws-local/machine-profile.json`
 - machine usernames accept English letters and digits only
 - profile creation normalizes usernames to lowercase
-- default/random creation happens only after explicit user consent
-- `workspace_profile.py ensure` on a missing profile fails unless `--username` or `--generate` is provided
+- random/default creation uses the `agent#####` format
+- `repo_init_profile.py plan` returns the fixed-choice question when the profile is missing
+- `repo_init_profile.py apply --choice custom` without `--custom-username` returns `needs_input`
 - narrow Git-only tasks do not force profile creation
 
 ### Tooling and auth
@@ -73,6 +80,8 @@ Review these files together after every substantial skill edit:
 - `.agents/skills/repo-init/references/behavior.md`
 - `.agents/skills/repo-init/references/command-recipes.md`
 - `.agents/skills/repo-init/references/acceptance.md`
+- `.agents/skills/repo-init/scripts/_profile_choice_common.py`
+- `.agents/skills/repo-init/scripts/repo_init_profile.py`
 - `.agents/skills/repo-init/scripts/repo_init_probe.py`
 - `.agents/skills/repo-init/scripts/repo_topology.py`
 - `.agents/scripts/workspace_profile.py`

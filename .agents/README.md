@@ -6,7 +6,7 @@ This directory contains the repository-local skill layer for Codex, Claude Code,
 
 - `.agents/skills/repo-init/` is the source-of-truth skill package for repository initialization.
 - `.agents/skills/machine-management/` is the source-of-truth skill package for remote machine attach, verify, repair, and removal workflows.
-- `.agents/scripts/workspace_profile.py` is the shared helper for the local workspace machine profile.
+- `.agents/scripts/workspace_profile.py` is the shared low-level helper for the local workspace machine profile.
 - `.agents/lib/vaws_local_state.py` is the shared library for untracked local runtime state.
 - `AGENTS.md` carries repository-wide routing rules and mandatory decision gates.
 
@@ -19,6 +19,7 @@ When you add or revise a helper script, keep the CLI alias-tolerant and give saf
 Current primary helpers:
 
 - `repo-init/scripts/repo_init_probe.py`
+- `repo-init/scripts/repo_init_profile.py`
 - `repo-init/scripts/repo_topology.py`
 - `machine-management/scripts/machine_add.py`
 - `machine-management/scripts/machine_verify.py`
@@ -45,6 +46,7 @@ The legacy repo-root `.machine-inventory.json` is compatibility input only and s
 Key guardrail:
 
 - on a missing machine profile, `workspace_profile.py ensure` now requires either `--username` or `--generate`
+- broad init should normally go through `repo-init/scripts/repo_init_profile.py`, which narrows the machine-username choice to: detected Git username, random `agent#####`, or custom
 - this prevents silent default usernames during broad init or first machine attach
 
 ## Maintenance rule

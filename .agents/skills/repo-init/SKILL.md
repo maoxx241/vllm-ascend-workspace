@@ -32,9 +32,13 @@ This skill is optional. Do not treat it as a prerequisite for unrelated work.
 - Never write secrets or user-specific remotes into tracked files.
 - Keep local runtime state only under `.vaws-local/`.
 - Prefer helper scripts in `scripts/` and `.agents/scripts/` over ad-hoc shell pipelines.
-- For a missing machine profile, never call `workspace_profile.py ensure` bare. Use either:
-  - `--username <letters-or-digits>` after the user chose a name
-  - `--generate` only after the user explicitly accepted the default/random option
+- During broad init, do not call `workspace_profile.py ensure` directly for a missing profile. Use `repo_init_profile.py`.
+- The machine-username checkpoint must use exactly three options when the profile is missing:
+  - current Git username
+  - random `agent#####`
+  - custom username
+- If the user selects custom, stop again and ask for the literal username before any mutation.
+- Never infer a custom username from `gh` login, Git remotes, or the local OS account.
 
 ## Cross-platform launcher rule
 
@@ -48,9 +52,17 @@ Start with the probe script:
 - POSIX: `python3 .agents/skills/repo-init/scripts/repo_init_probe.py --compact`
 - Windows: `py -3 .agents/skills/repo-init/scripts/repo_init_probe.py --compact`
 
-Shared profile helper:
+Public machine-profile wrapper for broad init:
+
+- `python3 .agents/skills/repo-init/scripts/repo_init_profile.py plan`
+- `python3 .agents/skills/repo-init/scripts/repo_init_profile.py apply --choice git-username`
+- `python3 .agents/skills/repo-init/scripts/repo_init_profile.py apply --choice random`
+- `python3 .agents/skills/repo-init/scripts/repo_init_profile.py apply --choice custom --custom-username <letters-or-digits>`
+
+Low-level shared profile helper, mainly for maintenance and debugging:
 
 - `python3 .agents/scripts/workspace_profile.py summary`
+- `python3 .agents/scripts/workspace_profile.py validate <letters-or-digits>`
 - `python3 .agents/scripts/workspace_profile.py ensure --username <letters-or-digits>`
 - `python3 .agents/scripts/workspace_profile.py ensure --generate`
 
@@ -73,10 +85,12 @@ After the probe and before any mutation, stop once and ask a grouped question wh
 That checkpoint must cover:
 
 1. machine username choice when `.vaws-local/machine-profile.json` is missing
-   - allowed: English letters and digits only
-   - normalize to lowercase
+   - ask exactly these three options: `git-username`, `random`, `custom`
+   - allowed usernames are English letters and digits only
+   - normalize usernames to lowercase
    - reject spaces and symbols
-   - blank / default is allowed, but only after the user explicitly says default/random is okay
+   - random mode means `agent#####`
+   - custom mode is not complete until the user provides the literal username in a second question
 2. repo topology choice
    - keep current remotes
    - recommended fork mode
@@ -108,13 +122,25 @@ Run the compact probe and summarize only the facts that matter:
 - what each repo currently uses for `origin` and `upstream`
 - whether the local machine profile exists and whether user choice is still required
 
-### 2. Stop for the decision checkpoint
+### 2. Resolve the machine-profile branch when relevant
+
+If the request is broad init and the profile is missing:
+
+- run `repo_init_profile.py plan`
+- use its fixed three-option payload for the username part of the grouped checkpoint
+- if the user chose `git-username`, run `repo_init_profile.py apply --choice git-username`
+- if the user chose `random`, run `repo_init_profile.py apply --choice random`
+- if the user chose `custom`, ask one extra free-text question and only then run `repo_init_profile.py apply --choice custom --custom-username ...`
+
+Do not silently fall back from `custom` to the detected Git username.
+
+### 3. Stop for the decision checkpoint
 
 Do not mutate in the same step as the first probe summary for broad init.
 
 If the request was just “初始化仓库” or similarly broad, do not silently assume a generated username or the recommended remotes.
 
-### 3. Apply approved changes by category
+### 4. Apply approved changes by category
 
 Typical categories:
 
@@ -126,7 +152,7 @@ Typical categories:
 - branch tracking updates
 - optional fork sync
 
-### 4. Finish compactly
+### 5. Finish compactly
 
 Report:
 

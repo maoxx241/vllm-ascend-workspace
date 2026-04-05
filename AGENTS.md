@@ -38,6 +38,9 @@ Both skills are optional. Do not force them as a gate before normal coding, docs
   - machine username choice for broad init when the profile is missing
   - repo topology choice: keep current, recommended fork mode, or community-only
   - whether to initialize submodules now
+- For a missing broad-init machine profile, prefer `.agents/skills/repo-init/scripts/repo_init_profile.py` over calling `workspace_profile.py` directly.
+- The broad-init machine-username question should use exactly three options: detected Git username, random `agent#####`, or custom. If the user picks custom, ask one more text question and wait for the literal username before mutating.
+- Never treat a custom selection as permission to reuse the detected Git username.
 - During `machine-management`, if host key SSH is missing and the user already supplied the host password in the request, prefer a one-shot scripted bootstrap first. Do not immediately bounce the user to a manual terminal command.
 
 ## Skill routing
