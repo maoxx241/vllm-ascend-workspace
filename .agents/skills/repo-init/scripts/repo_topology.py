@@ -34,8 +34,11 @@ def run(
     check: bool = False,
     quiet: bool = False,
 ) -> subprocess.CompletedProcess[str]:
+    command = list(cmd)
+    if command and command[0] == "git":
+        command = ["git", "-c", "safe.directory=*", *command[1:]]
     proc = subprocess.run(
-        list(cmd),
+        command,
         cwd=str(cwd) if cwd else None,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,

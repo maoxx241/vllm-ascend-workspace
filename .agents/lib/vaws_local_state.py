@@ -21,7 +21,9 @@ LEGACY_INVENTORY_FILENAME = ".machine-inventory.json"
 PROFILE_SCHEMA_VERSION = 1
 CONTAINER_PREFIX = "vaws-"
 USERNAME_PATTERN = re.compile(r"^[a-z0-9]{3,32}$")
-RANDOM_ALPHABET = string.ascii_lowercase + string.digits
+RANDOM_ALPHABET = string.digits
+DEFAULT_RANDOM_PREFIX = "agent"
+DEFAULT_RANDOM_SUFFIX_LENGTH = 5
 
 ROOT = Path(__file__).resolve().parents[2]
 STATE_DIR = ROOT / STATE_DIRNAME
@@ -68,15 +70,16 @@ validate_machine_username = normalize_machine_username
 
 def generate_machine_username(
     *,
-    prefix: str = "agent",
-    suffix_length: int = 6,
+    prefix: str = DEFAULT_RANDOM_PREFIX,
+    suffix_length: int = DEFAULT_RANDOM_SUFFIX_LENGTH,
     existing: set[str] | None = None,
+    alphabet: str = RANDOM_ALPHABET,
 ) -> str:
     cleaned_prefix = "".join(ch for ch in prefix.lower() if ch.isalnum()) or "agent"
     cleaned_prefix = cleaned_prefix[: max(1, 32 - suffix_length)]
     existing = existing or set()
     for _ in range(128):
-        suffix = "".join(secrets.choice(RANDOM_ALPHABET) for _ in range(suffix_length))
+        suffix = "".join(secrets.choice(alphabet) for _ in range(suffix_length))
         candidate = f"{cleaned_prefix}{suffix}"
         if candidate not in existing and USERNAME_PATTERN.fullmatch(candidate):
             return candidate
@@ -202,6 +205,7 @@ def profile_summary(path: Path = PROFILE_PATH) -> dict[str, Any]:
         "exists": path.exists(),
         "choice_required": not path.exists(),
         "username_rules": "3-32 chars, lowercase English letters and digits only",
+        "default_generated_pattern": "agent + 5 digits",
         "machine_username": None,
         "container_name": None,
         "source": None,

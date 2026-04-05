@@ -16,7 +16,33 @@ Windows:
 py -3 .agents/skills/repo-init/scripts/repo_init_probe.py --compact
 ```
 
-## Local machine profile
+## Broad-init machine profile
+
+Get the exact three-option machine-username question:
+
+```bash
+python3 .agents/skills/repo-init/scripts/repo_init_profile.py plan
+```
+
+Apply the Git-username option:
+
+```bash
+python3 .agents/skills/repo-init/scripts/repo_init_profile.py apply --choice git-username
+```
+
+Apply the random `agent#####` option:
+
+```bash
+python3 .agents/skills/repo-init/scripts/repo_init_profile.py apply --choice random
+```
+
+Apply the custom option after the user gave the literal username:
+
+```bash
+python3 .agents/skills/repo-init/scripts/repo_init_profile.py apply --choice custom --custom-username alice123
+```
+
+## Low-level profile helper
 
 Validate one user-provided name:
 
@@ -24,16 +50,10 @@ Validate one user-provided name:
 python3 .agents/scripts/workspace_profile.py validate alice123
 ```
 
-Create a specific profile after the user chose a name:
+Read the current profile summary:
 
 ```bash
-python3 .agents/scripts/workspace_profile.py ensure --username alice123
-```
-
-Create a default/random profile only after the user explicitly accepted that option:
-
-```bash
-python3 .agents/scripts/workspace_profile.py ensure --generate
+python3 .agents/scripts/workspace_profile.py summary
 ```
 
 ## Submodules
@@ -56,25 +76,17 @@ python3 .agents/skills/repo-init/scripts/repo_topology.py compare-main --repo vl
 Workspace example:
 
 ```bash
-python3 .agents/skills/repo-init/scripts/repo_topology.py configure \
-  --repo . \
-  --origin-url git@github.com:USER/vllm-ascend-workspace.git \
-  --upstream-url git@github.com:maoxx241/vllm-ascend-workspace.git
+python3 .agents/skills/repo-init/scripts/repo_topology.py configure   --repo .   --origin-url git@github.com:USER/vllm-ascend-workspace.git   --upstream-url git@github.com:maoxx241/vllm-ascend-workspace.git
 ```
 
 `vllm-ascend` example:
 
 ```bash
-python3 .agents/skills/repo-init/scripts/repo_topology.py configure \
-  --repo vllm-ascend \
-  --origin-url git@github.com:USER/vllm-ascend.git \
-  --upstream-url git@github.com:vllm-project/vllm-ascend.git
+python3 .agents/skills/repo-init/scripts/repo_topology.py configure   --repo vllm-ascend   --origin-url git@github.com:USER/vllm-ascend.git   --upstream-url git@github.com:vllm-project/vllm-ascend.git
 ```
 
 ## Branch tracking
 
 ```bash
-python3 .agents/skills/repo-init/scripts/repo_topology.py ensure-main \
-  --repo vllm-ascend \
-  --remote origin
+python3 .agents/skills/repo-init/scripts/repo_topology.py ensure-main   --repo vllm-ascend   --remote origin
 ```

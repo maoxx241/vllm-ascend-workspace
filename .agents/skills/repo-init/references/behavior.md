@@ -26,9 +26,9 @@ Rules:
 - create the machine profile during broad workspace init, not for every narrow Git-only task
 - machine usernames must be letters and digits only
 - normalize machine usernames to lowercase
-- blank / default is valid only after the user explicitly accepts the default/random option
+- the random/default format is `agent#####`
 - do not rewrite an existing machine profile unless the user explicitly asked for that change
-- on a missing profile, `workspace_profile.py ensure` must use either `--username` or `--generate`
+- during broad init, prefer `repo_init_profile.py` over calling `workspace_profile.py ensure` directly
 
 ## Stage model
 
@@ -58,15 +58,27 @@ That question must cover:
 - repo topology mode: keep current, recommended fork mode, or community-only
 - whether to initialize submodules now
 
-Do not silently generate a username and do not silently rewire remotes when the user only asked for generic init.
+For the machine username branch, use the fixed three-option model from `repo_init_profile.py plan`:
+
+- `git-username`
+- `random`
+- `custom`
+
+Rules:
+
+- do not silently generate a username when the user only asked for generic init
+- do not silently rewire remotes when the user only asked for generic init
+- do not treat `custom` as permission to reuse the detected Git username
+- if the user selects `custom`, stop again and ask for the literal username before any mutation
 
 ### Stage 3: ensure local machine profile when relevant
 
 During broad workspace init:
 
-- inspect the profile first with `workspace_profile.py summary`
-- if missing and the user chose a specific name, call `workspace_profile.py ensure --username ...`
-- if missing and the user explicitly accepted the default/random option, call `workspace_profile.py ensure --generate`
+- inspect the profile first with `repo_init_profile.py plan`
+- if missing and the user chose `git-username`, call `repo_init_profile.py apply --choice git-username`
+- if missing and the user explicitly accepted the default/random option, call `repo_init_profile.py apply --choice random`
+- if missing and the user chose `custom`, first ask for the literal username, then call `repo_init_profile.py apply --choice custom --custom-username ...`
 - do not change an existing profile unless the user explicitly asked to change it
 
 For narrow Git-only tasks, skip this stage.
@@ -128,6 +140,7 @@ gh repo sync USER/REPO --source OWNER/REPO
 A successful run usually ends with:
 
 - the local machine profile present when broad init asked for it
+- the machine-profile branch used one of the fixed choices: `git-username`, `random`, or `custom`
 - `gh` installed or a fallback provided
 - GitHub auth valid
 - recursive submodules initialized when the user approved it
