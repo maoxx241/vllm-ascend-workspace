@@ -44,6 +44,28 @@ Compatibility rule:
 - read legacy repo-root `.machine-inventory.json` when the new path is still absent
 - migrate to `.vaws-local/machine-inventory.json` on the next successful inventory write
 
+## Public API surface contract
+
+Normal agent-facing machine workflows should go through the task wrappers:
+
+- `machine_add.py`
+- `machine_verify.py`
+- `machine_repair.py`
+- `machine_remove.py`
+
+The low-level helpers remain implementation tools:
+
+- `manage_machine.py`
+- `inventory.py`
+- `workspace_profile.py`
+
+Rules:
+
+- keep the public wrapper surface narrow and task-oriented
+- keep alias compatibility in the parser layer, not in `AGENTS.md` or the main skill narrative
+- let wrappers infer safe defaults such as container name, container port reuse, bootstrap method reuse, and removal metadata from profile or inventory whenever possible
+- low-level helpers may stay alias-tolerant for robustness, but they are not the normal entrypoint for add / verify / repair / remove
+
 `inventory.py` stores canonical `bootstrap_method` values as:
 
 - `ssh`

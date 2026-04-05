@@ -27,10 +27,22 @@ These should not trigger `machine-management` unless machine readiness is the ob
 
 - the skill reads local profile and inventory state before mutating remote state
 - the skill uses `.vaws-local/` as the canonical local runtime-state directory
-- the skill prefers helper scripts over long inline SSH heredocs
+- the skill prefers the public task wrappers over low-level helper CLIs
+- the low-level helper CLIs remain available for deterministic fallback work
 - the skill does not use `scp`, `sftp`, `sshpass`, or `expect`
 - the final report is compact and evidence-based
-- helper CLIs are tolerant of the most natural flag spellings instead of requiring one fragile canonical spelling
+- structured wrapper outputs are sufficient for the agent to distinguish `ready`, `needs_input`, `needs_repair`, `blocked`, `removed`, and `unmanaged`
+
+### Public wrapper surface
+
+- normal add / verify / repair / remove flows can be completed through:
+  - `machine_add.py`
+  - `machine_verify.py`
+  - `machine_repair.py`
+  - `machine_remove.py`
+- normal wrappers do not require the agent to manually call `inventory.py put`, `manage_machine.py remove-container`, or `manage_machine.py verify-machine`
+- the wrapper surface is narrower than the low-level helper surface
+- alias tolerance stays in parser code, not in the main skill narrative
 
 ### Local machine profile
 
@@ -43,21 +55,17 @@ These should not trigger `machine-management` unless machine readiness is the ob
 
 ### Add / attach
 
+- `machine_add.py` can succeed with only `--host` when the profile and host key SSH are already in place
+- when the profile is missing, `machine_add.py` returns `needs_input` instead of silently generating a username
 - the skill prefers host key SSH first and uses a password only for the first bootstrap of a new machine
 - if the user already supplied the host password in the request, the skill prefers scripted bootstrap before asking the user to run a manual command
 - the primary bootstrap path does not depend on `ssh-copy-id`
-- `--print-command` remains a fallback, not the default
 - the skill checks Docker and required Ascend/NPU prerequisites before container creation
 - the managed container uses host networking, required devices, required Ascend mounts, and `/vllm-workspace` as the workdir
 - the skill configures a dedicated container `sshd` on a high port without brittle inline edits to `/etc/ssh/sshd_config`
 - the container bootstrap ensures `/run/sshd` exists
 - space-containing remote arguments such as SSH public keys and mesh peer keys survive the SSH hop intact
-- `bootstrap-container` no longer needs an out-of-band manual key copy when host key auth is already healthy
-- the skill verifies direct local -> container SSH
-- the skill runs the smoke test successfully before claiming readiness
-- the skill persists final alias, namespace, host identity, container name, image, and SSH port into inventory
-- inventory writes succeed with the shorter alias flags (`--host`, `--user`, `--machine-username`, `--name`, `--container-port`)
-- inventory writes succeed without an explicit `--bootstrap-method` for a new record
+- `machine_add.py` persists final alias, namespace, host identity, container name, image, and SSH port into inventory without the agent having to call `inventory.py put`
 
 ### Verify
 
@@ -67,6 +75,7 @@ These should not trigger `machine-management` unless machine readiness is the ob
 
 ### Repair
 
+- `machine_repair.py` accepts a single machine identifier for the normal case
 - the skill prefers non-destructive repairs first
 - the skill uses the bare-metal host only when container SSH is broken
 - the skill does not recreate or delete a container unless the user explicitly asked for destructive repair
@@ -74,12 +83,21 @@ These should not trigger `machine-management` unless machine readiness is the ob
 
 ### Remove
 
-- the skill removes only the container recorded in inventory as skill-managed
+- `machine_remove.py` removes only the container recorded in inventory as skill-managed
 - if the recorded container is already absent, removal still succeeds as drift cleanup
 - the skill removes the local endpoint from `known_hosts`
 - the skill best-effort removes the departing mesh key and endpoint from peers
 - the skill removes the machine record from inventory
 - the skill does not remove host firewall rules or host-level `authorized_keys` entries
+
+## Regression checklist from prior sessions
+
+These specific mistakes should no longer be part of the normal path:
+
+- agent should not need `manage_machine.py probe-host --host-user root`
+- agent should not need `inventory.py put ...` just to finish a normal add flow
+- agent should not need `manage_machine.py remove-container ... --container-name ...` for a normal remove flow
+- agent should not need to inspect helper `--help` output just to recover from ordinary add / verify / repair / remove work
 
 ## Manual regression checklist
 
@@ -89,6 +107,10 @@ Review these files together after every substantial skill edit:
 - `.agents/skills/machine-management/references/behavior.md`
 - `.agents/skills/machine-management/references/command-recipes.md`
 - `.agents/skills/machine-management/references/acceptance.md`
+- `.agents/skills/machine-management/scripts/machine_add.py`
+- `.agents/skills/machine-management/scripts/machine_verify.py`
+- `.agents/skills/machine-management/scripts/machine_repair.py`
+- `.agents/skills/machine-management/scripts/machine_remove.py`
 - `.agents/skills/machine-management/scripts/manage_machine.py`
 - `.agents/skills/machine-management/scripts/inventory.py`
 - `.agents/scripts/workspace_profile.py`

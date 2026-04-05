@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Manage local machine inventory for vllm-ascend-workspace.
+"""Low-level local machine inventory helper for vllm-ascend-workspace.
 
 The canonical inventory now lives under `.vaws-local/machine-inventory.json`.
 For compatibility, the helper will read the legacy repo-root
-`.machine-inventory.json` when the new path does not exist yet.
+`.machine-inventory.json` when the new path does not exist yet. Prefer the
+task-oriented wrappers for normal add / verify / repair / remove workflows.
 """
 
 from __future__ import annotations

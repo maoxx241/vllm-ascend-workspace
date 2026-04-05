@@ -1,51 +1,57 @@
 # Machine-management command recipes
 
-These are fallback patterns. Prefer the helper scripts in `scripts/` and `.agents/scripts/` when possible.
+Prefer the task-oriented wrappers. Treat the low-level helpers as fallback maintenance tools.
 
-## Local profile and inventory
+## Public workflow wrappers
 
 macOS / Linux / WSL:
 
 ```bash
-python3 .agents/scripts/workspace_profile.py summary
-python3 .agents/skills/machine-management/scripts/inventory.py summary
+python3 .agents/skills/machine-management/scripts/machine_add.py --host 173.125.1.2
+python3 .agents/skills/machine-management/scripts/machine_verify.py --machine 173.125.1.2
+python3 .agents/skills/machine-management/scripts/machine_repair.py --machine 173.125.1.2
+python3 .agents/skills/machine-management/scripts/machine_remove.py --machine 173.125.1.2
 ```
 
 Windows:
 
 ```powershell
-py -3 .agents/scripts/workspace_profile.py summary
-py -3 .agents/skills/machine-management/scripts/inventory.py summary
+py -3 .agents/skills/machine-management/scripts/machine_add.py --host 173.125.1.2
+py -3 .agents/skills/machine-management/scripts/machine_verify.py --machine 173.125.1.2
+py -3 .agents/skills/machine-management/scripts/machine_repair.py --machine 173.125.1.2
+py -3 .agents/skills/machine-management/scripts/machine_remove.py --machine 173.125.1.2
 ```
 
-Create or reuse a collision-safe local machine profile after the user chose a specific name:
+## Add one new machine
+
+If the local machine profile already exists and host key SSH is already healthy, the minimum form is:
 
 ```bash
-python3 .agents/scripts/workspace_profile.py ensure --username alice123
-```
-
-Create a default/random profile only after the user explicitly accepted that option:
-
-```bash
-python3 .agents/scripts/workspace_profile.py ensure --generate
-```
-
-## Probe one host
-
-```bash
-python3 .agents/skills/machine-management/scripts/manage_machine.py probe-host \
+python3 .agents/skills/machine-management/scripts/machine_add.py \
   --host 173.125.1.2
 ```
 
-## First host bootstrap with a supplied password
+If the profile is missing and the user chose a specific username:
 
-Prefer a hidden env var when the tool can set it without echoing the secret.
+```bash
+python3 .agents/skills/machine-management/scripts/machine_add.py \
+  --host 173.125.1.2 \
+  --machine-username alice123
+```
 
-POSIX example:
+If the user explicitly accepted the default/random option:
+
+```bash
+python3 .agents/skills/machine-management/scripts/machine_add.py \
+  --host 173.125.1.2 \
+  --generate-machine-username
+```
+
+If host key SSH is missing and the password can be hidden in an env var:
 
 ```bash
 export VAWS_SSH_PASSWORD='YOUR_PASSWORD'
-python3 .agents/skills/machine-management/scripts/manage_machine.py bootstrap-host-key \
+python3 .agents/skills/machine-management/scripts/machine_add.py \
   --host 173.125.1.2 \
   --password-env VAWS_SSH_PASSWORD
 unset VAWS_SSH_PASSWORD
@@ -55,13 +61,72 @@ PowerShell example:
 
 ```powershell
 $env:VAWS_SSH_PASSWORD = 'YOUR_PASSWORD'
-py -3 .agents/skills/machine-management/scripts/manage_machine.py bootstrap-host-key `
+py -3 .agents/skills/machine-management/scripts/machine_add.py `
   --host 173.125.1.2 `
   --password-env VAWS_SSH_PASSWORD
 Remove-Item Env:VAWS_SSH_PASSWORD
 ```
 
-When the agent cannot hide env or stdin and the user already supplied the password in the current chat, the literal flag is allowed as a last resort:
+If the user already exposed the password in chat and the tool cannot hide stdin or env:
+
+```bash
+python3 .agents/skills/machine-management/scripts/machine_add.py \
+  --host 173.125.1.2 \
+  --password 'YOUR_PASSWORD_ALREADY_IN_CHAT'
+```
+
+## Verify one managed machine
+
+```bash
+python3 .agents/skills/machine-management/scripts/machine_verify.py \
+  --machine 173.125.1.2
+```
+
+## Repair one managed machine
+
+Use the machine identifier already recorded in inventory.
+
+```bash
+python3 .agents/skills/machine-management/scripts/machine_repair.py \
+  --machine 173.125.1.2
+```
+
+If host key SSH drifted and a password bootstrap is needed again for recovery:
+
+```bash
+python3 .agents/skills/machine-management/scripts/machine_repair.py \
+  --machine 173.125.1.2 \
+  --password 'YOUR_PASSWORD_ALREADY_IN_CHAT'
+```
+
+## Remove one managed machine
+
+```bash
+python3 .agents/skills/machine-management/scripts/machine_remove.py \
+  --machine 173.125.1.2
+```
+
+## Local profile and inventory inspection
+
+These are still useful for debugging or reporting local state:
+
+```bash
+python3 .agents/scripts/workspace_profile.py summary
+python3 .agents/skills/machine-management/scripts/inventory.py summary
+```
+
+## Low-level fallback helpers
+
+Use these only when the workflow wrapper cannot express the requested maintenance.
+
+Probe one host:
+
+```bash
+python3 .agents/skills/machine-management/scripts/manage_machine.py probe-host \
+  --host 173.125.1.2
+```
+
+Bootstrap host key auth directly:
 
 ```bash
 python3 .agents/skills/machine-management/scripts/manage_machine.py bootstrap-host-key \
@@ -69,15 +134,7 @@ python3 .agents/skills/machine-management/scripts/manage_machine.py bootstrap-ho
   --password 'YOUR_PASSWORD_ALREADY_IN_CHAT'
 ```
 
-Manual fallback only when needed:
-
-```bash
-python3 .agents/skills/machine-management/scripts/manage_machine.py bootstrap-host-key \
-  --host 173.125.1.2 \
-  --print-command
-```
-
-## Bootstrap or repair one managed container
+Bootstrap or repair one managed container directly:
 
 ```bash
 python3 .agents/skills/machine-management/scripts/manage_machine.py bootstrap-container \
@@ -87,7 +144,7 @@ python3 .agents/skills/machine-management/scripts/manage_machine.py bootstrap-co
   --namespace alice123
 ```
 
-## Run the smoke test
+Run the smoke test directly:
 
 ```bash
 python3 .agents/skills/machine-management/scripts/manage_machine.py smoke \
@@ -95,17 +152,7 @@ python3 .agents/skills/machine-management/scripts/manage_machine.py smoke \
   --port 46671
 ```
 
-## Verify a machine read-only
-
-```bash
-python3 .agents/skills/machine-management/scripts/manage_machine.py verify-machine \
-  --host 173.125.1.2 \
-  --port 46671
-```
-
-## Write inventory after success
-
-Prefer the forgiving `upsert` surface and the short aliases when the caller already knows the final container identity:
+Manual inventory write:
 
 ```bash
 python3 .agents/skills/machine-management/scripts/inventory.py upsert \
@@ -113,58 +160,10 @@ python3 .agents/skills/machine-management/scripts/inventory.py upsert \
   --machine-username alice123 \
   --host 173.125.1.2 \
   --name vaws-alice123 \
-  --container-port 46671 \
-  --last-verified-at "2026-04-04T09:22:03Z"
+  --container-port 46671
 ```
 
 Notes:
 
 - `--bootstrap-method` is optional. New records default to `ssh`; updates preserve the existing stored value.
-- compatibility aliases still work, for example `--namespace`, `--host-ip`, `--container-name`, and `--container-ssh-port`
-- when you do want to record the first host bootstrap as password-assisted, pass `--bootstrap-method password-once`
-- `key` still normalizes to stored value `ssh`
-
-## Mesh trust
-
-Export a mesh key:
-
-```bash
-python3 .agents/skills/machine-management/scripts/manage_machine.py mesh-export-key \
-  --host 173.125.1.2 \
-  --port 46671 \
-  --comment vaws-mesh:173.125.1.2
-```
-
-Add a peer:
-
-```bash
-python3 .agents/skills/machine-management/scripts/manage_machine.py mesh-add-peer \
-  --host 173.131.1.2 \
-  --port 46768 \
-  --peer-public-key 'ssh-ed25519 AAAA... vaws-mesh:173.125.1.2' \
-  --peer-host 173.125.1.2 \
-  --peer-port 46671
-```
-
-Remove a peer:
-
-```bash
-python3 .agents/skills/machine-management/scripts/manage_machine.py mesh-remove-peer \
-  --host 173.131.1.2 \
-  --port 46768 \
-  --peer-comment vaws-mesh:173.125.1.2 \
-  --peer-host 173.125.1.2 \
-  --peer-port 46671
-```
-
-## Remove a machine
-
-```bash
-python3 .agents/skills/machine-management/scripts/manage_machine.py remove-container \
-  --host 173.125.1.2 \
-  --name vaws-alice123 \
-  --port 46671 \
-  --clean-local-known-hosts
-
-python3 .agents/skills/machine-management/scripts/inventory.py remove 173.125.1.2
-```
+- compatibility aliases still work in the low-level helpers, but the wrappers intentionally document only the narrow canonical surface.

@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Deterministic helpers for machine-management.
+"""Low-level deterministic helpers for machine-management.
 
 These helpers keep remote host/container workflows compact and predictable so
-an agent can rely on scripts instead of constructing long SSH heredocs in the
-conversation. All subcommands print JSON.
+higher-level task wrappers can rely on scripts instead of constructing long SSH
+heredocs in the conversation. Prefer `machine_add.py`, `machine_verify.py`,
+`machine_repair.py`, and `machine_remove.py` for normal agent-facing work. All
+subcommands print JSON.
 """
 
 from __future__ import annotations

@@ -20,6 +20,12 @@ Both skills are optional. Do not force them as a gate before normal coding, docs
   - `https://github.com/vllm-project/vllm.git`
   - `https://github.com/vllm-project/vllm-ascend.git`
 - Prefer helper scripts under `.agents/skills/*/scripts/` and `.agents/scripts/` for deterministic work.
+- For normal machine-management add / verify / repair / remove work, prefer the task wrappers:
+  - `.agents/skills/machine-management/scripts/machine_add.py`
+  - `.agents/skills/machine-management/scripts/machine_verify.py`
+  - `.agents/skills/machine-management/scripts/machine_repair.py`
+  - `.agents/skills/machine-management/scripts/machine_remove.py`
+- Treat `.agents/skills/machine-management/scripts/inventory.py` and `.agents/skills/machine-management/scripts/manage_machine.py` as low-level maintenance helpers, not the default agent-facing surface.
 - Keep helper CLIs ergonomic: accept common aliases, disable brittle prefix-abbreviation behavior, and default metadata that can be inferred safely.
 - Prefer concise machine-readable summaries over long raw command logs.
 - When a command is noisy, capture the log and report only a compact summary plus a short failure tail.

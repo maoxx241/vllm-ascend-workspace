@@ -20,9 +20,16 @@ Current primary helpers:
 
 - `repo-init/scripts/repo_init_probe.py`
 - `repo-init/scripts/repo_topology.py`
+- `machine-management/scripts/machine_add.py`
+- `machine-management/scripts/machine_verify.py`
+- `machine-management/scripts/machine_repair.py`
+- `machine-management/scripts/machine_remove.py`
+- `../scripts/workspace_profile.py`
+
+Low-level machine-management helpers remain available for implementation work and debugging:
+
 - `machine-management/scripts/inventory.py`
 - `machine-management/scripts/manage_machine.py`
-- `../scripts/workspace_profile.py`
 
 Reference files under `references/` are fallback detail, not the default execution path.
 

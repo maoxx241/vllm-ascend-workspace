@@ -35,10 +35,9 @@ Ready does **not** imply code sync, rebuild, serving, or benchmark readiness.
 - Be idempotent and conservative.
 - Keep mutations bounded to the requested machine.
 - Treat the bare-metal host as a maintenance plane, not a developer workspace.
-- Prefer helper scripts in `scripts/` and `.agents/scripts/` over ad-hoc SSH heredocs.
-- Keep helper CLIs forgiving: accept common flag aliases and avoid requiring metadata that can be inferred safely.
-- Never use `scp`, `sftp`, `sshpass`, or `expect` in this workflow.
+- Keep local runtime state only under `.vaws-local/`.
 - Never write passwords or tokens into tracked files or `.vaws-local/`.
+- Never use `scp`, `sftp`, `sshpass`, or `expect` in this workflow.
 - On a missing local machine profile, never call `workspace_profile.py ensure` bare. Use either:
   - `--username <letters-or-digits>` after the user chose a name
   - `--generate` only after the user explicitly accepted the default/random option
@@ -50,6 +49,34 @@ Ready does **not** imply code sync, rebuild, serving, or benchmark readiness.
 - Windows: `py -3 ...`
 
 The primary bootstrap path must not depend on `ssh-copy-id`, `expect`, or any other POSIX-only interactive tool.
+
+## Public workflow entry points
+
+Use these task-oriented wrappers for normal agent work. They keep the parameter surface narrow and return structured JSON statuses such as `ready`, `needs_input`, `needs_repair`, `blocked`, `removed`, or `unmanaged`.
+
+- `python3 .agents/skills/machine-management/scripts/machine_add.py --host <ip> [--machine-username <letters-or-digits> | --generate-machine-username] [--password-env NAME | --password-stdin | --password ...]`
+- `python3 .agents/skills/machine-management/scripts/machine_verify.py --machine <alias-or-ip>`
+- `python3 .agents/skills/machine-management/scripts/machine_repair.py --machine <alias-or-ip> [--password-env NAME | --password-stdin | --password ...]`
+- `python3 .agents/skills/machine-management/scripts/machine_remove.py --machine <alias-or-ip>`
+
+Design intent:
+
+- `machine_add.py` owns the full attach path: profile, host auth, probe, container bootstrap, inventory write, and best-effort mesh
+- `machine_verify.py` is read-only
+- `machine_repair.py` owns conservative repair of an already managed machine
+- `machine_remove.py` owns bounded removal and local cleanup
+
+## Internal helpers
+
+These remain available for deterministic implementation work and debugging, but they are **not** the normal agent-facing surface for add / verify / repair / remove:
+
+- `.agents/skills/machine-management/scripts/manage_machine.py`
+- `.agents/skills/machine-management/scripts/inventory.py`
+- `.agents/scripts/workspace_profile.py`
+
+Do not start with the low-level helpers unless the wrapper lacks a capability the user explicitly needs.
+
+Keep alias compatibility in the parser layer, not in the main skill narrative.
 
 ## Local state
 
@@ -63,46 +90,6 @@ Compatibility note:
 - the helper still reads legacy repo-root `.machine-inventory.json` when the new path does not exist yet
 - the next successful inventory write migrates state to `.vaws-local/machine-inventory.json`
 
-## Script-first entry points
-
-Shared profile helper:
-
-- `python3 .agents/scripts/workspace_profile.py summary`
-- `python3 .agents/scripts/workspace_profile.py ensure --username <letters-or-digits>`
-- `python3 .agents/scripts/workspace_profile.py ensure --generate`
-
-Inventory helper:
-
-- `python3 .agents/skills/machine-management/scripts/inventory.py summary`
-- `python3 .agents/skills/machine-management/scripts/inventory.py get <alias-or-ip>`
-- `python3 .agents/skills/machine-management/scripts/inventory.py put ...` or `upsert ...`
-- `python3 .agents/skills/machine-management/scripts/inventory.py remove <alias-or-ip>`
-
-Common ergonomic aliases intentionally accepted by the machine-management helpers:
-
-- inventory record writes: `--host` = `--host-ip`, `--user` = `--host-user`, `--machine-username` = `--namespace`, `--name` = `--container-name`, `--container-port` = `--container-ssh-port`
-- container-oriented checks: `--port` or `--container-port` = `--container-ssh-port`
-- `inventory.py put` defaults `--bootstrap-method` to `ssh` for new records and preserves the stored value when updating
-
-Remote-machine helper:
-
-- `python3 .agents/skills/machine-management/scripts/manage_machine.py probe-host --host <ip>`
-- `python3 .agents/skills/machine-management/scripts/manage_machine.py bootstrap-host-key --host <ip> [--password-env NAME | --password-stdin | --password ...]`
-- `python3 .agents/skills/machine-management/scripts/manage_machine.py bootstrap-container --host <ip> --container-name <name> --container-ssh-port <port> --namespace <machine-username>`
-- `python3 .agents/skills/machine-management/scripts/manage_machine.py smoke --host <ip> --container-ssh-port <port>`
-- `python3 .agents/skills/machine-management/scripts/manage_machine.py verify-machine --host <ip> --container-ssh-port <port>`
-- `python3 .agents/skills/machine-management/scripts/manage_machine.py mesh-export-key ...`
-- `python3 .agents/skills/machine-management/scripts/manage_machine.py mesh-add-peer ...`
-- `python3 .agents/skills/machine-management/scripts/manage_machine.py mesh-remove-peer ...`
-- `python3 .agents/skills/machine-management/scripts/manage_machine.py remove-container ...`
-- `python3 .agents/skills/machine-management/scripts/manage_machine.py clean-local-known-hosts ...`
-
-Reference files:
-
-- `.agents/skills/machine-management/references/behavior.md`
-- `.agents/skills/machine-management/references/command-recipes.md`
-- `.agents/skills/machine-management/references/acceptance.md`
-
 ## Workflow
 
 ### 1. Normalize the request
@@ -114,13 +101,11 @@ Classify the request as one of:
 - `repair`
 - `remove`
 
-If inventory already contains the same alias or host IP, pivot from blind add to verify-or-repair instead of creating a duplicate record.
+Then choose the matching wrapper entrypoint.
 
-### 2. Ensure the local machine profile
+### 2. Ensure the local machine profile when needed
 
-Inspect `.vaws-local/machine-profile.json` first.
-
-Rules:
+For `add` and any first-time attach flow:
 
 - if the profile exists, reuse it
 - if it is missing, ask once for the machine username
@@ -154,45 +139,46 @@ Password policy:
 
 If host key auth already works, do not use the password even if the user provided one.
 
-If host key auth does not work and the request is verify-only, stop with `needs_input` instead of mutating.
+If host key auth does not work and the wrapper lacks an approved password source, return `needs_input` instead of trying an interactive prompt.
 
 When password bootstrap is required:
 
 - if the user already supplied a password in the request, prefer scripted bootstrap with `bootstrap-host-key`
 - prefer `--password-env` or `--password-stdin` when the tool can hide the value
 - `--password` is acceptable only when the user already wrote the password in the current chat and the agent tool cannot hide stdin/env
-- keep `--print-command` as a fallback, not the default
-- use an interactive terminal prompt only when the user prefers it or automation is unavailable
+- keep manual print-command fallback in the low-level helper, not the normal wrapper path
 
 ### 5. Add or attach workflow
 
-Proceed in this order:
+`machine_add.py` should own this order:
 
-1. ensure a local machine profile exists
+1. ensure or reuse the local machine profile
 2. ensure a local public key exists
-3. if needed, establish host key auth with `bootstrap-host-key`
-4. run `probe-host`
-5. decide the container name from the local machine profile and choose a free high SSH port
-6. run `bootstrap-container`
-7. run `smoke`
-8. persist the record with `inventory.py put` or `inventory.py upsert`
+3. if needed, establish host key auth
+4. probe the host
+5. choose or reuse the container name and container SSH port
+6. bootstrap or repair the managed container
+7. run final readiness verification
+8. persist the record into inventory
 9. best-effort mesh the new container with existing managed containers
+
+If inventory already contains the same alias or host IP, treat add as an idempotent attach-or-repair path instead of creating a duplicate record.
 
 ### 6. Verify workflow
 
 For verify-only requests:
 
 - stay read-only
-- prefer `verify-machine`
+- use `machine_verify.py`
 - do not silently repair drift
 
 ### 7. Repair workflow
 
 Prefer non-destructive repair:
 
-- if host key SSH works, use `bootstrap-container` to restart or repair the managed container and its dedicated `sshd`
+- if host key SSH works, use container bootstrap to restart or repair the managed container and its dedicated `sshd`
 - once container SSH works again, switch back to direct local -> container SSH
-- rerun `smoke`
+- rerun final readiness verification
 - do not recreate or delete a container unless the user explicitly asked for destructive repair
 
 ### 8. Remove workflow
@@ -200,9 +186,9 @@ Prefer non-destructive repair:
 Proceed in this order:
 
 1. confirm the machine is managed by this workspace
-2. remove only the recorded container
-3. remove the local endpoint from `known_hosts`
-4. best-effort remove the departing mesh key and endpoint from peer managed containers
+2. best-effort remove the departing mesh trust from peers
+3. remove only the recorded container
+4. remove the local endpoint from `known_hosts`
 5. remove the machine record from inventory
 
 Do not remove host firewall rules or host-level `authorized_keys` entries.
@@ -217,3 +203,9 @@ Do not remove host firewall rules or host-level `authorized_keys` entries.
 - Preseed `PATH` and `LD_LIBRARY_PATH` before sourcing env scripts under `set -u`.
 - Prefix `LD_LIBRARY_PATH` with `/usr/local/Ascend/driver/lib64/driver:/usr/local/Ascend/driver/lib64`.
 - Do not add Ascend `devlib` paths by default.
+
+Reference files:
+
+- `.agents/skills/machine-management/references/behavior.md`
+- `.agents/skills/machine-management/references/command-recipes.md`
+- `.agents/skills/machine-management/references/acceptance.md`
