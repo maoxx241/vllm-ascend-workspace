@@ -8,13 +8,15 @@ Repo-local skills live under `.agents/skills/`.
 
 - `repo-init`: initialize the workspace after clone, including `gh`, GitHub auth, recursive submodules, optional fork / remote topology, and the local workspace machine profile used later by machine-management.
 - `machine-management`: add, verify, repair, or remove a workspace-managed remote NPU machine and its managed container.
+- `remote-code-parity`: automatically ensure a ready remote runtime uses the exact current local workspace state before any remote smoke, service launch, or benchmark.
 
-Both skills are optional. Do not force them as a gate before normal coding, docs work, serving, benchmarking, or unrelated Git / SSH tasks.
+`repo-init` and `machine-management` are optional. `remote-code-parity` is an automatic pre-execution gate only for ready-machine remote execution. Do not force any of them as a gate before normal local coding, docs work, or unrelated Git / SSH tasks.
 
 ## Repo-wide operating rules
 
 - Never write secrets, passwords, private keys, tokens, or user-specific machine metadata into tracked files.
 - Keep repo-local runtime state only under the untracked directory `.vaws-local/`.
+- Keep remote-code-parity state only under `.vaws-local/remote-code-parity/`.
 - Treat the legacy repo-root `.machine-inventory.json` as compatibility input only.
 - Keep `.gitmodules` on community URLs:
   - `https://github.com/vllm-project/vllm.git`
@@ -43,6 +45,13 @@ Both skills are optional. Do not force them as a gate before normal coding, docs
 - Never treat a custom selection as permission to reuse the detected Git username.
 - During `machine-management`, if host key SSH is missing and the user already supplied the host password in the request, prefer a one-shot scripted bootstrap first. Do not immediately bounce the user to a manual terminal command.
 
+
+## Mandatory execution gate
+
+- When a ready managed machine is about to run a remote smoke, service launch, or benchmark, run `remote-code-parity` first.
+- Do not continue remote execution unless `remote-code-parity` returned `status == ready`.
+- If the first runtime replacement is blocked by missing consent, stop and get consent instead of silently using the image-provided packages.
+
 ## Skill routing
 
 Use `repo-init` when the user explicitly asks to:
@@ -64,6 +73,14 @@ Use `machine-management` when the user explicitly asks to:
 
 Do not use `machine-management` for code sync, source rebuilds, serving, benchmarking, or generic SSH work unrelated to workspace-managed machines.
 
+Use `remote-code-parity` automatically when:
+
+- a ready managed machine is about to run a remote smoke, service launch, or benchmark
+- the request depends on local uncommitted changes, untracked files, or ignored-but-allowed files being reflected remotely
+- the container already accepts direct local -> container key-based SSH
+
+Do not use `remote-code-parity` for initial machine attach, SSH repair, generic Git topology work, or unrelated local-only tasks.
+
 ## Maintenance rule
 
 When you change a skill, update the whole skill package together:
@@ -78,3 +95,11 @@ When the change affects shared local-state behavior, also update:
 
 - `.agents/scripts/workspace_profile.py`
 - `.agents/lib/vaws_local_state.py`
+
+If you change `remote-code-parity`, update these together:
+
+- `.agents/skills/remote-code-parity/SKILL.md`
+- `.agents/skills/remote-code-parity/scripts/`
+- `.agents/skills/remote-code-parity/references/`
+- `AGENTS.md` and `.agents/README.md` when routing or local-state behavior changes
+

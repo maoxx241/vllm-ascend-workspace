@@ -10,6 +10,7 @@ The repository is intentionally **not** a mandatory workflow. Developers can use
 
 - `repo-init`
 - `machine-management`
+- `remote-code-parity`
 
 ## Design goals
 
@@ -17,6 +18,7 @@ The repository is intentionally **not** a mandatory workflow. Developers can use
 - Keep user-specific remotes, auth state, machine profile state, and managed-machine inventory in **local untracked state** only.
 - Make initialization optional, conservative, and repeatable.
 - Let agents drive setup in natural language instead of making the developer compose shell commands by hand.
+- Make ready remote execution use the exact current local workspace state even when the developer has not committed or pushed yet.
 - Preserve user freedom to add custom remotes such as `upstream2`, keep community-only mode, or skip any suggested step.
 
 ## Tracked repository model
@@ -34,6 +36,8 @@ Untracked workspace-local state lives under `.vaws-local/`:
 
 - `.vaws-local/machine-profile.json`: the stable machine username / namespace used to derive collision-safe container names such as `vaws-alice123`
 - `.vaws-local/machine-inventory.json`: managed remote-machine records for this local clone
+- `.vaws-local/remote-code-parity/install-consents.json`: per-container approval state for the first replacement of image-provided `vllm` / `vllm-ascend`
+- `.vaws-local/remote-code-parity/runtime-state.json`: advisory parity state such as the last validated `storage_root` per server and the last synced synthetic commits
 
 The legacy repo-root `.machine-inventory.json` is compatibility input only.
 
@@ -80,6 +84,21 @@ When invoked, `machine-management` can:
 
 New managed containers should derive their name from the local machine profile rather than using one global shared name.
 
+
+## What `remote-code-parity` does
+
+When invoked automatically before remote execution, `remote-code-parity` can:
+
+1. treat the local working tree as the source of truth, including committed, staged, unstaged, and untracked files
+2. build synthetic Git snapshot commits for the workspace root, `vllm/`, `vllm-ascend/`, and any nested populated submodules without forcing a real commit
+3. publish those snapshots into host-local bare mirror repositories under a validated `storage_root`
+4. materialize the mirrored commits inside the ready runtime container so the checked-out code matches the local workspace exactly
+5. on the first sync for a fresh container, require explicit user consent before uninstalling image-provided `vllm` / `vllm-ascend` and reinstalling them from the mirrored source trees
+6. on later syncs, reinstall only when build-critical paths changed
+7. verify the final runtime commit ids instead of assuming success from command exit status alone
+
+`remote-code-parity` is not a machine-attach or SSH-repair workflow. It assumes `machine-management` already proved the target container is reachable by key-based SSH.
+
 ## Recommended remote topology
 
 The skills treat the following as the recommended end state, but never as a hard requirement.
@@ -114,6 +133,7 @@ Example prompts for an agent:
 - “Configure this NPU machine for the current workspace.”
 - “Check whether the managed machine is ready.”
 - “Repair the container SSH on the managed host.”
+- “On the ready machine, sync my latest local code before you launch the remote service.”
 
 ## Repository layout
 
@@ -127,6 +147,10 @@ Example prompts for an agent:
 │   │   └── workspace_profile.py
 │   └── skills/
 │       ├── machine-management/
+│       │   ├── SKILL.md
+│       │   ├── references/
+│       │   └── scripts/
+│       ├── remote-code-parity/
 │       │   ├── SKILL.md
 │       │   ├── references/
 │       │   └── scripts/

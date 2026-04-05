@@ -6,6 +6,7 @@ This directory contains the repository-local skill layer for Codex, Claude Code,
 
 - `.agents/skills/repo-init/` is the source-of-truth skill package for repository initialization.
 - `.agents/skills/machine-management/` is the source-of-truth skill package for remote machine attach, verify, repair, and removal workflows.
+- `.agents/skills/remote-code-parity/` is the source-of-truth skill package for remote code parity before remote execution.
 - `.agents/scripts/workspace_profile.py` is the shared low-level helper for the local workspace machine profile.
 - `.agents/lib/vaws_local_state.py` is the shared library for untracked local runtime state.
 - `AGENTS.md` carries repository-wide routing rules and mandatory decision gates.
@@ -25,6 +26,9 @@ Current primary helpers:
 - `machine-management/scripts/machine_verify.py`
 - `machine-management/scripts/machine_repair.py`
 - `machine-management/scripts/machine_remove.py`
+- `remote-code-parity/scripts/remote_code_parity.py`
+- `remote-code-parity/scripts/install_consent.py`
+- `remote-code-parity/scripts/gc_runtime_cache.py`
 - `../scripts/workspace_profile.py`
 
 Low-level machine-management helpers remain available for implementation work and debugging:
@@ -40,6 +44,8 @@ Untracked workspace-local state lives under `.vaws-local/`:
 
 - `.vaws-local/machine-profile.json`
 - `.vaws-local/machine-inventory.json`
+- `.vaws-local/remote-code-parity/install-consents.json`
+- `.vaws-local/remote-code-parity/runtime-state.json`
 
 The legacy repo-root `.machine-inventory.json` is compatibility input only and should not be reintroduced as the primary path.
 
@@ -64,5 +70,12 @@ If you change `machine-management`, update these together:
 - `.agents/skills/machine-management/references/`
 - `.agents/skills/machine-management/scripts/`
 - shared helpers when the workflow depends on local profile or inventory state
+
+If you change `remote-code-parity`, update these together:
+
+- `.agents/skills/remote-code-parity/SKILL.md`
+- `.agents/skills/remote-code-parity/references/`
+- `.agents/skills/remote-code-parity/scripts/`
+- `AGENTS.md` and this file when routing or local-state behavior changes
 
 Keep the files under `.agents/skills/` as the canonical supporting files for repo-local skills.
