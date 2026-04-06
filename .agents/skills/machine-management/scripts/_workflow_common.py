@@ -15,7 +15,7 @@ import os
 import pathlib
 import sys
 from dataclasses import dataclass
-from typing import Any, Literal, Sequence
+from typing import Any, Callable, Literal, Sequence
 
 ROOT = pathlib.Path(__file__).resolve().parents[4]
 LIB_DIR = ROOT / ".agents" / "lib"
@@ -62,6 +62,19 @@ class InventoryState:
 
 def print_json(data: dict[str, Any]) -> None:
     print(json.dumps(data, indent=2, ensure_ascii=False))
+
+
+def emit_progress(*, action: str, phase: str, message: str, machine: str | None = None, **extra: Any) -> None:
+    payload: dict[str, Any] = {
+        "action": action,
+        "phase": phase,
+        "message": message,
+    }
+    if machine is not None:
+        payload["machine"] = machine
+    payload.update({key: value for key, value in extra.items() if value is not None})
+    sys.stderr.write(machine_ops.PROGRESS_SENTINEL + json.dumps(payload, ensure_ascii=False) + "\n")
+    sys.stderr.flush()
 
 
 def status_payload(
@@ -326,6 +339,7 @@ def probe_host(
         machine_ops.render_host_probe_script(),
         args=[image, port_range, managed_prefix],
         batch_mode=True,
+        timeout_seconds=machine_ops.DEFAULT_PROBE_TIMEOUT_SECONDS,
     )
     try:
         payload = machine_ops.assert_remote_success(result)
@@ -339,6 +353,8 @@ def probe_host(
             stderr_tail=machine_ops.compact_failure_tail(result.stderr),
         )
     payload["target"] = {"host": target.host, "user": target.user, "host_port": target.port}
+    if result.progress_events:
+        payload["progress_events"] = result.progress_events
     return payload
 
 
@@ -363,6 +379,7 @@ def bootstrap_container(
         machine_ops.render_bootstrap_host_script(),
         args=[container_name, str(container_ssh_port), image, workdir, public_key, namespace or ""],
         batch_mode=True,
+        timeout_seconds=machine_ops.DEFAULT_BOOTSTRAP_TIMEOUT_SECONDS,
     )
     try:
         payload = machine_ops.assert_remote_success(result)
@@ -399,6 +416,8 @@ def bootstrap_container(
             },
         }
     )
+    if result.progress_events:
+        payload["progress_events"] = result.progress_events
     if not ssh_check["ok"]:
         return status_payload(
             "needs_repair",
@@ -429,11 +448,19 @@ def smoke_machine(record: dict[str, Any], *, python: str | None = None) -> dict[
         )
 
 
-def verify_machine(record: dict[str, Any], *, python: str | None = None) -> dict[str, Any]:
+def verify_machine(
+    record: dict[str, Any],
+    *,
+    python: str | None = None,
+    progress_cb: Callable[[str, str], None] | None = None,
+) -> dict[str, Any]:
     try:
         identity_file = machine_ops.private_key_for_public_key(machine_ops.find_public_key(None))
     except machine_ops.MachineManagementError:
         identity_file = None
+
+    if progress_cb is not None:
+        progress_cb("host-ssh", "checking host SSH")
 
     host = host_target(
         host=record["host"]["ip"],
@@ -442,6 +469,8 @@ def verify_machine(record: dict[str, Any], *, python: str | None = None) -> dict
     )
     container = container_target(record)
     host_check = machine_ops.check_direct_ssh(host, identity_file=identity_file)
+    if progress_cb is not None:
+        progress_cb("container-ssh", "checking direct container SSH")
     container_check = machine_ops.check_direct_ssh(container, identity_file=identity_file)
     payload: dict[str, Any] = {
         "machine": machine_summary(record),
@@ -468,11 +497,15 @@ def verify_machine(record: dict[str, Any], *, python: str | None = None) -> dict
         )
         return payload
     if container_check["ok"]:
+        if progress_cb is not None:
+            progress_cb("smoke", "running torch/torch_npu smoke")
         smoke = smoke_machine(record, python=python)
     else:
         smoke = {"success": False, "skipped": "container SSH failed"}
     payload["smoke"] = smoke
     payload["ready"] = bool(host_check["ok"] and container_check["ok"] and smoke.get("success") is True)
+    if progress_cb is not None:
+        progress_cb("complete", "machine verification finished")
     if payload["ready"]:
         payload.update({"success": True, "status": "ready", "action": "verified"})
         return payload

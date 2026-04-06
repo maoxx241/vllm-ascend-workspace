@@ -32,6 +32,7 @@ Rules:
 - alias and host IP must not resolve to different records
 - machine username must be letters and digits only, normalized to lowercase
 - v1 supports one managed workspace container per host
+- wrapper scripts stream phase progress on `stderr` as `__VAWS_PROGRESS__=<json>` and keep one final JSON result on `stdout`
 - on a missing profile, `workspace_profile.py ensure` must use either `--username` or `--generate`
 
 Relevant files:
@@ -220,3 +221,21 @@ Do **not**:
 - remove host firewall rules
 - remove host-level `authorized_keys`
 - guess at unmanaged containers
+
+## Image selection policy
+
+Default low-level image policy is `auto`:
+
+1. attempt `docker pull quay.nju.edu.cn/ascend/vllm-ascend:latest`
+2. if that fails, attempt `docker pull quay.io/ascend/vllm-ascend:latest`
+3. if fresh pulls fail but one of those tags is already cached locally, reuse the cached image as a bounded fallback
+4. if a managed container already exists, prefer its current image identity for non-destructive attach / repair
+
+Inventory should record the actual selected image, not only the requested policy string.
+
+## Observability and timeout contract
+
+- wrappers and low-level helpers should report phase progress early enough for an agent to distinguish `probe`, `bootstrap`, `smoke`, `inventory`, and `verify` work
+- `stderr` carries progress events; `stdout` stays reserved for the final machine-readable JSON payload
+- host probe, container bootstrap, and smoke should each have an overall timeout budget in addition to SSH connect timeouts
+- timeout failures should preserve the last known phase and any successfully returned remote payload

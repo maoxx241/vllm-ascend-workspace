@@ -1,3 +1,5 @@
+Prefer the task wrappers for normal add / verify / repair / remove work. Wrappers emit live phase events on `stderr` as `__VAWS_PROGRESS__=<json>` and keep the final structured result on `stdout`.
+
 # Machine-management command recipes
 
 Prefer the task-oriented wrappers. Treat the low-level helpers as fallback maintenance tools.
@@ -123,7 +125,8 @@ Probe one host:
 
 ```bash
 python3 .agents/skills/machine-management/scripts/manage_machine.py probe-host \
-  --host 173.125.1.2
+  --host 173.125.1.2 \
+  --image auto
 ```
 
 Bootstrap host key auth directly:
@@ -141,7 +144,8 @@ python3 .agents/skills/machine-management/scripts/manage_machine.py bootstrap-co
   --host 173.125.1.2 \
   --name vaws-alice123 \
   --port 46671 \
-  --namespace alice123
+  --namespace alice123 \
+  --image auto
 ```
 
 Run the smoke test directly:

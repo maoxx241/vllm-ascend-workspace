@@ -18,6 +18,7 @@ from _workflow_common import (  # noqa: E402
     bootstrap_host_key,
     check_host_key,
     choose_alias,
+    emit_progress,
     find_record,
     host_target,
     list_records,
@@ -63,6 +64,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
+        emit_progress(action="add", phase="profile", message="ensuring local machine profile", machine=args.host)
         profile, needs_profile, profile_action = load_or_create_profile(
             machine_username=args.machine_username,
             generate_machine_username=args.generate_machine_username,
@@ -139,6 +141,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
 
         password = resolve_password_args(args)
+        emit_progress(action="add", phase="host-auth", message="checking host key SSH", machine=alias)
         host_ssh_precheck = check_host_key(target, private_key)
         host_auth = None
         if not host_ssh_precheck["ok"]:
@@ -153,6 +156,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             host_auth = {"success": True, "result": "already-configured", "precheck": host_ssh_precheck}
 
         image_for_probe = existing["container"]["image"] if existing is not None else args.image
+        emit_progress(action="add", phase="probe", message="probing host prerequisites", machine=alias)
         probe = probe_host(target, image=image_for_probe)
         if probe.get("status") == "blocked":
             print_json(probe)
@@ -176,6 +180,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         image = existing["container"]["image"] if existing is not None else args.image
         workdir = existing["container"]["workdir"] if existing is not None else args.workdir
 
+        emit_progress(action="add", phase="bootstrap", message="bootstrapping or repairing the managed container", machine=alias)
         container = bootstrap_container(
             target,
             host=target_host,
@@ -190,7 +195,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             print_json(container)
             return 0
 
+        actual_image = container.get("selected_image") or container.get("image") or image
         bootstrap_method = "password-once" if host_ssh_precheck.get("ok") is False and password.value is not None else None
+        emit_progress(action="add", phase="inventory", message="persisting machine record and refreshing mesh", machine=alias)
         inventory_payload, record = upsert_machine_record(
             alias=alias,
             namespace=namespace,
@@ -199,13 +206,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             host_user=target_user,
             container_name=container_name,
             container_ssh_port=container_port,
-            image=image,
+            image=actual_image,
             workdir=workdir,
             bootstrap_method=bootstrap_method,
         )
         peers = [peer for peer in list_records() if peer["alias"] != record["alias"]]
         mesh = sync_mesh(record, peers=peers)
-        verified = verify_machine(record)
+        emit_progress(action="add", phase="verify", message="running final readiness verification", machine=record["alias"])
+        verified = verify_machine(
+            record,
+            progress_cb=lambda phase, message: emit_progress(action="add", phase=phase, message=message, machine=record["alias"]),
+        )
         if verified.get("status") == "blocked":
             print_json(verified)
             return 0

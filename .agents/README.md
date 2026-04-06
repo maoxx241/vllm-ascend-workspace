@@ -15,6 +15,8 @@ This directory contains the repository-local skill layer for Codex, Claude Code,
 
 When a workflow has deterministic shell, SSH, Git, or local-state mechanics, prefer the helper script instead of rebuilding the command inline in the conversation.
 
+Wrapper-style helpers should stream bounded phase progress on `stderr` and keep one final machine-readable JSON payload on `stdout`.
+
 When you add or revise a helper script, keep the CLI alias-tolerant and give safe defaults for metadata that can be inferred. The goal is to reduce agent parameter brittleness, not to force one exact flag spelling.
 
 Current primary helpers:
@@ -48,7 +50,7 @@ Untracked workspace-local state lives under `.vaws-local/`:
 - `.vaws-local/remote-code-parity/install-consents.json`
 - `.vaws-local/remote-code-parity/runtime-state.json`
 
-Remote-code-parity transport is container-only after machine attach: use machine inventory to resolve the target, then push synthetic refs directly into the container-local cache root.
+Remote-code-parity transport is container-only after machine attach: use machine inventory to resolve the target, then push synthetic refs directly into the container-local cache root. Synthetic mirrors should also publish an advertised branch ref for the current snapshot so nested repos can be materialized without brittle submodule fetch behavior.
 
 The legacy repo-root `.machine-inventory.json` is compatibility input only and should not be reintroduced as the primary path.
 

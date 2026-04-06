@@ -14,24 +14,36 @@ import argparse
 import json
 import os
 import pathlib
+import queue
 import re
 import shlex
 import shutil
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 from dataclasses import dataclass
 from typing import Any, Sequence
 
 
-DEFAULT_IMAGE = "quay.nju.edu.cn/ascend/vllm-ascend:latest"
+DEFAULT_IMAGE = "auto"
+DEFAULT_IMAGE_CANDIDATES = (
+    "quay.nju.edu.cn/ascend/vllm-ascend:latest",
+    "quay.io/ascend/vllm-ascend:latest",
+)
 DEFAULT_WORKDIR = "/vllm-workspace"
 DEFAULT_HOST_USER = "root"
 DEFAULT_HOST_PORT = 22
 DEFAULT_PORT_RANGE = "46000:46999"
 DEFAULT_KNOWN_HOSTS = pathlib.Path.home() / ".ssh" / "known_hosts"
 SENTINEL = "__VAWS_JSON__="
+PROGRESS_SENTINEL = "__VAWS_PROGRESS__="
 DEFAULT_PASSWORD_ENV = "VAWS_SSH_PASSWORD"
+DEFAULT_PROBE_TIMEOUT_SECONDS = 60
+DEFAULT_BOOTSTRAP_TIMEOUT_SECONDS = 1800
+DEFAULT_SMOKE_TIMEOUT_SECONDS = 240
+DEFAULT_REMOTE_TIMEOUT_GRACE_SECONDS = 8
 ENV_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
@@ -224,6 +236,9 @@ class RemoteResult:
     stdout: str
     stderr: str
     payload: dict[str, Any] | None
+    timed_out: bool = False
+    timeout_seconds: int | None = None
+    progress_events: list[dict[str, Any]] | None = None
 
 
 def parse_sentinel(stdout: str) -> dict[str, Any] | None:
@@ -237,22 +252,146 @@ def parse_sentinel(stdout: str) -> dict[str, Any] | None:
     return payload
 
 
+def parse_progress_event(line: str) -> dict[str, Any] | None:
+    if not line.startswith(PROGRESS_SENTINEL):
+        return None
+    try:
+        event = json.loads(line[len(PROGRESS_SENTINEL) :])
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(event, dict):
+        return None
+    return event
+
+
+def format_progress_event(event: dict[str, Any], *, target: SshTarget | None = None) -> str:
+    phase = str(event.get("phase") or "remote")
+    message = str(event.get("message") or event.get("status") or "running")
+    expected = event.get("expected_seconds")
+    if isinstance(expected, int) and expected > 0:
+        message = f"{message} (~{expected}s)"
+    host = f" {target.host}" if target is not None else ""
+    return f"[vaws{host}][{phase}] {message}"
+
+
+def emit_progress_event(event: dict[str, Any], *, target: SshTarget | None = None) -> None:
+    sys.stderr.write(format_progress_event(event, target=target) + "\n")
+    sys.stderr.flush()
+
+
 def run_remote_script(
     target: SshTarget,
     script: str,
     *,
     args: Sequence[str] = (),
     batch_mode: bool = True,
+    timeout_seconds: int | None = None,
+    stream_progress: bool = True,
 ) -> RemoteResult:
     remote_cmd = remote_shell_command(["bash", "-s", "--", *args])
     cmd = ssh_command(target, batch_mode=batch_mode) + [remote_cmd]
-    proc = run_local(cmd, input_text=script)
+    try:
+        proc = subprocess.Popen(
+            list(cmd),
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+    except FileNotFoundError as exc:
+        raise MachineManagementError(f"required local command not found: {cmd[0]}") from exc
+
+    assert proc.stdin is not None
+    proc.stdin.write(script)
+    proc.stdin.close()
+
+    q: queue.Queue[tuple[str, str | None]] = queue.Queue()
+    stdout_parts: list[str] = []
+    stderr_parts: list[str] = []
+    progress_events: list[dict[str, Any]] = []
+
+    def reader(stream_name: str, pipe: Any) -> None:
+        try:
+            for line in pipe:
+                q.put((stream_name, line))
+        finally:
+            q.put((stream_name, None))
+
+    threads = [
+        threading.Thread(target=reader, args=("stdout", proc.stdout), daemon=True),
+        threading.Thread(target=reader, args=("stderr", proc.stderr), daemon=True),
+    ]
+    for thread in threads:
+        thread.start()
+
+    done_streams: set[str] = set()
+    deadline = time.monotonic() + timeout_seconds if timeout_seconds is not None else None
+    timed_out = False
+
+    while len(done_streams) < 2 or proc.poll() is None:
+        if deadline is not None and time.monotonic() >= deadline and proc.poll() is None:
+            timed_out = True
+            proc.kill()
+            break
+        wait_timeout = 0.2
+        if deadline is not None:
+            wait_timeout = max(0.01, min(wait_timeout, deadline - time.monotonic()))
+        try:
+            stream_name, line = q.get(timeout=wait_timeout)
+        except queue.Empty:
+            continue
+        if line is None:
+            done_streams.add(stream_name)
+            continue
+        if stream_name == "stdout":
+            stdout_parts.append(line)
+        else:
+            stderr_parts.append(line)
+        event = parse_progress_event(line)
+        if event is not None:
+            progress_events.append(event)
+            if stream_progress:
+                emit_progress_event(event, target=target)
+
+    try:
+        proc.wait(timeout=DEFAULT_REMOTE_TIMEOUT_GRACE_SECONDS)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait(timeout=DEFAULT_REMOTE_TIMEOUT_GRACE_SECONDS)
+
+    for thread in threads:
+        thread.join(timeout=1)
+
+    while True:
+        try:
+            stream_name, line = q.get_nowait()
+        except queue.Empty:
+            break
+        if line is None:
+            continue
+        if stream_name == "stdout":
+            stdout_parts.append(line)
+        else:
+            stderr_parts.append(line)
+        event = parse_progress_event(line)
+        if event is not None and event not in progress_events:
+            progress_events.append(event)
+            if stream_progress:
+                emit_progress_event(event, target=target)
+
+    stdout = "".join(stdout_parts)
+    stderr = "".join(stderr_parts)
     return RemoteResult(
         target=target,
-        returncode=proc.returncode,
-        stdout=proc.stdout,
-        stderr=proc.stderr,
-        payload=parse_sentinel(proc.stdout),
+        returncode=proc.returncode or 0,
+        stdout=stdout,
+        stderr=stderr,
+        payload=parse_sentinel(stdout),
+        timed_out=timed_out,
+        timeout_seconds=timeout_seconds,
+        progress_events=progress_events,
     )
 
 
@@ -268,6 +407,32 @@ def compact_failure_tail(text: str, *, max_lines: int = 20, max_chars: int = 160
 
 
 def assert_remote_success(result: RemoteResult, *, require_payload: bool = True) -> dict[str, Any]:
+    payload = dict(result.payload or {})
+    if result.progress_events:
+        payload.setdefault("progress_events", result.progress_events)
+    if result.timeout_seconds is not None:
+        transport = payload.setdefault("transport", {})
+        transport.setdefault("timeout_seconds", result.timeout_seconds)
+        transport.setdefault("timed_out", result.timed_out)
+
+    if result.timed_out:
+        if result.payload is not None and result.payload.get("success") is True:
+            transport = payload.setdefault("transport", {})
+            transport.update({
+                "timeout_seconds": result.timeout_seconds,
+                "timed_out": True,
+                "timeout_recovered_after_payload": True,
+                "returncode": result.returncode,
+            })
+            return payload
+        detail = f"remote command timed out after {result.timeout_seconds}s"
+        if result.progress_events:
+            detail += f"; last progress: {format_progress_event(result.progress_events[-1], target=result.target)}"
+        stderr_tail = compact_failure_tail(result.stderr)
+        if stderr_tail:
+            detail += f"\n--- stderr tail ---\n{stderr_tail}"
+        raise MachineManagementError(detail)
+
     if require_payload and result.payload is None:
         detail = result.stderr.strip() or result.stdout.strip() or "remote command produced no JSON payload"
         raise MachineManagementError(detail)
@@ -280,7 +445,7 @@ def assert_remote_success(result: RemoteResult, *, require_payload: bool = True)
             raise MachineManagementError(base)
         detail = result.stderr.strip() or result.stdout.strip() or "remote command failed"
         raise MachineManagementError(detail)
-    return result.payload or {}
+    return payload
 
 
 def find_public_key(explicit: str | None = None) -> pathlib.Path:
@@ -313,7 +478,7 @@ def load_public_key(path: pathlib.Path) -> str:
 def render_host_probe_script() -> str:
     template = r'''#!/usr/bin/env bash
 set -euo pipefail
-image="$1"
+image_spec="$1"
 port_range="$2"
 prefix="$3"
 py=""
@@ -327,7 +492,7 @@ if [ -z "$py" ]; then
   echo "__SENTINEL__{\"success\": false, \"error\": \"python not found on remote host\"}"
   exit 3
 fi
-"$py" - "$image" "$port_range" "$prefix" <<'PY'
+"$py" - "$image_spec" "$port_range" "$prefix" <<'PY'
 import json
 import os
 import pathlib
@@ -336,7 +501,8 @@ import socket
 import subprocess
 import sys
 
-image, port_range, prefix = sys.argv[1:4]
+AUTO_CANDIDATES = ["quay.nju.edu.cn/ascend/vllm-ascend:latest", "quay.io/ascend/vllm-ascend:latest"]
+image_spec, port_range, prefix = sys.argv[1:4]
 start_s, end_s = port_range.split(":", 1)
 start, end = int(start_s), int(end_s)
 
@@ -353,6 +519,14 @@ def run(cmd: list[str]) -> tuple[int, str, str]:
     return proc.returncode, proc.stdout.strip(), proc.stderr.strip()
 
 
+def resolve_image_candidates(spec: str) -> list[str]:
+    if spec == "auto":
+        return list(AUTO_CANDIDATES)
+    candidates = [item.strip() for item in spec.split(",") if item.strip()]
+    return candidates or [spec]
+
+
+candidates = resolve_image_candidates(image_spec)
 result: dict[str, object] = {
     "success": True,
     "hostname": socket.gethostname(),
@@ -366,8 +540,12 @@ result: dict[str, object] = {
     "optional_mounts": [],
     "npu_smi_present": os.path.exists("/usr/local/bin/npu-smi"),
     "image": {
-        "name": image,
+        "name": image_spec,
+        "requested": image_spec,
+        "policy": "auto-refresh-pull" if image_spec == "auto" else "explicit",
+        "candidates": candidates,
         "present_local": False,
+        "present_local_candidates": [],
     },
     "managed_containers": [],
     "free_port": None,
@@ -401,8 +579,13 @@ if result["docker"]["present"]:
         result["docker"]["version"] = out
     rc, _, _ = run(["docker", "info"])
     result["docker"]["info_ok"] = rc == 0
-    rc, _, _ = run(["docker", "image", "inspect", image])
-    result["image"]["present_local"] = rc == 0
+    present_local_candidates: list[str] = []
+    for candidate in candidates:
+        rc, _, _ = run(["docker", "image", "inspect", candidate])
+        if rc == 0:
+            present_local_candidates.append(candidate)
+    result["image"]["present_local_candidates"] = present_local_candidates
+    result["image"]["present_local"] = bool(present_local_candidates)
     rc, out, _ = run(["docker", "ps", "-a", "--format", "{{.Names}}\t{{.Status}}\t{{.Image}}"])
     if rc == 0:
         rows = []
@@ -447,10 +630,11 @@ def render_bootstrap_host_script() -> str:
 set -euo pipefail
 container="$1"
 port="$2"
-image="$3"
+image_spec="$3"
 workdir="$4"
 pubkey="$5"
 namespace="${6:-}"
+auto_candidates_json='["quay.nju.edu.cn/ascend/vllm-ascend:latest", "quay.io/ascend/vllm-ascend:latest"]'
 
 emit_json() {
   python3 - "$1" <<'PY'
@@ -460,6 +644,40 @@ print("__SENTINEL__" + json.dumps(json.loads(sys.argv[1]), ensure_ascii=False))
 PY
 }
 
+emit_progress() {
+  python3 - "$1" "$2" "$3" "${4:-}" <<'PY' >&2
+import json
+import sys
+payload = {
+    "phase": sys.argv[1],
+    "status": sys.argv[2],
+    "message": sys.argv[3],
+}
+if len(sys.argv) > 4 and sys.argv[4]:
+    try:
+        payload["expected_seconds"] = int(sys.argv[4])
+    except ValueError:
+        pass
+print("__PROGRESS__" + json.dumps(payload, ensure_ascii=False))
+PY
+}
+
+resolve_image_candidates() {
+  python3 - "$image_spec" "$auto_candidates_json" <<'PY'
+import json
+import sys
+image_spec = sys.argv[1]
+auto_candidates = json.loads(sys.argv[2])
+if image_spec == "auto":
+    candidates = auto_candidates
+else:
+    candidates = [item.strip() for item in image_spec.split(",") if item.strip()] or [image_spec]
+for item in candidates:
+    print(item)
+PY
+}
+
+emit_progress "preflight" "running" "validating host docker and Ascend prerequisites" 15
 if ! command -v docker >/dev/null 2>&1; then
   emit_json '{"success": false, "error": "docker not found on host", "phase": "probe"}'
   exit 10
@@ -499,26 +717,47 @@ started=false
 pulled=false
 installed_ssh=false
 firewall="none"
+selected_image=""
+image_resolution="unknown"
 
 if docker inspect "$container" >/dev/null 2>&1; then
+  emit_progress "container" "running" "reusing an existing managed container" 15
   state=$(docker inspect -f '{{.State.Status}}' "$container")
+  selected_image=$(docker inspect -f '{{.Config.Image}}' "$container")
+  image_resolution="existing-container"
   if [ "$state" != "running" ]; then
     docker start "$container" >/dev/null
     started=true
     actions+=("started-existing-container")
   fi
 else
-  if ! docker image inspect "$image" >/dev/null 2>&1; then
+  mapfile -t image_candidates < <(resolve_image_candidates)
+  if [ "${#image_candidates[@]}" -eq 0 ]; then
+    image_candidates=("$image_spec")
+  fi
+  emit_progress "image" "running" "resolving container image" 180
+  for candidate in "${image_candidates[@]}"; do
+    emit_progress "image" "running" "trying image candidate $candidate" 180
     pull_log=$(mktemp)
-    if ! docker pull "$image" >"$pull_log" 2>&1; then
-      tail -n 120 "$pull_log" >&2 || true
+    if docker pull "$candidate" >"$pull_log" 2>&1; then
       rm -f "$pull_log"
-      emit_json '{"success": false, "error": "docker pull failed", "phase": "image"}'
-      exit 20
+      selected_image="$candidate"
+      image_resolution="pulled"
+      pulled=true
+      actions+=("pulled-image")
+      break
     fi
     rm -f "$pull_log"
-    pulled=true
-    actions+=("pulled-image")
+    if docker image inspect "$candidate" >/dev/null 2>&1; then
+      selected_image="$candidate"
+      image_resolution="local-cache"
+      actions+=("reused-local-image-cache")
+      break
+    fi
+  done
+  if [ -z "$selected_image" ]; then
+    emit_json '{"success": false, "error": "no usable image candidate was found", "phase": "image"}'
+    exit 20
   fi
 
   mount_args=()
@@ -528,6 +767,7 @@ else
     fi
   done
 
+  emit_progress "container" "running" "creating managed container" 45
   docker run --name "$container" -it -d --network host --shm-size=500g \
     --privileged=true \
     --label com.vaws.managed=true \
@@ -545,13 +785,14 @@ else
     -v /usr/local/sbin:/usr/local/sbin \
     -v /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro \
     "${mount_args[@]}" \
-    "$image" >/dev/null
+    "$selected_image" >/dev/null
 
   created=true
   actions+=("created-container")
 fi
 
 if ! docker exec "$container" bash -lc 'command -v sshd >/dev/null 2>&1 && command -v ssh >/dev/null 2>&1'; then
+  emit_progress "container-ssh" "running" "installing openssh inside the container" 600
   if ! docker exec "$container" bash -lc '
 set -euo pipefail
 log=$(mktemp)
@@ -569,6 +810,7 @@ fi
   actions+=("installed-openssh")
 fi
 
+emit_progress "container-ssh" "running" "configuring dedicated container sshd" 60
 if ! docker exec -i "$container" bash -s -- "$port" "$pubkey" <<'INNER'
 set -euo pipefail
 port="$1"
@@ -581,7 +823,7 @@ fi
 chmod 600 /root/.ssh/authorized_keys
 install -d -m 0755 /run/sshd
 ssh-keygen -A >/dev/null 2>&1 || true
-cat > /etc/ssh/sshd_vaws_config <<EOF
+cat > /etc/ssh/sshd_vaws_config <<EOF2
 Port ${port}
 ListenAddress 0.0.0.0
 Protocol 2
@@ -597,7 +839,7 @@ UsePAM no
 PrintMotd no
 AuthorizedKeysFile .ssh/authorized_keys
 PidFile /run/sshd_vaws.pid
-EOF
+EOF2
 /usr/sbin/sshd -t -f /etc/ssh/sshd_vaws_config
 if [ -f /run/sshd_vaws.pid ]; then
   kill "$(cat /run/sshd_vaws.pid)" 2>/dev/null || true
@@ -615,6 +857,7 @@ then
 fi
 actions+=("configured-dedicated-sshd")
 
+emit_progress "firewall" "running" "updating host firewall for the container ssh port" 30
 if command -v ufw >/dev/null 2>&1; then
   ufw allow "${port}/tcp" >/dev/null 2>&1 || true
   firewall="ufw"
@@ -624,15 +867,26 @@ elif command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 
   firewall="firewalld"
 fi
 
-payload=$(python3 - <<'PY' "$container" "$port" "$image" "$workdir" "$namespace" "$created" "$started" "$pulled" "$installed_ssh" "$firewall" "${actions[*]}"
+payload=$(python3 - <<'PY' "$container" "$port" "$image_spec" "$selected_image" "$image_resolution" "$workdir" "$namespace" "$created" "$started" "$pulled" "$installed_ssh" "$firewall" "${actions[*]}" "$auto_candidates_json"
 import json
 import sys
-container, port, image, workdir, namespace, created, started, pulled, installed_ssh, firewall, actions = sys.argv[1:]
+
+def resolve_candidates(spec: str, auto_candidates_text: str) -> list[str]:
+    auto_candidates = json.loads(auto_candidates_text)
+    if spec == "auto":
+        return auto_candidates
+    return [item.strip() for item in spec.split(",") if item.strip()] or [spec]
+
+container, port, requested_image, selected_image, image_resolution, workdir, namespace, created, started, pulled, installed_ssh, firewall, actions, auto_candidates_json = sys.argv[1:]
 print(json.dumps({
     "success": True,
     "container": container,
     "container_ssh_port": int(port),
-    "image": image,
+    "image": selected_image,
+    "requested_image": requested_image,
+    "selected_image": selected_image,
+    "image_resolution": image_resolution,
+    "image_candidates": resolve_candidates(requested_image, auto_candidates_json),
     "workdir": workdir,
     "namespace": namespace or None,
     "created": created == "true",
@@ -644,15 +898,28 @@ print(json.dumps({
 }, ensure_ascii=False))
 PY
 )
+emit_progress "complete" "done" "managed container bootstrap completed" 0
 emit_json "$payload"
 '''
-    return template.replace("__SENTINEL__", SENTINEL)
+    return template.replace("__SENTINEL__", SENTINEL).replace("__PROGRESS__", PROGRESS_SENTINEL)
 
 
 def render_smoke_script() -> str:
     template = r'''#!/usr/bin/env bash
 set -euo pipefail
 requested_python="${1:-}"
+
+emit_progress() {
+  python3 - "$1" "$2" "$3" <<'PY' >&2
+import json
+import sys
+print("__PROGRESS__" + json.dumps({
+    "phase": sys.argv[1],
+    "status": sys.argv[2],
+    "message": sys.argv[3],
+}, ensure_ascii=False))
+PY
+}
 
 detect_python() {
   if [ -n "$requested_python" ] && [ -x "$requested_python" ]; then
@@ -676,12 +943,14 @@ detect_python() {
   return 1
 }
 
+emit_progress "python-discovery" "running" "discovering a usable python inside the container"
 PYTHON_BIN="$(detect_python || true)"
 if [ -z "$PYTHON_BIN" ]; then
   echo "__SENTINEL__{\"success\": false, \"error\": \"python not found in container\", \"phase\": \"python-discovery\"}"
   exit 40
 fi
 
+emit_progress "env" "running" "preparing Ascend and python environment"
 export PATH="${PATH:-}"
 export LD_LIBRARY_PATH="/usr/local/Ascend/driver/lib64/driver:/usr/local/Ascend/driver/lib64:${LD_LIBRARY_PATH:-}"
 export VLLM_WORKER_MULTIPROC_METHOD=spawn
@@ -710,8 +979,14 @@ import os
 import sys
 import traceback
 
+PROGRESS = "__PROGRESS__"
 python_path = sys.argv[1]
 sourced_text = sys.argv[2]
+
+def progress(phase: str, message: str) -> None:
+    sys.stderr.write(PROGRESS + json.dumps({"phase": phase, "status": "running", "message": message}, ensure_ascii=False) + "\n")
+    sys.stderr.flush()
+
 result = {
     "success": False,
     "python_path": python_path,
@@ -724,10 +999,13 @@ result = {
     "sourced_scripts": [line for line in sourced_text.splitlines() if line],
 }
 try:
+    progress("smoke", "importing torch and torch_npu")
     import torch
     import torch_npu  # noqa: F401
 
+    progress("smoke", "allocating a small tensor on NPU")
     x = torch.zeros(1, 2).npu()
+    progress("smoke", "container smoke test passed")
     result.update(
         {
             "success": True,
@@ -751,7 +1029,7 @@ print("__SENTINEL__" + json.dumps(result, ensure_ascii=False))
 raise SystemExit(0 if result["success"] else 3)
 PY
 '''
-    return template.replace("__SENTINEL__", SENTINEL)
+    return template.replace("__SENTINEL__", SENTINEL).replace("__PROGRESS__", PROGRESS_SENTINEL)
 
 
 def render_mesh_export_key_script() -> str:
@@ -1025,6 +1303,7 @@ def cmd_probe_host(args: argparse.Namespace) -> int:
         render_host_probe_script(),
         args=[args.image, args.port_range, args.managed_prefix],
         batch_mode=True,
+        timeout_seconds=DEFAULT_PROBE_TIMEOUT_SECONDS,
     )
     payload = assert_remote_success(result)
     payload["target"] = {
@@ -1053,6 +1332,7 @@ def cmd_bootstrap_container(args: argparse.Namespace) -> int:
             args.namespace or "",
         ],
         batch_mode=True,
+        timeout_seconds=DEFAULT_BOOTSTRAP_TIMEOUT_SECONDS,
     )
     payload = assert_remote_success(result)
 
@@ -1092,6 +1372,7 @@ def smoke_payload(args: argparse.Namespace) -> dict[str, Any]:
         render_smoke_script(),
         args=[python_arg],
         batch_mode=True,
+        timeout_seconds=DEFAULT_SMOKE_TIMEOUT_SECONDS,
     )
     payload = assert_remote_success(result, require_payload=True)
     payload["target"] = {
@@ -1290,7 +1571,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     probe = subparsers.add_parser("probe-host", help="probe host prerequisites and choose a free high SSH port")
     add_host_args(probe)
-    probe.add_argument("--image", default=DEFAULT_IMAGE, help=f"image name (default: {DEFAULT_IMAGE})")
+    probe.add_argument("--image", default=DEFAULT_IMAGE, help=f"image name or image policy (default: {DEFAULT_IMAGE}; auto tries {DEFAULT_IMAGE_CANDIDATES[0]} then {DEFAULT_IMAGE_CANDIDATES[1]})")
     probe.add_argument("--port-range", default=DEFAULT_PORT_RANGE, help=f"inclusive range START:END (default: {DEFAULT_PORT_RANGE})")
     probe.add_argument("--managed-prefix", default="vaws-", help="managed container name prefix (default: vaws-)")
     probe.set_defaults(func=cmd_probe_host)
@@ -1338,7 +1619,7 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="high non-default SSH port for the managed container",
     )
-    bootstrap.add_argument("--image", default=DEFAULT_IMAGE, help=f"image name (default: {DEFAULT_IMAGE})")
+    bootstrap.add_argument("--image", default=DEFAULT_IMAGE, help=f"image name or image policy (default: {DEFAULT_IMAGE}; auto tries {DEFAULT_IMAGE_CANDIDATES[0]} then {DEFAULT_IMAGE_CANDIDATES[1]})")
     bootstrap.add_argument("--workdir", default=DEFAULT_WORKDIR, help=f"container workdir (default: {DEFAULT_WORKDIR})")
     bootstrap.add_argument("--namespace", help="stable workspace machine username used for collision-safe container naming")
     bootstrap.add_argument("--public-key-file", help="local SSH public key to add to the container; defaults to ~/.ssh/id_ed25519.pub if present")

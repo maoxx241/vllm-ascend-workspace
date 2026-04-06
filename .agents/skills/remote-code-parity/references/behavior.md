@@ -10,6 +10,7 @@ This file defines the durable behavior of `remote-code-parity`.
 - Keep all local parity state under `.vaws-local/remote-code-parity/`.
 - Fail closed when parity cannot be proven.
 - Prove the final container-side commit ids instead of trusting command exit status alone.
+- Stream phase progress on `stderr` as `__VAWS_PARITY_PROGRESS__=<json>` and keep one final JSON payload on `stdout`.
 
 ## Scope and routing
 
@@ -77,6 +78,7 @@ Required behavior:
 
 - create bare mirror repos inside the container cache root
 - push synthetic refs directly from local -> container SSH
+- also publish an advertised branch ref inside each mirror so ordinary fetch paths can see the latest synthetic snapshot
 - use a container-local lock while mutating cache or runtime state
 - do not create or reuse a shared flat host path such as `/home/vaws`
 
@@ -89,6 +91,7 @@ Materialization requirements:
 - initialize the root repo in place when `.git` is missing
 - force the root repo and submodules to the synthetic snapshot commits
 - rewrite submodule URLs to container-local mirror paths
+- materialize child repos explicitly instead of relying on `git submodule update` to fetch synthetic child commits
 - preserve runtime-private sibling paths such as `Mooncake`
 - preserve `.remote-code-parity` so the container-side marker survives root cleanups
 - do not delete the entire runtime root as part of normal sync
@@ -148,3 +151,10 @@ A trustworthy parity result records:
 - whether `vllm` and `vllm-ascend` were reinstalled
 - whether first-time consent was consulted or blocked
 - any mismatch between the manifest and runtime state
+
+## Runtime install compatibility
+
+- discover the runtime Python dynamically from `/usr/local/python*/bin/python3`, then fall back to `python3` or `python`
+- export the Ascend driver `LD_LIBRARY_PATH` prefix before sourcing optional env scripts
+- keep the fast path on `pip install -e . --no-build-isolation`
+- if editable install fails because the image packaging stack is too old for the current `pyproject.toml`, attempt one bounded packaging-stack refresh and one retry before failing closed
