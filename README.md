@@ -37,7 +37,7 @@ Untracked workspace-local state lives under `.vaws-local/`:
 - `.vaws-local/machine-profile.json`: the stable machine username / namespace used to derive collision-safe container names such as `vaws-alice123`
 - `.vaws-local/machine-inventory.json`: managed remote-machine records for this local clone
 - `.vaws-local/remote-code-parity/install-consents.json`: per-container approval state for the first replacement of image-provided `vllm` / `vllm-ascend`
-- `.vaws-local/remote-code-parity/runtime-state.json`: advisory parity state such as the last validated `storage_root` per server and the last synced synthetic commits
+- `.vaws-local/remote-code-parity/runtime-state.json`: advisory parity state such as the last synced synthetic commits, runtime root, and container-local cache root per managed target
 
 The legacy repo-root `.machine-inventory.json` is compatibility input only.
 
@@ -89,13 +89,14 @@ New managed containers should derive their name from the local machine profile r
 
 When invoked automatically before remote execution, `remote-code-parity` can:
 
-1. treat the local working tree as the source of truth, including committed, staged, unstaged, and untracked files
+1. treat the local working tree as the source of truth, including committed, staged, unstaged, and untracked **non-ignored** files
 2. build synthetic Git snapshot commits for the workspace root, `vllm/`, `vllm-ascend/`, and any nested populated submodules without forcing a real commit
-3. publish those snapshots into host-local bare mirror repositories under a validated `storage_root`
-4. materialize the mirrored commits inside the ready runtime container so the checked-out code matches the local workspace exactly
-5. on the first sync for a fresh container, require explicit user consent before uninstalling image-provided `vllm` / `vllm-ascend` and reinstalling them from the mirrored source trees
-6. on later syncs, reinstall only when build-critical paths changed
-7. verify the final runtime commit ids instead of assuming success from command exit status alone
+3. push those snapshots directly into **container-local** bare mirror repositories over direct local -> container SSH
+4. materialize the mirrored commits in place inside `/vllm-workspace` so the checked-out code matches the local workspace exactly
+5. preserve runtime-private paths such as `Mooncake` instead of replacing the entire runtime root
+6. on the first sync for a fresh container, require explicit user consent before uninstalling image-provided `vllm` / `vllm-ascend`, deleting only `/vllm-workspace/vllm` and `/vllm-workspace/vllm-ascend`, and reinstalling them from the synced source trees
+7. on later syncs, reinstall only when build-critical paths changed
+8. verify the final runtime commit ids instead of assuming success from command exit status alone
 
 `remote-code-parity` is not a machine-attach or SSH-repair workflow. It assumes `machine-management` already proved the target container is reachable by key-based SSH.
 
