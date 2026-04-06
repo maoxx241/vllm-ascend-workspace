@@ -29,6 +29,7 @@ Repo-local skills live under `.agents/skills/`.
   - `.agents/skills/machine-management/scripts/machine_remove.py`
 - Treat `.agents/skills/machine-management/scripts/inventory.py` and `.agents/skills/machine-management/scripts/manage_machine.py` as low-level maintenance helpers, not the default agent-facing surface.
 - Keep helper CLIs ergonomic: accept common aliases, disable brittle prefix-abbreviation behavior, and default metadata that can be inferred safely.
+- For normal remote-code-parity work, prefer `.agents/skills/remote-code-parity/scripts/parity_sync.py` over the low-level `remote_code_parity.py` helper.
 - Prefer concise machine-readable summaries over long raw command logs.
 - When a command is noisy, capture the log and report only a compact summary plus a short failure tail.
 - Preserve user choices and extra remotes unless the user explicitly asks to replace them.
@@ -48,7 +49,7 @@ Repo-local skills live under `.agents/skills/`.
 
 ## Mandatory execution gate
 
-- When a ready managed machine is about to run a remote smoke, service launch, or benchmark, run `remote-code-parity` first.
+- When a ready managed machine is about to run a remote smoke, service launch, or benchmark, run `remote-code-parity` first. Prefer the inventory-driven `parity_sync.py` entrypoint.
 - Do not continue remote execution unless `remote-code-parity` returned `status == ready`.
 - If the first runtime replacement is blocked by missing consent, stop and get consent instead of silently using the image-provided packages.
 
@@ -76,7 +77,7 @@ Do not use `machine-management` for code sync, source rebuilds, serving, benchma
 Use `remote-code-parity` automatically when:
 
 - a ready managed machine is about to run a remote smoke, service launch, or benchmark
-- the request depends on local uncommitted changes, untracked files, or ignored-but-allowed files being reflected remotely
+- the request depends on local uncommitted changes, untracked files, or other non-ignored local files being reflected remotely
 - the container already accepts direct local -> container key-based SSH
 
 Do not use `remote-code-parity` for initial machine attach, SSH repair, generic Git topology work, or unrelated local-only tasks.

@@ -2,78 +2,61 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
+import json
 from pathlib import Path
+from typing import Any
 
-from common import json_dump, now_utc
-
-
-@dataclass
-class Candidate:
-    path: Path
-    category: str
-    modified_ns: int
-
-
-def list_candidates(workspace_root: Path) -> list[Candidate]:
-    candidates: list[Candidate] = []
-    for category in ("manifests", "logs"):
-        category_path = workspace_root / category
-        if not category_path.exists():
-            continue
-        for item in category_path.iterdir():
-            if item.is_file():
-                candidates.append(Candidate(item, category, item.stat().st_mtime_ns))
-    return sorted(candidates, key=lambda item: item.modified_ns, reverse=True)
-
-
-def run_gc(args: argparse.Namespace) -> int:
-    workspace_root = Path(args.storage_root) / "remote-code-parity" / "workspaces" / args.workspace_id
-    candidates = list_candidates(workspace_root)
-
-    kept: list[str] = []
-    removed: list[str] = []
-    keep_limit = {
-        "manifests": args.keep_success,
-        "logs": args.keep_failure,
-    }
-    counts = {"manifests": 0, "logs": 0}
-    for candidate in candidates:
-        counts[candidate.category] += 1
-        if counts[candidate.category] <= keep_limit[candidate.category]:
-            kept.append(str(candidate.path))
-            continue
-        removed.append(str(candidate.path))
-        if not args.dry_run:
-            candidate.path.unlink(missing_ok=True)
-
-    print(
-        json_dump(
-            {
-                "generated_at": now_utc(),
-                "workspace_root": str(workspace_root),
-                "dry_run": args.dry_run,
-                "kept": kept,
-                "removed": removed,
-            }
-        )
-    )
-    return 0
+from common import SshEndpoint, json_dump, quoted, ssh_exec
+from remote_code_parity import DEFAULT_CONTAINER_CACHE_ROOT, cache_workspace_root
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Prune old remote-code-parity manifests and logs.")
-    parser.add_argument("--storage-root", required=True)
-    parser.add_argument("--workspace-id", required=True)
-    parser.add_argument("--keep-success", type=int, default=3)
-    parser.add_argument("--keep-failure", type=int, default=1)
-    parser.add_argument("--dry-run", action="store_true")
+    parser = argparse.ArgumentParser(description='Prune old remote-code-parity manifests inside the container-local cache root.')
+    parser.add_argument('--container-host', required=True)
+    parser.add_argument('--container-port', type=int, required=True)
+    parser.add_argument('--container-user', required=True)
+    parser.add_argument('--workspace-id', required=True)
+    parser.add_argument('--container-cache-root', default=DEFAULT_CONTAINER_CACHE_ROOT)
+    parser.add_argument('--keep-manifests', type=int, default=5)
+    parser.add_argument('--dry-run', action='store_true')
     return parser
+
+
+def run_gc(args: argparse.Namespace) -> int:
+    container = SshEndpoint(host=args.container_host, port=args.container_port, user=args.container_user)
+    workspace_root = cache_workspace_root(args.container_cache_root, args.workspace_id)
+    manifests_dir = str(Path(workspace_root) / 'manifests')
+    script = '\n'.join(
+        [
+            'set -eo pipefail',
+            f"python3 - {quoted(manifests_dir)} {args.keep_manifests} {1 if args.dry_run else 0} <<'PY'",
+            'import json',
+            'import os',
+            'import sys',
+            'from pathlib import Path',
+            'manifests_dir = Path(sys.argv[1])',
+            'keep = int(sys.argv[2])',
+            'dry_run = bool(int(sys.argv[3]))',
+            "files = sorted([item for item in manifests_dir.iterdir() if item.is_file()], key=lambda item: item.stat().st_mtime_ns, reverse=True) if manifests_dir.exists() else []",
+            'kept = [str(item) for item in files[:keep]]',
+            'removed = [str(item) for item in files[keep:]]',
+            'if not dry_run:',
+            '    for item in files[keep:]:',
+            '        item.unlink(missing_ok=True)',
+            "print(json.dumps({'workspace_root': str(manifests_dir.parent), 'kept': kept, 'removed': removed}, indent=2, sort_keys=True))",
+            'PY',
+        ]
+    )
+    result = ssh_exec(container, script)
+    payload: dict[str, Any] = json.loads(result.stdout)
+    payload['dry_run'] = args.dry_run
+    print(json_dump(payload))
+    return 0
 
 
 def main() -> int:
     return run_gc(build_parser().parse_args())
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     raise SystemExit(main())

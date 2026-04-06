@@ -5,13 +5,22 @@ Prefer the helper scripts in `scripts/` when possible.
 ## Inspect the current consent state
 
 ```bash
-python3 .agents/skills/remote-code-parity/scripts/install_consent.py resolve   --repo-root .   --server-name blue-a   --container-identity c-20260405-01
+python3 .agents/skills/remote-code-parity/scripts/install_consent.py resolve \
+  --repo-root . \
+  --server-name blue-a \
+  --container-identity vaws-blue@/vllm-workspace
 ```
 
 ## Approve the first runtime replacement for one container
 
 ```bash
-python3 .agents/skills/remote-code-parity/scripts/install_consent.py set   --repo-root .   --server-name blue-a   --container-identity c-20260405-01   --decision allow   --note "approved for first editable install"
+python3 .agents/skills/remote-code-parity/scripts/install_consent.py set \
+  --repo-root . \
+  --server-name blue-a \
+  --container-identity vaws-blue@/vllm-workspace \
+  --decision allow \
+  --note "approved for first editable install" \
+  --approved-by-user
 ```
 
 ## Bulk-approve several containers at once
@@ -22,12 +31,12 @@ Input file example:
 [
   {
     "server_name": "blue-a",
-    "container_identity": "c-20260405-01",
+    "container_identity": "vaws-blue@/vllm-workspace",
     "decision": "allow"
   },
   {
     "server_name": "blue-b",
-    "container_identity": "c-20260405-09",
+    "container_identity": "vaws-blue-b@/vllm-workspace",
     "decision": "deny",
     "note": "leave image packages intact"
   }
@@ -37,44 +46,85 @@ Input file example:
 Apply:
 
 ```bash
-python3 .agents/skills/remote-code-parity/scripts/install_consent.py batch-set   --repo-root .   --input approvals.json
+python3 .agents/skills/remote-code-parity/scripts/install_consent.py batch-set \
+  --repo-root . \
+  --input approvals.json \
+  --approved-by-user
 ```
 
-## Dry-run the local parity plan
+## Inspect the derived sync arguments from inventory
 
 ```bash
-python3 .agents/skills/remote-code-parity/scripts/remote_code_parity.py plan   --workspace-root .   --workspace-id vaws-main   --server-name blue-a   --container-identity c-20260405-01   --runtime-root /vllm-workspace   --storage-root /mnt/nvme/vaws
+python3 .agents/skills/remote-code-parity/scripts/parity_sync.py \
+  --machine blue-a \
+  --print-derived-args
 ```
 
-## Full sync against an already-known storage root
+## Normal sync against a managed machine
 
 ```bash
-python3 .agents/skills/remote-code-parity/scripts/remote_code_parity.py sync   --workspace-root .   --workspace-id vaws-main   --server-name blue-a   --host lab.example.internal   --host-port 22   --host-user root   --container-host lab.example.internal   --container-port 41001   --container-user root   --container-identity c-20260405-01   --runtime-root /vllm-workspace   --storage-root /mnt/nvme/vaws
+python3 .agents/skills/remote-code-parity/scripts/parity_sync.py \
+  --machine blue-a
 ```
 
-## Probe storage-root candidates on the first run
+## Dry-run sync without remote mutation
 
 ```bash
-python3 .agents/skills/remote-code-parity/scripts/remote_code_parity.py sync   --workspace-root .   --workspace-id vaws-main   --server-name blue-a   --host lab.example.internal   --host-port 22   --host-user root   --container-host lab.example.internal   --container-port 41001   --container-user root   --container-identity c-20260405-01   --runtime-root /vllm-workspace   --storage-root-candidate /mnt/nvme/vaws   --storage-root-candidate /mnt/data/vaws   --storage-root-candidate /data/vaws
+python3 .agents/skills/remote-code-parity/scripts/parity_sync.py \
+  --machine blue-a \
+  --dry-run
 ```
 
-## Force a dry-run without touching the host or container
+## Override runtime root or preserve an extra runtime-private path
 
 ```bash
-python3 .agents/skills/remote-code-parity/scripts/remote_code_parity.py sync   --workspace-root .   --workspace-id vaws-main   --server-name blue-a   --host lab.example.internal   --host-port 22   --host-user root   --container-host lab.example.internal   --container-port 41001   --container-user root   --container-identity c-20260405-01   --runtime-root /vllm-workspace   --storage-root /mnt/nvme/vaws   --dry-run
+python3 .agents/skills/remote-code-parity/scripts/parity_sync.py \
+  --machine blue-a \
+  --runtime-root /vllm-workspace \
+  --preserve-path model-cache
 ```
 
-## Clean old parity artifacts
+## Low-level sync helper
 
 ```bash
-python3 .agents/skills/remote-code-parity/scripts/gc_runtime_cache.py   --storage-root /mnt/nvme/vaws   --workspace-id vaws-main   --keep-success 3   --keep-failure 1   --dry-run
+python3 .agents/skills/remote-code-parity/scripts/remote_code_parity.py sync \
+  --workspace-root . \
+  --workspace-id vaws-main \
+  --server-name blue-a \
+  --container-host 10.0.0.8 \
+  --container-port 46001 \
+  --container-user root \
+  --container-identity vaws-blue@/vllm-workspace \
+  --runtime-root /vllm-workspace
+```
+
+## Low-level local parity plan
+
+```bash
+python3 .agents/skills/remote-code-parity/scripts/remote_code_parity.py plan \
+  --workspace-root . \
+  --workspace-id vaws-main \
+  --server-name blue-a \
+  --container-identity vaws-blue@/vllm-workspace \
+  --runtime-root /vllm-workspace
+```
+
+## Clean old container-local manifests
+
+```bash
+python3 .agents/skills/remote-code-parity/scripts/gc_runtime_cache.py \
+  --container-host 10.0.0.8 \
+  --container-port 46001 \
+  --container-user root \
+  --workspace-id vaws-main \
+  --dry-run
 ```
 
 ## Recommended upper-skill routing rule
 
 When a serving / benchmark / smoke workflow is about to execute remotely:
 
-1. ensure `machine-management` already proved host + container SSH
+1. ensure `machine-management` already proved container SSH and recorded the machine in inventory
 2. call `remote-code-parity`
 3. continue only if `status == ready`
 

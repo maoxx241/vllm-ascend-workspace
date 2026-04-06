@@ -26,6 +26,7 @@ Current primary helpers:
 - `machine-management/scripts/machine_verify.py`
 - `machine-management/scripts/machine_repair.py`
 - `machine-management/scripts/machine_remove.py`
+- `remote-code-parity/scripts/parity_sync.py`
 - `remote-code-parity/scripts/remote_code_parity.py`
 - `remote-code-parity/scripts/install_consent.py`
 - `remote-code-parity/scripts/gc_runtime_cache.py`
@@ -46,6 +47,8 @@ Untracked workspace-local state lives under `.vaws-local/`:
 - `.vaws-local/machine-inventory.json`
 - `.vaws-local/remote-code-parity/install-consents.json`
 - `.vaws-local/remote-code-parity/runtime-state.json`
+
+Remote-code-parity transport is container-only after machine attach: use machine inventory to resolve the target, then push synthetic refs directly into the container-local cache root.
 
 The legacy repo-root `.machine-inventory.json` is compatibility input only and should not be reintroduced as the primary path.
 
@@ -76,6 +79,6 @@ If you change `remote-code-parity`, update these together:
 - `.agents/skills/remote-code-parity/SKILL.md`
 - `.agents/skills/remote-code-parity/references/`
 - `.agents/skills/remote-code-parity/scripts/`
-- `AGENTS.md` and this file when routing or local-state behavior changes
+- `AGENTS.md`, `README.md`, and this file when routing, transport model, or local-state behavior changes
 
 Keep the files under `.agents/skills/` as the canonical supporting files for repo-local skills.
