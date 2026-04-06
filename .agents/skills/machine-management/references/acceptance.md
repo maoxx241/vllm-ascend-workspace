@@ -32,6 +32,7 @@ These should not trigger `machine-management` unless machine readiness is the ob
 - the skill does not use `scp`, `sftp`, `sshpass`, or `expect`
 - the final report is compact and evidence-based
 - structured wrapper outputs are sufficient for the agent to distinguish `ready`, `needs_input`, `needs_repair`, `blocked`, `removed`, and `unmanaged`
+- wrappers stream phase progress on `stderr` as `__VAWS_PROGRESS__=<json>` while keeping the final JSON result on `stdout`
 
 ### Public wrapper surface
 
@@ -66,11 +67,13 @@ These should not trigger `machine-management` unless machine readiness is the ob
 - the container bootstrap ensures `/run/sshd` exists
 - space-containing remote arguments such as SSH public keys and mesh peer keys survive the SSH hop intact
 - `machine_add.py` persists final alias, namespace, host identity, container name, image, and SSH port into inventory without the agent having to call `inventory.py put`
+- when image policy is `auto`, the recorded inventory image is the actual selected image after pull / fallback resolution
 
 ### Verify
 
 - verify-only runs are read-only
 - a `ready` report requires host SSH, container SSH, and a passing smoke test
+- verify and smoke paths have an overall timeout budget, not only SSH connect timeouts
 - the skill does not silently repair drift during verify-only requests
 
 ### Repair

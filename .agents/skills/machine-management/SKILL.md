@@ -38,6 +38,9 @@ Ready does **not** imply code sync, rebuild, serving, or benchmark readiness.
 - Keep local runtime state only under `.vaws-local/`.
 - Never write passwords or tokens into tracked files or `.vaws-local/`.
 - Never use `scp`, `sftp`, `sshpass`, or `expect` in this workflow.
+- Default container image policy is `auto`: try `quay.nju.edu.cn/ascend/vllm-ascend:latest` first, then `quay.io/ascend/vllm-ascend:latest`, always attempting a fresh pull before falling back to a cached local copy.
+- Report and persist the **actual selected image** for the managed container, not only the requested image policy.
+- Long probe / bootstrap / smoke operations must expose bounded phase progress and have an overall timeout budget, not only a connect timeout.
 - On a missing local machine profile, never call `workspace_profile.py ensure` bare. Use either:
   - `--username <letters-or-digits>` after the user chose a name
   - `--generate` only after the user explicitly accepted the default/random option
@@ -52,7 +55,7 @@ The primary bootstrap path must not depend on `ssh-copy-id`, `expect`, or any ot
 
 ## Public workflow entry points
 
-Use these task-oriented wrappers for normal agent work. They keep the parameter surface narrow and return structured JSON statuses such as `ready`, `needs_input`, `needs_repair`, `blocked`, `removed`, or `unmanaged`.
+Use these task-oriented wrappers for normal agent work. They keep the parameter surface narrow and return structured JSON statuses such as `ready`, `needs_input`, `needs_repair`, `blocked`, `removed`, or `unmanaged`. They also stream phase progress on `stderr` as `__VAWS_PROGRESS__=<json>` while reserving `stdout` for one final machine-readable JSON payload.
 
 - `python3 .agents/skills/machine-management/scripts/machine_add.py --host <ip> [--machine-username <letters-or-digits> | --generate-machine-username] [--password-env NAME | --password-stdin | --password ...]`
 - `python3 .agents/skills/machine-management/scripts/machine_verify.py --machine <alias-or-ip>`
@@ -198,6 +201,8 @@ Do not remove host firewall rules or host-level `authorized_keys` entries.
 - Use the dedicated container SSH config `/etc/ssh/sshd_vaws_config` instead of editing `/etc/ssh/sshd_config` inline.
 - Quote remote-script arguments that may contain spaces, especially SSH public keys and mesh peer keys, before sending them through `ssh`.
 - Ensure `/run/sshd` exists before starting the dedicated `sshd`.
+- Prefer low-level `--image auto` unless the user explicitly pins another image. It should pull first, then reuse a cached image only as a bounded fallback.
+- Keep progress on `stderr` and the final status JSON on `stdout`; do not mix partial human narration into the terminal contract.
 - For smoke tests, do not pin a Python patch version. Discover the highest available `/usr/local/python*/bin/python3`, then fall back to `python3`.
 - Source only environment scripts that actually exist.
 - Preseed `PATH` and `LD_LIBRARY_PATH` before sourcing env scripts under `set -u`.

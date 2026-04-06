@@ -29,6 +29,7 @@ These should not trigger `remote-code-parity` unless remote code parity is the o
 - the skill does not require GitHub credentials on the host or in the container
 - the skill keeps local runtime state only under `.vaws-local/remote-code-parity/`
 - normal outcomes are reported as compact JSON with `status` equal to `ready`, `blocked`, `failed`, or `dry-run`
+- phase progress is emitted on `stderr` as `__VAWS_PARITY_PROGRESS__=<json>` while the final summary stays on `stdout`
 
 ### Repo graph and snapshotting
 
@@ -43,6 +44,7 @@ These should not trigger `remote-code-parity` unless remote code parity is the o
 
 - the normal sync path does not require host storage, host lock directories, or `docker inspect`
 - container-local bare mirrors are populated directly through container SSH
+- advertised branch refs are published inside the mirror so synthetic child commits are fetchable through ordinary Git paths
 - the normal agent-facing entrypoint can resolve the target from machine inventory through `parity_sync.py`
 - the skill does not create or reuse a flat shared host path such as `/home/vaws`
 
@@ -57,10 +59,13 @@ These should not trigger `remote-code-parity` unless remote code parity is the o
 ### Runtime materialization and proof
 
 - `/vllm-workspace` is updated in place instead of being replaced wholesale
+- nested repos are materialized explicitly instead of relying on `git submodule update` for synthetic child commits
 - runtime-private paths such as `Mooncake` survive root cleanups
 - final `git rev-parse HEAD` values inside the container match the synthetic snapshot commits exactly
 - reinstall runs only when the trigger matrix says it should, except for the mandatory first approved replacement on a fresh container
 - a successful run ends with `status == ready`
+- runtime install uses dynamic Python discovery plus the Ascend driver `LD_LIBRARY_PATH` preamble instead of one hard-coded Python patch path
+- packaging-metadata failures from stale image toolchains trigger one bounded packaging-stack refresh / retry before the skill reports `failed`
 
 ## Regression checklist from this patch
 

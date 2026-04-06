@@ -1,3 +1,5 @@
+All parity helpers stream phase progress on `stderr` as `__VAWS_PARITY_PROGRESS__=<json>` and keep the final summary JSON on `stdout`.
+
 # Remote-code-parity command recipes
 
 Prefer the helper scripts in `scripts/` when possible.

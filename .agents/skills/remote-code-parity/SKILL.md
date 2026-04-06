@@ -32,6 +32,11 @@ Keep a **ready** remote runtime in exact code parity with the local `vllm-ascend
 - Use synthetic snapshot refs so dirty working trees can move through Git transport.
 - Keep container cache / lock / manifest paths isolated by `workspace_id` under a container-local cache root.
 - Preserve runtime-private paths under `/vllm-workspace`, especially `Mooncake`.
+- Keep `stdout` reserved for one final JSON summary and stream phase progress on `stderr` as `__VAWS_PARITY_PROGRESS__=<json>`.
+- Publish each synthetic snapshot to both the parity ref and an advertised branch ref inside the container-local mirror.
+- Materialize child repos explicitly; do not rely on `git submodule update` to fetch synthetic child commits.
+- Use dynamic Python / pip discovery and the Ascend driver `LD_LIBRARY_PATH` preamble instead of pinning one Python patch path.
+- If editable install fails because the image packaging stack is too old, attempt one bounded packaging-stack refresh before failing closed.
 - Fail closed if parity cannot be proven.
 - First replacement of image-provided `vllm` / `vllm-ascend` requires explicit user consent for that logical container identity.
 - `install_consent.py set` and `batch-set` must include `--approved-by-user`.
@@ -134,7 +139,7 @@ Ignored files stay ignored. The snapshot source of truth is tracked + untracked 
 For each repo in scope:
 
 - ensure the container-local bare mirror repo exists under the cache root
-- push the synthetic commit to `refs/parity/<workspace_id>/current`
+- push the synthetic commit to `refs/parity/<workspace_id>/current` and to an advertised branch ref inside that same mirror
 - write a compact manifest for this sync attempt under `manifests/`
 - use a **container-local** lock while mutating cache or runtime state
 
@@ -169,7 +174,7 @@ Inside the container:
 - fetch each repo from the container-local mirror path
 - force the runtime repo to the synthetic parity ref
 - rewrite submodule URLs to container-local mirror paths
-- initialize / update submodules against those mirror paths
+- rewrite submodule URLs to those mirror paths and recursively materialize child repos explicitly
 - preserve runtime-private paths such as `Mooncake` and `.remote-code-parity`
 - ensure the checked-out commits match the manifest
 
@@ -185,7 +190,7 @@ Conservative defaults:
 - `vllm-ascend`: same as `vllm`, plus `vllm_ascend/_cann_ops_custom/**`
 - pure Python, docs, configs, tests, and ordinary scripts: parity only, no rebuild
 
-Use these commands inside the container when required:
+Use these commands inside the container when required. The normal path first tries the in-place environment, then does one bounded packaging refresh / retry when legacy packaging metadata blocks editable install:
 
 ### `vllm`
 

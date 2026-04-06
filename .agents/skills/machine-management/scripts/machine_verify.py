@@ -13,6 +13,7 @@ from typing import Sequence
 
 from _workflow_common import (  # noqa: E402
     WorkflowError,
+    emit_progress,
     find_record,
     machine_summary,
     print_json,
@@ -43,7 +44,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
             )
             return 0
-        verified = verify_machine(record, python=args.python)
+        emit_progress(action="verify", phase="verify", message="running managed-machine verification", machine=record["alias"])
+        verified = verify_machine(
+            record,
+            python=args.python,
+            progress_cb=lambda phase, message: emit_progress(action="verify", phase=phase, message=message, machine=record["alias"]),
+        )
         if verified.get("status") == "ready":
             print_json(verified)
             return 0

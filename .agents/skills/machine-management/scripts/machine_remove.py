@@ -14,6 +14,7 @@ from typing import Sequence
 from _workflow_common import (  # noqa: E402
     WorkflowError,
     cleanup_mesh,
+    emit_progress,
     find_record,
     list_records,
     machine_summary,
@@ -46,13 +47,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             return 0
 
+        emit_progress(action="remove", phase="mesh", message="cleaning up peer mesh trust", machine=record["alias"])
         peers = [peer for peer in list_records() if peer["alias"] != record["alias"]]
         mesh_cleanup = cleanup_mesh(record, peers=peers)
+        emit_progress(action="remove", phase="container", message="removing the managed container", machine=record["alias"])
         removed_container = remove_container(record)
         if removed_container.get("status") == "blocked":
             print_json(removed_container)
             return 0
 
+        emit_progress(action="remove", phase="inventory", message="removing the machine from local inventory", machine=record["alias"])
         inventory_payload, _ = remove_machine_record(record["alias"])
         print_json(
             status_payload(

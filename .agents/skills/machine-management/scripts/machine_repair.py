@@ -17,6 +17,7 @@ from _workflow_common import (  # noqa: E402
     bootstrap_container,
     bootstrap_host_key,
     check_host_key,
+    emit_progress,
     ensure_local_public_key,
     find_record,
     host_target,
@@ -59,7 +60,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             return 0
 
-        verified_before = verify_machine(record, python=args.python)
+        emit_progress(action="repair", phase="verify-before", message="checking current machine readiness", machine=record["alias"])
+        verified_before = verify_machine(
+            record,
+            python=args.python,
+            progress_cb=lambda phase, message: emit_progress(action="repair", phase=f"before-{phase}", message=message, machine=record["alias"]),
+        )
         if verified_before.get("status") == "ready":
             print_json(
                 status_payload(
@@ -82,6 +88,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
 
         password = resolve_password_args(args)
+        emit_progress(action="repair", phase="host-auth", message="checking host key SSH", machine=record["alias"])
         target = host_target(
             host=record["host"]["ip"],
             user=record["host"]["user"],
@@ -99,6 +106,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print_json(host_auth)
                 return 0
 
+        emit_progress(action="repair", phase="bootstrap", message="repairing the managed container", machine=record["alias"])
         container = bootstrap_container(
             target,
             host=record["host"]["ip"],
@@ -113,7 +121,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             print_json(container)
             return 0
 
+        actual_image = container.get("selected_image") or container.get("image") or record["container"]["image"]
         bootstrap_method = "password-once" if host_ssh_precheck.get("ok") is False and password.value is not None else None
+        emit_progress(action="repair", phase="inventory", message="refreshing inventory and mesh state", machine=record["alias"])
         inventory_payload, updated_record = upsert_machine_record(
             alias=record["alias"],
             namespace=record.get("namespace"),
@@ -122,13 +132,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             host_user=record["host"]["user"],
             container_name=record["container"]["name"],
             container_ssh_port=record["container"]["ssh_port"],
-            image=record["container"]["image"],
+            image=actual_image,
             workdir=record["container"]["workdir"],
             bootstrap_method=bootstrap_method,
         )
         peers = [peer for peer in list_records() if peer["alias"] != updated_record["alias"]]
         mesh = sync_mesh(updated_record, peers=peers)
-        verified_after = verify_machine(updated_record, python=args.python)
+        emit_progress(action="repair", phase="verify-after", message="running post-repair readiness verification", machine=updated_record["alias"])
+        verified_after = verify_machine(
+            updated_record,
+            python=args.python,
+            progress_cb=lambda phase, message: emit_progress(action="repair", phase=f"after-{phase}", message=message, machine=updated_record["alias"]),
+        )
         if verified_after.get("status") == "blocked":
             print_json(verified_after)
             return 0

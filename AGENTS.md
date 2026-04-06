@@ -28,10 +28,13 @@ Repo-local skills live under `.agents/skills/`.
   - `.agents/skills/machine-management/scripts/machine_repair.py`
   - `.agents/skills/machine-management/scripts/machine_remove.py`
 - Treat `.agents/skills/machine-management/scripts/inventory.py` and `.agents/skills/machine-management/scripts/manage_machine.py` as low-level maintenance helpers, not the default agent-facing surface.
+- For machine bootstrap, prefer the low-level `--image auto` policy unless the user explicitly pins a different image. It resolves to a pull-first latest-tag strategy with NJU first and `quay.io` fallback.
 - Keep helper CLIs ergonomic: accept common aliases, disable brittle prefix-abbreviation behavior, and default metadata that can be inferred safely.
 - For normal remote-code-parity work, prefer `.agents/skills/remote-code-parity/scripts/parity_sync.py` over the low-level `remote_code_parity.py` helper.
+- Remote-code-parity should expose phase progress, materialize nested repos explicitly, and avoid hard-coding one container Python patch path.
 - Prefer concise machine-readable summaries over long raw command logs.
 - When a command is noisy, capture the log and report only a compact summary plus a short failure tail.
+- Wrapper-style skills should keep progress on `stderr` and reserve `stdout` for a final machine-readable JSON payload.
 - Preserve user choices and extra remotes unless the user explicitly asks to replace them.
 
 ## Mandatory decision gates

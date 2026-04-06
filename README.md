@@ -78,9 +78,10 @@ When invoked, `machine-management` can:
 3. probe host prerequisites
 4. create or repair one managed host-network container per requested machine
 5. verify direct local -> container SSH and run a `torch` + `torch_npu` smoke test
-6. persist managed-machine state in local inventory
-7. mesh managed containers together on a best-effort basis
-8. remove a managed container and clean local trust state
+6. stream bounded machine-phase progress and record the actual selected image used for that container
+7. persist managed-machine state in local inventory
+8. mesh managed containers together on a best-effort basis
+9. remove a managed container and clean local trust state
 
 New managed containers should derive their name from the local machine profile rather than using one global shared name.
 
@@ -92,11 +93,12 @@ When invoked automatically before remote execution, `remote-code-parity` can:
 1. treat the local working tree as the source of truth, including committed, staged, unstaged, and untracked **non-ignored** files
 2. build synthetic Git snapshot commits for the workspace root, `vllm/`, `vllm-ascend/`, and any nested populated submodules without forcing a real commit
 3. push those snapshots directly into **container-local** bare mirror repositories over direct local -> container SSH
-4. materialize the mirrored commits in place inside `/vllm-workspace` so the checked-out code matches the local workspace exactly
-5. preserve runtime-private paths such as `Mooncake` instead of replacing the entire runtime root
-6. on the first sync for a fresh container, require explicit user consent before uninstalling image-provided `vllm` / `vllm-ascend`, deleting only `/vllm-workspace/vllm` and `/vllm-workspace/vllm-ascend`, and reinstalling them from the synced source trees
-7. on later syncs, reinstall only when build-critical paths changed
-8. verify the final runtime commit ids instead of assuming success from command exit status alone
+4. publish an advertised current branch inside each mirror so nested repos can fetch the synthetic snapshot cleanly
+5. materialize the mirrored commits in place inside `/vllm-workspace` so the checked-out code matches the local workspace exactly
+6. preserve runtime-private paths such as `Mooncake` instead of replacing the entire runtime root
+7. on the first sync for a fresh container, require explicit user consent before uninstalling image-provided `vllm` / `vllm-ascend`, deleting only `/vllm-workspace/vllm` and `/vllm-workspace/vllm-ascend`, and reinstalling them from the synced source trees
+8. on later syncs, reinstall only when build-critical paths changed
+9. verify the final runtime commit ids instead of assuming success from command exit status alone
 
 `remote-code-parity` is not a machine-attach or SSH-repair workflow. It assumes `machine-management` already proved the target container is reachable by key-based SSH.
 
