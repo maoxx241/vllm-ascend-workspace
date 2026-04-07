@@ -72,6 +72,7 @@ Agent 会自动检测你的环境、安装所需工具、配置 Git 远程仓库
 │   ├── lib/               # 共享本地状态库
 │   └── scripts/           # 共享辅助脚本
 ├── .cursor/rules/         # Cursor IDE 专用规则
+├── .trae/                 # TRAE IDE 专用规则与技能
 ├── AGENTS.md              # 跨工具 Agent 指令（AI Agent 读这个）
 ├── CLAUDE.md              # Claude Code 指令入口
 └── README.md              # 你正在看的这个文件
@@ -101,11 +102,12 @@ Agent 会自动检测你的环境、安装所需工具、配置 Git 远程仓库
 本仓库支持主流 AI 编程工具：
 
 
-| 文件               | 覆盖工具                                                         |
-| ---------------- | ------------------------------------------------------------ |
-| `AGENTS.md`      | Codex CLI、GitHub Copilot、Cursor、Windsurf、Cline、Devin、Aider 等 |
-| `CLAUDE.md`      | Claude Code                                                  |
-| `.cursor/rules/` | Cursor                                                       |
+| 文件               | 覆盖工具                                    |
+| ---------------- | ---------------------------------------- |
+| `AGENTS.md`      | Codex CLI、GitHub Copilot、Cursor、TRAE、OpenCode |
+| `CLAUDE.md`      | Claude Code                              |
+| `.cursor/rules/` | Cursor                                   |
+| `.trae/`         | TRAE                                     |
 
 
 ## 许可证

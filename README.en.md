@@ -72,6 +72,7 @@ When talking to an Agent:
 │   ├── lib/               # Shared local-state library
 │   └── scripts/           # Shared helper scripts
 ├── .cursor/rules/         # Cursor IDE specific rules
+├── .trae/                 # TRAE IDE specific rules and skills
 ├── AGENTS.md              # Cross-tool Agent instructions (Agents read this)
 ├── CLAUDE.md              # Claude Code instruction entry point
 └── README.md              # Chinese README (default)
@@ -101,11 +102,12 @@ Skills recommend the following topology, but never enforce it:
 This repository supports mainstream AI coding tools:
 
 
-| File             | Tools covered                                                          |
-| ---------------- | ---------------------------------------------------------------------- |
-| `AGENTS.md`      | Codex CLI, GitHub Copilot, Cursor, Windsurf, Cline, Devin, Aider, etc. |
-| `CLAUDE.md`      | Claude Code                                                            |
-| `.cursor/rules/` | Cursor                                                                 |
+| File             | Tools covered                                     |
+| ---------------- | ------------------------------------------------- |
+| `AGENTS.md`      | Codex CLI, GitHub Copilot, Cursor, TRAE, OpenCode |
+| `CLAUDE.md`      | Claude Code                                       |
+| `.cursor/rules/` | Cursor                                            |
+| `.trae/`         | TRAE                                              |
 
 
 ## License
