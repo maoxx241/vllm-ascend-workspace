@@ -109,6 +109,26 @@ This repository supports mainstream AI coding tools:
 | `.trae/`         | TRAE                                              |
 
 
+## Roadmap
+
+### Done
+
+- **repo-init** — Workspace initialization: GitHub CLI install, auth, submodules, fork & remote topology
+- **machine-management** — Remote machine management: add, verify, repair, remove Ascend NPU servers and managed containers
+- **remote-code-parity** — Code sync: push full local workspace state (including uncommitted changes) to remote containers
+
+### In Progress
+
+- **vllm-ascend-serving** — Service launch: idle NPU detection, idle port detection, one-click vLLM Ascend inference serving
+
+### Planned
+
+- **Benchmarking & accuracy testing** — Automated evaluation based on aisbench, with HTML report analysis, system scheduling assessment, and DP balance analysis
+- **Model profiling** — Automatic model structure analysis and operator latency breakdown, hot operator AIC/AIV/MTE2 ratio analysis, AICPU operator identification, host bound detection and diagnosis
+- **Sync-break optimization** — Provide async copy overlap strategies for specific cases to reduce synchronization overhead
+- **Compute graph analysis** — Build model compute graphs, generate theoretical performance evaluation reports and optimization recommendations
+- **External knowledge base** — Integrate external knowledge sources to extend Agent capabilities
+
 ## License
 
 This scaffold repository is licensed independently from its submodules. `vllm/` and `vllm-ascend/` each follow their respective upstream licenses.
