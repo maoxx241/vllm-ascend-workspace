@@ -1058,6 +1058,12 @@ def run_sync(args: argparse.Namespace) -> int:
             if reinstall_vllm and 'vllm-ascend' in record_map:
                 reinstall_vllm_ascend = True
 
+            if args.force_reinstall:
+                if 'vllm' in record_map:
+                    reinstall_vllm = True
+                if 'vllm-ascend' in record_map:
+                    reinstall_vllm_ascend = True
+
             snapshot_commits = {record.relpath: record.commit for record in records}
             if (
                 not args.dry_run
@@ -1379,6 +1385,7 @@ def build_parser() -> argparse.ArgumentParser:
     sync.add_argument('--container-host', required=True)
     sync.add_argument('--container-port', type=int, required=True)
     sync.add_argument('--container-user', required=True)
+    sync.add_argument('--force-reinstall', action='store_true', help='Force reinstall of vllm and vllm-ascend regardless of what changed.')
     sync.add_argument('--dry-run', action='store_true')
     sync.add_argument('--print-manifest', action='store_true')
 

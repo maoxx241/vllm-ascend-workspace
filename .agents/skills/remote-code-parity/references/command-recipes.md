@@ -73,6 +73,16 @@ The runtime-install path sources Ascend env scripts under a `set +u` / `set -u` 
 The final verification path is a heredoc-based Python import smoke, so the generated snippet must remain valid Python after shell quoting.
 Clean child repos reuse their original `HEAD` commit during snapshotting, so a nested submodule like `csrc/third_party/catlass` does not by itself force a parent reinstall.
 
+## Force full reinstall without code changes
+
+```bash
+python3 .agents/skills/remote-code-parity/scripts/parity_sync.py \
+  --machine blue-a \
+  --force-reinstall
+```
+
+Unconditionally reinstalls both `vllm` and `vllm-ascend` even when no files changed. Useful for recovering from a broken editable install or validating the install pipeline.
+
 ## Dry-run sync without remote mutation
 
 ```bash

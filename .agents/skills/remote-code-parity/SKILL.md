@@ -206,9 +206,13 @@ When `vllm` triggers reinstall (by either trigger), `vllm-ascend` is also reinst
 
 Only uninstall the packages that will actually be reinstalled. If only `vllm-ascend` needs reinstall, `vllm` is not uninstalled. On first install, the uninstall step is skipped because `first_install_prepare_script` already handled it.
 
+**Force reinstall:**
+
+Pass `--force-reinstall` to `parity_sync.py` to unconditionally reinstall both `vllm` and `vllm-ascend` regardless of what changed. This overrides all trigger logic above but still runs the full sync flow (snapshot, push, materialize, install, verify).
+
 **No-change fast path:**
 
-If all snapshot commits match `last_snapshot_commits` and no reinstall is needed, the sync verifies container-side commits with a single SSH call and returns `status == ready` immediately, skipping push, materialize, and manifest upload.
+If all snapshot commits match `last_snapshot_commits` and no reinstall is needed (and `--force-reinstall` is not set), the sync verifies container-side commits with a single SSH call and returns `status == ready` immediately, skipping push, materialize, and manifest upload.
 
 Use these commands inside the container when required. The normal path first unifies the runtime Python across `python`, `python3`, CMake, and CANN helper tools, sources optional Ascend env scripts under a `set +u` / `set -u` guard, then tries the in-place environment, and finally does one bounded packaging refresh / retry when legacy packaging metadata blocks editable install. Pip resolution should prefer Tsinghua, then Aliyun, then the public PyPI index:
 

@@ -163,9 +163,13 @@ Only uninstall the packages that will actually be reinstalled:
 
 On first install the reinstall-branch uninstall step is skipped because `first_install_prepare_script` already removed image-provided packages.
 
+### Force reinstall
+
+`--force-reinstall` unconditionally sets `reinstall_vllm` and `reinstall_vllm_ascend` to true, overriding all trigger logic. The full sync flow still runs (snapshot, push, materialize, install, verify). Useful for recovering from a broken editable install or validating the install pipeline without touching source files.
+
 ### No-change fast path
 
-When all snapshot commits match `last_snapshot_commits` and no reinstall trigger fires, the sync verifies the container-side commits with a single SSH call and returns `status == ready` immediately, skipping push, materialize, and manifest upload.
+When all snapshot commits match `last_snapshot_commits` and no reinstall trigger fires (and `--force-reinstall` is not set), the sync verifies the container-side commits with a single SSH call and returns `status == ready` immediately, skipping push, materialize, and manifest upload.
 
 ## Exact proof to collect
 

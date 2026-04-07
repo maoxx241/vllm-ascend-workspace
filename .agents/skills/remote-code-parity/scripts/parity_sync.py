@@ -104,6 +104,8 @@ def build_low_level_command(derived: dict[str, Any], args: argparse.Namespace) -
         cmd.extend(['--snapshot-id', args.snapshot_id])
     if args.print_manifest:
         cmd.append('--print-manifest')
+    if args.force_reinstall:
+        cmd.append('--force-reinstall')
     if args.dry_run:
         cmd.append('--dry-run')
     return cmd
@@ -120,6 +122,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument('--preserve-path', action='append', default=[])
     parser.add_argument('--snapshot-id', default=None)
     parser.add_argument('--print-manifest', action='store_true')
+    parser.add_argument('--force-reinstall', action='store_true', help='Force reinstall of vllm and vllm-ascend regardless of what changed.')
     parser.add_argument('--dry-run', action='store_true')
     parser.add_argument('--print-derived-args', action='store_true')
     return parser
