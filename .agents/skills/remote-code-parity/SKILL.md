@@ -186,13 +186,29 @@ Do not claim success before the container-side commit ids match the snapshot man
 
 ### 6. Reinstall only when required after first install
 
-After the first approved replacement, reinstall only when matching paths changed.
+After the first approved replacement, reinstall only when one of the following triggers fires:
 
-Conservative defaults:
+**Trigger 1 — changed-path pattern match:**
 
 - `vllm`: `requirements*`, `pyproject.toml`, `setup.*`, `CMake*`, `cmake/**`, `csrc/**`, and common native-source suffixes
 - `vllm-ascend`: same as `vllm`, plus `vllm_ascend/_cann_ops_custom/**`
 - pure Python, docs, configs, tests, and ordinary scripts: parity only, no rebuild
+
+**Trigger 2 — commit drift from last sync:**
+
+Compare each repo's real HEAD commit with `last_head_commits` recorded in `runtime-state.json`. Synthetic snapshot commits change whenever the working tree is dirty, so drift detection must use the underlying HEAD to avoid false positives from pure-Python edits. If a repo's HEAD changed (e.g. the user did `git checkout v0.8.0` inside `vllm/`), trigger reinstall for that repo even when `changed_paths` is empty.
+
+**Trigger 3 — dependency cascade:**
+
+When `vllm` triggers reinstall (by either trigger), `vllm-ascend` is also reinstalled because it depends on `vllm` internals.
+
+**Uninstall scope:**
+
+Only uninstall the packages that will actually be reinstalled. If only `vllm-ascend` needs reinstall, `vllm` is not uninstalled. On first install, the uninstall step is skipped because `first_install_prepare_script` already handled it.
+
+**No-change fast path:**
+
+If all snapshot commits match `last_snapshot_commits` and no reinstall is needed, the sync verifies container-side commits with a single SSH call and returns `status == ready` immediately, skipping push, materialize, and manifest upload.
 
 Use these commands inside the container when required. The normal path first unifies the runtime Python across `python`, `python3`, CMake, and CANN helper tools, sources optional Ascend env scripts under a `set +u` / `set -u` guard, then tries the in-place environment, and finally does one bounded packaging refresh / retry when legacy packaging metadata blocks editable install. Pip resolution should prefer Tsinghua, then Aliyun, then the public PyPI index:
 

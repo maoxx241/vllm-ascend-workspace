@@ -5,6 +5,7 @@ import contextlib
 import json
 import os
 import queue
+import re
 import shlex
 import subprocess
 import sys
@@ -15,6 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
+WORKSPACE_ID_PATTERN = re.compile(r'[^A-Za-z0-9._-]+')
 STATE_SUBDIR = Path('.vaws-local/remote-code-parity')
 LEGACY_STATE_DIR = Path('.vaws-local')
 
@@ -39,8 +41,6 @@ DEFAULT_DENYLIST = (
     'Thumbs.db',
 )
 
-HARD_MIN_FREE_BYTES = 512 * 1024 * 1024
-FIRST_INSTALL_MIN_FREE_BYTES = 4 * 1024 * 1024 * 1024
 PROGRESS_SENTINEL = '__VAWS_PARITY_PROGRESS__='
 STATE_LOCK_SUFFIX = '.lock'
 DEFAULT_STATE_LOCK_TIMEOUT_SECONDS = 15.0
@@ -200,16 +200,6 @@ def sanitize_repo_id(relpath: str) -> str:
 
 def json_dump(data: Any) -> str:
     return json.dumps(data, indent=2, sort_keys=True)
-
-
-def human_bytes(value: int) -> str:
-    units = ['B', 'KiB', 'MiB', 'GiB', 'TiB']
-    size = float(value)
-    for unit in units:
-        if size < 1024.0 or unit == units[-1]:
-            return f'{size:.1f} {unit}'
-        size /= 1024.0
-    return f'{value} B'
 
 
 def quoted(script: str) -> str:

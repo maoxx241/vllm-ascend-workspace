@@ -69,6 +69,12 @@ These should not trigger `remote-code-parity` unless remote code parity is the o
 - runtime-private paths such as `Mooncake` survive root cleanups
 - final `git rev-parse HEAD` values inside the container match the synthetic snapshot commits exactly
 - reinstall runs only when the trigger matrix says it should, except for the mandatory first approved replacement on a fresh container
+- switching a submodule to a different commit (e.g. `git checkout v0.8.0` in `vllm/`) triggers reinstall via HEAD-based commit drift detection (comparing real HEAD, not synthetic snapshot commit), even when the new checkout is clean
+- pure Python file edits inside a submodule do not trigger reinstall even though the synthetic snapshot commit changes
+- vllm reinstall cascades to vllm-ascend reinstall because of the runtime dependency
+- uninstall only removes packages that will be reinstalled; changing only vllm-ascend does not uninstall vllm
+- first install does not run the reinstall-branch uninstall step because `first_install_prepare_script` already handled it
+- when nothing changed since last sync (snapshot commits == last_snapshot_commits, no reinstall needed), the sync verifies the container with a single SSH call and returns `status == ready` immediately
 - a successful run ends with `status == ready`
 - runtime install uses dynamic Python discovery plus a shell-safe env preamble and guarded env-script sourcing instead of one hard-coded Python patch path
 - packaging-metadata failures from stale image toolchains trigger one bounded packaging-stack refresh / retry before the skill reports `failed`
@@ -87,6 +93,9 @@ These specific mistakes should no longer be part of the normal path:
 - runtime-install should not fail closed just because Ascend env scripts reference shell-specific or otherwise unset variables while being sourced
 - the final heredoc-based import smoke should not fail with a local quoting `SyntaxError`
 - clean nested submodules should not force parent `reinstall_vllm*` decisions through synthetic gitlink churn alone
+- changing only vllm-ascend files should not uninstall or break the vllm editable install
+- switching vllm to a different commit should trigger both vllm and vllm-ascend reinstall
+- consecutive syncs with no local changes should take the fast path and skip push, materialize, and manifest upload
 
 ## Manual regression checklist
 

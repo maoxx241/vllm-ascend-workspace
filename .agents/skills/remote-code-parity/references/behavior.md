@@ -120,9 +120,11 @@ First-install mutation boundary:
 
 ## Reinstall trigger matrix
 
-Recommended conservative defaults:
+Reinstall fires when **any** of these conditions is true:
 
-### `vllm`
+### Trigger 1 — changed-path pattern match
+
+#### `vllm`
 
 Trigger reinstall on changes matching:
 
@@ -135,13 +137,35 @@ Trigger reinstall on changes matching:
 - `csrc/**`
 - common native-source suffixes such as `*.cu`, `*.cuh`, `*.cpp`, `*.cc`, `*.h`, `*.hpp`
 
-### `vllm-ascend`
+#### `vllm-ascend`
 
 Trigger reinstall on the same set as `vllm`, plus:
 
 - `vllm_ascend/_cann_ops_custom/**`
 
 Everything else defaults to parity-only, no reinstall.
+
+### Trigger 2 — commit drift from last sync
+
+Compare each repo's real HEAD commit with `last_head_commits` in `runtime-state.json`. Synthetic snapshot commits change whenever the working tree is dirty, so drift detection must use the underlying HEAD to avoid false positives from pure-Python edits. If the HEAD differs (e.g. submodule version switch via `git checkout`), trigger reinstall for that repo even when `changed_paths` is empty because the tree matches the new HEAD.
+
+### Trigger 3 — dependency cascade
+
+When `vllm` triggers reinstall (by either trigger above), `vllm-ascend` is also reinstalled because it depends on `vllm` internals.
+
+### Uninstall scope
+
+Only uninstall the packages that will actually be reinstalled:
+
+- `reinstall_vllm` only → uninstall `vllm`
+- `reinstall_vllm_ascend` only → uninstall `vllm-ascend` / `vllm_ascend`
+- both → uninstall all three
+
+On first install the reinstall-branch uninstall step is skipped because `first_install_prepare_script` already removed image-provided packages.
+
+### No-change fast path
+
+When all snapshot commits match `last_snapshot_commits` and no reinstall trigger fires, the sync verifies the container-side commits with a single SSH call and returns `status == ready` immediately, skipping push, materialize, and manifest upload.
 
 ## Exact proof to collect
 

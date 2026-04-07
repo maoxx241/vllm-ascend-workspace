@@ -11,7 +11,7 @@ from remote_code_parity import DEFAULT_CONTAINER_CACHE_ROOT, cache_workspace_roo
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description='Prune old remote-code-parity manifests inside the container-local cache root.')
+    parser = argparse.ArgumentParser(description='Prune old remote-code-parity manifests inside the container-local cache root.', allow_abbrev=False)
     parser.add_argument('--container-host', required=True)
     parser.add_argument('--container-port', type=int, required=True)
     parser.add_argument('--container-user', required=True)
