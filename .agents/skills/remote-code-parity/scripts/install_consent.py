@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from common import json_dump, load_state, now_utc, repo_root_from, save_state
+from common import json_dump, load_state, now_utc, repo_root_from, save_state, update_state
 
 
 FILENAME = 'install-consents.json'
@@ -56,39 +56,43 @@ def run_resolve(args: argparse.Namespace) -> int:
 
 def run_set(args: argparse.Namespace) -> int:
     repo_root = repo_root_from(Path(args.repo_root))
-    state = load_consent_state(repo_root)
-    set_decision(
-        state,
-        args.server_name,
-        args.container_identity,
-        args.decision,
-        args.note,
-        approved_by_user=args.approved_by_user,
-    )
-    path = save_consent_state(repo_root, state)
+    def apply_update(state: dict[str, Any]) -> None:
+        set_decision(
+            state,
+            args.server_name,
+            args.container_identity,
+            args.decision,
+            args.note,
+            approved_by_user=args.approved_by_user,
+        )
+
+    _, path, _ = update_state(repo_root, FILENAME, {'schema_version': 1, 'consents': {}}, apply_update)
     print(json_dump({'status': 'updated', 'path': str(path)}))
     return 0
 
 
 def run_batch_set(args: argparse.Namespace) -> int:
     repo_root = repo_root_from(Path(args.repo_root))
-    state = load_consent_state(repo_root)
     items = json.loads(Path(args.input).read_text(encoding='utf-8'))
     if not isinstance(items, list):
         raise RuntimeError('batch-set input must be a JSON list')
-    for item in items:
-        if not isinstance(item, dict):
-            raise RuntimeError('each batch-set entry must be an object')
-        set_decision(
-            state,
-            item['server_name'],
-            item['container_identity'],
-            item['decision'],
-            item.get('note'),
-            approved_by_user=args.approved_by_user,
-        )
-    path = save_consent_state(repo_root, state)
-    print(json_dump({'status': 'updated', 'count': len(items), 'path': str(path)}))
+
+    def apply_update(state: dict[str, Any]) -> int:
+        for item in items:
+            if not isinstance(item, dict):
+                raise RuntimeError('each batch-set entry must be an object')
+            set_decision(
+                state,
+                item['server_name'],
+                item['container_identity'],
+                item['decision'],
+                item.get('note'),
+                approved_by_user=args.approved_by_user,
+            )
+        return len(items)
+
+    _, path, count = update_state(repo_root, FILENAME, {'schema_version': 1, 'consents': {}}, apply_update)
+    print(json_dump({'status': 'updated', 'count': count, 'path': str(path)}))
     return 0
 
 

@@ -9,7 +9,7 @@ Prefer the task-oriented wrappers. Treat the low-level helpers as fallback maint
 macOS / Linux / WSL:
 
 ```bash
-python3 .agents/skills/machine-management/scripts/machine_add.py --host 173.125.1.2 --image main
+python3 .agents/skills/machine-management/scripts/machine_add.py --host 173.125.1.2 --image rc
 python3 .agents/skills/machine-management/scripts/machine_verify.py --machine 173.125.1.2
 python3 .agents/skills/machine-management/scripts/machine_repair.py --machine 173.125.1.2
 python3 .agents/skills/machine-management/scripts/machine_remove.py --machine 173.125.1.2
@@ -18,7 +18,7 @@ python3 .agents/skills/machine-management/scripts/machine_remove.py --machine 17
 Windows:
 
 ```powershell
-py -3 .agents/skills/machine-management/scripts/machine_add.py --host 173.125.1.2 --image main
+py -3 .agents/skills/machine-management/scripts/machine_add.py --host 173.125.1.2 --image rc
 py -3 .agents/skills/machine-management/scripts/machine_verify.py --machine 173.125.1.2
 py -3 .agents/skills/machine-management/scripts/machine_repair.py --machine 173.125.1.2
 py -3 .agents/skills/machine-management/scripts/machine_remove.py --machine 173.125.1.2
@@ -31,7 +31,7 @@ If the local machine profile already exists and host key SSH is already healthy,
 ```bash
 python3 .agents/skills/machine-management/scripts/machine_add.py \
   --host 173.125.1.2 \
-  --image main
+  --image rc
 ```
 
 If the profile is missing and the user chose a specific username:
@@ -83,12 +83,20 @@ python3 .agents/skills/machine-management/scripts/machine_add.py \
   --password 'YOUR_PASSWORD_ALREADY_IN_CHAT'
 ```
 
-If the user explicitly wants the latest official release track instead of `main`:
+If the user explicitly wants the latest final release track instead of the recommended `rc` track:
 
 ```bash
 python3 .agents/skills/machine-management/scripts/machine_add.py \
   --host 173.125.1.2 \
   --image stable
+```
+
+If the user explicitly wants the upstream `main` image track:
+
+```bash
+python3 .agents/skills/machine-management/scripts/machine_add.py \
+  --host 173.125.1.2 \
+  --image main
 ```
 
 ## Verify one managed machine

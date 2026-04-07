@@ -40,7 +40,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--image",
         help=(
-            "explicit replacement image selector: `main`, `stable`, or a full non-latest image reference; "
+            "explicit replacement image selector: `rc`, `main`, `stable`, or a full non-latest image reference; "
             "omit only when the recorded image is already explicit and acceptable"
         ),
     )

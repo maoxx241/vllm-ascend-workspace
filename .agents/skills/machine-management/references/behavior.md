@@ -226,12 +226,13 @@ Do **not**:
 
 Image selection is an explicit decision gate, not an implicit default:
 
-1. ask the user to choose `main`, `stable`, or a custom image reference before new-machine bootstrap
-2. `main` resolves to `quay.nju.edu.cn/ascend/vllm-ascend:main`, then `quay.io/ascend/vllm-ascend:main`
-3. `stable` resolves the latest official non-prerelease `vllm-ascend` release tag at execution time, then tries NJU first and `quay.io` second
-4. custom references must include a concrete non-`latest` tag or digest; `auto`, `*:latest`, and bare repositories without a tag are forbidden defaults
-5. if fresh pulls fail but one of the explicit candidate refs is already cached locally, reuse that cached image as a bounded fallback
-6. for non-destructive attach / repair, a recorded explicit non-`latest` image may be reused; ambiguous legacy images require another user choice
+1. ask the user to choose `rc`, `main`, `stable`, or a custom image reference before new-machine bootstrap
+2. `rc` resolves the newest official prerelease `vllm-ascend` tag at execution time, then tries `quay.nju.edu.cn/ascend/vllm-ascend:<tag>` first and `quay.io/ascend/vllm-ascend:<tag>` second; this is the recommended developer track
+3. `main` resolves to `quay.nju.edu.cn/ascend/vllm-ascend:main`, then `quay.io/ascend/vllm-ascend:main`
+4. `stable` resolves the latest official non-prerelease `vllm-ascend` release tag at execution time, then tries NJU first and `quay.io` second
+5. custom references must include a concrete non-`latest` tag or digest; `auto`, `*:latest`, and bare repositories without a tag are forbidden defaults
+6. if fresh pulls fail but one of the explicit candidate refs is already cached locally, reuse that cached image as a bounded fallback
+7. for non-destructive attach / repair, a recorded explicit non-`latest` image may be reused; ambiguous legacy images require another user choice
 
 Inventory should record the actual selected image, not only the requested selector string.
 

@@ -55,7 +55,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--image",
         help=(
-            "explicit image selector: `main`, `stable`, or a full non-latest image reference; "
+            "explicit image selector: `rc`, `main`, `stable`, or a full non-latest image reference; "
             "this workflow does not default implicitly"
         ),
     )

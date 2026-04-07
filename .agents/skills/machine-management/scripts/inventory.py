@@ -10,8 +10,12 @@ task-oriented wrappers for normal add / verify / repair / remove workflows.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
+import os
 import sys
+import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +33,9 @@ from vaws_local_state import (  # noqa: E402
 )
 
 SCHEMA_VERSION = 1
+STATE_LOCK_SUFFIX = ".lock"
+DEFAULT_LOCK_TIMEOUT_SECONDS = 15.0
+DEFAULT_LOCK_POLL_SECONDS = 0.05
 
 
 class InventoryError(RuntimeError):
@@ -91,9 +98,51 @@ def load_inventory(path: Path) -> dict[str, Any]:
     return data
 
 
-def save_inventory(path: Path, inventory: dict[str, Any]) -> None:
+def _atomic_write_json(path: Path, data: Any) -> None:
     ensure_state_dir(path.parent)
-    path.write_text(json.dumps(inventory, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    handle, temp_name = tempfile.mkstemp(prefix=f'.{path.name}.', suffix='.tmp', dir=str(path.parent))
+    try:
+        with os.fdopen(handle, 'w', encoding='utf-8') as fh:
+            fh.write(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(temp_name, path)
+    finally:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(temp_name)
+
+
+def save_inventory(path: Path, inventory: dict[str, Any]) -> None:
+    _atomic_write_json(path, inventory)
+
+
+@contextlib.contextmanager
+def inventory_lock(
+    path: Path,
+    *,
+    timeout_seconds: float = DEFAULT_LOCK_TIMEOUT_SECONDS,
+    poll_seconds: float = DEFAULT_LOCK_POLL_SECONDS,
+):
+    ensure_state_dir(path.parent)
+    lock_path = path.with_name(path.name + STATE_LOCK_SUFFIX)
+    deadline = time.monotonic() + timeout_seconds
+    fd: int | None = None
+    while True:
+        try:
+            fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            os.write(fd, f'{os.getpid()}\n'.encode('utf-8'))
+            break
+        except FileExistsError:
+            if time.monotonic() >= deadline:
+                raise InventoryError(f'timed out waiting for inventory lock {lock_path}')
+            time.sleep(poll_seconds)
+    try:
+        yield lock_path
+    finally:
+        if fd is not None:
+            os.close(fd)
+        with contextlib.suppress(FileNotFoundError):
+            lock_path.unlink()
 
 
 def _validate_record(record: Any, where: str = "record") -> None:
@@ -226,55 +275,56 @@ def cmd_get(args: argparse.Namespace) -> int:
 def cmd_put(args: argparse.Namespace) -> int:
     if not args.image:
         raise InventoryError(
-            "--image is required; record an explicit `main`, `stable`-resolved, or concrete non-latest image reference"
+            "--image is required; record an explicit `rc`-resolved, `main`, `stable`-resolved, or concrete non-latest image reference"
         )
     requested_path = preferred_inventory_path(args.inventory)
-    active_path = read_inventory_path(requested_path)
-    inventory = load_inventory(active_path)
-    alias_matches = _find_matches(inventory, alias=args.alias)
-    ip_matches = _find_matches(inventory, host_ip=args.host_ip)
+    with inventory_lock(requested_path):
+        active_path = read_inventory_path(requested_path)
+        inventory = load_inventory(active_path)
+        alias_matches = _find_matches(inventory, alias=args.alias)
+        ip_matches = _find_matches(inventory, host_ip=args.host_ip)
 
-    alias_record = alias_matches[0] if alias_matches else None
-    ip_record = ip_matches[0] if ip_matches else None
-    if alias_record is not None and ip_record is not None and alias_record is not ip_record:
-        raise InventoryError(
-            "alias and host IP match different existing records; resolve the conflict manually"
-        )
+        alias_record = alias_matches[0] if alias_matches else None
+        ip_record = ip_matches[0] if ip_matches else None
+        if alias_record is not None and ip_record is not None and alias_record is not ip_record:
+            raise InventoryError(
+                "alias and host IP match different existing records; resolve the conflict manually"
+            )
 
-    target = alias_record or ip_record
-    namespace = validate_machine_username(args.namespace) if args.namespace else None
-    record = {
-        "alias": args.alias,
-        "namespace": namespace,
-        "host": {
-            "ip": args.host_ip,
-            "port": args.host_port,
-            "user": args.host_user,
-        },
-        "container": {
-            "name": args.container_name,
-            "ssh_port": args.container_ssh_port,
-            "image": args.image,
-            "workdir": args.workdir,
-        },
-        "bootstrap_method": resolve_bootstrap_method(args.bootstrap_method, existing_record=target),
-        "managed_by_skill": True,
-        "created_by_skill": args.created_by_skill,
-        "last_verified_at": args.last_verified_at,
-    }
-    if namespace is None:
-        record.pop("namespace")
-    _validate_record(record)
+        target = alias_record or ip_record
+        namespace = validate_machine_username(args.namespace) if args.namespace else None
+        record = {
+            "alias": args.alias,
+            "namespace": namespace,
+            "host": {
+                "ip": args.host_ip,
+                "port": args.host_port,
+                "user": args.host_user,
+            },
+            "container": {
+                "name": args.container_name,
+                "ssh_port": args.container_ssh_port,
+                "image": args.image,
+                "workdir": args.workdir,
+            },
+            "bootstrap_method": resolve_bootstrap_method(args.bootstrap_method, existing_record=target),
+            "managed_by_skill": True,
+            "created_by_skill": args.created_by_skill,
+            "last_verified_at": args.last_verified_at,
+        }
+        if namespace is None:
+            record.pop("namespace")
+        _validate_record(record)
 
-    if target is None:
-        inventory["machines"].append(record)
-        action = "inserted"
-    else:
-        target.clear()
-        target.update(record)
-        action = "updated"
+        if target is None:
+            inventory["machines"].append(record)
+            action = "inserted"
+        else:
+            target.clear()
+            target.update(record)
+            action = "updated"
 
-    save_inventory(requested_path, inventory)
+        save_inventory(requested_path, inventory)
     payload = {
         "result": action,
         "alias": record["alias"],
@@ -291,18 +341,19 @@ def cmd_put(args: argparse.Namespace) -> int:
 
 def cmd_remove(args: argparse.Namespace) -> int:
     requested_path = preferred_inventory_path(args.inventory)
-    active_path = read_inventory_path(requested_path)
-    inventory = load_inventory(active_path)
-    matches = _find_matches(inventory, identifier=args.identifier)
-    if not matches:
-        raise InventoryError(f"no machine found for identifier: {args.identifier}")
-    if len(matches) > 1:
-        raise InventoryError(
-            f"multiple machines matched {args.identifier!r}; use a unique alias or host IP"
-        )
-    target = matches[0]
-    inventory["machines"] = [record for record in inventory["machines"] if record is not target]
-    save_inventory(requested_path, inventory)
+    with inventory_lock(requested_path):
+        active_path = read_inventory_path(requested_path)
+        inventory = load_inventory(active_path)
+        matches = _find_matches(inventory, identifier=args.identifier)
+        if not matches:
+            raise InventoryError(f"no machine found for identifier: {args.identifier}")
+        if len(matches) > 1:
+            raise InventoryError(
+                f"multiple machines matched {args.identifier!r}; use a unique alias or host IP"
+            )
+        target = matches[0]
+        inventory["machines"] = [record for record in inventory["machines"] if record is not target]
+        save_inventory(requested_path, inventory)
     payload = {
         "result": "removed",
         "alias": target["alias"],

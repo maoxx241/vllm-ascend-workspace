@@ -56,7 +56,7 @@ These should not trigger `machine-management` unless machine readiness is the ob
 
 ### Add / attach
 
-- `machine_add.py` can succeed with `--host --image main` when the profile and host key SSH are already in place
+- `machine_add.py` can succeed with `--host --image rc` when the profile and host key SSH are already in place
 - when the profile is missing, `machine_add.py` returns `needs_input` instead of silently generating a username
 - when the image choice is missing for a new machine, `machine_add.py` returns `needs_input` instead of silently defaulting to `auto`, `latest`, or another moving tag
 - when an existing inventory record still points at a legacy or moving image tag, `machine_add.py` returns `await-image-selection` before any `already-ready` shortcut
@@ -70,8 +70,9 @@ These should not trigger `machine-management` unless machine readiness is the ob
 - space-containing remote arguments such as SSH public keys and mesh peer keys survive the SSH hop intact
 - `machine_add.py` persists final alias, namespace, host identity, container name, image, and SSH port into inventory without the agent having to call `inventory.py put`
 - the recorded inventory image is the actual selected image after mirror resolution and pull / cache fallback
-- `main` and `stable` remain first-class selectors, while `auto`, `*:latest`, and bare repositories without a tag are rejected as defaults
+- `rc`, `main`, and `stable` remain first-class selectors, while `auto`, `*:latest`, and bare repositories without a tag are rejected as defaults
 - long-running bootstrap phases keep emitting attributable progress for image pull and package-install steps instead of going silent behind one global timeout
+- inventory `put` / `remove` writes are atomic and serialized so concurrent wrappers do not clobber the recorded machine set
 
 ### Verify
 

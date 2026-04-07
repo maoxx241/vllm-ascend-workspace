@@ -27,7 +27,9 @@ from common import (
     sanitize_repo_id,
     save_state,
     ssh_exec,
+    ssh_exec_stream,
     ssh_stream_to_file,
+    update_state,
 )
 
 
@@ -52,17 +54,50 @@ VLLM_ASCEND_REINSTALL_PATTERNS = VLLM_REINSTALL_PATTERNS + (
 )
 
 DEFAULT_ENV_PREAMBLE = (
-    'export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:${PATH:-}"',
     'export LD_LIBRARY_PATH="/usr/local/Ascend/driver/lib64/driver:/usr/local/Ascend/driver/lib64:${LD_LIBRARY_PATH:-}"',
     'if [ -f /usr/local/Ascend/ascend-toolkit/set_env.sh ]; then source /usr/local/Ascend/ascend-toolkit/set_env.sh; fi',
     'if [ -f /usr/local/Ascend/nnal/atb/set_env.sh ]; then source /usr/local/Ascend/nnal/atb/set_env.sh; fi',
     'if [ -f /vllm-workspace/vllm-ascend/vllm_ascend/_cann_ops_custom/vendors/vllm-ascend/bin/set_env.bash ]; then source /vllm-workspace/vllm-ascend/vllm_ascend/_cann_ops_custom/vendors/vllm-ascend/bin/set_env.bash; fi',
     'PYTHON_CANDIDATE="$(ls -1d /usr/local/python*/bin/python3 2>/dev/null | sort -V | tail -n 1 || true)"',
     'if [ -n "$PYTHON_CANDIDATE" ]; then export PYTHON="$PYTHON_CANDIDATE"; elif command -v python3 >/dev/null 2>&1; then export PYTHON="$(command -v python3)"; elif command -v python >/dev/null 2>&1; then export PYTHON="$(command -v python)"; else echo "python not found" >&2; exit 127; fi',
+    'PYTHON_BIN_DIR="$(dirname "$PYTHON")"',
+    'VAWS_PYTHON_SHIM_DIR="$(mktemp -d /tmp/vaws-python-shim.XXXXXX)"',
+    'trap "rm -rf \"$VAWS_PYTHON_SHIM_DIR\"" EXIT',
+    'ln -sf "$PYTHON" "$VAWS_PYTHON_SHIM_DIR/python"',
+    'ln -sf "$PYTHON" "$VAWS_PYTHON_SHIM_DIR/python3"',
+    'export PATH="$VAWS_PYTHON_SHIM_DIR:$PYTHON_BIN_DIR:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:${PATH:-}"',
+    'hash -r',
+    'export HI_PYTHON="$PYTHON"',
+    'export Python3_EXECUTABLE="$PYTHON"',
+    'export Python_EXECUTABLE="$PYTHON"',
+    'export CMAKE_ARGS="-DPython3_EXECUTABLE=$PYTHON -DPython_EXECUTABLE=$PYTHON ${CMAKE_ARGS:-}"',
     'export PIP="$PYTHON -m pip"',
+    'export PIP_DISABLE_PIP_VERSION_CHECK=1',
+    'export PIP_NO_INPUT=1',
+    'export PIP_DEFAULT_TIMEOUT=60',
+    'export PIP_RETRIES=2',
+    'export PIP_PROGRESS_BAR=off',
     'export VLLM_WORKER_MULTIPROC_METHOD=spawn',
     'export OMP_NUM_THREADS=1',
     'export MKL_NUM_THREADS=1',
+)
+
+PIP_MIRROR_CANDIDATES = (
+    {
+        'name': 'tsinghua',
+        'index_url': 'https://pypi.tuna.tsinghua.edu.cn/simple',
+        'trusted_host': 'pypi.tuna.tsinghua.edu.cn',
+    },
+    {
+        'name': 'aliyun',
+        'index_url': 'https://mirrors.aliyun.com/pypi/simple',
+        'trusted_host': 'mirrors.aliyun.com',
+    },
+    {
+        'name': 'pypi',
+        'index_url': 'https://pypi.org/simple',
+        'trusted_host': 'pypi.org files.pythonhosted.org',
+    },
 )
 
 DEFAULT_CONTAINER_CACHE_ROOT = '/root/.cache/vaws/remote-code-parity'
@@ -525,78 +560,201 @@ def runtime_install_step_script(
     container_identity: str,
     step: str,
 ) -> str:
-    lines = ['set -eo pipefail', f'cd {quoted(runtime_root)}']
+    lines = ['set -euo pipefail', f'cd {quoted(runtime_root)}']
     lines.extend(DEFAULT_ENV_PREAMBLE)
-    if step in {'install-vllm', 'install-vllm-ascend'}:
+    if step in {'install-vllm', 'install-vllm-ascend', 'install-vllm-ascend-requirements'}:
         lines.extend(
             [
-                'upgrade_packaging_stack() {',
-                '  $PIP install --upgrade "pip>=24.0" "setuptools>=77" "wheel>=0.43" "packaging>=24.0" >/dev/null 2>&1 || true',
+                'emit_progress() {',
+                "  python3 - \"$1\" \"$2\" \"$3\" \"${4:-}\" <<'PY' >&2",
+                'import json',
+                'import sys',
+                'payload = {"phase": sys.argv[1], "message": sys.argv[2]}',
+                'if len(sys.argv) > 3 and sys.argv[3]:',
+                '    try:',
+                '        payload["expected_seconds"] = int(sys.argv[3])',
+                '    except ValueError:',
+                '        pass',
+                f'print("{PROGRESS_SENTINEL}" + json.dumps(payload, ensure_ascii=False))',
+                'PY',
                 '}',
-                'install_with_fallback() {',
-                '  target_dir="$1"',
-                '  install_cmd="$2"',
-                '  log_file="$(mktemp -t parity-install.XXXXXX.log)"',
-                '  cd "$target_dir"',
-                '  if bash -lc "$install_cmd" >"$log_file" 2>&1; then',
-                '    rm -f "$log_file"',
-                '    return 0',
-                '  fi',
+                'run_with_log_progress() {',
+                '  phase="$1"',
+                '  message="$2"',
+                '  expected_seconds="$3"',
+                '  log_file="$4"',
+                '  shift 4',
+                '  "$@" >"$log_file" 2>&1 &',
+                '  pid=$!',
+                '  start_ts=$(date +%s)',
+                '  while kill -0 "$pid" 2>/dev/null; do',
+                '    sleep 8',
+                '    if ! kill -0 "$pid" 2>/dev/null; then',
+                '      break',
+                '    fi',
+                '    elapsed=$(( $(date +%s) - start_ts ))',
+                '    if [ -s "$log_file" ]; then',
+                '      last_line="$(tail -n 1 "$log_file" 2>/dev/null | tr -d \"\\r\" | sed \"s/[^[:print:]\\t]//g\" | cut -c1-180)"',
+                '      if [ -n "$last_line" ]; then',
+                '        emit_progress "$phase" "$message - $last_line" "$expected_seconds"',
+                '      else',
+                '        emit_progress "$phase" "$message - still working (elapsed ${elapsed}s)" "$expected_seconds"',
+                '      fi',
+                '    else',
+                '      emit_progress "$phase" "$message - still working (elapsed ${elapsed}s)" "$expected_seconds"',
+                '    fi',
+                '  done',
+                '  set +e',
+                '  wait "$pid"',
                 '  status=$?',
-                '  if grep -Eiq "project\\.license|license[^[:alnum:]]|spdx|pyproject" "$log_file"; then',
-                '    upgrade_packaging_stack',
-                '    if bash -lc "$install_cmd" >>"$log_file" 2>&1; then',
-                '      rm -f "$log_file"',
-                '      return 0',
-                '    fi',
-                '    status=$?',
-                '    alt_cmd="$(printf "%s" "$install_cmd" | sed "s/--no-build-isolation//g")"',
-                '    if bash -lc "$alt_cmd" >>"$log_file" 2>&1; then',
-                '      rm -f "$log_file"',
-                '      return 0',
-                '    fi',
-                '    status=$?',
+                '  set -e',
+                '  if [ "$status" -ne 0 ]; then',
+                '    tail -n 160 "$log_file" >&2 || true',
                 '  fi',
-                '  tail -n 120 "$log_file" >&2 || true',
+                '  return "$status"',
+                '}',
+                'run_with_progress() {',
+                '  phase="$1"',
+                '  message="$2"',
+                '  expected_seconds="$3"',
+                '  shift 3',
+                '  log_file="$(mktemp -t parity-step.XXXXXX.log)"',
+                '  set +e',
+                '  run_with_log_progress "$phase" "$message" "$expected_seconds" "$log_file" "$@"',
+                '  status=$?',
+                '  set -e',
                 '  rm -f "$log_file"',
                 '  return "$status"',
+                '}',
+                'pip_apply_mirror() {',
+                '  mirror="$1"',
+                '  unset PIP_INDEX_URL PIP_TRUSTED_HOST',
+                '  case "$mirror" in',
+            ]
+        )
+        for mirror in PIP_MIRROR_CANDIDATES:
+            lines.extend(
+                [
+                    f'    {mirror["name"]}) export PIP_INDEX_URL={quoted(mirror["index_url"])}; export PIP_TRUSTED_HOST={quoted(mirror["trusted_host"])} ;;',
+                ]
+            )
+        lines.extend(
+            [
+                '    *) return 1 ;;',
+                '  esac',
+                '  emit_progress "runtime-pip-mirror" "using pip mirror $mirror" 30',
+                '}',
+                'pip_install_with_mirrors() {',
+                '  phase="$1"',
+                '  message="$2"',
+                '  expected_seconds="$3"',
+                '  shift 3',
+                '  last_status=1',
+                '  for mirror in tsinghua aliyun pypi; do',
+                '    pip_apply_mirror "$mirror"',
+                '    set +e',
+                '    run_with_progress "$phase" "$message via $mirror" "$expected_seconds" "$PYTHON" -m pip "$@"',
+                '    status=$?',
+                '    set -e',
+                '    if [ "$status" -eq 0 ]; then',
+                '      return 0',
+                '    fi',
+                '    last_status="$status"',
+                '  done',
+                '  return "$last_status"',
+                '}',
+                'upgrade_packaging_stack() {',
+                '  set +e',
+                '  pip_install_with_mirrors "runtime-install-packaging" "upgrading packaging toolchain" 300 install --upgrade "pip>=24.0" "setuptools>=77" "wheel>=0.43" "packaging>=24.0"',
+                '  status=$?',
+                '  set -e',
+                '  return "$status"',
+                '}',
+                'install_with_fallback() {',
+                '  phase="$1"',
+                '  message="$2"',
+                '  target_dir="$3"',
+                '  expected_seconds="$4"',
+                '  install_cmd="$5"',
+                '  log_file="$(mktemp -t parity-install.XXXXXX.log)"',
+                '  cd "$target_dir"',
+                '  last_status=1',
+                '  for mirror in tsinghua aliyun pypi; do',
+                '    pip_apply_mirror "$mirror"',
+                '    set +e',
+                '    run_with_log_progress "$phase" "$message via $mirror" "$expected_seconds" "$log_file" bash -lc "$install_cmd"',
+                '    status=$?',
+                '    set -e',
+                '    if [ "$status" -eq 0 ]; then',
+                '      rm -f "$log_file"',
+                '      return 0',
+                '    fi',
+                '    last_status="$status"',
+                '    if grep -Eiq "project\\.license|license[^[:alnum:]]|spdx|pyproject" "$log_file"; then',
+                '      upgrade_packaging_stack || true',
+                '      set +e',
+                '      run_with_log_progress "$phase" "$message via $mirror (packaging retry)" "$expected_seconds" "$log_file" bash -lc "$install_cmd"',
+                '      status=$?',
+                '      set -e',
+                '      if [ "$status" -eq 0 ]; then',
+                '        rm -f "$log_file"',
+                '        return 0',
+                '      fi',
+                '      last_status="$status"',
+                '      alt_cmd="$(printf "%s" "$install_cmd" | sed "s/--no-build-isolation//g" | xargs)"',
+                '      if [ -n "$alt_cmd" ] && [ "$alt_cmd" != "$install_cmd" ]; then',
+                '        set +e',
+                '        run_with_log_progress "$phase" "$message via $mirror (isolation fallback)" "$expected_seconds" "$log_file" bash -lc "$alt_cmd"',
+                '        status=$?',
+                '        set -e',
+                '        if [ "$status" -eq 0 ]; then',
+                '          rm -f "$log_file"',
+                '          return 0',
+                '        fi',
+                '        last_status="$status"',
+                '      fi',
+                '    fi',
+                '  done',
+                '  rm -f "$log_file"',
+                '  return "$last_status"',
                 '}',
             ]
         )
 
     if step == 'uninstall':
-        lines.append('$PIP uninstall -y vllm vllm-ascend vllm_ascend >/dev/null 2>&1 || true')
+        lines.append('$PYTHON -m pip uninstall -y vllm vllm-ascend vllm_ascend >/dev/null 2>&1 || true')
     elif step == 'install-vllm':
         lines.extend(
             [
                 f'cd {quoted(str(Path(runtime_root) / "vllm"))}',
                 'export VLLM_TARGET_DEVICE=empty',
-                'install_with_fallback . "$PIP install -e . --no-build-isolation"',
+                'install_with_fallback "runtime-install-vllm" "building editable vllm" . 1800 "$PYTHON -m pip install -e . --no-build-isolation"',
             ]
         )
     elif step == 'install-vllm-ascend-requirements':
         lines.extend(
             [
                 f'cd {quoted(str(Path(runtime_root) / "vllm-ascend"))}',
-                '$PIP install -r requirements.txt >/dev/null',
+                'pip_install_with_mirrors "runtime-install-vllm-ascend-requirements" "installing vllm-ascend requirements" 900 install -r requirements.txt',
             ]
         )
     elif step == 'install-vllm-ascend':
         lines.extend(
             [
                 f'cd {quoted(str(Path(runtime_root) / "vllm-ascend"))}',
-                'install_with_fallback . "$PIP install -v -e . --no-build-isolation"',
+                'install_with_fallback "runtime-install-vllm-ascend" "building editable vllm-ascend" . 2400 "$PYTHON -m pip install -v -e . --no-build-isolation"',
             ]
         )
     elif step == 'verify-imports':
         lines.extend(
             [
-                '$PYTHON - <<\'PY\'',
-                'import importlib.util',
+                "$PYTHON - <<'PY'",
+                'import sys',
+                'import torch',
                 'import torch_npu  # noqa: F401',
-                "assert importlib.util.find_spec('vllm') is not None",
-                "assert importlib.util.find_spec('vllm_ascend') is not None",
-                "print('editable-import-smoke=ok')",
+                'import vllm',
+                'import vllm_ascend',
+                'print(f"editable-import-smoke=ok python={sys.executable} torch={torch.__version__} vllm={getattr(vllm, "__version__", "unknown")}")',
                 'PY',
             ]
         )
@@ -624,6 +782,28 @@ def runtime_install_step_script(
     else:
         raise ValueError(f'unknown runtime install step: {step}')
     return '\n'.join(lines)
+
+
+def run_runtime_install_step(
+    *,
+    container: SshEndpoint,
+    runtime_root: str,
+    marker_dirname: str,
+    container_identity: str,
+    step: str,
+    stream_progress: bool = False,
+) -> None:
+    script = runtime_install_step_script(
+        runtime_root=runtime_root,
+        marker_dirname=marker_dirname,
+        container_identity=container_identity,
+        step=step,
+    )
+    if stream_progress:
+        ssh_exec_stream(container, script, stream_progress=True)
+    else:
+        ssh_exec(container, script)
+
 
 def read_runtime_install_marker(
     *,
@@ -688,18 +868,19 @@ def update_runtime_state(
     records: list[SnapshotRecord],
     first_reinstall_completed: bool,
 ) -> None:
-    state = load_runtime_state(repo_root)
-    server_state = state.setdefault('servers', {}).setdefault(server_name, {})
-    containers = server_state.setdefault('containers', {})
-    containers[container_identity] = {
-        'runtime_root': runtime_root,
-        'container_cache_root': container_cache_root,
-        'marker_dirname': marker_dirname,
-        'last_sync_at': now_utc(),
-        'first_reinstall_completed': first_reinstall_completed,
-        'last_snapshot_commits': {record.relpath: record.commit for record in records},
-    }
-    save_runtime_state(repo_root, state)
+    def apply_update(state: dict[str, Any]) -> None:
+        server_state = state.setdefault('servers', {}).setdefault(server_name, {})
+        containers = server_state.setdefault('containers', {})
+        containers[container_identity] = {
+            'runtime_root': runtime_root,
+            'container_cache_root': container_cache_root,
+            'marker_dirname': marker_dirname,
+            'last_sync_at': now_utc(),
+            'first_reinstall_completed': first_reinstall_completed,
+            'last_snapshot_commits': {record.relpath: record.commit for record in records},
+        }
+
+    update_state(repo_root, STATE_FILENAME, {'schema_version': 1, 'servers': {}}, apply_update)
 
 
 def make_manifest(
@@ -948,66 +1129,60 @@ def run_sync(args: argparse.Namespace) -> int:
                         reinstall_vllm_ascend=reinstall_vllm_ascend,
                     )
                     emit_progress('runtime-install-uninstall', packages=['vllm', 'vllm-ascend'])
-                    ssh_exec(
-                        container,
-                        runtime_install_step_script(
-                            runtime_root=runtime_root,
-                            marker_dirname=marker_dirname,
-                            container_identity=args.container_identity,
-                            step='uninstall',
-                        ),
+                    run_runtime_install_step(
+                        container=container,
+                        runtime_root=runtime_root,
+                        marker_dirname=marker_dirname,
+                        container_identity=args.container_identity,
+                        step='uninstall',
+                        stream_progress=False,
                     )
                     if reinstall_vllm:
                         emit_progress('runtime-install-vllm', package='vllm')
-                        ssh_exec(
-                            container,
-                            runtime_install_step_script(
-                                runtime_root=runtime_root,
-                                marker_dirname=marker_dirname,
-                                container_identity=args.container_identity,
-                                step='install-vllm',
-                            ),
+                        run_runtime_install_step(
+                            container=container,
+                            runtime_root=runtime_root,
+                            marker_dirname=marker_dirname,
+                            container_identity=args.container_identity,
+                            step='install-vllm',
+                            stream_progress=True,
                         )
                     if reinstall_vllm_ascend:
                         emit_progress('runtime-install-vllm-ascend-requirements', requirements='requirements.txt')
-                        ssh_exec(
-                            container,
-                            runtime_install_step_script(
-                                runtime_root=runtime_root,
-                                marker_dirname=marker_dirname,
-                                container_identity=args.container_identity,
-                                step='install-vllm-ascend-requirements',
-                            ),
+                        run_runtime_install_step(
+                            container=container,
+                            runtime_root=runtime_root,
+                            marker_dirname=marker_dirname,
+                            container_identity=args.container_identity,
+                            step='install-vllm-ascend-requirements',
+                            stream_progress=True,
                         )
                         emit_progress('runtime-install-vllm-ascend', package='vllm-ascend')
-                        ssh_exec(
-                            container,
-                            runtime_install_step_script(
-                                runtime_root=runtime_root,
-                                marker_dirname=marker_dirname,
-                                container_identity=args.container_identity,
-                                step='install-vllm-ascend',
-                            ),
+                        run_runtime_install_step(
+                            container=container,
+                            runtime_root=runtime_root,
+                            marker_dirname=marker_dirname,
+                            container_identity=args.container_identity,
+                            step='install-vllm-ascend',
+                            stream_progress=True,
                         )
                     emit_progress('runtime-install-verify-imports')
-                    ssh_exec(
-                        container,
-                        runtime_install_step_script(
-                            runtime_root=runtime_root,
-                            marker_dirname=marker_dirname,
-                            container_identity=args.container_identity,
-                            step='verify-imports',
-                        ),
+                    run_runtime_install_step(
+                        container=container,
+                        runtime_root=runtime_root,
+                        marker_dirname=marker_dirname,
+                        container_identity=args.container_identity,
+                        step='verify-imports',
+                        stream_progress=True,
                     )
                     emit_progress('runtime-install-marker')
-                    ssh_exec(
-                        container,
-                        runtime_install_step_script(
-                            runtime_root=runtime_root,
-                            marker_dirname=marker_dirname,
-                            container_identity=args.container_identity,
-                            step='write-marker',
-                        ),
+                    run_runtime_install_step(
+                        container=container,
+                        runtime_root=runtime_root,
+                        marker_dirname=marker_dirname,
+                        container_identity=args.container_identity,
+                        step='write-marker',
+                        stream_progress=False,
                     )
 
                 current_phase = 'verify-runtime-commits'
