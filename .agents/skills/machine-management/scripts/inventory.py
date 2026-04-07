@@ -36,6 +36,7 @@ SCHEMA_VERSION = 1
 STATE_LOCK_SUFFIX = ".lock"
 DEFAULT_LOCK_TIMEOUT_SECONDS = 15.0
 DEFAULT_LOCK_POLL_SECONDS = 0.05
+MACHINE_TYPE_CHOICES = ("A2", "A3", "310P")
 
 
 class InventoryError(RuntimeError):
@@ -72,6 +73,25 @@ def resolve_bootstrap_method(value: str | None, existing_record: dict[str, Any] 
         raise InventoryError("bootstrap method could not be resolved")
     return normalized
 
+
+
+
+def normalize_machine_type(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip().upper().replace("_", "")
+    if normalized in MACHINE_TYPE_CHOICES:
+        return normalized
+    raise InventoryError(
+        f"unsupported machine_type {value!r}; expected one of: {', '.join(MACHINE_TYPE_CHOICES)}"
+    )
+
+
+def normalize_soc_token(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip().lower()
+    return normalized or None
 
 def _empty_inventory() -> dict[str, Any]:
     return {"schema_version": SCHEMA_VERSION, "machines": []}
@@ -171,6 +191,16 @@ def _validate_record(record: Any, where: str = "record") -> None:
     if not isinstance(host_port, int) or host_port <= 0:
         raise InventoryError(f"{where}.host.port must be a positive integer")
 
+    host_machine_type = host.get("machine_type")
+    if host_machine_type is not None:
+        host["machine_type"] = normalize_machine_type(host_machine_type)
+    host_soc = host.get("soc")
+    if host_soc is not None:
+        normalized_soc = normalize_soc_token(host_soc)
+        if normalized_soc is None:
+            raise InventoryError(f"{where}.host.soc must be a non-empty string when present")
+        host["soc"] = normalized_soc
+
     container = record.get("container")
     if not isinstance(container, dict):
         raise InventoryError(f"{where}.container must be an object")
@@ -186,6 +216,10 @@ def _validate_record(record: Any, where: str = "record") -> None:
         raise InventoryError(f"{where}.container.image must be a non-empty string")
     if not isinstance(workdir, str) or not workdir.strip():
         raise InventoryError(f"{where}.container.workdir must be a non-empty string")
+
+    container_machine_type = container.get("machine_type")
+    if container_machine_type is not None:
+        container["machine_type"] = normalize_machine_type(container_machine_type)
 
     bootstrap_method = normalize_bootstrap_method(record.get("bootstrap_method"))
     if bootstrap_method is not None:
@@ -247,8 +281,11 @@ def cmd_summary(args: argparse.Namespace) -> int:
                 "alias": record["alias"],
                 "namespace": record.get("namespace"),
                 "host": f"{record['host']['user']}@{record['host']['ip']}:{record['host']['port']}",
+                "host_machine_type": record["host"].get("machine_type"),
+                "host_soc": record["host"].get("soc"),
                 "container": record["container"]["name"],
                 "container_ssh_port": record["container"]["ssh_port"],
+                "container_machine_type": record["container"].get("machine_type"),
                 "image": record["container"]["image"],
                 "last_verified_at": record.get("last_verified_at"),
             }
@@ -293,6 +330,27 @@ def cmd_put(args: argparse.Namespace) -> int:
 
         target = alias_record or ip_record
         namespace = validate_machine_username(args.namespace) if args.namespace else None
+        host_machine_type = (
+            normalize_machine_type(args.host_machine_type)
+            if args.host_machine_type is not None
+            else (target["host"].get("machine_type") if target is not None else None)
+        )
+        host_soc = (
+            normalize_soc_token(args.host_soc)
+            if args.host_soc is not None
+            else (target["host"].get("soc") if target is not None else None)
+        )
+        if args.host_soc is not None and host_soc is None:
+            raise InventoryError("host soc must be a non-empty string when provided")
+        container_machine_type = (
+            normalize_machine_type(args.container_machine_type)
+            if args.container_machine_type is not None
+            else (
+                target["container"].get("machine_type")
+                if target is not None and target.get("container") is not None
+                else host_machine_type
+            )
+        )
         record = {
             "alias": args.alias,
             "namespace": namespace,
@@ -312,6 +370,12 @@ def cmd_put(args: argparse.Namespace) -> int:
             "created_by_skill": args.created_by_skill,
             "last_verified_at": args.last_verified_at,
         }
+        if host_machine_type is not None:
+            record["host"]["machine_type"] = host_machine_type
+        if host_soc is not None:
+            record["host"]["soc"] = host_soc
+        if container_machine_type is not None:
+            record["container"]["machine_type"] = container_machine_type
         if namespace is None:
             record.pop("namespace")
         _validate_record(record)
@@ -330,6 +394,9 @@ def cmd_put(args: argparse.Namespace) -> int:
         "alias": record["alias"],
         "namespace": record.get("namespace"),
         "host_ip": record["host"]["ip"],
+        "host_machine_type": record["host"].get("machine_type"),
+        "host_soc": record["host"].get("soc"),
+        "container_machine_type": record["container"].get("machine_type"),
         "inventory": str(requested_path),
     }
     if not same_path(active_path, requested_path):
@@ -402,6 +469,8 @@ def build_parser() -> argparse.ArgumentParser:
     put_cmd.add_argument("--host-ip", "--host", dest="host_ip", required=True)
     put_cmd.add_argument("--host-port", "--host-ssh-port", dest="host_port", type=int, default=22)
     put_cmd.add_argument("--host-user", "--user", dest="host_user", default="root")
+    put_cmd.add_argument("--host-machine-type", "--machine-type", dest="host_machine_type", help="host machine type metadata, for example A2, A3, or 310P")
+    put_cmd.add_argument("--host-soc", "--soc", dest="host_soc", help="host SoC token metadata, for example ascend910b1")
     put_cmd.add_argument("--container-name", "--name", dest="container_name", required=True)
     put_cmd.add_argument(
         "--container-ssh-port",
@@ -416,6 +485,12 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
     )
     put_cmd.add_argument("--workdir", default="/vllm-workspace")
+    put_cmd.add_argument(
+        "--container-machine-type",
+        "--container-type",
+        dest="container_machine_type",
+        help="container hardware type metadata, for example A2, A3, or 310P",
+    )
     put_cmd.add_argument(
         "--bootstrap-method",
         choices=INPUT_BOOTSTRAP_METHOD_CHOICES,
@@ -446,6 +521,8 @@ def build_parser() -> argparse.ArgumentParser:
     upsert_cmd.add_argument("--host-ip", "--host", dest="host_ip", required=True)
     upsert_cmd.add_argument("--host-port", "--host-ssh-port", dest="host_port", type=int, default=22)
     upsert_cmd.add_argument("--host-user", "--user", dest="host_user", default="root")
+    upsert_cmd.add_argument("--host-machine-type", "--machine-type", dest="host_machine_type", help="host machine type metadata, for example A2, A3, or 310P")
+    upsert_cmd.add_argument("--host-soc", "--soc", dest="host_soc", help="host SoC token metadata, for example ascend910b1")
     upsert_cmd.add_argument("--container-name", "--name", dest="container_name", required=True)
     upsert_cmd.add_argument(
         "--container-ssh-port",
@@ -460,6 +537,12 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
     )
     upsert_cmd.add_argument("--workdir", default="/vllm-workspace")
+    upsert_cmd.add_argument(
+        "--container-machine-type",
+        "--container-type",
+        dest="container_machine_type",
+        help="container hardware type metadata, for example A2, A3, or 310P",
+    )
     upsert_cmd.add_argument(
         "--bootstrap-method",
         choices=INPUT_BOOTSTRAP_METHOD_CHOICES,

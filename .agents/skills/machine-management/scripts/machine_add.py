@@ -59,6 +59,11 @@ def build_parser() -> argparse.ArgumentParser:
             "this workflow does not default implicitly"
         ),
     )
+    parser.add_argument(
+        "--machine-type",
+        choices=machine_ops.MACHINE_TYPE_CHOICES,
+        help="override detected machine type when npu-smi cannot infer it",
+    )
     parser.add_argument("--workdir", default=machine_ops.DEFAULT_WORKDIR, help=f"container workdir (default: {machine_ops.DEFAULT_WORKDIR})")
     parser.add_argument("--public-key-file", help="local public key to install; defaults to ~/.ssh/id_ed25519.pub if present")
     password_group = parser.add_mutually_exclusive_group()
@@ -72,6 +77,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
+        requested_machine_type = (
+            machine_ops.normalize_machine_type(args.machine_type) if args.machine_type else None
+        )
         emit_progress(action="add", phase="profile", message="ensuring local machine profile", machine=args.host)
         profile, needs_profile, profile_action = load_or_create_profile(
             machine_username=args.machine_username,
@@ -100,9 +108,27 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
         assert image is not None
 
+        existing_machine_type_hint = None
         if existing is not None:
+            if existing["host"].get("machine_type"):
+                existing_machine_type_hint = machine_ops.normalize_machine_type(existing["host"]["machine_type"])
+            elif existing["container"].get("machine_type"):
+                existing_machine_type_hint = machine_ops.normalize_machine_type(existing["container"]["machine_type"])
+            else:
+                existing_machine_type_hint = machine_ops.infer_machine_type_from_image(existing["container"].get("image"))
+            if requested_machine_type is not None and existing_machine_type_hint is not None and requested_machine_type != existing_machine_type_hint:
+                raise WorkflowError(
+                    f"explicit machine type {requested_machine_type} does not match the recorded machine type {existing_machine_type_hint}"
+                )
             verified = verify_machine(existing)
-            if verified.get("status") == "ready" and image_request_matches_record(image, existing):
+            if (
+                verified.get("status") == "ready"
+                and image_request_matches_record(image, existing)
+                and (
+                    requested_machine_type is None
+                    or (existing_machine_type_hint is not None and requested_machine_type == existing_machine_type_hint)
+                )
+            ):
                 message = (
                     "machine is already managed and ready; no mutation was needed"
                     if existing_from_host
@@ -160,7 +186,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             host_auth = {"success": True, "result": "already-configured", "precheck": host_ssh_precheck}
 
         emit_progress(action="add", phase="probe", message="probing host prerequisites", machine=alias)
-        probe = probe_host(target, image=image)
+        probe = probe_host(
+            target,
+            image=image,
+            machine_type=requested_machine_type or existing_machine_type_hint,
+        )
         if probe.get("status") == "blocked":
             print_json(probe)
             return 0
@@ -177,6 +207,52 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             return 0
 
+        probed_machine_type = (
+            machine_ops.normalize_machine_type(probe.get("machine_type"))
+            if probe.get("machine_type")
+            else None
+        )
+        existing_host_machine_type = (
+            machine_ops.normalize_machine_type(existing["host"]["machine_type"])
+            if existing is not None and existing["host"].get("machine_type")
+            else None
+        )
+        existing_container_machine_type = (
+            machine_ops.normalize_machine_type(existing["container"]["machine_type"])
+            if existing is not None and existing["container"].get("machine_type")
+            else None
+        )
+        if requested_machine_type is not None and probed_machine_type is not None and requested_machine_type != probed_machine_type:
+            raise WorkflowError(
+                f"explicit machine type {requested_machine_type} does not match detected host type {probed_machine_type}"
+            )
+        machine_type = (
+            requested_machine_type
+            or probed_machine_type
+            or existing_host_machine_type
+            or existing_container_machine_type
+            or existing_machine_type_hint
+        )
+        if machine_type is None:
+            print_json(
+                status_payload(
+                    "blocked",
+                    success=False,
+                    action="detect-machine-type",
+                    message="host probe succeeded but machine type could not be inferred; rerun with --machine-type A2|A3|310P",
+                    probe=probe,
+                )
+            )
+            return 0
+
+        detected_soc = machine_ops.normalize_soc_token(probe.get("detected_soc"))
+        existing_soc = (
+            machine_ops.normalize_soc_token(existing["host"]["soc"])
+            if existing is not None and existing["host"].get("soc")
+            else None
+        )
+        soc = detected_soc or existing_soc
+
         namespace = existing.get("namespace") if existing is not None else profile["machine_username"]
         container_name = existing["container"]["name"] if existing is not None else profile["container_name"]
         container_port = existing["container"]["ssh_port"] if existing is not None else free_port
@@ -191,6 +267,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             image=image,
             workdir=workdir,
             namespace=namespace,
+            machine_type=machine_type,
+            soc=soc,
             public_key_file=args.public_key_file,
             replace_container_on_image_change=bool(args.image),
         )
@@ -200,6 +278,11 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         actual_image = container.get("selected_image") or container.get("image") or image
         bootstrap_method = "password-once" if host_ssh_precheck.get("ok") is False and password.value is not None else None
+        container_machine_type = (
+            machine_ops.normalize_machine_type(container.get("container_type"))
+            if container.get("container_type")
+            else machine_type
+        )
         emit_progress(action="add", phase="inventory", message="persisting machine record and refreshing mesh", machine=alias)
         inventory_payload, record = upsert_machine_record(
             alias=alias,
@@ -212,6 +295,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             image=actual_image,
             workdir=workdir,
             bootstrap_method=bootstrap_method,
+            host_machine_type=machine_type,
+            host_soc=soc,
+            container_machine_type=container_machine_type,
         )
         peers = [peer for peer in list_records() if peer["alias"] != record["alias"]]
         mesh = sync_mesh(record, peers=peers)
