@@ -39,6 +39,7 @@ Ready does **not** imply code sync, rebuild, serving, or benchmark readiness.
 - Never write passwords or tokens into tracked files or `.vaws-local/`.
 - Never use `scp`, `sftp`, `sshpass`, or `expect` in this workflow.
 - Never default the container image silently. Ask the user to choose one of:
+  - `rc`: resolve the newest official prerelease `vllm-ascend` tag, then try `quay.nju.edu.cn/ascend/vllm-ascend:<tag>` first and `quay.io/ascend/vllm-ascend:<tag>` second; this is the recommended developer track
   - `main`: `quay.nju.edu.cn/ascend/vllm-ascend:main`, then `quay.io/ascend/vllm-ascend:main`
   - `stable`: resolve the latest official non-prerelease `vllm-ascend` release tag, then try NJU first and `quay.io` second
   - `custom`: a full image reference with a concrete non-`latest` tag or digest
@@ -61,9 +62,9 @@ The primary bootstrap path must not depend on `ssh-copy-id`, `expect`, or any ot
 
 Use these task-oriented wrappers for normal agent work. They keep the parameter surface narrow and return structured JSON statuses such as `ready`, `needs_input`, `needs_repair`, `blocked`, `removed`, or `unmanaged`. They also stream phase progress on `stderr` as `__VAWS_PROGRESS__=<json>` while reserving `stdout` for one final machine-readable JSON payload.
 
-- `python3 .agents/skills/machine-management/scripts/machine_add.py --host <ip> --image <main|stable|custom-ref> [--machine-username <letters-or-digits> | --generate-machine-username] [--password-env NAME | --password-stdin | --password ...]`
+- `python3 .agents/skills/machine-management/scripts/machine_add.py --host <ip> --image <rc|main|stable|custom-ref> [--machine-username <letters-or-digits> | --generate-machine-username] [--password-env NAME | --password-stdin | --password ...]`
 - `python3 .agents/skills/machine-management/scripts/machine_verify.py --machine <alias-or-ip>`
-- `python3 .agents/skills/machine-management/scripts/machine_repair.py --machine <alias-or-ip> [--image <main|stable|custom-ref>] [--password-env NAME | --password-stdin | --password ...]`
+- `python3 .agents/skills/machine-management/scripts/machine_repair.py --machine <alias-or-ip> [--image <rc|main|stable|custom-ref>] [--password-env NAME | --password-stdin | --password ...]`
 - `python3 .agents/skills/machine-management/scripts/machine_remove.py --machine <alias-or-ip>`
 
 Design intent:
@@ -207,8 +208,8 @@ Do not remove host firewall rules or host-level `authorized_keys` entries.
 - Use the dedicated container SSH config `/etc/ssh/sshd_vaws_config` instead of editing `/etc/ssh/sshd_config` inline.
 - Quote remote-script arguments that may contain spaces, especially SSH public keys and mesh peer keys, before sending them through `ssh`.
 - Ensure `/run/sshd` exists before starting the dedicated `sshd`.
-- Image pulls should follow the selected mirror order and emit heartbeat-style progress so long `docker pull`, `apt-get update`, and `apt-get install` phases remain attributable.
-- Keep `stable` resolution dynamic: resolve the latest official non-prerelease release tag at execution time instead of using the moving `latest` tag.
+- Image pulls should follow the selected mirror order and emit heartbeat-style progress so long `docker pull`, `apt-get update`, and `apt-get install` phases remain attributable. Persist the actually selected image in inventory, not only the selector.
+- Keep `rc` and `stable` resolution dynamic: resolve the newest official prerelease tag or latest official non-prerelease release tag at execution time instead of using the moving `latest` tag.
 - Keep progress on `stderr` and the final status JSON on `stdout`; do not mix partial human narration into the terminal contract.
 - For smoke tests, do not pin a Python patch version. Discover the highest available `/usr/local/python*/bin/python3`, then fall back to `python3`.
 - Source only environment scripts that actually exist.

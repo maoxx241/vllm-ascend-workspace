@@ -28,13 +28,14 @@ Repo-local skills live under `.agents/skills/`.
   - `.agents/skills/machine-management/scripts/machine_repair.py`
   - `.agents/skills/machine-management/scripts/machine_remove.py`
 - Treat `.agents/skills/machine-management/scripts/inventory.py` and `.agents/skills/machine-management/scripts/manage_machine.py` as low-level maintenance helpers, not the default agent-facing surface.
-- For machine bootstrap, never default the image silently. Ask the user to choose `main`, `stable`, or a concrete custom image reference.
+- For machine bootstrap, never default the image silently. Ask the user to choose `rc`, `main`, `stable`, or a concrete custom image reference.
+- `rc` is the recommended developer track: resolve the newest official prerelease `vllm-ascend` tag at execution time, then try `quay.nju.edu.cn/ascend/vllm-ascend:<tag>` first and `quay.io/ascend/vllm-ascend:<tag>` second.
 - `main` should try `quay.nju.edu.cn/ascend/vllm-ascend:main` first and `quay.io/ascend/vllm-ascend:main` second.
 - `stable` should resolve the latest official non-prerelease `vllm-ascend` release tag at execution time, then try NJU first and `quay.io` second.
 - Reject `auto`, `*:latest`, and bare repositories without a tag as machine-bootstrap defaults.
 - Keep helper CLIs ergonomic: accept common aliases, disable brittle prefix-abbreviation behavior, and default metadata that can be inferred safely.
 - For normal remote-code-parity work, prefer `.agents/skills/remote-code-parity/scripts/parity_sync.py` over the low-level `remote_code_parity.py` helper.
-- Remote-code-parity should expose phase progress, materialize nested repos explicitly, and avoid hard-coding one container Python patch path.
+- Remote-code-parity should expose phase progress, materialize nested repos explicitly, keep consent/runtime-state writes atomic, unify the runtime Python across `python`, `python3`, CMake, and CANN helper tools, and use mirror-aware pip fallback in the order Tsinghua -> Aliyun -> PyPI.
 - Prefer concise machine-readable summaries over long raw command logs.
 - When a command is noisy, capture the log and report only a compact summary plus a short failure tail.
 - Wrapper-style skills should keep progress on `stderr` and reserve `stdout` for a final machine-readable JSON payload.
@@ -50,7 +51,7 @@ Repo-local skills live under `.agents/skills/`.
 - For a missing broad-init machine profile, prefer `.agents/skills/repo-init/scripts/repo_init_profile.py` over calling `workspace_profile.py` directly.
 - The broad-init machine-username question should use exactly three options: detected Git username, random `agent#####`, or custom. If the user picks custom, ask one more text question and wait for the literal username before mutating.
 - Never treat a custom selection as permission to reuse the detected Git username.
-- During new-machine bootstrap, stop for an explicit image choice unless an existing inventory record already points at a concrete non-`latest` image. The allowed default tracks are `main` and `stable`; any other choice must be a concrete custom ref.
+- During new-machine bootstrap, stop for an explicit image choice unless an existing inventory record already points at a concrete non-`latest` image. The named selector tracks are `rc`, `main`, and `stable`; any other choice must be a concrete custom ref.
 - During `machine-management`, if host key SSH is missing and the user already supplied the host password in the request, prefer a one-shot scripted bootstrap first. Do not immediately bounce the user to a manual terminal command.
 - During `machine-management`, long `docker pull`, `apt-get update`, and package-install phases should keep emitting attributable progress instead of going silent behind one global timeout.
 

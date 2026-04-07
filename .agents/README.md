@@ -17,7 +17,7 @@ When a workflow has deterministic shell, SSH, Git, or local-state mechanics, pre
 
 Wrapper-style helpers should stream bounded phase progress on `stderr` and keep one final machine-readable JSON payload on `stdout`.
 
-For machine-management specifically, image selection is an explicit user decision gate: choose `main`, `stable`, or a concrete custom image reference. Do not silently fall back to `auto`, `latest`, or another moving tag.
+For machine-management specifically, image selection is an explicit user decision gate: choose `rc`, `main`, `stable`, or a concrete custom image reference. `rc` is the recommended developer track. Do not silently fall back to `auto`, `latest`, or another moving tag.
 
 When you add or revise a helper script, keep the CLI alias-tolerant and give safe defaults for metadata that can be inferred. The goal is to reduce agent parameter brittleness, not to force one exact flag spelling.
 
@@ -52,7 +52,7 @@ Untracked workspace-local state lives under `.vaws-local/`:
 - `.vaws-local/remote-code-parity/install-consents.json`
 - `.vaws-local/remote-code-parity/runtime-state.json`
 
-Remote-code-parity transport is container-only after machine attach: use machine inventory to resolve the target, then push synthetic refs directly into the container-local cache root. Synthetic mirrors should also publish an advertised branch ref for the current snapshot so nested repos can be materialized without brittle submodule fetch behavior.
+Remote-code-parity transport is container-only after machine attach: use machine inventory to resolve the target, then push synthetic refs directly into the container-local cache root. Synthetic mirrors should also publish an advertised branch ref for the current snapshot so nested repos can be materialized without brittle submodule fetch behavior. Runtime installs should keep pip mirror fallback on Tsinghua -> Aliyun -> PyPI, stream progress for long package steps, and keep consent/runtime-state writes atomic.
 
 The legacy repo-root `.machine-inventory.json` is compatibility input only and should not be reintroduced as the primary path.
 

@@ -60,6 +60,7 @@ Keep local untracked state here:
 
 - `.vaws-local/remote-code-parity/install-consents.json`
 - `.vaws-local/remote-code-parity/runtime-state.json`
+- `install-consents.json` and `runtime-state.json` writes must be atomic and lock-protected.
 
 Container-local cache layout under the cache root:
 
@@ -191,7 +192,7 @@ Conservative defaults:
 - `vllm-ascend`: same as `vllm`, plus `vllm_ascend/_cann_ops_custom/**`
 - pure Python, docs, configs, tests, and ordinary scripts: parity only, no rebuild
 
-Use these commands inside the container when required. The normal path first tries the in-place environment, then does one bounded packaging refresh / retry when legacy packaging metadata blocks editable install:
+Use these commands inside the container when required. The normal path first unifies the runtime Python across `python`, `python3`, CMake, and CANN helper tools, then tries the in-place environment, and finally does one bounded packaging refresh / retry when legacy packaging metadata blocks editable install. Pip resolution should prefer Tsinghua, then Aliyun, then the public PyPI index:
 
 ### `vllm`
 
@@ -203,11 +204,14 @@ pip install -e . --no-build-isolation
 ### `vllm-ascend`
 
 ```bash
-pip install -r requirements.txt
+pip install -r requirements.txt  # mirror-aware fallback: Tsinghua -> Aliyun -> PyPI
 pip install -v -e . --no-build-isolation
 ```
 
 ### 7. Finish with proof, not assumptions
+
+- Finish with real import smoke (`import vllm`, `import vllm_ascend`, `import torch_npu`) instead of `find_spec()` only.
+
 
 Return a compact JSON summary that includes:
 

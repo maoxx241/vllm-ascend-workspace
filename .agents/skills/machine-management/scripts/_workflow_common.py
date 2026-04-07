@@ -132,8 +132,15 @@ def image_selection_needs_input_payload(
     machine: str | None = None,
     current_image: str | None = None,
 ) -> dict[str, Any]:
+    latest_prerelease_tag = None
     latest_release_tag = None
+    prerelease_resolution_note = "resolved at execution time"
     release_resolution_note = "resolved at execution time"
+    try:
+        latest_prerelease_tag = machine_ops.fetch_latest_prerelease_tag()
+        prerelease_resolution_note = f"currently resolves to {latest_prerelease_tag}"
+    except machine_ops.MachineManagementError:
+        latest_prerelease_tag = None
     try:
         latest_release_tag = machine_ops.fetch_latest_release_tag()
         release_resolution_note = f"currently resolves to {latest_release_tag}"
@@ -152,9 +159,17 @@ def image_selection_needs_input_payload(
             "required": True,
             "choices": [
                 {
+                    "value": machine_ops.IMAGE_SELECTOR_RC,
+                    "label": "latest official rc image",
+                    "recommended": True,
+                    "resolution": prerelease_resolution_note,
+                    "use_when": "recommended default for active development when you want the newest release-candidate image with matched container dependencies",
+                    **({"resolved_tag": latest_prerelease_tag} if latest_prerelease_tag else {}),
+                },
+                {
                     "value": machine_ops.IMAGE_SELECTOR_MAIN,
                     "label": "main branch image",
-                    "recommended": True,
+                    "recommended": False,
                     "resolution": f"{machine_ops.IMAGE_REGISTRY_NJU}:main, then {machine_ops.IMAGE_REGISTRY_OFFICIAL}:main",
                     "use_when": "active development against the upstream main branch",
                 },
@@ -209,7 +224,7 @@ def resolve_workflow_image(
     if existing_record is None:
         return None, image_selection_needs_input_payload(
             reason=(
-                f"{action} requires an explicit image choice; ask the user to choose `main`, `stable`, or a custom non-latest image reference before continuing"
+                f"{action} requires an explicit image choice; ask the user to choose `rc`, `main`, `stable`, or a custom non-latest image reference before continuing"
             )
         )
 
@@ -217,7 +232,7 @@ def resolve_workflow_image(
     if image_requires_explicit_reselection(current_image):
         return None, image_selection_needs_input_payload(
             reason=(
-                f"{action} cannot reuse the recorded image automatically because it is missing, ambiguous, or points at a forbidden moving tag; ask the user to choose `main`, `stable`, or a custom non-latest image reference"
+                f"{action} cannot reuse the recorded image automatically because it is missing, ambiguous, or points at a forbidden moving tag; ask the user to choose `rc`, `main`, `stable`, or a custom non-latest image reference"
             ),
             machine=existing_record["alias"],
             current_image=current_image,
@@ -446,10 +461,11 @@ def probe_host(
     port_range: str = machine_ops.DEFAULT_PORT_RANGE,
     managed_prefix: str = "vaws-",
 ) -> dict[str, Any]:
+    image_request = machine_ops.image_request_payload(image)
     result = machine_ops.run_remote_script(
         target,
         machine_ops.render_host_probe_script(),
-        args=[image, port_range, managed_prefix],
+        args=[json.dumps(image_request, ensure_ascii=False), port_range, managed_prefix],
         batch_mode=True,
         timeout_seconds=machine_ops.DEFAULT_PROBE_TIMEOUT_SECONDS,
     )
@@ -486,6 +502,7 @@ def bootstrap_container(
     if needs_input is not None:
         return needs_input
     assert key_path is not None and public_key is not None
+    image_request = machine_ops.image_request_payload(image)
 
     result = machine_ops.run_remote_script(
         target,
@@ -493,7 +510,7 @@ def bootstrap_container(
         args=[
             container_name,
             str(container_ssh_port),
-            image,
+            json.dumps(image_request, ensure_ascii=False),
             workdir,
             public_key,
             namespace or "",

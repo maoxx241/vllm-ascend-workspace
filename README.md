@@ -76,12 +76,13 @@ When invoked, `machine-management` can:
 1. create or reuse the local workspace machine profile when repo-init was skipped
 2. bootstrap host key-based SSH with a single interactive password-authenticated step
 3. probe host prerequisites
-4. stop for an explicit image decision gate: `main`, `stable`, or a concrete custom image reference
+4. stop for an explicit image decision gate: `rc`, `main`, `stable`, or a concrete custom image reference (`rc` is the recommended developer track)
 5. create or repair one managed host-network container per requested machine
 6. verify direct local -> container SSH and run a `torch` + `torch_npu` smoke test
 6. stream bounded machine-phase progress and record the actual selected image used for that container
 7. keep long `docker pull`, `apt-get update`, and package-install steps attributable with heartbeat-style progress
-8. persist managed-machine state in local inventory
+8. keep local inventory writes atomic so concurrent wrapper calls do not clobber each other
+8. persist managed-machine state in local inventory with atomic writes / lock protection
 9. mesh managed containers together on a best-effort basis
 10. remove a managed container and clean local trust state
 
@@ -98,6 +99,7 @@ When invoked automatically before remote execution, `remote-code-parity` can:
 3. push those snapshots directly into **container-local** bare mirror repositories over direct local -> container SSH
 4. publish an advertised current branch inside each mirror so nested repos can fetch the synthetic snapshot cleanly
 5. materialize the mirrored commits in place inside `/vllm-workspace` so the checked-out code matches the local workspace exactly
+6. keep runtime install progress attributable, use pip mirror fallback in the order Tsinghua -> Aliyun -> PyPI, and unify the runtime Python path for editable builds
 6. preserve runtime-private paths such as `Mooncake` instead of replacing the entire runtime root
 7. on the first sync for a fresh container, require explicit user consent before uninstalling image-provided `vllm` / `vllm-ascend`, deleting only `/vllm-workspace/vllm` and `/vllm-workspace/vllm-ascend`, and reinstalling them from the synced source trees
 8. on later syncs, reinstall only when build-critical paths changed

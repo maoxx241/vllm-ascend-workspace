@@ -33,9 +33,18 @@ from typing import Any, Sequence
 IMAGE_REGISTRY_NJU = "quay.nju.edu.cn/ascend/vllm-ascend"
 IMAGE_REGISTRY_OFFICIAL = "quay.io/ascend/vllm-ascend"
 IMAGE_REGISTRY_MIRRORS = (IMAGE_REGISTRY_NJU, IMAGE_REGISTRY_OFFICIAL)
+IMAGE_SELECTOR_RC = "rc"
 IMAGE_SELECTOR_MAIN = "main"
 IMAGE_SELECTOR_STABLE = "stable"
 IMAGE_SELECTOR_ALIASES = {
+    IMAGE_SELECTOR_RC: IMAGE_SELECTOR_RC,
+    "release-candidate": IMAGE_SELECTOR_RC,
+    "release-candidates": IMAGE_SELECTOR_RC,
+    "latest-rc": IMAGE_SELECTOR_RC,
+    "latest-prerelease": IMAGE_SELECTOR_RC,
+    "latest-pre-release": IMAGE_SELECTOR_RC,
+    "prerelease": IMAGE_SELECTOR_RC,
+    "pre-release": IMAGE_SELECTOR_RC,
     IMAGE_SELECTOR_MAIN: IMAGE_SELECTOR_MAIN,
     "main-branch": IMAGE_SELECTOR_MAIN,
     IMAGE_SELECTOR_STABLE: IMAGE_SELECTOR_STABLE,
@@ -45,9 +54,11 @@ IMAGE_SELECTOR_ALIASES = {
 }
 LEGACY_IMAGE_SELECTORS = {"auto"}
 FORBIDDEN_IMAGE_TAGS = {"latest"}
-DEFAULT_IMAGE = IMAGE_SELECTOR_MAIN
+DEFAULT_IMAGE = IMAGE_SELECTOR_RC
 DEFAULT_IMAGE_CANDIDATES = tuple(f"{repo}:main" for repo in IMAGE_REGISTRY_MIRRORS)
+RELEASES_API = "https://api.github.com/repos/vllm-project/vllm-ascend/releases?per_page=100"
 LATEST_RELEASE_API = "https://api.github.com/repos/vllm-project/vllm-ascend/releases/latest"
+RELEASES_PAGE = "https://github.com/vllm-project/vllm-ascend/releases"
 LATEST_RELEASE_PAGE = "https://github.com/vllm-project/vllm-ascend/releases/latest"
 LATEST_RELEASE_TIMEOUT_SECONDS = 10
 IMAGE_RESOLVER_USER_AGENT = "vaws-machine-management/1.0"
@@ -64,6 +75,10 @@ DEFAULT_BOOTSTRAP_TIMEOUT_SECONDS = 1800
 DEFAULT_SMOKE_TIMEOUT_SECONDS = 240
 DEFAULT_REMOTE_TIMEOUT_GRACE_SECONDS = 8
 ENV_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+SEMVER_TAG_PATTERN = re.compile(
+    r"^v?(?P<major>\d+)\.(?P<minor>\d+)\.(?P<patch>\d+)(?:(?P<kind>rc)(?P<kind_number>\d+))?$",
+    re.IGNORECASE,
+)
 
 
 class MachineManagementError(RuntimeError):
@@ -109,12 +124,12 @@ def require_explicit_image_ref(ref: str) -> str:
     candidate = ref.strip()
     if not candidate:
         raise MachineManagementError(
-            "image reference is empty; choose `main`, `stable`, or an explicit non-latest image reference"
+            "image reference is empty; choose `rc`, `main`, `stable`, or an explicit non-latest image reference"
         )
     normalized = candidate.lower()
     if normalized in LEGACY_IMAGE_SELECTORS:
         raise MachineManagementError(
-            "legacy image selector `auto` is no longer allowed; ask the user to choose `main`, `stable`, or a concrete image reference"
+            "legacy image selector `auto` is no longer allowed; ask the user to choose `rc`, `main`, `stable`, or a concrete image reference"
         )
     if normalized in IMAGE_SELECTOR_ALIASES:
         raise MachineManagementError(
@@ -129,26 +144,95 @@ def require_explicit_image_ref(ref: str) -> str:
         )
     if tag.lower() in FORBIDDEN_IMAGE_TAGS:
         raise MachineManagementError(
-            "the moving `latest` tag is not allowed for managed machine bootstrap; choose `main`, `stable`, or a concrete version tag"
+            "the moving `latest` tag is not allowed for managed machine bootstrap; choose `rc`, `main`, `stable`, or a concrete version tag"
         )
     return candidate
 
 
-def fetch_latest_release_tag(timeout_seconds: int = LATEST_RELEASE_TIMEOUT_SECONDS) -> str:
-    errors: list[str] = []
+def parse_release_tag(tag: str) -> tuple[int, int, int, int | None] | None:
+    match = SEMVER_TAG_PATTERN.fullmatch(tag.strip())
+    if match is None:
+        return None
+    major = int(match.group("major"))
+    minor = int(match.group("minor"))
+    patch = int(match.group("patch"))
+    kind = (match.group("kind") or "").lower()
+    kind_number = match.group("kind_number")
+    if kind == "rc":
+        return major, minor, patch, int(kind_number or "0")
+    return major, minor, patch, None
+
+
+def choose_latest_tag(tags: Sequence[str], *, prerelease: bool) -> str | None:
+    parsed_tags: list[tuple[tuple[int, int, int, int], str]] = []
+    for tag in tags:
+        parsed = parse_release_tag(tag)
+        if parsed is None:
+            continue
+        major, minor, patch, rc_number = parsed
+        is_prerelease = rc_number is not None
+        if prerelease != is_prerelease:
+            continue
+        sort_key = (major, minor, patch, rc_number or 0)
+        parsed_tags.append((sort_key, tag.strip()))
+    if not parsed_tags:
+        return None
+    parsed_tags.sort(key=lambda item: item[0], reverse=True)
+    return parsed_tags[0][1]
+
+
+def fetch_release_catalog(timeout_seconds: int = LATEST_RELEASE_TIMEOUT_SECONDS) -> list[dict[str, Any]]:
     headers = {
         "Accept": "application/vnd.github+json",
         "User-Agent": IMAGE_RESOLVER_USER_AGENT,
     }
-    api_request = urllib.request.Request(LATEST_RELEASE_API, headers=headers)
+    request = urllib.request.Request(RELEASES_API, headers=headers)
+    with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+        payload = json.load(response)
+    if not isinstance(payload, list):
+        raise MachineManagementError("GitHub releases API returned an unexpected payload")
+    releases = [item for item in payload if isinstance(item, dict)]
+    if not releases:
+        raise MachineManagementError("GitHub releases API returned no releases")
+    return releases
+
+
+def choose_release_tag_from_catalog(catalog: Sequence[dict[str, Any]], *, prerelease: bool) -> str | None:
+    tags: list[str] = []
+    for release in catalog:
+        if release.get("draft"):
+            continue
+        tag = str(release.get("tag_name") or "").strip()
+        if not tag:
+            continue
+        parsed = parse_release_tag(tag)
+        if parsed is None:
+            continue
+        is_prerelease = parsed[3] is not None
+        if prerelease:
+            if release.get("prerelease") or is_prerelease:
+                tags.append(tag)
+        else:
+            if not release.get("prerelease") and not is_prerelease:
+                tags.append(tag)
+    return choose_latest_tag(tags, prerelease=prerelease)
+
+
+def choose_release_tag_from_page(html: str, *, prerelease: bool) -> str | None:
+    matches = re.findall(r'/vllm-project/vllm-ascend/releases/tag/([^"?#]+)', html)
+    tags = [urllib.parse.unquote(item).strip() for item in matches]
+    return choose_latest_tag(tags, prerelease=prerelease)
+
+
+def fetch_latest_release_tag(timeout_seconds: int = LATEST_RELEASE_TIMEOUT_SECONDS) -> str:
+    errors: list[str] = []
     try:
-        with urllib.request.urlopen(api_request, timeout=timeout_seconds) as response:
-            payload = json.load(response)
-        tag = str(payload.get("tag_name") or "").strip()
-        if tag and not payload.get("draft") and not payload.get("prerelease"):
+        catalog = fetch_release_catalog(timeout_seconds=timeout_seconds)
+        tag = choose_release_tag_from_catalog(catalog, prerelease=False)
+        if tag:
             return tag
-        errors.append("GitHub API did not return a final release tag")
-    except (OSError, urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError) as exc:
+        errors.append("GitHub releases catalog did not contain a final release tag")
+    except (MachineManagementError, OSError, urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError) as exc:
         errors.append(f"GitHub API: {exc}")
 
     page_request = urllib.request.Request(LATEST_RELEASE_PAGE, headers={"User-Agent": IMAGE_RESOLVER_USER_AGENT})
@@ -157,14 +241,56 @@ def fetch_latest_release_tag(timeout_seconds: int = LATEST_RELEASE_TIMEOUT_SECON
             final_url = response.geturl()
         match = re.search(r"/tag/([^/?#]+)$", final_url)
         if match:
-            return urllib.parse.unquote(match.group(1))
+            tag = urllib.parse.unquote(match.group(1))
+            if choose_latest_tag([tag], prerelease=False):
+                return tag
         errors.append("release redirect did not expose a tag name")
     except (OSError, urllib.error.URLError, urllib.error.HTTPError) as exc:
         errors.append(f"GitHub releases page: {exc}")
 
+    page_request = urllib.request.Request(RELEASES_PAGE, headers={"User-Agent": IMAGE_RESOLVER_USER_AGENT})
+    try:
+        with urllib.request.urlopen(page_request, timeout=timeout_seconds) as response:
+            html = response.read().decode("utf-8", errors="replace")
+        tag = choose_release_tag_from_page(html, prerelease=False)
+        if tag:
+            return tag
+        errors.append("releases page did not expose a final release tag")
+    except (OSError, urllib.error.URLError, urllib.error.HTTPError) as exc:
+        errors.append(f"GitHub releases listing: {exc}")
+
     detail = "; ".join(errors)
     raise MachineManagementError(
-        "could not resolve the latest official vllm-ascend release tag; retry later, choose `main`, or pass an explicit image reference"
+        "could not resolve the latest official vllm-ascend release tag; retry later, choose `rc`, `main`, or pass an explicit image reference"
+        + (f" ({detail})" if detail else "")
+    )
+
+
+def fetch_latest_prerelease_tag(timeout_seconds: int = LATEST_RELEASE_TIMEOUT_SECONDS) -> str:
+    errors: list[str] = []
+    try:
+        catalog = fetch_release_catalog(timeout_seconds=timeout_seconds)
+        tag = choose_release_tag_from_catalog(catalog, prerelease=True)
+        if tag:
+            return tag
+        errors.append("GitHub releases catalog did not contain a prerelease tag")
+    except (MachineManagementError, OSError, urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError) as exc:
+        errors.append(f"GitHub API: {exc}")
+
+    page_request = urllib.request.Request(RELEASES_PAGE, headers={"User-Agent": IMAGE_RESOLVER_USER_AGENT})
+    try:
+        with urllib.request.urlopen(page_request, timeout=timeout_seconds) as response:
+            html = response.read().decode("utf-8", errors="replace")
+        tag = choose_release_tag_from_page(html, prerelease=True)
+        if tag:
+            return tag
+        errors.append("releases page did not expose a prerelease tag")
+    except (OSError, urllib.error.URLError, urllib.error.HTTPError) as exc:
+        errors.append(f"GitHub releases listing: {exc}")
+
+    detail = "; ".join(errors)
+    raise MachineManagementError(
+        "could not resolve the latest official vllm-ascend prerelease tag; retry later, choose `main`, `stable`, or pass an explicit image reference"
         + (f" ({detail})" if detail else "")
     )
 
@@ -173,10 +299,19 @@ def resolve_image_request(spec: str) -> ImageResolution:
     requested = spec.strip()
     if not requested:
         raise MachineManagementError(
-            "image selector is missing; choose `main`, `stable`, or an explicit non-latest image reference"
+            "image selector is missing; choose `rc`, `main`, `stable`, or an explicit non-latest image reference"
         )
     normalized = requested.lower()
     selector = IMAGE_SELECTOR_ALIASES.get(normalized)
+    if selector == IMAGE_SELECTOR_RC:
+        release_tag = fetch_latest_prerelease_tag()
+        return ImageResolution(
+            selector=IMAGE_SELECTOR_RC,
+            requested=requested,
+            policy="latest-official-prerelease",
+            candidates=image_candidates_for_tag(release_tag),
+            resolved_tag=release_tag,
+        )
     if selector == IMAGE_SELECTOR_MAIN:
         return ImageResolution(
             selector=IMAGE_SELECTOR_MAIN,
@@ -198,7 +333,7 @@ def resolve_image_request(spec: str) -> ImageResolution:
     candidates = tuple(require_explicit_image_ref(item) for item in requested.split(",") if item.strip())
     if not candidates:
         raise MachineManagementError(
-            "image selector is empty; choose `main`, `stable`, or an explicit non-latest image reference"
+            "image selector is empty; choose `rc`, `main`, `stable`, or an explicit non-latest image reference"
         )
     return ImageResolution(
         selector="explicit",
@@ -1825,8 +1960,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--image",
         required=True,
         help=(
-            "explicit image selector: `main`, `stable`, or a full non-latest image reference; "
-            f"`main` tries {DEFAULT_IMAGE_CANDIDATES[0]} then {DEFAULT_IMAGE_CANDIDATES[1]}"
+            "explicit image selector: `rc`, `main`, `stable`, or a full non-latest image reference; "
+            f"`rc` resolves the newest official prerelease tag, and `main` tries {DEFAULT_IMAGE_CANDIDATES[0]} then {DEFAULT_IMAGE_CANDIDATES[1]}"
         ),
     )
     probe.add_argument("--port-range", default=DEFAULT_PORT_RANGE, help=f"inclusive range START:END (default: {DEFAULT_PORT_RANGE})")
@@ -1880,8 +2015,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--image",
         required=True,
         help=(
-            "explicit image selector: `main`, `stable`, or a full non-latest image reference; "
-            f"`main` tries {DEFAULT_IMAGE_CANDIDATES[0]} then {DEFAULT_IMAGE_CANDIDATES[1]}"
+            "explicit image selector: `rc`, `main`, `stable`, or a full non-latest image reference; "
+            f"`rc` resolves the newest official prerelease tag, and `main` tries {DEFAULT_IMAGE_CANDIDATES[0]} then {DEFAULT_IMAGE_CANDIDATES[1]}"
         ),
     )
     bootstrap.add_argument(

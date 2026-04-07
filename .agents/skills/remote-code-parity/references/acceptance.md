@@ -31,6 +31,7 @@ These should not trigger `remote-code-parity` unless remote code parity is the o
 - normal outcomes are reported as compact JSON with `status` equal to `ready`, `blocked`, `failed`, or `dry-run`
 - phase progress is emitted on `stderr` as `__VAWS_PARITY_PROGRESS__=<json>` while the final summary stays on `stdout`
 - long runtime-install waits remain attributable because uninstall, requirements install, editable install, import verification, and marker write each emit their own progress phase
+- runtime install keeps pip mirror fallback in the order Tsinghua -> Aliyun -> PyPI instead of hard-coding only the public index
 
 ### Repo graph and snapshotting
 
@@ -53,11 +54,14 @@ These should not trigger `remote-code-parity` unless remote code parity is the o
 
 - first sync on a fresh container without recorded approval ends with `status == blocked`
 - consent writes require explicit `--approved-by-user`
+- consent and runtime-state writes are atomic / lock-protected so concurrent sync wrappers do not overwrite each other
 - first sync on a fresh container with `allow` recorded proceeds to uninstall image-provided packages best-effort, remove only `vllm` and `vllm-ascend`, and perform editable installs
 - later syncs on the same logical container identity do not ask again unless the marker or identity changed
 - batch approval supports mixed decisions across different servers or containers
 
 ### Runtime materialization and proof
+
+- final verification performs real imports for `vllm`, `vllm_ascend`, and `torch_npu` in the prepared runtime environment
 
 - `/vllm-workspace` is updated in place instead of being replaced wholesale
 - nested repos are materialized explicitly instead of relying on `git submodule update` for synthetic child commits
