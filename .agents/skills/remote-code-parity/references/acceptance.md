@@ -75,6 +75,7 @@ These should not trigger `remote-code-parity` unless remote code parity is the o
 - uninstall only removes packages that will be reinstalled; changing only vllm-ascend does not uninstall vllm
 - first install does not run the reinstall-branch uninstall step because `first_install_prepare_script` already handled it
 - when nothing changed since last sync (snapshot commits == last_snapshot_commits, no reinstall needed), the sync verifies the container with a single SSH call and returns `status == ready` immediately
+- `--force-reinstall` unconditionally triggers full reinstall of both vllm and vllm-ascend even when no files changed
 - a successful run ends with `status == ready`
 - runtime install uses dynamic Python discovery plus a shell-safe env preamble and guarded env-script sourcing instead of one hard-coded Python patch path
 - packaging-metadata failures from stale image toolchains trigger one bounded packaging-stack refresh / retry before the skill reports `failed`
