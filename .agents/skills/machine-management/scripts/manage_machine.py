@@ -56,8 +56,12 @@ LEGACY_IMAGE_SELECTORS = {"auto"}
 FORBIDDEN_IMAGE_TAGS = {"latest"}
 DEFAULT_IMAGE = IMAGE_SELECTOR_RC
 DEFAULT_IMAGE_CANDIDATES = tuple(f"{repo}:main" for repo in IMAGE_REGISTRY_MIRRORS)
-RELEASES_API = "https://api.github.com/repos/vllm-project/vllm-ascend/releases?per_page=100"
-LATEST_RELEASE_API = "https://api.github.com/repos/vllm-project/vllm-ascend/releases/latest"
+RELEASES_API = (
+    "https://api.github.com/repos/vllm-project/vllm-ascend/releases?per_page=100"
+)
+LATEST_RELEASE_API = (
+    "https://api.github.com/repos/vllm-project/vllm-ascend/releases/latest"
+)
 RELEASES_PAGE = "https://github.com/vllm-project/vllm-ascend/releases"
 LATEST_RELEASE_PAGE = "https://github.com/vllm-project/vllm-ascend/releases/latest"
 LATEST_RELEASE_TIMEOUT_SECONDS = 10
@@ -184,7 +188,9 @@ def image_tag_for_machine(base_tag: str, machine_type: str | None) -> str:
     return f"{base_tag}{suffix}"
 
 
-def image_candidates_for_tag(tag: str, machine_type: str | None = None) -> tuple[str, ...]:
+def image_candidates_for_tag(
+    tag: str, machine_type: str | None = None
+) -> tuple[str, ...]:
     resolved_tag = image_tag_for_machine(tag, machine_type)
     return tuple(f"{repo}:{resolved_tag}" for repo in IMAGE_REGISTRY_MIRRORS)
 
@@ -301,7 +307,9 @@ def choose_latest_tag(tags: Sequence[str], *, prerelease: bool) -> str | None:
     return parsed_tags[0][1]
 
 
-def fetch_release_catalog(timeout_seconds: int = LATEST_RELEASE_TIMEOUT_SECONDS) -> list[dict[str, Any]]:
+def fetch_release_catalog(
+    timeout_seconds: int = LATEST_RELEASE_TIMEOUT_SECONDS,
+) -> list[dict[str, Any]]:
     headers = {
         "Accept": "application/vnd.github+json",
         "User-Agent": IMAGE_RESOLVER_USER_AGENT,
@@ -310,14 +318,18 @@ def fetch_release_catalog(timeout_seconds: int = LATEST_RELEASE_TIMEOUT_SECONDS)
     with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
         payload = json.load(response)
     if not isinstance(payload, list):
-        raise MachineManagementError("GitHub releases API returned an unexpected payload")
+        raise MachineManagementError(
+            "GitHub releases API returned an unexpected payload"
+        )
     releases = [item for item in payload if isinstance(item, dict)]
     if not releases:
         raise MachineManagementError("GitHub releases API returned no releases")
     return releases
 
 
-def choose_release_tag_from_catalog(catalog: Sequence[dict[str, Any]], *, prerelease: bool) -> str | None:
+def choose_release_tag_from_catalog(
+    catalog: Sequence[dict[str, Any]], *, prerelease: bool
+) -> str | None:
     tags: list[str] = []
     for release in catalog:
         if release.get("draft"):
@@ -344,7 +356,9 @@ def choose_release_tag_from_page(html: str, *, prerelease: bool) -> str | None:
     return choose_latest_tag(tags, prerelease=prerelease)
 
 
-def fetch_latest_release_tag(timeout_seconds: int = LATEST_RELEASE_TIMEOUT_SECONDS) -> str:
+def fetch_latest_release_tag(
+    timeout_seconds: int = LATEST_RELEASE_TIMEOUT_SECONDS,
+) -> str:
     errors: list[str] = []
     try:
         catalog = fetch_release_catalog(timeout_seconds=timeout_seconds)
@@ -352,10 +366,18 @@ def fetch_latest_release_tag(timeout_seconds: int = LATEST_RELEASE_TIMEOUT_SECON
         if tag:
             return tag
         errors.append("GitHub releases catalog did not contain a final release tag")
-    except (MachineManagementError, OSError, urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError) as exc:
+    except (
+        MachineManagementError,
+        OSError,
+        urllib.error.URLError,
+        urllib.error.HTTPError,
+        json.JSONDecodeError,
+    ) as exc:
         errors.append(f"GitHub API: {exc}")
 
-    page_request = urllib.request.Request(LATEST_RELEASE_PAGE, headers={"User-Agent": IMAGE_RESOLVER_USER_AGENT})
+    page_request = urllib.request.Request(
+        LATEST_RELEASE_PAGE, headers={"User-Agent": IMAGE_RESOLVER_USER_AGENT}
+    )
     try:
         with urllib.request.urlopen(page_request, timeout=timeout_seconds) as response:
             final_url = response.geturl()
@@ -368,7 +390,9 @@ def fetch_latest_release_tag(timeout_seconds: int = LATEST_RELEASE_TIMEOUT_SECON
     except (OSError, urllib.error.URLError, urllib.error.HTTPError) as exc:
         errors.append(f"GitHub releases page: {exc}")
 
-    page_request = urllib.request.Request(RELEASES_PAGE, headers={"User-Agent": IMAGE_RESOLVER_USER_AGENT})
+    page_request = urllib.request.Request(
+        RELEASES_PAGE, headers={"User-Agent": IMAGE_RESOLVER_USER_AGENT}
+    )
     try:
         with urllib.request.urlopen(page_request, timeout=timeout_seconds) as response:
             html = response.read().decode("utf-8", errors="replace")
@@ -386,7 +410,9 @@ def fetch_latest_release_tag(timeout_seconds: int = LATEST_RELEASE_TIMEOUT_SECON
     )
 
 
-def fetch_latest_prerelease_tag(timeout_seconds: int = LATEST_RELEASE_TIMEOUT_SECONDS) -> str:
+def fetch_latest_prerelease_tag(
+    timeout_seconds: int = LATEST_RELEASE_TIMEOUT_SECONDS,
+) -> str:
     errors: list[str] = []
     try:
         catalog = fetch_release_catalog(timeout_seconds=timeout_seconds)
@@ -394,10 +420,18 @@ def fetch_latest_prerelease_tag(timeout_seconds: int = LATEST_RELEASE_TIMEOUT_SE
         if tag:
             return tag
         errors.append("GitHub releases catalog did not contain a prerelease tag")
-    except (MachineManagementError, OSError, urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError) as exc:
+    except (
+        MachineManagementError,
+        OSError,
+        urllib.error.URLError,
+        urllib.error.HTTPError,
+        json.JSONDecodeError,
+    ) as exc:
         errors.append(f"GitHub API: {exc}")
 
-    page_request = urllib.request.Request(RELEASES_PAGE, headers={"User-Agent": IMAGE_RESOLVER_USER_AGENT})
+    page_request = urllib.request.Request(
+        RELEASES_PAGE, headers={"User-Agent": IMAGE_RESOLVER_USER_AGENT}
+    )
     try:
         with urllib.request.urlopen(page_request, timeout=timeout_seconds) as response:
             html = response.read().decode("utf-8", errors="replace")
@@ -415,7 +449,9 @@ def fetch_latest_prerelease_tag(timeout_seconds: int = LATEST_RELEASE_TIMEOUT_SE
     )
 
 
-def resolve_image_request(spec: str, *, machine_type: str | None = None) -> ImageResolution:
+def resolve_image_request(
+    spec: str, *, machine_type: str | None = None
+) -> ImageResolution:
     requested = spec.strip()
     if not requested:
         raise MachineManagementError(
@@ -439,8 +475,12 @@ def resolve_image_request(spec: str, *, machine_type: str | None = None) -> Imag
             selector=IMAGE_SELECTOR_MAIN,
             requested=requested,
             policy="main-branch",
-            candidates=image_candidates_for_tag(IMAGE_SELECTOR_MAIN, normalized_machine_type),
-            resolved_tag=image_tag_for_machine(IMAGE_SELECTOR_MAIN, normalized_machine_type),
+            candidates=image_candidates_for_tag(
+                IMAGE_SELECTOR_MAIN, normalized_machine_type
+            ),
+            resolved_tag=image_tag_for_machine(
+                IMAGE_SELECTOR_MAIN, normalized_machine_type
+            ),
             machine_type=normalized_machine_type,
         )
     if selector == IMAGE_SELECTOR_STABLE:
@@ -454,7 +494,11 @@ def resolve_image_request(spec: str, *, machine_type: str | None = None) -> Imag
             machine_type=normalized_machine_type,
         )
 
-    candidates = tuple(validate_explicit_image_for_machine(item, normalized_machine_type) for item in requested.split(",") if item.strip())
+    candidates = tuple(
+        validate_explicit_image_for_machine(item, normalized_machine_type)
+        for item in requested.split(",")
+        if item.strip()
+    )
     if not candidates:
         raise MachineManagementError(
             "image selector is empty; choose `rc`, `main`, `stable`, or an explicit non-latest image reference"
@@ -468,7 +512,9 @@ def resolve_image_request(spec: str, *, machine_type: str | None = None) -> Imag
     )
 
 
-def image_request_payload(spec: str, *, machine_type: str | None = None) -> dict[str, Any]:
+def image_request_payload(
+    spec: str, *, machine_type: str | None = None
+) -> dict[str, Any]:
     resolution = resolve_image_request(spec, machine_type=machine_type)
     return {
         "requested": resolution.requested,
@@ -502,7 +548,9 @@ def run_local(
             stdin=stdin_source,
         )
     except FileNotFoundError as exc:
-        raise MachineManagementError(f"required local command not found: {cmd[0]}") from exc
+        raise MachineManagementError(
+            f"required local command not found: {cmd[0]}"
+        ) from exc
     if check and proc.returncode != 0:
         detail = proc.stderr.strip() or proc.stdout.strip() or "command failed"
         raise MachineManagementError(detail)
@@ -513,7 +561,9 @@ def run_local_interactive(cmd: Sequence[str]) -> int:
     try:
         proc = subprocess.run(list(cmd))
     except FileNotFoundError as exc:
-        raise MachineManagementError(f"required local command not found: {cmd[0]}") from exc
+        raise MachineManagementError(
+            f"required local command not found: {cmd[0]}"
+        ) from exc
     return proc.returncode
 
 
@@ -577,7 +627,9 @@ def read_password_value(args: argparse.Namespace) -> tuple[str | None, str | Non
         env_name = validate_env_name(args.password_env)
         value = os.environ.get(env_name)
         if value is None:
-            raise MachineManagementError(f"environment variable {env_name!r} is not set")
+            raise MachineManagementError(
+                f"environment variable {env_name!r} is not set"
+            )
         return value, f"env:{env_name}", env_name
     if getattr(args, "password_stdin", False):
         value = sys.stdin.read()
@@ -613,9 +665,7 @@ def write_askpass_helper(temp_dir: pathlib.Path, env_name: str) -> pathlib.Path:
         )
         helper = temp_dir / "askpass.cmd"
         helper.write_text(
-            "@echo off\r\n"
-            "setlocal\r\n"
-            f"\"{sys.executable}\" \"{helper_py}\"\r\n",
+            f'@echo off\r\nsetlocal\r\n"{sys.executable}" "{helper_py}"\r\n',
             encoding="utf-8",
         )
     else:
@@ -683,7 +733,9 @@ def parse_progress_event(line: str) -> dict[str, Any] | None:
     return event
 
 
-def format_progress_event(event: dict[str, Any], *, target: SshTarget | None = None) -> str:
+def format_progress_event(
+    event: dict[str, Any], *, target: SshTarget | None = None
+) -> str:
     phase = str(event.get("phase") or "remote")
     message = str(event.get("message") or event.get("status") or "running")
     expected = event.get("expected_seconds")
@@ -693,7 +745,9 @@ def format_progress_event(event: dict[str, Any], *, target: SshTarget | None = N
     return f"[vaws{host}][{phase}] {message}"
 
 
-def emit_progress_event(event: dict[str, Any], *, target: SshTarget | None = None) -> None:
+def emit_progress_event(
+    event: dict[str, Any], *, target: SshTarget | None = None
+) -> None:
     sys.stderr.write(format_progress_event(event, target=target) + "\n")
     sys.stderr.flush()
 
@@ -720,7 +774,9 @@ def run_remote_script(
             errors="replace",
         )
     except FileNotFoundError as exc:
-        raise MachineManagementError(f"required local command not found: {cmd[0]}") from exc
+        raise MachineManagementError(
+            f"required local command not found: {cmd[0]}"
+        ) from exc
 
     assert proc.stdin is not None
     proc.stdin.write(script)
@@ -746,11 +802,17 @@ def run_remote_script(
         thread.start()
 
     done_streams: set[str] = set()
-    deadline = time.monotonic() + timeout_seconds if timeout_seconds is not None else None
+    deadline = (
+        time.monotonic() + timeout_seconds if timeout_seconds is not None else None
+    )
     timed_out = False
 
     while len(done_streams) < 2 or proc.poll() is None:
-        if deadline is not None and time.monotonic() >= deadline and proc.poll() is None:
+        if (
+            deadline is not None
+            and time.monotonic() >= deadline
+            and proc.poll() is None
+        ):
             timed_out = True
             proc.kill()
             break
@@ -814,7 +876,9 @@ def run_remote_script(
     )
 
 
-def compact_failure_tail(text: str, *, max_lines: int = 20, max_chars: int = 1600) -> str:
+def compact_failure_tail(
+    text: str, *, max_lines: int = 20, max_chars: int = 1600
+) -> str:
     stripped = text.strip()
     if not stripped:
         return ""
@@ -825,7 +889,9 @@ def compact_failure_tail(text: str, *, max_lines: int = 20, max_chars: int = 160
     return tail
 
 
-def assert_remote_success(result: RemoteResult, *, require_payload: bool = True) -> dict[str, Any]:
+def assert_remote_success(
+    result: RemoteResult, *, require_payload: bool = True
+) -> dict[str, Any]:
     payload = dict(result.payload or {})
     if result.progress_events:
         payload.setdefault("progress_events", result.progress_events)
@@ -837,12 +903,14 @@ def assert_remote_success(result: RemoteResult, *, require_payload: bool = True)
     if result.timed_out:
         if result.payload is not None and result.payload.get("success") is True:
             transport = payload.setdefault("transport", {})
-            transport.update({
-                "timeout_seconds": result.timeout_seconds,
-                "timed_out": True,
-                "timeout_recovered_after_payload": True,
-                "returncode": result.returncode,
-            })
+            transport.update(
+                {
+                    "timeout_seconds": result.timeout_seconds,
+                    "timed_out": True,
+                    "timeout_recovered_after_payload": True,
+                    "returncode": result.returncode,
+                }
+            )
             return payload
         detail = f"remote command timed out after {result.timeout_seconds}s"
         if result.progress_events:
@@ -853,16 +921,24 @@ def assert_remote_success(result: RemoteResult, *, require_payload: bool = True)
         raise MachineManagementError(detail)
 
     if require_payload and result.payload is None:
-        detail = result.stderr.strip() or result.stdout.strip() or "remote command produced no JSON payload"
+        detail = (
+            result.stderr.strip()
+            or result.stdout.strip()
+            or "remote command produced no JSON payload"
+        )
         raise MachineManagementError(detail)
     if result.returncode != 0:
         stderr_tail = compact_failure_tail(result.stderr)
         if result.payload and result.payload.get("error"):
             base = str(result.payload["error"])
             if stderr_tail:
-                raise MachineManagementError(f"{base}\n--- stderr tail ---\n{stderr_tail}")
+                raise MachineManagementError(
+                    f"{base}\n--- stderr tail ---\n{stderr_tail}"
+                )
             raise MachineManagementError(base)
-        detail = result.stderr.strip() or result.stdout.strip() or "remote command failed"
+        detail = (
+            result.stderr.strip() or result.stdout.strip() or "remote command failed"
+        )
         raise MachineManagementError(detail)
     return payload
 
@@ -895,7 +971,7 @@ def load_public_key(path: pathlib.Path) -> str:
 
 
 def render_host_probe_script() -> str:
-    template = r'''#!/usr/bin/env bash
+    template = r"""#!/usr/bin/env bash
 set -euo pipefail
 image_request_json="$1"
 port_range="$2"
@@ -922,7 +998,6 @@ safe_source() {
   fi
 }
 safe_source /etc/profile.d/vaws-ascend-env.sh
-safe_source /etc/profile.d/vaws-ascend-env.sh
 safe_source /usr/local/Ascend/ascend-toolkit/set_env.sh
 safe_source /usr/local/Ascend/ascend-toolkit/latest/set_env.sh
 safe_source /usr/local/Ascend/nnal/atb/set_env.sh
@@ -946,6 +1021,7 @@ import shutil
 import socket
 import subprocess
 import sys
+from typing import Optional
 
 image_request, port_range, prefix, sourced_scripts = sys.argv[1:5]
 image = json.loads(image_request)
@@ -955,7 +1031,7 @@ SOC_TO_MACHINE_TYPE = __SOC_TO_MACHINE_TYPE__
 SOC_MATCH_ORDER = sorted(SOC_TO_MACHINE_TYPE, key=len, reverse=True)
 
 
-def run(cmd: list[str], *, env: dict[str, str] | None = None) -> tuple[int, str, str]:
+def run(cmd: list[str], *, env: Optional[dict[str, str]] = None) -> tuple[int, str, str]:
     proc = subprocess.run(
         cmd,
         stdout=subprocess.PIPE,
@@ -1079,10 +1155,8 @@ for label, cmd in [
         "label": label,
         "command": cmd,
         "returncode": rc,
-        "stdout_tail": "
-".join(out.splitlines()[-20:]),
-        "stderr_tail": "
-".join(err.splitlines()[-20:]),
+        "stdout_tail": "\n".join(out.splitlines()[-20:]),
+        "stderr_tail": "\n".join(err.splitlines()[-20:]),
     }
     result["npu_probe"]["commands"].append(entry)
     if rc == 0:
@@ -1096,8 +1170,7 @@ soc_from_env = os.environ.get("SOC_VERSION") or os.environ.get("VAWS_NPU_SOC")
 if soc_from_env:
     combined_probe_text.append(soc_from_env)
 
-normalized_probe_text = "
-".join(combined_probe_text).lower()
+normalized_probe_text = "\n".join(combined_probe_text).lower()
 for token in SOC_MATCH_ORDER:
     if token in normalized_probe_text:
         result["npu_probe"]["detected_soc"] = token
@@ -1136,14 +1209,14 @@ for port in range(start, end + 1):
 
 print("__SENTINEL__" + json.dumps(result, ensure_ascii=False))
 PY
-'''
+"""
     return template.replace("__SENTINEL__", SENTINEL).replace(
         "__SOC_TO_MACHINE_TYPE__", json.dumps(SOC_TO_MACHINE_TYPE, ensure_ascii=False)
     )
 
 
 def render_bootstrap_host_script() -> str:
-    template = r'''#!/usr/bin/env bash
+    template = r"""#!/usr/bin/env bash
 set -euo pipefail
 container="$1"
 port="$2"
@@ -1501,10 +1574,20 @@ if ! grep -qxF "$pubkey" /root/.ssh/authorized_keys 2>/dev/null; then
 fi
 chmod 600 /root/.ssh/authorized_keys
 install -d -m 0755 /run/sshd /etc/profile.d /etc/vaws
+_vaws_python_dir=""
+for _d in $(ls -1d /usr/local/python*/bin 2>/dev/null | sort -V -r); do
+  if [ -x "$_d/python3" ]; then
+    _vaws_python_dir="$_d"
+    break
+  fi
+done
+if [ -n "$_vaws_python_dir" ]; then
+  _path_prefix="$_vaws_python_dir:/usr/local/bin:/usr/local/sbin"
+else
+  _path_prefix="/usr/local/bin:/usr/local/sbin"
+fi
 cat > /etc/profile.d/vaws-ascend-env.sh <<EOF_CONTAINER_ENV
 #!/bin/sh
-export PATH="/usr/local/bin:/usr/local/sbin:\${PATH:-}"
-export LD_LIBRARY_PATH="/usr/local/Ascend/driver/lib64/common:/usr/local/Ascend/driver/lib64/driver:/usr/local/Ascend/driver/lib64:\${LD_LIBRARY_PATH:-}"
 if [ -z "\${ASCEND_HOME_PATH:-}" ]; then
   if [ -d /usr/local/Ascend/ascend-toolkit/latest ]; then
     export ASCEND_HOME_PATH=/usr/local/Ascend/ascend-toolkit/latest
@@ -1512,6 +1595,17 @@ if [ -z "\${ASCEND_HOME_PATH:-}" ]; then
     export ASCEND_HOME_PATH=/usr/local/Ascend/ascend-toolkit
   fi
 fi
+if [ -f /usr/local/Ascend/ascend-toolkit/set_env.sh ]; then
+  . /usr/local/Ascend/ascend-toolkit/set_env.sh >/dev/null 2>&1 || true
+fi
+if [ -f /usr/local/Ascend/ascend-toolkit/latest/set_env.sh ]; then
+  . /usr/local/Ascend/ascend-toolkit/latest/set_env.sh >/dev/null 2>&1 || true
+fi
+if [ -f /usr/local/Ascend/nnal/atb/set_env.sh ]; then
+  . /usr/local/Ascend/nnal/atb/set_env.sh >/dev/null 2>&1 || true
+fi
+export LD_LIBRARY_PATH="/usr/local/Ascend/driver/lib64/common:/usr/local/Ascend/driver/lib64/driver:/usr/local/Ascend/driver/lib64:\${LD_LIBRARY_PATH:-}"
+export PATH="$_path_prefix:\${PATH:-}"
 if [ -n "$machine_type" ]; then
   export VAWS_MACHINE_TYPE="$machine_type"
 fi
@@ -1860,12 +1954,14 @@ PY
 )
 emit_progress "complete" "done" "managed container bootstrap completed" 0
 emit_json "$payload"
-'''
-    return template.replace("__SENTINEL__", SENTINEL).replace("__PROGRESS__", PROGRESS_SENTINEL)
+"""
+    return template.replace("__SENTINEL__", SENTINEL).replace(
+        "__PROGRESS__", PROGRESS_SENTINEL
+    )
 
 
 def render_smoke_script() -> str:
-    template = r'''#!/usr/bin/env bash
+    template = r"""#!/usr/bin/env bash
 set -euo pipefail
 requested_python="${1:-}"
 
@@ -1990,12 +2086,14 @@ except Exception as exc:  # pragma: no cover - runtime dependent
 print("__SENTINEL__" + json.dumps(result, ensure_ascii=False))
 raise SystemExit(0 if result["success"] else 3)
 PY
-'''
-    return template.replace("__SENTINEL__", SENTINEL).replace("__PROGRESS__", PROGRESS_SENTINEL)
+"""
+    return template.replace("__SENTINEL__", SENTINEL).replace(
+        "__PROGRESS__", PROGRESS_SENTINEL
+    )
 
 
 def render_mesh_export_key_script() -> str:
-    template = r'''#!/usr/bin/env bash
+    template = r"""#!/usr/bin/env bash
 set -euo pipefail
 comment="$1"
 install -d -m 700 /root/.ssh
@@ -2014,12 +2112,12 @@ print("__SENTINEL__" + json.dumps({
     "fingerprint": sys.argv[3],
 }, ensure_ascii=False))
 PY
-'''
+"""
     return template.replace("__SENTINEL__", SENTINEL)
 
 
 def render_mesh_add_peer_script() -> str:
-    template = r'''#!/usr/bin/env bash
+    template = r"""#!/usr/bin/env bash
 set -euo pipefail
 peer_key="$1"
 peer_host="$2"
@@ -2044,12 +2142,12 @@ print("__SENTINEL__" + json.dumps({
     "peer_key_comment": parts[-1] if parts else None,
 }, ensure_ascii=False))
 PY
-'''
+"""
     return template.replace("__SENTINEL__", SENTINEL)
 
 
 def render_mesh_remove_peer_script() -> str:
-    template = r'''#!/usr/bin/env bash
+    template = r"""#!/usr/bin/env bash
 set -euo pipefail
 peer_comment="$1"
 peer_host="$2"
@@ -2079,12 +2177,12 @@ print("__SENTINEL__" + json.dumps({
     "removed_authorized_key_lines": int(sys.argv[4]),
 }, ensure_ascii=False))
 PY
-'''
+"""
     return template.replace("__SENTINEL__", SENTINEL)
 
 
 def render_remove_container_host_script() -> str:
-    template = r'''#!/usr/bin/env bash
+    template = r"""#!/usr/bin/env bash
 set -euo pipefail
 container="$1"
 if ! command -v docker >/dev/null 2>&1; then
@@ -2116,7 +2214,7 @@ print("__SENTINEL__" + json.dumps({
 }, ensure_ascii=False))
 PY
 fi
-'''
+"""
     return template.replace("__SENTINEL__", SENTINEL)
 
 
@@ -2135,7 +2233,8 @@ def check_direct_ssh(
 ) -> dict[str, Any]:
     try:
         result = run_local(
-            ssh_command(target, batch_mode=True, identity_file=identity_file) + ["printf", "ok"]
+            ssh_command(target, batch_mode=True, identity_file=identity_file)
+            + ["printf", "ok"]
         )
     except MachineManagementError as exc:
         return {
@@ -2197,17 +2296,21 @@ def cmd_bootstrap_host_key(args: argparse.Namespace) -> int:
         "password_automation": "ssh-askpass" if password is not None else None,
     }
     if before["ok"]:
-        payload.update({"success": True, "executed": False, "result": "already-configured"})
+        payload.update(
+            {"success": True, "executed": False, "result": "already-configured"}
+        )
         print_json(payload)
         return 0
 
     if args.print_command:
-        payload.update({
-            "success": True,
-            "executed": False,
-            "result": "command-preview",
-            "message": "run the bootstrap command once if you want to handle the password manually",
-        })
+        payload.update(
+            {
+                "success": True,
+                "executed": False,
+                "result": "command-preview",
+                "message": "run the bootstrap command once if you want to handle the password manually",
+            }
+        )
         print_json(payload)
         return 0
 
@@ -2264,7 +2367,11 @@ def cmd_probe_host(args: argparse.Namespace) -> int:
     result = run_remote_script(
         target,
         render_host_probe_script(),
-        args=[json.dumps(image_request, ensure_ascii=False), args.port_range, args.managed_prefix],
+        args=[
+            json.dumps(image_request, ensure_ascii=False),
+            args.port_range,
+            args.managed_prefix,
+        ],
         batch_mode=True,
         timeout_seconds=DEFAULT_PROBE_TIMEOUT_SECONDS,
     )
@@ -2368,7 +2475,11 @@ def cmd_verify_machine(args: argparse.Namespace) -> int:
     container_check = check_direct_ssh(container, identity_file=identity_file)
     result: dict[str, Any] = {
         "host": {"host": host.host, "user": host.user, "port": host.port},
-        "container": {"host": container.host, "user": container.user, "port": container.port},
+        "container": {
+            "host": container.host,
+            "user": container.user,
+            "port": container.port,
+        },
         "identity_file": str(identity_file) if identity_file is not None else None,
         "host_ssh": host_check,
         "container_ssh": container_check,
@@ -2450,7 +2561,9 @@ def cmd_mesh_remove_peer(args: argparse.Namespace) -> int:
     return 0
 
 
-def remove_known_host_entry(host: str, port: int, known_hosts: pathlib.Path) -> dict[str, Any]:
+def remove_known_host_entry(
+    host: str, port: int, known_hosts: pathlib.Path
+) -> dict[str, Any]:
     if not known_hosts.exists():
         return {
             "success": True,
@@ -2458,9 +2571,7 @@ def remove_known_host_entry(host: str, port: int, known_hosts: pathlib.Path) -> 
             "removed": False,
             "reason": "known_hosts file does not exist",
         }
-    proc = run_local(
-        ["ssh-keygen", "-R", f"[{host}]:{port}", "-f", str(known_hosts)]
-    )
+    proc = run_local(["ssh-keygen", "-R", f"[{host}]:{port}", "-f", str(known_hosts)])
     combined = (proc.stdout + "\n" + proc.stderr).lower()
     return {
         "success": proc.returncode == 0 or "not found" in combined,
@@ -2508,12 +2619,19 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(
         dest="command",
         required=True,
-        parser_class=lambda *args, **kwargs: argparse.ArgumentParser(*args, allow_abbrev=False, **kwargs),
+        parser_class=lambda *args, **kwargs: argparse.ArgumentParser(
+            *args, allow_abbrev=False, **kwargs
+        ),
     )
 
     def add_host_args(p: argparse.ArgumentParser) -> None:
         p.add_argument("--host", required=True, help="host IP or DNS name")
-        p.add_argument("--user", dest="user", default=DEFAULT_HOST_USER, help=f"SSH user (default: {DEFAULT_HOST_USER})")
+        p.add_argument(
+            "--user",
+            dest="user",
+            default=DEFAULT_HOST_USER,
+            help=f"SSH user (default: {DEFAULT_HOST_USER})",
+        )
         p.add_argument(
             "--host-port",
             "--host-ssh-port",
@@ -2525,7 +2643,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     def add_container_args(p: argparse.ArgumentParser) -> None:
         p.add_argument("--host", required=True, help="host IP or DNS name")
-        p.add_argument("--user", dest="user", default=DEFAULT_HOST_USER, help=f"SSH user (default: {DEFAULT_HOST_USER})")
+        p.add_argument(
+            "--user",
+            dest="user",
+            default=DEFAULT_HOST_USER,
+            help=f"SSH user (default: {DEFAULT_HOST_USER})",
+        )
         p.add_argument(
             "--container-ssh-port",
             "--container-port",
@@ -2536,7 +2659,9 @@ def build_parser() -> argparse.ArgumentParser:
             help="direct SSH port exposed by the managed container",
         )
 
-    probe = subparsers.add_parser("probe-host", help="probe host prerequisites and choose a free high SSH port")
+    probe = subparsers.add_parser(
+        "probe-host", help="probe host prerequisites and choose a free high SSH port"
+    )
     add_host_args(probe)
     probe.add_argument(
         "--image",
@@ -2546,9 +2671,21 @@ def build_parser() -> argparse.ArgumentParser:
             f"`rc` resolves the newest official prerelease tag, and `main` tries {DEFAULT_IMAGE_CANDIDATES[0]} then {DEFAULT_IMAGE_CANDIDATES[1]}"
         ),
     )
-    probe.add_argument("--port-range", default=DEFAULT_PORT_RANGE, help=f"inclusive range START:END (default: {DEFAULT_PORT_RANGE})")
-    probe.add_argument("--managed-prefix", default="vaws-", help="managed container name prefix (default: vaws-)")
-    probe.add_argument("--machine-type", choices=MACHINE_TYPE_CHOICES, help="override detected machine type when selecting hardware-specific image tags")
+    probe.add_argument(
+        "--port-range",
+        default=DEFAULT_PORT_RANGE,
+        help=f"inclusive range START:END (default: {DEFAULT_PORT_RANGE})",
+    )
+    probe.add_argument(
+        "--managed-prefix",
+        default="vaws-",
+        help="managed container name prefix (default: vaws-)",
+    )
+    probe.add_argument(
+        "--machine-type",
+        choices=MACHINE_TYPE_CHOICES,
+        help="override detected machine type when selecting hardware-specific image tags",
+    )
     probe.set_defaults(func=cmd_probe_host)
 
     host_bootstrap = subparsers.add_parser(
@@ -2582,9 +2719,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     host_bootstrap.set_defaults(func=cmd_bootstrap_host_key)
 
-    bootstrap = subparsers.add_parser("bootstrap-container", help="create or repair the managed container and dedicated sshd")
+    bootstrap = subparsers.add_parser(
+        "bootstrap-container",
+        help="create or repair the managed container and dedicated sshd",
+    )
     add_host_args(bootstrap)
-    bootstrap.add_argument("--container-name", "--name", dest="container_name", required=True, help="container name to create or reuse")
+    bootstrap.add_argument(
+        "--container-name",
+        "--name",
+        dest="container_name",
+        required=True,
+        help="container name to create or reuse",
+    )
     bootstrap.add_argument(
         "--container-ssh-port",
         "--container-port",
@@ -2608,19 +2754,43 @@ def build_parser() -> argparse.ArgumentParser:
         default=False,
         help="recreate the existing managed container when its current image does not match the requested selector",
     )
-    bootstrap.add_argument("--workdir", default=DEFAULT_WORKDIR, help=f"container workdir (default: {DEFAULT_WORKDIR})")
-    bootstrap.add_argument("--namespace", help="stable workspace machine username used for collision-safe container naming")
-    bootstrap.add_argument("--machine-type", choices=MACHINE_TYPE_CHOICES, help="override detected machine type when selecting hardware-specific image tags")
-    bootstrap.add_argument("--soc", help="optional detected SoC token, for example ascend910b1")
-    bootstrap.add_argument("--public-key-file", help="local SSH public key to add to the container; defaults to ~/.ssh/id_ed25519.pub if present")
+    bootstrap.add_argument(
+        "--workdir",
+        default=DEFAULT_WORKDIR,
+        help=f"container workdir (default: {DEFAULT_WORKDIR})",
+    )
+    bootstrap.add_argument(
+        "--namespace",
+        help="stable workspace machine username used for collision-safe container naming",
+    )
+    bootstrap.add_argument(
+        "--machine-type",
+        choices=MACHINE_TYPE_CHOICES,
+        help="override detected machine type when selecting hardware-specific image tags",
+    )
+    bootstrap.add_argument(
+        "--soc", help="optional detected SoC token, for example ascend910b1"
+    )
+    bootstrap.add_argument(
+        "--public-key-file",
+        help="local SSH public key to add to the container; defaults to ~/.ssh/id_ed25519.pub if present",
+    )
     bootstrap.set_defaults(func=cmd_bootstrap_container)
 
-    smoke = subparsers.add_parser("smoke", help="run the container-side torch/torch_npu smoke test with dynamic env discovery")
+    smoke = subparsers.add_parser(
+        "smoke",
+        help="run the container-side torch/torch_npu smoke test with dynamic env discovery",
+    )
     add_container_args(smoke)
-    smoke.add_argument("--python", help="optional explicit python path inside the container")
+    smoke.add_argument(
+        "--python", help="optional explicit python path inside the container"
+    )
     smoke.set_defaults(func=cmd_smoke)
 
-    verify = subparsers.add_parser("verify-machine", help="check host SSH, container SSH, and smoke readiness together")
+    verify = subparsers.add_parser(
+        "verify-machine",
+        help="check host SSH, container SSH, and smoke readiness together",
+    )
     add_container_args(verify)
     verify.add_argument(
         "--host-port",
@@ -2630,29 +2800,61 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_HOST_PORT,
         help=f"host SSH port (default: {DEFAULT_HOST_PORT})",
     )
-    verify.add_argument("--python", help="optional explicit python path inside the container")
+    verify.add_argument(
+        "--python", help="optional explicit python path inside the container"
+    )
     verify.set_defaults(func=cmd_verify_machine)
 
-    mesh_export = subparsers.add_parser("mesh-export-key", help="ensure a mesh key exists in the container and print its public key")
+    mesh_export = subparsers.add_parser(
+        "mesh-export-key",
+        help="ensure a mesh key exists in the container and print its public key",
+    )
     add_container_args(mesh_export)
-    mesh_export.add_argument("--comment", required=True, help="stable mesh key comment, for example vaws-mesh:173.125.1.2")
+    mesh_export.add_argument(
+        "--comment",
+        required=True,
+        help="stable mesh key comment, for example vaws-mesh:173.125.1.2",
+    )
     mesh_export.set_defaults(func=cmd_mesh_export_key)
 
-    mesh_add = subparsers.add_parser("mesh-add-peer", help="add a peer mesh key and known_hosts entry inside a managed container")
+    mesh_add = subparsers.add_parser(
+        "mesh-add-peer",
+        help="add a peer mesh key and known_hosts entry inside a managed container",
+    )
     add_container_args(mesh_add)
-    mesh_add.add_argument("--peer-public-key", required=True, help="peer public key line, including its comment")
+    mesh_add.add_argument(
+        "--peer-public-key",
+        required=True,
+        help="peer public key line, including its comment",
+    )
     mesh_add.add_argument("--peer-host", required=True, help="peer host IP or DNS name")
-    mesh_add.add_argument("--peer-port", type=int, required=True, help="peer container SSH port")
+    mesh_add.add_argument(
+        "--peer-port", type=int, required=True, help="peer container SSH port"
+    )
     mesh_add.set_defaults(func=cmd_mesh_add_peer)
 
-    mesh_remove = subparsers.add_parser("mesh-remove-peer", help="remove a peer mesh key and known_hosts entry inside a managed container")
+    mesh_remove = subparsers.add_parser(
+        "mesh-remove-peer",
+        help="remove a peer mesh key and known_hosts entry inside a managed container",
+    )
     add_container_args(mesh_remove)
-    mesh_remove.add_argument("--peer-comment", required=True, help="stable mesh comment, for example vaws-mesh:173.125.1.2")
-    mesh_remove.add_argument("--peer-host", required=True, help="peer host IP or DNS name")
-    mesh_remove.add_argument("--peer-port", type=int, required=True, help="peer container SSH port")
+    mesh_remove.add_argument(
+        "--peer-comment",
+        required=True,
+        help="stable mesh comment, for example vaws-mesh:173.125.1.2",
+    )
+    mesh_remove.add_argument(
+        "--peer-host", required=True, help="peer host IP or DNS name"
+    )
+    mesh_remove.add_argument(
+        "--peer-port", type=int, required=True, help="peer container SSH port"
+    )
     mesh_remove.set_defaults(func=cmd_mesh_remove_peer)
 
-    clean_known_hosts = subparsers.add_parser("clean-local-known-hosts", help="remove one managed container endpoint from local known_hosts")
+    clean_known_hosts = subparsers.add_parser(
+        "clean-local-known-hosts",
+        help="remove one managed container endpoint from local known_hosts",
+    )
     clean_known_hosts.add_argument("--host", required=True, help="host IP or DNS name")
     clean_known_hosts.add_argument(
         "--container-ssh-port",
@@ -2663,12 +2865,24 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="managed container SSH port",
     )
-    clean_known_hosts.add_argument("--known-hosts", default=str(DEFAULT_KNOWN_HOSTS), help=f"known_hosts path (default: {DEFAULT_KNOWN_HOSTS})")
+    clean_known_hosts.add_argument(
+        "--known-hosts",
+        default=str(DEFAULT_KNOWN_HOSTS),
+        help=f"known_hosts path (default: {DEFAULT_KNOWN_HOSTS})",
+    )
     clean_known_hosts.set_defaults(func=cmd_clean_local_known_hosts)
 
-    remove = subparsers.add_parser("remove-container", help="remove a managed container from the host")
+    remove = subparsers.add_parser(
+        "remove-container", help="remove a managed container from the host"
+    )
     add_host_args(remove)
-    remove.add_argument("--container-name", "--name", dest="container_name", required=True, help="container name to remove")
+    remove.add_argument(
+        "--container-name",
+        "--name",
+        dest="container_name",
+        required=True,
+        help="container name to remove",
+    )
     remove.add_argument(
         "--container-ssh-port",
         "--container-port",
@@ -2677,7 +2891,11 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         help="container SSH port for optional local known_hosts cleanup",
     )
-    remove.add_argument("--known-hosts", default=str(DEFAULT_KNOWN_HOSTS), help=f"known_hosts path (default: {DEFAULT_KNOWN_HOSTS})")
+    remove.add_argument(
+        "--known-hosts",
+        default=str(DEFAULT_KNOWN_HOSTS),
+        help=f"known_hosts path (default: {DEFAULT_KNOWN_HOSTS})",
+    )
     remove.add_argument(
         "--clean-local-known-hosts",
         action=argparse.BooleanOptionalAction,
