@@ -5,18 +5,16 @@ import argparse
 import hashlib
 import json
 import os
-import re
 import subprocess
 import sys
 from pathlib import Path
 from typing import Any
 
-from common import json_dump, repo_root_from
+from common import WORKSPACE_ID_PATTERN, json_dump, repo_root_from
 from remote_code_parity import DEFAULT_CONTAINER_CACHE_ROOT
 
 
 DEFAULT_CONTAINER_USER = 'root'
-WORKSPACE_ID_PATTERN = re.compile(r'[^A-Za-z0-9._-]+')
 
 
 def derive_workspace_id(repo_root: Path) -> str:
@@ -112,7 +110,7 @@ def build_low_level_command(derived: dict[str, Any], args: argparse.Namespace) -
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description='Resolve a managed machine from inventory and run container-only remote-code-parity sync.')
+    parser = argparse.ArgumentParser(description='Resolve a managed machine from inventory and run container-only remote-code-parity sync.', allow_abbrev=False)
     parser.add_argument('--machine', required=True, help='machine alias or host IP from inventory')
     parser.add_argument('--repo-root', default='.')
     parser.add_argument('--workspace-id', default=None)

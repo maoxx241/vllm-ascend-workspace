@@ -97,7 +97,7 @@ def run_batch_set(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description='Manage first-install consent for remote-code-parity.')
+    parser = argparse.ArgumentParser(description='Manage first-install consent for remote-code-parity.', allow_abbrev=False)
     subparsers = parser.add_subparsers(dest='command', required=True)
 
     def add_common(target: argparse.ArgumentParser) -> None:
