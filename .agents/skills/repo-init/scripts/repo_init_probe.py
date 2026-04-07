@@ -481,6 +481,7 @@ def compact_submodule_summary(rows: List[Dict[str, str]]) -> Dict[str, Any]:
             issues.append({"error": row["error"]})
     return {
         "count": len(rows),
+        "all_initialized": len(rows) > 0 and len(issues) == 0,
         "needs_attention": issues,
     }
 

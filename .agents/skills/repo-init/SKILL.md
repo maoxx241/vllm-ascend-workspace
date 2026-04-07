@@ -69,7 +69,7 @@ Low-level shared profile helper, mainly for maintenance and debugging:
 Topology helper:
 
 - `python3 .agents/skills/repo-init/scripts/repo_topology.py compare-main --repo <path>`
-- `python3 .agents/skills/repo-init/scripts/repo_topology.py configure --repo <path> [--origin-url URL] [--upstream-url URL]`
+- `python3 .agents/skills/repo-init/scripts/repo_topology.py configure --repo <path> [--origin-url URL] [--upstream-url URL] [--gh-default origin|upstream|none]`
 - `python3 .agents/skills/repo-init/scripts/repo_topology.py ensure-main --repo <path> --remote <origin-or-upstream>`
 
 Reference files:

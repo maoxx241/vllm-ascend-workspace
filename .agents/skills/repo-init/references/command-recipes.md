@@ -85,6 +85,12 @@ python3 .agents/skills/repo-init/scripts/repo_topology.py configure   --repo .  
 python3 .agents/skills/repo-init/scripts/repo_topology.py configure   --repo vllm-ascend   --origin-url git@github.com:USER/vllm-ascend.git   --upstream-url git@github.com:vllm-project/vllm-ascend.git
 ```
 
+Optionally set `gh repo set-default` during configure:
+
+```bash
+python3 .agents/skills/repo-init/scripts/repo_topology.py configure   --repo vllm-ascend   --origin-url git@github.com:USER/vllm-ascend.git   --upstream-url git@github.com:vllm-project/vllm-ascend.git   --gh-default upstream
+```
+
 ## Branch tracking
 
 ```bash
