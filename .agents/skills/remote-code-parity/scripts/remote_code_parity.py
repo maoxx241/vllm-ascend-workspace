@@ -54,10 +54,19 @@ VLLM_ASCEND_REINSTALL_PATTERNS = VLLM_REINSTALL_PATTERNS + (
 )
 
 DEFAULT_ENV_PREAMBLE = (
+    'export PATH="${PATH:-/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin}"',
     'export LD_LIBRARY_PATH="/usr/local/Ascend/driver/lib64/driver:/usr/local/Ascend/driver/lib64:${LD_LIBRARY_PATH:-}"',
-    'if [ -f /usr/local/Ascend/ascend-toolkit/set_env.sh ]; then source /usr/local/Ascend/ascend-toolkit/set_env.sh; fi',
-    'if [ -f /usr/local/Ascend/nnal/atb/set_env.sh ]; then source /usr/local/Ascend/nnal/atb/set_env.sh; fi',
-    'if [ -f /vllm-workspace/vllm-ascend/vllm_ascend/_cann_ops_custom/vendors/vllm-ascend/bin/set_env.bash ]; then source /vllm-workspace/vllm-ascend/vllm_ascend/_cann_ops_custom/vendors/vllm-ascend/bin/set_env.bash; fi',
+    'safe_source() {',
+    '  file="$1"',
+    '  if [ -f "$file" ]; then',
+    '    set +u',
+    '    source "$file" >/dev/null 2>&1 || true',
+    '    set -u',
+    '  fi',
+    '}',
+    'safe_source /usr/local/Ascend/ascend-toolkit/set_env.sh',
+    'safe_source /usr/local/Ascend/nnal/atb/set_env.sh',
+    'safe_source /vllm-workspace/vllm-ascend/vllm_ascend/_cann_ops_custom/vendors/vllm-ascend/bin/set_env.bash',
     'PYTHON_CANDIDATE="$(ls -1d /usr/local/python*/bin/python3 2>/dev/null | sort -V | tail -n 1 || true)"',
     'if [ -n "$PYTHON_CANDIDATE" ]; then export PYTHON="$PYTHON_CANDIDATE"; elif command -v python3 >/dev/null 2>&1; then export PYTHON="$(command -v python3)"; elif command -v python >/dev/null 2>&1; then export PYTHON="$(command -v python)"; else echo "python not found" >&2; exit 127; fi',
     'PYTHON_BIN_DIR="$(dirname "$PYTHON")"',
@@ -65,7 +74,7 @@ DEFAULT_ENV_PREAMBLE = (
     'trap "rm -rf \"$VAWS_PYTHON_SHIM_DIR\"" EXIT',
     'ln -sf "$PYTHON" "$VAWS_PYTHON_SHIM_DIR/python"',
     'ln -sf "$PYTHON" "$VAWS_PYTHON_SHIM_DIR/python3"',
-    'export PATH="$VAWS_PYTHON_SHIM_DIR:$PYTHON_BIN_DIR:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:${PATH:-}"',
+    'export PATH="$VAWS_PYTHON_SHIM_DIR:$PYTHON_BIN_DIR:$PATH"',
     'hash -r',
     'export HI_PYTHON="$PYTHON"',
     'export Python3_EXECUTABLE="$PYTHON"',
@@ -231,6 +240,15 @@ def git_head(repo: Path) -> str | None:
     return result.stdout.strip() or None
 
 
+def git_tree_for_commit(repo: Path, commit: str | None) -> str | None:
+    if not commit:
+        return None
+    result = git(repo, ['rev-parse', f'{commit}^{{tree}}'], check=False)
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip() or None
+
+
 def reset_pathspecs(node: RepoNode, denylist: tuple[str, ...]) -> list[str]:
     specs: list[str] = []
     for child in node.children:
@@ -261,6 +279,7 @@ def build_synthetic_snapshot(
 ) -> SnapshotRecord:
     repo = node.repo_path
     parent = git_head(repo)
+    parent_tree = git_tree_for_commit(repo, parent)
     ref = synthetic_ref(workspace_id, snapshot_id, node.relpath)
     temp_index = tempfile.NamedTemporaryFile(prefix='parity-index-', delete=False)
     temp_index.close()
@@ -303,17 +322,21 @@ def build_synthetic_snapshot(
             )
 
         tree = git(repo, ['write-tree'], env=env).stdout.strip()
-        commit_args = ['commit-tree', tree]
-        if parent:
-            commit_args.extend(['-p', parent])
-        commit_args.extend(['-m', commit_message(workspace_id, snapshot_id, node.relpath)])
-        commit = git(repo, commit_args, env=env).stdout.strip()
-        git(repo, ['update-ref', ref, commit])
-
-        if parent:
-            diff = git(repo, ['diff', '--name-only', f'{parent}..{commit}']).stdout.splitlines()
+        if parent and parent_tree == tree:
+            commit = parent
+            diff: list[str] = []
         else:
-            diff = git(repo, ['show', '--pretty=', '--name-only', commit]).stdout.splitlines()
+            commit_args = ['commit-tree', tree]
+            if parent:
+                commit_args.extend(['-p', parent])
+            commit_args.extend(['-m', commit_message(workspace_id, snapshot_id, node.relpath)])
+            commit = git(repo, commit_args, env=env).stdout.strip()
+            if parent:
+                diff = git(repo, ['diff', '--name-only', f'{parent}..{commit}']).stdout.splitlines()
+            else:
+                diff = git(repo, ['show', '--pretty=', '--name-only', commit]).stdout.splitlines()
+
+        git(repo, ['update-ref', ref, commit])
 
         return SnapshotRecord(
             relpath=node.relpath,
@@ -754,7 +777,7 @@ def runtime_install_step_script(
                 'import torch_npu  # noqa: F401',
                 'import vllm',
                 'import vllm_ascend',
-                'print(f"editable-import-smoke=ok python={sys.executable} torch={torch.__version__} vllm={getattr(vllm, "__version__", "unknown")}")',
+                'print(f"editable-import-smoke=ok python={sys.executable} torch={torch.__version__} vllm={getattr(vllm, \'__version__\', \'unknown\')}")',
                 'PY',
             ]
         )

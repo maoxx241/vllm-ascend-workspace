@@ -69,6 +69,10 @@ python3 .agents/skills/remote-code-parity/scripts/parity_sync.py \
   --machine blue-a
 ```
 
+The runtime-install path sources Ascend env scripts under a `set +u` / `set -u` guard, so first-install parity does not depend on predefining shell-specific variables.
+The final verification path is a heredoc-based Python import smoke, so the generated snippet must remain valid Python after shell quoting.
+Clean child repos reuse their original `HEAD` commit during snapshotting, so a nested submodule like `csrc/third_party/catlass` does not by itself force a parent reinstall.
+
 ## Dry-run sync without remote mutation
 
 ```bash

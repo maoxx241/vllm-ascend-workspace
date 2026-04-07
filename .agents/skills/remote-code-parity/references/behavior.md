@@ -93,6 +93,7 @@ Materialization requirements:
 - force the root repo and submodules to the synthetic snapshot commits
 - rewrite submodule URLs to container-local mirror paths
 - materialize child repos explicitly instead of relying on `git submodule update` to fetch synthetic child commits
+- when a child repo snapshot has the same tree as its original `HEAD`, reuse that original commit so parent repos do not see a gitlink-only synthetic delta
 - preserve runtime-private sibling paths such as `Mooncake`
 - preserve `.remote-code-parity` so the container-side marker survives root cleanups
 - do not delete the entire runtime root as part of normal sync
@@ -157,10 +158,10 @@ A trustworthy parity result records:
 
 - discover the runtime Python dynamically from `/usr/local/python*/bin/python3`, then fall back to `python3` or `python`
 - unify that interpreter across `python`, `python3`, `HI_PYTHON`, `Python_EXECUTABLE`, `Python3_EXECUTABLE`, and CMake-driven helper processes before editable install
-- export the Ascend driver `LD_LIBRARY_PATH` prefix before sourcing optional env scripts
+- preseed the runtime `PATH` and the Ascend driver `LD_LIBRARY_PATH` prefix, then source optional env scripts under a `set +u` / `set -u` guard so shell-specific variables are not required
 - keep the fast path on `pip install -e . --no-build-isolation`
 - route pip installs through mirror-aware fallback in the order Tsinghua -> Aliyun -> PyPI
 - if editable install fails because the image packaging stack is too old for the current `pyproject.toml`, attempt one bounded packaging-stack refresh and one retry before failing closed
-- finish runtime verification with real imports, not `find_spec()` alone
+- finish runtime verification with real imports, not `find_spec()` alone, and keep the generated heredoc smoke snippet valid Python after shell quoting
 - surface a progress transition before each long runtime-install package step so an agent can tell whether the wait is in uninstall, requirements, editable install, or verification
 - keep consent and runtime-state writes atomic so parallel wrapper calls do not clobber local state
