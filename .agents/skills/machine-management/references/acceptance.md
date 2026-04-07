@@ -64,14 +64,18 @@ These should not trigger `machine-management` unless machine readiness is the ob
 - if the user already supplied the host password in the request, the skill prefers scripted bootstrap before asking the user to run a manual command
 - the primary bootstrap path does not depend on `ssh-copy-id`
 - the skill checks Docker and required Ascend/NPU prerequisites before container creation
+- the host probe captures `machine_type` and `soc` from `npu-smi` / SoC output when possible and returns a clear override request when it cannot
 - the managed container uses host networking, required devices, required Ascend mounts, and `/vllm-workspace` as the workdir
 - the skill configures a dedicated container `sshd` on a high port without brittle inline edits to `/etc/ssh/sshd_config`
 - the container bootstrap ensures `/run/sshd` exists
 - space-containing remote arguments such as SSH public keys and mesh peer keys survive the SSH hop intact
 - `machine_add.py` persists final alias, namespace, host identity, container name, image, and SSH port into inventory without the agent having to call `inventory.py put`
 - the recorded inventory image is the actual selected image after mirror resolution and pull / cache fallback
+- selector-based image resolution is hardware-aware: A2 keeps the base tag, A3 appends `-a3`, and 310P appends `-310p`
+- inventory persists `host.machine_type`, `host.soc`, and `container.machine_type`
 - `rc`, `main`, and `stable` remain first-class selectors, while `auto`, `*:latest`, and bare repositories without a tag are rejected as defaults
 - long-running bootstrap phases keep emitting attributable progress for image pull and package-install steps instead of going silent behind one global timeout
+- container-side apt bootstrap probes a small set of domestic mirrors first and rewrites sources to the fastest reachable mirror before `apt-get update` / `apt-get install`
 - inventory `put` / `remove` writes are atomic and serialized so concurrent wrappers do not clobber the recorded machine set
 
 ### Verify
@@ -90,6 +94,7 @@ These should not trigger `machine-management` unless machine readiness is the ob
 - the skill uses the bare-metal host only when container SSH is broken
 - the skill does not recreate or delete a container unless the user explicitly asked for destructive repair
 - the smoke path stays dynamic: no pinned Python patch version, no unconditional vendor `set_env.bash`, no default `devlib` injection
+- verify / smoke prepend `driver/lib64/common`, `driver/lib64/driver`, and `driver/lib64`, and source `/etc/profile.d/vaws-ascend-env.sh` when it exists
 
 ### Remove
 
@@ -123,5 +128,6 @@ Review these files together after every substantial skill edit:
 - `.agents/skills/machine-management/scripts/machine_remove.py`
 - `.agents/skills/machine-management/scripts/manage_machine.py`
 - `.agents/skills/machine-management/scripts/inventory.py`
+- inspect the generated `/etc/vaws/host-info.json`, `/etc/vaws/container-info.json`, and `/etc/profile.d/vaws-ascend-env.sh` on a real machine after any bootstrap logic change
 - `.agents/scripts/workspace_profile.py`
 - `.agents/lib/vaws_local_state.py`

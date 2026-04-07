@@ -246,8 +246,23 @@ def image_request_matches_record(explicit_image: str | None, record: dict[str, A
     current_image = record.get("container", {}).get("image")
     if not current_image:
         return False
+    machine_type = None
+    host = record.get("host") or {}
+    container = record.get("container") or {}
+    if host.get("machine_type"):
+        try:
+            machine_type = machine_ops.normalize_machine_type(host["machine_type"])
+        except machine_ops.MachineManagementError:
+            machine_type = None
+    if machine_type is None and container.get("machine_type"):
+        try:
+            machine_type = machine_ops.normalize_machine_type(container["machine_type"])
+        except machine_ops.MachineManagementError:
+            machine_type = None
+    if machine_type is None:
+        machine_type = machine_ops.infer_machine_type_from_image(current_image)
     try:
-        resolution = machine_ops.resolve_image_request(explicit_image.strip())
+        resolution = machine_ops.resolve_image_request(explicit_image.strip(), machine_type=machine_type)
     except machine_ops.MachineManagementError:
         return False
     return current_image in resolution.candidates
@@ -304,12 +319,15 @@ def machine_summary(record: dict[str, Any]) -> dict[str, Any]:
             "ip": record["host"]["ip"],
             "user": record["host"]["user"],
             "port": record["host"]["port"],
+            "machine_type": record["host"].get("machine_type"),
+            "soc": record["host"].get("soc"),
         },
         "container": {
             "name": record["container"]["name"],
             "ssh_port": record["container"]["ssh_port"],
             "image": record["container"]["image"],
             "workdir": record["container"]["workdir"],
+            "machine_type": record["container"].get("machine_type"),
         },
         "last_verified_at": record.get("last_verified_at"),
     }
@@ -458,10 +476,11 @@ def probe_host(
     target: machine_ops.SshTarget,
     *,
     image: str,
+    machine_type: str | None = None,
     port_range: str = machine_ops.DEFAULT_PORT_RANGE,
     managed_prefix: str = "vaws-",
 ) -> dict[str, Any]:
-    image_request = machine_ops.image_request_payload(image)
+    image_request = machine_ops.image_request_payload(image, machine_type=machine_type)
     result = machine_ops.run_remote_script(
         target,
         machine_ops.render_host_probe_script(),
@@ -495,6 +514,8 @@ def bootstrap_container(
     image: str,
     workdir: str,
     namespace: str | None,
+    machine_type: str | None = None,
+    soc: str | None = None,
     public_key_file: str | None = None,
     replace_container_on_image_change: bool = False,
 ) -> dict[str, Any]:
@@ -502,7 +523,7 @@ def bootstrap_container(
     if needs_input is not None:
         return needs_input
     assert key_path is not None and public_key is not None
-    image_request = machine_ops.image_request_payload(image)
+    image_request = machine_ops.image_request_payload(image, machine_type=machine_type)
 
     result = machine_ops.run_remote_script(
         target,
@@ -515,6 +536,8 @@ def bootstrap_container(
             public_key,
             namespace or "",
             "true" if replace_container_on_image_change else "false",
+            machine_type or "",
+            soc or "",
         ],
         batch_mode=True,
         timeout_seconds=machine_ops.DEFAULT_BOOTSTRAP_TIMEOUT_SECONDS,
@@ -545,6 +568,9 @@ def bootstrap_container(
             "public_key_file": str(key_path),
             "private_key_file": str(private_key) if private_key is not None else None,
             "namespace": namespace,
+            "machine_type": payload.get("machine_type") or machine_type,
+            "container_type": payload.get("container_type") or machine_type,
+            "soc": payload.get("soc") or soc,
             "direct_container_ssh": ssh_check,
             "target": {
                 "host": target.host,
@@ -771,6 +797,9 @@ def upsert_machine_record(
     image: str,
     workdir: str,
     bootstrap_method: str | None,
+    host_machine_type: str | None = None,
+    host_soc: str | None = None,
+    container_machine_type: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     state = load_inventory_state()
     alias_matches = inventory_store._find_matches(state.inventory, alias=alias)  # noqa: SLF001
@@ -805,6 +834,12 @@ def upsert_machine_record(
         "created_by_skill": True,
         "last_verified_at": utc_now_iso(),
     }
+    if host_machine_type is not None:
+        record["host"]["machine_type"] = host_machine_type
+    if host_soc is not None:
+        record["host"]["soc"] = host_soc
+    if container_machine_type is not None:
+        record["container"]["machine_type"] = container_machine_type
     if normalized_namespace is None:
         record.pop("namespace")
     inventory_store._validate_record(record)  # noqa: SLF001
@@ -823,6 +858,9 @@ def upsert_machine_record(
         "alias": record["alias"],
         "namespace": record.get("namespace"),
         "host_ip": record["host"]["ip"],
+        "host_machine_type": record["host"].get("machine_type"),
+        "host_soc": record["host"].get("soc"),
+        "container_machine_type": record["container"].get("machine_type"),
         "inventory": str(state.requested_path),
     }
     if not inventory_store.same_path(state.active_path, state.requested_path):

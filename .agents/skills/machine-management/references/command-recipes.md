@@ -34,6 +34,17 @@ python3 .agents/skills/machine-management/scripts/machine_add.py \
   --image rc
 ```
 
+The wrapper will detect A2 / A3 / 310P from `npu-smi` when possible and append `-a3` or `-310p` automatically for selector-based images.
+
+If `npu-smi` cannot identify the hardware cleanly, pass an explicit override:
+
+```bash
+python3 .agents/skills/machine-management/scripts/machine_add.py \
+  --host 173.125.1.2 \
+  --image rc \
+  --machine-type A3
+```
+
 If the profile is missing and the user chose a specific username:
 
 ```bash
@@ -123,6 +134,15 @@ python3 .agents/skills/machine-management/scripts/machine_repair.py \
   --image main
 ```
 
+If the host hardware probe needs an explicit override during repair:
+
+```bash
+python3 .agents/skills/machine-management/scripts/machine_repair.py \
+  --machine 173.125.1.2 \
+  --image rc \
+  --machine-type 310P
+```
+
 If host key SSH drifted and a password bootstrap is needed again for recovery:
 
 ```bash
@@ -156,7 +176,8 @@ Probe one host:
 ```bash
 python3 .agents/skills/machine-management/scripts/manage_machine.py probe-host \
   --host 173.125.1.2 \
-  --image main
+  --image main \
+  --machine-type A3
 ```
 
 Bootstrap host key auth directly:
@@ -175,7 +196,9 @@ python3 .agents/skills/machine-management/scripts/manage_machine.py bootstrap-co
   --name vaws-alice123 \
   --port 46671 \
   --namespace alice123 \
-  --image main
+  --image main \
+  --machine-type A3 \
+  --soc ascend910_9391
 ```
 
 Run the smoke test directly:
@@ -186,7 +209,7 @@ python3 .agents/skills/machine-management/scripts/manage_machine.py smoke \
   --port 46671
 ```
 
-Manual inventory write:
+Manual inventory write with hardware metadata:
 
 ```bash
 python3 .agents/skills/machine-management/scripts/inventory.py upsert \
@@ -195,7 +218,10 @@ python3 .agents/skills/machine-management/scripts/inventory.py upsert \
   --host 173.125.1.2 \
   --name vaws-alice123 \
   --container-port 46671 \
-  --image quay.nju.edu.cn/ascend/vllm-ascend:main
+  --image quay.nju.edu.cn/ascend/vllm-ascend:main-a3 \
+  --machine-type A3 \
+  --soc ascend910_9391 \
+  --container-type A3
 ```
 
 Notes:

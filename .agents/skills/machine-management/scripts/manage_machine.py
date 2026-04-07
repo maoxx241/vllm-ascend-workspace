@@ -79,6 +79,38 @@ SEMVER_TAG_PATTERN = re.compile(
     r"^v?(?P<major>\d+)\.(?P<minor>\d+)\.(?P<patch>\d+)(?:(?P<kind>rc)(?P<kind_number>\d+))?$",
     re.IGNORECASE,
 )
+MACHINE_TYPE_CHOICES = ("A2", "A3", "310P")
+IMAGE_SUFFIX_BY_MACHINE_TYPE = {
+    "A2": "",
+    "A3": "-a3",
+    "310P": "-310p",
+}
+SOC_TO_MACHINE_TYPE = {
+    "910b": "A2",
+    "910c": "A3",
+    "310p": "310P",
+    "ascend910b1": "A2",
+    "ascend910b2": "A2",
+    "ascend910b2c": "A2",
+    "ascend910b3": "A2",
+    "ascend910b4": "A2",
+    "ascend910b4-1": "A2",
+    "ascend910_9391": "A3",
+    "ascend910_9381": "A3",
+    "ascend910_9372": "A3",
+    "ascend910_9392": "A3",
+    "ascend910_9382": "A3",
+    "ascend910_9362": "A3",
+    "ascend310p1": "310P",
+    "ascend310p3": "310P",
+    "ascend310p5": "310P",
+    "ascend310p7": "310P",
+    "ascend310p3vir01": "310P",
+    "ascend310p3vir02": "310P",
+    "ascend310p3vir04": "310P",
+    "ascend310p3vir08": "310P",
+}
+SOC_MATCH_ORDER = sorted(SOC_TO_MACHINE_TYPE, key=len, reverse=True)
 
 
 class MachineManagementError(RuntimeError):
@@ -100,14 +132,61 @@ class ImageResolution:
     candidates: tuple[str, ...]
     resolved_tag: str | None = None
     mirror_order: tuple[str, ...] = IMAGE_REGISTRY_MIRRORS
+    machine_type: str | None = None
 
 
 def print_json(data: dict[str, Any]) -> None:
     print(json.dumps(data, indent=2, ensure_ascii=False))
 
 
-def image_candidates_for_tag(tag: str) -> tuple[str, ...]:
-    return tuple(f"{repo}:{tag}" for repo in IMAGE_REGISTRY_MIRRORS)
+def normalize_machine_type(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip().upper().replace("_", "")
+    if normalized == "310P":
+        return "310P"
+    if normalized in {"A2", "A3"}:
+        return normalized
+    raise MachineManagementError(
+        f"unsupported machine type {value!r}; expected one of: {', '.join(MACHINE_TYPE_CHOICES)}"
+    )
+
+
+def normalize_soc_token(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip().lower()
+    return normalized or None
+
+
+def detect_machine_type_from_text(text: str | None) -> tuple[str | None, str | None]:
+    if not text:
+        return None, None
+    normalized = text.lower()
+    for token in SOC_MATCH_ORDER:
+        if token in normalized:
+            return token, SOC_TO_MACHINE_TYPE[token]
+    return None, None
+
+
+def image_tag_for_machine(base_tag: str, machine_type: str | None) -> str:
+    normalized = normalize_machine_type(machine_type) or "A2"
+    suffix = IMAGE_SUFFIX_BY_MACHINE_TYPE[normalized]
+    if not suffix:
+        return base_tag
+    if base_tag.endswith("-openeuler"):
+        stem = base_tag[: -len("-openeuler")]
+        if stem.endswith(suffix):
+            return base_tag
+        return f"{stem}{suffix}-openeuler"
+    if base_tag.endswith(suffix):
+        return base_tag
+    return f"{base_tag}{suffix}"
+
+
+def image_candidates_for_tag(tag: str, machine_type: str | None = None) -> tuple[str, ...]:
+    resolved_tag = image_tag_for_machine(tag, machine_type)
+    return tuple(f"{repo}:{resolved_tag}" for repo in IMAGE_REGISTRY_MIRRORS)
 
 
 def docker_ref_tag(ref: str) -> str | None:
@@ -118,6 +197,47 @@ def docker_ref_tag(ref: str) -> str | None:
     if last_colon > last_slash:
         return ref[last_colon + 1 :]
     return None
+
+
+def docker_ref_repo(ref: str) -> str:
+    without_digest = ref.split("@", 1)[0]
+    last_slash = without_digest.rfind("/")
+    last_colon = without_digest.rfind(":")
+    if last_colon > last_slash:
+        return without_digest[:last_colon]
+    return without_digest
+
+
+def infer_machine_type_from_image(ref: str | None) -> str | None:
+    if not ref:
+        return None
+    tag = docker_ref_tag(ref)
+    if tag is None:
+        return None
+    lowered = tag.lower()
+    if "-310p" in lowered:
+        return "310P"
+    if "-a3" in lowered:
+        return "A3"
+    if docker_ref_repo(ref).endswith("ascend/vllm-ascend"):
+        return "A2"
+    return None
+
+
+def validate_explicit_image_for_machine(ref: str, machine_type: str | None) -> str:
+    candidate = require_explicit_image_ref(ref)
+    normalized_machine_type = normalize_machine_type(machine_type)
+    if normalized_machine_type is None:
+        return candidate
+    repo = docker_ref_repo(candidate)
+    if not repo.endswith("ascend/vllm-ascend"):
+        return candidate
+    inferred = infer_machine_type_from_image(candidate)
+    if inferred is not None and inferred != normalized_machine_type:
+        raise MachineManagementError(
+            f"image {candidate!r} appears to target {inferred}, but the machine type is {normalized_machine_type}"
+        )
+    return candidate
 
 
 def require_explicit_image_ref(ref: str) -> str:
@@ -295,12 +415,13 @@ def fetch_latest_prerelease_tag(timeout_seconds: int = LATEST_RELEASE_TIMEOUT_SE
     )
 
 
-def resolve_image_request(spec: str) -> ImageResolution:
+def resolve_image_request(spec: str, *, machine_type: str | None = None) -> ImageResolution:
     requested = spec.strip()
     if not requested:
         raise MachineManagementError(
             "image selector is missing; choose `rc`, `main`, `stable`, or an explicit non-latest image reference"
         )
+    normalized_machine_type = normalize_machine_type(machine_type)
     normalized = requested.lower()
     selector = IMAGE_SELECTOR_ALIASES.get(normalized)
     if selector == IMAGE_SELECTOR_RC:
@@ -309,16 +430,18 @@ def resolve_image_request(spec: str) -> ImageResolution:
             selector=IMAGE_SELECTOR_RC,
             requested=requested,
             policy="latest-official-prerelease",
-            candidates=image_candidates_for_tag(release_tag),
-            resolved_tag=release_tag,
+            candidates=image_candidates_for_tag(release_tag, normalized_machine_type),
+            resolved_tag=image_tag_for_machine(release_tag, normalized_machine_type),
+            machine_type=normalized_machine_type,
         )
     if selector == IMAGE_SELECTOR_MAIN:
         return ImageResolution(
             selector=IMAGE_SELECTOR_MAIN,
             requested=requested,
             policy="main-branch",
-            candidates=image_candidates_for_tag(IMAGE_SELECTOR_MAIN),
-            resolved_tag=IMAGE_SELECTOR_MAIN,
+            candidates=image_candidates_for_tag(IMAGE_SELECTOR_MAIN, normalized_machine_type),
+            resolved_tag=image_tag_for_machine(IMAGE_SELECTOR_MAIN, normalized_machine_type),
+            machine_type=normalized_machine_type,
         )
     if selector == IMAGE_SELECTOR_STABLE:
         release_tag = fetch_latest_release_tag()
@@ -326,11 +449,12 @@ def resolve_image_request(spec: str) -> ImageResolution:
             selector=IMAGE_SELECTOR_STABLE,
             requested=requested,
             policy="latest-official-release",
-            candidates=image_candidates_for_tag(release_tag),
-            resolved_tag=release_tag,
+            candidates=image_candidates_for_tag(release_tag, normalized_machine_type),
+            resolved_tag=image_tag_for_machine(release_tag, normalized_machine_type),
+            machine_type=normalized_machine_type,
         )
 
-    candidates = tuple(require_explicit_image_ref(item) for item in requested.split(",") if item.strip())
+    candidates = tuple(validate_explicit_image_for_machine(item, normalized_machine_type) for item in requested.split(",") if item.strip())
     if not candidates:
         raise MachineManagementError(
             "image selector is empty; choose `rc`, `main`, `stable`, or an explicit non-latest image reference"
@@ -340,11 +464,12 @@ def resolve_image_request(spec: str) -> ImageResolution:
         requested=requested,
         policy="explicit",
         candidates=candidates,
+        machine_type=normalized_machine_type,
     )
 
 
-def image_request_payload(spec: str) -> dict[str, Any]:
-    resolution = resolve_image_request(spec)
+def image_request_payload(spec: str, *, machine_type: str | None = None) -> dict[str, Any]:
+    resolution = resolve_image_request(spec, machine_type=machine_type)
     return {
         "requested": resolution.requested,
         "selector": resolution.selector,
@@ -352,6 +477,7 @@ def image_request_payload(spec: str) -> dict[str, Any]:
         "candidates": list(resolution.candidates),
         "resolved_tag": resolution.resolved_tag,
         "mirror_order": list(resolution.mirror_order),
+        "machine_type": resolution.machine_type,
     }
 
 
@@ -774,6 +900,33 @@ set -euo pipefail
 image_request_json="$1"
 port_range="$2"
 prefix="$3"
+
+export PATH="/usr/local/bin:/usr/local/sbin:${PATH:-}"
+export LD_LIBRARY_PATH="/usr/local/Ascend/driver/lib64/common:/usr/local/Ascend/driver/lib64/driver:/usr/local/Ascend/driver/lib64:${LD_LIBRARY_PATH:-}"
+if [ -z "${ASCEND_HOME_PATH:-}" ]; then
+  if [ -d /usr/local/Ascend/ascend-toolkit/latest ]; then
+    export ASCEND_HOME_PATH=/usr/local/Ascend/ascend-toolkit/latest
+  elif [ -d /usr/local/Ascend/ascend-toolkit ]; then
+    export ASCEND_HOME_PATH=/usr/local/Ascend/ascend-toolkit
+  fi
+fi
+sourced_scripts=""
+safe_source() {
+  file="$1"
+  if [ -f "$file" ]; then
+    set +u
+    . "$file" >/dev/null 2>&1 || true
+    set -u
+    sourced_scripts="${sourced_scripts}${file}
+"
+  fi
+}
+safe_source /etc/profile.d/vaws-ascend-env.sh
+safe_source /etc/profile.d/vaws-ascend-env.sh
+safe_source /usr/local/Ascend/ascend-toolkit/set_env.sh
+safe_source /usr/local/Ascend/ascend-toolkit/latest/set_env.sh
+safe_source /usr/local/Ascend/nnal/atb/set_env.sh
+
 py=""
 for cand in python3 python; do
   if command -v "$cand" >/dev/null 2>&1; then
@@ -785,7 +938,7 @@ if [ -z "$py" ]; then
   echo "__SENTINEL__{\"success\": false, \"error\": \"python not found on remote host\"}"
   exit 3
 fi
-"$py" - "$image_request_json" "$port_range" "$prefix" <<'PY'
+"$py" - "$image_request_json" "$port_range" "$prefix" "$sourced_scripts" <<'PY'
 import json
 import os
 import pathlib
@@ -794,13 +947,15 @@ import socket
 import subprocess
 import sys
 
-image_request, port_range, prefix = sys.argv[1:4]
+image_request, port_range, prefix, sourced_scripts = sys.argv[1:5]
 image = json.loads(image_request)
 start_s, end_s = port_range.split(":", 1)
 start, end = int(start_s), int(end_s)
+SOC_TO_MACHINE_TYPE = __SOC_TO_MACHINE_TYPE__
+SOC_MATCH_ORDER = sorted(SOC_TO_MACHINE_TYPE, key=len, reverse=True)
 
 
-def run(cmd: list[str]) -> tuple[int, str, str]:
+def run(cmd: list[str], *, env: dict[str, str] | None = None) -> tuple[int, str, str]:
     proc = subprocess.run(
         cmd,
         stdout=subprocess.PIPE,
@@ -808,6 +963,7 @@ def run(cmd: list[str]) -> tuple[int, str, str]:
         text=True,
         encoding="utf-8",
         errors="replace",
+        env=env,
     )
     return proc.returncode, proc.stdout.strip(), proc.stderr.strip()
 
@@ -823,8 +979,24 @@ result: dict[str, object] = {
         "info_ok": False,
     },
     "required_paths": {},
+    "missing_required_paths": [],
     "optional_mounts": [],
-    "npu_smi_present": os.path.exists("/usr/local/bin/npu-smi"),
+    "npu_smi_present": pathlib.Path("/usr/local/bin/npu-smi").exists() or shutil.which("npu-smi") is not None,
+    "npu_probe": {
+        "present": pathlib.Path("/usr/local/bin/npu-smi").exists() or shutil.which("npu-smi") is not None,
+        "commands": [],
+        "detected_soc": None,
+        "machine_type": None,
+        "success": False,
+        "sourced_scripts": [line for line in sourced_scripts.splitlines() if line],
+        "env": {
+            "PATH": os.environ.get("PATH"),
+            "LD_LIBRARY_PATH": os.environ.get("LD_LIBRARY_PATH"),
+            "ASCEND_HOME_PATH": os.environ.get("ASCEND_HOME_PATH"),
+            "SOC_VERSION": os.environ.get("SOC_VERSION"),
+            "VAWS_NPU_SOC": os.environ.get("VAWS_NPU_SOC"),
+        },
+    },
     "image": {
         "name": image.get("requested"),
         "requested": image.get("requested"),
@@ -833,6 +1005,7 @@ result: dict[str, object] = {
         "resolved_tag": image.get("resolved_tag"),
         "candidates": candidates,
         "mirror_order": list(image.get("mirror_order") or []),
+        "machine_type": image.get("machine_type"),
         "present_local": False,
         "present_local_candidates": [],
     },
@@ -850,13 +1023,18 @@ required = [
     "/dev/hisi_hdc",
     "/dev/devmm_svm",
     "/usr/local/Ascend/driver",
+    "/usr/local/Ascend/driver/lib64/common",
+    "/usr/local/Ascend/driver/lib64/driver",
     "/usr/local/dcmi",
     "/usr/local/bin/npu-smi",
     "/usr/local/sbin",
     "/usr/share/zoneinfo/Asia/Shanghai",
 ]
 for item in required:
-    result["required_paths"][item] = pathlib.Path(item).exists()
+    exists = pathlib.Path(item).exists()
+    result["required_paths"][item] = exists
+    if not exists:
+        result["missing_required_paths"].append(item)
 
 for item in ["/home", "/tmp", "/weight", "/data", "/mnt"]:
     if pathlib.Path(item).exists():
@@ -875,19 +1053,67 @@ if result["docker"]["present"]:
             present_local_candidates.append(candidate)
     result["image"]["present_local_candidates"] = present_local_candidates
     result["image"]["present_local"] = bool(present_local_candidates)
-    rc, out, _ = run(["docker", "ps", "-a", "--format", "{{.Names}}\t{{.Status}}\t{{.Image}}"])
+    rc, out, _ = run(["docker", "ps", "-a", "--format", "{{.Names}}	{{.Status}}	{{.Image}}"])
     if rc == 0:
         rows = []
         for line in out.splitlines():
             if not line:
                 continue
-            parts = line.split("\t", 2)
+            parts = line.split("	", 2)
             if len(parts) < 3:
                 continue
             name, status, actual_image = parts
             if name.startswith(prefix):
                 rows.append({"name": name, "status": status, "image": actual_image})
         result["managed_containers"] = rows
+
+combined_probe_text: list[str] = []
+for label, cmd in [
+    ("info", ["npu-smi", "info"]),
+    ("info-list", ["npu-smi", "info", "-l"]),
+    ("board-0", ["npu-smi", "info", "-t", "board", "-i", "0"]),
+    ("common-0", ["npu-smi", "info", "-t", "common", "-i", "0"]),
+]:
+    rc, out, err = run(cmd, env=os.environ.copy())
+    entry = {
+        "label": label,
+        "command": cmd,
+        "returncode": rc,
+        "stdout_tail": "
+".join(out.splitlines()[-20:]),
+        "stderr_tail": "
+".join(err.splitlines()[-20:]),
+    }
+    result["npu_probe"]["commands"].append(entry)
+    if rc == 0:
+        result["npu_probe"]["success"] = True
+        if out:
+            combined_probe_text.append(out)
+        if err:
+            combined_probe_text.append(err)
+
+soc_from_env = os.environ.get("SOC_VERSION") or os.environ.get("VAWS_NPU_SOC")
+if soc_from_env:
+    combined_probe_text.append(soc_from_env)
+
+normalized_probe_text = "
+".join(combined_probe_text).lower()
+for token in SOC_MATCH_ORDER:
+    if token in normalized_probe_text:
+        result["npu_probe"]["detected_soc"] = token
+        result["npu_probe"]["machine_type"] = SOC_TO_MACHINE_TYPE[token]
+        break
+
+result["detected_soc"] = result["npu_probe"]["detected_soc"]
+result["machine_type"] = result["npu_probe"]["machine_type"]
+result["prerequisites_ok"] = bool(
+    result["docker"]["present"]
+    and result["docker"]["info_ok"]
+    and not result["missing_required_paths"]
+)
+result["warnings"] = []
+if result["machine_type"] is None:
+    result["warnings"].append("machine type could not be inferred from npu-smi output; pass an explicit override if needed")
 
 rc, out, _ = run(["ss", "-ltnH"])
 used: set[int] = set()
@@ -911,7 +1137,9 @@ for port in range(start, end + 1):
 print("__SENTINEL__" + json.dumps(result, ensure_ascii=False))
 PY
 '''
-    return template.replace("__SENTINEL__", SENTINEL)
+    return template.replace("__SENTINEL__", SENTINEL).replace(
+        "__SOC_TO_MACHINE_TYPE__", json.dumps(SOC_TO_MACHINE_TYPE, ensure_ascii=False)
+    )
 
 
 def render_bootstrap_host_script() -> str:
@@ -924,6 +1152,8 @@ workdir="$4"
 pubkey="$5"
 namespace="${6:-}"
 replace_on_image_change="${7:-false}"
+machine_type_input="${8:-}"
+soc_input="${9:-}"
 
 emit_json() {
   python3 - "$1" <<'PY'
@@ -1012,6 +1242,337 @@ run_with_progress() {
   return "$status"
 }
 
+infer_type_from_image() {
+  image_ref="$1"
+  lowered="$(printf '%s' "$image_ref" | tr '[:upper:]' '[:lower:]')"
+  case "$lowered" in
+    *-310p*)
+      printf '310P\n'
+      return 0
+      ;;
+    *-a3*)
+      printf 'A3\n'
+      return 0
+      ;;
+  esac
+  repo_part="$image_ref"
+  if [[ "$repo_part" == *"@"* ]]; then
+    repo_part="${repo_part%@*}"
+  fi
+  if [[ "$repo_part" == *":"* && "$repo_part" != *"//"* ]]; then
+    maybe_repo="${repo_part%:*}"
+  else
+    maybe_repo="$repo_part"
+  fi
+  if [[ "$maybe_repo" == *"ascend/vllm-ascend" ]]; then
+    printf 'A2\n'
+    return 0
+  fi
+  return 1
+}
+
+write_host_state() {
+  host_machine_type="$1"
+  host_container_type="$2"
+  host_soc="$3"
+  host_image="$4"
+  install -d -m 0755 /etc/vaws /etc/profile.d
+  cat > "$host_env_file" <<EOF_HOST_ENV
+#!/bin/sh
+export PATH="/usr/local/bin:/usr/local/sbin:\${PATH:-}"
+export LD_LIBRARY_PATH="/usr/local/Ascend/driver/lib64/common:/usr/local/Ascend/driver/lib64/driver:/usr/local/Ascend/driver/lib64:\${LD_LIBRARY_PATH:-}"
+if [ -z "\${ASCEND_HOME_PATH:-}" ]; then
+  if [ -d /usr/local/Ascend/ascend-toolkit/latest ]; then
+    export ASCEND_HOME_PATH=/usr/local/Ascend/ascend-toolkit/latest
+  elif [ -d /usr/local/Ascend/ascend-toolkit ]; then
+    export ASCEND_HOME_PATH=/usr/local/Ascend/ascend-toolkit
+  fi
+fi
+if [ -n "$host_machine_type" ]; then
+  export VAWS_MACHINE_TYPE="$host_machine_type"
+fi
+if [ -n "$host_container_type" ]; then
+  export VAWS_CONTAINER_TYPE="$host_container_type"
+fi
+if [ -n "$host_soc" ]; then
+  export VAWS_NPU_SOC="$host_soc"
+  export SOC_VERSION="$host_soc"
+fi
+if [ -n "$host_image" ]; then
+  export VAWS_CONTAINER_IMAGE="$host_image"
+fi
+EOF_HOST_ENV
+  chmod 0644 "$host_env_file"
+  actions+=("configured-host-env")
+  python3 - "$host_machine_type" "$host_container_type" "$host_soc" "$host_image" "$container" "$port" "$workdir" "$namespace" "$host_env_file" > "$host_metadata_file" <<'PY'
+import json
+import socket
+import sys
+machine_type, container_type, soc, image, container, port, workdir, namespace, env_file = sys.argv[1:]
+print(json.dumps({
+    "hostname": socket.gethostname(),
+    "machine_type": machine_type or None,
+    "container_type": container_type or None,
+    "soc": soc or None,
+    "container": container,
+    "container_ssh_port": int(port),
+    "selected_image": image or None,
+    "workdir": workdir,
+    "namespace": namespace or None,
+    "env_file": env_file,
+}, ensure_ascii=False, indent=2))
+PY
+  chmod 0644 "$host_metadata_file"
+  actions+=("wrote-host-metadata")
+}
+
+install_container_ssh_packages() {
+  docker exec -i "$container" bash -s -- <<'INNER_PKG'
+set -euo pipefail
+state_file=/tmp/vaws-package-bootstrap.json
+rm -f "$state_file"
+if command -v apt-get >/dev/null 2>&1; then
+  export DEBIAN_FRONTEND=noninteractive
+  python3 - "$state_file" <<'PY'
+import json
+import os
+import pathlib
+import re
+import time
+import urllib.request
+from urllib.parse import urlsplit, urlunsplit
+
+state_file = pathlib.Path(__import__("sys").argv[1])
+os_release = {}
+os_release_path = pathlib.Path("/etc/os-release")
+if os_release_path.exists():
+    for line in os_release_path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        os_release[key] = value.strip().strip('"')
+
+sources_dir = pathlib.Path("/etc/apt/sources.list.d")
+source_files = []
+for candidate in [pathlib.Path("/etc/apt/sources.list"), *sorted(sources_dir.glob("*.list")), *sorted(sources_dir.glob("*.sources"))]:
+    if candidate.exists() and candidate.is_file():
+        source_files.append(candidate)
+
+list_pattern = re.compile(r"^\s*deb(?:-src)?\s+(?:\[[^\]]+\]\s+)?(\S+)\s+(\S+)")
+entries = []
+uri_set = {}
+for source_file in source_files:
+    content = source_file.read_text(encoding="utf-8", errors="replace")
+    if source_file.suffix == ".list" or source_file.name == "sources.list":
+        for line in content.splitlines():
+            if line.strip().startswith("#"):
+                continue
+            match = list_pattern.match(line)
+            if not match:
+                continue
+            uri, suite = match.groups()
+            entries.append((uri, suite))
+            uri_set[uri] = None
+    else:
+        uris = []
+        suites = []
+        for line in content.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("URIs:"):
+                uris.extend(stripped.split(":", 1)[1].split())
+            elif stripped.startswith("Suites:"):
+                suites.extend(stripped.split(":", 1)[1].split())
+        for uri in uris:
+            uri_set[uri] = None
+            for suite in suites:
+                entries.append((uri, suite))
+
+entries = list(dict.fromkeys(entries))
+candidate_hosts = [
+    "mirrors.nju.edu.cn",
+    "mirrors.tuna.tsinghua.edu.cn",
+    "mirrors.ustc.edu.cn",
+    "mirrors.aliyun.com",
+    "mirrors.cloud.tencent.com",
+]
+for uri, _ in entries:
+    host = urlsplit(uri).netloc
+    if host and host not in candidate_hosts:
+        candidate_hosts.append(host)
+
+timings = {}
+if entries:
+    for host in candidate_hosts:
+        samples = []
+        ok = True
+        for uri, suite in entries[:4]:
+            original = urlsplit(uri)
+            candidate_uri = urlunsplit((original.scheme, host, original.path, original.query, original.fragment)).rstrip("/")
+            probe_url = f"{candidate_uri}/dists/{suite}/InRelease"
+            request = urllib.request.Request(probe_url, headers={"User-Agent": "vaws-apt-probe/1.0"})
+            started = time.monotonic()
+            try:
+                with urllib.request.urlopen(request, timeout=3) as response:
+                    response.read(256)
+            except Exception:
+                ok = False
+                break
+            samples.append((time.monotonic() - started) * 1000.0)
+        if ok and samples:
+            timings[host] = sum(samples) / len(samples)
+
+selected_host = min(timings, key=timings.get) if timings else None
+changed_files = []
+changed = False
+if selected_host is not None:
+    replacements = {}
+    for uri in uri_set:
+        original = urlsplit(uri)
+        replacements[uri] = urlunsplit((original.scheme, selected_host, original.path, original.query, original.fragment))
+    for source_file in source_files:
+        original_text = source_file.read_text(encoding="utf-8", errors="replace")
+        updated_text = original_text
+        for old_uri, new_uri in replacements.items():
+            updated_text = updated_text.replace(old_uri, new_uri)
+        if updated_text != original_text:
+            source_file.write_text(updated_text, encoding="utf-8")
+            changed = True
+            changed_files.append(str(source_file))
+
+state = {
+    "package_manager": "apt",
+    "selected_mirror": selected_host,
+    "candidate_timings_ms": {host: round(value, 2) for host, value in sorted(timings.items(), key=lambda item: item[1])},
+    "changed_files": changed_files,
+    "changed": changed,
+    "install_skipped": False,
+    "entries_detected": len(entries),
+    "os_id": os_release.get("ID"),
+}
+state_file.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+PY
+  echo "apt-get update"
+  apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=10 -o Acquire::https::Timeout=10 -o Acquire::Check-Date=false -o Acquire::Check-Valid-Until=false update
+  echo "apt-get install openssh-server openssh-client"
+  apt-get install -y --no-install-recommends openssh-server openssh-client
+elif command -v dnf >/dev/null 2>&1; then
+  printf '%s' '{"package_manager":"dnf","selected_mirror":null,"candidate_timings_ms":{},"changed_files":[],"changed":false,"install_skipped":false}' > "$state_file"
+  echo "dnf install openssh-server openssh-clients"
+  dnf install -y openssh-server openssh-clients
+elif command -v yum >/dev/null 2>&1; then
+  printf '%s' '{"package_manager":"yum","selected_mirror":null,"candidate_timings_ms":{},"changed_files":[],"changed":false,"install_skipped":false}' > "$state_file"
+  echo "yum install openssh-server openssh-clients"
+  yum install -y openssh-server openssh-clients
+elif command -v microdnf >/dev/null 2>&1; then
+  printf '%s' '{"package_manager":"microdnf","selected_mirror":null,"candidate_timings_ms":{},"changed_files":[],"changed":false,"install_skipped":false}' > "$state_file"
+  echo "microdnf install openssh-server openssh-clients"
+  microdnf install -y openssh-server openssh-clients
+else
+  echo "no supported package manager found for ssh installation" >&2
+  exit 97
+fi
+INNER_PKG
+}
+
+configure_container_state() {
+  docker exec -i "$container" bash -s -- "$port" "$pubkey" "$machine_type" "$container_type" "$soc" "$selected_image" "$workdir" "$namespace" <<'INNER_CFG'
+set -euo pipefail
+port="$1"
+pubkey="$2"
+machine_type="$3"
+container_type="$4"
+soc="$5"
+image="$6"
+workdir="$7"
+namespace="$8"
+export PATH="/usr/local/bin:/usr/local/sbin:${PATH:-}"
+export LD_LIBRARY_PATH="/usr/local/Ascend/driver/lib64/common:/usr/local/Ascend/driver/lib64/driver:/usr/local/Ascend/driver/lib64:${LD_LIBRARY_PATH:-}"
+if [ -z "${ASCEND_HOME_PATH:-}" ]; then
+  if [ -d /usr/local/Ascend/ascend-toolkit/latest ]; then
+    export ASCEND_HOME_PATH=/usr/local/Ascend/ascend-toolkit/latest
+  elif [ -d /usr/local/Ascend/ascend-toolkit ]; then
+    export ASCEND_HOME_PATH=/usr/local/Ascend/ascend-toolkit
+  fi
+fi
+install -d -m 700 /root/.ssh
+[ -f /root/.ssh/authorized_keys ] || touch /root/.ssh/authorized_keys
+if ! grep -qxF "$pubkey" /root/.ssh/authorized_keys 2>/dev/null; then
+  printf '%s\n' "$pubkey" >> /root/.ssh/authorized_keys
+fi
+chmod 600 /root/.ssh/authorized_keys
+install -d -m 0755 /run/sshd /etc/profile.d /etc/vaws
+cat > /etc/profile.d/vaws-ascend-env.sh <<EOF_CONTAINER_ENV
+#!/bin/sh
+export PATH="/usr/local/bin:/usr/local/sbin:\${PATH:-}"
+export LD_LIBRARY_PATH="/usr/local/Ascend/driver/lib64/common:/usr/local/Ascend/driver/lib64/driver:/usr/local/Ascend/driver/lib64:\${LD_LIBRARY_PATH:-}"
+if [ -z "\${ASCEND_HOME_PATH:-}" ]; then
+  if [ -d /usr/local/Ascend/ascend-toolkit/latest ]; then
+    export ASCEND_HOME_PATH=/usr/local/Ascend/ascend-toolkit/latest
+  elif [ -d /usr/local/Ascend/ascend-toolkit ]; then
+    export ASCEND_HOME_PATH=/usr/local/Ascend/ascend-toolkit
+  fi
+fi
+if [ -n "$machine_type" ]; then
+  export VAWS_MACHINE_TYPE="$machine_type"
+fi
+if [ -n "$container_type" ]; then
+  export VAWS_CONTAINER_TYPE="$container_type"
+fi
+if [ -n "$soc" ]; then
+  export VAWS_NPU_SOC="$soc"
+  export SOC_VERSION="$soc"
+fi
+if [ -n "$image" ]; then
+  export VAWS_CONTAINER_IMAGE="$image"
+fi
+EOF_CONTAINER_ENV
+chmod 0644 /etc/profile.d/vaws-ascend-env.sh
+python3 - "$machine_type" "$container_type" "$soc" "$image" "$workdir" "$namespace" > /etc/vaws/container-info.json <<'PY'
+import json
+import sys
+machine_type, container_type, soc, image, workdir, namespace = sys.argv[1:]
+print(json.dumps({
+    "machine_type": machine_type or None,
+    "container_type": container_type or None,
+    "soc": soc or None,
+    "image": image or None,
+    "workdir": workdir,
+    "namespace": namespace or None,
+    "env_file": "/etc/profile.d/vaws-ascend-env.sh",
+}, ensure_ascii=False, indent=2))
+PY
+chmod 0644 /etc/vaws/container-info.json
+ssh-keygen -A >/dev/null 2>&1 || true
+cat > /etc/ssh/sshd_vaws_config <<EOF_SSH
+Port ${port}
+ListenAddress 0.0.0.0
+Protocol 2
+HostKey /etc/ssh/ssh_host_rsa_key
+HostKey /etc/ssh/ssh_host_ecdsa_key
+HostKey /etc/ssh/ssh_host_ed25519_key
+PermitRootLogin prohibit-password
+PubkeyAuthentication yes
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+ChallengeResponseAuthentication no
+UsePAM no
+PrintMotd no
+AuthorizedKeysFile .ssh/authorized_keys
+PidFile /run/sshd_vaws.pid
+EOF_SSH
+/usr/sbin/sshd -t -f /etc/ssh/sshd_vaws_config
+if [ -f /run/sshd_vaws.pid ]; then
+  kill "$(cat /run/sshd_vaws.pid)" 2>/dev/null || true
+  rm -f /run/sshd_vaws.pid
+fi
+pkill -f '/etc/ssh/sshd_vaws_config' 2>/dev/null || true
+/usr/sbin/sshd -f /etc/ssh/sshd_vaws_config
+if command -v ss >/dev/null 2>&1; then
+  ss -ltnH | awk '{print $4}' | grep -Eq "[:.]${port}$"
+fi
+INNER_CFG
+}
+
 emit_progress "preflight" "running" "validating host docker and Ascend prerequisites" 15
 if ! command -v docker >/dev/null 2>&1; then
   emit_json '{"success": false, "error": "docker not found on host", "phase": "probe"}'
@@ -1028,6 +1589,8 @@ for p in \
   /dev/hisi_hdc \
   /dev/devmm_svm \
   /usr/local/Ascend/driver \
+  /usr/local/Ascend/driver/lib64/common \
+  /usr/local/Ascend/driver/lib64/driver \
   /usr/local/dcmi \
   /usr/local/bin/npu-smi \
   /usr/local/sbin \
@@ -1054,10 +1617,18 @@ installed_ssh=false
 firewall="none"
 selected_image=""
 image_resolution="unknown"
+package_bootstrap='{"package_manager": null, "selected_mirror": null, "candidate_timings_ms": {}, "changed_files": [], "changed": false, "install_skipped": false}'
+host_env_file="/etc/profile.d/vaws-ascend-env.sh"
+host_metadata_file="/etc/vaws/host-info.json"
+container_env_file="/etc/profile.d/vaws-ascend-env.sh"
+container_metadata_file="/etc/vaws/container-info.json"
 requested_image="$(image_field requested || true)"
 requested_selector="$(image_field selector || true)"
 image_policy="$(image_field policy || true)"
 resolved_tag="$(image_field resolved_tag || true)"
+machine_type="${machine_type_input:-$(image_field machine_type || true)}"
+soc="${soc_input:-}"
+container_type=""
 previous_image=""
 mapfile -t image_candidates < <(resolve_image_candidates)
 if [ "${#image_candidates[@]}" -eq 0 ]; then
@@ -1118,6 +1689,8 @@ if [ "$container_exists" = "true" ]; then
     docker start "$container" >/dev/null
     started=true
     actions+=("started-existing-container")
+  else
+    actions+=("reused-existing-container")
   fi
 else
   emit_progress "image" "running" "resolved image selector ${requested_image:-unknown} (${image_policy:-unknown})" 30
@@ -1142,6 +1715,10 @@ else
     emit_json '{"success": false, "error": "no usable image candidate was found", "phase": "image"}'
     exit 20
   fi
+  if [ -z "$machine_type" ]; then
+    machine_type="$(infer_type_from_image "$selected_image" || true)"
+  fi
+  container_type="$machine_type"
 
   mount_args=()
   for optional in /home /tmp /weight /data /mnt; do
@@ -1157,6 +1734,9 @@ else
     --label com.vaws.container_ssh_port="$port" \
     --label com.vaws.workdir="$workdir" \
     --label com.vaws.namespace="$namespace" \
+    --label com.vaws.machine_type="$machine_type" \
+    --label com.vaws.container_type="$machine_type" \
+    --label com.vaws.soc="$soc" \
     -w "$workdir" \
     --device=/dev/davinci_manager \
     --device=/dev/hisi_hdc \
@@ -1174,68 +1754,35 @@ else
   actions+=("created-container")
 fi
 
+if [ -z "$machine_type" ]; then
+  machine_type="$(infer_type_from_image "$selected_image" || true)"
+fi
+container_type="$machine_type"
+write_host_state "$machine_type" "$container_type" "$soc" "$selected_image"
+
 if ! docker exec "$container" bash -lc 'command -v sshd >/dev/null 2>&1 && command -v ssh >/dev/null 2>&1'; then
-  emit_progress "container-ssh" "running" "updating apt metadata inside the container" 300
-  if ! run_with_progress "container-ssh-apt-update" "apt-get update inside the container" 300 \
-    docker exec "$container" bash -lc 'set -euo pipefail; export DEBIAN_FRONTEND=noninteractive; apt-get -o Acquire::Check-Date=false -o Acquire::Check-Valid-Until=false update'; then
-    emit_json '{"success": false, "error": "apt-get update inside container failed", "phase": "container-ssh-apt-update"}'
+  emit_progress "container-ssh" "running" "installing openssh inside the container" 900
+  if ! run_with_progress "container-ssh-install" "installing openssh inside the container" 900 install_container_ssh_packages; then
+    emit_json '{"success": false, "error": "installing openssh inside container failed", "phase": "container-ssh-install"}'
     exit 30
   fi
-  emit_progress "container-ssh" "running" "installing openssh inside the container" 600
-  if ! run_with_progress "container-ssh-apt-install" "apt-get install openssh-server openssh-client" 600 \
-    docker exec "$container" bash -lc 'set -euo pipefail; export DEBIAN_FRONTEND=noninteractive; apt-get install -y openssh-server openssh-client --fix-missing'; then
-    emit_json '{"success": false, "error": "installing openssh inside container failed", "phase": "container-ssh-apt-install"}'
-    exit 31
+  package_bootstrap="$(docker exec "$container" bash -lc 'cat /tmp/vaws-package-bootstrap.json 2>/dev/null || true')"
+  docker exec "$container" bash -lc 'rm -f /tmp/vaws-package-bootstrap.json' >/dev/null 2>&1 || true
+  if [ -z "$package_bootstrap" ]; then
+    package_bootstrap='{"package_manager": null, "selected_mirror": null, "candidate_timings_ms": {}, "changed_files": [], "changed": false, "install_skipped": false}'
   fi
   installed_ssh=true
   actions+=("installed-openssh")
+else
+  package_bootstrap='{"package_manager": null, "selected_mirror": null, "candidate_timings_ms": {}, "changed_files": [], "changed": false, "install_skipped": true}'
 fi
 
 emit_progress "container-ssh" "running" "configuring dedicated container sshd" 60
-if ! docker exec -i "$container" bash -s -- "$port" "$pubkey" <<'INNER'
-set -euo pipefail
-port="$1"
-pubkey="$2"
-install -d -m 700 /root/.ssh
-[ -f /root/.ssh/authorized_keys ] || touch /root/.ssh/authorized_keys
-if ! grep -qxF "$pubkey" /root/.ssh/authorized_keys 2>/dev/null; then
-  printf '%s\n' "$pubkey" >> /root/.ssh/authorized_keys
-fi
-chmod 600 /root/.ssh/authorized_keys
-install -d -m 0755 /run/sshd
-ssh-keygen -A >/dev/null 2>&1 || true
-cat > /etc/ssh/sshd_vaws_config <<EOF2
-Port ${port}
-ListenAddress 0.0.0.0
-Protocol 2
-HostKey /etc/ssh/ssh_host_rsa_key
-HostKey /etc/ssh/ssh_host_ecdsa_key
-HostKey /etc/ssh/ssh_host_ed25519_key
-PermitRootLogin prohibit-password
-PubkeyAuthentication yes
-PasswordAuthentication no
-KbdInteractiveAuthentication no
-ChallengeResponseAuthentication no
-UsePAM no
-PrintMotd no
-AuthorizedKeysFile .ssh/authorized_keys
-PidFile /run/sshd_vaws.pid
-EOF2
-/usr/sbin/sshd -t -f /etc/ssh/sshd_vaws_config
-if [ -f /run/sshd_vaws.pid ]; then
-  kill "$(cat /run/sshd_vaws.pid)" 2>/dev/null || true
-  rm -f /run/sshd_vaws.pid
-fi
-pkill -f '/etc/ssh/sshd_vaws_config' 2>/dev/null || true
-/usr/sbin/sshd -f /etc/ssh/sshd_vaws_config
-if command -v ss >/dev/null 2>&1; then
-  ss -ltnH | awk '{print $4}' | grep -Eq "[:.]${port}$"
-fi
-INNER
-then
+if ! run_with_progress "container-ssh-config" "configuring dedicated container sshd" 60 configure_container_state; then
   emit_json '{"success": false, "error": "configuring dedicated container sshd failed", "phase": "container-ssh"}'
-  exit 32
+  exit 31
 fi
+actions+=("configured-container-env")
 actions+=("configured-dedicated-sshd")
 
 emit_progress "firewall" "running" "updating host firewall for the container ssh port" 30
@@ -1248,11 +1795,34 @@ elif command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 
   firewall="firewalld"
 fi
 
-payload=$(python3 - <<'PY' "$container" "$port" "$image_request_json" "$selected_image" "$image_resolution" "$workdir" "$namespace" "$created" "$started" "$pulled" "$installed_ssh" "$firewall" "${actions[*]}" "$previous_image" "$replace_on_image_change"
+payload=$(python3 - <<'PY' "$container" "$port" "$image_request_json" "$selected_image" "$image_resolution" "$workdir" "$namespace" "$created" "$started" "$pulled" "$installed_ssh" "$firewall" "${actions[*]}" "$previous_image" "$replace_on_image_change" "$machine_type" "$container_type" "$soc" "$host_env_file" "$host_metadata_file" "$container_env_file" "$container_metadata_file" "$package_bootstrap"
 import json
 import sys
-
-container, port, image_request_json, selected_image, image_resolution, workdir, namespace, created, started, pulled, installed_ssh, firewall, actions, previous_image, replace_on_image_change = sys.argv[1:]
+(
+    container,
+    port,
+    image_request_json,
+    selected_image,
+    image_resolution,
+    workdir,
+    namespace,
+    created,
+    started,
+    pulled,
+    installed_ssh,
+    firewall,
+    actions,
+    previous_image,
+    replace_on_image_change,
+    machine_type,
+    container_type,
+    soc,
+    host_env_file,
+    host_metadata_file,
+    container_env_file,
+    container_metadata_file,
+    package_bootstrap,
+) = sys.argv[1:]
 image_request = json.loads(image_request_json)
 print(json.dumps({
     "success": True,
@@ -1277,6 +1847,14 @@ print(json.dumps({
     "replace_container_on_image_change": replace_on_image_change == "true",
     "firewall": firewall,
     "actions": [item for item in actions.split() if item],
+    "machine_type": machine_type or None,
+    "container_type": container_type or None,
+    "soc": soc or None,
+    "host_env_file": host_env_file,
+    "host_metadata_file": host_metadata_file,
+    "container_env_file": container_env_file,
+    "container_metadata_file": container_metadata_file,
+    "package_bootstrap": json.loads(package_bootstrap) if package_bootstrap else None,
 }, ensure_ascii=False))
 PY
 )
@@ -1333,8 +1911,8 @@ if [ -z "$PYTHON_BIN" ]; then
 fi
 
 emit_progress "env" "running" "preparing Ascend and python environment"
-export PATH="${PATH:-}"
-export LD_LIBRARY_PATH="/usr/local/Ascend/driver/lib64/driver:/usr/local/Ascend/driver/lib64:${LD_LIBRARY_PATH:-}"
+export PATH="/usr/local/bin:/usr/local/sbin:${PATH:-}"
+export LD_LIBRARY_PATH="/usr/local/Ascend/driver/lib64/common:/usr/local/Ascend/driver/lib64/driver:/usr/local/Ascend/driver/lib64:${LD_LIBRARY_PATH:-}"
 export VLLM_WORKER_MULTIPROC_METHOD=spawn
 export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
@@ -1350,6 +1928,7 @@ safe_source() {
   fi
 }
 
+safe_source /etc/profile.d/vaws-ascend-env.sh
 safe_source /usr/local/Ascend/ascend-toolkit/set_env.sh
 safe_source /usr/local/Ascend/ascend-toolkit/latest/set_env.sh
 safe_source /usr/local/Ascend/nnal/atb/set_env.sh
@@ -1374,6 +1953,7 @@ result = {
     "python_path": python_path,
     "python_version": sys.version.split()[0],
     "driver_ld_library_path_prefix": [
+        "/usr/local/Ascend/driver/lib64/common",
         "/usr/local/Ascend/driver/lib64/driver",
         "/usr/local/Ascend/driver/lib64",
     ],
@@ -1680,7 +2260,7 @@ def cmd_bootstrap_host_key(args: argparse.Namespace) -> int:
 
 def cmd_probe_host(args: argparse.Namespace) -> int:
     target = host_target(args)
-    image_request = image_request_payload(args.image)
+    image_request = image_request_payload(args.image, machine_type=args.machine_type)
     result = run_remote_script(
         target,
         render_host_probe_script(),
@@ -1703,7 +2283,7 @@ def cmd_bootstrap_container(args: argparse.Namespace) -> int:
     key_path = find_public_key(args.public_key_file)
     private_key = private_key_for_public_key(key_path)
     public_key = load_public_key(key_path)
-    image_request = image_request_payload(args.image)
+    image_request = image_request_payload(args.image, machine_type=args.machine_type)
     result = run_remote_script(
         target,
         render_bootstrap_host_script(),
@@ -1715,6 +2295,8 @@ def cmd_bootstrap_container(args: argparse.Namespace) -> int:
             public_key,
             args.namespace or "",
             "true" if args.replace_container_on_image_change else "false",
+            args.machine_type or "",
+            args.soc or "",
         ],
         batch_mode=True,
         timeout_seconds=DEFAULT_BOOTSTRAP_TIMEOUT_SECONDS,
@@ -1966,6 +2548,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     probe.add_argument("--port-range", default=DEFAULT_PORT_RANGE, help=f"inclusive range START:END (default: {DEFAULT_PORT_RANGE})")
     probe.add_argument("--managed-prefix", default="vaws-", help="managed container name prefix (default: vaws-)")
+    probe.add_argument("--machine-type", choices=MACHINE_TYPE_CHOICES, help="override detected machine type when selecting hardware-specific image tags")
     probe.set_defaults(func=cmd_probe_host)
 
     host_bootstrap = subparsers.add_parser(
@@ -2027,6 +2610,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     bootstrap.add_argument("--workdir", default=DEFAULT_WORKDIR, help=f"container workdir (default: {DEFAULT_WORKDIR})")
     bootstrap.add_argument("--namespace", help="stable workspace machine username used for collision-safe container naming")
+    bootstrap.add_argument("--machine-type", choices=MACHINE_TYPE_CHOICES, help="override detected machine type when selecting hardware-specific image tags")
+    bootstrap.add_argument("--soc", help="optional detected SoC token, for example ascend910b1")
     bootstrap.add_argument("--public-key-file", help="local SSH public key to add to the container; defaults to ~/.ssh/id_ed25519.pub if present")
     bootstrap.set_defaults(func=cmd_bootstrap_container)
 
