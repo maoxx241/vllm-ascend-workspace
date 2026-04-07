@@ -38,6 +38,7 @@ These should not trigger `remote-code-parity` unless remote code parity is the o
 - the workspace root, `vllm/`, and `vllm-ascend/` all participate in parity
 - synthetic snapshots can represent dirty working trees without forcing a real commit
 - when `vllm` or `vllm-ascend` changed locally, the workspace-root synthetic snapshot also changes because the gitlinks are rewritten to the synthetic child commits
+- when a nested child repo has no tree changes, the parent repo does not report a gitlink-only change just because the child was snapshotted
 - ignored files are not added to the snapshot by default
 - denylisted files such as `.vaws-local/*`, `.env*`, and local cache directories are excluded
 - if a required submodule path exists but is not populated, the skill fails closed with a clear error instead of producing a traceback-heavy Git failure
@@ -69,7 +70,7 @@ These should not trigger `remote-code-parity` unless remote code parity is the o
 - final `git rev-parse HEAD` values inside the container match the synthetic snapshot commits exactly
 - reinstall runs only when the trigger matrix says it should, except for the mandatory first approved replacement on a fresh container
 - a successful run ends with `status == ready`
-- runtime install uses dynamic Python discovery plus the Ascend driver `LD_LIBRARY_PATH` preamble instead of one hard-coded Python patch path
+- runtime install uses dynamic Python discovery plus a shell-safe env preamble and guarded env-script sourcing instead of one hard-coded Python patch path
 - packaging-metadata failures from stale image toolchains trigger one bounded packaging-stack refresh / retry before the skill reports `failed`
 
 ## Regression checklist from this patch
@@ -83,6 +84,9 @@ These specific mistakes should no longer be part of the normal path:
 - missing or unpopulated required submodules should return a compact failure payload instead of a raw Git traceback
 - the main snapshot path should not force ignored files into the synthetic snapshot
 - root cleanups inside `/vllm-workspace` should not delete `Mooncake`
+- runtime-install should not fail closed just because Ascend env scripts reference shell-specific or otherwise unset variables while being sourced
+- the final heredoc-based import smoke should not fail with a local quoting `SyntaxError`
+- clean nested submodules should not force parent `reinstall_vllm*` decisions through synthetic gitlink churn alone
 
 ## Manual regression checklist
 

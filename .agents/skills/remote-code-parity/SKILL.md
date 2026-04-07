@@ -36,7 +36,8 @@ Keep a **ready** remote runtime in exact code parity with the local `vllm-ascend
 - Runtime install progress should be attributable at the package-step level: uninstall, `vllm`, `vllm-ascend` requirements, `vllm-ascend`, import smoke, and marker write.
 - Publish each synthetic snapshot to both the parity ref and an advertised branch ref inside the container-local mirror.
 - Materialize child repos explicitly; do not rely on `git submodule update` to fetch synthetic child commits.
-- Use dynamic Python / pip discovery and the Ascend driver `LD_LIBRARY_PATH` preamble instead of pinning one Python patch path.
+- If a child repo snapshot has no tree changes, reuse its original `HEAD` commit instead of inventing a new gitlink-only delta that bubbles into the parent repo.
+- Use dynamic Python / pip discovery plus a shell-safe env preamble, and source optional Ascend env scripts under a `set +u` / `set -u` guard instead of relying on shell-specific variables.
 - If editable install fails because the image packaging stack is too old, attempt one bounded packaging-stack refresh before failing closed.
 - Fail closed if parity cannot be proven.
 - First replacement of image-provided `vllm` / `vllm-ascend` requires explicit user consent for that logical container identity.
@@ -133,6 +134,7 @@ For each repo:
 - reset local-only denylist paths and child-submodule paths from that temporary index
 - replace child submodule gitlinks with the child synthetic snapshot commit ids
 - write a synthetic commit
+- if the resulting tree matches the original `HEAD`, reuse the original commit so clean child repos do not trigger parent reinstall heuristics through gitlink churn
 
 Ignored files stay ignored. The snapshot source of truth is tracked + untracked non-ignored.
 
@@ -192,7 +194,7 @@ Conservative defaults:
 - `vllm-ascend`: same as `vllm`, plus `vllm_ascend/_cann_ops_custom/**`
 - pure Python, docs, configs, tests, and ordinary scripts: parity only, no rebuild
 
-Use these commands inside the container when required. The normal path first unifies the runtime Python across `python`, `python3`, CMake, and CANN helper tools, then tries the in-place environment, and finally does one bounded packaging refresh / retry when legacy packaging metadata blocks editable install. Pip resolution should prefer Tsinghua, then Aliyun, then the public PyPI index:
+Use these commands inside the container when required. The normal path first unifies the runtime Python across `python`, `python3`, CMake, and CANN helper tools, sources optional Ascend env scripts under a `set +u` / `set -u` guard, then tries the in-place environment, and finally does one bounded packaging refresh / retry when legacy packaging metadata blocks editable install. Pip resolution should prefer Tsinghua, then Aliyun, then the public PyPI index:
 
 ### `vllm`
 
@@ -210,7 +212,7 @@ pip install -v -e . --no-build-isolation
 
 ### 7. Finish with proof, not assumptions
 
-- Finish with real import smoke (`import vllm`, `import vllm_ascend`, `import torch_npu`) instead of `find_spec()` only.
+- Finish with real import smoke (`import vllm`, `import vllm_ascend`, `import torch_npu`) instead of `find_spec()` only, and keep the generated smoke snippet syntactically valid under shell heredoc quoting.
 
 
 Return a compact JSON summary that includes:
