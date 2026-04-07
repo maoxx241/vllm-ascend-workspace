@@ -45,17 +45,16 @@ When talking to an Agent:
 
 ```
 # Initialization
-"Run repo-init and set me up for PR work."
-"Only install GitHub CLI and log me in. Do not touch remotes."
-"Initialize in community-only mode. Do not create any forks."
+"Help me initialize this repo"
+"Help me set up this repo"
 
 # Machine management
-"Configure this NPU machine for the current workspace."
-"Check whether the managed machine is ready."
-"Repair the container SSH on the managed host."
+"Add these two servers, IPs are x.x.x.1 and x.x.x.2, password is xxxx"
+"Set up this server for me, IP is x.x.x.x, password is xxxx"
+"Remove the x.x.x.x server"
 
-# Code sync and remote execution
-"Sync my latest local code before running tests on the remote machine."
+# Code sync
+"Sync my code to the server and rebuild"
 ```
 
 ## Repository layout
