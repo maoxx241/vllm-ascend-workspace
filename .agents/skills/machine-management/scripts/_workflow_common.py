@@ -10,10 +10,12 @@ available as implementation helpers.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import pathlib
 import sys
+import tempfile
 from dataclasses import dataclass
 from typing import Any, Callable, Literal, Sequence
 
@@ -801,58 +803,69 @@ def upsert_machine_record(
     host_soc: str | None = None,
     container_machine_type: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    state = load_inventory_state()
-    alias_matches = inventory_store._find_matches(state.inventory, alias=alias)  # noqa: SLF001
-    ip_matches = inventory_store._find_matches(state.inventory, host_ip=host_ip)  # noqa: SLF001
-    alias_record = alias_matches[0] if alias_matches else None
-    ip_record = ip_matches[0] if ip_matches else None
-    if alias_record is not None and ip_record is not None and alias_record is not ip_record:
+    requested_path = inventory_store.preferred_inventory_path(inventory_store.DEFAULT_PATH)
+    try:
+        with inventory_store.inventory_lock(requested_path):
+            active_path = inventory_store.read_inventory_path(requested_path)
+            inventory = inventory_store.load_inventory(active_path)
+            state = InventoryState(requested_path=requested_path, active_path=active_path, inventory=inventory)
+
+            alias_matches = inventory_store._find_matches(state.inventory, alias=alias)  # noqa: SLF001
+            ip_matches = inventory_store._find_matches(state.inventory, host_ip=host_ip)  # noqa: SLF001
+            alias_record = alias_matches[0] if alias_matches else None
+            ip_record = ip_matches[0] if ip_matches else None
+            if alias_record is not None and ip_record is not None and alias_record is not ip_record:
+                raise WorkflowError(
+                    "alias and host IP match different existing records; resolve the conflict manually"
+                )
+            target = alias_record or ip_record
+            normalized_namespace = inventory_store.validate_machine_username(namespace) if namespace else None
+            record = {
+                "alias": alias,
+                "namespace": normalized_namespace,
+                "host": {
+                    "ip": host_ip,
+                    "port": host_port,
+                    "user": host_user,
+                },
+                "container": {
+                    "name": container_name,
+                    "ssh_port": container_ssh_port,
+                    "image": image,
+                    "workdir": workdir,
+                },
+                "bootstrap_method": inventory_store.resolve_bootstrap_method(
+                    bootstrap_method,
+                    existing_record=target,
+                ),
+                "managed_by_skill": True,
+                "created_by_skill": True,
+                "last_verified_at": utc_now_iso(),
+            }
+            if host_machine_type is not None:
+                record["host"]["machine_type"] = host_machine_type
+            if host_soc is not None:
+                record["host"]["soc"] = host_soc
+            if container_machine_type is not None:
+                record["container"]["machine_type"] = container_machine_type
+            if normalized_namespace is None:
+                record.pop("namespace")
+            inventory_store._validate_record(record)  # noqa: SLF001
+
+            if target is None:
+                state.inventory["machines"].append(record)
+                action = "inserted"
+            else:
+                target.clear()
+                target.update(record)
+                action = "updated"
+
+            inventory_store.save_inventory(state.requested_path, state.inventory)
+    except inventory_store.InventoryError as exc:
         raise WorkflowError(
-            "alias and host IP match different existing records; resolve the conflict manually"
-        )
-    target = alias_record or ip_record
-    normalized_namespace = inventory_store.validate_machine_username(namespace) if namespace else None
-    record = {
-        "alias": alias,
-        "namespace": normalized_namespace,
-        "host": {
-            "ip": host_ip,
-            "port": host_port,
-            "user": host_user,
-        },
-        "container": {
-            "name": container_name,
-            "ssh_port": container_ssh_port,
-            "image": image,
-            "workdir": workdir,
-        },
-        "bootstrap_method": inventory_store.resolve_bootstrap_method(
-            bootstrap_method,
-            existing_record=target,
-        ),
-        "managed_by_skill": True,
-        "created_by_skill": True,
-        "last_verified_at": utc_now_iso(),
-    }
-    if host_machine_type is not None:
-        record["host"]["machine_type"] = host_machine_type
-    if host_soc is not None:
-        record["host"]["soc"] = host_soc
-    if container_machine_type is not None:
-        record["container"]["machine_type"] = container_machine_type
-    if normalized_namespace is None:
-        record.pop("namespace")
-    inventory_store._validate_record(record)  # noqa: SLF001
-
-    if target is None:
-        state.inventory["machines"].append(record)
-        action = "inserted"
-    else:
-        target.clear()
-        target.update(record)
-        action = "updated"
-
-    inventory_store.save_inventory(state.requested_path, state.inventory)
+            f"inventory write failed: {exc}; "
+            "another machine-management operation may be running concurrently — wait a moment and retry"
+        ) from exc
     payload: dict[str, Any] = {
         "result": action,
         "alias": record["alias"],
@@ -873,22 +886,33 @@ def upsert_machine_record(
 
 
 def remove_machine_record(identifier: str) -> tuple[dict[str, Any], dict[str, Any] | None]:
-    state = load_inventory_state()
-    matches = inventory_store._find_matches(state.inventory, identifier=identifier)  # noqa: SLF001
-    if not matches:
-        return status_payload(
-            "unmanaged",
-            success=False,
-            action="remove-skipped",
-            message=f"no managed machine found for {identifier}",
-        ), None
-    if len(matches) > 1:
+    requested_path = inventory_store.preferred_inventory_path(inventory_store.DEFAULT_PATH)
+    try:
+        with inventory_store.inventory_lock(requested_path):
+            active_path = inventory_store.read_inventory_path(requested_path)
+            inventory = inventory_store.load_inventory(active_path)
+            state = InventoryState(requested_path=requested_path, active_path=active_path, inventory=inventory)
+
+            matches = inventory_store._find_matches(state.inventory, identifier=identifier)  # noqa: SLF001
+            if not matches:
+                return status_payload(
+                    "unmanaged",
+                    success=False,
+                    action="remove-skipped",
+                    message=f"no managed machine found for {identifier}",
+                ), None
+            if len(matches) > 1:
+                raise WorkflowError(
+                    f"multiple machines matched {identifier!r}; use a unique alias or host IP"
+                )
+            target = matches[0]
+            state.inventory["machines"] = [record for record in state.inventory["machines"] if record is not target]
+            inventory_store.save_inventory(state.requested_path, state.inventory)
+    except inventory_store.InventoryError as exc:
         raise WorkflowError(
-            f"multiple machines matched {identifier!r}; use a unique alias or host IP"
-        )
-    target = matches[0]
-    state.inventory["machines"] = [record for record in state.inventory["machines"] if record is not target]
-    inventory_store.save_inventory(state.requested_path, state.inventory)
+            f"inventory write failed: {exc}; "
+            "another machine-management operation may be running concurrently — wait a moment and retry"
+        ) from exc
     payload: dict[str, Any] = {
         "result": "removed",
         "alias": target["alias"],
@@ -939,3 +963,109 @@ def remove_container(record: dict[str, Any]) -> dict[str, Any]:
         "host_port": target.port,
     }
     return payload
+
+
+# ---------------------------------------------------------------------------
+# Remote-code-parity state cleanup
+# ---------------------------------------------------------------------------
+
+_PARITY_STATE_DIR = ROOT / ".vaws-local" / "remote-code-parity"
+_PARITY_LOCK_SUFFIX = ".lock"
+_PARITY_LOCK_TIMEOUT = 15.0
+_PARITY_LOCK_POLL = 0.05
+
+
+@contextlib.contextmanager
+def _parity_state_lock(filepath: pathlib.Path):
+    """File lock compatible with remote-code-parity's ``state_lock``."""
+    lock_path = filepath.with_name(filepath.name + _PARITY_LOCK_SUFFIX)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    deadline = __import__("time").monotonic() + _PARITY_LOCK_TIMEOUT
+    fd: int | None = None
+    while True:
+        try:
+            fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            os.write(fd, f"{os.getpid()}\n".encode("utf-8"))
+            break
+        except FileExistsError:
+            if __import__("time").monotonic() >= deadline:
+                raise WorkflowError(
+                    f"timed out waiting for parity state lock {lock_path}"
+                )
+            __import__("time").sleep(_PARITY_LOCK_POLL)
+    try:
+        yield lock_path
+    finally:
+        if fd is not None:
+            os.close(fd)
+        with contextlib.suppress(FileNotFoundError):
+            lock_path.unlink()
+
+
+def _atomic_write_parity_json(path: pathlib.Path, data: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle, temp_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent)
+    )
+    try:
+        with os.fdopen(handle, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps(data, indent=2, sort_keys=True) + "\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(temp_name, path)
+    finally:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(temp_name)
+
+
+def cleanup_parity_state(record: dict[str, Any]) -> dict[str, Any]:
+    """Remove remote-code-parity local state entries for a removed machine.
+
+    Cleans both ``install-consents.json`` and ``runtime-state.json`` under
+    ``.vaws-local/remote-code-parity/``, using file locks compatible with the
+    remote-code-parity skill's own locking scheme.
+    """
+    host_ip = record["host"]["ip"]
+    container_name = record["container"]["name"]
+    workdir = record["container"].get("workdir", "/vllm-workspace")
+    container_identity = f"{container_name}@{workdir}"
+
+    result: dict[str, Any] = {
+        "server": host_ip,
+        "container": container_name,
+        "cleaned": [],
+    }
+
+    file_specs: list[tuple[str, str, str]] = [
+        ("install-consents.json", "consents", container_name),
+        ("runtime-state.json", "servers", container_identity),
+    ]
+
+    for filename, top_key, entry_key in file_specs:
+        filepath = _PARITY_STATE_DIR / filename
+        if not filepath.exists():
+            continue
+        try:
+            with _parity_state_lock(filepath):
+                try:
+                    data = json.loads(filepath.read_text(encoding="utf-8"))
+                except (json.JSONDecodeError, OSError):
+                    continue
+                top = data.get(top_key, {})
+                server = top.get(host_ip, {})
+                containers = server.get("containers", {})
+                if entry_key not in containers:
+                    continue
+                del containers[entry_key]
+                if not containers:
+                    server.pop("containers", None)
+                if not server:
+                    top.pop(host_ip, None)
+                _atomic_write_parity_json(filepath, data)
+                result["cleaned"].append(filename)
+        except WorkflowError:
+            result.setdefault("warnings", []).append(
+                f"could not acquire lock for {filename}; skipped cleanup"
+            )
+
+    return result

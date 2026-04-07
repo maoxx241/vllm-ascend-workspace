@@ -6,10 +6,13 @@ This module centralizes repo-local runtime state that should never be tracked.
 
 from __future__ import annotations
 
+import contextlib
 import json
+import os
 import re
 import secrets
 import string
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -99,7 +102,18 @@ def _load_json(path: Path) -> Any:
 
 def _save_json(path: Path, data: Any) -> None:
     ensure_state_dir(path.parent)
-    path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    handle, temp_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent)
+    )
+    try:
+        with os.fdopen(handle, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(temp_name, path)
+    finally:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(temp_name)
 
 
 def _validate_profile(profile: Any, *, where: str = "profile") -> dict[str, Any]:

@@ -14,6 +14,7 @@ from typing import Sequence
 from _workflow_common import (  # noqa: E402
     WorkflowError,
     cleanup_mesh,
+    cleanup_parity_state,
     emit_progress,
     find_record,
     list_records,
@@ -56,6 +57,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             print_json(removed_container)
             return 0
 
+        emit_progress(action="remove", phase="parity-cleanup", message="cleaning up remote-code-parity local state", machine=record["alias"])
+        parity_cleanup = cleanup_parity_state(record)
+
         emit_progress(action="remove", phase="inventory", message="removing the machine from local inventory", machine=record["alias"])
         inventory_payload, _ = remove_machine_record(record["alias"])
         print_json(
@@ -67,6 +71,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 machine=machine_summary(record),
                 mesh=mesh_cleanup,
                 container=removed_container,
+                parity=parity_cleanup,
                 inventory=inventory_payload,
             )
         )
