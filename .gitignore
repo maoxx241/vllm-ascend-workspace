@@ -17,3 +17,9 @@ docs/superpowers/
 .codex/
 .vaws-local/
 .machine-inventory.json
+.worktrees/
+
+# Cursor IDE — ignore all except rules and skills (those are tracked / shared)
+.cursor/*
+!.cursor/rules/
+!.cursor/skills/

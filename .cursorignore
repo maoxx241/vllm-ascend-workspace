@@ -1,0 +1,74 @@
+# =============================================================================
+# .cursorignore — Cursor IDE indexing exclusions for vllm-ascend-workspace
+#
+# Two tiers of patterns:
+#   1. Universally stable (extensions + generic dir names) — never break.
+#   2. Submodule convention dirs (tests/, docs/, .github/) — highly stable
+#      by open-source convention but technically version-dependent.
+# =============================================================================
+
+# === Tier 1: build artifacts (generic extensions, universally stable) ===
+**/*.so
+**/*.o
+**/*.a
+**/*.dylib
+**/*.pyc
+**/*.pyo
+**/*.egg-info/
+**/*.egg
+**/*.whl
+
+# === Tier 1: model weights (defensive — prevent accidental indexing) ===
+**/*.pth
+**/*.bin
+**/*.safetensors
+**/*.gguf
+
+# === Tier 1: common build / cache directories ===
+**/build/
+**/dist/
+**/__pycache__/
+**/.mypy_cache/
+**/.ruff_cache/
+**/.pytest_cache/
+**/.tox/
+**/.triton/
+**/kernel_meta/
+**/.eggs/
+**/develop-eggs/
+**/cmake-build-*/
+**/_build/
+**/site/
+
+# === Tier 2: submodule convention dirs (highly stable by OSS convention) ===
+# vllm
+vllm/tests/
+vllm/benchmarks/
+vllm/examples/
+vllm/csrc/
+vllm/docker/
+vllm/.buildkite/
+vllm/.github/
+vllm/docs/
+
+# vllm-ascend
+vllm-ascend/tests/
+vllm-ascend/benchmarks/
+vllm-ascend/examples/
+vllm-ascend/csrc/
+vllm-ascend/.github/
+vllm-ascend/docs/
+
+# === Workspace runtime state ===
+.vaws-local/
+
+# === Worktrees ===
+.worktrees/
+
+# =============================================================================
+# Explicitly NOT excluded (ensure reachable):
+#   vllm-ascend/vllm_ascend/**  — daily NPU plugin development
+#   vllm/vllm/**                — upstream Python source reference
+#   **/AGENTS.md                — agent routing rules
+#   .agents/**                  — skill packages
+# =============================================================================
