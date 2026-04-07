@@ -1,177 +1,113 @@
 # vllm-ascend-workspace
 
-`vllm-ascend-workspace` is a composable, agent-first scaffold for developing against three repositories at once:
+**中文** | **[English](README.en.md)**
 
-- the workspace control repository
-- `vllm/`
-- `vllm-ascend/`
+一个可组合的本地开发脚手架，让你在同一个工作区里同时开发 [vLLM](https://github.com/vllm-project/vllm) 和 [vLLM Ascend 插件](https://github.com/vllm-project/vllm-ascend)，并通过内置的 AI Agent 技能自动完成环境初始化、远程 NPU 机器管理和代码同步。
 
-The repository is intentionally **not** a mandatory workflow. Developers can use only the pieces they want. The bundled repo-local skills are:
+## 这个项目解决什么问题
 
-- `repo-init`
-- `machine-management`
-- `remote-code-parity`
+vLLM Ascend 的开发通常需要在本地编辑代码、在远程昇腾 NPU 服务器上运行测试，同时还要跟踪上游 vLLM 的变化。手动维护这套工作流涉及大量重复的 Git、SSH 和环境配置操作。
 
-## Design goals
+`vllm-ascend-workspace` 把这些操作封装成三个 AI Agent 技能，你可以用自然语言让 Agent 代劳，也可以完全忽略这些技能、只把它当作一个普通的多仓库工作区。
 
-- Keep the tracked repository state public-safe and community-oriented.
-- Keep user-specific remotes, auth state, machine profile state, and managed-machine inventory in **local untracked state** only.
-- Make initialization optional, conservative, and repeatable.
-- Let agents drive setup in natural language instead of making the developer compose shell commands by hand.
-- Make ready remote execution use the exact current local workspace state even when the developer has not committed or pushed yet.
-- Preserve user freedom to add custom remotes such as `upstream2`, keep community-only mode, or skip any suggested step.
+## 快速开始
 
-## Tracked repository model
+```bash
+# 克隆仓库
+git clone https://github.com/maoxx241/vllm-ascend-workspace.git
+cd vllm-ascend-workspace
 
-This repository expects two Git submodules:
-
-- `vllm/` -> `https://github.com/vllm-project/vllm.git`
-- `vllm-ascend/` -> `https://github.com/vllm-project/vllm-ascend.git`
-
-The tracked `.gitmodules` file should always stay pointed at the community repositories on `main`. Personal forks are a **local runtime concern**, not a tracked file concern.
-
-## Local runtime state
-
-Untracked workspace-local state lives under `.vaws-local/`:
-
-- `.vaws-local/machine-profile.json`: the stable machine username / namespace used to derive collision-safe container names such as `vaws-alice123`
-- `.vaws-local/machine-inventory.json`: managed remote-machine records for this local clone
-- `.vaws-local/remote-code-parity/install-consents.json`: per-container approval state for the first replacement of image-provided `vllm` / `vllm-ascend`
-- `.vaws-local/remote-code-parity/runtime-state.json`: advisory parity state such as the last synced synthetic commits, runtime root, and container-local cache root per managed target
-
-The legacy repo-root `.machine-inventory.json` is compatibility input only.
-
-## What `repo-init` does
-
-When invoked, `repo-init` can:
-
-1. detect the machine, shell, OS, package managers, GitHub CLI state, GitHub auth state, local workspace machine profile state, and current remote topology
-2. install `gh` on macOS, Ubuntu, WSL, or Windows
-3. support headless auth flows and prefer SSH when possible
-4. initialize submodules recursively
-5. inspect whether the logged-in user has forks of:
-   - `maoxx241/vllm-ascend-workspace`
-   - `vllm-project/vllm`
-   - `vllm-project/vllm-ascend`
-6. optionally create or adopt forks and wire local remotes into the recommended topology
-7. optionally sync user forks to the latest community `main`
-8. for broad workspace init, create the local machine profile that later machine-management will reuse
-9. optionally place local `main` branches on the expected tracking branch for active development
-
-`repo-init` is **idempotent** and **conservative**:
-- it asks before installing tools
-- it asks before logging into GitHub
-- it asks before generating or uploading SSH keys
-- it asks before forking repositories
-- it asks before renaming or replacing remotes
-- it asks before syncing forks or resetting branches
-- it asks before changing the local machine profile when one already exists
-
-If the developer declines any step, the skill should stop at the last safe state and report a partial but valid result.
-
-## What `machine-management` does
-
-When invoked, `machine-management` can:
-
-1. create or reuse the local workspace machine profile when repo-init was skipped
-2. bootstrap host key-based SSH with a single interactive password-authenticated step
-3. probe host prerequisites
-4. stop for an explicit image decision gate: `rc`, `main`, `stable`, or a concrete custom image reference (`rc` is the recommended developer track)
-5. create or repair one managed host-network container per requested machine
-6. verify direct local -> container SSH and run a `torch` + `torch_npu` smoke test
-6. stream bounded machine-phase progress and record the actual selected image used for that container
-7. keep long `docker pull`, `apt-get update`, and package-install steps attributable with heartbeat-style progress
-8. keep local inventory writes atomic so concurrent wrapper calls do not clobber each other
-8. persist managed-machine state in local inventory with atomic writes / lock protection
-9. mesh managed containers together on a best-effort basis
-10. remove a managed container and clean local trust state
-
-New managed containers should derive their name from the local machine profile rather than using one global shared name.
-The workflow should never default to `auto`, the moving `latest` tag, or another implicit image reference.
-
-
-## What `remote-code-parity` does
-
-When invoked automatically before remote execution, `remote-code-parity` can:
-
-1. treat the local working tree as the source of truth, including committed, staged, unstaged, and untracked **non-ignored** files
-2. build synthetic Git snapshot commits for the workspace root, `vllm/`, `vllm-ascend/`, and any nested populated submodules without forcing a real commit
-3. push those snapshots directly into **container-local** bare mirror repositories over direct local -> container SSH
-4. publish an advertised current branch inside each mirror so nested repos can fetch the synthetic snapshot cleanly
-5. materialize the mirrored commits in place inside `/vllm-workspace` so the checked-out code matches the local workspace exactly
-6. keep runtime install progress attributable, use pip mirror fallback in the order Tsinghua -> Aliyun -> PyPI, and unify the runtime Python path for editable builds
-6. preserve runtime-private paths such as `Mooncake` instead of replacing the entire runtime root
-7. on the first sync for a fresh container, require explicit user consent before uninstalling image-provided `vllm` / `vllm-ascend`, deleting only `/vllm-workspace/vllm` and `/vllm-workspace/vllm-ascend`, and reinstalling them from the synced source trees
-8. on later syncs, reinstall only when build-critical paths changed
-9. verify the final runtime commit ids instead of assuming success from command exit status alone
-
-`remote-code-parity` is not a machine-attach or SSH-repair workflow. It assumes `machine-management` already proved the target container is reachable by key-based SSH.
-
-## Recommended remote topology
-
-The skills treat the following as the recommended end state, but never as a hard requirement.
-
-| Repository | Recommended `origin` | Recommended `upstream` | Notes |
-| --- | --- | --- | --- |
-| workspace | user fork, if the user wants one | `maoxx241/vllm-ascend-workspace` | If the clone is already the user fork, offer to add `upstream`. |
-| `vllm` | user fork, if one exists and the user wants it | `vllm-project/vllm` | Community-only mode is valid. |
-| `vllm-ascend` | user fork | `vllm-project/vllm-ascend` | A personal fork is recommended for PR-oriented work. |
-
-A user may keep extra remotes such as `upstream2`; `repo-init` must preserve them.
-
-## Recommended branch placement
-
-The skills should optimize for the developer-facing state instead of preserving a detached submodule checkout forever.
-
-- `workspace`: keep the current branch unless the user explicitly wants branch movement.
-- `vllm`: prefer a local `main` tracking the chosen working remote's `main`.
-- `vllm-ascend`: prefer a local `main` tracking the chosen working remote's `main`.
-
-If the relevant worktree is dirty, the skill must ask before changing branches, rebasing, syncing, or resetting.
-
-## Quick usage
-
-Example prompts for an agent:
-
-- “Initialize this workspace for vLLM Ascend development.”
-- “Run repo-init and set me up for PR work.”
-- “Only install GitHub CLI and log me in. Do not touch remotes.”
-- “Initialize submodules recursively and move `vllm-ascend` to my fork.”
-- “Run repo-init in community-only mode. Do not create any forks.”
-- “Configure this NPU machine for the current workspace.”
-- “Check whether the managed machine is ready.”
-- “Repair the container SSH on the managed host.”
-- “On the ready machine, sync my latest local code before you launch the remote service.”
-
-## Repository layout
-
-```text
-.
-├── .agents/
-│   ├── README.md
-│   ├── lib/
-│   │   └── vaws_local_state.py
-│   ├── scripts/
-│   │   └── workspace_profile.py
-│   └── skills/
-│       ├── machine-management/
-│       │   ├── SKILL.md
-│       │   ├── references/
-│       │   └── scripts/
-│       ├── remote-code-parity/
-│       │   ├── SKILL.md
-│       │   ├── references/
-│       │   └── scripts/
-│       └── repo-init/
-│           ├── SKILL.md
-│           ├── references/
-│           └── scripts/
-├── .gitmodules
-├── AGENTS.md
-└── README.md
+# 初始化子模块
+git submodule update --init --recursive
 ```
 
-## Source of truth
+如果你使用支持 Agent 的 IDE（Cursor、Windsurf 等）或终端工具（Claude Code、Codex CLI 等），可以直接用自然语言完成后续配置：
 
-- Repo-local skills live under `.agents/skills/`.
-- Shared local-state helpers live under `.agents/lib/` and `.agents/scripts/`.
+> "初始化这个工作区，帮我配好 vLLM Ascend 的开发环境。"
+
+Agent 会自动检测你的环境、安装所需工具、配置 Git 远程仓库和 Fork。
+
+## 内置技能
+
+
+| 技能                     | 用途                                             | 何时使用               |
+| ---------------------- | ---------------------------------------------- | ------------------ |
+| **repo-init**          | 安装 GitHub CLI、登录 GitHub、初始化子模块、配置 Fork 和远程仓库拓扑 | 首次 clone 后初始化工作区   |
+| **machine-management** | 添加、验证、修复或移除远程昇腾 NPU 服务器及其托管容器                  | 需要配置远程 NPU 开发机时    |
+| **remote-code-parity** | 将本地工作区的完整状态（含未提交的修改）同步到远程容器                    | 在远程机器上运行测试或服务前自动触发 |
+
+
+所有技能都是**可选的**。你可以只用其中的一部分，也可以完全不用。
+
+## 使用示例
+
+与 Agent 对话时，可以这样说：
+
+```
+# 初始化
+"帮我初始化工作区，配好 PR 开发环境。"
+"只安装 GitHub CLI 并登录，不动远程仓库。"
+"用 community-only 模式初始化，不创建 Fork。"
+
+# 机器管理
+"把这台 NPU 服务器配置到工作区里。"
+"检查一下托管机器是不是 ready 状态。"
+"修复容器的 SSH 连接。"
+
+# 代码同步与远程执行
+"在远程机器上跑测试之前先同步我的最新代码。"
+```
+
+## 仓库结构
+
+```
+.
+├── vllm/                  # vLLM 上游（Git 子模块）
+├── vllm-ascend/           # vLLM Ascend 插件（Git 子模块）
+├── .agents/
+│   ├── skills/
+│   │   ├── repo-init/         # 工作区初始化技能
+│   │   ├── machine-management/# 远程机器管理技能
+│   │   └── remote-code-parity/# 代码同步技能
+│   ├── lib/               # 共享本地状态库
+│   └── scripts/           # 共享辅助脚本
+├── .cursor/rules/         # Cursor IDE 专用规则
+├── AGENTS.md              # 跨工具 Agent 指令（AI Agent 读这个）
+├── CLAUDE.md              # Claude Code 指令入口
+└── README.md              # 你正在看的这个文件
+```
+
+## 设计原则
+
+- **不强制任何流程** — 所有技能都可选，开发者自由选择使用哪些部分。
+- **本地状态不入库** — 用户特定的远程仓库、认证信息、机器配置等只存在于本地未跟踪的 `.vaws-local/` 目录中。
+- **子模块指向社区** — `.gitmodules` 始终指向 `vllm-project` 的官方仓库，个人 Fork 是本地运行时配置。
+- **Agent 驱动，但不依赖 Agent** — 所有操作都可以手动完成，Agent 只是让流程更方便。
+
+## 推荐的远程仓库拓扑
+
+技能会推荐以下拓扑结构，但不强制要求：
+
+
+| 仓库            | `origin`    | `upstream`                       |
+| ------------- | ----------- | -------------------------------- |
+| workspace     | 你的 Fork（可选） | `maoxx241/vllm-ascend-workspace` |
+| `vllm`        | 你的 Fork（可选） | `vllm-project/vllm`              |
+| `vllm-ascend` | 你的 Fork     | `vllm-project/vllm-ascend`       |
+
+
+## 多工具支持
+
+本仓库支持主流 AI 编程工具：
+
+
+| 文件               | 覆盖工具                                                         |
+| ---------------- | ------------------------------------------------------------ |
+| `AGENTS.md`      | Codex CLI、GitHub Copilot、Cursor、Windsurf、Cline、Devin、Aider 等 |
+| `CLAUDE.md`      | Claude Code                                                  |
+| `.cursor/rules/` | Cursor                                                       |
+
+
+## 许可证
+
+本脚手架仓库的许可证独立于子模块。`vllm/` 和 `vllm-ascend/` 各自遵循其上游项目的许可证。
