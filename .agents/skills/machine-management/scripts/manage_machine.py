@@ -23,15 +23,34 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from dataclasses import dataclass
 from typing import Any, Sequence
 
 
-DEFAULT_IMAGE = "auto"
-DEFAULT_IMAGE_CANDIDATES = (
-    "quay.nju.edu.cn/ascend/vllm-ascend:latest",
-    "quay.io/ascend/vllm-ascend:latest",
-)
+IMAGE_REGISTRY_NJU = "quay.nju.edu.cn/ascend/vllm-ascend"
+IMAGE_REGISTRY_OFFICIAL = "quay.io/ascend/vllm-ascend"
+IMAGE_REGISTRY_MIRRORS = (IMAGE_REGISTRY_NJU, IMAGE_REGISTRY_OFFICIAL)
+IMAGE_SELECTOR_MAIN = "main"
+IMAGE_SELECTOR_STABLE = "stable"
+IMAGE_SELECTOR_ALIASES = {
+    IMAGE_SELECTOR_MAIN: IMAGE_SELECTOR_MAIN,
+    "main-branch": IMAGE_SELECTOR_MAIN,
+    IMAGE_SELECTOR_STABLE: IMAGE_SELECTOR_STABLE,
+    "release": IMAGE_SELECTOR_STABLE,
+    "latest-release": IMAGE_SELECTOR_STABLE,
+    "latest-official": IMAGE_SELECTOR_STABLE,
+}
+LEGACY_IMAGE_SELECTORS = {"auto"}
+FORBIDDEN_IMAGE_TAGS = {"latest"}
+DEFAULT_IMAGE = IMAGE_SELECTOR_MAIN
+DEFAULT_IMAGE_CANDIDATES = tuple(f"{repo}:main" for repo in IMAGE_REGISTRY_MIRRORS)
+LATEST_RELEASE_API = "https://api.github.com/repos/vllm-project/vllm-ascend/releases/latest"
+LATEST_RELEASE_PAGE = "https://github.com/vllm-project/vllm-ascend/releases/latest"
+LATEST_RELEASE_TIMEOUT_SECONDS = 10
+IMAGE_RESOLVER_USER_AGENT = "vaws-machine-management/1.0"
 DEFAULT_WORKDIR = "/vllm-workspace"
 DEFAULT_HOST_USER = "root"
 DEFAULT_HOST_PORT = 22
@@ -58,8 +77,147 @@ class SshTarget:
     port: int = DEFAULT_HOST_PORT
 
 
+@dataclass(frozen=True)
+class ImageResolution:
+    selector: str
+    requested: str
+    policy: str
+    candidates: tuple[str, ...]
+    resolved_tag: str | None = None
+    mirror_order: tuple[str, ...] = IMAGE_REGISTRY_MIRRORS
+
+
 def print_json(data: dict[str, Any]) -> None:
     print(json.dumps(data, indent=2, ensure_ascii=False))
+
+
+def image_candidates_for_tag(tag: str) -> tuple[str, ...]:
+    return tuple(f"{repo}:{tag}" for repo in IMAGE_REGISTRY_MIRRORS)
+
+
+def docker_ref_tag(ref: str) -> str | None:
+    if "@" in ref:
+        return None
+    last_slash = ref.rfind("/")
+    last_colon = ref.rfind(":")
+    if last_colon > last_slash:
+        return ref[last_colon + 1 :]
+    return None
+
+
+def require_explicit_image_ref(ref: str) -> str:
+    candidate = ref.strip()
+    if not candidate:
+        raise MachineManagementError(
+            "image reference is empty; choose `main`, `stable`, or an explicit non-latest image reference"
+        )
+    normalized = candidate.lower()
+    if normalized in LEGACY_IMAGE_SELECTORS:
+        raise MachineManagementError(
+            "legacy image selector `auto` is no longer allowed; ask the user to choose `main`, `stable`, or a concrete image reference"
+        )
+    if normalized in IMAGE_SELECTOR_ALIASES:
+        raise MachineManagementError(
+            "semantic image selectors must be handled directly, not mixed into a custom candidate list"
+        )
+    if "@" in candidate:
+        return candidate
+    tag = docker_ref_tag(candidate)
+    if tag is None:
+        raise MachineManagementError(
+            "explicit image references must include a concrete tag or digest; bare repositories implicitly resolve to `latest` and are not allowed"
+        )
+    if tag.lower() in FORBIDDEN_IMAGE_TAGS:
+        raise MachineManagementError(
+            "the moving `latest` tag is not allowed for managed machine bootstrap; choose `main`, `stable`, or a concrete version tag"
+        )
+    return candidate
+
+
+def fetch_latest_release_tag(timeout_seconds: int = LATEST_RELEASE_TIMEOUT_SECONDS) -> str:
+    errors: list[str] = []
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": IMAGE_RESOLVER_USER_AGENT,
+    }
+    api_request = urllib.request.Request(LATEST_RELEASE_API, headers=headers)
+    try:
+        with urllib.request.urlopen(api_request, timeout=timeout_seconds) as response:
+            payload = json.load(response)
+        tag = str(payload.get("tag_name") or "").strip()
+        if tag and not payload.get("draft") and not payload.get("prerelease"):
+            return tag
+        errors.append("GitHub API did not return a final release tag")
+    except (OSError, urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError) as exc:
+        errors.append(f"GitHub API: {exc}")
+
+    page_request = urllib.request.Request(LATEST_RELEASE_PAGE, headers={"User-Agent": IMAGE_RESOLVER_USER_AGENT})
+    try:
+        with urllib.request.urlopen(page_request, timeout=timeout_seconds) as response:
+            final_url = response.geturl()
+        match = re.search(r"/tag/([^/?#]+)$", final_url)
+        if match:
+            return urllib.parse.unquote(match.group(1))
+        errors.append("release redirect did not expose a tag name")
+    except (OSError, urllib.error.URLError, urllib.error.HTTPError) as exc:
+        errors.append(f"GitHub releases page: {exc}")
+
+    detail = "; ".join(errors)
+    raise MachineManagementError(
+        "could not resolve the latest official vllm-ascend release tag; retry later, choose `main`, or pass an explicit image reference"
+        + (f" ({detail})" if detail else "")
+    )
+
+
+def resolve_image_request(spec: str) -> ImageResolution:
+    requested = spec.strip()
+    if not requested:
+        raise MachineManagementError(
+            "image selector is missing; choose `main`, `stable`, or an explicit non-latest image reference"
+        )
+    normalized = requested.lower()
+    selector = IMAGE_SELECTOR_ALIASES.get(normalized)
+    if selector == IMAGE_SELECTOR_MAIN:
+        return ImageResolution(
+            selector=IMAGE_SELECTOR_MAIN,
+            requested=requested,
+            policy="main-branch",
+            candidates=image_candidates_for_tag(IMAGE_SELECTOR_MAIN),
+            resolved_tag=IMAGE_SELECTOR_MAIN,
+        )
+    if selector == IMAGE_SELECTOR_STABLE:
+        release_tag = fetch_latest_release_tag()
+        return ImageResolution(
+            selector=IMAGE_SELECTOR_STABLE,
+            requested=requested,
+            policy="latest-official-release",
+            candidates=image_candidates_for_tag(release_tag),
+            resolved_tag=release_tag,
+        )
+
+    candidates = tuple(require_explicit_image_ref(item) for item in requested.split(",") if item.strip())
+    if not candidates:
+        raise MachineManagementError(
+            "image selector is empty; choose `main`, `stable`, or an explicit non-latest image reference"
+        )
+    return ImageResolution(
+        selector="explicit",
+        requested=requested,
+        policy="explicit",
+        candidates=candidates,
+    )
+
+
+def image_request_payload(spec: str) -> dict[str, Any]:
+    resolution = resolve_image_request(spec)
+    return {
+        "requested": resolution.requested,
+        "selector": resolution.selector,
+        "policy": resolution.policy,
+        "candidates": list(resolution.candidates),
+        "resolved_tag": resolution.resolved_tag,
+        "mirror_order": list(resolution.mirror_order),
+    }
 
 
 def run_local(
@@ -478,7 +636,7 @@ def load_public_key(path: pathlib.Path) -> str:
 def render_host_probe_script() -> str:
     template = r'''#!/usr/bin/env bash
 set -euo pipefail
-image_spec="$1"
+image_request_json="$1"
 port_range="$2"
 prefix="$3"
 py=""
@@ -492,7 +650,7 @@ if [ -z "$py" ]; then
   echo "__SENTINEL__{\"success\": false, \"error\": \"python not found on remote host\"}"
   exit 3
 fi
-"$py" - "$image_spec" "$port_range" "$prefix" <<'PY'
+"$py" - "$image_request_json" "$port_range" "$prefix" <<'PY'
 import json
 import os
 import pathlib
@@ -501,8 +659,8 @@ import socket
 import subprocess
 import sys
 
-AUTO_CANDIDATES = ["quay.nju.edu.cn/ascend/vllm-ascend:latest", "quay.io/ascend/vllm-ascend:latest"]
-image_spec, port_range, prefix = sys.argv[1:4]
+image_request, port_range, prefix = sys.argv[1:4]
+image = json.loads(image_request)
 start_s, end_s = port_range.split(":", 1)
 start, end = int(start_s), int(end_s)
 
@@ -519,14 +677,7 @@ def run(cmd: list[str]) -> tuple[int, str, str]:
     return proc.returncode, proc.stdout.strip(), proc.stderr.strip()
 
 
-def resolve_image_candidates(spec: str) -> list[str]:
-    if spec == "auto":
-        return list(AUTO_CANDIDATES)
-    candidates = [item.strip() for item in spec.split(",") if item.strip()]
-    return candidates or [spec]
-
-
-candidates = resolve_image_candidates(image_spec)
+candidates = list(image.get("candidates") or [])
 result: dict[str, object] = {
     "success": True,
     "hostname": socket.gethostname(),
@@ -540,10 +691,13 @@ result: dict[str, object] = {
     "optional_mounts": [],
     "npu_smi_present": os.path.exists("/usr/local/bin/npu-smi"),
     "image": {
-        "name": image_spec,
-        "requested": image_spec,
-        "policy": "auto-refresh-pull" if image_spec == "auto" else "explicit",
+        "name": image.get("requested"),
+        "requested": image.get("requested"),
+        "selector": image.get("selector"),
+        "policy": image.get("policy"),
+        "resolved_tag": image.get("resolved_tag"),
         "candidates": candidates,
+        "mirror_order": list(image.get("mirror_order") or []),
         "present_local": False,
         "present_local_candidates": [],
     },
@@ -630,11 +784,11 @@ def render_bootstrap_host_script() -> str:
 set -euo pipefail
 container="$1"
 port="$2"
-image_spec="$3"
+image_request_json="$3"
 workdir="$4"
 pubkey="$5"
 namespace="${6:-}"
-auto_candidates_json='["quay.nju.edu.cn/ascend/vllm-ascend:latest", "quay.io/ascend/vllm-ascend:latest"]'
+replace_on_image_change="${7:-false}"
 
 emit_json() {
   python3 - "$1" <<'PY'
@@ -662,19 +816,65 @@ print("__PROGRESS__" + json.dumps(payload, ensure_ascii=False))
 PY
 }
 
-resolve_image_candidates() {
-  python3 - "$image_spec" "$auto_candidates_json" <<'PY'
+image_field() {
+  python3 - "$image_request_json" "$1" <<'PY'
 import json
 import sys
-image_spec = sys.argv[1]
-auto_candidates = json.loads(sys.argv[2])
-if image_spec == "auto":
-    candidates = auto_candidates
+payload = json.loads(sys.argv[1])
+field = sys.argv[2]
+value = payload.get(field)
+if value is None:
+    raise SystemExit(1)
+if isinstance(value, str):
+    print(value)
 else:
-    candidates = [item.strip() for item in image_spec.split(",") if item.strip()] or [image_spec]
-for item in candidates:
+    print(json.dumps(value, ensure_ascii=False))
+PY
+}
+
+resolve_image_candidates() {
+  python3 - "$image_request_json" <<'PY'
+import json
+import sys
+payload = json.loads(sys.argv[1])
+for item in payload.get("candidates") or []:
     print(item)
 PY
+}
+
+run_with_progress() {
+  phase="$1"
+  message="$2"
+  expected_seconds="$3"
+  shift 3
+  log_file="$(mktemp)"
+  "$@" >"$log_file" 2>&1 &
+  pid=$!
+  start_ts=$(date +%s)
+  while kill -0 "$pid" 2>/dev/null; do
+    sleep 8
+    if ! kill -0 "$pid" 2>/dev/null; then
+      break
+    fi
+    elapsed=$(( $(date +%s) - start_ts ))
+    if [ -s "$log_file" ]; then
+      last_line="$(tail -n 1 "$log_file" 2>/dev/null | tr -d '\r' | sed 's/[^[:print:]\t]//g' | cut -c1-180)"
+      if [ -n "$last_line" ]; then
+        emit_progress "$phase" "running" "$message - $last_line" "$expected_seconds"
+      else
+        emit_progress "$phase" "running" "$message - still working (elapsed ${elapsed}s)" "$expected_seconds"
+      fi
+    else
+      emit_progress "$phase" "running" "$message - still working (elapsed ${elapsed}s)" "$expected_seconds"
+    fi
+  done
+  wait "$pid"
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    tail -n 120 "$log_file" >&2 || true
+  fi
+  rm -f "$log_file"
+  return "$status"
 }
 
 emit_progress "preflight" "running" "validating host docker and Ascend prerequisites" 15
@@ -719,8 +919,62 @@ installed_ssh=false
 firewall="none"
 selected_image=""
 image_resolution="unknown"
+requested_image="$(image_field requested || true)"
+requested_selector="$(image_field selector || true)"
+image_policy="$(image_field policy || true)"
+resolved_tag="$(image_field resolved_tag || true)"
+previous_image=""
+mapfile -t image_candidates < <(resolve_image_candidates)
+if [ "${#image_candidates[@]}" -eq 0 ]; then
+  emit_json '{"success": false, "error": "image selector resolved to zero candidates", "phase": "image"}'
+  exit 19
+fi
 
+container_exists=false
 if docker inspect "$container" >/dev/null 2>&1; then
+  container_exists=true
+  current_image=$(docker inspect -f '{{.Config.Image}}' "$container")
+  previous_image="$current_image"
+  image_matches=false
+  for candidate in "${image_candidates[@]}"; do
+    if [ "$candidate" = "$current_image" ]; then
+      image_matches=true
+      break
+    fi
+  done
+  if [ "$image_matches" != "true" ]; then
+    if [ "$replace_on_image_change" = "true" ]; then
+      emit_progress "image" "running" "existing container image $current_image does not match requested selector; recreating container" 60
+      docker rm -f "$container" >/dev/null
+      actions+=("removed-container-for-image-change")
+      container_exists=false
+    else
+      mismatch_payload=$(python3 - <<'PY' "$current_image" "$image_request_json"
+import json
+import sys
+current_image, image_request_json = sys.argv[1:]
+image_request = json.loads(image_request_json)
+print(json.dumps({
+    "success": False,
+    "error": "existing container image does not match the requested selector",
+    "phase": "image",
+    "existing_container_image": current_image,
+    "requested_image": image_request.get("requested"),
+    "requested_selector": image_request.get("selector"),
+    "image_policy": image_request.get("policy"),
+    "resolved_tag": image_request.get("resolved_tag"),
+    "image_candidates": list(image_request.get("candidates") or []),
+    "suggestion": "rerun with explicit container replacement consent or remove the managed container first",
+}, ensure_ascii=False))
+PY
+)
+      emit_json "$mismatch_payload"
+      exit 21
+    fi
+  fi
+fi
+
+if [ "$container_exists" = "true" ]; then
   emit_progress "container" "running" "reusing an existing managed container" 15
   state=$(docker inspect -f '{{.State.Status}}' "$container")
   selected_image=$(docker inspect -f '{{.Config.Image}}' "$container")
@@ -731,23 +985,17 @@ if docker inspect "$container" >/dev/null 2>&1; then
     actions+=("started-existing-container")
   fi
 else
-  mapfile -t image_candidates < <(resolve_image_candidates)
-  if [ "${#image_candidates[@]}" -eq 0 ]; then
-    image_candidates=("$image_spec")
-  fi
-  emit_progress "image" "running" "resolving container image" 180
+  emit_progress "image" "running" "resolved image selector ${requested_image:-unknown} (${image_policy:-unknown})" 30
   for candidate in "${image_candidates[@]}"; do
-    emit_progress "image" "running" "trying image candidate $candidate" 180
-    pull_log=$(mktemp)
-    if docker pull "$candidate" >"$pull_log" 2>&1; then
-      rm -f "$pull_log"
+    emit_progress "image" "running" "trying image candidate $candidate" 600
+    if run_with_progress "image-pull" "docker pull $candidate" 600 docker pull "$candidate"; then
       selected_image="$candidate"
       image_resolution="pulled"
       pulled=true
       actions+=("pulled-image")
       break
     fi
-    rm -f "$pull_log"
+    emit_progress "image" "running" "pull failed for $candidate; checking local cache" 30
     if docker image inspect "$candidate" >/dev/null 2>&1; then
       selected_image="$candidate"
       image_resolution="local-cache"
@@ -792,19 +1040,17 @@ else
 fi
 
 if ! docker exec "$container" bash -lc 'command -v sshd >/dev/null 2>&1 && command -v ssh >/dev/null 2>&1'; then
-  emit_progress "container-ssh" "running" "installing openssh inside the container" 600
-  if ! docker exec "$container" bash -lc '
-set -euo pipefail
-log=$(mktemp)
-trap "rm -f \"$log\"" EXIT
-export DEBIAN_FRONTEND=noninteractive
-if ! (apt-get -o Acquire::Check-Date=false -o Acquire::Check-Valid-Until=false update >"$log" 2>&1 && apt-get install -y openssh-server openssh-client --fix-missing >>"$log" 2>&1); then
-  tail -n 120 "$log" >&2 || true
-  exit 97
-fi
-'; then
-    emit_json '{"success": false, "error": "installing openssh inside container failed", "phase": "container-ssh"}'
+  emit_progress "container-ssh" "running" "updating apt metadata inside the container" 300
+  if ! run_with_progress "container-ssh-apt-update" "apt-get update inside the container" 300 \
+    docker exec "$container" bash -lc 'set -euo pipefail; export DEBIAN_FRONTEND=noninteractive; apt-get -o Acquire::Check-Date=false -o Acquire::Check-Valid-Until=false update'; then
+    emit_json '{"success": false, "error": "apt-get update inside container failed", "phase": "container-ssh-apt-update"}'
     exit 30
+  fi
+  emit_progress "container-ssh" "running" "installing openssh inside the container" 600
+  if ! run_with_progress "container-ssh-apt-install" "apt-get install openssh-server openssh-client" 600 \
+    docker exec "$container" bash -lc 'set -euo pipefail; export DEBIAN_FRONTEND=noninteractive; apt-get install -y openssh-server openssh-client --fix-missing'; then
+    emit_json '{"success": false, "error": "installing openssh inside container failed", "phase": "container-ssh-apt-install"}'
+    exit 31
   fi
   installed_ssh=true
   actions+=("installed-openssh")
@@ -853,7 +1099,7 @@ fi
 INNER
 then
   emit_json '{"success": false, "error": "configuring dedicated container sshd failed", "phase": "container-ssh"}'
-  exit 31
+  exit 32
 fi
 actions+=("configured-dedicated-sshd")
 
@@ -867,32 +1113,33 @@ elif command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 
   firewall="firewalld"
 fi
 
-payload=$(python3 - <<'PY' "$container" "$port" "$image_spec" "$selected_image" "$image_resolution" "$workdir" "$namespace" "$created" "$started" "$pulled" "$installed_ssh" "$firewall" "${actions[*]}" "$auto_candidates_json"
+payload=$(python3 - <<'PY' "$container" "$port" "$image_request_json" "$selected_image" "$image_resolution" "$workdir" "$namespace" "$created" "$started" "$pulled" "$installed_ssh" "$firewall" "${actions[*]}" "$previous_image" "$replace_on_image_change"
 import json
 import sys
 
-def resolve_candidates(spec: str, auto_candidates_text: str) -> list[str]:
-    auto_candidates = json.loads(auto_candidates_text)
-    if spec == "auto":
-        return auto_candidates
-    return [item.strip() for item in spec.split(",") if item.strip()] or [spec]
-
-container, port, requested_image, selected_image, image_resolution, workdir, namespace, created, started, pulled, installed_ssh, firewall, actions, auto_candidates_json = sys.argv[1:]
+container, port, image_request_json, selected_image, image_resolution, workdir, namespace, created, started, pulled, installed_ssh, firewall, actions, previous_image, replace_on_image_change = sys.argv[1:]
+image_request = json.loads(image_request_json)
 print(json.dumps({
     "success": True,
     "container": container,
     "container_ssh_port": int(port),
     "image": selected_image,
-    "requested_image": requested_image,
+    "requested_image": image_request.get("requested"),
+    "requested_selector": image_request.get("selector"),
+    "image_policy": image_request.get("policy"),
+    "resolved_tag": image_request.get("resolved_tag"),
     "selected_image": selected_image,
     "image_resolution": image_resolution,
-    "image_candidates": resolve_candidates(requested_image, auto_candidates_json),
+    "image_candidates": list(image_request.get("candidates") or []),
+    "image_mirror_order": list(image_request.get("mirror_order") or []),
     "workdir": workdir,
     "namespace": namespace or None,
+    "previous_image": previous_image or None,
     "created": created == "true",
     "started_existing": started == "true",
     "pulled_image": pulled == "true",
     "installed_openssh": installed_ssh == "true",
+    "replace_container_on_image_change": replace_on_image_change == "true",
     "firewall": firewall,
     "actions": [item for item in actions.split() if item],
 }, ensure_ascii=False))
@@ -1298,10 +1545,11 @@ def cmd_bootstrap_host_key(args: argparse.Namespace) -> int:
 
 def cmd_probe_host(args: argparse.Namespace) -> int:
     target = host_target(args)
+    image_request = image_request_payload(args.image)
     result = run_remote_script(
         target,
         render_host_probe_script(),
-        args=[args.image, args.port_range, args.managed_prefix],
+        args=[json.dumps(image_request, ensure_ascii=False), args.port_range, args.managed_prefix],
         batch_mode=True,
         timeout_seconds=DEFAULT_PROBE_TIMEOUT_SECONDS,
     )
@@ -1320,16 +1568,18 @@ def cmd_bootstrap_container(args: argparse.Namespace) -> int:
     key_path = find_public_key(args.public_key_file)
     private_key = private_key_for_public_key(key_path)
     public_key = load_public_key(key_path)
+    image_request = image_request_payload(args.image)
     result = run_remote_script(
         target,
         render_bootstrap_host_script(),
         args=[
             args.container_name,
             str(args.container_ssh_port),
-            args.image,
+            json.dumps(image_request, ensure_ascii=False),
             args.workdir,
             public_key,
             args.namespace or "",
+            "true" if args.replace_container_on_image_change else "false",
         ],
         batch_mode=True,
         timeout_seconds=DEFAULT_BOOTSTRAP_TIMEOUT_SECONDS,
@@ -1571,7 +1821,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     probe = subparsers.add_parser("probe-host", help="probe host prerequisites and choose a free high SSH port")
     add_host_args(probe)
-    probe.add_argument("--image", default=DEFAULT_IMAGE, help=f"image name or image policy (default: {DEFAULT_IMAGE}; auto tries {DEFAULT_IMAGE_CANDIDATES[0]} then {DEFAULT_IMAGE_CANDIDATES[1]})")
+    probe.add_argument(
+        "--image",
+        required=True,
+        help=(
+            "explicit image selector: `main`, `stable`, or a full non-latest image reference; "
+            f"`main` tries {DEFAULT_IMAGE_CANDIDATES[0]} then {DEFAULT_IMAGE_CANDIDATES[1]}"
+        ),
+    )
     probe.add_argument("--port-range", default=DEFAULT_PORT_RANGE, help=f"inclusive range START:END (default: {DEFAULT_PORT_RANGE})")
     probe.add_argument("--managed-prefix", default="vaws-", help="managed container name prefix (default: vaws-)")
     probe.set_defaults(func=cmd_probe_host)
@@ -1619,7 +1876,20 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="high non-default SSH port for the managed container",
     )
-    bootstrap.add_argument("--image", default=DEFAULT_IMAGE, help=f"image name or image policy (default: {DEFAULT_IMAGE}; auto tries {DEFAULT_IMAGE_CANDIDATES[0]} then {DEFAULT_IMAGE_CANDIDATES[1]})")
+    bootstrap.add_argument(
+        "--image",
+        required=True,
+        help=(
+            "explicit image selector: `main`, `stable`, or a full non-latest image reference; "
+            f"`main` tries {DEFAULT_IMAGE_CANDIDATES[0]} then {DEFAULT_IMAGE_CANDIDATES[1]}"
+        ),
+    )
+    bootstrap.add_argument(
+        "--replace-container-on-image-change",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="recreate the existing managed container when its current image does not match the requested selector",
+    )
     bootstrap.add_argument("--workdir", default=DEFAULT_WORKDIR, help=f"container workdir (default: {DEFAULT_WORKDIR})")
     bootstrap.add_argument("--namespace", help="stable workspace machine username used for collision-safe container naming")
     bootstrap.add_argument("--public-key-file", help="local SSH public key to add to the container; defaults to ~/.ssh/id_ed25519.pub if present")

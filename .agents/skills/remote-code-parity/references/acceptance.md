@@ -30,6 +30,7 @@ These should not trigger `remote-code-parity` unless remote code parity is the o
 - the skill keeps local runtime state only under `.vaws-local/remote-code-parity/`
 - normal outcomes are reported as compact JSON with `status` equal to `ready`, `blocked`, `failed`, or `dry-run`
 - phase progress is emitted on `stderr` as `__VAWS_PARITY_PROGRESS__=<json>` while the final summary stays on `stdout`
+- long runtime-install waits remain attributable because uninstall, requirements install, editable install, import verification, and marker write each emit their own progress phase
 
 ### Repo graph and snapshotting
 

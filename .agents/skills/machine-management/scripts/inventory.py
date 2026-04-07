@@ -224,6 +224,10 @@ def cmd_get(args: argparse.Namespace) -> int:
 
 
 def cmd_put(args: argparse.Namespace) -> int:
+    if not args.image:
+        raise InventoryError(
+            "--image is required; record an explicit `main`, `stable`-resolved, or concrete non-latest image reference"
+        )
     requested_path = preferred_inventory_path(args.inventory)
     active_path = read_inventory_path(requested_path)
     inventory = load_inventory(active_path)
@@ -358,7 +362,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     put_cmd.add_argument(
         "--image",
-        default="quay.nju.edu.cn/ascend/vllm-ascend:latest",
+        required=True,
     )
     put_cmd.add_argument("--workdir", default="/vllm-workspace")
     put_cmd.add_argument(
@@ -402,7 +406,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     upsert_cmd.add_argument(
         "--image",
-        default="quay.nju.edu.cn/ascend/vllm-ascend:latest",
+        required=True,
     )
     upsert_cmd.add_argument("--workdir", default="/vllm-workspace")
     upsert_cmd.add_argument(

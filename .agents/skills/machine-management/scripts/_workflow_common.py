@@ -126,6 +126,118 @@ def public_key_needs_input_payload(error: str) -> dict[str, Any]:
     )
 
 
+def image_selection_needs_input_payload(
+    *,
+    reason: str,
+    machine: str | None = None,
+    current_image: str | None = None,
+) -> dict[str, Any]:
+    latest_release_tag = None
+    release_resolution_note = "resolved at execution time"
+    try:
+        latest_release_tag = machine_ops.fetch_latest_release_tag()
+        release_resolution_note = f"currently resolves to {latest_release_tag}"
+    except machine_ops.MachineManagementError:
+        latest_release_tag = None
+
+    return status_payload(
+        "needs_input",
+        success=False,
+        action="await-image-selection",
+        message=reason,
+        machine=machine,
+        current_image=current_image,
+        missing={
+            "name": "image",
+            "required": True,
+            "choices": [
+                {
+                    "value": machine_ops.IMAGE_SELECTOR_MAIN,
+                    "label": "main branch image",
+                    "recommended": True,
+                    "resolution": f"{machine_ops.IMAGE_REGISTRY_NJU}:main, then {machine_ops.IMAGE_REGISTRY_OFFICIAL}:main",
+                    "use_when": "active development against the upstream main branch",
+                },
+                {
+                    "value": machine_ops.IMAGE_SELECTOR_STABLE,
+                    "label": "latest official release image",
+                    "recommended": False,
+                    "resolution": release_resolution_note,
+                    "use_when": "reproducing the newest official non-prerelease container release",
+                    **({"resolved_tag": latest_release_tag} if latest_release_tag else {}),
+                },
+                {
+                    "value": "custom",
+                    "label": "custom image reference",
+                    "recommended": False,
+                    "expected": "a full image reference with a concrete non-latest tag or digest; comma-separated fallbacks are allowed",
+                },
+            ],
+            "forbidden_defaults": [
+                "auto",
+                "*:latest",
+                "bare repositories without a tag",
+            ],
+            "mirror_order": [machine_ops.IMAGE_REGISTRY_NJU, machine_ops.IMAGE_REGISTRY_OFFICIAL],
+        },
+    )
+
+
+def image_requires_explicit_reselection(image: str | None) -> bool:
+    if image is None or not image.strip():
+        return True
+    normalized = image.strip().lower()
+    if normalized in machine_ops.LEGACY_IMAGE_SELECTORS:
+        return True
+    if "@" in image:
+        return False
+    tag = machine_ops.docker_ref_tag(image.strip())
+    if tag is None:
+        return True
+    return tag.lower() in machine_ops.FORBIDDEN_IMAGE_TAGS
+
+
+def resolve_workflow_image(
+    *,
+    explicit_image: str | None,
+    existing_record: dict[str, Any] | None,
+    action: str,
+) -> tuple[str | None, dict[str, Any] | None]:
+    if explicit_image is not None and explicit_image.strip():
+        return explicit_image.strip(), None
+
+    if existing_record is None:
+        return None, image_selection_needs_input_payload(
+            reason=(
+                f"{action} requires an explicit image choice; ask the user to choose `main`, `stable`, or a custom non-latest image reference before continuing"
+            )
+        )
+
+    current_image = existing_record["container"].get("image")
+    if image_requires_explicit_reselection(current_image):
+        return None, image_selection_needs_input_payload(
+            reason=(
+                f"{action} cannot reuse the recorded image automatically because it is missing, ambiguous, or points at a forbidden moving tag; ask the user to choose `main`, `stable`, or a custom non-latest image reference"
+            ),
+            machine=existing_record["alias"],
+            current_image=current_image,
+        )
+    return current_image, None
+
+
+def image_request_matches_record(explicit_image: str | None, record: dict[str, Any] | None) -> bool:
+    if explicit_image is None or record is None:
+        return False
+    current_image = record.get("container", {}).get("image")
+    if not current_image:
+        return False
+    try:
+        resolution = machine_ops.resolve_image_request(explicit_image.strip())
+    except machine_ops.MachineManagementError:
+        return False
+    return current_image in resolution.candidates
+
+
 def host_password_needs_input_payload(target: machine_ops.SshTarget) -> dict[str, Any]:
     return status_payload(
         "needs_input",
@@ -330,7 +442,7 @@ def bootstrap_host_key(
 def probe_host(
     target: machine_ops.SshTarget,
     *,
-    image: str = machine_ops.DEFAULT_IMAGE,
+    image: str,
     port_range: str = machine_ops.DEFAULT_PORT_RANGE,
     managed_prefix: str = "vaws-",
 ) -> dict[str, Any]:
@@ -368,6 +480,7 @@ def bootstrap_container(
     workdir: str,
     namespace: str | None,
     public_key_file: str | None = None,
+    replace_container_on_image_change: bool = False,
 ) -> dict[str, Any]:
     key_path, private_key, public_key, needs_input = ensure_local_public_key(public_key_file)
     if needs_input is not None:
@@ -377,7 +490,15 @@ def bootstrap_container(
     result = machine_ops.run_remote_script(
         target,
         machine_ops.render_bootstrap_host_script(),
-        args=[container_name, str(container_ssh_port), image, workdir, public_key, namespace or ""],
+        args=[
+            container_name,
+            str(container_ssh_port),
+            image,
+            workdir,
+            public_key,
+            namespace or "",
+            "true" if replace_container_on_image_change else "false",
+        ],
         batch_mode=True,
         timeout_seconds=machine_ops.DEFAULT_BOOTSTRAP_TIMEOUT_SECONDS,
     )

@@ -224,18 +224,21 @@ Do **not**:
 
 ## Image selection policy
 
-Default low-level image policy is `auto`:
+Image selection is an explicit decision gate, not an implicit default:
 
-1. attempt `docker pull quay.nju.edu.cn/ascend/vllm-ascend:latest`
-2. if that fails, attempt `docker pull quay.io/ascend/vllm-ascend:latest`
-3. if fresh pulls fail but one of those tags is already cached locally, reuse the cached image as a bounded fallback
-4. if a managed container already exists, prefer its current image identity for non-destructive attach / repair
+1. ask the user to choose `main`, `stable`, or a custom image reference before new-machine bootstrap
+2. `main` resolves to `quay.nju.edu.cn/ascend/vllm-ascend:main`, then `quay.io/ascend/vllm-ascend:main`
+3. `stable` resolves the latest official non-prerelease `vllm-ascend` release tag at execution time, then tries NJU first and `quay.io` second
+4. custom references must include a concrete non-`latest` tag or digest; `auto`, `*:latest`, and bare repositories without a tag are forbidden defaults
+5. if fresh pulls fail but one of the explicit candidate refs is already cached locally, reuse that cached image as a bounded fallback
+6. for non-destructive attach / repair, a recorded explicit non-`latest` image may be reused; ambiguous legacy images require another user choice
 
-Inventory should record the actual selected image, not only the requested policy string.
+Inventory should record the actual selected image, not only the requested selector string.
 
 ## Observability and timeout contract
 
 - wrappers and low-level helpers should report phase progress early enough for an agent to distinguish `probe`, `bootstrap`, `smoke`, `inventory`, and `verify` work
 - `stderr` carries progress events; `stdout` stays reserved for the final machine-readable JSON payload
 - host probe, container bootstrap, and smoke should each have an overall timeout budget in addition to SSH connect timeouts
+- long-running bootstrap steps should keep emitting attributable heartbeats for image pull, `apt-get update`, and `apt-get install` instead of going silent behind one generic timeout
 - timeout failures should preserve the last known phase and any successfully returned remote payload

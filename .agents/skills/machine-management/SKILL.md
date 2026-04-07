@@ -38,7 +38,11 @@ Ready does **not** imply code sync, rebuild, serving, or benchmark readiness.
 - Keep local runtime state only under `.vaws-local/`.
 - Never write passwords or tokens into tracked files or `.vaws-local/`.
 - Never use `scp`, `sftp`, `sshpass`, or `expect` in this workflow.
-- Default container image policy is `auto`: try `quay.nju.edu.cn/ascend/vllm-ascend:latest` first, then `quay.io/ascend/vllm-ascend:latest`, always attempting a fresh pull before falling back to a cached local copy.
+- Never default the container image silently. Ask the user to choose one of:
+  - `main`: `quay.nju.edu.cn/ascend/vllm-ascend:main`, then `quay.io/ascend/vllm-ascend:main`
+  - `stable`: resolve the latest official non-prerelease `vllm-ascend` release tag, then try NJU first and `quay.io` second
+  - `custom`: a full image reference with a concrete non-`latest` tag or digest
+- Treat `auto`, `*:latest`, and bare repositories without a tag as forbidden defaults for managed-machine bootstrap.
 - Report and persist the **actual selected image** for the managed container, not only the requested image policy.
 - Long probe / bootstrap / smoke operations must expose bounded phase progress and have an overall timeout budget, not only a connect timeout.
 - On a missing local machine profile, never call `workspace_profile.py ensure` bare. Use either:
@@ -57,9 +61,9 @@ The primary bootstrap path must not depend on `ssh-copy-id`, `expect`, or any ot
 
 Use these task-oriented wrappers for normal agent work. They keep the parameter surface narrow and return structured JSON statuses such as `ready`, `needs_input`, `needs_repair`, `blocked`, `removed`, or `unmanaged`. They also stream phase progress on `stderr` as `__VAWS_PROGRESS__=<json>` while reserving `stdout` for one final machine-readable JSON payload.
 
-- `python3 .agents/skills/machine-management/scripts/machine_add.py --host <ip> [--machine-username <letters-or-digits> | --generate-machine-username] [--password-env NAME | --password-stdin | --password ...]`
+- `python3 .agents/skills/machine-management/scripts/machine_add.py --host <ip> --image <main|stable|custom-ref> [--machine-username <letters-or-digits> | --generate-machine-username] [--password-env NAME | --password-stdin | --password ...]`
 - `python3 .agents/skills/machine-management/scripts/machine_verify.py --machine <alias-or-ip>`
-- `python3 .agents/skills/machine-management/scripts/machine_repair.py --machine <alias-or-ip> [--password-env NAME | --password-stdin | --password ...]`
+- `python3 .agents/skills/machine-management/scripts/machine_repair.py --machine <alias-or-ip> [--image <main|stable|custom-ref>] [--password-env NAME | --password-stdin | --password ...]`
 - `python3 .agents/skills/machine-management/scripts/machine_remove.py --machine <alias-or-ip>`
 
 Design intent:
@@ -156,14 +160,16 @@ When password bootstrap is required:
 `machine_add.py` should own this order:
 
 1. ensure or reuse the local machine profile
-2. ensure a local public key exists
-3. if needed, establish host key auth
-4. probe the host
-5. choose or reuse the container name and container SSH port
-6. bootstrap or repair the managed container
-7. run final readiness verification
-8. persist the record into inventory
-9. best-effort mesh the new container with existing managed containers
+2. ask for or reuse an explicit image choice; never fall back to `auto` or `latest`
+3. if an existing record still points at a legacy or moving image tag, stop for re-selection before any `already-ready` shortcut
+4. ensure a local public key exists
+5. if needed, establish host key auth
+6. probe the host
+7. choose or reuse the container name and container SSH port
+8. bootstrap or repair the managed container
+9. persist the record into inventory
+10. best-effort mesh the new container with existing managed containers
+11. run final readiness verification
 
 If inventory already contains the same alias or host IP, treat add as an idempotent attach-or-repair path instead of creating a duplicate record.
 
@@ -201,7 +207,8 @@ Do not remove host firewall rules or host-level `authorized_keys` entries.
 - Use the dedicated container SSH config `/etc/ssh/sshd_vaws_config` instead of editing `/etc/ssh/sshd_config` inline.
 - Quote remote-script arguments that may contain spaces, especially SSH public keys and mesh peer keys, before sending them through `ssh`.
 - Ensure `/run/sshd` exists before starting the dedicated `sshd`.
-- Prefer low-level `--image auto` unless the user explicitly pins another image. It should pull first, then reuse a cached image only as a bounded fallback.
+- Image pulls should follow the selected mirror order and emit heartbeat-style progress so long `docker pull`, `apt-get update`, and `apt-get install` phases remain attributable.
+- Keep `stable` resolution dynamic: resolve the latest official non-prerelease release tag at execution time instead of using the moving `latest` tag.
 - Keep progress on `stderr` and the final status JSON on `stdout`; do not mix partial human narration into the terminal contract.
 - For smoke tests, do not pin a Python patch version. Discover the highest available `/usr/local/python*/bin/python3`, then fall back to `python3`.
 - Source only environment scripts that actually exist.

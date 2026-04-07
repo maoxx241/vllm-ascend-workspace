@@ -76,14 +76,17 @@ When invoked, `machine-management` can:
 1. create or reuse the local workspace machine profile when repo-init was skipped
 2. bootstrap host key-based SSH with a single interactive password-authenticated step
 3. probe host prerequisites
-4. create or repair one managed host-network container per requested machine
-5. verify direct local -> container SSH and run a `torch` + `torch_npu` smoke test
+4. stop for an explicit image decision gate: `main`, `stable`, or a concrete custom image reference
+5. create or repair one managed host-network container per requested machine
+6. verify direct local -> container SSH and run a `torch` + `torch_npu` smoke test
 6. stream bounded machine-phase progress and record the actual selected image used for that container
-7. persist managed-machine state in local inventory
-8. mesh managed containers together on a best-effort basis
-9. remove a managed container and clean local trust state
+7. keep long `docker pull`, `apt-get update`, and package-install steps attributable with heartbeat-style progress
+8. persist managed-machine state in local inventory
+9. mesh managed containers together on a best-effort basis
+10. remove a managed container and clean local trust state
 
 New managed containers should derive their name from the local machine profile rather than using one global shared name.
+The workflow should never default to `auto`, the moving `latest` tag, or another implicit image reference.
 
 
 ## What `remote-code-parity` does

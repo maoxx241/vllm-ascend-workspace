@@ -56,8 +56,10 @@ These should not trigger `machine-management` unless machine readiness is the ob
 
 ### Add / attach
 
-- `machine_add.py` can succeed with only `--host` when the profile and host key SSH are already in place
+- `machine_add.py` can succeed with `--host --image main` when the profile and host key SSH are already in place
 - when the profile is missing, `machine_add.py` returns `needs_input` instead of silently generating a username
+- when the image choice is missing for a new machine, `machine_add.py` returns `needs_input` instead of silently defaulting to `auto`, `latest`, or another moving tag
+- when an existing inventory record still points at a legacy or moving image tag, `machine_add.py` returns `await-image-selection` before any `already-ready` shortcut
 - the skill prefers host key SSH first and uses a password only for the first bootstrap of a new machine
 - if the user already supplied the host password in the request, the skill prefers scripted bootstrap before asking the user to run a manual command
 - the primary bootstrap path does not depend on `ssh-copy-id`
@@ -67,7 +69,9 @@ These should not trigger `machine-management` unless machine readiness is the ob
 - the container bootstrap ensures `/run/sshd` exists
 - space-containing remote arguments such as SSH public keys and mesh peer keys survive the SSH hop intact
 - `machine_add.py` persists final alias, namespace, host identity, container name, image, and SSH port into inventory without the agent having to call `inventory.py put`
-- when image policy is `auto`, the recorded inventory image is the actual selected image after pull / fallback resolution
+- the recorded inventory image is the actual selected image after mirror resolution and pull / cache fallback
+- `main` and `stable` remain first-class selectors, while `auto`, `*:latest`, and bare repositories without a tag are rejected as defaults
+- long-running bootstrap phases keep emitting attributable progress for image pull and package-install steps instead of going silent behind one global timeout
 
 ### Verify
 
@@ -79,6 +83,8 @@ These should not trigger `machine-management` unless machine readiness is the ob
 ### Repair
 
 - `machine_repair.py` accepts a single machine identifier for the normal case
+- `machine_repair.py` can request an explicit replacement image when the recorded image is legacy, ambiguous, or the user wants to rotate tracks
+- `machine_repair.py` does not short-circuit to `already-ready` when the recorded image is legacy, ambiguous, or still points at a moving tag
 - the skill prefers non-destructive repairs first
 - the skill uses the bare-metal host only when container SSH is broken
 - the skill does not recreate or delete a container unless the user explicitly asked for destructive repair

@@ -21,10 +21,12 @@ from _workflow_common import (  # noqa: E402
     ensure_local_public_key,
     find_record,
     host_target,
+    image_request_matches_record,
     list_records,
     machine_summary,
     print_json,
     resolve_password_args,
+    resolve_workflow_image,
     status_payload,
     sync_mesh,
     upsert_machine_record,
@@ -35,6 +37,13 @@ from _workflow_common import (  # noqa: E402
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     parser.add_argument("--machine", required=True, help="machine alias or host IP from inventory")
+    parser.add_argument(
+        "--image",
+        help=(
+            "explicit replacement image selector: `main`, `stable`, or a full non-latest image reference; "
+            "omit only when the recorded image is already explicit and acceptable"
+        ),
+    )
     parser.add_argument("--public-key-file", help="local public key to install; defaults to ~/.ssh/id_ed25519.pub if present")
     parser.add_argument("--python", help="optional explicit python path inside the container")
     password_group = parser.add_mutually_exclusive_group()
@@ -60,13 +69,23 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             return 0
 
+        image, image_needs_input = resolve_workflow_image(
+            explicit_image=args.image,
+            existing_record=record,
+            action="machine repair",
+        )
+        if image_needs_input is not None:
+            print_json(image_needs_input)
+            return 0
+        assert image is not None
+
         emit_progress(action="repair", phase="verify-before", message="checking current machine readiness", machine=record["alias"])
         verified_before = verify_machine(
             record,
             python=args.python,
             progress_cb=lambda phase, message: emit_progress(action="repair", phase=f"before-{phase}", message=message, machine=record["alias"]),
         )
-        if verified_before.get("status") == "ready":
+        if verified_before.get("status") == "ready" and image_request_matches_record(image, record):
             print_json(
                 status_payload(
                     "ready",
@@ -112,16 +131,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             host=record["host"]["ip"],
             container_name=record["container"]["name"],
             container_ssh_port=record["container"]["ssh_port"],
-            image=record["container"]["image"],
+            image=image,
             workdir=record["container"]["workdir"],
             namespace=record.get("namespace"),
             public_key_file=args.public_key_file,
+            replace_container_on_image_change=bool(args.image),
         )
         if container.get("status") in {"needs_input", "needs_repair", "blocked"}:
             print_json(container)
             return 0
 
-        actual_image = container.get("selected_image") or container.get("image") or record["container"]["image"]
+        actual_image = container.get("selected_image") or container.get("image") or image
         bootstrap_method = "password-once" if host_ssh_precheck.get("ok") is False and password.value is not None else None
         emit_progress(action="repair", phase="inventory", message="refreshing inventory and mesh state", machine=record["alias"])
         inventory_payload, updated_record = upsert_machine_record(

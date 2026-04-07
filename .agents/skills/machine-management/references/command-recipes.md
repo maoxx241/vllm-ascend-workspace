@@ -9,7 +9,7 @@ Prefer the task-oriented wrappers. Treat the low-level helpers as fallback maint
 macOS / Linux / WSL:
 
 ```bash
-python3 .agents/skills/machine-management/scripts/machine_add.py --host 173.125.1.2
+python3 .agents/skills/machine-management/scripts/machine_add.py --host 173.125.1.2 --image main
 python3 .agents/skills/machine-management/scripts/machine_verify.py --machine 173.125.1.2
 python3 .agents/skills/machine-management/scripts/machine_repair.py --machine 173.125.1.2
 python3 .agents/skills/machine-management/scripts/machine_remove.py --machine 173.125.1.2
@@ -18,7 +18,7 @@ python3 .agents/skills/machine-management/scripts/machine_remove.py --machine 17
 Windows:
 
 ```powershell
-py -3 .agents/skills/machine-management/scripts/machine_add.py --host 173.125.1.2
+py -3 .agents/skills/machine-management/scripts/machine_add.py --host 173.125.1.2 --image main
 py -3 .agents/skills/machine-management/scripts/machine_verify.py --machine 173.125.1.2
 py -3 .agents/skills/machine-management/scripts/machine_repair.py --machine 173.125.1.2
 py -3 .agents/skills/machine-management/scripts/machine_remove.py --machine 173.125.1.2
@@ -30,7 +30,8 @@ If the local machine profile already exists and host key SSH is already healthy,
 
 ```bash
 python3 .agents/skills/machine-management/scripts/machine_add.py \
-  --host 173.125.1.2
+  --host 173.125.1.2 \
+  --image main
 ```
 
 If the profile is missing and the user chose a specific username:
@@ -38,6 +39,7 @@ If the profile is missing and the user chose a specific username:
 ```bash
 python3 .agents/skills/machine-management/scripts/machine_add.py \
   --host 173.125.1.2 \
+  --image main \
   --machine-username alice123
 ```
 
@@ -46,6 +48,7 @@ If the user explicitly accepted the default/random option:
 ```bash
 python3 .agents/skills/machine-management/scripts/machine_add.py \
   --host 173.125.1.2 \
+  --image main \
   --generate-machine-username
 ```
 
@@ -55,6 +58,7 @@ If host key SSH is missing and the password can be hidden in an env var:
 export VAWS_SSH_PASSWORD='YOUR_PASSWORD'
 python3 .agents/skills/machine-management/scripts/machine_add.py \
   --host 173.125.1.2 \
+  --image main \
   --password-env VAWS_SSH_PASSWORD
 unset VAWS_SSH_PASSWORD
 ```
@@ -65,6 +69,7 @@ PowerShell example:
 $env:VAWS_SSH_PASSWORD = 'YOUR_PASSWORD'
 py -3 .agents/skills/machine-management/scripts/machine_add.py `
   --host 173.125.1.2 `
+  --image main `
   --password-env VAWS_SSH_PASSWORD
 Remove-Item Env:VAWS_SSH_PASSWORD
 ```
@@ -74,7 +79,16 @@ If the user already exposed the password in chat and the tool cannot hide stdin 
 ```bash
 python3 .agents/skills/machine-management/scripts/machine_add.py \
   --host 173.125.1.2 \
+  --image main \
   --password 'YOUR_PASSWORD_ALREADY_IN_CHAT'
+```
+
+If the user explicitly wants the latest official release track instead of `main`:
+
+```bash
+python3 .agents/skills/machine-management/scripts/machine_add.py \
+  --host 173.125.1.2 \
+  --image stable
 ```
 
 ## Verify one managed machine
@@ -91,6 +105,14 @@ Use the machine identifier already recorded in inventory.
 ```bash
 python3 .agents/skills/machine-management/scripts/machine_repair.py \
   --machine 173.125.1.2
+```
+
+If the recorded image is legacy or the user wants to rotate to a different track:
+
+```bash
+python3 .agents/skills/machine-management/scripts/machine_repair.py \
+  --machine 173.125.1.2 \
+  --image main
 ```
 
 If host key SSH drifted and a password bootstrap is needed again for recovery:
@@ -126,7 +148,7 @@ Probe one host:
 ```bash
 python3 .agents/skills/machine-management/scripts/manage_machine.py probe-host \
   --host 173.125.1.2 \
-  --image auto
+  --image main
 ```
 
 Bootstrap host key auth directly:
@@ -145,7 +167,7 @@ python3 .agents/skills/machine-management/scripts/manage_machine.py bootstrap-co
   --name vaws-alice123 \
   --port 46671 \
   --namespace alice123 \
-  --image auto
+  --image main
 ```
 
 Run the smoke test directly:
@@ -164,7 +186,8 @@ python3 .agents/skills/machine-management/scripts/inventory.py upsert \
   --machine-username alice123 \
   --host 173.125.1.2 \
   --name vaws-alice123 \
-  --container-port 46671
+  --container-port 46671 \
+  --image quay.nju.edu.cn/ascend/vllm-ascend:main
 ```
 
 Notes:
