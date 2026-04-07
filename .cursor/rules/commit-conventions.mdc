@@ -1,0 +1,20 @@
+---
+description: Commit message and PR conventions for scaffold and vllm-ascend submodule
+alwaysApply: false
+---
+
+# Commit Conventions
+
+## Scaffold repository (this repo)
+
+Standard conventional commits:
+
+```
+<type>: <summary>
+```
+
+Types: `feat`, `fix`, `refactor`, `docs`, `chore`, `test`
+
+## vllm-ascend submodule
+
+Commits inside `vllm-ascend/` must follow the submodule's own conventions — always read `vllm-ascend/AGENTS.md` for the current commit format, sign-off requirements, and PR title rules.

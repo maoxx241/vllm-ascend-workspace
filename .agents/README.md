@@ -86,3 +86,7 @@ If you change `remote-code-parity`, update these together:
 - `AGENTS.md`, `README.md`, and this file when routing, transport model, or local-state behavior changes
 
 Keep the files under `.agents/skills/` as the canonical supporting files for repo-local skills.
+
+## Cursor IDE integration
+
+Cursor IDE users: see `.cursor/rules/` for IDE-specific glob-activated rules that complement `AGENTS.md`. These rules are a thin pointer layer — they do not duplicate skill or routing content, and are designed to remain stable across submodule version switches.

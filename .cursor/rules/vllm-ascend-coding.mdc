@@ -1,0 +1,18 @@
+---
+description: Version-independent NPU coding principles for vllm-ascend development
+globs: vllm-ascend/**/*.py
+alwaysApply: false
+---
+
+# vllm-ascend NPU Coding Guide
+
+For version-specific conventions (naming, file layout, patching patterns, review checklists), always read the current `vllm-ascend/AGENTS.md` first — it updates automatically with each submodule version.
+
+## Version-independent NPU principles
+
+These hold across all vllm-ascend versions:
+
+- **`tensor.item()` sync overhead**: Calling `.item()` on a device tensor triggers a synchronous NPU-to-CPU transfer. Avoid it in hot paths; prefer device-side ops (`torch.max`, `torch.sum`) or batched transfers.
+- **Minimize CPU-NPU transfers**: Keep data on device whenever possible. In-place ops (`x.add_()`, `x.mul_()`) are preferred when safe.
+- **Plugin architecture**: vllm-ascend is a hardware plugin — it does not add model files directly. Use patching or inheritance to extend upstream vLLM (see `vllm-ascend/AGENTS.md` for current patterns).
+- **Environment variables**: Must be centralized in the designated env module (see `vllm-ascend/AGENTS.md`), never scattered across the codebase.
