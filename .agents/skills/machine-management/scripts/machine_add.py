@@ -21,6 +21,7 @@ from _workflow_common import (  # noqa: E402
     emit_progress,
     find_record,
     host_target,
+    image_request_matches_record,
     list_records,
     load_or_create_profile,
     machine_summary,
@@ -28,6 +29,7 @@ from _workflow_common import (  # noqa: E402
     probe_host,
     public_key_needs_input_payload,
     resolve_password_args,
+    resolve_workflow_image,
     status_payload,
     sync_mesh,
     upsert_machine_record,
@@ -50,7 +52,13 @@ def build_parser() -> argparse.ArgumentParser:
         default=False,
         help="generate a default workspace machine username; only use after explicit user consent",
     )
-    parser.add_argument("--image", default=machine_ops.DEFAULT_IMAGE, help=f"container image (default: {machine_ops.DEFAULT_IMAGE})")
+    parser.add_argument(
+        "--image",
+        help=(
+            "explicit image selector: `main`, `stable`, or a full non-latest image reference; "
+            "this workflow does not default implicitly"
+        ),
+    )
     parser.add_argument("--workdir", default=machine_ops.DEFAULT_WORKDIR, help=f"container workdir (default: {machine_ops.DEFAULT_WORKDIR})")
     parser.add_argument("--public-key-file", help="local public key to install; defaults to ~/.ssh/id_ed25519.pub if present")
     password_group = parser.add_mutually_exclusive_group()
@@ -76,16 +84,36 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         existing = find_record(args.host)
         alias = choose_alias(explicit_alias=args.alias, host=args.host)
+        existing_from_host = existing is not None
         if existing is not None:
             alias = existing["alias"]
+        else:
+            existing = find_record(alias)
+
+        image, image_needs_input = resolve_workflow_image(
+            explicit_image=args.image,
+            existing_record=existing,
+            action="machine add / attach",
+        )
+        if image_needs_input is not None:
+            print_json(image_needs_input)
+            return 0
+        assert image is not None
+
+        if existing is not None:
             verified = verify_machine(existing)
-            if verified.get("status") == "ready":
+            if verified.get("status") == "ready" and image_request_matches_record(image, existing):
+                message = (
+                    "machine is already managed and ready; no mutation was needed"
+                    if existing_from_host
+                    else "machine alias already exists in inventory and is ready"
+                )
                 print_json(
                     status_payload(
                         "ready",
                         success=True,
                         action="already-ready",
-                        message="machine is already managed and ready; no mutation was needed",
+                        message=message,
                         machine=machine_summary(existing),
                         profile={
                             "action": profile_action,
@@ -99,30 +127,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             if verified.get("status") == "blocked":
                 print_json(verified)
                 return 0
-        else:
-            existing = find_record(alias)
-            if existing is not None:
-                verified = verify_machine(existing)
-                if verified.get("status") == "ready":
-                    print_json(
-                        status_payload(
-                            "ready",
-                            success=True,
-                            action="already-ready",
-                            message="machine alias already exists in inventory and is ready",
-                            machine=machine_summary(existing),
-                            profile={
-                                "action": profile_action,
-                                "machine_username": profile["machine_username"],
-                                "container_name": profile["container_name"],
-                            },
-                            verify=verified,
-                        )
-                    )
-                    return 0
-                if verified.get("status") == "blocked":
-                    print_json(verified)
-                    return 0
 
         target_host = existing["host"]["ip"] if existing is not None else args.host
         target_user = existing["host"]["user"] if existing is not None else args.host_user
@@ -155,9 +159,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         else:
             host_auth = {"success": True, "result": "already-configured", "precheck": host_ssh_precheck}
 
-        image_for_probe = existing["container"]["image"] if existing is not None else args.image
         emit_progress(action="add", phase="probe", message="probing host prerequisites", machine=alias)
-        probe = probe_host(target, image=image_for_probe)
+        probe = probe_host(target, image=image)
         if probe.get("status") == "blocked":
             print_json(probe)
             return 0
@@ -177,7 +180,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         namespace = existing.get("namespace") if existing is not None else profile["machine_username"]
         container_name = existing["container"]["name"] if existing is not None else profile["container_name"]
         container_port = existing["container"]["ssh_port"] if existing is not None else free_port
-        image = existing["container"]["image"] if existing is not None else args.image
         workdir = existing["container"]["workdir"] if existing is not None else args.workdir
 
         emit_progress(action="add", phase="bootstrap", message="bootstrapping or repairing the managed container", machine=alias)
@@ -190,6 +192,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             workdir=workdir,
             namespace=namespace,
             public_key_file=args.public_key_file,
+            replace_container_on_image_change=bool(args.image),
         )
         if container.get("status") in {"needs_input", "needs_repair", "blocked"}:
             print_json(container)

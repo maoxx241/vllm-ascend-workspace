@@ -11,6 +11,7 @@ This file defines the durable behavior of `remote-code-parity`.
 - Fail closed when parity cannot be proven.
 - Prove the final container-side commit ids instead of trusting command exit status alone.
 - Stream phase progress on `stderr` as `__VAWS_PARITY_PROGRESS__=<json>` and keep one final JSON payload on `stdout`.
+- Keep runtime-install phases attributable instead of collapsing them into one opaque step: uninstall, `vllm`, `vllm-ascend` requirements, `vllm-ascend`, import verification, and marker write should each surface their own progress event.
 
 ## Scope and routing
 
@@ -158,3 +159,4 @@ A trustworthy parity result records:
 - export the Ascend driver `LD_LIBRARY_PATH` prefix before sourcing optional env scripts
 - keep the fast path on `pip install -e . --no-build-isolation`
 - if editable install fails because the image packaging stack is too old for the current `pyproject.toml`, attempt one bounded packaging-stack refresh and one retry before failing closed
+- surface a progress transition before each long runtime-install package step so an agent can tell whether the wait is in uninstall, requirements, editable install, or verification

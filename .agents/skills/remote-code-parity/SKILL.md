@@ -33,6 +33,7 @@ Keep a **ready** remote runtime in exact code parity with the local `vllm-ascend
 - Keep container cache / lock / manifest paths isolated by `workspace_id` under a container-local cache root.
 - Preserve runtime-private paths under `/vllm-workspace`, especially `Mooncake`.
 - Keep `stdout` reserved for one final JSON summary and stream phase progress on `stderr` as `__VAWS_PARITY_PROGRESS__=<json>`.
+- Runtime install progress should be attributable at the package-step level: uninstall, `vllm`, `vllm-ascend` requirements, `vllm-ascend`, import smoke, and marker write.
 - Publish each synthetic snapshot to both the parity ref and an advertised branch ref inside the container-local mirror.
 - Materialize child repos explicitly; do not rely on `git submodule update` to fetch synthetic child commits.
 - Use dynamic Python / pip discovery and the Ascend driver `LD_LIBRARY_PATH` preamble instead of pinning one Python patch path.
