@@ -188,8 +188,8 @@ def fixed_machine_username_question(cwd: pathlib.Path | None = None) -> dict[str
             },
             {
                 "id": "random",
-                "label": f"随机生成（{random_preview}）",
-                "description": "生成 agent + 5 位数字的用户名",
+                "label": f"随机生成（例如 {random_preview}）",
+                "description": "生成 agent + 5 位随机数字的用户名，实际值在创建时确定",
                 "available": True,
                 "pattern": "agent#####",
             },

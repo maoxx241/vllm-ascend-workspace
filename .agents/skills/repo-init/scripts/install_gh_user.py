@@ -22,12 +22,13 @@ import tarfile
 import tempfile
 import urllib.request
 import zipfile
+from typing import NoReturn
 
 
 API_URL = "https://api.github.com/repos/cli/cli/releases/latest"
 
 
-def fail(message: str) -> None:
+def fail(message: str) -> NoReturn:
     print(f"error: {message}", file=sys.stderr)
     raise SystemExit(1)
 

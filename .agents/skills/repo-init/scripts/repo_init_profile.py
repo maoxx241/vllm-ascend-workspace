@@ -209,10 +209,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    plan = subparsers.add_parser("plan", help="summarize the exact machine-username choices for broad init")
+    plan = subparsers.add_parser("plan", help="summarize the exact machine-username choices for broad init", allow_abbrev=False)
     plan.set_defaults(func=cmd_plan)
 
-    apply = subparsers.add_parser("apply", help="materialize one approved machine-username choice")
+    apply = subparsers.add_parser("apply", help="materialize one approved machine-username choice", allow_abbrev=False)
     apply.add_argument(
         "--choice",
         required=True,

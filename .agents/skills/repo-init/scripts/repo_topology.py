@@ -32,7 +32,6 @@ def run(
     *,
     cwd: pathlib.Path | None = None,
     check: bool = False,
-    quiet: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     command = list(cmd)
     if command and command[0] == "git":
@@ -49,8 +48,6 @@ def run(
     if check and proc.returncode != 0:
         detail = proc.stderr.strip() or proc.stdout.strip() or "command failed"
         raise RepoTopologyError(detail)
-    if quiet:
-        return proc
     return proc
 
 
@@ -277,12 +274,13 @@ def cmd_ensure_main(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     compare_main = subparsers.add_parser(
         "compare-main",
         help="compare local main/tracking refs with remote heads without broad fetch/prune",
+        allow_abbrev=False,
     )
     compare_main.add_argument("--repo", required=True, help="repository path")
     compare_main.add_argument("--branch", default="main", help="branch to compare (default: main)")
@@ -291,6 +289,7 @@ def build_parser() -> argparse.ArgumentParser:
     configure = subparsers.add_parser(
         "configure",
         help="configure origin/upstream conservatively and preserve extra remotes",
+        allow_abbrev=False,
     )
     configure.add_argument("--repo", required=True, help="repository path")
     configure.add_argument("--origin-url")
@@ -306,6 +305,7 @@ def build_parser() -> argparse.ArgumentParser:
     ensure_main = subparsers.add_parser(
         "ensure-main",
         help="quietly fetch one branch, ensure a local tracking branch, and optionally pull",
+        allow_abbrev=False,
     )
     ensure_main.add_argument("--repo", required=True, help="repository path")
     ensure_main.add_argument("--remote", required=True, help="tracking remote name")
