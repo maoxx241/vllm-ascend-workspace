@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from common import WORKSPACE_ID_PATTERN, json_dump, repo_root_from
+from install_consent import load_consent_state, resolve_sync_mode
 from remote_code_parity import DEFAULT_CONTAINER_CACHE_ROOT
 
 
@@ -132,6 +133,20 @@ def main() -> int:
     args = build_parser().parse_args()
     repo_root = repo_root_from(Path(args.repo_root))
     derived = build_derived_args(repo_root, args)
+
+    if not args.force_reinstall:
+        consent_state = load_consent_state(repo_root)
+        mode = resolve_sync_mode(consent_state, derived['server_name'], derived['container_identity'])
+        if mode == 'image':
+            print(json_dump({
+                'status': 'skipped',
+                'reason': 'sync_mode is image — using container-provided packages',
+                'sync_mode': 'image',
+                'server_name': derived['server_name'],
+                'container_identity': derived['container_identity'],
+            }))
+            return 0
+
     low_level_cmd = build_low_level_command(derived, args)
     if args.print_derived_args:
         payload = dict(derived)

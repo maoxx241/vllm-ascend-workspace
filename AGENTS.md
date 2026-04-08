@@ -64,9 +64,13 @@ Repo-local skills live under `.agents/skills/`.
 
 ## Mandatory execution gate
 
-- When a ready managed machine is about to run a remote smoke, service launch, or benchmark, run `remote-code-parity` first. Prefer the inventory-driven `parity_sync.py` entrypoint.
-- Do not continue remote execution unless `remote-code-parity` returned `status == ready`.
-- If the first runtime replacement is blocked by missing consent, stop and get consent instead of silently using the image-provided packages.
+- When a ready managed machine is about to run a remote smoke, service launch, or benchmark for the first time, check the sync mode for that container before running `remote-code-parity`:
+  - If `sync_mode` is `unset` (first use), proactively ask the user: sync local code (`local`) or use the container's image-provided vllm + vllm-ascend (`image`). Record the choice via `install_consent.py set-sync-mode`.
+  - If `sync_mode` is `local`, run `remote-code-parity` normally. Do not continue unless it returned `status == ready`.
+  - If `sync_mode` is `image`, skip `remote-code-parity` entirely and proceed with remote execution using image-provided packages.
+  - `--force-reinstall` overrides `image` mode and forces a full sync + reinstall.
+- If the first runtime replacement is blocked by missing install consent, stop and get consent instead of silently using the image-provided packages.
+- The user can switch sync mode at any time by asking to change it.
 
 ## Skill routing
 
