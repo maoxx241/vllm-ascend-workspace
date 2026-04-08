@@ -4,6 +4,34 @@ All parity helpers stream phase progress on `stderr` as `__VAWS_PARITY_PROGRESS_
 
 Prefer the helper scripts in `scripts/` when possible.
 
+## Check sync mode for a container
+
+```bash
+python3 .agents/skills/remote-code-parity/scripts/install_consent.py resolve-sync-mode \
+  --server-name blue-a \
+  --container-identity vaws-blue@/vllm-workspace
+```
+
+## Set sync mode to use image-provided packages (skip parity)
+
+```bash
+python3 .agents/skills/remote-code-parity/scripts/install_consent.py set-sync-mode \
+  --server-name blue-a \
+  --container-identity vaws-blue@/vllm-workspace \
+  --sync-mode image \
+  --approved-by-user
+```
+
+## Set sync mode to sync local code
+
+```bash
+python3 .agents/skills/remote-code-parity/scripts/install_consent.py set-sync-mode \
+  --server-name blue-a \
+  --container-identity vaws-blue@/vllm-workspace \
+  --sync-mode local \
+  --approved-by-user
+```
+
 ## Inspect the current consent state
 
 ```bash

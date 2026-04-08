@@ -51,6 +51,14 @@ These should not trigger `remote-code-parity` unless remote code parity is the o
 - the normal agent-facing entrypoint can resolve the target from machine inventory through `parity_sync.py`
 - the skill does not create or reuse a flat shared host path such as `/home/vaws`
 
+### Sync mode gate
+
+- when `sync_mode` is `unset`, the agent proactively asks the user before running parity
+- when `sync_mode` is `image`, `parity_sync.py` returns `status: skipped` without any remote operations
+- when `sync_mode` is `local`, the full parity flow proceeds normally
+- `--force-reinstall` overrides `image` mode and forces a full sync + reinstall
+- the user can switch sync mode at any time
+
 ### Consent and first install
 
 - first sync on a fresh container without recorded approval ends with `status == blocked`

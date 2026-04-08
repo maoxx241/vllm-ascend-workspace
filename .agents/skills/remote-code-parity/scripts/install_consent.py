@@ -40,6 +40,34 @@ def set_decision(
     }
 
 
+def resolve_sync_mode(state: dict[str, Any], server_name: str, container_identity: str) -> str:
+    return (
+        state.get('consents', {})
+        .get(server_name, {})
+        .get('containers', {})
+        .get(container_identity, {})
+        .get('sync_mode', 'unset')
+    )
+
+
+def set_sync_mode(
+    state: dict[str, Any],
+    server_name: str,
+    container_identity: str,
+    sync_mode: str,
+    note: str | None,
+    *,
+    approved_by_user: bool,
+) -> None:
+    if not approved_by_user:
+        raise RuntimeError('explicit --approved-by-user is required before writing sync-mode')
+    container = state.setdefault('consents', {}).setdefault(server_name, {}).setdefault('containers', {}).setdefault(container_identity, {})
+    container['sync_mode'] = sync_mode
+    container['sync_mode_updated_at'] = now_utc()
+    if note:
+        container['sync_mode_note'] = note
+
+
 def run_resolve(args: argparse.Namespace) -> int:
     repo_root = repo_root_from(Path(args.repo_root))
     state = load_consent_state(repo_root)
@@ -68,6 +96,36 @@ def run_set(args: argparse.Namespace) -> int:
 
     _, path, _ = update_state(repo_root, FILENAME, {'schema_version': 1, 'consents': {}}, apply_update)
     print(json_dump({'status': 'updated', 'path': str(path)}))
+    return 0
+
+
+def run_resolve_sync_mode(args: argparse.Namespace) -> int:
+    repo_root = repo_root_from(Path(args.repo_root))
+    state = load_consent_state(repo_root)
+    mode = resolve_sync_mode(state, args.server_name, args.container_identity)
+    payload = {
+        'server_name': args.server_name,
+        'container_identity': args.container_identity,
+        'sync_mode': mode,
+    }
+    print(json_dump(payload))
+    return 0
+
+
+def run_set_sync_mode(args: argparse.Namespace) -> int:
+    repo_root = repo_root_from(Path(args.repo_root))
+    def apply_update(state: dict[str, Any]) -> None:
+        set_sync_mode(
+            state,
+            args.server_name,
+            args.container_identity,
+            args.sync_mode,
+            args.note,
+            approved_by_user=args.approved_by_user,
+        )
+
+    _, path, _ = update_state(repo_root, FILENAME, {'schema_version': 1, 'consents': {}}, apply_update)
+    print(json_dump({'status': 'updated', 'sync_mode': args.sync_mode, 'path': str(path)}))
     return 0
 
 
@@ -119,6 +177,15 @@ def build_parser() -> argparse.ArgumentParser:
     batch.add_argument('--input', required=True)
     batch.add_argument('--approved-by-user', action='store_true')
 
+    resolve_sm = subparsers.add_parser('resolve-sync-mode')
+    add_common(resolve_sm)
+
+    set_sm = subparsers.add_parser('set-sync-mode')
+    add_common(set_sm)
+    set_sm.add_argument('--sync-mode', required=True, choices=('local', 'image'))
+    set_sm.add_argument('--note', default=None)
+    set_sm.add_argument('--approved-by-user', action='store_true')
+
     return parser
 
 
@@ -132,6 +199,10 @@ def main() -> int:
             return run_set(args)
         if args.command == 'batch-set':
             return run_batch_set(args)
+        if args.command == 'resolve-sync-mode':
+            return run_resolve_sync_mode(args)
+        if args.command == 'set-sync-mode':
+            return run_set_sync_mode(args)
         parser.error(f'unsupported command: {args.command}')
         return 2
     except Exception as exc:

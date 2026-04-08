@@ -13,6 +13,16 @@ This file defines the durable behavior of `remote-code-parity`.
 - Stream phase progress on `stderr` as `__VAWS_PARITY_PROGRESS__=<json>` and keep one final JSON payload on `stdout`.
 - Keep runtime-install phases attributable instead of collapsing them into one opaque step: uninstall, `vllm`, `vllm-ascend` requirements, `vllm-ascend`, import verification, and marker write should each surface their own progress event.
 
+## Sync mode gate
+
+Before invoking parity for a container, the agent checks the persisted `sync_mode` in `install-consents.json`:
+
+- `unset`: first use — agent must ask the user whether to sync local code (`local`) or use image-provided packages (`image`), then record via `install_consent.py set-sync-mode`.
+- `local`: proceed with the full parity flow.
+- `image`: `parity_sync.py` returns `status: skipped` immediately; the agent proceeds with remote execution using image-provided packages without syncing or installing.
+
+`--force-reinstall` overrides `image` mode. The user can switch sync mode at any time.
+
 ## Scope and routing
 
 `remote-code-parity` is an internal execution skill.

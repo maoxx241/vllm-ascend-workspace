@@ -105,7 +105,17 @@ Reference files:
 
 ## Workflow
 
-### 1. Resolve the ready target from inventory
+### 1. Check sync mode before anything else
+
+Before running parity for a container, check the persisted `sync_mode`:
+
+- `unset` (first use): the agent must proactively ask the user whether to sync local code (`local`) or use the container's image-provided vllm + vllm-ascend (`image`). Record the choice via `install_consent.py set-sync-mode --approved-by-user`.
+- `local`: proceed with the full parity flow below.
+- `image`: `parity_sync.py` returns `status: skipped` immediately. The agent skips parity and proceeds with remote execution using image-provided packages.
+
+The user can switch sync mode at any time. `--force-reinstall` overrides `image` mode.
+
+### 2. Resolve the ready target from inventory
 
 For normal agent work, start from `parity_sync.py`.
 
@@ -119,7 +129,7 @@ Collect from local machine inventory:
 
 Stop if the request is not actually about imminent remote execution.
 
-### 2. Capture synthetic snapshot refs
+### 3. Capture synthetic snapshot refs
 
 Create synthetic Git commits for the workspace repo and nested submodules in **postorder**:
 
@@ -138,7 +148,7 @@ For each repo:
 
 Ignored files stay ignored. The snapshot source of truth is tracked + untracked non-ignored.
 
-### 3. Publish mirrors directly into the container cache
+### 4. Publish mirrors directly into the container cache
 
 For each repo in scope:
 
@@ -154,7 +164,7 @@ Preferred scope:
 - `vllm-ascend/`
 - recursive nested populated submodules if discovered
 
-### 4. Handle first-time runtime replacement
+### 5. Handle first-time runtime replacement
 
 Use a container-side marker under `/vllm-workspace/.remote-code-parity/` to detect whether editable replacement already happened.
 
@@ -170,7 +180,7 @@ If the user already approved this container identity:
 - delete `/vllm-workspace/vllm` and `/vllm-workspace/vllm-ascend`
 - do **not** delete the entire `/vllm-workspace`
 
-### 5. Materialize the mirrors in place inside `/vllm-workspace`
+### 6. Materialize the mirrors in place inside `/vllm-workspace`
 
 Inside the container:
 
@@ -184,7 +194,7 @@ Inside the container:
 
 Do not claim success before the container-side commit ids match the snapshot manifest.
 
-### 6. Reinstall only when required after first install
+### 7. Reinstall only when required after first install
 
 After the first approved replacement, reinstall only when one of the following triggers fires:
 
@@ -230,7 +240,7 @@ pip install -r requirements.txt  # mirror-aware fallback: Tsinghua -> Aliyun -> 
 pip install -v -e . --no-build-isolation
 ```
 
-### 7. Finish with proof, not assumptions
+### 8. Finish with proof, not assumptions
 
 - Finish with real import smoke (`import vllm`, `import vllm_ascend`, `import torch_npu`) instead of `find_spec()` only, and keep the generated smoke snippet syntactically valid under shell heredoc quoting.
 
