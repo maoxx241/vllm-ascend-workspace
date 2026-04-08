@@ -7,6 +7,7 @@ This directory contains the repository-local skill layer for Codex, Claude Code,
 - `.agents/skills/repo-init/` is the source-of-truth skill package for repository initialization.
 - `.agents/skills/machine-management/` is the source-of-truth skill package for remote machine attach, verify, repair, and removal workflows.
 - `.agents/skills/remote-code-parity/` is the source-of-truth skill package for remote code parity before remote execution.
+- `.agents/skills/vllm-ascend-serving/` is the source-of-truth skill package for starting, checking, and stopping vLLM Ascend online services on managed containers.
 - `.agents/scripts/workspace_profile.py` is the shared low-level helper for the local workspace machine profile.
 - `.agents/lib/vaws_local_state.py` is the shared library for untracked local runtime state.
 - `AGENTS.md` carries repository-wide routing rules and mandatory decision gates.
@@ -34,6 +35,10 @@ Current primary helpers:
 - `remote-code-parity/scripts/remote_code_parity.py`
 - `remote-code-parity/scripts/install_consent.py`
 - `remote-code-parity/scripts/gc_runtime_cache.py`
+- `vllm-ascend-serving/scripts/serve_start.py`
+- `vllm-ascend-serving/scripts/serve_status.py`
+- `vllm-ascend-serving/scripts/serve_stop.py`
+- `vllm-ascend-serving/scripts/serve_probe_npus.py`
 - `../scripts/workspace_profile.py`
 
 Low-level machine-management helpers remain available for implementation work and debugging:
@@ -51,6 +56,7 @@ Untracked workspace-local state lives under `.vaws-local/`:
 - `.vaws-local/machine-inventory.json`
 - `.vaws-local/remote-code-parity/install-consents.json`
 - `.vaws-local/remote-code-parity/runtime-state.json`
+- `.vaws-local/serving/<machine-alias>.json`
 
 Remote-code-parity transport is container-only after machine attach: use machine inventory to resolve the target, then push synthetic refs directly into the container-local cache root. Synthetic mirrors should also publish an advertised branch ref for the current snapshot so nested repos can be materialized without brittle submodule fetch behavior. Runtime installs should keep pip mirror fallback on Tsinghua -> Aliyun -> PyPI, stream progress for long package steps, and keep consent/runtime-state writes atomic.
 
@@ -77,6 +83,13 @@ If you change `machine-management`, update these together:
 - `.agents/skills/machine-management/references/`
 - `.agents/skills/machine-management/scripts/`
 - shared helpers when the workflow depends on local profile or inventory state
+
+If you change `vllm-ascend-serving`, update these together:
+
+- `.agents/skills/vllm-ascend-serving/SKILL.md`
+- `.agents/skills/vllm-ascend-serving/references/`
+- `.agents/skills/vllm-ascend-serving/scripts/`
+- `AGENTS.md` and this file when routing or local-state behavior changes
 
 If you change `remote-code-parity`, update these together:
 

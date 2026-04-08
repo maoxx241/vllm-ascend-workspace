@@ -9,14 +9,16 @@ Repo-local skills live under `.agents/skills/`.
 - `repo-init`: initialize the workspace after clone, including `gh`, GitHub auth, recursive submodules, optional fork / remote topology, and the local workspace machine profile used later by machine-management.
 - `machine-management`: add, verify, repair, or remove a workspace-managed remote NPU machine and its managed container.
 - `remote-code-parity`: automatically ensure a ready remote runtime uses the exact current local workspace state before any remote smoke, service launch, or benchmark.
+- `vllm-ascend-serving`: start, check, or stop a single-node colocated vLLM Ascend online service on a workspace-managed ready remote container.
 
-`repo-init` and `machine-management` are optional. `remote-code-parity` is an automatic pre-execution gate only for ready-machine remote execution. Do not force any of them as a gate before normal local coding, docs work, or unrelated Git / SSH tasks.
+`repo-init` and `machine-management` are optional. `remote-code-parity` is an automatic pre-execution gate only for ready-machine remote execution. `vllm-ascend-serving` handles service lifecycle after parity. Do not force any of them as a gate before normal local coding, docs work, or unrelated Git / SSH tasks.
 
 ## Repo-wide operating rules
 
 - Never write secrets, passwords, private keys, tokens, or user-specific machine metadata into tracked files.
 - Keep repo-local runtime state only under the untracked directory `.vaws-local/`.
 - Keep remote-code-parity state only under `.vaws-local/remote-code-parity/`.
+- Keep serving state only under `.vaws-local/serving/`.
 - Treat the legacy repo-root `.machine-inventory.json` as compatibility input only.
 - Keep `.gitmodules` on community URLs:
   - `https://github.com/vllm-project/vllm.git`
@@ -27,6 +29,11 @@ Repo-local skills live under `.agents/skills/`.
   - `.agents/skills/machine-management/scripts/machine_verify.py`
   - `.agents/skills/machine-management/scripts/machine_repair.py`
   - `.agents/skills/machine-management/scripts/machine_remove.py`
+- For normal serving work, prefer the task wrappers:
+  - `.agents/skills/vllm-ascend-serving/scripts/serve_start.py`
+  - `.agents/skills/vllm-ascend-serving/scripts/serve_status.py`
+  - `.agents/skills/vllm-ascend-serving/scripts/serve_stop.py`
+  - `.agents/skills/vllm-ascend-serving/scripts/serve_probe_npus.py`
 - Treat `.agents/skills/machine-management/scripts/inventory.py` and `.agents/skills/machine-management/scripts/manage_machine.py` as low-level maintenance helpers, not the default agent-facing surface.
 - For machine bootstrap, never default the image silently. Ask the user to choose `rc`, `main`, `stable`, or a concrete custom image reference.
 - `rc` is the recommended developer track: resolve the newest official prerelease `vllm-ascend` tag at execution time, then try `quay.nju.edu.cn/ascend/vllm-ascend:<tag>` first and `quay.io/ascend/vllm-ascend:<tag>` second.
@@ -54,7 +61,6 @@ Repo-local skills live under `.agents/skills/`.
 - During new-machine bootstrap, stop for an explicit image choice unless an existing inventory record already points at a concrete non-`latest` image. The named selector tracks are `rc`, `main`, and `stable`; any other choice must be a concrete custom ref.
 - During `machine-management`, if host key SSH is missing and the user already supplied the host password in the request, prefer a one-shot scripted bootstrap first. Do not immediately bounce the user to a manual terminal command.
 - During `machine-management`, long `docker pull`, `apt-get update`, and package-install phases should keep emitting attributable progress instead of going silent behind one global timeout.
-
 
 ## Mandatory execution gate
 
@@ -91,6 +97,15 @@ Use `remote-code-parity` automatically when:
 
 Do not use `remote-code-parity` for initial machine attach, SSH repair, generic Git topology work, or unrelated local-only tasks.
 
+Use `vllm-ascend-serving` when the user asks to:
+
+- start, launch, or pull up a vllm-ascend online service on a managed machine
+- restart or relaunch a service (possibly with changed flags or env)
+- check if a running service is alive or ready
+- stop a running service
+
+Do not use `vllm-ascend-serving` for machine attach, environment bootstrap, code sync, benchmark orchestration, or offline inference.
+
 ## Maintenance rule
 
 When you change a skill, update the whole skill package together:
@@ -112,4 +127,3 @@ If you change `remote-code-parity`, update these together:
 - `.agents/skills/remote-code-parity/scripts/`
 - `.agents/skills/remote-code-parity/references/`
 - `AGENTS.md` and `.agents/README.md` when routing or local-state behavior changes
-

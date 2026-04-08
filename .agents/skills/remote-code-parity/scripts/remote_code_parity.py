@@ -780,6 +780,40 @@ def runtime_install_step_script(
                 'PY',
             ]
         )
+    elif step == 'verify-deps':
+        # Check vllm-ascend deps only.  vllm-ascend intentionally overrides
+        # some vllm constraints (e.g. opencv-python-headless) to keep numpy
+        # compatible with CANN, so checking vllm deps would false-positive.
+        lines.extend(
+            [
+                "$PYTHON - <<'PY'",
+                'import sys',
+                'from importlib.metadata import requires, version as pkg_version',
+                'from packaging.requirements import Requirement',
+                '',
+                'errors = []',
+                'try:',
+                '    reqs = requires("vllm-ascend") or []',
+                'except Exception:',
+                '    reqs = []',
+                'for raw in reqs:',
+                '    try:',
+                '        r = Requirement(raw)',
+                '        if r.marker and not r.marker.evaluate():',
+                '            continue',
+                '        installed = pkg_version(r.name)',
+                '        if r.specifier and not r.specifier.contains(installed):',
+                '            errors.append(f"{r.name}{r.specifier} (installed {installed})")',
+                '    except Exception:',
+                '        pass',
+                'if errors:',
+                '    for e in errors:',
+                '        print(f"MISMATCH: {e}", file=sys.stderr)',
+                '    sys.exit(1)',
+                'print("dependency-check=ok")',
+                'PY',
+            ]
+        )
     elif step == 'write-marker':
         lines.extend(
             [
@@ -1265,6 +1299,35 @@ def run_sync(args: argparse.Namespace) -> int:
                         step='verify-imports',
                         stream_progress=True,
                     )
+                    emit_progress('runtime-install-verify-deps')
+                    try:
+                        run_runtime_install_step(
+                            container=container,
+                            runtime_root=runtime_root,
+                            marker_dirname=marker_dirname,
+                            container_identity=args.container_identity,
+                            step='verify-deps',
+                            stream_progress=True,
+                        )
+                    except Exception:
+                        emit_progress('runtime-install-repair-deps',
+                                      message='dependency mismatch detected, reinstalling vllm-ascend requirements')
+                        run_runtime_install_step(
+                            container=container,
+                            runtime_root=runtime_root,
+                            marker_dirname=marker_dirname,
+                            container_identity=args.container_identity,
+                            step='install-vllm-ascend-requirements',
+                            stream_progress=True,
+                        )
+                        run_runtime_install_step(
+                            container=container,
+                            runtime_root=runtime_root,
+                            marker_dirname=marker_dirname,
+                            container_identity=args.container_identity,
+                            step='verify-deps',
+                            stream_progress=True,
+                        )
                     emit_progress('runtime-install-marker')
                     run_runtime_install_step(
                         container=container,
