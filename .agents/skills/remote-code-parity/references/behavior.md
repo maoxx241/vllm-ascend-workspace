@@ -191,5 +191,6 @@ A trustworthy parity result records:
 - route pip installs through mirror-aware fallback in the order Tsinghua -> Aliyun -> PyPI
 - if editable install fails because the image packaging stack is too old for the current `pyproject.toml`, attempt one bounded packaging-stack refresh and one retry before failing closed
 - finish runtime verification with real imports, not `find_spec()` alone, and keep the generated heredoc smoke snippet valid Python after shell quoting
+- after import smoke test, verify all `vllm-ascend` declared dependencies are version-satisfied (`verify-deps`); if a mismatch is detected (e.g. `numpy<2.0.0` but `numpy 2.x` installed), automatically reinstall `vllm-ascend` requirements and re-verify before failing
 - surface a progress transition before each long runtime-install package step so an agent can tell whether the wait is in uninstall, requirements, editable install, or verification
 - keep consent and runtime-state writes atomic so parallel wrapper calls do not clobber local state
