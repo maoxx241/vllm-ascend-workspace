@@ -3,7 +3,7 @@
 The authoritative agent instructions and skill packages for this workspace are defined in the following locations — always consult them:
 
 1. **`AGENTS.md`** (repo root) — repo-wide routing rules, mandatory decision gates, and maintenance constraints.
-2. **`.agents/skills/`** — skill packages (repo-init, machine-management, remote-code-parity), each with SKILL.md, scripts/, and references/.
+2. **`.agents/skills/`** — skill packages (repo-init, machine-management, remote-code-parity, vllm-ascend-serving), each with SKILL.md, scripts/, and references/.
 3. **`.agents/README.md`** — skill layout and script-first conventions.
 4. Each submodule's own `AGENTS.md` (e.g. `vllm-ascend/AGENTS.md`) — version-specific coding conventions; always defer to the submodule's own file.
 

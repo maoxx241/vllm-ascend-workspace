@@ -2,13 +2,13 @@
 
 **中文** | **[English](README.en.md)**
 
-一个可组合的本地开发脚手架，让你在同一个工作区里同时开发 [vLLM](https://github.com/vllm-project/vllm) 和 [vLLM Ascend 插件](https://github.com/vllm-project/vllm-ascend)，并通过内置的 AI Agent 技能自动完成环境初始化、远程 NPU 机器管理和代码同步。
+一个可组合的本地开发脚手架，让你在同一个工作区里同时开发 [vLLM](https://github.com/vllm-project/vllm) 和 [vLLM Ascend 插件](https://github.com/vllm-project/vllm-ascend)，并通过内置的 AI Agent 技能自动完成环境初始化、远程 NPU 机器管理、代码同步和服务拉起。
 
 ## 这个项目解决什么问题
 
 vLLM Ascend 的开发通常需要在本地编辑代码、在远程昇腾 NPU 服务器上运行测试，同时还要跟踪上游 vLLM 的变化。手动维护这套工作流涉及大量重复的 Git、SSH 和环境配置操作。
 
-`vllm-ascend-workspace` 把这些操作封装成三个 AI Agent 技能，你可以用自然语言让 Agent 代劳，也可以完全忽略这些技能、只把它当作一个普通的多仓库工作区。
+`vllm-ascend-workspace` 把这些操作封装成四个 AI Agent 技能，你可以用自然语言让 Agent 代劳，也可以完全忽略这些技能、只把它当作一个普通的多仓库工作区。
 
 ## 快速开始
 
@@ -30,11 +30,12 @@ Agent 会自动检测你的环境、安装所需工具、配置 Git 远程仓库
 ## 内置技能
 
 
-| 技能                     | 用途                                             | 何时使用               |
-| ---------------------- | ---------------------------------------------- | ------------------ |
-| **repo-init**          | 安装 GitHub CLI、登录 GitHub、初始化子模块、配置 Fork 和远程仓库拓扑 | 首次 clone 后初始化工作区   |
-| **machine-management** | 添加、验证、修复或移除远程昇腾 NPU 服务器及其托管容器                  | 需要配置远程 NPU 开发机时    |
-| **remote-code-parity** | 将本地工作区的完整状态（含未提交的修改）同步到远程容器                    | 在远程机器上运行测试或服务前自动触发 |
+| 技能                       | 用途                                             | 何时使用               |
+| ------------------------ | ---------------------------------------------- | ------------------ |
+| **repo-init**            | 安装 GitHub CLI、登录 GitHub、初始化子模块、配置 Fork 和远程仓库拓扑 | 首次 clone 后初始化工作区   |
+| **machine-management**   | 添加、验证、修复或移除远程昇腾 NPU 服务器及其托管容器                  | 需要配置远程 NPU 开发机时    |
+| **remote-code-parity**   | 将本地工作区的完整状态（含未提交的修改）同步到远程容器                    | 在远程机器上运行测试或服务前自动触发 |
+| **vllm-ascend-serving**  | 在远程容器上一键拉起 vLLM Ascend 推理服务，支持 NPU 探测、自动选卡、增量重启 | 需要在远程机器上起推理服务时     |
 
 
 所有技能都是**可选的**。你可以只用其中的一部分，也可以完全不用。
@@ -55,6 +56,12 @@ Agent 会自动检测你的环境、安装所需工具、配置 Git 远程仓库
 
 # 代码同步
 "帮我同步代码到服务器上并重新编译"
+
+# 服务拉起
+"在 173.131.1.2 上用 Qwen3-32B-W8A8 拉一个 4 卡的推理服务，开 W8A8 量化"
+"帮我重启一下 173.131.1.2 的服务，把 max-model-len 改成 8192"
+"看下 173.131.1.2 上的服务状态"
+"停掉 173.131.1.2 上的服务"
 ```
 
 ## 仓库结构
@@ -65,9 +72,10 @@ Agent 会自动检测你的环境、安装所需工具、配置 Git 远程仓库
 ├── vllm-ascend/           # vLLM Ascend 插件（Git 子模块）
 ├── .agents/
 │   ├── skills/
-│   │   ├── repo-init/         # 工作区初始化技能
-│   │   ├── machine-management/# 远程机器管理技能
-│   │   └── remote-code-parity/# 代码同步技能
+│   │   ├── repo-init/             # 工作区初始化技能
+│   │   ├── machine-management/    # 远程机器管理技能
+│   │   ├── remote-code-parity/    # 代码同步技能
+│   │   └── vllm-ascend-serving/   # 服务拉起技能
 │   ├── lib/               # 共享本地状态库
 │   └── scripts/           # 共享辅助脚本
 ├── .cursor/rules/         # Cursor IDE 专用规则
@@ -116,10 +124,7 @@ Agent 会自动检测你的环境、安装所需工具、配置 Git 远程仓库
 - [x] **repo-init** — 工作区初始化：GitHub CLI 安装、认证、子模块、Fork 与远程仓库拓扑配置
 - [x] **machine-management** — 远程机器管理：添加、验证、修复、移除昇腾 NPU 服务器及托管容器
 - [x] **remote-code-parity** — 代码同步：将本地完整工作区状态（含未提交修改）同步到远程容器
-
-### 进行中
-
-- [ ] **vllm-ascend-serving** — 服务拉起：支持空闲 NPU 检测、空闲端口检测，一键拉起 vLLM Ascend 推理服务
+- [x] **vllm-ascend-serving** — 服务拉起：支持空闲 NPU 检测、空闲端口检测，一键拉起 vLLM Ascend 推理服务
 
 ### 计划中
 
