@@ -39,6 +39,8 @@ Keep a **ready** remote runtime in exact code parity with the local `vllm-ascend
 - If a child repo snapshot has no tree changes, reuse its original `HEAD` commit instead of inventing a new gitlink-only delta that bubbles into the parent repo.
 - Use dynamic Python / pip discovery plus a shell-safe env preamble, and source optional Ascend env scripts under a `set +u` / `set -u` guard instead of relying on shell-specific variables.
 - If editable install fails because the image packaging stack is too old, attempt one bounded packaging-stack refresh before failing closed.
+- Before invoking parity, confirm the local working tree represents the **intended deployment state**. If any submodule source files have uncommitted changes made for temporary debugging or hypothesis testing, revert them before syncing — do not sync exploratory patches to the remote.
+- If a previous parity sync in this session led to a failed remote execution and the agent subsequently modified local code, do not re-sync until the root cause of the failure is confirmed from remote logs (not from hypothesis).
 - Fail closed if parity cannot be proven.
 - First replacement of image-provided `vllm` / `vllm-ascend` requires explicit user consent for that logical container identity.
 - `install_consent.py set` and `batch-set` must include `--approved-by-user`.
@@ -219,6 +221,10 @@ Only uninstall the packages that will actually be reinstalled. If only `vllm-asc
 **Force reinstall:**
 
 Pass `--force-reinstall` to `parity_sync.py` to unconditionally reinstall both `vllm` and `vllm-ascend` regardless of what changed. This overrides all trigger logic above but still runs the full sync flow (snapshot, push, materialize, install, verify).
+
+**`--force-reinstall` usage discipline:**
+
+Use `--force-reinstall` only when (a) it is the first sync to a new container, (b) the previous install is known to be broken, or (c) the user explicitly requests it. Do not default to `--force-reinstall` as a precaution — the trigger matrix above already handles normal cases, and unnecessary force-reinstall adds 5–15 minutes of remote compilation time per invocation.
 
 **No-change fast path:**
 

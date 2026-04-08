@@ -140,6 +140,15 @@ NPU availability is checked via `npu-smi info` on the **bare-metal host** (not t
 
 The script polls `/health` and `/v1/models` until both return success or the timeout expires.
 
+### 6a. Diagnose launch failure before any code change
+
+If the service fails during engine initialization or health check timeout:
+
+- Read **both** `stdout.log` and `stderr.log` from the remote runtime directory — vllm often logs the actual Python exception to stdout, not stderr.
+- Identify the actual exception type and message before hypothesizing a cause.
+- Do not modify source code to work around a launch failure until the root cause is confirmed from logs.
+- If the root cause is unclear, try the simplest launch configuration first (e.g. tp-only, no speculative decoding, no graph mode) and incrementally add features to isolate the failing component.
+
 ### 7. Return structured JSON
 
 On success:

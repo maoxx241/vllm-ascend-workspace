@@ -96,8 +96,12 @@ That checkpoint must cover:
    - recommended fork mode
    - community-only mode
 3. whether to initialize submodules now
+4. vllm submodule version alignment (only when submodules will be initialized)
+   - **CI-pinned** (default): check out `vllm/` at the commit CI actually tests against — from `vllm_version` matrix in `vllm-ascend/.github/workflows/pr_test_full.yaml`; cross-reference with `main_vllm_commit` in `vllm-ascend/docs/source/conf.py`
+   - **upstream main**: both submodules track their respective upstream `main` HEAD
+   - **keep current**: leave `vllm/` at whatever commit it is already on
 
-If the user only asked for a narrow GitHub auth / `gh` task, skip the machine-profile question.
+If the user only asked for a narrow GitHub auth / `gh` task, skip the machine-profile and version-alignment questions.
 
 ## Recommended topology
 
@@ -139,6 +143,15 @@ Do not silently fall back from `custom` to the detected Git username.
 Do not mutate in the same step as the first probe summary for broad init.
 
 If the request was just “初始化仓库” or similarly broad, do not silently assume a generated username or the recommended remotes.
+
+### 3a. Align vllm submodule version after submodule init
+
+After recursive submodule init completes, if the user chose CI-pinned alignment:
+
+- Extract the CI-pinned vllm commit: check `vllm_version` matrix in `vllm-ascend/.github/workflows/pr_test_full.yaml` (ground truth for PR CI), cross-reference with `main_vllm_commit` in `vllm-ascend/docs/source/conf.py`.
+- If the two sources differ, prefer the `pr_test_full.yaml` matrix value.
+- Check out `vllm/` at that commit.
+- Report the active version combination (vllm commit + vllm-ascend branch) in the finish summary.
 
 ### 4. Apply approved changes by category
 
