@@ -153,17 +153,19 @@ After recursive submodule init completes, if the user chose CI-pinned alignment:
 - Check out `vllm/` at that commit.
 - Report the active version combination (vllm commit + vllm-ascend branch) in the finish summary.
 
-### 4. Apply approved changes by category
+### 4. Apply approved changes in order
 
-Typical categories:
+Execute categories in the order listed below. **Submodule init must complete before remote rewiring of submodule repos**, because uninitialized submodule directories are not independent git repositories — running `repo_topology.py configure --repo <submodule>` on an uninitialized submodule will silently resolve to the parent workspace repo and corrupt its remotes.
 
-- local machine profile creation or change
-- `gh` install / configure
-- GitHub auth
-- recursive submodule init
-- remote rewiring
-- branch tracking updates
-- optional fork sync
+1. local machine profile creation or change
+2. `gh` install / configure
+3. GitHub auth
+4. recursive submodule init (`git submodule sync --recursive && git submodule update --init --recursive`)
+5. vllm submodule version alignment (CI-pinned checkout, if chosen)
+6. remote rewiring for workspace repo
+7. remote rewiring for `vllm` and `vllm-ascend` submodule repos (only after step 4)
+8. branch tracking updates
+9. optional fork sync
 
 ### 5. Finish compactly
 

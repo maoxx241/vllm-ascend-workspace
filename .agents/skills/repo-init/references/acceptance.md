@@ -67,6 +67,8 @@ A successful run should satisfy all applicable items below.
 ### Submodules and topology
 
 - initializes submodules recursively when the user approved it
+- completes submodule init before configuring submodule remotes
+- `repo_topology.py configure --repo <submodule>` errors out when the submodule is not initialized (git root mismatch)
 - preserves nonstandard remotes
 - keeps tracked files on community URLs
 - uses quiet remote comparison instead of broad prune-heavy fetches

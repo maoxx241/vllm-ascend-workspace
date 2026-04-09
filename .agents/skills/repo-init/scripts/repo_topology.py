@@ -63,10 +63,20 @@ def parse_repo_url(url: str | None) -> str | None:
 
 def resolve_repo(path_value: str) -> pathlib.Path:
     path = pathlib.Path(path_value).expanduser().resolve()
+    if not path.is_dir():
+        raise RepoTopologyError(f"path does not exist or is not a directory: {path}")
     proc = run(["git", "rev-parse", "--show-toplevel"], cwd=path)
     if proc.returncode != 0 or not proc.stdout.strip():
         raise RepoTopologyError(f"not a git repository: {path}")
-    return pathlib.Path(proc.stdout.strip()).resolve()
+    git_root = pathlib.Path(proc.stdout.strip()).resolve()
+    if git_root != path:
+        raise RepoTopologyError(
+            f"path '{path_value}' is not a git repository root; "
+            f"git root resolved to {git_root} instead of {path}. "
+            f"If this is a submodule, initialize it first with "
+            f"'git submodule update --init --recursive'."
+        )
+    return git_root
 
 
 def branch_exists(repo: pathlib.Path, branch: str) -> bool:

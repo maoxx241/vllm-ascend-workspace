@@ -98,13 +98,16 @@ Always use recursive sync + init for this repo.
 
 Use `repo_topology.py configure` for remote mutations.
 
+**Prerequisite**: Stage 5 (submodule init) must be complete before configuring submodule remotes. `repo_topology.py` will refuse to operate on a path whose git root resolves to a different directory (e.g. an uninitialized submodule falling through to the parent workspace).
+
 Rules:
 
 - do not delete nonstandard remotes
 - add `upstream` only when it helps the chosen workflow
 - `vllm` user fork is optional
 - `vllm-ascend` user fork is recommended but not mandatory
-- if the user chose “keep current”, do not rewrite remotes just because the recommended topology differs
+- if the user chose "keep current", do not rewrite remotes just because the recommended topology differs
+- configure workspace remotes first, then submodule remotes (after submodule init)
 
 ### Stage 7: main-branch comparison and tracking
 
@@ -144,5 +147,5 @@ A successful run usually ends with:
 - `gh` installed or a fallback provided
 - GitHub auth valid
 - recursive submodules initialized when the user approved it
-- remotes matching the user’s selected topology
+- remotes matching the user's selected topology
 - local `main` tracking the selected working remote where the user approved branch movement
