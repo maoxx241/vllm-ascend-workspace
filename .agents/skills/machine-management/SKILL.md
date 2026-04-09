@@ -216,6 +216,8 @@ Do not remove host firewall rules or host-level `authorized_keys` entries.
 - Ensure `/run/sshd` exists before starting the dedicated `sshd`.
 - Image pulls should follow the selected mirror order and emit heartbeat-style progress so long `docker pull`, `apt-get update`, and `apt-get install` phases remain attributable. Persist the actually selected image in inventory, not only the selector.
 - Container bootstrap should leave behind `/etc/vaws/host-info.json`, `/etc/vaws/container-info.json`, and `/etc/profile.d/vaws-ascend-env.sh` so later verify / repair runs can see the recorded machine type, container type, and SoC quickly.
+- Container bootstrap should write `/etc/pip.conf` with multiple pip indexes (Tsinghua as primary, Aliyun and PyPI as additional) so any subsequent `pip install` inside the container does not fail due to missing mirror configuration.
+- Container bootstrap should install `pytest` into the runtime Python if not already present, so that remote test execution works out of the box without ad-hoc environment setup.
 - Keep `rc` and `stable` resolution dynamic: resolve the newest official prerelease tag or latest official non-prerelease release tag at execution time instead of using the moving `latest` tag.
 - Keep progress on `stderr` and the final status JSON on `stdout`; do not mix partial human narration into the terminal contract.
 - For smoke tests, do not pin a Python patch version. Discover the highest available `/usr/local/python*/bin/python3`, then fall back to `python3`.

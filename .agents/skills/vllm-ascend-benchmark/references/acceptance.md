@@ -1,6 +1,6 @@
 # Benchmark Skill Acceptance Criteria
 
-## Single-run (`bench_run.py`)
+## Single-run (`bench_run.py` with default `--runs 1`)
 
 - [ ] Service is started via `serve_start.py` (not raw SSH).
 - [ ] `vllm bench serve` executes on the remote container and returns a result JSON.
@@ -12,23 +12,29 @@
 - [ ] When `--refer-nightly` is given, nightly values fill in missing args only.
 - [ ] When user args AND nightly are both given, user args win.
 
-## A/B comparison (`bench_compare.py`)
+## Multi-run (`bench_run.py` with `--runs N`)
 
-- [ ] Baseline ref is checked out and benchmarked first.
-- [ ] Patched ref is checked out and benchmarked second.
-- [ ] Core benchmark parameters (model, tp, bench-args) are identical for both runs.
-- [ ] `--patched-extra-env` values appear only in the patched run's env.
-- [ ] Output JSON contains `baseline.metrics`, `patched.metrics`, and `delta`.
-- [ ] `env_diff.patched_only` lists the extra env vars applied to patched side.
-- [ ] `regression` field is `true` when patched throughput < baseline * 0.97.
-- [ ] Submodule is restored to its original HEAD in the `finally` block.
-- [ ] If either run fails, service is stopped and error is reported.
+- [ ] Service starts once and is not restarted between runs.
+- [ ] All N benchmark iterations run against the same warm service instance.
+- [ ] `--warmup-runs M` marks the first M runs as warmup in `per_run`.
+- [ ] `aggregated` statistics exclude warmup runs.
+- [ ] `aggregated` contains `count`, and per-metric `mean`, `stddev`, `values`.
+- [ ] `per_run` lists all runs with `run` number and `warmup` boolean.
+- [ ] If a run fails mid-sequence, service is stopped and `completed_runs` are reported.
+- [ ] `--warmup-runs` is clamped to at most `--runs - 1`.
 
 ## Progress reporting
 
 - [ ] Progress lines go to stderr as `__VAWS_BENCHMARK_PROGRESS__=<json>`.
 - [ ] Final JSON goes to stdout only.
 - [ ] Serving progress lines are forwarded to stderr.
+- [ ] Multi-run mode reports per-run progress with run number and warmup tag.
+
+## Multi-state comparison contract
+
+- [ ] Regression comparisons must use identical `--serve-args`, `--bench-args`, `--extra-env`, and `--tp` across states.
+- [ ] Only the code state (branch / commit / worktree) changes between runs.
+- [ ] If any configuration parameter differs, the agent explicitly records the difference and labels the result as a configuration comparison.
 
 ## Configuration priority
 
