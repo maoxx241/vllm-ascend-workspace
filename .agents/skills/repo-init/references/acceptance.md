@@ -38,6 +38,7 @@ A successful run should satisfy all applicable items below.
   - machine username choice if the profile is missing
   - repo topology choice
   - submodule-init choice
+  - vllm version alignment choice (when the probe shows submodules are uninitialized)
 - the machine-username branch uses exactly three options:
   - `git-username`
   - `random`
@@ -67,6 +68,8 @@ A successful run should satisfy all applicable items below.
 ### Submodules and topology
 
 - initializes submodules recursively when the user approved it
+- completes submodule init before configuring submodule remotes
+- `repo_topology.py configure --repo <submodule>` errors out when the submodule is not initialized (git root mismatch)
 - preserves nonstandard remotes
 - keeps tracked files on community URLs
 - uses quiet remote comparison instead of broad prune-heavy fetches

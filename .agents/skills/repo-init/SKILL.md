@@ -96,10 +96,12 @@ That checkpoint must cover:
    - recommended fork mode
    - community-only mode
 3. whether to initialize submodules now
-4. vllm submodule version alignment (only when submodules will be initialized)
+4. vllm submodule version alignment — **always include this question in the grouped checkpoint when the probe shows submodules are not yet initialized**. Since all questions are asked in a single batch, you cannot wait for the answer to question 3 before deciding whether to include question 4. If the user later chooses not to initialize submodules, simply ignore their version-alignment answer. Options:
    - **CI-pinned** (default): check out `vllm/` at the commit CI actually tests against — from `vllm_version` matrix in `vllm-ascend/.github/workflows/pr_test_full.yaml`; cross-reference with `main_vllm_commit` in `vllm-ascend/docs/source/conf.py`
    - **upstream main**: both submodules track their respective upstream `main` HEAD
    - **keep current**: leave `vllm/` at whatever commit it is already on
+
+Skip question 4 only when the probe shows submodules are already initialized (nothing to align).
 
 If the user only asked for a narrow GitHub auth / `gh` task, skip the machine-profile and version-alignment questions.
 
@@ -153,17 +155,19 @@ After recursive submodule init completes, if the user chose CI-pinned alignment:
 - Check out `vllm/` at that commit.
 - Report the active version combination (vllm commit + vllm-ascend branch) in the finish summary.
 
-### 4. Apply approved changes by category
+### 4. Apply approved changes in order
 
-Typical categories:
+Execute categories in the order listed below. **Submodule init must complete before remote rewiring of submodule repos**, because uninitialized submodule directories are not independent git repositories — running `repo_topology.py configure --repo <submodule>` on an uninitialized submodule will silently resolve to the parent workspace repo and corrupt its remotes.
 
-- local machine profile creation or change
-- `gh` install / configure
-- GitHub auth
-- recursive submodule init
-- remote rewiring
-- branch tracking updates
-- optional fork sync
+1. local machine profile creation or change
+2. `gh` install / configure
+3. GitHub auth
+4. recursive submodule init (`git submodule sync --recursive && git submodule update --init --recursive`)
+5. vllm submodule version alignment (CI-pinned checkout, if chosen)
+6. remote rewiring for workspace repo
+7. remote rewiring for `vllm` and `vllm-ascend` submodule repos (only after step 4)
+8. branch tracking updates
+9. optional fork sync
 
 ### 5. Finish compactly
 
