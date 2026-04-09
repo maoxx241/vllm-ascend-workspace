@@ -1636,6 +1636,35 @@ print(json.dumps({
 }, ensure_ascii=False, indent=2))
 PY
 chmod 0644 /etc/vaws/container-info.json
+_vaws_runtime_python=""
+if [ -n "$_vaws_python_dir" ] && [ -x "$_vaws_python_dir/python3" ]; then
+  _vaws_runtime_python="$_vaws_python_dir/python3"
+elif command -v python3 >/dev/null 2>&1; then
+  _vaws_runtime_python="$(command -v python3)"
+fi
+if [ -n "$_vaws_runtime_python" ]; then
+  install -d -m 0755 /etc/pip
+  cat > /etc/pip.conf <<'EOF_PIP'
+[global]
+index-url = https://pypi.tuna.tsinghua.edu.cn/simple
+extra-index-url = https://mirrors.aliyun.com/pypi/simple https://pypi.org/simple
+trusted-host = pypi.tuna.tsinghua.edu.cn mirrors.aliyun.com pypi.org files.pythonhosted.org
+EOF_PIP
+  chmod 0644 /etc/pip.conf
+  echo "[vaws-bootstrap] pip configured: /etc/pip.conf (primary=tsinghua, additional=aliyun,pypi)"
+  if "$_vaws_runtime_python" -c "import pytest" >/dev/null 2>&1; then
+    echo "[vaws-bootstrap] pytest already present"
+  else
+    echo "[vaws-bootstrap] installing pytest..."
+    if "$_vaws_runtime_python" -m pip install pytest -q --disable-pip-version-check 2>/dev/null; then
+      echo "[vaws-bootstrap] pytest installed"
+    else
+      echo "[vaws-bootstrap] pytest install failed (best-effort, continuing)"
+    fi
+  fi
+else
+  echo "[vaws-bootstrap] runtime python not found, skipping pip/pytest setup"
+fi
 ssh-keygen -A >/dev/null 2>&1 || true
 cat > /etc/ssh/sshd_vaws_config <<EOF_SSH
 Port ${port}

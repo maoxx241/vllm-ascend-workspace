@@ -1,10 +1,19 @@
 #!/usr/bin/env python3
-"""Run a single vllm bench serve benchmark on a workspace-managed remote container.
+"""Run vllm bench serve benchmarks on a workspace-managed remote container.
+
+Supports single-run and multi-run (warm-service) modes.  In multi-run mode
+the service is started once and multiple benchmark iterations run against the
+same warm service, with optional warmup runs excluded from the aggregated
+statistics.
 
 Usage examples:
 
-    # Minimal: model + machine
+    # Minimal single run
     python3 bench_run.py --machine 173.131.1.2 --model /home/weights/Qwen3.5-35B
+
+    # Multi-run with warmup (start service once, run 5 times, discard first)
+    python3 bench_run.py --machine 173.131.1.2 --model /home/weights/Qwen3.5-35B \\
+        --runs 5 --warmup-runs 1 --tp 4
 
     # With explicit serve and bench args
     python3 bench_run.py --machine 173.131.1.2 --model /home/weights/Qwen3.5-35B \\
@@ -25,6 +34,7 @@ import argparse
 import sys
 import traceback
 from pathlib import Path
+from typing import Any
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
 if str(_SCRIPT_DIR) not in sys.path:
@@ -45,7 +55,7 @@ from _common import (
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        description="Run a single vllm bench serve benchmark.",
+        description="Run vllm bench serve benchmarks (single or multi-run).",
         allow_abbrev=False,
     )
     p.add_argument("--machine", required=True, help="machine alias or IP")
@@ -57,6 +67,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--refer-nightly", default=None,
                    help="nightly YAML name as configuration reference")
     p.add_argument("--skip-parity", action="store_true")
+    p.add_argument("--runs", type=int, default=1,
+                   help="number of benchmark iterations against the same warm service (default: 1)")
+    p.add_argument("--warmup-runs", type=int, default=0,
+                   help="number of initial runs to discard from aggregated statistics (default: 0)")
     return p
 
 
@@ -86,14 +100,52 @@ def _split_sections(argv: list[str]) -> tuple[list[str], list[str] | None, list[
     )
 
 
+def _aggregate_metrics(
+    all_runs: list[dict[str, Any]],
+    warmup: int,
+) -> dict[str, Any]:
+    """Compute mean/stddev over the statistical runs (excluding warmup)."""
+    stat_runs = all_runs[warmup:]
+    if not stat_runs:
+        return {}
+
+    metric_keys = set()
+    for m in stat_runs:
+        metric_keys.update(m.keys())
+
+    agg: dict[str, Any] = {"count": len(stat_runs)}
+    for key in sorted(metric_keys):
+        vals: list[float] = []
+        for m in stat_runs:
+            if key in m:
+                try:
+                    vals.append(float(m[key]))
+                except (TypeError, ValueError):
+                    continue
+        if not vals:
+            continue
+        mean = sum(vals) / len(vals)
+        if len(vals) > 1:
+            variance = sum((v - mean) ** 2 for v in vals) / (len(vals) - 1)
+            stddev = variance ** 0.5
+        else:
+            stddev = 0.0
+        agg[key] = {"mean": round(mean, 4), "stddev": round(stddev, 4), "values": vals}
+
+    return agg
+
+
 def main(argv: list[str] | None = None) -> int:
     raw_argv = argv if argv is not None else sys.argv[1:]
     main_argv, manual_serve_args, manual_bench_args = _split_sections(raw_argv)
 
     args = build_parser().parse_args(main_argv)
 
-    serve_args = manual_serve_args if manual_serve_args is not None else args.serve_args
-    bench_args = manual_bench_args if manual_bench_args is not None else args.bench_args
+    total_runs: int = max(1, args.runs)
+    warmup_runs: int = max(0, min(args.warmup_runs, total_runs - 1))
+
+    serve_args = manual_serve_args if manual_serve_args is not None else getattr(args, "serve_args", None)
+    bench_args = manual_bench_args if manual_bench_args is not None else getattr(args, "bench_args", None)
 
     try:
         config = assemble_config(
@@ -108,7 +160,6 @@ def main(argv: list[str] | None = None) -> int:
             skip_parity=args.skip_parity,
         )
 
-        # --- Start service ---
         emit_progress("start", "launching vllm service")
         start_result = call_serve_start(config)
 
@@ -125,44 +176,94 @@ def main(argv: list[str] | None = None) -> int:
         served_model = start_result.get("served_model_name", Path(args.model).name)
         container_ip, container_port = _get_ssh_endpoint(args.machine)
 
-        # --- Run benchmark ---
-        emit_progress("bench", "running vllm bench serve")
-        try:
-            raw_result = run_bench_on_remote(
-                config, base_url, served_model, container_ip, container_port,
-            )
-        except Exception as e:
-            emit_progress("bench", f"benchmark failed: {e}")
-            call_serve_stop(args.machine, force=True)
-            print_json({
-                "status": "failed",
-                "phase": "bench_run",
-                "error": str(e),
-                "config": config.summary_dict(),
-            })
-            return 1
+        all_metrics: list[dict[str, Any]] = []
+        all_raw: list[dict[str, Any]] = []
 
-        # --- Stop service ---
+        for i in range(total_runs):
+            run_label = f"run {i + 1}/{total_runs}"
+            is_warmup = i < warmup_runs
+            tag = " (warmup)" if is_warmup else ""
+            emit_progress("bench", f"{run_label}{tag}: running vllm bench serve")
+            try:
+                raw_result = run_bench_on_remote(
+                    config, base_url, served_model, container_ip, container_port,
+                )
+            except Exception as e:
+                emit_progress("bench", f"{run_label}: benchmark failed: {e}")
+                call_serve_stop(args.machine, force=True)
+                print_json({
+                    "status": "failed",
+                    "phase": "bench_run",
+                    "run": i + 1,
+                    "error": str(e),
+                    "completed_runs": [
+                        {"run": j + 1, "warmup": j < warmup_runs, "metrics": m}
+                        for j, m in enumerate(all_metrics)
+                    ],
+                    "config": config.summary_dict(),
+                })
+                return 1
+
+            metrics = extract_metrics(raw_result)
+            all_metrics.append(metrics)
+            all_raw.append(raw_result)
+            throughput = metrics.get("output_throughput", "N/A")
+            emit_progress("bench", f"{run_label}{tag}: throughput={throughput}")
+
         emit_progress("stop", "stopping service")
-        call_serve_stop(args.machine)
+        stop_result = call_serve_stop(args.machine)
+        cleanup_warning: str | None = None
+        if stop_result.get("status") not in ("stopped", "not_found"):
+            emit_progress("stop", "graceful stop failed, retrying with force")
+            stop_result = call_serve_stop(args.machine, force=True)
+            if stop_result.get("status") not in ("stopped", "not_found"):
+                cleanup_warning = f"service may still be running: {stop_result}"
 
-        # --- Output ---
-        metrics = extract_metrics(raw_result)
-        emit_progress("done", f"benchmark complete, throughput={metrics.get('output_throughput', 'N/A')}")
-
-        print_json({
-            "status": "ok",
-            "machine": args.machine,
-            "model": args.model,
-            "metrics": metrics,
-            "config": config.summary_dict(),
-            "raw_result": raw_result,
-            "timestamp": now_utc(),
-        })
+        if total_runs == 1:
+            emit_progress("done", f"benchmark complete, throughput={all_metrics[0].get('output_throughput', 'N/A')}")
+            result_json: dict[str, Any] = {
+                "status": "ok",
+                "machine": args.machine,
+                "model": args.model,
+                "metrics": all_metrics[0],
+                "config": config.summary_dict(),
+                "raw_result": all_raw[0],
+                "timestamp": now_utc(),
+            }
+            if cleanup_warning:
+                result_json["cleanup_warning"] = cleanup_warning
+            print_json(result_json)
+        else:
+            aggregated = _aggregate_metrics(all_metrics, warmup_runs)
+            emit_progress(
+                "done",
+                f"benchmark complete: {total_runs} runs ({warmup_runs} warmup), "
+                f"mean throughput={aggregated.get('output_throughput', {}).get('mean', 'N/A')}",
+            )
+            result_json = {
+                "status": "ok",
+                "machine": args.machine,
+                "model": args.model,
+                "runs": total_runs,
+                "warmup_runs": warmup_runs,
+                "aggregated": aggregated,
+                "per_run": [
+                    {"run": j + 1, "warmup": j < warmup_runs, "metrics": m}
+                    for j, m in enumerate(all_metrics)
+                ],
+                "config": config.summary_dict(),
+                "timestamp": now_utc(),
+            }
+            if cleanup_warning:
+                result_json["cleanup_warning"] = cleanup_warning
+            print_json(result_json)
         return 0
 
     except Exception as e:
-        call_serve_stop(args.machine, force=True)
+        try:
+            call_serve_stop(args.machine, force=True)
+        except Exception:
+            pass
         print_json({
             "status": "failed",
             "phase": "unexpected",

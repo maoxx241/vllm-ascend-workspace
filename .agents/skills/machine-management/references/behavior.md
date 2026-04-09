@@ -196,6 +196,16 @@ The smoke path must remain dynamic and conservative:
 
 The recorded session showed that adding `devlib` advanced past one missing-library error but introduced ABI mismatch. Driver-library prefixing alone was the stable fix.
 
+## Runtime environment provisioning
+
+Container bootstrap writes persistent runtime environment configuration so that subsequent SSH sessions (parity, serving, benchmark, ad-hoc scripts) work without per-session setup:
+
+- `/etc/profile.d/vaws-ascend-env.sh`: adds the runtime Python directory and Ascend driver libs to `PATH` and `LD_LIBRARY_PATH`.
+- `/etc/pip.conf`: configures pip with multiple indexes — Tsinghua as `index-url` (primary), Aliyun and PyPI as `extra-index-url` (additional). Note: pip searches all configured indexes and selects the best match; this is multi-source availability, not ordered fallback. This prevents `pip install` failures due to unreachable default mirrors inside the container.
+- `pytest`: installed into the runtime Python during bootstrap. This ensures agents can run remote test verification without ad-hoc dependency installation.
+
+The pip config and pytest install are best-effort: if the runtime Python cannot be discovered or pip is broken, the bootstrap continues without failing.
+
 ## Mesh contract
 
 Use stable key comments such as `vaws-mesh:<alias-or-ip>` so later cleanup is deterministic.

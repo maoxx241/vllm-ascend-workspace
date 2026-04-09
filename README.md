@@ -8,7 +8,7 @@
 
 vLLM Ascend 的开发通常需要在本地编辑代码、在远程昇腾 NPU 服务器上运行测试，同时还要跟踪上游 vLLM 的变化。手动维护这套工作流涉及大量重复的 Git、SSH 和环境配置操作。
 
-`vllm-ascend-workspace` 把这些操作封装成四个 AI Agent 技能，你可以用自然语言让 Agent 代劳，也可以完全忽略这些技能、只把它当作一个普通的多仓库工作区。
+`vllm-ascend-workspace` 把这些操作封装成五个 AI Agent 技能，你可以用自然语言让 Agent 代劳，也可以完全忽略这些技能、只把它当作一个普通的多仓库工作区。
 
 ## 快速开始
 
@@ -36,6 +36,7 @@ Agent 会自动检测你的环境、安装所需工具、配置 Git 远程仓库
 | **machine-management**   | 添加、验证、修复或移除远程昇腾 NPU 服务器及其托管容器                  | 需要配置远程 NPU 开发机时    |
 | **remote-code-parity**   | 将本地工作区的完整状态（含未提交的修改）同步到远程容器                    | 在远程机器上运行测试或服务前自动触发 |
 | **vllm-ascend-serving**  | 在远程容器上一键拉起 vLLM Ascend 推理服务，支持 NPU 探测、自动选卡、增量重启 | 需要在远程机器上起推理服务时     |
+| **vllm-ascend-benchmark** | 在远程容器上运行 `vllm bench serve` 性能基准测试，支持多轮预热和统计聚合     | 需要跑吞吐/延迟基准测试或性能回归对比时 |
 
 
 所有技能都是**可选的**。你可以只用其中的一部分，也可以完全不用。
@@ -62,6 +63,10 @@ Agent 会自动检测你的环境、安装所需工具、配置 Git 远程仓库
 "帮我重启一下 x.x.x.x 的服务，把 max-model-len 改成 8192"
 "看下 x.x.x.x 上的服务状态"
 "停掉 x.x.x.x 上的服务"
+
+# 性能基准测试
+"在 x.x.x.x 上用 Qwen3.5-35B 跑个 benchmark，4 卡，跑 5 组取后 4 组"
+"对比一下 main 和这个 PR 的吞吐差异"
 ```
 
 ## 仓库结构
@@ -75,7 +80,8 @@ Agent 会自动检测你的环境、安装所需工具、配置 Git 远程仓库
 │   │   ├── repo-init/             # 工作区初始化技能
 │   │   ├── machine-management/    # 远程机器管理技能
 │   │   ├── remote-code-parity/    # 代码同步技能
-│   │   └── vllm-ascend-serving/   # 服务拉起技能
+│   │   ├── vllm-ascend-serving/   # 服务拉起技能
+│   │   └── vllm-ascend-benchmark/ # 性能基准测试技能
 │   ├── lib/               # 共享本地状态库
 │   └── scripts/           # 共享辅助脚本
 ├── .cursor/rules/         # Cursor IDE 专用规则
@@ -125,10 +131,11 @@ Agent 会自动检测你的环境、安装所需工具、配置 Git 远程仓库
 - [x] **machine-management** — 远程机器管理：添加、验证、修复、移除昇腾 NPU 服务器及托管容器
 - [x] **remote-code-parity** — 代码同步：将本地完整工作区状态（含未提交修改）同步到远程容器
 - [x] **vllm-ascend-serving** — 服务拉起：支持空闲 NPU 检测、空闲端口检测，一键拉起 vLLM Ascend 推理服务
+- [x] **vllm-ascend-benchmark** — 在线性能基准测试：支持单轮/多轮（warm-service）模式、预热轮剔除、统计聚合，多状态回归对比由 Agent 编排
 
 ### 计划中
 
-- [ ] **性能与精度测试** — 基于 aisbench 的自动化评测，支持 HTML 报告自动分析、系统调度评估及 DP 均衡度分析
+- [ ] **精度测试与 aisbench 集成** — 基于 aisbench 的自动化评测，支持 HTML 报告自动分析、系统调度评估及 DP 均衡度分析
 - [ ] **模型 Profiling 分析** — 自动分析模型结构及主要算子耗时，热点算子 AIC/AIV/MTE2 ratio 分析，AICPU 算子识别，host bound 识别与诊断
 - [ ] **同步打断优化** — 针对具体 case 提供异步拷贝掩盖方案，减少同步等待开销
 - [ ] **计算图分析** — 构建模型计算图，提供基于计算图的理论性能评估报告及优化方案

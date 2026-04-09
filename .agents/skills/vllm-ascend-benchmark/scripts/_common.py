@@ -449,38 +449,3 @@ def extract_metrics(raw_result: dict[str, Any]) -> dict[str, Any]:
 
     return metrics
 
-
-def compute_delta(baseline: dict[str, Any], patched: dict[str, Any]) -> dict[str, str]:
-    """Compute percentage delta between baseline and patched metrics."""
-    delta: dict[str, str] = {}
-    for key in baseline:
-        if key not in patched:
-            continue
-        try:
-            bv = float(baseline[key])
-            pv = float(patched[key])
-        except (TypeError, ValueError):
-            continue
-        if bv == 0:
-            delta[key] = "N/A (baseline=0)"
-            continue
-        pct = (pv - bv) / abs(bv) * 100
-        sign = "+" if pct >= 0 else ""
-        delta[key] = f"{sign}{pct:.2f}%"
-    return delta
-
-
-def check_regression(
-    baseline_metrics: dict[str, Any],
-    patched_metrics: dict[str, Any],
-    threshold: float = 0.97,
-) -> bool:
-    """Return True if patched throughput regressed below threshold."""
-    bv = baseline_metrics.get("output_throughput")
-    pv = patched_metrics.get("output_throughput")
-    if bv is None or pv is None:
-        return False
-    try:
-        return float(pv) < float(bv) * threshold
-    except (TypeError, ValueError):
-        return False

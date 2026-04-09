@@ -8,7 +8,7 @@ A composable local development scaffold for working on [vLLM](https://github.com
 
 Developing vLLM Ascend typically involves editing code locally, running tests on remote Ascend NPU servers, and tracking upstream vLLM changes — all of which require repetitive Git, SSH, and environment configuration.
 
-`vllm-ascend-workspace` wraps these operations into three AI Agent skills. You can ask an Agent to handle them in natural language, or ignore the skills entirely and use it as a plain multi-repo workspace.
+`vllm-ascend-workspace` wraps these operations into five AI Agent skills. You can ask an Agent to handle them in natural language, or ignore the skills entirely and use it as a plain multi-repo workspace.
 
 ## Quick start
 
@@ -35,6 +35,8 @@ The Agent will detect your environment, install required tools, and configure Gi
 | **repo-init**          | Install GitHub CLI, authenticate, initialize submodules, configure forks and remote topology | After first clone                                          |
 | **machine-management** | Add, verify, repair, or remove a remote Ascend NPU server and its managed container          | When setting up a remote NPU dev machine                   |
 | **remote-code-parity** | Sync the full local workspace state (including uncommitted changes) to a remote container    | Triggered automatically before remote test or service runs |
+| **vllm-ascend-serving** | Launch a vLLM Ascend inference service on a remote container, with NPU probing, auto card selection, and incremental restart | When you need an inference service on a remote machine |
+| **vllm-ascend-benchmark** | Run `vllm bench serve` performance benchmarks on a remote container, with multi-run warmup and statistical aggregation | When you need throughput/latency benchmarks or performance regression checks |
 
 
 All skills are **optional**. Use any subset, or none at all.
@@ -55,6 +57,15 @@ When talking to an Agent:
 
 # Code sync
 "Sync my code to the server and rebuild"
+
+# Serving (--model must point to weights already present on the remote container)
+"Launch a 4-card inference service on x.x.x.x using /home/weights/Qwen3-32B-W8A8 with W8A8 quantization"
+"Check the service status on x.x.x.x"
+"Stop the service on x.x.x.x"
+
+# Benchmarking
+"Run a benchmark on x.x.x.x with Qwen3.5-35B, 4 cards, 5 runs keep last 4"
+"Compare throughput between main and this PR"
 ```
 
 ## Repository layout
@@ -66,8 +77,10 @@ When talking to an Agent:
 ├── .agents/
 │   ├── skills/
 │   │   ├── repo-init/         # Workspace initialization skill
-│   │   ├── machine-management/# Remote machine management skill
-│   │   └── remote-code-parity/# Code synchronization skill
+│   │   ├── machine-management/    # Remote machine management skill
+│   │   ├── remote-code-parity/    # Code synchronization skill
+│   │   ├── vllm-ascend-serving/   # Inference serving skill
+│   │   └── vllm-ascend-benchmark/ # Performance benchmarking skill
 │   ├── lib/               # Shared local-state library
 │   └── scripts/           # Shared helper scripts
 ├── .cursor/rules/         # Cursor IDE specific rules
@@ -116,14 +129,12 @@ This repository supports mainstream AI coding tools:
 - **repo-init** — Workspace initialization: GitHub CLI install, auth, submodules, fork & remote topology
 - **machine-management** — Remote machine management: add, verify, repair, remove Ascend NPU servers and managed containers
 - **remote-code-parity** — Code sync: push full local workspace state (including uncommitted changes) to remote containers
-
-### In Progress
-
 - **vllm-ascend-serving** — Service launch: idle NPU detection, idle port detection, one-click vLLM Ascend inference serving
+- **vllm-ascend-benchmark** — Online performance benchmarking: single-run / multi-run (warm-service) mode, warmup exclusion, statistical aggregation; multi-state regression comparisons orchestrated by the Agent
 
 ### Planned
 
-- **Benchmarking & accuracy testing** — Automated evaluation based on aisbench, with HTML report analysis, system scheduling assessment, and DP balance analysis
+- **Accuracy testing & aisbench integration** — Automated evaluation based on aisbench, with HTML report analysis, system scheduling assessment, and DP balance analysis
 - **Model profiling** — Automatic model structure analysis and operator latency breakdown, hot operator AIC/AIV/MTE2 ratio analysis, AICPU operator identification, host bound detection and diagnosis
 - **Sync-break optimization** — Provide async copy overlap strategies for specific cases to reduce synchronization overhead
 - **Compute graph analysis** — Build model compute graphs, generate theoretical performance evaluation reports and optimization recommendations

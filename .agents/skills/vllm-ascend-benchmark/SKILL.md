@@ -5,12 +5,12 @@ description: Run vLLM online-serving benchmarks on a workspace-managed remote co
 
 # vLLM Ascend Benchmark
 
-Run `vllm bench serve` on a **ready** workspace-managed remote container and produce structured performance results. Supports single-run benchmarks and A/B comparisons.
+Run `vllm bench serve` on a **ready** workspace-managed remote container and produce structured performance results. Supports single-run and multi-run (warm-service) modes.
 
 ## Use this skill when
 
 - the user asks to run a performance benchmark / throughput test on a managed machine
-- the user asks to compare performance before and after a code change (A/B)
+- the user asks to compare performance before and after a code change
 - the user asks to verify there is no performance regression for a PR or commit
 
 ## Do not use this skill when
@@ -26,25 +26,25 @@ Run `vllm bench serve` on a **ready** workspace-managed remote container and pro
 - Benchmark parameters are assembled by the agent based on user intent and executed through the scripts below. The agent must not construct raw `vllm bench serve` commands and run them directly on the remote.
 - **User intent takes priority** over nightly configs. Nightly YAML files under `vllm-ascend/tests/e2e/nightly/single_node/models/configs/` are a **reference source** for discovering how to configure a given model or feature (MTP, graph mode, TP count, etc.), not an execution template to run verbatim.
 - Nightly configs are used as a **fallback** only when the user specifies a model but provides no other parameters.
-- A/B comparisons must use identical core benchmark parameters (model, tp, bench-args) for both sides — only the code state changes. However, the patched side may carry additional environment variables (debug switches, feature flags) via `--patched-extra-env`, and the env difference must be recorded in the output.
 - After benchmarking, the service is automatically stopped. No residual processes should remain.
 - Progress goes to `stderr` as `__VAWS_BENCHMARK_PROGRESS__=<json>`. Final result goes to `stdout` as JSON.
 - Keep local benchmark state only under `.vaws-local/benchmark/`.
+- **Multi-state comparisons** (e.g. baseline vs PR vs modified) are orchestrated by the agent calling `bench_run.py` once per code state, not by a single script. The agent is responsible for switching code states (via worktree, checkout, or manual edit) and running parity between each state.
 
 ## Cross-platform launcher rule
 
 - macOS / Linux / WSL: `python3 ...`
 - Windows: `py -3 ...`
 
-## Public entry points
-
-### Single-run benchmark
+## Public entry point
 
 ```bash
 python3 .agents/skills/vllm-ascend-benchmark/scripts/bench_run.py \
   --machine <alias-or-ip> \
   --model <remote-weight-path> \
   [--tp <N>] \
+  [--runs <N>] \
+  [--warmup-runs <M>] \
   [--serve-args <arg> ...] \
   [--bench-args <arg> ...] \
   [--extra-env KEY=VALUE ...] \
@@ -53,31 +53,12 @@ python3 .agents/skills/vllm-ascend-benchmark/scripts/bench_run.py \
   [--skip-parity]
 ```
 
+- `--runs`: number of benchmark iterations against the same warm service (default: 1). The service starts once and all runs hit the same warm instance.
+- `--warmup-runs`: number of initial runs to discard from aggregated statistics (default: 0). Must be less than `--runs`.
 - `--serve-args`: extra arguments forwarded to `vllm serve` (e.g. `--async-scheduling`, `--compilation-config '...'`)
 - `--bench-args`: extra arguments forwarded to `vllm bench serve` (e.g. `--num-prompts 128`, `--max-concurrency 32`)
 - `--extra-env`: environment variables for the service (e.g. `HCCL_BUFFSIZE=1024`)
 - `--refer-nightly`: name of a nightly YAML (without path prefix) to use as a configuration reference; user-provided args override anything from the YAML
-
-### A/B comparison
-
-```bash
-python3 .agents/skills/vllm-ascend-benchmark/scripts/bench_compare.py \
-  --machine <alias-or-ip> \
-  --baseline-ref <branch-or-commit> \
-  --patched-ref <branch-or-commit> \
-  --repo <vllm-ascend|vllm> \
-  --model <remote-weight-path> \
-  [--patched-extra-env KEY=VALUE ...] \
-  [--tp <N>] \
-  [--serve-args <arg> ...] \
-  [--bench-args <arg> ...] \
-  [--extra-env KEY=VALUE ...] \
-  [--refer-nightly <yaml-name>] \
-  [--port <N>]
-```
-
-- `--patched-extra-env`: environment variables applied **only** to the patched side (e.g. a debug flag the patched branch introduces). The env difference is recorded in the output.
-- Core benchmark parameters are shared between both runs.
 
 ## Workflow
 
@@ -103,21 +84,17 @@ If a service is already running on the target machine, stop it before proceeding
 
 Uses `serve_start.py` internally to launch the vLLM service with the assembled configuration. Parity sync is handled automatically by the serving skill.
 
-### 5. Run `vllm bench serve`
+### 5. Run benchmark iterations
 
-Executes `vllm bench serve` via SSH on the remote container against the running service endpoint.
+Executes `vllm bench serve` via SSH on the remote container against the running service. In multi-run mode, all iterations hit the same warm service instance — the service is **not** restarted between runs.
 
-### 6. Collect results
+### 6. Stop the service
 
-Parses the benchmark output JSON for key metrics: `output_throughput`, `mean_tpot_ms`, `mean_ttft_ms`, and (when applicable) `acceptance_rate`.
+Calls `serve_stop.py` to clean up after all runs complete.
 
-### 7. Stop the service
+### 7. Return structured JSON
 
-Calls `serve_stop.py` to clean up.
-
-### 8. Return structured JSON
-
-Single-run output:
+Single-run output (`--runs 1`, the default):
 
 ```json
 {
@@ -134,23 +111,40 @@ Single-run output:
 }
 ```
 
-A/B comparison output:
+Multi-run output (`--runs N` where N > 1):
 
 ```json
 {
   "status": "ok",
   "machine": "173.131.1.2",
   "model": "/home/weights/Qwen3.5-35B",
-  "baseline": { "ref": "main", "metrics": {...}, "env": {...} },
-  "patched":  { "ref": "feat/xxx", "metrics": {...}, "env": {...} },
-  "delta": {
-    "output_throughput": "+3.2%",
-    "mean_tpot_ms": "-1.5%"
+  "runs": 5,
+  "warmup_runs": 1,
+  "aggregated": {
+    "count": 4,
+    "output_throughput": { "mean": 165.2, "stddev": 2.1, "values": [163.5, 165.1, 166.8, 165.4] },
+    "mean_ttft_ms": { "mean": 1020.5, "stddev": 15.3, "values": [...] },
+    "acceptance_rate": { "mean": 0.572, "stddev": 0.01, "values": [...] }
   },
-  "env_diff": { "patched_only": ["VLLM_XXX=1"] },
-  "regression": false
+  "per_run": [
+    { "run": 1, "warmup": true, "metrics": {...} },
+    { "run": 2, "warmup": false, "metrics": {...} },
+    ...
+  ],
+  "config": { "tp": 4, "serve_args": [...], "bench_args": [...], "env": {...} }
 }
 ```
+
+## Multi-state comparison pattern
+
+To compare performance across code states (e.g. baseline vs PR), the agent should:
+
+1. For each code state, ensure the local workspace reflects that state (checkout, worktree, or revert).
+2. Call `bench_run.py` with `--runs N --warmup-runs M` for that state.
+3. Collect the JSON output for each state.
+4. Compare the `aggregated` metrics across states.
+
+The agent orchestrates the code-state switching and parity syncing between runs. This is more flexible and robust than a single script trying to manage git operations, because the agent can handle edge cases like cross-fork commits and submodule quirks.
 
 ## Reference files
 

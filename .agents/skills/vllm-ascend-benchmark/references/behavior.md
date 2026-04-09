@@ -6,10 +6,9 @@
 2. **Assemble config** from user args + optional nightly reference.
 3. **Stop existing service** on the target machine if any.
 4. **Start service** via `serve_start.py` (which handles parity sync internally).
-5. **Run `vllm bench serve`** via SSH on the remote container.
-6. **Collect results** from the bench output JSON.
-7. **Stop service** via `serve_stop.py`.
-8. **Output structured JSON** on stdout.
+5. **Run benchmark iterations** via SSH on the remote container — all against the same warm service.
+6. **Stop service** via `serve_stop.py`.
+7. **Output structured JSON** on stdout.
 
 ## Configuration Priority
 
@@ -26,32 +25,41 @@ Nightly YAML is a reference source for discovering how to configure a model/feat
 - `benchmarks.perf` fields (`num_prompts`, `max_out_len`, `batch_size`) are mapped to bench CLI args.
 - User-provided `--serve-args` / `--bench-args` completely override the nightly values.
 
-## A/B Comparison
+## Multi-Run (Warm-Service) Mode
 
-The A/B flow runs two complete benchmark cycles (start -> bench -> stop) sequentially:
+When `--runs N` is given with N > 1, the service starts once and all N iterations run sequentially against the same warm service instance. The service is never restarted between runs.
 
-1. Checkout `baseline-ref` in the target submodule, run full bench cycle.
-2. Checkout `patched-ref`, run full bench cycle.
-3. Compute delta and regression status.
-4. Restore the submodule to its original HEAD.
+`--warmup-runs M` excludes the first M runs from the aggregated statistics. This accounts for JIT compilation, graph capture, and other one-time costs that skew initial measurements.
 
-### Patched Extra Env
+### Why warm-service matters
 
-The patched side can carry additional environment variables via `--patched-extra-env`. These are:
+Restarting the service between runs means every run pays the full startup cost (model loading, graph capture, JIT). The "discard first run" strategy only works when subsequent runs hit the already-warm service. If the service restarts each time, there are no warm runs to keep.
 
-- Applied only to the patched service launch.
-- Recorded in the output under `env_diff.patched_only`.
-- Typical use case: the patched branch introduces a new feature flag (e.g., `VLLM_ENABLE_NEW_OPT=1`) that must be set for the optimization to take effect.
+### Aggregation
 
-### Core Parameters Invariant
+The output JSON includes:
 
-Both runs share identical:
-- Model path and served model name
-- TP / port configuration
-- Bench args (num-prompts, concurrency, output-len, etc.)
-- Base environment variables (from `--extra-env`)
+- `per_run`: every run's metrics, tagged with `warmup: true/false`
+- `aggregated`: mean + sample stddev over the non-warmup runs, for each metric key
+- `aggregated.count`: number of runs included in the statistics
 
-Only the code state and `--patched-extra-env` differ.
+## Multi-State Comparison
+
+Comparing multiple code states (baseline, PR, modified) is **not** handled by a single benchmark script. Instead:
+
+1. The agent switches the local workspace to each code state.
+2. The agent calls `bench_run.py` once per state (each call does parity sync + service lifecycle + N runs).
+3. The agent compares the returned JSON metrics across states.
+
+This keeps the benchmark script focused on one thing (reliable measurement) and leaves orchestration to the agent, which is better equipped to handle git worktrees, cross-fork commits, and submodule complexity.
+
+### Comparison contract
+
+For performance regression comparisons, all runs must use identical core benchmark parameters (`--serve-args`, `--bench-args`, `--extra-env`, `--tp`). Only the code state should change between runs. If any configuration parameter differs, the agent must explicitly record the difference in its output and treat the result as a **configuration comparison**, not a pure regression comparison.
+
+### Regression判定
+
+Given baseline throughput `T_b` and patched throughput `T_p`, compute the ratio `r = T_p / T_b`. If `r < 0.97`, the patched version is considered a throughput regression. The same threshold applies to `acceptance_rate` when speculative decoding is enabled. TTFT and TPOT regressions use inverted comparison (`r = T_b / T_p`) since lower is better for latency metrics.
 
 ## Remote Execution
 
