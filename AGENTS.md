@@ -10,8 +10,9 @@ Repo-local skills live under `.agents/skills/`.
 - `machine-management`: add, verify, repair, or remove a workspace-managed remote NPU machine and its managed container.
 - `remote-code-parity`: automatically ensure a ready remote runtime uses the exact current local workspace state before any remote smoke, service launch, or benchmark.
 - `vllm-ascend-serving`: start, check, or stop a single-node colocated vLLM Ascend online service on a workspace-managed ready remote container.
+- `vllm-ascend-benchmark`: run `vllm bench serve` performance benchmarks on a workspace-managed remote container, supporting single-run and A/B comparison modes.
 
-`repo-init` and `machine-management` are optional. `remote-code-parity` is an automatic pre-execution gate only for ready-machine remote execution. `vllm-ascend-serving` handles service lifecycle after parity. Do not force any of them as a gate before normal local coding, docs work, or unrelated Git / SSH tasks.
+`repo-init` and `machine-management` are optional. `remote-code-parity` is an automatic pre-execution gate only for ready-machine remote execution. `vllm-ascend-serving` handles service lifecycle after parity. `vllm-ascend-benchmark` orchestrates serving + benchmarking end-to-end. Do not force any of them as a gate before normal local coding, docs work, or unrelated Git / SSH tasks.
 
 ## Repo-wide operating rules
 
@@ -34,6 +35,9 @@ Repo-local skills live under `.agents/skills/`.
   - `.agents/skills/vllm-ascend-serving/scripts/serve_status.py`
   - `.agents/skills/vllm-ascend-serving/scripts/serve_stop.py`
   - `.agents/skills/vllm-ascend-serving/scripts/serve_probe_npus.py`
+- For normal benchmark work, prefer the task wrappers:
+  - `.agents/skills/vllm-ascend-benchmark/scripts/bench_run.py`
+  - `.agents/skills/vllm-ascend-benchmark/scripts/bench_compare.py`
 - Treat `.agents/skills/machine-management/scripts/inventory.py` and `.agents/skills/machine-management/scripts/manage_machine.py` as low-level maintenance helpers, not the default agent-facing surface.
 - For machine bootstrap, never default the image silently. Ask the user to choose `rc`, `main`, `stable`, or a concrete custom image reference.
 - `rc` is the recommended developer track: resolve the newest official prerelease `vllm-ascend` tag at execution time, then try `quay.nju.edu.cn/ascend/vllm-ascend:<tag>` first and `quay.io/ascend/vllm-ascend:<tag>` second.
@@ -109,6 +113,14 @@ Use `vllm-ascend-serving` when the user asks to:
 - stop a running service
 
 Do not use `vllm-ascend-serving` for machine attach, environment bootstrap, code sync, benchmark orchestration, or offline inference.
+
+Use `vllm-ascend-benchmark` when the user asks to:
+
+- run a performance benchmark / throughput test on a managed machine
+- compare performance before and after a code change (A/B)
+- verify there is no performance regression for a PR or commit
+
+Do not use `vllm-ascend-benchmark` for accuracy tests, nightly CI matrix runs, offline inference, or service-only lifecycle without benchmarking.
 
 ## Maintenance rule
 
