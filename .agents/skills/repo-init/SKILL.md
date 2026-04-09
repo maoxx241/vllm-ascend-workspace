@@ -96,10 +96,12 @@ That checkpoint must cover:
    - recommended fork mode
    - community-only mode
 3. whether to initialize submodules now
-4. vllm submodule version alignment (only when submodules will be initialized)
+4. vllm submodule version alignment — **always include this question in the grouped checkpoint when the probe shows submodules are not yet initialized**. Since all questions are asked in a single batch, you cannot wait for the answer to question 3 before deciding whether to include question 4. If the user later chooses not to initialize submodules, simply ignore their version-alignment answer. Options:
    - **CI-pinned** (default): check out `vllm/` at the commit CI actually tests against — from `vllm_version` matrix in `vllm-ascend/.github/workflows/pr_test_full.yaml`; cross-reference with `main_vllm_commit` in `vllm-ascend/docs/source/conf.py`
    - **upstream main**: both submodules track their respective upstream `main` HEAD
    - **keep current**: leave `vllm/` at whatever commit it is already on
+
+Skip question 4 only when the probe shows submodules are already initialized (nothing to align).
 
 If the user only asked for a narrow GitHub auth / `gh` task, skip the machine-profile and version-alignment questions.
 

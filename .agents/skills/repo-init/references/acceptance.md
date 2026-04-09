@@ -38,6 +38,7 @@ A successful run should satisfy all applicable items below.
   - machine username choice if the profile is missing
   - repo topology choice
   - submodule-init choice
+  - vllm version alignment choice (when the probe shows submodules are uninitialized)
 - the machine-username branch uses exactly three options:
   - `git-username`
   - `random`

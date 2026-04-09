@@ -57,6 +57,7 @@ That question must cover:
 - machine username choice when the profile is missing
 - repo topology mode: keep current, recommended fork mode, or community-only
 - whether to initialize submodules now
+- vllm submodule version alignment (CI-pinned / upstream main / keep current) — always include this when the probe shows submodules are uninitialized, because all questions are asked in one batch and you cannot wait for the submodule-init answer first; ignore the answer if the user later declines submodule init
 
 For the machine username branch, use the fixed three-option model from `repo_init_profile.py plan`:
 
