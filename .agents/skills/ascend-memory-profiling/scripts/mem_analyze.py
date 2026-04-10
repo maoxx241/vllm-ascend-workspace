@@ -514,6 +514,7 @@ def generate_device_report(
     weight_theory: dict,
     weight_precise: dict,
     tp: int,
+    msprof_scope: str = "process-level",
 ) -> DeviceReport:
     """Generate a memory breakdown report for a single device."""
     baseline = baseline_hbm.get(dev_id, {})
@@ -610,12 +611,14 @@ def generate_device_report(
         evidence=kv_evidence,
     ))
 
+    scope_label = f" [{msprof_scope}]" if msprof_scope != "per-device" else ""
+
     # HCCL
     if hccl_mb > 0:
         report.components.append(MemoryComponent(
             name="HCCL 缓冲",
             value_mb=hccl_mb,
-            source="msprof npu_module_mem Component=HCCL",
+            source=f"msprof npu_module_mem Component=HCCL{scope_label}",
             evidence=f"npu_module_mem.csv: HCCL max = {hccl_mb:.2f} MB",
         ))
 
@@ -624,7 +627,7 @@ def generate_device_report(
         report.components.append(MemoryComponent(
             name="CANN Runtime",
             value_mb=runtime_mb,
-            source="msprof npu_module_mem Component=RUNTIME",
+            source=f"msprof npu_module_mem Component=RUNTIME{scope_label}",
             evidence=f"npu_module_mem.csv: RUNTIME max = {runtime_mb:.2f} MB",
         ))
 
@@ -633,7 +636,7 @@ def generate_device_report(
         report.components.append(MemoryComponent(
             name="SLOG (系统日志)",
             value_mb=slog_mb,
-            source="msprof npu_module_mem Component=SLOG",
+            source=f"msprof npu_module_mem Component=SLOG{scope_label}",
             evidence=f"npu_module_mem.csv: SLOG max = {slog_mb:.2f} MB",
         ))
 
@@ -642,7 +645,7 @@ def generate_device_report(
         report.components.append(MemoryComponent(
             name="其他 msprof 组件",
             value_mb=other_msprof,
-            source="msprof npu_module_mem (minor components)",
+            source=f"msprof npu_module_mem (minor components){scope_label}",
             evidence=f"Sum of minor components = {other_msprof:.2f} MB",
         ))
 
@@ -857,14 +860,32 @@ def main() -> None:
     log_path = run_dir / "vllm_serve.log"
     vllm_info = parse_vllm_logs(log_path.read_text()) if log_path.exists() else {}
 
-    # Parse msprof data — merge all npu_module_mem slices (slice_0 has
-    # APP/HCCL/RUNTIME/SLOG, slice_1 may have FFTS/other minor components)
-    msprof_components: dict[str, float] = {}
+    # Parse msprof data — build per-device component dicts.
+    # The manifest's __prof_device_map__ maps CSV filenames to device IDs,
+    # allowing per-device attribution when DP > 1 (multiple PROF directories).
+    prof_device_map: dict[str, list[int]] = {}
+    msprof_csvs_meta = manifest.get("msprof_csvs", {})
+    if isinstance(msprof_csvs_meta, dict):
+        prof_device_map = msprof_csvs_meta.get("__prof_device_map__", {})
+
+    per_device_msprof: dict[int, dict[str, float]] = {}
+    global_msprof: dict[str, float] = {}
+
     for csv_path in find_all_msprof_csvs(run_dir, "npu_module_mem"):
         partial = parse_npu_module_mem_csv(csv_path)
+        devs = prof_device_map.get(csv_path.name, [])
+
+        if devs:
+            for dev_id in devs:
+                if dev_id not in per_device_msprof:
+                    per_device_msprof[dev_id] = {}
+                for comp, val in partial.items():
+                    if val > per_device_msprof[dev_id].get(comp, 0):
+                        per_device_msprof[dev_id][comp] = val
+        # Always merge into global for fallback / cross-validation
         for comp, val in partial.items():
-            if val > msprof_components.get(comp, 0):
-                msprof_components[comp] = val
+            if val > global_msprof.get(comp, 0):
+                global_msprof[comp] = val
 
     # Weight analysis: prefer safetensors manifest, fallback to config estimate
     tp = manifest.get("tp", 1)
@@ -906,16 +927,18 @@ def main() -> None:
     for dev_id in devices:
         if isinstance(dev_id, int) and dev_id >= total_devices:
             continue
+        device_msprof = per_device_msprof.get(dev_id, global_msprof)
         report = generate_device_report(
             dev_id=dev_id,
             baseline_hbm=baseline_hbm,
             after_ready_hbm=after_ready_hbm,
             after_infer_hbm=after_infer_hbm,
-            msprof_components=msprof_components,
+            msprof_components=device_msprof,
             vllm_info=vllm_info,
             weight_theory=weight_theory,
             weight_precise=weight_precise,
             tp=tp,
+            msprof_scope="per-device" if dev_id in per_device_msprof else "process-level",
         )
         reports.append(report)
 
@@ -927,7 +950,8 @@ def main() -> None:
     json_report = {
         "manifest": manifest,
         "vllm_info": vllm_info,
-        "msprof_components": {k: round(v, 2) for k, v in msprof_components.items()},
+        "msprof_components_global": {k: round(v, 2) for k, v in global_msprof.items()},
+        "msprof_per_device": {str(d): {k: round(v, 2) for k, v in comps.items()} for d, comps in per_device_msprof.items()},
         "weight_theory": weight_theory,
         "weight_precise": weight_precise,
         "devices": [asdict(r) for r in reports],

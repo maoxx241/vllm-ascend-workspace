@@ -85,6 +85,8 @@ def parse_args() -> argparse.Namespace:
                    help="Attach to a running service managed by the serving skill")
     p.add_argument("--baseline-from", default="",
                    help="Path to a previous run directory to reuse baseline npu-smi data (for attach mode)")
+    p.add_argument("--resume-run", default="",
+                   help="Path to a previous run directory to merge new data into (for two-phase attach)")
     return p.parse_args()
 
 
@@ -272,44 +274,6 @@ def stop_service(ep: SshEndpoint) -> None:
     ), check=False)
 
 
-def export_msprof(ep: SshEndpoint, remote_dir: str) -> list[str]:
-    """Run msprof --export once for all PROF directories under remote_dir/msprof_data."""
-    from _common import MSPROF_REPORTS_REMOTE_PATH
-    progress("Running msprof export...")
-    msprof_data = f"{remote_dir}/msprof_data"
-    r = ssh_exec(ep, f"find {msprof_data} -maxdepth 1 -name 'PROF_*' -type d", check=False)
-    prof_dirs = [d.strip() for d in r.stdout.strip().splitlines() if d.strip()]
-    if not prof_dirs:
-        progress("WARNING: No PROF directories found")
-        return []
-
-    progress(f"Exporting {len(prof_dirs)} PROF directories...")
-    reports_arg = ""
-    r_chk = ssh_exec(ep, f"test -f {MSPROF_REPORTS_REMOTE_PATH} && echo YES || echo NO", check=False)
-    if "YES" in r_chk.stdout:
-        reports_arg = f" --reports={MSPROF_REPORTS_REMOTE_PATH}"
-    log_file = f"{msprof_data}/_export.log"
-    ssh_exec(
-        ep,
-        f"{ENV_PREAMBLE} msprof --export=on --output={msprof_data}"
-        f"{reports_arg} > {log_file} 2>&1 &",
-        check=False, timeout=30,
-    )
-    import time as _time
-    deadline = _time.monotonic() + 1800
-    poll_interval = 10
-    while _time.monotonic() < deadline:
-        _time.sleep(poll_interval)
-        r = ssh_exec(ep, "pgrep -f '[m]sprof.*--export' >/dev/null 2>&1 && echo RUNNING || echo DONE", check=False, timeout=15)
-        if "DONE" in r.stdout:
-            break
-        poll_interval = min(poll_interval * 1.5, 60)
-    else:
-        progress("WARNING: msprof export timed out, proceeding with available CSVs")
-
-    return prof_dirs
-
-
 def collect_vllm_logs(ep: SshEndpoint, remote_dir: str, local_path: Path) -> str:
     """Fetch vLLM serve logs from remote."""
     for logname in ["msprof_stdout.log", "vllm_serve.log"]:
@@ -318,6 +282,39 @@ def collect_vllm_logs(ep: SshEndpoint, remote_dir: str, local_path: Path) -> str
             (local_path / "vllm_serve.log").write_text(r.stdout)
             return r.stdout
     return ""
+
+
+def _discover_prof_device_map(
+    ep: SshEndpoint,
+    search_root: str,
+) -> dict[str, list[int]]:
+    """Map PROF directory names to device IDs they cover.
+
+    Returns e.g. {"PROF_000001_...": [0,1,2,3], "PROF_000002_...": [4,5,6,7]}.
+    Device IDs are discovered from ``device_*`` subdirectories within each PROF.
+    """
+    r = ssh_exec(
+        ep,
+        f"find {search_root} -maxdepth 1 -name 'PROF_*' -type d",
+        check=False,
+    )
+    prof_dirs = [d.strip() for d in r.stdout.strip().splitlines() if d.strip()]
+    mapping: dict[str, list[int]] = {}
+    for pdir in prof_dirs:
+        prof_name = Path(pdir).name
+        r2 = ssh_exec(
+            ep,
+            f"find {shlex.quote(pdir)} -maxdepth 1 -name 'device_*' -type d "
+            f"| sed 's|.*/device_||'",
+            check=False,
+        )
+        devs = []
+        for tok in r2.stdout.strip().splitlines():
+            tok = tok.strip()
+            if tok.isdigit():
+                devs.append(int(tok))
+        mapping[prof_name] = sorted(devs)
+    return mapping
 
 
 def collect_msprof_csvs(
@@ -332,14 +329,21 @@ def collect_msprof_csvs(
     When *msprof_data_subdir* is True (default, standalone mode), CSVs are found
     under ``remote_dir/msprof_data/``.  When False (attach mode), *remote_dir*
     already points to the msprof data directory itself.
+
+    The manifest maps ``local_filename`` → ``relative_path`` and additionally
+    stores a ``__prof_device_map__`` key mapping each CSV to the device IDs
+    of its parent PROF directory (for per-device attribution).
     """
     csv_dir = local_path / "msprof_csvs"
     csv_dir.mkdir(exist_ok=True)
 
     search_root = f"{remote_dir}/msprof_data" if msprof_data_subdir else remote_dir
+    prof_device_map = _discover_prof_device_map(ep, search_root)
+
     r = ssh_exec(ep, f"find {search_root} -name '*.csv' -size +100c", check=False)
     csvs = [f.strip() for f in r.stdout.strip().splitlines() if f.strip()]
-    manifest = {}
+    manifest: dict[str, Any] = {}
+    csv_device_map: dict[str, list[int]] = {}
 
     for remote_csv in csvs:
         basename = Path(remote_csv).name
@@ -354,8 +358,14 @@ def collect_msprof_csvs(
                     local_csv = csv_dir / f"{stem}_{idx}{suffix}"
                     idx += 1
             local_csv.write_text(r2.stdout)
-            manifest[basename] = str(local_csv.relative_to(local_path))
+            manifest[local_csv.name] = str(local_csv.relative_to(local_path))
 
+            for prof_name, devs in prof_device_map.items():
+                if prof_name in remote_csv:
+                    csv_device_map[local_csv.name] = devs
+                    break
+
+    manifest["__prof_device_map__"] = csv_device_map
     return manifest
 
 
@@ -514,7 +524,13 @@ def _main_attach(
     _extract_serve_config_from_extra_args(args, svc_extra_args)
 
     model_tag = Path(model).name.replace("/", "_")
-    run_dir = ensure_run_dir(tag=args.tag or f"attach_{model_tag}")
+    if args.resume_run:
+        run_dir = Path(args.resume_run)
+        if not run_dir.exists():
+            raise SystemExit(f"--resume-run directory does not exist: {run_dir}")
+        progress(f"Resuming into existing run: {run_dir}")
+    else:
+        run_dir = ensure_run_dir(tag=args.tag or f"attach_{model_tag}")
     remote_dir = f"/tmp/vaws_memprof_{int(time.time())}"
 
     progress(f"Output directory: {run_dir}")
@@ -567,11 +583,11 @@ def _main_attach(
     if service_alive:
         # Full collection: health check, npu-smi, logs, inference
         try:
-            wait_for_health(ep, port, timeout=30)
+            wait_for_health(ep, port, timeout=args.health_timeout)
         except TimeoutError:
             raise SystemExit(
-                f"Service on port {port} is not responding to /health. "
-                "Check service status with the serving skill."
+                f"Service on port {port} is not responding to /health after "
+                f"{args.health_timeout}s. Check service status with the serving skill."
             )
 
         manifest["after_ready_hbm"] = collect_npu_smi(ep, "after_ready", run_dir)
@@ -618,6 +634,17 @@ def _main_attach(
         progress("Attach-mode collection complete (service left running)")
     else:
         progress("Attach-mode collection complete (service was stopped, collected available data)")
+
+    # When resuming, merge into the existing manifest so both phases
+    # contribute to a single complete run.
+    existing_manifest_path = run_dir / "manifest.json"
+    if args.resume_run and existing_manifest_path.exists():
+        existing = json.loads(existing_manifest_path.read_text())
+        for key, val in manifest.items():
+            if val in (None, {}, [], "", False, 0) and existing.get(key) not in (None, {}, [], "", False, 0):
+                continue
+            existing[key] = val
+        manifest = existing
 
     (run_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False))
     progress(f"Data saved to {run_dir}")
@@ -743,8 +770,8 @@ def _main_standalone(
     stop_service(ep)
     time.sleep(5)
 
-    # Phase 5: msprof export
-    export_msprof(ep, remote_dir)
+    # Phase 5: msprof export (via shared helper)
+    run_msprof_export(ep, f"{remote_dir}/msprof_data")
     manifest["msprof_csvs"] = collect_msprof_csvs(ep, remote_dir, run_dir)
 
     # Phase 6: model config + weight manifest

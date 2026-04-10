@@ -29,7 +29,7 @@ Collect and analyze HBM memory usage on Ascend NPU devices running vLLM serving 
 | P0 | `msprof --application` wrapping | Full component breakdown (APP, HCCL, RUNTIME, SLOG) | Highest -- sees memory torch cannot manage |
 | P1 | `npu-smi info` | Static baseline + phased delta | High -- hardware-level |
 | P2 | vLLM startup logs | Weights, KV cache, num_gpu_blocks | Medium-high -- application-reported |
-| P3 | `safetensors` file headers | Exact tensor shapes, dtypes, per-component breakdown | High -- byte-accurate |
+| P3 | `safetensors` file headers | Tensor shapes, dtypes, byte sizes (byte-accurate); component classification and shard strategy are rule-based inference | High for byte sizes; medium for per-device attribution |
 | P4 | Model `config.json` | Theoretical weight calculation (fallback) | Reference only |
 
 ## Memory components
@@ -40,8 +40,8 @@ Collect and analyze HBM memory usage on Ascend NPU devices running vLLM serving 
 | Model weights | safetensors + vLLM logs | `weight_inspector.py` 解析文件头 → 按 TP/EP/DP 分片 → 与 vLLM `DeviceMemoryProfiler` 交叉验证 |
 | KV cache | vLLM logs | "Available KV cache memory: X GiB" |
 | ACL Graph 编译缓冲 | vLLM logs | "Graph capturing finished in X secs, took Y GiB" |
-| HCCL buffers | msprof | npu_module_mem.csv Component=HCCL |
-| CANN Runtime | msprof | npu_module_mem.csv Component=RUNTIME |
+| HCCL buffers | msprof | npu_module_mem.csv Component=HCCL (per-device when PROF→device mapping available, otherwise process-level) |
+| CANN Runtime | msprof | npu_module_mem.csv Component=RUNTIME (same scoping as HCCL) |
 | Activations | npu-smi delta | HBM during inference minus HBM at idle |
 | 未归因残差 | Residual | 所有已知组件加总后的余量 (有 msprof 时通常 < 200 MB) |
 
@@ -119,14 +119,15 @@ python3 .agents/skills/vllm-ascend-serving/scripts/serve_stop.py --machine <alia
 
 ### Step 4: Collect msprof data
 
-After stop, run `mem_collect --attach` again. It detects the msprof wrapper from the serving state, automatically runs `msprof --export`, and downloads the resulting CSVs:
+After stop, run `mem_collect --attach` again **with `--resume-run`** pointing to the run directory from Step 2. This merges the msprof CSV data into the same run, producing a single manifest with both live npu-smi data and post-stop msprof CSVs:
 
 ```bash
 python3 .agents/skills/ascend-memory-profiling/scripts/mem_collect.py \
-  --machine <alias> --attach --tag <same-experiment-name>
+  --machine <alias> --attach \
+  --resume-run .vaws-local/memory-profiling/<run-dir-from-step-2>/
 ```
 
-This works because attach mode accepts stopped services — it skips health check and inference, and focuses on collecting msprof CSVs that are now available.
+This works because attach mode accepts stopped services — it skips health check and inference, and focuses on collecting msprof CSVs that are now available. The `--resume-run` flag ensures all data lands in one directory.
 
 ### Step 5: Analyze and generate report
 
@@ -209,7 +210,7 @@ CANN Runtime                   |      125.3 |      0.122 |   0.4% | msprof npu_m
 
 ## Weight analysis methodology
 
-The skill uses `weight_inspector.py` to parse safetensors file headers on the remote machine, extracting exact tensor names, shapes, dtypes, and byte sizes. This provides a **byte-accurate** breakdown of model weights by component.
+The skill uses `weight_inspector.py` to parse safetensors file headers on the remote machine, extracting tensor names, shapes, dtypes, and byte sizes. Individual tensor byte sizes are **byte-accurate** from the file headers. Component classification (e.g. "Attention Q", "MoE Expert") and shard strategy assignment (col/row/expert parallel) are **rule-based inferences** from tensor name patterns, not direct measurements.
 
 ### How it works
 
