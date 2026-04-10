@@ -15,6 +15,7 @@ This skill takes structured parameters, handles all SSH escaping and remote exec
 - the user asks to restart or relaunch a service (possibly with changed flags or env)
 - the user asks to check if a running service is alive / ready
 - the user asks to stop a running service
+- another skill needs to start a service (e.g. `ascend-memory-profiling`)
 
 ## Do not use this skill when
 
@@ -51,8 +52,17 @@ python3 .agents/skills/vllm-ascend-serving/scripts/serve_start.py \
   [--extra-env KEY=VALUE ...] \
   [--port <N>] \
   [--health-timeout <seconds>] \
+  [--wrap-script <remote-path>] \
   [-- <extra vllm serve args>]
 ```
+
+#### Launch wrapping (`--wrap-script`)
+
+The serving skill supports a generic `--wrap-script` mechanism. When provided, the vLLM launch command is written as `_serve.sh` in the runtime directory, and the wrapper script is called with two arguments: `$1` = serve script path, `$2` = runtime directory.
+
+This is used by other skills (e.g. `ascend-memory-profiling`) to wrap the service launch process without the serving skill needing to know the wrapping details. The serving skill is agnostic to what the wrapper does.
+
+The `wrap_script` path is recorded in the serving state so downstream skills can detect it.
 
 ### Relaunch with previous config
 
@@ -105,7 +115,7 @@ python3 .agents/skills/vllm-ascend-serving/scripts/serve_stop.py \
 
 Per-machine launch state is stored under `.vaws-local/serving/<alias>.json`.
 
-This file records the last successful launch parameters (model, tp, devices, env, extra args, port, pid, log paths). It is the basis for `--relaunch`.
+This file records the last successful launch parameters (model, tp, devices, env, extra args, port, pid, log paths, runtime_dir, wrap_script). It is the basis for `--relaunch` and is read by other skills (e.g. `ascend-memory-profiling`) in attach mode.
 
 ## Workflow
 
@@ -126,7 +136,7 @@ Unless `--skip-parity` is passed, `parity_sync.py` is called to ensure the conta
 NPU availability is checked via `npu-smi info` on the **bare-metal host** (not the container). Host-level probing sees processes from all containers, bypassing PID namespace isolation. Devices with HBM usage above 4 GB are also marked busy to catch cross-container occupancy:
 
 - If `--devices` is specified, those devices are verified to be free. If any are busy, start is blocked with the conflict details.
-- If `--devices` is not specified but `--tp` is given, the first N free devices are automatically selected.
+- If `--devices` is not specified but `--tp` is given, the first N free devices are automatically selected, where N = TP × DP (defaults to TP when DP is not set).
 - If NPU probe fails (e.g. driver issue), it is treated as a non-fatal warning and launch continues with user-specified devices.
 
 ### 5. Validate and launch

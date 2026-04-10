@@ -133,6 +133,7 @@ class BenchConfig:
     machine: str = ""
     model: str = ""
     tp: int | None = None
+    dp: int | None = None
     port: int | None = None
     serve_args: list[str] = field(default_factory=list)
     bench_args: list[str] = field(default_factory=list)
@@ -145,6 +146,8 @@ class BenchConfig:
         args = ["--machine", self.machine, "--model", self.model]
         if self.tp is not None:
             args.extend(["--tp", str(self.tp)])
+        if self.dp is not None:
+            args.extend(["--dp", str(self.dp)])
         if self.port is not None:
             args.extend(["--port", str(self.port)])
         for k, v in self.env.items():
@@ -204,6 +207,7 @@ def assemble_config(
     machine: str,
     model: str,
     tp: int | None = None,
+    dp: int | None = None,
     port: int | None = None,
     serve_args: list[str] | None = None,
     bench_args: list[str] | None = None,
@@ -230,6 +234,14 @@ def assemble_config(
         idx = nightly_ref.server_cmd.index("--tensor-parallel-size")
         if idx + 1 < len(nightly_ref.server_cmd):
             cfg.tp = int(nightly_ref.server_cmd[idx + 1])
+
+    # --- DP ---
+    if dp is not None:
+        cfg.dp = dp
+    elif nightly_ref and "--data-parallel-size" in nightly_ref.server_cmd:
+        idx = nightly_ref.server_cmd.index("--data-parallel-size")
+        if idx + 1 < len(nightly_ref.server_cmd):
+            cfg.dp = int(nightly_ref.server_cmd[idx + 1])
 
     # --- Port ---
     cfg.port = port

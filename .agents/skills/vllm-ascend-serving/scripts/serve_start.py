@@ -130,6 +130,7 @@ def build_launch_script(
     devices: str | None,
     extra_env: dict[str, str],
     extra_args: list[str],
+    wrap_script: str = "",
 ) -> str:
     lines: list[str] = ["set -e"]
 
@@ -191,12 +192,32 @@ def build_launch_script(
     stderr_log = f"{runtime_dir}/stderr.log"
     pid_file = f"{runtime_dir}/pid"
 
-    lines.append(
-        f"nohup {cmd_str}"
-        f" > {shlex.quote(stdout_log)}"
-        f" 2> {shlex.quote(stderr_log)}"
-        f" </dev/null &"
-    )
+    # Always write the vLLM command as a standalone script for clean quoting
+    serve_script = f"{runtime_dir}/_serve.sh"
+    lines.append(f"cat > {shlex.quote(serve_script)} << 'VAWS_SERVE_EOF'")
+    lines.append("#!/bin/bash")
+    lines.append(f"exec {cmd_str}")
+    lines.append("VAWS_SERVE_EOF")
+    lines.append(f"chmod +x {shlex.quote(serve_script)}")
+
+    if wrap_script:
+        # External wrapper: receives serve script path and runtime dir as args.
+        # The wrapper decides how to launch (e.g. msprof wrapping, strace, etc.)
+        lines.append(
+            f"nohup bash {shlex.quote(wrap_script)}"
+            f" {shlex.quote(serve_script)} {shlex.quote(runtime_dir)}"
+            f" > {shlex.quote(stdout_log)}"
+            f" 2> {shlex.quote(stderr_log)}"
+            f" </dev/null &"
+        )
+    else:
+        lines.append(
+            f"nohup bash {shlex.quote(serve_script)}"
+            f" > {shlex.quote(stdout_log)}"
+            f" 2> {shlex.quote(stderr_log)}"
+            f" </dev/null &"
+        )
+
     lines.append("_PID=$!")
     lines.append("disown $_PID")
     lines.append(f"echo $_PID > {shlex.quote(pid_file)}")
@@ -388,6 +409,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--health-timeout", type=int, default=DEFAULT_HEALTH_TIMEOUT,
         help=f"seconds to wait for /health + /v1/models (default: {DEFAULT_HEALTH_TIMEOUT})",
     )
+    p.add_argument(
+        "--wrap-script", default="",
+        help="remote path to a wrapper script that receives the serve script path "
+        "and runtime dir as $1 and $2. The wrapper controls how the service is launched "
+        "(e.g. msprof wrapping). The serving skill is agnostic to what the wrapper does.",
+    )
     return p
 
 
@@ -504,7 +531,7 @@ def main(argv: list[str] | None = None) -> int:
 
         if npu_info is not None:
             resolved_devices, device_error = select_devices(
-                npu_info, requested_devices=devices, tp=tp,
+                npu_info, requested_devices=devices, tp=tp, dp=dp,
             )
             if device_error:
                 print_json({
@@ -546,7 +573,11 @@ def main(argv: list[str] | None = None) -> int:
         instance_ts = now_utc().replace(":", "").replace("-", "").replace("T", "_").replace("Z", "")
         runtime_dir = f"{runtime_base}/{RUNTIME_DIR_BASE}/{instance_ts}"
 
-        emit_progress("launch", "starting vllm serve")
+        wrap_script = getattr(args, "wrap_script", "") or ""
+        if wrap_script:
+            emit_progress("launch", f"starting vllm serve (wrapped by {wrap_script})")
+        else:
+            emit_progress("launch", "starting vllm serve")
         script = build_launch_script(
             runtime_dir=runtime_dir,
             model=model,
@@ -556,6 +587,7 @@ def main(argv: list[str] | None = None) -> int:
             devices=devices,
             extra_env=launch_env,
             extra_args=launch_extra_args,
+            wrap_script=wrap_script,
         )
         result = ssh_exec(ep, script, check=False)
         if result.returncode != 0:
@@ -604,6 +636,8 @@ def main(argv: list[str] | None = None) -> int:
             "started_at": now_utc(),
             "status": "ready" if readiness["ready"] else "started",
         }
+        if wrap_script:
+            state["wrap_script"] = wrap_script
         save_serving_state(alias, state)
 
         # ---- build output ----
@@ -629,6 +663,8 @@ def main(argv: list[str] | None = None) -> int:
             output["env"] = launch_env
         if launch_extra_args:
             output["extra_args"] = launch_extra_args
+        if wrap_script:
+            output["wrap_script"] = wrap_script
         if not readiness["ready"]:
             output["stderr_tail"] = read_remote_tail(ep, f"{runtime_dir}/stderr.log")
 
