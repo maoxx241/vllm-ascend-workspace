@@ -249,6 +249,7 @@ def select_devices(
     *,
     requested_devices: str | None,
     tp: int | None,
+    dp: int | None = None,
 ) -> tuple[str | None, str | None]:
     """Validate or auto-select NPU devices.
 
@@ -274,12 +275,13 @@ def select_devices(
     if tp is None:
         return None, None
 
-    if len(free) < tp:
+    need = tp * (dp or 1)
+    if len(free) < need:
         return None, (
-            f"need {tp} free NPUs but only {len(free)} available; "
+            f"need {need} free NPUs (tp={tp}, dp={dp or 1}) but only {len(free)} available; "
             f"free={free}, busy={list(busy.keys())}"
         )
-    selected = free[:tp]
+    selected = free[:need]
     return ",".join(str(d) for d in selected), None
 
 

@@ -42,7 +42,7 @@ Run `vllm bench serve` on a **ready** workspace-managed remote container and pro
 python3 .agents/skills/vllm-ascend-benchmark/scripts/bench_run.py \
   --machine <alias-or-ip> \
   --model <remote-weight-path> \
-  [--tp <N>] \
+  [--tp <N>] [--dp <N>] \
   [--runs <N>] \
   [--warmup-runs <M>] \
   [--serve-args <arg> ...] \
