@@ -8,7 +8,7 @@ A composable local development scaffold for working on [vLLM](https://github.com
 
 Developing vLLM Ascend typically involves editing code locally, running tests on remote Ascend NPU servers, and tracking upstream vLLM changes — all of which require repetitive Git, SSH, and environment configuration.
 
-`vllm-ascend-workspace` wraps these operations into five AI Agent skills. You can ask an Agent to handle them in natural language, or ignore the skills entirely and use it as a plain multi-repo workspace.
+`vllm-ascend-workspace` wraps these operations into six AI Agent skills. You can ask an Agent to handle them in natural language, or ignore the skills entirely and use it as a plain multi-repo workspace.
 
 ## Quick start
 
@@ -37,6 +37,7 @@ The Agent will detect your environment, install required tools, and configure Gi
 | **remote-code-parity** | Sync the full local workspace state (including uncommitted changes) to a remote container    | Triggered automatically before remote test or service runs |
 | **vllm-ascend-serving** | Launch a vLLM Ascend inference service on a remote container, with NPU probing, auto card selection, and incremental restart | When you need an inference service on a remote machine |
 | **vllm-ascend-benchmark** | Run `vllm bench serve` performance benchmarks on a remote container, with multi-run warmup and statistical aggregation | When you need throughput/latency benchmarks or performance regression checks |
+| **ascend-memory-profiling** | Profile and attribute HBM memory usage on Ascend NPU, with per-component breakdown and evidence chains | When you need to analyze memory consumption of a vLLM serving workload |
 
 
 All skills are **optional**. Use any subset, or none at all.
@@ -80,7 +81,8 @@ When talking to an Agent:
 │   │   ├── machine-management/    # Remote machine management skill
 │   │   ├── remote-code-parity/    # Code synchronization skill
 │   │   ├── vllm-ascend-serving/   # Inference serving skill
-│   │   └── vllm-ascend-benchmark/ # Performance benchmarking skill
+│   │   ├── vllm-ascend-benchmark/ # Performance benchmarking skill
+│   │   └── ascend-memory-profiling/ # Memory profiling skill
 │   ├── lib/               # Shared local-state library
 │   └── scripts/           # Shared helper scripts
 ├── .cursor/rules/         # Cursor IDE specific rules
@@ -131,11 +133,12 @@ This repository supports mainstream AI coding tools:
 - **remote-code-parity** — Code sync: push full local workspace state (including uncommitted changes) to remote containers
 - **vllm-ascend-serving** — Service launch: idle NPU detection, idle port detection, one-click vLLM Ascend inference serving
 - **vllm-ascend-benchmark** — Online performance benchmarking: single-run / multi-run (warm-service) mode, warmup exclusion, statistical aggregation; multi-state regression comparisons orchestrated by the Agent
+- **ascend-memory-profiling** — Memory profiling: collect and analyze HBM usage, per-component breakdown (fixed overhead, weights, KV cache, HCCL, activations, runtime), with msprof component-level attribution
 
 ### Planned
 
 - **Accuracy testing & aisbench integration** — Automated evaluation based on aisbench, with HTML report analysis, system scheduling assessment, and DP balance analysis
-- **Model profiling** — Automatic model structure analysis and operator latency breakdown, hot operator AIC/AIV/MTE2 ratio analysis, AICPU operator identification, host bound detection and diagnosis
+- **Performance profiling** — Automatic operator latency breakdown, hot operator AIC/AIV/MTE2 ratio analysis, AICPU operator identification, host bound detection and diagnosis
 - **Sync-break optimization** — Provide async copy overlap strategies for specific cases to reduce synchronization overhead
 - **Compute graph analysis** — Build model compute graphs, generate theoretical performance evaluation reports and optimization recommendations
 - **External knowledge base** — Integrate external knowledge sources to extend Agent capabilities

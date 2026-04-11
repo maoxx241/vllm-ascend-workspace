@@ -84,7 +84,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--attach", action="store_true",
                    help="Attach to a running service managed by the serving skill")
     p.add_argument("--baseline-from", default="",
-                   help="Path to a previous run directory to reuse baseline npu-smi data (for attach mode)")
+                   help="Path to a previous run directory OR a raw npu-smi output file to reuse as baseline (for attach mode)")
     p.add_argument("--resume-run", default="",
                    help="Path to a previous run directory to merge new data into (for two-phase attach)")
     return p.parse_args()
@@ -434,11 +434,49 @@ def _resolve_attach_state(machine: dict, args: argparse.Namespace) -> dict:
     return state
 
 
+def _parse_npu_smi_text(text: str) -> dict:
+    """Parse raw npu-smi info output into {npu_id: {used_mb, total_mb}}."""
+    hbm = {}
+    current_npu = None
+    for line in text.splitlines():
+        stripped = line.strip().strip("|").strip()
+        if not stripped or stripped.startswith("+") or stripped.startswith("="):
+            continue
+        parts = [p.strip() for p in stripped.split("|")]
+        col0 = parts[0].strip() if parts else ""
+        tokens = col0.split()
+        if len(tokens) >= 2 and tokens[0].isdigit() and any(c.isalpha() for c in tokens[1]):
+            current_npu = int(tokens[0])
+            continue
+        if current_npu is not None:
+            hbm_match = re.search(r"(\d+)\s*/\s*(\d+)\s*$", stripped)
+            if hbm_match:
+                used = int(hbm_match.group(1))
+                total = int(hbm_match.group(2))
+                if total > 1000:
+                    hbm[current_npu] = {"used_mb": used, "total_mb": total}
+                    current_npu = None
+    return hbm
+
+
 def _load_baseline_from(baseline_path: str, run_dir: Path) -> dict:
-    """Reuse baseline npu-smi data from a previous profiling run."""
-    src = Path(baseline_path) / "baseline_npu_smi.txt"
+    """Reuse baseline npu-smi data from a previous profiling run or raw file.
+
+    Accepts either a previous run directory (containing baseline_npu_smi.txt
+    and/or manifest.json) or a raw npu-smi output text file.
+    """
+    p = Path(baseline_path)
+
+    # If it's a file, treat it as raw npu-smi output
+    if p.is_file():
+        import shutil
+        shutil.copy2(p, run_dir / "baseline_npu_smi.txt")
+        return _parse_npu_smi_text(p.read_text())
+
+    # Otherwise treat as a run directory
+    src = p / "baseline_npu_smi.txt"
     if not src.exists():
-        manifest_path = Path(baseline_path) / "manifest.json"
+        manifest_path = p / "manifest.json"
         if manifest_path.exists():
             m = json.loads(manifest_path.read_text())
             return m.get("baseline_hbm", {})
@@ -447,7 +485,7 @@ def _load_baseline_from(baseline_path: str, run_dir: Path) -> dict:
     import shutil
     shutil.copy2(src, run_dir / "baseline_npu_smi.txt")
 
-    manifest_path = Path(baseline_path) / "manifest.json"
+    manifest_path = p / "manifest.json"
     if manifest_path.exists():
         m = json.loads(manifest_path.read_text())
         return m.get("baseline_hbm", {})
