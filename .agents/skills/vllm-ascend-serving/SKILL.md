@@ -53,6 +53,7 @@ python3 .agents/skills/vllm-ascend-serving/scripts/serve_start.py \
   [--port <N>] \
   [--health-timeout <seconds>] \
   [--wrap-script <remote-path>] \
+  [--skip-parity] \
   [-- <extra vllm serve args>]
 ```
 

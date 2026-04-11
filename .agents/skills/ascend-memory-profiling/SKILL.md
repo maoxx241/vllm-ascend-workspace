@@ -17,7 +17,7 @@ Collect and analyze HBM memory usage on Ascend NPU devices running vLLM serving 
 
 ## Do not use this skill when
 
-- the task is performance profiling (kernel timing, bubble analysis) → use `ascend-profiling-anomaly`
+- the task is performance profiling (kernel timing, bubble analysis) → not covered by this skill; use the user-level `ascend-profiling-anomaly` skill if installed, otherwise analyze manually
 - the task is starting/stopping a service without memory analysis → use `vllm-ascend-serving`
 - the task involves non-Ascend hardware
 - the task is offline (non-serving) inference only
@@ -133,16 +133,21 @@ This works because attach mode accepts stopped services — it skips health chec
 
 ```bash
 python3 .agents/skills/ascend-memory-profiling/scripts/mem_analyze.py \
-  .vaws-local/memory-profiling/<run-dir>/
+  .vaws-local/memory-profiling/<run-dir>/ \
+  [--format json|text]
 ```
+
+Default `--format json` outputs machine-readable JSON to stdout (matching the repo-wide wrapper contract). Use `--format text` for a human-readable report on stdout. Both modes write `report.json` and `report.txt` files to the run directory.
 
 ### Baseline strategy
 
 | Situation | How to get baseline |
 |-----------|-------------------|
-| Fresh profiling | Collect `npu-smi info` before `serve_start`, save to file, use `--baseline-from` |
+| Fresh profiling | Collect `npu-smi info` before `serve_start`, save to file, use `--baseline-from <file>` |
 | Repeat profiling on same machine | Reuse baseline from a previous run via `--baseline-from <old-run-dir>` |
 | Quick analysis (no baseline needed) | Omit `--baseline-from` — report shows "固定开销" as 0 with note |
+
+`--baseline-from` accepts either a previous run directory (containing `baseline_npu_smi.txt` or `manifest.json`) or a raw `npu-smi info` output text file.
 
 ### Fallback: Standalone mode
 

@@ -88,6 +88,7 @@ DEFAULT_ENV_PREAMBLE = (
     'export PIP_DEFAULT_TIMEOUT=60',
     'export PIP_RETRIES=2',
     'export PIP_PROGRESS_BAR=off',
+    'export UV_CACHE_DIR="${UV_CACHE_DIR:-/root/.cache/uv}"',
     'export VLLM_WORKER_MULTIPROC_METHOD=spawn',
     'export OMP_NUM_THREADS=1',
     'export MKL_NUM_THREADS=1',
@@ -583,7 +584,7 @@ def runtime_install_step_script(
 ) -> str:
     lines = ['set -euo pipefail', f'cd {quoted(runtime_root)}']
     lines.extend(DEFAULT_ENV_PREAMBLE)
-    if step in {'install-vllm', 'install-vllm-ascend', 'install-vllm-ascend-requirements'}:
+    if step in {'bootstrap-uv', 'install-vllm', 'install-vllm-ascend', 'install-vllm-ascend-requirements'}:
         lines.extend(
             [
                 'emit_progress() {',
@@ -665,11 +666,44 @@ def runtime_install_step_script(
                 '  esac',
                 '  emit_progress "runtime-pip-mirror" "using pip mirror $mirror" 30',
                 '}',
+                'HAS_UV=0',
+                'if command -v uv >/dev/null 2>&1; then HAS_UV=1; fi',
+                'ensure_uv() {',
+                '  if [ "$HAS_UV" -eq 1 ]; then return 0; fi',
+                '  if command -v uv >/dev/null 2>&1; then HAS_UV=1; return 0; fi',
+                '  emit_progress "runtime-bootstrap-uv" "installing uv" 30',
+                '  for mirror in tsinghua aliyun pypi; do',
+                '    pip_apply_mirror "$mirror"',
+                '    set +e',
+                '    "$PYTHON" -m pip install uv -q 2>/dev/null',
+                '    status=$?',
+                '    set -e',
+                '    if [ "$status" -eq 0 ]; then',
+                '      hash -r',
+                '      if command -v uv >/dev/null 2>&1; then HAS_UV=1; return 0; fi',
+                '    fi',
+                '  done',
+                '  return 1',
+                '}',
+                'UV_INDEX_ARGS="'
+                + ' '.join(
+                    (f'--index-url {m["index_url"]}' if i == 0 else f'--extra-index-url {m["index_url"]}')
+                    for i, m in enumerate(PIP_MIRROR_CANDIDATES)
+                )
+                + '"',
                 'pip_install_with_mirrors() {',
                 '  phase="$1"',
                 '  message="$2"',
                 '  expected_seconds="$3"',
                 '  shift 3',
+                '  if [ "$HAS_UV" -eq 1 ]; then',
+                '    set +e',
+                '    run_with_progress "$phase" "$message via uv" "$expected_seconds" uv pip $UV_INDEX_ARGS "$@"',
+                '    status=$?',
+                '    set -e',
+                '    if [ "$status" -eq 0 ]; then return 0; fi',
+                '    emit_progress "$phase" "uv failed (status $status), falling back to pip" 10',
+                '  fi',
                 '  last_status=1',
                 '  for mirror in tsinghua aliyun pypi; do',
                 '    pip_apply_mirror "$mirror"',
@@ -699,6 +733,18 @@ def runtime_install_step_script(
                 '  install_cmd="$5"',
                 '  log_file="$(mktemp -t parity-install.XXXXXX.log)"',
                 '  cd "$target_dir"',
+                '  if [ "$HAS_UV" -eq 1 ]; then',
+                '    pip_args="${install_cmd#*pip }"',
+                '    set +e',
+                '    run_with_log_progress "$phase" "$message via uv" "$expected_seconds" "$log_file" bash -lc "uv pip $pip_args $UV_INDEX_ARGS"',
+                '    status=$?',
+                '    set -e',
+                '    if [ "$status" -eq 0 ]; then',
+                '      rm -f "$log_file"',
+                '      return 0',
+                '    fi',
+                '    emit_progress "$phase" "uv install failed (status $status), falling back to pip" 10',
+                '  fi',
                 '  last_status=1',
                 '  for mirror in tsinghua aliyun pypi; do',
                 '    pip_apply_mirror "$mirror"',
@@ -742,7 +788,9 @@ def runtime_install_step_script(
             ]
         )
 
-    if step == 'uninstall':
+    if step == 'bootstrap-uv':
+        lines.append('ensure_uv || emit_progress "runtime-bootstrap-uv" "uv not available, will use pip" 5')
+    elif step == 'uninstall':
         pkg_args = ' '.join(uninstall_packages) if uninstall_packages else 'vllm vllm-ascend vllm_ascend'
         lines.append(f'$PYTHON -m pip uninstall -y {pkg_args} >/dev/null 2>&1 || true')
     elif step == 'install-vllm':
@@ -1261,6 +1309,15 @@ def run_sync(args: argparse.Namespace) -> int:
                             stream_progress=False,
                             uninstall_packages=tuple(uninstall_pkgs),
                         )
+                    emit_progress('runtime-bootstrap-uv')
+                    run_runtime_install_step(
+                        container=container,
+                        runtime_root=runtime_root,
+                        marker_dirname=marker_dirname,
+                        container_identity=args.container_identity,
+                        step='bootstrap-uv',
+                        stream_progress=True,
+                    )
                     if reinstall_vllm:
                         emit_progress('runtime-install-vllm', package='vllm')
                         run_runtime_install_step(
@@ -1311,7 +1368,7 @@ def run_sync(args: argparse.Namespace) -> int:
                         )
                     except Exception:
                         emit_progress('runtime-install-repair-deps',
-                                      message='dependency mismatch detected, reinstalling vllm-ascend requirements')
+                                      message='dependency mismatch detected, installing missing deps')
                         run_runtime_install_step(
                             container=container,
                             runtime_root=runtime_root,

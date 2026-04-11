@@ -9,6 +9,7 @@ This directory contains the repository-local skill layer for Codex, Claude Code,
 - `.agents/skills/remote-code-parity/` is the source-of-truth skill package for remote code parity before remote execution.
 - `.agents/skills/vllm-ascend-serving/` is the source-of-truth skill package for starting, checking, and stopping vLLM Ascend online services on managed containers.
 - `.agents/skills/vllm-ascend-benchmark/` is the source-of-truth skill package for running `vllm bench serve` performance benchmarks on managed containers.
+- `.agents/skills/ascend-memory-profiling/` is the source-of-truth skill package for profiling and attributing HBM memory usage on Ascend NPU for vLLM serving scenarios.
 - `.agents/scripts/workspace_profile.py` is the shared low-level helper for the local workspace machine profile.
 - `.agents/lib/vaws_local_state.py` is the shared library for untracked local runtime state.
 - `AGENTS.md` carries repository-wide routing rules and mandatory decision gates.
@@ -41,7 +42,10 @@ Current primary helpers:
 - `vllm-ascend-serving/scripts/serve_stop.py`
 - `vllm-ascend-serving/scripts/serve_probe_npus.py`
 - `vllm-ascend-benchmark/scripts/bench_run.py`
-- `../scripts/workspace_profile.py`
+- `ascend-memory-profiling/scripts/mem_collect.py`
+- `ascend-memory-profiling/scripts/mem_analyze.py`
+- `ascend-memory-profiling/scripts/weight_inspector.py`
+- `scripts/workspace_profile.py`
 
 Low-level machine-management helpers remain available for implementation work and debugging:
 
@@ -59,6 +63,8 @@ Untracked workspace-local state lives under `.vaws-local/`:
 - `.vaws-local/remote-code-parity/install-consents.json`
 - `.vaws-local/remote-code-parity/runtime-state.json`
 - `.vaws-local/serving/<machine-alias>.json`
+- `.vaws-local/benchmark/`
+- `.vaws-local/memory-profiling/`
 
 Remote-code-parity transport is container-only after machine attach: use machine inventory to resolve the target, then push synthetic refs directly into the container-local cache root. Synthetic mirrors should also publish an advertised branch ref for the current snapshot so nested repos can be materialized without brittle submodule fetch behavior. Runtime installs should configure multiple pip indexes (Tsinghua as primary, Aliyun and PyPI as additional), stream progress for long package steps, and keep consent/runtime-state writes atomic.
 
@@ -99,6 +105,12 @@ If you change `vllm-ascend-benchmark`, update these together:
 - `.agents/skills/vllm-ascend-benchmark/references/`
 - `.agents/skills/vllm-ascend-benchmark/scripts/`
 - `AGENTS.md` and this file when routing or output contract changes
+
+If you change `ascend-memory-profiling`, update these together:
+
+- `.agents/skills/ascend-memory-profiling/SKILL.md`
+- `.agents/skills/ascend-memory-profiling/scripts/`
+- `AGENTS.md` and this file when routing, output contract, or local-state behavior changes
 
 If you change `remote-code-parity`, update these together:
 

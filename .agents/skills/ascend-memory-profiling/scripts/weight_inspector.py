@@ -215,15 +215,16 @@ def classify_shard_strategy(name: str, category: str) -> str:
 
 
 def main():
-    if len(sys.argv) < 2:
-        print("Usage: weight_inspector.py <model_dir>", file=sys.stderr)
-        sys.exit(1)
+    import argparse as _ap
+    p = _ap.ArgumentParser(description="Inspect safetensors weight files and produce a JSON manifest")
+    p.add_argument("model_dir", help="Path to model directory containing *.safetensors files")
+    args = p.parse_args()
 
-    model_dir = sys.argv[1]
+    model_dir = args.model_dir
 
     st_files = sorted(glob.glob(os.path.join(model_dir, "*.safetensors")))
     if not st_files:
-        print(json.dumps({"error": "no safetensors files found"}))
+        print(json.dumps({"status": "error", "error": "no safetensors files found", "model_dir": model_dir}))
         sys.exit(1)
 
     all_tensors = []
@@ -256,6 +257,7 @@ def main():
     total_params = sum(t["numel"] for t in all_tensors)
 
     result = {
+        "status": "ok",
         "model_dir": model_dir,
         "num_safetensors_files": len(st_files),
         "total_tensors": len(all_tensors),

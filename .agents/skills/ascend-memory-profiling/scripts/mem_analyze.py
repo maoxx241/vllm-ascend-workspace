@@ -846,6 +846,8 @@ def find_all_msprof_csvs(run_dir: Path, pattern: str) -> list[Path]:
 def main() -> None:
     p = argparse.ArgumentParser(description="Analyze Ascend memory profiling data")
     p.add_argument("run_dir", help="Path to collection run directory")
+    p.add_argument("--format", choices=["json", "text"], default="json",
+                   help="Output format on stdout (default: json)")
     args = p.parse_args()
 
     run_dir = Path(args.run_dir)
@@ -944,7 +946,6 @@ def main() -> None:
 
     # Format and save report
     text_report = format_report_text(reports, manifest, weight_precise)
-    print(text_report)
     (run_dir / "report.txt").write_text(text_report)
 
     json_report = {
@@ -956,7 +957,13 @@ def main() -> None:
         "weight_precise": weight_precise,
         "devices": [asdict(r) for r in reports],
     }
-    (run_dir / "report.json").write_text(json.dumps(json_report, indent=2, ensure_ascii=False))
+    json_str = json.dumps(json_report, indent=2, ensure_ascii=False)
+    (run_dir / "report.json").write_text(json_str)
+
+    if args.format == "json":
+        print(json_str)
+    else:
+        print(text_report)
 
     print(f"\nReport saved to: {run_dir / 'report.txt'}", file=sys.stderr)
     print(f"JSON report:     {run_dir / 'report.json'}", file=sys.stderr)

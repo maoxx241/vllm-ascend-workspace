@@ -13,6 +13,7 @@ Repo-local skills live under `.agents/skills/`. Each has its own `SKILL.md` with
 | `remote-code-parity` | Sync local working tree to remote container before execution |
 | `vllm-ascend-serving` | Start / check / stop a vLLM Ascend service on a remote container |
 | `vllm-ascend-benchmark` | Run `vllm bench serve` benchmarks (single-run or multi-run with warmup) |
+| `ascend-memory-profiling` | Profile HBM memory usage on Ascend NPU for vLLM serving scenarios |
 
 None of these are gates for normal local coding, docs work, or unrelated Git tasks.
 
