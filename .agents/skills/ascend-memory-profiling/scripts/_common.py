@@ -304,3 +304,133 @@ def run_msprof_export(
 
     progress(f"msprof export complete: {len(prof_dirs)} PROF directories")
     return prof_dirs
+
+
+# ---------------------------------------------------------------------------
+# Direct .db reader (primary path — avoids msprof --export)
+# ---------------------------------------------------------------------------
+
+DB_READER_REMOTE_PATH = "/tmp/_vaws_db_reader.py"
+
+
+def try_read_msprof_db_direct(
+    ep: SshEndpoint,
+    msprof_data_dir: str,
+    local_path: Path,
+    *,
+    tables: str = "npu_module_mem,npu_mem",
+    timeout: int = 120,
+) -> dict[str, Any] | None:
+    """Try to read msprof profiling data directly from .db files.
+
+    Uploads ``db_reader.py`` to the remote machine, executes it against
+    *msprof_data_dir*, and if successful writes CSV files to *local_path*
+    that are compatible with the existing ``mem_analyze.py`` pipeline.
+
+    Returns a manifest dict (same shape as ``collect_msprof_csvs``) on
+    success, or ``None`` if direct reading is not possible (no .db files,
+    unsupported format, etc.), signalling the caller to fall back to
+    ``msprof --export`` + CSV collection.
+    """
+    progress("Attempting direct .db read (skipping msprof --export)...")
+
+    # Upload the db_reader script
+    db_reader_src = (Path(__file__).parent / "db_reader.py").read_text()
+    ssh_write_text(ep, db_reader_src, DB_READER_REMOTE_PATH)
+
+    # Run it
+    python_for_sqlite = "python3"  # sqlite3 is part of stdlib
+    cmd = (
+        f"{python_for_sqlite} {DB_READER_REMOTE_PATH} "
+        f"{shlex.quote(msprof_data_dir)} "
+        f"--tables {shlex.quote(tables)}"
+    )
+    r = ssh_exec(ep, cmd, check=False, timeout=timeout)
+
+    if r.returncode != 0:
+        stderr_hint = r.stderr[:500] if r.stderr else ""
+        stdout_hint = r.stdout[:500] if r.stdout else ""
+        progress(
+            f"Direct .db read failed (rc={r.returncode}). "
+            f"Will fall back to msprof --export. "
+            f"Hint: {stderr_hint or stdout_hint}"
+        )
+        return None
+
+    # Parse JSON output
+    try:
+        db_result = json.loads(r.stdout)
+    except json.JSONDecodeError:
+        progress("Direct .db read returned invalid JSON. Falling back.")
+        return None
+
+    if db_result.get("status") != "ok":
+        progress(
+            f"Direct .db read unsuccessful: {db_result.get('error', 'unknown')}. "
+            f"Falling back."
+        )
+        return None
+
+    # Convert the DB data into CSV files in local_path/msprof_csvs/,
+    # producing the same layout that collect_msprof_csvs() would.
+    return _db_data_to_csvs(db_result, local_path)
+
+
+def _db_data_to_csvs(db_result: dict, local_path: Path) -> dict[str, Any]:
+    """Convert ``db_reader.py`` output into CSV files on disk.
+
+    Writes one CSV per target table (e.g. ``npu_module_mem.csv``) into
+    ``local_path/msprof_csvs/`` and returns a manifest dict compatible
+    with ``collect_msprof_csvs()`` output.
+    """
+    import csv as _csv
+
+    csv_dir = local_path / "msprof_csvs"
+    csv_dir.mkdir(exist_ok=True)
+
+    manifest: dict[str, Any] = {}
+    csv_device_map: dict[str, list[int]] = {}
+    prof_device_map = db_result.get("prof_device_map", {})
+
+    for table_prefix, rows in db_result.get("data", {}).items():
+        if not rows:
+            continue
+
+        csv_name = f"{table_prefix}.csv"
+        csv_path = csv_dir / csv_name
+
+        # Deduplicate column names while preserving order
+        cols: list[str] = []
+        seen: set[str] = set()
+        for row in rows:
+            for k in row.keys():
+                if k not in seen:
+                    cols.append(k)
+                    seen.add(k)
+
+        with open(csv_path, "w", newline="") as f:
+            writer = _csv.DictWriter(f, fieldnames=cols, extrasaction="ignore")
+            writer.writeheader()
+            writer.writerows(rows)
+
+        manifest[csv_name] = str(csv_path.relative_to(local_path))
+
+        # Merge all device IDs from all PROF directories
+        all_devs: list[int] = []
+        for devs in prof_device_map.values():
+            all_devs.extend(devs)
+        if all_devs:
+            csv_device_map[csv_name] = sorted(set(all_devs))
+
+    manifest["__prof_device_map__"] = csv_device_map
+    manifest["__source__"] = "direct_db_read"
+    manifest["__db_files_found__"] = db_result.get("db_files_found", 0)
+    manifest["__schemas__"] = db_result.get("schemas", {})
+
+    rows_total = db_result.get("total_rows", 0)
+    tables = db_result.get("tables_extracted", [])
+    progress(
+        f"Direct .db read succeeded: {rows_total} rows from "
+        f"{', '.join(tables)} → {len(manifest) - 3} CSV files"
+    )
+    return manifest
