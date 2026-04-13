@@ -261,6 +261,61 @@ def read_remote_tail(ep: SshEndpoint, remote_path: str, lines: int = 30) -> str:
     return r.stdout.strip()
 
 
+# ---------------------------------------------------------------------------
+# Environment error diagnosis
+# ---------------------------------------------------------------------------
+
+_ENV_ERROR_PATTERNS: list[tuple[str, str]] = [
+    ("Failed to infer device type", "device-type"),
+    ("No module named 'vllm_ascend'", "missing-vllm-ascend"),
+    ("No module named 'vllm'", "missing-vllm"),
+    ("No module named 'torch_npu'", "missing-torch-npu"),
+    ("cannot open shared object file", "missing-so"),
+    ("libhccl.so", "missing-so"),
+    ("torch_npu", "torch-npu-error"),
+    ("ImportError", "import-error"),
+    ("ModuleNotFoundError", "module-not-found"),
+]
+
+
+def diagnose_env_failure(stderr_tail: str, machine: str) -> dict[str, Any] | None:
+    """Scan stderr for environment-related errors and return structured recovery guidance.
+
+    Returns a dict with diagnosis details, or None if the error
+    doesn't look environment-related.
+    """
+    if not stderr_tail:
+        return None
+
+    matched_tags: list[str] = []
+    for pattern, tag in _ENV_ERROR_PATTERNS:
+        if pattern in stderr_tail:
+            matched_tags.append(tag)
+
+    if not matched_tags:
+        return None
+
+    return {
+        "error_tags": sorted(set(matched_tags)),
+        "cause": "remote Python package version mismatch",
+        "recovery_command": (
+            f"python3 .agents/skills/remote-code-parity/scripts/parity_sync.py "
+            f"--machine {machine} --force-reinstall"
+        ),
+        "recovery_description": (
+            "Re-run parity sync with --force-reinstall to rebuild "
+            "vllm and vllm-ascend in the correct order with pinned dependencies."
+        ),
+        "warning": (
+            "Do NOT run bare `pip install` inside the container. "
+            "The container has exact version locks between torch, torch_npu, "
+            "vllm, and vllm-ascend. Manual pip install will break the "
+            "dependency graph. Parity sync uses the correct install flags "
+            "(--no-build-isolation, VLLM_TARGET_DEVICE=empty, uv acceleration)."
+        ),
+    }
+
+
 def wait_for_ready(
     ep: SshEndpoint,
     pid: int,
@@ -666,17 +721,29 @@ def main(argv: list[str] | None = None) -> int:
         if wrap_script:
             output["wrap_script"] = wrap_script
         if not readiness["ready"]:
-            output["stderr_tail"] = read_remote_tail(ep, f"{runtime_dir}/stderr.log")
+            stderr_tail = readiness.get("stderr_tail") or read_remote_tail(ep, f"{runtime_dir}/stderr.log")
+            output["stderr_tail"] = stderr_tail
+            diagnosis = diagnose_env_failure(stderr_tail, alias)
+            if diagnosis:
+                output["env_diagnosis"] = diagnosis
+                emit_progress("diagnosis", diagnosis["recovery_command"],
+                              error_tags=diagnosis["error_tags"])
 
         print_json(output)
         return 0 if readiness["ready"] else 1
 
     except Exception as exc:
-        print_json({
+        error_msg = str(exc)
+        machine_id = getattr(args, "machine", None) or ""
+        result: dict[str, Any] = {
             "status": "failed",
-            "error": str(exc),
-            "machine": getattr(args, "machine", None),
-        })
+            "error": error_msg,
+            "machine": machine_id,
+        }
+        diagnosis = diagnose_env_failure(error_msg, machine_id)
+        if diagnosis:
+            result["env_diagnosis"] = diagnosis
+        print_json(result)
         return 2
 
 
