@@ -55,6 +55,36 @@ from _common import (
 )
 
 
+_ENV_ERROR_PATTERNS = [
+    "Failed to infer device type",
+    "No module named 'vllm_ascend'",
+    "No module named 'vllm'",
+    "No module named 'torch_npu'",
+    "cannot open shared object file",
+    "libhccl.so",
+    "ImportError",
+    "ModuleNotFoundError",
+]
+
+
+def _emit_env_recovery_hint(log_text: str, machine: str) -> None:
+    """If log_text contains environment error patterns, emit structured recovery guidance."""
+    if not log_text:
+        return
+    if not any(pat in log_text for pat in _ENV_ERROR_PATTERNS):
+        return
+    recovery_cmd = (
+        f"python3 .agents/skills/remote-code-parity/scripts/parity_sync.py "
+        f"--machine {machine} --force-reinstall"
+    )
+    progress(
+        "ENV_ERROR_DETECTED: Remote Python environment is broken. "
+        f"Recovery: run `{recovery_cmd}`. "
+        "Do NOT run bare `pip install` inside the container — "
+        "parity sync has the correct install flags."
+    )
+
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Collect Ascend NPU memory profiling data")
     p.add_argument("--machine", required=True, help="Machine alias or IP")
@@ -623,6 +653,8 @@ def _main_attach(
         try:
             wait_for_health(ep, port, timeout=args.health_timeout)
         except TimeoutError:
+            log_text = _collect_serving_logs(ep, serving_state, run_dir)
+            _emit_env_recovery_hint(log_text, args.machine)
             raise SystemExit(
                 f"Service on port {port} is not responding to /health after "
                 f"{args.health_timeout}s. Check service status with the serving skill."
@@ -790,8 +822,9 @@ def _main_standalone(
         manifest["startup_seconds"] = wait_for_health(ep, port, args.health_timeout)
     except TimeoutError as e:
         progress(f"ERROR: {e}")
-        collect_vllm_logs(ep, remote_dir, run_dir)
+        log_text = collect_vllm_logs(ep, remote_dir, run_dir)
         stop_service(ep)
+        _emit_env_recovery_hint(log_text, args.machine)
         manifest["error"] = str(e)
         print(json.dumps(manifest, indent=2, ensure_ascii=False))
         sys.exit(1)
