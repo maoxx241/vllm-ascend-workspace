@@ -104,7 +104,7 @@ Materialization requirements:
 - rewrite submodule URLs to container-local mirror paths
 - materialize child repos explicitly instead of relying on `git submodule update` to fetch synthetic child commits
 - when a child repo snapshot has the same tree as its original `HEAD`, reuse that original commit so parent repos do not see a gitlink-only synthetic delta
-- preserve runtime-private sibling paths such as `Mooncake`
+- preserve runtime-private sibling paths such as `Mooncake` (image-provided runtime) and `.vaws-runtime` (workspace-managed runtime artifacts, e.g. profiler dumps that downstream skills consume after parity refreshes)
 - preserve `.remote-code-parity` so the container-side marker survives root cleanups
 - do not delete the entire runtime root as part of normal sync
 
@@ -126,7 +126,7 @@ First-install mutation boundary:
 - uninstall image packages best-effort
 - delete `/vllm-workspace/vllm`
 - delete `/vllm-workspace/vllm-ascend`
-- keep the rest of `/vllm-workspace`, including `Mooncake`
+- keep the rest of `/vllm-workspace`, including `Mooncake` and `.vaws-runtime`
 
 ## Reinstall trigger matrix
 

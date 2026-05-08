@@ -74,7 +74,7 @@ These should not trigger `remote-code-parity` unless remote code parity is the o
 
 - `/vllm-workspace` is updated in place instead of being replaced wholesale
 - nested repos are materialized explicitly instead of relying on `git submodule update` for synthetic child commits
-- runtime-private paths such as `Mooncake` survive root cleanups
+- runtime-private paths such as `Mooncake` and `.vaws-runtime` survive root cleanups
 - final `git rev-parse HEAD` values inside the container match the synthetic snapshot commits exactly
 - reinstall runs only when the trigger matrix says it should, except for the mandatory first approved replacement on a fresh container
 - switching a submodule to a different commit (e.g. `git checkout v0.8.0` in `vllm/`) triggers reinstall via HEAD-based commit drift detection (comparing real HEAD, not synthetic snapshot commit), even when the new checkout is clean
@@ -98,7 +98,7 @@ These specific mistakes should no longer be part of the normal path:
 - temporary parity index files should be cleaned up after snapshot construction
 - missing or unpopulated required submodules should return a compact failure payload instead of a raw Git traceback
 - the main snapshot path should not force ignored files into the synthetic snapshot
-- root cleanups inside `/vllm-workspace` should not delete `Mooncake`
+- root cleanups inside `/vllm-workspace` should not delete `Mooncake` or `.vaws-runtime`
 - runtime-install should not fail closed just because Ascend env scripts reference shell-specific or otherwise unset variables while being sourced
 - the final heredoc-based import smoke should not fail with a local quoting `SyntaxError`
 - clean nested submodules should not force parent `reinstall_vllm*` decisions through synthetic gitlink churn alone

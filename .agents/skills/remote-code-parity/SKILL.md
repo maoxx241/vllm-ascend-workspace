@@ -31,7 +31,7 @@ Keep a **ready** remote runtime in exact code parity with the local `vllm-ascend
 - Keep the sync path **container-only** after machine attach: no host storage root, no host mirror, no host lock.
 - Use synthetic snapshot refs so dirty working trees can move through Git transport.
 - Keep container cache / lock / manifest paths isolated by `workspace_id` under a container-local cache root.
-- Preserve runtime-private paths under `/vllm-workspace`, especially `Mooncake`.
+- Preserve runtime-private paths under `/vllm-workspace`, in particular `Mooncake/` (image-provided runtime) and `.vaws-runtime/` (workspace-managed runtime artifacts such as profiler dumps consumed by downstream skills). The exact list lives in `DEFAULT_ROOT_PRESERVE_PATHS` in `scripts/remote_code_parity.py`.
 - Keep `stdout` reserved for one final JSON summary and stream phase progress on `stderr` as `__VAWS_PARITY_PROGRESS__=<json>`.
 - Runtime install progress should be attributable at the package-step level: uninstall, `vllm`, `vllm-ascend` requirements, `vllm-ascend`, import smoke, and marker write.
 - Publish each synthetic snapshot to both the parity ref and an advertised branch ref inside the container-local mirror.
@@ -191,7 +191,7 @@ Inside the container:
 - force the runtime repo to the synthetic parity ref
 - rewrite submodule URLs to container-local mirror paths
 - rewrite submodule URLs to those mirror paths and recursively materialize child repos explicitly
-- preserve runtime-private paths such as `Mooncake` and `.remote-code-parity`
+- preserve runtime-private paths such as `Mooncake`, `.vaws-runtime`, and `.remote-code-parity`
 - ensure the checked-out commits match the manifest
 
 Do not claim success before the container-side commit ids match the snapshot manifest.
