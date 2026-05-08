@@ -114,7 +114,9 @@ PIP_MIRROR_CANDIDATES = (
 
 DEFAULT_CONTAINER_CACHE_ROOT = '/root/.cache/vaws/remote-code-parity'
 DEFAULT_MARKER_DIRNAME = '.remote-code-parity'
-DEFAULT_ROOT_PRESERVE_PATHS = ('Mooncake',)
+# Keep runtime-private state and profiling artifacts that may be needed for
+# post-run analysis across parity refreshes.
+DEFAULT_ROOT_PRESERVE_PATHS = ('Mooncake', '.vaws-runtime')
 STATE_FILENAME = 'runtime-state.json'
 CONSENT_FILENAME = 'install-consents.json'
 PARITY_BRANCH_NAME = 'parity-current'
