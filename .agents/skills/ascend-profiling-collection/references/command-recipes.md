@@ -74,10 +74,11 @@ Use this when a previous collection ran but `analyse()` was skipped or the agent
 ```bash
 python3 .agents/skills/ascend-profiling-collection/scripts/run_remote_analyse.py \
   --machine blue-a \
-  --profile-root /vllm-workspace/.vaws-runtime/serving/<timestamp>/vllm_profile
+  --profile-root /vllm-workspace/.vaws-runtime/serving/<timestamp>/vllm_profile \
+  --expected-ranks 8
 ```
 
-Exit 0 means every rank produced `kernel_details.csv` and `trace_view.json`. Non-zero means re-collection is needed.
+Exit 0 means every rank produced `kernel_details.csv` and `trace_view.json` AND the directory count matched `--expected-ranks` (typically `tp * (dp or 1)`). Non-zero means re-collection is needed. Always pass `--expected-ranks` against fresh roots — without it a partial capture where some ranks never produced a directory looks "clean".
 
 ## Manually flip the profiler window on a service the agent already started
 

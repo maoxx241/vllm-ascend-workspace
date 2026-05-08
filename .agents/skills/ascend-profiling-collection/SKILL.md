@@ -38,7 +38,10 @@ This skill is **only** about collection: start a profiled service, bracket a wor
 - The serving skill must remain profiling-agnostic. Never push profiler-window control or `analyse()` invocation into it.
 - `--profiler-config` is the only profiling-related thing the serving skill knows about, and only because vLLM accepts it as an opaque blob.
 - Run profiling **inside the remote container**. Never copy raw `*_ascend_pt` directories back to the local Mac.
-- Hard-fail when any rank's `kernel_details.csv` is missing after `analyse()` — see "Failure policy" below.
+- Hard-fail in three cases (all detailed in "Failure policy"):
+  1. any rank's `kernel_details.csv` is missing after `analyse()`
+  2. number of `*_ascend_pt` directories does not match `tp * (dp or 1)`
+  3. workload was not real — follow-up request failed or benchmark wave fell below `--benchmark-success-threshold`
 - Progress on `stderr` as `__VAWS_PROFILING_COLLECTION_PROGRESS__=<json>`. Final manifest on `stdout` as one JSON object.
 - Local state lives **only** under `.vaws-local/ascend-profiling-collection/runs/`.
 
@@ -62,6 +65,7 @@ python3 .agents/skills/ascend-profiling-collection/scripts/collect_torch_profile
   [--api-server-count <N>] \
   [--prompt-tokens <N>] [--followup-output-tokens <N>] \
   [--benchmark-total-requests <N>] [--benchmark-concurrency <N>] \
+  [--benchmark-success-threshold <f>] \
   [--request-timeout <s>] [--profile-control-timeout <s>] \
   [--torch-profiler-dir <relpath>] [--torch-profiler-with-stack] \
   [--image-path <local-path>] [--image-height <px>] \
@@ -106,10 +110,13 @@ The script reads the service port from `.vaws-local/serving/<alias>.json`. A ser
 
 ```bash
 python3 .agents/skills/ascend-profiling-collection/scripts/run_remote_analyse.py \
-  --machine <alias> --profile-root <remote-path>
+  --machine <alias> --profile-root <remote-path> \
+  [--expected-ranks <N>]
 ```
 
 Discovers every `*_ascend_pt` under `--profile-root`, runs `torch_npu.profiler.profiler.analyse()` on each, and verifies that `ASCEND_PROFILER_OUTPUT/kernel_details.csv` and `trace_view.json` landed. Exits non-zero if any rank is incomplete.
+
+Always pass `--expected-ranks` (typically `tp * (dp or 1)`) when running this against a fresh capture: without it a partial collection where some ranks never produced a directory looks "clean" because every directory that *did* land was complete. The orchestrator passes this automatically.
 
 ## Workflow
 
@@ -127,14 +134,24 @@ Discovers every `*_ascend_pt` under `--profile-root`, runs `torch_npu.profiler.p
 
 ## Failure policy
 
-Accuracy beats coverage. The script exits non-zero (status `failed`) when:
+Accuracy beats coverage. The script exits non-zero (status `failed`) when **any** of:
 
 - the service did not become `ready`
 - `/start_profile` or `/stop_profile` returned non-2xx
-- any benchmark request raised before the profile window closed (recorded but not by itself fatal — agent decides)
-- any rank's `kernel_details.csv` is missing after `analyse()` — `analysis_status == missing_kernel_details`
+- **workload was not real**: `workload_status.status != "ok"`, i.e. the
+  follow-up request failed or the benchmark wave's success rate was below
+  `--benchmark-success-threshold` (default 0.8). Without real traffic during
+  the profile window the trace records nothing useful.
+- **rank count mismatch**: number of `*_ascend_pt` directories `!= tp * (dp or 1)`
+  → `analysis_status == "rank_count_mismatch"`. Some rank never dumped its
+  profiler data; even if every directory that *did* land is complete, the
+  topology is broken and downstream cross-rank analysis would be wrong.
+- any rank's `kernel_details.csv` is missing after `analyse()` →
+  `analysis_status == "missing_kernel_details"`
 
-The third condition is the canonical "device-side data did not land" failure documented in `doc/profiling-inventory.md`. Treat it as **re-collect required**, not as something the analysis skill can recover from.
+The last condition is the canonical "device-side data did not land" failure
+documented in `doc/profiling-inventory.md`. Treat all of the above as
+**re-collect required**, not as something the analysis skill can recover from.
 
 If the orchestrator fails after `serve_start`, it always tries to stop the service (graceful, then `--force`) so no orphan vLLM process is left behind.
 
@@ -148,16 +165,19 @@ The manifest is the input contract for the analysis skill. Important fields:
 | `tag`, `started_at`, `completed_at` / `failed_at` | Run identity |
 | `machine`, `model`, `served_model_name`, `tp`, `dp` | Hardware / model identity |
 | `mode`, `speculative_tokens`, `speculative_method`, `enable_expert_parallel`, `api_server_count` | What was profiled |
-| `request_kind`, `prompt_tokens`, `benchmark_output_tokens`, `followup_output_tokens`, `benchmark_total_requests`, `benchmark_concurrency` | What workload produced the trace |
+| `request_kind`, `prompt_tokens`, `benchmark_output_tokens`, `followup_output_tokens`, `benchmark_total_requests`, `benchmark_concurrency`, `benchmark_success_threshold` | What workload produced the trace and what success bar it had to clear |
+| `expected_ranks` | `tp * (dp or 1)` — what `analyse()` was told to enforce |
 | `torch_profiler_with_stack`, `torch_profiler_dir` | Profiler depth and on-disk location |
 | `serve_args` | Exact `serve_start.py` argv (audit trail) |
 | `service_result`, `start_profile`, `stop_profile`, `stop_result` | Sub-call outputs |
 | `benchmark_results`, `followup_result` | Per-request status / latency / response body |
+| `workload_status` | `{status, bench_total, bench_ok, bench_success_rate, bench_threshold, followup_ok}` — workload hard gate |
 | `remote_profile_root` | Path the analysis skill passes to its `analyze.py` |
 | `remote_profile_dirs` | Per-rank `{path, outputs, analysis_status}` |
-| `analysis_status` | `ok` / `partial` / `missing_kernel_details` — the hard gate |
-| `status` | `ok` / `failed` |
-| `error` | Set when `status == failed` |
+| `rank_count` | Number of `*_ascend_pt` directories actually found |
+| `analysis_status` | `ok` / `partial` / `rank_count_mismatch` / `missing_kernel_details` — analysis hard gate |
+| `status` | `ok` / `failed`. `ok` requires both `analysis_status == "ok"` and `workload_status.status == "ok"` |
+| `error` | Set when `status == failed`; lists which gate(s) tripped |
 
 ## Reference files
 

@@ -273,6 +273,41 @@ def _render_request_results(results: list[RequestResult]) -> list[dict[str, Any]
     ]
 
 
+def _evaluate_workload(
+    bench_results: list[RequestResult],
+    followup_result: RequestResult | None,
+    threshold: float,
+) -> dict[str, Any]:
+    """Decide whether the workload was healthy enough to make the trace useful.
+
+    Hard-fails (returned status != "ok") propagate to the top-level manifest
+    status so downstream analysis never sees a profiling root that was
+    captured with no actual model traffic flowing through it.
+    """
+    bench_total = len(bench_results)
+    bench_ok = sum(1 for r in bench_results if r.ok)
+    rate = (bench_ok / bench_total) if bench_total else 0.0
+    followup_ok = bool(followup_result and followup_result.ok)
+
+    if not followup_ok:
+        status = "followup_failed"
+    elif bench_total == 0:
+        status = "no_benchmark_requests"
+    elif rate < threshold:
+        status = "benchmark_below_threshold"
+    else:
+        status = "ok"
+
+    return {
+        "status": status,
+        "bench_total": bench_total,
+        "bench_ok": bench_ok,
+        "bench_success_rate": round(rate, 4),
+        "bench_threshold": threshold,
+        "followup_ok": followup_ok,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Serving args assembly
 # ---------------------------------------------------------------------------
@@ -401,6 +436,17 @@ def build_parser() -> argparse.ArgumentParser:
                    help="max_tokens for the single tail request")
     p.add_argument("--benchmark-total-requests", type=int, default=10)
     p.add_argument("--benchmark-concurrency", type=int, default=5)
+    p.add_argument(
+        "--benchmark-success-threshold",
+        type=float,
+        default=0.8,
+        help=(
+            "minimum required success rate of the benchmark wave (0..1); "
+            "below this the run is reported as failed because the trace was "
+            "captured without real model traffic. The follow-up request is "
+            "always required to succeed independently of this threshold"
+        ),
+    )
     p.add_argument("--request-timeout", type=int, default=DEFAULT_REQUEST_TIMEOUT,
                    help="per chat-completions request timeout (seconds)")
     p.add_argument(
@@ -493,6 +539,8 @@ def main(argv: list[str] | None = None) -> int:
         "followup_output_tokens": args.followup_output_tokens,
         "benchmark_total_requests": args.benchmark_total_requests,
         "benchmark_concurrency": args.benchmark_concurrency,
+        "benchmark_success_threshold": args.benchmark_success_threshold,
+        "expected_ranks": args.tp * (args.dp if args.dp else 1),
         "profile_control_timeout": args.profile_control_timeout,
         "run_dir": str(run_dir),
         "serve_args": serve_args,
@@ -559,6 +607,11 @@ def main(argv: list[str] | None = None) -> int:
             )
             manifest["followup_result"] = _render_request_results([followup_result])[0]
 
+            workload_status = _evaluate_workload(
+                bench_results, followup_result, args.benchmark_success_threshold,
+            )
+            manifest["workload_status"] = workload_status
+
             emit_progress("profile_control", "POST /stop_profile")
             manifest["stop_profile"] = post_remote_action(
                 ep, port, "stop_profile", args.profile_control_timeout,
@@ -573,17 +626,26 @@ def main(argv: list[str] | None = None) -> int:
         stop_result = call_serve_stop(args.machine)
         manifest["stop_result"] = stop_result
 
-        emit_progress("analyse", f"analysing {profile_root}")
-        analyse_bundle = analyse_profile_root(ep, profile_root)
+        expected_ranks = manifest["expected_ranks"]
+        emit_progress(
+            "analyse",
+            f"analysing {profile_root} (expected_ranks={expected_ranks})",
+        )
+        analyse_bundle = analyse_profile_root(
+            ep, profile_root, expected_ranks=expected_ranks,
+        )
         manifest["remote_profile_root"] = profile_root
         manifest["remote_profile_dirs"] = analyse_bundle["dirs"]
+        manifest["rank_count"] = analyse_bundle.get("rank_count")
         manifest["analysis_status"] = analyse_bundle["analysis_status"]
         manifest["completed_at"] = now_utc()
 
-        # Hard gate: degenerate roots fail loudly so downstream analyze.py is
-        # never asked to interpret them.
-        worst = analyse_bundle["analysis_status"]
-        if worst == "ok":
+        # Hard gate: degenerate roots OR a workload that did not actually
+        # exercise the model both fail loudly so downstream analyze.py is
+        # never asked to interpret a useless trace.
+        analysis_worst = analyse_bundle["analysis_status"]
+        workload_worst = manifest["workload_status"]["status"]
+        if analysis_worst == "ok" and workload_worst == "ok":
             manifest["status"] = "ok"
             (run_dir / "manifest.json").write_text(
                 json.dumps(manifest, indent=2, ensure_ascii=False) + "\n",
@@ -592,10 +654,16 @@ def main(argv: list[str] | None = None) -> int:
             print_json(manifest)
             return 0
 
+        reasons: list[str] = []
+        if analysis_worst != "ok":
+            reasons.append(f"analysis_status={analysis_worst}")
+        if workload_worst != "ok":
+            reasons.append(f"workload_status={workload_worst}")
         manifest["status"] = "failed"
         manifest["error"] = (
-            f"profiling collection produced incomplete output (analysis_status="
-            f"{worst}); re-collect required, see profiling-inventory.md"
+            "profiling collection produced an unusable trace ("
+            + "; ".join(reasons)
+            + "); re-collect required, see profiling-inventory.md"
         )
         (run_dir / "manifest.json").write_text(
             json.dumps(manifest, indent=2, ensure_ascii=False) + "\n",

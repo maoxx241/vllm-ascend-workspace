@@ -18,12 +18,20 @@ verification turns that failure mode into a hard exit instead of letting
 downstream analysis silently process degenerate roots.
 
 Exit codes:
-    0  -- every rank produced kernel_details.csv and trace_view.json
-    1  -- at least one rank is incomplete (missing_kernel_details / partial)
+    0  -- every rank produced kernel_details.csv and trace_view.json AND
+          (when --expected-ranks is given) the rank count matches
+    1  -- at least one rank is incomplete OR the rank count does not match
+          (missing_kernel_details / rank_count_mismatch / partial)
     2  -- the SSH or analyse() call itself failed
 
 Usage:
-    python3 run_remote_analyse.py --machine <alias> --profile-root <path>
+    python3 run_remote_analyse.py --machine <alias> \\
+        --profile-root <path> [--expected-ranks <N>]
+
+The agent should always pass ``--expected-ranks`` when invoking this from a
+collection orchestrator (typically ``tp * (dp or 1)``); otherwise a partial
+capture where some ranks never produced a ``*_ascend_pt`` directory will look
+"clean" because every directory that *did* land was complete.
 
 Progress on stderr, final JSON on stdout.
 """
@@ -115,21 +123,37 @@ def classify_status(outputs: dict[str, Any]) -> str:
     return "ok"
 
 
-def analyse_profile_root(ep, profile_root: str) -> dict[str, Any]:
+def analyse_profile_root(
+    ep,
+    profile_root: str,
+    *,
+    expected_ranks: int | None = None,
+) -> dict[str, Any]:
     """Discover, analyse, and verify every *_ascend_pt under profile_root.
+
+    When ``expected_ranks`` is provided, the rank count is enforced: missing
+    ranks land as ``analysis_status = "rank_count_mismatch"`` even if every
+    directory that *did* exist was complete. This is the canonical "rank N
+    silently failed to dump anything" failure mode.
 
     Returns a dict ready to merge into the collection manifest:
 
         {
           "profile_root": "...",
-          "analysis_status": "ok | missing_kernel_details | partial",
+          "expected_ranks": int | None,
+          "rank_count": int,
+          "analysis_status": "ok | missing_kernel_details |
+                              rank_count_mismatch | partial",
           "dirs": [ {path, outputs, analysis_status}, ... ],
         }
     """
     targets = list_ascend_pt_dirs(ep, profile_root)
+    rank_count = len(targets)
     if not targets:
         return {
             "profile_root": profile_root,
+            "expected_ranks": expected_ranks,
+            "rank_count": 0,
             "analysis_status": "no_profile_dirs",
             "dirs": [],
         }
@@ -146,17 +170,32 @@ def analyse_profile_root(ep, profile_root: str) -> dict[str, Any]:
             "analysis_status": status,
         })
 
-    worst = "ok"
+    # Per-rank classification first: a missing kernel_details.csv on any rank
+    # is the most actionable signal and short-circuits the rest.
+    per_rank_worst = "ok"
     for item in analysed:
         s = item["analysis_status"]
         if s == "missing_kernel_details":
-            worst = "missing_kernel_details"
+            per_rank_worst = "missing_kernel_details"
             break
         if s == "partial":
-            worst = "partial"
+            per_rank_worst = "partial"
+
+    # Worst-of priority: missing_kernel_details > rank_count_mismatch > partial
+    # > ok. rank_count_mismatch is reported only when no per-rank csv is
+    # missing, otherwise the per-rank failure is a strictly more useful
+    # signal (and the count would naturally be off anyway).
+    if per_rank_worst == "missing_kernel_details":
+        worst = "missing_kernel_details"
+    elif expected_ranks is not None and rank_count != expected_ranks:
+        worst = "rank_count_mismatch"
+    else:
+        worst = per_rank_worst
 
     return {
         "profile_root": profile_root,
+        "expected_ranks": expected_ranks,
+        "rank_count": rank_count,
         "analysis_status": worst,
         "dirs": analysed,
     }
@@ -173,6 +212,17 @@ def build_parser() -> argparse.ArgumentParser:
             "(typically <runtime_dir>/<torch_profiler_dir>)."
         ),
     )
+    p.add_argument(
+        "--expected-ranks",
+        type=int,
+        default=None,
+        help=(
+            "expected number of *_ascend_pt directories (typically "
+            "tp * (dp or 1)); when set, a mismatch fails with "
+            "analysis_status=rank_count_mismatch even if every present rank "
+            "was complete"
+        ),
+    )
     return p
 
 
@@ -185,7 +235,9 @@ def main(argv: list[str] | None = None) -> int:
         ep = container_endpoint(record)
 
         emit_progress("discover", f"listing *_ascend_pt under {args.profile_root}")
-        bundle = analyse_profile_root(ep, args.profile_root)
+        bundle = analyse_profile_root(
+            ep, args.profile_root, expected_ranks=args.expected_ranks
+        )
         bundle["machine"] = alias
 
         worst = bundle["analysis_status"]

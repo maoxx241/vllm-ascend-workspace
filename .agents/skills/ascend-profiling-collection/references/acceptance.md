@@ -34,11 +34,23 @@ A non-2xx status here means the profiler window was never actually open, even if
 ## 4. Workload actually executed during the window
 
 ```jsonc
-"benchmark_results": [ { "ok": true, ... }, ... ],
-"followup_result":   { "ok": true, ... }
+"workload_status": {
+  "status": "ok",
+  "bench_total": <int>,
+  "bench_ok":    <int>,
+  "bench_success_rate": <float>,
+  "bench_threshold":    <float>,
+  "followup_ok": true
+}
 ```
 
-If most benchmark requests have `ok=false`, the model was not under load when the profiler was active. Inspect `error` / `body` fields and decide whether the request shape (`--prompt-tokens`, `--benchmark-output-tokens`, `--max-model-len`) was wrong for the model.
+`workload_status.status != "ok"` is a top-level hard gate (orchestrator already sets `status=failed`). Possible non-ok values:
+
+- `followup_failed` — the single tail request failed; the trace ends in an error path, not in steady-state decode
+- `benchmark_below_threshold` — fewer than `--benchmark-success-threshold` of the benchmark wave succeeded; the model was not under load for most of the window
+- `no_benchmark_requests` — defensive: the orchestrator was asked to run zero benchmark requests
+
+Inspect `benchmark_results[*].error` / `body` to decide whether the request shape (`--prompt-tokens`, `--benchmark-output-tokens`, `--max-model-len`) was wrong for the model before re-collecting.
 
 ## 5. Every rank produced kernel_details.csv
 
@@ -60,9 +72,13 @@ Any per-rank `analysis_status` other than `ok` invalidates the whole root for do
 
 ## 6. Number of rank dirs matches expected topology
 
-`len(remote_profile_dirs) == tp * (dp or 1)`.
+```jsonc
+"expected_ranks": <tp * (dp or 1)>,
+"rank_count":     <observed>,
+"analysis_status": "ok"   // not "rank_count_mismatch"
+```
 
-Mismatch usually means one rank's profiler thread crashed or its `*_ascend_pt` directory landed somewhere unexpected. SSH into the container and inspect `<remote_profile_root>` directly before re-collecting.
+The orchestrator passes `--expected-ranks = tp * (dp or 1)` to `run_remote_analyse.py` and the script sets `analysis_status = "rank_count_mismatch"` (and the top-level `status = failed`) when the count is off — even if every directory that *did* land was complete. Mismatch usually means one rank's profiler thread crashed or its `*_ascend_pt` directory landed somewhere unexpected. SSH into the container and inspect `<remote_profile_root>` directly before re-collecting.
 
 ## 7. Service was stopped cleanly
 
@@ -77,6 +93,8 @@ If `stop_result.status` is `failed`, an orphan vLLM process may still be holding
 The following symptoms cannot be fixed offline:
 
 - `analysis_status == "missing_kernel_details"` on any rank
+- `analysis_status == "rank_count_mismatch"` (a rank failed to dump anything)
+- `workload_status.status != "ok"` (no real model traffic during the window)
 - `*_ascend_pt/PROF_*/device_*/data` is suspiciously small (kilobytes vs. expected MB)
 - `FRAMEWORK/torch.op_range` missing
 - profile window was shorter than the actual model warmup (rare but seen with first-call lazy compilation)

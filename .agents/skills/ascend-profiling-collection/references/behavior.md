@@ -42,6 +42,24 @@ The `sips` image resizer is macOS-only. The collection skill assumes the agent r
 
 `--api-server-count` is exposed because vLLM's multi-api-server mode has historically had control-plane routing quirks: a `/start_profile` POST may be answered by an API server that is not the one driving the worker processes. When investigating a "trace empty" symptom, set `--api-server-count 1` to eliminate this variable before blaming the profiler.
 
+## Workload success gate
+
+`benchmark_results` and `followup_result` are not just diagnostic data — the
+orchestrator computes a `workload_status` over them and the top-level
+`status` is `failed` whenever:
+
+- the follow-up tail request did not return 2xx (`workload_status.status ==
+  "followup_failed"`), or
+- the benchmark wave's success rate fell below
+  `--benchmark-success-threshold` (default 0.8) — `bench_success_rate <
+  bench_threshold` ⇒ `workload_status.status == "benchmark_below_threshold"`.
+
+A profile window that ran with no real model traffic produces a trace that
+*looks* fine to `analyse()` (kernel_details.csv lands, only it describes
+nothing useful). The gate prevents that root from leaking into downstream
+analysis. Lower the threshold only when you explicitly expect flakiness in
+the wave.
+
 ## Output verification
 
 After `analyse()`, every `*_ascend_pt` directory is expected to contain:
@@ -50,6 +68,13 @@ After `analyse()`, every `*_ascend_pt` directory is expected to contain:
 - `ASCEND_PROFILER_OUTPUT/trace_view.json`
 
 `profiling-inventory.md` documents several captures where `analyse()` "succeeded" but produced no `kernel_details.csv` because the profile window was too short or `FRAMEWORK/torch.op_range` never made it to disk. The skill turns that into `analysis_status == missing_kernel_details` and fails the run. Re-collection is the only fix; offline `analyse()` cannot recover the missing device data.
+
+In addition, the orchestrator passes `--expected-ranks = tp * (dp or 1)` to
+`run_remote_analyse.py`. When the actual `*_ascend_pt` count differs from the
+expected number, `analysis_status` becomes `rank_count_mismatch`. Without
+this gate a partial capture (e.g. only rank 0 dumped) can look "clean"
+because every directory that *did* land was complete, masking a topology
+failure.
 
 ## Post-stop flush window
 
