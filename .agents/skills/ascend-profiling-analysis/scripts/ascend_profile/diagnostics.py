@@ -204,6 +204,28 @@ def diagnose_profile(output_dir: Path) -> dict[str, Any]:
     findings.extend(diagnose_rank_workload(rank_rows, step_rows))
     for row in wait_rows:
         if str(row.get("is_false_hotspot_risk")).lower() == "true":
+            # ``wait_anchor_ops.csv`` is itself the per-kernel evidence
+            # (with ``row_ranges`` + ``sample_event_ids`` pointing back
+            # to the normalized event index). The evidence-chain
+            # validator only knows about ``evidence_index.csv``
+            # (``evd_*`` ids), so we expose the wait_anchor row's own
+            # back-references as an explicit ``limitations`` string
+            # instead of faking a cross-ID match.
+            row_ranges = str(row.get("row_ranges") or "").strip()
+            sample_evt = str(row.get("sample_event_ids") or "").strip()
+            limitation_parts = [
+                "Wait-anchor false-hotspot is derived directly from "
+                "wait_anchor_ops.csv (per-kernel aggregate); not aligned "
+                "to an evidence_index.csv span.",
+            ]
+            if row_ranges:
+                limitation_parts.append(
+                    f"Source rows in kernel_details.csv: {row_ranges}."
+                )
+            if sample_evt:
+                limitation_parts.append(
+                    f"Sample event ids in normalized_event_index.csv: {sample_evt}."
+                )
             findings.append(
                 finding(
                     finding_type="wait_anchor_false_hotspot",
@@ -213,6 +235,7 @@ def diagnose_profile(output_dir: Path) -> dict[str, Any]:
                     confidence="high",
                     rank_ids=(str(row.get("rank_id")),),
                     metrics=dict(row),
+                    limitations=(" ".join(limitation_parts),),
                 )
             )
     for row in aicpu_rows:

@@ -143,19 +143,31 @@ attributes:
   html_status:
     description: |
       Reported in ``report/manifest.json`` to signal whether the
-      interactive HTML view rendered successfully.
+      L1/L2/L3 HTML view rendered successfully.
     type: enum
     values:
       - ok
       - skipped                # --skip-html
-      - stub                   # report_mode left HTML out by design
+      - stub                   # report_mode=summary left HTML out by design
       - error                  # rendering raised; placeholder html written
 
   report_mode:
     description: |
       ``--report-mode`` selection forwarded to the report stage.
+
+      Only two modes survive in production:
+
+      * ``full-raw`` — default; render the complete L1/L2/L3 HTML with
+        operator cards backed by raw ``kernel_details`` rows. This is
+        the canonical analysis output.
+      * ``summary`` — md + xlsx only; HTML is a stub. Used to shorten
+        the feedback loop while debugging the pipeline (segment /
+        classify / summarize / cross_rank); not a deliverable mode.
+
+      A prior ``interactive`` mode (HTML without raw kernel rows) was
+      removed because the operator cards lost their core value when
+      raw rows were stripped.
     type: enum
     values:
-      - summary                # md + xlsx only; HTML is a stub
-      - interactive            # HTML L1/L2/L3 without raw kernel rows
-      - full-raw               # complete HTML with attached raw kernel rows
+      - summary
+      - full-raw

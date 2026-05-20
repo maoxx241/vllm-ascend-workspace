@@ -938,9 +938,12 @@ def render_report(
     write_xlsx(report_dir / "report.xlsx", sheets)
 
     # HTML report (rich, single-file, zero-dependency). Three modes:
-    #   * summary      — skip entirely; stub file explains.
-    #   * interactive  — render L1/L2/L3 without attaching raw kernel rows.
-    #   * full-raw     — render everything (default).
+    #   * summary  — skip entirely; stub file explains. Used for
+    #                first-stage pipeline debugging where md+xlsx is
+    #                enough and HTML render time would just slow the
+    #                feedback loop.
+    #   * full-raw — render the complete L1/L2/L3 SPA with raw kernel
+    #                rows attached to operator cards (default).
     # ``skip_html=True`` forces summary regardless of mode.
     html_path = report_dir / "report.html"
     html_status = "ok"
@@ -966,11 +969,7 @@ def render_report(
                 import sys as _sys
                 _sys.path.insert(0, str(Path(__file__).resolve().parent))
                 from html_report import build_html_report  # type: ignore[no-redef]
-            build_html_report(
-                output_dir,
-                html_path,
-                attach_raw_rows=(effective_mode == "full-raw"),
-            )
+            build_html_report(output_dir, html_path)
         except Exception as exc:  # noqa: BLE001
             html_status = "error"
             html_error = f"{type(exc).__name__}: {exc}"
@@ -1019,8 +1018,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--skip-html", action="store_true")
     parser.add_argument(
         "--report-mode",
-        choices=("summary", "interactive", "full-raw"),
+        choices=("summary", "full-raw"),
         default="full-raw",
+        help=(
+            "summary: skip HTML (stub file written) — for first-stage "
+            "pipeline debugging when md+xlsx is enough. "
+            "full-raw: render the complete L1/L2/L3 HTML with operator "
+            "cards backed by raw kernel_details rows."
+        ),
     )
     return parser
 

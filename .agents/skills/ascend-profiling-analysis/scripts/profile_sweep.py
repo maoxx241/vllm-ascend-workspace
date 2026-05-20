@@ -108,7 +108,7 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help=(
             "also pull each root's report/report.html. Off by default because "
-            "interactive HTML can be 100MB+ per root; turn it on only when "
+            "full-raw HTML can be 100MB+ per root; turn it on only when "
             "you actually plan to open every report locally."
         ),
     )
@@ -122,9 +122,13 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--report-mode",
-        choices=("summary", "interactive", "full-raw"),
+        choices=("summary", "full-raw"),
         default="summary",
-        help="when --render-html is set, forwards HTML depth to remote sweep.",
+        help=(
+            "when --render-html is set, forwards HTML depth to remote "
+            "sweep. 'summary' (default) keeps each root's HTML as a "
+            "stub; 'full-raw' renders every root's complete HTML."
+        ),
     )
     parser.add_argument(
         "--local-output-dir",

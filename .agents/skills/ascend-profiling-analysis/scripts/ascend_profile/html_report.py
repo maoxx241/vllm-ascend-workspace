@@ -921,7 +921,7 @@ def events_in_row_range(events_by_row: list, row_start: int, row_end: int, rank_
     return out
 
 
-def load_bundle(root: Path, *, attach_raw_rows: bool = True) -> Bundle:
+def load_bundle(root: Path) -> Bundle:
     b = Bundle(root=root)
     b.rank_summary = load_csv(root / "rank_summary.csv")
     b.step_summary = load_csv(root / "step_summary.csv")
@@ -957,12 +957,9 @@ def load_bundle(root: Path, *, attach_raw_rows: bool = True) -> Bundle:
     print(f"  loaded {len(b.events)} events", file=sys.stderr)
     n_dedup = dedup_comm_aiv(b.events)
     print(f"  marked {n_dedup} comm-shadow events as redundant (mix_comm_aiv + AIV ops with comm-name keywords vs HCCL events, IoU >= 0.9)", file=sys.stderr)
-    if attach_raw_rows:
-        print(f"loading raw kernel_details.csv (per source) ...", file=sys.stderr)
-        raw_by_source = _load_raw_kernel_details(root)
-        _attach_raw_rows(b.events, raw_by_source)
-    else:
-        print(f"skipping raw kernel_details.csv attach (interactive mode)", file=sys.stderr)
+    print(f"loading raw kernel_details.csv (per source) ...", file=sys.stderr)
+    raw_by_source = _load_raw_kernel_details(root)
+    _attach_raw_rows(b.events, raw_by_source)
     return b
 
 
@@ -2759,22 +2756,19 @@ def _render_l3_layer(b: "Bundle", view_id: str, parent_seg_id: str,
 def build_html_report(
     analysis_root: Path | str,
     output_path: Path | str,
-    *,
-    attach_raw_rows: bool = True,
 ) -> Path:
     """Render the v7 SPA HTML report for the given analysis root.
 
-    Three-level focus: L1 总览 · L2 单步 · L3 局部.
-
-    ``attach_raw_rows`` controls whether per-event raw rows from the original
-    ``kernel_details.csv`` are merged into the operator cards. Setting it to
-    ``False`` (used by ``--report-mode interactive``) skips that load — saving
-    significant memory and HTML size for large multi-rank traces.
+    Three-level focus: L1 总览 · L2 单步 · L3 局部. Raw kernel rows from
+    ``kernel_details.csv`` are always merged into the operator cards;
+    callers that want to skip HTML rendering entirely should use
+    ``--skip-html`` or ``--report-mode summary`` upstream rather than
+    trimming this function.
     """
     root = Path(analysis_root)
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
-    b = load_bundle(root, attach_raw_rows=attach_raw_rows)
+    b = load_bundle(root)
     title = f"Ascend Profiling · {os.path.basename(str(root).rstrip('/'))}"
     html_out = "".join([
         render_head(title),

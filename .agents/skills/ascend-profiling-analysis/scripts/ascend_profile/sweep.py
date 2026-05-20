@@ -421,11 +421,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--report-mode",
-        choices=("summary", "interactive", "full-raw"),
+        choices=("summary", "full-raw"),
         default="summary",
         help=(
             "per-root HTML report mode when --no-skip-html is set. "
-            "Defaults to 'summary' to keep sweep outputs small."
+            "'summary' (default) writes only the HTML stub so sweep stays "
+            "small; 'full-raw' renders each root's complete HTML."
         ),
     )
     parser.add_argument(

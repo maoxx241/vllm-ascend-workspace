@@ -1,6 +1,6 @@
 ---
 name: ascend-profiling-analysis
-description: Analyze Ascend NPU torch profiler output (kernel_details.csv / trace_view.json / op_summary / communication.json) for one or many profiling roots and produce a traceable report (rank/step/layer/operator summary, cross-rank alignment, diagnosis findings, report.md / report.xlsx / report.html with interactive single-step inspectors, bubble tracing axes, and zoomable Chrome-tracing-style timelines). Use for requests like "分析 profiling", "解析这份 kernel_details", "看 step/layer 切分", "跨 rank 对齐", "通信慢/EP 不均/快慢卡", "生成 profiling 报告". Do not use for HBM/显存归因 (use ascend-memory-profiling), service lifecycle (use vllm-ascend-serving), benchmarks (use vllm-ascend-benchmark), or采集 profiling 数据 (use ascend-profiling-collection).
+description: Analyze Ascend NPU torch profiler output (kernel_details.csv / trace_view.json / op_summary / communication.json) for one or many profiling roots and produce a traceable report (rank/step/layer/operator summary, cross-rank alignment, diagnosis findings, report.md / report.xlsx / report.html with single-step inspectors, bubble tracing axes, and zoomable Chrome-tracing-style timelines). Use for requests like "分析 profiling", "解析这份 kernel_details", "看 step/layer 切分", "跨 rank 对齐", "通信慢/EP 不均/快慢卡", "生成 profiling 报告". Do not use for HBM/显存归因 (use ascend-memory-profiling), service lifecycle (use vllm-ascend-serving), benchmarks (use vllm-ascend-benchmark), or采集 profiling 数据 (use ascend-profiling-collection).
 ---
 
 # Ascend Profiling Analysis
@@ -57,7 +57,7 @@ python3 .agents/skills/ascend-profiling-analysis/scripts/profile_analyze.py \
   [--remote-output-dir <absolute-remote-output-dir>] \
   [--remote-timeout 3600] \
   [--keep-remote-output] \
-  [--skip-html] [--report-mode summary|interactive|full-raw] \
+  [--skip-html] [--report-mode summary|full-raw] \
   [--from-stage <stage>] [--to-stage <stage>] [--only-stage <stage>] \
   [--verbose]
 ```
@@ -66,7 +66,7 @@ Flag notes:
 
 - `--local-output-dir`: explicit local dir to write pulled artifacts into. If omitted, defaults to `.vaws-local/profiling-analysis/runs/<timestamp>_<tag>/`. Pass `--overwrite` to allow a non-empty target.
 - `--remote-output-dir`: explicit **absolute** remote output dir. Useful with `--from-stage` / `--only-stage` to **reuse a previous run's normalize/segment artifacts** when iterating on classify / diagnostics / report. Default: `<remote-work-dir>/runs/<local-run-dir-name>`.
-- `--skip-html` / `--report-mode`: forwarded to the remote analyze stage; `summary` skips HTML entirely (smallest), `interactive` renders L1/L2/L3 without attaching raw kernel rows, `full-raw` (default) is the complete report.
+- `--skip-html` / `--report-mode`: forwarded to the remote analyze stage. `full-raw` (default) renders the complete L1/L2/L3 HTML with operator cards backed by raw `kernel_details` rows. `summary` writes an HTML stub instead — use it for first-stage pipeline debugging when md+xlsx are enough and you don't want to wait for HTML rendering. `--skip-html` is the explicit kill-switch and overrides `--report-mode`.
 - `--from-stage` / `--to-stage` / `--only-stage`: resume / partial re-runs; require the prior stages' manifest files already exist in the remote output dir. The wrapper validates only the artifacts the chosen stage *should* produce, so `--only-stage normalize` no longer demands `report/report.md`.
 
 行为：
@@ -90,7 +90,7 @@ python3 .agents/skills/ascend-profiling-analysis/scripts/profile_sweep.py \
   [--tag <name>] \
   [--limit <N>] \
   [--jobs <N>] [--reuse-existing] \
-  [--render-html [--report-mode summary|interactive|full-raw]] \
+  [--render-html [--report-mode summary|full-raw]] \
   [--pull-html] \
   [--local-output-dir <local-dir>] [--overwrite] \
   [--remote-work-dir /tmp/ascend_profile_framework] \

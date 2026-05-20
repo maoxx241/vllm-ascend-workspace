@@ -9,7 +9,7 @@
 - [ ] When `--manifest` is given, the script copies the input manifest into the local run dir as `collection_manifest.json` for traceability.
 - [ ] When neither input is supplied (or both are), argparse rejects the invocation.
 - [ ] `--local-output-dir` is honoured: when set, pulled artifacts land there; existing non-empty targets are rejected unless `--overwrite` is also given.
-- [ ] `--skip-html` / `--report-mode {summary,interactive,full-raw}` / `--from-stage` / `--to-stage` / `--only-stage` are forwarded verbatim to the remote `ascend_profile.analyze` invocation.
+- [ ] `--skip-html` / `--report-mode {summary,full-raw}` / `--from-stage` / `--to-stage` / `--only-stage` are forwarded verbatim to the remote `ascend_profile.analyze` invocation.
 - [ ] `--remote-output-dir <abs>` overrides the default `<remote-work-dir>/runs/<local-run-dir-name>`. Used to point a follow-up partial rerun (`--from-stage classify`) at a previous remote run so normalize/segment artifacts are reused.
 - [ ] Stage-aware artifact validation: `--only-stage normalize` succeeds without requiring `report/report.md`, while a full pipeline run still demands the complete artifact set. Segment-health validation only runs when segmentation is in the stage window.
 

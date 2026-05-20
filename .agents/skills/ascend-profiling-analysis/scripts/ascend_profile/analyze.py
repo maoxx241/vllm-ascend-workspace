@@ -42,7 +42,7 @@ def run_stage(name: str, func: Callable[[], dict[str, Any]], *, verbose: bool) -
     return result, {"stage": name, "elapsed_s": round(elapsed, 6)}
 
 
-REPORT_MODES = ("summary", "interactive", "full-raw")
+REPORT_MODES = ("summary", "full-raw")
 
 # Stage registry. The order is the canonical pipeline order; selectors like
 # ``--from-stage`` / ``--to-stage`` / ``--only-stage`` operate on stage names
@@ -201,9 +201,10 @@ def build_parser() -> argparse.ArgumentParser:
         choices=list(REPORT_MODES),
         default="full-raw",
         help=(
-            "HTML report depth. 'summary' = tables only; 'interactive' = L1/L2/L3 "
-            "without raw kernel rows attached; 'full-raw' (default) = full operator "
-            "cards with attached raw kernel_details rows."
+            "HTML report depth. 'summary' = md+xlsx only (HTML is a stub) — "
+            "for first-stage pipeline debugging. 'full-raw' (default) = "
+            "complete L1/L2/L3 HTML with operator cards backed by raw "
+            "kernel_details rows."
         ),
     )
     stage_group = parser.add_argument_group("stage selection (advanced)")

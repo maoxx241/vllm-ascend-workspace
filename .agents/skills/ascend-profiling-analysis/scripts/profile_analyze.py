@@ -88,11 +88,13 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--report-mode",
-        choices=("summary", "interactive", "full-raw"),
+        choices=("summary", "full-raw"),
         default="full-raw",
         help=(
-            "forward to remote analyze: HTML report depth (summary | "
-            "interactive | full-raw). Default: full-raw."
+            "forward to remote analyze: 'summary' (md+xlsx only, HTML is "
+            "a stub) for first-stage pipeline debugging; 'full-raw' "
+            "(default) renders the complete L1/L2/L3 HTML with operator "
+            "cards backed by raw kernel_details rows."
         ),
     )
     parser.add_argument(

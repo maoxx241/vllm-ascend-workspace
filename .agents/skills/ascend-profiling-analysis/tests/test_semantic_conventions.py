@@ -123,7 +123,7 @@ def test_html_status_and_report_mode_enums():
             f"{sorted(leftover)}"
         )
 
-    report_mode_values = {"summary", "interactive", "full-raw"}
+    report_mode_values = {"summary", "full-raw"}
     yaml_mode = _load_enum("report_mode")
     missing = report_mode_values - yaml_mode
     assert not missing, (
