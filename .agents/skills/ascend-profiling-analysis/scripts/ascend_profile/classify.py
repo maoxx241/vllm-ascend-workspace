@@ -49,6 +49,7 @@ try:
         SCHEMA_VERSION,
         StepSegment,
         TOOL_VERSION,
+        emit_stage_json,
         group_by_rank,
         load_events,
         load_layer_segments,
@@ -61,13 +62,15 @@ except ImportError:  # pragma: no cover - script-mode fallback
     import sys
 
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-    from common import (  # type: ignore[no-redef]
+    from common import (
+        # type: ignore[no-redef]
         BlockSegment,
         LayerSegment,
         NormalizedEvent,
         SCHEMA_VERSION,
         StepSegment,
         TOOL_VERSION,
+        emit_stage_json,
         group_by_rank,
         load_events,
         load_layer_segments,
@@ -520,7 +523,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     manifest = classify_profile(Path(args.output))
-    print({"stage": "classify", "counts": manifest["counts"]})
+    emit_stage_json({"stage": "classify", "counts": manifest["counts"]})
     return 0
 
 

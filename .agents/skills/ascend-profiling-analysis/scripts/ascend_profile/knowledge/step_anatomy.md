@@ -3,7 +3,7 @@
 Every `segment_type == step` row is decomposed into four time buckets so
 the report can answer "where does the step time actually go" without
 running a second pass over raw data. The decomposition is computed in
-`tools/ascend_profile/summarize.py:step_anatomy_rows` and persisted to
+`ascend_profile/summarize.py:step_anatomy_rows` and persisted to
 `step_anatomy.csv`. A subset of the columns is also inlined into
 `step_summary.csv` for spreadsheet ergonomics.
 
@@ -76,7 +76,7 @@ common case).
 
 ## 5. Cross-references
 
-- Step segmentation rules: `tools/ascend_profile/segment.py` (especially
+- Step segmentation rules: `ascend_profile/segment.py` (especially
   `StepPlan` / `StepSegment.segment_type`).
 - Layer segmentation rules: `LayerSegment` and the layer assembly logic
   in `segment.py:build_layers` and downstream helpers.

@@ -14,6 +14,7 @@ try:
         NormalizedEvent,
         SCHEMA_VERSION,
         TOOL_VERSION,
+        emit_stage_json,
         group_by_rank,
         load_events,
         load_step_segments,
@@ -27,11 +28,13 @@ except ImportError:  # pragma: no cover
     import sys
 
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-    from common import (  # type: ignore[no-redef]
+    from common import (
+        # type: ignore[no-redef]
         CrossRankAlignment,
         NormalizedEvent,
         SCHEMA_VERSION,
         TOOL_VERSION,
+        emit_stage_json,
         group_by_rank,
         load_events,
         load_step_segments,
@@ -45,6 +48,24 @@ except ImportError:  # pragma: no cover
 
 STEP_TIME_OVERLAP_RATIO = 0.20
 OPERATOR_ALIGNMENT_BUCKET_US = 1000.0
+
+# Alignment method tags + their default confidence/limitation envelopes.
+# Embedded in every alignment row so downstream diagnostics and the
+# evidence-chain validator can reason about how trustworthy each
+# alignment is.
+STEP_ALIGNMENT_METHOD = "step_time_overlap_v1"
+OPERATOR_ALIGNMENT_METHOD = "time_bucket_v1"
+STEP_ALIGNMENT_LIMITATIONS = (
+    "Step alignment uses raw start/end overlap; ranks captured with "
+    "different start offsets or non-overlapping time windows will be "
+    "treated as independent."
+)
+OPERATOR_ALIGNMENT_LIMITATIONS = (
+    "Operator alignment buckets events by (role, name_key, shape, "
+    "floor(start_us / bucket_us)). Multiple ops landing in the same "
+    "bucket are assumed to be the same logical op across ranks; "
+    "non-overlapping schedules or operator-level reordering can mis-pair."
+)
 
 
 def overlap_us(left_start: float, left_end: float, right_start: float, right_end: float) -> float:
@@ -60,9 +81,36 @@ def alignment_row(alignment: CrossRankAlignment) -> dict[str, Any]:
         "event_ids": list(alignment.event_ids),
         "start_us": alignment.start_us,
         "end_us": alignment.end_us,
+        # ``alignment_method`` / ``alignment_confidence`` / ``limitations``
+        # are surfaced as first-class columns rather than nested metrics so
+        # the CSV stays consumable by spreadsheets and the evidence-chain
+        # validator can read them without parsing JSON.
+        "alignment_method": alignment.metrics.get("alignment_method"),
+        "alignment_confidence": alignment.metrics.get("alignment_confidence"),
+        "alignment_limitations": alignment.metrics.get("alignment_limitations"),
         **alignment.metrics,
         "evidence_ids": list(alignment.evidence_ids),
     }
+
+
+def _step_confidence(members_count: int, wall_skew_us: float, layer_mismatch: bool) -> str:
+    if layer_mismatch:
+        return "low"
+    if members_count >= 4 and wall_skew_us <= 5000.0:
+        return "high"
+    if members_count >= 2 and wall_skew_us <= 20000.0:
+        return "medium"
+    return "low"
+
+
+def _operator_confidence(member_count: int, start_skew_us: float, duration_ratio: float) -> str:
+    if duration_ratio >= 5.0 or start_skew_us >= 20000.0:
+        return "low"
+    if member_count >= 4 and duration_ratio <= 1.5 and start_skew_us <= 2000.0:
+        return "high"
+    if member_count >= 2 and duration_ratio <= 2.5 and start_skew_us <= 10000.0:
+        return "medium"
+    return "low"
 
 
 def event_alignment_key(event: NormalizedEvent) -> tuple[str, str, str]:
@@ -107,6 +155,14 @@ def build_step_alignments(segments: Sequence[Any]) -> list[CrossRankAlignment]:
         end = max(member.end_us for member in members)
         layer_counts = [member.main_layer_count for member in members]
         families = sorted({member.step_family for member in members})
+        wall_skew_us = round(
+            max(member.end_us - member.start_us for member in members)
+            - min(member.end_us - member.start_us for member in members),
+            3,
+        )
+        layer_mismatch = (
+            len(set((member.step_family, member.main_layer_count) for member in members)) > 1
+        )
         alignments.append(
             CrossRankAlignment(
                 alignment_id=stable_id("align", "step", segment_ids),
@@ -116,11 +172,16 @@ def build_step_alignments(segments: Sequence[Any]) -> list[CrossRankAlignment]:
                 start_us=start,
                 end_us=end,
                 metrics={
+                    "alignment_method": STEP_ALIGNMENT_METHOD,
+                    "alignment_confidence": _step_confidence(
+                        len(members), wall_skew_us, layer_mismatch
+                    ),
+                    "alignment_limitations": STEP_ALIGNMENT_LIMITATIONS,
                     "member_count": len(members),
-                    "wall_skew_us": round(max(member.end_us - member.start_us for member in members) - min(member.end_us - member.start_us for member in members), 3),
+                    "wall_skew_us": wall_skew_us,
                     "layer_counts": layer_counts,
                     "step_families": families,
-                    "is_structure_mismatch": len(set((member.step_family, member.main_layer_count) for member in members)) > 1,
+                    "is_structure_mismatch": layer_mismatch,
                 },
             )
         )
@@ -143,6 +204,8 @@ def build_operator_alignments(events: Sequence[NormalizedEvent], *, bucket_us: f
         starts = [event.start_us for event in items]
         durations = [event.duration_us for event in items]
         waits = [event.wait_us for event in items]
+        start_skew_us = round(max(starts) - min(starts), 3)
+        duration_ratio = round(max(durations) / max(1e-6, min(durations)), 6)
         alignments.append(
             CrossRankAlignment(
                 alignment_id=stable_id("align", role, name_key, shape, bucket),
@@ -152,17 +215,22 @@ def build_operator_alignments(events: Sequence[NormalizedEvent], *, bucket_us: f
                 start_us=min(event.start_us for event in items),
                 end_us=max(event.end_us for event in items),
                 metrics={
+                    "alignment_method": OPERATOR_ALIGNMENT_METHOD,
+                    "alignment_confidence": _operator_confidence(
+                        len(items), start_skew_us, duration_ratio
+                    ),
+                    "alignment_limitations": OPERATOR_ALIGNMENT_LIMITATIONS,
                     "role": role,
                     "name_key": name_key,
                     "shape_signature": shape,
                     "bucket_us": bucket_us,
                     "member_count": len(items),
                     "rank_count": len(rank_ids),
-                    "start_skew_us": round(max(starts) - min(starts), 3),
+                    "start_skew_us": start_skew_us,
                     "duration_min_us": round(min(durations), 3),
                     "duration_max_us": round(max(durations), 3),
                     "duration_skew_us": round(max(durations) - min(durations), 3),
-                    "duration_ratio": round(max(durations) / max(1e-6, min(durations)), 6),
+                    "duration_ratio": duration_ratio,
                     "wait_max_us": round(max(waits), 3),
                 },
             )
@@ -210,7 +278,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     manifest = cross_rank_profile(Path(args.output))
-    print({"stage": "cross_rank", "counts": manifest["counts"]})
+    emit_stage_json({"stage": "cross_rank", "counts": manifest["counts"]})
     return 0
 
 

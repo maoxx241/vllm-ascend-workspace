@@ -29,7 +29,7 @@ description: Analyze Ascend NPU torch profiler output (kernel_details.csv / trac
 
 - **准确性优先于覆盖率**：宁可报错或留 `low confidence`，也不输出无法追溯的结论。
 - **远端解析**：profiling root 通常几十 GB，禁止全量拉回本地解析。本地只做静态检查、schema 校验、产物 manifest 阅读。真实 analyze 在远端容器里跑，必要时把 `report/` 目录拉回本地。
-- **入口稳定**：agent 调用 `profile_analyze.py` / `profile_sweep.py`，不要绕过去手写 `python3 -m tools.ascend_profile.analyze` 命令。
+- **入口稳定**：agent 调用 `profile_analyze.py` / `profile_sweep.py`，不要绕过去手写 `python3 -m ascend_profile.analyze` 命令。
 - **manifest-aware**：当 `ascend-profiling-collection` 产物可用时，优先把 `--manifest <run_dir>/manifest.json` 喂给 `profile_analyze.py`，让本 skill 自己从 manifest 里读 `remote_profile_root` / `analysis_status`。`analysis_status != "ok"` 直接拒绝，不要静默跳过。
 - **进度协议**：进度走 `stderr`，前缀 `__VAWS_PROFILE_ANALYSIS_PROGRESS__=<json>`。最终结果走 `stdout`，单个 JSON 对象。
 - **本地状态**：本 skill 的本地状态全部放在 `.vaws-local/profiling-analysis/runs/<timestamp>_<tag>/`（untracked）。远端工作目录默认 `/tmp/ascend_profile_framework`。
@@ -50,11 +50,20 @@ python3 .agents/skills/ascend-profiling-analysis/scripts/profile_analyze.py \
   ( --manifest <local-run-dir>/manifest.json
    | --remote-profile-root <remote-path> ) \
   [--tag <name>] \
-  [--output-dir <local-dir-to-pull-report>] \
+  [--local-output-dir <local-dir-to-pull-report>] [--overwrite] \
   [--remote-work-dir /tmp/ascend_profile_framework] \
+  [--remote-timeout 3600] \
   [--keep-remote-output] \
+  [--skip-html] [--report-mode summary|interactive|full-raw] \
+  [--from-stage <stage>] [--to-stage <stage>] [--only-stage <stage>] \
   [--verbose]
 ```
+
+Flag notes:
+
+- `--local-output-dir`: explicit local dir to write pulled artifacts into. If omitted, defaults to `.vaws-local/profiling-analysis/runs/<timestamp>_<tag>/`. Pass `--overwrite` to allow a non-empty target.
+- `--skip-html` / `--report-mode`: forwarded to the remote analyze stage; `summary` skips HTML entirely (smallest), `interactive` renders L1/L2/L3 without attaching raw kernel rows, `full-raw` (default) is the complete report.
+- `--from-stage` / `--to-stage` / `--only-stage`: resume / partial re-runs; require the prior stages' manifest files already exist in the remote output dir.
 
 行为：
 
@@ -62,8 +71,8 @@ python3 .agents/skills/ascend-profiling-analysis/scripts/profile_analyze.py \
 2. 解析输入：
    - `--manifest`：读取 `analysis_status`、`remote_profile_root`、`schema_version`；若不是 `ok` 直接失败。
    - `--remote-profile-root`：直接走原始路径（用于历史 profiling）。
-3. 通过 `remote-code-parity` 把当前 `tools/ascend_profile/` 同步到远端 `<remote-work-dir>/tools/ascend_profile/`（轻量 rsync，仅这个子目录）。
-4. 远端跑 `python3 -m tools.ascend_profile.analyze <REMOTE_ROOT> --output <REMOTE_OUT> --verbose`。
+3. 通过 tar-over-ssh 把当前 `scripts/ascend_profile/` 同步到远端 `<remote-work-dir>/ascend_profile/`（仅这一个子目录，去掉 `__pycache__`/`*.pyc`）。
+4. 远端跑 `python3 -m ascend_profile.analyze <REMOTE_ROOT> --output <REMOTE_OUT> --verbose`。
 5. 校验远端产物：`manifest.json`、`segment_manifest.json`、`diagnosis_findings.json`、`report/report.md`、`report/report.xlsx`、`report/report.html` 必须存在（HTML 生成失败时仍会留下带错误说明的占位 html，`report/manifest.json` 中的 `html_status` 字段会标 `error`）。
 6. 拉回轻量产物（`report/`、所有 `*_manifest.json`、`diagnosis_findings.json`、`evidence_index.csv`、`raw_kernel_index.csv`、CSV 摘要），不拉 `normalized_event_index.csv` / `evidence/bubble_windows.jsonl` 这种大文件，除非给了 `--keep-remote-output` 才整目录拉回。
 7. 把摘要、diagnosis 计数、stage timing 整理成 stdout JSON。
@@ -76,15 +85,22 @@ python3 .agents/skills/ascend-profiling-analysis/scripts/profile_sweep.py \
   --search-root <remote-path> [--search-root <remote-path> ...] \
   [--tag <name>] \
   [--limit <N>] \
+  [--jobs <N>] [--reuse-existing] \
+  [--render-html [--report-mode summary|interactive|full-raw]] \
+  [--pull-html] \
+  [--local-output-dir <local-dir>] [--overwrite] \
   [--remote-work-dir /tmp/ascend_profile_framework] \
   [--verbose]
 ```
 
 行为：
 
-- 通过 `python3 -m tools.ascend_profile.sweep` 在远端发现所有含 `kernel_details.csv` 的 root，逐个 analyze，产 `sweep_summary.json`。
-- 拉回 `sweep_summary.json` 和每个 root 的 `report/` + `diagnosis_findings.json`（量级可控）。
-- stdout JSON 给出 `root_count`、`status_counts`、失败 root 列表、`union_layers` inventory 分布。
+- 通过 `python3 -m ascend_profile.sweep` 在远端发现所有含 `kernel_details.csv` 的 root，逐个 analyze，产 `sweep_summary.json`。
+- 拉回 `sweep_summary.json` 和每个 root 的 lightweight 产物。HTML 报告默认 **不** 拉回，因为 sweep 跑很多 root 时 HTML 累计可能上 GB；要拉就显式加 `--pull-html`。
+- sweep 默认在远端跑 `--skip-html` 以节省时间和磁盘；要为每个 root 都渲染 HTML，传 `--render-html` 并可选 `--report-mode`。
+- `--jobs N` 在远端用 N 个线程并行分析 root（thread pool；GIL 限制下 N=2~4 通常是最佳收益）。
+- `--reuse-existing` 让 sweep 跳过已有 `manifest.json` 的 root，用于断点续跑。
+- stdout JSON 给出 `root_count`、`status_counts`、`config`（实际使用的 jobs/report mode 等）、失败 root 列表、`union_layers` inventory 分布。
 
 ## Workflow
 
@@ -93,7 +109,7 @@ python3 .agents/skills/ascend-profiling-analysis/scripts/profile_sweep.py \
    - 其次 `--remote-profile-root`，要求是远端绝对路径。
 2. **远端就绪**
    - 通过 `machine-management` 确认机器 ready；本 skill 不重复实现 ready 检查，但调用前会 ping 一下 `which python3`。
-   - 通过 `remote-code-parity` 模式同步只 `tools/ascend_profile/` 子目录到 `<remote-work-dir>/tools/ascend_profile/`，避免污染 `.vaws-runtime`。
+   - tar-sync 只 `scripts/ascend_profile/` 这一个子目录到 `<remote-work-dir>/ascend_profile/`，避免污染 `.vaws-runtime`。
 3. **执行分析**
    - 单 root：`analyze.py`；多 root：`sweep.py`。
    - 远端 `--verbose` 默认开，stage timing 会回到 stdout。
@@ -134,13 +150,13 @@ python3 .agents/skills/ascend-profiling-analysis/scripts/profile_sweep.py \
 
 `summarize` 阶段额外产出：
 
-- `step_anatomy.csv`: 每个 step 的 head / main / tail / bubble 拆分（行号 + start_us / end_us + wall/busy/bubble 毫秒），由 `layer_segments.json` 推导。规则见 `tools/ascend_profile/knowledge/step_anatomy.md`。
+- `step_anatomy.csv`: 每个 step 的 head / main / tail / bubble 拆分（行号 + start_us / end_us + wall/busy/bubble 毫秒），由 `layer_segments.json` 推导。规则见 `scripts/ascend_profile/knowledge/step_anatomy.md`。
 - `operator_summary.csv` 现包含原始 CANN pipeline 字段（`aicore_time / aiv_time / aic_mac_time / aic_fixpipe_time / aic_mte1_time / aic_mte2_time / aic_scalar_time / aiv_vec_time / aiv_mte2_time / aiv_mte3_time / aiv_scalar_time`，单位 us），以及四列分类：
   - `op_type ∈ {aic, aiv, mix_cv, mix_comm_aiv, communication, aicpu, dsa, unknown}` — 来源是 `kernel_details.csv` 的 `Accelerator Core` 列，CV 解耦架构下 FIA / GroupedMatmul 等真正同时跑 Cube + Vector 的算子归 `mix_cv`；`DispatchFFNCombine` 等 comm + AIV 融合算子归 `mix_comm_aiv`。
   - `bound_stage` — 9 个 sub-stage 中累计耗时最大的那个（`aic_mac_time` / `aic_mte2_time` / `aiv_vec_time` …），`mix_comm_aiv` 只在 AIV 4 个 stage 里取最大。
   - `bound_family ∈ {cube, vector, aic_mte, aiv_mte, scalar, mixed, aicpu, communication, comm_aiv_mix, dsa, unknown}` — Atlas A2/A3 是 Cube/Vector 解耦架构，AIC mte2 与 AIV mte2 **严禁合并**。
   - `dominant_core ∈ {aic, aiv, mix, none}` — 由 stage-time 推算（不是 wall-time）。
-  规则见 `tools/ascend_profile/knowledge/pipeline_taxonomy.md` 与 `bound_classification.md`。
+  规则见 `scripts/ascend_profile/knowledge/pipeline_taxonomy.md` 与 `bound_classification.md`。
 - `normalized_event_index.csv` 每条 event 也带 `op_type` 列（per-event 粒度），下游可按 op_type 切片（例如某 step 内 `mix_cv` 占多少 ms）。
 - `summary_manifest.json` 增补 `pipeline_coverage`（events / operators 两级覆盖率）和 `pipeline_fields`（schema），便于报告侧报告「哪些 events / operators 没有 pipeline 数据」。
 
@@ -148,8 +164,8 @@ python3 .agents/skills/ascend-profiling-analysis/scripts/profile_sweep.py \
 
 新增 `classify` 阶段（在 `segment` 与 `summarize` 之间）产出：
 
-- `block_segments.json` — 每个 layer 切成 1~2 个 block，类型 `attention | ffn | moe | aicpu | other`；layer 没有 attention 时 `companion_layer=true`，规则见 `tools/ascend_profile/knowledge/block_taxonomy.md`。
-- `class_signatures.json` — `step_class_by_id` / `layer_class_by_id` / `block_class_by_id` 映射 + 每个 class 的成员列表与元信息。class 签名走 **shape 严格相等**（顺序敏感，缺 shape 不合并），具体规则见 `tools/ascend_profile/knowledge/step_class_grouping.md`。
+- `block_segments.json` — 每个 layer 切成 1~2 个 block，类型 `attention | ffn | moe | aicpu | other`；layer 没有 attention 时 `companion_layer=true`，规则见 `scripts/ascend_profile/knowledge/block_taxonomy.md`。
+- `class_signatures.json` — `step_class_by_id` / `layer_class_by_id` / `block_class_by_id` 映射 + 每个 class 的成员列表与元信息。class 签名走 **shape 严格相等**（顺序敏感，缺 shape 不合并），具体规则见 `scripts/ascend_profile/knowledge/step_class_grouping.md`。
 - `classify_manifest.json` — block_kind 直方图、companion_layers 计数、shape coverage（多少 class 有 shape）。
 
 `summarize` 阶段消费分类产物，新增四张 CSV：
@@ -166,7 +182,7 @@ python3 .agents/skills/ascend-profiling-analysis/scripts/profile_sweep.py \
 `summarize` 阶段在 `operator_summary.csv` 之外再生成三张 CSV，用于报告 § 7 Operator View：
 
 - `operator_class_summary.csv` — 把 `operator_summary.csv` 按 `(name, task_type, op_type, roles)` 跨 rank 合并；每行包含 `rank_count`、`call_count`、`duration_sum_us`、11 个 pipeline 字段求和、`bound_family` / `dominant_core`，以及 `rank_duration_min/max/p50_us` 与 `rank_duration_skew_ratio`，便于一眼看出 rank 间的不均。
-- `hccl_op_summary.csv` — 仅 HCCL（`op_type ∈ {communication, mix_comm_aiv}`）算子，按 `(hccl_op_kind, comm_aiv_fused, rank_id)` 聚合；`hccl_op_kind ∈ {allreduce, allgather, reducescatter, alltoallv, broadcast, send_recv, barrier, other}`，规则与 CANN HCCL 文档术语对齐，详见 `tools/ascend_profile/knowledge/communication_taxonomy.md`。
+- `hccl_op_summary.csv` — 仅 HCCL（`op_type ∈ {communication, mix_comm_aiv}`）算子，按 `(hccl_op_kind, comm_aiv_fused, rank_id)` 聚合；`hccl_op_kind ∈ {allreduce, allgather, reducescatter, alltoallv, broadcast, send_recv, barrier, other}`，规则与 CANN HCCL 文档术语对齐，详见 `scripts/ascend_profile/knowledge/communication_taxonomy.md`。
 - `hccl_class_summary.csv` — 在 `hccl_op_summary.csv` 基础上再跨 rank 汇总；含 `rank_skew_ratio = (max_rank_avg - min_rank_avg) / mean_rank_avg`，可直接用于 `communication_collective_slow` 类诊断。
 
 `mix_comm_aiv` 融合算子（`DispatchFFNCombine` / `MoeDistributeDispatch` / `MoeDistributeCombine` 等）同时出现在 `comm_aiv_fused=true` 行里，pipeline 字段反映 AIV 侧的工作；纯 HCCL 行的 pipeline 字段为空。
@@ -251,14 +267,31 @@ XLSX 包新增 sheet：`step_anatomy`、`step_class_summary`、`layer_class_summ
 | Skill | 互动 |
 |-------|------|
 | `machine-management` | 提供 SSH endpoint；本 skill 只读 inventory，不改 inventory |
-| `remote-code-parity` | 调用其同步逻辑，但只同步 `tools/ascend_profile/`；不动 `.vaws-runtime` |
+| `remote-code-parity` | 本 skill 不依赖 parity skill；用自带的 tar-over-ssh 同步 `scripts/ascend_profile/`，不动 `.vaws-runtime` |
 | `ascend-profiling-collection` | 上游：消费它的 `manifest.json`（`analysis_status`、`remote_profile_root`） |
 | `ascend-memory-profiling` | 不交叉，专管 HBM |
 | `vllm-ascend-serving` / `vllm-ascend-benchmark` | 不交叉，本 skill 不启停服务 |
 
 ## Layout note
 
-底层分析框架住在 `tools/ascend_profile/`（`analyze.py` / `normalize.py` / `segment.py` / `classify.py` / `summarize.py` / `cross_rank.py` / `diagnostics.py` / `report.py` / `html_report.py` / `sweep.py` / `common.py`）。本 skill 的脚本只做远端编排和产物搬运，**不复制分析逻辑**。框架本身的数据契约见 `tools/ascend_profile/README.md`。
+```
+.agents/skills/ascend-profiling-analysis/
+  SKILL.md
+  references/                  # behavior / acceptance / command-recipes
+  scripts/
+    _common.py                 # SSH / tar-sync / inventory / manifest helpers
+    profile_analyze.py         # single-root entry point
+    profile_sweep.py           # multi-root entry point
+    ascend_profile/            # analysis framework, runs remotely as a package
+      analyze.py normalize.py segment.py classify.py summarize.py
+      cross_rank.py diagnostics.py report.py html_report.py sweep.py
+      common.py
+      knowledge/               # taxonomy / pipeline / step-anatomy docs
+      schemas/                 # analysis_bundle.schema.json
+      README.md                # framework data contract
+```
+
+本 skill 的 wrapper（`profile_analyze.py` / `profile_sweep.py`）只做远端编排和产物搬运，**不复制分析逻辑**。框架本身的数据契约见 `scripts/ascend_profile/README.md`。
 
 ## References
 

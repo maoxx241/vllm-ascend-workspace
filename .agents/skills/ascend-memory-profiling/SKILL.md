@@ -17,7 +17,7 @@ Collect and analyze HBM memory usage on Ascend NPU devices running vLLM serving 
 
 ## Do not use this skill when
 
-- the task is performance profiling (kernel timing, bubble analysis) → not covered by this skill; use the user-level `ascend-profiling-anomaly` skill if installed, otherwise analyze manually
+- the task is performance profiling (kernel timing, bubble analysis, step/layer/operator breakdown, cross-rank diagnosis) → use `ascend-profiling-analysis` (consumes an `ascend-profiling-collection` manifest or a remote profile root)
 - the task is starting/stopping a service without memory analysis → use `vllm-ascend-serving`
 - the task involves non-Ascend hardware
 - the task is offline (non-serving) inference only

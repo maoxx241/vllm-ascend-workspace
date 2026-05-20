@@ -48,21 +48,22 @@ and old case/spec files were removed after full remote regression passed.
 
 ## Current CLI
 
-Run the full pipeline:
+Run the full pipeline (from a directory that has `ascend_profile/` on its
+`PYTHONPATH`, e.g. the remote work dir):
 
 ```bash
-python3 tools/ascend_profile/analyze.py PROFILE_ROOT --output OUT_DIR --verbose
+python3 -m ascend_profile.analyze PROFILE_ROOT --output OUT_DIR --verbose
 ```
 
 Run individual stages for debugging:
 
 ```bash
-python3 tools/ascend_profile/normalize.py PROFILE_ROOT --output OUT_DIR
-python3 tools/ascend_profile/segment.py --output OUT_DIR
-python3 tools/ascend_profile/summarize.py --output OUT_DIR
-python3 tools/ascend_profile/cross_rank.py --output OUT_DIR
-python3 tools/ascend_profile/diagnostics.py --output OUT_DIR
-python3 tools/ascend_profile/report.py --output OUT_DIR
+python3 -m ascend_profile.normalize PROFILE_ROOT --output OUT_DIR
+python3 -m ascend_profile.segment --output OUT_DIR
+python3 -m ascend_profile.summarize --output OUT_DIR
+python3 -m ascend_profile.cross_rank --output OUT_DIR
+python3 -m ascend_profile.diagnostics --output OUT_DIR
+python3 -m ascend_profile.report --output OUT_DIR
 ```
 
 The staged commands are intended for agent debugging.  The skill entrypoint
@@ -77,7 +78,7 @@ run inside the remote container that has the profiling data, for example:
 ```bash
 ssh -p 46000 root@173.131.1.2 \
   'cd /tmp/ascend_profile_framework && \
-   python3 -m tools.ascend_profile.analyze PROFILE_ROOT --output OUT_DIR'
+   python3 -m ascend_profile.analyze PROFILE_ROOT --output OUT_DIR'
 ```
 
 ## Required Traceability

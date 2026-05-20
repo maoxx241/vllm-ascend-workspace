@@ -21,10 +21,11 @@ try:
         bound_class_from_pipeline,
         bubble_windows,
         csv_value,
+        emit_stage_json,
         group_by_rank,
         has_pipeline_signal,
-        is_aicpu_event,
         is_ai_core_like,
+        is_aicpu_event,
         is_comm_event,
         load_block_segments,
         load_events,
@@ -45,7 +46,8 @@ except ImportError:  # pragma: no cover
     import sys
 
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-    from common import (  # type: ignore[no-redef]
+    from common import (
+        # type: ignore[no-redef]
         BlockSegment,
         EvidenceRef,
         Interval,
@@ -56,10 +58,11 @@ except ImportError:  # pragma: no cover
         bound_class_from_pipeline,
         bubble_windows,
         csv_value,
+        emit_stage_json,
         group_by_rank,
         has_pipeline_signal,
-        is_aicpu_event,
         is_ai_core_like,
+        is_aicpu_event,
         is_comm_event,
         load_block_segments,
         load_events,
@@ -1486,7 +1489,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     manifest = summarize_profile(Path(args.output))
-    print({"stage": "summarize", "counts": manifest["counts"]})
+    emit_stage_json({"stage": "summarize", "counts": manifest["counts"]})
     return 0
 
 

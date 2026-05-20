@@ -7,8 +7,8 @@ Inputs (one of):
 
 Behavior:
   1. Resolve machine + SSH endpoint via inventory.
-  2. Rsync ``tools/ascend_profile/`` to ``<remote-work-dir>/tools/ascend_profile/``.
-  3. Remote: ``python3 -m tools.ascend_profile.analyze <ROOT> --output <OUT> --verbose``.
+  2. Tar-sync ``scripts/ascend_profile/`` to ``<remote-work-dir>/ascend_profile/``.
+  3. Remote: ``python3 -m ascend_profile.analyze <ROOT> --output <OUT> --verbose``.
   4. Validate required artifacts exist on the remote.
   5. Pull lightweight artifacts (and report/) back to the local run dir.
   6. Emit a single JSON object on stdout.
@@ -48,6 +48,20 @@ def _build_parser() -> argparse.ArgumentParser:
         help=f"remote scratch dir for tools + outputs (default: {common.DEFAULT_REMOTE_WORK_DIR})",
     )
     parser.add_argument(
+        "--local-output-dir",
+        default=None,
+        help=(
+            "explicit local directory to write pulled artifacts into. "
+            "Default: .vaws-local/profiling-analysis/runs/<timestamp>_<tag>/. "
+            "Existing non-empty directories are rejected unless --overwrite is given."
+        ),
+    )
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="allow --local-output-dir to point at an existing non-empty directory",
+    )
+    parser.add_argument(
         "--keep-remote-output",
         action="store_true",
         help="pull every file in the remote output dir back to the local run dir",
@@ -57,6 +71,35 @@ def _build_parser() -> argparse.ArgumentParser:
         type=int,
         default=3600,
         help="hard timeout (seconds) for the remote analyze command",
+    )
+    parser.add_argument(
+        "--skip-html",
+        action="store_true",
+        help="forward to remote analyze: skip HTML rendering entirely",
+    )
+    parser.add_argument(
+        "--report-mode",
+        choices=("summary", "interactive", "full-raw"),
+        default="full-raw",
+        help=(
+            "forward to remote analyze: HTML report depth (summary | "
+            "interactive | full-raw). Default: full-raw."
+        ),
+    )
+    parser.add_argument(
+        "--from-stage",
+        choices=("normalize", "segment", "classify", "summarize", "cross_rank", "diagnostics", "report"),
+        help="forward to remote analyze: resume from this stage (skip earlier ones)",
+    )
+    parser.add_argument(
+        "--to-stage",
+        choices=("normalize", "segment", "classify", "summarize", "cross_rank", "diagnostics", "report"),
+        help="forward to remote analyze: stop after this stage",
+    )
+    parser.add_argument(
+        "--only-stage",
+        choices=("normalize", "segment", "classify", "summarize", "cross_rank", "diagnostics", "report"),
+        help="forward to remote analyze: run exactly one stage (e.g. report)",
     )
     parser.add_argument("--verbose", action="store_true")
     return parser
@@ -138,12 +181,27 @@ def _validate_segment_health(endpoint: common.SshEndpoint, remote_output_dir: st
     except json.JSONDecodeError as e:
         raise RuntimeError(f"segment_manifest.json is not valid JSON: {e}") from e
 
-    hard = int(seg.get("hard_errors", 0) or 0)
+    # New schema: ``hard_error_count`` (int) + ``interior_island_total`` (int) +
+    # ``hard_errors`` (list).  Older drafts emitted only ``hard_errors`` as a
+    # list, so accept both.
+    raw_hard = seg.get("hard_error_count")
+    if raw_hard is None:
+        legacy_hard = seg.get("hard_errors", 0)
+        if isinstance(legacy_hard, list):
+            raw_hard = len(legacy_hard)
+        else:
+            raw_hard = legacy_hard
+    hard = int(raw_hard or 0)
+
     interior = int(seg.get("interior_island_total", 0) or 0)
+    if interior == 0:
+        for rank in seg.get("rank_summaries", []) or []:
+            interior += int(rank.get("interior_unclassified_count") or 0)
+
     if hard or interior:
         raise RuntimeError(
             "segmentation reported unrecoverable issues "
-            f"(hard_errors={hard}, interior_island_total={interior}); "
+            f"(hard_error_count={hard}, interior_island_total={interior}); "
             "see segment_manifest.json for details"
         )
 
@@ -152,7 +210,7 @@ def _diagnosis_counts(local_run_dir: Path) -> dict[str, int]:
     """Aggregate findings by confidence level.
 
     The diagnosis stage emits findings under the ``diagnosis_findings`` key
-    (schema: tools/ascend_profile/diagnostics.py). Older drafts used
+    (schema: scripts/ascend_profile/diagnostics.py). Older drafts used
     ``findings`` / ``claims``; we keep those as fallbacks so the skill
     survives a schema rename.
     """
@@ -232,7 +290,22 @@ def main(argv: Sequence[str] | None = None) -> int:
         ssh_port=endpoint.port,
     )
 
-    run_dir = common.ensure_run_dir(args.tag)
+    try:
+        run_dir = common.ensure_run_dir(
+            args.tag,
+            explicit_dir=args.local_output_dir,
+            overwrite=args.overwrite,
+        )
+    except FileExistsError as exc:
+        common.print_json(
+            {
+                "status": "failed",
+                "phase": "setup",
+                "error": str(exc),
+                "machine": alias,
+            }
+        )
+        return 2
     common.progress("setup", "local run dir created", path=str(run_dir))
 
     if manifest is not None:
@@ -241,20 +314,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
 
     remote_work_dir = args.remote_work_dir.rstrip("/")
-    remote_tools_dir = f"{remote_work_dir}/{common.TOOLS_REMOTE_SUBPATH}"
+    remote_framework_dir = f"{remote_work_dir}/{common.FRAMEWORK_REMOTE_SUBPATH}"
     remote_output_dir = f"{remote_work_dir}/runs/{run_dir.name}"
 
-    # Phase 1: parity sync (only tools/ascend_profile/)
+    # Phase 1: parity sync (only scripts/ascend_profile/)
     try:
         common.ssh_exec(
             endpoint,
-            f"mkdir -p {common.quote_remote(remote_tools_dir)} "
+            f"mkdir -p {common.quote_remote(remote_framework_dir)} "
             f"{common.quote_remote(remote_output_dir)}",
             check=True,
             timeout=60,
         )
         common.sync_to_remote(
-            endpoint, common.TOOLS_LOCAL_DIR, remote_tools_dir
+            endpoint, common.FRAMEWORK_LOCAL_DIR, remote_framework_dir
         )
     except (RuntimeError, FileNotFoundError) as exc:
         common.print_json(
@@ -270,12 +343,24 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     # Phase 2: remote analyze
     py = common.remote_python_with_module(endpoint, "csv")  # csv always present
+    extra_flags: list[str] = []
+    if args.verbose:
+        extra_flags.append("--verbose")
+    if args.skip_html:
+        extra_flags.append("--skip-html")
+    extra_flags.extend(["--report-mode", args.report_mode])
+    if args.from_stage:
+        extra_flags.extend(["--from-stage", args.from_stage])
+    if args.to_stage:
+        extra_flags.extend(["--to-stage", args.to_stage])
+    if args.only_stage:
+        extra_flags.extend(["--only-stage", args.only_stage])
     cmd = (
         f"set -e; cd {common.quote_remote(remote_work_dir)} && "
-        f"{py} -m tools.ascend_profile.analyze "
+        f"{py} -m {common.FRAMEWORK_PYTHON_MODULE}.analyze "
         f"{common.quote_remote(remote_profile_root)} "
         f"--output {common.quote_remote(remote_output_dir)} "
-        f"{'--verbose' if args.verbose else ''}"
+        + " ".join(extra_flags)
     )
     common.progress(
         "analyze",

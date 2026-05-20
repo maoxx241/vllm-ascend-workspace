@@ -246,6 +246,18 @@ def read_json(path: Path, default: Any = None) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def emit_stage_json(payload: dict[str, Any]) -> None:
+    """Emit a stage CLI's summary JSON to stdout, terminated by a newline.
+
+    Callers (analyze/segment/classify/summarize/cross_rank/diagnostics/report)
+    should funnel their final printout through this helper so wrappers and
+    automation can consume valid JSON instead of Python dict repr.
+    """
+    import sys as _sys
+    _sys.stdout.write(json.dumps(to_plain(payload), ensure_ascii=False) + "\n")
+    _sys.stdout.flush()
+
+
 def write_jsonl(path: Path, rows: Iterable[Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as handle:

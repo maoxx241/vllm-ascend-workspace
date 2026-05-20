@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """HTML report renderer for an Ascend profiling analysis root.
 
-Reads the CSV / JSON artefacts already produced by `tools/ascend_profile`
-and emits a single-file, zero-dependency HTML report with three SPA-style
-views (no long scroll):
+Reads the CSV / JSON artefacts already produced by the ``ascend_profile``
+framework and emits a single-file, zero-dependency HTML report with three
+SPA-style views (no long scroll):
 
   - L1 (overview): cross-rank step Gantt with quick/slow cards, DP/EP
     load summary (EP peak-to-mean via GroupedMatmul wall), companion-run
@@ -18,7 +18,7 @@ views (no long scroll):
     cumulative share metrics.
 
 Entry points:
-  - CLI:    python -m tools.ascend_profile.html_report <analysis_root> <out.html>
+  - CLI:    python -m ascend_profile.html_report <analysis_root> <out.html>
   - Python: build_html_report(analysis_root, output_path)
 
 Internal hash IDs (segment_id / step_class_id / layer_class_id / block_class_id)
@@ -907,7 +907,7 @@ def events_in_row_range(events_by_row: list, row_start: int, row_end: int, rank_
     return out
 
 
-def load_bundle(root: Path) -> Bundle:
+def load_bundle(root: Path, *, attach_raw_rows: bool = True) -> Bundle:
     b = Bundle(root=root)
     b.rank_summary = load_csv(root / "rank_summary.csv")
     b.step_summary = load_csv(root / "step_summary.csv")
@@ -918,9 +918,19 @@ def load_bundle(root: Path) -> Bundle:
     b.operator_class = load_csv(root / "operator_class_summary.csv")
     b.hccl_class = load_csv(root / "hccl_class_summary.csv")
     b.hccl_op = load_csv(root / "hccl_op_summary.csv")
-    findings = load_json(root / "diagnosis_findings.json") or []
-    if isinstance(findings, dict):
-        findings = findings.get("findings", [])
+    findings_payload = load_json(root / "diagnosis_findings.json") or []
+    if isinstance(findings_payload, dict):
+        # The current schema writes `diagnosis_findings`; older drafts used
+        # `findings`. Accept either to survive schema renames without losing
+        # rows in the HTML view.
+        findings = (
+            findings_payload.get("diagnosis_findings")
+            or findings_payload.get("findings")
+            or findings_payload.get("claims")
+            or []
+        )
+    else:
+        findings = findings_payload
     b.findings = findings
     b.manifest = load_json(root / "manifest.json") or {}
     b.step_segments = _load_segments(root / "step_segments.json", "step_segments")
@@ -933,9 +943,12 @@ def load_bundle(root: Path) -> Bundle:
     print(f"  loaded {len(b.events)} events", file=sys.stderr)
     n_dedup = dedup_comm_aiv(b.events)
     print(f"  marked {n_dedup} comm-shadow events as redundant (mix_comm_aiv + AIV ops with comm-name keywords vs HCCL events, IoU >= 0.9)", file=sys.stderr)
-    print(f"loading raw kernel_details.csv (per source) ...", file=sys.stderr)
-    raw_by_source = _load_raw_kernel_details(root)
-    _attach_raw_rows(b.events, raw_by_source)
+    if attach_raw_rows:
+        print(f"loading raw kernel_details.csv (per source) ...", file=sys.stderr)
+        raw_by_source = _load_raw_kernel_details(root)
+        _attach_raw_rows(b.events, raw_by_source)
+    else:
+        print(f"skipping raw kernel_details.csv attach (interactive mode)", file=sys.stderr)
     return b
 
 
@@ -2716,15 +2729,25 @@ def _render_l3_layer(b: "Bundle", view_id: str, parent_seg_id: str,
     )
 
 
-def build_html_report(analysis_root: Path | str, output_path: Path | str) -> Path:
+def build_html_report(
+    analysis_root: Path | str,
+    output_path: Path | str,
+    *,
+    attach_raw_rows: bool = True,
+) -> Path:
     """Render the v7 SPA HTML report for the given analysis root.
 
-    Three-level focus: L1 总览 · L2 单步 · L3 局部。
+    Three-level focus: L1 总览 · L2 单步 · L3 局部.
+
+    ``attach_raw_rows`` controls whether per-event raw rows from the original
+    ``kernel_details.csv`` are merged into the operator cards. Setting it to
+    ``False`` (used by ``--report-mode interactive``) skips that load — saving
+    significant memory and HTML size for large multi-rank traces.
     """
     root = Path(analysis_root)
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
-    b = load_bundle(root)
+    b = load_bundle(root, attach_raw_rows=attach_raw_rows)
     title = f"Ascend Profiling · {os.path.basename(str(root).rstrip('/'))}"
     html_out = "".join([
         render_head(title),

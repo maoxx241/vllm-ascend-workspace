@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Run the Ascend profiling analysis pipeline against many profiling roots.
 
-This is a thin wrapper around ``tools.ascend_profile.sweep`` (which already
+This is a thin wrapper around ``ascend_profile.sweep`` (which already
 discovers roots and aggregates results). The wrapper handles:
   - inventory lookup
-  - parity sync of ``tools/ascend_profile/`` to the remote work dir
+  - tar-sync of ``scripts/ascend_profile/`` to the remote work dir
   - launching ``sweep`` on the remote
   - pulling back ``sweep_summary.json`` plus per-root ``report/`` and
     ``diagnosis_findings.json`` (skips the bulky normalized event index)
@@ -85,6 +85,59 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="pull every per-root file (otherwise only summaries + report/ are pulled)",
     )
+    parser.add_argument(
+        "--jobs",
+        type=int,
+        default=1,
+        help=(
+            "forwarded to remote sweep: number of roots to analyze in "
+            "parallel (thread pool). Default 1."
+        ),
+    )
+    parser.add_argument(
+        "--reuse-existing",
+        action="store_true",
+        help=(
+            "forwarded to remote sweep: reuse a prior root's output if its "
+            "manifest.json already exists. Useful for resuming interrupted sweeps."
+        ),
+    )
+    parser.add_argument(
+        "--pull-html",
+        action="store_true",
+        help=(
+            "also pull each root's report/report.html. Off by default because "
+            "interactive HTML can be 100MB+ per root; turn it on only when "
+            "you actually plan to open every report locally."
+        ),
+    )
+    parser.add_argument(
+        "--render-html",
+        action="store_true",
+        help=(
+            "by default the remote sweep skips HTML rendering. Set this to "
+            "render HTML for every root (warning: slow + bulky)."
+        ),
+    )
+    parser.add_argument(
+        "--report-mode",
+        choices=("summary", "interactive", "full-raw"),
+        default="summary",
+        help="when --render-html is set, forwards HTML depth to remote sweep.",
+    )
+    parser.add_argument(
+        "--local-output-dir",
+        default=None,
+        help=(
+            "explicit local directory to write pulled artifacts into. "
+            "Default: .vaws-local/profiling-analysis/runs/<timestamp>_<tag>/."
+        ),
+    )
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="allow --local-output-dir to point at an existing non-empty directory",
+    )
     parser.add_argument("--verbose", action="store_true")
     return parser
 
@@ -141,23 +194,38 @@ def main(argv: Sequence[str] | None = None) -> int:
         ssh_port=endpoint.port,
     )
 
-    run_dir = common.ensure_run_dir(args.tag)
+    try:
+        run_dir = common.ensure_run_dir(
+            args.tag,
+            explicit_dir=args.local_output_dir,
+            overwrite=args.overwrite,
+        )
+    except FileExistsError as exc:
+        common.print_json(
+            {
+                "status": "failed",
+                "phase": "setup",
+                "error": str(exc),
+                "machine": alias,
+            }
+        )
+        return 2
     common.progress("setup", "local run dir created", path=str(run_dir))
 
     remote_work_dir = args.remote_work_dir.rstrip("/")
-    remote_tools_dir = f"{remote_work_dir}/{common.TOOLS_REMOTE_SUBPATH}"
+    remote_framework_dir = f"{remote_work_dir}/{common.FRAMEWORK_REMOTE_SUBPATH}"
     remote_output_dir = f"{remote_work_dir}/sweeps/{run_dir.name}"
 
     # Phase 1: parity sync
     try:
         common.ssh_exec(
             endpoint,
-            f"mkdir -p {common.quote_remote(remote_tools_dir)} "
+            f"mkdir -p {common.quote_remote(remote_framework_dir)} "
             f"{common.quote_remote(remote_output_dir)}",
             check=True,
             timeout=60,
         )
-        common.sync_to_remote(endpoint, common.TOOLS_LOCAL_DIR, remote_tools_dir)
+        common.sync_to_remote(endpoint, common.FRAMEWORK_LOCAL_DIR, remote_framework_dir)
     except (RuntimeError, FileNotFoundError) as exc:
         common.print_json(
             {
@@ -171,17 +239,26 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     # Phase 2: remote sweep
     py = common.remote_python_with_module(endpoint, "csv")
-    sweep_args = " ".join(
+    sweep_args_parts: list[str] = [
         f"--search-root {common.quote_remote(root)}" for root in args.search_root
-    )
+    ]
     if args.limit is not None:
-        sweep_args += f" --limit {int(args.limit)}"
+        sweep_args_parts.append(f"--limit {int(args.limit)}")
+    if args.jobs and args.jobs > 1:
+        sweep_args_parts.append(f"--jobs {int(args.jobs)}")
+    if args.reuse_existing:
+        sweep_args_parts.append("--reuse-existing")
+    if args.render_html:
+        sweep_args_parts.append("--no-skip-html")
+        sweep_args_parts.append(f"--report-mode {args.report_mode}")
+    if args.verbose:
+        sweep_args_parts.append("--verbose")
+    sweep_args = " ".join(sweep_args_parts)
     cmd = (
         f"set -e; cd {common.quote_remote(remote_work_dir)} && "
-        f"{py} -m tools.ascend_profile.sweep "
+        f"{py} -m {common.FRAMEWORK_PYTHON_MODULE}.sweep "
         f"{sweep_args} "
-        f"--output {common.quote_remote(remote_output_dir)} "
-        f"{'--verbose' if args.verbose else ''}"
+        f"--output {common.quote_remote(remote_output_dir)}"
     )
     common.progress(
         "sweep",
@@ -245,6 +322,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             common.sync_from_remote(endpoint, remote_output_dir, run_dir)
         else:
             includes: list[str] = ["sweep_summary.json"]
+            per_root_extras: tuple[str, ...] = (
+                ("report/report.html",) if args.pull_html else ()
+            )
             for item in summary.get("results", []):
                 if item.get("status") != "ok":
                     continue
@@ -254,7 +334,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 rel = Path(out).name
                 if not rel:
                     continue
-                for sub in SWEEP_PER_ROOT_INCLUDES:
+                for sub in SWEEP_PER_ROOT_INCLUDES + per_root_extras:
                     includes.append(f"{rel}/{sub}")
             common.sync_from_remote(
                 endpoint, remote_output_dir, run_dir, include_paths=includes

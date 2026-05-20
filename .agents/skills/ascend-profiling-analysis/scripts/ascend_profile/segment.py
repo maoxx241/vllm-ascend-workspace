@@ -30,6 +30,7 @@ try:
         StepSegment,
         StructureObservation,
         TOOL_VERSION,
+        emit_stage_json,
         group_by_rank,
         load_events,
         metrics_for_events,
@@ -41,7 +42,8 @@ except ImportError:  # pragma: no cover
     import sys
 
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-    from common import (  # type: ignore[no-redef]
+    from common import (
+        # type: ignore[no-redef]
         EvidenceRef,
         LayerSegment,
         NormalizedEvent,
@@ -49,6 +51,7 @@ except ImportError:  # pragma: no cover
         StepSegment,
         StructureObservation,
         TOOL_VERSION,
+        emit_stage_json,
         group_by_rank,
         load_events,
         metrics_for_events,
@@ -2710,6 +2713,10 @@ def segment_profile(output_dir: Path) -> dict[str, Any]:
                 "hard_error_count": len(rank_errors),
             }
         )
+    interior_island_total = sum(
+        int(item.get("interior_unclassified_count") or 0)
+        for item in rank_summaries
+    )
     manifest = {
         "schema_version": SCHEMA_VERSION,
         "tool_version": TOOL_VERSION,
@@ -2727,6 +2734,10 @@ def segment_profile(output_dir: Path) -> dict[str, Any]:
         "layer_count": len(all_layers),
         "structure_observation_count": len(all_observations),
         "evidence_count": len(all_evidence),
+        # Skill launcher reads these scalar fields for artifact validation.
+        # The full structured list stays under `hard_errors` for debugging.
+        "hard_error_count": len(hard_errors),
+        "interior_island_total": interior_island_total,
         "hard_errors": hard_errors,
     }
     write_json(output_dir / "step_segments.json", {"step_segments": all_segments})
@@ -2754,7 +2765,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     manifest = segment_profile(Path(args.output))
-    print({"stage": "segment", "segment_count": manifest["segment_count"], "layer_count": manifest["layer_count"]})
+    emit_stage_json({"stage": "segment", "segment_count": manifest["segment_count"], "layer_count": manifest["layer_count"]})
     return 0
 
 

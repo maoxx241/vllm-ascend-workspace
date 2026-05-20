@@ -6,8 +6,8 @@
 2. **Resolve input**:
    - `--manifest <local-run-dir>/manifest.json` → produced by `ascend-profiling-collection`. We require `analysis_status == "ok"` and a non-empty `remote_profile_root`.
    - `--remote-profile-root <abs-path>` → raw remote path (used for historical roots not collected through the collection skill).
-3. **Parity sync** (light): rsync only `tools/ascend_profile/` from the local workspace to `<remote-work-dir>/tools/ascend_profile/`. Excludes `__pycache__` and `*.pyc`. Does **not** touch `.vaws-runtime/` or sync the entire repo.
-4. **Remote analyze**: run `python3 -m tools.ascend_profile.analyze <ROOT> --output <OUT> --verbose`. stdout/stderr is streamed back so the agent can see stage timings live.
+3. **Parity sync** (light): tar-over-ssh only `scripts/ascend_profile/` from the local skill dir to `<remote-work-dir>/ascend_profile/`. Excludes `__pycache__` and `*.pyc`. Does **not** touch `.vaws-runtime/` or sync the entire repo.
+4. **Remote analyze**: run `python3 -m ascend_profile.analyze <ROOT> --output <OUT> --verbose` from inside `<remote-work-dir>`. stdout/stderr is streamed back so the agent can see stage timings live.
 5. **Validate artifacts**: every required artifact must exist, and `segment_manifest.json` must have `hard_errors == 0` and `interior_island_total == 0`.
 6. **Pull artifacts**: lightweight by default (`report/`, `*_manifest.json`, `diagnosis_findings.json`, summary CSVs, `step_segments.json`, `layer_segments.json`, `structure_evidence_graph.json`, `evidence_index.csv`, `raw_kernel_index.csv`). Use `--keep-remote-output` to mirror the entire remote output dir locally.
 7. **Emit JSON** on stdout. Progress lines (`__VAWS_PROFILE_ANALYSIS_PROGRESS__=...`) go to stderr.
@@ -94,8 +94,8 @@ evidence/bubble_windows.jsonl
 ## Remote work directory layout
 
 ```
-<remote-work-dir>/                   # default /tmp/ascend_profile_framework
-  tools/ascend_profile/             # rsynced from local repo
+<remote-work-dir>/                  # default /tmp/ascend_profile_framework
+  ascend_profile/                   # tar-synced from local skill dir
   runs/<timestamp>_<tag>/           # single-root analyze output
   sweeps/<timestamp>_<tag>/         # multi-root sweep output
 ```
@@ -119,7 +119,7 @@ Hard fail (`status: "failed"` in stdout JSON, non-zero exit code):
 | Phase | Cause | exit code |
 |-------|-------|-----------|
 | `manifest_validation` | manifest missing / malformed / `analysis_status != "ok"` / `remote_profile_root` empty | 2 |
-| `parity_sync` | rsync of `tools/ascend_profile/` to remote failed | 3 |
+| `parity_sync` | tar-sync of `scripts/ascend_profile/` to remote failed | 3 |
 | `remote_analyze` | remote `analyze.py` exited non-zero or hit `--remote-timeout` | 4 |
 | `artifact_validation` | any required artifact missing, or `segment_manifest.json` reports `hard_errors > 0` / `interior_island_total > 0` | 5 |
 | `artifact_pull` | rsync of artifacts back to the local run dir failed | 6 |
@@ -132,7 +132,7 @@ Soft outcomes (still `status: "ok"`):
 
 ## Sweep behavior
 
-`profile_sweep.py` is a thin wrapper around `tools.ascend_profile.sweep`. It:
+`profile_sweep.py` is a thin wrapper around `ascend_profile.sweep`. It:
 
 - Calls the remote sweep with all `--search-root`s the agent provides.
 - Pulls back `sweep_summary.json` plus every successful root's `report/` and `*_manifest.json`.

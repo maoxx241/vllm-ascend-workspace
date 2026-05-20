@@ -15,6 +15,7 @@ try:
         SCHEMA_VERSION,
         TOOL_VERSION,
         csv_rows,
+        emit_stage_json,
         read_json,
         stable_id,
         utc_now,
@@ -30,6 +31,7 @@ except ImportError:  # pragma: no cover
         SCHEMA_VERSION,
         TOOL_VERSION,
         csv_rows,
+        emit_stage_json,
         read_json,
         stable_id,
         utc_now,
@@ -233,41 +235,130 @@ def cross_root_rollup_rows(results: Sequence[Mapping[str, Any]]) -> list[dict[st
     return rollup_rows
 
 
-def sweep_roots(search_roots: Sequence[Path], output_dir: Path, *, limit: int | None, verbose: bool) -> dict[str, Any]:
+def _analyze_one(
+    idx: int,
+    total: int,
+    root: Path,
+    output_dir: Path,
+    *,
+    verbose: bool,
+    skip_html: bool,
+    report_mode: str,
+    reuse_existing: bool,
+) -> dict[str, Any]:
+    root_out = output_dir / safe_slug(root)
+    item: dict[str, Any] = {
+        "root": str(root),
+        "output_dir": str(root_out),
+        "status": None,
+        "elapsed_s": None,
+    }
+    print(f"[{idx}/{total}] analyze {root}", flush=True)
+    t0 = time.time()
+    # Reuse path: if manifest.json already exists and reuse_existing is set,
+    # don't re-run the pipeline. Useful when a sweep was interrupted and you
+    # only want to fill in the missing roots.
+    manifest_path = root_out / "manifest.json"
+    if reuse_existing and manifest_path.is_file():
+        try:
+            manifest = read_json(manifest_path, default={}) or {}
+            item.update({
+                "status": "ok",
+                "elapsed_s": 0.0,
+                "reused": True,
+                "stage_timings": manifest.get("stage_timings"),
+                "rank_count": manifest.get("stage_results", {}).get("normalize", {}).get("rank_count"),
+                "event_count": manifest.get("stage_results", {}).get("normalize", {}).get("event_count"),
+                "segment_count": manifest.get("stage_results", {}).get("segment", {}).get("segment_count"),
+                "layer_count": manifest.get("stage_results", {}).get("segment", {}).get("layer_count"),
+                "diagnosis_counts": manifest.get("stage_results", {}).get("diagnostics", {}).get("counts"),
+                **step_inventory(root_out),
+            })
+            return item
+        except Exception:  # noqa: BLE001
+            # Fall through to re-analyze if reuse fails for any reason.
+            pass
+
+    try:
+        manifest = analyze_profile(
+            root,
+            root_out,
+            verbose=verbose,
+            skip_html=skip_html,
+            report_mode=report_mode,
+        )
+        item.update(
+            {
+                "status": "ok",
+                "elapsed_s": round(time.time() - t0, 6),
+                "stage_timings": manifest.get("stage_timings"),
+                "rank_count": manifest.get("stage_results", {}).get("normalize", {}).get("rank_count"),
+                "event_count": manifest.get("stage_results", {}).get("normalize", {}).get("event_count"),
+                "segment_count": manifest.get("stage_results", {}).get("segment", {}).get("segment_count"),
+                "layer_count": manifest.get("stage_results", {}).get("segment", {}).get("layer_count"),
+                "diagnosis_counts": manifest.get("stage_results", {}).get("diagnostics", {}).get("counts"),
+                **step_inventory(root_out),
+            }
+        )
+    except Exception as exc:  # noqa: BLE001
+        item.update({"status": "error", "elapsed_s": round(time.time() - t0, 6), "error": repr(exc)})
+    return item
+
+
+def sweep_roots(
+    search_roots: Sequence[Path],
+    output_dir: Path,
+    *,
+    limit: int | None,
+    verbose: bool,
+    jobs: int = 1,
+    skip_html: bool = True,
+    report_mode: str = "summary",
+    reuse_existing: bool = False,
+) -> dict[str, Any]:
     output_dir.mkdir(parents=True, exist_ok=True)
     roots = discover_roots(search_roots)
     if limit is not None:
         roots = roots[: max(0, limit)]
     started = time.time()
     results: list[dict[str, Any]] = []
-    for idx, root in enumerate(roots, 1):
-        root_out = output_dir / safe_slug(root)
-        item: dict[str, Any] = {
-            "root": str(root),
-            "output_dir": str(root_out),
-            "status": None,
-            "elapsed_s": None,
-        }
-        print(f"[{idx}/{len(roots)}] analyze {root}", flush=True)
-        t0 = time.time()
-        try:
-            manifest = analyze_profile(root, root_out, verbose=verbose)
-            item.update(
-                {
-                    "status": "ok",
-                    "elapsed_s": round(time.time() - t0, 6),
-                    "stage_timings": manifest.get("stage_timings"),
-                    "rank_count": manifest.get("stage_results", {}).get("normalize", {}).get("rank_count"),
-                    "event_count": manifest.get("stage_results", {}).get("normalize", {}).get("event_count"),
-                    "segment_count": manifest.get("stage_results", {}).get("segment", {}).get("segment_count"),
-                    "layer_count": manifest.get("stage_results", {}).get("segment", {}).get("layer_count"),
-                    "diagnosis_counts": manifest.get("stage_results", {}).get("diagnostics", {}).get("counts"),
-                    **step_inventory(root_out),
-                }
+    total = len(roots)
+
+    if jobs <= 1 or total <= 1:
+        for idx, root in enumerate(roots, 1):
+            results.append(
+                _analyze_one(
+                    idx, total, root, output_dir,
+                    verbose=verbose, skip_html=skip_html,
+                    report_mode=report_mode, reuse_existing=reuse_existing,
+                )
             )
-        except Exception as exc:  # noqa: BLE001
-            item.update({"status": "error", "elapsed_s": round(time.time() - t0, 6), "error": repr(exc)})
-        results.append(item)
+    else:
+        # Use a thread pool: each worker forks the analysis pipeline in this
+        # interpreter. The pipeline is CPU-bound (CSV/JSON parsing + Python
+        # rollups), so true parallelism with a pool of threads is limited by
+        # the GIL, but in practice each root spends a lot of time in IO
+        # (reading large CSVs, writing JSON), so 2-4 workers help noticeably
+        # on multi-root sweeps. For heavier parallelism users can run the
+        # sweep wrapper multiple times against disjoint --search-root sets.
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        with ThreadPoolExecutor(max_workers=max(1, int(jobs))) as pool:
+            future_to_idx = {
+                pool.submit(
+                    _analyze_one,
+                    idx, total, root, output_dir,
+                    verbose=verbose, skip_html=skip_html,
+                    report_mode=report_mode, reuse_existing=reuse_existing,
+                ): idx
+                for idx, root in enumerate(roots, 1)
+            }
+            done = [None] * total
+            for future in as_completed(future_to_idx):
+                idx = future_to_idx[future]
+                done[idx - 1] = future.result()
+            results.extend(item for item in done if item is not None)
+
     rollup_rows = cross_root_rollup_rows(results)
     write_csv(output_dir / "sweep_class_rollup.csv", rollup_rows)
     summary = {
@@ -280,6 +371,12 @@ def sweep_roots(search_roots: Sequence[Path], output_dir: Path, *, limit: int | 
         "root_count": len(roots),
         "elapsed_s": round(time.time() - started, 6),
         "status_counts": count_by(results, "status"),
+        "config": {
+            "jobs": int(jobs),
+            "skip_html": bool(skip_html),
+            "report_mode": report_mode,
+            "reuse_existing": bool(reuse_existing),
+        },
         "files": {
             "sweep_summary": "sweep_summary.json",
             "sweep_class_rollup": "sweep_class_rollup.csv",
@@ -296,6 +393,49 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--search-root", action="append", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--limit", type=int)
+    parser.add_argument(
+        "--jobs",
+        type=int,
+        default=1,
+        help=(
+            "number of roots to analyze in parallel (thread pool). Default 1. "
+            "Practical sweet spot 2-4 on a fast machine; the pipeline is a mix "
+            "of IO and CPU and the GIL caps true parallelism."
+        ),
+    )
+    parser.add_argument(
+        "--skip-html",
+        action="store_true",
+        default=True,
+        help=(
+            "skip per-root HTML rendering. ON by default for sweeps because "
+            "HTML can be 100MB+ per root; turn off with --no-skip-html if you "
+            "really want HTML for every root."
+        ),
+    )
+    parser.add_argument(
+        "--no-skip-html",
+        dest="skip_html",
+        action="store_false",
+        help="render HTML for each root (opposite of --skip-html)",
+    )
+    parser.add_argument(
+        "--report-mode",
+        choices=("summary", "interactive", "full-raw"),
+        default="summary",
+        help=(
+            "per-root HTML report mode when --no-skip-html is set. "
+            "Defaults to 'summary' to keep sweep outputs small."
+        ),
+    )
+    parser.add_argument(
+        "--reuse-existing",
+        action="store_true",
+        help=(
+            "reuse a prior root's output if its manifest.json already exists. "
+            "Lets you continue an interrupted sweep without redoing finished roots."
+        ),
+    )
     parser.add_argument("--verbose", action="store_true")
     return parser
 
@@ -307,12 +447,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         Path(args.output),
         limit=args.limit,
         verbose=bool(args.verbose),
+        jobs=int(args.jobs),
+        skip_html=bool(args.skip_html),
+        report_mode=args.report_mode,
+        reuse_existing=bool(args.reuse_existing),
     )
-    print(
+    emit_stage_json(
         {
+            "stage": "sweep",
             "root_count": summary["root_count"],
             "elapsed_s": summary["elapsed_s"],
             "status_counts": summary["status_counts"],
+            "config": summary["config"],
             "output": str(Path(args.output) / "sweep_summary.json"),
         }
     )

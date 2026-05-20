@@ -9,12 +9,12 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 try:
-    from .common import DiagnosisFinding, SCHEMA_VERSION, TOOL_VERSION, csv_rows, stable_id, utc_now, write_json
+    from .common import DiagnosisFinding, SCHEMA_VERSION, TOOL_VERSION, csv_rows, emit_stage_json, stable_id, utc_now, write_json
 except ImportError:  # pragma: no cover
     import sys
 
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-    from common import DiagnosisFinding, SCHEMA_VERSION, TOOL_VERSION, csv_rows, stable_id, utc_now, write_json  # type: ignore[no-redef]
+    from common import DiagnosisFinding, SCHEMA_VERSION, TOOL_VERSION, csv_rows, emit_stage_json, stable_id, utc_now, write_json  # type: ignore[no-redef]
 
 
 CROSS_RANK_SKEW_RATIO = 2.0
@@ -226,6 +226,16 @@ def diagnose_profile(output_dir: Path) -> dict[str, Any]:
                     confidence="medium",
                     rank_ids=(str(row.get("rank_id")),),
                     metrics=dict(row),
+                    # No cross-rank alignment row / evidence row is produced
+                    # for AICPU-exposure findings: the heuristic looks at one
+                    # rank at a time and uses the aicpu_summary row directly.
+                    # Surface that as an explicit limitation so the
+                    # evidence-chain validator can accept the finding.
+                    limitations=(
+                        "Derived from aicpu_summary.csv per-rank rollup; no "
+                        "cross-rank alignment_id is produced for AICPU-exposed "
+                        "findings. Trace back via the kernel name + rank_id.",
+                    ),
                 )
             )
     payload = {
@@ -252,7 +262,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     payload = diagnose_profile(Path(args.output))
-    print({"stage": "diagnostics", "counts": payload["counts"]})
+    emit_stage_json({"stage": "diagnostics", "counts": payload["counts"]})
     return 0
 
 

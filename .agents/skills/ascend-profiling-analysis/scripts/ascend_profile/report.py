@@ -14,6 +14,7 @@ try:
         SCHEMA_VERSION,
         TOOL_VERSION,
         csv_rows,
+        emit_stage_json,
         read_json,
         read_jsonl,
         stable_id,
@@ -25,10 +26,12 @@ except ImportError:  # pragma: no cover
     import sys
 
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-    from common import (  # type: ignore[no-redef]
+    from common import (
+        # type: ignore[no-redef]
         SCHEMA_VERSION,
         TOOL_VERSION,
         csv_rows,
+        emit_stage_json,
         read_json,
         read_jsonl,
         stable_id,
@@ -419,7 +422,7 @@ def operator_view_lines(
                 "fused dispatch / combine kernel family (`op_type=mix_comm_aiv`).  `rank_skew_ratio` "
                 "is `(max_rank_avg - min_rank_avg) / mean_rank_avg` for the per-call duration; values "
                 "above ~0.30 are flagged as `communication_collective_slow` by `diagnostics.py`.  See "
-                "`tools/ascend_profile/knowledge/communication_taxonomy.md` for op-kind mapping and "
+                "`ascend_profile/knowledge/communication_taxonomy.md` for op-kind mapping and "
                 "level-0 vs level-1 caveats.",
                 "",
                 "| HCCL op | Fused (comm+AIV) | Ranks | Calls | Σ duration ms | Mean per call us | Min rank us | Max rank us | Skew |",
@@ -621,7 +624,7 @@ def markdown_report(output_dir: Path, report_id: str) -> str:
             "## 3. Macro Step Timeline",
             "",
             "Per-step head / main / tail / bubble decomposition is derived from `step_anatomy.csv` "
-            "(see `tools/ascend_profile/knowledge/step_anatomy.md` for the boundary rules).",
+            "(see `ascend_profile/knowledge/step_anatomy.md` for the boundary rules).",
             "",
         ]
     )
@@ -633,7 +636,7 @@ def markdown_report(output_dir: Path, report_id: str) -> str:
             "",
             "Pipeline figures only apply to events whose `kernel_details.csv` row exposed AIC/AIV stage columns. "
             "AICPU and HCCL events are tagged separately and do not count as missing data.  See "
-            "`tools/ascend_profile/knowledge/pipeline_taxonomy.md` and `bound_classification.md` for the field schema.",
+            "`ascend_profile/knowledge/pipeline_taxonomy.md` and `bound_classification.md` for the field schema.",
             "",
         ]
     )
@@ -646,7 +649,7 @@ def markdown_report(output_dir: Path, report_id: str) -> str:
             "Steps are grouped into classes by **strict shape equality** -- two members "
             "share a class iff their structure signatures match *and* their ordered "
             "shape-bearing event sequences are identical (see "
-            "`tools/ascend_profile/knowledge/step_class_grouping.md`).  Members with no "
+            "`ascend_profile/knowledge/step_class_grouping.md`).  Members with no "
             "shape-bearing events fall into singleton `*_unknown_shape_*` classes and are "
             "never merged into a real class.",
             "",
@@ -659,7 +662,7 @@ def markdown_report(output_dir: Path, report_id: str) -> str:
             "## 6. Layer And Block View",
             "",
             "Each transformer layer is split into one `attention` block followed by one "
-            "`ffn` or `moe` block (see `tools/ascend_profile/knowledge/block_taxonomy.md`).  "
+            "`ffn` or `moe` block (see `ascend_profile/knowledge/block_taxonomy.md`).  "
             "Layers that have no attention kernel are flagged as `companion_layer` so the "
             "report keeps them separate from the main forward pass.",
             "",
@@ -672,7 +675,7 @@ def markdown_report(output_dir: Path, report_id: str) -> str:
             "## 7. Operator View",
             "",
             "Compute and HCCL operators are surfaced rank-merged so the table reflects the whole "
-            "capture window.  See `tools/ascend_profile/knowledge/communication_taxonomy.md` for "
+            "capture window.  See `ascend_profile/knowledge/communication_taxonomy.md` for "
             "the HCCL `op_kind` mapping (allreduce / allgather / reducescatter / alltoallv / ...) "
             "and the level-0 vs level-1 caveats; rank-level rows are exported to "
             "`hccl_op_summary.csv` for slow-rank diagnostics.",
@@ -831,40 +834,154 @@ def sheet_rows(output_dir: Path) -> dict[str, list[Mapping[str, Any]]]:
     }
 
 
-def render_report(output_dir: Path) -> dict[str, Any]:
+def validate_evidence_chain(output_dir: Path) -> dict[str, Any]:
+    """Verify every finding can be traced to evidence rows or to an explicit
+    limitation. Designed to be cheap (just file-scoped joins) so it can run
+    before every report render.
+
+    A finding must satisfy at least one of:
+      * has ``evidence_ids``, and every id resolves into ``evidence_index.csv``;
+      * has ``alignment_ids``, and every id resolves into ``cross_rank_alignment.csv``;
+      * carries a non-empty ``limitations`` string/array;
+      * is explicitly tagged ``confidence == "info"``.
+
+    Findings that fail all four checks are returned as ``hard_errors``.
+    """
+    findings = finding_rows(output_dir)
+
+    evidence_path = output_dir / "evidence_index.csv"
+    evidence_ids: set[str] = set()
+    if evidence_path.is_file():
+        for row in csv_rows(evidence_path):
+            ev_id = (row.get("evidence_id") or "").strip()
+            if ev_id:
+                evidence_ids.add(ev_id)
+
+    alignment_path = output_dir / "cross_rank_alignment.csv"
+    alignment_ids: set[str] = set()
+    if alignment_path.is_file():
+        for row in csv_rows(alignment_path):
+            al_id = (row.get("alignment_id") or "").strip()
+            if al_id:
+                alignment_ids.add(al_id)
+
+    hard_errors: list[dict[str, Any]] = []
+    soft_warnings: list[dict[str, Any]] = []
+    checked = 0
+    for finding in findings:
+        checked += 1
+        claim_id = finding.get("claim_id") or finding.get("finding_id") or "?"
+        confidence = str(finding.get("confidence") or "").lower()
+        limitations = finding.get("limitations")
+        has_limitation = (
+            (isinstance(limitations, str) and limitations.strip())
+            or (isinstance(limitations, (list, tuple)) and any(limitations))
+        )
+        if confidence == "info" or has_limitation:
+            continue
+
+        ev_ids = finding.get("evidence_ids") or []
+        al_ids = finding.get("alignment_ids") or []
+        if not ev_ids and not al_ids:
+            hard_errors.append({
+                "claim_id": claim_id,
+                "issue": "missing_evidence_and_alignment",
+                "summary": finding.get("summary"),
+                "confidence": confidence,
+            })
+            continue
+
+        unknown_evidence = [e for e in ev_ids if e not in evidence_ids]
+        unknown_alignment = [a for a in al_ids if a not in alignment_ids]
+        if unknown_evidence or unknown_alignment:
+            (hard_errors if not has_limitation else soft_warnings).append({
+                "claim_id": claim_id,
+                "issue": "evidence_id_not_found",
+                "unknown_evidence_ids": unknown_evidence,
+                "unknown_alignment_ids": unknown_alignment,
+                "confidence": confidence,
+            })
+
+    return {
+        "findings_checked": checked,
+        "evidence_rows": len(evidence_ids),
+        "alignment_rows": len(alignment_ids),
+        "hard_errors": hard_errors,
+        "soft_warnings": soft_warnings,
+    }
+
+
+def render_report(
+    output_dir: Path,
+    *,
+    skip_html: bool = False,
+    report_mode: str = "full-raw",
+) -> dict[str, Any]:
     report_dir = output_dir / "report"
     report_dir.mkdir(parents=True, exist_ok=True)
     report_id = stable_id("report", output_dir, read_json(output_dir / "normalize_manifest.json", default={}).get("profile_root"))
+
+    chain = validate_evidence_chain(output_dir)
+    if chain["hard_errors"]:
+        first = chain["hard_errors"][0]
+        raise RuntimeError(
+            "evidence chain broken for "
+            f"{len(chain['hard_errors'])} finding(s); first offender: "
+            f"claim_id={first.get('claim_id')} issue={first.get('issue')}. "
+            "Either downgrade these findings to confidence=info, attach a "
+            "non-empty `limitations` field, or fix the evidence reference."
+        )
+
     markdown = markdown_report(output_dir, report_id)
     (report_dir / "report.md").write_text(markdown, encoding="utf-8")
     sheets = sheet_rows(output_dir)
     write_xlsx(report_dir / "report.xlsx", sheets)
 
-    # HTML report (rich, single-file, zero-dependency). Best-effort: don't fail
-    # the whole stage if html rendering hits an exception — emit a stub file
-    # noting the failure so downstream consumers can still see something.
+    # HTML report (rich, single-file, zero-dependency). Three modes:
+    #   * summary      — skip entirely; stub file explains.
+    #   * interactive  — render L1/L2/L3 without attaching raw kernel rows.
+    #   * full-raw     — render everything (default).
+    # ``skip_html=True`` forces summary regardless of mode.
     html_path = report_dir / "report.html"
     html_status = "ok"
     html_error: str | None = None
-    try:
-        try:
-            from .html_report import build_html_report
-        except ImportError:  # pragma: no cover
-            import sys as _sys
-            _sys.path.insert(0, str(Path(__file__).resolve().parent))
-            from html_report import build_html_report  # type: ignore[no-redef]
-        build_html_report(output_dir, html_path)
-    except Exception as exc:  # noqa: BLE001
-        html_status = "error"
-        html_error = f"{type(exc).__name__}: {exc}"
+    effective_mode = "summary" if skip_html else report_mode
+
+    if effective_mode == "summary":
+        html_status = "skipped"
         html_path.write_text(
-            "<!doctype html><meta charset='utf-8'><title>HTML report failed</title>"
+            "<!doctype html><meta charset='utf-8'><title>HTML report skipped</title>"
             "<body style='font-family:sans-serif;padding:20px;background:#0d1117;color:#c9d1d9'>"
-            "<h1>HTML report could not be rendered</h1>"
-            f"<pre style='color:#f85149'>{html_error}</pre>"
-            "<p>Fall back to <code>report.md</code> / <code>report.xlsx</code> in this directory.</p>",
+            "<h1>HTML report skipped</h1>"
+            "<p>This run was invoked with <code>--skip-html</code> or "
+            "<code>--report-mode summary</code>. Use <code>report.md</code> / "
+            "<code>report.xlsx</code> in this directory.</p>",
             encoding="utf-8",
         )
+    else:
+        try:
+            try:
+                from .html_report import build_html_report
+            except ImportError:  # pragma: no cover
+                import sys as _sys
+                _sys.path.insert(0, str(Path(__file__).resolve().parent))
+                from html_report import build_html_report  # type: ignore[no-redef]
+            build_html_report(
+                output_dir,
+                html_path,
+                attach_raw_rows=(effective_mode == "full-raw"),
+            )
+        except Exception as exc:  # noqa: BLE001
+            html_status = "error"
+            html_error = f"{type(exc).__name__}: {exc}"
+            html_path.write_text(
+                "<!doctype html><meta charset='utf-8'><title>HTML report failed</title>"
+                "<body style='font-family:sans-serif;padding:20px;background:#0d1117;color:#c9d1d9'>"
+                "<h1>HTML report could not be rendered</h1>"
+                f"<pre style='color:#f85149'>{html_error}</pre>"
+                "<p>Fall back to <code>report.md</code> / <code>report.xlsx</code> in this directory.</p>",
+                encoding="utf-8",
+            )
 
     manifest = {
         "schema_version": SCHEMA_VERSION,
@@ -880,8 +997,15 @@ def render_report(output_dir: Path) -> dict[str, Any]:
             "manifest": "manifest.json",
         },
         "html_status": html_status,
+        "report_mode": effective_mode,
         "sheet_map": {name: name for name in sheets},
         "claim_ids": [item.get("claim_id") for item in finding_rows(output_dir)],
+        "evidence_chain": {
+            "findings_checked": chain["findings_checked"],
+            "evidence_rows": chain["evidence_rows"],
+            "alignment_rows": chain["alignment_rows"],
+            "soft_warning_count": len(chain["soft_warnings"]),
+        },
     }
     if html_error:
         manifest["html_error"] = html_error
@@ -892,13 +1016,27 @@ def render_report(output_dir: Path) -> dict[str, Any]:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", required=True)
+    parser.add_argument("--skip-html", action="store_true")
+    parser.add_argument(
+        "--report-mode",
+        choices=("summary", "interactive", "full-raw"),
+        default="full-raw",
+    )
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    manifest = render_report(Path(args.output))
-    print({"stage": "report", "output_dir": manifest["output_dir"]})
+    manifest = render_report(
+        Path(args.output),
+        skip_html=bool(args.skip_html),
+        report_mode=args.report_mode,
+    )
+    emit_stage_json({
+        "stage": "report",
+        "output_dir": manifest["output_dir"],
+        "html_status": manifest.get("html_status"),
+    })
     return 0
 
 

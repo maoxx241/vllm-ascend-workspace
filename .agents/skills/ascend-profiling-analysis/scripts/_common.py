@@ -4,13 +4,15 @@
 Responsibilities kept minimal on purpose:
   - resolve a machine (alias or IP) to an SSH endpoint via inventory
   - run remote bash commands and stream stdout/stderr back
-  - rsync a local subtree (only ``tools/ascend_profile/``) to the remote work dir
+  - tar-sync the framework subtree (``scripts/ascend_profile/``) to the
+    remote work dir
   - read / validate the collection skill's manifest
   - manage local run directories under ``.vaws-local/profiling-analysis/runs/``
   - emit progress as ``__VAWS_PROFILE_ANALYSIS_PROGRESS__=<json>`` on stderr
 
 This script intentionally does NOT contain any profiling analysis logic. The
-real pipeline lives in ``tools/ascend_profile/`` and is run remotely.
+real pipeline lives next to it under ``scripts/ascend_profile/`` and is run
+remotely.
 """
 
 from __future__ import annotations
@@ -39,8 +41,16 @@ ANALYSIS_STATE_DIR = ROOT / ".vaws-local" / "profiling-analysis" / "runs"
 PROGRESS_SENTINEL = "__VAWS_PROFILE_ANALYSIS_PROGRESS__="
 
 DEFAULT_REMOTE_WORK_DIR = "/tmp/ascend_profile_framework"
-TOOLS_LOCAL_DIR = ROOT / "tools" / "ascend_profile"
-TOOLS_REMOTE_SUBPATH = "tools/ascend_profile"
+# The analysis framework lives next to this file as a sibling package; it is
+# tar-synced to the remote work dir's ``ascend_profile/`` subpath and invoked
+# as ``python3 -m ascend_profile.<stage>`` from that work dir.
+FRAMEWORK_LOCAL_DIR = Path(__file__).resolve().parent / "ascend_profile"
+FRAMEWORK_REMOTE_SUBPATH = "ascend_profile"
+FRAMEWORK_PYTHON_MODULE = "ascend_profile"
+
+# Back-compat aliases (will be removed once all call sites use the new names).
+TOOLS_LOCAL_DIR = FRAMEWORK_LOCAL_DIR
+TOOLS_REMOTE_SUBPATH = FRAMEWORK_REMOTE_SUBPATH
 
 REQUIRED_SINGLE_ARTIFACTS = (
     "manifest.json",
@@ -217,8 +227,29 @@ def ssh_stream(
 
     Returns the remote exit code. Useful for long-running ``analyze.py`` runs
     where users want to see stage progress live.
+
+    Silent-hang handling: ``timeout`` is enforced two ways at once. First, the
+    remote command is wrapped in ``timeout --preserve-status <s>s bash -c …``
+    so an unresponsive remote process is killed at the source even if it
+    stops producing output. Second, the local reader uses ``select.select``
+    with a small slice so wall-clock timeouts are honoured immediately even
+    when stdout pipes through a slow buffer.
     """
-    cmd = [*_ssh_base_cmd(endpoint), "bash", "-c", shlex.quote(script)]
+    import select
+
+    remote_payload = script
+    if timeout is not None and timeout > 0:
+        # Add a small grace margin (5 s) so the remote-side ``timeout`` fires
+        # first and exits with a useful message before the local killer takes
+        # over. We still keep ``--preserve-status`` to surface the wrapped
+        # command's real exit code on success.
+        margin = max(int(timeout) - 5, 1)
+        remote_payload = (
+            f"timeout --preserve-status {margin}s bash -lc "
+            f"{shlex.quote(script)}"
+        )
+
+    cmd = [*_ssh_base_cmd(endpoint), "bash", "-c", shlex.quote(remote_payload)]
     proc = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
@@ -227,14 +258,41 @@ def ssh_stream(
         bufsize=1,
     )
     assert proc.stdout is not None
+    fd = proc.stdout.fileno()
     started = time.time()
+    deadline = started + timeout if timeout is not None else None
     try:
-        for line in proc.stdout:
-            if timeout is not None and time.time() - started > timeout:
-                proc.kill()
-                raise TimeoutError(f"remote command exceeded {timeout}s")
-            sys.stderr.write(forward_prefix + line if not line.startswith(forward_prefix) else line)
-            sys.stderr.flush()
+        while True:
+            if deadline is not None:
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    proc.kill()
+                    raise TimeoutError(
+                        f"remote command exceeded {timeout}s (no output for the wall-clock window)"
+                    )
+                # Slice the select wait so we react to deadline promptly.
+                wait = min(remaining, 5.0)
+            else:
+                wait = 5.0
+            ready, _, _ = select.select([fd], [], [], wait)
+            if ready:
+                line = proc.stdout.readline()
+                if not line:
+                    break
+                sys.stderr.write(
+                    forward_prefix + line if not line.startswith(forward_prefix) else line
+                )
+                sys.stderr.flush()
+            else:
+                # No data this slice; loop and re-check deadline. If the
+                # process has already exited we'd see eof on next readline.
+                if proc.poll() is not None:
+                    # Drain anything still buffered.
+                    remainder = proc.stdout.read()
+                    if remainder:
+                        sys.stderr.write(forward_prefix + remainder)
+                        sys.stderr.flush()
+                    break
         return proc.wait()
     finally:
         if proc.poll() is None:
@@ -269,7 +327,7 @@ def sync_to_remote(
 
     Implements --delete by clearing ``remote_path`` first, then unpacking the
     tarball. Lightweight on purpose: callers pick the smallest subtree they
-    need (typically ``tools/ascend_profile/``).
+    need (typically ``scripts/ascend_profile/``).
     """
     if not local_path.exists():
         raise FileNotFoundError(f"local path does not exist: {local_path}")
@@ -389,7 +447,35 @@ def sync_from_remote(
 # Run dir / manifest helpers
 # ---------------------------------------------------------------------------
 
-def ensure_run_dir(tag: str = "") -> Path:
+def ensure_run_dir(
+    tag: str = "",
+    *,
+    explicit_dir: str | None = None,
+    overwrite: bool = False,
+) -> Path:
+    """Return the local run directory to write pulled artifacts into.
+
+    - When ``explicit_dir`` is given, it is used verbatim.  If the path
+      already exists and is non-empty, ``FileExistsError`` is raised unless
+      ``overwrite=True``.
+    - Otherwise a fresh ``<state-dir>/<timestamp>_<tag>/`` directory is
+      created under ``.vaws-local/profiling-analysis/runs/``.
+    """
+    if explicit_dir:
+        d = Path(explicit_dir).expanduser().resolve()
+        if d.exists():
+            if d.is_file():
+                raise FileExistsError(
+                    f"--local-output-dir points at an existing file: {d}"
+                )
+            if any(d.iterdir()) and not overwrite:
+                raise FileExistsError(
+                    f"--local-output-dir is not empty: {d}; "
+                    "pass --overwrite to use it anyway"
+                )
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
     ts = time.strftime("%Y%m%d_%H%M%S")
     name = f"{ts}_{tag}" if tag else ts
     d = ANALYSIS_STATE_DIR / name
