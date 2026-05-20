@@ -30,6 +30,7 @@ def test_analyze_wrapper_has_required_args() -> None:
         "--remote-profile-root",
         "--tag",
         "--remote-work-dir",
+        "--remote-output-dir",
         "--local-output-dir",
         "--overwrite",
         "--keep-remote-output",

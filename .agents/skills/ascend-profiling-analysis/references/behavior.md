@@ -51,6 +51,9 @@ layer_class_summary.csv
 block_summary.csv
 block_class_summary.csv
 operator_summary.csv
+operator_class_summary.csv
+hccl_op_summary.csv
+hccl_class_summary.csv
 wait_anchor_ops.csv
 aicpu_summary.csv
 cross_rank_alignment.csv
@@ -89,6 +92,7 @@ evidence/bubble_windows.jsonl
     report.xlsx
     manifest.json
   sweep_summary.json               # only for profile_sweep.py
+  sweep_class_rollup.csv           # only for profile_sweep.py (multi-root rollup)
 ```
 
 ## Remote work directory layout
@@ -135,7 +139,7 @@ Soft outcomes (still `status: "ok"`):
 `profile_sweep.py` is a thin wrapper around `ascend_profile.sweep`. It:
 
 - Calls the remote sweep with all `--search-root`s the agent provides.
-- Pulls back `sweep_summary.json` plus every successful root's `report/` and `*_manifest.json`.
+- Pulls back `sweep_summary.json` and `sweep_class_rollup.csv` (the multi-root rollup table) plus every successful root's `report/` and `*_manifest.json`. Use `--pull-html` to additionally fetch per-root `report/report.html` files.
 - Reports a layer inventory in the form `{"(27, 40)": 17, "(24,)": 9, ...}` so the agent can cross-compare captures.
 - Returns `status: "partial"` (exit code 1) when any root failed but the summary was still produced. `status: "failed"` (exit codes 3-6) is reserved for setup / pull failures that prevent the summary from being written at all.
 

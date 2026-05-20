@@ -273,6 +273,20 @@ def fmt_ms(v, prec=2):
 
 # -----------------------------
 # v7 analysis helpers
+#
+# NOTE (UI-only heuristics):
+#   The functions in this block (``compute_ep_balance``,
+#   ``assess_companion_run``, ``detect_attention_subtype``,
+#   ``derive_layer_composition``, ``guess_model_structure``) compute
+#   heuristic signals for the HTML report's narrative cards. They are
+#   *not* formal diagnosis findings: nothing here is added to
+#   ``diagnosis_findings.json`` and they do not participate in the
+#   evidence-chain validator. Treat their outputs as UI hints; load
+#   ``diagnosis_findings.json`` if you need official claims with
+#   ``evidence_ids`` / ``alignment_ids`` / ``limitations`` attached.
+#
+#   These hints are rendered alongside an explicit "UI-only heuristic"
+#   ribbon in the HTML so end-users don't mistake them for findings.
 # -----------------------------
 
 def compute_ep_balance(b) -> dict:
@@ -1140,6 +1154,7 @@ def render_head(title: str) -> str:
         # KPI strip
         ".kpi-strip{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;}"
         ".kpi-strip .kpi{background:var(--bg-card);border:1px solid var(--border);border-radius:5px;padding:10px 12px;}"
+        ".ui-only-pill{display:inline-block;margin-left:4px;padding:0 5px;border:1px solid #d9a55b;border-radius:3px;background:rgba(217,165,91,.12);color:#d9a55b;font-size:9px;font-weight:600;line-height:14px;letter-spacing:.03em;text-transform:uppercase;vertical-align:middle;cursor:help;}"
         # step Gantt jumpable rects
         ".gantt-svg rect.seg{cursor:pointer;transition:filter .1s;}"
         ".gantt-svg rect.seg:hover{filter:brightness(1.3);stroke:#fff;stroke-width:0.6;}"
@@ -2004,15 +2019,25 @@ def render_l1_view(b: "Bundle") -> str:
         '<div class="kpi-strip">'
         f'<div class="kpi"><div class="label">参与 Rank</div><div class="value">{rank_count}</div>'
         f'<div class="sub">{step_count} step · 平均 wall {fmt_ms(total_wall)} ms / rank</div></div>'
-        f'<div class="kpi"><div class="label">EP 峰均比 (GMM){ep_info}</div>'
+        f'<div class="kpi"><div class="label">EP 峰均比 (GMM){ep_info}'
+        '<span class="ui-only-pill" title="UI-only heuristic — 非 diagnosis finding，未进入 diagnosis_findings.json">UI-only</span>'
+        '</div>'
         f'<div class="value" style="color:{ep_color}">{ep_val}</div>'
         f'<div class="sub">{ep_sub}</div></div>'
-        f'<div class="kpi"><div class="label">DP 陪跑步数</div>'
+        f'<div class="kpi"><div class="label">DP 陪跑步数'
+        '<span class="ui-only-pill" title="UI-only heuristic — 非 diagnosis finding，未进入 diagnosis_findings.json">UI-only</span>'
+        '</div>'
         f'<div class="value" style="color:{comp_color}">{comp["n_companion"]} / {comp["n_total_aligned"]}</div>'
         f'<div class="sub">{comp_msg}</div></div>'
         f'<div class="kpi"><div class="label">Findings</div>'
         f'<div class="value">{len(b.findings)}</div>'
         f'<div class="sub">最频 {findings_freq}</div></div>'
+        '</div>'
+        '<div class="muted" style="margin-top:6px;font-size:11px">'
+        '<span class="ui-only-pill" style="margin-right:6px">UI-only</span>'
+        '标签项为 UI 推断信号（EP 峰均比 / DP 陪跑 / Layer composition / 模型结构猜测），'
+        '不会写入 <code>diagnosis_findings.json</code>，也不参与 evidence-chain 校验。'
+        '需要正式结论请查 <code>diagnosis_findings.json</code>。'
         '</div>'
     )
 
@@ -2541,7 +2566,9 @@ def _render_l2_single_step(b: "Bundle", s: dict, view_id: str,
         '</div>'
         '<div class="kernel-rollup" style="margin-top:6px">'
         '<div class="kernel-row head" style="grid-template-columns:50px 1.2fr 0.6fr 1.0fr 0.5fr 0.4fr 0.4fr">'
-        '<div>idx</div><div>Composition</div><div class="num">Active ms</div><div class="num">% of step active</div><div class="num">Events</div><div>Role</div><div></div>'
+        '<div>idx</div>'
+        '<div>Composition <span class="ui-only-pill" title="UI-only heuristic — block 组合由 block_segments 推断，不是 diagnosis finding">UI-only</span></div>'
+        '<div class="num">Active ms</div><div class="num">% of step active</div><div class="num">Events</div><div>Role</div><div></div>'
         '</div>'
         + "".join(layer_rows_html) +
         '</div>'

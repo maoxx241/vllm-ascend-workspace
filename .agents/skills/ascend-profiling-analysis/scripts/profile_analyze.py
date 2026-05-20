@@ -48,6 +48,15 @@ def _build_parser() -> argparse.ArgumentParser:
         help=f"remote scratch dir for tools + outputs (default: {common.DEFAULT_REMOTE_WORK_DIR})",
     )
     parser.add_argument(
+        "--remote-output-dir",
+        default=None,
+        help=(
+            "explicit remote output directory (absolute path). Useful with "
+            "--from-stage / --only-stage to reuse a prior run's artifacts; "
+            "default: <remote-work-dir>/runs/<local-run-dir-name>."
+        ),
+    )
+    parser.add_argument(
         "--local-output-dir",
         default=None,
         help=(
@@ -125,17 +134,48 @@ def _resolve_input(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+def _resolve_end_stage(
+    only_stage: str | None,
+    from_stage: str | None,
+    to_stage: str | None,
+) -> str:
+    """Mirror ``ascend_profile.analyze._resolve_stage_window`` but lighter:
+    we only need the *end* stage to pick the required-artifacts set.
+    """
+    if only_stage:
+        return only_stage
+    if to_stage:
+        return to_stage
+    # No explicit window means the full pipeline; the wrapper validates the
+    # full ``report`` artifact set.
+    return "report"
+
+
+def _required_artifacts_for(end_stage: str) -> tuple[str, ...]:
+    return common.REQUIRED_ARTIFACTS_BY_END_STAGE.get(
+        end_stage, common.REQUIRED_SINGLE_ARTIFACTS
+    )
+
+
 def _validate_remote_artifacts(
-    endpoint: common.SshEndpoint, remote_output_dir: str
+    endpoint: common.SshEndpoint,
+    remote_output_dir: str,
+    *,
+    required_artifacts: tuple[str, ...] = common.REQUIRED_SINGLE_ARTIFACTS,
 ) -> dict[str, Any]:
-    """Confirm required artifacts exist; raise on missing files."""
+    """Confirm required artifacts exist; raise on missing files.
+
+    ``required_artifacts`` is scoped to the stage window the wrapper just
+    asked for, so partial reruns (``--only-stage normalize``) don't get
+    flagged for not producing ``report/report.md``.
+    """
     quoted = common.quote_remote(remote_output_dir)
     listing = common.ssh_exec(
         endpoint,
         "set -e; "
         f"cd {quoted} && "
         "for f in "
-        + " ".join(common.quote_remote(p) for p in common.REQUIRED_SINGLE_ARTIFACTS)
+        + " ".join(common.quote_remote(p) for p in required_artifacts)
         + "; do test -f \"$f\" && echo OK:\"$f\" || echo MISSING:\"$f\"; done",
         check=True,
         timeout=120,
@@ -315,7 +355,10 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     remote_work_dir = args.remote_work_dir.rstrip("/")
     remote_framework_dir = f"{remote_work_dir}/{common.FRAMEWORK_REMOTE_SUBPATH}"
-    remote_output_dir = f"{remote_work_dir}/runs/{run_dir.name}"
+    if args.remote_output_dir:
+        remote_output_dir = args.remote_output_dir
+    else:
+        remote_output_dir = f"{remote_work_dir}/runs/{run_dir.name}"
 
     # Phase 1: parity sync (only scripts/ascend_profile/)
     try:
@@ -400,10 +443,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 4
 
-    # Phase 3: validate artifacts and segmentation health
+    # Phase 3: validate artifacts and segmentation health.
+    #
+    # When the caller restricted the stage window (``--only-stage`` /
+    # ``--to-stage``), the wrapper only checks the artifact set that
+    # *should* exist after that stage. Segment health is re-validated
+    # whenever ``segment_manifest.json`` is part of the expected set.
+    end_stage = _resolve_end_stage(args.only_stage, args.from_stage, args.to_stage)
+    required_artifacts = _required_artifacts_for(end_stage)
     try:
-        remote_manifest = _validate_remote_artifacts(endpoint, remote_output_dir)
-        _validate_segment_health(endpoint, remote_output_dir)
+        remote_manifest = _validate_remote_artifacts(
+            endpoint, remote_output_dir, required_artifacts=required_artifacts
+        )
+        if "segment_manifest.json" in required_artifacts:
+            _validate_segment_health(endpoint, remote_output_dir)
     except RuntimeError as exc:
         common.print_json(
             {

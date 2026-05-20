@@ -10,6 +10,8 @@
 - [ ] When neither input is supplied (or both are), argparse rejects the invocation.
 - [ ] `--local-output-dir` is honoured: when set, pulled artifacts land there; existing non-empty targets are rejected unless `--overwrite` is also given.
 - [ ] `--skip-html` / `--report-mode {summary,interactive,full-raw}` / `--from-stage` / `--to-stage` / `--only-stage` are forwarded verbatim to the remote `ascend_profile.analyze` invocation.
+- [ ] `--remote-output-dir <abs>` overrides the default `<remote-work-dir>/runs/<local-run-dir-name>`. Used to point a follow-up partial rerun (`--from-stage classify`) at a previous remote run so normalize/segment artifacts are reused.
+- [ ] Stage-aware artifact validation: `--only-stage normalize` succeeds without requiring `report/report.md`, while a full pipeline run still demands the complete artifact set. Segment-health validation only runs when segmentation is in the stage window.
 
 ### Remote orchestration
 
@@ -60,6 +62,7 @@
 - [ ] `--jobs N` is forwarded to the remote sweep (defaults to 1, sequential).
 - [ ] `--reuse-existing` is forwarded; sweep skips roots whose `manifest.json` already exists in the per-root output dir.
 - [ ] `--render-html` flips the remote sweep into HTML-rendering mode; default behaviour is `--skip-html` so sweep outputs stay small. `--pull-html` is independent: it only controls whether the local pull set includes `report/report.html`.
+- [ ] `sweep_summary.json` **and** `sweep_class_rollup.csv` are both pulled back by default (the rollup is the multi-root comparison table; it stays first-class even when individual root HTMLs are skipped).
 
 ### Remote orchestration
 
@@ -99,3 +102,5 @@
 - [ ] `python3 .agents/skills/ascend-profiling-analysis/tests/test_manifest_schema.py` exits 0 (segment manifest schema regression).
 - [ ] `python3 .agents/skills/ascend-profiling-analysis/tests/test_html_diagnosis_key.py` exits 0 (HTML diagnosis key regression).
 - [ ] `python3 .agents/skills/ascend-profiling-analysis/tests/test_timeout.py` exits 0 (silent-hang wall-clock regression).
+- [ ] `python3 -m pytest .agents/skills/ascend-profiling-analysis/tests/test_stage_validation.py` passes (wrapper validates only the artifact set the chosen stage window should produce; `--only-stage normalize` no longer requires `report/report.md`).
+- [ ] `python3 -m pytest .agents/skills/ascend-profiling-analysis/tests/test_semantic_conventions.py` passes (`knowledge/semantic_conventions.yaml` enum catalogue stays in sync with Python `op_type` / `finding_type` / `alignment_method` / `report_mode` emissions).

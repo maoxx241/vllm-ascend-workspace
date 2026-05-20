@@ -6,7 +6,8 @@ discovers roots and aggregates results). The wrapper handles:
   - inventory lookup
   - tar-sync of ``scripts/ascend_profile/`` to the remote work dir
   - launching ``sweep`` on the remote
-  - pulling back ``sweep_summary.json`` plus per-root ``report/`` and
+  - pulling back ``sweep_summary.json`` and ``sweep_class_rollup.csv``
+    (the multi-root rollup table) plus per-root ``report/`` and
     ``diagnosis_findings.json`` (skips the bulky normalized event index)
   - emitting a summary JSON on stdout
 """
@@ -321,7 +322,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.keep_remote_output:
             common.sync_from_remote(endpoint, remote_output_dir, run_dir)
         else:
-            includes: list[str] = ["sweep_summary.json"]
+            includes: list[str] = [
+                "sweep_summary.json",
+                "sweep_class_rollup.csv",
+            ]
             per_root_extras: tuple[str, ...] = (
                 ("report/report.html",) if args.pull_html else ()
             )

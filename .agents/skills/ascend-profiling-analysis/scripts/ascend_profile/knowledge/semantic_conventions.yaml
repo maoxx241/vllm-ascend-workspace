@@ -1,0 +1,161 @@
+version: 1
+
+# Stable enumerations used across CSV / JSON artifacts in this skill.
+#
+# Source of truth for these enums lives in Python today
+# (``common.py:categories_and_roles``, ``classify.py:decompose_layer_into_blocks``,
+# ``cross_rank.py``, ``diagnostics.py``). This YAML is the *contract* layer:
+# adding a new value here is the first step before extending Python so that
+# downstream readers (HTML report, schema tests, agent prompts) all agree.
+#
+# Test ``tests/test_semantic_conventions.py`` verifies that any value
+# emitted by the pipeline is listed here.
+
+attributes:
+  op_type:
+    description: |
+      Coarse accelerator-core classification for a kernel event.
+      Derived from ``kernel_details.csv`` column ``Accelerator Core`` plus
+      the kernel name (for ``mix_*`` fused kernels).
+    type: enum
+    values:
+      - aic                    # AI Cube only
+      - aiv                    # AI Vector only
+      - mix_cv                 # Cube + Vector fused on the same kernel (e.g. FIA, GroupedMatmul)
+      - mix_comm_aiv           # Communication + Vector fused (e.g. DispatchFFNCombine)
+      - communication          # HCCL / hcom collective or point-to-point
+      - aicpu                  # AICPU core (still device-side; counted as busy time)
+      - dsa                    # Data Stream Accelerator (memcpy, transpose, etc.)
+      - unknown
+
+  op_roles:
+    description: |
+      Functional roles attached to a kernel after taxonomy matching. A
+      single kernel may have multiple roles (multi-valued enum).
+    type: enum
+    multi: true
+    values:
+      - attention
+      - moe
+      - ffn
+      - communication
+      - normalization
+      - block_head
+      - selection
+      - sampling
+      - aicpu
+      - dummy_or_reduced_work
+      - matmul
+      - linear_attention
+      - mamba
+      - compute_other
+
+  op_categories:
+    description: |
+      Fine-grained categories used by the rule matcher (multi-valued).
+      Categories are namespaced ``domain.subkind``.
+    type: enum
+    multi: true
+    values:
+      - attention.gqa_or_mha
+      - attention.mla
+      - attention.csa
+      - attention.linear_or_mamba
+      - moe.gating
+      - moe.dispatch
+      - moe.combine
+      - moe.dispatch_expert_compute
+      - compute.matmul
+      - compute.norm
+      - communication.collective
+      - communication.point_to_point
+      - block_head
+      - sampling_or_selection
+      - aicpu
+      - dummy_or_reduced_work
+
+  bound_family:
+    description: |
+      Pipeline stage on which a kernel spends the most time
+      (decoupled Cube / Vector aware).
+    type: enum
+    values:
+      - mac                    # Cube MAC compute
+      - fixpipe                # Cube fixpipe (DMA from L1/L0C out)
+      - mte1                   # Cube L1 -> L0A/L0B
+      - mte2                   # L1 -> UB or scalar -> UB load
+      - mte3                   # UB -> L1 / Out
+      - vec                    # AI Vector compute
+      - scalar
+      - communication
+      - aicpu
+      - unknown
+
+  block_kind:
+    description: |
+      The block-level decomposition emitted by
+      ``classify.decompose_layer_into_blocks``.
+    type: enum
+    values:
+      - attention
+      - ffn
+      - moe
+      - aicpu                  # AICPU companion / sampling-only blocks
+      - other
+
+  finding_type:
+    description: |
+      Stable identifier for entries inside ``diagnosis_findings.json``.
+      Adding a new finding requires (a) adding an enum value here,
+      (b) emitting it from ``diagnostics.py``, (c) keeping the new
+      finding evidence-chained (``evidence_ids`` or ``alignment_ids``
+      or non-empty ``limitations``).
+    type: enum
+    values:
+      - communication_collective_slow
+      - ep_load_imbalance_suspected
+      - slow_rank_suspected
+      - dp_workload_imbalance
+      - reduced_work_or_dummy_rank
+      - rank_workload_asymmetry
+      - device_idle_bubble
+      - aicpu_exposed
+      - wait_anchor_false_hotspot
+
+  alignment_method:
+    description: |
+      How a ``cross_rank_alignment.csv`` row was produced.
+      Versioned identifiers so future algorithm changes can coexist.
+    type: enum
+    values:
+      - step_time_overlap_v1
+      - time_bucket_v1
+
+  alignment_confidence:
+    description: |
+      Per-row confidence of cross-rank alignment.
+    type: enum
+    values:
+      - high                   # exact class signature match across all ranks
+      - medium                 # class match but with partial coverage / fallback
+      - low                    # heuristic / row-range overlap only
+
+  html_status:
+    description: |
+      Reported in ``report/manifest.json`` to signal whether the
+      interactive HTML view rendered successfully.
+    type: enum
+    values:
+      - ok
+      - skipped                # --skip-html
+      - stub                   # report_mode left HTML out by design
+      - error                  # rendering raised; placeholder html written
+
+  report_mode:
+    description: |
+      ``--report-mode`` selection forwarded to the report stage.
+    type: enum
+    values:
+      - summary                # md + xlsx only; HTML is a stub
+      - interactive            # HTML L1/L2/L3 without raw kernel rows
+      - full-raw               # complete HTML with attached raw kernel rows

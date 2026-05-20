@@ -5,6 +5,8 @@ description: Analyze Ascend NPU torch profiler output (kernel_details.csv / trac
 
 # Ascend Profiling Analysis
 
+> Status: **experimental / beta**. 当前 PR 主要提供：远端 pipeline、evidence-chained report、HTML 三级聚焦视图、stage selector。**主动 knowledge 仍在 Python 内（`common.py:categories_and_roles`、`segment.py` 切分规则、`classify.py` block 拆分等）**，YAML 化 knowledge 已起步（见 [Knowledge map](#knowledge-map-for-agents)）但尚未替换 Python 规则。新模型 / 新算子族碰到问题时，仍可能需要改 Python，请把 counterexample 落到 `knowledge/known_counterexamples.md` 再改代码。
+
 读取 Ascend NPU torch profiler 的产物 (`kernel_details.csv`, `trace_view.json`, `op_summary`, `communication.json` 等)，做 **normalize → segment → summarize → cross-rank → diagnostics → report** 的端到端分析，产物全部可追溯到原始 row range。
 
 本 skill 只消费已经采集好的 profiling root，**不负责采集**，不负责服务生命周期，不负责 benchmark。
@@ -52,6 +54,7 @@ python3 .agents/skills/ascend-profiling-analysis/scripts/profile_analyze.py \
   [--tag <name>] \
   [--local-output-dir <local-dir-to-pull-report>] [--overwrite] \
   [--remote-work-dir /tmp/ascend_profile_framework] \
+  [--remote-output-dir <absolute-remote-output-dir>] \
   [--remote-timeout 3600] \
   [--keep-remote-output] \
   [--skip-html] [--report-mode summary|interactive|full-raw] \
@@ -62,8 +65,9 @@ python3 .agents/skills/ascend-profiling-analysis/scripts/profile_analyze.py \
 Flag notes:
 
 - `--local-output-dir`: explicit local dir to write pulled artifacts into. If omitted, defaults to `.vaws-local/profiling-analysis/runs/<timestamp>_<tag>/`. Pass `--overwrite` to allow a non-empty target.
+- `--remote-output-dir`: explicit **absolute** remote output dir. Useful with `--from-stage` / `--only-stage` to **reuse a previous run's normalize/segment artifacts** when iterating on classify / diagnostics / report. Default: `<remote-work-dir>/runs/<local-run-dir-name>`.
 - `--skip-html` / `--report-mode`: forwarded to the remote analyze stage; `summary` skips HTML entirely (smallest), `interactive` renders L1/L2/L3 without attaching raw kernel rows, `full-raw` (default) is the complete report.
-- `--from-stage` / `--to-stage` / `--only-stage`: resume / partial re-runs; require the prior stages' manifest files already exist in the remote output dir.
+- `--from-stage` / `--to-stage` / `--only-stage`: resume / partial re-runs; require the prior stages' manifest files already exist in the remote output dir. The wrapper validates only the artifacts the chosen stage *should* produce, so `--only-stage normalize` no longer demands `report/report.md`.
 
 行为：
 
@@ -271,6 +275,46 @@ XLSX 包新增 sheet：`step_anatomy`、`step_class_summary`、`layer_class_summ
 | `ascend-profiling-collection` | 上游：消费它的 `manifest.json`（`analysis_status`、`remote_profile_root`） |
 | `ascend-memory-profiling` | 不交叉，专管 HBM |
 | `vllm-ascend-serving` / `vllm-ascend-benchmark` | 不交叉，本 skill 不启停服务 |
+
+## Knowledge map for agents
+
+When extending this skill (new model family, new operator subtype, new
+diagnosis heuristic), **read knowledge first, change Python only if
+knowledge can't express it**. Suggested reading order:
+
+1. `scripts/ascend_profile/knowledge/index.md` — entry to the rest.
+2. `scripts/ascend_profile/knowledge/semantic_conventions.yaml` — enums for
+   `op_type` / `block_kind` / `finding_type` / `alignment_method`. New
+   values must be added here first so downstream schema tests stay green.
+3. `scripts/ascend_profile/knowledge/operator_taxonomy.md` + Python
+   `common.categories_and_roles()` — kernel name → `(op_categories,
+   op_roles)`. (Rule loader from YAML is on the roadmap; current source of
+   truth is still Python.)
+4. `scripts/ascend_profile/knowledge/communication_taxonomy.md` — HCCL /
+   dispatch / combine semantics.
+5. `scripts/ascend_profile/knowledge/block_taxonomy.md` — how
+   `classify.decompose_layer_into_blocks` cuts layer → attention / ffn /
+   moe / aicpu.
+6. `scripts/ascend_profile/knowledge/step_anatomy.md` — head / main / tail
+   / bubble definition; consumed by `summarize`.
+7. `scripts/ascend_profile/knowledge/known_counterexamples.md` — cases
+   that previously broke segmentation / classification. **Add new cases
+   here before patching Python.**
+
+Rule-change invalidation (which stage to rerun via `--from-stage`):
+
+| Change | Re-run from |
+|---|---|
+| operator taxonomy / new kernel naming | `normalize` |
+| segmentation strategy / new anchor / new repair | `segment` |
+| block taxonomy / new attention or moe variant | `classify` |
+| summary metric definition | `summarize` |
+| diagnosis rules / new finding type | `diagnostics` |
+| report template / HTML widget only | `report` |
+
+When the same remote root must be rerun multiple times while iterating on
+a downstream stage, pass `--remote-output-dir <abs-path>` so prior stages'
+artifacts are reused.
 
 ## Layout note
 

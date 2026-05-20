@@ -61,6 +61,55 @@ REQUIRED_SINGLE_ARTIFACTS = (
     "report/report.html",
 )
 
+# Stage-aware artifact validation: the minimum set of files that must exist
+# in the remote output dir once a given stage has finished. Used by the
+# wrapper so that ``--only-stage normalize`` doesn't get rejected for not
+# producing ``report/report.md``.
+#
+# The keys match ``ascend_profile.analyze.STAGE_ORDER``; each value is the
+# *cumulative* set assumed to be present after that stage runs (so checking
+# the end-stage set is enough).
+REQUIRED_ARTIFACTS_BY_END_STAGE = {
+    "normalize": (
+        "manifest.json",
+        "normalize_manifest.json",
+        "normalized_event_index.csv",
+    ),
+    "segment": (
+        "manifest.json",
+        "normalize_manifest.json",
+        "segment_manifest.json",
+        "step_segments.json",
+        "layer_segments.json",
+    ),
+    "classify": (
+        "manifest.json",
+        "segment_manifest.json",
+        "classify_manifest.json",
+        "block_segments.json",
+        "class_signatures.json",
+    ),
+    "summarize": (
+        "manifest.json",
+        "classify_manifest.json",
+        "summary_manifest.json",
+        "rank_summary.csv",
+        "step_summary.csv",
+    ),
+    "cross_rank": (
+        "manifest.json",
+        "summary_manifest.json",
+        "cross_rank_manifest.json",
+        "cross_rank_alignment.csv",
+    ),
+    "diagnostics": (
+        "manifest.json",
+        "summary_manifest.json",
+        "diagnosis_findings.json",
+    ),
+    "report": REQUIRED_SINGLE_ARTIFACTS,
+}
+
 # Artifacts that are cheap to pull back to the user's workstation. Big ones
 # (normalized_event_index.csv, evidence/bubble_windows.jsonl) are intentionally
 # excluded -- agents that need them should ssh in and grep, not download.

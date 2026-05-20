@@ -81,6 +81,28 @@ kernel names. A `taxonomy.yaml` rule file plus a tiny matcher would let
 us add operator families (new attention kernels, new MoE primitives)
 without editing Python. See review §6.5 for the proposed shape.
 
+**Partial progress:** `scripts/ascend_profile/knowledge/semantic_conventions.yaml`
+now pins the enum catalogue (`op_type`, `op_roles`, `op_categories`,
+`bound_family`, `block_kind`, `finding_type`, `alignment_method`,
+`alignment_confidence`, `html_status`, `report_mode`).
+`tests/test_semantic_conventions.py` keeps Python and YAML in sync. The
+next step is replacing the Python rule body of `categories_and_roles()`
+with a YAML-driven matcher (`operator_taxonomy.yaml`).
+
+## 5b. Segmentation strategy externalization
+
+`segment.py` is the most safety-critical module in the framework; we
+have not externalized its rules. The follow-up PR should add
+`knowledge/segmentation_strategy.yaml` with these parameter blocks:
+
+* `anchor_priority` (role / category ordering)
+* `boundary_markers` (block_head, normalization, selection)
+* `residual_policy` (head/tail allow vs hard_fail, interior policies)
+* `repair_rules` (toggleable rule names, no algorithm changes)
+
+Acceptance for that follow-up: golden segmentation fixtures must keep
+passing (see §8).
+
 ## 6. Stage resume from interrupted run
 
 The new `--from-stage` / `--to-stage` selectors in `analyze.py` cover
@@ -88,7 +110,59 @@ forward resumes when prior outputs are intact. A richer "stage cache"
 that detects stale inputs and replays only the dirty stages is the
 natural next step, especially once we have schema validation in place.
 
-## 7. `ascend-profiling-anomaly` overlap
+## 7. Golden segmentation fixtures
+
+Recommended layout (see review §3.8):
+
+```
+tests/fixtures/segmentation/
+  qwen_moe_tp4_minimal/
+    kernel_details_rank0.csv
+    expected_step_segments.json
+    expected_layer_segments.json
+  argmax_not_boundary/
+    kernel_details.csv
+    expected_no_standalone_step_boundary.json
+  companion_layer/
+    kernel_details.csv
+    expected_companion_layer.json
+```
+
+Tests: `test_operator_taxonomy_rules.py`,
+`test_segmentation_strategy_rules.py`,
+`test_known_counterexamples.py`,
+`test_stage_resume_contract.py`.
+
+This is the prerequisite for landing §5b (segmentation strategy YAML)
+safely.
+
+## 8. UI-only heuristic → diagnostic findings
+
+`compute_ep_balance`, `assess_companion_run`, `detect_attention_subtype`,
+`derive_layer_composition`, `guess_model_structure` are flagged
+`UI-only` in the HTML (see ribbon on the L1 KPI strip and the Composition
+column header in L2). Promoting them into `diagnostics.py` proper means
+emitting them as `ep_load_imbalance_suspected` /
+`reduced_work_or_dummy_rank` / `rank_workload_asymmetry` findings with
+real `evidence_ids` plus a non-empty `limitations` string when the
+heuristic is necessarily soft. Deferred because it requires alignment
+work in `cross_rank.py` first (a finding-grade EP imbalance claim needs
+per-step alignment, not just a per-rank wall-time aggregate).
+
+## 9. `--remote-output-dir` semantics
+
+Wrapper now accepts `--remote-output-dir <abs>` for partial reruns.
+Open follow-ups:
+
+* When the user reuses a remote output dir but the local run dir is new,
+  we still tar-sync the framework — that's fine, but we could skip the
+  sync if `<framework>/.version` matches the local checkout.
+* The wrapper does not yet verify that the remote dir belongs to the
+  same `remote_profile_root`. A small sanity check (read remote
+  `manifest.json:input.root`, compare to current `--remote-profile-root`)
+  would catch foot-guns.
+
+## 10. `ascend-profiling-anomaly` overlap
 
 The user-level `ascend-profiling-anomaly` skill (in `.claude/`) still
 operates on raw kernel_details for ad-hoc anomaly hunts. Once this
