@@ -1,0 +1,749 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vllm-ascend.local/schemas/ascend-profile-analysis-bundle.schema.json",
+  "title": "Ascend Profile Analysis Bundle",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema_version",
+    "analysis_id",
+    "created_at",
+    "source_profile",
+    "sources"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "analysis_id": {
+      "type": "string"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "tool_version": {
+      "type": "string"
+    },
+    "source_profile": {
+      "$ref": "#/$defs/ProfileRef"
+    },
+    "sources": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/SourceRef"
+      }
+    },
+    "normalized_events": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/NormalizedEvent"
+      }
+    },
+    "step_segments": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/StepSegment"
+      }
+    },
+    "layer_segments": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/LayerSegment"
+      }
+    },
+    "structure_observations": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/StructureObservation"
+      }
+    },
+    "cross_rank_alignments": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/CrossRankAlignment"
+      }
+    },
+    "diagnosis_findings": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/DiagnosisFinding"
+      }
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/EvidenceRef"
+      }
+    },
+    "report_manifest": {
+      "$ref": "#/$defs/ReportManifest"
+    }
+  },
+  "$defs": {
+    "ProfileRef": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "profile_id",
+        "root_path"
+      ],
+      "properties": {
+        "profile_id": {
+          "type": "string"
+        },
+        "root_path": {
+          "type": "string"
+        },
+        "capture_start_us": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "capture_end_us": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "rank_count": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "known_context": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    },
+    "SourceRef": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "source_id",
+        "kind",
+        "path"
+      ],
+      "properties": {
+        "source_id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "kernel_details_csv",
+            "trace_view_json",
+            "op_summary_csv",
+            "communication_json",
+            "manifest_json",
+            "materialized_segment_csv",
+            "analysis_table",
+            "report_file",
+            "other"
+          ]
+        },
+        "path": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rank_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "row_base": {
+          "type": "string",
+          "enum": [
+            "zero_based",
+            "one_based",
+            "not_applicable"
+          ],
+          "default": "zero_based"
+        },
+        "row_start": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "row_end": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      }
+    },
+    "EvidenceRef": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "evidence_id",
+        "kind",
+        "summary"
+      ],
+      "properties": {
+        "evidence_id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "source_refs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SourceRef"
+          }
+        },
+        "event_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "segment_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "layer_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "alignment_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "metrics": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    },
+    "Claim": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "claim_id",
+        "claim_type",
+        "summary",
+        "confidence"
+      ],
+      "properties": {
+        "claim_id": {
+          "type": "string"
+        },
+        "claim_type": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "severity": {
+          "type": "string",
+          "enum": [
+            "info",
+            "low",
+            "medium",
+            "high",
+            "critical"
+          ],
+          "default": "info"
+        },
+        "confidence": {
+          "type": "string",
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ]
+        },
+        "evidence_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "counter_evidence_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "limitations": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "NormalizedEvent": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "event_id",
+        "rank_id",
+        "source_id",
+        "row_idx",
+        "name_raw",
+        "start_us",
+        "end_us"
+      ],
+      "properties": {
+        "event_id": {
+          "type": "string"
+        },
+        "profile_id": {
+          "type": "string"
+        },
+        "rank_id": {
+          "type": "string"
+        },
+        "source_id": {
+          "type": "string"
+        },
+        "row_idx": {
+          "type": "integer"
+        },
+        "name_raw": {
+          "type": "string"
+        },
+        "task_type": {
+          "type": "string"
+        },
+        "accelerator_core": {
+          "type": "string"
+        },
+        "stream_id": {
+          "type": "string"
+        },
+        "start_us": {
+          "type": "number"
+        },
+        "end_us": {
+          "type": "number"
+        },
+        "duration_us": {
+          "type": "number"
+        },
+        "wait_us": {
+          "type": "number"
+        },
+        "op_categories": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "op_roles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "shape_signature": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "shape_features": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "raw_fields_ref": {
+          "$ref": "#/$defs/SourceRef"
+        }
+      }
+    },
+    "StepSegment": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "segment_id",
+        "rank_id",
+        "segment_type",
+        "complete",
+        "row_start",
+        "row_end"
+      ],
+      "properties": {
+        "segment_id": {
+          "type": "string"
+        },
+        "rank_id": {
+          "type": "string"
+        },
+        "segment_type": {
+          "type": "string",
+          "enum": [
+            "step",
+            "head",
+            "tail",
+            "unclassified_island"
+          ]
+        },
+        "complete": {
+          "type": "boolean"
+        },
+        "row_start": {
+          "type": "integer"
+        },
+        "row_end": {
+          "type": "integer"
+        },
+        "start_us": {
+          "type": "number"
+        },
+        "end_us": {
+          "type": "number"
+        },
+        "cluster_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "step_family": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "main_layer_count": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "speculative_layer_count": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "structure_signature": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "layer_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "evidence_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "LayerSegment": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "layer_id",
+        "rank_id",
+        "segment_id",
+        "layer_index",
+        "row_start",
+        "row_end"
+      ],
+      "properties": {
+        "layer_id": {
+          "type": "string"
+        },
+        "rank_id": {
+          "type": "string"
+        },
+        "segment_id": {
+          "type": "string"
+        },
+        "layer_index": {
+          "type": "integer"
+        },
+        "layer_role": {
+          "type": "string"
+        },
+        "boundary_source": {
+          "type": "string"
+        },
+        "row_start": {
+          "type": "integer"
+        },
+        "row_end": {
+          "type": "integer"
+        },
+        "start_us": {
+          "type": "number"
+        },
+        "end_us": {
+          "type": "number"
+        },
+        "structure_signature": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "evidence_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "StructureObservation": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "structure_id",
+        "scope_type",
+        "rank_id",
+        "role"
+      ],
+      "properties": {
+        "structure_id": {
+          "type": "string"
+        },
+        "scope_type": {
+          "type": "string",
+          "enum": [
+            "rank",
+            "step",
+            "layer",
+            "block",
+            "operator_group"
+          ]
+        },
+        "rank_id": {
+          "type": "string"
+        },
+        "segment_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "layer_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "role": {
+          "type": "string"
+        },
+        "role_family": {
+          "type": "string"
+        },
+        "implementation_evidence": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "event_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "evidence_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "confidence": {
+          "type": "string",
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ]
+        }
+      }
+    },
+    "CrossRankAlignment": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "alignment_id",
+        "alignment_type",
+        "rank_ids"
+      ],
+      "properties": {
+        "alignment_id": {
+          "type": "string"
+        },
+        "alignment_type": {
+          "type": "string",
+          "enum": [
+            "time_window",
+            "step_sequence",
+            "structure_signature",
+            "operator",
+            "shape_signature"
+          ]
+        },
+        "rank_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "segment_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "event_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "start_us": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "end_us": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "metrics": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "evidence_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "DiagnosisFinding": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/Claim"
+        },
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "finding_type": {
+              "type": "string",
+              "enum": [
+                "communication_collective_slow",
+                "ep_load_imbalance_suspected",
+                "slow_rank_suspected",
+                "dp_workload_imbalance",
+                "reduced_work_or_dummy_rank",
+                "rank_workload_asymmetry",
+                "aicpu_exposed",
+                "wait_anchor_false_hotspot",
+                "device_idle_bubble",
+                "insufficient_evidence",
+                "other"
+              ]
+            },
+            "scope": {
+              "type": "string",
+              "enum": [
+                "rank",
+                "step",
+                "layer",
+                "operator",
+                "cross_rank",
+                "profile"
+              ]
+            },
+            "rank_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "alignment_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "metrics": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          }
+        }
+      ]
+    },
+    "ReportManifest": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "report_id",
+        "output_dir",
+        "files"
+      ],
+      "properties": {
+        "report_id": {
+          "type": "string"
+        },
+        "output_dir": {
+          "type": "string"
+        },
+        "files": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "claim_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "sheet_map": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}
+
