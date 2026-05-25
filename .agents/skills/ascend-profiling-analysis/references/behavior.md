@@ -69,7 +69,7 @@ report/report.xlsx
 report/report.html
 ```
 
-Excluded from the lightweight set (large or only useful for deep debug; pull on demand with `--keep-remote-output` or by explicit `scp`):
+Excluded from the lightweight set (large or only useful for deep debug; pull on demand with `--keep-remote-output` or by explicit `remote_artifact_pull.py` against the remote output dir):
 
 ```
 normalized_event_index.csv
@@ -126,7 +126,7 @@ Hard fail (`status: "failed"` in stdout JSON, non-zero exit code):
 | `parity_sync` | tar-sync of `scripts/ascend_profile/` to remote failed | 3 |
 | `remote_analyze` | remote `analyze.py` exited non-zero or hit `--remote-timeout` | 4 |
 | `artifact_validation` | any required artifact missing, or `segment_manifest.json` reports `hard_errors > 0` / `interior_island_total > 0` | 5 |
-| `artifact_pull` | rsync of artifacts back to the local run dir failed | 6 |
+| `artifact_pull` | artifact manifest / SSH-streaming pull back to the local run dir failed | 6 |
 
 Soft outcomes (still `status: "ok"`):
 

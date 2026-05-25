@@ -9,6 +9,15 @@ python3 .agents/skills/vllm-ascend-benchmark/scripts/bench_run.py \
   --tp 1
 ```
 
+Session-scoped equivalent:
+
+```bash
+python3 .agents/skills/vllm-ascend-benchmark/scripts/bench_run.py \
+  --session-id pr123 \
+  --model /home/weights/Qwen3.5-0.8B \
+  --tp 1
+```
+
 ## Single-run: full-featured (MTP + graph mode)
 
 ```bash

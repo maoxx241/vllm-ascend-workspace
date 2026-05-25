@@ -218,6 +218,7 @@ Do not remove host firewall rules or host-level `authorized_keys` entries.
 - Container bootstrap should leave behind `/etc/vaws/host-info.json`, `/etc/vaws/container-info.json`, and `/etc/profile.d/vaws-ascend-env.sh` so later verify / repair runs can see the recorded machine type, container type, and SoC quickly.
 - Container bootstrap should write `/etc/pip.conf` with multiple pip indexes (Tsinghua as primary, Aliyun and PyPI as additional) so any subsequent `pip install` inside the container does not fail due to missing mirror configuration.
 - Container bootstrap should install `pytest` into the runtime Python if not already present, so that remote test execution works out of the box without ad-hoc environment setup.
+- Session-management may opt into the shared bootstrap helper's prepared image cache for short-lived session containers. Normal `machine_add.py` / `machine_repair.py` managed-base-container flows keep raw selected-image bootstrap behavior unless explicitly wired otherwise.
 - Keep `rc` and `stable` resolution dynamic: resolve the newest official prerelease tag or latest official non-prerelease release tag at execution time instead of using the moving `latest` tag.
 - Keep progress on `stderr` and the final status JSON on `stdout`; do not mix partial human narration into the terminal contract.
 - For smoke tests, do not pin a Python patch version. Discover the highest available `/usr/local/python*/bin/python3`, then fall back to `python3`.

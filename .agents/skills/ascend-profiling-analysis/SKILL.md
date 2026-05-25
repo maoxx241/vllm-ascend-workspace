@@ -48,7 +48,7 @@ description: Analyze Ascend NPU torch profiler output (kernel_details.csv / trac
 
 ```bash
 python3 .agents/skills/ascend-profiling-analysis/scripts/profile_analyze.py \
-  --machine <alias-or-ip> \
+  (--machine <alias-or-ip> | --session-id <id> | --session-file <session.json>) \
   ( --manifest <local-run-dir>/manifest.json
    | --remote-profile-root <remote-path> ) \
   [--tag <name>] \
@@ -71,7 +71,7 @@ Flag notes:
 
 行为：
 
-1. 解析 machine inventory，得到容器 SSH endpoint。
+1. 解析 machine inventory 或 session state，得到目标容器 SSH endpoint。若 `--manifest` 来自 session-scoped collection 且未显式传 target，则优先使用 manifest 里的 `session_file` / `session_id`，确保分析在采集同一个 session 容器内运行。
 2. 解析输入：
    - `--manifest`：读取 `analysis_status`、`remote_profile_root`、`schema_version`；若不是 `ok` 直接失败。
    - `--remote-profile-root`：直接走原始路径（用于历史 profiling）。

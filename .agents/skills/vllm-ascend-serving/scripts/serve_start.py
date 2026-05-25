@@ -7,6 +7,10 @@ Usage examples:
     python3 serve_start.py --machine blue-a --model /data/models/Qwen3-32B \\
         --tp 4 --devices 0,1,2,3 -- --max-model-len 4096
 
+    # Session-scoped start for parallel agent work
+    python3 serve_start.py --session-id pr-123 --model /data/models/Qwen3-32B \\
+        --tp 4 --devices 0,1,2,3
+
     # Relaunch with same config
     python3 serve_start.py --machine blue-a --relaunch
 
@@ -23,10 +27,13 @@ Final result on stdout as a single JSON object.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
+import re
 import shlex
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -38,49 +45,75 @@ if str(_SCRIPT_DIR) not in sys.path:
 from _common import (
     ROOT,
     SshEndpoint,
-    container_endpoint,
     emit_progress,
-    host_endpoint,
     load_serving_state,
     now_utc,
     print_json,
     probe_npus,
-    resolve_machine,
+    resolve_execution_target,
     save_serving_state,
     select_devices,
     ssh_exec,
 )
+from vaws_session_state import allocate_service_port, file_lock, release_service_port, session_lock_dir
+from vaws_validate import parse_device_csv, require_env_name
 
 RUNTIME_DIR_BASE = ".vaws-runtime/serving"
 DEFAULT_HEALTH_TIMEOUT = 300
 HEALTH_POLL_INTERVAL = 5
+PORT_TAIL_RE = re.compile(r"[:.]([0-9]+)$")
 
 
 # ---------------------------------------------------------------------------
 # Parity
 # ---------------------------------------------------------------------------
 
-def run_parity(machine: str) -> dict[str, Any]:
+def run_parity(machine: str | None, session_id: str | None, session_file: Path | None = None) -> dict[str, Any]:
     parity_script = ROOT / ".agents" / "skills" / "remote-code-parity" / "scripts" / "parity_sync.py"
-    cmd = [sys.executable, str(parity_script), "--machine", machine]
-    result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(ROOT))
-    for line in (result.stderr or "").splitlines():
-        if line.startswith("__VAWS_PARITY_PROGRESS__="):
-            sys.stderr.write(line + "\n")
-            sys.stderr.flush()
-    if result.returncode != 0:
+    if session_file is not None:
+        cmd = [sys.executable, str(parity_script), "--session-file", str(session_file)]
+    elif session_id:
+        cmd = [sys.executable, str(parity_script), "--session-id", session_id]
+    else:
+        assert machine is not None
+        cmd = [sys.executable, str(parity_script), "--machine", machine]
+    proc = subprocess.Popen(
+        cmd,
+        cwd=str(ROOT),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    stderr_lines: list[str] = []
+
+    def relay_stderr() -> None:
+        assert proc.stderr is not None
+        for line in proc.stderr:
+            stderr_lines.append(line)
+            if line.startswith("__VAWS_PARITY_PROGRESS__="):
+                sys.stderr.write(line)
+                sys.stderr.flush()
+
+    thread = threading.Thread(target=relay_stderr, daemon=True)
+    thread.start()
+    assert proc.stdout is not None
+    stdout = proc.stdout.read()
+    returncode = proc.wait()
+    thread.join(timeout=1)
+    stderr = "".join(stderr_lines)
+    if returncode != 0:
         return {
             "status": "failed",
-            "error": f"parity sync failed (rc={result.returncode})",
-            "stderr_tail": (result.stderr or "")[-1000:],
+            "error": f"parity sync failed (rc={returncode})",
+            "stderr_tail": stderr[-1000:],
         }
     try:
-        return json.loads(result.stdout)
+        return json.loads(stdout)
     except json.JSONDecodeError:
         return {
             "status": "failed",
             "error": "parity sync returned non-JSON output",
-            "stdout_tail": (result.stdout or "")[-500:],
+            "stdout_tail": (stdout or "")[-500:],
         }
 
 
@@ -113,6 +146,72 @@ def find_free_port(ep: SshEndpoint) -> int:
     if "error" in data:
         raise RuntimeError(data["error"])
     return data["port"]
+
+
+def remote_port_available(ep: SshEndpoint, port: int) -> bool:
+    script = (
+        "python3 -c "
+        + shlex.quote(
+            "import socket,sys\n"
+            f"port={int(port)}\n"
+            "s=socket.socket(socket.AF_INET, socket.SOCK_STREAM)\n"
+            "try:\n"
+            "    s.bind(('0.0.0.0', port))\n"
+            "except OSError:\n"
+            "    sys.exit(1)\n"
+            "finally:\n"
+            "    s.close()\n"
+        )
+    )
+    return ssh_exec(ep, script, check=False).returncode == 0
+
+
+def _parse_listening_ports(stdout: str) -> set[int]:
+    ports: set[int] = set()
+    for line in stdout.splitlines():
+        match = PORT_TAIL_RE.search(line.strip())
+        if match:
+            ports.add(int(match.group(1)))
+    return ports
+
+
+def remote_listening_ports(ep: SshEndpoint) -> set[int] | None:
+    script = """
+if command -v ss >/dev/null 2>&1; then
+  ss -ltnH 2>/dev/null | awk '{print $4}'
+elif command -v netstat >/dev/null 2>&1; then
+  netstat -ltn 2>/dev/null | awk 'NR > 2 {print $4}'
+else
+  exit 42
+fi
+"""
+    result = ssh_exec(ep, script, check=False)
+    if result.returncode != 0:
+        return None
+    return _parse_listening_ports(result.stdout)
+
+
+def remote_port_availability(ep: SshEndpoint):
+    busy_ports = remote_listening_ports(ep)
+    if busy_ports is None:
+        return lambda candidate: remote_port_available(ep, candidate)
+    return lambda candidate: candidate not in busy_ports
+
+
+def _parse_devices_csv(value: str) -> set[int]:
+    if not value or not value.strip():
+        return set()
+    return set(parse_device_csv(value) or [])
+
+
+def _leased_devices_csv(session: dict[str, Any] | None) -> str | None:
+    if not session:
+        return None
+    raw_devices = session.get("leases", {}).get("npu_devices", [])
+    if not isinstance(raw_devices, list) or not raw_devices:
+        return None
+    devices = [int(item) for item in raw_devices]
+    return ",".join(str(item) for item in sorted(devices))
 
 
 # ---------------------------------------------------------------------------
@@ -168,7 +267,8 @@ def build_launch_script(
         lines.append(f"export ASCEND_RT_VISIBLE_DEVICES={shlex.quote(devices)}")
 
     for key, value in extra_env.items():
-        lines.append(f"export {key}={shlex.quote(value)}")
+        name = require_env_name(key)
+        lines.append(f"export {name}={shlex.quote(value)}")
 
     # Launch from the runtime dir — NOT from /vllm-workspace, which would
     # shadow the installed vllm package with the source tree.
@@ -256,6 +356,23 @@ def check_models(ep: SshEndpoint, port: int) -> dict[str, Any] | None:
     return None
 
 
+def wait_for_devices_free(host_ep: SshEndpoint, devices: set[int], *, timeout: int = 45) -> bool:
+    if not devices:
+        return True
+    deadline = time.time() + timeout
+    while True:
+        try:
+            npu_info = probe_npus(host_ep)
+            busy = {int(dev) for dev in npu_info.get("busy", {}) if str(dev).isdigit()}
+            if not (devices & busy):
+                return True
+        except Exception:
+            return True
+        if time.time() >= deadline:
+            return False
+        time.sleep(3)
+
+
 def read_remote_tail(ep: SshEndpoint, remote_path: str, lines: int = 30) -> str:
     r = ssh_exec(ep, f"tail -{lines} {shlex.quote(remote_path)} 2>/dev/null || echo '(no log)'", check=False)
     return r.stdout.strip()
@@ -272,13 +389,18 @@ _ENV_ERROR_PATTERNS: list[tuple[str, str]] = [
     ("No module named 'torch_npu'", "missing-torch-npu"),
     ("cannot open shared object file", "missing-so"),
     ("libhccl.so", "missing-so"),
-    ("torch_npu", "torch-npu-error"),
+    ("RuntimeError:.*torch_npu", "torch-npu-error"),
     ("ImportError", "import-error"),
     ("ModuleNotFoundError", "module-not-found"),
 ]
 
 
-def diagnose_env_failure(stderr_tail: str, machine: str) -> dict[str, Any] | None:
+def diagnose_env_failure(
+    stderr_tail: str,
+    machine: str,
+    *,
+    session_id: str | None = None,
+) -> dict[str, Any] | None:
     """Scan stderr for environment-related errors and return structured recovery guidance.
 
     Returns a dict with diagnosis details, or None if the error
@@ -289,18 +411,19 @@ def diagnose_env_failure(stderr_tail: str, machine: str) -> dict[str, Any] | Non
 
     matched_tags: list[str] = []
     for pattern, tag in _ENV_ERROR_PATTERNS:
-        if pattern in stderr_tail:
+        if pattern in stderr_tail or re.search(pattern, stderr_tail):
             matched_tags.append(tag)
 
     if not matched_tags:
         return None
 
+    recovery_target = f"--session-id {session_id}" if session_id else f"--machine {machine}"
     return {
         "error_tags": sorted(set(matched_tags)),
         "cause": "remote Python package version mismatch",
         "recovery_command": (
             f"python3 .agents/skills/remote-code-parity/scripts/parity_sync.py "
-            f"--machine {machine} --force-reinstall"
+            f"{recovery_target} --force-reinstall"
         ),
         "recovery_description": (
             "Re-run parity sync with --force-reinstall to rebuild "
@@ -435,7 +558,9 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         allow_abbrev=False,
     )
-    p.add_argument("--machine", required=True, help="machine alias or host IP")
+    p.add_argument("--machine", help="machine alias or host IP")
+    p.add_argument("--session-id", help="VAWS session id; uses the session container and state namespace")
+    p.add_argument("--session-file", help="explicit session.json path")
     p.add_argument("--model", help="absolute model weight path on the remote container")
     p.add_argument(
         "--served-model-name", "--served-name",
@@ -486,14 +611,26 @@ def main(argv: list[str] | None = None) -> int:
         vllm_extra = argv[idx + 1:]
 
     args = build_parser().parse_args(own_argv)
+    lock_stack = contextlib.ExitStack()
 
     try:
-        # ---- resolve machine ----
-        emit_progress("resolve-machine", f"looking up {args.machine}")
-        record = resolve_machine(args.machine)
-        alias = record["alias"]
-        ep = container_endpoint(record)
-        runtime_base = record["container"].get("workdir", "/vllm-workspace")
+        # ---- resolve target ----
+        target_label = args.session_id or args.session_file or args.machine
+        emit_progress("resolve-target", f"looking up {target_label}")
+        target = resolve_execution_target(
+            args.machine,
+            session_id=args.session_id,
+            session_file=args.session_file,
+        )
+        record = target.record
+        alias = target.alias
+        ep = target.endpoint
+        runtime_base = target.runtime_base
+        if target.session_id:
+            emit_progress("lock", f"acquiring serving lock for session {target.session_id}")
+            lock_stack.enter_context(
+                file_lock(session_lock_dir(target.state_repo_root) / f"{target.session_id}.serving.lock")
+            )
 
         # ---- parse env overrides ----
         extra_env: dict[str, str] = {}
@@ -502,11 +639,19 @@ def main(argv: list[str] | None = None) -> int:
                 print_json({"status": "failed", "error": f"bad --extra-env {item!r}, expected KEY=VALUE"})
                 return 1
             k, _, v = item.partition("=")
-            extra_env[k.strip()] = v
+            try:
+                extra_env[require_env_name(k.strip())] = v
+            except ValueError as exc:
+                print_json({"status": "needs_input", "error": str(exc)})
+                return 1
 
         # ---- resolve launch params (fresh or relaunch) ----
         if args.relaunch:
-            previous = load_serving_state(alias)
+            previous = load_serving_state(
+                alias,
+                session_id=target.session_id,
+                state_repo_root=target.state_repo_root,
+            )
             if previous is None:
                 print_json({
                     "status": "failed",
@@ -546,24 +691,142 @@ def main(argv: list[str] | None = None) -> int:
             launch_env = extra_env
             launch_extra_args = vllm_extra
 
+        leased_devices = _leased_devices_csv(target.session)
+        if target.session_id and leased_devices:
+            try:
+                leased = _parse_devices_csv(leased_devices)
+            except ValueError as exc:
+                print_json({"status": "needs_repair", "error": str(exc), "session_id": target.session_id})
+                return 1
+            needed_devices = tp * (dp or 1) if tp is not None else None
+            if needed_devices is not None and len(leased) < needed_devices:
+                print_json({
+                    "status": "needs_input",
+                    "error": (
+                        f"session {target.session_id} leases {len(leased)} NPU devices "
+                        f"but launch needs {needed_devices} (tp={tp}, dp={dp or 1})"
+                    ),
+                    "machine": alias,
+                    "mode": target.mode,
+                    "session_id": target.session_id,
+                })
+                return 1
+            if devices:
+                try:
+                    requested = _parse_devices_csv(devices)
+                except ValueError as exc:
+                    print_json({"status": "needs_input", "error": str(exc)})
+                    return 1
+                if not requested.issubset(leased):
+                    print_json({
+                        "status": "needs_input",
+                        "error": (
+                            f"requested devices {sorted(requested)} are outside "
+                            f"session {target.session_id} lease {sorted(leased)}"
+                        ),
+                        "machine": alias,
+                        "mode": target.mode,
+                        "session_id": target.session_id,
+                    })
+                    return 1
+            else:
+                selected = sorted(leased)
+                if needed_devices is not None:
+                    selected = selected[:needed_devices]
+                devices = ",".join(str(item) for item in selected)
+                emit_progress("lease", f"using leased session devices: {devices}")
+
+        # Validate the new launch target before touching an existing service.
+        # A mistyped model path should be a needs_input response, not a reason
+        # to stop a currently running service for this machine/session.
+        emit_progress("validate", f"checking model path: {model}")
+        r = ssh_exec(ep, f"test -d {shlex.quote(model)} || test -f {shlex.quote(model)}", check=False)
+        if r.returncode != 0:
+            print_json({
+                "status": "needs_input",
+                "error": f"model path not found on remote container: {model}",
+                "machine": alias,
+                "mode": target.mode,
+                "session_id": target.session_id,
+            })
+            return 1
+
         # ---- stop existing service on this machine ----
-        prev_state = load_serving_state(alias)
+        prev_state = load_serving_state(
+            alias,
+            session_id=target.session_id,
+            state_repo_root=target.state_repo_root,
+        )
         if prev_state and prev_state.get("pid"):
             old_pid = prev_state["pid"]
-            emit_progress("stop-existing", f"stopping previous service (pid={old_pid})")
-            ssh_exec(
-                ep,
-                f"kill -2 {old_pid} 2>/dev/null || true; sleep 2; kill -15 {old_pid} 2>/dev/null || true",
-                check=False,
-            )
-            time.sleep(1)
+            scope = f"session {target.session_id}" if target.session_id else f"machine {alias}"
+            if not check_alive(ep, int(old_pid)):
+                emit_progress("stop-existing", f"previous service for {scope} is already stopped (pid={old_pid})")
+                prev_state["status"] = "stopped"
+                prev_state["stopped_at"] = now_utc()
+                save_serving_state(
+                    alias,
+                    prev_state,
+                    session_id=target.session_id,
+                    state_repo_root=target.state_repo_root,
+                )
+                if target.session_id:
+                    release_service_port(
+                        repo_root=target.state_repo_root,
+                        machine_alias=alias,
+                        session_id=target.session_id,
+                        port=prev_state.get("port"),
+                    )
+            else:
+                emit_progress("stop-existing", f"stopping previous service for {scope} (pid={old_pid})")
+                ssh_exec(
+                    ep,
+                    f"kill -2 {old_pid} 2>/dev/null || true; sleep 2; kill -15 {old_pid} 2>/dev/null || true",
+                    check=False,
+                )
+                deadline = time.time() + 20
+                while check_alive(ep, int(old_pid)) and time.time() < deadline:
+                    time.sleep(1)
+                if check_alive(ep, int(old_pid)):
+                    emit_progress("stop-existing", f"previous service still alive, sending SIGKILL to pid={old_pid}")
+                    ssh_exec(ep, f"kill -9 {old_pid} 2>/dev/null || true", check=False)
+                    time.sleep(2)
+                old_devices = _parse_devices_csv(str(prev_state.get("devices") or ""))
+                if old_devices:
+                    emit_progress("stop-existing", f"waiting for old service devices to free: {sorted(old_devices)}")
+                    wait_for_devices_free(target.host_endpoint, old_devices)
+                if not check_alive(ep, int(old_pid)):
+                    prev_state["status"] = "stopped"
+                    prev_state["stopped_at"] = now_utc()
+                    save_serving_state(
+                        alias,
+                        prev_state,
+                        session_id=target.session_id,
+                        state_repo_root=target.state_repo_root,
+                    )
+                    if target.session_id:
+                        release_service_port(
+                            repo_root=target.state_repo_root,
+                            machine_alias=alias,
+                            session_id=target.session_id,
+                            port=prev_state.get("port"),
+                        )
+                else:
+                    prev_state["status"] = "stopping"
+                    prev_state["status_checked_at"] = now_utc()
+                    save_serving_state(
+                        alias,
+                        prev_state,
+                        session_id=target.session_id,
+                        state_repo_root=target.state_repo_root,
+                    )
 
         # ---- parity gate ----
         if not args.skip_parity:
             emit_progress("parity-sync", "ensuring remote code parity")
-            parity = run_parity(args.machine)
+            parity = run_parity(args.machine, target.session_id, target.session_file)
             parity_status = parity.get("status")
-            if parity_status not in ("ready", "ok", "success"):
+            if parity_status not in ("ready", "ok", "success", "skipped"):
                 print_json({
                     "status": "blocked",
                     "error": "remote-code-parity did not return ready",
@@ -576,7 +839,7 @@ def main(argv: list[str] | None = None) -> int:
             parity = {"status": "skipped"}
 
         # ---- probe NPUs on the HOST for cross-container visibility ----
-        h_ep = host_endpoint(record)
+        h_ep = target.host_endpoint
         emit_progress("probe-npus", "checking NPU device availability (host)")
         try:
             npu_info = probe_npus(h_ep)
@@ -585,9 +848,13 @@ def main(argv: list[str] | None = None) -> int:
             emit_progress("probe-npus", f"NPU probe failed (non-fatal): {exc}")
 
         if npu_info is not None:
-            resolved_devices, device_error = select_devices(
-                npu_info, requested_devices=devices, tp=tp, dp=dp,
-            )
+            try:
+                resolved_devices, device_error = select_devices(
+                    npu_info, requested_devices=devices, tp=tp, dp=dp,
+                )
+            except ValueError as exc:
+                print_json({"status": "needs_input", "error": str(exc), "npu_info": npu_info})
+                return 1
             if device_error:
                 print_json({
                     "status": "needs_input",
@@ -605,19 +872,33 @@ def main(argv: list[str] | None = None) -> int:
                     busy=list(npu_info.get("busy", {}).keys()),
                 )
 
-        # ---- validate model path exists remotely ----
-        emit_progress("validate", f"checking model path: {model}")
-        r = ssh_exec(ep, f"test -d {shlex.quote(model)} || test -f {shlex.quote(model)}", check=False)
-        if r.returncode != 0:
-            print_json({
-                "status": "needs_input",
-                "error": f"model path not found on remote container: {model}",
-                "machine": alias,
-            })
-            return 1
-
         # ---- port ----
-        if args.port:
+        if target.session_id:
+            emit_progress("allocate-port", "allocating session service port")
+            port_available = remote_port_availability(ep)
+            port = allocate_service_port(
+                repo_root=target.state_repo_root,
+                machine_alias=alias,
+                session_id=target.session_id,
+                requested_port=args.port,
+                port_available=port_available,
+            )
+            if not remote_port_available(ep, port):
+                release_service_port(
+                    repo_root=target.state_repo_root,
+                    machine_alias=alias,
+                    session_id=target.session_id,
+                    port=port,
+                )
+                print_json({
+                    "status": "failed",
+                    "error": f"allocated service port {port} became unavailable before launch",
+                    "machine": alias,
+                    "mode": target.mode,
+                    "session_id": target.session_id,
+                })
+                return 1
+        elif args.port:
             port = args.port
         else:
             emit_progress("allocate-port", "finding free port")
@@ -653,6 +934,13 @@ def main(argv: list[str] | None = None) -> int:
                 "stdout_tail": result.stdout[-500:],
                 "machine": alias,
             })
+            if target.session_id:
+                release_service_port(
+                    repo_root=target.state_repo_root,
+                    machine_alias=alias,
+                    session_id=target.session_id,
+                    port=port,
+                )
             return 1
 
         pid_line = result.stdout.strip().splitlines()[-1].strip() if result.stdout.strip() else ""
@@ -664,15 +952,17 @@ def main(argv: list[str] | None = None) -> int:
                 "error": f"cannot parse PID from launch output: {pid_line!r}",
                 "machine": alias,
             })
+            if target.session_id:
+                release_service_port(
+                    repo_root=target.state_repo_root,
+                    machine_alias=alias,
+                    session_id=target.session_id,
+                    port=port,
+                )
             return 1
 
         emit_progress("launch", f"process started pid={pid}", pid=pid)
 
-        # ---- probe readiness ----
-        emit_progress("probe", f"waiting for ready (timeout={args.health_timeout}s)")
-        readiness = wait_for_ready(ep, pid, port, runtime_dir, timeout=args.health_timeout)
-
-        # ---- persist state (always, even if not ready — so stop can clean up) ----
         state = {
             "model": model,
             "served_model_name": served_model_name,
@@ -682,6 +972,8 @@ def main(argv: list[str] | None = None) -> int:
             "env": launch_env,
             "extra_args": launch_extra_args,
             "machine": alias,
+            "mode": target.mode,
+            "session_id": target.session_id,
             "pid": pid,
             "port": port,
             "base_url": f"http://{ep.host}:{port}",
@@ -689,16 +981,38 @@ def main(argv: list[str] | None = None) -> int:
             "log_stdout": f"{runtime_dir}/stdout.log",
             "log_stderr": f"{runtime_dir}/stderr.log",
             "started_at": now_utc(),
-            "status": "ready" if readiness["ready"] else "started",
+            "status": "starting",
         }
         if wrap_script:
             state["wrap_script"] = wrap_script
-        save_serving_state(alias, state)
+        save_serving_state(
+            alias,
+            state,
+            session_id=target.session_id,
+            state_repo_root=target.state_repo_root,
+        )
+
+        # ---- probe readiness ----
+        emit_progress("probe", f"waiting for ready (timeout={args.health_timeout}s)")
+        readiness = wait_for_ready(ep, pid, port, runtime_dir, timeout=args.health_timeout)
+
+        # ---- persist state (always, even if not ready — so stop can clean up) ----
+        state["status"] = "ready" if readiness["ready"] else "started"
+        state["readiness_checked_at"] = now_utc()
+        save_serving_state(
+            alias,
+            state,
+            session_id=target.session_id,
+            state_repo_root=target.state_repo_root,
+        )
 
         # ---- build output ----
         output: dict[str, Any] = {
             "status": "ready" if readiness["ready"] else "failed",
             "machine": alias,
+            "mode": target.mode,
+            "session_id": target.session_id,
+            "session_file": str(target.session_file) if target.session_file else None,
             "base_url": f"http://{ep.host}:{port}",
             "container_ip": ep.host,
             "port": port,
@@ -723,7 +1037,7 @@ def main(argv: list[str] | None = None) -> int:
         if not readiness["ready"]:
             stderr_tail = readiness.get("stderr_tail") or read_remote_tail(ep, f"{runtime_dir}/stderr.log")
             output["stderr_tail"] = stderr_tail
-            diagnosis = diagnose_env_failure(stderr_tail, alias)
+            diagnosis = diagnose_env_failure(stderr_tail, alias, session_id=target.session_id)
             if diagnosis:
                 output["env_diagnosis"] = diagnosis
                 emit_progress("diagnosis", diagnosis["recovery_command"],
@@ -740,11 +1054,13 @@ def main(argv: list[str] | None = None) -> int:
             "error": error_msg,
             "machine": machine_id,
         }
-        diagnosis = diagnose_env_failure(error_msg, machine_id)
+        diagnosis = diagnose_env_failure(error_msg, machine_id, session_id=getattr(args, "session_id", None))
         if diagnosis:
             result["env_diagnosis"] = diagnosis
         print_json(result)
         return 2
+    finally:
+        lock_stack.close()
 
 
 if __name__ == "__main__":

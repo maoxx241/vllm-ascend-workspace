@@ -11,6 +11,9 @@ Usage examples:
     # Minimal single run
     python3 bench_run.py --machine 173.131.1.2 --model /home/weights/Qwen3.5-35B
 
+    # Session-scoped single run
+    python3 bench_run.py --session-id pr-123 --model /home/weights/Qwen3.5-35B
+
     # Multi-run with warmup (start service once, run 5 times, discard first)
     python3 bench_run.py --machine 173.131.1.2 --model /home/weights/Qwen3.5-35B \\
         --runs 5 --warmup-runs 1 --tp 4
@@ -58,7 +61,9 @@ def build_parser() -> argparse.ArgumentParser:
         description="Run vllm bench serve benchmarks (single or multi-run).",
         allow_abbrev=False,
     )
-    p.add_argument("--machine", required=True, help="machine alias or IP")
+    p.add_argument("--machine", help="machine alias or IP")
+    p.add_argument("--session-id", help="VAWS session id")
+    p.add_argument("--session-file", help="explicit session.json path")
     p.add_argument("--model", required=True, help="remote model weight path")
     p.add_argument("--tp", "--tensor-parallel-size", type=int, default=None)
     p.add_argument("--dp", "--data-parallel-size", type=int, default=None)
@@ -151,6 +156,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         config = assemble_config(
             machine=args.machine,
+            session_id=args.session_id,
+            session_file=args.session_file,
             model=args.model,
             tp=args.tp,
             dp=args.dp,
@@ -166,17 +173,23 @@ def main(argv: list[str] | None = None) -> int:
         start_result = call_serve_start(config)
 
         if start_result.get("status") != "ready":
+            cleanup_result = call_serve_stop(config, force=True)
             print_json({
                 "status": "failed",
                 "phase": "serve_start",
                 "error": start_result.get("error", "service did not become ready"),
                 "serve_result": start_result,
+                "cleanup_result": cleanup_result,
             })
             return 1
 
         base_url = start_result["base_url"]
         served_model = start_result.get("served_model_name", Path(args.model).name)
-        container_ip, container_port = _get_ssh_endpoint(args.machine)
+        container_ip, container_port = _get_ssh_endpoint(
+            args.machine,
+            session_id=args.session_id,
+            session_file=args.session_file,
+        )
 
         all_metrics: list[dict[str, Any]] = []
         all_raw: list[dict[str, Any]] = []
@@ -192,7 +205,7 @@ def main(argv: list[str] | None = None) -> int:
                 )
             except Exception as e:
                 emit_progress("bench", f"{run_label}: benchmark failed: {e}")
-                call_serve_stop(args.machine, force=True)
+                call_serve_stop(config, force=True)
                 print_json({
                     "status": "failed",
                     "phase": "bench_run",
@@ -213,11 +226,11 @@ def main(argv: list[str] | None = None) -> int:
             emit_progress("bench", f"{run_label}{tag}: throughput={throughput}")
 
         emit_progress("stop", "stopping service")
-        stop_result = call_serve_stop(args.machine)
+        stop_result = call_serve_stop(config)
         cleanup_warning: str | None = None
         if stop_result.get("status") not in ("stopped", "not_found"):
             emit_progress("stop", "graceful stop failed, retrying with force")
-            stop_result = call_serve_stop(args.machine, force=True)
+            stop_result = call_serve_stop(config, force=True)
             if stop_result.get("status") not in ("stopped", "not_found"):
                 cleanup_warning = f"service may still be running: {stop_result}"
 
@@ -226,6 +239,7 @@ def main(argv: list[str] | None = None) -> int:
             result_json: dict[str, Any] = {
                 "status": "ok",
                 "machine": args.machine,
+                "session_id": args.session_id,
                 "model": args.model,
                 "metrics": all_metrics[0],
                 "config": config.summary_dict(),
@@ -245,6 +259,7 @@ def main(argv: list[str] | None = None) -> int:
             result_json = {
                 "status": "ok",
                 "machine": args.machine,
+                "session_id": args.session_id,
                 "model": args.model,
                 "runs": total_runs,
                 "warmup_runs": warmup_runs,
@@ -263,7 +278,8 @@ def main(argv: list[str] | None = None) -> int:
 
     except Exception as e:
         try:
-            call_serve_stop(args.machine, force=True)
+            if "config" in locals():
+                call_serve_stop(config, force=True)
         except Exception:
             pass
         print_json({

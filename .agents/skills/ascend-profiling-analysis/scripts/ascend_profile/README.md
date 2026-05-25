@@ -73,12 +73,14 @@ should call `analyze.py` unless it needs to inspect an intermediate artifact.
 
 Do not parse large profiling roots on the local Mac.  Local execution is limited
 to static checks and small schema validation.  Real profiling analysis should
-run inside the remote container that has the profiling data, for example:
+run through the skill entrypoint inside the remote container that has the
+profiling data, for example:
 
 ```bash
-ssh -p 46000 root@173.131.1.2 \
-  'cd /tmp/ascend_profile_framework && \
-   python3 -m ascend_profile.analyze PROFILE_ROOT --output OUT_DIR'
+python3 .agents/skills/ascend-profiling-analysis/scripts/profile_analyze.py \
+  --session-id <session-id> \
+  --remote-profile-root PROFILE_ROOT \
+  --remote-output-dir OUT_DIR
 ```
 
 ## Required Traceability

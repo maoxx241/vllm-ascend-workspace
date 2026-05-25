@@ -6,12 +6,19 @@ This directory contains the repository-local skill layer for Codex, Claude Code,
 
 - `.agents/skills/repo-init/` is the source-of-truth skill package for repository initialization.
 - `.agents/skills/machine-management/` is the source-of-truth skill package for remote machine attach, verify, repair, and removal workflows.
+- `.agents/skills/session-management/` is the source-of-truth skill package for isolated parallel agent sessions.
+- `.agents/skills/remote-toolbox/` is the source-of-truth skill package for structured agent-facing remote target/probe/exec/job/sync/service/artifact/cleanup tools.
 - `.agents/skills/remote-code-parity/` is the source-of-truth skill package for remote code parity before remote execution.
 - `.agents/skills/vllm-ascend-serving/` is the source-of-truth skill package for starting, checking, and stopping vLLM Ascend online services on managed containers.
 - `.agents/skills/vllm-ascend-benchmark/` is the source-of-truth skill package for running `vllm bench serve` performance benchmarks on managed containers.
 - `.agents/skills/ascend-memory-profiling/` is the source-of-truth skill package for profiling and attributing HBM memory usage on Ascend NPU for vLLM serving scenarios.
+- `.agents/skills/ascend-profiling-collection/` is the source-of-truth skill package for collecting Ascend torch-profiler traces and verified manifests.
+- `.agents/skills/ascend-profiling-analysis/` is the source-of-truth skill package for analyzing collected profiler roots/manifests and generating reports.
 - `.agents/scripts/workspace_profile.py` is the shared low-level helper for the local workspace machine profile.
 - `.agents/lib/vaws_local_state.py` is the shared library for untracked local runtime state.
+- `.agents/lib/vaws_session_id.py` and `.agents/lib/vaws_session_state.py` are the shared libraries for session identity, state, locks, and leases.
+- `.agents/lib/vaws_remote_toolbox.py` is the shared library for remote target resolution, SSH execution, job observation, artifact streaming, sync adapters, service adapters, and cleanup.
+- `.agents/lib/vaws_validate.py` is the shared validation library for agent-facing ids, environment names, path boundaries, and NPU device lists.
 - `AGENTS.md` carries repository-wide routing rules and mandatory decision gates.
 
 ## Script-first convention
@@ -33,6 +40,30 @@ Current primary helpers:
 - `machine-management/scripts/machine_verify.py`
 - `machine-management/scripts/machine_repair.py`
 - `machine-management/scripts/machine_remove.py`
+- `session-management/scripts/session_create.py`
+- `session-management/scripts/session_list.py`
+- `session-management/scripts/session_status.py`
+- `session-management/scripts/session_remove.py`
+- `session-management/scripts/session_gc.py`
+- `scripts/remote_target_resolve.py`
+- `scripts/remote_probe.py`
+- `scripts/remote_exec.py`
+- `scripts/remote_job_start.py`
+- `scripts/remote_job_status.py`
+- `scripts/remote_job_tail.py`
+- `scripts/remote_job_stop.py`
+- `scripts/remote_job_collect.py`
+- `scripts/remote_sync_plan.py`
+- `scripts/remote_sync_apply.py`
+- `scripts/remote_service_start.py`
+- `scripts/remote_service_status.py`
+- `scripts/remote_service_logs.py`
+- `scripts/remote_service_stop.py`
+- `scripts/remote_artifact_manifest.py`
+- `scripts/remote_artifact_pull.py`
+- `scripts/remote_artifact_push.py`
+- `scripts/remote_cleanup.py`
+- `scripts/remote_toolbox_stress.py`
 - `remote-code-parity/scripts/parity_sync.py`
 - `remote-code-parity/scripts/remote_code_parity.py`
 - `remote-code-parity/scripts/install_consent.py`
@@ -45,7 +76,13 @@ Current primary helpers:
 - `ascend-memory-profiling/scripts/mem_collect.py`
 - `ascend-memory-profiling/scripts/mem_analyze.py`
 - `ascend-memory-profiling/scripts/weight_inspector.py`
+- `ascend-profiling-collection/scripts/collect_torch_profile_case.py`
+- `ascend-profiling-collection/scripts/profile_control.py`
+- `ascend-profiling-collection/scripts/run_remote_analyse.py`
+- `ascend-profiling-analysis/scripts/profile_analyze.py`
+- `ascend-profiling-analysis/scripts/profile_sweep.py`
 - `scripts/workspace_profile.py`
+- `.agents/tests/test_vaws_scaffold_safety.py`
 
 Low-level machine-management helpers remain available for implementation work and debugging:
 
@@ -63,10 +100,22 @@ Untracked workspace-local state lives under `.vaws-local/`:
 - `.vaws-local/remote-code-parity/install-consents.json`
 - `.vaws-local/remote-code-parity/runtime-state.json`
 - `.vaws-local/serving/<machine-alias>.json`
+- `.vaws-local/remote-toolbox/logs/`
+- `.vaws-local/remote-toolbox/jobs/`
+- `.vaws-local/remote-toolbox/artifacts/`
+- `.vaws-local/sessions/<session-id>/session.json`
+- `.vaws-local/sessions/<session-id>/serving.json`
+- `.vaws-local/sessions/leases.json`
 - `.vaws-local/benchmark/`
 - `.vaws-local/memory-profiling/`
+- `.vaws-local/ascend-profiling-collection/runs/`
+- `.vaws-local/profiling-analysis/runs/`
 
-Remote-code-parity transport is container-only after machine attach: use machine inventory to resolve the target, then push synthetic refs directly into the container-local cache root. Synthetic mirrors should also publish an advertised branch ref for the current snapshot so nested repos can be materialized without brittle submodule fetch behavior. Runtime installs should configure multiple pip indexes (Tsinghua as primary, Aliyun and PyPI as additional), stream progress for long package steps, and keep consent/runtime-state writes atomic.
+Parallel remote work should use `session-management` first. A session owns a local worktree, a dedicated remote container, session-scoped serving/benchmark/profiling state, and resource leases. Existing `--machine` commands remain legacy-compatible for single-tenant workflows.
+
+The remote toolbox is the preferred agent-facing surface once a target exists. It resolves host and container endpoints, probes actual runtime facts, runs bounded remote shell commands with local logs, tracks long jobs, splits source-only/materialize/install sync modes, wraps service lifecycle entrypoints, transfers artifacts with SSH streaming plus hash manifests, and performs dry-run-capable cleanup.
+
+Remote-code-parity transport is container-only after machine attach: use machine inventory to resolve the target, then push synthetic refs directly into the container-local cache root. Synthetic mirrors should also publish an advertised branch ref for the current snapshot so nested repos can be materialized without brittle submodule fetch behavior. Runtime installs should explicitly forward whitelisted `VAWS_*` compile/cache env into the remote shell, configure multiple pip indexes (Tsinghua as primary, Aliyun and PyPI as additional), scope the default Ascend package index to `vllm-ascend` installs, reuse pip / uv / CMake `FetchContent` caches under `/root/.cache`, default paired-image editable installs to `--no-deps`, bound uv bootstrap mirror attempts, stream progress for long package steps, record the effective install env, and keep consent/runtime-state writes atomic.
 
 The legacy repo-root `.machine-inventory.json` is compatibility input only and should not be reintroduced as the primary path.
 
@@ -92,6 +141,26 @@ If you change `machine-management`, update these together:
 - `.agents/skills/machine-management/scripts/`
 - shared helpers when the workflow depends on local profile or inventory state
 
+If you change `session-management`, update these together:
+
+- `.agents/skills/session-management/SKILL.md`
+- `.agents/skills/session-management/references/`
+- `.agents/skills/session-management/scripts/`
+- `.agents/lib/vaws_session_id.py`
+- `.agents/lib/vaws_session_state.py`
+- `AGENTS.md`, `README.md`, and this file when routing or local-state behavior changes
+
+If you change `remote-toolbox`, update these together:
+
+- `.agents/skills/remote-toolbox/SKILL.md`
+- `.agents/skills/remote-toolbox/references/`
+- `.agents/scripts/remote_*.py`
+- `.agents/lib/vaws_remote_toolbox.py`
+- affected wrapper scripts that reuse toolbox primitives
+- `.agents/lib/vaws_validate.py` when changing accepted id, env, path, or device syntax
+- `.agents/tests/test_vaws_scaffold_safety.py` when changing safety validation behavior
+- `AGENTS.md`, `README.md`, and this file when routing or output contracts change
+
 If you change `vllm-ascend-serving`, update these together:
 
 - `.agents/skills/vllm-ascend-serving/SKILL.md`
@@ -110,6 +179,20 @@ If you change `ascend-memory-profiling`, update these together:
 
 - `.agents/skills/ascend-memory-profiling/SKILL.md`
 - `.agents/skills/ascend-memory-profiling/scripts/`
+- `AGENTS.md` and this file when routing, output contract, or local-state behavior changes
+
+If you change `ascend-profiling-collection`, update these together:
+
+- `.agents/skills/ascend-profiling-collection/SKILL.md`
+- `.agents/skills/ascend-profiling-collection/references/`
+- `.agents/skills/ascend-profiling-collection/scripts/`
+- `AGENTS.md` and this file when routing, output contract, or local-state behavior changes
+
+If you change `ascend-profiling-analysis`, update these together:
+
+- `.agents/skills/ascend-profiling-analysis/SKILL.md`
+- `.agents/skills/ascend-profiling-analysis/references/`
+- `.agents/skills/ascend-profiling-analysis/scripts/`
 - `AGENTS.md` and this file when routing, output contract, or local-state behavior changes
 
 If you change `remote-code-parity`, update these together:

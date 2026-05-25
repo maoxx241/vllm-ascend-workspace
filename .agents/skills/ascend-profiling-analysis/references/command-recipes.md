@@ -11,14 +11,24 @@ Feed that manifest to the analysis skill.
 
 ```bash
 python3 .agents/skills/ascend-profiling-analysis/scripts/profile_analyze.py \
-  --machine 173.131.1.2 \
   --manifest .vaws-local/ascend-profiling-collection/runs/20260507_qwen35_tp4_s3/manifest.json \
   --tag qwen35_tp4_s3
 ```
 
-The skill reads `analysis_status`, `remote_profile_root`, runs the analysis on
-the remote, and pulls `report/` plus the lightweight summaries back to
+The skill reads `analysis_status`, `remote_profile_root`, and any
+`session_file` / `session_id` recorded by collection. Session-scoped manifests
+are analyzed in the same session container by default. It then pulls `report/`
+plus the lightweight summaries back to
 `.vaws-local/profiling-analysis/runs/<timestamp>_qwen35_tp4_s3/`.
+
+To override the target explicitly:
+
+```bash
+python3 .agents/skills/ascend-profiling-analysis/scripts/profile_analyze.py \
+  --session-id scaffold-131-smoke \
+  --manifest .vaws-local/ascend-profiling-collection/runs/20260507_qwen35_tp4_s3/manifest.json \
+  --tag qwen35_tp4_s3
+```
 
 ## Single-root: historical raw root
 

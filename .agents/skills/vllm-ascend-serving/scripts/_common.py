@@ -25,6 +25,12 @@ for _p in (str(LIB_DIR), str(MM_SCRIPTS)):
 
 import inventory as inventory_store  # noqa: E402
 from vaws_local_state import ensure_state_dir  # noqa: E402
+from vaws_remote_toolbox import (  # noqa: E402
+    SshEndpoint,
+    resolve_remote_target,
+)
+from vaws_session_state import session_serving_state_path  # noqa: E402
+from vaws_validate import parse_device_csv  # noqa: E402
 
 SERVING_STATE_DIR = ROOT / ".vaws-local" / "serving"
 PROGRESS_SENTINEL = "__VAWS_SERVING_PROGRESS__="
@@ -35,13 +41,17 @@ PROGRESS_SENTINEL = "__VAWS_SERVING_PROGRESS__="
 # ---------------------------------------------------------------------------
 
 @dataclass(frozen=True)
-class SshEndpoint:
-    host: str
-    port: int
-    user: str = "root"
-
-    def destination(self) -> str:
-        return f"{self.user}@{self.host}"
+class ExecutionTarget:
+    mode: str
+    alias: str
+    session_id: str | None
+    endpoint: SshEndpoint
+    host_endpoint: SshEndpoint
+    runtime_base: str
+    record: dict[str, Any]
+    state_repo_root: Path
+    session_file: Path | None = None
+    session: dict[str, Any] | None = None
 
 
 def _ssh_base_cmd(endpoint: SshEndpoint) -> list[str]:
@@ -103,8 +113,34 @@ def host_endpoint(record: dict[str, Any]) -> SshEndpoint:
     """
     return SshEndpoint(
         host=record["host"]["ip"],
-        port=record["host"].get("ssh_port", 22),
+        port=record["host"].get("port", record["host"].get("ssh_port", 22)),
         user=record["host"].get("user", "root"),
+    )
+
+
+def resolve_execution_target(
+    machine: str | None,
+    *,
+    session_id: str | None = None,
+    session_file: str | Path | None = None,
+) -> ExecutionTarget:
+    remote = resolve_remote_target(
+        machine=machine,
+        session_id=session_id,
+        session_file=session_file,
+        repo_root=ROOT,
+    )
+    return ExecutionTarget(
+        mode=remote.mode,
+        alias=remote.alias,
+        session_id=remote.session_id,
+        endpoint=remote.container_endpoint,
+        host_endpoint=remote.host_endpoint,
+        runtime_base=remote.runtime_root,
+        record=remote.record,
+        state_repo_root=remote.state_repo_root,
+        session_file=remote.session_file,
+        session=remote.session,
     )
 
 
@@ -112,8 +148,17 @@ def host_endpoint(record: dict[str, Any]) -> SshEndpoint:
 # Local serving state
 # ---------------------------------------------------------------------------
 
-def load_serving_state(machine_alias: str) -> dict[str, Any] | None:
-    path = SERVING_STATE_DIR / f"{machine_alias}.json"
+def load_serving_state(
+    machine_alias: str,
+    *,
+    session_id: str | None = None,
+    state_repo_root: Path = ROOT,
+) -> dict[str, Any] | None:
+    path = (
+        session_serving_state_path(session_id, state_repo_root)
+        if session_id
+        else SERVING_STATE_DIR / f"{machine_alias}.json"
+    )
     if not path.exists():
         return None
     try:
@@ -122,9 +167,19 @@ def load_serving_state(machine_alias: str) -> dict[str, Any] | None:
         return None
 
 
-def save_serving_state(machine_alias: str, data: dict[str, Any]) -> Path:
-    ensure_state_dir(SERVING_STATE_DIR)
-    path = SERVING_STATE_DIR / f"{machine_alias}.json"
+def save_serving_state(
+    machine_alias: str,
+    data: dict[str, Any],
+    *,
+    session_id: str | None = None,
+    state_repo_root: Path = ROOT,
+) -> Path:
+    path = (
+        session_serving_state_path(session_id, state_repo_root)
+        if session_id
+        else SERVING_STATE_DIR / f"{machine_alias}.json"
+    )
+    ensure_state_dir(path.parent)
     handle, temp_name = tempfile.mkstemp(
         prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent)
     )
@@ -260,7 +315,14 @@ def select_devices(
     busy: dict[str, list] = npu_info.get("busy", {})
 
     if requested_devices is not None:
-        requested = [int(d.strip()) for d in requested_devices.split(",")]
+        requested = parse_device_csv(requested_devices) or []
+        visible = set(npu_info.get("devices", []))
+        missing = [d for d in requested if d not in visible]
+        if missing:
+            return None, (
+                f"requested devices {missing} are not visible on host; "
+                f"visible={sorted(visible)}"
+            )
         conflicts = [d for d in requested if str(d) in busy]
         if conflicts:
             details = {
@@ -270,7 +332,7 @@ def select_devices(
                 f"requested devices {conflicts} are busy: {json.dumps(details)}; "
                 f"free devices: {free}"
             )
-        return requested_devices, None
+        return ",".join(str(d) for d in requested), None
 
     if tp is None:
         return None, None

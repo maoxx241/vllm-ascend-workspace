@@ -29,15 +29,20 @@ Keep a **ready** remote runtime in exact code parity with the local `vllm-ascend
 - Do **not** use `scp`, `sftp`, `rsync`, `sshpass`, or `expect`.
 - Do **not** require GitHub credentials on the host or in the container.
 - Keep the sync path **container-only** after machine attach: no host storage root, no host mirror, no host lock.
+- For parallel agent work, use `parity_sync.py --session-id <id>`. Session mode derives the workspace root, container endpoint, workspace id, and container identity from `.vaws-local/sessions/<id>/session.json`.
 - Use synthetic snapshot refs so dirty working trees can move through Git transport.
 - Keep container cache / lock / manifest paths isolated by `workspace_id` under a container-local cache root.
 - Preserve runtime-private paths under `/vllm-workspace`, in particular `Mooncake/` (image-provided runtime) and `.vaws-runtime/` (workspace-managed runtime artifacts such as profiler dumps consumed by downstream skills). The exact list lives in `DEFAULT_ROOT_PRESERVE_PATHS` in `scripts/remote_code_parity.py`.
+- Container locks should record owner metadata and recover stale lock directories after the bounded stale interval; failed mirror hydration should best-effort clean any matching legacy `git-receive-pack` process trees and discard that repo's partial mirror before retry.
 - Keep `stdout` reserved for one final JSON summary and stream phase progress on `stderr` as `__VAWS_PARITY_PROGRESS__=<json>`.
 - Runtime install progress should be attributable at the package-step level: uninstall, `vllm`, `vllm-ascend` requirements, `vllm-ascend`, import smoke, and marker write.
-- Publish each synthetic snapshot to both the parity ref and an advertised branch ref inside the container-local mirror.
+- Publish each synthetic snapshot to both the parity ref and an advertised branch ref inside the container-local mirror. Use Git bundles imported inside the container so parentless transport snapshots do not depend on remote receive-pack negotiation or remote base objects.
 - Materialize child repos explicitly; do not rely on `git submodule update` to fetch synthetic child commits.
-- If a child repo snapshot has no tree changes, reuse its original `HEAD` commit instead of inventing a new gitlink-only delta that bubbles into the parent repo.
+- Synthetic commits are deterministic parentless tree snapshots. Keep each repo's real `HEAD` separately as `source_head` for reinstall drift detection instead of using it as the transport parent.
+- If a clean child repo only differs from the parent through the parentless transport commit id, suppress that transport-only child gitlink path from the parent repo's `changed_paths`.
 - Use dynamic Python / pip discovery plus a shell-safe env preamble, and source optional Ascend env scripts under a `set +u` / `set -u` guard instead of relying on shell-specific variables.
+- Runtime dependency installs may opt into a near-cache index with `VAWS_PIP_INDEX_URL`, `VAWS_PIP_EXTRA_INDEX_URL`, and `VAWS_PIP_TRUSTED_HOST`; these whitelisted local env vars are explicitly passed into the remote install shell because SSH does not reliably forward arbitrary local env. When no caller extra index is set, only the `vllm-ascend` requirements/editable steps add the public Ascend PyPI extra index.
+- Runtime editable installs use CI-aligned cache / compile defaults: `PIP_CACHE_DIR`, `UV_CACHE_DIR`, `FETCHCONTENT_BASE_DIR`, `UV_INDEX_STRATEGY=unsafe-best-match`, `MAX_JOBS=4`, and `CMAKE_BUILD_TYPE=Release`, all overrideable by environment. The effective remote install env is recorded in the manifest/runtime state with URL userinfo redacted. Do not default `COMPILE_CUSTOM_KERNELS=0`; that is only available as an explicit `VAWS_COMPILE_CUSTOM_KERNELS=0` unit-test-style override and is not valid for normal serving / benchmark runtime parity.
 - If editable install fails because the image packaging stack is too old, attempt one bounded packaging-stack refresh before failing closed.
 - Before invoking parity, confirm the local working tree represents the **intended deployment state**. If any submodule source files have uncommitted changes made for temporary debugging or hypothesis testing, revert them before syncing — do not sync exploratory patches to the remote.
 - If a previous parity sync in this session led to a failed remote execution and the agent subsequently modified local code, do not re-sync until the root cause of the failure is confirmed from remote logs (not from hypothesis).
@@ -82,8 +87,19 @@ Container commands in this skill assume Linux shells.
 
 Normal agent entrypoint:
 
-- POSIX: `python3 .agents/skills/remote-code-parity/scripts/parity_sync.py --machine <alias-or-ip> ...`
+- POSIX: `python3 .agents/skills/remote-code-parity/scripts/parity_sync.py (--machine <alias-or-ip> | --session-id <id>) ...`
 - Windows: `py -3 .agents/skills/remote-code-parity/scripts/parity_sync.py --machine <alias-or-ip> ...`
+
+Apply-mode split:
+
+- `--apply-mode source-only`: publish source snapshots to the container cache only; no runtime materialization and no install/rebuild.
+- `--apply-mode materialize`: publish snapshots and update the runtime source tree; no install/rebuild.
+- `--apply-mode install`: default full parity behavior with consent, materialization, install/rebuild triggers, and verification.
+
+Agent-facing sync tools:
+
+- `python3 .agents/scripts/remote_sync_plan.py ... --mode source-only|materialize|install`
+- `python3 .agents/scripts/remote_sync_apply.py ... --mode source-only|materialize|install`
 
 Consent helper:
 
@@ -119,7 +135,7 @@ The user can switch sync mode at any time. `--force-reinstall` overrides `image`
 
 ### 2. Resolve the ready target from inventory
 
-For normal agent work, start from `parity_sync.py`.
+For normal agent work, start from `parity_sync.py`. Use `--session-id` when the task was created by `session-management`; use legacy `--machine` only for single-tenant base-container work.
 
 Collect from local machine inventory:
 
@@ -145,8 +161,9 @@ For each repo:
 - stage the full current working tree with `git add -A`
 - reset local-only denylist paths and child-submodule paths from that temporary index
 - replace child submodule gitlinks with the child synthetic snapshot commit ids
-- write a synthetic commit
-- if the resulting tree matches the original `HEAD`, reuse the original commit so clean child repos do not trigger parent reinstall heuristics through gitlink churn
+- write a deterministic parentless synthetic commit for the resulting tree
+- record the repo's original `HEAD` as `source_head`; do not make the synthetic commit a child of that `HEAD`, because an empty container mirror would otherwise receive full vLLM history on first push
+- filter transport-only child gitlink paths out of `changed_paths` when the child `source_head` matches the parent gitlink and the child has no logical changes
 
 Ignored files stay ignored. The snapshot source of truth is tracked + untracked non-ignored.
 
@@ -155,7 +172,8 @@ Ignored files stay ignored. The snapshot source of truth is tracked + untracked 
 For each repo in scope:
 
 - ensure the container-local bare mirror repo exists under the cache root
-- push the synthetic commit to `refs/parity/<workspace_id>/current` and to an advertised branch ref inside that same mirror
+- create a local Git bundle for the synthetic ref, stream it to the container over SSH, and fetch that bundle into the container-local bare mirror
+- update `refs/parity/<workspace_id>/current` and an advertised branch ref inside that same mirror
 - write a compact manifest for this sync attempt under `manifests/`
 - use a **container-local** lock while mutating cache or runtime state
 
@@ -208,7 +226,7 @@ After the first approved replacement, reinstall only when one of the following t
 
 **Trigger 2 — commit drift from last sync:**
 
-Compare each repo's real HEAD commit with `last_head_commits` recorded in `runtime-state.json`. Synthetic snapshot commits change whenever the working tree is dirty, so drift detection must use the underlying HEAD to avoid false positives from pure-Python edits. If a repo's HEAD changed (e.g. the user did `git checkout v0.8.0` inside `vllm/`), trigger reinstall for that repo even when `changed_paths` is empty.
+Compare each repo's real `source_head` commit with `last_head_commits` recorded in `runtime-state.json`. Synthetic snapshot commits are parentless transport commits, so drift detection must use the underlying source HEAD to catch submodule version switches without treating ordinary dirty Python edits as rebuild triggers. If a repo's HEAD changed (e.g. the user did `git checkout v0.8.0` inside `vllm/`), trigger reinstall for that repo even when `changed_paths` is empty.
 
 **Trigger 3 — dependency cascade:**
 
@@ -220,7 +238,7 @@ Only uninstall the packages that will actually be reinstalled. If only `vllm-asc
 
 **Force reinstall:**
 
-Pass `--force-reinstall` to `parity_sync.py` to unconditionally reinstall both `vllm` and `vllm-ascend` regardless of what changed. This overrides all trigger logic above but still runs the full sync flow (snapshot, push, materialize, install, verify).
+Pass `--force-reinstall` to `parity_sync.py` to unconditionally reinstall both `vllm` and `vllm-ascend` regardless of what changed. This overrides all trigger logic above but still runs the full sync flow (snapshot, mirror hydration, materialize, install, verify).
 
 **`--force-reinstall` usage discipline:**
 
@@ -228,9 +246,22 @@ Use `--force-reinstall` only when (a) it is the first sync to a new container, (
 
 **No-change fast path:**
 
-If all snapshot commits match `last_snapshot_commits` and no reinstall is needed (and `--force-reinstall` is not set), the sync verifies container-side commits with a single SSH call and returns `status == ready` immediately, skipping push, materialize, and manifest upload.
+If all snapshot commits match `last_snapshot_commits` and no reinstall is needed (and `--force-reinstall` is not set), the sync verifies container-side commits with a single SSH call and returns `status == ready` immediately, skipping mirror hydration, materialize, and manifest upload.
 
-Use these commands inside the container when required. The normal path first unifies the runtime Python across `python`, `python3`, CMake, and CANN helper tools, sources optional Ascend env scripts under a `set +u` / `set -u` guard, then tries the in-place environment, and finally does one bounded packaging refresh / retry when legacy packaging metadata blocks editable install. Pip resolution should prefer Tsinghua, then Aliyun, then the public PyPI index:
+Use these commands inside the container when required. The normal path first unifies the runtime Python across `python`, `python3`, CMake, and CANN helper tools, sources optional Ascend env scripts under a `set +u` / `set -u` guard, then tries the in-place environment, and finally does one bounded packaging refresh / retry when legacy packaging metadata blocks editable install. Pip/uv resolution can use a caller-provided near-cache index first, then falls back to Tsinghua, Aliyun, and the public PyPI index. The public Ascend package index is added only for `vllm-ascend` dependency/install steps unless the caller explicitly sets `VAWS_PIP_EXTRA_INDEX_URL` or `PIP_EXTRA_INDEX_URL`.
+
+The install environment mirrors the portable parts of `vllm-ascend` CI:
+
+- cache roots default to `/root/.cache/pip`, `/root/.cache/uv`, and `/root/.cache/vaws/fetchcontent` so CMake `FetchContent` survives repo cleanups
+- editable installs default to `--no-deps` against the paired runtime image, and the `vllm-ascend` requirements step is skipped on ordinary paired-image replacement; dependency resolution is re-enabled when dependency files changed, a repo HEAD drifted, verify-deps detects a non-runtime mismatch, or the caller sets `VAWS_INSTALL_DEPS=1`
+- paired-image `torch_npu` is treated as runtime state: accept public-version matches and a successful real import instead of forcing a large wheel reinstall
+- `MAX_JOBS` defaults to `4` like CI and can be overridden with `VAWS_MAX_JOBS` or `MAX_JOBS`
+- `UV_INDEX_STRATEGY` defaults to `unsafe-best-match` because both CI and this workspace use multiple indexes
+- uv bootstrap is progress-wrapped and bounded by `VAWS_UV_BOOTSTRAP_TIMEOUT` seconds per mirror before falling back to the next mirror or pip-only installs; uv package installs are bounded by `VAWS_UV_INSTALL_TIMEOUT`, and `VAWS_DISABLE_UV=1` forces pip-only mode
+- `VAWS_SOC_VERSION` is forwarded as `SOC_VERSION` when the caller needs to pin chip selection instead of relying on `npu-smi`
+- custom kernel compilation remains enabled by default; set `VAWS_COMPILE_CUSTOM_KERNELS=0` only for non-runtime unit-test-style validation
+- `VAWS_USE_CLANG15=1` selects `clang-15` / `clang++-15` only when they are already installed in the image
+- after the editable `vllm` install, `triton` is removed best-effort to match Ascend CI's non-Triton runtime expectation
 
 ### `vllm`
 

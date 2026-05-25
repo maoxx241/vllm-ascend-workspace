@@ -36,6 +36,7 @@ for _p in (str(LIB_DIR), str(MM_SCRIPTS)):
         sys.path.insert(0, _p)
 
 import inventory as inventory_store  # noqa: E402
+from vaws_session_state import load_session_lookup, session_record_for_execution  # noqa: E402
 
 ANALYSIS_STATE_DIR = ROOT / ".vaws-local" / "profiling-analysis" / "runs"
 PROGRESS_SENTINEL = "__VAWS_PROFILE_ANALYSIS_PROGRESS__="
@@ -203,6 +204,42 @@ def get_machine_alias(machine: dict[str, Any]) -> str:
     else:
         host_ip = host or "unknown"
     return machine.get("alias", host_ip)
+
+
+def resolve_execution_target(
+    machine: str | None,
+    *,
+    session_id: str | None = None,
+    session_file: str | Path | None = None,
+) -> dict[str, Any]:
+    if session_id or session_file:
+        lookup = load_session_lookup(
+            session_id=session_id,
+            session_file=session_file,
+            repo_root=ROOT,
+        )
+        record = session_record_for_execution(lookup.session)
+        return {
+            "mode": "session",
+            "record": record,
+            "alias": get_machine_alias(record),
+            "endpoint": endpoint_from_machine(record),
+            "session_id": lookup.session["session_id"],
+            "session_file": str(lookup.session_file),
+            "session": lookup.session,
+        }
+    if not machine:
+        raise ValueError("--machine is required unless --session-id or --session-file is used")
+    record = resolve_machine(machine)
+    return {
+        "mode": "legacy",
+        "record": record,
+        "alias": get_machine_alias(record),
+        "endpoint": endpoint_from_machine(record),
+        "session_id": None,
+        "session_file": None,
+        "session": None,
+    }
 
 
 # ---------------------------------------------------------------------------

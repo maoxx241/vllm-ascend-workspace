@@ -520,6 +520,7 @@ def bootstrap_container(
     soc: str | None = None,
     public_key_file: str | None = None,
     replace_container_on_image_change: bool = False,
+    use_prepared_image_cache: bool = False,
 ) -> dict[str, Any]:
     key_path, private_key, public_key, needs_input = ensure_local_public_key(public_key_file)
     if needs_input is not None:
@@ -540,6 +541,7 @@ def bootstrap_container(
             "true" if replace_container_on_image_change else "false",
             machine_type or "",
             soc or "",
+            "true" if use_prepared_image_cache else "false",
         ],
         batch_mode=True,
         timeout_seconds=machine_ops.DEFAULT_BOOTSTRAP_TIMEOUT_SECONDS,

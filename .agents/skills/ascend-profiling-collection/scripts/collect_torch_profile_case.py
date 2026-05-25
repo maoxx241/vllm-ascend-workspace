@@ -57,6 +57,7 @@ from _common import (
     now_utc,
     open_local_tunnel,
     print_json,
+    resolve_execution_target,
     resolve_machine,
 )
 from profile_control import post_remote_action
@@ -314,11 +315,16 @@ def _evaluate_workload(
 
 def _build_serve_args(args: argparse.Namespace, profiler_config: dict[str, Any]) -> list[str]:
     serve_args: list[str] = [
-        "--machine", args.machine,
         "--model", args.model,
         "--served-model-name", args.served_model_name,
         "--tp", str(args.tp),
     ]
+    if args.session_file:
+        serve_args[:0] = ["--session-file", args.session_file]
+    elif args.session_id:
+        serve_args[:0] = ["--session-id", args.session_id]
+    else:
+        serve_args[:0] = ["--machine", args.machine]
     if args.dp is not None and args.dp > 1:
         serve_args.extend(["--dp", str(args.dp)])
     serve_args.extend([
@@ -382,8 +388,10 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
 
     # Required: target + workload identity
-    p.add_argument("--machine", required=True,
+    p.add_argument("--machine",
                    help="machine alias or host IP (must be ready in inventory)")
+    p.add_argument("--session-id", help="VAWS session id")
+    p.add_argument("--session-file", help="explicit session.json path")
     p.add_argument("--model", required=True,
                    help="absolute remote path to model weights")
     p.add_argument("--served-model-name", required=True,
@@ -483,6 +491,24 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if not args.machine and not args.session_id and not args.session_file:
+        print_json({
+            "status": "failed",
+            "error": "--machine is required unless --session-id or --session-file is used",
+        })
+        return 2
+
+    session_target = None
+    if args.session_id or args.session_file:
+        session_target = resolve_execution_target(
+            args.machine,
+            session_id=args.session_id,
+            session_file=args.session_file,
+        )
+        args.session_id = session_target.session_id
+        args.session_file = str(session_target.session_file) if session_target.session_file else args.session_file
+        if not args.machine:
+            args.machine = session_target.alias
 
     ensure_dir(COLLECTION_STATE_DIR)
     run_dir = COLLECTION_STATE_DIR / f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{args.tag}"
@@ -520,6 +546,8 @@ def main(argv: list[str] | None = None) -> int:
         "started_at": now_utc(),
         "tag": args.tag,
         "machine": args.machine,
+        "session_id": args.session_id,
+        "session_file": args.session_file,
         "model": args.model,
         "served_model_name": args.served_model_name,
         "tp": args.tp,
@@ -550,7 +578,7 @@ def main(argv: list[str] | None = None) -> int:
     service_result: dict[str, Any] | None = None
     stop_result: dict[str, Any] | None = None
     try:
-        emit_progress("serve_start", f"starting service on {args.machine}")
+        emit_progress("serve_start", f"starting service on {args.session_id or args.machine}")
         service_result = call_serve_start(serve_args)
         manifest["service_result"] = service_result
         if service_result.get("status") != "ready":
@@ -560,8 +588,17 @@ def main(argv: list[str] | None = None) -> int:
         port = int(service_result["port"])
         profile_root = f"{runtime_dir}/{args.torch_profiler_dir}"
 
-        record = resolve_machine(args.machine)
-        ep = container_endpoint(record)
+        if args.session_id or args.session_file:
+            if session_target is None:
+                session_target = resolve_execution_target(
+                    args.machine,
+                    session_id=args.session_id,
+                    session_file=args.session_file,
+                )
+            ep = session_target.endpoint
+        else:
+            record = resolve_machine(args.machine)
+            ep = container_endpoint(record)
 
         with open_local_tunnel(ep, port) as tunnel:
             manifest["request_tunnel"] = tunnel
@@ -623,7 +660,11 @@ def main(argv: list[str] | None = None) -> int:
         time.sleep(POST_STOP_FLUSH_SECONDS)
 
         emit_progress("serve_stop", "stopping service")
-        stop_result = call_serve_stop(args.machine)
+        stop_result = call_serve_stop(
+            args.machine,
+            session_id=args.session_id,
+            session_file=args.session_file,
+        )
         manifest["stop_result"] = stop_result
 
         expected_ranks = manifest["expected_ranks"]
@@ -678,11 +719,20 @@ def main(argv: list[str] | None = None) -> int:
         manifest["failed_at"] = now_utc()
         if stop_result is None:
             try:
-                stop_result = call_serve_stop(args.machine)
+                stop_result = call_serve_stop(
+                    args.machine,
+                    session_id=args.session_id,
+                    session_file=args.session_file,
+                )
                 manifest["stop_result"] = stop_result
             except Exception:  # noqa: BLE001
                 try:
-                    stop_result = call_serve_stop(args.machine, force=True)
+                    stop_result = call_serve_stop(
+                        args.machine,
+                        session_id=args.session_id,
+                        session_file=args.session_file,
+                        force=True,
+                    )
                     manifest["stop_result"] = stop_result
                 except Exception as stop_exc:  # noqa: BLE001
                     manifest["stop_error"] = str(stop_exc)

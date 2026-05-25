@@ -11,6 +11,7 @@ import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 from common import (
     DEFAULT_DENYLIST,
@@ -30,6 +31,7 @@ from common import (
     save_state,
     ssh_exec,
     ssh_exec_stream,
+    ssh_stream_bytes_to_file,
     ssh_stream_to_file,
     update_state,
 )
@@ -53,6 +55,13 @@ VLLM_REINSTALL_PATTERNS = (
 
 VLLM_ASCEND_REINSTALL_PATTERNS = VLLM_REINSTALL_PATTERNS + (
     'vllm_ascend/_cann_ops_custom/**',
+)
+
+DEPENDENCY_INSTALL_PATTERNS = (
+    'requirements*',
+    'pyproject.toml',
+    'setup.py',
+    'setup.cfg',
 )
 
 DEFAULT_ENV_PREAMBLE = (
@@ -88,7 +97,25 @@ DEFAULT_ENV_PREAMBLE = (
     'export PIP_DEFAULT_TIMEOUT=60',
     'export PIP_RETRIES=2',
     'export PIP_PROGRESS_BAR=off',
-    'export UV_CACHE_DIR="${UV_CACHE_DIR:-/root/.cache/uv}"',
+    'export XDG_CACHE_HOME="${XDG_CACHE_HOME:-/root/.cache}"',
+    'export PIP_CACHE_DIR="${PIP_CACHE_DIR:-$XDG_CACHE_HOME/pip}"',
+    'export UV_CACHE_DIR="${UV_CACHE_DIR:-$XDG_CACHE_HOME/uv}"',
+    'export UV_SYSTEM_PYTHON="${UV_SYSTEM_PYTHON:-1}"',
+    'export UV_PYTHON="${UV_PYTHON:-$PYTHON}"',
+    'export UV_INDEX_STRATEGY="${UV_INDEX_STRATEGY:-unsafe-best-match}"',
+    'export VAWS_UV_BOOTSTRAP_TIMEOUT="${VAWS_UV_BOOTSTRAP_TIMEOUT:-120}"',
+    'export VAWS_UV_INSTALL_TIMEOUT="${VAWS_UV_INSTALL_TIMEOUT:-300}"',
+    'export VAWS_DISABLE_UV="${VAWS_DISABLE_UV:-0}"',
+    'export VAWS_INSTALL_DEPS="${VAWS_INSTALL_DEPS:-0}"',
+    'export VAWS_ASCEND_PIP_EXTRA_INDEX_URL="${VAWS_ASCEND_PIP_EXTRA_INDEX_URL-https://mirrors.huaweicloud.com/ascend/repos/pypi}"',
+    'export VAWS_EFFECTIVE_PIP_EXTRA_INDEX_URL="${VAWS_PIP_EXTRA_INDEX_URL:-${PIP_EXTRA_INDEX_URL:-}}"',
+    'export FETCHCONTENT_BASE_DIR="${FETCHCONTENT_BASE_DIR:-$XDG_CACHE_HOME/vaws/fetchcontent}"',
+    'export CMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE:-Release}"',
+    'export MAX_JOBS="${VAWS_MAX_JOBS:-${MAX_JOBS:-4}}"',
+    'export CMAKE_BUILD_PARALLEL_LEVEL="${CMAKE_BUILD_PARALLEL_LEVEL:-$MAX_JOBS}"',
+    'if [ -n "${VAWS_SOC_VERSION:-}" ]; then export SOC_VERSION="$VAWS_SOC_VERSION"; fi',
+    'if [ -n "${VAWS_COMPILE_CUSTOM_KERNELS:-}" ]; then export COMPILE_CUSTOM_KERNELS="$VAWS_COMPILE_CUSTOM_KERNELS"; fi',
+    'if [ "${VAWS_USE_CLANG15:-0}" = "1" ] && command -v clang-15 >/dev/null 2>&1 && command -v clang++-15 >/dev/null 2>&1; then export C_COMPILER="${C_COMPILER:-$(command -v clang-15)}"; export CXX_COMPILER="${CXX_COMPILER:-$(command -v clang++-15)}"; fi',
     'export VLLM_WORKER_MULTIPROC_METHOD=spawn',
     'export OMP_NUM_THREADS=1',
     'export MKL_NUM_THREADS=1',
@@ -114,12 +141,70 @@ PIP_MIRROR_CANDIDATES = (
 
 DEFAULT_CONTAINER_CACHE_ROOT = '/root/.cache/vaws/remote-code-parity'
 DEFAULT_MARKER_DIRNAME = '.remote-code-parity'
+DEFAULT_GIT_TRANSPORT_TIMEOUT_SECONDS = 900.0
+DEFAULT_CONTAINER_LOCK_STALE_SECONDS = 3600
 # Keep runtime-private state and profiling artifacts that may be needed for
 # post-run analysis across parity refreshes.
 DEFAULT_ROOT_PRESERVE_PATHS = ('Mooncake', '.vaws-runtime')
 STATE_FILENAME = 'runtime-state.json'
 CONSENT_FILENAME = 'install-consents.json'
 PARITY_BRANCH_NAME = 'parity-current'
+
+REMOTE_RUNTIME_ENV_PASSTHROUGH = (
+    'VAWS_PIP_INDEX_URL',
+    'VAWS_PIP_EXTRA_INDEX_URL',
+    'VAWS_PIP_TRUSTED_HOST',
+    'VAWS_ASCEND_PIP_EXTRA_INDEX_URL',
+    'PIP_EXTRA_INDEX_URL',
+    'XDG_CACHE_HOME',
+    'PIP_CACHE_DIR',
+    'UV_CACHE_DIR',
+    'UV_SYSTEM_PYTHON',
+    'UV_INDEX_STRATEGY',
+    'VAWS_UV_BOOTSTRAP_TIMEOUT',
+    'VAWS_UV_INSTALL_TIMEOUT',
+    'VAWS_DISABLE_UV',
+    'VAWS_INSTALL_DEPS',
+    'FETCHCONTENT_BASE_DIR',
+    'VAWS_MAX_JOBS',
+    'MAX_JOBS',
+    'CMAKE_BUILD_PARALLEL_LEVEL',
+    'CMAKE_BUILD_TYPE',
+    'VAWS_SOC_VERSION',
+    'SOC_VERSION',
+    'VAWS_COMPILE_CUSTOM_KERNELS',
+    'COMPILE_CUSTOM_KERNELS',
+    'VAWS_USE_CLANG15',
+    'C_COMPILER',
+    'CXX_COMPILER',
+    'VERBOSE',
+    'ASCEND_HOME_PATH',
+)
+
+RUNTIME_INSTALL_ENV_KEYS = (
+    'MAX_JOBS',
+    'CMAKE_BUILD_PARALLEL_LEVEL',
+    'CMAKE_BUILD_TYPE',
+    'FETCHCONTENT_BASE_DIR',
+    'XDG_CACHE_HOME',
+    'PIP_CACHE_DIR',
+    'UV_CACHE_DIR',
+    'UV_SYSTEM_PYTHON',
+    'UV_INDEX_STRATEGY',
+    'VAWS_UV_BOOTSTRAP_TIMEOUT',
+    'VAWS_UV_INSTALL_TIMEOUT',
+    'VAWS_DISABLE_UV',
+    'VAWS_INSTALL_DEPS',
+    'VAWS_PIP_INDEX_URL',
+    'VAWS_EFFECTIVE_PIP_EXTRA_INDEX_URL',
+    'VAWS_ASCEND_PIP_EXTRA_INDEX_URL',
+    'VAWS_VLLM_ASCEND_EFFECTIVE_PIP_EXTRA_INDEX_URL',
+    'SOC_VERSION',
+    'COMPILE_CUSTOM_KERNELS',
+    'C_COMPILER',
+    'CXX_COMPILER',
+    'ASCEND_HOME_PATH',
+)
 
 
 @dataclass
@@ -140,6 +225,7 @@ class RepoNode:
 class SnapshotRecord:
     relpath: str
     repo_id: str
+    source_head: str | None
     parent: str | None
     commit: str
     tree: str
@@ -171,6 +257,41 @@ def validate_absolute_posix_path(value: str, *, label: str) -> str:
     if not value.startswith('/'):
         raise RuntimeError(f'{label} must be an absolute POSIX path, got: {value!r}')
     return PurePosixPath(value).as_posix()
+
+
+def remote_runtime_env_exports() -> list[str]:
+    lines: list[str] = []
+    for key in REMOTE_RUNTIME_ENV_PASSTHROUGH:
+        if key in os.environ:
+            lines.append(f'export {key}={quoted(os.environ[key])}')
+    return lines
+
+
+def redact_url_value(value: str) -> str:
+    parts = value.split()
+    redacted_parts: list[str] = []
+    for part in parts:
+        try:
+            parsed = urlsplit(part)
+        except ValueError:
+            redacted_parts.append(part)
+            continue
+        if parsed.scheme and parsed.netloc and '@' in parsed.netloc:
+            host = parsed.netloc.rsplit('@', 1)[1]
+            redacted_parts.append(urlunsplit((parsed.scheme, f'***@{host}', parsed.path, parsed.query, parsed.fragment)))
+        else:
+            redacted_parts.append(part)
+    return ' '.join(redacted_parts)
+
+
+def redact_runtime_env(env: dict[str, str]) -> dict[str, str]:
+    redacted: dict[str, str] = {}
+    for key, value in env.items():
+        if key.endswith('_URL') or 'INDEX' in key or 'PATH' in key:
+            redacted[key] = redact_url_value(value)
+        else:
+            redacted[key] = value
+    return redacted
 
 
 def resolved_root_preserve_paths(marker_dirname: str, extra_paths: list[str]) -> tuple[str, ...]:
@@ -268,8 +389,27 @@ def synthetic_ref(workspace_id: str, snapshot_id: str, relpath: str) -> str:
     return f'refs/parity/{workspace_id}/{snapshot_id}/{sanitize_repo_id(relpath)}'
 
 
-def commit_message(workspace_id: str, snapshot_id: str, relpath: str) -> str:
-    return f'remote-code-parity snapshot {workspace_id} {snapshot_id} {sanitize_repo_id(relpath)}'
+def commit_message(workspace_id: str, relpath: str) -> str:
+    return f'remote-code-parity tree snapshot {workspace_id} {sanitize_repo_id(relpath)}'
+
+
+def gitlink_for_path(repo: Path, commit: str | None, path: str) -> str | None:
+    if not commit:
+        return None
+    result = git(repo, ['ls-tree', commit, '--', path], check=False)
+    if result.returncode != 0 or not result.stdout.strip():
+        return None
+    first = result.stdout.splitlines()[0].split(maxsplit=3)
+    if len(first) < 3 or first[0] != '160000':
+        return None
+    return first[2]
+
+
+def filter_transport_only_child_paths(
+    paths: list[str],
+    transport_only_child_paths: set[str],
+) -> list[str]:
+    return [path for path in paths if path not in transport_only_child_paths]
 
 
 def build_synthetic_snapshot(
@@ -281,8 +421,7 @@ def build_synthetic_snapshot(
     child_commits: dict[str, SnapshotRecord],
 ) -> SnapshotRecord:
     repo = node.repo_path
-    parent = git_head(repo)
-    parent_tree = git_tree_for_commit(repo, parent)
+    source_head = git_head(repo)
     ref = synthetic_ref(workspace_id, snapshot_id, node.relpath)
     temp_index = tempfile.NamedTemporaryFile(prefix='parity-index-', delete=False)
     temp_index.close()
@@ -299,17 +438,25 @@ def build_synthetic_snapshot(
     env.setdefault('GIT_COMMITTER_DATE', '1970-01-01T00:00:00Z')
 
     try:
-        if parent:
-            git(repo, ['read-tree', parent], env=env)
+        if source_head:
+            git(repo, ['read-tree', source_head], env=env)
         git(repo, ['add', '-A'], env=env)
         reset_specs = reset_pathspecs(node, denylist)
         if reset_specs:
             git(repo, ['reset', '-q', '--', *reset_specs], env=env)
 
         submodule_records: list[dict[str, str]] = []
+        transport_only_child_paths: set[str] = set()
         for child in node.children:
             child_record = child_commits[child.relpath]
             child_rel_to_repo = child.repo_path.relative_to(repo).as_posix()
+            source_gitlink = gitlink_for_path(repo, source_head, child_rel_to_repo)
+            if (
+                source_gitlink
+                and child_record.source_head == source_gitlink
+                and not child_record.changed_paths
+            ):
+                transport_only_child_paths.add(child_rel_to_repo)
             git(
                 repo,
                 ['update-index', '--add', '--cacheinfo', f'160000,{child_record.commit},{child_rel_to_repo}'],
@@ -325,26 +472,20 @@ def build_synthetic_snapshot(
             )
 
         tree = git(repo, ['write-tree'], env=env).stdout.strip()
-        if parent and parent_tree == tree:
-            commit = parent
-            diff: list[str] = []
+        commit = git(repo, ['commit-tree', tree, '-m', commit_message(workspace_id, node.relpath)], env=env).stdout.strip()
+        if source_head:
+            diff = git(repo, ['diff', '--name-only', f'{source_head}..{commit}']).stdout.splitlines()
         else:
-            commit_args = ['commit-tree', tree]
-            if parent:
-                commit_args.extend(['-p', parent])
-            commit_args.extend(['-m', commit_message(workspace_id, snapshot_id, node.relpath)])
-            commit = git(repo, commit_args, env=env).stdout.strip()
-            if parent:
-                diff = git(repo, ['diff', '--name-only', f'{parent}..{commit}']).stdout.splitlines()
-            else:
-                diff = git(repo, ['show', '--pretty=', '--name-only', commit]).stdout.splitlines()
+            diff = git(repo, ['show', '--pretty=', '--name-only', commit]).stdout.splitlines()
+        diff = filter_transport_only_child_paths(diff, transport_only_child_paths)
 
         git(repo, ['update-ref', ref, commit])
 
         return SnapshotRecord(
             relpath=node.relpath,
             repo_id=sanitize_repo_id(node.relpath),
-            parent=parent,
+            source_head=source_head,
+            parent=source_head,
             commit=commit,
             tree=tree,
             ref=ref,
@@ -396,6 +537,11 @@ def mirror_path_for(container_cache_root: str, workspace_id: str, record: Snapsh
     return str(root / 'nested' / f'{record.repo_id}.git')
 
 
+def bundle_path_for(container_cache_root: str, workspace_id: str, record: SnapshotRecord) -> str:
+    root = Path(cache_workspace_root(container_cache_root, workspace_id)) / 'bundles'
+    return str(root / f'{record.repo_id}-{record.commit}.bundle')
+
+
 def manifest_path_for(container_cache_root: str, workspace_id: str, snapshot_id: str) -> str:
     return str(Path(cache_workspace_root(container_cache_root, workspace_id)) / 'manifests' / f'{snapshot_id}.json')
 
@@ -424,38 +570,120 @@ def ensure_remote_bare_repos(container: SshEndpoint, mirror_paths: list[str], dr
     ssh_exec(container, '\n'.join(lines))
 
 
+def cleanup_failed_mirror_hydration(container: SshEndpoint, mirror_path: str) -> None:
+    script = '\n'.join(
+        [
+            'set +e',
+            f'mirror={quoted(mirror_path)}',
+            'for pid in $(pgrep -x git-receive-pack 2>/dev/null || true); do',
+            '  cmd="$(tr "\\000" " " <"/proc/$pid/cmdline" 2>/dev/null || true)"',
+            '  case "$cmd" in',
+            '    *"$mirror"*)',
+            '      pkill -TERM -P "$pid" >/dev/null 2>&1 || true',
+            '      kill -TERM "$pid" >/dev/null 2>&1 || true',
+            '      ;;',
+            '  esac',
+            'done',
+            'sleep 1',
+            'for pid in $(pgrep -x git-receive-pack 2>/dev/null || true); do',
+            '  cmd="$(tr "\\000" " " <"/proc/$pid/cmdline" 2>/dev/null || true)"',
+            '  case "$cmd" in',
+            '    *"$mirror"*)',
+            '      pkill -KILL -P "$pid" >/dev/null 2>&1 || true',
+            '      kill -KILL "$pid" >/dev/null 2>&1 || true',
+            '      ;;',
+            '  esac',
+            'done',
+            'rm -rf "$mirror"',
+        ]
+    )
+    try:
+        ssh_exec(container, script, check=False)
+    except Exception:
+        pass
+
+
 def push_snapshot_to_mirror(
     repo: Path,
     *,
     container: SshEndpoint,
     mirror_path: str,
+    container_cache_root: str,
     record: SnapshotRecord,
     workspace_id: str,
     dry_run: bool,
 ) -> None:
     if dry_run:
         return
-    remote_url = f'ssh://{container.user}@{container.host}:{container.port}{mirror_path}'
     target_ref = f'refs/parity/{workspace_id}/current'
-    git(
-        repo,
-        [
-            'push',
-            '--force',
-            remote_url,
-            f'{record.commit}:{target_ref}',
-            f'{record.commit}:refs/heads/{PARITY_BRANCH_NAME}',
-        ],
-    )
+    remote_bundle_path = bundle_path_for(container_cache_root, workspace_id, record)
+    local_bundle = tempfile.NamedTemporaryFile(prefix='parity-bundle-', suffix='.bundle', delete=False)
+    local_bundle.close()
+    local_bundle_path = Path(local_bundle.name)
+    try:
+        git(repo, ['bundle', 'create', str(local_bundle_path), record.ref], timeout=DEFAULT_GIT_TRANSPORT_TIMEOUT_SECONDS)
+        ssh_stream_bytes_to_file(container, remote_bundle_path, local_bundle_path.read_bytes())
+        script = '\n'.join(
+            [
+                'set -eo pipefail',
+                f'mkdir -p {quoted(str(Path(mirror_path).parent))}',
+                f'if [ ! -d {quoted(mirror_path)} ]; then git init --bare {quoted(mirror_path)} >/dev/null; fi',
+                (
+                    f'git -C {quoted(mirror_path)} fetch --force {quoted(remote_bundle_path)} '
+                    f'{quoted(record.ref + ":" + target_ref)} '
+                    f'{quoted(record.ref + ":refs/heads/" + PARITY_BRANCH_NAME)} >/dev/null'
+                ),
+                f'rm -f {quoted(remote_bundle_path)}',
+            ]
+        )
+        ssh_exec(container, script)
+    except Exception:
+        cleanup_failed_mirror_hydration(container, mirror_path)
+        raise
+    finally:
+        local_bundle_path.unlink(missing_ok=True)
 
-def acquire_container_lock(container: SshEndpoint, lock_path: str, dry_run: bool) -> None:
+def acquire_container_lock(
+    container: SshEndpoint,
+    lock_path: str,
+    dry_run: bool,
+    *,
+    stale_seconds: int = DEFAULT_CONTAINER_LOCK_STALE_SECONDS,
+) -> None:
     if dry_run:
         return
     script = '\n'.join(
         [
             'set -eo pipefail',
-            f'mkdir -p {quoted(str(Path(lock_path).parent))}',
-            f'mkdir {quoted(lock_path)}',
+            f'lock={quoted(lock_path)}',
+            f'stale_seconds={int(stale_seconds)}',
+            'mkdir -p "$(dirname "$lock")"',
+            'write_owner() {',
+            '  {',
+            '    printf "pid=%s\\n" "$$"',
+            '    printf "host=%s\\n" "$(hostname 2>/dev/null || true)"',
+            '    printf "started_at=%s\\n" "$(date -Is 2>/dev/null || date)"',
+            '  } >"$lock/owner"',
+            '}',
+            'if mkdir "$lock" 2>/dev/null; then',
+            '  write_owner',
+            '  exit 0',
+            'fi',
+            'if [ -d "$lock" ]; then',
+            '  now="$(date +%s)"',
+            '  mtime="$(stat -c %Y "$lock" 2>/dev/null || echo 0)"',
+            '  age="$((now - mtime))"',
+            '  if [ "$age" -ge "$stale_seconds" ]; then',
+            '    rm -rf "$lock"',
+            '    if mkdir "$lock" 2>/dev/null; then',
+            '      write_owner',
+            '      exit 0',
+            '    fi',
+            '  fi',
+            'fi',
+            'echo "lock exists: $lock" >&2',
+            'if [ -f "$lock/owner" ]; then cat "$lock/owner" >&2 || true; fi',
+            'exit 1',
         ]
     )
     result = ssh_exec(container, script, check=False)
@@ -466,7 +694,7 @@ def acquire_container_lock(container: SshEndpoint, lock_path: str, dry_run: bool
 def release_container_lock(container: SshEndpoint, lock_path: str, dry_run: bool) -> None:
     if dry_run:
         return
-    ssh_exec(container, f'rmdir {quoted(lock_path)} >/dev/null 2>&1 || true', check=False)
+    ssh_exec(container, f'rm -rf {quoted(lock_path)} >/dev/null 2>&1 || true', check=False)
 
 
 def upload_manifest(container: SshEndpoint, manifest_path: str, manifest: dict[str, Any], dry_run: bool) -> None:
@@ -483,6 +711,7 @@ def container_repo_path(runtime_root: str, record: SnapshotRecord) -> str:
 
 def first_install_prepare_script(runtime_root: str) -> str:
     lines = ['set -eo pipefail', f'mkdir -p {quoted(runtime_root)}', f'cd {quoted(runtime_root)}']
+    lines.extend(remote_runtime_env_exports())
     lines.extend(DEFAULT_ENV_PREAMBLE)
     lines.extend(
         [
@@ -576,6 +805,10 @@ def reinstall_required_for_repo(record: SnapshotRecord, patterns: tuple[str, ...
     return any(glob_match_any(path, patterns) for path in record.changed_paths)
 
 
+def dependency_install_required_for_repo(record: SnapshotRecord) -> bool:
+    return any(glob_match_any(path, DEPENDENCY_INSTALL_PATTERNS) for path in record.changed_paths)
+
+
 def runtime_install_step_script(
     *,
     runtime_root: str,
@@ -583,10 +816,18 @@ def runtime_install_step_script(
     container_identity: str,
     step: str,
     uninstall_packages: tuple[str, ...] = (),
+    install_deps: bool = False,
 ) -> str:
     lines = ['set -euo pipefail', f'cd {quoted(runtime_root)}']
+    lines.extend(remote_runtime_env_exports())
     lines.extend(DEFAULT_ENV_PREAMBLE)
+    if install_deps:
+        lines.append('export VAWS_INSTALL_DEPS=1')
     if step in {'bootstrap-uv', 'install-vllm', 'install-vllm-ascend', 'install-vllm-ascend-requirements'}:
+        if step in {'install-vllm-ascend', 'install-vllm-ascend-requirements'}:
+            lines.append(
+                'export VAWS_EFFECTIVE_PIP_EXTRA_INDEX_URL="${VAWS_PIP_EXTRA_INDEX_URL:-${PIP_EXTRA_INDEX_URL:-$VAWS_ASCEND_PIP_EXTRA_INDEX_URL}}"'
+            )
         lines.extend(
             [
                 'emit_progress() {',
@@ -652,14 +893,20 @@ def runtime_install_step_script(
                 '}',
                 'pip_apply_mirror() {',
                 '  mirror="$1"',
-                '  unset PIP_INDEX_URL PIP_TRUSTED_HOST',
+                '  unset PIP_INDEX_URL PIP_EXTRA_INDEX_URL PIP_TRUSTED_HOST',
                 '  case "$mirror" in',
+                '    custom)',
+                '      if [ -z "${VAWS_PIP_INDEX_URL:-}" ]; then return 1; fi',
+                '      export PIP_INDEX_URL="$VAWS_PIP_INDEX_URL"',
+                '      if [ -n "${VAWS_EFFECTIVE_PIP_EXTRA_INDEX_URL:-}" ]; then export PIP_EXTRA_INDEX_URL="$VAWS_EFFECTIVE_PIP_EXTRA_INDEX_URL"; fi',
+                '      if [ -n "${VAWS_PIP_TRUSTED_HOST:-}" ]; then export PIP_TRUSTED_HOST="$VAWS_PIP_TRUSTED_HOST"; fi',
+                '      ;;',
             ]
         )
         for mirror in PIP_MIRROR_CANDIDATES:
             lines.extend(
                 [
-                    f'    {mirror["name"]}) export PIP_INDEX_URL={quoted(mirror["index_url"])}; export PIP_TRUSTED_HOST={quoted(mirror["trusted_host"])} ;;',
+                    f'    {mirror["name"]}) export PIP_INDEX_URL={quoted(mirror["index_url"])}; export PIP_TRUSTED_HOST={quoted(mirror["trusted_host"])}; if [ -n "${{VAWS_EFFECTIVE_PIP_EXTRA_INDEX_URL:-}}" ]; then export PIP_EXTRA_INDEX_URL="$VAWS_EFFECTIVE_PIP_EXTRA_INDEX_URL"; fi ;;',
                 ]
             )
         lines.extend(
@@ -669,15 +916,20 @@ def runtime_install_step_script(
                 '  emit_progress "runtime-pip-mirror" "using pip mirror $mirror" 30',
                 '}',
                 'HAS_UV=0',
-                'if command -v uv >/dev/null 2>&1; then HAS_UV=1; fi',
+                'if [ "${VAWS_DISABLE_UV:-0}" != "1" ] && command -v uv >/dev/null 2>&1; then HAS_UV=1; fi',
                 'ensure_uv() {',
+                '  if [ "${VAWS_DISABLE_UV:-0}" = "1" ]; then return 1; fi',
                 '  if [ "$HAS_UV" -eq 1 ]; then return 0; fi',
                 '  if command -v uv >/dev/null 2>&1; then HAS_UV=1; return 0; fi',
                 '  emit_progress "runtime-bootstrap-uv" "installing uv" 30',
-                '  for mirror in tsinghua aliyun pypi; do',
-                '    pip_apply_mirror "$mirror"',
+                '  for mirror in custom tsinghua aliyun pypi; do',
+                '    pip_apply_mirror "$mirror" || continue',
                 '    set +e',
-                '    "$PYTHON" -m pip install uv -q 2>/dev/null',
+                '    if command -v timeout >/dev/null 2>&1; then',
+                '      run_with_progress "runtime-bootstrap-uv" "installing uv via $mirror" "$VAWS_UV_BOOTSTRAP_TIMEOUT" timeout "$VAWS_UV_BOOTSTRAP_TIMEOUT" "$PYTHON" -m pip install uv -q',
+                '    else',
+                '      run_with_progress "runtime-bootstrap-uv" "installing uv via $mirror" "$VAWS_UV_BOOTSTRAP_TIMEOUT" "$PYTHON" -m pip install uv -q',
+                '    fi',
                 '    status=$?',
                 '    set -e',
                 '    if [ "$status" -eq 0 ]; then',
@@ -687,12 +939,29 @@ def runtime_install_step_script(
                 '  done',
                 '  return 1',
                 '}',
-                'UV_INDEX_ARGS="'
+                'DEFAULT_UV_INDEX_ARGS="'
                 + ' '.join(
                     (f'--index-url {m["index_url"]}' if i == 0 else f'--extra-index-url {m["index_url"]}')
                     for i, m in enumerate(PIP_MIRROR_CANDIDATES)
                 )
                 + '"',
+                'UV_EXTRA_INDEX_ARGS=""',
+                'if [ -n "${VAWS_EFFECTIVE_PIP_EXTRA_INDEX_URL:-}" ]; then UV_EXTRA_INDEX_ARGS="$UV_EXTRA_INDEX_ARGS --extra-index-url $VAWS_EFFECTIVE_PIP_EXTRA_INDEX_URL"; fi',
+                'UV_INDEX_ARGS="$DEFAULT_UV_INDEX_ARGS$UV_EXTRA_INDEX_ARGS"',
+                'if [ -n "${VAWS_PIP_INDEX_URL:-}" ]; then',
+                '  UV_INDEX_ARGS="--index-url $VAWS_PIP_INDEX_URL"',
+                '  if [ -n "${VAWS_EFFECTIVE_PIP_EXTRA_INDEX_URL:-}" ]; then UV_INDEX_ARGS="$UV_INDEX_ARGS --extra-index-url $VAWS_EFFECTIVE_PIP_EXTRA_INDEX_URL"; fi',
+                '  UV_INDEX_ARGS="$UV_INDEX_ARGS ${DEFAULT_UV_INDEX_ARGS/--index-url/--extra-index-url}"',
+                'fi',
+                'emit_runtime_install_env() {',
+                '  emit_progress "runtime-install-env" "MAX_JOBS=$MAX_JOBS CMAKE_BUILD_TYPE=$CMAKE_BUILD_TYPE INSTALL_DEPS=${VAWS_INSTALL_DEPS:-0} DISABLE_UV=${VAWS_DISABLE_UV:-0} SOC_VERSION=${SOC_VERSION:-auto} FETCHCONTENT_BASE_DIR=$FETCHCONTENT_BASE_DIR UV_CACHE_DIR=$UV_CACHE_DIR PIP_CACHE_DIR=$PIP_CACHE_DIR" 5',
+                '}',
+                'emit_runtime_npu_probe() {',
+                '  if command -v npu-smi >/dev/null 2>&1; then',
+                '    summary="$(npu-smi info 2>/dev/null | head -n 8 | tr "\\n" " " | sed "s/  */ /g" | cut -c1-220 || true)"',
+                '    if [ -n "$summary" ]; then emit_progress "runtime-npu-probe" "$summary" 5; fi',
+                '  fi',
+                '}',
                 'pip_install_with_mirrors() {',
                 '  phase="$1"',
                 '  message="$2"',
@@ -701,16 +970,21 @@ def runtime_install_step_script(
                 '  if [ "$HAS_UV" -eq 1 ]; then',
                 '    uv_args="$*"',
                 '    uv_args="${uv_args#install }"',
+                '    uv_cmd="uv pip install --system $UV_INDEX_ARGS $uv_args"',
                 '    set +e',
-                '    run_with_progress "$phase" "$message via uv" "$expected_seconds" bash -lc "uv pip install --system $UV_INDEX_ARGS $uv_args"',
+                '    if command -v timeout >/dev/null 2>&1; then',
+                '      run_with_progress "$phase" "$message via uv" "$VAWS_UV_INSTALL_TIMEOUT" timeout "$VAWS_UV_INSTALL_TIMEOUT" bash -lc "$uv_cmd"',
+                '    else',
+                '      run_with_progress "$phase" "$message via uv" "$expected_seconds" bash -lc "$uv_cmd"',
+                '    fi',
                 '    status=$?',
                 '    set -e',
                 '    if [ "$status" -eq 0 ]; then return 0; fi',
                 '    emit_progress "$phase" "uv failed (status $status), falling back to pip" 10',
                 '  fi',
                 '  last_status=1',
-                '  for mirror in tsinghua aliyun pypi; do',
-                '    pip_apply_mirror "$mirror"',
+                '  for mirror in custom tsinghua aliyun pypi; do',
+                '    pip_apply_mirror "$mirror" || continue',
                 '    set +e',
                 '    run_with_progress "$phase" "$message via $mirror" "$expected_seconds" "$PYTHON" -m pip "$@"',
                 '    status=$?',
@@ -739,8 +1013,13 @@ def runtime_install_step_script(
                 '  cd "$target_dir"',
                 '  if [ "$HAS_UV" -eq 1 ]; then',
                 '    pip_args="${install_cmd#*pip install }"',
+                '    uv_cmd="uv pip install --system $UV_INDEX_ARGS $pip_args"',
                 '    set +e',
-                '    run_with_log_progress "$phase" "$message via uv" "$expected_seconds" "$log_file" bash -lc "uv pip install --system $UV_INDEX_ARGS $pip_args"',
+                '    if command -v timeout >/dev/null 2>&1; then',
+                '      run_with_log_progress "$phase" "$message via uv" "$VAWS_UV_INSTALL_TIMEOUT" "$log_file" timeout "$VAWS_UV_INSTALL_TIMEOUT" bash -lc "$uv_cmd"',
+                '    else',
+                '      run_with_log_progress "$phase" "$message via uv" "$expected_seconds" "$log_file" bash -lc "$uv_cmd"',
+                '    fi',
                 '    status=$?',
                 '    set -e',
                 '    if [ "$status" -eq 0 ]; then',
@@ -750,8 +1029,8 @@ def runtime_install_step_script(
                 '    emit_progress "$phase" "uv install failed (status $status), falling back to pip" 10',
                 '  fi',
                 '  last_status=1',
-                '  for mirror in tsinghua aliyun pypi; do',
-                '    pip_apply_mirror "$mirror"',
+                '  for mirror in custom tsinghua aliyun pypi; do',
+                '    pip_apply_mirror "$mirror" || continue',
                 '    set +e',
                 '    run_with_log_progress "$phase" "$message via $mirror" "$expected_seconds" "$log_file" bash -lc "$install_cmd"',
                 '    status=$?',
@@ -793,7 +1072,12 @@ def runtime_install_step_script(
         )
 
     if step == 'bootstrap-uv':
-        lines.append('ensure_uv || emit_progress "runtime-bootstrap-uv" "uv not available, will use pip" 5')
+        lines.extend(
+            [
+                'emit_runtime_install_env',
+                'ensure_uv || emit_progress "runtime-bootstrap-uv" "uv not available, will use pip" 5',
+            ]
+        )
     elif step == 'uninstall':
         pkg_args = ' '.join(uninstall_packages) if uninstall_packages else 'vllm vllm-ascend vllm_ascend'
         lines.append(f'$PYTHON -m pip uninstall -y {pkg_args} >/dev/null 2>&1 || true')
@@ -802,13 +1086,19 @@ def runtime_install_step_script(
             [
                 f'cd {quoted(str(Path(runtime_root) / "vllm"))}',
                 'export VLLM_TARGET_DEVICE=empty',
-                'install_with_fallback "runtime-install-vllm" "building editable vllm" . 1800 "$PYTHON -m pip install -e . --no-build-isolation"',
+                'emit_runtime_install_env',
+                'if [ "${VAWS_INSTALL_DEPS:-0}" = "1" ]; then VLLM_EDITABLE_INSTALL_ARGS="-e . --no-build-isolation"; else VLLM_EDITABLE_INSTALL_ARGS="-e . --no-build-isolation --no-deps"; fi',
+                'install_with_fallback "runtime-install-vllm" "building editable vllm" . 1800 "$PYTHON -m pip install $VLLM_EDITABLE_INSTALL_ARGS"',
+                'set +e',
+                '$PYTHON -m pip uninstall -y triton >/dev/null 2>&1',
+                'set -e',
             ]
         )
     elif step == 'install-vllm-ascend-requirements':
         lines.extend(
             [
                 f'cd {quoted(str(Path(runtime_root) / "vllm-ascend"))}',
+                'emit_runtime_install_env',
                 'pip_install_with_mirrors "runtime-install-vllm-ascend-requirements" "installing vllm-ascend requirements" 900 install -r requirements.txt',
             ]
         )
@@ -816,7 +1106,10 @@ def runtime_install_step_script(
         lines.extend(
             [
                 f'cd {quoted(str(Path(runtime_root) / "vllm-ascend"))}',
-                'install_with_fallback "runtime-install-vllm-ascend" "building editable vllm-ascend" . 2400 "$PYTHON -m pip install -v -e . --no-build-isolation"',
+                'emit_runtime_install_env',
+                'emit_runtime_npu_probe',
+                'if [ "${VAWS_INSTALL_DEPS:-0}" = "1" ]; then VLLM_ASCEND_EDITABLE_INSTALL_ARGS="-v -e . --no-build-isolation"; else VLLM_ASCEND_EDITABLE_INSTALL_ARGS="-v -e . --no-build-isolation --no-deps"; fi',
+                'install_with_fallback "runtime-install-vllm-ascend" "building editable vllm-ascend" . 2400 "$PYTHON -m pip install $VLLM_ASCEND_EDITABLE_INSTALL_ARGS"',
             ]
         )
     elif step == 'verify-imports':
@@ -842,6 +1135,34 @@ def runtime_install_step_script(
                 'import sys',
                 'from importlib.metadata import requires, version as pkg_version',
                 'from packaging.requirements import Requirement',
+                'from packaging.utils import canonicalize_name',
+                'from packaging.version import InvalidVersion, Version',
+                '',
+                'def importable(module):',
+                '    try:',
+                '        __import__(module)',
+                '        return True',
+                '    except Exception:',
+                '        return False',
+                '',
+                'def public_version(value):',
+                '    try:',
+                '        return Version(value).public',
+                '    except InvalidVersion:',
+                '        return value.split("+", 1)[0]',
+                '',
+                'def requirement_satisfied(req, installed):',
+                '    if not req.specifier:',
+                '        return True',
+                '    if req.specifier.contains(installed, prereleases=True):',
+                '        return True',
+                '    public = public_version(installed)',
+                '    if public != installed and req.specifier.contains(public, prereleases=True):',
+                '        return True',
+                '    # Paired vLLM Ascend images provide torch_npu as runtime state.',
+                '    if canonicalize_name(req.name) == "torch-npu" and importable("torch_npu"):',
+                '        return True',
+                '    return False',
                 '',
                 'errors = []',
                 'try:',
@@ -853,8 +1174,13 @@ def runtime_install_step_script(
                 '        r = Requirement(raw)',
                 '        if r.marker and not r.marker.evaluate():',
                 '            continue',
-                '        installed = pkg_version(r.name)',
-                '        if r.specifier and not r.specifier.contains(installed):',
+                '        try:',
+                '            installed = pkg_version(r.name)',
+                '        except Exception:',
+                '            if canonicalize_name(r.name) == "torch-npu" and importable("torch_npu"):',
+                '                continue',
+                '            raise',
+                '        if not requirement_satisfied(r, installed):',
                 '            errors.append(f"{r.name}{r.specifier} (installed {installed})")',
                 '    except Exception:',
                 '        pass',
@@ -901,6 +1227,7 @@ def run_runtime_install_step(
     step: str,
     stream_progress: bool = False,
     uninstall_packages: tuple[str, ...] = (),
+    install_deps: bool = False,
 ) -> None:
     script = runtime_install_step_script(
         runtime_root=runtime_root,
@@ -908,6 +1235,7 @@ def run_runtime_install_step(
         container_identity=container_identity,
         step=step,
         uninstall_packages=uninstall_packages,
+        install_deps=install_deps,
     )
     if stream_progress:
         ssh_exec_stream(container, script, stream_progress=True)
@@ -967,6 +1295,38 @@ def verify_runtime_commits(
     return observed
 
 
+def read_runtime_install_env(
+    *,
+    container: SshEndpoint,
+    runtime_root: str,
+    dry_run: bool,
+) -> dict[str, str]:
+    if dry_run:
+        return {}
+    lines = ['set -euo pipefail', f'mkdir -p {quoted(runtime_root)}', f'cd {quoted(runtime_root)}']
+    lines.extend(remote_runtime_env_exports())
+    lines.extend(DEFAULT_ENV_PREAMBLE)
+    lines.extend(
+        [
+            "$PYTHON - <<'PY'",
+            'import json',
+            'import os',
+            f'keys = {json.dumps(RUNTIME_INSTALL_ENV_KEYS)}',
+            'env = {key: os.environ[key] for key in keys if key in os.environ}',
+            'env["VAWS_VLLM_ASCEND_EFFECTIVE_PIP_EXTRA_INDEX_URL"] = (',
+            '    os.environ.get("VAWS_PIP_EXTRA_INDEX_URL")',
+            '    or os.environ.get("PIP_EXTRA_INDEX_URL")',
+            '    or os.environ.get("VAWS_ASCEND_PIP_EXTRA_INDEX_URL", "")',
+            ')',
+            'print(json.dumps(env, sort_keys=True))',
+            'PY',
+        ]
+    )
+    result = ssh_exec(container, '\n'.join(lines))
+    raw = json.loads(result.stdout.strip() or '{}')
+    return redact_runtime_env({str(key): str(value) for key, value in raw.items()})
+
+
 def update_runtime_state(
     *,
     repo_root: Path,
@@ -977,6 +1337,7 @@ def update_runtime_state(
     marker_dirname: str,
     records: list[SnapshotRecord],
     first_reinstall_completed: bool,
+    runtime_install_env: dict[str, str] | None,
 ) -> None:
     def apply_update(state: dict[str, Any]) -> None:
         server_state = state.setdefault('servers', {}).setdefault(server_name, {})
@@ -988,7 +1349,8 @@ def update_runtime_state(
             'last_sync_at': now_utc(),
             'first_reinstall_completed': first_reinstall_completed,
             'last_snapshot_commits': {record.relpath: record.commit for record in records},
-            'last_head_commits': {record.relpath: record.parent for record in records},
+            'last_head_commits': {record.relpath: record.source_head for record in records},
+            'last_runtime_install_env': runtime_install_env or {},
         }
 
     update_state(repo_root, STATE_FILENAME, {'schema_version': 2, 'servers': {}}, apply_update)
@@ -1006,6 +1368,7 @@ def make_manifest(
     marker_dirname: str,
     root_preserve_paths: tuple[str, ...],
     records: list[SnapshotRecord],
+    runtime_install_env: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     git_name, git_email = ensure_local_git_identity(workspace_root)
     return {
@@ -1022,6 +1385,7 @@ def make_manifest(
         'root_preserve_paths': list(root_preserve_paths),
         'git_identity': {'name': git_name, 'email': git_email},
         'repos': [asdict(record) for record in records],
+        'runtime_install_env': runtime_install_env or {},
         'local_source_of_truth': 'tracked + staged + unstaged + untracked-nonignored',
     }
 
@@ -1037,6 +1401,7 @@ def summary_payload(
     reinstall_status: str,
     reason: str | None,
     first_install: bool,
+    runtime_install_env: dict[str, str] | None = None,
     observed_runtime_commits: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     return {
@@ -1049,6 +1414,7 @@ def summary_payload(
         'snapshot_commits': {record.relpath: record.commit for record in records},
         'runtime_commits': observed_runtime_commits,
         'reinstall': reinstall_status,
+        'runtime_install_env': runtime_install_env or {},
         'reason': reason,
     }
 
@@ -1126,6 +1492,10 @@ def run_sync(args: argparse.Namespace) -> int:
             record_map = {record.relpath: record for record in records}
             reinstall_vllm = reinstall_required_for_repo(record_map['vllm'], VLLM_REINSTALL_PATTERNS) if 'vllm' in record_map else False
             reinstall_vllm_ascend = reinstall_required_for_repo(record_map['vllm-ascend'], VLLM_ASCEND_REINSTALL_PATTERNS) if 'vllm-ascend' in record_map else False
+            vllm_dependency_changed = dependency_install_required_for_repo(record_map['vllm']) if 'vllm' in record_map else False
+            vllm_ascend_dependency_changed = dependency_install_required_for_repo(record_map['vllm-ascend']) if 'vllm-ascend' in record_map else False
+            vllm_head_drift = False
+            vllm_ascend_head_drift = False
 
             prior_runtime_state = load_runtime_state(workspace_root)
             last_container_state = (
@@ -1137,9 +1507,11 @@ def run_sync(args: argparse.Namespace) -> int:
             )
             last_commits = last_container_state.get('last_snapshot_commits', {})
             last_head_commits = last_container_state.get('last_head_commits', {})
-            if 'vllm' in record_map and last_head_commits.get('vllm') and record_map['vllm'].parent != last_head_commits['vllm']:
+            if 'vllm' in record_map and last_head_commits.get('vllm') and record_map['vllm'].source_head != last_head_commits['vllm']:
+                vllm_head_drift = True
                 reinstall_vllm = True
-            if 'vllm-ascend' in record_map and last_head_commits.get('vllm-ascend') and record_map['vllm-ascend'].parent != last_head_commits['vllm-ascend']:
+            if 'vllm-ascend' in record_map and last_head_commits.get('vllm-ascend') and record_map['vllm-ascend'].source_head != last_head_commits['vllm-ascend']:
+                vllm_ascend_head_drift = True
                 reinstall_vllm_ascend = True
             if reinstall_vllm and 'vllm-ascend' in record_map:
                 reinstall_vllm_ascend = True
@@ -1149,8 +1521,167 @@ def run_sync(args: argparse.Namespace) -> int:
                     reinstall_vllm = True
                 if 'vllm-ascend' in record_map:
                     reinstall_vllm_ascend = True
+            install_vllm_deps = os.environ.get('VAWS_INSTALL_DEPS') == '1' or vllm_dependency_changed or vllm_head_drift
+            install_vllm_ascend_deps = (
+                os.environ.get('VAWS_INSTALL_DEPS') == '1'
+                or vllm_ascend_dependency_changed
+                or vllm_ascend_head_drift
+            )
 
             snapshot_commits = {record.relpath: record.commit for record in records}
+            if args.apply_mode in {'source-only', 'materialize'}:
+                runtime_install_env: dict[str, str] = {}
+                manifest = make_manifest(
+                    workspace_root=workspace_root,
+                    workspace_id=workspace_id,
+                    snapshot_id=snapshot_id,
+                    server_name=args.server_name,
+                    container_identity=args.container_identity,
+                    runtime_root=runtime_root,
+                    container_cache_root=container_cache_root,
+                    marker_dirname=marker_dirname,
+                    root_preserve_paths=root_preserve_paths,
+                    records=records,
+                    runtime_install_env=runtime_install_env,
+                )
+                manifest['apply_mode'] = args.apply_mode
+                if args.print_manifest:
+                    print(json_dump(manifest))
+
+                if args.dry_run:
+                    summary = summary_payload(
+                        status='dry-run',
+                        server_name=args.server_name,
+                        container_identity=args.container_identity,
+                        workspace_id=workspace_id,
+                        container_cache_root=container_cache_root,
+                        records=records,
+                        reinstall_status='skipped-by-apply-mode',
+                        reason=f'apply_mode={args.apply_mode} skips runtime install/rebuild',
+                        first_install=False,
+                        runtime_install_env=runtime_install_env,
+                        observed_runtime_commits=None,
+                    )
+                    summary['apply_mode'] = args.apply_mode
+                    summary['manifest_path'] = manifest_path
+                    print(json_dump(summary))
+                    return 0
+
+                lock_path = lock_path_for(container_cache_root, workspace_id, args.container_identity)
+                current_phase = 'acquire-lock'
+                emit_progress(current_phase, lock_path=lock_path, apply_mode=args.apply_mode)
+                acquire_container_lock(container, lock_path, args.dry_run)
+                try:
+                    current_phase = 'push-mirrors'
+                    emit_progress(current_phase, repo_count=len(records), apply_mode=args.apply_mode)
+                    all_mirror_paths = [mirror_path_for(container_cache_root, workspace_id, r) for r in records]
+                    ensure_remote_bare_repos(container, all_mirror_paths, args.dry_run)
+                    for record in records:
+                        emit_progress('push-mirror', relpath=record.relpath)
+                        push_snapshot_to_mirror(
+                            repo=workspace_root if record.relpath in ('', '.') else workspace_root / record.relpath,
+                            container=container,
+                            mirror_path=mirror_path_for(container_cache_root, workspace_id, record),
+                            container_cache_root=container_cache_root,
+                            record=record,
+                            workspace_id=workspace_id,
+                            dry_run=args.dry_run,
+                        )
+
+                    current_phase = 'upload-manifest'
+                    emit_progress(current_phase, manifest_path=manifest_path, apply_mode=args.apply_mode)
+                    upload_manifest(container, manifest_path, manifest, args.dry_run)
+
+                    observed_runtime_commits = None
+                    status = 'source-only'
+                    if args.apply_mode == 'materialize':
+                        current_phase = 'materialize-runtime'
+                        emit_progress(current_phase, runtime_root=runtime_root, install='skipped')
+                        materialize_runtime(
+                            container=container,
+                            runtime_root=runtime_root,
+                            container_cache_root=container_cache_root,
+                            workspace_id=workspace_id,
+                            marker_dirname=marker_dirname,
+                            root_preserve_paths=root_preserve_paths,
+                            records=records,
+                            dry_run=args.dry_run,
+                        )
+                        current_phase = 'verify-runtime-commits'
+                        emit_progress(current_phase, repo_count=len(records))
+                        observed_runtime_commits = verify_runtime_commits(
+                            container=container,
+                            runtime_root=runtime_root,
+                            records=records,
+                            dry_run=args.dry_run,
+                        )
+                        expected_runtime_commits = {record.relpath: record.commit for record in records}
+                        if observed_runtime_commits != expected_runtime_commits:
+                            upload_manifest(
+                                container,
+                                manifest_path,
+                                final_manifest(
+                                    manifest,
+                                    status='failed',
+                                    reinstall_status='skipped-by-apply-mode',
+                                    runtime_commits=observed_runtime_commits,
+                                ),
+                                False,
+                            )
+                            summary = summary_payload(
+                                status='failed',
+                                server_name=args.server_name,
+                                container_identity=args.container_identity,
+                                workspace_id=workspace_id,
+                                container_cache_root=container_cache_root,
+                                records=records,
+                                reinstall_status='skipped-by-apply-mode',
+                                reason='runtime commit verification mismatch',
+                                first_install=False,
+                                runtime_install_env=runtime_install_env,
+                                observed_runtime_commits=observed_runtime_commits,
+                            )
+                            summary['apply_mode'] = args.apply_mode
+                            summary['manifest_path'] = manifest_path
+                            print(json_dump(summary))
+                            return 1
+                        status = 'materialized'
+
+                    current_phase = 'finalize-manifest'
+                    emit_progress(current_phase, manifest_path=manifest_path, apply_mode=args.apply_mode)
+                    upload_manifest(
+                        container,
+                        manifest_path,
+                        final_manifest(
+                            manifest,
+                            status=status,
+                            reinstall_status='skipped-by-apply-mode',
+                            runtime_commits=observed_runtime_commits,
+                        ),
+                        False,
+                    )
+                    emit_progress('complete', status=status, apply_mode=args.apply_mode)
+                    summary = summary_payload(
+                        status=status,
+                        server_name=args.server_name,
+                        container_identity=args.container_identity,
+                        workspace_id=workspace_id,
+                        container_cache_root=container_cache_root,
+                        records=records,
+                        reinstall_status='skipped-by-apply-mode',
+                        reason=f'apply_mode={args.apply_mode} skipped runtime install/rebuild',
+                        first_install=False,
+                        runtime_install_env=runtime_install_env,
+                        observed_runtime_commits=observed_runtime_commits,
+                    )
+                    summary['apply_mode'] = args.apply_mode
+                    summary['manifest_path'] = manifest_path
+                    print(json_dump(summary))
+                    return 0
+                finally:
+                    emit_progress('release-lock', lock_path=lock_path)
+                    release_container_lock(container, lock_path, args.dry_run)
+
             if (
                 not args.dry_run
                 and not reinstall_vllm
@@ -1178,6 +1709,7 @@ def run_sync(args: argparse.Namespace) -> int:
                         reinstall_status='not-needed',
                         reason=None,
                         first_install=False,
+                        runtime_install_env=last_container_state.get('last_runtime_install_env', {}),
                         observed_runtime_commits=observed,
                     )
                     print(json_dump(summary))
@@ -1214,6 +1746,16 @@ def run_sync(args: argparse.Namespace) -> int:
                 reinstall_vllm = True if 'vllm' in record_map else reinstall_vllm
                 reinstall_vllm_ascend = True if 'vllm-ascend' in record_map else reinstall_vllm_ascend
 
+            runtime_install_env: dict[str, str] = {}
+            if not args.dry_run:
+                current_phase = 'runtime-install-env'
+                emit_progress(current_phase, runtime_root=runtime_root)
+                runtime_install_env = read_runtime_install_env(
+                    container=container,
+                    runtime_root=runtime_root,
+                    dry_run=args.dry_run,
+                )
+
             manifest = make_manifest(
                 workspace_root=workspace_root,
                 workspace_id=workspace_id,
@@ -1225,6 +1767,7 @@ def run_sync(args: argparse.Namespace) -> int:
                 marker_dirname=marker_dirname,
                 root_preserve_paths=root_preserve_paths,
                 records=records,
+                runtime_install_env=runtime_install_env,
             )
             if args.print_manifest:
                 print(json_dump(manifest))
@@ -1241,6 +1784,7 @@ def run_sync(args: argparse.Namespace) -> int:
                     reinstall_status=reinstall_status,
                     reason=None,
                     first_install=first_install,
+                    runtime_install_env=runtime_install_env,
                     observed_runtime_commits=None,
                 )
                 print(json_dump(summary))
@@ -1261,6 +1805,7 @@ def run_sync(args: argparse.Namespace) -> int:
                         repo=workspace_root if record.relpath in ('', '.') else workspace_root / record.relpath,
                         container=container,
                         mirror_path=mirror_path_for(container_cache_root, workspace_id, record),
+                        container_cache_root=container_cache_root,
                         record=record,
                         workspace_id=workspace_id,
                         dry_run=args.dry_run,
@@ -1331,17 +1876,24 @@ def run_sync(args: argparse.Namespace) -> int:
                             container_identity=args.container_identity,
                             step='install-vllm',
                             stream_progress=True,
+                            install_deps=install_vllm_deps,
                         )
                     if reinstall_vllm_ascend:
-                        emit_progress('runtime-install-vllm-ascend-requirements', requirements='requirements.txt')
-                        run_runtime_install_step(
-                            container=container,
-                            runtime_root=runtime_root,
-                            marker_dirname=marker_dirname,
-                            container_identity=args.container_identity,
-                            step='install-vllm-ascend-requirements',
-                            stream_progress=True,
-                        )
+                        if install_vllm_ascend_deps:
+                            emit_progress('runtime-install-vllm-ascend-requirements', requirements='requirements.txt')
+                            run_runtime_install_step(
+                                container=container,
+                                runtime_root=runtime_root,
+                                marker_dirname=marker_dirname,
+                                container_identity=args.container_identity,
+                                step='install-vllm-ascend-requirements',
+                                stream_progress=True,
+                            )
+                        else:
+                            emit_progress(
+                                'runtime-install-vllm-ascend-requirements',
+                                requirements='skipped-paired-image-deps',
+                            )
                         emit_progress('runtime-install-vllm-ascend', package='vllm-ascend')
                         run_runtime_install_step(
                             container=container,
@@ -1350,16 +1902,8 @@ def run_sync(args: argparse.Namespace) -> int:
                             container_identity=args.container_identity,
                             step='install-vllm-ascend',
                             stream_progress=True,
+                            install_deps=install_vllm_ascend_deps,
                         )
-                    emit_progress('runtime-install-verify-imports')
-                    run_runtime_install_step(
-                        container=container,
-                        runtime_root=runtime_root,
-                        marker_dirname=marker_dirname,
-                        container_identity=args.container_identity,
-                        step='verify-imports',
-                        stream_progress=True,
-                    )
                     emit_progress('runtime-install-verify-deps')
                     try:
                         run_runtime_install_step(
@@ -1389,6 +1933,15 @@ def run_sync(args: argparse.Namespace) -> int:
                             step='verify-deps',
                             stream_progress=True,
                         )
+                    emit_progress('runtime-install-verify-imports')
+                    run_runtime_install_step(
+                        container=container,
+                        runtime_root=runtime_root,
+                        marker_dirname=marker_dirname,
+                        container_identity=args.container_identity,
+                        step='verify-imports',
+                        stream_progress=True,
+                    )
                     emit_progress('runtime-install-marker')
                     run_runtime_install_step(
                         container=container,
@@ -1430,6 +1983,7 @@ def run_sync(args: argparse.Namespace) -> int:
                         reinstall_status=reinstall_status,
                         reason='runtime commit verification mismatch',
                         first_install=first_install,
+                        runtime_install_env=runtime_install_env,
                         observed_runtime_commits=observed_runtime_commits,
                     )
                     print(json_dump(summary))
@@ -1448,6 +2002,7 @@ def run_sync(args: argparse.Namespace) -> int:
                     first_reinstall_completed=first_install
                     or last_container_state.get('first_reinstall_completed', False)
                     or reinstall_status == 'performed',
+                    runtime_install_env=runtime_install_env,
                 )
                 current_phase = 'finalize-manifest'
                 emit_progress(current_phase, manifest_path=manifest_path)
@@ -1473,6 +2028,7 @@ def run_sync(args: argparse.Namespace) -> int:
                     reinstall_status=reinstall_status,
                     reason=None,
                     first_install=first_install,
+                    runtime_install_env=runtime_install_env,
                     observed_runtime_commits=observed_runtime_commits,
                 )
                 print(json_dump(summary))
@@ -1512,6 +2068,12 @@ def build_parser() -> argparse.ArgumentParser:
     sync.add_argument('--force-reinstall', action='store_true', help='Force reinstall of vllm and vllm-ascend regardless of what changed.')
     sync.add_argument('--dry-run', action='store_true')
     sync.add_argument('--print-manifest', action='store_true')
+    sync.add_argument(
+        '--apply-mode',
+        choices=('source-only', 'materialize', 'install'),
+        default='install',
+        help='source-only publishes snapshots only; materialize updates runtime sources without install/rebuild; install keeps full parity behavior.',
+    )
 
     return parser
 

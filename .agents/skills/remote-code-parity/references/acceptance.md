@@ -28,17 +28,35 @@ These should not trigger `remote-code-parity` unless remote code parity is the o
 - the skill does not use `scp`, `sftp`, `rsync`, `sshpass`, or `expect`
 - the skill does not require GitHub credentials on the host or in the container
 - the skill keeps local runtime state only under `.vaws-local/remote-code-parity/`
+- session mode resolves the source worktree and container endpoint from `.vaws-local/sessions/<session-id>/session.json`
 - normal outcomes are reported as compact JSON with `status` equal to `ready`, `blocked`, `failed`, or `dry-run`
 - phase progress is emitted on `stderr` as `__VAWS_PARITY_PROGRESS__=<json>` while the final summary stays on `stdout`
+- `remote_sync_plan.py --mode source-only` reports that install/rebuild will not run
+- `remote_sync_apply.py --mode source-only` completes without invoking runtime install phases
+- `remote_sync_plan.py --mode install` reports install/rebuild reasons and current consent state
 - long runtime-install waits remain attributable because uninstall, requirements install, editable install, import verification, and marker write each emit their own progress phase
-- runtime install keeps pip mirror fallback in the order Tsinghua -> Aliyun -> PyPI instead of hard-coding only the public index
+- whitelisted local env overrides such as `VAWS_MAX_JOBS`, `VAWS_PIP_INDEX_URL`, and `VAWS_SOC_VERSION` are explicitly exported inside the remote install shell instead of relying on SSH env forwarding
+- runtime install can opt into a caller-provided near-cache index via `VAWS_PIP_INDEX_URL`, then keeps pip mirror fallback in the order Tsinghua -> Aliyun -> PyPI instead of hard-coding only the public index
+- runtime install adds the Ascend PyPI repository as a default extra index only for `vllm-ascend` requirements/editable install steps and allows the caller to override it through `VAWS_PIP_EXTRA_INDEX_URL` or disable the default by exporting an empty `VAWS_ASCEND_PIP_EXTRA_INDEX_URL`
+- runtime install exports persistent pip, uv, and CMake `FetchContent` cache roots outside the synced repos so normal materialization cleanups do not delete dependency caches
+- runtime install wraps uv bootstrap with progress and a per-mirror timeout controlled by `VAWS_UV_BOOTSTRAP_TIMEOUT`, then continues with pip fallback when uv cannot be installed quickly
+- runtime install bounds uv package install attempts with `VAWS_UV_INSTALL_TIMEOUT` and supports `VAWS_DISABLE_UV=1` for pip-only validation when uv resolution stalls
+- runtime editable installs default to `--no-deps` against the paired image and skip ordinary `vllm-ascend` requirements reinstall; dependency resolution is re-enabled for dependency-file changes, HEAD drift, verify-deps repair, or `VAWS_INSTALL_DEPS=1`
+- paired-image `torch_npu` is verified by public-version compatibility and real import smoke instead of forcing a `torch-npu` wheel reinstall during verify-deps repair
+- runtime install defaults to `MAX_JOBS=4` and `CMAKE_BUILD_TYPE=Release`, while allowing `VAWS_MAX_JOBS`, `MAX_JOBS`, and `CMAKE_BUILD_TYPE` to override the compile profile
+- runtime install does not set `COMPILE_CUSTOM_KERNELS=0` unless the caller explicitly exports `VAWS_COMPILE_CUSTOM_KERNELS=0`
+- runtime install records its effective cache/compile/index env in the manifest, final summary, and runtime state with URL userinfo redacted
+- runtime install forwards `VAWS_SOC_VERSION` as `SOC_VERSION` and emits an `npu-smi` probe before building `vllm-ascend` when `npu-smi` is available
 
 ### Repo graph and snapshotting
 
 - the workspace root, `vllm/`, and `vllm-ascend/` all participate in parity
 - synthetic snapshots can represent dirty working trees without forcing a real commit
 - when `vllm` or `vllm-ascend` changed locally, the workspace-root synthetic snapshot also changes because the gitlinks are rewritten to the synthetic child commits
-- when a nested child repo has no tree changes, the parent repo does not report a gitlink-only change just because the child was snapshotted
+- synthetic snapshot commits are parentless, so first mirror hydration transfers the snapshot tree instead of the full upstream history
+- parentless snapshot mirror hydration uses Git bundle import, so it does not depend on remote receive-pack negotiation or remote base history that may not exist
+- repeated snapshots of the same workspace tree produce the same synthetic commit ids, enabling the no-change fast path
+- when a nested child repo has no logical changes, the parent repo does not report a reinstall-relevant `changed_paths` entry just because the child was represented by a parentless transport commit
 - ignored files are not added to the snapshot by default
 - denylisted files such as `.vaws-local/*`, `.env*`, and local cache directories are excluded
 - if a required submodule path exists but is not populated, the skill fails closed with a clear error instead of producing a traceback-heavy Git failure
@@ -46,9 +64,12 @@ These should not trigger `remote-code-parity` unless remote code parity is the o
 ### Container-only cache path
 
 - the normal sync path does not require host storage, host lock directories, or `docker inspect`
-- container-local bare mirrors are populated directly through container SSH
+- container-local bare mirrors are populated by SSH-streamed Git bundles, without requiring GitHub credentials or host storage
 - advertised branch refs are published inside the mirror so synthetic child commits are fetchable through ordinary Git paths
+- stale container lock directories are eventually recovered instead of permanently blocking later parity attempts
+- failed or timed-out mirror hydration does not leave matching legacy `git-receive-pack` process trees or partial repo mirrors blocking later retries
 - the normal agent-facing entrypoint can resolve the target from machine inventory through `parity_sync.py`
+- the normal agent-facing entrypoint can also resolve a session target through `parity_sync.py --session-id <id>`
 - the skill does not create or reuse a flat shared host path such as `/home/vaws`
 
 ### Sync mode gate
@@ -101,10 +122,10 @@ These specific mistakes should no longer be part of the normal path:
 - root cleanups inside `/vllm-workspace` should not delete `Mooncake` or `.vaws-runtime`
 - runtime-install should not fail closed just because Ascend env scripts reference shell-specific or otherwise unset variables while being sourced
 - the final heredoc-based import smoke should not fail with a local quoting `SyntaxError`
-- clean nested submodules should not force parent `reinstall_vllm*` decisions through synthetic gitlink churn alone
+- clean nested submodules should not force parent `reinstall_vllm*` decisions through parentless transport gitlink churn alone
 - changing only vllm-ascend files should not uninstall or break the vllm editable install
 - switching vllm to a different commit should trigger both vllm and vllm-ascend reinstall
-- consecutive syncs with no local changes should take the fast path and skip push, materialize, and manifest upload
+- consecutive syncs with no local changes should take the fast path and skip mirror hydration, materialize, and manifest upload
 
 ## Manual regression checklist
 

@@ -56,6 +56,10 @@ All memory attribution is based on measured data — **no estimation or guessing
 
 **Always use the `vllm-ascend-serving` skill for service lifecycle management.** This profiling skill only collects and analyzes data — it attaches to a running service. **msprof wrapping is mandatory** for a complete, traceable memory breakdown.
 
+For parallel agent work, create or reuse a `session-management` session first, then use `--session-id <id>` or `--session-file <session.json>` everywhere below. In session mode, this skill reads serving state from `.vaws-local/sessions/<session-id>/serving.json` and talks only to that session's dedicated container.
+
+Session-scoped memory profiling must use `--attach`. Standalone mode starts its own service and is kept only for legacy single-tenant machine flows; it is blocked when `--session-id` or `--session-file` is used so it cannot bypass session service-port leases or shared state isolation.
+
 ### Step 0: Check msprof availability
 
 Before starting the service, verify that msprof is available on the remote machine:
@@ -63,8 +67,9 @@ Before starting the service, verify that msprof is available on the remote machi
 ```bash
 python3 -c "
 import sys; sys.path.insert(0, '.agents/skills/ascend-memory-profiling/scripts')
-from _common import resolve_machine, endpoint_from_machine, check_msprof_available
-ep = endpoint_from_machine(resolve_machine('<alias>'))
+from _common import check_msprof_available, resolve_execution_target
+target = resolve_execution_target('<alias-or-none>', session_id='<session-id-or-none>')
+ep = target['endpoint']
 print(check_msprof_available(ep))
 "
 ```
@@ -79,18 +84,19 @@ Upload the msprof wrapper, then start the service with `--wrap-script`:
 # Upload msprof wrapper to remote
 python3 -c "
 import sys; sys.path.insert(0, '.agents/skills/ascend-memory-profiling/scripts')
-from _common import resolve_machine, endpoint_from_machine, upload_msprof_wrapper
-ep = endpoint_from_machine(resolve_machine('<alias>'))
+from _common import resolve_execution_target, upload_msprof_wrapper
+target = resolve_execution_target('<alias-or-none>', session_id='<session-id-or-none>')
+ep = target['endpoint']
 print(upload_msprof_wrapper(ep, mem_freq=50))
 "
 # Start service with msprof wrapping
 python3 .agents/skills/vllm-ascend-serving/scripts/serve_start.py \
-  --machine <alias> --model <path> --tp <N> \
+  (--machine <alias> | --session-id <id>) --model <path> --tp <N> \
   --wrap-script /tmp/_vaws_msprof_wrap.sh \
   [-- --speculative-config '...' --compilation-config '...' ...]
 ```
 
-Note: `upload_msprof_wrapper` internally calls `check_msprof_available` as a safety net.
+Note: `upload_msprof_wrapper` internally calls `check_msprof_available` as a safety net and writes a unique wrapper path under `/tmp` for each call.
 
 For baseline npu-smi data, collect `npu-smi info` **before** starting the service.
 
@@ -98,14 +104,16 @@ For baseline npu-smi data, collect `npu-smi info` **before** starting the servic
 
 ```bash
 python3 .agents/skills/ascend-memory-profiling/scripts/mem_collect.py \
-  --machine <alias-or-ip> \
+  --session-id <id> \
   --attach \
   [--baseline-from <previous-run-dir>] \
   [--tag <experiment-name>]
 ```
 
+Use `--machine <alias-or-ip>` for legacy single-tenant workflows, or `--session-file <session.json>` when the session file path is the stable handle.
+
 What happens:
-- Reads `.vaws-local/serving/<alias>.json` to discover port, PID, model path, tp/dp, extra args
+- Reads `.vaws-local/serving/<alias>.json` or `.vaws-local/sessions/<session-id>/serving.json` to discover port, PID, model path, tp/dp, extra args
 - Auto-extracts `--speculative-config`, `--compilation-config`, etc. from the serving state
 - Collects npu-smi snapshot, vLLM logs (from serving's runtime dir), weight manifest
 - Sends inference request to collect activation delta
@@ -114,8 +122,11 @@ What happens:
 ### Step 3: Stop service (via `vllm-ascend-serving`)
 
 ```bash
-python3 .agents/skills/vllm-ascend-serving/scripts/serve_stop.py --machine <alias>
+python3 .agents/skills/vllm-ascend-serving/scripts/serve_stop.py \
+  --session-id <id>
 ```
+
+Use the same target form that was used for `serve_start.py`.
 
 ### Step 4: Collect msprof data
 
@@ -123,7 +134,7 @@ After stop, run `mem_collect --attach` again **with `--resume-run`** pointing to
 
 ```bash
 python3 .agents/skills/ascend-memory-profiling/scripts/mem_collect.py \
-  --machine <alias> --attach \
+  --session-id <id> --attach \
   --resume-run .vaws-local/memory-profiling/<run-dir-from-step-2>/
 ```
 
@@ -155,7 +166,7 @@ When the serving skill is unavailable (e.g. bootstrap scenario), `mem_collect.py
 
 ```bash
 python3 .agents/skills/ascend-memory-profiling/scripts/mem_collect.py \
-  --machine <alias-or-ip> \
+  --session-id <id> \
   --model <remote-weight-path> \
   --tp <N> [--dp <N>] [--tag <name>] \
   [--speculative-config '...'] [--compilation-config '...'] ...
@@ -201,7 +212,8 @@ CANN Runtime                   |      125.3 |      0.122 |   0.4% | msprof npu_m
 
 | Skill | Interaction |
 |-------|-------------|
-| `vllm-ascend-serving` | **Service lifecycle**: Use `serve_start.py` to start (with `--wrap-script` for msprof), `serve_stop.py` to stop. This skill reads serving state from `.vaws-local/serving/<alias>.json`. The serving skill is agnostic to msprof — it only knows about the wrapper script. |
+| `vllm-ascend-serving` | **Service lifecycle**: Use `serve_start.py` to start (with `--wrap-script` for msprof), `serve_stop.py` to stop. This skill reads serving state from `.vaws-local/serving/<alias>.json` or `.vaws-local/sessions/<session-id>/serving.json` in session mode. The serving skill is agnostic to msprof — it only knows about the wrapper script. |
+| `session-management` | **Parallel isolation**: Use `session_create.py` before parallel remote work and pass `--session-id` to serving and memory collection. Session mode stores serving state under `.vaws-local/sessions/<session-id>/serving.json`. |
 | `machine-management` | **SSH endpoint resolution**: Both skills share the machine inventory via `inventory` from `.agents/lib/`. |
 | `remote-code-parity` | **Automatic via serving**: The serving skill calls parity sync before service start. |
 

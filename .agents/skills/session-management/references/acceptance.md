@@ -1,0 +1,21 @@
+# Acceptance
+
+- Two sessions on the same base machine have different worktree roots, container names, container SSH ports, and serving state paths.
+- For non-moving image policies, session creation checks the host-local image cache before `docker pull`.
+- The first session for a base image can create a `vaws-session-prepared:<image-hash>-ssh-v2` image after installing SSH packages and pip / pytest basics.
+- A later session for the same base image starts from the prepared image and reports `used_prepared_image_cache: true` without reinstalling `openssh` or repeating pip / pytest bootstrap.
+- `session_create.py --disable-prepared-image-cache` keeps the raw base-image bootstrap path available.
+- Default session creation reports `verification_mode: ssh` and `npu_smoke_skipped: true` after host/container SSH checks.
+- `session_create.py --verification-mode full` keeps the full `torch` / `torch_npu` smoke check available.
+- `session_create.py` without `--session-id`, `VAWS_SESSION_ID`, or `VAWS_AGENT_SESSION_ID` generates a fresh session id instead of reusing repo-root `.vaws-local/current-session.json`.
+- Explicit `session_create.py --session-id <id> --no-worktree` does not overwrite the repo-root `.vaws-local/current-session.json`.
+- Session container SSH port allocation does not hold the lease lock while running per-port remote SSH probes.
+- `serve_start.py --session-id s1` stops only `s1`'s previous service.
+- `serve_start.py --session-id s1` defaults to `s1`'s leased NPU devices and rejects explicit devices outside that lease.
+- `serve_stop.py --session-id s1` does not read or mutate `.vaws-local/serving/<machine>.json`.
+- `bench_run.py --session-id s2` stops only `s2`'s service at cleanup time.
+- `parity_sync.py --session-id s1` derives `workspace_id=s1` and `container_identity=<s1-container>@<runtime-root>`.
+- `session_remove.py --remove-container --release-leases` can skip `serve_stop.py` when no session serving state exists and still release leases after the container is removed or the stop result is `not_found`.
+- `session_remove.py` returns `needs_repair` instead of `removed` when requested container or worktree removal fails.
+- `session_gc.py` does not release leases for generic `failed` sessions.
+- Legacy `--machine` commands continue to work against the base machine state.

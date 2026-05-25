@@ -178,6 +178,8 @@ The managed config must enforce:
 - password auth disabled
 - dedicated PID file
 
+The shared bootstrap helper also supports an opt-in prepared image cache for session-management. When enabled by its caller, it may prefer a local exact image hit for non-moving image policies, derive `vaws-session-prepared:<base-image-id>-ssh-v2`, and use that image to skip repeated `openssh` package installation plus pip / pytest bootstrap for short-lived session containers. The normal managed-base-container add / repair wrappers do not enable this cache by default, preserving conservative raw selected-image behavior.
+
 The container bootstrap must ensure `/run/sshd` exists before starting the dedicated daemon.
 Remote-script arguments that may contain spaces, such as SSH public keys or mesh peer keys, must survive the local -> ssh -> remote-shell hop intact. Do not rely on raw argv joining for those values.
 

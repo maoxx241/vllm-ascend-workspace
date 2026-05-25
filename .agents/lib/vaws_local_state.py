@@ -21,6 +21,7 @@ STATE_DIRNAME = ".vaws-local"
 PROFILE_FILENAME = "machine-profile.json"
 INVENTORY_FILENAME = "machine-inventory.json"
 LEGACY_INVENTORY_FILENAME = ".machine-inventory.json"
+SESSIONS_DIRNAME = "sessions"
 PROFILE_SCHEMA_VERSION = 1
 CONTAINER_PREFIX = "vaws-"
 USERNAME_PATTERN = re.compile(r"^[a-z0-9]{3,32}$")
@@ -32,6 +33,7 @@ ROOT = Path(__file__).resolve().parents[2]
 STATE_DIR = ROOT / STATE_DIRNAME
 PROFILE_PATH = STATE_DIR / PROFILE_FILENAME
 INVENTORY_PATH = STATE_DIR / INVENTORY_FILENAME
+SESSIONS_DIR = STATE_DIR / SESSIONS_DIRNAME
 LEGACY_INVENTORY_PATH = ROOT / LEGACY_INVENTORY_FILENAME
 
 
@@ -215,6 +217,7 @@ def profile_summary(path: Path = PROFILE_PATH) -> dict[str, Any]:
         "state_dir": str(path.parent),
         "profile_path": str(path),
         "inventory_path": str(INVENTORY_PATH),
+        "sessions_path": str(SESSIONS_DIR),
         "legacy_inventory_path": str(LEGACY_INVENTORY_PATH),
         "exists": path.exists(),
         "choice_required": not path.exists(),

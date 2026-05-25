@@ -5,7 +5,7 @@ description: Start, check, or stop a single-node vLLM Ascend online service on a
 
 # vLLM Ascend Serving
 
-Manage the lifecycle of a **single-node colocated** `vllm-ascend` online service on a workspace-managed ready remote container.
+Manage the lifecycle of a **single-node colocated** `vllm-ascend` online service on a workspace-managed ready remote container or an isolated VAWS session container.
 
 This skill takes structured parameters, handles all SSH escaping and remote execution internally, and returns machine-readable JSON. The agent never needs to construct raw shell commands for service management.
 
@@ -29,8 +29,12 @@ This skill takes structured parameters, handles all SSH escaping and remote exec
 
 - `start` automatically runs `remote-code-parity` before launching. If parity fails, start is blocked.
 - `status` and `stop` do not require parity.
+- For parallel agent work, use `session-management` first and pass `--session-id <id>`. Session mode reads and writes `.vaws-local/sessions/<id>/serving.json` and never stops another session's service.
+- Session mode serializes `start` / `stop` operations for the same session with a serving lock; different sessions remain independent.
+- Once a remote PID is launched, `serve_start.py` writes `serving.json` with `status=starting` before health probing so `serve_stop.py` can clean up even if readiness later fails.
+- Legacy `--machine` mode remains supported and keeps the previous machine-level singleton behavior.
 - All remote execution goes through the scripts — never construct raw SSH commands for serving.
-- Keep local runtime state only under `.vaws-local/serving/`.
+- Keep local runtime state under `.vaws-local/serving/` for legacy mode and `.vaws-local/sessions/<id>/` for session mode.
 - Progress on `stderr` as `__VAWS_SERVING_PROGRESS__=<json>`, final result on `stdout` as JSON.
 
 ## Cross-platform launcher rule
@@ -44,7 +48,7 @@ This skill takes structured parameters, handles all SSH escaping and remote exec
 
 ```bash
 python3 .agents/skills/vllm-ascend-serving/scripts/serve_start.py \
-  --machine <alias-or-ip> \
+  (--machine <alias-or-ip> | --session-id <id>) \
   --model <remote-weight-path> \
   [--served-model-name <name>] \
   [--tp <N>] [--dp <N>] \
@@ -102,21 +106,24 @@ Returns which NPU devices are free, which are busy (with PID and HBM details), p
 
 ```bash
 python3 .agents/skills/vllm-ascend-serving/scripts/serve_status.py \
-  --machine <alias-or-ip>
+  (--machine <alias-or-ip> | --session-id <id>)
 ```
 
 ### Stop
 
 ```bash
 python3 .agents/skills/vllm-ascend-serving/scripts/serve_stop.py \
-  --machine <alias-or-ip> [--force]
+  (--machine <alias-or-ip> | --session-id <id>) [--force]
 ```
 
 ## Local state
 
 Per-machine launch state is stored under `.vaws-local/serving/<alias>.json`.
+Session launch state is stored under `.vaws-local/sessions/<session-id>/serving.json`.
 
 This file records the last successful launch parameters (model, tp, devices, env, extra args, port, pid, log paths, runtime_dir, wrap_script). It is the basis for `--relaunch` and is read by other skills (e.g. `ascend-memory-profiling`) in attach mode.
+
+During launch the same file may temporarily contain `status=starting`; this is still a valid cleanup target for `serve_stop.py`.
 
 ## Workflow
 
@@ -126,7 +133,7 @@ The `--machine` argument is looked up in the local machine inventory. The machin
 
 ### 2. Stop any existing service
 
-If a previous service is recorded for this machine, it is stopped before launching a new one.
+If a previous service is recorded for this target, it is stopped before launching a new one. In session mode this target is the session, not the base machine, so other sessions on the same host are not touched.
 
 ### 3. Run remote-code-parity (start only)
 

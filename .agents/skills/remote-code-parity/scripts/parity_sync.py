@@ -14,6 +14,13 @@ from common import WORKSPACE_ID_PATTERN, json_dump, repo_root_from
 from install_consent import load_consent_state, resolve_sync_mode
 from remote_code_parity import DEFAULT_CONTAINER_CACHE_ROOT
 
+ROOT = Path(__file__).resolve().parents[4]
+LIB_DIR = ROOT / '.agents' / 'lib'
+if str(LIB_DIR) not in sys.path:
+    sys.path.insert(0, str(LIB_DIR))
+
+from vaws_session_state import load_session_lookup  # noqa: E402
+
 
 DEFAULT_CONTAINER_USER = 'root'
 
@@ -52,6 +59,9 @@ def resolve_machine_record(inventory: dict[str, Any], identifier: str) -> dict[s
 
 
 def build_derived_args(repo_root: Path, args: argparse.Namespace) -> dict[str, Any]:
+    if args.session_id or args.session_file:
+        return build_derived_args_from_session(repo_root, args)
+
     inventory = load_machine_inventory(repo_root)
     record = resolve_machine_record(inventory, args.machine)
     runtime_root = args.runtime_root or record.get('container', {}).get('workdir') or '/vllm-workspace'
@@ -83,6 +93,47 @@ def build_derived_args(repo_root: Path, args: argparse.Namespace) -> dict[str, A
     }
 
 
+def build_derived_args_from_session(repo_root: Path, args: argparse.Namespace) -> dict[str, Any]:
+    lookup = load_session_lookup(
+        session_id=args.session_id,
+        session_file=args.session_file,
+        repo_root=repo_root,
+    )
+    session = lookup.session
+    local = session['local']
+    remote = session['remote']
+    container = remote['container']
+    workspace_root = repo_root_from(Path(local['worktree_root']))
+    runtime_root = args.runtime_root or container.get('runtime_root') or container.get('workdir') or '/vllm-workspace'
+    workspace_id = args.workspace_id or session.get('workspace_id') or session['session_id']
+    container_name = container.get('name')
+    if not container_name:
+        raise RuntimeError(f"session {session['session_id']!r} is missing remote.container.name")
+    container_port = container.get('ssh_port')
+    if not isinstance(container_port, int):
+        raise RuntimeError(f"session {session['session_id']!r} is missing remote.container.ssh_port")
+    container_host = remote.get('host')
+    if not container_host:
+        raise RuntimeError(f"session {session['session_id']!r} is missing remote.host")
+    container_identity = f'{container_name}@{runtime_root}'
+    return {
+        'workspace_root': str(workspace_root),
+        'workspace_id': workspace_id,
+        'server_name': session['base_machine'],
+        'runtime_root': runtime_root,
+        'container_identity': container_identity,
+        'container_cache_root': args.container_cache_root,
+        'container_host': container_host,
+        'container_port': container_port,
+        'container_user': args.container_user,
+        'preserve_path': list(args.preserve_path),
+        'machine_record': None,
+        'session_id': session['session_id'],
+        'session_file': str(lookup.session_file),
+        'inventory_path': str(lookup.session_file),
+    }
+
+
 def build_low_level_command(derived: dict[str, Any], args: argparse.Namespace) -> list[str]:
     script_path = Path(__file__).with_name('remote_code_parity.py')
     cmd = [
@@ -109,12 +160,16 @@ def build_low_level_command(derived: dict[str, Any], args: argparse.Namespace) -
         cmd.append('--force-reinstall')
     if args.dry_run:
         cmd.append('--dry-run')
+    if args.apply_mode:
+        cmd.extend(['--apply-mode', args.apply_mode])
     return cmd
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description='Resolve a managed machine from inventory and run container-only remote-code-parity sync.', allow_abbrev=False)
-    parser.add_argument('--machine', required=True, help='machine alias or host IP from inventory')
+    parser.add_argument('--machine', help='machine alias or host IP from inventory')
+    parser.add_argument('--session-id', help='VAWS session id')
+    parser.add_argument('--session-file', help='explicit session.json path')
     parser.add_argument('--repo-root', default='.')
     parser.add_argument('--workspace-id', default=None)
     parser.add_argument('--runtime-root', default=None)
@@ -125,6 +180,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument('--print-manifest', action='store_true')
     parser.add_argument('--force-reinstall', action='store_true', help='Force reinstall of vllm and vllm-ascend regardless of what changed.')
     parser.add_argument('--dry-run', action='store_true')
+    parser.add_argument(
+        '--apply-mode',
+        choices=('source-only', 'materialize', 'install'),
+        default='install',
+        help='source-only publishes container-cache snapshots only; materialize updates runtime sources without install; install preserves the full parity behavior.',
+    )
     parser.add_argument('--print-derived-args', action='store_true')
     return parser
 
@@ -132,10 +193,13 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     args = build_parser().parse_args()
     repo_root = repo_root_from(Path(args.repo_root))
+    if not args.machine and not args.session_id and not args.session_file:
+        raise RuntimeError('--machine is required unless --session-id or --session-file is used')
     derived = build_derived_args(repo_root, args)
+    state_repo_root = repo_root_from(Path(derived['workspace_root']))
 
     if not args.force_reinstall:
-        consent_state = load_consent_state(repo_root)
+        consent_state = load_consent_state(state_repo_root)
         mode = resolve_sync_mode(consent_state, derived['server_name'], derived['container_identity'])
         if mode == 'image':
             print(json_dump({

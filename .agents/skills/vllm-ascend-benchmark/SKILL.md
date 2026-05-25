@@ -27,8 +27,10 @@ Run `vllm bench serve` on a **ready** workspace-managed remote container and pro
 - **User intent takes priority** over nightly configs. Nightly YAML files under `vllm-ascend/tests/e2e/nightly/single_node/models/configs/` are a **reference source** for discovering how to configure a given model or feature (MTP, graph mode, TP count, etc.), not an execution template to run verbatim.
 - Nightly configs are used as a **fallback** only when the user specifies a model but provides no other parameters.
 - After benchmarking, the service is automatically stopped. No residual processes should remain.
+- If service startup returns a non-ready result after launching a PID, benchmark cleanup still calls `serve_stop.py --force` for the same target.
+- For parallel agent work, use `session-management` first and call `bench_run.py --session-id <id>`. Cleanup then stops only that session's service.
 - Progress goes to `stderr` as `__VAWS_BENCHMARK_PROGRESS__=<json>`. Final result goes to `stdout` as JSON.
-- Keep local benchmark state only under `.vaws-local/benchmark/`.
+- Keep local benchmark state under `.vaws-local/benchmark/` for legacy mode and `.vaws-local/sessions/<id>/benchmark/` for session-scoped workflows.
 - **Multi-state comparisons** (e.g. baseline vs PR vs modified) are orchestrated by the agent calling `bench_run.py` once per code state, not by a single script. The agent is responsible for switching code states (via worktree, checkout, or manual edit) and running parity between each state.
 
 ## Cross-platform launcher rule
@@ -40,7 +42,7 @@ Run `vllm bench serve` on a **ready** workspace-managed remote container and pro
 
 ```bash
 python3 .agents/skills/vllm-ascend-benchmark/scripts/bench_run.py \
-  --machine <alias-or-ip> \
+  (--machine <alias-or-ip> | --session-id <id>) \
   --model <remote-weight-path> \
   [--tp <N>] [--dp <N>] \
   [--runs <N>] \
@@ -83,6 +85,8 @@ If a service is already running on the target machine, stop it before proceeding
 ### 4. Start the service
 
 Uses `serve_start.py` internally to launch the vLLM service with the assembled configuration. Parity sync is handled automatically by the serving skill.
+
+If startup fails or times out after a remote PID was recorded, `bench_run.py` calls `serve_stop.py --force` before returning failure.
 
 ### 5. Run benchmark iterations
 

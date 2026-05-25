@@ -6,7 +6,7 @@ Inputs (one of):
   --remote-profile-root <abs-path>            -- raw remote profiling root (historical)
 
 Behavior:
-  1. Resolve machine + SSH endpoint via inventory.
+  1. Resolve machine/session + SSH endpoint via inventory or session state.
   2. Tar-sync ``scripts/ascend_profile/`` to ``<remote-work-dir>/ascend_profile/``.
   3. Remote: ``python3 -m ascend_profile.analyze <ROOT> --output <OUT> --verbose``.
   4. Validate required artifacts exist on the remote.
@@ -37,7 +37,9 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         allow_abbrev=False,
     )
-    parser.add_argument("--machine", required=True, help="alias or IP from machine inventory")
+    parser.add_argument("--machine", help="alias or IP from machine inventory")
+    parser.add_argument("--session-id", help="VAWS session id")
+    parser.add_argument("--session-file", help="explicit session.json path")
     src = parser.add_mutually_exclusive_group(required=True)
     src.add_argument("--manifest", help="path to ascend-profiling-collection manifest.json")
     src.add_argument("--remote-profile-root", help="absolute remote path to profiling root")
@@ -320,14 +322,33 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     remote_profile_root = input_info["remote_profile_root"]
     manifest = input_info["manifest"]
+    if manifest is not None and not args.session_id and not args.session_file:
+        args.session_id = manifest.get("session_id")
+        args.session_file = manifest.get("session_file")
 
-    machine = common.resolve_machine(args.machine)
-    alias = common.get_machine_alias(machine)
-    endpoint = common.endpoint_from_machine(machine)
+    try:
+        target = common.resolve_execution_target(
+            args.machine,
+            session_id=args.session_id,
+            session_file=args.session_file,
+        )
+    except ValueError as exc:
+        common.print_json(
+            {
+                "status": "failed",
+                "phase": "resolve",
+                "error": str(exc),
+            }
+        )
+        return 2
+    alias = target["alias"]
+    endpoint = target["endpoint"]
     common.progress(
         "resolve",
-        "machine resolved",
+        "target resolved",
         machine=alias,
+        mode=target["mode"],
+        session_id=target["session_id"],
         host=endpoint.host,
         ssh_port=endpoint.port,
     )
@@ -345,6 +366,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "phase": "setup",
                 "error": str(exc),
                 "machine": alias,
+                "session_id": target["session_id"],
             }
         )
         return 2
@@ -523,6 +545,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     output: dict[str, Any] = {
         "status": "ok",
         "machine": alias,
+        "mode": target["mode"],
+        "session_id": target["session_id"],
+        "session_file": target["session_file"],
         "remote_profile_root": remote_profile_root,
         "remote_output_dir": remote_output_dir,
         "local_output_dir": str(run_dir),

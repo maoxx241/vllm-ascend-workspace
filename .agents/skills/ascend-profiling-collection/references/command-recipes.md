@@ -16,6 +16,20 @@ python3 .agents/skills/ascend-profiling-collection/scripts/collect_torch_profile
   --benchmark-output-tokens 64
 ```
 
+Session-scoped equivalent:
+
+```bash
+python3 .agents/skills/ascend-profiling-collection/scripts/collect_torch_profile_case.py \
+  --session-id pr123 \
+  --model /home/weights/Qwen3-8B \
+  --served-model-name Qwen3-8B \
+  --tp 1 \
+  --tag qwen3_8b_eager_text \
+  --mode enforce_eager \
+  --request-kind text \
+  --benchmark-output-tokens 64
+```
+
 ## Full-decode-only graph mode with MTP=3 speculative decoding
 
 ```bash
@@ -94,7 +108,7 @@ python3 .agents/skills/ascend-profiling-collection/scripts/profile_control.py \
   --machine blue-a --action stop_profile --timeout 900
 ```
 
-The script reads the service port from `.vaws-local/serving/<alias>.json`.
+The script reads the service port from `.vaws-local/serving/<alias>.json`, or from `.vaws-local/sessions/<id>/serving.json` when called with `--session-id`.
 
 ## What NOT to do
 

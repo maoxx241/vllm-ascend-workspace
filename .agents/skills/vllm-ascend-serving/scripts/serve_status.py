@@ -3,6 +3,7 @@
 
 Usage:
     python3 serve_status.py --machine <alias>
+    python3 serve_status.py --session-id <id>
 
 Progress on stderr, final JSON on stdout.
 """
@@ -21,13 +22,15 @@ if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 
 from _common import (
-    container_endpoint,
     emit_progress,
     load_serving_state,
+    now_utc,
     print_json,
-    resolve_machine,
+    resolve_execution_target,
+    save_serving_state,
     ssh_exec,
 )
+from vaws_session_state import release_service_port
 
 
 def check_alive(ep, pid: int) -> bool:
@@ -59,7 +62,9 @@ def check_models(ep, port: int) -> dict[str, Any] | None:
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
-    p.add_argument("--machine", required=True, help="machine alias or host IP")
+    p.add_argument("--machine", help="machine alias or host IP")
+    p.add_argument("--session-id", help="VAWS session id")
+    p.add_argument("--session-file", help="explicit session.json path")
     return p
 
 
@@ -67,15 +72,25 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
     try:
-        record = resolve_machine(args.machine)
-        alias = record["alias"]
-        ep = container_endpoint(record)
+        target = resolve_execution_target(
+            args.machine,
+            session_id=args.session_id,
+            session_file=args.session_file,
+        )
+        alias = target.alias
+        ep = target.endpoint
 
-        state = load_serving_state(alias)
+        state = load_serving_state(
+            alias,
+            session_id=target.session_id,
+            state_repo_root=target.state_repo_root,
+        )
         if state is None:
             print_json({
                 "status": "not_found",
                 "machine": alias,
+                "mode": target.mode,
+                "session_id": target.session_id,
                 "message": "no serving state recorded for this machine",
             })
             return 0
@@ -86,6 +101,8 @@ def main(argv: list[str] | None = None) -> int:
             print_json({
                 "status": "not_found",
                 "machine": alias,
+                "mode": target.mode,
+                "session_id": target.session_id,
                 "message": "serving state is missing pid or port",
                 "state": state,
             })
@@ -106,9 +123,29 @@ def main(argv: list[str] | None = None) -> int:
         else:
             status = "stopped"
 
+        state["status"] = status
+        state["status_checked_at"] = now_utc()
+        if status == "stopped":
+            state["stopped_at"] = state.get("stopped_at") or state["status_checked_at"]
+        save_serving_state(
+            alias,
+            state,
+            session_id=target.session_id,
+            state_repo_root=target.state_repo_root,
+        )
+        if status == "stopped" and target.session_id:
+            release_service_port(
+                repo_root=target.state_repo_root,
+                machine_alias=alias,
+                session_id=target.session_id,
+                port=state.get("port"),
+            )
+
         output: dict[str, Any] = {
             "status": status,
             "machine": alias,
+            "mode": target.mode,
+            "session_id": target.session_id,
             "alive": alive,
             "health": health,
             "models_ok": models is not None,
@@ -141,6 +178,7 @@ def main(argv: list[str] | None = None) -> int:
             "status": "failed",
             "error": str(exc),
             "machine": getattr(args, "machine", None),
+            "session_id": getattr(args, "session_id", None),
         })
         return 2
 

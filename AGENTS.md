@@ -10,11 +10,14 @@ Repo-local skills live under `.agents/skills/`. Each has its own `SKILL.md` with
 |-------|---------|
 | `repo-init` | Initialize workspace: `gh`, GitHub auth, submodules, fork topology |
 | `machine-management` | Add / verify / repair / remove a remote NPU machine |
+| `session-management` | Create / inspect / remove isolated agent sessions (local worktree + remote container + leases) |
+| `remote-toolbox` | Structured target/probe/exec/job/sync/service/artifact/cleanup tools for managed remote containers |
 | `remote-code-parity` | Sync local working tree to remote container before execution |
 | `vllm-ascend-serving` | Start / check / stop a vLLM Ascend service on a remote container |
 | `vllm-ascend-benchmark` | Run `vllm bench serve` benchmarks (single-run or multi-run with warmup) |
 | `ascend-memory-profiling` | Profile HBM memory usage on Ascend NPU for vLLM serving scenarios |
 | `ascend-profiling-collection` | Collect one Ascend torch-profiler case end-to-end (start service, bracket workload with `/start_profile` + `/stop_profile`, run `analyse()`, verify outputs, write manifest) |
+| `ascend-profiling-analysis` | Analyze collected Ascend torch-profiler roots/manifests and generate reports |
 
 None of these are gates for normal local coding, docs work, or unrelated Git tasks.
 
@@ -25,8 +28,10 @@ None of these are gates for normal local coding, docs work, or unrelated Git tas
 - Keep `.gitmodules` on community upstream URLs.
 - Prefer skill wrapper scripts over raw SSH / shell commands for remote operations.
 - Skill wrappers: progress on `stderr`, final JSON on `stdout`.
+- Use the remote toolbox entrypoints for agent-facing target resolution, probing, shell execution, long jobs, artifact transfer, service adapters, and cleanup before falling back to bare SSH.
+- For parallel remote work, create or reuse a `session-management` session and pass `--session-id` through parity, serving, benchmark, and profiling commands. Legacy `--machine` flows remain available for explicitly single-tenant work.
 - This repo targets Huawei Ascend NPU. Local machines (Mac/PC) cannot run `torch`/`torch_npu`-dependent code. Do not attempt local test execution — go straight to the remote container.
 
 ## Maintenance
 
-When changing a skill, update the whole package together: `SKILL.md`, `scripts/`, `references/`. When the change affects shared state, also update `.agents/scripts/workspace_profile.py` and `.agents/lib/vaws_local_state.py`.
+When changing a skill, update the whole package together: `SKILL.md`, `scripts/`, `references/`. When the change affects shared state, also update `.agents/scripts/workspace_profile.py`, `.agents/lib/vaws_local_state.py`, `.agents/lib/vaws_session_id.py`, `.agents/lib/vaws_session_state.py`, and `.agents/lib/vaws_remote_toolbox.py` as applicable.

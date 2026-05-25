@@ -16,7 +16,8 @@ Two modes of operation:
 **Attach mode** (--attach):
   Attach to a service already managed by the vllm-ascend-serving skill.
   Reads service state (port, PID, log paths, model config) from
-  `.vaws-local/serving/<alias>.json`.  Skips service start/stop.
+  `.vaws-local/serving/<alias>.json` or
+  `.vaws-local/sessions/<session-id>/serving.json`.  Skips service start/stop.
   If the service was launched with --wrap-script pointing to the msprof
   wrapper, attach mode detects this, runs msprof export, and collects CSVs.
   When the service was NOT launched with msprof, a warning is emitted and the
@@ -29,10 +30,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shlex
 import sys
 import time
+import uuid
 from pathlib import Path
 
 from _common import (
@@ -40,19 +43,23 @@ from _common import (
     MSPROF_WRAPPER_REMOTE_PATH,
     SshEndpoint,
     check_msprof_available,
-    endpoint_from_machine,
     ensure_run_dir,
     find_python,
     get_machine_alias,
     load_serving_state,
     progress,
-    resolve_machine,
+    resolve_execution_target,
     run_msprof_export,
     ssh_exec,
     ssh_upload,
     ssh_write_text,
     upload_msprof_wrapper,
 )
+
+
+def unique_remote_tmp(prefix: str, session_id: str | None = None) -> str:
+    sid = re.sub(r"[^A-Za-z0-9_.-]+", "_", session_id or "legacy").strip("._-") or "legacy"
+    return f"/tmp/{prefix}_{sid}_{os.getpid()}_{uuid.uuid4().hex[:8]}"
 
 
 _ENV_ERROR_PATTERNS = [
@@ -67,15 +74,16 @@ _ENV_ERROR_PATTERNS = [
 ]
 
 
-def _emit_env_recovery_hint(log_text: str, machine: str) -> None:
+def _emit_env_recovery_hint(log_text: str, machine: str, session_id: str | None = None) -> None:
     """If log_text contains environment error patterns, emit structured recovery guidance."""
     if not log_text:
         return
     if not any(pat in log_text for pat in _ENV_ERROR_PATTERNS):
         return
+    target_arg = f"--session-id {session_id}" if session_id else f"--machine {machine}"
     recovery_cmd = (
         f"python3 .agents/skills/remote-code-parity/scripts/parity_sync.py "
-        f"--machine {machine} --force-reinstall"
+        f"{target_arg} --force-reinstall"
     )
     progress(
         "ENV_ERROR_DETECTED: Remote Python environment is broken. "
@@ -87,7 +95,9 @@ def _emit_env_recovery_hint(log_text: str, machine: str) -> None:
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Collect Ascend NPU memory profiling data")
-    p.add_argument("--machine", required=True, help="Machine alias or IP")
+    p.add_argument("--machine", help="Machine alias or IP")
+    p.add_argument("--session-id", help="VAWS session id")
+    p.add_argument("--session-file", help="explicit session.json path")
     p.add_argument("--model", default="", help="Remote model weight path (auto-detected in attach mode)")
     p.add_argument("--tp", type=int, default=None, help="Tensor parallel size (auto-detected in attach mode)")
     p.add_argument("--dp", type=int, default=None, help="Data parallel size (auto-detected in attach mode)")
@@ -445,7 +455,11 @@ def _resolve_attach_state(machine: dict, args: argparse.Namespace) -> dict:
     inference).
     """
     alias = get_machine_alias(machine)
-    state = load_serving_state(alias)
+    state = load_serving_state(
+        alias,
+        session_id=args.session_id,
+        state_repo_root=getattr(args, "_state_repo_root", Path(__file__).resolve().parents[4]),
+    )
     if state is None:
         raise SystemExit(
             f"No serving state found for machine '{alias}'. "
@@ -545,12 +559,30 @@ def _collect_serving_logs(ep: SshEndpoint, serving_state: dict, local_path: Path
 
 def main() -> None:
     args = parse_args()
-    machine = resolve_machine(args.machine)
-    ep = endpoint_from_machine(machine)
+    target = resolve_execution_target(
+        args.machine,
+        session_id=args.session_id,
+        session_file=args.session_file,
+    )
+    machine = target["record"]
+    ep = target["endpoint"]
+    args._state_repo_root = target["state_repo_root"]
+    args._session = target.get("session")
+    if target["session_id"]:
+        args.session_id = target["session_id"]
+        args.session_file = target["session_file"]
+    if not args.machine:
+        args.machine = target["alias"]
 
     if args.attach:
         _main_attach(args, machine, ep)
     else:
+        if target["session_id"]:
+            raise SystemExit(
+                "session-scoped memory profiling requires --attach. "
+                "Start the service with vllm-ascend-serving --wrap-script first, "
+                "then run mem_collect.py --session-id <id> --attach."
+            )
         _main_standalone(args, machine, ep)
 
 
@@ -599,7 +631,7 @@ def _main_attach(
         progress(f"Resuming into existing run: {run_dir}")
     else:
         run_dir = ensure_run_dir(tag=args.tag or f"attach_{model_tag}")
-    remote_dir = f"/tmp/vaws_memprof_{int(time.time())}"
+    remote_dir = unique_remote_tmp("vaws_memprof_attach", args.session_id)
 
     progress(f"Output directory: {run_dir}")
     ssh_exec(ep, f"mkdir -p {remote_dir}")
@@ -619,6 +651,8 @@ def _main_attach(
 
     manifest: dict = {
         "mode": "attach",
+        "session_id": args.session_id,
+        "session_file": args.session_file,
         "model": model,
         "tp": tp,
         "dp": dp,
@@ -628,7 +662,10 @@ def _main_attach(
         "msprof_enabled": msprof_used,
         "msprof_output_dir": msprof_data_dir,
         "run_dir": str(run_dir),
-        "serving_state_ref": f".vaws-local/serving/{alias}.json",
+        "serving_state_ref": (
+            f".vaws-local/sessions/{args.session_id}/serving.json"
+            if args.session_id else f".vaws-local/serving/{alias}.json"
+        ),
         "serving_runtime_dir": svc_runtime_dir,
         "speculative_config": args.speculative_config,
         "compilation_config": args.compilation_config,
@@ -654,7 +691,7 @@ def _main_attach(
             wait_for_health(ep, port, timeout=args.health_timeout)
         except TimeoutError:
             log_text = _collect_serving_logs(ep, serving_state, run_dir)
-            _emit_env_recovery_hint(log_text, args.machine)
+            _emit_env_recovery_hint(log_text, args.machine or "", args.session_id)
             raise SystemExit(
                 f"Service on port {port} is not responding to /health after "
                 f"{args.health_timeout}s. Check service status with the serving skill."
@@ -780,10 +817,23 @@ def _main_standalone(
     args.tp = tp
     args.dp = dp
     args.port = port
+    if not args.devices:
+        session = getattr(args, "_session", None)
+        leased_devices = session.get("leases", {}).get("npu_devices", []) if isinstance(session, dict) else []
+        if leased_devices:
+            selected = sorted(int(item) for item in leased_devices)
+            need = tp * dp
+            if len(selected) < need:
+                raise SystemExit(
+                    f"session {args.session_id} leases {len(selected)} NPU devices "
+                    f"but standalone memory profiling needs {need} (tp={tp}, dp={dp})"
+                )
+            args.devices = ",".join(str(item) for item in selected[:need])
+            progress(f"Using leased session devices: {args.devices}")
 
     model_tag = Path(args.model).name.replace("/", "_")
     run_dir = ensure_run_dir(tag=args.tag or model_tag)
-    remote_dir = f"/tmp/vaws_memprof_{int(time.time())}"
+    remote_dir = unique_remote_tmp("vaws_memprof", args.session_id)
 
     progress(f"Output directory: {run_dir}")
     ssh_exec(ep, f"mkdir -p {remote_dir}")
@@ -796,6 +846,8 @@ def _main_standalone(
 
     manifest: dict = {
         "mode": "standalone",
+        "session_id": args.session_id,
+        "session_file": args.session_file,
         "model": args.model,
         "tp": tp,
         "dp": dp,
@@ -824,7 +876,7 @@ def _main_standalone(
         progress(f"ERROR: {e}")
         log_text = collect_vllm_logs(ep, remote_dir, run_dir)
         stop_service(ep)
-        _emit_env_recovery_hint(log_text, args.machine)
+        _emit_env_recovery_hint(log_text, args.machine or "", args.session_id)
         manifest["error"] = str(e)
         print(json.dumps(manifest, indent=2, ensure_ascii=False))
         sys.exit(1)

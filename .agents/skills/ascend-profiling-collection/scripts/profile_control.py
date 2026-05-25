@@ -17,6 +17,7 @@ ordinary inference request, so the timeout is long by default.
 
 Usage:
     python3 profile_control.py --machine <alias> --action start_profile
+    python3 profile_control.py --session-id <id> --action start_profile
     python3 profile_control.py --machine <alias> --action stop_profile [--timeout 900]
 
 Progress on stderr, final JSON on stdout.
@@ -36,11 +37,10 @@ if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 
 from _common import (
-    container_endpoint,
     emit_progress,
     load_serving_state,
     print_json,
-    resolve_machine,
+    resolve_execution_target,
     ssh_exec,
 )
 
@@ -101,7 +101,9 @@ def post_remote_action(ep, port: int, action: str, timeout: int) -> dict[str, An
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
-    p.add_argument("--machine", required=True, help="machine alias or host IP")
+    p.add_argument("--machine", help="machine alias or host IP")
+    p.add_argument("--session-id", help="VAWS session id")
+    p.add_argument("--session-file", help="explicit session.json path")
     p.add_argument(
         "--action",
         required=True,
@@ -125,15 +127,24 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
     try:
-        record = resolve_machine(args.machine)
-        alias = record["alias"]
-        ep = container_endpoint(record)
+        target = resolve_execution_target(
+            args.machine,
+            session_id=args.session_id,
+            session_file=args.session_file,
+        )
+        alias = target.alias
+        ep = target.endpoint
 
-        state = load_serving_state(alias)
+        state = load_serving_state(
+            alias,
+            session_id=target.session_id,
+            state_repo_root=target.state_repo_root,
+        )
         if state is None:
             print_json({
                 "status": "not_found",
                 "machine": alias,
+                "session_id": target.session_id,
                 "action": args.action,
                 "message": (
                     f"no serving state recorded for {alias}; start the service "
@@ -146,6 +157,7 @@ def main(argv: list[str] | None = None) -> int:
             print_json({
                 "status": "not_found",
                 "machine": alias,
+                "session_id": target.session_id,
                 "action": args.action,
                 "message": "serving state has no port; service may have failed to launch",
             })
@@ -162,6 +174,7 @@ def main(argv: list[str] | None = None) -> int:
         print_json({
             "status": "ok" if ok else "failed",
             "machine": alias,
+            "session_id": target.session_id,
             "action": args.action,
             "port": port,
             "http_status": result.get("status"),
@@ -174,6 +187,7 @@ def main(argv: list[str] | None = None) -> int:
         print_json({
             "status": "failed",
             "machine": getattr(args, "machine", None),
+            "session_id": getattr(args, "session_id", None),
             "action": getattr(args, "action", None),
             "error": str(exc),
         })

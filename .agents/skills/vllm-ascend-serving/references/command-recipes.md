@@ -10,6 +10,17 @@ python3 .agents/skills/vllm-ascend-serving/scripts/serve_start.py \
   --devices 0,1,2,3
 ```
 
+## Fresh start in an isolated session
+
+```bash
+python3 .agents/skills/vllm-ascend-serving/scripts/serve_start.py \
+  --session-id pr123 \
+  --model /data/models/Qwen3-32B \
+  --tp 4
+```
+
+Session mode uses the session container and writes state under `.vaws-local/sessions/pr123/serving.json`.
+
 ## Fresh start with extra vllm args
 
 ```bash
@@ -144,11 +155,25 @@ python3 .agents/skills/vllm-ascend-serving/scripts/serve_status.py \
   --machine blue-a
 ```
 
+Session status:
+
+```bash
+python3 .agents/skills/vllm-ascend-serving/scripts/serve_status.py \
+  --session-id pr123
+```
+
 ## Stop gracefully
 
 ```bash
 python3 .agents/skills/vllm-ascend-serving/scripts/serve_stop.py \
   --machine blue-a
+```
+
+Session stop:
+
+```bash
+python3 .agents/skills/vllm-ascend-serving/scripts/serve_stop.py \
+  --session-id pr123
 ```
 
 ## Force stop
@@ -215,11 +240,13 @@ python3 .agents/skills/vllm-ascend-serving/scripts/serve_start.py \
 After `remote-code-parity` syncs tracked files, custom op build artifacts are missing. Rebuild them before launch:
 
 ```bash
-ssh -p <container_ssh_port> root@<host_ip> 'bash -c "
-  set +u; source /etc/profile.d/vaws-ascend-env.sh; set -u
-  cd /vllm-workspace/vllm-ascend
-  bash csrc/build_aclnn.sh /vllm-workspace/vllm-ascend ascend910b
-"'
+python3 .agents/scripts/remote_job_start.py \
+  --session-id <session-id> \
+  --kind build \
+  --cwd /vllm-workspace/vllm-ascend \
+  --command 'bash csrc/build_aclnn.sh /vllm-workspace/vllm-ascend ascend910b'
+python3 .agents/scripts/remote_job_status.py --job-id <job-id>
+python3 .agents/scripts/remote_job_tail.py --job-id <job-id> --lines 120
 ```
 
 Note: if `numpy>=2.0` is installed, first downgrade: `pip3 install "numpy<2.0.0" -i https://pypi.tuna.tsinghua.edu.cn/simple`

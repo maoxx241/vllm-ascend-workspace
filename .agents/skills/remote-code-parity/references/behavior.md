@@ -8,10 +8,21 @@ This file defines the durable behavior of `remote-code-parity`.
 - Use Git transport without requiring a real user commit.
 - Keep sync container-only after machine attach.
 - Keep all local parity state under `.vaws-local/remote-code-parity/`.
+- In session mode, derive the source worktree and target container from `.vaws-local/sessions/<session-id>/session.json`.
 - Fail closed when parity cannot be proven.
 - Prove the final container-side commit ids instead of trusting command exit status alone.
 - Stream phase progress on `stderr` as `__VAWS_PARITY_PROGRESS__=<json>` and keep one final JSON payload on `stdout`.
 - Keep runtime-install phases attributable instead of collapsing them into one opaque step: uninstall, `vllm`, `vllm-ascend` requirements, `vllm-ascend`, import verification, and marker write should each surface their own progress event.
+
+## Apply-mode split
+
+The remote toolbox exposes parity through three explicit modes:
+
+- `source-only`: publish source snapshots to the container cache and upload a manifest; do not materialize runtime sources and do not install/rebuild.
+- `materialize`: publish snapshots and update runtime sources; do not install/rebuild.
+- `install`: full parity behavior, including first-install consent and reinstall triggers.
+
+The `source-only` and `materialize` modes must not update runtime install state in a way that lets a later `install` run incorrectly skip first-install or rebuild gates.
 
 ## Sync mode gate
 
@@ -34,6 +45,14 @@ Intended route:
 3. a higher-level serving / benchmark / smoke workflow executes the requested workload.
 
 Normal agent-facing entrypoint: `parity_sync.py`.
+
+Session-aware entrypoint:
+
+```bash
+python3 .agents/skills/remote-code-parity/scripts/parity_sync.py --session-id <id>
+```
+
+Session mode sets `workspace_root` to the session worktree, `workspace_id` to the session id by default, and `container_identity` to `<session-container>@<runtime-root>`.
 
 ## Preconditions
 
@@ -88,9 +107,12 @@ Per-workspace layout:
 Required behavior:
 
 - create bare mirror repos inside the container cache root
-- push synthetic refs directly from local -> container SSH
+- stream Git bundles directly from local -> container SSH, then fetch them into the container-local bare mirrors
+- publish deterministic parentless tree snapshot commits so first use of an empty container mirror does not require shipping the full upstream history of large repos such as `vllm`
+- avoid remote receive-pack negotiation for those parentless transport commits so the remote mirror does not need to fix up deltas against absent base history
 - also publish an advertised branch ref inside each mirror so ordinary fetch paths can see the latest synthetic snapshot
-- use a container-local lock while mutating cache or runtime state
+- use a container-local lock while mutating cache or runtime state; locks carry owner metadata and stale lock directories are recovered after the bounded stale interval
+- after failed or timed-out mirror hydration, best-effort terminate any matching legacy `git-receive-pack` process trees for that mirror and discard that repo's partial mirror before surfacing the failure
 - do not create or reuse a shared flat host path such as `/home/vaws`
 
 ## Runtime materialization model
@@ -103,7 +125,7 @@ Materialization requirements:
 - force the root repo and submodules to the synthetic snapshot commits
 - rewrite submodule URLs to container-local mirror paths
 - materialize child repos explicitly instead of relying on `git submodule update` to fetch synthetic child commits
-- when a child repo snapshot has the same tree as its original `HEAD`, reuse that original commit so parent repos do not see a gitlink-only synthetic delta
+- suppress transport-only child gitlink paths from parent `changed_paths` when a clean child repo only differs because it was represented by a parentless snapshot commit
 - preserve runtime-private sibling paths such as `Mooncake` (image-provided runtime) and `.vaws-runtime` (workspace-managed runtime artifacts, e.g. profiler dumps that downstream skills consume after parity refreshes)
 - preserve `.remote-code-parity` so the container-side marker survives root cleanups
 - do not delete the entire runtime root as part of normal sync
@@ -157,7 +179,7 @@ Everything else defaults to parity-only, no reinstall.
 
 ### Trigger 2 — commit drift from last sync
 
-Compare each repo's real HEAD commit with `last_head_commits` in `runtime-state.json`. Synthetic snapshot commits change whenever the working tree is dirty, so drift detection must use the underlying HEAD to avoid false positives from pure-Python edits. If the HEAD differs (e.g. submodule version switch via `git checkout`), trigger reinstall for that repo even when `changed_paths` is empty because the tree matches the new HEAD.
+Compare each repo's real `source_head` commit with `last_head_commits` in `runtime-state.json`. Synthetic snapshot commits are parentless transport commits, so drift detection must use the underlying HEAD to avoid false positives from dirty pure-Python edits while still detecting submodule version switches. If the HEAD differs (e.g. submodule version switch via `git checkout`), trigger reinstall for that repo even when `changed_paths` is empty because the tree matches the new HEAD.
 
 ### Trigger 3 — dependency cascade
 
@@ -175,18 +197,18 @@ On first install the reinstall-branch uninstall step is skipped because `first_i
 
 ### Force reinstall
 
-`--force-reinstall` unconditionally sets `reinstall_vllm` and `reinstall_vllm_ascend` to true, overriding all trigger logic. The full sync flow still runs (snapshot, push, materialize, install, verify). Useful for recovering from a broken editable install or validating the install pipeline without touching source files.
+`--force-reinstall` unconditionally sets `reinstall_vllm` and `reinstall_vllm_ascend` to true, overriding all trigger logic. The full sync flow still runs (snapshot, mirror hydration, materialize, install, verify). Useful for recovering from a broken editable install or validating the install pipeline without touching source files.
 
 ### No-change fast path
 
-When all snapshot commits match `last_snapshot_commits` and no reinstall trigger fires (and `--force-reinstall` is not set), the sync verifies the container-side commits with a single SSH call and returns `status == ready` immediately, skipping push, materialize, and manifest upload.
+When all snapshot commits match `last_snapshot_commits` and no reinstall trigger fires (and `--force-reinstall` is not set), the sync verifies the container-side commits with a single SSH call and returns `status == ready` immediately, skipping mirror hydration, materialize, and manifest upload.
 
 ## Exact proof to collect
 
 A trustworthy parity result records:
 
 - container cache root actually used
-- pushed synthetic commit ids
+- published synthetic commit ids
 - checked-out commit ids in the container
 - whether `vllm` and `vllm-ascend` were reinstalled
 - whether first-time consent was consulted or blocked
@@ -198,9 +220,15 @@ A trustworthy parity result records:
 - unify that interpreter across `python`, `python3`, `HI_PYTHON`, `Python_EXECUTABLE`, `Python3_EXECUTABLE`, and CMake-driven helper processes before editable install
 - preseed the runtime `PATH` and the Ascend driver `LD_LIBRARY_PATH` prefix, then source optional env scripts under a `set +u` / `set -u` guard so shell-specific variables are not required
 - keep the fast path on `pip install -e . --no-build-isolation`
-- route pip installs through mirror-aware fallback in the order Tsinghua -> Aliyun -> PyPI
+- explicitly pass whitelisted local runtime-install env vars into the remote SSH shell; do not assume SSH forwards `VAWS_*` or pip env vars automatically
+- route pip/uv installs through a caller-provided near-cache index when `VAWS_PIP_INDEX_URL` is set, then mirror-aware fallback in the order Tsinghua -> Aliyun -> PyPI; only `vllm-ascend` dependency/install steps add the default public Ascend PyPI repository as an extra index when the caller did not set a broader extra index
+- align runtime editable install environment with portable `vllm-ascend` CI behavior: paired-image editable installs default to `--no-deps`, ordinary paired-image replacement skips the `vllm-ascend` requirements reinstall, persistent pip / uv / CMake `FetchContent` cache roots, bounded/progress-wrapped uv bootstrap/install with pip-only fallback, `UV_INDEX_STRATEGY=unsafe-best-match`, `MAX_JOBS=4`, `CMAKE_BUILD_TYPE=Release`, `VAWS_SOC_VERSION -> SOC_VERSION`, best-effort `triton` removal after `vllm` install, and optional `clang-15` selection when explicitly requested
+- re-enable editable-install dependency resolution and requirements installation when dependency files changed, a repo HEAD drifted, verify-deps detects a mismatch, or the caller explicitly sets `VAWS_INSTALL_DEPS=1`
+- record the effective runtime install env in manifest/runtime-state with URL userinfo redacted so cache/compile differences are auditable
+- keep `COMPILE_CUSTOM_KERNELS` enabled by default for real serving / benchmark runtime parity; only pass `VAWS_COMPILE_CUSTOM_KERNELS=0` for deliberate unit-test-style validation where custom kernels are not required
 - if editable install fails because the image packaging stack is too old for the current `pyproject.toml`, attempt one bounded packaging-stack refresh and one retry before failing closed
+- verify all `vllm-ascend` declared dependencies are version-satisfied (`verify-deps`); if a mismatch is detected (e.g. `numpy<2.0.0` but `numpy 2.x` installed), automatically reinstall `vllm-ascend` requirements and re-verify before failing
+- treat paired-image `torch_npu` as runtime state: accept public-version matches and a successful `import torch_npu` instead of forcing a large `torch-npu` wheel reinstall
 - finish runtime verification with real imports, not `find_spec()` alone, and keep the generated heredoc smoke snippet valid Python after shell quoting
-- after import smoke test, verify all `vllm-ascend` declared dependencies are version-satisfied (`verify-deps`); if a mismatch is detected (e.g. `numpy<2.0.0` but `numpy 2.x` installed), automatically reinstall `vllm-ascend` requirements and re-verify before failing
 - surface a progress transition before each long runtime-install package step so an agent can tell whether the wait is in uninstall, requirements, editable install, or verification
 - keep consent and runtime-state writes atomic so parallel wrapper calls do not clobber local state

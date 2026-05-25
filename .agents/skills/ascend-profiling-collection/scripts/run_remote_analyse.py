@@ -25,7 +25,7 @@ Exit codes:
     2  -- the SSH or analyse() call itself failed
 
 Usage:
-    python3 run_remote_analyse.py --machine <alias> \\
+    python3 run_remote_analyse.py (--machine <alias> | --session-id <id>) \\
         --profile-root <path> [--expected-ranks <N>]
 
 The agent should always pass ``--expected-ranks`` when invoking this from a
@@ -51,10 +51,9 @@ if str(_SCRIPT_DIR) not in sys.path:
 
 from _common import (
     ASCEND_ENV_PREAMBLE,
-    container_endpoint,
     emit_progress,
     print_json,
-    resolve_machine,
+    resolve_execution_target,
     ssh_exec,
 )
 
@@ -203,7 +202,10 @@ def analyse_profile_root(
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
-    p.add_argument("--machine", required=True, help="machine alias or host IP")
+    target = p.add_mutually_exclusive_group(required=True)
+    target.add_argument("--machine", help="machine alias or host IP")
+    target.add_argument("--session-id", help="VAWS session id")
+    target.add_argument("--session-file", help="explicit session.json path")
     p.add_argument(
         "--profile-root",
         required=True,
@@ -230,15 +232,22 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
     try:
-        record = resolve_machine(args.machine)
-        alias = record["alias"]
-        ep = container_endpoint(record)
+        target = resolve_execution_target(
+            args.machine,
+            session_id=args.session_id,
+            session_file=args.session_file,
+        )
+        alias = target.alias
+        ep = target.endpoint
 
         emit_progress("discover", f"listing *_ascend_pt under {args.profile_root}")
         bundle = analyse_profile_root(
             ep, args.profile_root, expected_ranks=args.expected_ranks
         )
         bundle["machine"] = alias
+        bundle["mode"] = target.mode
+        bundle["session_id"] = target.session_id
+        bundle["session_file"] = str(target.session_file) if target.session_file else None
 
         worst = bundle["analysis_status"]
         if worst == "no_profile_dirs":
@@ -255,6 +264,8 @@ def main(argv: list[str] | None = None) -> int:
         print_json({
             "status": "failed",
             "machine": getattr(args, "machine", None),
+            "session_id": getattr(args, "session_id", None),
+            "session_file": getattr(args, "session_file", None),
             "profile_root": getattr(args, "profile_root", None),
             "error": str(exc),
         })

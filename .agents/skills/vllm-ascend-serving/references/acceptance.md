@@ -12,6 +12,17 @@
 - stdout is a JSON object with `status=ready`, `base_url`, `pid`, `log_stdout`, `log_stderr`
 - `.vaws-local/serving/<alias>.json` is written
 
+## A1s. Fresh start — session target
+
+**Given** a ready session `s1`,
+**When** `serve_start.py --session-id s1 --model <path> --tp 2` runs,
+**Then**:
+- parity is executed with `--session-id s1`
+- the SSH endpoint is the session container
+- a session serving lock is held while the lifecycle state is mutated
+- the service state is written to `.vaws-local/sessions/s1/serving.json`
+- `.vaws-local/serving/<alias>.json` is not modified
+
 ## A2. Fresh start — model path not found
 
 **Given** a ready machine,
@@ -97,6 +108,18 @@
 **Given** a running service on the target machine,
 **When** a new `serve_start.py` runs for the same machine,
 **Then** the old service is stopped before the new one launches.
+
+## A14s. Session cleanup scope
+
+**Given** services are running in sessions `s1` and `s2` on the same base machine,
+**When** `serve_start.py --session-id s1 --relaunch` or `serve_stop.py --session-id s1` runs,
+**Then** only `s1`'s recorded PID is stopped and `s2` remains running.
+
+## A14l. Session lifecycle lock and starting state
+
+**Given** `serve_start.py --session-id s1` has launched a remote PID,
+**When** health probing is still in progress or later fails,
+**Then** `.vaws-local/sessions/s1/serving.json` already contains `status=starting`, the PID, port, and runtime dir so `serve_stop.py --session-id s1 --force` can clean it up.
 
 ## A15. NPU probe — devices busy (cross-container via host)
 

@@ -9,6 +9,7 @@ import shlex
 import subprocess
 import sys
 import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,11 @@ for _p in (str(LIB_DIR), str(MM_SCRIPTS)):
 
 import inventory as inventory_store  # noqa: E402
 from vaws_local_state import ensure_state_dir  # noqa: E402
+from vaws_session_state import (  # noqa: E402
+    load_session_lookup,
+    session_record_for_execution,
+    session_serving_state_path,
+)
 
 MEMPROF_STATE_DIR = ROOT / ".vaws-local" / "memory-profiling"
 SERVING_STATE_DIR = ROOT / ".vaws-local" / "serving"
@@ -128,8 +134,48 @@ def endpoint_from_machine(machine: dict[str, Any]) -> SshEndpoint:
         user = "root"
 
     ssh_port = container_info.get("ssh_port", host_port)
+    if container_info.get("ssh_port") is not None:
+        user = container_info.get("user", "root")
 
     return SshEndpoint(host=ip, port=ssh_port, user=user)
+
+
+def resolve_execution_target(
+    machine: str | None,
+    *,
+    session_id: str | None = None,
+    session_file: str | None = None,
+) -> dict[str, Any]:
+    if session_id or session_file:
+        lookup = load_session_lookup(
+            session_id=session_id,
+            session_file=session_file,
+            repo_root=ROOT,
+        )
+        record = session_record_for_execution(lookup.session)
+        return {
+            "mode": "session",
+            "record": record,
+            "alias": record["alias"],
+            "endpoint": endpoint_from_machine(record),
+            "session_id": lookup.session["session_id"],
+            "session_file": str(lookup.session_file),
+            "session": lookup.session,
+            "state_repo_root": lookup.state_repo_root,
+        }
+    if not machine:
+        raise ValueError("--machine is required unless --session-id or --session-file is used")
+    record = resolve_machine(machine)
+    return {
+        "mode": "legacy",
+        "record": record,
+        "alias": get_machine_alias(record),
+        "endpoint": endpoint_from_machine(record),
+        "session_id": None,
+        "session_file": None,
+        "session": None,
+        "state_repo_root": ROOT,
+    }
 
 
 def ensure_run_dir(tag: str = "") -> Path:
@@ -143,6 +189,7 @@ def ensure_run_dir(tag: str = "") -> Path:
 def find_python(endpoint: SshEndpoint) -> str:
     """Detect the Python binary with torch_npu on the remote machine."""
     for candidate in [
+        "/usr/local/python3.11.15/bin/python3",
         "/usr/local/python3.11.14/bin/python3",
         "/usr/local/python3.10/bin/python3",
         "python3",
@@ -153,14 +200,23 @@ def find_python(endpoint: SshEndpoint) -> str:
     raise RuntimeError("No Python with torch_npu found on remote machine")
 
 
-def load_serving_state(machine_alias: str) -> dict[str, Any] | None:
+def load_serving_state(
+    machine_alias: str,
+    *,
+    session_id: str | None = None,
+    state_repo_root: Path = ROOT,
+) -> dict[str, Any] | None:
     """Read the serving skill's persisted state for a given machine.
 
     Returns None if no state file exists or it's unparseable.
     The state dict contains: model, pid, port, runtime_dir, log_stdout,
     log_stderr, tp, dp, devices, status, started_at, etc.
     """
-    path = SERVING_STATE_DIR / f"{machine_alias}.json"
+    path = (
+        session_serving_state_path(session_id, state_repo_root)
+        if session_id
+        else SERVING_STATE_DIR / f"{machine_alias}.json"
+    )
     if not path.exists():
         return None
     try:
@@ -228,7 +284,12 @@ _MSPROF_REPORTS_CONFIG = json.dumps({
 }, indent=2)
 
 
-def upload_msprof_wrapper(ep: SshEndpoint, mem_freq: int = 1) -> str:
+def _safe_tmp_token(value: str) -> str:
+    token = "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in value)
+    return token.strip("._-") or "run"
+
+
+def upload_msprof_wrapper(ep: SshEndpoint, mem_freq: int = 1, token: str | None = None) -> str:
     """Generate and upload an msprof wrapper script to the remote machine.
 
     The wrapper receives two arguments from the serving skill's --wrap-script:
@@ -253,10 +314,12 @@ exec msprof --output="$MSPROF_OUT" \\
   --ascendcl=off \\
   --application="bash $SERVE_SCRIPT"
 """
-    ssh_write_text(ep, script, MSPROF_WRAPPER_REMOTE_PATH)
-    ssh_exec(ep, f"chmod +x {MSPROF_WRAPPER_REMOTE_PATH}")
+    suffix = _safe_tmp_token(token or f"{os.getpid()}_{uuid.uuid4().hex[:8]}")
+    wrapper_path = f"/tmp/_vaws_msprof_wrap_{suffix}.sh"
+    ssh_write_text(ep, script, wrapper_path)
+    ssh_exec(ep, f"chmod +x {wrapper_path}")
     ssh_write_text(ep, _MSPROF_REPORTS_CONFIG, MSPROF_REPORTS_REMOTE_PATH)
-    return MSPROF_WRAPPER_REMOTE_PATH
+    return wrapper_path
 
 
 def run_msprof_export(

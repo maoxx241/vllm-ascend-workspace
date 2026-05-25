@@ -36,8 +36,8 @@
 
 ### Artifact pull
 
-- [ ] By default, only the lightweight pull set is rsynced back (see `behavior.md`).
-- [ ] `--keep-remote-output` rsyncs the entire remote output dir locally.
+- [ ] By default, only the lightweight pull set is transferred back through manifest-verified SSH streaming (see `behavior.md`).
+- [ ] `--keep-remote-output` transfers the entire remote output dir locally through the same artifact path.
 - [ ] `normalized_event_index.csv` and `evidence/bubble_windows.jsonl` are excluded from the lightweight pull.
 
 ### Output JSON

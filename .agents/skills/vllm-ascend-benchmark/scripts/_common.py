@@ -7,11 +7,19 @@ import json
 import os
 import subprocess
 import sys
+import threading
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[4]
+LIB_DIR = ROOT / ".agents" / "lib"
+if str(LIB_DIR) not in sys.path:
+    sys.path.insert(0, str(LIB_DIR))
+
+from vaws_session_state import load_session_lookup  # noqa: E402
+from vaws_validate import require_env_name  # noqa: E402
 
 SERVING_SCRIPTS = ROOT / ".agents" / "skills" / "vllm-ascend-serving" / "scripts"
 NIGHTLY_CONFIGS_DIR = (
@@ -45,6 +53,51 @@ def now_utc() -> str:
         .isoformat()
         .replace("+00:00", "Z")
     )
+
+
+def safe_token(value: str) -> str:
+    token = "".join(ch if ch.isalnum() or ch in "._-" else "-" for ch in value)
+    return token.strip(".-") or "benchmark"
+
+
+def _run_json_command_streaming(
+    cmd: list[str],
+    *,
+    progress_markers: tuple[str, ...] = (),
+) -> tuple[int, dict[str, Any] | None, str, str]:
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        cwd=str(ROOT),
+    )
+    stderr_lines: list[str] = []
+
+    def relay_stderr() -> None:
+        assert proc.stderr is not None
+        for line in proc.stderr:
+            stderr_lines.append(line)
+            if not progress_markers or any(marker in line for marker in progress_markers):
+                sys.stderr.write(line)
+                sys.stderr.flush()
+
+    thread = threading.Thread(target=relay_stderr, daemon=True)
+    thread.start()
+    assert proc.stdout is not None
+    stdout = proc.stdout.read()
+    returncode = proc.wait()
+    thread.join(timeout=1)
+    stderr = "".join(stderr_lines)
+    payload = None
+    if stdout.strip():
+        try:
+            parsed = json.loads(stdout)
+            if isinstance(parsed, dict):
+                payload = parsed
+        except json.JSONDecodeError:
+            payload = None
+    return returncode, payload, stdout, stderr
 
 
 # ---------------------------------------------------------------------------
@@ -131,6 +184,8 @@ def parse_nightly_yaml(yaml_name: str) -> NightlyReference | None:
 class BenchConfig:
     """Assembled benchmark configuration ready for execution."""
     machine: str = ""
+    session_id: str | None = None
+    session_file: str | None = None
     model: str = ""
     tp: int | None = None
     dp: int | None = None
@@ -143,7 +198,13 @@ class BenchConfig:
 
     def to_serve_start_args(self) -> list[str]:
         """Build CLI args for serve_start.py."""
-        args = ["--machine", self.machine, "--model", self.model]
+        args = ["--model", self.model]
+        if self.session_file:
+            args.extend(["--session-file", self.session_file])
+        elif self.session_id:
+            args.extend(["--session-id", self.session_id])
+        else:
+            args.extend(["--machine", self.machine])
         if self.tp is not None:
             args.extend(["--tp", str(self.tp)])
         if self.dp is not None:
@@ -191,6 +252,10 @@ class BenchConfig:
 
     def summary_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {"machine": self.machine, "model": self.model}
+        if self.session_id:
+            d["session_id"] = self.session_id
+        if self.session_file:
+            d["session_file"] = self.session_file
         if self.tp is not None:
             d["tp"] = self.tp
         if self.serve_args:
@@ -204,7 +269,9 @@ class BenchConfig:
 
 def assemble_config(
     *,
-    machine: str,
+    machine: str | None,
+    session_id: str | None = None,
+    session_file: str | None = None,
     model: str,
     tp: int | None = None,
     dp: int | None = None,
@@ -216,12 +283,16 @@ def assemble_config(
     skip_parity: bool = False,
 ) -> BenchConfig:
     """Assemble a BenchConfig with user > nightly priority."""
+    if not machine and not session_id and not session_file:
+        raise RuntimeError("--machine is required unless --session-id or --session-file is used")
     nightly_ref: NightlyReference | None = None
     if refer_nightly:
         nightly_ref = parse_nightly_yaml(refer_nightly)
 
     cfg = BenchConfig(
-        machine=machine,
+        machine=machine or "",
+        session_id=session_id,
+        session_file=session_file,
         model=model,
         skip_parity=skip_parity,
         nightly_ref=nightly_ref,
@@ -279,12 +350,14 @@ def assemble_config(
     # --- Env: merge nightly base + user overrides ---
     env: dict[str, str] = {}
     if nightly_ref:
-        env.update(nightly_ref.envs)
+        for key, value in nightly_ref.envs.items():
+            env[require_env_name(key)] = value
     if extra_env:
         for item in extra_env:
-            if "=" in item:
-                k, v = item.split("=", 1)
-                env[k] = v
+            if "=" not in item:
+                raise ValueError(f"bad --extra-env {item!r}, expected KEY=VALUE")
+            k, v = item.split("=", 1)
+            env[require_env_name(k)] = v
     cfg.env = env
 
     return cfg
@@ -300,50 +373,67 @@ def call_serve_start(config: BenchConfig) -> dict[str, Any]:
     cmd = [sys.executable, script] + config.to_serve_start_args()
 
     emit_progress("serve_start", f"starting service: {config.model}")
-    result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(ROOT))
+    returncode, data, stdout, stderr = _run_json_command_streaming(
+        cmd,
+        progress_markers=("__VAWS_SERVING_PROGRESS__=", "__VAWS_PARITY_PROGRESS__="),
+    )
 
-    for line in result.stderr.splitlines():
-        if "__VAWS_SERVING_PROGRESS__=" in line or "__VAWS_PARITY_PROGRESS__=" in line:
-            sys.stderr.write(line + "\n")
-
-    if not result.stdout.strip():
+    if not stdout.strip():
         raise RuntimeError(
-            f"serve_start.py produced no output (rc={result.returncode}):\n"
-            f"{result.stderr[:2000]}"
+            f"serve_start.py produced no output (rc={returncode}):\n"
+            f"{stderr[:2000]}"
         )
-    try:
-        data = json.loads(result.stdout)
-    except json.JSONDecodeError:
+    if data is None:
         raise RuntimeError(
-            f"serve_start.py output is not JSON (rc={result.returncode}):\n"
-            f"stdout: {result.stdout[:1000]}\nstderr: {result.stderr[:1000]}"
+            f"serve_start.py output is not JSON (rc={returncode}):\n"
+            f"stdout: {stdout[:1000]}\nstderr: {stderr[:1000]}"
         )
     return data
 
 
-def call_serve_stop(machine: str, force: bool = False) -> dict[str, Any]:
+def call_serve_stop(config: BenchConfig, force: bool = False) -> dict[str, Any]:
     """Call serve_stop.py and return its JSON output."""
     script = str(SERVING_SCRIPTS / "serve_stop.py")
-    cmd = [sys.executable, script, "--machine", machine]
+    cmd = [sys.executable, script]
+    if config.session_file:
+        cmd.extend(["--session-file", config.session_file])
+    elif config.session_id:
+        cmd.extend(["--session-id", config.session_id])
+    else:
+        cmd.extend(["--machine", config.machine])
     if force:
         cmd.append("--force")
 
     emit_progress("serve_stop", "stopping service")
-    result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(ROOT))
-    if not result.stdout.strip():
+    _returncode, data, stdout, _stderr = _run_json_command_streaming(cmd)
+    if not stdout.strip():
         return {"status": "unknown", "message": "no output from serve_stop"}
-    try:
-        return json.loads(result.stdout)
-    except json.JSONDecodeError:
-        return {"status": "unknown", "message": result.stdout[:500]}
+    if data is None:
+        return {"status": "unknown", "message": stdout[:500]}
+    return data
 
 
 # ---------------------------------------------------------------------------
 # Remote benchmark execution
 # ---------------------------------------------------------------------------
 
-def _get_ssh_endpoint(machine: str) -> tuple[str, int]:
+def _get_ssh_endpoint(
+    machine: str | None,
+    *,
+    session_id: str | None = None,
+    session_file: str | None = None,
+) -> tuple[str, int]:
     """Resolve container SSH host and port from inventory."""
+    if session_id or session_file:
+        lookup = load_session_lookup(
+            session_id=session_id,
+            session_file=session_file,
+            repo_root=ROOT,
+        )
+        remote = lookup.session["remote"]
+        container = remote["container"]
+        return remote["host"], int(container["ssh_port"])
+
     lib_dir = str(ROOT / ".agents" / "lib")
     mm_dir = str(ROOT / ".agents" / "skills" / "machine-management" / "scripts")
     for p in (lib_dir, mm_dir):
@@ -386,7 +476,11 @@ def run_bench_on_remote(
     import shlex
 
     bench_cmd_parts = config.to_bench_serve_args(base_url, served_model_name)
-    result_filename = f"result_bench_{now_utc().replace(':', '-')}.json"
+    target_token = safe_token(config.session_id or config.machine or "benchmark")
+    result_filename = (
+        f"result_bench_{target_token}_{now_utc().replace(':', '-')}_"
+        f"{os.getpid()}_{uuid.uuid4().hex[:8]}.json"
+    )
     bench_cmd_parts.extend(["--result-filename", result_filename])
 
     bench_cmd = " ".join(shlex.quote(str(s)) for s in bench_cmd_parts)
@@ -406,7 +500,7 @@ def run_bench_on_remote(
         "bash", "-c", shlex.quote(remote_script),
     ]
 
-    emit_progress("bench_run", f"running vllm bench serve on {config.machine}")
+    emit_progress("bench_run", f"running vllm bench serve on {target_token}")
     proc = subprocess.run(ssh_cmd, capture_output=True, text=True, timeout=1200)
 
     if proc.returncode != 0:
@@ -460,4 +554,3 @@ def extract_metrics(raw_result: dict[str, Any]) -> dict[str, Any]:
             metrics[key] = val
 
     return metrics
-

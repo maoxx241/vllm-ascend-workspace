@@ -1227,6 +1227,7 @@ namespace="${6:-}"
 replace_on_image_change="${7:-false}"
 machine_type_input="${8:-}"
 soc_input="${9:-}"
+use_prepared_image_cache="${10:-false}"
 
 emit_json() {
   python3 - "$1" <<'PY'
@@ -1342,6 +1343,20 @@ infer_type_from_image() {
     return 0
   fi
   return 1
+}
+
+prepared_image_tag() {
+  image_ref="$1"
+  image_id="$(docker image inspect -f '{{.Id}}' "$image_ref" 2>/dev/null || true)"
+  if [ -z "$image_id" ]; then
+    return 1
+  fi
+  image_hash="${image_id#sha256:}"
+  image_hash="$(printf '%s' "$image_hash" | tr '[:upper:]' '[:lower:]' | cut -c1-16)"
+  if [ -z "$image_hash" ]; then
+    return 1
+  fi
+  printf 'vaws-session-prepared:%s-ssh-v2\n' "$image_hash"
 }
 
 write_host_state() {
@@ -1536,14 +1551,47 @@ elif command -v yum >/dev/null 2>&1; then
   printf '%s' '{"package_manager":"yum","selected_mirror":null,"candidate_timings_ms":{},"changed_files":[],"changed":false,"install_skipped":false}' > "$state_file"
   echo "yum install openssh-server openssh-clients"
   yum install -y openssh-server openssh-clients
-elif command -v microdnf >/dev/null 2>&1; then
-  printf '%s' '{"package_manager":"microdnf","selected_mirror":null,"candidate_timings_ms":{},"changed_files":[],"changed":false,"install_skipped":false}' > "$state_file"
-  echo "microdnf install openssh-server openssh-clients"
-  microdnf install -y openssh-server openssh-clients
-else
-  echo "no supported package manager found for ssh installation" >&2
-  exit 97
-fi
+  elif command -v microdnf >/dev/null 2>&1; then
+    printf '%s' '{"package_manager":"microdnf","selected_mirror":null,"candidate_timings_ms":{},"changed_files":[],"changed":false,"install_skipped":false}' > "$state_file"
+    echo "microdnf install openssh-server openssh-clients"
+    microdnf install -y openssh-server openssh-clients
+  else
+    echo "no supported package manager found for ssh installation" >&2
+    exit 97
+  fi
+  _vaws_runtime_python=""
+  for _d in $(ls -1d /usr/local/python*/bin 2>/dev/null | sort -V -r); do
+    if [ -x "$_d/python3" ]; then
+      _vaws_runtime_python="$_d/python3"
+      break
+    fi
+  done
+  if [ -z "$_vaws_runtime_python" ] && command -v python3 >/dev/null 2>&1; then
+    _vaws_runtime_python="$(command -v python3)"
+  fi
+  if [ -n "$_vaws_runtime_python" ]; then
+    install -d -m 0755 /etc/pip
+    cat > /etc/pip.conf <<'EOF_PIP'
+[global]
+index-url = https://pypi.tuna.tsinghua.edu.cn/simple
+extra-index-url = https://mirrors.aliyun.com/pypi/simple https://pypi.org/simple
+trusted-host = pypi.tuna.tsinghua.edu.cn mirrors.aliyun.com pypi.org files.pythonhosted.org
+EOF_PIP
+    chmod 0644 /etc/pip.conf
+    echo "[vaws-bootstrap] pip configured: /etc/pip.conf (primary=tsinghua, additional=aliyun,pypi)"
+    if "$_vaws_runtime_python" -c "import pytest" >/dev/null 2>&1; then
+      echo "[vaws-bootstrap] pytest already present"
+    else
+      echo "[vaws-bootstrap] installing pytest..."
+      if "$_vaws_runtime_python" -m pip install pytest -q --disable-pip-version-check 2>/dev/null; then
+        echo "[vaws-bootstrap] pytest installed"
+      else
+        echo "[vaws-bootstrap] pytest install failed (best-effort, continuing)"
+      fi
+    fi
+  else
+    echo "[vaws-bootstrap] runtime python not found, skipping pip/pytest setup"
+  fi
 INNER_PKG
 }
 
@@ -1739,6 +1787,10 @@ pulled=false
 installed_ssh=false
 firewall="none"
 selected_image=""
+run_image=""
+prepared_image=""
+used_prepared_image_cache=false
+created_prepared_image_cache=false
 image_resolution="unknown"
 package_bootstrap='{"package_manager": null, "selected_mirror": null, "candidate_timings_ms": {}, "changed_files": [], "changed": false, "install_skipped": false}'
 host_env_file="/etc/profile.d/vaws-ascend-env.sh"
@@ -1748,6 +1800,7 @@ container_metadata_file="/etc/vaws/container-info.json"
 requested_image="$(image_field requested || true)"
 requested_selector="$(image_field selector || true)"
 image_policy="$(image_field policy || true)"
+docker_pull_policy="${VAWS_DOCKER_PULL_POLICY:-missing}"
 resolved_tag="$(image_field resolved_tag || true)"
 machine_type="${machine_type_input:-$(image_field machine_type || true)}"
 soc="${soc_input:-}"
@@ -1763,10 +1816,14 @@ container_exists=false
 if docker inspect "$container" >/dev/null 2>&1; then
   container_exists=true
   current_image=$(docker inspect -f '{{.Config.Image}}' "$container")
+  current_base_image=$(docker inspect -f '{{ index .Config.Labels "com.vaws.base_image" }}' "$container" 2>/dev/null || true)
+  if [ "$current_base_image" = "<no value>" ]; then
+    current_base_image=""
+  fi
   previous_image="$current_image"
   image_matches=false
   for candidate in "${image_candidates[@]}"; do
-    if [ "$candidate" = "$current_image" ]; then
+    if [ "$candidate" = "$current_image" ] || { [ "$use_prepared_image_cache" = "true" ] && [ "$candidate" = "$current_base_image" ]; }; then
       image_matches=true
       break
     fi
@@ -1807,6 +1864,20 @@ if [ "$container_exists" = "true" ]; then
   emit_progress "container" "running" "reusing an existing managed container" 15
   state=$(docker inspect -f '{{.State.Status}}' "$container")
   selected_image=$(docker inspect -f '{{.Config.Image}}' "$container")
+  run_image="$selected_image"
+  existing_base_image=$(docker inspect -f '{{ index .Config.Labels "com.vaws.base_image" }}' "$container" 2>/dev/null || true)
+  if [ "$existing_base_image" = "<no value>" ]; then
+    existing_base_image=""
+  fi
+  if [ "$use_prepared_image_cache" = "true" ] && [ -n "$existing_base_image" ]; then
+    run_image="$selected_image"
+    selected_image="$existing_base_image"
+    prepared_image="$(docker inspect -f '{{ index .Config.Labels "com.vaws.prepared_image" }}' "$container" 2>/dev/null || true)"
+    if [ "$prepared_image" = "<no value>" ]; then
+      prepared_image=""
+    fi
+    used_prepared_image_cache=true
+  fi
   image_resolution="existing-container"
   if [ "$state" != "running" ]; then
     docker start "$container" >/dev/null
@@ -1819,6 +1890,12 @@ else
   emit_progress "image" "running" "resolved image selector ${requested_image:-unknown} (${image_policy:-unknown})" 30
   for candidate in "${image_candidates[@]}"; do
     emit_progress "image" "running" "trying image candidate $candidate" 600
+    if [ "$docker_pull_policy" != "always" ] && [ "$image_policy" != "main-branch" ] && docker image inspect "$candidate" >/dev/null 2>&1; then
+      selected_image="$candidate"
+      image_resolution="local-cache"
+      actions+=("reused-local-image-cache")
+      break
+    fi
     if run_with_progress "image-pull" "docker pull $candidate" 600 docker pull "$candidate"; then
       selected_image="$candidate"
       image_resolution="pulled"
@@ -1827,12 +1904,6 @@ else
       break
     fi
     emit_progress "image" "running" "pull failed for $candidate; checking local cache" 30
-    if docker image inspect "$candidate" >/dev/null 2>&1; then
-      selected_image="$candidate"
-      image_resolution="local-cache"
-      actions+=("reused-local-image-cache")
-      break
-    fi
   done
   if [ -z "$selected_image" ]; then
     emit_json '{"success": false, "error": "no usable image candidate was found", "phase": "image"}'
@@ -1842,6 +1913,18 @@ else
     machine_type="$(infer_type_from_image "$selected_image" || true)"
   fi
   container_type="$machine_type"
+  run_image="$selected_image"
+  if [ "$use_prepared_image_cache" = "true" ]; then
+    prepared_image="$(prepared_image_tag "$selected_image" || true)"
+    if [ -n "$prepared_image" ] && docker image inspect "$prepared_image" >/dev/null 2>&1; then
+      emit_progress "image-cache" "running" "using prepared session image $prepared_image" 10
+      run_image="$prepared_image"
+      used_prepared_image_cache=true
+      actions+=("reused-prepared-image-cache")
+    elif [ -n "$prepared_image" ]; then
+      emit_progress "image-cache" "running" "prepared session image cache miss; will populate after ssh package install" 10
+    fi
+  fi
 
   mount_args=()
   for optional in /home /tmp /weight /data /mnt; do
@@ -1871,7 +1954,10 @@ else
     -v /usr/local/sbin:/usr/local/sbin \
     -v /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro \
     "${mount_args[@]}" \
-    "$selected_image" >/dev/null
+    --label com.vaws.base_image="$selected_image" \
+    --label com.vaws.run_image="$run_image" \
+    --label com.vaws.prepared_image="$prepared_image" \
+    "$run_image" >/dev/null
 
   created=true
   actions+=("created-container")
@@ -1896,8 +1982,24 @@ if ! docker exec "$container" bash -lc 'command -v sshd >/dev/null 2>&1 && comma
   fi
   installed_ssh=true
   actions+=("installed-openssh")
+  if [ "$use_prepared_image_cache" = "true" ] && [ -n "$prepared_image" ] && ! docker image inspect "$prepared_image" >/dev/null 2>&1; then
+    emit_progress "image-cache" "running" "committing prepared session image $prepared_image" 120
+    if run_with_progress "image-cache-commit" "committing prepared session image" 120 docker commit "$container" "$prepared_image"; then
+      created_prepared_image_cache=true
+      actions+=("created-prepared-image-cache")
+    else
+      emit_progress "image-cache" "running" "prepared session image commit failed; continuing without cache" 30
+    fi
+  fi
 else
   package_bootstrap='{"package_manager": null, "selected_mirror": null, "candidate_timings_ms": {}, "changed_files": [], "changed": false, "install_skipped": true}'
+  if [ "$use_prepared_image_cache" = "true" ] && [ "$run_image" = "$selected_image" ] && [ -n "$prepared_image" ] && ! docker image inspect "$prepared_image" >/dev/null 2>&1; then
+    emit_progress "image-cache" "running" "tagging selected image as prepared session image $prepared_image" 30
+    if docker tag "$selected_image" "$prepared_image" >/dev/null 2>&1; then
+      created_prepared_image_cache=true
+      actions+=("tagged-prepared-image-cache")
+    fi
+  fi
 fi
 
 emit_progress "container-ssh" "running" "configuring dedicated container sshd" 60
@@ -1918,7 +2020,7 @@ elif command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 
   firewall="firewalld"
 fi
 
-payload=$(python3 - <<'PY' "$container" "$port" "$image_request_json" "$selected_image" "$image_resolution" "$workdir" "$namespace" "$created" "$started" "$pulled" "$installed_ssh" "$firewall" "${actions[*]}" "$previous_image" "$replace_on_image_change" "$machine_type" "$container_type" "$soc" "$host_env_file" "$host_metadata_file" "$container_env_file" "$container_metadata_file" "$package_bootstrap"
+payload=$(python3 - <<'PY' "$container" "$port" "$image_request_json" "$selected_image" "$image_resolution" "$workdir" "$namespace" "$created" "$started" "$pulled" "$installed_ssh" "$firewall" "${actions[*]}" "$previous_image" "$replace_on_image_change" "$machine_type" "$container_type" "$soc" "$host_env_file" "$host_metadata_file" "$container_env_file" "$container_metadata_file" "$package_bootstrap" "$run_image" "$prepared_image" "$use_prepared_image_cache" "$used_prepared_image_cache" "$created_prepared_image_cache" "$docker_pull_policy"
 import json
 import sys
 (
@@ -1945,6 +2047,12 @@ import sys
     container_env_file,
     container_metadata_file,
     package_bootstrap,
+    run_image,
+    prepared_image,
+    use_prepared_image_cache,
+    used_prepared_image_cache,
+    created_prepared_image_cache,
+    docker_pull_policy,
 ) = sys.argv[1:]
 image_request = json.loads(image_request_json)
 print(json.dumps({
@@ -1957,7 +2065,13 @@ print(json.dumps({
     "image_policy": image_request.get("policy"),
     "resolved_tag": image_request.get("resolved_tag"),
     "selected_image": selected_image,
+    "run_image": run_image or selected_image,
+    "prepared_image": prepared_image or None,
+    "prepared_image_cache_requested": use_prepared_image_cache == "true",
+    "used_prepared_image_cache": used_prepared_image_cache == "true",
+    "created_prepared_image_cache": created_prepared_image_cache == "true",
     "image_resolution": image_resolution,
+    "docker_pull_policy": docker_pull_policy,
     "image_candidates": list(image_request.get("candidates") or []),
     "image_mirror_order": list(image_request.get("mirror_order") or []),
     "workdir": workdir,

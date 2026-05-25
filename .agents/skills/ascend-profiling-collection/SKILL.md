@@ -43,13 +43,14 @@ This skill is **only** about collection: start a profiled service, bracket a wor
   2. number of `*_ascend_pt` directories does not match `tp * (dp or 1)`
   3. workload was not real — follow-up request failed or benchmark wave fell below `--benchmark-success-threshold`
 - Progress on `stderr` as `__VAWS_PROFILING_COLLECTION_PROGRESS__=<json>`. Final manifest on `stdout` as one JSON object.
-- Local state lives **only** under `.vaws-local/ascend-profiling-collection/runs/`.
+- For parallel agent work, create a session first and pass `--session-id <id>`. Service start/stop and parity then stay scoped to that session.
+- Local state lives under `.vaws-local/ascend-profiling-collection/runs/` for collection manifests; serving/parity state follows the target mode.
 
 ## Public entry point
 
 ```bash
 python3 .agents/skills/ascend-profiling-collection/scripts/collect_torch_profile_case.py \
-  --machine <alias-or-ip> \
+  (--machine <alias-or-ip> | --session-id <id>) \
   --model <remote-weight-path> \
   --served-model-name <name> \
   --tp <N> \
@@ -78,7 +79,7 @@ The script intentionally has no Qwen-specific defaults. The agent must always pa
 
 | Required arg | Why |
 | --- | --- |
-| `--machine` | Target container; resolved through inventory |
+| `--machine` or `--session-id` | Target container; sessions are preferred for parallel work |
 | `--model` / `--served-model-name` | Different cases need different models, no safe default |
 | `--tp` | Hardware shape; never assume it |
 | `--mode` | The profile is meaningless without recording which graph mode produced it |
@@ -97,14 +98,14 @@ The agent can call these directly if it already has a service running and only w
 ```bash
 # Start a profile window on a service that the serving skill already launched
 python3 .agents/skills/ascend-profiling-collection/scripts/profile_control.py \
-  --machine <alias> --action start_profile [--timeout 900]
+  (--machine <alias> | --session-id <id>) --action start_profile [--timeout 900]
 
 # Close it
 python3 .agents/skills/ascend-profiling-collection/scripts/profile_control.py \
-  --machine <alias> --action stop_profile [--timeout 900]
+  (--machine <alias> | --session-id <id>) --action stop_profile [--timeout 900]
 ```
 
-The script reads the service port from `.vaws-local/serving/<alias>.json`. A service must be running.
+The script reads the service port from `.vaws-local/serving/<alias>.json` in legacy mode or `.vaws-local/sessions/<id>/serving.json` in session mode. A service must be running.
 
 ### Re-run `analyse()` on an existing root
 

@@ -8,7 +8,7 @@
 
 vLLM Ascend 的开发通常需要在本地编辑代码、在远程昇腾 NPU 服务器上运行测试，同时还要跟踪上游 vLLM 的变化。手动维护这套工作流涉及大量重复的 Git、SSH 和环境配置操作。
 
-`vllm-ascend-workspace` 把这些操作封装成六个 AI Agent 技能，你可以用自然语言让 Agent 代劳，也可以完全忽略这些技能、只把它当作一个普通的多仓库工作区。
+`vllm-ascend-workspace` 把这些操作封装成一组 AI Agent 技能，你可以用自然语言让 Agent 代劳，也可以完全忽略这些技能、只把它当作一个普通的多仓库工作区。
 
 ## 快速开始
 
@@ -34,10 +34,14 @@ Agent 会自动检测你的环境、安装所需工具、配置 Git 远程仓库
 | ------------------------ | ---------------------------------------------- | ------------------ |
 | **repo-init**            | 安装 GitHub CLI、登录 GitHub、初始化子模块、配置 Fork 和远程仓库拓扑 | 首次 clone 后初始化工作区   |
 | **machine-management**   | 添加、验证、修复或移除远程昇腾 NPU 服务器及其托管容器                  | 需要配置远程 NPU 开发机时    |
+| **session-management**   | 创建/检查/清理隔离 session：本地 worktree、远端容器、状态目录和资源 lease | 多 agent 或多任务并行远端执行时 |
+| **remote-toolbox**       | 结构化解析/探测/执行/长任务/同步/服务/产物传输/清理远端容器              | Agent 需要像使用本地工具一样操作远端 session container 时 |
 | **remote-code-parity**   | 将本地工作区的完整状态（含未提交的修改）同步到远程容器                    | 在远程机器上运行测试或服务前自动触发 |
 | **vllm-ascend-serving**  | 在远程容器上一键拉起 vLLM Ascend 推理服务，支持 NPU 探测、自动选卡、增量重启 | 需要在远程机器上起推理服务时     |
 | **vllm-ascend-benchmark** | 在远程容器上运行 `vllm bench serve` 性能基准测试，支持多轮预热和统计聚合     | 需要跑吞吐/延迟基准测试或性能回归对比时 |
 | **ascend-memory-profiling** | 采集并分析昇腾 NPU 的 HBM 显存占用，按组件拆分并溯源 | 需要分析 vLLM 推理服务的显存占用时 |
+| **ascend-profiling-collection** | 采集 Ascend torch profiler：起服务、控制 profile 窗口、运行 workload、远端 analyse 并写 manifest | 需要采集 kernel_details/trace_view 时 |
+| **ascend-profiling-analysis** | 分析已采集的 profiler root/manifest，生成 step/layer/operator/cross-rank 诊断报告 | 需要分析 profiling 结果或生成报告时 |
 
 
 所有技能都是**可选的**。你可以只用其中的一部分，也可以完全不用。
@@ -80,10 +84,14 @@ Agent 会自动检测你的环境、安装所需工具、配置 Git 远程仓库
 │   ├── skills/
 │   │   ├── repo-init/             # 工作区初始化技能
 │   │   ├── machine-management/    # 远程机器管理技能
+│   │   ├── session-management/    # 并行 Session 隔离技能
+│   │   ├── remote-toolbox/        # 远端结构化工具面
 │   │   ├── remote-code-parity/    # 代码同步技能
 │   │   ├── vllm-ascend-serving/   # 服务拉起技能
 │   │   ├── vllm-ascend-benchmark/ # 性能基准测试技能
-│   │   └── ascend-memory-profiling/ # 显存 profiling 技能
+│   │   ├── ascend-memory-profiling/ # 显存 profiling 技能
+│   │   ├── ascend-profiling-collection/ # torch profiler 采集技能
+│   │   └── ascend-profiling-analysis/ # profiling 分析报告技能
 │   ├── lib/               # 共享本地状态库
 │   └── scripts/           # 共享辅助脚本
 ├── .cursor/rules/         # Cursor IDE 专用规则
@@ -97,6 +105,8 @@ Agent 会自动检测你的环境、安装所需工具、配置 Git 远程仓库
 
 - **不强制任何流程** — 所有技能都可选，开发者自由选择使用哪些部分。
 - **本地状态不入库** — 用户特定的远程仓库、认证信息、机器配置等只存在于本地未跟踪的 `.vaws-local/` 目录中。
+- **并行任务隔离** — 远端并行执行优先使用 session：每个任务有独立本地 worktree、远端容器、状态目录和资源 lease。
+- **远端操作结构化** — Agent 面向远端容器优先使用 remote toolbox，产出 JSON、可观测日志、可恢复 artifact manifest 和可清理状态。
 - **子模块指向社区** — `.gitmodules` 始终指向 `vllm-project` 的官方仓库，个人 Fork 是本地运行时配置。
 - **Agent 驱动，但不依赖 Agent** — 所有操作都可以手动完成，Agent 只是让流程更方便。
 

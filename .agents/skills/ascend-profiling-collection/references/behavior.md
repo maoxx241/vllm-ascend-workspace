@@ -94,6 +94,8 @@ One directory per invocation. Nothing else is ever written here. The remote prof
 
 Code parity is enforced transitively through `serve_start.py`. The collection skill must not call parity itself. The `.vaws-runtime` preserve carve-out and the `uv pip install --system` fix that profiling needed are owned by the parity skill — see `.agents/skills/remote-code-parity/SKILL.md`.
 
+When `--session-id` is used, `serve_start.py`, `profile_control.py`, and `serve_stop.py` all use the session container and session serving state. This allows two profiling collections on the same base host to run without stopping each other's services.
+
 ## Manifest schema versioning
 
 `schema_version` starts at 1. Bump only when a field is renamed or removed. Adding new fields (e.g. richer profiler config knobs) does not require a bump; the analysis skill should treat unknown fields as advisory.

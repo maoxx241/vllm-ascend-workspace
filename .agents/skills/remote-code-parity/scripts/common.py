@@ -45,6 +45,7 @@ PROGRESS_SENTINEL = '__VAWS_PARITY_PROGRESS__='
 STATE_LOCK_SUFFIX = '.lock'
 DEFAULT_STATE_LOCK_TIMEOUT_SECONDS = 15.0
 DEFAULT_STATE_LOCK_POLL_SECONDS = 0.05
+DEFAULT_STATE_LOCK_STALE_SECONDS = 60 * 60 * 6
 
 
 @dataclass(frozen=True)
@@ -72,15 +73,25 @@ def run(
     env: dict[str, str] | None = None,
     check: bool = True,
     capture_output: bool = True,
+    timeout: float | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    result = subprocess.run(
-        cmd,
-        cwd=str(cwd) if cwd else None,
-        env=env,
-        check=False,
-        capture_output=capture_output,
-        text=True,
-    )
+    try:
+        result = subprocess.run(
+            cmd,
+            cwd=str(cwd) if cwd else None,
+            env=env,
+            check=False,
+            capture_output=capture_output,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            f"command timed out after {timeout:.0f}s: "
+            f"{' '.join(shlex.quote(part) for part in cmd)}\n"
+            f'stdout:\n{exc.stdout or ""}\n'
+            f'stderr:\n{exc.stderr or ""}'
+        ) from exc
     if check and result.returncode != 0:
         raise RuntimeError(
             f"command failed ({result.returncode}): {' '.join(shlex.quote(part) for part in cmd)}\n"
@@ -90,8 +101,15 @@ def run(
     return result
 
 
-def git(repo: Path, args: list[str], *, env: dict[str, str] | None = None, check: bool = True) -> subprocess.CompletedProcess[str]:
-    return run(['git', '-C', str(repo), *args], env=env, check=check)
+def git(
+    repo: Path,
+    args: list[str],
+    *,
+    env: dict[str, str] | None = None,
+    check: bool = True,
+    timeout: float | None = None,
+) -> subprocess.CompletedProcess[str]:
+    return run(['git', '-C', str(repo), *args], env=env, check=check, timeout=timeout)
 
 
 def repo_root_from(path: Path) -> Path:
@@ -158,16 +176,30 @@ def state_lock(
     *,
     timeout_seconds: float = DEFAULT_STATE_LOCK_TIMEOUT_SECONDS,
     poll_seconds: float = DEFAULT_STATE_LOCK_POLL_SECONDS,
+    stale_after_seconds: float = DEFAULT_STATE_LOCK_STALE_SECONDS,
 ):
     lock_path = canonical_state_path(repo_root, filename + STATE_LOCK_SUFFIX)
     deadline = time.monotonic() + timeout_seconds
+    owner = {
+        "pid": os.getpid(),
+        "hostname": os.uname().nodename if hasattr(os, "uname") else None,
+        "created_at": now_utc(),
+    }
     fd: int | None = None
     while True:
         try:
             fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-            os.write(fd, f'{os.getpid()}\n'.encode('utf-8'))
+            os.write(fd, (json.dumps(owner, sort_keys=True) + "\n").encode('utf-8'))
             break
         except FileExistsError:
+            try:
+                age = time.time() - lock_path.stat().st_mtime
+            except FileNotFoundError:
+                continue
+            if age >= stale_after_seconds:
+                with contextlib.suppress(FileNotFoundError):
+                    lock_path.unlink()
+                continue
             if time.monotonic() >= deadline:
                 raise RuntimeError(f'timed out waiting for state lock {lock_path}')
             time.sleep(poll_seconds)
@@ -352,6 +384,21 @@ def ssh_stream_to_file(endpoint: SshEndpoint, remote_path: str, payload: str) ->
     if result.returncode != 0:
         raise RuntimeError(
             f'failed to stream payload to {remote_path}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}'
+        )
+
+
+def ssh_stream_bytes_to_file(endpoint: SshEndpoint, remote_path: str, payload: bytes) -> None:
+    script = (
+        f'mkdir -p {quoted(str(Path(remote_path).parent))} && '
+        f'head -c {len(payload)} > {quoted(remote_path)}'
+    )
+    cmd = [*_ssh_base_cmd(endpoint), 'bash', '-c', shlex.quote(script)]
+    result = subprocess.run(cmd, input=payload, capture_output=True)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f'failed to stream binary payload to {remote_path}\n'
+            f'stdout:\n{result.stdout.decode("utf-8", errors="replace")}\n'
+            f'stderr:\n{result.stderr.decode("utf-8", errors="replace")}'
         )
 
 

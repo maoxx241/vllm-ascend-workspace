@@ -2,12 +2,12 @@
 
 ## Lifecycle
 
-1. **Resolve machine** from local inventory (same as serving).
+1. **Resolve target** from local inventory or a VAWS session spec.
 2. **Assemble config** from user args + optional nightly reference.
-3. **Stop existing service** on the target machine if any.
-4. **Start service** via `serve_start.py` (which handles parity sync internally).
+3. **Stop existing service** on the target target if any. In session mode this means only the session service.
+4. **Start service** via `serve_start.py` (which handles parity sync internally). If startup returns non-ready, call `serve_stop.py --force` for the same target before failing.
 5. **Run benchmark iterations** via SSH on the remote container — all against the same warm service.
-6. **Stop service** via `serve_stop.py`.
+6. **Stop service** via `serve_stop.py`, passing through `--session-id` when used.
 7. **Output structured JSON** on stdout.
 
 ## Configuration Priority
@@ -63,7 +63,7 @@ Given baseline throughput `T_b` and patched throughput `T_p`, compute the ratio 
 
 ## Remote Execution
 
-`vllm bench serve` runs inside the container via SSH. The result JSON file is written to `/tmp/` and `cat`-ed back through the SSH session. The script parses the last JSON object from stdout.
+`vllm bench serve` runs inside the container via SSH. The result JSON file is written to `/tmp/` with a target token, local process id, and random suffix in the file name, then `cat`-ed back through the SSH session. The script parses the last JSON object from stdout. The unique file name matters because session containers can share the host `/tmp` mount on the same machine.
 
 ## Defaults
 
@@ -75,4 +75,4 @@ These are conservative defaults suitable for a quick smoke test. For production 
 
 ## State Management
 
-Benchmark results are not persisted locally by default. The structured JSON is returned on stdout for the agent or user to consume. The serving skill handles its own state under `.vaws-local/serving/`.
+Benchmark results are not persisted locally by default. The structured JSON is returned on stdout for the agent or user to consume. The serving skill handles its own state under `.vaws-local/serving/` in legacy mode and `.vaws-local/sessions/<session-id>/serving.json` in session mode.

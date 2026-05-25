@@ -18,6 +18,7 @@ import socket
 import subprocess
 import sys
 import textwrap
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -59,6 +60,7 @@ SERVING = _load_serving_common()
 SshEndpoint = SERVING.SshEndpoint
 ssh_exec = SERVING.ssh_exec
 resolve_machine = SERVING.resolve_machine
+resolve_execution_target = SERVING.resolve_execution_target
 container_endpoint = SERVING.container_endpoint
 host_endpoint = SERVING.host_endpoint
 load_serving_state = SERVING.load_serving_state
@@ -190,31 +192,45 @@ def call_json_command(cmd: list[str], *, cwd: Path | None = None) -> dict[str, A
     underlying serving / parity scripts. Raises RuntimeError on non-zero exit
     or non-JSON output, with both streams attached.
     """
-    result = subprocess.run(
+    proc = subprocess.Popen(
         cmd,
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
         cwd=str(cwd or ROOT),
     )
-    if result.stderr:
-        sys.stderr.write(result.stderr)
-        sys.stderr.flush()
-    if result.returncode != 0:
+    stderr_lines: list[str] = []
+
+    def relay_stderr() -> None:
+        assert proc.stderr is not None
+        for line in proc.stderr:
+            stderr_lines.append(line)
+            sys.stderr.write(line)
+            sys.stderr.flush()
+
+    thread = threading.Thread(target=relay_stderr, daemon=True)
+    thread.start()
+    assert proc.stdout is not None
+    stdout = proc.stdout.read()
+    returncode = proc.wait()
+    thread.join(timeout=1)
+    stderr = "".join(stderr_lines)
+    if returncode != 0:
         raise RuntimeError(
-            f"command failed (rc={result.returncode}): {' '.join(cmd)}\n"
-            f"stdout={result.stdout[:2000]}\nstderr={result.stderr[:2000]}"
+            f"command failed (rc={returncode}): {' '.join(cmd)}\n"
+            f"stdout={stdout[:2000]}\nstderr={stderr[:2000]}"
         )
-    if not result.stdout.strip():
+    if not stdout.strip():
         raise RuntimeError(
             f"command produced no output: {' '.join(cmd)}\n"
-            f"stderr={result.stderr[:2000]}"
+            f"stderr={stderr[:2000]}"
         )
     try:
-        return json.loads(result.stdout)
+        return json.loads(stdout)
     except json.JSONDecodeError as exc:
         raise RuntimeError(
             f"command returned non-JSON output: {' '.join(cmd)}\n"
-            f"stdout={result.stdout[:2000]}"
+            f"stdout={stdout[:2000]}"
         ) from exc
 
 
@@ -227,8 +243,22 @@ def call_serve_start(extra_args: list[str]) -> dict[str, Any]:
     return call_json_command(cmd)
 
 
-def call_serve_stop(machine: str, *, force: bool = False) -> dict[str, Any]:
-    cmd = [sys.executable, str(SERVING_SCRIPTS / "serve_stop.py"), "--machine", machine]
+def call_serve_stop(
+    machine: str | None,
+    *,
+    session_id: str | None = None,
+    session_file: str | None = None,
+    force: bool = False,
+) -> dict[str, Any]:
+    cmd = [sys.executable, str(SERVING_SCRIPTS / "serve_stop.py")]
+    if session_file:
+        cmd.extend(["--session-file", session_file])
+    elif session_id:
+        cmd.extend(["--session-id", session_id])
+    else:
+        if not machine:
+            raise RuntimeError("machine is required unless session_id or session_file is provided")
+        cmd.extend(["--machine", machine])
     if force:
         cmd.append("--force")
     return call_json_command(cmd)
