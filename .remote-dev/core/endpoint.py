@@ -11,8 +11,8 @@ from typing import Any
 from .errors import EndpointError
 
 DEFAULT_USER = os.environ.get("REMOTE_DEV_DEFAULT_USER", "root")
-DEFAULT_ROOT = os.environ.get("REMOTE_DEV_DEFAULT_ROOT", "/vllm-workspace")
-DEFAULT_CWD = os.environ.get("REMOTE_DEV_DEFAULT_CWD")
+DEFAULT_ROOT = os.environ.get("REMOTE_DEV_DEFAULT_ROOT", "/")
+DEFAULT_CWD = os.environ.get("REMOTE_DEV_DEFAULT_CWD", "/vllm-workspace")
 
 
 @dataclass(frozen=True)
@@ -132,7 +132,7 @@ def _endpoint_from_managed(payload: dict[str, Any]) -> Endpoint:
         host=endpoint.host,
         port=int(endpoint.port),
         user=endpoint.user,
-        root=str(payload.get("root") or target.runtime_root),
+        root=str(payload.get("root") or DEFAULT_ROOT),
         cwd=str(payload.get("cwd") or target.runtime_root),
         runtime_env=bool(payload.get("runtime_env", True)),
         identity_file=str(payload["identity_file"]) if payload.get("identity_file") else None,

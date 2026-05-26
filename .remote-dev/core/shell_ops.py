@@ -9,7 +9,6 @@ from .endpoint import Endpoint
 from .errors import PathPolicyError
 from .job_ops import start_remote_job
 from .path_policy import assert_under_root
-from .permissions import contains_secret_in_argv
 from .preview import compact_text, stdout_stderr_preview
 from .result import make_result, new_invocation_id, utc_now_iso
 from .ssh_transport import run_script
@@ -31,6 +30,23 @@ def _env_exports(env: dict[str, str]) -> list[str]:
     return lines
 
 
+def _cwd_outside_root_next(cwd: str) -> dict[str, Any]:
+    if not cwd.startswith("/"):
+        return {
+            "suggested_action": "rerun_with_absolute_cwd",
+            "message": "Remote cwd must be absolute and inside the endpoint root.",
+        }
+    return {
+        "suggested_action": "rerun_with_endpoint_root",
+        "message": (
+            "The requested cwd is outside the endpoint root. If this path is "
+            "intentional and trusted, rerun with root set to cwd or one of "
+            "its trusted ancestor directories."
+        ),
+        "endpoint_patch": {"root": cwd, "cwd": cwd},
+    }
+
+
 def remote_bash(
     endpoint: Endpoint,
     *,
@@ -44,17 +60,6 @@ def remote_bash(
 ) -> dict[str, Any]:
     env = env or {}
     runtime_enabled = endpoint.runtime_env if runtime_env is None else runtime_env
-    if contains_secret_in_argv(command):
-        result = make_result(
-            tool="remote.bash",
-            target=endpoint.to_result_target(),
-            outcome="blocked",
-            status="secret_like_argv",
-            summary="RemoteBash blocked because the command contains secret-like argv.",
-            preview={"stderr": "secret-like command argv is blocked"},
-            extra={"command_preview": command[:500]},
-        )
-        return {"text": result["summary"] + "\n", "result": result}
     try:
         cwd = assert_under_root(cwd or endpoint.effective_cwd, endpoint.root)
     except PathPolicyError as exc:
@@ -65,9 +70,18 @@ def remote_bash(
             status="cwd_outside_root",
             summary="RemoteBash blocked because cwd is outside root.",
             preview={"stderr": str(exc)},
+            next=_cwd_outside_root_next(cwd or endpoint.effective_cwd),
             extra={"error": str(exc), "command_preview": command[:500]},
         )
-        return {"text": result["summary"] + "\n" + str(exc) + "\n", "result": result}
+        text = (
+            result["summary"]
+            + "\n"
+            + str(exc)
+            + "\n"
+            + f"Next: rerun with --root {shlex.quote(cwd or endpoint.effective_cwd)} "
+            + f"--cwd {shlex.quote(cwd or endpoint.effective_cwd)} if that path is trusted.\n"
+        )
+        return {"text": text, "result": result}
     if run_in_background:
         return start_remote_job(
             endpoint,

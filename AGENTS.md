@@ -29,16 +29,17 @@ Default endpoint fields:
 - `host`
 - `port`
 - `user`, default `root`
-- `root`, default `/vllm-workspace`
-- `cwd`, default `root`
+- `root`, default `/`
+- `cwd`, default `/vllm-workspace`
 
 Prefer `host + port` direct endpoints for ordinary remote development.
 `session_id`, `session_file`, and `machine` remain advanced compatibility
 paths for managed VAWS sessions and legacy single-tenant flows.
 
-Do not use raw `ssh`, `scp`, `sftp`, or `rsync` for ordinary remote
-development. Use hooks only as guardrails; tool implementations enforce path,
-edit, artifact, and ledger safety.
+Prefer remote companion tools for ordinary remote development. Hooks are
+permissive by default, and direct endpoints default to full remote-path
+permission (`root=/`). Pass a narrower `root` explicitly when a task requires
+path isolation.
 
 ## Skills
 

@@ -17,7 +17,7 @@ import core.state_store as state_store  # noqa: E402
 
 class ArtifactTests(unittest.TestCase):
     def test_artifact_manifest_path_escape_returns_blocked_result(self) -> None:
-        endpoint = Endpoint(host="1.2.3.4", port=46000)
+        endpoint = Endpoint(host="1.2.3.4", port=46000, root="/vllm-workspace")
         payload = artifact_ops.remote_artifact_manifest(endpoint, remote_path="/etc/passwd")
         self.assertEqual(payload["result"]["outcome"], "blocked")
         self.assertEqual(payload["result"]["status"], "path_outside_root")

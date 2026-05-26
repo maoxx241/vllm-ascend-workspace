@@ -15,17 +15,32 @@ import core.state_store as state_store  # noqa: E402
 
 
 class RemoteEditTests(unittest.TestCase):
-    def test_remote_edit_requires_read_ledger(self) -> None:
+    def test_remote_edit_without_read_ledger_executes_by_default(self) -> None:
         endpoint = Endpoint(host="1.2.3.4", port=46000)
-        with tempfile.TemporaryDirectory() as tmp:
-            original = state_store.substrate_root
-            try:
+        original_state_root = state_store.substrate_root
+        original_runner = file_ops.run_remote_python
+        captured = {}
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
                 state_store.substrate_root = lambda: Path(tmp)  # type: ignore[assignment]
+
+                def fake_run_remote_python(_endpoint, _script, payload, **_kwargs):
+                    captured.update(payload)
+                    return {
+                        "status": "edited",
+                        "file": {"path": "/vllm-workspace/foo.py", "sha256": "after", "size": 3, "mtime_ns": 2},
+                        "before_sha256": "before",
+                        "after_sha256": "after",
+                        "diff_preview": "@@\n-a\n+b\n",
+                    }
+
+                file_ops.run_remote_python = fake_run_remote_python  # type: ignore[assignment]
                 payload = file_ops.remote_edit(endpoint, file_path="/vllm-workspace/foo.py", old_string="a", new_string="b")
-                self.assertEqual(payload["result"]["outcome"], "blocked")
-                self.assertEqual(payload["result"]["status"], "read_required")
-            finally:
-                state_store.substrate_root = original  # type: ignore[assignment]
+                self.assertEqual(payload["result"]["outcome"], "success")
+                self.assertIsNone(captured["expected_sha256"])
+        finally:
+            state_store.substrate_root = original_state_root  # type: ignore[assignment]
+            file_ops.run_remote_python = original_runner  # type: ignore[assignment]
 
     def test_remote_edit_with_ledger_returns_changed_file(self) -> None:
         endpoint = Endpoint(host="1.2.3.4", port=46000)
@@ -49,10 +64,11 @@ class RemoteEditTests(unittest.TestCase):
             state_store.substrate_root = original_state_root  # type: ignore[assignment]
             file_ops.run_remote_python = original_runner  # type: ignore[assignment]
 
-    def test_remote_edit_does_not_use_read_ledger_from_different_client_context(self) -> None:
+    def test_remote_edit_ignores_read_ledger_from_different_client_context(self) -> None:
         endpoint = Endpoint(host="1.2.3.4", port=46000)
         original_state_root = state_store.substrate_root
         original_runner = file_ops.run_remote_python
+        captured = {}
         try:
             with tempfile.TemporaryDirectory() as tmp:
                 state_store.substrate_root = lambda: Path(tmp)  # type: ignore[assignment]
@@ -62,10 +78,17 @@ class RemoteEditTests(unittest.TestCase):
                     client_context_id="agent-a",
                 )
 
-                def fail_if_called(*_args, **_kwargs):
-                    raise AssertionError("remote edit should not execute without same-context read ledger")
+                def fake_run_remote_python(_endpoint, _script, payload, **_kwargs):
+                    captured.update(payload)
+                    return {
+                        "status": "edited",
+                        "file": {"path": "/vllm-workspace/foo.py", "sha256": "after", "size": 3, "mtime_ns": 2},
+                        "before_sha256": "before",
+                        "after_sha256": "after",
+                        "diff_preview": "@@\n-a\n+b\n",
+                    }
 
-                file_ops.run_remote_python = fail_if_called  # type: ignore[assignment]
+                file_ops.run_remote_python = fake_run_remote_python  # type: ignore[assignment]
                 payload = file_ops.remote_edit(
                     endpoint,
                     file_path="/vllm-workspace/foo.py",
@@ -73,8 +96,8 @@ class RemoteEditTests(unittest.TestCase):
                     new_string="b",
                     client_context_id="agent-b",
                 )
-                self.assertEqual(payload["result"]["outcome"], "blocked")
-                self.assertEqual(payload["result"]["status"], "read_required")
+                self.assertEqual(payload["result"]["outcome"], "success")
+                self.assertIsNone(captured["expected_sha256"])
         finally:
             state_store.substrate_root = original_state_root  # type: ignore[assignment]
             file_ops.run_remote_python = original_runner  # type: ignore[assignment]

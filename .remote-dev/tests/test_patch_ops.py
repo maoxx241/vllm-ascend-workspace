@@ -75,7 +75,7 @@ class PatchOpsTests(unittest.TestCase):
         self.assertEqual(parse_unified_patch_paths(patch), ["a.py"])
 
     def test_remote_apply_patch_path_escape_returns_blocked_result(self) -> None:
-        endpoint = Endpoint(host="1.2.3.4", port=46000)
+        endpoint = Endpoint(host="1.2.3.4", port=46000, root="/vllm-workspace")
         patch = """*** Begin Patch
 *** Add File: /tmp/outside.py
 +x = 1
@@ -86,7 +86,7 @@ class PatchOpsTests(unittest.TestCase):
         self.assertEqual(payload["result"]["status"], "path_outside_root")
 
     def test_remote_apply_patch_move_escape_returns_blocked_result(self) -> None:
-        endpoint = Endpoint(host="1.2.3.4", port=46000)
+        endpoint = Endpoint(host="1.2.3.4", port=46000, root="/vllm-workspace")
         patch = """*** Begin Patch
 *** Update File: foo.py
 *** Move to: /tmp/outside.py

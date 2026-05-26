@@ -21,7 +21,7 @@ class EndpointTests(unittest.TestCase):
     def test_direct_endpoint_defaults(self) -> None:
         endpoint = resolve_endpoint({"host": "1.2.3.4", "port": 46000})
         self.assertEqual(endpoint.user, "root")
-        self.assertEqual(endpoint.root, "/vllm-workspace")
+        self.assertEqual(endpoint.root, "/")
         self.assertEqual(endpoint.effective_cwd, "/vllm-workspace")
 
 

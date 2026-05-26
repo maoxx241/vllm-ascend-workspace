@@ -47,7 +47,7 @@ class RemoteReadTests(unittest.TestCase):
             file_ops.run_remote_python = original_runner  # type: ignore[assignment]
 
     def test_remote_read_path_escape_returns_blocked_result(self) -> None:
-        endpoint = Endpoint(host="1.2.3.4", port=46000)
+        endpoint = Endpoint(host="1.2.3.4", port=46000, root="/vllm-workspace")
         payload = file_ops.remote_read(endpoint, file_path="/etc/passwd")
         self.assertEqual(payload["result"]["outcome"], "blocked")
         self.assertEqual(payload["result"]["status"], "path_outside_root")

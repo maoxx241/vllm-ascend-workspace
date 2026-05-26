@@ -15,14 +15,18 @@ import core.search_ops as search_ops  # noqa: E402
 
 class RemoteSearchTests(unittest.TestCase):
     def test_remote_glob_path_escape_returns_blocked_result(self) -> None:
-        endpoint = Endpoint(host="1.2.3.4", port=46000)
+        endpoint = Endpoint(host="1.2.3.4", port=46000, root="/vllm-workspace")
         payload = search_ops.remote_glob(endpoint, pattern="*", path="/etc")
         self.assertEqual(payload["result"]["outcome"], "blocked")
 
     def test_remote_grep_path_escape_returns_blocked_result(self) -> None:
-        endpoint = Endpoint(host="1.2.3.4", port=46000)
+        endpoint = Endpoint(host="1.2.3.4", port=46000, root="/vllm-workspace")
         payload = search_ops.remote_grep(endpoint, pattern="x", path="/etc")
         self.assertEqual(payload["result"]["outcome"], "blocked")
+
+    def test_remote_search_script_does_not_spawn_login_shell_to_find_rg(self) -> None:
+        self.assertNotIn("bash\", \"-lc", search_ops.REMOTE_SEARCH_PY)
+        self.assertIn("shutil.which(\"rg\")", search_ops.REMOTE_SEARCH_PY)
 
     def test_remote_grep_clamps_limit_and_text(self) -> None:
         endpoint = Endpoint(host="1.2.3.4", port=46000)

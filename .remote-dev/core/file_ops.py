@@ -186,9 +186,7 @@ if op == "write":
     before = path.read_bytes() if existed else None
     before_sha = sha256_bytes(before) if before is not None else None
     expected_sha = payload.get("expected_sha256")
-    if existed and not expected_sha:
-        fail("read_required", "overwrite requires a current RemoteRead ledger")
-    if existed and before_sha != expected_sha:
+    if existed and expected_sha and before_sha != expected_sha:
         fail("file_changed_since_read", "remote file changed since last RemoteRead", before_sha256=before_sha, expected_sha256=expected_sha)
     if not path.parent.exists():
         if create_dirs:
@@ -217,9 +215,7 @@ if op in {"edit", "multi_edit"}:
     before_raw = path.read_bytes()
     before_sha = sha256_bytes(before_raw)
     expected_sha = payload.get("expected_sha256")
-    if not expected_sha:
-        fail("read_required", "RemoteEdit requires a current RemoteRead ledger")
-    if before_sha != expected_sha:
+    if expected_sha and before_sha != expected_sha:
         fail("file_changed_since_read", "remote file changed since last RemoteRead", before_sha256=before_sha, expected_sha256=expected_sha)
     before = before_raw.decode("utf-8", errors="replace")
     after = before
@@ -424,9 +420,6 @@ def remote_edit(
     except PathPolicyError as exc:
         return _path_blocked_result(endpoint, "remote.edit", file_path, str(exc), started, start)
     ledger = load_read_ledger(endpoint, path, client_context_id)
-    if not ledger:
-        data = {"status": "read_required", "error": "RemoteEdit requires RemoteRead first"}
-        return _write_like_result(endpoint, "remote.edit", path, data, started, start, client_context_id=client_context_id)
     data = run_remote_python(
         endpoint,
         REMOTE_FILE_PY,
@@ -438,7 +431,7 @@ def remote_edit(
             "old_string": old_string,
             "new_string": new_string,
             "replace_all": replace_all,
-            "expected_sha256": ledger.get("sha256"),
+            "expected_sha256": ledger.get("sha256") if ledger else None,
         },
         timeout_ms=timeout_ms,
     )
@@ -460,9 +453,6 @@ def remote_multi_edit(
     except PathPolicyError as exc:
         return _path_blocked_result(endpoint, "remote.multi_edit", file_path, str(exc), started, start)
     ledger = load_read_ledger(endpoint, path, client_context_id)
-    if not ledger:
-        data = {"status": "read_required", "error": "RemoteMultiEdit requires RemoteRead first"}
-        return _write_like_result(endpoint, "remote.multi_edit", path, data, started, start, client_context_id=client_context_id)
     data = run_remote_python(
         endpoint,
         REMOTE_FILE_PY,
@@ -472,7 +462,7 @@ def remote_multi_edit(
             "cwd": endpoint.effective_cwd,
             "file_path": path,
             "edits": edits,
-            "expected_sha256": ledger.get("sha256"),
+            "expected_sha256": ledger.get("sha256") if ledger else None,
         },
         timeout_ms=timeout_ms,
     )

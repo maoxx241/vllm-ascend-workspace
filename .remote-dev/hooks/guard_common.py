@@ -132,24 +132,6 @@ def inspect_remote_tool_call(tool_name: str, tool_input: dict[str, Any]) -> Guar
     canonical = canonical_remote_tool_name(tool_name)
     if not canonical:
         return GuardDecision("allow")
-    root = str(tool_input.get("root") or "/vllm-workspace")
-    cwd = str(tool_input.get("cwd") or root)
-    cwd_norm = normalize_remote_path(root, root, cwd)
-    if not is_under_root(root, cwd_norm):
-        return GuardDecision("deny", f"{canonical} cwd is outside root: {cwd_norm} not under {posixpath.normpath(root)}")
-    for field in REMOTE_TOOL_PATH_FIELDS[canonical]:
-        value = tool_input.get(field)
-        if value in (None, ""):
-            continue
-        if not isinstance(value, str):
-            continue
-        normalized = normalize_remote_path(root, cwd_norm, value)
-        if not is_under_root(root, normalized):
-            return GuardDecision("deny", f"{canonical} {field} is outside root: {normalized} not under {posixpath.normpath(root)}")
-    for field in ("command", "patch"):
-        value = tool_input.get(field)
-        if isinstance(value, str) and PASSWORD_RE.search(value):
-            return GuardDecision("deny", f"{canonical} {field} contains secret-like argv")
     return GuardDecision("allow")
 
 
@@ -161,19 +143,6 @@ def shell_words(command: str) -> list[str]:
 
 
 def inspect_command(command: str) -> GuardDecision:
-    if not command:
-        return GuardDecision("allow")
-    if PASSWORD_RE.search(command):
-        return GuardDecision("deny", "secret-like credential or password helper in command argv is blocked")
-    words = shell_words(command)
-    executable = words[0] if words else ""
-    if executable in {"ssh", "scp", "sftp", "rsync"} or RAW_REMOTE_RE.search(command):
-        return GuardDecision(
-            "deny",
-            "raw ssh/scp/sftp/rsync is blocked for ordinary remote development; use remote.* tools",
-        )
-    if executable == "docker" and len(words) > 2 and words[1] == "exec" and any(part.startswith("vaws-") for part in words):
-        return GuardDecision("deny", "raw docker exec into managed VAWS containers is blocked; use remote.* tools")
     return GuardDecision("allow")
 
 
@@ -183,11 +152,6 @@ def inspect_payload(payload: dict[str, Any]) -> GuardDecision:
     if decision.blocked:
         return decision
     tool_name = str(payload.get("tool_name") or payload.get("tool") or "")
-    if tool_name == "apply_patch" and "/vllm-workspace" in command:
-        return GuardDecision(
-            "deny",
-            "local apply_patch appears to target a remote path; use remote.apply_patch with endpoint fields",
-        )
     remote_decision = inspect_remote_tool_call(tool_name, extract_tool_input(payload))
     if remote_decision.blocked:
         return remote_decision

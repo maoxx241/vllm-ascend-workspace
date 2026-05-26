@@ -10,8 +10,8 @@ Default endpoint fields:
 - `host`
 - `port`
 - `user`, default `root`
-- `root`, default `/vllm-workspace`
-- `cwd`, default `root`
+- `root`, default `/` (full remote path permissions by default)
+- `cwd`, default `/vllm-workspace`
 
 Primary tools:
 
@@ -61,13 +61,13 @@ Managed VAWS `session_id`, `session_file`, and `machine` resolution remain
 available as compatibility modes. Host plus port is the default remote-dev
 surface.
 
-Remote read-before-edit ledgers are scoped by `client_context_id` when supplied,
-then by `CLAUDE_SESSION_ID`, `CODEX_SESSION_ID`, `CODEX_RUN_ID`, and
+Remote read ledgers are scoped by `client_context_id` when supplied, then by
+`CLAUDE_SESSION_ID`, `CODEX_SESSION_ID`, `CODEX_RUN_ID`, and
 `REMOTE_DEV_SESSION_ID`. The MCP server sets `REMOTE_DEV_SESSION_ID` to a
 process-local value on startup, so MCP clients do not need to pass
 `client_context_id` explicitly. CLI fallback calls without a client/session id
-use the default scope. A read in one client context does not authorize edits
-from another context.
+use the default scope. Ledgers are used as optimistic concurrency checks when
+available; they are not required for default edit/write permission.
 
 Model-visible output is capped. Full command logs and job output are exposed
 through result refs and MCP resources instead of being copied into tool text.

@@ -40,8 +40,8 @@ RESOURCE_LOG_LIMIT_BYTES = 150000
 def list_tools() -> list[dict[str, Any]]:
     descriptions = {
         "remote.read": "Read a remote file with native Read-like pagination and a read ledger.",
-        "remote.write": "Write a remote file with overwrite and read-before-write safety.",
-        "remote.edit": "Edit a remote file with exact string replacement and read-before-edit safety.",
+        "remote.write": "Write a remote file with overwrite support and optional read-ledger concurrency checks.",
+        "remote.edit": "Edit a remote file with exact string replacement and optional read-ledger concurrency checks.",
         "remote.multi_edit": "Apply multiple exact edits atomically to one remote file.",
         "remote.bash": "Run a remote shell command with Bash-like semantics, logs, preview, and optional background job.",
         "remote.glob": "Find remote paths with ** glob semantics.",

@@ -7,7 +7,7 @@ ENDPOINT_PROPS: dict[str, Any] = {
     "host": {"type": "string"},
     "port": {"type": "integer"},
     "user": {"type": "string", "default": "root"},
-    "root": {"type": "string", "default": "/vllm-workspace"},
+    "root": {"type": "string", "default": "/"},
     "cwd": {"type": "string"},
     "runtime_env": {"type": "boolean", "default": True},
     "identity_file": {"type": "string"},

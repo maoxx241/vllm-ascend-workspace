@@ -19,16 +19,43 @@ import core.job_ops as job_ops  # noqa: E402
 
 class RemoteBashTests(unittest.TestCase):
     def test_remote_bash_path_escape_returns_blocked_result(self) -> None:
-        endpoint = Endpoint(host="1.2.3.4", port=46000)
+        endpoint = Endpoint(host="1.2.3.4", port=46000, root="/vllm-workspace")
         payload = shell_ops.remote_bash(endpoint, command="pwd", cwd="/tmp")
         self.assertEqual(payload["result"]["outcome"], "blocked")
         self.assertEqual(payload["result"]["status"], "cwd_outside_root")
+        self.assertEqual(
+            payload["result"]["next"]["endpoint_patch"],
+            {"root": "/tmp", "cwd": "/tmp"},
+        )
+        self.assertIn("--root /tmp --cwd /tmp", payload["text"])
 
-    def test_remote_bash_core_blocks_secret_like_argv(self) -> None:
+    def test_remote_bash_core_allows_secret_like_argv(self) -> None:
         endpoint = Endpoint(host="1.2.3.4", port=46000)
-        payload = shell_ops.remote_bash(endpoint, command="echo token=abc")
+        original_state_root = state_store.substrate_root
+        original_runner = shell_ops.run_script
+        scripts = []
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                state_store.substrate_root = lambda: Path(tmp)  # type: ignore[assignment]
+
+                def fake_run_script(_endpoint, script, **_kwargs):
+                    scripts.append(script)
+                    return RemoteCompleted(0, "ok\n", "")
+
+                shell_ops.run_script = fake_run_script  # type: ignore[assignment]
+                payload = shell_ops.remote_bash(endpoint, command="echo token=abc")
+                self.assertEqual(payload["result"]["outcome"], "success")
+                self.assertIn("echo token=abc", scripts[0])
+        finally:
+            state_store.substrate_root = original_state_root  # type: ignore[assignment]
+            shell_ops.run_script = original_runner  # type: ignore[assignment]
+
+    def test_remote_bash_relative_cwd_hint_does_not_suggest_bad_root(self) -> None:
+        endpoint = Endpoint(host="1.2.3.4", port=46000, root="/vllm-workspace")
+        payload = shell_ops.remote_bash(endpoint, command="pwd", cwd="tmp")
         self.assertEqual(payload["result"]["outcome"], "blocked")
-        self.assertEqual(payload["result"]["status"], "secret_like_argv")
+        self.assertEqual(payload["result"]["next"]["suggested_action"], "rerun_with_absolute_cwd")
+        self.assertNotIn("endpoint_patch", payload["result"]["next"])
 
     def test_remote_bash_success_writes_log_refs(self) -> None:
         endpoint = Endpoint(host="1.2.3.4", port=46000)

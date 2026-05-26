@@ -16,6 +16,7 @@ import glob as glob_mod
 import json
 import os
 import pathlib
+import shutil
 import subprocess
 import sys
 
@@ -76,9 +77,9 @@ if op == "grep":
     type_name = payload.get("type")
     multiline = bool(payload.get("multiline", False))
     warnings = []
-    rg = subprocess.run(["bash", "-lc", "command -v rg"], capture_output=True, text=True, check=False)
-    if rg.returncode == 0 and rg.stdout.strip():
-        cmd = [rg.stdout.strip(), "--color", "never"]
+    rg_path = shutil.which("rg")
+    if rg_path:
+        cmd = [rg_path, "--color", "never"]
         if multiline:
             cmd.append("-U")
         if glob_pattern:

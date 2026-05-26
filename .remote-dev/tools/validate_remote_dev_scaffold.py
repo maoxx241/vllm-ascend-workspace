@@ -151,12 +151,15 @@ def require_outcome(name: str, payload: dict[str, Any], *, statuses: set[str] | 
 
 
 def endpoint_payload(args: argparse.Namespace) -> dict[str, Any]:
+    cwd = args.cwd
+    if cwd is None and args.root != "/":
+        cwd = args.root
     payload = {
         "host": args.host,
         "port": args.port,
         "user": args.user,
         "root": args.root,
-        "cwd": args.cwd or args.root,
+        "cwd": cwd,
         "connect_timeout_ms": args.connect_timeout_ms,
         "alias": args.alias,
         "session_id": args.session_id,
@@ -197,14 +200,16 @@ def live_endpoint_checks(args: argparse.Namespace) -> dict[str, Any]:
         return {"status": "skipped", "reason": "no endpoint selector was provided"}
     timeout_ms = args.timeout_ms
     stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
-    scratch = f"{args.root.rstrip('/')}/.remote-dev/validation/{stamp}"
+    scratch_root = (endpoint.get("cwd") or "/vllm-workspace").rstrip("/")
+    scratch = f"{scratch_root}/.remote-dev/validation/{stamp}"
+    narrow_endpoint = {**endpoint, "root": scratch_root, "cwd": scratch_root}
     checks: list[dict[str, Any]] = []
     failures: list[str] = []
     try:
         progress("remote:probe")
         checks.append(require_outcome("probe", call_tool("remote.probe", {**endpoint, "timeout_ms": timeout_ms})))
         checks.append(require_outcome("context_snapshot", call_tool("remote.context_snapshot", {**endpoint, "timeout_ms": timeout_ms, "live_probe": True})))
-        checks.append(require_outcome("cwd_blocked", call_tool("remote.bash", {**endpoint, "cwd": "/tmp", "command": "pwd", "timeout_ms": timeout_ms}), outcomes={"blocked"}, statuses={"cwd_outside_root"}))
+        checks.append(require_outcome("cwd_blocked", call_tool("remote.bash", {**narrow_endpoint, "cwd": "/tmp", "command": "pwd", "timeout_ms": timeout_ms}), outcomes={"blocked"}, statuses={"cwd_outside_root"}))
         checks.append(require_outcome("cwd_not_found", call_tool("remote.bash", {**endpoint, "cwd": f"{scratch}/missing", "command": "pwd", "timeout_ms": timeout_ms}), outcomes={"failed"}, statuses={"cwd_not_found"}))
         checks.append(require_outcome("nonzero_exit", call_tool("remote.bash", {**endpoint, "command": "exit 7", "timeout_ms": timeout_ms}), outcomes={"failed"}, statuses={"nonzero_exit"}))
         checks.append(require_outcome("timeout", call_tool("remote.bash", {**endpoint, "command": "sleep 2", "timeout_ms": 500}), outcomes={"timeout"}, statuses={"timeout"}))
@@ -218,7 +223,7 @@ def live_endpoint_checks(args: argparse.Namespace) -> dict[str, Any]:
         checks.append(require_outcome("ls", call_tool("remote.ls", {**endpoint, "path": scratch, "timeout_ms": timeout_ms})))
         checks.append(require_outcome("read", call_tool("remote.read", {**endpoint, "file_path": f"{scratch}/file.txt", "offset": 1, "limit": 10, "timeout_ms": timeout_ms}), statuses={"ok"}))
         checks.append(require_outcome("directory_read_rejected", call_tool("remote.read", {**endpoint, "file_path": scratch, "timeout_ms": timeout_ms}), outcomes={"failed"}, statuses={"is_directory"}))
-        checks.append(require_outcome("symlink_read_blocked", call_tool("remote.read", {**endpoint, "file_path": f"{scratch}/escape-link", "timeout_ms": timeout_ms}), outcomes={"blocked"}, statuses={"path_outside_root"}))
+        checks.append(require_outcome("symlink_read_blocked", call_tool("remote.read", {**narrow_endpoint, "file_path": f"{scratch}/escape-link", "timeout_ms": timeout_ms}), outcomes={"blocked"}, statuses={"path_outside_root"}))
         checks.append(require_outcome("artifact_symlink_blocked", call_tool("remote.artifact_manifest", {**endpoint, "remote_path": f"{scratch}/escape-link", "timeout_ms": timeout_ms}), outcomes={"blocked"}))
         checks.append(require_outcome("remove_escape_symlink", call_tool("remote.bash", {**endpoint, "command": f"rm -f {scratch!r}/escape-link", "timeout_ms": timeout_ms})))
         checks.append(require_outcome("edit", call_tool("remote.edit", {**endpoint, "file_path": f"{scratch}/file.txt", "old_string": "beta", "new_string": "gamma", "timeout_ms": timeout_ms}), statuses={"edited"}))
@@ -295,7 +300,7 @@ def main() -> int:
     parser.add_argument("--host")
     parser.add_argument("--port", type=int)
     parser.add_argument("--user", default="root")
-    parser.add_argument("--root", default="/vllm-workspace")
+    parser.add_argument("--root", default="/")
     parser.add_argument("--cwd")
     parser.add_argument("--connect-timeout-ms", type=int, default=10000)
     parser.add_argument("--alias")

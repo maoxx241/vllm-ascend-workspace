@@ -22,8 +22,8 @@ Layer B is the shared substrate:
 
 - endpoint resolution
 - SSH transport
-- root/cwd path policy
-- read-before-edit ledger
+- full-permission default root with optional explicit root/cwd path policy
+- optional read-ledger concurrency checks
 - compact previews plus full refs
 - background job registry
 - artifact manifests and pull verification
@@ -42,7 +42,8 @@ and hook tests.
 Phase 1 implements `remote.bash`, `remote.read`, and `remote.ls`.
 
 Phase 2 implements `remote.write`, `remote.edit`, and `remote.multi_edit` with
-read-before-edit/write safety and atomic writes.
+default write/edit permission, optional read-ledger concurrency checks, and
+atomic writes.
 
 Phase 3 implements `remote.apply_patch` for Codex apply_patch payloads,
 including file moves and end-of-file markers, plus unified diffs.

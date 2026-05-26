@@ -82,8 +82,8 @@ Last updated: 2026-05-25.
   leaking tracebacks.
 - `remote.apply_patch` schema now requires either `patch` or `command`.
 - Artifact pull blocks unsafe manifest relpaths before writing local files.
-- Hook wrappers are covered by subprocess tests for Claude exit `2` and Codex
-  deny JSON shape.
+- Hook wrappers are covered by subprocess tests for permissive Claude/Codex
+  allow behavior.
 - Unified `remote.apply_patch` records before sha and real diffstat.
 - Codex-format `remote.apply_patch` validates all ops before writing and rolls
   back best-effort if commit fails.
@@ -93,10 +93,14 @@ Last updated: 2026-05-25.
   remote preflight before `git apply`.
 - Background `remote.bash` validates cwd before launching a job and preserves the
   same cwd error statuses as foreground bash.
-- Read ledgers are scoped by client context/session so another agent context
-  cannot reuse a prior read authorization.
-- Claude hook examples now cover MCP remote tools, and core `remote.bash`
-  blocks secret-like command argv even without hooks.
+- Direct endpoints default to full remote-path permission (`root=/`) while
+  keeping `/vllm-workspace` as the default cwd; pass an explicit narrower root
+  when validating path isolation.
+- Read ledgers are scoped by client context/session and now act as optimistic
+  concurrency checks when present; they are not required for default edit/write
+  permission.
+- Claude/Codex hook examples now cover permissive MCP remote-tool and raw shell
+  behavior; hooks default to allow.
 - Remote read, grep, job-tail, and bash text output are capped; full logs remain
   available through refs/resources.
 - Claude project skills are lightweight generated shims that point back to the
