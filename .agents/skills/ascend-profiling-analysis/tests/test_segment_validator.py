@@ -33,12 +33,16 @@ from ascend_profile import segment as segm  # noqa: E402
 from ascend_profile.segment import (  # noqa: E402
     LayerFrame,
     LayerObservation,
+    build_layers,
     StepPlan,
     classify_interior_substructure_plans,
     classify_residual_plans,
+    compose_step_plans,
+    event_role,
     validate_exact_cover,
     validate_unresolved_composite_bodies,
 )
+from ascend_profile.common import NormalizedEvent  # noqa: E402
 
 
 def _layer(index: int, signature: str, *, row_base: int = 0) -> LayerObservation:
@@ -77,6 +81,163 @@ def _step_plan(
         segment_type=segment_type,
         complete=complete,
     )
+
+
+def _event(
+    row_idx: int,
+    name: str,
+    *,
+    categories: tuple[str, ...] = (),
+    roles: tuple[str, ...] = (),
+) -> NormalizedEvent:
+    return NormalizedEvent(
+        event_id=f"evt_{row_idx}",
+        profile_id="profile_test",
+        rank_id="rank0",
+        source_id="src_test",
+        row_idx=row_idx,
+        name_raw=name,
+        task_type=name.upper(),
+        accelerator_core="AI_CORE",
+        stream_id="0",
+        start_us=float(row_idx),
+        end_us=float(row_idx) + 0.5,
+        duration_us=0.5,
+        wait_us=0.0,
+        op_categories=categories,
+        op_roles=roles,
+    )
+
+
+def _build_test_layers(events: list[NormalizedEvent]) -> list[LayerObservation]:
+    row_numbers = tuple(event.row_idx for event in events)
+    boundary_rows = segm.dedup_adjacent_event_rows(
+        events,
+        lambda event: event_role(event, "block_head") or event_role(event, "normalization"),
+    )
+    anchor_boundary_rows = segm.dedup_adjacent_event_rows(
+        events,
+        lambda event: event_role(event, "block_head"),
+    )
+    return build_layers(events, row_numbers, boundary_rows, anchor_boundary_rows, ())
+
+
+def test_mla_sparse_attention_subunits_stay_in_one_layer() -> None:
+    """GLM5-style MLA decode exposes several attention-labelled subunits.
+
+    Only the layer-start MLA marker should define layer frequency.  The sparse
+    score and V-up projection are internal attention evidence for the same
+    model layer, otherwise one transformer layer is reported as three layers.
+    """
+
+    events = [
+        _event(0, "aclnnAddRmsNorm", categories=("block_head",), roles=("block_head",)),
+        _event(1, "MlaPrologV3", categories=("attention.mla", "attention.mla.preprocess"), roles=("attention",)),
+        _event(2, "KvQuantSparseFlashAttention", categories=("attention.flash_score",), roles=("attention",)),
+        _event(
+            3,
+            "aclnnTransposeBatchMatMul",
+            categories=("attention.mla.v_up_proj", "attention.sparse_attn.v_up_proj", "compute.matmul"),
+            roles=("attention", "compute"),
+        ),
+        _event(4, "MoeDistributeDispatchV3", categories=("moe.dispatch",), roles=("moe",)),
+        _event(5, "MoeDistributeCombineV3", categories=("moe.combine",), roles=("moe",)),
+        _event(6, "aclnnAddRmsNorm", categories=("block_head",), roles=("block_head",)),
+        _event(7, "MlaPrologV3", categories=("attention.mla", "attention.mla.preprocess"), roles=("attention",)),
+        _event(8, "KvQuantSparseFlashAttention", categories=("attention.flash_score",), roles=("attention",)),
+        _event(
+            9,
+            "aclnnTransposeBatchMatMul",
+            categories=("attention.mla.v_up_proj", "attention.sparse_attn.v_up_proj", "compute.matmul"),
+            roles=("attention", "compute"),
+        ),
+    ]
+
+    layers = _build_test_layers(events)
+
+    assert len(layers) == 2
+    assert [tuple(anchor.name_raw for anchor in layer.anchors) for layer in layers] == [
+        ("MlaPrologV3",),
+        ("MlaPrologV3",),
+    ]
+    assert layers[0].row_start == 0
+    assert layers[0].row_end == 5
+    assert "attention.flash_scorex1" in layers[0].signature
+    assert "attention.mla.v_up_projx1" in layers[0].signature
+    assert "moe.dispatchx1" in layers[0].signature
+
+
+def test_flash_attention_still_anchors_when_no_mla_marker() -> None:
+    """Dense attention profiles without MLA markers still use flash score as
+    the layer-frequency anchor.
+    """
+
+    events = [
+        _event(0, "aclnnAddRmsNorm", categories=("block_head",), roles=("block_head",)),
+        _event(1, "FusedInferAttentionScore", categories=("attention.flash_score",), roles=("attention",)),
+        _event(2, "aclnnMatmul", categories=("compute.matmul",), roles=("compute",)),
+        _event(3, "aclnnAddRmsNorm", categories=("block_head",), roles=("block_head",)),
+        _event(4, "FusedInferAttentionScore", categories=("attention.flash_score",), roles=("attention",)),
+        _event(5, "aclnnMatmul", categories=("compute.matmul",), roles=("compute",)),
+    ]
+
+    layers = _build_test_layers(events)
+
+    assert len(layers) == 2
+    assert [tuple(anchor.name_raw for anchor in layer.anchors) for layer in layers] == [
+        ("FusedInferAttentionScore",),
+        ("FusedInferAttentionScore",),
+    ]
+
+
+_GLM_MLA_ATTENTION = (
+    "attention:attention.flash_scorex1+attention.lightning_indexerx1+"
+    "attention.mlax1+attention.mla.preprocessx1+attention.mla.v_up_projx1+"
+    "attention.ropex2+attention.sparse_attn.v_up_projx1"
+)
+_GLM_DENSE_LAYER = f"{_GLM_MLA_ATTENTION}|ffn_or_dense_compute|block_head"
+_GLM_MOE_LAYER = (
+    f"{_GLM_MLA_ATTENTION}|"
+    "moe:moe.combinex1+moe.dispatchx1+moe.expert_matmulx2+moe.gatingx1|block_head"
+)
+
+
+def test_glm_dense_prefix_stays_in_main_body_before_mtp_tail() -> None:
+    """GLM5 has dense early main layers followed by MoE main layers.
+
+    That dense->MoE transition is a model-layer family transition inside the
+    main body.  It must not split the 78-layer body into a fake 3-layer step
+    followed by a 75-layer step with a 3-layer MTP tail.
+    """
+
+    main_layers = tuple(
+        _layer(index, _GLM_DENSE_LAYER if index < 3 else _GLM_MOE_LAYER)
+        for index in range(78)
+    )
+    main_frame = LayerFrame(
+        layers=main_layers,
+        reason="selection_delimited_body",
+        selection_after=(1000,),
+    )
+
+    assert segm.split_frame_by_regime(main_frame) == [main_frame]
+
+    mtp_frames = tuple(
+        LayerFrame(
+            layers=(_layer(78 + offset, _GLM_MOE_LAYER),),
+            reason="selection_delimited_body",
+            selection_before=(1000 + offset,),
+            selection_after=(1001 + offset,),
+        )
+        for offset in range(3)
+    )
+
+    plans = compose_step_plans((main_frame, *mtp_frames))
+
+    assert len(plans) == 1
+    assert len(plans[0].main_layers) == 78
+    assert len(plans[0].all_layers) == 81
+    assert plans[0].reason == "main_body+selection_delimited_speculative_tail"
 
 
 # ---------------------------------------------------------------------------

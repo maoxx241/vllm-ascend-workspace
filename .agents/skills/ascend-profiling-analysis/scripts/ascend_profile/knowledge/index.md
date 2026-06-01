@@ -26,6 +26,7 @@ which are *reference docs*.
 | `attention_families.yaml` | **Contract** (active reference) | `common.categories_and_roles`, `html_report.detect_attention_subtype`, `tests/test_attention_families.py` | paper-aligned families MLA / DSA / CSA / HCA / GQA / linear / FA, with "must-have / must-not-have" signature combinations; CANN backend names are documented but never used as family labels |
 | `moe_families.yaml` | **Contract** (active reference) | `common.categories_and_roles`, `tests/test_moe_families.py` | MC2 / fused MC2 / dense FFN families. **Note:** the `HC*` / `MHC*` prefix kernels are NOT moe.gating sub-kernels — they prefix both attention and MoE blocks and stay under `block_head.mhc_prefix` |
 | `model_architectures.yaml` | Reference (report-time annotation only) | future diagnostics for `attention_family_mismatch` | HF arch → (attention family, FFN family); NOT used for segmentation |
+| `known_counterexamples.md` | Reference | `segment.py`, `classify.py`, reviewers | concrete profiles that broke segmentation / classification and the invariants future fixes must preserve |
 | `README.md` | Reference | humans | historical notes; roadmap |
 
 ## Adding new knowledge
@@ -82,7 +83,7 @@ remaining "knowledge externalization" items are:
   and the schema test enforces parity.
 - **`segmentation_strategy.yaml`** — anchor priority, boundary markers,
   residual policy, repair-rule enablement; consumed by `segment.py`.
-- **`known_counterexamples.yaml`** — fixture cases the segmenter /
+- **`known_counterexamples.md`** — fixture cases the segmenter /
   classifier must keep passing.
 - **`diagnosis_rules.yaml`** — declarative rule pack for
   `diagnostics.py`, including the `attention_family_mismatch` and

@@ -19,6 +19,8 @@ analysis code; treat them as part of the contract.
 | `moe_families.yaml` | MC2 / fused MC2 / dense FFN families. Also explicitly documents that the HC* / MHC* prefix kernels (`HCPreSinkhorn`, `HCPreInvRMS`, `HCPost`, `MhcRmsNorm`) are **structural block-head helpers** that appear before BOTH attention and MoE blocks — they stay under `block_head.mhc_prefix` and must NOT be conflated with `moe.gating`. | `common.categories_and_roles`, `tests/test_moe_families.py` |
 | `model_architectures.yaml` | HF arch → (attention family, FFN family) high-level map. **Static knowledge / documentation only.** This skill's input is `ascend_pt/` profiling output — never HF `config.json` — so the file is *not consumed at runtime* by any analysis stage. The report's "model structure" line (e.g. `27L · mla+moe`) is derived from observed kernel signatures via `html_report.guess_model_structure`, not from this YAML. Use it as a human reference table when reasoning about which kernel signatures *should* be seen for each architecture. | (none — documentation) |
 
+| `known_counterexamples.md` | Concrete profiling patterns that previously broke segmentation / classification. Add a case here before changing Python rules. | `segment.py`, `classify.py`, reviewer audit |
+
 When adding a new knowledge file, register it in the table above and
 reference it from the analysis stage that consumes it.
 
@@ -35,7 +37,6 @@ The maintenance rule is simple:
 ```text
 structure_roles.yaml
 diagnosis_rules.yaml
-known_counterexamples.yaml
 ```
 
 ## Operator Taxonomy (canonical list)

@@ -102,6 +102,27 @@ def primary_attention_category(event: NormalizedEvent) -> str | None:
     return sorted(matches)[0] if matches else None
 
 
+MLA_LAYER_START_CATEGORIES = (
+    "attention.mla",
+    "attention.mla.kv_norm_rope_cache",
+)
+
+ATTENTION_COMPANION_ONLY_CATEGORIES = {
+    "attention.lightning_indexer",
+    "attention.mla.v_up_proj",
+    "attention.sparse_attn.v_up_proj",
+    "attention.sparse_sharedkv.metadata",
+    "attention.kv_compressor",
+    "attention.kvcomp.signpack",
+    "attention.kvcomp.cache_write",
+    "attention.kv_cache_io",
+}
+
+
+def is_attention_companion_only(category: str) -> bool:
+    return category in ATTENTION_COMPANION_ONLY_CATEGORIES or category.startswith("attention.rope")
+
+
 def primary_moe_category(event: NormalizedEvent) -> str | None:
     matches = [category for category in event.op_categories if category.startswith("moe.")]
     return sorted(matches)[0] if matches else None
@@ -214,14 +235,38 @@ def dedup_adjacent_events(events: Sequence[NormalizedEvent]) -> tuple[Normalized
 def layer_anchor_events(events: Sequence[NormalizedEvent]) -> tuple[NormalizedEvent, ...]:
     """Pick one deterministic layer-anchor family for this rank.
 
-    Attention is the best layer-frequency signal when present.  Dummy/runner
+    Attention is the best layer-frequency signal when present, but some MLA
+    decode paths expose one logical layer as several attention-labelled
+    subunits: MlaProlog, sparse/flash score, and V-up projection.  In those
+    profiles only the layer-start MLA marker should drive layer frequency; the
+    later attention companions stay inside the same layer window.  Dummy/runner
     ranks can miss attention entirely, so the fallback order is MoE, matmul,
     block-head, then normalization.  This is an evidence priority, not a model
     name rule.
     """
 
+    attention_events = dedup_adjacent_events(
+        tuple(
+            event
+            for event in events
+            if event_role(event, "attention") and primary_attention_category(event) is not None
+        )
+    )
+    if attention_events:
+        for category in MLA_LAYER_START_CATEGORIES:
+            anchors = tuple(event for event in attention_events if category in event.op_categories)
+            if anchors:
+                return anchors
+        anchors = tuple(
+            event
+            for event in attention_events
+            if not is_attention_companion_only(primary_attention_category(event) or "")
+        )
+        if anchors:
+            return anchors
+        return attention_events
+
     role_order = (
-        lambda event: event_role(event, "attention"),
         lambda event: event_role(event, "moe"),
         lambda event: "compute.matmul" in event.op_categories and event_role(event, "compute"),
         lambda event: event_role(event, "block_head"),
@@ -585,19 +630,50 @@ def layers_have_moe(layers: Sequence[LayerObservation]) -> bool:
     return any("moe:" in core_role_key(layer.signature) for layer in layers)
 
 
+def layers_have_dense_compute(layers: Sequence[LayerObservation]) -> bool:
+    return any("ffn_or_dense_compute" in core_role_key(layer.signature) for layer in layers)
+
+
+def layers_have_primary_attention(layers: Sequence[LayerObservation]) -> bool:
+    return any(layer_has_primary_attention(layer) for layer in layers)
+
+
+def regime_cut_is_dense_prefix_moe_suffix(frame: LayerFrame, cut: int) -> bool:
+    left = frame.layers[:cut]
+    right = frame.layers[cut:]
+    if not left or not right:
+        return False
+    if len(left) * 4 > len(right):
+        return False
+    if not layers_have_primary_attention(left) or not layers_have_primary_attention(right):
+        return False
+    if not layers_have_dense_compute(left):
+        return False
+    if layers_have_moe(left) or not layers_have_moe(right):
+        return False
+    return dense_prefix_matches_moe_suffix_attention(
+        LayerFrame(tuple(left), reason=frame.reason),
+        LayerFrame(tuple(right), reason=frame.reason),
+    )
+
+
 def regime_cut_is_prefix_variant(frame: LayerFrame, cut: int) -> bool:
     """Keep model-local prefix variants inside one body.
 
     Some models expose early layers without auxiliary attention kernels such as
     CSA compressor/indexer, while the remaining layers include them.  This is a
-    layer-family variation, not a workload boundary.  Dense VL+LLM boundaries
-    are not suppressed here because they lack the MoE/CSA structural marker.
+    layer-family variation, not a workload boundary.  GLM-style MoE models can
+    likewise expose a short dense prefix before the recurring MoE suffix; when
+    both sides share the same attention body, the cut is a main-layer family
+    transition instead of a step/workload boundary.
     """
 
     left = frame.layers[:cut]
     right = frame.layers[cut:]
     left_core = layer_core_set(left)
     right_core = layer_core_set(right)
+    if regime_cut_is_dense_prefix_moe_suffix(frame, cut):
+        return True
     if not left_core or not right_core:
         return False
     same_core_family = bool(left_core & right_core) or left_core.issubset(right_core) or right_core.issubset(left_core)
