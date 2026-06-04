@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import shlex
 import sys
 import time
@@ -99,6 +100,28 @@ def _build_parser() -> argparse.ArgumentParser:
             "cards backed by raw kernel_details rows."
         ),
     )
+    parser.add_argument("--model-id", help="optional model id/name for report context")
+    parser.add_argument(
+        "--model-config",
+        help=(
+            "optional config.json for comparison. If the path exists locally, "
+            "the wrapper uploads it into this run's remote output dir; "
+            "otherwise it is treated as a remote path."
+        ),
+    )
+    parser.add_argument("--hardware-model", help="optional capture hardware model, e.g. Ascend910B4")
+    parser.add_argument(
+        "--hardware-profile",
+        help=(
+            "optional hardware_profile.json. If the path exists locally, the "
+            "wrapper uploads it; otherwise it is treated as a remote path."
+        ),
+    )
+    parser.add_argument(
+        "--no-cann-hardware-scan",
+        action="store_true",
+        help="disable remote CANN platform_config scanning",
+    )
     parser.add_argument(
         "--from-stage",
         choices=("normalize", "segment", "classify", "summarize", "cross_rank", "diagnostics", "report"),
@@ -116,6 +139,53 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--verbose", action="store_true")
     return parser
+
+
+def _manifest_default_hardware_model(manifest: dict[str, Any] | None) -> str | None:
+    if not manifest:
+        return None
+    for key in ("hardware_model", "npu_name", "device_name", "chip_name", "soc_version"):
+        value = manifest.get(key)
+        if value:
+            return str(value)
+    snapshot = manifest.get("hardware_snapshot")
+    if isinstance(snapshot, dict):
+        for key in ("hardware_model", "npu_name", "device_name", "chip_name", "soc_version"):
+            value = snapshot.get(key)
+            if value:
+                return str(value)
+        devices = snapshot.get("devices")
+        if isinstance(devices, list) and devices:
+            first = devices[0] if isinstance(devices[0], dict) else {}
+            for key in ("name", "hardware_model", "chip_name", "soc_version"):
+                value = first.get(key)
+                if value:
+                    return str(value)
+    return None
+
+
+def _maybe_upload_local_file(
+    endpoint: common.SshEndpoint,
+    run_dir: Path,
+    local_or_remote: str | None,
+    remote_output_dir: str,
+    *,
+    upload_subdir: str,
+) -> str | None:
+    if not local_or_remote:
+        return None
+    path = Path(local_or_remote).expanduser()
+    if not path.is_file():
+        return local_or_remote
+    upload_dir = run_dir / upload_subdir
+    if upload_dir.exists():
+        shutil.rmtree(upload_dir)
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    dst = upload_dir / path.name
+    shutil.copy2(path, dst)
+    remote_dir = f"{remote_output_dir.rstrip('/')}/{upload_subdir}"
+    common.sync_to_remote(endpoint, upload_dir, remote_dir)
+    return f"{remote_dir}/{path.name}"
 
 
 def _resolve_input(args: argparse.Namespace) -> dict[str, Any]:
@@ -287,6 +357,7 @@ def _write_local_run_meta(
     manifest_path: str | None,
     stage_timings: list[dict[str, Any]],
     elapsed_s: float,
+    analysis_context: dict[str, Any],
 ) -> None:
     meta = {
         "schema_version": 1,
@@ -298,6 +369,7 @@ def _write_local_run_meta(
         "collection_manifest": manifest_path,
         "stage_timings": stage_timings,
         "elapsed_s": round(elapsed_s, 6),
+        "analysis_context": analysis_context,
     }
     (run_dir / "skill_run.json").write_text(
         json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -325,6 +397,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     if manifest is not None and not args.session_id and not args.session_file:
         args.session_id = manifest.get("session_id")
         args.session_file = manifest.get("session_file")
+    if manifest is not None and not args.hardware_model:
+        args.hardware_model = _manifest_default_hardware_model(manifest)
 
     try:
         target = common.resolve_execution_target(
@@ -396,6 +470,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         common.sync_to_remote(
             endpoint, common.FRAMEWORK_LOCAL_DIR, remote_framework_dir
         )
+        remote_model_config = _maybe_upload_local_file(
+            endpoint,
+            run_dir,
+            args.model_config,
+            remote_output_dir,
+            upload_subdir="input_model_config",
+        )
+        remote_hardware_profile = _maybe_upload_local_file(
+            endpoint,
+            run_dir,
+            args.hardware_profile,
+            remote_output_dir,
+            upload_subdir="input_hardware_profile",
+        )
     except (RuntimeError, FileNotFoundError) as exc:
         common.print_json(
             {
@@ -422,12 +510,22 @@ def main(argv: Sequence[str] | None = None) -> int:
         extra_flags.extend(["--to-stage", args.to_stage])
     if args.only_stage:
         extra_flags.extend(["--only-stage", args.only_stage])
+    if args.model_id:
+        extra_flags.extend(["--model-id", args.model_id])
+    if remote_model_config:
+        extra_flags.extend(["--model-config", remote_model_config])
+    if args.hardware_model:
+        extra_flags.extend(["--hardware-model", args.hardware_model])
+    if remote_hardware_profile:
+        extra_flags.extend(["--hardware-profile", remote_hardware_profile])
+    if args.no_cann_hardware_scan:
+        extra_flags.append("--no-cann-hardware-scan")
     cmd = (
         f"set -e; cd {common.quote_remote(remote_work_dir)} && "
         f"{py} -m {common.FRAMEWORK_PYTHON_MODULE}.analyze "
         f"{common.quote_remote(remote_profile_root)} "
         f"--output {common.quote_remote(remote_output_dir)} "
-        + " ".join(extra_flags)
+        + " ".join(common.quote_remote(item) for item in extra_flags)
     )
     common.progress(
         "analyze",
@@ -520,6 +618,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     elapsed = time.time() - started
     stage_timings = remote_manifest.get("stage_timings", [])
+    analysis_context = remote_manifest.get("analysis_context", {}) or {}
     _write_local_run_meta(
         run_dir,
         machine=alias,
@@ -528,6 +627,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         manifest_path=input_info.get("manifest_path"),
         stage_timings=stage_timings,
         elapsed_s=elapsed,
+        analysis_context=analysis_context,
     )
 
     stage_results = remote_manifest.get("stage_results", {}) or {}
@@ -561,6 +661,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "report_xlsx": str(run_dir / "report" / "report.xlsx"),
         "report_html": str(run_dir / "report" / "report.html"),
         "html_status": html_status,
+        "analysis_context": analysis_context,
         "elapsed_s": round(elapsed, 6),
     }
     common.print_json(output)

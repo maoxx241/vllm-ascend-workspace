@@ -40,7 +40,7 @@ compatibility backend for managed VAWS sessions.
 - **manifest-aware**：当 `ascend-profiling-collection` 产物可用时，优先把 `--manifest <run_dir>/manifest.json` 喂给 `profile_analyze.py`，让本 skill 自己从 manifest 里读 `remote_profile_root` / `analysis_status`。`analysis_status != "ok"` 直接拒绝，不要静默跳过。
 - **进度协议**：进度走 `stderr`，前缀 `__VAWS_PROFILE_ANALYSIS_PROGRESS__=<json>`。最终结果走 `stdout`，单个 JSON 对象。
 - **本地状态**：本 skill 的本地状态全部放在 `.vaws-local/profiling-analysis/runs/<timestamp>_<tag>/`（untracked）。远端工作目录默认 `/tmp/ascend_profile_framework`。
-- **不写死层数 / 模型语义**：层数 (24/27/36/40/48 …) 是观测结果不是规则；模型名 (LLM / VIT / dummy) 不在 skill 文案里下结论，除非用户/上下文明确给出。
+- **不在算法里硬编码层数 / 模型语义**：层数不能写成 Python 规则。已知模型的结构字段必须来自 `config.json`（显式提供、Hugging Face、ModelScope 或已登记本地 catalog）或已验证的 profile-visible hint；模糊族名（如 `dsv4` / `qwen3.5`）必须枚举具体 variants 后逐个匹配，不能直接猜层数。量化和数据格式只影响权重大小、dtype 和效率解释，不作为层数/结构变体。
 
 ## Cross-platform launcher rule
 
@@ -63,6 +63,9 @@ python3 .agents/skills/ascend-profiling-analysis/scripts/profile_analyze.py \
   [--remote-timeout 3600] \
   [--keep-remote-output] \
   [--skip-html] [--report-mode summary|full-raw] \
+  [--model-id <hf-or-modelscope-id>] [--model-config <local-or-remote-config.json>] \
+  [--hardware-model <Ascend910B4|...>] [--hardware-profile <local-or-remote-json>] \
+  [--no-cann-hardware-scan] \
   [--from-stage <stage>] [--to-stage <stage>] [--only-stage <stage>] \
   [--verbose]
 ```
@@ -72,6 +75,8 @@ Flag notes:
 - `--local-output-dir`: explicit local dir to write pulled artifacts into. If omitted, defaults to `.vaws-local/profiling-analysis/runs/<timestamp>_<tag>/`. Pass `--overwrite` to allow a non-empty target.
 - `--remote-output-dir`: explicit **absolute** remote output dir. Useful with `--from-stage` / `--only-stage` to **reuse a previous run's normalize/segment artifacts** when iterating on classify / diagnostics / report. Default: `<remote-work-dir>/runs/<local-run-dir-name>`.
 - `--skip-html` / `--report-mode`: forwarded to the remote analyze stage. `full-raw` (default) renders the complete L1/L2/L3 HTML with operator cards backed by raw `kernel_details` rows. `summary` writes an HTML stub instead — use it for first-stage pipeline debugging when md+xlsx are enough and you don't want to wait for HTML rendering. `--skip-html` is the explicit kill-switch and overrides `--report-mode`.
+- `--model-id` / `--model-config`: optional model context. If `--model-config` points to a local file, the wrapper uploads it into the remote run dir before analysis; otherwise it is treated as a remote path. The report still performs profiling-first inference when config is absent.
+- `--hardware-model` / `--hardware-profile`: optional capture-hardware context. Use this when the profiling root is historical and the current remote host is not proven to be the capture host. CANN theoretical peaks are scanned from the analysis host by default; `--no-cann-hardware-scan` disables that scan.
 - `--from-stage` / `--to-stage` / `--only-stage`: resume / partial re-runs; require the prior stages' manifest files already exist in the remote output dir. The wrapper validates only the artifacts the chosen stage *should* produce, so `--only-stage normalize` no longer demands `report/report.md`.
 
 行为：
@@ -193,29 +198,64 @@ python3 .agents/skills/ascend-profiling-analysis/scripts/profile_sweep.py \
 - `operator_class_summary.csv` — 把 `operator_summary.csv` 按 `(name, task_type, op_type, roles)` 跨 rank 合并；每行包含 `rank_count`、`call_count`、`duration_sum_us`、11 个 pipeline 字段求和、`bound_family` / `dominant_core`，以及 `rank_duration_min/max/p50_us` 与 `rank_duration_skew_ratio`，便于一眼看出 rank 间的不均。
 - `hccl_op_summary.csv` — 仅 HCCL（`op_type ∈ {communication, mix_comm_aiv}`）算子，按 `(hccl_op_kind, comm_aiv_fused, rank_id)` 聚合；`hccl_op_kind ∈ {allreduce, allgather, reducescatter, alltoallv, broadcast, send_recv, barrier, other}`，规则与 CANN HCCL 文档术语对齐，详见 `scripts/ascend_profile/knowledge/communication_taxonomy.md`。
 - `hccl_class_summary.csv` — 在 `hccl_op_summary.csv` 基础上再跨 rank 汇总；含 `rank_skew_ratio = (max_rank_avg - min_rank_avg) / mean_rank_avg`，可直接用于 `communication_collective_slow` 类诊断。
+- `operator_efficiency_summary.csv` — LLMInsight 风格的 shape-derived FLOPs / tensor bytes / arithmetic intensity / assumed-roofline 排名。只把 `kernel_details.csv` shape/dtype 能支持的 matmul、attention、vector 类算子建模；910B roofline 是排序假设，不是诊断结论。
 
 `mix_comm_aiv` 融合算子（`DispatchFFNCombine` / `MoeDistributeDispatch` / `MoeDistributeCombine` 等）同时出现在 `comm_aiv_fused=true` 行里，pipeline 字段反映 AIV 侧的工作；纯 HCCL 行的 pipeline 字段为空。
 
 > Level-1 `communication.json` 里的 `Notify Wait` / `Notify Record` / `RDMASend` / `Memcpy` / `Reduce_Inline` 任务级数据在本 skill 当前版本不展开（只在 level-1 profile 上才有意义）；后续若需启用，参考 `communication_taxonomy.md` § 3。
 
+### Profiling-derived model fingerprint
+
+`summarize` 阶段会从 profiling 已有信息反推可观测的模型指纹，而不是要求先给 `config.json`：
+
+- `model_inferred_config.csv` — 候选 config 字段：层数、hidden / intermediate / expert / head 维度、profile 序列长度、`lm_head`/logits 暴露的 `vocab_size_or_lm_head_shard`、以及 rank-visible matmul 权重参数下界。
+- `model_feature_summary.csv` — profiling 可观测结构特征：MoE、MLA、CSA/HCA/DSA、dense flash attention、linear/Mamba/GDN、RoPE 等。
+- `model_layer_type_summary.csv` — 从 block decomposition 汇总的 layer/block 结构序列。
+- `model_candidate_summary.csv` — 本地 fingerprint catalog 的 Top-N 候选模型匹配。候选匹配只用于缩小范围；不作为 diagnosis finding。
+- `model_insights.json` — 上述结果与 limitations 的机器可读汇总。
+- `model_context_summary.csv` / `model_config_overview.csv` / `model_parameter_estimate.csv` / `model_kv_cache_estimate.csv` / `model_config_feature_summary.csv` — 用户显式提供 model id/config 时的对照信息。config 是对照和补充，不替代 profiling 反推证据。
+
+规则：
+
+- `config.json` 只能作为可选对照；缺失时报告仍应可生成模型指纹。
+- 当用户给出 `--model-id` 但没有 `--model-config` 时，早期 resolver 先查本地 fingerprint catalog；若命中的是模糊模型族，必须枚举 catalog variants，并对缺失层数的候选尝试从 Hugging Face / ModelScope 拉取 `config.json`。只有具体候选的 config 或 profile-visible hint 能收敛时，segment 才能使用该层数。
+- 当用户给出的是结构描述而不是精确模型名（例如 `CSA MoE`、`DSA`、`compressor`、`linear/Mamba`），早期 resolver 必须先把结构词映射到 catalog feature，再枚举匹配的模型族；`moe` / `gating topk` 单独只能证明 MoE 架构，不允许直接猜具体模型或层数。
+- 当用户没有给模型信息时，早期 resolver 必须先用 profiling 的核心算子组合匹配 `model_fingerprints.json:operator_match`：`attention.kv_compressor` 快速收敛到 DSV4，`attention.lightning_indexer + attention.sparse_sharedkv` 且无 compressor 收敛到 DSA sparse-attention family，`moe.gating + attention.linear_or_mamba` 收敛到 Qwen3.5/GDN 类候选。纯统计 feature overlap 只能作为最后兜底。
+- 已知模型但 catalog/config/HF/ModelScope 都拿不到层数时，`expected_layers` 必须保持 unknown，并在 `segment_model_context.json`/TODO 中留下 limitation；不允许从模型族名或量化名猜层数。
+- `vocab_size` 只有在 `lm_head` / logits projection matmul shape 可见时才能推断；TP 下可能只看到 vocab shard，所以字段命名为 `vocab_size_or_lm_head_shard`。
+- 参数量从 matmul weight shape 可得到 rank-visible 下界；全模型参数量需要 TP/EP/DP 和权重切分策略，单 rank profiling 不能直接证明。
+- 候选模型匹配优先用 profiling 证据：层数、block 结构、算子族、head/expert/hidden/vocab-shard shape。tokenizer ids、rope_theta、精确 checkpoint 名称不可由 profiling 证明。
+
 ### Report 输出
 
-`report.md` 章节布局（v0.3）：
+`report.md` 章节布局（v0.4）：
 
 1. Executive Summary
 2. Capture And Segmentation
 3. Macro Step Timeline — per-rank step 时长分位数 + head/main/tail/bubble + Top 8 重 step
 4. Pipeline Coverage And Bound Families — 覆盖率 + op_type 直方图（aicore Σms / aiv Σms 双侧）+ bound_family 直方图
-5. **Step Class View** — Top step classes（按 members × wall_mean 总贡献排序）+ 最重 class 的 top layer classes + 最重 class 的 top operators
-6. **Layer And Block View** — Top layer classes（含 block_kind 占比）+ Top block classes（按 kind 分组，含 bound_family / dominant_core / comm_share）
-7. **Operator View** — Top compute 算子（rank-merged，含 AIC/AIV/MTE2 流水线分解）+ HCCL collective summary（含 `rank_skew_ratio`）+ 最重 HCCL kind 的 per-rank 分布
-8. Step Inventory（按 step_family + main_layer_count 聚合，传统视图）
-9. Cross-Rank And Anomaly Findings
-10. Finding Inventory
-11. Evidence Chain
-12. Limitations
+5. **Profile-Derived Model Fingerprint** — 不依赖 config，从 layers / block 结构 / shape / 算子族反推候选 config、vocab shard、参数下界和候选模型
+6. **Hardware Peak And MFU Context** — 显式硬件/manifest/hardware_profile/CANN 扫描得到的理论 peak 与 sustained factor。MFU 分母使用 theoretical peak；operator reclaim 排序优先使用 sustained peak。
+7. **Step Class View** — Top step classes（按 members × wall_mean 总贡献排序）+ 最重 class 的 top layer classes + 最重 class 的 top operators
+8. **Layer And Block View** — Top layer classes（含 block_kind 占比）+ Top block classes（按 kind 分组，含 bound_family / dominant_core / comm_share）
+9. **Operator View** — Top compute 算子（rank-merged，含 AIC/AIV/MTE2 流水线分解）+ HCCL collective summary（含 `rank_skew_ratio`）+ 最重 HCCL kind 的 per-rank 分布
+10. **Operator Calculation And Roofline Estimates** — shape-derived FLOPs / bytes / theoretical-MFU / sustained-roofline ranking
+11. Step Inventory（按 step_family + main_layer_count 聚合，传统视图）
+12. Cross-Rank And Anomaly Findings
+13. Finding Inventory
+14. Evidence Chain
+15. Limitations
 
-XLSX 包新增 sheet：`step_anatomy`、`step_class_summary`、`layer_class_summary`、`block_summary`、`block_class_summary`、`operator_class_summary`、`hccl_op_summary`、`hccl_class_summary`。
+XLSX 包新增 sheet：`step_anatomy`、`step_class_summary`、`layer_class_summary`、`block_summary`、`block_class_summary`、`operator_class_summary`、`operator_efficiency_summary`、`model_inferred_config`、`model_feature_summary`、`model_layer_type_summary`、`model_candidate_summary`、`model_context_summary`、`model_config_overview`、`model_parameter_estimate`、`model_kv_cache_estimate`、`model_config_feature_summary`、`hardware_summary`、`hardware_theoretical_peaks`、`hccl_op_summary`、`hccl_class_summary`。
+
+### Hardware peak knowledge
+
+`summarize` 阶段会扫描分析主机上的 CANN `platform_config/*.ini`，输出 `hardware_theoretical_peaks.csv`。对 `Ascend910B4 / A2 32G`，`knowledge/hardware_peak_measurements.json` 记录了 131 单卡实测 sustained factor：
+
+- FP16/BF16 dense matmul：`theoretical * 0.95`
+- INT8 `npu_quant_matmul`：`theoretical * 0.65`
+
+这两个 sustained factor 用于 operator roofline/reclaim 排序；MFU 报告仍以 CANN theoretical peak 为分母。当前远端硬件只能说明分析主机，不能证明历史 profiling 的采集硬件；历史 root 需要用户、collection manifest 或 `--hardware-profile` 显式给出 provenance。
 
 ### Sweep 级横向对比
 

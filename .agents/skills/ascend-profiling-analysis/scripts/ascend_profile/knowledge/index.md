@@ -26,6 +26,8 @@ which are *reference docs*.
 | `attention_families.yaml` | **Contract** (active reference) | `common.categories_and_roles`, `html_report.detect_attention_subtype`, `tests/test_attention_families.py` | paper-aligned families MLA / DSA / CSA / HCA / GQA / linear / FA, with "must-have / must-not-have" signature combinations; CANN backend names are documented but never used as family labels |
 | `moe_families.yaml` | **Contract** (active reference) | `common.categories_and_roles`, `tests/test_moe_families.py` | MC2 / fused MC2 / dense FFN families. **Note:** the `HC*` / `MHC*` prefix kernels are NOT moe.gating sub-kernels — they prefix both attention and MoE blocks and stay under `block_head.mhc_prefix` |
 | `model_architectures.yaml` | Reference (report-time annotation only) | future diagnostics for `attention_family_mismatch` | HF arch → (attention family, FFN family); NOT used for segmentation |
+| `model_fingerprints.json` | **Contract** (active) | `model_context.py`, `model_insights.py`, `segment.py` | concrete model/variant catalog. Structural fields must come from config evidence or validated profile-visible hints; fuzzy families enumerate variants; `operator_match` rules drive early profile-category model-family matching |
+| `model_knowledge_todo.md` | Reference | humans / agents | unverified model facts and missing profile-mode knowledge to collect before promoting into `model_fingerprints.json` |
 | `known_counterexamples.md` | Reference | `segment.py`, `classify.py`, reviewers | concrete profiles that broke segmentation / classification and the invariants future fixes must preserve |
 | `README.md` | Reference | humans | historical notes; roadmap |
 
@@ -54,6 +56,12 @@ which are *reference docs*.
    `semantic_conventions.yaml`, then emit it from `diagnostics.py`.
    The evidence-chain validator in `report.py` will reject any finding
    lacking `evidence_ids` / `alignment_ids` / `limitations`.
+5. **New known model or architecture fast path**: add the exact/fuzzy model
+   entry to `model_fingerprints.json`.  Put user-facing aliases under
+   `aliases`, concrete variants under `variants`, and profile-category fast
+   evidence under `operator_match`.  Use generic architecture contexts for
+   weak signals such as MoE gating alone; do not promote weak signals to layer
+   counts.
 
 ## Rule-change → stage invalidation
 

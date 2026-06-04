@@ -487,6 +487,202 @@ def operator_view_lines(
     return lines
 
 
+def model_fingerprint_lines(
+    inferred_rows: Sequence[Mapping[str, Any]],
+    feature_rows: Sequence[Mapping[str, Any]],
+    layer_type_rows: Sequence[Mapping[str, Any]],
+    candidate_rows: Sequence[Mapping[str, Any]],
+) -> list[str]:
+    """Render profile-derived model fingerprint and candidate matching.
+
+    These rows are estimates from profiling evidence, not config facts.
+    They intentionally live outside diagnosis findings.
+    """
+
+    lines: list[str] = [
+        "Profile-derived fingerprint. These values come from `kernel_details.csv` shape fields, "
+        "`step_summary.csv`, and `layer_summary.csv`; they narrow candidate models but do not prove "
+        "non-profile fields such as tokenizer ids or rope theta. If an `lm_head` / logits matmul is "
+        "visible, the output dimension is reported as a vocab or vocab-shard candidate.",
+        "",
+        "| Field | Inferred value | Confidence | Observations | Evidence | Note |",
+        "|---|---:|---|---:|---|---|",
+    ]
+    if inferred_rows:
+        for row in inferred_rows:
+            lines.append(
+                f"| `{row.get('field')}` | `{row.get('inferred_value')}` | "
+                f"{row.get('confidence')} | {row.get('observations')} | "
+                f"`{row.get('evidence')}` | {str(row.get('note') or '').replace('|', '/')} |"
+            )
+    else:
+        lines.append("| _none_ | `unknown` | unknown | 0 | — | no shape evidence |")
+
+    lines.extend(
+        [
+            "",
+            "Observed architecture features:",
+            "",
+            "| Feature | Confidence | Events | Evidence | Note |",
+            "|---|---|---:|---|---|",
+        ]
+    )
+    if feature_rows:
+        for row in feature_rows:
+            lines.append(
+                f"| `{row.get('feature')}` | {row.get('confidence')} | "
+                f"{row.get('event_count')} | `{row.get('evidence')}` | "
+                f"{str(row.get('note') or '').replace('|', '/')} |"
+            )
+    else:
+        lines.append("| _none_ | unknown | 0 | — | no feature signatures |")
+
+    lines.extend(
+        [
+            "",
+            "Observed layer/block structure:",
+            "",
+            "| Layer type | Observations | Share |",
+            "|---|---:|---:|",
+        ]
+    )
+    if layer_type_rows:
+        for row in layer_type_rows[:12]:
+            lines.append(
+                f"| `{row.get('layer_type')}` | {row.get('observations')} | "
+                f"{_f(row.get('share')) * 100:.2f}% |"
+            )
+    else:
+        lines.append("| `unknown` | 0 | 0.00% |")
+
+    lines.extend(
+        [
+            "",
+            "Candidate model match (local fingerprint catalog, not a network lookup):",
+            "",
+            "| Candidate | Confidence | Score | Match ratio | Reasons |",
+            "|---|---|---:|---:|---|",
+        ]
+    )
+    if candidate_rows:
+        for row in candidate_rows[:8]:
+            reasons = parse_jsonish(row.get("matched_reasons"), [])
+            if not isinstance(reasons, list):
+                reasons = [str(reasons)]
+            lines.append(
+                f"| `{row.get('model_name')}` | {row.get('confidence')} | "
+                f"{_f(row.get('score')):.1f}/{_f(row.get('max_score')):.1f} | "
+                f"{_f(row.get('match_ratio')) * 100:.1f}% | "
+                f"{', '.join(str(item) for item in reasons[:8]).replace('|', '/')} |"
+            )
+    else:
+        lines.append("| _none_ | unknown | 0/0 | 0.0% | no fingerprint catalog match |")
+    return lines
+
+
+def operator_efficiency_lines(
+    operator_efficiency_rows: Sequence[Mapping[str, Any]],
+    *,
+    top_n: int = 12,
+) -> list[str]:
+    """Render LLMInsight-style operator calculation estimates."""
+
+    lines: list[str] = [
+        "Operator calculation estimates are derived from CANN shape/dtype fields. "
+        "FLOPs are modeled for matmul / fused-attention / vector-like kernels; bytes are "
+        "read+write tensor bytes. MFU-style efficiency uses the selected hardware theoretical "
+        "peak; reclaim ranking uses the sustained peak when a measured factor exists.",
+        "",
+        "| Operator | Work class | DType | Calls | Σ duration ms | Est TFLOPs | Achieved TFLOPS | Theoretical peak | MFU | Sustained peak | Sustained eff | Reclaim sustained ms | Confidence |",
+        "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|",
+    ]
+    rows = [
+        row
+        for row in operator_efficiency_rows
+        if _f(row.get("reclaim_us_sustained")) > 0 or _f(row.get("reclaim_us_theoretical")) > 0 or _f(row.get("estimated_flops")) > 0 or _f(row.get("estimated_bytes")) > 0
+    ][:top_n]
+    for row in rows:
+        lines.append(
+            f"| `{row.get('name')}` | `{row.get('work_class')}` | `{row.get('dtype')}` | {row.get('call_count')} | "
+            f"{_f(row.get('duration_sum_us')) / 1000.0:.3f} | "
+            f"{_f(row.get('estimated_flops')) / 1e12:.6f} | "
+            f"{_f(row.get('achieved_tflops')):.3f} | "
+            f"{_f(row.get('theoretical_peak_tflops_or_tops')):.3f} | "
+            f"{_f(row.get('mfu_theoretical')) * 100:.2f}% | "
+            f"{_f(row.get('sustained_peak_tflops_or_tops')):.3f} | "
+            f"{_f(row.get('sustained_efficiency')) * 100:.2f}% | "
+            f"{_f(row.get('reclaim_us_sustained')) / 1000.0:.3f} | "
+            f"{row.get('confidence')} |"
+        )
+    if not rows:
+        lines.append("| _none_ | `unmodeled` | | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | no shape/dtype evidence |")
+    return lines
+
+
+def hardware_context_lines(
+    hardware_rows: Sequence[Mapping[str, Any]],
+    theoretical_rows: Sequence[Mapping[str, Any]],
+    summary_manifest: Mapping[str, Any],
+) -> list[str]:
+    summary = {
+        str(row.get("key")): row.get("value")
+        for row in hardware_rows
+        if row.get("key") not in (None, "")
+    }
+    limitations = (summary_manifest.get("hardware_insights") or {}).get("limitations") or []
+    lines: list[str] = [
+        "Hardware context is explicit evidence for MFU denominators. Current-host hardware is not treated as profiling provenance unless the user, manifest, or hardware profile identifies it as the capture hardware.",
+        "",
+        "| Key | Value |",
+        "|---|---|",
+    ]
+    keys = [
+        "hardware_model",
+        "hardware_source",
+        "theoretical_peak_source",
+        "measurement_source",
+        "fp16_tflops_theoretical",
+        "bf16_tflops_theoretical",
+        "int8_tops_theoretical",
+        "fp16_tflops_sustained",
+        "bf16_tflops_sustained",
+        "int8_tops_sustained",
+        "fp16_sustained_factor",
+        "bf16_sustained_factor",
+        "int8_sustained_factor",
+        "memory_size_gib",
+        "cann_ddr_derived_gbps",
+    ]
+    for key in keys:
+        if key in summary:
+            lines.append(f"| `{key}` | `{summary.get(key)}` |")
+    if not hardware_rows:
+        lines.append("| `hardware_model` | `unknown` |")
+    lines.extend(
+        [
+            "",
+            "CANN platform configs discovered in this analysis environment:",
+            "",
+            "| SoC | Cube cores | Cube MHz | FP16 TFLOPS | BF16 TFLOPS | INT8 TOPS | Memory GiB | Source |",
+            "|---|---:|---:|---:|---:|---:|---:|---|",
+        ]
+    )
+    for row in theoretical_rows[:16]:
+        lines.append(
+            f"| `{row.get('soc_version')}` | {row.get('cube_core_cnt')} | {_f(row.get('cube_freq_mhz')):.0f} | "
+            f"{_f(row.get('fp16_tflops')):.3f} | {_f(row.get('bf16_tflops')):.3f} | "
+            f"{_f(row.get('int8_tops')):.3f} | {_f(row.get('memory_size_gib')):.1f} | "
+            f"`{Path(str(row.get('source_path') or '')).name}` |"
+        )
+    if not theoretical_rows:
+        lines.append("| _none_ | 0 | 0 | 0 | 0 | 0 | 0 | no CANN platform_config found |")
+    if limitations:
+        lines.extend(["", "Hardware limitations:", ""])
+        for item in limitations:
+            lines.append(f"- {item}")
+    return lines
+
+
 def pipeline_coverage_lines(summary_manifest: Mapping[str, Any], operator_rows: Sequence[Mapping[str, Any]]) -> list[str]:
     """Render the Pipeline Coverage section.
 
@@ -581,8 +777,15 @@ def markdown_report(output_dir: Path, report_id: str) -> str:
     anatomy_rows = csv_rows(output_dir / "step_anatomy.csv")
     operator_rows = csv_rows(output_dir / "operator_summary.csv")
     operator_class_rows = csv_rows(output_dir / "operator_class_summary.csv")
+    operator_eff_rows = csv_rows(output_dir / "operator_efficiency_summary.csv")
     hccl_op_rows = csv_rows(output_dir / "hccl_op_summary.csv")
     hccl_class_rows = csv_rows(output_dir / "hccl_class_summary.csv")
+    model_inferred_rows = csv_rows(output_dir / "model_inferred_config.csv")
+    model_feature_rows = csv_rows(output_dir / "model_feature_summary.csv")
+    model_layer_type_rows = csv_rows(output_dir / "model_layer_type_summary.csv")
+    model_candidate_rows = csv_rows(output_dir / "model_candidate_summary.csv")
+    hardware_rows = csv_rows(output_dir / "hardware_summary.csv")
+    hardware_theoretical_rows = csv_rows(output_dir / "hardware_theoretical_peaks.csv")
     step_class_rows = csv_rows(output_dir / "step_class_summary.csv")
     layer_class_rows = csv_rows(output_dir / "layer_class_summary.csv")
     block_class_rows = csv_rows(output_dir / "block_class_summary.csv")
@@ -644,7 +847,35 @@ def markdown_report(output_dir: Path, report_id: str) -> str:
     lines.extend(
         [
             "",
-            "## 5. Step Class View",
+            "## 5. Profile-Derived Model Fingerprint",
+            "",
+            "This section implements a profiling-first model-analysis lens: it infers the "
+            "candidate config fields and model family from observed layers, block structure, "
+            "operator signatures, and CANN shape cells. A `config.json` is useful as a "
+            "comparison source, but is not required for this fingerprint.",
+            "",
+        ]
+    )
+    lines.extend(
+        model_fingerprint_lines(
+            model_inferred_rows,
+            model_feature_rows,
+            model_layer_type_rows,
+            model_candidate_rows,
+        )
+    )
+    lines.extend(
+        [
+            "",
+            "## 6. Hardware Peak And MFU Context",
+            "",
+        ]
+    )
+    lines.extend(hardware_context_lines(hardware_rows, hardware_theoretical_rows, summary_manifest))
+    lines.extend(
+        [
+            "",
+            "## 7. Step Class View",
             "",
             "Steps are grouped into classes by **strict shape equality** -- two members "
             "share a class iff their structure signatures match *and* their ordered "
@@ -659,7 +890,7 @@ def markdown_report(output_dir: Path, report_id: str) -> str:
     lines.extend(
         [
             "",
-            "## 6. Layer And Block View",
+            "## 8. Layer And Block View",
             "",
             "Each transformer layer is split into one `attention` block followed by one "
             "`ffn` or `moe` block (see `ascend_profile/knowledge/block_taxonomy.md`).  "
@@ -672,7 +903,7 @@ def markdown_report(output_dir: Path, report_id: str) -> str:
     lines.extend(
         [
             "",
-            "## 7. Operator View",
+            "## 9. Operator View",
             "",
             "Compute and HCCL operators are surfaced rank-merged so the table reflects the whole "
             "capture window.  See `ascend_profile/knowledge/communication_taxonomy.md` for "
@@ -686,7 +917,15 @@ def markdown_report(output_dir: Path, report_id: str) -> str:
     lines.extend(
         [
             "",
-            "## 8. Step Inventory",
+            "## 10. Operator Calculation And Roofline Estimates",
+            "",
+        ]
+    )
+    lines.extend(operator_efficiency_lines(operator_eff_rows))
+    lines.extend(
+        [
+            "",
+            "## 11. Step Inventory",
             "",
             "| Family | Layer count | Count | Avg wall ms | Avg main ms | Avg head ms | Avg tail ms | Max bubble ms |",
             "|---|---:|---:|---:|---:|---:|---:|---:|",
@@ -724,7 +963,7 @@ def markdown_report(output_dir: Path, report_id: str) -> str:
     lines.extend(
         [
             "",
-            "## 9. Cross-Rank And Anomaly Findings",
+            "## 12. Cross-Rank And Anomaly Findings",
             "",
             "| Severity | Type | Confidence | Ranks | Evidence | Summary |",
             "|---|---|---|---|---|---|",
@@ -742,7 +981,7 @@ def markdown_report(output_dir: Path, report_id: str) -> str:
     lines.extend(
         [
             "",
-            "## 10. Finding Inventory",
+            "## 13. Finding Inventory",
             "",
             "| Finding type | Count |",
             "|---|---:|",
@@ -753,23 +992,29 @@ def markdown_report(output_dir: Path, report_id: str) -> str:
     lines.extend(
         [
             "",
-            "## 11. Evidence Chain",
+            "## 14. Evidence Chain",
             "",
             "- `report.xlsx:evidence_index` maps evidence ids to source rows, segment ids, and layer ids.",
             "- `report.xlsx:step_anatomy` is the head / main / tail / bubble per-step evidence table.",
             "- `report.xlsx:block_summary` is the per-block decomposition (attention/ffn/moe with bound + comm share).",
             "- `report.xlsx:step_class_summary`, `layer_class_summary`, `block_class_summary` carry the shape-strict class aggregates.",
             "- `report.xlsx:operator_class_summary` is the rank-merged operator view; `hccl_op_summary` and `hccl_class_summary` cover collective communication.",
+            "- `report.xlsx:model_inferred_config`, `model_feature_summary`, and `model_candidate_summary` are profiling-derived model-fingerprint tables.",
+            "- `report.xlsx:hardware_summary` and `hardware_theoretical_peaks` document the selected hardware denominator and CANN-derived theoretical peaks.",
+            "- `report.xlsx:operator_efficiency_summary` is the shape-derived FLOPs / bytes / theoretical-MFU / sustained-roofline ranking table.",
             "- `report.xlsx:raw_kernel_index` maps normalized event ids back to original `kernel_details.csv` rows.",
             "- `report.xlsx:cross_rank_alignment` contains cross-rank step/operator alignment evidence.",
             "- `diagnosis_findings.json` is the machine-readable claim source for this Markdown report.",
             "",
-            "## 12. Limitations",
+            "## 15. Limitations",
             "",
             "- Step and layer segmentation is inferred from structural anchors and should be audited on new model families.",
             "- Pipeline coverage may be < 100% on older CANN versions; per-stage figures are skipped for events without source columns.",
             "- Host-side root cause attribution is not asserted unless host trace evidence is present.",
             "- Missing shape fields reduce confidence for slow-rank and DP-load diagnoses.",
+            "- Model fingerprint matching narrows candidates; vocab can be inferred only when lm_head/logits shapes are visible, and tensor parallelism may expose only a shard.",
+            "- MFU is only a real capture-hardware metric when the selected hardware comes from profiling provenance, a collection manifest, a hardware profile, or explicit user input.",
+            "- Operator FLOPs / bytes / roofline estimates are derived ranking signals, not diagnosis findings.",
             "",
         ]
     )
@@ -822,6 +1067,18 @@ def sheet_rows(output_dir: Path) -> dict[str, list[Mapping[str, Any]]]:
         "block_class_summary": csv_rows(output_dir / "block_class_summary.csv"),
         "operator_summary": csv_rows(output_dir / "operator_summary.csv"),
         "operator_class_summary": csv_rows(output_dir / "operator_class_summary.csv"),
+        "operator_efficiency_summary": csv_rows(output_dir / "operator_efficiency_summary.csv"),
+        "model_inferred_config": csv_rows(output_dir / "model_inferred_config.csv"),
+        "model_feature_summary": csv_rows(output_dir / "model_feature_summary.csv"),
+        "model_layer_type_summary": csv_rows(output_dir / "model_layer_type_summary.csv"),
+        "model_candidate_summary": csv_rows(output_dir / "model_candidate_summary.csv"),
+        "model_context_summary": csv_rows(output_dir / "model_context_summary.csv"),
+        "model_config_overview": csv_rows(output_dir / "model_config_overview.csv"),
+        "model_parameter_estimate": csv_rows(output_dir / "model_parameter_estimate.csv"),
+        "model_kv_cache_estimate": csv_rows(output_dir / "model_kv_cache_estimate.csv"),
+        "model_config_feature_summary": csv_rows(output_dir / "model_config_feature_summary.csv"),
+        "hardware_summary": csv_rows(output_dir / "hardware_summary.csv"),
+        "hardware_theoretical_peaks": csv_rows(output_dir / "hardware_theoretical_peaks.csv"),
         "hccl_op_summary": csv_rows(output_dir / "hccl_op_summary.csv"),
         "hccl_class_summary": csv_rows(output_dir / "hccl_class_summary.csv"),
         "bubble_windows": bubble_windows,

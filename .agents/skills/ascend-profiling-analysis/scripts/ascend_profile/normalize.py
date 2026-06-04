@@ -19,6 +19,7 @@ try:
         core_from_row,
         discover_rank_dirs,
         event_time_from_row,
+        estimated_work_from_row,
         has_pipeline_signal,
         infer_rank_id,
         iter_csv_rows,
@@ -50,6 +51,7 @@ except ImportError:  # pragma: no cover - direct script execution
         core_from_row,
         discover_rank_dirs,
         event_time_from_row,
+        estimated_work_from_row,
         has_pipeline_signal,
         infer_rank_id,
         iter_csv_rows,
@@ -189,15 +191,20 @@ def normalize_profile(
                 stream_id = stream_from_row(row)
                 start_us, end_us, duration_us, wait_us = event_time_from_row(row)
                 categories, roles = categories_and_roles(name, task, core)
+                pipeline_us = pipeline_breakdown_from_row(row)
+                event_op_type = op_type_from_event(core, pipeline_us)
                 if set(roles).intersection({"attention", "moe", "compute", "communication"}):
                     shape_sig, _shape_features = shape_signature(row)
                 else:
                     shape_sig = None
-                shape_features: dict[str, Any] = {}
-                pipeline_us = pipeline_breakdown_from_row(row)
+                shape_features: dict[str, Any] = estimated_work_from_row(
+                    row,
+                    name=name,
+                    task_type=task,
+                    op_type=event_op_type,
+                )
                 if has_pipeline_signal(pipeline_us):
                     rank_pipeline_event_count += 1
-                event_op_type = op_type_from_event(core, pipeline_us)
                 raw_ref = SourceRef(
                     source_id=source.source_id,
                     kind=source.kind,

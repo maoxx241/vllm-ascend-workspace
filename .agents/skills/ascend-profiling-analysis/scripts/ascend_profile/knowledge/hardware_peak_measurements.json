@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "description": "Measured sustained-peak factors for Ascend profiling analysis. Theoretical peaks are derived from CANN platform_config at analysis time; these rows supply practical sustained ratios for known hardware/operator paths.",
+  "measurements": [
+    {
+      "hardware_model": "Ascend910B4",
+      "aliases": ["910B4", "Ascend910B4-32G", "A2-32G", "Atlas A2 32G"],
+      "chip_family": "Atlas A2",
+      "memory_gib": 32,
+      "source": "microbenchmark_131_npu4_2026-06-03",
+      "source_note": "Single-card 910B4 on remote 131, NPU 4, torch_npu 2.10.0, 8192x8192 dense matmul measured with torch.npu.Event timing.",
+      "theoretical_peak_source": "cann_platform_config",
+      "sustained_factors": {
+        "fp16_matmul": 0.95,
+        "bf16_matmul": 0.95,
+        "int8_quant_matmul": 0.65
+      },
+      "measured": {
+        "fp16_matmul_tflops": 232.332682,
+        "bf16_matmul_tflops": 231.833233,
+        "int8_quant_matmul_tops": 319.337134
+      },
+      "measured_shape": "8192x8192x8192",
+      "notes": [
+        "MFU denominator should still use theoretical peak for industry-comparable MFU.",
+        "Sustained peak is intended for operator roofline expectation and reclaim ranking.",
+        "INT8 uses torch_npu.npu_quant_matmul, not torch.mm; ordinary torch.mm does not support int8 on this stack."
+      ]
+    }
+  ]
+}

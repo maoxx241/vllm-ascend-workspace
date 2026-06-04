@@ -42,6 +42,8 @@ try:
         write_json,
         write_jsonl,
     )
+    from .hardware_insights import build_hardware_insights
+    from .model_insights import model_config_insights, operator_efficiency_rows, profile_inferred_model_insights
 except ImportError:  # pragma: no cover
     import sys
 
@@ -79,6 +81,8 @@ except ImportError:  # pragma: no cover
         write_json,
         write_jsonl,
     )
+    from hardware_insights import build_hardware_insights  # type: ignore[no-redef]
+    from model_insights import model_config_insights, operator_efficiency_rows, profile_inferred_model_insights  # type: ignore[no-redef]
 
 
 UNDERFEED_HEAVY_RATIO = 0.30
@@ -1335,7 +1339,32 @@ def evidence_index_rows(step_rows: Sequence[Mapping[str, Any]], layer_rows: Sequ
     return rows
 
 
-def summarize_profile(output_dir: Path) -> dict[str, Any]:
+def _context_rows(
+    *,
+    model_id: str | None,
+    model_config: Path | None,
+    hardware_model: str | None,
+    hardware_profile: Path | None,
+    scan_cann_hardware: bool,
+) -> list[dict[str, Any]]:
+    return [
+        {"key": "model_id", "value": model_id or ""},
+        {"key": "model_config", "value": str(model_config) if model_config else ""},
+        {"key": "hardware_model", "value": hardware_model or ""},
+        {"key": "hardware_profile", "value": str(hardware_profile) if hardware_profile else ""},
+        {"key": "scan_cann_hardware", "value": bool(scan_cann_hardware)},
+    ]
+
+
+def summarize_profile(
+    output_dir: Path,
+    *,
+    model_id: str | None = None,
+    model_config: Path | None = None,
+    hardware_model: str | None = None,
+    hardware_profile: Path | None = None,
+    scan_cann_hardware: bool = True,
+) -> dict[str, Any]:
     events = load_events(output_dir / "normalized_event_index.jsonl")
     events_by_rank = group_by_rank(events)
     segments = load_step_segments(output_dir / "step_segments.json")
@@ -1373,8 +1402,14 @@ def summarize_profile(output_dir: Path) -> dict[str, Any]:
     step_class_rows = step_class_summary_rows(
         step_rows, anatomy_rows, step_classes_meta, layer_rows, block_rows, layer_class_by_id
     )
+    hardware_insights = build_hardware_insights(
+        hardware_model=hardware_model,
+        hardware_profile_path=hardware_profile,
+        scan_cann=scan_cann_hardware,
+    )
     operator_rows = operator_summary_rows(events)
     operator_class_rows = operator_class_summary_rows(operator_rows)
+    operator_efficiency = operator_efficiency_rows(events, hardware=hardware_insights)
     hccl_rows = hccl_op_summary_rows(operator_rows)
     hccl_class_rows = hccl_class_summary_rows(hccl_rows)
     wait_rows = wait_anchor_rows(operator_rows)
@@ -1401,6 +1436,30 @@ def summarize_profile(output_dir: Path) -> dict[str, Any]:
         }
         for event in events
     ]
+    model_insights = profile_inferred_model_insights(events, step_rows, layer_rows)
+    model_config = model_config.expanduser() if model_config else None
+    config_insights = model_config_insights(model_config)
+    model_context_rows = _context_rows(
+        model_id=model_id,
+        model_config=model_config,
+        hardware_model=hardware_model,
+        hardware_profile=hardware_profile,
+        scan_cann_hardware=scan_cann_hardware,
+    )
+    if model_id:
+        model_insights["model_id"] = model_id
+    model_insights["config_comparison"] = config_insights
+    model_insights["context"] = {
+        "model_id": model_id,
+        "model_config": str(model_config) if model_config else None,
+        "hardware_model": hardware_model,
+        "hardware_profile": str(hardware_profile) if hardware_profile else None,
+        "scan_cann_hardware": scan_cann_hardware,
+    }
+    model_inferred_rows = model_insights.get("inferred_config_rows") or []
+    model_feature_rows = model_insights.get("attention_feature_rows") or []
+    model_layer_type_rows = model_insights.get("layer_type_rows") or []
+    model_candidate_rows = model_insights.get("candidate_model_rows") or []
     write_csv(output_dir / "rank_summary.csv", rank_rows)
     write_csv(output_dir / "step_summary.csv", step_rows)
     write_csv(output_dir / "step_anatomy.csv", anatomy_rows)
@@ -1411,6 +1470,7 @@ def summarize_profile(output_dir: Path) -> dict[str, Any]:
     write_csv(output_dir / "step_class_summary.csv", step_class_rows)
     write_csv(output_dir / "operator_summary.csv", operator_rows)
     write_csv(output_dir / "operator_class_summary.csv", operator_class_rows)
+    write_csv(output_dir / "operator_efficiency_summary.csv", operator_efficiency)
     write_csv(output_dir / "hccl_op_summary.csv", hccl_rows)
     write_csv(output_dir / "hccl_class_summary.csv", hccl_class_rows)
     write_csv(output_dir / "wait_anchor_ops.csv", wait_rows)
@@ -1418,6 +1478,19 @@ def summarize_profile(output_dir: Path) -> dict[str, Any]:
     write_jsonl(output_dir / "evidence" / "bubble_windows.jsonl", bubbles)
     write_csv(output_dir / "evidence_index.csv", evidence)
     write_csv(output_dir / "raw_kernel_index.csv", raw_kernel_index)
+    write_csv(output_dir / "model_inferred_config.csv", model_inferred_rows)
+    write_csv(output_dir / "model_feature_summary.csv", model_feature_rows)
+    write_csv(output_dir / "model_layer_type_summary.csv", model_layer_type_rows)
+    write_csv(output_dir / "model_candidate_summary.csv", model_candidate_rows)
+    write_csv(output_dir / "model_context_summary.csv", model_context_rows)
+    write_csv(output_dir / "model_config_overview.csv", config_insights.get("overview_rows") or [])
+    write_csv(output_dir / "model_parameter_estimate.csv", config_insights.get("parameter_rows") or [])
+    write_csv(output_dir / "model_kv_cache_estimate.csv", config_insights.get("kv_cache_rows") or [])
+    write_csv(output_dir / "model_config_feature_summary.csv", config_insights.get("feature_rows") or [])
+    write_json(output_dir / "model_insights.json", model_insights)
+    write_csv(output_dir / "hardware_summary.csv", hardware_insights.get("summary_rows") or [])
+    write_csv(output_dir / "hardware_theoretical_peaks.csv", hardware_insights.get("theoretical_peak_rows") or [])
+    write_json(output_dir / "hardware_insights.json", hardware_insights)
     manifest = {
         "schema_version": SCHEMA_VERSION,
         "tool_version": TOOL_VERSION,
@@ -1435,6 +1508,7 @@ def summarize_profile(output_dir: Path) -> dict[str, Any]:
             "step_class_summary": "step_class_summary.csv",
             "operator_summary": "operator_summary.csv",
             "operator_class_summary": "operator_class_summary.csv",
+            "operator_efficiency_summary": "operator_efficiency_summary.csv",
             "hccl_op_summary": "hccl_op_summary.csv",
             "hccl_class_summary": "hccl_class_summary.csv",
             "wait_anchor_ops": "wait_anchor_ops.csv",
@@ -1442,6 +1516,19 @@ def summarize_profile(output_dir: Path) -> dict[str, Any]:
             "bubble_windows": "evidence/bubble_windows.jsonl",
             "evidence_index": "evidence_index.csv",
             "raw_kernel_index": "raw_kernel_index.csv",
+            "model_insights": "model_insights.json",
+            "model_inferred_config": "model_inferred_config.csv",
+            "model_feature_summary": "model_feature_summary.csv",
+            "model_layer_type_summary": "model_layer_type_summary.csv",
+            "model_candidate_summary": "model_candidate_summary.csv",
+            "model_context_summary": "model_context_summary.csv",
+            "model_config_overview": "model_config_overview.csv",
+            "model_parameter_estimate": "model_parameter_estimate.csv",
+            "model_kv_cache_estimate": "model_kv_cache_estimate.csv",
+            "model_config_feature_summary": "model_config_feature_summary.csv",
+            "hardware_insights": "hardware_insights.json",
+            "hardware_summary": "hardware_summary.csv",
+            "hardware_theoretical_peaks": "hardware_theoretical_peaks.csv",
         },
         "counts": {
             "rank_summary_rows": len(rank_rows),
@@ -1454,8 +1541,16 @@ def summarize_profile(output_dir: Path) -> dict[str, Any]:
             "step_class_rows": len(step_class_rows),
             "operator_summary_rows": len(operator_rows),
             "operator_class_summary_rows": len(operator_class_rows),
+            "operator_efficiency_rows": len(operator_efficiency),
             "hccl_op_summary_rows": len(hccl_rows),
             "hccl_class_summary_rows": len(hccl_class_rows),
+            "model_inferred_config_rows": len(model_inferred_rows),
+            "model_feature_rows": len(model_feature_rows),
+            "model_candidate_rows": len(model_candidate_rows),
+            "model_config_overview_rows": len(config_insights.get("overview_rows") or []),
+            "model_parameter_rows": len(config_insights.get("parameter_rows") or []),
+            "model_kv_cache_rows": len(config_insights.get("kv_cache_rows") or []),
+            "hardware_theoretical_peak_rows": len(hardware_insights.get("theoretical_peak_rows") or []),
             "bubble_rows": len(bubbles),
             "wait_anchor_rows": len(wait_rows),
             "aicpu_rows": len(aicpu),
@@ -1475,6 +1570,19 @@ def summarize_profile(output_dir: Path) -> dict[str, Any]:
             "layer_classes": len(layer_class_rows),
             "block_classes": len(block_class_rows),
         },
+        "model_insights": {
+            "source": "profiling",
+            "model_id": model_id,
+            "config_source": config_insights.get("source") if config_insights.get("available") else None,
+            "features": model_insights.get("features") or [],
+            "top_candidates": model_candidate_rows[:5],
+            "limitations": model_insights.get("limitations") or [],
+        },
+        "hardware_insights": {
+            "hardware_model": hardware_insights.get("hardware_model"),
+            "summary": hardware_insights.get("summary") or {},
+            "limitations": hardware_insights.get("limitations") or [],
+        },
     }
     write_json(output_dir / "summary_manifest.json", manifest)
     return manifest
@@ -1483,12 +1591,24 @@ def summarize_profile(output_dir: Path) -> dict[str, Any]:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", required=True)
+    parser.add_argument("--model-id", help="optional user-supplied model id/name for report context")
+    parser.add_argument("--model-config", help="optional config.json path available on this analysis host")
+    parser.add_argument("--hardware-model", help="optional capture hardware model, e.g. Ascend910B4")
+    parser.add_argument("--hardware-profile", help="optional hardware_profile.json path available on this analysis host")
+    parser.add_argument("--no-cann-hardware-scan", action="store_true", help="disable CANN platform_config scan")
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    manifest = summarize_profile(Path(args.output))
+    manifest = summarize_profile(
+        Path(args.output),
+        model_id=args.model_id,
+        model_config=Path(args.model_config) if args.model_config else None,
+        hardware_model=args.hardware_model,
+        hardware_profile=Path(args.hardware_profile) if args.hardware_profile else None,
+        scan_cann_hardware=not bool(args.no_cann_hardware_scan),
+    )
     emit_stage_json({"stage": "summarize", "counts": manifest["counts"]})
     return 0
 

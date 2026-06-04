@@ -96,9 +96,22 @@ def analyze_profile(
     from_stage: str | None = None,
     to_stage: str | None = None,
     only_stage: str | None = None,
+    model_id: str | None = None,
+    model_config: Path | None = None,
+    hardware_model: str | None = None,
+    hardware_profile: Path | None = None,
+    scan_cann_hardware: bool = True,
 ) -> dict[str, Any]:
     output_dir.mkdir(parents=True, exist_ok=True)
     timings: list[dict[str, Any]] = []
+    analysis_context = {
+        "model_id": model_id,
+        "model_config": str(model_config) if model_config else None,
+        "hardware_model": hardware_model,
+        "hardware_profile": str(hardware_profile) if hardware_profile else None,
+        "scan_cann_hardware": scan_cann_hardware,
+    }
+    write_json(output_dir / "analysis_context.json", analysis_context)
 
     start_idx, end_idx = _resolve_stage_window(from_stage, to_stage, only_stage)
     if start_idx > 0:
@@ -127,9 +140,19 @@ def analyze_profile(
         stage_results[name] = result
 
     maybe_run("normalize", lambda: normalize_profile(profile_root, output_dir))
-    maybe_run("segment",   lambda: segment_profile(output_dir))
+    maybe_run("segment",   lambda: segment_profile(output_dir, model_id=model_id, model_config=model_config))
     maybe_run("classify",  lambda: classify_profile(output_dir))
-    maybe_run("summarize", lambda: summarize_profile(output_dir))
+    maybe_run(
+        "summarize",
+        lambda: summarize_profile(
+            output_dir,
+            model_id=model_id,
+            model_config=model_config,
+            hardware_model=hardware_model,
+            hardware_profile=hardware_profile,
+            scan_cann_hardware=scan_cann_hardware,
+        ),
+    )
     maybe_run("cross_rank", lambda: cross_rank_profile(output_dir))
     maybe_run("diagnostics", lambda: diagnose_profile(output_dir))
     maybe_run(
@@ -167,6 +190,7 @@ def analyze_profile(
             "report_md": "report/report.md",
             "report_xlsx": "report/report.xlsx",
         },
+        "analysis_context": analysis_context,
         "stage_results": {
             "normalize": normalize_result,
             "segment": segment_result,
@@ -207,6 +231,15 @@ def build_parser() -> argparse.ArgumentParser:
             "kernel_details rows."
         ),
     )
+    parser.add_argument("--model-id", help="optional user-supplied model id/name for report context")
+    parser.add_argument("--model-config", help="optional config.json path available on this analysis host")
+    parser.add_argument("--hardware-model", help="optional capture hardware model, e.g. Ascend910B4")
+    parser.add_argument("--hardware-profile", help="optional hardware_profile.json path available on this analysis host")
+    parser.add_argument(
+        "--no-cann-hardware-scan",
+        action="store_true",
+        help="disable CANN platform_config scanning for hardware theoretical peaks",
+    )
     stage_group = parser.add_argument_group("stage selection (advanced)")
     stage_group.add_argument(
         "--from-stage",
@@ -243,6 +276,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         from_stage=args.from_stage,
         to_stage=args.to_stage,
         only_stage=args.only_stage,
+        model_id=args.model_id,
+        model_config=Path(args.model_config) if args.model_config else None,
+        hardware_model=args.hardware_model,
+        hardware_profile=Path(args.hardware_profile) if args.hardware_profile else None,
+        scan_cann_hardware=not bool(args.no_cann_hardware_scan),
     )
     emit_stage_json({
         "stage": "full_pipeline",
@@ -251,10 +289,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         "stage_timings": manifest["stage_timings"],
         "skip_html": bool(args.skip_html),
         "report_mode": args.report_mode,
+        "model_id": args.model_id,
+        "hardware_model": args.hardware_model,
     })
     return 0
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
