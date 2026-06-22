@@ -63,6 +63,19 @@ git submodule sync --recursive
 git submodule update --init --recursive
 ```
 
+## Resolve CI-pinned vLLM ref
+
+Use this after `vllm-ascend/` is populated and the user chose CI-pinned
+alignment:
+
+```bash
+python3 .agents/skills/repo-init/scripts/resolve_vllm_ci_pin.py --vllm-ascend-dir vllm-ascend
+```
+
+Then check out `vllm/` at the returned `vllm_ref`. The resolver prefers
+`.github/vllm-main-verified.commit`; older checkouts may fall back to a
+workflow `vllm_version` or docs `main_vllm_commit` value.
+
 ## Quiet main comparison
 
 ```bash

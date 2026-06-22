@@ -203,10 +203,9 @@ The recorded session showed that adding `devlib` advanced past one missing-libra
 Container bootstrap writes persistent runtime environment configuration so that subsequent SSH sessions (parity, serving, benchmark, ad-hoc scripts) work without per-session setup:
 
 - `/etc/profile.d/vaws-ascend-env.sh`: adds the runtime Python directory and Ascend driver libs to `PATH` and `LD_LIBRARY_PATH`.
-- `/etc/pip.conf`: configures pip with multiple indexes — Tsinghua as `index-url` (primary), Aliyun and PyPI as `extra-index-url` (additional). Note: pip searches all configured indexes and selects the best match; this is multi-source availability, not ordered fallback. This prevents `pip install` failures due to unreachable default mirrors inside the container.
-- `pytest`: installed into the runtime Python during bootstrap. This ensures agents can run remote test verification without ad-hoc dependency installation.
+- `/etc/pip.conf`: configures pip with a single A3-tested source, HuaweiCloud (`https://repo.huaweicloud.com/repository/pypi/simple`). Do not add extra indexes by default.
 
-The pip config and pytest install are best-effort: if the runtime Python cannot be discovered or pip is broken, the bootstrap continues without failing.
+The pip config write is best-effort: if the runtime Python cannot be discovered, the bootstrap continues without failing. Do not install `pytest` or other test packages during container bootstrap; fresh startup should stay focused on SSH reachability and durable runtime-source configuration.
 
 ## Mesh contract
 

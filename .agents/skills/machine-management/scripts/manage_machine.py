@@ -1426,11 +1426,10 @@ import json
 import os
 import pathlib
 import re
-import time
-import urllib.request
 from urllib.parse import urlsplit, urlunsplit
 
 state_file = pathlib.Path(__import__("sys").argv[1])
+fixed_host = "mirrors.nju.edu.cn"
 os_release = {}
 os_release_path = pathlib.Path("/etc/os-release")
 if os_release_path.exists():
@@ -1475,62 +1474,31 @@ for source_file in source_files:
             for suite in suites:
                 entries.append((uri, suite))
 
-entries = list(dict.fromkeys(entries))
-candidate_hosts = [
-    "mirrors.nju.edu.cn",
-    "mirrors.tuna.tsinghua.edu.cn",
-    "mirrors.ustc.edu.cn",
-    "mirrors.aliyun.com",
-    "mirrors.cloud.tencent.com",
-]
-for uri, _ in entries:
-    host = urlsplit(uri).netloc
-    if host and host not in candidate_hosts:
-        candidate_hosts.append(host)
-
-timings = {}
-if entries:
-    for host in candidate_hosts:
-        samples = []
-        ok = True
-        for uri, suite in entries[:4]:
-            original = urlsplit(uri)
-            candidate_uri = urlunsplit((original.scheme, host, original.path, original.query, original.fragment)).rstrip("/")
-            probe_url = f"{candidate_uri}/dists/{suite}/InRelease"
-            request = urllib.request.Request(probe_url, headers={"User-Agent": "vaws-apt-probe/1.0"})
-            started = time.monotonic()
-            try:
-                with urllib.request.urlopen(request, timeout=3) as response:
-                    response.read(256)
-            except Exception:
-                ok = False
-                break
-            samples.append((time.monotonic() - started) * 1000.0)
-        if ok and samples:
-            timings[host] = sum(samples) / len(samples)
-
-selected_host = min(timings, key=timings.get) if timings else None
 changed_files = []
 changed = False
-if selected_host is not None:
-    replacements = {}
-    for uri in uri_set:
-        original = urlsplit(uri)
-        replacements[uri] = urlunsplit((original.scheme, selected_host, original.path, original.query, original.fragment))
-    for source_file in source_files:
-        original_text = source_file.read_text(encoding="utf-8", errors="replace")
-        updated_text = original_text
-        for old_uri, new_uri in replacements.items():
-            updated_text = updated_text.replace(old_uri, new_uri)
-        if updated_text != original_text:
-            source_file.write_text(updated_text, encoding="utf-8")
-            changed = True
-            changed_files.append(str(source_file))
+replacements = {}
+for uri in uri_set:
+    original = urlsplit(uri)
+    if not original.scheme or not original.netloc:
+        continue
+    if original.netloc == fixed_host:
+        continue
+    replacements[uri] = urlunsplit((original.scheme, fixed_host, original.path, original.query, original.fragment))
+for source_file in source_files:
+    original_text = source_file.read_text(encoding="utf-8", errors="replace")
+    updated_text = original_text
+    for old_uri, new_uri in replacements.items():
+        updated_text = updated_text.replace(old_uri, new_uri)
+    if updated_text != original_text:
+        source_file.write_text(updated_text, encoding="utf-8")
+        changed = True
+        changed_files.append(str(source_file))
 
 state = {
     "package_manager": "apt",
-    "selected_mirror": selected_host,
-    "candidate_timings_ms": {host: round(value, 2) for host, value in sorted(timings.items(), key=lambda item: item[1])},
+    "selected_mirror": fixed_host,
+    "source_strategy": "fixed-nju",
+    "candidate_timings_ms": {},
     "changed_files": changed_files,
     "changed": changed,
     "install_skipped": False,
@@ -1573,24 +1541,13 @@ elif command -v yum >/dev/null 2>&1; then
     install -d -m 0755 /etc/pip
     cat > /etc/pip.conf <<'EOF_PIP'
 [global]
-index-url = https://pypi.tuna.tsinghua.edu.cn/simple
-extra-index-url = https://mirrors.aliyun.com/pypi/simple https://pypi.org/simple
-trusted-host = pypi.tuna.tsinghua.edu.cn mirrors.aliyun.com pypi.org files.pythonhosted.org
+index-url = https://repo.huaweicloud.com/repository/pypi/simple
+trusted-host = repo.huaweicloud.com
 EOF_PIP
     chmod 0644 /etc/pip.conf
-    echo "[vaws-bootstrap] pip configured: /etc/pip.conf (primary=tsinghua, additional=aliyun,pypi)"
-    if "$_vaws_runtime_python" -c "import pytest" >/dev/null 2>&1; then
-      echo "[vaws-bootstrap] pytest already present"
-    else
-      echo "[vaws-bootstrap] installing pytest..."
-      if "$_vaws_runtime_python" -m pip install pytest -q --disable-pip-version-check 2>/dev/null; then
-        echo "[vaws-bootstrap] pytest installed"
-      else
-        echo "[vaws-bootstrap] pytest install failed (best-effort, continuing)"
-      fi
-    fi
+    echo "[vaws-bootstrap] pip configured: /etc/pip.conf (index=huaweicloud)"
   else
-    echo "[vaws-bootstrap] runtime python not found, skipping pip/pytest setup"
+    echo "[vaws-bootstrap] runtime python not found, skipping pip setup"
   fi
 INNER_PKG
 }
@@ -1694,24 +1651,13 @@ if [ -n "$_vaws_runtime_python" ]; then
   install -d -m 0755 /etc/pip
   cat > /etc/pip.conf <<'EOF_PIP'
 [global]
-index-url = https://pypi.tuna.tsinghua.edu.cn/simple
-extra-index-url = https://mirrors.aliyun.com/pypi/simple https://pypi.org/simple
-trusted-host = pypi.tuna.tsinghua.edu.cn mirrors.aliyun.com pypi.org files.pythonhosted.org
+index-url = https://repo.huaweicloud.com/repository/pypi/simple
+trusted-host = repo.huaweicloud.com
 EOF_PIP
   chmod 0644 /etc/pip.conf
-  echo "[vaws-bootstrap] pip configured: /etc/pip.conf (primary=tsinghua, additional=aliyun,pypi)"
-  if "$_vaws_runtime_python" -c "import pytest" >/dev/null 2>&1; then
-    echo "[vaws-bootstrap] pytest already present"
-  else
-    echo "[vaws-bootstrap] installing pytest..."
-    if "$_vaws_runtime_python" -m pip install pytest -q --disable-pip-version-check 2>/dev/null; then
-      echo "[vaws-bootstrap] pytest installed"
-    else
-      echo "[vaws-bootstrap] pytest install failed (best-effort, continuing)"
-    fi
-  fi
+  echo "[vaws-bootstrap] pip configured: /etc/pip.conf (index=huaweicloud)"
 else
-  echo "[vaws-bootstrap] runtime python not found, skipping pip/pytest setup"
+  echo "[vaws-bootstrap] runtime python not found, skipping pip setup"
 fi
 ssh-keygen -A >/dev/null 2>&1 || true
 cat > /etc/ssh/sshd_vaws_config <<EOF_SSH

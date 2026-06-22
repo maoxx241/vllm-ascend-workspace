@@ -46,6 +46,23 @@ python3 .agents/skills/remote-code-parity/scripts/install_consent.py set-sync-mo
   --approved-by-user
 ```
 
+## Set local sync and approve first editable replacement
+
+Use this when the user explicitly says to run the local workspace code, replace
+the image `vllm` / `vllm-ascend`, or "用本地的 vllm 和 vllm-ascend 替换".
+This is the preferred first-use command because it writes sync mode and
+first-install consent atomically.
+
+```bash
+python3 .agents/skills/remote-code-parity/scripts/install_consent.py set-sync-mode \
+  --server-name blue-a \
+  --container-identity vaws-blue@/vllm-workspace \
+  --sync-mode local \
+  --allow-first-install \
+  --note "use local workspace packages" \
+  --approved-by-user
+```
+
 ## Inspect the current consent state
 
 ```bash
@@ -121,6 +138,9 @@ python3 .agents/skills/remote-code-parity/scripts/parity_sync.py \
 This syncs the session worktree to the session container and uses `workspace_id=pr123` unless explicitly overridden.
 
 The runtime-install path sources Ascend env scripts under a `set +u` / `set -u` guard, so first-install parity does not depend on predefining shell-specific variables.
+It also scans versioned CANN paths such as `/usr/local/Ascend/cann-9.0.0/set_env.sh`, so A3 images that do not expose only `/usr/local/Ascend/ascend-toolkit/set_env.sh` still get HCCL/CANN libraries.
+Package installation is pip-only and uses the single A3-tested HuaweiCloud index. Do not install or invoke `uv`, probe mirror candidates, or configure default extra indexes in the parity path.
+Editable installs use `--no-deps`; `vllm-ascend/requirements.txt` owns dependency versions so `vllm` cannot upgrade `numpy` beyond the CANN-compatible stack. The runtime preamble also exports bounded build parallelism through `MAX_JOBS` and `CMAKE_BUILD_PARALLEL_LEVEL` (`min(available CPUs, 128)` by default), which keeps `vllm-ascend` nested CMake builds from falling back to serial protobuf compilation.
 The final verification path is a heredoc-based Python import smoke, so the generated snippet must remain valid Python after shell quoting.
 Synthetic commits are deterministic parentless tree snapshots. Clean child repos still avoid parent reinstall churn because transport-only child gitlink paths are filtered out of parent `changed_paths`.
 
@@ -136,25 +156,23 @@ Unconditionally reinstalls both `vllm` and `vllm-ascend` even when no files chan
 
 ## Runtime install cache / compile knobs
 
-The editable install path carries portable defaults from the `vllm-ascend` CI compile jobs:
+The editable install path carries only cache and compile knobs; package source selection stays fixed to HuaweiCloud:
 
 ```bash
-VAWS_MAX_JOBS=8 \
-VAWS_UV_BOOTSTRAP_TIMEOUT=120 \
-VAWS_UV_INSTALL_TIMEOUT=300 \
-VAWS_DISABLE_UV=0 \
-VAWS_INSTALL_DEPS=0 \
+VAWS_BUILD_JOBS=64 \
+MAX_JOBS=64 \
+CMAKE_BUILD_PARALLEL_LEVEL=64 \
+CMAKE_BUILD_TYPE=Release \
+PIP_CACHE_DIR=/root/.cache/pip \
 FETCHCONTENT_BASE_DIR=/root/.cache/vaws/fetchcontent \
-VAWS_PIP_INDEX_URL=http://near-cache.example/pypi/simple \
-VAWS_PIP_TRUSTED_HOST=near-cache.example \
 python3 .agents/skills/remote-code-parity/scripts/parity_sync.py \
   --machine blue-a \
   --force-reinstall
 ```
 
-Defaults are conservative when these variables are unset: `MAX_JOBS=4`, `CMAKE_BUILD_TYPE=Release`, persistent pip / uv / `FetchContent` cache roots under `/root/.cache`, public mirror fallback, and the Ascend PyPI repository as an extra index. `VAWS_COMPILE_CUSTOM_KERNELS=0` is available only for deliberate unit-test-style checks; do not use it for real serving or benchmark validation.
+Defaults when these variables are unset: `VAWS_BUILD_JOBS=min(available CPUs, 128)`, `MAX_JOBS=$VAWS_BUILD_JOBS`, `CMAKE_BUILD_PARALLEL_LEVEL=$VAWS_BUILD_JOBS`, `CMAKE_BUILD_TYPE=Release`, persistent pip and `FetchContent` cache roots under `/root/.cache`, and the single HuaweiCloud pip index. `VAWS_COMPILE_CUSTOM_KERNELS=0` is available only for deliberate unit-test-style checks; do not use it for real serving or benchmark validation.
 
-The `VAWS_*` values shown above are exported into the remote install shell by `remote-code-parity`; they do not depend on OpenSSH `SendEnv` / `AcceptEnv`. The default Ascend extra index is scoped to `vllm-ascend` requirements/editable install steps. Set `VAWS_ASCEND_PIP_EXTRA_INDEX_URL=` to disable that default, or set `VAWS_PIP_EXTRA_INDEX_URL` when all package steps should use a custom extra index. Set `VAWS_SOC_VERSION=<soc>` to force `SOC_VERSION` when `npu-smi` auto-detection is not enough. `VAWS_UV_BOOTSTRAP_TIMEOUT` and `VAWS_UV_INSTALL_TIMEOUT` bound uv attempts before continuing with mirror/pip fallback; set `VAWS_DISABLE_UV=1` for pip-only validation. Editable installs default to `--no-deps` against the paired image; set `VAWS_INSTALL_DEPS=1` when validating dependency changes.
+The cache/compile values shown above are exported into the remote install shell by `remote-code-parity`; they do not depend on OpenSSH `SendEnv` / `AcceptEnv`. Set `VAWS_SOC_VERSION=<soc>` to force `SOC_VERSION` when auto-detection is not enough. Editable installs always use `--no-deps`; dependency changes are handled by the explicit `vllm-ascend/requirements.txt` step, then verified without repair reinstall.
 
 ## Dry-run sync without remote mutation
 

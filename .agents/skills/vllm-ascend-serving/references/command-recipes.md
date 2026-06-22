@@ -249,4 +249,4 @@ python3 .agents/scripts/remote_job_status.py --job-id <job-id>
 python3 .agents/scripts/remote_job_tail.py --job-id <job-id> --lines 120
 ```
 
-Note: if `numpy>=2.0` is installed, first downgrade: `pip3 install "numpy<2.0.0" -i https://pypi.tuna.tsinghua.edu.cn/simple`
+Note: if `numpy>=2.0` is installed, first downgrade through parity or use the same HuaweiCloud pip index: `pip3 install "numpy<2.0.0" -i https://repo.huaweicloud.com/repository/pypi/simple`

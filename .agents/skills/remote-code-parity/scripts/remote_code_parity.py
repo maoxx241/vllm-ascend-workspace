@@ -66,7 +66,15 @@ DEPENDENCY_INSTALL_PATTERNS = (
 
 DEFAULT_ENV_PREAMBLE = (
     'export PATH="${PATH:-/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin}"',
-    'export LD_LIBRARY_PATH="/usr/local/Ascend/driver/lib64/driver:/usr/local/Ascend/driver/lib64:${LD_LIBRARY_PATH:-}"',
+    'export VAWS_RUNTIME_ROOT="${VAWS_RUNTIME_ROOT:-/vllm-workspace}"',
+    'prepend_ld_path() {',
+    '  dir="$1"',
+    '  if [ -d "$dir" ]; then',
+    '    export LD_LIBRARY_PATH="$dir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"',
+    '  fi',
+    '}',
+    'prepend_ld_path /usr/local/Ascend/driver/lib64',
+    'prepend_ld_path /usr/local/Ascend/driver/lib64/driver',
     'safe_source() {',
     '  file="$1"',
     '  if [ -f "$file" ]; then',
@@ -75,9 +83,23 @@ DEFAULT_ENV_PREAMBLE = (
     '    set -u',
     '  fi',
     '}',
-    'safe_source /usr/local/Ascend/ascend-toolkit/set_env.sh',
-    'safe_source /usr/local/Ascend/nnal/atb/set_env.sh',
-    'safe_source /vllm-workspace/vllm-ascend/vllm_ascend/_cann_ops_custom/vendors/vllm-ascend/bin/set_env.bash',
+    'for _ascend_env in '
+    '/etc/profile.d/vaws-ascend-env.sh '
+    '/usr/local/Ascend/cann-*/set_env.sh '
+    '/usr/local/Ascend/ascend-toolkit/latest/set_env.sh '
+    '/usr/local/Ascend/ascend-toolkit/set_env.sh '
+    '/usr/local/Ascend/nnal/atb/set_env.sh '
+    '"$VAWS_RUNTIME_ROOT/vllm-ascend/vllm_ascend/_cann_ops_custom/vendors/vllm-ascend/bin/set_env.bash"; do',
+    '  safe_source "$_ascend_env"',
+    'done',
+    'for _ascend_lib in '
+    '/usr/local/Ascend/cann-*/lib64 '
+    '/usr/local/Ascend/cann-*/runtime/lib64 '
+    '/usr/local/Ascend/ascend-toolkit/latest/lib64 '
+    '/usr/local/Ascend/ascend-toolkit/lib64; do',
+    '  prepend_ld_path "$_ascend_lib"',
+    'done',
+    'unset _ascend_env _ascend_lib',
     'PYTHON_CANDIDATE="$(ls -1d /usr/local/python*/bin/python3 2>/dev/null | sort -V | tail -n 1 || true)"',
     'if [ -n "$PYTHON_CANDIDATE" ]; then export PYTHON="$PYTHON_CANDIDATE"; elif command -v python3 >/dev/null 2>&1; then export PYTHON="$(command -v python3)"; elif command -v python >/dev/null 2>&1; then export PYTHON="$(command -v python)"; else echo "python not found" >&2; exit 127; fi',
     'PYTHON_BIN_DIR="$(dirname "$PYTHON")"',
@@ -91,28 +113,34 @@ DEFAULT_ENV_PREAMBLE = (
     'export Python3_EXECUTABLE="$PYTHON"',
     'export Python_EXECUTABLE="$PYTHON"',
     'export CMAKE_ARGS="-DPython3_EXECUTABLE=$PYTHON -DPython_EXECUTABLE=$PYTHON ${CMAKE_ARGS:-}"',
+    'if [ -z "${VAWS_BUILD_JOBS:-}" ]; then',
+    '  VAWS_BUILD_JOBS="$("$PYTHON" - <<\'PY\'',
+    'import os',
+    'try:',
+    '    count = len(os.sched_getaffinity(0))',
+    'except Exception:',
+    '    count = os.cpu_count() or 1',
+    'print(max(1, min(int(count), 128)))',
+    'PY',
+    ')"',
+    'fi',
+    'export VAWS_BUILD_JOBS',
+    'export MAX_JOBS="${MAX_JOBS:-$VAWS_BUILD_JOBS}"',
+    'export CMAKE_BUILD_PARALLEL_LEVEL="${CMAKE_BUILD_PARALLEL_LEVEL:-$VAWS_BUILD_JOBS}"',
     'export PIP="$PYTHON -m pip"',
     'export PIP_DISABLE_PIP_VERSION_CHECK=1',
     'export PIP_NO_INPUT=1',
     'export PIP_DEFAULT_TIMEOUT=60',
-    'export PIP_RETRIES=2',
+    'export PIP_RETRIES=1',
     'export PIP_PROGRESS_BAR=off',
     'export XDG_CACHE_HOME="${XDG_CACHE_HOME:-/root/.cache}"',
     'export PIP_CACHE_DIR="${PIP_CACHE_DIR:-$XDG_CACHE_HOME/pip}"',
-    'export UV_CACHE_DIR="${UV_CACHE_DIR:-$XDG_CACHE_HOME/uv}"',
-    'export UV_SYSTEM_PYTHON="${UV_SYSTEM_PYTHON:-1}"',
-    'export UV_PYTHON="${UV_PYTHON:-$PYTHON}"',
-    'export UV_INDEX_STRATEGY="${UV_INDEX_STRATEGY:-unsafe-best-match}"',
-    'export VAWS_UV_BOOTSTRAP_TIMEOUT="${VAWS_UV_BOOTSTRAP_TIMEOUT:-120}"',
-    'export VAWS_UV_INSTALL_TIMEOUT="${VAWS_UV_INSTALL_TIMEOUT:-300}"',
-    'export VAWS_DISABLE_UV="${VAWS_DISABLE_UV:-0}"',
-    'export VAWS_INSTALL_DEPS="${VAWS_INSTALL_DEPS:-0}"',
-    'export VAWS_ASCEND_PIP_EXTRA_INDEX_URL="${VAWS_ASCEND_PIP_EXTRA_INDEX_URL-https://mirrors.huaweicloud.com/ascend/repos/pypi}"',
-    'export VAWS_EFFECTIVE_PIP_EXTRA_INDEX_URL="${VAWS_PIP_EXTRA_INDEX_URL:-${PIP_EXTRA_INDEX_URL:-}}"',
     'export FETCHCONTENT_BASE_DIR="${FETCHCONTENT_BASE_DIR:-$XDG_CACHE_HOME/vaws/fetchcontent}"',
+    'export PIP_CONFIG_FILE=/dev/null',
+    'unset PIP_EXTRA_INDEX_URL',
+    'export PIP_INDEX_URL="https://repo.huaweicloud.com/repository/pypi/simple"',
+    'export PIP_TRUSTED_HOST="repo.huaweicloud.com"',
     'export CMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE:-Release}"',
-    'export MAX_JOBS="${VAWS_MAX_JOBS:-${MAX_JOBS:-4}}"',
-    'export CMAKE_BUILD_PARALLEL_LEVEL="${CMAKE_BUILD_PARALLEL_LEVEL:-$MAX_JOBS}"',
     'if [ -n "${VAWS_SOC_VERSION:-}" ]; then export SOC_VERSION="$VAWS_SOC_VERSION"; fi',
     'if [ -n "${VAWS_COMPILE_CUSTOM_KERNELS:-}" ]; then export COMPILE_CUSTOM_KERNELS="$VAWS_COMPILE_CUSTOM_KERNELS"; fi',
     'if [ "${VAWS_USE_CLANG15:-0}" = "1" ] && command -v clang-15 >/dev/null 2>&1 && command -v clang++-15 >/dev/null 2>&1; then export C_COMPILER="${C_COMPILER:-$(command -v clang-15)}"; export CXX_COMPILER="${CXX_COMPILER:-$(command -v clang++-15)}"; fi',
@@ -121,23 +149,9 @@ DEFAULT_ENV_PREAMBLE = (
     'export MKL_NUM_THREADS=1',
 )
 
-PIP_MIRROR_CANDIDATES = (
-    {
-        'name': 'tsinghua',
-        'index_url': 'https://pypi.tuna.tsinghua.edu.cn/simple',
-        'trusted_host': 'pypi.tuna.tsinghua.edu.cn',
-    },
-    {
-        'name': 'aliyun',
-        'index_url': 'https://mirrors.aliyun.com/pypi/simple',
-        'trusted_host': 'mirrors.aliyun.com',
-    },
-    {
-        'name': 'pypi',
-        'index_url': 'https://pypi.org/simple',
-        'trusted_host': 'pypi.org files.pythonhosted.org',
-    },
-)
+PIP_INDEX_NAME = 'huaweicloud'
+PIP_INDEX_URL = 'https://repo.huaweicloud.com/repository/pypi/simple'
+PIP_TRUSTED_HOST = 'repo.huaweicloud.com'
 
 DEFAULT_CONTAINER_CACHE_ROOT = '/root/.cache/vaws/remote-code-parity'
 DEFAULT_MARKER_DIRNAME = '.remote-code-parity'
@@ -151,22 +165,10 @@ CONSENT_FILENAME = 'install-consents.json'
 PARITY_BRANCH_NAME = 'parity-current'
 
 REMOTE_RUNTIME_ENV_PASSTHROUGH = (
-    'VAWS_PIP_INDEX_URL',
-    'VAWS_PIP_EXTRA_INDEX_URL',
-    'VAWS_PIP_TRUSTED_HOST',
-    'VAWS_ASCEND_PIP_EXTRA_INDEX_URL',
-    'PIP_EXTRA_INDEX_URL',
     'XDG_CACHE_HOME',
     'PIP_CACHE_DIR',
-    'UV_CACHE_DIR',
-    'UV_SYSTEM_PYTHON',
-    'UV_INDEX_STRATEGY',
-    'VAWS_UV_BOOTSTRAP_TIMEOUT',
-    'VAWS_UV_INSTALL_TIMEOUT',
-    'VAWS_DISABLE_UV',
-    'VAWS_INSTALL_DEPS',
     'FETCHCONTENT_BASE_DIR',
-    'VAWS_MAX_JOBS',
+    'VAWS_BUILD_JOBS',
     'MAX_JOBS',
     'CMAKE_BUILD_PARALLEL_LEVEL',
     'CMAKE_BUILD_TYPE',
@@ -188,17 +190,10 @@ RUNTIME_INSTALL_ENV_KEYS = (
     'FETCHCONTENT_BASE_DIR',
     'XDG_CACHE_HOME',
     'PIP_CACHE_DIR',
-    'UV_CACHE_DIR',
-    'UV_SYSTEM_PYTHON',
-    'UV_INDEX_STRATEGY',
-    'VAWS_UV_BOOTSTRAP_TIMEOUT',
-    'VAWS_UV_INSTALL_TIMEOUT',
-    'VAWS_DISABLE_UV',
-    'VAWS_INSTALL_DEPS',
-    'VAWS_PIP_INDEX_URL',
-    'VAWS_EFFECTIVE_PIP_EXTRA_INDEX_URL',
-    'VAWS_ASCEND_PIP_EXTRA_INDEX_URL',
-    'VAWS_VLLM_ASCEND_EFFECTIVE_PIP_EXTRA_INDEX_URL',
+    'PIP_CONFIG_FILE',
+    'PIP_INDEX_URL',
+    'PIP_TRUSTED_HOST',
+    'VAWS_BUILD_JOBS',
     'SOC_VERSION',
     'COMPILE_CUSTOM_KERNELS',
     'C_COMPILER',
@@ -816,18 +811,12 @@ def runtime_install_step_script(
     container_identity: str,
     step: str,
     uninstall_packages: tuple[str, ...] = (),
-    install_deps: bool = False,
 ) -> str:
     lines = ['set -euo pipefail', f'cd {quoted(runtime_root)}']
     lines.extend(remote_runtime_env_exports())
+    lines.append(f'export VAWS_RUNTIME_ROOT={quoted(runtime_root)}')
     lines.extend(DEFAULT_ENV_PREAMBLE)
-    if install_deps:
-        lines.append('export VAWS_INSTALL_DEPS=1')
-    if step in {'bootstrap-uv', 'install-vllm', 'install-vllm-ascend', 'install-vllm-ascend-requirements'}:
-        if step in {'install-vllm-ascend', 'install-vllm-ascend-requirements'}:
-            lines.append(
-                'export VAWS_EFFECTIVE_PIP_EXTRA_INDEX_URL="${VAWS_PIP_EXTRA_INDEX_URL:-${PIP_EXTRA_INDEX_URL:-$VAWS_ASCEND_PIP_EXTRA_INDEX_URL}}"'
-            )
+    if step in {'install-vllm', 'install-vllm-ascend', 'install-vllm-ascend-requirements'}:
         lines.extend(
             [
                 'emit_progress() {',
@@ -891,119 +880,22 @@ def runtime_install_step_script(
                 '  rm -f "$log_file"',
                 '  return "$status"',
                 '}',
-                'pip_apply_mirror() {',
-                '  mirror="$1"',
-                '  unset PIP_INDEX_URL PIP_EXTRA_INDEX_URL PIP_TRUSTED_HOST',
-                '  case "$mirror" in',
-                '    custom)',
-                '      if [ -z "${VAWS_PIP_INDEX_URL:-}" ]; then return 1; fi',
-                '      export PIP_INDEX_URL="$VAWS_PIP_INDEX_URL"',
-                '      if [ -n "${VAWS_EFFECTIVE_PIP_EXTRA_INDEX_URL:-}" ]; then export PIP_EXTRA_INDEX_URL="$VAWS_EFFECTIVE_PIP_EXTRA_INDEX_URL"; fi',
-                '      if [ -n "${VAWS_PIP_TRUSTED_HOST:-}" ]; then export PIP_TRUSTED_HOST="$VAWS_PIP_TRUSTED_HOST"; fi',
-                '      ;;',
-            ]
-        )
-        for mirror in PIP_MIRROR_CANDIDATES:
-            lines.extend(
-                [
-                    f'    {mirror["name"]}) export PIP_INDEX_URL={quoted(mirror["index_url"])}; export PIP_TRUSTED_HOST={quoted(mirror["trusted_host"])}; if [ -n "${{VAWS_EFFECTIVE_PIP_EXTRA_INDEX_URL:-}}" ]; then export PIP_EXTRA_INDEX_URL="$VAWS_EFFECTIVE_PIP_EXTRA_INDEX_URL"; fi ;;',
-                ]
-            )
-        lines.extend(
-            [
-                '    *) return 1 ;;',
-                '  esac',
-                '  emit_progress "runtime-pip-mirror" "using pip mirror $mirror" 30',
+                'configure_pip_index() {',
+                '  unset PIP_EXTRA_INDEX_URL',
+                '  export PIP_CONFIG_FILE=/dev/null',
+                f'  export PIP_INDEX_URL={quoted(PIP_INDEX_URL)}',
+                f'  export PIP_TRUSTED_HOST={quoted(PIP_TRUSTED_HOST)}',
+                f'  emit_progress "runtime-pip-index" "using pip index {PIP_INDEX_NAME}" 30',
                 '}',
-                'HAS_UV=0',
-                'if [ "${VAWS_DISABLE_UV:-0}" != "1" ] && command -v uv >/dev/null 2>&1; then HAS_UV=1; fi',
-                'ensure_uv() {',
-                '  if [ "${VAWS_DISABLE_UV:-0}" = "1" ]; then return 1; fi',
-                '  if [ "$HAS_UV" -eq 1 ]; then return 0; fi',
-                '  if command -v uv >/dev/null 2>&1; then HAS_UV=1; return 0; fi',
-                '  emit_progress "runtime-bootstrap-uv" "installing uv" 30',
-                '  for mirror in custom tsinghua aliyun pypi; do',
-                '    pip_apply_mirror "$mirror" || continue',
-                '    set +e',
-                '    if command -v timeout >/dev/null 2>&1; then',
-                '      run_with_progress "runtime-bootstrap-uv" "installing uv via $mirror" "$VAWS_UV_BOOTSTRAP_TIMEOUT" timeout "$VAWS_UV_BOOTSTRAP_TIMEOUT" "$PYTHON" -m pip install uv -q',
-                '    else',
-                '      run_with_progress "runtime-bootstrap-uv" "installing uv via $mirror" "$VAWS_UV_BOOTSTRAP_TIMEOUT" "$PYTHON" -m pip install uv -q',
-                '    fi',
-                '    status=$?',
-                '    set -e',
-                '    if [ "$status" -eq 0 ]; then',
-                '      hash -r',
-                '      if command -v uv >/dev/null 2>&1; then HAS_UV=1; return 0; fi',
-                '    fi',
-                '  done',
-                '  return 1',
-                '}',
-                'DEFAULT_UV_INDEX_ARGS="'
-                + ' '.join(
-                    (f'--index-url {m["index_url"]}' if i == 0 else f'--extra-index-url {m["index_url"]}')
-                    for i, m in enumerate(PIP_MIRROR_CANDIDATES)
-                )
-                + '"',
-                'UV_EXTRA_INDEX_ARGS=""',
-                'if [ -n "${VAWS_EFFECTIVE_PIP_EXTRA_INDEX_URL:-}" ]; then UV_EXTRA_INDEX_ARGS="$UV_EXTRA_INDEX_ARGS --extra-index-url $VAWS_EFFECTIVE_PIP_EXTRA_INDEX_URL"; fi',
-                'UV_INDEX_ARGS="$DEFAULT_UV_INDEX_ARGS$UV_EXTRA_INDEX_ARGS"',
-                'if [ -n "${VAWS_PIP_INDEX_URL:-}" ]; then',
-                '  UV_INDEX_ARGS="--index-url $VAWS_PIP_INDEX_URL"',
-                '  if [ -n "${VAWS_EFFECTIVE_PIP_EXTRA_INDEX_URL:-}" ]; then UV_INDEX_ARGS="$UV_INDEX_ARGS --extra-index-url $VAWS_EFFECTIVE_PIP_EXTRA_INDEX_URL"; fi',
-                '  UV_INDEX_ARGS="$UV_INDEX_ARGS ${DEFAULT_UV_INDEX_ARGS/--index-url/--extra-index-url}"',
-                'fi',
-                'emit_runtime_install_env() {',
-                '  emit_progress "runtime-install-env" "MAX_JOBS=$MAX_JOBS CMAKE_BUILD_TYPE=$CMAKE_BUILD_TYPE INSTALL_DEPS=${VAWS_INSTALL_DEPS:-0} DISABLE_UV=${VAWS_DISABLE_UV:-0} SOC_VERSION=${SOC_VERSION:-auto} FETCHCONTENT_BASE_DIR=$FETCHCONTENT_BASE_DIR UV_CACHE_DIR=$UV_CACHE_DIR PIP_CACHE_DIR=$PIP_CACHE_DIR" 5',
-                '}',
-                'emit_runtime_npu_probe() {',
-                '  if command -v npu-smi >/dev/null 2>&1; then',
-                '    summary="$(npu-smi info 2>/dev/null | head -n 8 | tr "\\n" " " | sed "s/  */ /g" | cut -c1-220 || true)"',
-                '    if [ -n "$summary" ]; then emit_progress "runtime-npu-probe" "$summary" 5; fi',
-                '  fi',
-                '}',
-                'pip_install_with_mirrors() {',
+                'pip_install_fast() {',
                 '  phase="$1"',
                 '  message="$2"',
                 '  expected_seconds="$3"',
                 '  shift 3',
-                '  if [ "$HAS_UV" -eq 1 ]; then',
-                '    uv_args="$*"',
-                '    uv_args="${uv_args#install }"',
-                '    uv_cmd="uv pip install --system $UV_INDEX_ARGS $uv_args"',
-                '    set +e',
-                '    if command -v timeout >/dev/null 2>&1; then',
-                '      run_with_progress "$phase" "$message via uv" "$VAWS_UV_INSTALL_TIMEOUT" timeout "$VAWS_UV_INSTALL_TIMEOUT" bash -lc "$uv_cmd"',
-                '    else',
-                '      run_with_progress "$phase" "$message via uv" "$expected_seconds" bash -lc "$uv_cmd"',
-                '    fi',
-                '    status=$?',
-                '    set -e',
-                '    if [ "$status" -eq 0 ]; then return 0; fi',
-                '    emit_progress "$phase" "uv failed (status $status), falling back to pip" 10',
-                '  fi',
-                '  last_status=1',
-                '  for mirror in custom tsinghua aliyun pypi; do',
-                '    pip_apply_mirror "$mirror" || continue',
-                '    set +e',
-                '    run_with_progress "$phase" "$message via $mirror" "$expected_seconds" "$PYTHON" -m pip "$@"',
-                '    status=$?',
-                '    set -e',
-                '    if [ "$status" -eq 0 ]; then',
-                '      return 0',
-                '    fi',
-                '    last_status="$status"',
-                '  done',
-                '  return "$last_status"',
+                '  configure_pip_index',
+                f'  run_with_progress "$phase" "$message via {PIP_INDEX_NAME}" "$expected_seconds" "$PYTHON" -m pip "$@"',
                 '}',
-                'upgrade_packaging_stack() {',
-                '  set +e',
-                '  pip_install_with_mirrors "runtime-install-packaging" "upgrading packaging toolchain" 300 install --upgrade "pip>=24.0" "setuptools>=77" "wheel>=0.43" "packaging>=24.0"',
-                '  status=$?',
-                '  set -e',
-                '  return "$status"',
-                '}',
-                'install_with_fallback() {',
+                'install_editable_fast() {',
                 '  phase="$1"',
                 '  message="$2"',
                 '  target_dir="$3"',
@@ -1011,74 +903,18 @@ def runtime_install_step_script(
                 '  install_cmd="$5"',
                 '  log_file="$(mktemp -t parity-install.XXXXXX.log)"',
                 '  cd "$target_dir"',
-                '  if [ "$HAS_UV" -eq 1 ]; then',
-                '    pip_args="${install_cmd#*pip install }"',
-                '    uv_cmd="uv pip install --system $UV_INDEX_ARGS $pip_args"',
-                '    set +e',
-                '    if command -v timeout >/dev/null 2>&1; then',
-                '      run_with_log_progress "$phase" "$message via uv" "$VAWS_UV_INSTALL_TIMEOUT" "$log_file" timeout "$VAWS_UV_INSTALL_TIMEOUT" bash -lc "$uv_cmd"',
-                '    else',
-                '      run_with_log_progress "$phase" "$message via uv" "$expected_seconds" "$log_file" bash -lc "$uv_cmd"',
-                '    fi',
-                '    status=$?',
-                '    set -e',
-                '    if [ "$status" -eq 0 ]; then',
-                '      rm -f "$log_file"',
-                '      return 0',
-                '    fi',
-                '    emit_progress "$phase" "uv install failed (status $status), falling back to pip" 10',
-                '  fi',
-                '  last_status=1',
-                '  for mirror in custom tsinghua aliyun pypi; do',
-                '    pip_apply_mirror "$mirror" || continue',
-                '    set +e',
-                '    run_with_log_progress "$phase" "$message via $mirror" "$expected_seconds" "$log_file" bash -lc "$install_cmd"',
-                '    status=$?',
-                '    set -e',
-                '    if [ "$status" -eq 0 ]; then',
-                '      rm -f "$log_file"',
-                '      return 0',
-                '    fi',
-                '    last_status="$status"',
-                '    if grep -Eiq "project\\.license|license[^[:alnum:]]|spdx|pyproject" "$log_file"; then',
-                '      upgrade_packaging_stack || true',
-                '      set +e',
-                '      run_with_log_progress "$phase" "$message via $mirror (packaging retry)" "$expected_seconds" "$log_file" bash -lc "$install_cmd"',
-                '      status=$?',
-                '      set -e',
-                '      if [ "$status" -eq 0 ]; then',
-                '        rm -f "$log_file"',
-                '        return 0',
-                '      fi',
-                '      last_status="$status"',
-                '      alt_cmd="$(printf "%s" "$install_cmd" | sed "s/--no-build-isolation//g" | xargs)"',
-                '      if [ -n "$alt_cmd" ] && [ "$alt_cmd" != "$install_cmd" ]; then',
-                '        set +e',
-                '        run_with_log_progress "$phase" "$message via $mirror (isolation fallback)" "$expected_seconds" "$log_file" bash -lc "$alt_cmd"',
-                '        status=$?',
-                '        set -e',
-                '        if [ "$status" -eq 0 ]; then',
-                '          rm -f "$log_file"',
-                '          return 0',
-                '        fi',
-                '        last_status="$status"',
-                '      fi',
-                '    fi',
-                '  done',
+                '  configure_pip_index',
+                '  set +e',
+                f'  run_with_log_progress "$phase" "$message via {PIP_INDEX_NAME}" "$expected_seconds" "$log_file" bash -lc "$install_cmd"',
+                '  status=$?',
+                '  set -e',
                 '  rm -f "$log_file"',
-                '  return "$last_status"',
+                '  return "$status"',
                 '}',
             ]
         )
 
-    if step == 'bootstrap-uv':
-        lines.extend(
-            [
-                'emit_runtime_install_env',
-                'ensure_uv || emit_progress "runtime-bootstrap-uv" "uv not available, will use pip" 5',
-            ]
-        )
-    elif step == 'uninstall':
+    if step == 'uninstall':
         pkg_args = ' '.join(uninstall_packages) if uninstall_packages else 'vllm vllm-ascend vllm_ascend'
         lines.append(f'$PYTHON -m pip uninstall -y {pkg_args} >/dev/null 2>&1 || true')
     elif step == 'install-vllm':
@@ -1086,30 +922,22 @@ def runtime_install_step_script(
             [
                 f'cd {quoted(str(Path(runtime_root) / "vllm"))}',
                 'export VLLM_TARGET_DEVICE=empty',
-                'emit_runtime_install_env',
-                'if [ "${VAWS_INSTALL_DEPS:-0}" = "1" ]; then VLLM_EDITABLE_INSTALL_ARGS="-e . --no-build-isolation"; else VLLM_EDITABLE_INSTALL_ARGS="-e . --no-build-isolation --no-deps"; fi',
-                'install_with_fallback "runtime-install-vllm" "building editable vllm" . 1800 "$PYTHON -m pip install $VLLM_EDITABLE_INSTALL_ARGS"',
-                'set +e',
-                '$PYTHON -m pip uninstall -y triton >/dev/null 2>&1',
-                'set -e',
+                'export TORCH_DEVICE_BACKEND_AUTOLOAD=0',
+                'install_editable_fast "runtime-install-vllm" "building editable vllm" . 900 "$PYTHON -m pip install --no-deps -e . --no-build-isolation"',
             ]
         )
     elif step == 'install-vllm-ascend-requirements':
         lines.extend(
             [
                 f'cd {quoted(str(Path(runtime_root) / "vllm-ascend"))}',
-                'emit_runtime_install_env',
-                'pip_install_with_mirrors "runtime-install-vllm-ascend-requirements" "installing vllm-ascend requirements" 900 install -r requirements.txt',
+                'pip_install_fast "runtime-install-vllm-ascend-requirements" "installing vllm-ascend requirements" 900 install -r requirements.txt',
             ]
         )
     elif step == 'install-vllm-ascend':
         lines.extend(
             [
                 f'cd {quoted(str(Path(runtime_root) / "vllm-ascend"))}',
-                'emit_runtime_install_env',
-                'emit_runtime_npu_probe',
-                'if [ "${VAWS_INSTALL_DEPS:-0}" = "1" ]; then VLLM_ASCEND_EDITABLE_INSTALL_ARGS="-v -e . --no-build-isolation"; else VLLM_ASCEND_EDITABLE_INSTALL_ARGS="-v -e . --no-build-isolation --no-deps"; fi',
-                'install_with_fallback "runtime-install-vllm-ascend" "building editable vllm-ascend" . 2400 "$PYTHON -m pip install $VLLM_ASCEND_EDITABLE_INSTALL_ARGS"',
+                'install_editable_fast "runtime-install-vllm-ascend" "building editable vllm-ascend custom ops" . 2400 "$PYTHON -m pip install --no-deps -v -e . --no-build-isolation"',
             ]
         )
     elif step == 'verify-imports':
@@ -1227,7 +1055,6 @@ def run_runtime_install_step(
     step: str,
     stream_progress: bool = False,
     uninstall_packages: tuple[str, ...] = (),
-    install_deps: bool = False,
 ) -> None:
     script = runtime_install_step_script(
         runtime_root=runtime_root,
@@ -1235,7 +1062,6 @@ def run_runtime_install_step(
         container_identity=container_identity,
         step=step,
         uninstall_packages=uninstall_packages,
-        install_deps=install_deps,
     )
     if stream_progress:
         ssh_exec_stream(container, script, stream_progress=True)
@@ -1305,6 +1131,7 @@ def read_runtime_install_env(
         return {}
     lines = ['set -euo pipefail', f'mkdir -p {quoted(runtime_root)}', f'cd {quoted(runtime_root)}']
     lines.extend(remote_runtime_env_exports())
+    lines.append(f'export VAWS_RUNTIME_ROOT={quoted(runtime_root)}')
     lines.extend(DEFAULT_ENV_PREAMBLE)
     lines.extend(
         [
@@ -1313,11 +1140,6 @@ def read_runtime_install_env(
             'import os',
             f'keys = {json.dumps(RUNTIME_INSTALL_ENV_KEYS)}',
             'env = {key: os.environ[key] for key in keys if key in os.environ}',
-            'env["VAWS_VLLM_ASCEND_EFFECTIVE_PIP_EXTRA_INDEX_URL"] = (',
-            '    os.environ.get("VAWS_PIP_EXTRA_INDEX_URL")',
-            '    or os.environ.get("PIP_EXTRA_INDEX_URL")',
-            '    or os.environ.get("VAWS_ASCEND_PIP_EXTRA_INDEX_URL", "")',
-            ')',
             'print(json.dumps(env, sort_keys=True))',
             'PY',
         ]
@@ -1521,12 +1343,7 @@ def run_sync(args: argparse.Namespace) -> int:
                     reinstall_vllm = True
                 if 'vllm-ascend' in record_map:
                     reinstall_vllm_ascend = True
-            install_vllm_deps = os.environ.get('VAWS_INSTALL_DEPS') == '1' or vllm_dependency_changed or vllm_head_drift
-            install_vllm_ascend_deps = (
-                os.environ.get('VAWS_INSTALL_DEPS') == '1'
-                or vllm_ascend_dependency_changed
-                or vllm_ascend_head_drift
-            )
+            install_vllm_ascend_deps = vllm_ascend_dependency_changed or vllm_ascend_head_drift
 
             snapshot_commits = {record.relpath: record.commit for record in records}
             if args.apply_mode in {'source-only', 'materialize'}:
@@ -1745,6 +1562,7 @@ def run_sync(args: argparse.Namespace) -> int:
                     return 2
                 reinstall_vllm = True if 'vllm' in record_map else reinstall_vllm
                 reinstall_vllm_ascend = True if 'vllm-ascend' in record_map else reinstall_vllm_ascend
+                install_vllm_ascend_deps = True if 'vllm-ascend' in record_map else install_vllm_ascend_deps
 
             runtime_install_env: dict[str, str] = {}
             if not args.dry_run:
@@ -1858,15 +1676,6 @@ def run_sync(args: argparse.Namespace) -> int:
                             stream_progress=False,
                             uninstall_packages=tuple(uninstall_pkgs),
                         )
-                    emit_progress('runtime-bootstrap-uv')
-                    run_runtime_install_step(
-                        container=container,
-                        runtime_root=runtime_root,
-                        marker_dirname=marker_dirname,
-                        container_identity=args.container_identity,
-                        step='bootstrap-uv',
-                        stream_progress=True,
-                    )
                     if reinstall_vllm:
                         emit_progress('runtime-install-vllm', package='vllm')
                         run_runtime_install_step(
@@ -1876,7 +1685,6 @@ def run_sync(args: argparse.Namespace) -> int:
                             container_identity=args.container_identity,
                             step='install-vllm',
                             stream_progress=True,
-                            install_deps=install_vllm_deps,
                         )
                     if reinstall_vllm_ascend:
                         if install_vllm_ascend_deps:
@@ -1902,36 +1710,6 @@ def run_sync(args: argparse.Namespace) -> int:
                             container_identity=args.container_identity,
                             step='install-vllm-ascend',
                             stream_progress=True,
-                            install_deps=install_vllm_ascend_deps,
-                        )
-                    emit_progress('runtime-install-verify-deps')
-                    try:
-                        run_runtime_install_step(
-                            container=container,
-                            runtime_root=runtime_root,
-                            marker_dirname=marker_dirname,
-                            container_identity=args.container_identity,
-                            step='verify-deps',
-                            stream_progress=True,
-                        )
-                    except Exception:
-                        emit_progress('runtime-install-repair-deps',
-                                      message='dependency mismatch detected, installing missing deps')
-                        run_runtime_install_step(
-                            container=container,
-                            runtime_root=runtime_root,
-                            marker_dirname=marker_dirname,
-                            container_identity=args.container_identity,
-                            step='install-vllm-ascend-requirements',
-                            stream_progress=True,
-                        )
-                        run_runtime_install_step(
-                            container=container,
-                            runtime_root=runtime_root,
-                            marker_dirname=marker_dirname,
-                            container_identity=args.container_identity,
-                            step='verify-deps',
-                            stream_progress=True,
                         )
                     emit_progress('runtime-install-verify-imports')
                     run_runtime_install_step(
@@ -1940,6 +1718,15 @@ def run_sync(args: argparse.Namespace) -> int:
                         marker_dirname=marker_dirname,
                         container_identity=args.container_identity,
                         step='verify-imports',
+                        stream_progress=True,
+                    )
+                    emit_progress('runtime-install-verify-deps')
+                    run_runtime_install_step(
+                        container=container,
+                        runtime_root=runtime_root,
+                        marker_dirname=marker_dirname,
+                        container_identity=args.container_identity,
+                        step='verify-deps',
                         stream_progress=True,
                     )
                     emit_progress('runtime-install-marker')

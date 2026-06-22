@@ -77,9 +77,9 @@ These should not trigger `machine-management` unless machine readiness is the ob
 - inventory persists `host.machine_type`, `host.soc`, and `container.machine_type`
 - `rc`, `main`, and `stable` remain first-class selectors, while `auto`, `*:latest`, and bare repositories without a tag are rejected as defaults
 - long-running bootstrap phases keep emitting attributable progress for image pull and package-install steps instead of going silent behind one global timeout
-- container-side apt bootstrap probes a small set of domestic mirrors first and rewrites sources to the fastest reachable mirror before `apt-get update` / `apt-get install`
-- container bootstrap writes `/etc/pip.conf` with multiple pip indexes (Tsinghua as primary, Aliyun and PyPI as additional) so pip installs inside the container work reliably
-- container bootstrap installs `pytest` into the runtime Python (best-effort, does not fail bootstrap if pip is broken)
+- container-side apt bootstrap rewrites sources to the fixed A3-tested NJU mirror (`mirrors.nju.edu.cn`) before `apt-get update` / `apt-get install`
+- container bootstrap writes `/etc/pip.conf` with the single A3-tested HuaweiCloud pip source and no default extra indexes
+- container bootstrap does not install `pytest` or other opportunistic test packages
 - inventory `put` / `remove` writes are atomic and serialized so concurrent wrappers do not clobber the recorded machine set
 
 ### Verify

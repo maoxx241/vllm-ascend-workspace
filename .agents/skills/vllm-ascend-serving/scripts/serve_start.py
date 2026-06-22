@@ -434,7 +434,7 @@ def diagnose_env_failure(
             "The container has exact version locks between torch, torch_npu, "
             "vllm, and vllm-ascend. Manual pip install will break the "
             "dependency graph. Parity sync uses the correct install flags "
-            "(--no-build-isolation, VLLM_TARGET_DEVICE=empty, uv acceleration)."
+            "(--no-deps, --no-build-isolation, VLLM_TARGET_DEVICE=empty, HuaweiCloud pip index)."
         ),
     }
 
