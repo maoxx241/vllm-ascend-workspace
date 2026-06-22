@@ -1,0 +1,4 @@
+interface:
+  display_name: "ModelScope"
+  short_description: "Download, inspect, auto-resume, and verify ModelScope weights"
+  default_prompt: "Use $modelscope to download, auto-resume, inspect progress, or verify ModelScope model weights."

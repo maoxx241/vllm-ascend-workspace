@@ -37,6 +37,7 @@ Agent 会自动检测你的环境、安装所需工具、配置 Git 远程仓库
 | **session-management**   | 创建/检查/清理隔离 session：本地 worktree、远端容器、状态目录和资源 lease | 多 agent 或多任务并行远端执行时 |
 | **remote-toolbox**       | 结构化解析/探测/执行/长任务/同步/服务/产物传输/清理远端容器              | Agent 需要像使用本地工具一样操作远端 session container 时 |
 | **remote-code-parity**   | 将本地工作区的完整状态（含未提交的修改）同步到远程容器                    | 在远程机器上运行测试或服务前自动触发 |
+| **modelscope**           | 下载、续传、查看进度并 SHA256 校验 ModelScope 模型权重                  | 需要把模型权重下载到明确目录时 |
 | **vllm-ascend-serving**  | 在远程容器上一键拉起 vLLM Ascend 推理服务，支持 NPU 探测、自动选卡、增量重启 | 需要在远程机器上起推理服务时     |
 | **vllm-ascend-benchmark** | 在远程容器上运行 `vllm bench serve` 性能基准测试，支持多轮预热和统计聚合     | 需要跑吞吐/延迟基准测试或性能回归对比时 |
 | **ascend-memory-profiling** | 采集并分析昇腾 NPU 的 HBM 显存占用，按组件拆分并溯源 | 需要分析 vLLM 推理服务的显存占用时 |
@@ -63,6 +64,10 @@ Agent 会自动检测你的环境、安装所需工具、配置 Git 远程仓库
 # 代码同步
 "帮我同步代码到服务器上并重新编译"
 
+# 模型权重下载
+"帮我把 Qwen/Qwen3-32B 从 ModelScope 下载到 /root/Qwen/Qwen3-32B，并查看进度"
+"校验一下 /root/Qwen/Qwen3-32B 的 ModelScope 权重"
+
 # 服务拉起（--model 需要指定远程容器上已存在的权重路径，不支持自动下载）
 "在 x.x.x.x 上用 /home/weights/Qwen3-32B-W8A8 拉一个 4 卡的推理服务，开 W8A8 量化"
 "帮我重启一下 x.x.x.x 的服务，把 max-model-len 改成 8192"
@@ -87,6 +92,7 @@ Agent 会自动检测你的环境、安装所需工具、配置 Git 远程仓库
 │   │   ├── session-management/    # 并行 Session 隔离技能
 │   │   ├── remote-toolbox/        # 远端结构化工具面
 │   │   ├── remote-code-parity/    # 代码同步技能
+│   │   ├── modelscope/            # ModelScope 权重下载与校验技能
 │   │   ├── vllm-ascend-serving/   # 服务拉起技能
 │   │   ├── vllm-ascend-benchmark/ # 性能基准测试技能
 │   │   ├── ascend-memory-profiling/ # 显存 profiling 技能

@@ -6,7 +6,7 @@ alwaysApply: false
 
 # Skill Package Maintenance
 
-When modifying any skill package, follow the maintenance rule in `AGENTS.md` — keep the per-skill bundle (SKILL.md + scripts/ + references/), shared modules, and remote-code-parity files in sync.
+When modifying any skill package, follow the maintenance rule in `AGENTS.md` — keep the per-skill bundle (`SKILL.md` plus supporting `scripts/`, `references/`, `agents/`, and similar files), shared modules, and remote-code-parity files in sync.
 
 ## Script conventions (supplemental to AGENTS.md)
 

@@ -37,6 +37,7 @@ The Agent will detect your environment, install required tools, and configure Gi
 | **session-management** | Create, inspect, and clean isolated sessions: local worktree, remote container, state namespace, and resource leases | For parallel remote work or multiple agents |
 | **remote-toolbox**    | Structured target/probe/exec/job/sync/service/artifact/cleanup tools for remote containers | When agents need local-tool-like control of a remote session container |
 | **remote-code-parity** | Sync the full local workspace state (including uncommitted changes) to a remote container    | Triggered automatically before remote test or service runs |
+| **modelscope**       | Download, resume, status-check, and SHA256-verify ModelScope model weights                  | When model weights need to be downloaded into an explicit local directory |
 | **vllm-ascend-serving** | Launch a vLLM Ascend inference service on a remote container, with NPU probing, auto card selection, and incremental restart | When you need an inference service on a remote machine |
 | **vllm-ascend-benchmark** | Run `vllm bench serve` performance benchmarks on a remote container, with multi-run warmup and statistical aggregation | When you need throughput/latency benchmarks or performance regression checks |
 | **ascend-memory-profiling** | Profile and attribute HBM memory usage on Ascend NPU, with per-component breakdown and evidence chains | When you need to analyze memory consumption of a vLLM serving workload |
@@ -63,6 +64,10 @@ When talking to an Agent:
 # Code sync
 "Sync my code to the server and rebuild"
 
+# Model weight download
+"Download Qwen/Qwen3-32B from ModelScope to /root/Qwen/Qwen3-32B and show progress"
+"Verify the ModelScope weights under /root/Qwen/Qwen3-32B"
+
 # Serving (--model must point to weights already present on the remote container)
 "Launch a 4-card inference service on x.x.x.x using /home/weights/Qwen3-32B-W8A8 with W8A8 quantization"
 "Check the service status on x.x.x.x"
@@ -86,6 +91,7 @@ When talking to an Agent:
 │   │   ├── session-management/    # Parallel session isolation skill
 │   │   ├── remote-toolbox/        # Structured remote toolbox
 │   │   ├── remote-code-parity/    # Code synchronization skill
+│   │   ├── modelscope/            # ModelScope weight download and verification skill
 │   │   ├── vllm-ascend-serving/   # Inference serving skill
 │   │   ├── vllm-ascend-benchmark/ # Performance benchmarking skill
 │   │   ├── ascend-memory-profiling/ # Memory profiling skill

@@ -52,6 +52,7 @@ Repo-local skills live under `.agents/skills/`. Each has its own `SKILL.md` with
 | `session-management` | Create / inspect / remove isolated agent sessions (local worktree + remote container + leases) |
 | `remote-toolbox` | Compatibility backend for managed VAWS target/probe/exec/job/sync/service/artifact/cleanup tools |
 | `remote-code-parity` | Sync local working tree to remote container before execution |
+| `modelscope` | Download / resume / status-check / SHA256-verify ModelScope model weights under explicit local directories |
 | `vllm-ascend-serving` | Start / check / stop a vLLM Ascend service on a remote container |
 | `vllm-ascend-benchmark` | Run `vllm bench serve` benchmarks (single-run or multi-run with warmup) |
 | `ascend-memory-profiling` | Profile HBM memory usage on Ascend NPU for vLLM serving scenarios |
@@ -76,4 +77,4 @@ for domain workflows.
 
 ## Maintenance
 
-When changing a skill, update the whole package together: `SKILL.md`, `scripts/`, `references/`. When the change affects shared state, also update `.agents/scripts/workspace_profile.py`, `.agents/lib/vaws_local_state.py`, `.agents/lib/vaws_session_id.py`, `.agents/lib/vaws_session_state.py`, and `.agents/lib/vaws_remote_toolbox.py` as applicable.
+When changing a skill, update the whole package together: `SKILL.md`, `scripts/`, `references/`, `agents/`, and other supporting files as applicable. When the change affects shared state, also update `.agents/scripts/workspace_profile.py`, `.agents/lib/vaws_local_state.py`, `.agents/lib/vaws_session_id.py`, `.agents/lib/vaws_session_state.py`, and `.agents/lib/vaws_remote_toolbox.py` as applicable.
