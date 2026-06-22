@@ -86,7 +86,7 @@ After `remote-code-parity` sync, these build artifacts may be missing because th
 cd /vllm-workspace/vllm-ascend && bash csrc/build_aclnn.sh /vllm-workspace/vllm-ascend ascend910b
 ```
 
-Installation note: `pip install -e . -i https://pypi.tuna.tsinghua.edu.cn/simple` handles `numpy<2.0.0` (CANN hard dependency) automatically. Do not skip it or manually override numpy to >=2.0.
+Installation note: parity installs with the HuaweiCloud pip index and handles `numpy<2.0.0` (CANN hard dependency) automatically. Do not skip it or manually override numpy to >=2.0.
 
 ## Extra args escaping
 

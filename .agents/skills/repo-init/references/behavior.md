@@ -95,6 +95,13 @@ For narrow Git-only tasks, skip this stage.
 
 Always use recursive sync + init for this repo.
 
+When the user chose CI-pinned vLLM alignment, resolve the tested vLLM ref with
+`resolve_vllm_ci_pin.py` after `vllm-ascend/` is populated. The resolver
+prefers `.github/vllm-main-verified.commit`, which is the current upstream
+source of truth, and falls back to older workflow/docs sources for older
+checkouts. Report the resolver source in the summary so later remote install
+or parity work can tell which pairing was deployed.
+
 ### Stage 6: topology
 
 Use `repo_topology.py configure` for remote mutations.

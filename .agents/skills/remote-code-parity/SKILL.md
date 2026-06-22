@@ -41,14 +41,15 @@ Keep a **ready** remote runtime in exact code parity with the local `vllm-ascend
 - Synthetic commits are deterministic parentless tree snapshots. Keep each repo's real `HEAD` separately as `source_head` for reinstall drift detection instead of using it as the transport parent.
 - If a clean child repo only differs from the parent through the parentless transport commit id, suppress that transport-only child gitlink path from the parent repo's `changed_paths`.
 - Use dynamic Python / pip discovery plus a shell-safe env preamble, and source optional Ascend env scripts under a `set +u` / `set -u` guard instead of relying on shell-specific variables.
-- Runtime dependency installs may opt into a near-cache index with `VAWS_PIP_INDEX_URL`, `VAWS_PIP_EXTRA_INDEX_URL`, and `VAWS_PIP_TRUSTED_HOST`; these whitelisted local env vars are explicitly passed into the remote install shell because SSH does not reliably forward arbitrary local env. When no caller extra index is set, only the `vllm-ascend` requirements/editable steps add the public Ascend PyPI extra index.
-- Runtime editable installs use CI-aligned cache / compile defaults: `PIP_CACHE_DIR`, `UV_CACHE_DIR`, `FETCHCONTENT_BASE_DIR`, `UV_INDEX_STRATEGY=unsafe-best-match`, `MAX_JOBS=4`, and `CMAKE_BUILD_TYPE=Release`, all overrideable by environment. The effective remote install env is recorded in the manifest/runtime state with URL userinfo redacted. Do not default `COMPILE_CUSTOM_KERNELS=0`; that is only available as an explicit `VAWS_COMPILE_CUSTOM_KERNELS=0` unit-test-style override and is not valid for normal serving / benchmark runtime parity.
-- If editable install fails because the image packaging stack is too old, attempt one bounded packaging-stack refresh before failing closed.
+- Runtime dependency installs use the single A3-tested HuaweiCloud pip index. Do not configure default extra indexes, mirror fallback, or caller-provided pip index overrides in parity.
+- Runtime editable installs use `--no-deps`; dependency ownership stays in `vllm-ascend` requirements. Cache / compile env such as `PIP_CACHE_DIR`, `FETCHCONTENT_BASE_DIR`, `VAWS_BUILD_JOBS`, `MAX_JOBS`, and `CMAKE_BUILD_PARALLEL_LEVEL` may be explicitly passed into the remote install shell, and the effective remote install env is recorded in the manifest/runtime state with URL userinfo redacted.
+- If editable install or dependency verification fails, fail closed with the captured log instead of trying alternate package sources, installing `uv`, refreshing the packaging stack, or changing install modes.
 - Before invoking parity, confirm the local working tree represents the **intended deployment state**. If any submodule source files have uncommitted changes made for temporary debugging or hypothesis testing, revert them before syncing — do not sync exploratory patches to the remote.
 - If a previous parity sync in this session led to a failed remote execution and the agent subsequently modified local code, do not re-sync until the root cause of the failure is confirmed from remote logs (not from hypothesis).
 - Fail closed if parity cannot be proven.
 - First replacement of image-provided `vllm` / `vllm-ascend` requires explicit user consent for that logical container identity.
-- `install_consent.py set` and `batch-set` must include `--approved-by-user`.
+- `install_consent.py set`, `batch-set`, and `set-sync-mode` must include `--approved-by-user`.
+- If the user explicitly says to use local `vllm` / `vllm-ascend`, replace image packages, or run current workspace code remotely, record both decisions in one atomic write: `set-sync-mode --sync-mode local --allow-first-install --approved-by-user`. Do not ask a second first-install question for the same container identity.
 - Keep local runtime state only under `.vaws-local/remote-code-parity/`.
 
 ## Preconditions
@@ -105,6 +106,7 @@ Consent helper:
 
 - POSIX: `python3 .agents/skills/remote-code-parity/scripts/install_consent.py resolve ...`
 - POSIX: `python3 .agents/skills/remote-code-parity/scripts/install_consent.py set ... --approved-by-user`
+- POSIX: `python3 .agents/skills/remote-code-parity/scripts/install_consent.py set-sync-mode ... --sync-mode local --allow-first-install --approved-by-user`
 - POSIX: `python3 .agents/skills/remote-code-parity/scripts/install_consent.py batch-set --input FILE.json --approved-by-user`
 
 Low-level helper:
@@ -127,11 +129,12 @@ Reference files:
 
 Before running parity for a container, check the persisted `sync_mode`:
 
-- `unset` (first use): the agent must proactively ask the user whether to sync local code (`local`) or use the container's image-provided vllm + vllm-ascend (`image`). Record the choice via `install_consent.py set-sync-mode --approved-by-user`.
+- `unset` (first use): the agent must proactively ask the user whether to sync local code (`local`) or use the container's image-provided vllm + vllm-ascend (`image`). If the user chooses local replacement, record it via `install_consent.py set-sync-mode --sync-mode local --allow-first-install --approved-by-user`; if the user chooses image packages, record `--sync-mode image --approved-by-user`.
 - `local`: proceed with the full parity flow below.
 - `image`: `parity_sync.py` returns `status: skipped` immediately. The agent skips parity and proceeds with remote execution using image-provided packages.
 
 The user can switch sync mode at any time. `--force-reinstall` overrides `image` mode.
+If the agent forgets to set sync mode, `parity_sync.py` returns `status: blocked` before remote mutation.
 
 ### 2. Resolve the ready target from inventory
 
@@ -193,6 +196,7 @@ If the container identity has never been approved:
 - resolve the consent state from `.vaws-local/remote-code-parity/install-consents.json`
 - if there is no `allow`, stop with `status == blocked`
 - do **not** silently continue with the image-provided packages
+- if the user already approved `local` sync with `--allow-first-install`, this consent is already present; do not ask again
 
 If the user already approved this container identity:
 
@@ -248,33 +252,23 @@ Use `--force-reinstall` only when (a) it is the first sync to a new container, (
 
 If all snapshot commits match `last_snapshot_commits` and no reinstall is needed (and `--force-reinstall` is not set), the sync verifies container-side commits with a single SSH call and returns `status == ready` immediately, skipping mirror hydration, materialize, and manifest upload.
 
-Use these commands inside the container when required. The normal path first unifies the runtime Python across `python`, `python3`, CMake, and CANN helper tools, sources optional Ascend env scripts under a `set +u` / `set -u` guard, then tries the in-place environment, and finally does one bounded packaging refresh / retry when legacy packaging metadata blocks editable install. Pip/uv resolution can use a caller-provided near-cache index first, then falls back to Tsinghua, Aliyun, and the public PyPI index. The public Ascend package index is added only for `vllm-ascend` dependency/install steps unless the caller explicitly sets `VAWS_PIP_EXTRA_INDEX_URL` or `PIP_EXTRA_INDEX_URL`.
-
-The install environment mirrors the portable parts of `vllm-ascend` CI:
-
-- cache roots default to `/root/.cache/pip`, `/root/.cache/uv`, and `/root/.cache/vaws/fetchcontent` so CMake `FetchContent` survives repo cleanups
-- editable installs default to `--no-deps` against the paired runtime image, and the `vllm-ascend` requirements step is skipped on ordinary paired-image replacement; dependency resolution is re-enabled when dependency files changed, a repo HEAD drifted, verify-deps detects a non-runtime mismatch, or the caller sets `VAWS_INSTALL_DEPS=1`
-- paired-image `torch_npu` is treated as runtime state: accept public-version matches and a successful real import instead of forcing a large wheel reinstall
-- `MAX_JOBS` defaults to `4` like CI and can be overridden with `VAWS_MAX_JOBS` or `MAX_JOBS`
-- `UV_INDEX_STRATEGY` defaults to `unsafe-best-match` because both CI and this workspace use multiple indexes
-- uv bootstrap is progress-wrapped and bounded by `VAWS_UV_BOOTSTRAP_TIMEOUT` seconds per mirror before falling back to the next mirror or pip-only installs; uv package installs are bounded by `VAWS_UV_INSTALL_TIMEOUT`, and `VAWS_DISABLE_UV=1` forces pip-only mode
-- `VAWS_SOC_VERSION` is forwarded as `SOC_VERSION` when the caller needs to pin chip selection instead of relying on `npu-smi`
-- custom kernel compilation remains enabled by default; set `VAWS_COMPILE_CUSTOM_KERNELS=0` only for non-runtime unit-test-style validation
-- `VAWS_USE_CLANG15=1` selects `clang-15` / `clang++-15` only when they are already installed in the image
-- after the editable `vllm` install, `triton` is removed best-effort to match Ascend CI's non-Triton runtime expectation
+Use these commands inside the container when required. The normal path first unifies the runtime Python across `python`, `python3`, CMake, and CANN helper tools, sources optional Ascend env scripts under a `set +u` / `set -u` guard, then uses pip with the single A3-tested HuaweiCloud index. Editable installs use `--no-deps`; dependency ownership stays in the `vllm-ascend` requirements step so `vllm` cannot upgrade `numpy` away from the CANN-compatible version. Build parallelism defaults to `min(available CPUs, 128)` through both `MAX_JOBS` and `CMAKE_BUILD_PARALLEL_LEVEL`. Do not bootstrap `uv`, probe mirror candidates, retry across indexes, or retry by dropping `--no-build-isolation`.
 
 ### `vllm`
 
 ```bash
 export VLLM_TARGET_DEVICE=empty
-pip install -e . --no-build-isolation
+export TORCH_DEVICE_BACKEND_AUTOLOAD=0
+pip install --no-deps -e . --no-build-isolation
 ```
 
 ### `vllm-ascend`
 
 ```bash
-pip install -r requirements.txt  # mirror-aware fallback: Tsinghua -> Aliyun -> PyPI
-pip install -v -e . --no-build-isolation
+pip install -r requirements.txt
+export MAX_JOBS="${MAX_JOBS:-128}"
+export CMAKE_BUILD_PARALLEL_LEVEL="${CMAKE_BUILD_PARALLEL_LEVEL:-$MAX_JOBS}"
+pip install --no-deps -v -e . --no-build-isolation
 ```
 
 ### 8. Finish with proof, not assumptions

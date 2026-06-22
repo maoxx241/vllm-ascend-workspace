@@ -72,6 +72,10 @@ Topology helper:
 - `python3 .agents/skills/repo-init/scripts/repo_topology.py configure --repo <path> [--origin-url URL] [--upstream-url URL] [--gh-default origin|upstream|none]`
 - `python3 .agents/skills/repo-init/scripts/repo_topology.py ensure-main --repo <path> --remote <origin-or-upstream>`
 
+CI-pinned vLLM resolver:
+
+- `python3 .agents/skills/repo-init/scripts/resolve_vllm_ci_pin.py --vllm-ascend-dir vllm-ascend`
+
 Reference files:
 
 - `.agents/skills/repo-init/references/behavior.md`
@@ -97,7 +101,7 @@ That checkpoint must cover:
    - community-only mode
 3. whether to initialize submodules now
 4. vllm submodule version alignment — **always include this question in the grouped checkpoint when the probe shows submodules are not yet initialized**. Since all questions are asked in a single batch, you cannot wait for the answer to question 3 before deciding whether to include question 4. If the user later chooses not to initialize submodules, simply ignore their version-alignment answer. Options:
-   - **CI-pinned** (default): check out `vllm/` at the commit CI actually tests against — from `vllm_version` matrix in `vllm-ascend/.github/workflows/pr_test_full.yaml`; cross-reference with `main_vllm_commit` in `vllm-ascend/docs/source/conf.py`
+   - **CI-pinned** (default): check out `vllm/` at the commit CI actually tests against — resolve it with `resolve_vllm_ci_pin.py`, which prefers `vllm-ascend/.github/vllm-main-verified.commit` and falls back to older workflow/docs sources
    - **upstream main**: both submodules track their respective upstream `main` HEAD
    - **keep current**: leave `vllm/` at whatever commit it is already on
 
@@ -150,8 +154,8 @@ If the request was just “初始化仓库” or similarly broad, do not silentl
 
 After recursive submodule init completes, if the user chose CI-pinned alignment:
 
-- Extract the CI-pinned vllm commit: check `vllm_version` matrix in `vllm-ascend/.github/workflows/pr_test_full.yaml` (ground truth for PR CI), cross-reference with `main_vllm_commit` in `vllm-ascend/docs/source/conf.py`.
-- If the two sources differ, prefer the `pr_test_full.yaml` matrix value.
+- Extract the CI-pinned vllm ref with `python3 .agents/skills/repo-init/scripts/resolve_vllm_ci_pin.py --vllm-ascend-dir vllm-ascend`.
+- Prefer `.github/vllm-main-verified.commit` when present. Older checkouts may only expose a `vllm_version` workflow matrix or `docs/source/conf.py`; treat those as fallbacks and report which source was used.
 - Check out `vllm/` at that commit.
 - Report the active version combination (vllm commit + vllm-ascend branch) in the finish summary.
 

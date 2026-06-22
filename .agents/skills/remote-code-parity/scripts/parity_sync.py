@@ -197,26 +197,40 @@ def main() -> int:
         raise RuntimeError('--machine is required unless --session-id or --session-file is used')
     derived = build_derived_args(repo_root, args)
     state_repo_root = repo_root_from(Path(derived['workspace_root']))
+    low_level_cmd = build_low_level_command(derived, args)
+
+    if args.print_derived_args:
+        payload = dict(derived)
+        payload['command'] = low_level_cmd
+        print(json_dump(payload))
+        return 0
 
     if not args.force_reinstall:
         consent_state = load_consent_state(state_repo_root)
         mode = resolve_sync_mode(consent_state, derived['server_name'], derived['container_identity'])
+        if mode == 'unset':
+            print(json_dump({
+                'status': 'blocked',
+                'reason': 'sync_mode is unset; choose local sync or image-provided packages before parity',
+                'sync_mode': 'unset',
+                'server_name': derived['server_name'],
+                'container_identity': derived['container_identity'],
+                'next_actions': [
+                    'set sync mode to local and approve first install when the user wants local vllm/vllm-ascend',
+                    'set sync mode to image when the user wants container-provided packages',
+                ],
+            }))
+            return 2
         if mode == 'image':
             print(json_dump({
                 'status': 'skipped',
-                'reason': 'sync_mode is image — using container-provided packages',
+                'reason': 'sync_mode is image; using container-provided packages',
                 'sync_mode': 'image',
                 'server_name': derived['server_name'],
                 'container_identity': derived['container_identity'],
             }))
             return 0
 
-    low_level_cmd = build_low_level_command(derived, args)
-    if args.print_derived_args:
-        payload = dict(derived)
-        payload['command'] = low_level_cmd
-        print(json_dump(payload))
-        return 0
     result = subprocess.run(low_level_cmd)
     return result.returncode
 

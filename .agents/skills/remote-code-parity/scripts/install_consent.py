@@ -31,13 +31,13 @@ def set_decision(
 ) -> None:
     if not approved_by_user:
         raise RuntimeError('explicit --approved-by-user is required before writing first-install consent')
-    containers = state.setdefault('consents', {}).setdefault(server_name, {}).setdefault('containers', {})
-    containers[container_identity] = {
+    container = state.setdefault('consents', {}).setdefault(server_name, {}).setdefault('containers', {}).setdefault(container_identity, {})
+    container.update({
         'decision': decision,
         'updated_at': now_utc(),
         'note': note or '',
         'approved_by_user': True,
-    }
+    })
 
 
 def resolve_sync_mode(state: dict[str, Any], server_name: str, container_identity: str) -> str:
@@ -58,14 +58,26 @@ def set_sync_mode(
     note: str | None,
     *,
     approved_by_user: bool,
+    allow_first_install: bool = False,
 ) -> None:
     if not approved_by_user:
         raise RuntimeError('explicit --approved-by-user is required before writing sync-mode')
+    if allow_first_install and sync_mode != 'local':
+        raise RuntimeError('--allow-first-install is only valid with --sync-mode local')
     container = state.setdefault('consents', {}).setdefault(server_name, {}).setdefault('containers', {}).setdefault(container_identity, {})
     container['sync_mode'] = sync_mode
     container['sync_mode_updated_at'] = now_utc()
     if note:
         container['sync_mode_note'] = note
+    if allow_first_install:
+        set_decision(
+            state,
+            server_name,
+            container_identity,
+            'allow',
+            note or 'approved local sync and first editable install',
+            approved_by_user=approved_by_user,
+        )
 
 
 def run_resolve(args: argparse.Namespace) -> int:
@@ -122,10 +134,16 @@ def run_set_sync_mode(args: argparse.Namespace) -> int:
             args.sync_mode,
             args.note,
             approved_by_user=args.approved_by_user,
+            allow_first_install=args.allow_first_install,
         )
 
     _, path, _ = update_state(repo_root, FILENAME, {'schema_version': 1, 'consents': {}}, apply_update)
-    print(json_dump({'status': 'updated', 'sync_mode': args.sync_mode, 'path': str(path)}))
+    print(json_dump({
+        'status': 'updated',
+        'sync_mode': args.sync_mode,
+        'first_install_decision': 'allow' if args.allow_first_install else None,
+        'path': str(path),
+    }))
     return 0
 
 
@@ -185,6 +203,11 @@ def build_parser() -> argparse.ArgumentParser:
     set_sm.add_argument('--sync-mode', required=True, choices=('local', 'image'))
     set_sm.add_argument('--note', default=None)
     set_sm.add_argument('--approved-by-user', action='store_true')
+    set_sm.add_argument(
+        '--allow-first-install',
+        action='store_true',
+        help='with --sync-mode local, also approve the first editable vllm/vllm-ascend replacement',
+    )
 
     return parser
 

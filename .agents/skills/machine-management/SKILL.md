@@ -48,7 +48,7 @@ Ready does **not** imply code sync, rebuild, serving, or benchmark readiness.
 - Resolve hardware-specific image tags from the detected machine type whenever the user chose `rc`, `main`, or `stable`: A2 uses the base tag, A3 appends `-a3`, and 310P appends `-310p`.
 - Detect the machine type from `npu-smi info` / SoC output when possible; when detection is inconclusive, stop and ask for an explicit machine type override instead of guessing.
 - Persist `host.machine_type`, `host.soc`, and `container.machine_type` into inventory, and write matching metadata under `/etc/vaws/` plus `/etc/profile.d/vaws-ascend-env.sh` on the host and inside the managed container.
-- Before running `apt-get update` / `apt-get install` inside the container, probe a small set of reachable domestic mirrors, switch to the fastest usable one, and keep the original source host only as a fallback.
+- Before running `apt-get update` / `apt-get install` inside the container, rewrite apt sources to the fixed A3-tested NJU mirror (`mirrors.nju.edu.cn`). Do not spend bootstrap time probing alternate mirrors.
 - Prepend `/usr/local/Ascend/driver/lib64/common`, `/usr/local/Ascend/driver/lib64/driver`, and `/usr/local/Ascend/driver/lib64` before calling `npu-smi` or the smoke test; source `/etc/profile.d/vaws-ascend-env.sh` when it exists.
 - Long probe / bootstrap / smoke operations must expose bounded phase progress and have an overall timeout budget, not only a connect timeout.
 - On a missing local machine profile, never call `workspace_profile.py ensure` bare. Use either:
@@ -173,7 +173,7 @@ When password bootstrap is required:
 5. if needed, establish host key auth
 6. probe the host, detect `machine_type` / `soc`, and resolve the hardware-specific image tag
 7. choose or reuse the container name and container SSH port
-8. bootstrap or repair the managed container, including container-side apt mirror selection before package installation when needed
+8. bootstrap or repair the managed container, including fixed container-side apt source configuration before package installation when needed
 9. persist the record into inventory
 10. best-effort mesh the new container with existing managed containers
 11. run final readiness verification
@@ -216,9 +216,9 @@ Do not remove host firewall rules or host-level `authorized_keys` entries.
 - Ensure `/run/sshd` exists before starting the dedicated `sshd`.
 - Image pulls should follow the selected mirror order and emit heartbeat-style progress so long `docker pull`, `apt-get update`, and `apt-get install` phases remain attributable. Persist the actually selected image in inventory, not only the selector.
 - Container bootstrap should leave behind `/etc/vaws/host-info.json`, `/etc/vaws/container-info.json`, and `/etc/profile.d/vaws-ascend-env.sh` so later verify / repair runs can see the recorded machine type, container type, and SoC quickly.
-- Container bootstrap should write `/etc/pip.conf` with multiple pip indexes (Tsinghua as primary, Aliyun and PyPI as additional) so any subsequent `pip install` inside the container does not fail due to missing mirror configuration.
-- Container bootstrap should install `pytest` into the runtime Python if not already present, so that remote test execution works out of the box without ad-hoc environment setup.
 - Session-management may opt into the shared bootstrap helper's prepared image cache for short-lived session containers. Normal `machine_add.py` / `machine_repair.py` managed-base-container flows keep raw selected-image bootstrap behavior unless explicitly wired otherwise.
+- Container bootstrap should write `/etc/pip.conf` with a single A3-tested pip source: HuaweiCloud (`https://repo.huaweicloud.com/repository/pypi/simple`). Do not configure extra indexes by default.
+- Container bootstrap should not install test packages opportunistically. Keep fresh-container startup limited to SSH, runtime env metadata, apt source configuration, and pip source configuration.
 - Keep `rc` and `stable` resolution dynamic: resolve the newest official prerelease tag or latest official non-prerelease release tag at execution time instead of using the moving `latest` tag.
 - Keep progress on `stderr` and the final status JSON on `stdout`; do not mix partial human narration into the terminal contract.
 - For smoke tests, do not pin a Python patch version. Discover the highest available `/usr/local/python*/bin/python3`, then fall back to `python3`.

@@ -35,18 +35,12 @@ These should not trigger `remote-code-parity` unless remote code parity is the o
 - `remote_sync_apply.py --mode source-only` completes without invoking runtime install phases
 - `remote_sync_plan.py --mode install` reports install/rebuild reasons and current consent state
 - long runtime-install waits remain attributable because uninstall, requirements install, editable install, import verification, and marker write each emit their own progress phase
-- whitelisted local env overrides such as `VAWS_MAX_JOBS`, `VAWS_PIP_INDEX_URL`, and `VAWS_SOC_VERSION` are explicitly exported inside the remote install shell instead of relying on SSH env forwarding
-- runtime install can opt into a caller-provided near-cache index via `VAWS_PIP_INDEX_URL`, then keeps pip mirror fallback in the order Tsinghua -> Aliyun -> PyPI instead of hard-coding only the public index
-- runtime install adds the Ascend PyPI repository as a default extra index only for `vllm-ascend` requirements/editable install steps and allows the caller to override it through `VAWS_PIP_EXTRA_INDEX_URL` or disable the default by exporting an empty `VAWS_ASCEND_PIP_EXTRA_INDEX_URL`
-- runtime install exports persistent pip, uv, and CMake `FetchContent` cache roots outside the synced repos so normal materialization cleanups do not delete dependency caches
-- runtime install wraps uv bootstrap with progress and a per-mirror timeout controlled by `VAWS_UV_BOOTSTRAP_TIMEOUT`, then continues with pip fallback when uv cannot be installed quickly
-- runtime install bounds uv package install attempts with `VAWS_UV_INSTALL_TIMEOUT` and supports `VAWS_DISABLE_UV=1` for pip-only validation when uv resolution stalls
-- runtime editable installs default to `--no-deps` against the paired image and skip ordinary `vllm-ascend` requirements reinstall; dependency resolution is re-enabled for dependency-file changes, HEAD drift, verify-deps repair, or `VAWS_INSTALL_DEPS=1`
-- paired-image `torch_npu` is verified by public-version compatibility and real import smoke instead of forcing a `torch-npu` wheel reinstall during verify-deps repair
-- runtime install defaults to `MAX_JOBS=4` and `CMAKE_BUILD_TYPE=Release`, while allowing `VAWS_MAX_JOBS`, `MAX_JOBS`, and `CMAKE_BUILD_TYPE` to override the compile profile
-- runtime install does not set `COMPILE_CUSTOM_KERNELS=0` unless the caller explicitly exports `VAWS_COMPILE_CUSTOM_KERNELS=0`
+- runtime install uses the single A3-tested HuaweiCloud pip index and does not configure default extra indexes
+- runtime editable installs use `--no-deps`; only the `vllm-ascend` requirements step is allowed to resolve and change Python dependencies
+- runtime install exports persistent pip and CMake `FetchContent` cache roots outside the synced repos so normal materialization cleanups do not delete dependency caches
+- runtime install sets bounded CMake/build parallelism through `VAWS_BUILD_JOBS`, `MAX_JOBS`, and `CMAKE_BUILD_PARALLEL_LEVEL`
+- runtime install does not run `pip install uv`, call `uv`, probe mirror candidates, or retry across indexes
 - runtime install records its effective cache/compile/index env in the manifest, final summary, and runtime state with URL userinfo redacted
-- runtime install forwards `VAWS_SOC_VERSION` as `SOC_VERSION` and emits an `npu-smi` probe before building `vllm-ascend` when `npu-smi` is available
 
 ### Repo graph and snapshotting
 
@@ -75,8 +69,10 @@ These should not trigger `remote-code-parity` unless remote code parity is the o
 ### Sync mode gate
 
 - when `sync_mode` is `unset`, the agent proactively asks the user before running parity
+- when `sync_mode` is still `unset`, `parity_sync.py` returns `status == blocked` before remote mutation
 - when `sync_mode` is `image`, `parity_sync.py` returns `status: skipped` without any remote operations
 - when `sync_mode` is `local`, the full parity flow proceeds normally
+- when the user approves local sync plus image-package replacement, `install_consent.py set-sync-mode --sync-mode local --allow-first-install --approved-by-user` records both sync mode and first-install consent in one atomic update
 - `--force-reinstall` overrides `image` mode and forces a full sync + reinstall
 - the user can switch sync mode at any time
 
@@ -84,6 +80,7 @@ These should not trigger `remote-code-parity` unless remote code parity is the o
 
 - first sync on a fresh container without recorded approval ends with `status == blocked`
 - consent writes require explicit `--approved-by-user`
+- writing first-install consent preserves existing sync-mode fields, and writing sync-mode preserves existing first-install decision fields
 - consent and runtime-state writes are atomic / lock-protected so concurrent sync wrappers do not overwrite each other
 - first sync on a fresh container with `allow` recorded proceeds to uninstall image-provided packages best-effort, remove only `vllm` and `vllm-ascend`, and perform editable installs
 - later syncs on the same logical container identity do not ask again unless the marker or identity changed
@@ -107,7 +104,10 @@ These should not trigger `remote-code-parity` unless remote code parity is the o
 - `--force-reinstall` unconditionally triggers full reinstall of both vllm and vllm-ascend even when no files changed
 - a successful run ends with `status == ready`
 - runtime install uses dynamic Python discovery plus a shell-safe env preamble and guarded env-script sourcing instead of one hard-coded Python patch path
-- packaging-metadata failures from stale image toolchains trigger one bounded packaging-stack refresh / retry before the skill reports `failed`
+- runtime install sources versioned CANN roots such as `/usr/local/Ascend/cann-9.0.0/set_env.sh` when present, avoiding `libhccl.so` failures on A3 images whose login profile is not loaded by SSH commands
+- runtime install uses pip only, with HuaweiCloud as the single package index
+- runtime install keeps `numpy` on the CANN-compatible version; `vllm` editable install must not upgrade it through dependency resolution
+- packaging or build-isolation failures report `failed` directly; the normal path does not run packaging-stack refreshes or build-isolation fallback installs
 
 ## Regression checklist from this patch
 
@@ -121,11 +121,15 @@ These specific mistakes should no longer be part of the normal path:
 - the main snapshot path should not force ignored files into the synthetic snapshot
 - root cleanups inside `/vllm-workspace` should not delete `Mooncake` or `.vaws-runtime`
 - runtime-install should not fail closed just because Ascend env scripts reference shell-specific or otherwise unset variables while being sourced
+- runtime-install should not miss CANN/HCCL libraries just because the image stores them under a versioned `/usr/local/Ascend/cann-*` directory
+- runtime-install should not spend time installing or invoking uv before installing `vllm` / `vllm-ascend`
+- runtime-install should not loop through Tsinghua, Aliyun, or public PyPI when HuaweiCloud is the selected source
 - the final heredoc-based import smoke should not fail with a local quoting `SyntaxError`
 - clean nested submodules should not force parent `reinstall_vllm*` decisions through parentless transport gitlink churn alone
 - changing only vllm-ascend files should not uninstall or break the vllm editable install
 - switching vllm to a different commit should trigger both vllm and vllm-ascend reinstall
-- consecutive syncs with no local changes should take the fast path and skip mirror hydration, materialize, and manifest upload
+- consecutive syncs with no local changes should take the fast path and skip mirror push/hydration, materialize, and manifest upload
+- setting first-install consent after sync-mode should not erase `sync_mode`, and setting sync-mode after first-install consent should not erase `decision`
 
 ## Manual regression checklist
 

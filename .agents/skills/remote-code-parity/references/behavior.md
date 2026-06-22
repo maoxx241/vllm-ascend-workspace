@@ -32,7 +32,9 @@ Before invoking parity for a container, the agent checks the persisted `sync_mod
 - `local`: proceed with the full parity flow.
 - `image`: `parity_sync.py` returns `status: skipped` immediately; the agent proceeds with remote execution using image-provided packages without syncing or installing.
 
-`--force-reinstall` overrides `image` mode. The user can switch sync mode at any time.
+If the user explicitly chooses local code and replacement of image packages, record both facts in one atomic write with `set-sync-mode --sync-mode local --allow-first-install --approved-by-user`. That prevents the later first-install consent write from clobbering sync-mode state and avoids a second prompt for the same logical container identity.
+
+If `sync_mode` is still unset when `parity_sync.py` is invoked, the wrapper returns `status: blocked` before any remote mutation. `--force-reinstall` overrides `image` mode. The user can switch sync mode at any time.
 
 ## Scope and routing
 
@@ -142,6 +144,7 @@ That step is mutating and potentially slow, so:
 - require `--approved-by-user` before writing consent state
 - fail closed if the user declines or has not approved yet
 - use a container-side marker under `/vllm-workspace/.remote-code-parity/runtime-install.json` to detect whether first install already happened
+- preserve existing per-container consent fields when writing first-install decisions or sync-mode decisions
 
 First-install mutation boundary:
 
@@ -219,16 +222,16 @@ A trustworthy parity result records:
 - discover the runtime Python dynamically from `/usr/local/python*/bin/python3`, then fall back to `python3` or `python`
 - unify that interpreter across `python`, `python3`, `HI_PYTHON`, `Python_EXECUTABLE`, `Python3_EXECUTABLE`, and CMake-driven helper processes before editable install
 - preseed the runtime `PATH` and the Ascend driver `LD_LIBRARY_PATH` prefix, then source optional env scripts under a `set +u` / `set -u` guard so shell-specific variables are not required
-- keep the fast path on `pip install -e . --no-build-isolation`
-- explicitly pass whitelisted local runtime-install env vars into the remote SSH shell; do not assume SSH forwards `VAWS_*` or pip env vars automatically
-- route pip/uv installs through a caller-provided near-cache index when `VAWS_PIP_INDEX_URL` is set, then mirror-aware fallback in the order Tsinghua -> Aliyun -> PyPI; only `vllm-ascend` dependency/install steps add the default public Ascend PyPI repository as an extra index when the caller did not set a broader extra index
-- align runtime editable install environment with portable `vllm-ascend` CI behavior: paired-image editable installs default to `--no-deps`, ordinary paired-image replacement skips the `vllm-ascend` requirements reinstall, persistent pip / uv / CMake `FetchContent` cache roots, bounded/progress-wrapped uv bootstrap/install with pip-only fallback, `UV_INDEX_STRATEGY=unsafe-best-match`, `MAX_JOBS=4`, `CMAKE_BUILD_TYPE=Release`, `VAWS_SOC_VERSION -> SOC_VERSION`, best-effort `triton` removal after `vllm` install, and optional `clang-15` selection when explicitly requested
-- re-enable editable-install dependency resolution and requirements installation when dependency files changed, a repo HEAD drifted, verify-deps detects a mismatch, or the caller explicitly sets `VAWS_INSTALL_DEPS=1`
-- record the effective runtime install env in manifest/runtime-state with URL userinfo redacted so cache/compile differences are auditable
-- keep `COMPILE_CUSTOM_KERNELS` enabled by default for real serving / benchmark runtime parity; only pass `VAWS_COMPILE_CUSTOM_KERNELS=0` for deliberate unit-test-style validation where custom kernels are not required
-- if editable install fails because the image packaging stack is too old for the current `pyproject.toml`, attempt one bounded packaging-stack refresh and one retry before failing closed
-- verify all `vllm-ascend` declared dependencies are version-satisfied (`verify-deps`); if a mismatch is detected (e.g. `numpy<2.0.0` but `numpy 2.x` installed), automatically reinstall `vllm-ascend` requirements and re-verify before failing
-- treat paired-image `torch_npu` as runtime state: accept public-version matches and a successful `import torch_npu` instead of forcing a large `torch-npu` wheel reinstall
+- source `/etc/profile.d/vaws-ascend-env.sh`, versioned CANN roots such as `/usr/local/Ascend/cann-9.0.0/set_env.sh`, ascend-toolkit roots, ATB, and the runtime-root-relative custom op `set_env.bash` when present
+- keep the fast path on `pip install --no-deps -e . --no-build-isolation`; editable installs must not run dependency resolution
+- set `TORCH_DEVICE_BACKEND_AUTOLOAD=0` for the `vllm` editable install because `VLLM_TARGET_DEVICE=empty` does not need `torch_npu` during metadata generation
+- compute `VAWS_BUILD_JOBS=min(available CPUs, 128)` and export it through both `MAX_JOBS` and `CMAKE_BUILD_PARALLEL_LEVEL` so `vllm-ascend` top-level and nested CMake builds get bounded parallelism
+- keep dependency ownership in `pip install -r vllm-ascend/requirements.txt`, which pins the CANN-compatible `numpy` / `triton-ascend` stack
+- route pip installs through the single A3-tested HuaweiCloud index (`https://repo.huaweicloud.com/repository/pypi/simple`)
+- do not bootstrap, install, or invoke `uv` as part of parity
+- do not retry across mirror candidates or retry editable installs by dropping `--no-build-isolation`
+- if editable install fails, report the captured install log and fail closed instead of changing package sources, refreshing the packaging stack, or changing install flags
 - finish runtime verification with real imports, not `find_spec()` alone, and keep the generated heredoc smoke snippet valid Python after shell quoting
+- after import smoke test, verify all `vllm-ascend` declared dependencies are version-satisfied (`verify-deps`); if a mismatch is detected (e.g. `numpy<2.0.0` but `numpy 2.x` installed), report `failed` instead of running a repair install
 - surface a progress transition before each long runtime-install package step so an agent can tell whether the wait is in uninstall, requirements, editable install, or verification
 - keep consent and runtime-state writes atomic so parallel wrapper calls do not clobber local state

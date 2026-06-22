@@ -148,7 +148,7 @@ commands with local logs, tracks long jobs, splits source-only/materialize/insta
 sync modes, wraps service lifecycle entrypoints, transfers artifacts with SSH
 streaming plus hash manifests, and performs dry-run-capable cleanup.
 
-Remote-code-parity transport is container-only after machine attach: use machine inventory to resolve the target, then push synthetic refs directly into the container-local cache root. Synthetic mirrors should also publish an advertised branch ref for the current snapshot so nested repos can be materialized without brittle submodule fetch behavior. Runtime installs should explicitly forward whitelisted `VAWS_*` compile/cache env into the remote shell, configure multiple pip indexes (Tsinghua as primary, Aliyun and PyPI as additional), scope the default Ascend package index to `vllm-ascend` installs, reuse pip / uv / CMake `FetchContent` caches under `/root/.cache`, default paired-image editable installs to `--no-deps`, bound uv bootstrap mirror attempts, stream progress for long package steps, record the effective install env, and keep consent/runtime-state writes atomic.
+Remote-code-parity transport is container-only after machine attach: use machine inventory to resolve the target, then push synthetic refs directly into the container-local cache root. Synthetic mirrors should also publish an advertised branch ref for the current snapshot so nested repos can be materialized without brittle submodule fetch behavior. Runtime installs should use the single A3-tested HuaweiCloud pip index, stream progress for long package steps, and keep consent/runtime-state writes atomic.
 
 The legacy repo-root `.machine-inventory.json` is compatibility input only and should not be reintroduced as the primary path.
 
