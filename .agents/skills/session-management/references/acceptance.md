@@ -33,6 +33,9 @@
 - Legacy `--machine` commands continue to work against the base machine state.
 - A session group requires at least two unique ready sessions.
 - Group creation fails when live workspace or recursive submodule snapshots differ.
+- Dirty snapshots include a content digest of tracked changes, untracked files,
+  and recursively dirty submodules; matching HEADs and a shared `dirty: true`
+  flag are not sufficient for grouping.
 - Startup order contains every member exactly once; shutdown order is its reverse.
 - Group teardown delegates to `session_remove.py` for every member and retains `needs_repair` when any member fails.
 - Shared NPU coordination state defaults to the bare-metal host's `/tmp/vaws-npu-coordinator/v1/` and recreates a new coordination epoch after state loss.

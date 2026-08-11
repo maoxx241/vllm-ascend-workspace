@@ -34,7 +34,13 @@ groups = load_module()
 NOW = "2026-07-25T12:00:00Z"
 
 
-def write_session(repo: Path, session_id: str, machine: str) -> None:
+def write_session(
+    repo: Path,
+    session_id: str,
+    machine: str,
+    *,
+    worktree: Path | None = None,
+) -> None:
     path = repo / ".vaws-local" / "sessions" / session_id / "session.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
@@ -42,7 +48,9 @@ def write_session(repo: Path, session_id: str, machine: str) -> None:
         "session_id": session_id,
         "base_machine": machine,
         "status": "ready",
-        "local": {"worktree_root": str(repo / "worktrees" / session_id)},
+        "local": {
+            "worktree_root": str(worktree or repo / "worktrees" / session_id)
+        },
         "remote": {
             "host": machine,
             "container": {
@@ -61,6 +69,66 @@ def same_snapshot(_session: dict) -> dict:
         "submodules": [" def vllm", " ghi vllm-ascend"],
         "dirty": False,
     }
+
+
+def run_git(repo: Path, *args: str) -> str:
+    result = subprocess.run(
+        ["git", "-C", str(repo), *args],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise AssertionError(result.stderr or result.stdout)
+    return result.stdout.strip()
+
+
+def create_test_worktrees(root: Path) -> tuple[Path, Path]:
+    first = root / "first"
+    second = root / "second"
+    first.mkdir()
+    run_git(first, "init")
+    run_git(first, "config", "user.name", "Session Group Test")
+    run_git(first, "config", "user.email", "session-group@example.invalid")
+    (first / "tracked.txt").write_text("base\n", encoding="utf-8")
+    run_git(first, "add", "tracked.txt")
+    run_git(first, "commit", "-m", "base")
+    run_git(first, "worktree", "add", "--detach", str(second), "HEAD")
+    return first, second
+
+
+def create_test_worktrees_with_submodule(root: Path) -> tuple[Path, Path]:
+    child = root / "child-source"
+    child.mkdir()
+    run_git(child, "init")
+    run_git(child, "config", "user.name", "Session Group Test")
+    run_git(child, "config", "user.email", "session-group@example.invalid")
+    (child / "child.txt").write_text("base-child\n", encoding="utf-8")
+    run_git(child, "add", "child.txt")
+    run_git(child, "commit", "-m", "child base")
+
+    first, second = create_test_worktrees(root)
+    run_git(
+        first,
+        "-c",
+        "protocol.file.allow=always",
+        "submodule",
+        "add",
+        str(child),
+        "module",
+    )
+    run_git(first, "commit", "-am", "add submodule")
+    run_git(first, "worktree", "remove", "--force", str(second))
+    run_git(first, "worktree", "add", "--detach", str(second), "HEAD")
+    run_git(
+        second,
+        "-c",
+        "protocol.file.allow=always",
+        "submodule",
+        "update",
+        "--init",
+    )
+    return first, second
 
 
 class SessionGroupTests(unittest.TestCase):
@@ -93,6 +161,98 @@ class SessionGroupTests(unittest.TestCase):
                     member_specs=["prefill=session-a", "decode=session-b"],
                     snapshot_resolver=different,
                     created_at=NOW,
+                )
+
+    def test_rejects_same_head_with_different_tracked_contents(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            first, second = create_test_worktrees(repo)
+            (first / "tracked.txt").write_text("candidate-a\n", encoding="utf-8")
+            (second / "tracked.txt").write_text("candidate-b\n", encoding="utf-8")
+            write_session(repo, "session-a", "host-a", worktree=first)
+            write_session(repo, "session-b", "host-b", worktree=second)
+
+            first_snapshot = groups.workspace_snapshot(
+                {"local": {"worktree_root": str(first)}}
+            )
+            second_snapshot = groups.workspace_snapshot(
+                {"local": {"worktree_root": str(second)}}
+            )
+            self.assertEqual(
+                first_snapshot["workspace_head"], second_snapshot["workspace_head"]
+            )
+            self.assertTrue(first_snapshot["dirty"])
+            self.assertNotEqual(
+                first_snapshot["dirty_digest"], second_snapshot["dirty_digest"]
+            )
+            with self.assertRaisesRegex(groups.SessionGroupError, "same workspace"):
+                groups.create_group(
+                    repo_root=repo,
+                    group_id="dirty-tracked",
+                    member_specs=["prefill=session-a", "decode=session-b"],
+                )
+
+    def test_rejects_same_head_with_different_untracked_contents(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            first, second = create_test_worktrees(repo)
+            (first / "candidate.txt").write_text("candidate-a\n", encoding="utf-8")
+            (second / "candidate.txt").write_text("candidate-b\n", encoding="utf-8")
+            write_session(repo, "session-a", "host-a", worktree=first)
+            write_session(repo, "session-b", "host-b", worktree=second)
+
+            with self.assertRaisesRegex(groups.SessionGroupError, "same workspace"):
+                groups.create_group(
+                    repo_root=repo,
+                    group_id="dirty-untracked",
+                    member_specs=["prefill=session-a", "decode=session-b"],
+                )
+
+    def test_accepts_same_head_with_identical_dirty_contents(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            first, second = create_test_worktrees(repo)
+            for worktree in (first, second):
+                (worktree / "tracked.txt").write_text(
+                    "same-candidate\n", encoding="utf-8"
+                )
+                (worktree / "candidate.txt").write_text(
+                    "same-untracked\n", encoding="utf-8"
+                )
+            write_session(repo, "session-a", "host-a", worktree=first)
+            write_session(repo, "session-b", "host-b", worktree=second)
+
+            created = groups.create_group(
+                repo_root=repo,
+                group_id="same-dirty",
+                member_specs=["prefill=session-a", "decode=session-b"],
+                created_at=NOW,
+            )
+
+            self.assertEqual(created["status"], "ready")
+            self.assertEqual(
+                created["members"][0]["snapshot"]["dirty_digest"],
+                created["members"][1]["snapshot"]["dirty_digest"],
+            )
+
+    def test_rejects_different_dirty_submodule_contents(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            first, second = create_test_worktrees_with_submodule(repo)
+            (first / "module" / "child.txt").write_text(
+                "candidate-a\n", encoding="utf-8"
+            )
+            (second / "module" / "child.txt").write_text(
+                "candidate-b\n", encoding="utf-8"
+            )
+            write_session(repo, "session-a", "host-a", worktree=first)
+            write_session(repo, "session-b", "host-b", worktree=second)
+
+            with self.assertRaisesRegex(groups.SessionGroupError, "same workspace"):
+                groups.create_group(
+                    repo_root=repo,
+                    group_id="dirty-submodule",
+                    member_specs=["prefill=session-a", "decode=session-b"],
                 )
 
     def test_create_and_status(self) -> None:

@@ -1229,6 +1229,7 @@ replace_on_image_change="${7:-false}"
 machine_type_input="${8:-}"
 soc_input="${9:-}"
 use_prepared_image_cache="${10:-false}"
+visible_devices="${11:-}"
 
 emit_json() {
   python3 - "$1" <<'PY'
@@ -1554,7 +1555,7 @@ INNER_PKG
 }
 
 configure_container_state() {
-  docker exec -i "$container" bash -s -- "$port" "$pubkey" "$machine_type" "$container_type" "$soc" "$selected_image" "$workdir" "$namespace" <<'INNER_CFG'
+  docker exec -i "$container" bash -s -- "$port" "$pubkey" "$machine_type" "$container_type" "$soc" "$selected_image" "$workdir" "$namespace" "$visible_devices" <<'INNER_CFG'
 set -euo pipefail
 port="$1"
 pubkey="$2"
@@ -1564,6 +1565,7 @@ soc="$5"
 image="$6"
 workdir="$7"
 namespace="$8"
+visible_devices="$9"
 export PATH="/usr/local/bin:/usr/local/sbin:${PATH:-}"
 export LD_LIBRARY_PATH="/usr/local/Ascend/driver/lib64/common:/usr/local/Ascend/driver/lib64/driver:/usr/local/Ascend/driver/lib64:${LD_LIBRARY_PATH:-}"
 if [ -z "${ASCEND_HOME_PATH:-}" ]; then
@@ -1660,12 +1662,15 @@ fi
 if [ -n "$image" ]; then
   export VAWS_CONTAINER_IMAGE="$image"
 fi
+if [ -n "$visible_devices" ]; then
+  export ASCEND_RT_VISIBLE_DEVICES="$visible_devices"
+fi
 EOF_CONTAINER_ENV
 chmod 0644 /etc/profile.d/vaws-ascend-env.sh
-python3 - "$machine_type" "$container_type" "$soc" "$image" "$workdir" "$namespace" "$_vaws_atb_cxx_abi" > /etc/vaws/container-info.json <<'PY'
+python3 - "$machine_type" "$container_type" "$soc" "$image" "$workdir" "$namespace" "$_vaws_atb_cxx_abi" "$visible_devices" > /etc/vaws/container-info.json <<'PY'
 import json
 import sys
-machine_type, container_type, soc, image, workdir, namespace, atb_cxx_abi = sys.argv[1:]
+machine_type, container_type, soc, image, workdir, namespace, atb_cxx_abi, visible_devices = sys.argv[1:]
 print(json.dumps({
     "machine_type": machine_type or None,
     "container_type": container_type or None,
@@ -1674,6 +1679,7 @@ print(json.dumps({
     "workdir": workdir,
     "namespace": namespace or None,
     "atb_cxx_abi": atb_cxx_abi or None,
+    "visible_devices": [int(item) for item in visible_devices.split(",") if item] if visible_devices else [],
     "env_file": "/etc/profile.d/vaws-ascend-env.sh",
 }, ensure_ascii=False, indent=2))
 PY
@@ -1714,6 +1720,9 @@ PrintMotd no
 AuthorizedKeysFile .ssh/authorized_keys
 PidFile /run/sshd_vaws.pid
 EOF_SSH
+if [ -n "$visible_devices" ]; then
+  printf 'SetEnv ASCEND_RT_VISIBLE_DEVICES=%s\n' "$visible_devices" >> /etc/ssh/sshd_vaws_config
+fi
 /usr/sbin/sshd -t -f /etc/ssh/sshd_vaws_config
 if [ -f /run/sshd_vaws.pid ]; then
   kill "$(cat /run/sshd_vaws.pid)" 2>/dev/null || true
@@ -1916,6 +1925,12 @@ else
     fi
   done
 
+  visibility_args=()
+  if [ -n "$visible_devices" ]; then
+    visibility_args+=("--env" "ASCEND_RT_VISIBLE_DEVICES=$visible_devices")
+    visibility_args+=("--label" "com.vaws.visible_devices=$visible_devices")
+  fi
+
   emit_progress "container" "running" "creating managed container" 45
   docker run --name "$container" -it -d --network host --shm-size=500g \
     --privileged=true \
@@ -1937,6 +1952,7 @@ else
     -v /usr/local/sbin:/usr/local/sbin \
     -v /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro \
     "${mount_args[@]}" \
+    "${visibility_args[@]}" \
     --label com.vaws.base_image="$selected_image" \
     --label com.vaws.run_image="$run_image" \
     --label com.vaws.prepared_image="$prepared_image" \
@@ -2003,7 +2019,7 @@ elif command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 
   firewall="firewalld"
 fi
 
-payload=$(python3 - <<'PY' "$container" "$port" "$image_request_json" "$selected_image" "$image_resolution" "$workdir" "$namespace" "$created" "$started" "$pulled" "$installed_ssh" "$firewall" "${actions[*]}" "$previous_image" "$replace_on_image_change" "$machine_type" "$container_type" "$soc" "$host_env_file" "$host_metadata_file" "$container_env_file" "$container_metadata_file" "$package_bootstrap" "$run_image" "$prepared_image" "$use_prepared_image_cache" "$used_prepared_image_cache" "$created_prepared_image_cache" "$docker_pull_policy"
+payload=$(python3 - <<'PY' "$container" "$port" "$image_request_json" "$selected_image" "$image_resolution" "$workdir" "$namespace" "$created" "$started" "$pulled" "$installed_ssh" "$firewall" "${actions[*]}" "$previous_image" "$replace_on_image_change" "$machine_type" "$container_type" "$soc" "$host_env_file" "$host_metadata_file" "$container_env_file" "$container_metadata_file" "$package_bootstrap" "$run_image" "$prepared_image" "$use_prepared_image_cache" "$used_prepared_image_cache" "$created_prepared_image_cache" "$docker_pull_policy" "$visible_devices"
 import json
 import sys
 (
@@ -2036,6 +2052,7 @@ import sys
     used_prepared_image_cache,
     created_prepared_image_cache,
     docker_pull_policy,
+    visible_devices,
 ) = sys.argv[1:]
 image_request = json.loads(image_request_json)
 print(json.dumps({
@@ -2055,6 +2072,7 @@ print(json.dumps({
     "created_prepared_image_cache": created_prepared_image_cache == "true",
     "image_resolution": image_resolution,
     "docker_pull_policy": docker_pull_policy,
+    "visible_devices": [int(item) for item in visible_devices.split(",") if item] if visible_devices else [],
     "image_candidates": list(image_request.get("candidates") or []),
     "image_mirror_order": list(image_request.get("mirror_order") or []),
     "workdir": workdir,
@@ -2197,6 +2215,8 @@ try:
             "torch_version": getattr(torch, "__version__", None),
             "shape": list(x.shape),
             "device": str(x.device),
+            "device_count": torch.npu.device_count(),
+            "visible_devices": os.environ.get("ASCEND_RT_VISIBLE_DEVICES"),
         }
     )
     if not str(x.device).startswith("npu"):

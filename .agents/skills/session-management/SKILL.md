@@ -20,7 +20,8 @@ Each session binds:
 - local leases for container SSH port, service port, and optional NPU devices
 
 A session group binds two or more ready sessions with the same code and
-submodule snapshot, plus explicit startup and reverse shutdown order. Grouping
+submodule snapshot, including content-level parity for dirty worktrees, plus
+explicit startup and reverse shutdown order. Grouping
 does not create another container or duplicate member leases.
 
 ## Use This Skill When

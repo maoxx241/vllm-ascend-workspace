@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import importlib.util
+import inspect
 import subprocess
 import sys
 import unittest
@@ -34,6 +35,30 @@ session_create = load_module()
 
 
 class SessionVisibilityTests(unittest.TestCase):
+    def test_bootstrap_helper_accepts_and_persists_visible_devices(self) -> None:
+        parameters = inspect.signature(session_create.bootstrap_container).parameters
+        self.assertIn("visible_devices", parameters)
+        helper_source = inspect.getsource(session_create.bootstrap_container)
+        self.assertIn(
+            '",".join(str(device) for device in (visible_devices or []))',
+            helper_source,
+        )
+
+        script = session_create.machine_ops.render_bootstrap_host_script()
+        self.assertIn('visible_devices="${11:-}"', script)
+        self.assertIn('ASCEND_RT_VISIBLE_DEVICES=$visible_devices', script)
+        self.assertIn('SetEnv ASCEND_RT_VISIBLE_DEVICES=%s', script)
+        self.assertIn('"visible_devices": [int(item)', script)
+
+    def test_full_smoke_reports_visibility_fields(self) -> None:
+        script = session_create.machine_ops.render_smoke_script()
+
+        self.assertIn('"device_count": torch.npu.device_count()', script)
+        self.assertIn(
+            '"visible_devices": os.environ.get("ASCEND_RT_VISIBLE_DEVICES")',
+            script,
+        )
+
     def verify(self, observed: str):
         ready = {
             "ok": True,

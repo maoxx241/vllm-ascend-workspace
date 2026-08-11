@@ -521,6 +521,7 @@ def bootstrap_container(
     public_key_file: str | None = None,
     replace_container_on_image_change: bool = False,
     use_prepared_image_cache: bool = False,
+    visible_devices: list[int] | None = None,
 ) -> dict[str, Any]:
     key_path, private_key, public_key, needs_input = ensure_local_public_key(public_key_file)
     if needs_input is not None:
@@ -542,6 +543,7 @@ def bootstrap_container(
             machine_type or "",
             soc or "",
             "true" if use_prepared_image_cache else "false",
+            ",".join(str(device) for device in (visible_devices or [])),
         ],
         batch_mode=True,
         timeout_seconds=machine_ops.DEFAULT_BOOTSTRAP_TIMEOUT_SECONDS,
