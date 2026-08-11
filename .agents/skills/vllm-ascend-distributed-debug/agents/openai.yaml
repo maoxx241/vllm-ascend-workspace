@@ -1,0 +1,4 @@
+interface:
+  display_name: "vLLM Ascend Distributed Debug"
+  short_description: "Diagnose multi-rank and collective failures"
+  default_prompt: "Use $vllm-ascend-distributed-debug to diagnose this multi-rank or multi-node failure from structured topology and rank evidence."
