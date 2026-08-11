@@ -1,5 +1,11 @@
 # Command Recipes
 
+Inspect the agent identity used for new session attribution:
+
+```bash
+python3 .agents/scripts/workspace_identity.py summary
+```
+
 Create a session on a ready base machine:
 
 ```bash
@@ -98,3 +104,82 @@ python3 .agents/skills/session-management/scripts/session_remove.py \
   --remove-worktree \
   --release-leases
 ```
+
+## Optional cross-agent NPU queue
+
+Publish a two-device task with a 30-minute estimate and a one-hour queue TTL:
+
+```bash
+python3 .agents/skills/session-management/scripts/npu_coordination.py \
+  --machine a2-01 submit \
+  --task-id pr123-profile \
+  --npu-count 2 \
+  --queue-ttl-seconds 3600 \
+  --estimated-duration-seconds 1800
+```
+
+The wrapper reads `agent_id` and `agent_alias` from
+`.vaws-local/workspace-identity.json`. Use `--agent-id` or `--agent-alias`
+only when an explicit override is required.
+
+Try to acquire the strict FIFO queue head. Save the returned `fence_token` and
+`ASCEND_RT_VISIBLE_DEVICES`:
+
+```bash
+python3 .agents/skills/session-management/scripts/npu_coordination.py \
+  --machine a2-01 acquire \
+  --task-id pr123-profile
+```
+
+Immediately before launching, recheck real host occupancy:
+
+```bash
+python3 .agents/skills/session-management/scripts/npu_coordination.py \
+  --machine a2-01 preflight \
+  --task-id pr123-profile \
+  --fence-token <token>
+```
+
+After launching with the returned `ASCEND_RT_VISIBLE_DEVICES`, record the PID
+and renew the heartbeat while it runs:
+
+```bash
+python3 .agents/skills/session-management/scripts/npu_coordination.py \
+  --machine a2-01 activate \
+  --task-id pr123-profile \
+  --fence-token <token> \
+  --pid <pid>
+
+python3 .agents/skills/session-management/scripts/npu_coordination.py \
+  --machine a2-01 heartbeat \
+  --task-id pr123-profile \
+  --fence-token <token>
+```
+
+After stopping the workload, release only after two consecutive free probes:
+
+```bash
+python3 .agents/skills/session-management/scripts/npu_coordination.py \
+  --machine a2-01 release \
+  --task-id pr123-profile \
+  --fence-token <token>
+```
+
+Publish a protected human window and inspect the queue:
+
+```bash
+python3 .agents/skills/session-management/scripts/npu_coordination.py \
+  --machine a2-01 hold-add \
+  --hold-id alice-accuracy \
+  --owner human-alice \
+  --devices 0,1,2,3 \
+  --from 2026-08-11T18:00:00+08:00 \
+  --until 2026-08-11T22:00:00+08:00 \
+  --reason "manual accuracy run"
+
+python3 .agents/skills/session-management/scripts/npu_coordination.py \
+  --machine a2-01 status
+```
+
+All commands are optional. Existing task flows remain valid without publishing
+or acquiring a cooperative task.

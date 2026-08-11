@@ -202,3 +202,38 @@ def fixed_machine_username_question(cwd: pathlib.Path | None = None) -> dict[str
             },
         ],
     }
+
+
+def fixed_workspace_alias_question(machine_username: str | None = None) -> dict[str, Any]:
+    machine_label = (
+        f"使用机器用户名（{machine_username}）" if machine_username else "使用本次选定的机器用户名"
+    )
+    return {
+        "question": "是否为项目、agent、新启动的容器和服务目录设置一个统一别名？",
+        "mode": "single-choice",
+        "rules": "3-32 chars, lowercase English letters and digits only",
+        "fixed_options_only": True,
+        "followup_required_for": ["custom"],
+        "followup_question": "请输入统一别名（仅限英文和数字，3-32 位）",
+        "options": [
+            {
+                "id": "machine-username",
+                "label": machine_label,
+                "description": "推荐；新资源统一使用该别名，已有资源名称保持不变。",
+                "available": True,
+            },
+            {
+                "id": "custom",
+                "label": "自定义统一别名",
+                "description": "选择后需再输入具体别名；不会重命名已有资源。",
+                "available": True,
+                "requires_followup_text": True,
+            },
+            {
+                "id": "none",
+                "label": "暂不设置",
+                "description": "记录本次决定并继续使用现有机器用户名和资源命名规则。",
+                "available": True,
+            },
+        ],
+    }

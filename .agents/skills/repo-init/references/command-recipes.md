@@ -42,6 +42,23 @@ Apply the custom option after the user gave the literal username:
 python3 .agents/skills/repo-init/scripts/repo_init_profile.py apply --choice custom --custom-username alice123
 ```
 
+Apply the unified alias choice after the machine profile exists:
+
+```bash
+python3 .agents/skills/repo-init/scripts/repo_init_profile.py apply-alias --choice machine-username
+python3 .agents/skills/repo-init/scripts/repo_init_profile.py apply-alias --choice custom --custom-alias team42
+python3 .agents/skills/repo-init/scripts/repo_init_profile.py apply-alias --choice none
+```
+
+Inspect or maintain only the local identity:
+
+```bash
+python3 .agents/scripts/workspace_identity.py summary
+python3 .agents/scripts/workspace_identity.py ensure
+python3 .agents/scripts/workspace_identity.py set-alias team42
+python3 .agents/scripts/workspace_identity.py decline-alias
+```
+
 ## Low-level profile helper
 
 Validate one user-provided name:

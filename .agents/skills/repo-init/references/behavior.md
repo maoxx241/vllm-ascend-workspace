@@ -17,12 +17,16 @@ Repo-local runtime state lives under `.vaws-local/`.
 
 Relevant files:
 
+- `.vaws-local/workspace-identity.json`
 - `.vaws-local/machine-profile.json`
 - `.vaws-local/machine-inventory.json`
 
 Rules:
 
 - keep the directory untracked
+- during broad init, silently and idempotently create one UUID4 agent identity before the decision checkpoint
+- ask once whether to use the machine username, a custom alias, or no unified alias; persist `declined` so the question is not repeated
+- unified aliases follow the same lowercase letters/digits-only 3-32 character rule needed by container namespaces
 - create the machine profile during broad workspace init, not for every narrow Git-only task
 - machine usernames must be letters and digits only
 - normalize machine usernames to lowercase
@@ -36,7 +40,7 @@ Rules:
 
 Use `repo-init` only for workspace setup, GitHub auth / CLI setup, recursive submodules, fork / remote topology, and the local machine profile during broad init.
 
-### Stage 1: read-only probe
+### Stage 1: probe plus identity bootstrap
 
 Use `repo_init_probe.py` to collect:
 
@@ -48,12 +52,16 @@ Use `repo_init_probe.py` to collect:
 - repo remote topology for `workspace`, `vllm`, and `vllm-ascend`
 - whether matching personal forks appear to exist
 
+The probe may only mutate untracked local state by creating a missing
+`workspace-identity.json` UUID4. It must not silently choose an alias.
+
 ### Stage 2: mandatory decision checkpoint
 
 Before mutating a broad init or any topology-changing task, stop once and ask a grouped question.
 
 That question must cover:
 
+- unified workspace alias choice when its decision is pending
 - machine username choice when the profile is missing
 - repo topology mode: keep current, recommended fork mode, or community-only
 - whether to initialize submodules now

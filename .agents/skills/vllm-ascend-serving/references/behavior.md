@@ -106,6 +106,16 @@ Each launch instance gets its own directory under:
 <workdir>/.vaws-runtime/serving/<timestamp>/
 ```
 
+With a configured unified alias, the layout is:
+
+```
+<workdir>/.vaws-runtime/serving/<alias>/<timestamp>/
+```
+
+The service receives `VAWS_AGENT_ID`; configured aliases are also exported as
+`VAWS_AGENT_ALIAS` and `VAWS_PROJECT_ALIAS`. Serving state snapshots those
+values. A missing or declined alias preserves the legacy directory layout.
+
 This directory contains:
 - `stdout.log` — vllm server stdout
 - `stderr.log` — vllm server stderr

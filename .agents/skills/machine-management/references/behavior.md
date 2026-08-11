@@ -37,6 +37,7 @@ Rules:
 
 Relevant files:
 
+- `.vaws-local/workspace-identity.json`
 - `.vaws-local/machine-profile.json`
 - `.vaws-local/machine-inventory.json`
 
@@ -88,7 +89,8 @@ CLI ergonomics rules:
 
 ## Namespace and container naming contract
 
-The local machine profile provides a stable workspace machine username / namespace.
+The optional workspace identity alias provides the preferred resource
+namespace; the local machine profile remains the compatibility fallback.
 
 Rules:
 
@@ -97,7 +99,8 @@ Rules:
 - normalize to lowercase
 - default/random is valid only after the user explicitly accepts it
 - derive new container names from the namespace, for example `vaws-alice123`
-- if inventory already records a container name for a managed machine, keep using the recorded name for that machine
+- if inventory already records a namespace or container name for a managed machine, keep using the recorded values for that machine
+- changing an alias affects only new resources and never renames an existing container
 
 ## Ready vs not-ready
 

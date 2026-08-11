@@ -96,6 +96,7 @@ Keep alias compatibility in the parser layer, not in the main skill narrative.
 
 Local workspace-machine state lives under `.vaws-local/`:
 
+- `.vaws-local/workspace-identity.json`
 - `.vaws-local/machine-profile.json`
 - `.vaws-local/machine-inventory.json`
 
@@ -128,9 +129,13 @@ For `add` and any first-time attach flow:
 - reject spaces and symbols
 - default/random is allowed only after the user explicitly accepts it
 
-Use the resulting machine username as the stable namespace for collision-sensitive identifiers. For new containers, derive the name from that profile, for example `vaws-alice123`.
+Use the configured unified workspace alias as the stable namespace for new
+collision-sensitive identifiers when present; otherwise use the machine
+username. For example, alias `team42` creates `vaws-team42`.
 
-If inventory already records a container name for the target machine, keep using that recorded name even if the current local profile later changes.
+If inventory already records a namespace or container name for the target
+machine, keep using those recorded values even if the current identity or
+machine profile later changes. Alias changes never rename existing containers.
 
 ### 3. Probe first
 

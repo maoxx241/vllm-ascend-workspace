@@ -31,6 +31,7 @@ This skill is optional. Do not treat it as a prerequisite for unrelated work.
 - Preserve extra remotes such as `upstream2`.
 - Never write secrets or user-specific remotes into tracked files.
 - Keep local runtime state only under `.vaws-local/`.
+- Silently create `.vaws-local/workspace-identity.json` with one persistent UUID4 during broad-init probing. This idempotent local bootstrap is the only allowed pre-checkpoint mutation.
 - Prefer helper scripts in `scripts/` and `.agents/scripts/` over ad-hoc shell pipelines.
 - During broad init, do not call `workspace_profile.py ensure` directly for a missing profile. Use `repo_init_profile.py`.
 - The machine-username checkpoint must use exactly three options when the profile is missing:
@@ -58,6 +59,9 @@ Public machine-profile wrapper for broad init:
 - `python3 .agents/skills/repo-init/scripts/repo_init_profile.py apply --choice git-username`
 - `python3 .agents/skills/repo-init/scripts/repo_init_profile.py apply --choice random`
 - `python3 .agents/skills/repo-init/scripts/repo_init_profile.py apply --choice custom --custom-username <letters-or-digits>`
+- `python3 .agents/skills/repo-init/scripts/repo_init_profile.py apply-alias --choice machine-username|none`
+- `python3 .agents/skills/repo-init/scripts/repo_init_profile.py apply-alias --choice custom --custom-alias <letters-or-digits>`
+- `python3 .agents/scripts/workspace_identity.py summary|ensure|set-alias|decline-alias`
 
 Low-level shared profile helper, mainly for maintenance and debugging:
 
@@ -88,19 +92,24 @@ After the probe and before any mutation, stop once and ask a grouped question wh
 
 That checkpoint must cover:
 
-1. machine username choice when `.vaws-local/machine-profile.json` is missing
+1. unified workspace alias choice when the identity decision is still pending
+   - use the selected/existing machine username (recommended)
+   - custom alias
+   - no alias
+   - custom mode requires one follow-up question for the literal alias
+2. machine username choice when `.vaws-local/machine-profile.json` is missing
    - ask exactly these three options: `git-username`, `random`, `custom`
    - allowed usernames are English letters and digits only
    - normalize usernames to lowercase
    - reject spaces and symbols
    - random mode means `agent#####`
    - custom mode is not complete until the user provides the literal username in a second question
-2. repo topology choice
+3. repo topology choice
    - keep current remotes
    - recommended fork mode
    - community-only mode
-3. whether to initialize submodules now
-4. vllm submodule version alignment — **always include this question in the grouped checkpoint when the probe shows submodules are not yet initialized**. Since all questions are asked in a single batch, you cannot wait for the answer to question 3 before deciding whether to include question 4. If the user later chooses not to initialize submodules, simply ignore their version-alignment answer. Options:
+4. whether to initialize submodules now
+5. vllm submodule version alignment — **always include this question in the grouped checkpoint when the probe shows submodules are not yet initialized**. Since all questions are asked in a single batch, you cannot wait for the answer to question 4 before deciding whether to include question 5. If the user later chooses not to initialize submodules, simply ignore their version-alignment answer. Options:
    - **CI-pinned** (default): check out `vllm/` at the commit CI actually tests against — resolve it with `resolve_vllm_ci_pin.py`, which prefers `vllm-ascend/.github/vllm-main-verified.commit` and falls back to older workflow/docs sources
    - **upstream main**: both submodules track their respective upstream `main` HEAD
    - **keep current**: leave `vllm/` at whatever commit it is already on
@@ -131,6 +140,7 @@ Run the compact probe and summarize only the facts that matter:
 - which forks exist
 - what each repo currently uses for `origin` and `upstream`
 - whether the local machine profile exists and whether user choice is still required
+- the persistent agent UUID and whether the unified-alias decision is still pending
 
 ### 2. Resolve the machine-profile branch when relevant
 
@@ -143,6 +153,10 @@ If the request is broad init and the profile is missing:
 - if the user chose `custom`, ask one extra free-text question and only then run `repo_init_profile.py apply --choice custom --custom-username ...`
 
 Do not silently fall back from `custom` to the detected Git username.
+
+The probe silently ensures the UUID. If the alias decision is pending, use the
+`alias_question` payload and persist the approved choice with `apply-alias`.
+Choosing `none` is a durable decision and must not be asked again on each init.
 
 ### 3. Stop for the decision checkpoint
 
@@ -163,7 +177,7 @@ After recursive submodule init completes, if the user chose CI-pinned alignment:
 
 Execute categories in the order listed below. **Submodule init must complete before remote rewiring of submodule repos**, because uninitialized submodule directories are not independent git repositories — running `repo_topology.py configure --repo <submodule>` on an uninitialized submodule will silently resolve to the parent workspace repo and corrupt its remotes.
 
-1. local machine profile creation or change
+1. local machine profile creation or change, then the approved alias decision
 2. `gh` install / configure
 3. GitHub auth
 4. recursive submodule init (`git submodule sync --recursive && git submodule update --init --recursive`)

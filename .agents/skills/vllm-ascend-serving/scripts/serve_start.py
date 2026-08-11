@@ -56,12 +56,18 @@ from _common import (
     ssh_exec,
 )
 from vaws_session_state import allocate_service_port, file_lock, release_service_port, session_lock_dir
+from vaws_local_state import effective_workspace_alias, load_workspace_identity
 from vaws_validate import parse_device_csv, require_env_name
 
 RUNTIME_DIR_BASE = ".vaws-runtime/serving"
 DEFAULT_HEALTH_TIMEOUT = 300
 HEALTH_POLL_INTERVAL = 5
 PORT_TAIL_RE = re.compile(r"[:.]([0-9]+)$")
+
+
+def service_runtime_dir(runtime_base: str, instance_ts: str, alias: str | None) -> str:
+    runtime_namespace = f"/{alias}" if alias else ""
+    return f"{runtime_base}/{RUNTIME_DIR_BASE}{runtime_namespace}/{instance_ts}"
 
 
 # ---------------------------------------------------------------------------
@@ -906,8 +912,19 @@ def main(argv: list[str] | None = None) -> int:
         emit_progress("allocate-port", f"port {port}", port=port)
 
         # ---- launch ----
+        workspace_identity = load_workspace_identity()
+        unified_alias = effective_workspace_alias()
+        launch_env = dict(launch_env)
+        if workspace_identity is not None:
+            launch_env["VAWS_AGENT_ID"] = workspace_identity["agent_id"]
+        if unified_alias:
+            launch_env["VAWS_AGENT_ALIAS"] = unified_alias
+            launch_env["VAWS_PROJECT_ALIAS"] = unified_alias
+        else:
+            launch_env.pop("VAWS_AGENT_ALIAS", None)
+            launch_env.pop("VAWS_PROJECT_ALIAS", None)
         instance_ts = now_utc().replace(":", "").replace("-", "").replace("T", "_").replace("Z", "")
-        runtime_dir = f"{runtime_base}/{RUNTIME_DIR_BASE}/{instance_ts}"
+        runtime_dir = service_runtime_dir(runtime_base, instance_ts, unified_alias)
 
         wrap_script = getattr(args, "wrap_script", "") or ""
         if wrap_script:
@@ -982,6 +999,9 @@ def main(argv: list[str] | None = None) -> int:
             "log_stderr": f"{runtime_dir}/stderr.log",
             "started_at": now_utc(),
             "status": "starting",
+            "agent_id": workspace_identity.get("agent_id") if workspace_identity else None,
+            "agent_alias": unified_alias,
+            "project_alias": unified_alias,
         }
         if wrap_script:
             state["wrap_script"] = wrap_script

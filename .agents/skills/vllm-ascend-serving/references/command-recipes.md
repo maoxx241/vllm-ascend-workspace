@@ -1,5 +1,8 @@
 # Command Recipes
 
+The start workflow automatically consumes the local workspace identity. Check
+it before launch with `python3 .agents/scripts/workspace_identity.py summary`.
+
 ## Fresh start with basic params
 
 ```bash

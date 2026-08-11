@@ -1,9 +1,14 @@
 ---
 name: session-management
-description: Create, list, inspect, remove, and garbage-collect isolated VAWS agent sessions. Use before remote execution when multiple agent tasks must run in parallel without sharing local worktrees, remote containers, serving state, or resource leases.
+description: Create, list, inspect, remove, and garbage-collect isolated VAWS agent sessions, and optionally coordinate NPU task intent across independent agents on one host. Use before remote execution when tasks must not share worktrees, containers, serving state, or resource leases, or when cooperative NPU queueing is requested. Do not use for service lifecycle, code sync, benchmarks, or distributed failure diagnosis.
 ---
 
 # Session Management
+
+When `.vaws-local/workspace-identity.json` contains a unified alias, new
+session container names inherit the base machine namespace. Session records
+also snapshot `agent_id` and alias for cooperative attribution. Existing
+session/container names are never rewritten after an alias change.
 
 Create and maintain isolated VAWS sessions for parallel agent work.
 
@@ -31,6 +36,8 @@ Each session binds:
 - For session work, pass `--session-id <id>` or `--session-file <session.json>` to parity, serving, benchmark, profiling-collection, memory-profiling, and profiling-analysis entry points.
 - Never call legacy `serve_stop.py --machine <alias>` from a session-scoped task.
 - Session removal should stop only that session's service and release only that session's leases.
+- Shared NPU coordination is an optional gentleman's agreement. It must not become a mandatory gate for existing serving, benchmark, profiling, or remote-command flows.
+- Shared coordination state is intentionally ephemeral under the remote host's `/tmp`; if it disappears, start a new coordination epoch and trust actual host occupancy over missing declarations.
 
 ## Entry Points
 
@@ -52,6 +59,24 @@ python3 .agents/skills/session-management/scripts/session_status.py --session-id
 python3 .agents/skills/session-management/scripts/session_remove.py --session-id <id> --remove-container --remove-worktree --release-leases
 python3 .agents/skills/session-management/scripts/session_gc.py
 ```
+
+Optional cross-agent NPU coordination on the same bare-metal host:
+
+```bash
+python3 .agents/skills/session-management/scripts/npu_coordination.py \
+  --machine <alias-or-ip> submit \
+  --task-id <id> --npu-count 2 \
+  --estimated-duration-seconds 1800
+
+python3 .agents/skills/session-management/scripts/npu_coordination.py \
+  --machine <alias-or-ip> acquire --task-id <id>
+```
+
+The coordinator uses `/tmp/vaws-npu-coordinator/v1/coordinator.sqlite3` on the
+bare-metal host. It is advisory, does not alter existing local Session leases,
+and never stops an observed external or human process. It automatically
+publishes the persistent workspace UUID plus configured agent alias;
+`--agent-id` and `--agent-alias` remain explicit overrides.
 
 Progress is emitted on `stderr` as `__VAWS_SESSION_PROGRESS__=<json>`. Final output is JSON on `stdout`.
 

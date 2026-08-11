@@ -39,7 +39,12 @@ from vaws_session_state import (  # noqa: E402
     session_file_path,
     session_record_for_execution,
 )
-from vaws_local_state import load_profile, utc_now_iso  # noqa: E402
+from vaws_local_state import (  # noqa: E402
+    effective_workspace_alias,
+    load_profile,
+    load_workspace_identity,
+    utc_now_iso,
+)
 from vaws_validate import ValidationError, parse_device_csv  # noqa: E402
 
 PROGRESS_SENTINEL = "__VAWS_SESSION_PROGRESS__="
@@ -406,7 +411,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         namespace = base_record.get("namespace")
         if not namespace:
             profile = load_profile()
-            namespace = profile.get("machine_username") if profile else None
+            namespace = effective_workspace_alias() or (
+                profile.get("machine_username") if profile else None
+            )
+        workspace_identity = load_workspace_identity()
 
         image = args.image or base_record["container"]["image"]
         workdir = args.workdir or base_record["container"].get("workdir", "/vllm-workspace")
@@ -473,6 +481,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             "session_id_source": resolved.source,
             "base_machine": alias,
             "workspace_id": sid,
+            "agent_identity": {
+                "agent_id": workspace_identity.get("agent_id") if workspace_identity else None,
+                "alias": workspace_identity.get("alias") if workspace_identity else None,
+            },
             "status": "creating",
             "local": {
                 "worktree_root": str(local_root),

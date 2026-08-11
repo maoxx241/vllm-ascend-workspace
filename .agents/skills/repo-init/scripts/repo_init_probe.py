@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read-only probe for repo-init.
+"""Probe for repo-init.
 
 The script reports machine state, GitHub CLI state, GitHub auth state,
 recursive submodule state, and local remote topology for:
@@ -7,7 +7,8 @@ recursive submodule state, and local remote topology for:
   - vllm
   - vllm-ascend
 
-It never mutates the repository.
+Its only pre-checkpoint mutation is idempotently creating the untracked local
+workspace UUID required by project initialization.
 """
 
 from __future__ import annotations
@@ -28,11 +29,16 @@ LIB_DIR = pathlib.Path(__file__).resolve().parents[3] / "lib"
 if str(LIB_DIR) not in sys.path:
     sys.path.insert(0, str(LIB_DIR))
 
-from vaws_local_state import profile_summary  # noqa: E402
+from vaws_local_state import (  # noqa: E402
+    ensure_workspace_identity,
+    profile_summary,
+    workspace_identity_summary,
+)
 
 from _profile_choice_common import (  # noqa: E402
     detect_git_username_candidate,
     fixed_machine_username_question,
+    fixed_workspace_alias_question,
 )
 
 COMMUNITY = {
@@ -501,6 +507,7 @@ def compact_fork_summary(forks: Dict[str, Any]) -> Dict[str, Any]:
 def compact_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     gh = payload.get("gh") or {}
     profile = payload.get("workspace_profile") or {}
+    identity = payload.get("workspace_identity") or {}
     compact_submodules = compact_submodule_summary(payload.get("submodules") or [])
     repo_root_value = payload.get("repo_root")
     repo_root = pathlib.Path(repo_root_value) if isinstance(repo_root_value, str) and repo_root_value else None
@@ -521,6 +528,7 @@ def compact_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
             "container_name": profile.get("container_name"),
             "source": profile.get("source"),
         },
+        "workspace_identity": identity,
         "gh": {
             "installed": gh.get("installed"),
             "logged_in": gh.get("logged_in"),
@@ -549,6 +557,12 @@ def compact_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
                 "detected_git_username": detected_git_username,
                 "question_template": machine_username_question,
             },
+            "workspace_alias": {
+                "required": bool(identity.get("alias_choice_required")),
+                "question_template": fixed_workspace_alias_question(
+                    profile.get("machine_username")
+                ),
+            },
             "repo_topology": {
                 "required": True,
                 "options": ["keep-current", "recommended-fork-mode", "community-only"],
@@ -563,7 +577,7 @@ def compact_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Read-only probe for repo-init")
+    parser = argparse.ArgumentParser(description="Repo-init probe with silent local UUID bootstrap")
     parser.add_argument(
         "--compact",
         action="store_true",
@@ -574,6 +588,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    ensure_workspace_identity()
     platform_info = detect_platform()
     root = git_root()
     gh_state = gh_login()
@@ -583,6 +598,7 @@ def main() -> None:
         "platform": platform_info,
         "tools": tool_state(),
         "workspace_profile": profile_summary(),
+        "workspace_identity": workspace_identity_summary(),
         "gh": gh_state,
         "gh_install_plan": gh_install_plan(platform_info),
         "repo_root": str(root) if root else None,

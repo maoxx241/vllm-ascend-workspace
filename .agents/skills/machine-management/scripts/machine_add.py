@@ -35,6 +35,11 @@ from _workflow_common import (  # noqa: E402
     upsert_machine_record,
     verify_machine,
 )
+from vaws_local_state import (  # noqa: E402
+    default_container_name,
+    effective_workspace_alias,
+    workspace_identity_summary,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -146,6 +151,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                             "machine_username": profile["machine_username"],
                             "container_name": profile["container_name"],
                         },
+                        workspace_identity=workspace_identity_summary(),
                         verify=verified,
                     )
                 )
@@ -253,8 +259,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         soc = detected_soc or existing_soc
 
-        namespace = existing.get("namespace") if existing is not None else profile["machine_username"]
-        container_name = existing["container"]["name"] if existing is not None else profile["container_name"]
+        unified_alias = effective_workspace_alias()
+        namespace = (
+            existing.get("namespace") if existing is not None else None
+        ) or unified_alias or profile["machine_username"]
+        container_name = (
+            existing["container"]["name"]
+            if existing is not None
+            else default_container_name(namespace)
+        )
         container_port = existing["container"]["ssh_port"] if existing is not None else free_port
         workdir = existing["container"]["workdir"] if existing is not None else args.workdir
 
@@ -322,6 +335,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "machine_username": profile["machine_username"],
                         "container_name": profile["container_name"],
                     },
+                    workspace_identity=workspace_identity_summary(),
                     host_auth=host_auth,
                     probe=probe,
                     container=container,
@@ -345,6 +359,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "machine_username": profile["machine_username"],
                     "container_name": profile["container_name"],
                 },
+                workspace_identity=workspace_identity_summary(),
                 host_auth=host_auth,
                 probe=probe,
                 container=container,

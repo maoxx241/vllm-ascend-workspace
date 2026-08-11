@@ -1,5 +1,11 @@
 # Machine-management acceptance criteria
 
+## Workspace identity compatibility
+
+- a configured unified alias is used for the namespace and name of a newly managed container
+- without an alias, new containers retain the machine-username naming behavior
+- existing inventory namespace and container names always win over later alias changes
+
 ## Trigger examples
 
 These should trigger `machine-management`:

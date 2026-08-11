@@ -41,6 +41,7 @@ This skill takes structured parameters, handles all SSH escaping and remote exec
 - All remote execution goes through the scripts — never construct raw SSH commands for serving.
 - Keep local runtime state under `.vaws-local/serving/` for legacy mode and `.vaws-local/sessions/<id>/` for session mode.
 - Progress on `stderr` as `__VAWS_SERVING_PROGRESS__=<json>`, final result on `stdout` as JSON.
+- With a unified workspace alias, new runtime directories use `.vaws-runtime/serving/<alias>/<timestamp>/` and the service receives `VAWS_AGENT_ID`, `VAWS_AGENT_ALIAS`, and `VAWS_PROJECT_ALIAS`. Without an alias, preserve the legacy layout.
 
 ## Cross-platform launcher rule
 
@@ -126,7 +127,10 @@ python3 .agents/skills/vllm-ascend-serving/scripts/serve_stop.py \
 Per-machine launch state is stored under `.vaws-local/serving/<alias>.json`.
 Session launch state is stored under `.vaws-local/sessions/<session-id>/serving.json`.
 
-This file records the last successful launch parameters (model, tp, devices, env, extra args, port, pid, log paths, runtime_dir, wrap_script). It is the basis for `--relaunch` and is read by other skills (e.g. `ascend-memory-profiling`) in attach mode.
+This file records the last successful launch parameters (model, tp, devices,
+env, extra args, port, pid, log paths, runtime_dir, wrap_script) plus the
+workspace `agent_id` and alias snapshot. It is the basis for `--relaunch` and
+is read by other skills (e.g. `ascend-memory-profiling`) in attach mode.
 
 During launch the same file may temporarily contain `status=starting`; this is still a valid cleanup target for `serve_stop.py`.
 

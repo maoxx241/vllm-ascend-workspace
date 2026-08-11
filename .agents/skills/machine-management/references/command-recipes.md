@@ -2,6 +2,10 @@ Prefer the task wrappers for normal add / verify / repair / remove work. Wrapper
 
 # Machine-management command recipes
 
+When project initialization configured a unified alias, `machine_add.py`
+automatically uses it for new container namespaces; no extra machine flag is
+required. Inspect it with `python3 .agents/scripts/workspace_identity.py summary`.
+
 Prefer the task-oriented wrappers. Treat the low-level helpers as fallback maintenance tools.
 
 ## Public workflow wrappers

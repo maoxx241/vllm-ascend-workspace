@@ -1,5 +1,12 @@
 # Acceptance Criteria
 
+## Workspace identity
+
+- a configured alias namespaces new service runtime directories
+- services receive the persistent agent UUID and configured alias variables
+- serving state records `agent_id`, `agent_alias`, and `project_alias`
+- no alias preserves the prior timestamp-only runtime directory layout
+
 ## A1. Fresh start — structured input
 
 **Given** a ready managed machine with a valid model path,

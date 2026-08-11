@@ -22,12 +22,20 @@ if str(LIB_DIR) not in sys.path:
 from vaws_local_state import (  # noqa: E402
     WorkspaceStateError,
     ensure_profile,
+    ensure_workspace_identity,
     load_profile,
     profile_summary,
+    set_workspace_alias,
     validate_machine_username,
+    validate_workspace_alias,
+    workspace_identity_summary,
 )
 
-from _profile_choice_common import detect_git_username_candidate, fixed_machine_username_question  # noqa: E402
+from _profile_choice_common import (  # noqa: E402
+    detect_git_username_candidate,
+    fixed_machine_username_question,
+    fixed_workspace_alias_question,
+)
 
 
 Status = str
@@ -64,6 +72,7 @@ def existing_profile_payload() -> dict[str, Any]:
         action="existing",
         message="local machine profile already exists; broad init should reuse it unless the user explicitly asked to change it",
         profile=summary,
+        workspace_identity=workspace_identity_summary(),
     )
 
 
@@ -76,15 +85,32 @@ def needs_choice_payload(cwd: pathlib.Path | None = None) -> dict[str, Any]:
         message="local machine profile is missing; ask exactly one fixed-choice question before continuing broad init",
         profile=summary,
         question=fixed_machine_username_question(cwd),
+        alias_question=fixed_workspace_alias_question(),
+        workspace_identity=workspace_identity_summary(),
     )
 
 
 def cmd_plan(args: argparse.Namespace) -> int:
+    ensure_workspace_identity()
     summary = profile_summary()
-    if summary["exists"]:
+    identity = workspace_identity_summary()
+    if summary["exists"] and not identity["alias_choice_required"]:
         print_json(existing_profile_payload())
         return 0
-    print_json(needs_choice_payload(pathlib.Path.cwd()))
+    if not summary["exists"]:
+        print_json(needs_choice_payload(pathlib.Path.cwd()))
+        return 0
+    print_json(
+        status_payload(
+            "needs_input",
+            success=False,
+            action="choose-workspace-alias",
+            message="workspace UUID is ready; ask whether to set one unified alias before continuing broad init",
+            profile=summary,
+            workspace_identity=identity,
+            alias_question=fixed_workspace_alias_question(summary["machine_username"]),
+        )
+    )
     return 0
 
 
@@ -191,6 +217,7 @@ def _create_profile_from_choice(choice: str, custom_username: str | None, cwd: p
 
 
 def cmd_apply(args: argparse.Namespace) -> int:
+    ensure_workspace_identity()
     current = load_profile()
     if current is not None:
         print_json(existing_profile_payload())
@@ -203,6 +230,58 @@ def cmd_apply(args: argparse.Namespace) -> int:
     )
     print_json(payload)
     return 0 if payload.get("success") else 2
+
+
+def cmd_apply_alias(args: argparse.Namespace) -> int:
+    ensure_workspace_identity()
+    if args.choice == "none":
+        identity, action = set_workspace_alias(None, declined=True)
+    elif args.choice == "machine-username":
+        profile = load_profile()
+        if profile is None:
+            payload = status_payload(
+                "needs_input",
+                success=False,
+                action="machine-profile-required",
+                message="create the approved machine profile before applying the machine-username alias choice",
+                workspace_identity=workspace_identity_summary(),
+                alias_question=fixed_workspace_alias_question(),
+            )
+            print_json(payload)
+            return 2
+        identity, action = set_workspace_alias(profile["machine_username"])
+    else:
+        if args.custom_alias is None:
+            payload = status_payload(
+                "needs_input",
+                success=False,
+                action="await-custom-workspace-alias",
+                message="custom alias mode was selected; ask one follow-up question for the literal alias",
+                missing={
+                    "name": "custom_workspace_alias",
+                    "rules": workspace_identity_summary()["alias_rules"],
+                    "question": "请输入统一别名（仅限英文和数字，3-32 位）",
+                },
+                alias_question=fixed_workspace_alias_question(
+                    (load_profile() or {}).get("machine_username")
+                ),
+            )
+            print_json(payload)
+            return 2
+        normalized = validate_workspace_alias(args.custom_alias)
+        identity, action = set_workspace_alias(normalized)
+
+    print_json(
+        status_payload(
+            "ready",
+            success=True,
+            action=action,
+            message="workspace alias decision persisted locally",
+            selection={"choice": args.choice, "alias": identity.get("alias")},
+            workspace_identity=workspace_identity_summary(),
+        )
+    )
+    return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -224,6 +303,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="required only when --choice custom; letters and digits only",
     )
     apply.set_defaults(func=cmd_apply)
+
+    apply_alias = subparsers.add_parser(
+        "apply-alias", help="materialize one approved unified-alias choice", allow_abbrev=False
+    )
+    apply_alias.add_argument(
+        "--choice",
+        required=True,
+        choices=["machine-username", "custom", "none"],
+        help="approved fixed-choice alias mode",
+    )
+    apply_alias.add_argument(
+        "--custom-alias",
+        help="required only when --choice custom; letters and digits only",
+    )
+    apply_alias.set_defaults(func=cmd_apply_alias)
     return parser
 
 

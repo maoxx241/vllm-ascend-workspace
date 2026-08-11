@@ -13,16 +13,19 @@ import re
 import secrets
 import string
 import tempfile
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 STATE_DIRNAME = ".vaws-local"
 PROFILE_FILENAME = "machine-profile.json"
+IDENTITY_FILENAME = "workspace-identity.json"
 INVENTORY_FILENAME = "machine-inventory.json"
 LEGACY_INVENTORY_FILENAME = ".machine-inventory.json"
 SESSIONS_DIRNAME = "sessions"
 PROFILE_SCHEMA_VERSION = 1
+IDENTITY_SCHEMA_VERSION = 1
 CONTAINER_PREFIX = "vaws-"
 USERNAME_PATTERN = re.compile(r"^[a-z0-9]{3,32}$")
 RANDOM_ALPHABET = string.digits
@@ -32,6 +35,7 @@ DEFAULT_RANDOM_SUFFIX_LENGTH = 5
 ROOT = Path(__file__).resolve().parents[2]
 STATE_DIR = ROOT / STATE_DIRNAME
 PROFILE_PATH = STATE_DIR / PROFILE_FILENAME
+IDENTITY_PATH = STATE_DIR / IDENTITY_FILENAME
 INVENTORY_PATH = STATE_DIR / INVENTORY_FILENAME
 SESSIONS_DIR = STATE_DIR / SESSIONS_DIRNAME
 LEGACY_INVENTORY_PATH = ROOT / LEGACY_INVENTORY_FILENAME
@@ -71,6 +75,20 @@ def normalize_machine_username(value: str) -> str:
 
 
 validate_machine_username = normalize_machine_username
+
+
+def normalize_workspace_alias(value: str) -> str:
+    normalized = value.strip().lower()
+    if not normalized:
+        raise WorkspaceStateError("workspace alias must be non-empty")
+    if not USERNAME_PATTERN.fullmatch(normalized):
+        raise WorkspaceStateError(
+            "workspace alias must be 3-32 characters of English letters and digits only"
+        )
+    return normalized
+
+
+validate_workspace_alias = normalize_workspace_alias
 
 
 def generate_machine_username(
@@ -116,6 +134,160 @@ def _save_json(path: Path, data: Any) -> None:
     finally:
         with contextlib.suppress(FileNotFoundError):
             os.unlink(temp_name)
+
+
+def _create_json_exclusive(path: Path, data: Any) -> bool:
+    """Create one JSON file without replacing a concurrent creator's value."""
+    ensure_state_dir(path.parent)
+    fd, temp_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".new", dir=str(path.parent)
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+        try:
+            os.link(temp_name, path)
+        except FileExistsError:
+            return False
+        return True
+    finally:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(temp_name)
+
+
+def _validate_workspace_identity(identity: Any, *, where: str = "workspace identity") -> dict[str, Any]:
+    if not isinstance(identity, dict):
+        raise WorkspaceStateError(f"{where} must be an object")
+    if identity.get("schema_version") != IDENTITY_SCHEMA_VERSION:
+        raise WorkspaceStateError(
+            f"unsupported identity schema_version in {where}: {identity.get('schema_version')!r}"
+        )
+
+    raw_agent_id = identity.get("agent_id")
+    try:
+        parsed_agent_id = uuid.UUID(str(raw_agent_id))
+    except (ValueError, TypeError, AttributeError) as exc:
+        raise WorkspaceStateError(f"{where}.agent_id must be a valid UUID") from exc
+    if parsed_agent_id.version != 4 or str(parsed_agent_id) != str(raw_agent_id).lower():
+        raise WorkspaceStateError(f"{where}.agent_id must be a canonical UUID4")
+
+    decision = identity.get("alias_decision", "pending")
+    if decision not in {"pending", "set", "declined"}:
+        raise WorkspaceStateError(
+            f"{where}.alias_decision must be 'pending', 'set', or 'declined'"
+        )
+    alias = identity.get("alias")
+    if decision == "set":
+        if not isinstance(alias, str):
+            raise WorkspaceStateError(f"{where}.alias must be a string when alias_decision is 'set'")
+        alias = normalize_workspace_alias(alias)
+    elif alias is not None:
+        raise WorkspaceStateError(f"{where}.alias must be null unless alias_decision is 'set'")
+
+    for field in ("created_at", "updated_at"):
+        value = identity.get(field)
+        if value is not None and not isinstance(value, str):
+            raise WorkspaceStateError(f"{where}.{field} must be a string when present")
+
+    normalized = dict(identity)
+    normalized["agent_id"] = str(parsed_agent_id)
+    normalized["alias"] = alias
+    normalized["alias_decision"] = decision
+    return normalized
+
+
+def load_workspace_identity(path: Path = IDENTITY_PATH) -> dict[str, Any] | None:
+    path = path.expanduser().resolve()
+    if not path.exists():
+        return None
+    return _validate_workspace_identity(_load_json(path), where=str(path))
+
+
+def save_workspace_identity(
+    identity: dict[str, Any], path: Path = IDENTITY_PATH
+) -> dict[str, Any]:
+    path = path.expanduser().resolve()
+    normalized = _validate_workspace_identity(identity)
+    _save_json(path, normalized)
+    return normalized
+
+
+def ensure_workspace_identity(
+    *, path: Path = IDENTITY_PATH
+) -> tuple[dict[str, Any], str]:
+    """Silently create and persist one repo-local UUID4 identity."""
+    path = path.expanduser().resolve()
+    existing = load_workspace_identity(path)
+    if existing is not None:
+        return existing, "existing"
+
+    now = utc_now_iso()
+    candidate = {
+        "schema_version": IDENTITY_SCHEMA_VERSION,
+        "agent_id": str(uuid.uuid4()),
+        "alias": None,
+        "alias_decision": "pending",
+        "created_at": now,
+        "updated_at": now,
+    }
+    normalized = _validate_workspace_identity(candidate)
+    if _create_json_exclusive(path, normalized):
+        return normalized, "created"
+    concurrent = load_workspace_identity(path)
+    if concurrent is None:  # pragma: no cover - defensive against external deletion
+        raise WorkspaceStateError(f"workspace identity disappeared during creation: {path}")
+    return concurrent, "existing"
+
+
+def set_workspace_alias(
+    alias: str | None,
+    *,
+    path: Path = IDENTITY_PATH,
+    declined: bool = False,
+) -> tuple[dict[str, Any], str]:
+    if alias is not None and declined:
+        raise WorkspaceStateError("workspace alias cannot be set and declined at the same time")
+    identity, identity_action = ensure_workspace_identity(path=path)
+    normalized_alias = normalize_workspace_alias(alias) if alias is not None else None
+    decision = "set" if normalized_alias is not None else "declined" if declined else "pending"
+    if identity.get("alias") == normalized_alias and identity.get("alias_decision") == decision:
+        return identity, identity_action if identity_action == "created" else "existing"
+    updated = dict(identity)
+    updated["alias"] = normalized_alias
+    updated["alias_decision"] = decision
+    updated["updated_at"] = utc_now_iso()
+    return save_workspace_identity(updated, path=path), "updated"
+
+
+def workspace_identity_summary(
+    path: Path = IDENTITY_PATH, *, ensure: bool = False
+) -> dict[str, Any]:
+    path = path.expanduser().resolve()
+    action = None
+    identity = load_workspace_identity(path)
+    if identity is None and ensure:
+        identity, action = ensure_workspace_identity(path=path)
+    return {
+        "identity_path": str(path),
+        "exists": identity is not None,
+        "identity_action": action,
+        "agent_id": identity.get("agent_id") if identity else None,
+        "alias": identity.get("alias") if identity else None,
+        "alias_decision": identity.get("alias_decision") if identity else "pending",
+        "alias_choice_required": identity is None or identity.get("alias_decision") == "pending",
+        "alias_rules": "3-32 chars, lowercase English letters and digits only",
+        "created_at": identity.get("created_at") if identity else None,
+        "updated_at": identity.get("updated_at") if identity else None,
+    }
+
+
+def effective_workspace_alias(path: Path = IDENTITY_PATH) -> str | None:
+    identity = load_workspace_identity(path)
+    if identity is None or identity.get("alias_decision") != "set":
+        return None
+    return identity.get("alias")
 
 
 def _validate_profile(profile: Any, *, where: str = "profile") -> dict[str, Any]:
