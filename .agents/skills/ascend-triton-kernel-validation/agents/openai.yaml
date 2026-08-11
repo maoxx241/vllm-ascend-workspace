@@ -1,0 +1,4 @@
+interface:
+  display_name: "Ascend Triton Kernel Validation"
+  short_description: "Validate Ascend Triton kernels across explicit cases"
+  default_prompt: "Use $ascend-triton-kernel-validation to validate this Ascend Triton kernel across an explicit case matrix."
