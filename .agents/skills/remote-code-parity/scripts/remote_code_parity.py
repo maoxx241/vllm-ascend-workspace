@@ -2,16 +2,19 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
+import shlex
 import sys
 import tempfile
+import time
 import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import quote, urlsplit, urlunsplit
 
 from common import (
     DEFAULT_DENYLIST,
@@ -163,6 +166,7 @@ DEFAULT_ROOT_PRESERVE_PATHS = ('Mooncake', '.vaws-runtime')
 STATE_FILENAME = 'runtime-state.json'
 CONSENT_FILENAME = 'install-consents.json'
 PARITY_BRANCH_NAME = 'parity-current'
+TRANSFER_MODES = ('auto', 'git', 'bundle')
 
 REMOTE_RUNTIME_ENV_PASSTHROUGH = (
     'XDG_CACHE_HOME',
@@ -537,6 +541,111 @@ def bundle_path_for(container_cache_root: str, workspace_id: str, record: Snapsh
     return str(root / f'{record.repo_id}-{record.commit}.bundle')
 
 
+def git_remote_url(container: SshEndpoint, mirror_path: str) -> str:
+    host = container.host
+    if ':' in host and not host.startswith('['):
+        host = f'[{host}]'
+    user = quote(container.user, safe='')
+    path = quote(validate_absolute_posix_path(mirror_path, label='mirror path'), safe='/')
+    return f'ssh://{user}@{host}:{container.port}{path}'
+
+
+def git_ssh_environment(container: SshEndpoint) -> dict[str, str]:
+    env = os.environ.copy()
+    env['GIT_TERMINAL_PROMPT'] = '0'
+    env['GIT_SSH_COMMAND'] = shlex.join(
+        [
+            'ssh',
+            '-T',
+            '-o',
+            'BatchMode=yes',
+            '-o',
+            'StrictHostKeyChecking=accept-new',
+            '-o',
+            'LogLevel=ERROR',
+            '-p',
+            str(container.port),
+        ]
+    )
+    return env
+
+
+def transport_carrier_ref(
+    container: SshEndpoint,
+    mirror_path: str,
+    workspace_id: str,
+    record: SnapshotRecord,
+) -> str:
+    target = f'{container.user}@{container.host}:{container.port}:{mirror_path}'
+    token = hashlib.sha256(target.encode('utf-8')).hexdigest()[:16]
+    return f'refs/parity-transport/{workspace_id}/{token}/{record.repo_id}'
+
+
+def build_transport_carrier(
+    repo: Path,
+    *,
+    container: SshEndpoint,
+    mirror_path: str,
+    workspace_id: str,
+    record: SnapshotRecord,
+    remote_carrier_commit: str | None = None,
+) -> tuple[str, str]:
+    ref = transport_carrier_ref(container, mirror_path, workspace_id, record)
+    previous_result = git(repo, ['rev-parse', '--verify', ref], check=False)
+    previous = previous_result.stdout.strip() if previous_result.returncode == 0 else None
+    if not previous or previous != remote_carrier_commit:
+        carrier = record.commit
+    elif git_tree_for_commit(repo, previous) == record.tree:
+        carrier = previous
+    else:
+        env = os.environ.copy()
+        author_name, author_email = ensure_local_git_identity(repo)
+        env.update(
+            {
+                'GIT_AUTHOR_NAME': author_name or 'remote-code-parity',
+                'GIT_AUTHOR_EMAIL': author_email or 'remote-code-parity@example.invalid',
+                'GIT_AUTHOR_DATE': '1970-01-01T00:00:00Z',
+                'GIT_COMMITTER_NAME': author_name or 'remote-code-parity',
+                'GIT_COMMITTER_EMAIL': author_email or 'remote-code-parity@example.invalid',
+                'GIT_COMMITTER_DATE': '1970-01-01T00:00:00Z',
+            }
+        )
+        carrier = git(
+            repo,
+            [
+                'commit-tree',
+                record.tree,
+                '-p',
+                previous,
+                '-m',
+                f'remote-code-parity transport carrier {workspace_id} {record.repo_id}',
+            ],
+            env=env,
+        ).stdout.strip()
+    git(repo, ['update-ref', ref, carrier])
+    return ref, carrier
+
+
+def remote_ref_commit(
+    repo: Path,
+    *,
+    remote_url: str,
+    remote_ref: str,
+    env: dict[str, str],
+) -> str | None:
+    result = git(
+        repo,
+        ['ls-remote', remote_url, remote_ref],
+        env=env,
+        timeout=DEFAULT_GIT_TRANSPORT_TIMEOUT_SECONDS,
+    )
+    for line in result.stdout.splitlines():
+        fields = line.split()
+        if len(fields) == 2 and fields[1] == remote_ref:
+            return fields[0]
+    return None
+
+
 def manifest_path_for(container_cache_root: str, workspace_id: str, snapshot_id: str) -> str:
     return str(Path(cache_workspace_root(container_cache_root, workspace_id)) / 'manifests' / f'{snapshot_id}.json')
 
@@ -598,7 +707,57 @@ def cleanup_failed_mirror_hydration(container: SshEndpoint, mirror_path: str) ->
         pass
 
 
-def push_snapshot_to_mirror(
+def push_snapshot_via_git(
+    repo: Path,
+    *,
+    container: SshEndpoint,
+    mirror_path: str,
+    record: SnapshotRecord,
+    workspace_id: str,
+) -> dict[str, Any]:
+    started = time.monotonic()
+    target_ref = f'refs/parity/{workspace_id}/current'
+    remote_carrier_ref = f'refs/parity/{workspace_id}/transport-carrier'
+    remote_url = git_remote_url(container, mirror_path)
+    git_env = git_ssh_environment(container)
+    remote_carrier_commit = remote_ref_commit(
+        repo,
+        remote_url=remote_url,
+        remote_ref=remote_carrier_ref,
+        env=git_env,
+    )
+    carrier_ref, carrier_commit = build_transport_carrier(
+        repo,
+        container=container,
+        mirror_path=mirror_path,
+        workspace_id=workspace_id,
+        record=record,
+        remote_carrier_commit=remote_carrier_commit,
+    )
+    result = git(
+        repo,
+        [
+            'push',
+            '--porcelain',
+            '--force',
+            remote_url,
+            f'{record.ref}:{target_ref}',
+            f'{record.ref}:refs/heads/{PARITY_BRANCH_NAME}',
+            f'{carrier_ref}:{remote_carrier_ref}',
+        ],
+        env=git_env,
+        timeout=DEFAULT_GIT_TRANSPORT_TIMEOUT_SECONDS,
+    )
+    return {
+        'repo': record.relpath,
+        'transport': 'git',
+        'elapsed_seconds': round(time.monotonic() - started, 6),
+        'carrier_commit': carrier_commit,
+        'detail': result.stdout.strip(),
+    }
+
+
+def push_snapshot_via_bundle(
     repo: Path,
     *,
     container: SshEndpoint,
@@ -606,18 +765,18 @@ def push_snapshot_to_mirror(
     container_cache_root: str,
     record: SnapshotRecord,
     workspace_id: str,
-    dry_run: bool,
-) -> None:
-    if dry_run:
-        return
+) -> dict[str, Any]:
     target_ref = f'refs/parity/{workspace_id}/current'
     remote_bundle_path = bundle_path_for(container_cache_root, workspace_id, record)
     local_bundle = tempfile.NamedTemporaryFile(prefix='parity-bundle-', suffix='.bundle', delete=False)
     local_bundle.close()
     local_bundle_path = Path(local_bundle.name)
+    started = time.monotonic()
     try:
         git(repo, ['bundle', 'create', str(local_bundle_path), record.ref], timeout=DEFAULT_GIT_TRANSPORT_TIMEOUT_SECONDS)
-        ssh_stream_bytes_to_file(container, remote_bundle_path, local_bundle_path.read_bytes())
+        bundle_payload = local_bundle_path.read_bytes()
+        bundle_bytes = len(bundle_payload)
+        ssh_stream_bytes_to_file(container, remote_bundle_path, bundle_payload)
         script = '\n'.join(
             [
                 'set -eo pipefail',
@@ -632,11 +791,68 @@ def push_snapshot_to_mirror(
             ]
         )
         ssh_exec(container, script)
+        return {
+            'repo': record.relpath,
+            'transport': 'bundle',
+            'elapsed_seconds': round(time.monotonic() - started, 6),
+            'bundle_bytes': bundle_bytes,
+        }
     except Exception:
         cleanup_failed_mirror_hydration(container, mirror_path)
         raise
     finally:
         local_bundle_path.unlink(missing_ok=True)
+
+
+def push_snapshot_to_mirror(
+    repo: Path,
+    *,
+    container: SshEndpoint,
+    mirror_path: str,
+    container_cache_root: str,
+    record: SnapshotRecord,
+    workspace_id: str,
+    dry_run: bool,
+    transport: str = 'auto',
+) -> dict[str, Any]:
+    if transport not in TRANSFER_MODES:
+        raise ValueError(f'unsupported parity transport: {transport}')
+    if dry_run:
+        return {'repo': record.relpath, 'transport': f'{transport}-dry-run'}
+
+    git_error: Exception | None = None
+    if transport in {'auto', 'git'}:
+        try:
+            return push_snapshot_via_git(
+                repo,
+                container=container,
+                mirror_path=mirror_path,
+                record=record,
+                workspace_id=workspace_id,
+            )
+        except Exception as exc:
+            if transport == 'git':
+                raise
+            git_error = exc
+            emit_progress(
+                'push-mirror-fallback',
+                relpath=record.relpath,
+                from_transport='git',
+                to_transport='bundle',
+                reason=str(exc),
+            )
+
+    result = push_snapshot_via_bundle(
+        repo,
+        container=container,
+        mirror_path=mirror_path,
+        container_cache_root=container_cache_root,
+        record=record,
+        workspace_id=workspace_id,
+    )
+    if git_error is not None:
+        result['fallback_from'] = 'git'
+    return result
 
 def acquire_container_lock(
     container: SshEndpoint,
@@ -1393,9 +1609,10 @@ def run_sync(args: argparse.Namespace) -> int:
                     emit_progress(current_phase, repo_count=len(records), apply_mode=args.apply_mode)
                     all_mirror_paths = [mirror_path_for(container_cache_root, workspace_id, r) for r in records]
                     ensure_remote_bare_repos(container, all_mirror_paths, args.dry_run)
+                    transfer_reports: list[dict[str, Any]] = []
                     for record in records:
-                        emit_progress('push-mirror', relpath=record.relpath)
-                        push_snapshot_to_mirror(
+                        emit_progress('push-mirror', relpath=record.relpath, transport=args.transport)
+                        transfer = push_snapshot_to_mirror(
                             repo=workspace_root if record.relpath in ('', '.') else workspace_root / record.relpath,
                             container=container,
                             mirror_path=mirror_path_for(container_cache_root, workspace_id, record),
@@ -1403,7 +1620,11 @@ def run_sync(args: argparse.Namespace) -> int:
                             record=record,
                             workspace_id=workspace_id,
                             dry_run=args.dry_run,
+                            transport=args.transport,
                         )
+                        transfer_reports.append(transfer)
+                        emit_progress('push-mirror-complete', **transfer)
+                    manifest['transfers'] = transfer_reports
 
                     current_phase = 'upload-manifest'
                     emit_progress(current_phase, manifest_path=manifest_path, apply_mode=args.apply_mode)
@@ -1460,6 +1681,7 @@ def run_sync(args: argparse.Namespace) -> int:
                             )
                             summary['apply_mode'] = args.apply_mode
                             summary['manifest_path'] = manifest_path
+                            summary['transfers'] = transfer_reports
                             print(json_dump(summary))
                             return 1
                         status = 'materialized'
@@ -1493,6 +1715,7 @@ def run_sync(args: argparse.Namespace) -> int:
                     )
                     summary['apply_mode'] = args.apply_mode
                     summary['manifest_path'] = manifest_path
+                    summary['transfers'] = transfer_reports
                     print(json_dump(summary))
                     return 0
                 finally:
@@ -1617,9 +1840,10 @@ def run_sync(args: argparse.Namespace) -> int:
                 emit_progress(current_phase, repo_count=len(records))
                 all_mirror_paths = [mirror_path_for(container_cache_root, workspace_id, r) for r in records]
                 ensure_remote_bare_repos(container, all_mirror_paths, args.dry_run)
+                transfer_reports: list[dict[str, Any]] = []
                 for record in records:
-                    emit_progress('push-mirror', relpath=record.relpath)
-                    push_snapshot_to_mirror(
+                    emit_progress('push-mirror', relpath=record.relpath, transport=args.transport)
+                    transfer = push_snapshot_to_mirror(
                         repo=workspace_root if record.relpath in ('', '.') else workspace_root / record.relpath,
                         container=container,
                         mirror_path=mirror_path_for(container_cache_root, workspace_id, record),
@@ -1627,7 +1851,11 @@ def run_sync(args: argparse.Namespace) -> int:
                         record=record,
                         workspace_id=workspace_id,
                         dry_run=args.dry_run,
+                        transport=args.transport,
                     )
+                    transfer_reports.append(transfer)
+                    emit_progress('push-mirror-complete', **transfer)
+                manifest['transfers'] = transfer_reports
 
                 current_phase = 'upload-manifest'
                 emit_progress(current_phase, manifest_path=manifest_path)
@@ -1773,6 +2001,7 @@ def run_sync(args: argparse.Namespace) -> int:
                         runtime_install_env=runtime_install_env,
                         observed_runtime_commits=observed_runtime_commits,
                     )
+                    summary['transfers'] = transfer_reports
                     print(json_dump(summary))
                     return 1
 
@@ -1818,6 +2047,7 @@ def run_sync(args: argparse.Namespace) -> int:
                     runtime_install_env=runtime_install_env,
                     observed_runtime_commits=observed_runtime_commits,
                 )
+                summary['transfers'] = transfer_reports
                 print(json_dump(summary))
                 return 0
             finally:
@@ -1855,6 +2085,12 @@ def build_parser() -> argparse.ArgumentParser:
     sync.add_argument('--force-reinstall', action='store_true', help='Force reinstall of vllm and vllm-ascend regardless of what changed.')
     sync.add_argument('--dry-run', action='store_true')
     sync.add_argument('--print-manifest', action='store_true')
+    sync.add_argument(
+        '--transport',
+        choices=TRANSFER_MODES,
+        default='auto',
+        help='auto prefers incremental Git push and falls back to the full-bundle transport.',
+    )
     sync.add_argument(
         '--apply-mode',
         choices=('source-only', 'materialize', 'install'),

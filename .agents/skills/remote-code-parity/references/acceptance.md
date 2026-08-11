@@ -48,7 +48,13 @@ These should not trigger `remote-code-parity` unless remote code parity is the o
 - synthetic snapshots can represent dirty working trees without forcing a real commit
 - when `vllm` or `vllm-ascend` changed locally, the workspace-root synthetic snapshot also changes because the gitlinks are rewritten to the synthetic child commits
 - synthetic snapshot commits are parentless, so first mirror hydration transfers the snapshot tree instead of the full upstream history
-- parentless snapshot mirror hydration uses Git bundle import, so it does not depend on remote receive-pack negotiation or remote base history that may not exist
+- parentless snapshots pushed to an existing mirror reuse unchanged Git objects;
+  first hydration still sends only the snapshot tree rather than upstream history
+- a target-scoped transport carrier advances over the same snapshot trees so a
+  small repeated edit produces a small receive-pack payload while runtime and
+  manifest commit ids remain the deterministic parentless snapshot ids
+- `auto` transport falls back to self-contained Git bundle import when
+  receive-pack is unavailable, without requiring remote base history
 - repeated snapshots of the same workspace tree produce the same synthetic commit ids, enabling the no-change fast path
 - when a nested child repo has no logical changes, the parent repo does not report a reinstall-relevant `changed_paths` entry just because the child was represented by a parentless transport commit
 - ignored files are not added to the snapshot by default
@@ -58,7 +64,11 @@ These should not trigger `remote-code-parity` unless remote code parity is the o
 ### Container-only cache path
 
 - the normal sync path does not require host storage, host lock directories, or `docker inspect`
-- container-local bare mirrors are populated by SSH-streamed Git bundles, without requiring GitHub credentials or host storage
+- container-local bare mirrors are populated by direct SSH Git push when
+  available, without requiring GitHub credentials or host storage
+- `--transport git` fails closed instead of silently using a bundle;
+  `--transport bundle` bypasses receive-pack; `--transport auto` records a
+  progress event before falling back
 - advertised branch refs are published inside the mirror so synthetic child commits are fetchable through ordinary Git paths
 - stale container lock directories are eventually recovered instead of permanently blocking later parity attempts
 - failed or timed-out mirror hydration does not leave matching legacy `git-receive-pack` process trees or partial repo mirrors blocking later retries

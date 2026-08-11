@@ -35,8 +35,15 @@ Keep a **ready** remote runtime in exact code parity with the local `vllm-ascend
 - Preserve runtime-private paths under `/vllm-workspace`, in particular `Mooncake/` (image-provided runtime) and `.vaws-runtime/` (workspace-managed runtime artifacts such as profiler dumps consumed by downstream skills). The exact list lives in `DEFAULT_ROOT_PRESERVE_PATHS` in `scripts/remote_code_parity.py`.
 - Container locks should record owner metadata and recover stale lock directories after the bounded stale interval; failed mirror hydration should best-effort clean any matching legacy `git-receive-pack` process trees and discard that repo's partial mirror before retry.
 - Keep `stdout` reserved for one final JSON summary and stream phase progress on `stderr` as `__VAWS_PARITY_PROGRESS__=<json>`.
+- Prefer incremental Git `receive-pack` directly into the container-local bare
+  mirrors. In `auto` mode, fall back to the self-contained full-bundle transfer
+  when Git push is unavailable.
 - Runtime install progress should be attributable at the package-step level: uninstall, `vllm`, `vllm-ascend` requirements, `vllm-ascend`, import smoke, and marker write.
-- Publish each synthetic snapshot to both the parity ref and an advertised branch ref inside the container-local mirror. Use Git bundles imported inside the container so parentless transport snapshots do not depend on remote receive-pack negotiation or remote base objects.
+- Publish each synthetic snapshot to both the parity ref and an advertised branch ref inside the container-local mirror. Git push reuses objects already present in that mirror; the bundle fallback remains self-contained and does not require remote base objects.
+- Keep deterministic parentless snapshot commits as the runtime identity. Maintain
+  a separate endpoint-scoped transport-carrier ref whose commits form a chain
+  over the same trees; this gives receive-pack a common ancestor without making
+  snapshot ids target-dependent or pulling upstream history into first sync.
 - Materialize child repos explicitly; do not rely on `git submodule update` to fetch synthetic child commits.
 - Synthetic commits are deterministic parentless tree snapshots. Keep each repo's real `HEAD` separately as `source_head` for reinstall drift detection instead of using it as the transport parent.
 - If a clean child repo only differs from the parent through the parentless transport commit id, suppress that transport-only child gitlink path from the parent repo's `changed_paths`.
@@ -113,6 +120,14 @@ Low-level helper:
 
 - POSIX: `python3 .agents/skills/remote-code-parity/scripts/remote_code_parity.py sync ...`
 
+Transport selection:
+
+- `--transport auto` (default): incremental Git push first, full bundle fallback.
+- `--transport git`: require incremental Git push and fail closed on transport failure.
+- `--transport bundle`: force the legacy self-contained full-bundle path.
+- `scripts/transport_benchmark.py` compares full-bundle payloads with
+  incremental receive-pack payloads in isolated temporary repositories.
+
 Optional cache cleanup helper:
 
 - POSIX: `python3 .agents/skills/remote-code-parity/scripts/gc_runtime_cache.py ...`
@@ -175,7 +190,11 @@ Ignored files stay ignored. The snapshot source of truth is tracked + untracked 
 For each repo in scope:
 
 - ensure the container-local bare mirror repo exists under the cache root
-- create a local Git bundle for the synthetic ref, stream it to the container over SSH, and fetch that bundle into the container-local bare mirror
+- push the synthetic ref over SSH directly into the container-local bare mirror,
+  together with the endpoint-scoped transport-carrier ref, allowing Git to omit
+  objects already reachable from the previous carrier
+- in `auto` mode, if `git-receive-pack` cannot complete, create a self-contained
+  local Git bundle, stream it to the remote, and fetch it into the same mirror
 - update `refs/parity/<workspace_id>/current` and an advertised branch ref inside that same mirror
 - write a compact manifest for this sync attempt under `manifests/`
 - use a **container-local** lock while mutating cache or runtime state

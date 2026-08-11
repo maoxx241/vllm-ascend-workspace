@@ -12,7 +12,7 @@ from typing import Any
 
 from common import WORKSPACE_ID_PATTERN, json_dump, repo_root_from
 from install_consent import load_consent_state, resolve_sync_mode
-from remote_code_parity import DEFAULT_CONTAINER_CACHE_ROOT
+from remote_code_parity import DEFAULT_CONTAINER_CACHE_ROOT, TRANSFER_MODES
 
 ROOT = Path(__file__).resolve().parents[4]
 LIB_DIR = ROOT / '.agents' / 'lib'
@@ -162,6 +162,9 @@ def build_low_level_command(derived: dict[str, Any], args: argparse.Namespace) -
         cmd.append('--dry-run')
     if args.apply_mode:
         cmd.extend(['--apply-mode', args.apply_mode])
+    transport = getattr(args, 'transport', 'auto')
+    if transport:
+        cmd.extend(['--transport', transport])
     return cmd
 
 
@@ -180,6 +183,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument('--print-manifest', action='store_true')
     parser.add_argument('--force-reinstall', action='store_true', help='Force reinstall of vllm and vllm-ascend regardless of what changed.')
     parser.add_argument('--dry-run', action='store_true')
+    parser.add_argument(
+        '--transport',
+        choices=TRANSFER_MODES,
+        default='auto',
+        help='auto prefers incremental Git push and falls back to the full-bundle transport.',
+    )
     parser.add_argument(
         '--apply-mode',
         choices=('source-only', 'materialize', 'install'),

@@ -137,6 +137,30 @@ python3 .agents/skills/remote-code-parity/scripts/parity_sync.py \
 
 This syncs the session worktree to the session container and uses `workspace_id=pr123` unless explicitly overridden.
 
+## Select or benchmark mirror transport
+
+The default prefers incremental Git push and retains the full-bundle fallback:
+
+```bash
+python3 .agents/skills/remote-code-parity/scripts/parity_sync.py \
+  --machine blue-a \
+  --transport auto
+```
+
+Require Git receive-pack, or force the compatibility transport:
+
+```bash
+python3 .agents/skills/remote-code-parity/scripts/parity_sync.py --machine blue-a --transport git
+python3 .agents/skills/remote-code-parity/scripts/parity_sync.py --machine blue-a --transport bundle
+```
+
+Run the isolated transport benchmark without a remote machine:
+
+```bash
+python3 .agents/skills/remote-code-parity/scripts/transport_benchmark.py \
+  --files 256 --bytes-per-file 4096 --changed-bytes 4096 --repeats 3
+```
+
 The runtime-install path sources Ascend env scripts under a `set +u` / `set -u` guard, so first-install parity does not depend on predefining shell-specific variables.
 It also scans versioned CANN paths such as `/usr/local/Ascend/cann-9.0.0/set_env.sh`, so A3 images that do not expose only `/usr/local/Ascend/ascend-toolkit/set_env.sh` still get HCCL/CANN libraries.
 Package installation is pip-only and uses the single A3-tested HuaweiCloud index. Do not install or invoke `uv`, probe mirror candidates, or configure default extra indexes in the parity path.
