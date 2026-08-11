@@ -34,9 +34,19 @@ compatibility backend for managed sessions, sync, service adapters, and cleanup.
 - `.agents/skills/ascend-memory-profiling/` is the source-of-truth skill package for profiling and attributing HBM memory usage on Ascend NPU for vLLM serving scenarios.
 - `.agents/skills/ascend-profiling-collection/` is the source-of-truth skill package for collecting Ascend torch-profiler traces and verified manifests.
 - `.agents/skills/ascend-profiling-analysis/` is the source-of-truth skill package for analyzing collected profiler roots/manifests and generating reports.
+- `.agents/skills/curate-workspace-knowledge/` is the explicit-only package for reviewing and promoting verified candidates into formal knowledge files.
 - `.agents/scripts/workspace_profile.py` is the shared low-level helper for the local workspace machine profile.
 - `.agents/scripts/workspace_identity.py` manages the persistent local UUID4 and optional unified project/agent/resource alias.
+- `.agents/scripts/run_manifest.py` creates and validates shared Run Manifest v1 files.
+- `.agents/scripts/knowledge_validate.py` validates the versioned shared knowledge documents.
+- `.agents/scripts/knowledge_query.py` retrieves compact matching knowledge summaries and expands one entry only by id.
+- `.agents/scripts/knowledge_capture.py` records or merges one verified, redacted candidate without loading a Skill.
+- `.agents/hooks/knowledge_session_end.py` flushes only candidates explicitly deferred for the ending Codex session; it never reads the transcript.
+- `.agents/knowledge/` stores the empty formal document skeleton and any subsequently reviewed project knowledge.
+- `.agents/schemas/` stores the machine-readable Run Manifest and knowledge contracts.
 - `.agents/lib/vaws_local_state.py` is the shared library for untracked local runtime state.
+- `.agents/lib/vaws_run_manifest.py` is the shared Run Manifest v1 library for workflow correlation and artifact links.
+- `.agents/lib/vaws_knowledge.py` is the shared knowledge validation, capture, and query library.
 - `.agents/lib/vaws_session_id.py` and `.agents/lib/vaws_session_state.py` are the shared libraries for session identity, state, locks, and leases.
 - `.agents/lib/vaws_remote_toolbox.py` is the shared library for remote target resolution, SSH execution, job observation, artifact streaming, sync adapters, service adapters, and cleanup.
 - `.agents/lib/vaws_validate.py` is the shared validation library for agent-facing ids, environment names, path boundaries, and NPU device lists.
@@ -106,6 +116,11 @@ Current primary helpers:
 - `ascend-profiling-collection/scripts/run_remote_analyse.py`
 - `ascend-profiling-analysis/scripts/profile_analyze.py`
 - `ascend-profiling-analysis/scripts/profile_sweep.py`
+- `curate-workspace-knowledge/scripts/knowledge_curate.py`
+- `scripts/run_manifest.py`
+- `scripts/knowledge_validate.py`
+- `scripts/knowledge_query.py`
+- `scripts/knowledge_capture.py`
 - `scripts/workspace_profile.py`
 - `.agents/tests/test_vaws_scaffold_safety.py`
 
@@ -136,6 +151,9 @@ Untracked workspace-local state lives under `.vaws-local/`:
 - `.vaws-local/memory-profiling/`
 - `.vaws-local/ascend-profiling-collection/runs/`
 - `.vaws-local/profiling-analysis/runs/`
+- `.vaws-local/knowledge/candidates/`
+- `.vaws-local/knowledge/pending/<session-key>/`
+- `.vaws-local/knowledge/session-end/`
 
 Parallel remote work should use `session-management` first. A session owns a local worktree, a dedicated remote container, session-scoped serving/benchmark/profiling state, and resource leases. Existing `--machine` commands remain legacy-compatible for single-tenant workflows.
 

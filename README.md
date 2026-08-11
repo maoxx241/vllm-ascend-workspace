@@ -43,6 +43,7 @@ Agent 会自动检测你的环境、安装所需工具、配置 Git 远程仓库
 | **ascend-memory-profiling** | 采集并分析昇腾 NPU 的 HBM 显存占用，按组件拆分并溯源 | 需要分析 vLLM 推理服务的显存占用时 |
 | **ascend-profiling-collection** | 采集 Ascend torch profiler：起服务、控制 profile 窗口、运行 workload、远端 analyse 并写 manifest | 需要采集 kernel_details/trace_view 时 |
 | **ascend-profiling-analysis** | 分析已采集的 profiler root/manifest，生成 step/layer/operator/cross-rank 诊断报告 | 需要分析 profiling 结果或生成报告时 |
+| **curate-workspace-knowledge** | 审核、去重、提升、合并、拒绝或废弃已验证的项目知识候选 | 显式要求沉淀、整理或维护项目知识时 |
 
 
 所有技能都是**可选的**。你可以只用其中的一部分，也可以完全不用。
@@ -97,7 +98,8 @@ Agent 会自动检测你的环境、安装所需工具、配置 Git 远程仓库
 │   │   ├── vllm-ascend-benchmark/ # 性能基准测试技能
 │   │   ├── ascend-memory-profiling/ # 显存 profiling 技能
 │   │   ├── ascend-profiling-collection/ # torch profiler 采集技能
-│   │   └── ascend-profiling-analysis/ # profiling 分析报告技能
+│   │   ├── ascend-profiling-analysis/ # profiling 分析报告技能
+│   │   └── curate-workspace-knowledge/ # 显式知识整理技能
 │   ├── lib/               # 共享本地状态库
 │   └── scripts/           # 共享辅助脚本
 ├── .cursor/rules/         # Cursor IDE 专用规则

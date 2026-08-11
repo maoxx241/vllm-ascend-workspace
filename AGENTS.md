@@ -58,6 +58,7 @@ Repo-local skills live under `.agents/skills/`. Each has its own `SKILL.md` with
 | `ascend-memory-profiling` | Profile HBM memory usage on Ascend NPU for vLLM serving scenarios |
 | `ascend-profiling-collection` | Collect one Ascend torch-profiler case end-to-end (start service, bracket workload with `/start_profile` + `/stop_profile`, run `analyse()`, verify outputs, write manifest) |
 | `ascend-profiling-analysis` | Analyze collected Ascend torch-profiler roots/manifests and generate reports |
+| `curate-workspace-knowledge` | Explicitly review, deduplicate, promote, merge, reject, or deprecate verified knowledge candidates |
 
 None of these are gates for normal local coding, docs work, or unrelated Git tasks.
 For remote endpoint work, prefer `.remote-dev` tools first and use these skills
@@ -71,6 +72,11 @@ for domain workflows.
 - Keep `.gitmodules` on community upstream URLs.
 - Prefer `.remote-dev` remote companion tools or skill wrapper scripts over raw SSH / shell commands for remote operations.
 - Skill wrappers: progress on `stderr`, final JSON on `stdout`.
+- Execution skills must use Run Manifest v1 from `.agents/lib/vaws_run_manifest.py` for new cross-workflow runs and keep manifests under untracked `.vaws-local/`.
+- Read fast-changing compatibility, capability, validation, and failure-signature facts from `.agents/knowledge/`; treat missing facts as unknown rather than supported.
+- On a concrete practical failure, query compact formal matches with `.agents/scripts/knowledge_query.py` before repeating diagnosis. After a novel fix has a confirmed cause and verification evidence, capture a candidate with `.agents/scripts/knowledge_capture.py`.
+- Invoke `curate-workspace-knowledge` only for explicit knowledge review or promotion; normal workflows use the shared capture and query scripts directly.
+- Before reporting a blocking problem or asking the user to intervene, query `.agents/knowledge/` with `.agents/scripts/knowledge_query.py` using the observed failure signature. State explicitly when no verified match exists.
 - Use the remote-dev substrate for agent-facing remote read/edit/bash/search/patch/job/artifact work. Use the remote toolbox entrypoints as the managed VAWS compatibility backend before falling back to bare SSH.
 - For parallel managed remote work, create or reuse a `session-management` session and pass `--session-id` through parity, serving, benchmark, and profiling commands. Legacy `--machine` flows remain available for explicitly single-tenant work.
 - This repo targets Huawei Ascend NPU. Local machines (Mac/PC) cannot run `torch`/`torch_npu`-dependent code. Do not attempt local test execution — go straight to the remote container.
