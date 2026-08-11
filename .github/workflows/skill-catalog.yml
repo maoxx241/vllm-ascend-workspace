@@ -1,0 +1,80 @@
+name: Skill catalog
+
+on:
+  pull_request:
+    paths:
+      - ".agents/**"
+      - "AGENTS.md"
+      - "README.md"
+      - "README.en.md"
+      - ".github/workflows/skill-catalog.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - ".agents/**"
+      - "AGENTS.md"
+      - "README.md"
+      - "README.en.md"
+      - ".github/workflows/skill-catalog.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Validate catalog
+        run: python -B .agents/scripts/skill_catalog.py
+      - name: Validate shared knowledge
+        run: python -B .agents/scripts/knowledge_validate.py
+      - name: Run catalog tests
+        run: python -B -m unittest discover -s .agents/tests -p "test_*catalog.py"
+      - name: Run manifest and knowledge tests
+        run: python -B -m unittest discover -s .agents/tests -p "test_run_manifest.py"
+      - name: Run knowledge evidence-chain tests
+        run: python -B -m unittest discover -s .agents/tests -p "test_knowledge*.py"
+      - name: Run knowledge curation tests
+        run: python -B -m unittest discover -s .agents/skills/curate-workspace-knowledge/tests
+      - name: Run graph-debug tests
+        run: python -B -m unittest discover -s .agents/skills/vllm-ascend-graph-debug/tests
+      - name: Run correctness-validation tests
+        run: python -B -m unittest discover -s .agents/skills/vllm-ascend-correctness-validation/tests
+      - name: Run change-validation tests
+        run: python -B -m unittest discover -s .agents/skills/vllm-ascend-change-validation/tests
+      - name: Run performance-regression tests
+        run: python -B -m unittest discover -s .agents/skills/vllm-ascend-performance-regression/tests
+
+      - name: Run session-management tests
+        run: python -B -m unittest discover -s .agents/skills/session-management/tests
+
+      - name: Validate parameterized Ray helpers
+        run: bash -n scripts/ray_head.sh scripts/ray_worker.sh
+
+      - name: Run distributed-debug tests
+        run: python -B -m unittest discover -s .agents/skills/vllm-ascend-distributed-debug/tests
+
+      - name: Run operator-debug tests
+        run: python -B -m unittest discover -s .agents/skills/ascend-operator-debug/tests
+
+      - name: Run Triton development tests
+        run: python -B -m unittest discover -s .agents/skills/ascend-triton-operator-development/tests
+
+      - name: Run Triton validation tests
+        run: python -B -m unittest discover -s .agents/skills/ascend-triton-kernel-validation/tests
+
+      - name: Run Triton optimization tests
+        run: python -B -m unittest discover -s .agents/skills/ascend-triton-kernel-optimization/tests
+
+      - name: Run Triton workflow tests
+        run: python -B -m unittest discover -s .agents/skills/ascend-triton-workflow/tests
+
+      - name: Run PD-serving tests
+        run: python -B -m unittest discover -s .agents/skills/vllm-ascend-pd-serving/tests

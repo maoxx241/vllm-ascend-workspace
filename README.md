@@ -34,7 +34,7 @@ Agent 会自动检测你的环境、安装所需工具、配置 Git 远程仓库
 | ------------------------ | ---------------------------------------------- | ------------------ |
 | **repo-init**            | 安装 GitHub CLI、登录 GitHub、初始化子模块、配置 Fork 和远程仓库拓扑 | 首次 clone 后初始化工作区   |
 | **machine-management**   | 添加、验证、修复或移除远程昇腾 NPU 服务器及其托管容器                  | 需要配置远程 NPU 开发机时    |
-| **session-management**   | 创建/检查/清理隔离 session：本地 worktree、远端容器、状态目录和资源 lease | 多 agent 或多任务并行远端执行时 |
+| **session-management**   | 创建、检查、分组和清理隔离 session：本地 worktree、远端容器、状态目录和资源 lease | 多 agent、多任务或 PD 场景并行远端执行时 |
 | **remote-toolbox**       | 结构化解析/探测/执行/长任务/同步/服务/产物传输/清理远端容器              | Agent 需要像使用本地工具一样操作远端 session container 时 |
 | **remote-code-parity**   | 将本地工作区的完整状态（含未提交的修改）同步到远程容器                    | 在远程机器上运行测试或服务前自动触发 |
 | **modelscope**           | 下载、续传、查看进度并 SHA256 校验 ModelScope 模型权重                  | 需要把模型权重下载到明确目录时 |
@@ -44,6 +44,17 @@ Agent 会自动检测你的环境、安装所需工具、配置 Git 远程仓库
 | **ascend-profiling-collection** | 采集 Ascend torch profiler：起服务、控制 profile 窗口、运行 workload、远端 analyse 并写 manifest | 需要采集 kernel_details/trace_view 时 |
 | **ascend-profiling-analysis** | 分析已采集的 profiler root/manifest，生成 step/layer/operator/cross-rank 诊断报告 | 需要分析 profiling 结果或生成报告时 |
 | **curate-workspace-knowledge** | 审核、去重、提升、合并、拒绝或废弃已验证的项目知识候选 | 显式要求沉淀、整理或维护项目知识时 |
+| **vllm-ascend-graph-debug** | 定位图编译、捕获、重放及 graph/eager 正确性分歧 | 图模式失败或与 eager 结果不一致时 |
+| **vllm-ascend-correctness-validation** | 对比 baseline/candidate、eager/graph、离线/在线和 AISBench 正确性 | 需要精度验证或输出对拍时 |
+| **vllm-ascend-change-validation** | 根据代码 diff 生成验证计划并汇总证据和 PR 报告 | 验证工作区变更或 PR 时 |
+| **vllm-ascend-performance-regression** | 运行交替 A/B 实验并分析波动和回退阈值 | 判断吞吐或延迟是否回退时 |
+| **vllm-ascend-distributed-debug** | 从拓扑、端点、collective 和逐 rank 事件诊断分布式故障 | 故障依赖多卡、多机或 rank 时 |
+| **ascend-operator-debug** | 将模型故障缩减为单算子并运行 dtype/shape/layout/mode 矩阵 | 需要最小化算子复现时 |
+| **ascend-triton-operator-development** | 从 PyTorch 或 GPU Triton 语义生成首个正确的 Ascend Triton 实现 | 新建或迁移 Triton 算子时 |
+| **ascend-triton-kernel-validation** | 检测 PyTorch fallback 并执行显式正确性矩阵 | 验证 Triton 候选实现时 |
+| **ascend-triton-kernel-optimization** | 在正确性门禁后执行 profiler 驱动的优化实验 | 优化已正确的 Triton kernel 时 |
+| **ascend-triton-workflow** | 编排开发、验证、优化和 Run Manifest 证据 | 交付完整 Triton 算子生命周期时 |
+| **vllm-ascend-pd-serving** | 编排 Session Group 上的 prefill/decode、connector、回滚和 KV smoke | 部署 PD 分离服务时 |
 
 
 所有技能都是**可选的**。你可以只用其中的一部分，也可以完全不用。

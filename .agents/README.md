@@ -35,6 +35,17 @@ compatibility backend for managed sessions, sync, service adapters, and cleanup.
 - `.agents/skills/ascend-profiling-collection/` is the source-of-truth skill package for collecting Ascend torch-profiler traces and verified manifests.
 - `.agents/skills/ascend-profiling-analysis/` is the source-of-truth skill package for analyzing collected profiler roots/manifests and generating reports.
 - `.agents/skills/curate-workspace-knowledge/` is the explicit-only package for reviewing and promoting verified candidates into formal knowledge files.
+- `.agents/skills/vllm-ascend-graph-debug/` diagnoses graph compile, capture, replay, and graph/eager divergence.
+- `.agents/skills/vllm-ascend-correctness-validation/` compares normalized baseline/candidate and eager/graph correctness.
+- `.agents/skills/vllm-ascend-change-validation/` plans diff-driven validation and aggregates evidence.
+- `.agents/skills/vllm-ascend-performance-regression/` runs controlled alternating performance experiments.
+- `.agents/skills/vllm-ascend-distributed-debug/` records topology and per-rank distributed evidence.
+- `.agents/skills/ascend-operator-debug/` builds isolated Ascend operator case matrices.
+- `.agents/skills/ascend-triton-operator-development/` develops a first correct Ascend Triton candidate.
+- `.agents/skills/ascend-triton-kernel-validation/` gates fallback and correctness.
+- `.agents/skills/ascend-triton-kernel-optimization/` records profiler-driven tuning decisions.
+- `.agents/skills/ascend-triton-workflow/` links the Triton lifecycle through Run Manifest evidence.
+- `.agents/skills/vllm-ascend-pd-serving/` orchestrates grouped prefill/decode serving.
 - `.agents/scripts/workspace_profile.py` is the shared low-level helper for the local workspace machine profile.
 - `.agents/scripts/workspace_identity.py` manages the persistent local UUID4 and optional unified project/agent/resource alias.
 - `.agents/scripts/run_manifest.py` creates and validates shared Run Manifest v1 files.
@@ -75,6 +86,7 @@ Current primary helpers:
 - `session-management/scripts/session_list.py`
 - `session-management/scripts/session_status.py`
 - `session-management/scripts/session_remove.py`
+- `session-management/scripts/session_group.py`
 - `session-management/scripts/session_gc.py`
 - `scripts/remote_target_resolve.py`
 - `scripts/remote_probe.py`
@@ -117,6 +129,17 @@ Current primary helpers:
 - `ascend-profiling-analysis/scripts/profile_analyze.py`
 - `ascend-profiling-analysis/scripts/profile_sweep.py`
 - `curate-workspace-knowledge/scripts/knowledge_curate.py`
+- `vllm-ascend-graph-debug/scripts/graph_debug_case.py`
+- `vllm-ascend-correctness-validation/scripts/correctness_run.py`
+- `vllm-ascend-change-validation/scripts/change_validation.py`
+- `vllm-ascend-performance-regression/scripts/performance_regression.py`
+- `vllm-ascend-distributed-debug/scripts/distributed_debug.py`
+- `ascend-operator-debug/scripts/operator_debug.py`
+- `ascend-triton-operator-development/scripts/triton_development.py`
+- `ascend-triton-kernel-validation/scripts/triton_validation.py`
+- `ascend-triton-kernel-optimization/scripts/triton_optimization.py`
+- `ascend-triton-workflow/scripts/triton_workflow.py`
+- `vllm-ascend-pd-serving/scripts/pd_serving.py`
 - `scripts/run_manifest.py`
 - `scripts/knowledge_validate.py`
 - `scripts/knowledge_query.py`

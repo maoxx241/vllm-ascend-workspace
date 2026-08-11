@@ -49,7 +49,7 @@ Repo-local skills live under `.agents/skills/`. Each has its own `SKILL.md` with
 |-------|---------|
 | `repo-init` | Initialize workspace: `gh`, GitHub auth, submodules, fork topology |
 | `machine-management` | Add / verify / repair / remove a remote NPU machine |
-| `session-management` | Create / inspect / remove isolated agent sessions (local worktree + remote container + leases) |
+| `session-management` | Create / inspect / remove / group isolated agent sessions (local worktree + remote container + leases) |
 | `remote-toolbox` | Compatibility backend for managed VAWS target/probe/exec/job/sync/service/artifact/cleanup tools |
 | `remote-code-parity` | Sync local working tree to remote container before execution |
 | `modelscope` | Download / resume / status-check / SHA256-verify ModelScope model weights under explicit local directories |
@@ -59,6 +59,17 @@ Repo-local skills live under `.agents/skills/`. Each has its own `SKILL.md` with
 | `ascend-profiling-collection` | Collect one Ascend torch-profiler case end-to-end (start service, bracket workload with `/start_profile` + `/stop_profile`, run `analyse()`, verify outputs, write manifest) |
 | `ascend-profiling-analysis` | Analyze collected Ascend torch-profiler roots/manifests and generate reports |
 | `curate-workspace-knowledge` | Explicitly review, deduplicate, promote, merge, reject, or deprecate verified knowledge candidates |
+| `vllm-ascend-graph-debug` | Diagnose Ascend graph compile, capture, replay, and graph/eager correctness divergence |
+| `vllm-ascend-correctness-validation` | Plan and compare baseline/candidate, eager/graph, offline/online, and task-metric correctness evidence |
+| `vllm-ascend-change-validation` | Map code diffs to required validation evidence and aggregate downstream runs into PR reports |
+| `vllm-ascend-performance-regression` | Control alternating baseline/candidate experiments and assess performance regressions |
+| `vllm-ascend-distributed-debug` | Diagnose rank topology, process-group, endpoint, collective, and distributed hang failures |
+| `ascend-operator-debug` | Reduce a model symptom to one Ascend operator call and validate an explicit input/mode matrix |
+| `ascend-triton-operator-development` | Convert a PyTorch or GPU Triton contract into a first correct Ascend Triton candidate |
+| `ascend-triton-kernel-validation` | Detect fallback and validate an Ascend Triton kernel over an explicit correctness matrix |
+| `ascend-triton-kernel-optimization` | Run profiler-driven, correctness-gated Ascend Triton optimization experiments |
+| `ascend-triton-workflow` | Orchestrate Ascend Triton development, validation, optimization, and evidence linking |
+| `vllm-ascend-pd-serving` | Orchestrate grouped prefill/decode services, connector configuration, rollback, and smoke tests |
 
 None of these are gates for normal local coding, docs work, or unrelated Git tasks.
 For remote endpoint work, prefer `.remote-dev` tools first and use these skills
