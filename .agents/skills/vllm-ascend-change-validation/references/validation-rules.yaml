@@ -1,0 +1,249 @@
+{
+  "schema_version": 1,
+  "kind": "validation-rules",
+  "updated_at": "2026-07-25",
+  "entries": [
+    {
+      "id": "graph-path-requires-eager-graph-comparison",
+      "source": "workspace skill roadmap and vllm-ascend-graph-debug contract",
+      "applicable_versions": "all workspace-managed revisions",
+      "updated_at": "2026-07-25",
+      "status": "active",
+      "rule": {
+        "category": "graph",
+        "path_patterns": [
+          "(?i)(acl.?graph|cudagraph|graph_mode)"
+        ],
+        "required_checks": [
+          "correctness:eager",
+          "correctness:graph"
+        ],
+        "route_on_divergence": "vllm-ascend-graph-debug"
+      }
+    },
+    {
+      "id": "custom-op-change-requires-operator-matrix",
+      "source": "workspace skill roadmap",
+      "applicable_versions": "all workspace-managed revisions",
+      "updated_at": "2026-07-25",
+      "status": "experimental",
+      "rule": {
+        "category": "custom-op",
+        "path_patterns": [
+          "(?i)(custom_op|ops/|kernel)"
+        ],
+        "required_checks": [
+          "operator:dtype-shape-layout",
+          "correctness:model-smoke"
+        ],
+        "recommended_checks": [
+          "performance:operator-microbenchmark"
+        ]
+      }
+    },
+    {
+      "id": "parallel-metadata-change-requires-rank-consistency",
+      "source": "workspace skill roadmap",
+      "applicable_versions": "all workspace-managed revisions",
+      "updated_at": "2026-07-25",
+      "status": "experimental",
+      "rule": {
+        "category": "parallel-metadata",
+        "path_patterns": [
+          "(?i)(parallel|metadata|communicator|process_group)"
+        ],
+        "required_checks": [
+          "correctness:multi-rank-metadata-consistency"
+        ],
+        "route_on_hang": "vllm-ascend-distributed-debug"
+      }
+    },
+    {
+      "id": "model-runner-change-requires-override-and-smoke",
+      "source": "workspace skill roadmap",
+      "applicable_versions": "all workspace-managed revisions",
+      "updated_at": "2026-07-25",
+      "status": "active",
+      "rule": {
+        "category": "model-runner",
+        "path_patterns": [
+          "(?i)(model_runner|runner/)"
+        ],
+        "required_checks": [
+          "compatibility:vllm-ascend-override",
+          "build:import-smoke",
+          "correctness:single-card-model-smoke"
+        ]
+      }
+    },
+    {
+      "id": "attention-backend-change-requires-backend-correctness",
+      "source": "workspace skill roadmap",
+      "applicable_versions": "all workspace-managed revisions",
+      "updated_at": "2026-07-25",
+      "status": "active",
+      "rule": {
+        "category": "attention-backend",
+        "path_patterns": [
+          "(?i)(attention|attn_backend)"
+        ],
+        "required_checks": [
+          "correctness:affected-attention-backend",
+          "correctness:eager"
+        ],
+        "recommended_checks": [
+          "correctness:graph"
+        ]
+      }
+    },
+    {
+      "id": "kv-cache-change-requires-cache-feature-matrix",
+      "source": "workspace skill roadmap",
+      "applicable_versions": "all workspace-managed revisions",
+      "updated_at": "2026-07-25",
+      "status": "active",
+      "rule": {
+        "category": "kv-cache",
+        "path_patterns": [
+          "(?i)(kv_cache|prefix_cache|block_table)"
+        ],
+        "required_checks": [
+          "correctness:kv-cache",
+          "correctness:prefix-cache"
+        ],
+        "recommended_checks": [
+          "correctness:chunked-prefill"
+        ]
+      }
+    },
+    {
+      "id": "scheduler-change-requires-online-cases",
+      "source": "workspace skill roadmap",
+      "applicable_versions": "all workspace-managed revisions",
+      "updated_at": "2026-07-25",
+      "status": "active",
+      "rule": {
+        "category": "scheduler",
+        "path_patterns": [
+          "(?i)(scheduler|request_queue)"
+        ],
+        "required_checks": [
+          "correctness:online-chat",
+          "correctness:mixed-request-shapes"
+        ],
+        "recommended_checks": [
+          "performance:online-serving"
+        ]
+      }
+    },
+    {
+      "id": "worker-change-requires-multi-rank-smoke",
+      "source": "workspace skill roadmap",
+      "applicable_versions": "all workspace-managed revisions",
+      "updated_at": "2026-07-25",
+      "status": "active",
+      "rule": {
+        "category": "worker",
+        "path_patterns": [
+          "(?i)(worker|executor)"
+        ],
+        "required_checks": [
+          "correctness:single-rank-smoke",
+          "correctness:multi-rank-smoke"
+        ],
+        "route_on_hang": "vllm-ascend-distributed-debug"
+      }
+    },
+    {
+      "id": "quantization-change-requires-dtype-and-model-smoke",
+      "source": "workspace skill roadmap",
+      "applicable_versions": "all workspace-managed revisions",
+      "updated_at": "2026-07-25",
+      "status": "active",
+      "rule": {
+        "category": "quantization",
+        "path_patterns": [
+          "(?i)(quant|w8a8|fp8|int8)"
+        ],
+        "required_checks": [
+          "operator:quantized-dtype-shape",
+          "correctness:quantized-model-smoke"
+        ],
+        "recommended_checks": [
+          "performance:quantized-model"
+        ]
+      }
+    },
+    {
+      "id": "model-adapter-change-requires-model-smoke",
+      "source": "workspace skill roadmap",
+      "applicable_versions": "all workspace-managed revisions",
+      "updated_at": "2026-07-25",
+      "status": "active",
+      "rule": {
+        "category": "model-adapter",
+        "path_patterns": [
+          "(?i)(models/|model_adapter|registry)"
+        ],
+        "required_checks": [
+          "build:model-import",
+          "correctness:dummy-weight-smoke",
+          "correctness:real-weight-smoke"
+        ]
+      }
+    },
+    {
+      "id": "kv-connector-change-requires-transfer-smoke",
+      "source": "workspace skill roadmap",
+      "applicable_versions": "all workspace-managed revisions",
+      "updated_at": "2026-07-25",
+      "status": "active",
+      "rule": {
+        "category": "kv-connector",
+        "path_patterns": [
+          "(?i)(nixl|mooncake|kv_connector|kv_transfer|disaggreg)"
+        ],
+        "required_checks": [
+          "correctness:kv-transfer-smoke",
+          "correctness:prefill-decode-smoke"
+        ],
+        "recommended_checks": [
+          "performance:pd-serving"
+        ]
+      }
+    },
+    {
+      "id": "build-change-requires-build-and-import",
+      "source": "workspace skill roadmap",
+      "applicable_versions": "all workspace-managed revisions",
+      "updated_at": "2026-07-25",
+      "status": "active",
+      "rule": {
+        "category": "build",
+        "path_patterns": [
+          "(?i)(cmakelists|pyproject|setup\\.py|requirements|dockerfile|\\.github/workflows)"
+        ],
+        "required_checks": [
+          "build:package",
+          "build:import-smoke"
+        ]
+      }
+    },
+    {
+      "id": "test-change-requires-targeted-test-suite",
+      "source": "workspace skill roadmap",
+      "applicable_versions": "all workspace-managed revisions",
+      "updated_at": "2026-07-25",
+      "status": "active",
+      "rule": {
+        "category": "test",
+        "path_patterns": [
+          "(?i)(^|/)(tests?|ci)(/|$)"
+        ],
+        "required_checks": [
+          "test:targeted-suite"
+        ]
+      }
+    }
+  ]
+}
