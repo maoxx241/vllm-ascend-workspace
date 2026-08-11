@@ -6,6 +6,27 @@ Inspect the agent identity used for new session attribution:
 python3 .agents/scripts/workspace_identity.py summary
 ```
 
+## Multi-session group
+
+After creating each isolated member session:
+
+```bash
+python3 .agents/skills/session-management/scripts/session_group.py create \
+  --group-id pd-a \
+  --member ray-head=head-session \
+  --member ray-worker=worker-session \
+  --startup-order ray-head,ray-worker
+```
+
+Use the parameterized Ray helpers inside the corresponding member containers:
+
+```bash
+scripts/ray_head.sh --node-ip 10.0.0.1 --port 6379 --interface eth0
+scripts/ray_worker.sh --head-address 10.0.0.1:6379 --node-ip 10.0.0.2 --interface eth0
+```
+
+Neither helper stops an existing cluster unless `--stop-existing` is explicit.
+
 Create a session on a ready base machine:
 
 ```bash

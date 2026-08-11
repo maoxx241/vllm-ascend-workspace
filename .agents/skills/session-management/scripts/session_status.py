@@ -120,6 +120,36 @@ def main() -> int:
             "root",
             "true",
         )
+        leased_devices = [
+            int(item) for item in session.get("leases", {}).get("npu_devices", [])
+        ]
+        expected_visibility = ",".join(str(device) for device in leased_devices)
+        visibility_probe = (
+            ssh_check(
+                remote["host"],
+                int(container["ssh_port"]),
+                "root",
+                "printf '%s' \"${ASCEND_RT_VISIBLE_DEVICES-}\"",
+            )
+            if container_ssh["ok"] and expected_visibility
+            else None
+        )
+        observed_visibility = (
+            visibility_probe.get("stdout_tail", "").strip()
+            if visibility_probe is not None
+            else ""
+        )
+        visibility = {
+            "expected": expected_visibility,
+            "observed": observed_visibility or None,
+            "matches": not expected_visibility
+            or bool(
+                visibility_probe
+                and visibility_probe.get("ok")
+                and observed_visibility == expected_visibility
+            ),
+            "probe": visibility_probe,
+        }
         service: dict[str, Any] | None = None
         if serving and serving.get("pid"):
             pid = int(serving["pid"])
@@ -134,6 +164,8 @@ def main() -> int:
             status = "needs_repair"
         if status == "ready" and not container_ssh["ok"]:
             status = "needs_repair"
+        if status == "ready" and not visibility["matches"]:
+            status = "needs_repair"
         print_json(
             {
                 "status": status,
@@ -144,6 +176,7 @@ def main() -> int:
                     "name": container["name"],
                     "ssh_port": container["ssh_port"],
                     "ssh": container_ssh,
+                    "device_visibility": visibility,
                 },
                 "serving": serving,
                 "service_alive": service,

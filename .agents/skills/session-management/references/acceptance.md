@@ -12,6 +12,11 @@
 - `session_create.py --disable-prepared-image-cache` keeps the raw base-image bootstrap path available.
 - Default session creation reports `verification_mode: ssh` and `npu_smoke_skipped: true` after host/container SSH checks.
 - `session_create.py --verification-mode full` keeps the full `torch` / `torch_npu` smoke check available.
+- A Session with leased NPU devices persists the exact
+  `ASCEND_RT_VISIBLE_DEVICES` through Docker, the runtime profile, dedicated
+  sshd, and container metadata.
+- Session creation and status return `needs_repair` when the observed
+  `ASCEND_RT_VISIBLE_DEVICES` differs from a non-empty lease.
 - `session_create.py` without `--session-id`, `VAWS_SESSION_ID`, or `VAWS_AGENT_SESSION_ID` generates a fresh session id instead of reusing repo-root `.vaws-local/current-session.json`.
 - Explicit `session_create.py --session-id <id> --no-worktree` does not overwrite the repo-root `.vaws-local/current-session.json`.
 - Session container SSH port allocation does not hold the lease lock while running per-port remote SSH probes.
@@ -21,9 +26,15 @@
 - `bench_run.py --session-id s2` stops only `s2`'s service at cleanup time.
 - `parity_sync.py --session-id s1` derives `workspace_id=s1` and `container_identity=<s1-container>@<runtime-root>`.
 - `session_remove.py --remove-container --release-leases` can skip `serve_stop.py` when no session serving state exists and still release leases after the container is removed or the stop result is `not_found`.
+- `session_remove.py --remove-worktree` deinitializes populated submodules before asking Git to remove the worktree.
 - `session_remove.py` returns `needs_repair` instead of `removed` when requested container or worktree removal fails.
+- An exception during remote cleanup marks the Session `needs_repair` and keeps its leases.
 - `session_gc.py` does not release leases for generic `failed` sessions.
 - Legacy `--machine` commands continue to work against the base machine state.
+- A session group requires at least two unique ready sessions.
+- Group creation fails when live workspace or recursive submodule snapshots differ.
+- Startup order contains every member exactly once; shutdown order is its reverse.
+- Group teardown delegates to `session_remove.py` for every member and retains `needs_repair` when any member fails.
 - Shared NPU coordination state defaults to the bare-metal host's `/tmp/vaws-npu-coordinator/v1/` and recreates a new coordination epoch after state loss.
 - Shared NPU coordination is optional and does not gate existing Session, serving, benchmark, profiling, or remote-command entry points.
 - Multiple agents use SQLite transactions to grant a multi-device request atomically.
