@@ -1,0 +1,4 @@
+interface:
+  display_name: "vLLM Ascend PD Serving"
+  short_description: "Orchestrate prefill/decode services and KV-transfer smoke"
+  default_prompt: "Use $vllm-ascend-pd-serving to plan and operate this multi-session prefill/decode deployment with connector and proxy health evidence."
