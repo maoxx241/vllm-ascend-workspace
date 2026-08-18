@@ -1,0 +1,4 @@
+interface:
+  display_name: "Optimize vLLM Ascend Prefill"
+  short_description: "Find optimal Prefill performance under a TTFT SLO"
+  default_prompt: "Use $optimize-vllm-ascend-prefill to benchmark this Prefill case and find the fastest valid configuration under its TTFT limit."
