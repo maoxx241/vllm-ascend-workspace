@@ -31,6 +31,7 @@ compatibility backend for managed sessions, sync, service adapters, and cleanup.
 - `.agents/skills/modelscope/` is the source-of-truth skill package for ModelScope weight download, resume, status, and SHA256 verification workflows.
 - `.agents/skills/vllm-ascend-serving/` is the source-of-truth skill package for starting, checking, and stopping vLLM Ascend online services on managed containers.
 - `.agents/skills/vllm-ascend-benchmark/` is the source-of-truth skill package for running `vllm bench serve` performance benchmarks on managed containers.
+- `.agents/skills/optimize-vllm-ascend-prefill/` is the source-of-truth skill package for AISBench Prefill optimization under a TTFT SLO with reproducible result archival.
 - `.agents/skills/ascend-memory-profiling/` is the source-of-truth skill package for profiling and attributing HBM memory usage on Ascend NPU for vLLM serving scenarios.
 - `.agents/skills/ascend-profiling-collection/` is the source-of-truth skill package for collecting Ascend torch-profiler traces and verified manifests.
 - `.agents/skills/ascend-profiling-analysis/` is the source-of-truth skill package for analyzing collected profiler roots/manifests and generating reports.
@@ -120,6 +121,10 @@ Current primary helpers:
 - `vllm-ascend-serving/scripts/serve_stop.py`
 - `vllm-ascend-serving/scripts/serve_probe_npus.py`
 - `vllm-ascend-benchmark/scripts/bench_run.py`
+- `optimize-vllm-ascend-prefill/scripts/clear_ascend_logs.sh`
+- `optimize-vllm-ascend-prefill/scripts/parse_aisbench_console.py`
+- `optimize-vllm-ascend-prefill/scripts/archive_run.py`
+- `optimize-vllm-ascend-prefill/scripts/summarize_runs.py`
 - `ascend-memory-profiling/scripts/mem_collect.py`
 - `ascend-memory-profiling/scripts/mem_analyze.py`
 - `ascend-memory-profiling/scripts/weight_inspector.py`
@@ -257,6 +262,14 @@ If you change `vllm-ascend-benchmark`, update these together:
 - `.agents/skills/vllm-ascend-benchmark/references/`
 - `.agents/skills/vllm-ascend-benchmark/scripts/`
 - `AGENTS.md` and this file when routing or output contract changes
+
+If you change `optimize-vllm-ascend-prefill`, update these together:
+
+- `.agents/skills/optimize-vllm-ascend-prefill/SKILL.md`
+- `.agents/skills/optimize-vllm-ascend-prefill/references/`
+- `.agents/skills/optimize-vllm-ascend-prefill/scripts/`
+- `.agents/skills/optimize-vllm-ascend-prefill/agents/`
+- `AGENTS.md`, `README.md`, `README.en.md`, and this file when routing or output contracts change
 
 If you change `ascend-memory-profiling`, update these together:
 
