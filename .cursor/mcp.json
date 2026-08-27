@@ -3,7 +3,7 @@
     "remote-dev": {
       "type": "stdio",
       "command": "python3",
-      "args": ["${workspaceFolder}/.remote-dev/mcp/server.py"],
+      "args": [".remote-dev/mcp/server.py"],
       "env": {
         "REMOTE_DEV_DEFAULT_USER": "root",
         "REMOTE_DEV_DEFAULT_ROOT": "/vllm-workspace",

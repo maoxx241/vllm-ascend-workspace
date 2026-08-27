@@ -22,12 +22,14 @@ checkout path. Actual machine-specific TOML files are ignored by Git. Do not add
 model credentials to these files. Restart existing sessions after schema/config
 changes so they rediscover tools.
 
-Cursor's checked-in entry uses `${workspaceFolder}` to resolve the shared server
-without a machine-specific path, as supported by its
-[official MCP configuration](https://cursor.com/docs/mcp). Cursor Agent uses
-the same project configuration as the IDE. Use `cursor-agent` explicitly when
-Grok also provides an `agent` command; the shared MCP does not require changing
-either client's shell aliases.
+Cursor's checked-in entry uses the same repository-relative server path as
+`.mcp.json`; open the repository as the workspace and run Cursor Agent from its
+root. Its [official MCP configuration](https://cursor.com/docs/mcp) documents
+`${workspaceFolder}` interpolation, but Cursor Agent `2026.08.25-3e8eec8` passed
+that expression literally to Python in a real startup check. The relative path
+avoids that CLI incompatibility. Use `cursor-agent` explicitly when Grok also
+provides an `agent` command; the shared MCP does not require changing either
+client's shell aliases.
 
 Grok's automatic `.mcp.json` import depends on its Claude-import state; a native
 `.grok/config.toml` avoids that ambiguity. Confirm project trust on first use.

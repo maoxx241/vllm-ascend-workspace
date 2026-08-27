@@ -67,7 +67,7 @@ class McpSchemaTests(unittest.TestCase):
         self.assertEqual(cursor["type"], "stdio")
         self.assertEqual(cursor["command"], shared["command"])
         self.assertEqual(cursor["env"], shared["env"])
-        self.assertEqual(cursor["args"], ["${workspaceFolder}/.remote-dev/mcp/server.py"])
+        self.assertEqual(cursor["args"], shared["args"])
         self.assertTrue((REPO_ROOT / shared["args"][0]).is_file())
 
     def test_underscore_aliases_map_to_canonical_names(self) -> None:
