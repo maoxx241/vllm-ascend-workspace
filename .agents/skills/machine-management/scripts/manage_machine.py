@@ -36,6 +36,8 @@ IMAGE_REGISTRY_MIRRORS = (IMAGE_REGISTRY_NJU, IMAGE_REGISTRY_OFFICIAL)
 IMAGE_SELECTOR_RC = "rc"
 IMAGE_SELECTOR_MAIN = "main"
 IMAGE_SELECTOR_STABLE = "stable"
+IMAGE_SELECTOR_LOCAL_LATEST = "local-latest"
+IMAGE_POLICY_LOCAL_LATEST = "latest-local-vllm-ascend"
 IMAGE_SELECTOR_ALIASES = {
     IMAGE_SELECTOR_RC: IMAGE_SELECTOR_RC,
     "release-candidate": IMAGE_SELECTOR_RC,
@@ -51,6 +53,7 @@ IMAGE_SELECTOR_ALIASES = {
     "release": IMAGE_SELECTOR_STABLE,
     "latest-release": IMAGE_SELECTOR_STABLE,
     "latest-official": IMAGE_SELECTOR_STABLE,
+    IMAGE_SELECTOR_LOCAL_LATEST: IMAGE_SELECTOR_LOCAL_LATEST,
 }
 LEGACY_IMAGE_SELECTORS = {"auto"}
 FORBIDDEN_IMAGE_TAGS = {"latest"}
@@ -115,6 +118,96 @@ SOC_TO_MACHINE_TYPE = {
     "ascend310p3vir08": "310P",
 }
 SOC_MATCH_ORDER = sorted(SOC_TO_MACHINE_TYPE, key=len, reverse=True)
+
+
+LOCAL_IMAGE_DISCOVERY_PY = r'''
+def _vaws_image_ref_repo(ref):
+    without_digest = ref.split("@", 1)[0]
+    last_slash = without_digest.rfind("/")
+    last_colon = without_digest.rfind(":")
+    if last_colon > last_slash:
+        return without_digest[:last_colon]
+    return without_digest
+
+
+def _vaws_image_ref_machine_type(ref):
+    if "@" in ref:
+        return None
+    last_slash = ref.rfind("/")
+    last_colon = ref.rfind(":")
+    if last_colon <= last_slash:
+        return None
+    tag = ref[last_colon + 1:].lower()
+    if "-310p" in tag:
+        return "310P"
+    if "-a3" in tag:
+        return "A3"
+    return "A2"
+
+
+def _vaws_local_ref_rank(ref):
+    is_digest = "@" in ref
+    tag = ""
+    if not is_digest:
+        last_slash = ref.rfind("/")
+        last_colon = ref.rfind(":")
+        if last_colon > last_slash:
+            tag = ref[last_colon + 1:].lower()
+    return (1 if is_digest else 0, 1 if tag == "latest" else 0, ref)
+
+
+def select_latest_local_vllm_ascend_image(image_inspects, machine_type=None):
+    matched_images = []
+    eligible_images = []
+    for image in image_inspects:
+        if not isinstance(image, dict):
+            continue
+        references = []
+        for ref in list(image.get("RepoTags") or []) + list(image.get("RepoDigests") or []):
+            if not isinstance(ref, str) or not ref.strip():
+                continue
+            repo = _vaws_image_ref_repo(ref.strip())
+            if "vllm-ascend" not in repo.rsplit("/", 1)[-1].lower():
+                continue
+            references.append(ref.strip())
+        references = sorted(set(references), key=_vaws_local_ref_rank)
+        if not references:
+            continue
+        compatible_references = [
+            ref
+            for ref in references
+            if machine_type is None or _vaws_image_ref_machine_type(ref) == machine_type
+        ]
+        entry = {
+            "image_id": str(image.get("Id") or ""),
+            "created": str(image.get("Created") or ""),
+            "references": references,
+            "compatible_references": compatible_references,
+            "compatible": bool(compatible_references),
+        }
+        matched_images.append(entry)
+        if compatible_references:
+            eligible = dict(entry)
+            eligible["selected_reference"] = compatible_references[0]
+            eligible_images.append(eligible)
+
+    matched_images.sort(
+        key=lambda item: (item["created"], item["image_id"]), reverse=True
+    )
+    eligible_images.sort(
+        key=lambda item: (item["created"], item["image_id"]), reverse=True
+    )
+    selected = eligible_images[0] if eligible_images else None
+    return {
+        "machine_type": machine_type,
+        "matched_count": len(matched_images),
+        "eligible_count": len(eligible_images),
+        "matched_images": matched_images,
+        "selected_reference": selected.get("selected_reference") if selected else None,
+        "selected_image_id": selected.get("image_id") if selected else None,
+        "selected_created": selected.get("created") if selected else None,
+    }
+'''
 
 
 class MachineManagementError(RuntimeError):
@@ -250,12 +343,12 @@ def require_explicit_image_ref(ref: str) -> str:
     candidate = ref.strip()
     if not candidate:
         raise MachineManagementError(
-            "image reference is empty; choose `rc`, `main`, `stable`, or an explicit non-latest image reference"
+            "image reference is empty; choose `local-latest`, `rc`, `main`, `stable`, or an explicit non-latest image reference"
         )
     normalized = candidate.lower()
     if normalized in LEGACY_IMAGE_SELECTORS:
         raise MachineManagementError(
-            "legacy image selector `auto` is no longer allowed; ask the user to choose `rc`, `main`, `stable`, or a concrete image reference"
+            "legacy image selector `auto` is no longer allowed; ask the user to choose `local-latest`, `rc`, `main`, `stable`, or a concrete image reference"
         )
     if normalized in IMAGE_SELECTOR_ALIASES:
         raise MachineManagementError(
@@ -270,7 +363,7 @@ def require_explicit_image_ref(ref: str) -> str:
         )
     if tag.lower() in FORBIDDEN_IMAGE_TAGS:
         raise MachineManagementError(
-            "the moving `latest` tag is not allowed for managed machine bootstrap; choose `rc`, `main`, `stable`, or a concrete version tag"
+            "the moving `latest` tag is not allowed as a direct image choice; choose `local-latest`, `rc`, `main`, `stable`, or a concrete version tag"
         )
     return candidate
 
@@ -455,7 +548,7 @@ def resolve_image_request(
     requested = spec.strip()
     if not requested:
         raise MachineManagementError(
-            "image selector is missing; choose `rc`, `main`, `stable`, or an explicit non-latest image reference"
+            "image selector is missing; choose `local-latest`, `rc`, `main`, `stable`, or an explicit non-latest image reference"
         )
     normalized_machine_type = normalize_machine_type(machine_type)
     normalized = requested.lower()
@@ -493,6 +586,15 @@ def resolve_image_request(
             resolved_tag=image_tag_for_machine(release_tag, normalized_machine_type),
             machine_type=normalized_machine_type,
         )
+    if selector == IMAGE_SELECTOR_LOCAL_LATEST:
+        return ImageResolution(
+            selector=IMAGE_SELECTOR_LOCAL_LATEST,
+            requested=requested,
+            policy=IMAGE_POLICY_LOCAL_LATEST,
+            candidates=(),
+            mirror_order=(),
+            machine_type=normalized_machine_type,
+        )
 
     candidates = tuple(
         validate_explicit_image_for_machine(item, normalized_machine_type)
@@ -501,7 +603,7 @@ def resolve_image_request(
     )
     if not candidates:
         raise MachineManagementError(
-            "image selector is empty; choose `rc`, `main`, `stable`, or an explicit non-latest image reference"
+            "image selector is empty; choose `local-latest`, `rc`, `main`, `stable`, or an explicit non-latest image reference"
         )
     return ImageResolution(
         selector="explicit",
@@ -1045,7 +1147,11 @@ def run(cmd: list[str], *, env: Optional[dict[str, str]] = None) -> tuple[int, s
     return proc.returncode, proc.stdout.strip(), proc.stderr.strip()
 
 
+__LOCAL_IMAGE_DISCOVERY_PY__
+
+
 candidates = list(image.get("candidates") or [])
+local_image_inspects: list[dict[str, object]] = []
 result: dict[str, object] = {
     "success": True,
     "hostname": socket.gethostname(),
@@ -1123,6 +1229,18 @@ if result["docker"]["present"]:
         result["docker"]["version"] = out
     rc, _, _ = run(["docker", "info"])
     result["docker"]["info_ok"] = rc == 0
+    if image.get("policy") == "__LOCAL_IMAGE_DISCOVERY_POLICY__":
+        rc, out, _ = run(["docker", "image", "ls", "--no-trunc", "--quiet"])
+        image_ids = sorted(set(out.splitlines())) if rc == 0 else []
+        if image_ids:
+            rc, out, _ = run(["docker", "image", "inspect", *image_ids])
+            if rc == 0:
+                try:
+                    inspected = json.loads(out)
+                    if isinstance(inspected, list):
+                        local_image_inspects = [item for item in inspected if isinstance(item, dict)]
+                except json.JSONDecodeError:
+                    local_image_inspects = []
     present_local_candidates: list[str] = []
     for candidate in candidates:
         rc, _, _ = run(["docker", "image", "inspect", candidate])
@@ -1189,6 +1307,22 @@ result["warnings"] = []
 if result["machine_type"] is None:
     result["warnings"].append("machine type could not be inferred from npu-smi output; pass an explicit override if needed")
 
+if image.get("policy") == "__LOCAL_IMAGE_DISCOVERY_POLICY__":
+    discovery_machine_type = image.get("machine_type") or result["machine_type"]
+    local_discovery = select_latest_local_vllm_ascend_image(
+        local_image_inspects,
+        discovery_machine_type,
+    )
+    selected_reference = local_discovery.get("selected_reference")
+    result["image"]["local_discovery"] = local_discovery
+    result["image"]["candidates"] = [selected_reference] if selected_reference else []
+    result["image"]["present_local_candidates"] = [selected_reference] if selected_reference else []
+    result["image"]["present_local"] = bool(selected_reference)
+    if not selected_reference:
+        result["warnings"].append(
+            "no machine-compatible local vllm-ascend image was discovered"
+        )
+
 rc, out, _ = run(["ss", "-ltnH"])
 used: set[int] = set()
 if rc == 0:
@@ -1211,8 +1345,11 @@ for port in range(start, end + 1):
 print("__SENTINEL__" + json.dumps(result, ensure_ascii=False))
 PY
 """
-    return template.replace("__SENTINEL__", SENTINEL).replace(
-        "__SOC_TO_MACHINE_TYPE__", json.dumps(SOC_TO_MACHINE_TYPE, ensure_ascii=False)
+    return (
+        template.replace("__SENTINEL__", SENTINEL)
+        .replace("__SOC_TO_MACHINE_TYPE__", json.dumps(SOC_TO_MACHINE_TYPE, ensure_ascii=False))
+        .replace("__LOCAL_IMAGE_DISCOVERY_PY__", LOCAL_IMAGE_DISCOVERY_PY)
+        .replace("__LOCAL_IMAGE_DISCOVERY_POLICY__", IMAGE_POLICY_LOCAL_LATEST)
     )
 
 
@@ -1280,6 +1417,52 @@ import sys
 payload = json.loads(sys.argv[1])
 for item in payload.get("candidates") or []:
     print(item)
+PY
+}
+
+discover_local_vllm_ascend_images() {
+  local requested_machine_type="$1"
+  local inspect_file
+  local discovery
+  local -a image_ids=()
+  mapfile -t image_ids < <(docker image ls --no-trunc --quiet | sort -u)
+  if [ "${#image_ids[@]}" -eq 0 ]; then
+    printf '%s\n' '{"machine_type": null, "matched_count": 0, "eligible_count": 0, "matched_images": [], "selected_reference": null, "selected_image_id": null, "selected_created": null}'
+    return 0
+  fi
+  inspect_file="$(mktemp)"
+  if ! docker image inspect "${image_ids[@]}" >"$inspect_file"; then
+    rm -f "$inspect_file"
+    return 1
+  fi
+  if ! discovery="$(python3 - "$requested_machine_type" "$inspect_file" <<'PY'
+import json
+import sys
+
+machine_type = sys.argv[1] or None
+with open(sys.argv[2], encoding="utf-8") as handle:
+    image_inspects = json.load(handle)
+
+__LOCAL_IMAGE_DISCOVERY_PY__
+
+print(json.dumps(
+    select_latest_local_vllm_ascend_image(image_inspects, machine_type),
+    ensure_ascii=False,
+))
+PY
+)"; then
+    rm -f "$inspect_file"
+    return 1
+  fi
+  rm -f "$inspect_file"
+  printf '%s\n' "$discovery"
+}
+
+json_string_array() {
+  python3 - "$@" <<'PY'
+import json
+import sys
+print(json.dumps(sys.argv[1:], ensure_ascii=False))
 PY
 }
 
@@ -1798,9 +1981,46 @@ machine_type="${machine_type_input:-$(image_field machine_type || true)}"
 soc="${soc_input:-}"
 container_type=""
 previous_image=""
+selected_image_id=""
+local_image_discovery='null'
 mapfile -t image_candidates < <(resolve_image_candidates)
+if [ "$image_policy" = "__LOCAL_IMAGE_DISCOVERY_POLICY__" ]; then
+  emit_progress "image-discovery" "running" "scanning local Docker images for the newest machine-compatible vllm-ascend image" 30
+  if ! local_image_discovery="$(discover_local_vllm_ascend_images "$machine_type")"; then
+    emit_json '{"success": false, "error": "failed to inspect local Docker images", "phase": "image-discovery"}'
+    exit 19
+  fi
+  selected_local_image="$(python3 - "$local_image_discovery" <<'PY'
+import json
+import sys
+print(json.loads(sys.argv[1]).get("selected_reference") or "")
+PY
+)"
+  if [ -n "$selected_local_image" ]; then
+    image_candidates=("$selected_local_image")
+  else
+    image_candidates=()
+  fi
+fi
+runtime_image_candidates_json="$(json_string_array "${image_candidates[@]}")"
 if [ "${#image_candidates[@]}" -eq 0 ]; then
-  emit_json '{"success": false, "error": "image selector resolved to zero candidates", "phase": "image"}'
+  empty_candidates_payload=$(python3 - "$image_request_json" "$local_image_discovery" <<'PY'
+import json
+import sys
+request = json.loads(sys.argv[1])
+discovery = json.loads(sys.argv[2]) if sys.argv[2] != "null" else None
+print(json.dumps({
+    "success": False,
+    "error": "image selector resolved to zero candidates",
+    "phase": "image-discovery" if discovery is not None else "image",
+    "requested_image": request.get("requested"),
+    "requested_selector": request.get("selector"),
+    "image_policy": request.get("policy"),
+    "local_image_discovery": discovery,
+}, ensure_ascii=False))
+PY
+)
+  emit_json "$empty_candidates_payload"
   exit 19
 fi
 
@@ -1814,12 +2034,24 @@ if docker inspect "$container" >/dev/null 2>&1; then
   fi
   previous_image="$current_image"
   image_matches=false
-  for candidate in "${image_candidates[@]}"; do
-    if [ "$candidate" = "$current_image" ] || { [ "$use_prepared_image_cache" = "true" ] && [ "$candidate" = "$current_base_image" ]; }; then
-      image_matches=true
-      break
+  if [ "$image_policy" = "__LOCAL_IMAGE_DISCOVERY_POLICY__" ]; then
+    candidate_image_id="$(docker image inspect -f '{{.Id}}' "${image_candidates[0]}" 2>/dev/null || true)"
+    current_source_image_id="$(docker inspect -f '{{.Image}}' "$container" 2>/dev/null || true)"
+    recorded_base_image_id="$(docker inspect -f '{{ index .Config.Labels "com.vaws.base_image_id" }}' "$container" 2>/dev/null || true)"
+    if [ "$recorded_base_image_id" != "<no value>" ] && [ -n "$recorded_base_image_id" ]; then
+      current_source_image_id="$recorded_base_image_id"
     fi
-  done
+    if [ -n "$candidate_image_id" ] && [ "$candidate_image_id" = "$current_source_image_id" ]; then
+      image_matches=true
+    fi
+  else
+    for candidate in "${image_candidates[@]}"; do
+      if [ "$candidate" = "$current_image" ] || { [ "$use_prepared_image_cache" = "true" ] && [ "$candidate" = "$current_base_image" ]; }; then
+        image_matches=true
+        break
+      fi
+    done
+  fi
   if [ "$image_matches" != "true" ]; then
     if [ "$replace_on_image_change" = "true" ]; then
       emit_progress "image" "running" "existing container image $current_image does not match requested selector; recreating container" 60
@@ -1827,10 +2059,10 @@ if docker inspect "$container" >/dev/null 2>&1; then
       actions+=("removed-container-for-image-change")
       container_exists=false
     else
-      mismatch_payload=$(python3 - <<'PY' "$current_image" "$image_request_json"
+      mismatch_payload=$(python3 - <<'PY' "$current_image" "$image_request_json" "$runtime_image_candidates_json" "$local_image_discovery"
 import json
 import sys
-current_image, image_request_json = sys.argv[1:]
+current_image, image_request_json, runtime_candidates_json, local_discovery_json = sys.argv[1:]
 image_request = json.loads(image_request_json)
 print(json.dumps({
     "success": False,
@@ -1841,7 +2073,8 @@ print(json.dumps({
     "requested_selector": image_request.get("selector"),
     "image_policy": image_request.get("policy"),
     "resolved_tag": image_request.get("resolved_tag"),
-    "image_candidates": list(image_request.get("candidates") or []),
+    "image_candidates": json.loads(runtime_candidates_json),
+    "local_image_discovery": json.loads(local_discovery_json) if local_discovery_json != "null" else None,
     "suggestion": "rerun with explicit container replacement consent or remove the managed container first",
 }, ensure_ascii=False))
 PY
@@ -1870,6 +2103,11 @@ if [ "$container_exists" = "true" ]; then
     fi
     used_prepared_image_cache=true
   fi
+  selected_image_id="$(docker inspect -f '{{.Image}}' "$container" 2>/dev/null || true)"
+  recorded_base_image_id="$(docker inspect -f '{{ index .Config.Labels "com.vaws.base_image_id" }}' "$container" 2>/dev/null || true)"
+  if [ "$recorded_base_image_id" != "<no value>" ] && [ -n "$recorded_base_image_id" ]; then
+    selected_image_id="$recorded_base_image_id"
+  fi
   image_resolution="existing-container"
   if [ "$state" != "running" ]; then
     docker start "$container" >/dev/null
@@ -1882,6 +2120,16 @@ else
   emit_progress "image" "running" "resolved image selector ${requested_image:-unknown} (${image_policy:-unknown})" 30
   for candidate in "${image_candidates[@]}"; do
     emit_progress "image" "running" "trying image candidate $candidate" 600
+    if [ "$image_policy" = "__LOCAL_IMAGE_DISCOVERY_POLICY__" ]; then
+      if docker image inspect "$candidate" >/dev/null 2>&1; then
+        selected_image="$candidate"
+        image_resolution="local-discovery"
+        actions+=("selected-latest-local-vllm-ascend-image")
+        break
+      fi
+      emit_progress "image-discovery" "running" "locally discovered image $candidate disappeared before deployment" 30
+      continue
+    fi
     if [ "$docker_pull_policy" != "always" ] && [ "$image_policy" != "main-branch" ] && docker image inspect "$candidate" >/dev/null 2>&1; then
       selected_image="$candidate"
       image_resolution="local-cache"
@@ -1901,6 +2149,7 @@ else
     emit_json '{"success": false, "error": "no usable image candidate was found", "phase": "image"}'
     exit 20
   fi
+  selected_image_id="$(docker image inspect -f '{{.Id}}' "$selected_image" 2>/dev/null || true)"
   if [ -z "$machine_type" ]; then
     machine_type="$(infer_type_from_image "$selected_image" || true)"
   fi
@@ -1954,6 +2203,7 @@ else
     "${mount_args[@]}" \
     "${visibility_args[@]}" \
     --label com.vaws.base_image="$selected_image" \
+    --label com.vaws.base_image_id="$selected_image_id" \
     --label com.vaws.run_image="$run_image" \
     --label com.vaws.prepared_image="$prepared_image" \
     "$run_image" >/dev/null
@@ -2019,7 +2269,7 @@ elif command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 
   firewall="firewalld"
 fi
 
-payload=$(python3 - <<'PY' "$container" "$port" "$image_request_json" "$selected_image" "$image_resolution" "$workdir" "$namespace" "$created" "$started" "$pulled" "$installed_ssh" "$firewall" "${actions[*]}" "$previous_image" "$replace_on_image_change" "$machine_type" "$container_type" "$soc" "$host_env_file" "$host_metadata_file" "$container_env_file" "$container_metadata_file" "$package_bootstrap" "$run_image" "$prepared_image" "$use_prepared_image_cache" "$used_prepared_image_cache" "$created_prepared_image_cache" "$docker_pull_policy" "$visible_devices"
+payload=$(python3 - <<'PY' "$container" "$port" "$image_request_json" "$selected_image" "$image_resolution" "$workdir" "$namespace" "$created" "$started" "$pulled" "$installed_ssh" "$firewall" "${actions[*]}" "$previous_image" "$replace_on_image_change" "$machine_type" "$container_type" "$soc" "$host_env_file" "$host_metadata_file" "$container_env_file" "$container_metadata_file" "$package_bootstrap" "$run_image" "$prepared_image" "$use_prepared_image_cache" "$used_prepared_image_cache" "$created_prepared_image_cache" "$docker_pull_policy" "$visible_devices" "$selected_image_id" "$runtime_image_candidates_json" "$local_image_discovery"
 import json
 import sys
 (
@@ -2053,6 +2303,9 @@ import sys
     created_prepared_image_cache,
     docker_pull_policy,
     visible_devices,
+    selected_image_id,
+    runtime_image_candidates_json,
+    local_image_discovery_json,
 ) = sys.argv[1:]
 image_request = json.loads(image_request_json)
 print(json.dumps({
@@ -2065,6 +2318,7 @@ print(json.dumps({
     "image_policy": image_request.get("policy"),
     "resolved_tag": image_request.get("resolved_tag"),
     "selected_image": selected_image,
+    "selected_image_id": selected_image_id or None,
     "run_image": run_image or selected_image,
     "prepared_image": prepared_image or None,
     "prepared_image_cache_requested": use_prepared_image_cache == "true",
@@ -2073,8 +2327,9 @@ print(json.dumps({
     "image_resolution": image_resolution,
     "docker_pull_policy": docker_pull_policy,
     "visible_devices": [int(item) for item in visible_devices.split(",") if item] if visible_devices else [],
-    "image_candidates": list(image_request.get("candidates") or []),
+    "image_candidates": json.loads(runtime_image_candidates_json),
     "image_mirror_order": list(image_request.get("mirror_order") or []),
+    "local_image_discovery": json.loads(local_image_discovery_json) if local_image_discovery_json != "null" else None,
     "workdir": workdir,
     "namespace": namespace or None,
     "previous_image": previous_image or None,
@@ -2099,8 +2354,11 @@ PY
 emit_progress "complete" "done" "managed container bootstrap completed" 0
 emit_json "$payload"
 """
-    return template.replace("__SENTINEL__", SENTINEL).replace(
-        "__PROGRESS__", PROGRESS_SENTINEL
+    return (
+        template.replace("__SENTINEL__", SENTINEL)
+        .replace("__PROGRESS__", PROGRESS_SENTINEL)
+        .replace("__LOCAL_IMAGE_DISCOVERY_PY__", LOCAL_IMAGE_DISCOVERY_PY)
+        .replace("__LOCAL_IMAGE_DISCOVERY_POLICY__", IMAGE_POLICY_LOCAL_LATEST)
     )
 
 
@@ -2814,7 +3072,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--image",
         required=True,
         help=(
-            "explicit image selector: `rc`, `main`, `stable`, or a full non-latest image reference; "
+            "explicit image selector: `local-latest`, `rc`, `main`, `stable`, or a full non-latest image reference; "
             f"`rc` resolves the newest official prerelease tag, and `main` tries {DEFAULT_IMAGE_CANDIDATES[0]} then {DEFAULT_IMAGE_CANDIDATES[1]}"
         ),
     )
@@ -2891,7 +3149,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--image",
         required=True,
         help=(
-            "explicit image selector: `rc`, `main`, `stable`, or a full non-latest image reference; "
+            "explicit image selector: `local-latest`, `rc`, `main`, `stable`, or a full non-latest image reference; "
             f"`rc` resolves the newest official prerelease tag, and `main` tries {DEFAULT_IMAGE_CANDIDATES[0]} then {DEFAULT_IMAGE_CANDIDATES[1]}"
         ),
     )

@@ -23,6 +23,7 @@ from _workflow_common import (  # noqa: E402
     host_target,
     image_request_matches_record,
     list_records,
+    local_image_discovery_blocker,
     machine_summary,
     print_json,
     probe_host,
@@ -41,7 +42,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--image",
         help=(
-            "explicit replacement image selector: `rc`, `main`, `stable`, or a full non-latest image reference; "
+            "explicit replacement image selector: `local-latest`, `rc`, `main`, `stable`, or a full non-latest image reference; "
             "omit only when the recorded image is already explicit and acceptable"
         ),
     )
@@ -161,6 +162,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         if probe.get("status") == "blocked":
             print_json(probe)
+            return 0
+        image_discovery_blocker = local_image_discovery_blocker(probe)
+        if image_discovery_blocker is not None:
+            print_json(image_discovery_blocker)
             return 0
 
         probed_machine_type = (

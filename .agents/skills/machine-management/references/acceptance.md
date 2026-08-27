@@ -80,8 +80,11 @@ These should not trigger `machine-management` unless machine readiness is the ob
 - `machine_add.py` persists final alias, namespace, host identity, container name, image, and SSH port into inventory without the agent having to call `inventory.py put`
 - the recorded inventory image is the actual selected image after mirror resolution and pull / cache fallback
 - selector-based image resolution is hardware-aware: A2 keeps the base tag, A3 appends `-a3`, and 310P appends `-310p`
+- `local-latest` scans the target host Docker daemon, accepts repository basenames containing `vllm-ascend` (including registry / namespace prefixes and repository-name prefixes or suffixes), filters by machine type, and selects the newest compatible image by Docker creation time without pulling
+- probe and bootstrap payloads expose `local_image_discovery`, the selected reference, and `selected_image_id`; an empty compatible set fails in the image-discovery phase
+- an existing container selected through `local-latest` is compared by immutable source image ID, so a reused tag that now points at a newer image triggers replacement when replacement consent is present
 - inventory persists `host.machine_type`, `host.soc`, and `container.machine_type`
-- `rc`, `main`, and `stable` remain first-class selectors, while `auto`, `*:latest`, and bare repositories without a tag are rejected as defaults
+- `local-latest`, `rc`, `main`, and `stable` remain first-class selectors, while `auto`, direct `*:latest`, and bare repositories without a tag are rejected as defaults
 - long-running bootstrap phases keep emitting attributable progress for image pull and package-install steps instead of going silent behind one global timeout
 - container-side apt bootstrap rewrites sources to the fixed A3-tested NJU mirror (`mirrors.nju.edu.cn`) before `apt-get update` / `apt-get install`
 - container bootstrap writes `/etc/pip.conf` with the single A3-tested HuaweiCloud pip source and no default extra indexes

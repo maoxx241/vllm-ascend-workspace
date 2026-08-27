@@ -70,7 +70,7 @@ When a workflow has deterministic shell, SSH, Git, or local-state mechanics, pre
 
 Wrapper-style helpers should stream bounded phase progress on `stderr` and keep one final machine-readable JSON payload on `stdout`.
 
-For machine-management specifically, image selection is an explicit user decision gate: choose `rc`, `main`, `stable`, or a concrete custom image reference. `rc` is the recommended developer track. Do not silently fall back to `auto`, `latest`, or another moving tag.
+For machine-management specifically, image selection is an explicit user decision gate: choose `local-latest`, `rc`, `main`, `stable`, or a concrete custom image reference. `local-latest` scans the target host's Docker images and deploys the newest machine-compatible `vllm-ascend` image without pulling; `rc` remains the recommended registry-backed developer track. Do not silently fall back to `auto`, `latest`, or another moving tag.
 
 When you add or revise a helper script, keep the CLI alias-tolerant and give safe defaults for metadata that can be inferred. The goal is to reduce agent parameter brittleness, not to force one exact flag spelling.
 

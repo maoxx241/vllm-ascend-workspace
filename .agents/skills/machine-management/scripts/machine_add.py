@@ -23,6 +23,7 @@ from _workflow_common import (  # noqa: E402
     host_target,
     image_request_matches_record,
     list_records,
+    local_image_discovery_blocker,
     load_or_create_profile,
     machine_summary,
     print_json,
@@ -60,7 +61,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--image",
         help=(
-            "explicit image selector: `rc`, `main`, `stable`, or a full non-latest image reference; "
+            "explicit image selector: `local-latest`, `rc`, `main`, `stable`, or a full non-latest image reference; "
             "this workflow does not default implicitly"
         ),
     )
@@ -199,6 +200,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         if probe.get("status") == "blocked":
             print_json(probe)
+            return 0
+        image_discovery_blocker = local_image_discovery_blocker(probe)
+        if image_discovery_blocker is not None:
+            print_json(image_discovery_blocker)
             return 0
         free_port = probe.get("free_port")
         if not isinstance(free_port, int) and existing is None:
