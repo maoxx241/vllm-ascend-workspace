@@ -17,7 +17,7 @@ REPO_ROOT = REMOTE_DEV_ROOT.parent
 if str(REMOTE_DEV_ROOT) not in sys.path:
     sys.path.insert(0, str(REMOTE_DEV_ROOT))
 
-from mcp.schemas import ENDPOINT_PROPS, ENDPOINT_SELECTOR_ANY_OF, TOOL_SCHEMAS  # noqa: E402
+from mcp.schemas import ALIASES, ENDPOINT_PROPS, ENDPOINT_SELECTOR_DESCRIPTION, TOOL_SCHEMAS  # noqa: E402
 from mcp.tools import call_tool, list_resources, list_tools, read_resource  # noqa: E402
 
 
@@ -93,28 +93,28 @@ def mcp_and_burden_checks() -> dict[str, Any]:
     endpoint_selector_tools = {
         name
         for name, schema in TOOL_SCHEMAS.items()
-        if {"anyOf": ENDPOINT_SELECTOR_ANY_OF} in schema.get("allOf", [])
+        if ENDPOINT_SELECTOR_DESCRIPTION in schema.get("description", "")
     }
     endpoint_selector_missing = sorted(set(TOOL_SCHEMAS) - {"remote.job_status", "remote.job_tail", "remote.job_stop"} - endpoint_selector_tools)
     own_required_counts = {
         name: len(required - endpoint_fields)
         for name, required in required_by_tool.items()
     }
-    has_native_shape_names = all(name.startswith("remote.") for name in names)
+    has_native_shape_names = all(name.startswith("remote_") for name in names)
     all_have_schema = all("inputSchema" in tool for tool in tools)
     resources = list_resources()
     status = "ok"
     failures: list[str] = []
-    if set(names) != set(TOOL_SCHEMAS):
-        failures.append("tools/list does not match TOOL_SCHEMAS")
+    if set(names) != set(ALIASES) or len(names) != len(set(names)):
+        failures.append("tools/list does not match unique portable aliases")
     if set(scripts) != expected_scripts:
         failures.append("CLI remote_*.py wrappers do not match TOOL_SCHEMAS")
     if endpoint_required:
         failures.append("endpoint fields should not be top-level required by tool schemas")
     if endpoint_selector_missing:
-        failures.append("remote tools should express endpoint selector anyOf in tool schemas")
+        failures.append("remote tools should describe the server-enforced endpoint selector requirement")
     if not has_native_shape_names:
-        failures.append("tool names should retain remote.<native-tool> shape")
+        failures.append("wire tool names should retain remote_<native-tool> shape")
     if not all_have_schema:
         failures.append("every tool must expose inputSchema")
     if failures:

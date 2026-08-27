@@ -1,8 +1,21 @@
 # Remote-Dev Scaffold Validation
 
-Last updated: 2026-05-25.
+Last updated: 2026-08-27.
 
-## Current Evidence
+## Current Client Compatibility Evidence (2026-08-27)
+
+See [client compatibility](CLIENT_COMPATIBILITY.md) for client-native config
+locations, common object schemas, portable wire names, approval behavior, and
+version-specific real-client smoke results. Kimi Code, Claude + DeepSeek V4,
+Codex, and Grok all passed real MCP patch-and-read checks. The focused regression set passes
+60 tests. The full 81-test run retains 8 failures in two existing Claude
+skill-shim checks, reproduced on unchanged HEAD; it is not a fully passing suite.
+
+## Historical Evidence (2026-05-25)
+
+The following records describe the earlier validation snapshot, not a rerun on
+the current checkout. Its endpoint `anyOf` representation is superseded by the
+portable schemas documented above; endpoint validation remains server-enforced.
 
 - Local contract gates pass:
   - `python3 -m compileall -q .remote-dev .agents`

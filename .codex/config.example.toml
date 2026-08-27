@@ -1,15 +1,26 @@
+# Copy to config.toml and replace the absolute checkout path below.
+# Interactive MCP confirmation must remain available; headless runs need
+# explicit, invocation-scoped approvals for the exact tools they will use.
+approval_policy = "on-request"
+
 [mcp_servers.remote_dev]
 command = "python3"
-args = [".remote-dev/mcp/server.py"]
+args = ["/absolute/path/to/vllm-ascend-workspace/.remote-dev/mcp/server.py"]
+cwd = "/absolute/path/to/vllm-ascend-workspace"
 startup_timeout_sec = 20
 tool_timeout_sec = 600
 enabled = true
+
+[mcp_servers.remote_dev.env]
+REMOTE_DEV_DEFAULT_USER = "root"
+REMOTE_DEV_DEFAULT_ROOT = "/vllm-workspace"
+REMOTE_DEV_DEFAULT_CWD = "/vllm-workspace"
 
 [features]
 hooks = true
 
 [[hooks.PreToolUse]]
-matcher = "^Bash$|^apply_patch$|^mcp__remote-dev__.*"
+matcher = "^Bash$|^apply_patch$|^mcp__(remote-dev|remote_dev)__.*"
 
 [[hooks.PreToolUse.hooks]]
 type = "command"
