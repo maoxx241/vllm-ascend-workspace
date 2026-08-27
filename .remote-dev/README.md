@@ -40,6 +40,11 @@ field and `remote-dev.result.v1` metadata in `result`. The MCP server supports
 standard stdio `Content-Length` framing and a newline-delimited JSON-RPC fallback
 for simple tests.
 
+The names above are canonical dispatcher/result names. MCP discovery advertises
+portable underscore names such as `remote_read`; dotted calls remain accepted.
+See [client compatibility](CLIENT_COMPATIBILITY.md) for Kimi, Claude, Codex,
+Cursor, and Grok configuration and version-specific verification.
+
 MCP resources expose endpoint state and generated evidence:
 
 - `remote://endpoints`

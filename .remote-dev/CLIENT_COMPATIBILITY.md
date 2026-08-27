@@ -31,6 +31,13 @@ avoids that CLI incompatibility. Use `cursor-agent` explicitly when Grok also
 provides an `agent` command; the shared MCP does not require changing either
 client's shell aliases.
 
+If Cursor's model cannot discover the tools, check **Customize > MCPs >
+remote-dev** and enable the repository source. A disabled source can still be
+listed in the UI; it is not evidence that the model can call it. Start a new
+agent after enabling it. Cursor Agent separately requires server approval
+(`cursor-agent mcp enable remote-dev`) and a valid client login; these are not
+MCP schema problems.
+
 Grok's automatic `.mcp.json` import depends on its Claude-import state; a native
 `.grok/config.toml` avoids that ambiguity. Confirm project trust on first use.
 Check registration with `grok inspect --json` and `grok mcp doctor remote-dev --json`,
@@ -79,31 +86,52 @@ interactive calls should use the client's confirmation flow.
 
 ## Verification, 2026-08-27
 
-The smoke tests use only a newly created remote scratch directory. Each model
-must actually invoke MCP patch + read and return the exact marker. A successful
-process exit or a server listed as connected does not count as a passing test.
+PR #64 code/config revision `1f93400` was exercised from the VAWS checkout. Each
+model performed four sequential MCP calls in a newly created remote scratch
+directory: patch a new file, read it, replace its content with `remote_multi_edit`,
+and read it again. Final content and SHA256 were independently checked remotely.
+A successful process exit or a server listed as connected does not count as a
+passing test.
 
-| Client / model | Version | Final-schema result |
+| Client / model | Version | Four-call result |
 | --- | --- | --- |
-| Kimi Code / `kimi-for-coding` | 0.38.0 | Patch + read passed, `MCP_KIMI_OK` |
-| Claude Code / `deepseek-v4-flash` | 2.1.143 | Patch + read passed, `MCP_DSV4_OK` |
-| Codex / `gpt-5.6-sol` | 0.147.0 | Patch + read passed in both headless and normal interactive confirmation flows, `MCP_CODEX_OK` |
-| Grok Build / `grok-4.6` | 1.0.5 | Discovery + patch + read passed, `MCP_GROK_OK` |
+| Kimi Code / `kimi-for-coding` | 0.38.0 | Passed, `VAWS_PR64_kimi_clean_OK` |
+| Claude Code / `deepseek-v4-flash` | 2.1.143 | Passed, `VAWS_PR64_claude_OK` |
+| Codex / `gpt-5.6-sol` | 0.147.0 | Passed, `VAWS_PR64_codex_OK` |
+| Grok Build / `grok-4.6` (`grok-4.6-build` usage ID) | 1.0.5 | Discovery and calls passed, `VAWS_PR64_grok_OK` |
+| Cursor IDE / Cursor Grok 4.6 | 3.17.19 | Discovery and calls passed, `VAWS_PR64_cursor_OK` |
 
-Grok used `dontAsk` plus invocation-only allow rules for
-`MCPTool(remote-dev__remote_apply_patch)` and `MCPTool(remote-dev__remote_read)`.
-Its model round trips took about 290 seconds; the final MCP calls succeeded.
-No blanket approvals were persisted for any client.
+The initial Kimi attempt incorrectly escaped patch newlines; the server rejected
+that payload without writing, and the model corrected it. A fresh-file rerun
+with an explicit multiline patch passed all four calls without a retry.
+
+Cursor Agent `2026.08.25-3e8eec8` loaded all 18 tools with the relative path, but
+its model request failed because its saved login had expired. That CLI model run
+is **not** counted as passing: the completed Cursor row is the native IDE test,
+using its existing authenticated session after enabling the workspace MCP source.
+
+Grok and Codex headless checks used invocation-scoped approvals for only
+`remote_apply_patch`, `remote_read`, and `remote_multi_edit`. No blanket approvals
+were persisted. The same server code also passed a separate Codex patch/read
+test with normal allow-once interactive confirmations.
 
 Remote Python 3.9.9 unit validation:
 
-- 60 focused tests pass: MCP schema/framing/aliases, missing arguments,
-  patch atomicity/path guards, endpoints, read/write/edit, artifacts, and hooks.
+- 63 focused tests pass: MCP schema/framing/aliases, native Cursor entry, missing
+  arguments, patch atomicity/path guards, endpoints, read/write/edit, artifacts,
+  hooks, and CLI wrappers/errors. The same 63 tests pass in GitHub Actions on
+  both Python 3.9 and 3.12.
 - MCP burden validation passes: 18 tools, 18 CLI wrappers, no missing documented
   endpoint requirements, maximum 3 tool-specific required arguments.
-- Full suite: 81 tests, 8 failures within the two pre-existing Claude skill-shim
-  checks in `test_cli_help.py`. The unchanged HEAD snapshot reproduces the same
-  8 failures. No unrelated skill packages were changed to mask this baseline.
+- Full suite: 82 tests, 8 failures within the two pre-existing Claude skill-shim
+  checks in `test_cli_help.py`. Base commit `2176b48` runs 73 tests and reproduces
+  exactly the same 8 failures. No unrelated skill packages were changed to mask
+  this baseline.
+
+The focused CI command is in `.github/workflows/remote-dev.yml`; the full suite
+can be reproduced with `python3 -B -m unittest discover -s .remote-dev/tests` on
+a remote validation host. These unit tests use temporary files and mocked
+transports and do not require NPU access.
 
 These checks establish this MCP integration at the versions above, not every
 provider feature, arbitrary future versions, or NPU/model-serving correctness.

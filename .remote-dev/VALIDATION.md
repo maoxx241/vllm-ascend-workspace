@@ -7,9 +7,13 @@ Last updated: 2026-08-27.
 See [client compatibility](CLIENT_COMPATIBILITY.md) for client-native config
 locations, common object schemas, portable wire names, approval behavior, and
 version-specific real-client smoke results. Kimi Code, Claude + DeepSeek V4,
-Codex, and Grok all passed real MCP patch-and-read checks. The focused regression set passes
-60 tests. The full 81-test run retains 8 failures in two existing Claude
-skill-shim checks, reproduced on unchanged HEAD; it is not a fully passing suite.
+Codex, Grok, and Cursor IDE all passed real MCP patch/read/multi-edit/read checks
+on code/config revision `1f93400`. Cursor CLI separately loaded all 18 tools but
+its model request needs a fresh login and is not counted as passing. The focused
+regression set passes 63 tests remotely and in Python 3.9/3.12 CI. The full
+82-test run retains 8 failures in two existing Claude skill-shim checks; base
+commit `2176b48` reproduces the same failures in 73 tests. It is not a fully
+passing suite.
 
 ## Historical Evidence (2026-05-25)
 
