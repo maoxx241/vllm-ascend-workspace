@@ -21,7 +21,7 @@
 
 ## 目录和依赖
 
-项目依赖 Node.js 22+、Python 3.11+、系统 OpenSSH 客户端和 `ssh-keygen`。后端只使用 Python 标准库。项目分支只包含监控服务本身，适合以独立 Git worktree 部署。服务通过 worktree 的 Git common-dir 自动定位主工作区，也可用 `NFM_SOURCE_WORKSPACE` 显式指定，然后复用：
+项目依赖 Node.js 22.13+、Python 3.11+、系统 OpenSSH 客户端和 `ssh-keygen`。后端只使用 Python 标准库。支持 Linux systemd user service 和 Windows 原生任务计划程序两种持续运行方式。项目分支只包含监控服务本身，适合以独立 Git worktree 部署。服务通过 worktree 的 Git common-dir 自动定位主工作区，也可用 `NFM_SOURCE_WORKSPACE` 显式指定，然后复用：
 
 - `.agents/skills/machine-management/scripts/manage_machine.py`：一次性密码引导和公钥安装；
 - `.agents/skills/machine-management/scripts/npu_occupancy.py`：Ascend NPU 解析；
@@ -65,6 +65,18 @@ journalctl --user -u npu-fleet-monitor -f
 ```
 
 环境变量示例见 `.env.example`。部署脚本不会修改远程服务器上的系统配置，只会在目标 SSH 用户的 `authorized_keys` 中幂等加入监控公钥。
+
+### Windows
+
+在项目根目录的普通 PowerShell 中运行：
+
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass
+.\scripts\install-windows-service.ps1
+.\scripts\manage-windows-service.ps1 status
+```
+
+Windows 版本使用当前用户的任务计划程序在登录后启动，异常退出自动重试，仍然只监听 `127.0.0.1`。无需 NSSM、Docker Desktop 或 WSL；完整安装、参数、日志和卸载说明见 [Windows 原生部署](docs/windows-deployment.md)。
 
 ## 批量格式
 

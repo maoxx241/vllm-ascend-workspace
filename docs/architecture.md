@@ -29,6 +29,8 @@ An NPU is busy when the host process table reports an owner, AICore utilization 
 
 Each cycle is non-overlapping: a new cycle is scheduled only after the previous one finishes. Host probes run in a bounded thread pool, and OpenSSH `ControlPersist` reuses authenticated connections. Its control socket uses a short project-relative path so a deeply nested worktree cannot exceed the Unix-domain socket path limit. If a 1-second cycle cannot finish within one second, the system naturally runs at the achievable rate instead of creating a backlog.
 
+On native Windows, the OpenSSH client does not use Unix-domain control sockets, so `ControlMaster`, `ControlPersist`, and `ControlPath` are omitted while all other host-key, identity, timeout, and keepalive controls remain active. The Windows installer runs the same Python supervisor under a per-user scheduled task triggered at logon; both processes continue to bind loopback only. The generated private key receives an explicit current-user-only Windows ACL.
+
 ## Persistence
 
 SQLite runs in WAL mode. The primary history index is `(server_id, collected_at DESC)`, matching server-range reports, with a second time index for retention cleanup and fleet reports. Detailed snapshots are stored as JSON alongside summary columns used by aggregate queries. The heatmap endpoint groups summary columns and `payload_json.devices` with SQLite JSON functions into timezone-aligned two-hour buckets, so the UI can render both server-level and per-NPU activity without loading raw samples into the browser.

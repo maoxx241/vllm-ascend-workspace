@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import signal
+import shutil
 import subprocess
 import sys
 import time
@@ -10,6 +11,15 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def frontend_command(env: dict[str, str], *, platform: str | None = None) -> list[str]:
+    platform = platform or os.name
+    candidates = ("npm.cmd", "npm.exe", "npm") if platform == "nt" else ("npm",)
+    npm = next((path for name in candidates if (path := shutil.which(name))), None)
+    if not npm:
+        raise RuntimeError("npm executable not found on PATH")
+    return [npm, "run", "start", "--", "--hostname", env["NFM_BIND"], "--port", env["NFM_WEB_PORT"]]
 
 
 def main() -> int:
@@ -25,7 +35,7 @@ def main() -> int:
     children = [
         subprocess.Popen([sys.executable, "-m", "npu_fleet_monitor"], cwd=ROOT, env=env),
         subprocess.Popen(
-            ["npm", "run", "start", "--", "--hostname", env["NFM_BIND"], "--port", env["NFM_WEB_PORT"]],
+            frontend_command(env),
             cwd=ROOT,
             env=env,
         ),

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import subprocess
 import tempfile
 import unittest
 from unittest import mock
@@ -121,6 +122,40 @@ class ProbeTests(unittest.TestCase):
             option = next(command[index + 1] for index, value in enumerate(command) if value == "-o" and command[index + 1].startswith("ControlPath="))
             expanded = option.split("=", 1)[1].replace("%C", "x" * 40)
             self.assertLess(len(expanded), 100)
+
+    def test_windows_ssh_omits_unix_control_socket_options(self) -> None:
+        with tempfile.TemporaryDirectory() as state:
+            project = Path(__file__).resolve().parents[2]
+            adapter = WorkspaceDeviceAdapter(project, Path(state))
+            adapter.is_windows = True
+            with mock.patch.object(adapter, "ensure_key", return_value=adapter.private_key):
+                command = adapter.ssh_base({"host": "10.0.0.1", "port": 22, "username": "root"})
+            rendered = " ".join(command)
+            self.assertNotIn("ControlMaster", rendered)
+            self.assertNotIn("ControlPersist", rendered)
+            self.assertNotIn("ControlPath", rendered)
+            self.assertIn("IdentitiesOnly=yes", rendered)
+
+    def test_windows_private_key_acl_is_scoped_to_current_user_once(self) -> None:
+        with tempfile.TemporaryDirectory() as state:
+            project = Path(__file__).resolve().parents[2]
+            adapter = WorkspaceDeviceAdapter(project, Path(state))
+            adapter.is_windows = True
+            adapter.private_key.parent.mkdir(parents=True)
+            adapter.private_key.write_text("private", encoding="utf-8")
+            adapter.public_key.write_text("public", encoding="utf-8")
+            responses = [
+                subprocess.CompletedProcess(["whoami"], 0, "DOMAIN\\monitor\n", ""),
+                subprocess.CompletedProcess(["icacls"], 0, "processed", ""),
+            ]
+            with mock.patch("npu_fleet_monitor.workspace_adapter.subprocess.run", side_effect=responses) as run:
+                adapter._secure_key_permissions()
+                adapter._secure_key_permissions()
+            self.assertEqual(run.call_count, 2)
+            self.assertEqual(
+                run.call_args_list[1].args[0],
+                ["icacls", str(adapter.private_key), "/inheritance:r", "/grant:r", "DOMAIN\\monitor:(R,W)"],
+            )
 
     def test_explicit_source_workspace_takes_precedence(self) -> None:
         with tempfile.TemporaryDirectory() as root, tempfile.TemporaryDirectory() as state:

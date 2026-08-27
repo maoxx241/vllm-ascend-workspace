@@ -29,6 +29,8 @@ class WorkspaceDeviceAdapter:
             if self.workspace_root else None
         )
         self._npu_module: ModuleType | None = None
+        self.is_windows = os.name == "nt"
+        self._key_permissions_ready = False
 
     def _find_workspace_root(self) -> Path | None:
         candidates: list[Path] = []
@@ -83,6 +85,7 @@ class WorkspaceDeviceAdapter:
 
     def ensure_key(self) -> Path:
         if self.private_key.exists() and self.public_key.exists():
+            self._secure_key_permissions()
             return self.private_key
         self.private_key.parent.mkdir(parents=True, exist_ok=True)
         result = subprocess.run(
@@ -96,15 +99,35 @@ class WorkspaceDeviceAdapter:
         )
         if result.returncode != 0:
             raise RuntimeError((result.stderr or "ssh-keygen failed")[-1000:])
-        self.private_key.chmod(0o600)
-        self.public_key.chmod(0o600)
+        self._secure_key_permissions()
         return self.private_key
+
+    def _secure_key_permissions(self) -> None:
+        if self._key_permissions_ready:
+            return
+        self.private_key.chmod(0o600)
+        if self.public_key.exists():
+            self.public_key.chmod(0o600)
+        if self.is_windows:
+            identity = subprocess.run(
+                ["whoami"], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, timeout=5, check=False,
+            )
+            user = identity.stdout.strip()
+            if identity.returncode != 0 or not user:
+                raise RuntimeError("无法确定当前 Windows 用户，不能收紧监控私钥 ACL")
+            acl = subprocess.run(
+                ["icacls", str(self.private_key), "/inheritance:r", "/grant:r", f"{user}:(R,W)"],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=10, check=False,
+            )
+            if acl.returncode != 0:
+                raise RuntimeError((acl.stderr or acl.stdout or "icacls failed")[-1000:])
+        self._key_permissions_ready = True
 
     def ssh_base(self, server: dict[str, Any], *, batch_mode: bool = True) -> list[str]:
         self.validate_endpoint(server["host"], int(server["port"]), server["username"])
         self.ensure_key()
-        control_path = Path("data") / "ssh-control" / "%C"
-        return [
+        command = [
             "ssh", "-T",
             "-o", f"BatchMode={'yes' if batch_mode else 'no'}",
             "-o", "StrictHostKeyChecking=accept-new",
@@ -114,14 +137,21 @@ class WorkspaceDeviceAdapter:
             "-o", "ConnectionAttempts=1",
             "-o", "ServerAliveInterval=10",
             "-o", "ServerAliveCountMax=1",
-            "-o", "ControlMaster=auto",
-            "-o", "ControlPersist=90",
-            "-o", f"ControlPath={control_path}",
+        ]
+        if not self.is_windows:
+            control_path = Path("data") / "ssh-control" / "%C"
+            command.extend([
+                "-o", "ControlMaster=auto",
+                "-o", "ControlPersist=90",
+                "-o", f"ControlPath={control_path}",
+            ])
+        command.extend([
             "-i", str(self.private_key),
             "-o", "IdentitiesOnly=yes",
             "-p", str(server["port"]),
             f"{server['username']}@{server['host']}",
-        ]
+        ])
+        return command
 
     def preflight(self, server: dict[str, Any]) -> dict[str, Any]:
         self.validate_endpoint(server["host"], int(server["port"]), server["username"])
