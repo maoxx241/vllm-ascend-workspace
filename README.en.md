@@ -27,6 +27,16 @@ If you use an Agent-capable IDE (Cursor, Windsurf, etc.) or terminal tool (Claud
 
 The Agent will detect your environment, install required tools, and configure Git remotes and forks.
 
+## Local NPU fleet monitoring
+
+The `npu-fleet-monitor` Skill deploys a persistent NPU fleet monitoring service. The application is maintained on the standalone `vaws-top` branch; the deployment entrypoint fetches that branch, creates a dedicated worktree, builds the frontend, and installs and enables a systemd user service:
+
+```bash
+python3 .agents/skills/npu-fleet-monitor/scripts/manage_monitor.py ensure
+```
+
+After deployment, open <http://127.0.0.1:8788>. The dashboard shows NPU/AICore, HBM, CPU, system memory, disk, mount, and Docker status with historical trends and heatmaps. Active browsers can request 1, 5, 10, or 30-second updates; the collector returns to its low-frequency cadence when no page is active. See [Local NPU Fleet Monitor deployment](docs/npu-fleet-monitor.md) for installation, operations, and data-directory details.
+
 ## Built-in skills
 
 
@@ -34,6 +44,7 @@ The Agent will detect your environment, install required tools, and configure Gi
 | ---------------------- | -------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
 | **repo-init**          | Install GitHub CLI, authenticate, initialize submodules, configure forks and remote topology | After first clone                                          |
 | **machine-management** | Add, verify, repair, or remove a remote Ascend NPU server and its managed container          | When setting up a remote NPU dev machine                   |
+| **npu-fleet-monitor**  | Build, start, inspect, or stop the local NPU dashboard from its standalone project worktree | When continuously monitoring fleet resources and history  |
 | **session-management** | Create, inspect, group, and clean isolated sessions: local worktree, remote container, state namespace, and resource leases | For parallel remote work, multiple agents, or PD deployments |
 | **remote-toolbox**    | Structured target/probe/exec/job/sync/service/artifact/cleanup tools for remote containers | When agents need local-tool-like control of a remote session container |
 | **remote-code-parity** | Sync the full local workspace state (including uncommitted changes) to a remote container    | Triggered automatically before remote test or service runs |
@@ -100,6 +111,7 @@ When talking to an Agent:
 │   ├── skills/
 │   │   ├── repo-init/         # Workspace initialization skill
 │   │   ├── machine-management/    # Remote machine management skill
+│   │   ├── npu-fleet-monitor/     # Local NPU monitor deployment skill
 │   │   ├── session-management/    # Parallel session isolation skill
 │   │   ├── remote-toolbox/        # Structured remote toolbox
 │   │   ├── remote-code-parity/    # Code synchronization skill
@@ -159,6 +171,7 @@ This repository supports mainstream AI coding tools:
 
 - **repo-init** — Workspace initialization: GitHub CLI install, auth, submodules, fork & remote topology
 - **machine-management** — Remote machine management: add, verify, repair, remove Ascend NPU servers and managed containers
+- **npu-fleet-monitor** — Standalone-worktree monitoring service with automatic build, user-systemd startup, and loopback health checks
 - **remote-code-parity** — Code sync: push full local workspace state (including uncommitted changes) to remote containers
 - **vllm-ascend-serving** — Service launch: idle NPU detection, idle port detection, one-click vLLM Ascend inference serving
 - **vllm-ascend-benchmark** — Online performance benchmarking: single-run / multi-run (warm-service) mode, warmup exclusion, statistical aggregation; multi-state regression comparisons orchestrated by the Agent
