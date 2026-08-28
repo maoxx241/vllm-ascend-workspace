@@ -154,7 +154,10 @@ def publish(root: Path, cache: Path, manifest: dict[str, Any]) -> Path:
     destination = cache / manifest["build_key"]
     if destination.exists():
         existing = json.loads((destination / "manifest.json").read_text())
-        if existing != manifest:
+        # A new successful smoke log can contain a new timestamp/PID without
+        # changing native outputs. Keep the original verified evidence bundle.
+        identity_fields = ("schema_version", "profile", "profile_key", "build_inputs", "build_key", "runtime_root", "files")
+        if any(existing.get(key) != manifest.get(key) for key in identity_fields):
             raise ValueError("same build inputs produced different artifacts; inspect reproducibility")
         verify(destination, existing, check_environment=False)
         return destination

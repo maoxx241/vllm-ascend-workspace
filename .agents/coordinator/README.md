@@ -77,6 +77,11 @@ performed by importing or running tests in this PR.
    reference; and `system_files` entries for actual CANN/driver version files
    (`{"path": "/absolute/path", "sha256": "..."}`). Include additional critical
    `.pth`, compatibility-library or compiler files when the profile needs them.
+   Optional `packages` pins additional installed dependencies (for example
+   NumPy or Triton). Record build flags from the actual successful build recipe;
+   a handwritten manifest cannot infer what an arbitrary old library was built
+   against. K3 profiles must also record their required `VLLM_VERSION` and full
+   `VLLM_PLUGINS` selection; no default version pair is silently selected.
 4. `files` explicitly enumerates every runtime output relative to the runtime
    root, mapping each path to a role. At minimum it needs `library` and
    `metadata` roles. For Ascend custom operators include the kernel library,

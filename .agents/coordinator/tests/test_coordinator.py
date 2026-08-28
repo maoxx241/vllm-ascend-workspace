@@ -209,10 +209,19 @@ class ProfileTests(unittest.TestCase):
             with mock.patch("vaws_runtime_profile.importlib.metadata.version", return_value="test-version"), mock.patch("vaws_runtime_profile.sysconfig.get_config_var", return_value="test-version"):
                 bundle = publish(root, Path(tmp) / "bundles", manifest)
                 self.assertEqual(publish(root, Path(tmp) / "bundles", manifest), bundle)
+                (root / "smoke.txt").write_text("same passed smoke, new timestamp")
+                refreshed = copy.deepcopy(manifest)
+                refreshed["evidence"]["smoke"]["sha256"] = hashlib.sha256((root / "smoke.txt").read_bytes()).hexdigest()
+                self.assertEqual(publish(root, Path(tmp) / "bundles", refreshed), bundle)
+                # Restoration also restores the original complete evidence,
+                # rather than mixing its manifest with a newer smoke receipt.
                 (root / "kernels.so").unlink()
                 with self.assertRaisesRegex(ValueError, "missing required"):
                     verify(root, manifest)
                 restore(root, bundle, manifest["build_key"])
+                with mock.patch("vaws_runtime_profile.sysconfig.get_config_var", return_value="different-abi"):
+                    with self.assertRaisesRegex(ValueError, "Python ABI changed"):
+                        verify(root, manifest)
                 (root / "binary_info_config.json").write_text("corrupt")
                 with self.assertRaisesRegex(ValueError, "hash mismatch"):
                     verify(root, manifest)

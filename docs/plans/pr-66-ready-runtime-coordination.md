@@ -185,5 +185,9 @@ has been marked K3-compatible solely from CI or an image name.
 - `1d8a6be`: both workflows passed again, including lost-grant/submit reply
   recovery, Run Manifest v1 exports and external-source staging tests (Skill
   catalog run 33140143240, Remote-dev run 33140143182).
-- Final-head verification will be recorded in the PR description after the
-  complete documentation and port-guard update passes.
+- `6991d7e`: all four checks passed after documentation, declared-port guards
+  and expiry recovery updates (Skill catalog run 33140577672, Remote-dev run
+  33140577671). Logs confirm 13 coordinator/HTTP tests, 32 session tests,
+  17 scaffold safety tests, 5 shared-inventory tests and 12 parity tests.
+- Final-head verification is recorded in the PR description, including the
+  evidence-refresh cache regression added after this passing snapshot.
