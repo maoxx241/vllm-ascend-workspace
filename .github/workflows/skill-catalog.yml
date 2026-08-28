@@ -58,6 +58,7 @@ jobs:
       - name: Run scaffold ownership and parity regressions
         run: |
           python -B -m unittest discover -s .agents/tests -p "test_vaws_scaffold_safety.py"
+          python -B -m unittest discover -s .agents/tests -p "test_shared_inventory_state.py"
           python -B -m unittest discover -s .agents/skills/remote-code-parity/tests
 
       - name: Validate parameterized Ray helpers
@@ -83,3 +84,14 @@ jobs:
 
       - name: Run PD-serving tests
         run: python -B -m unittest discover -s .agents/skills/vllm-ascend-pd-serving/tests
+
+  coordinator:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -r .agents/coordinator/requirements.txt
+      - name: Runtime pool, artifacts and real HTTP MCP contracts
+        run: python -B -m unittest discover -s .agents/coordinator/tests -v
