@@ -1,0 +1,329 @@
+"""Shared ready-runtime registry. Host NpuCoordinator remains card authority.
+
+One manager process owns this database. Transactions persist intent before
+remote calls, whose idempotent task ids survive manager restart. Neither this
+module nor its backend creates containers, installs packages or kills workers.
+"""
+from __future__ import annotations
+
+import contextlib
+import json
+import re
+import sqlite3
+import threading
+import time
+import uuid
+from pathlib import Path, PurePosixPath
+from typing import Any
+
+from vaws_runtime_profile import digest
+
+TERMINAL = {"released", "cancelled", "expired"}
+
+
+def safe_id(value: str) -> str:
+    if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}", value):
+        raise ValueError("invalid identifier")
+    return value
+
+
+def endpoint(value: dict[str, Any], *, container: bool = False) -> dict[str, Any]:
+    host, user, port = value.get("host", ""), value.get("user", "root"), int(value.get("port", 22))
+    if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9.:-]*", host) or not re.fullmatch(r"[a-zA-Z0-9_][a-zA-Z0-9_.-]*", user) or not 0 < port < 65536:
+        raise ValueError("invalid endpoint")
+    result = {"host": host, "port": port, "user": user}
+    if container:
+        root = value.get("root", "")
+        if not root.startswith("/") or root == "/" or ".." in PurePosixPath(root).parts:
+            raise ValueError("a dedicated absolute runtime root is required")
+        result.update(root=str(PurePosixPath(root)), cwd=str(PurePosixPath(root)))
+    return result
+
+
+class RuntimePool:
+    def __init__(self, state_dir: Path, backend: Any, *, clock=time.time):
+        self.state_dir, self.backend, self.clock = state_dir, backend, clock
+        state_dir.mkdir(parents=True, exist_ok=True)
+        self.db_path = state_dir / "coordinator.sqlite3"
+        self.lock = threading.RLock()
+        with self.transaction() as db:
+            db.execute("CREATE TABLE IF NOT EXISTS records(kind TEXT, id TEXT, data TEXT NOT NULL, PRIMARY KEY(kind,id))")
+            db.execute("CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY AUTOINCREMENT, owner TEXT NOT NULL, data TEXT NOT NULL)")
+
+    @contextlib.contextmanager
+    def transaction(self):
+        with sqlite3.connect(self.db_path, timeout=60) as db:
+            db.execute("PRAGMA journal_mode=WAL")
+            db.execute("PRAGMA synchronous=FULL")
+            db.execute("BEGIN IMMEDIATE")
+            yield db
+
+    @staticmethod
+    def get(db, kind, key):
+        row = db.execute("SELECT data FROM records WHERE kind=? AND id=?", (kind, key)).fetchone()
+        if row is None:
+            raise ValueError(f"unknown {kind}")
+        return json.loads(row[0])
+
+    @staticmethod
+    def put(db, kind, row):
+        db.execute("INSERT OR REPLACE INTO records VALUES(?,?,?)", (kind, row["id"], json.dumps(row, sort_keys=True)))
+
+    @staticmethod
+    def rows(db, kind):
+        return [json.loads(row[0]) for row in db.execute("SELECT data FROM records WHERE kind=? ORDER BY rowid", (kind,))]
+
+    def owned(self, db, kind, key, owner):
+        row = self.get(db, kind, key)
+        if row["owner"] != owner:
+            raise PermissionError("resource belongs to another principal")
+        return row
+
+    def event(self, db, owner, kind, **data):
+        event = {"kind": kind, "at": self.clock(), **data}
+        cur = db.execute("INSERT INTO events(owner,data) VALUES(?,?)", (owner, json.dumps(event)))
+        return {"cursor": cur.lastrowid, **event}
+
+    def session_open(self, owner: str, session_id: str, sources: dict[str, str]):
+        safe_id(owner)
+        safe_id(session_id)
+        if not sources or any(not isinstance(path, str) or not Path(path).is_absolute() for path in sources.values()):
+            raise ValueError("record the actual absolute local business worktree paths")
+        key = digest([owner, session_id])
+        with self.lock, self.transaction() as db:
+            for old in self.rows(db, "session"):
+                if old["id"] == key:
+                    if old["sources"] != sources:
+                        raise ValueError("session sources changed; use a new session id")
+                    return old
+            row = {"id": key, "owner": owner, "session_id": session_id, "sources": sources}
+            self.put(db, "session", row)
+            return row
+
+    def register(self, runtime_id: str, spec: dict[str, Any]):
+        """Administrator adopts a prepared idle container; never provisions it."""
+        safe_id(runtime_id)
+        spec = {"endpoint": endpoint(spec["endpoint"], container=True),
+                "host_endpoint": endpoint(spec["host_endpoint"]),
+                "container_name": safe_id(spec["container_name"])}
+        with self.lock:
+            with self.transaction() as db:
+                for other in self.rows(db, "runtime"):
+                    if other["id"] == runtime_id:
+                        if other["state"] == "bound":
+                            raise ValueError("runtime is still bound; return it first")
+                    elif (other["endpoint"]["host"], other["endpoint"]["port"]) == (spec["endpoint"]["host"], spec["endpoint"]["port"]) or (other["host_endpoint"], other["container_name"]) == (spec["host_endpoint"], spec["container_name"]):
+                        raise ValueError("container/endpoint already registered")
+            observed = self.backend.inspect(spec, idle=True)
+            row = {"id": runtime_id, **spec, "state": "ready", "attestation": observed}
+            with self.transaction() as db:
+                self.put(db, "runtime", row)
+            return row
+
+    def checkout(self, owner: str, session: str, profile_key: str, request_id: str, runtime_id: str = ""):
+        safe_id(request_id)
+        key = digest([owner, request_id])
+        intent = {"session": session, "profile_key": profile_key, "runtime_id": runtime_id}
+        with self.lock:
+            with self.transaction() as db:
+                self.owned(db, "session", session, owner)
+                for binding in self.rows(db, "binding"):
+                    if binding["id"] == key:
+                        if binding["intent"] != intent:
+                            raise ValueError("request id reused with different checkout parameters")
+                        return binding
+                candidates = [row for row in self.rows(db, "runtime") if row["state"] == "ready"
+                              and row["attestation"]["profile_key"] == profile_key
+                              and (not runtime_id or row["id"] == runtime_id)]
+            for runtime in candidates:
+                try:
+                    observed = self.backend.inspect(runtime, idle=True)
+                    if observed != runtime["attestation"]:
+                        raise ValueError("prepared environment changed; re-register it")
+                except Exception:
+                    runtime["state"] = "needs_repair"
+                    with self.transaction() as db:
+                        self.put(db, "runtime", runtime)
+                    continue
+                row = {"id": key, "owner": owner, "intent": intent, "runtime_id": runtime["id"],
+                       "state": "bound", "endpoint": runtime["endpoint"],
+                       "profile_key": profile_key, "build_key": observed["build_key"],
+                       "environment": {"VAWS_ENVIRONMENT_FINGERPRINT": profile_key},
+                       "launch_env": observed["profile"]["launch_env"]}
+                runtime["state"] = "bound"
+                with self.transaction() as db:
+                    self.put(db, "runtime", runtime)
+                    self.put(db, "binding", row)
+                    self.event(db, owner, "runtime-bound", binding=key, runtime=runtime["id"])
+                return row
+            return {"status": "cache_miss", "reason": "no verified ready runtime matches the requested profile",
+                    "provisioning_started": False}
+
+    def return_runtime(self, owner: str, binding_id: str):
+        with self.lock, self.transaction() as db:
+            binding = self.owned(db, "binding", binding_id, owner)
+            if any(run["binding_id"] == binding_id and run["state"] not in TERMINAL for run in self.rows(db, "run")):
+                raise ValueError("resolve/release execution leases before returning the runtime")
+            runtime = self.get(db, "runtime", binding["runtime_id"])
+            if binding["state"] != "returned":
+                binding["state"] = "returned"
+                runtime["state"] = "needs_repair"
+                self.put(db, "binding", binding)
+                self.put(db, "runtime", runtime)
+                self.event(db, owner, "runtime-returned", binding=binding_id)
+            return {"status": "returned", "runtime_state": "needs_repair",
+                    "next": "owner cleans only its workers; administrator re-verifies and registers the idle runtime"}
+
+    def request_run(self, owner: str, binding_id: str, request_id: str, snapshots: dict[str, str],
+                    expected_build_key: str, devices: list[int], npu_count: int,
+                    priority: int = 0, queue_seconds: int = 1800):
+        safe_id(request_id)
+        if bool(devices) == bool(npu_count) or any(type(d) is not int or d < 0 for d in devices) or len(set(devices)) != len(devices) or npu_count < 0:
+            raise ValueError("supply distinct physical devices OR a positive npu_count")
+        if not 1 <= queue_seconds <= 86400:
+            raise ValueError("queue_seconds must be between 1 and 86400")
+        if not {"vllm", "vllm-ascend"}.issubset(snapshots) or any(not re.fullmatch(r"[0-9a-f]{40,64}", commit) for commit in snapshots.values()):
+            raise ValueError("pin the complete parity snapshot map before requesting cards")
+        for name in snapshots:
+            if name != "." and (PurePosixPath(name).is_absolute() or ".." in PurePosixPath(name).parts):
+                raise ValueError("unsafe snapshot path")
+        key = digest([owner, binding_id, request_id])
+        intent = {"snapshots": snapshots, "build_key": expected_build_key, "devices": devices,
+                  "npu_count": npu_count, "priority": priority, "queue_seconds": queue_seconds}
+        with self.lock:
+            with self.transaction() as db:
+                binding = self.owned(db, "binding", binding_id, owner)
+                runtime = self.get(db, "runtime", binding["runtime_id"])
+                for run in self.rows(db, "run"):
+                    if run["id"] == key:
+                        if run["intent"] != intent:
+                            raise ValueError("run request id reused with different parameters")
+                        return run
+                    if run["binding_id"] == binding_id and run["state"] not in TERMINAL:
+                        raise ValueError("binding already has an unresolved execution")
+                if binding["state"] != "bound" or expected_build_key != binding["build_key"]:
+                    raise ValueError("cache miss or returned binding; prepare matching artifacts first")
+            observed = self.backend.inspect(runtime, snapshots=snapshots)
+            if observed != runtime["attestation"]:
+                raise ValueError("runtime/profile changed since checkout")
+            run = {"id": key, "owner": owner, "binding_id": binding_id, "intent": intent,
+                   "task_id": "pool-" + uuid.uuid4().hex, "state": "pending", "epoch": None,
+                   "deadline": self.clock() + queue_seconds, "last_poll": 0}
+            with self.transaction() as db:
+                self.put(db, "run", run)  # durable intent BEFORE the first host request
+                self.event(db, owner, "run-queued", run=key)
+            return self.control(owner, key, "poll")
+
+    def control(self, owner: str, run_id: str, action: str, pid: int = 0):
+        if action not in {"poll", "preflight", "activate", "heartbeat", "release", "cancel"}:
+            raise ValueError("unsupported execution action")
+        with self.lock:
+            with self.transaction() as db:
+                run = self.owned(db, "run", run_id, owner)
+                binding = self.owned(db, "binding", run["binding_id"], owner)
+                runtime = self.get(db, "runtime", binding["runtime_id"])
+            if run["state"] in TERMINAL:
+                return run
+            try:
+                if run["state"] == "uncertain":
+                    # A previous timed-out action may have succeeded. Recover by
+                    # observing its exact task; never submit a replacement.
+                    snapshot = self.backend.host(runtime, {"action": "status", "no_probe": False})
+                    if snapshot["coordination_epoch"] != run["epoch"]:
+                        raise ValueError("host epoch changed; ownership requires operator reconciliation")
+                    matches = [task for task in snapshot["tasks"] if task["task_id"] == run["task_id"]]
+                    if not matches:
+                        raise ValueError("host task disappeared; ownership remains unresolved")
+                    run["task"] = matches[0]
+                    run["state"] = matches[0]["state"]
+                    # Observation is not a retry of a possibly non-idempotent
+                    # activate/preflight action. Caller observes before retry.
+                    action = "poll"
+                if run["epoch"] is None:
+                    status = self.backend.host(runtime, {"action": "status", "no_probe": True})
+                    run["epoch"] = status["coordination_epoch"]
+                    with self.transaction() as db:
+                        self.put(db, "run", run)
+                request = {"task_id": run["task_id"], "coordination_epoch": run["epoch"]}
+                if run["state"] == "pending":
+                    intent = run["intent"]
+                    submit = {**request, "action": "submit", "agent_id": owner,
+                              "session_id": binding["intent"]["session"], "container_name": runtime["container_name"],
+                              "priority": intent["priority"], "latest_start": run["deadline"],
+                              "estimated_duration_seconds": 1800}
+                    submit.update({"devices": intent["devices"]} if intent["devices"] else {"npu_count": intent["npu_count"]})
+                    reply = self.backend.host(runtime, submit)
+                    run["task"], run["state"] = reply["task"], reply["task"]["state"]
+                if action == "poll":
+                    if run["state"] == "queued":
+                        reply = self.backend.host(runtime, {**request, "action": "acquire"})
+                    else:
+                        status = self.backend.host(runtime, {**request, "action": "status", "no_probe": False})
+                        reply = {"task": status["tasks"][0]}
+                else:
+                    if action == "preflight":
+                        observed = self.backend.inspect(runtime, snapshots=run["intent"]["snapshots"])
+                        if observed != runtime["attestation"]:
+                            raise ValueError("runtime changed before launch")
+                    reply = self.backend.host(runtime, {**request, "action": action,
+                              "fence_token": run.get("task", {}).get("fence_token"), "pid": pid})
+                if reply.get("task"):
+                    run["task"], run["state"] = reply["task"], reply["task"]["state"]
+                    run.pop("error", None)
+                else:
+                    raise ValueError(reply.get("error", "host probe did not return a task"))
+                run["environment"] = {"ASCEND_RT_VISIBLE_DEVICES": ",".join(map(str, run["task"].get("granted_devices", [])))}
+            except Exception as exc:
+                run["state"] = "uncertain"
+                run["error"] = str(exc)[:500]
+            run["last_poll"] = self.clock()
+            with self.transaction() as db:
+                previous = self.get(db, "run", run_id)
+                self.put(db, "run", run)
+                if (previous["state"], previous.get("error")) != (run["state"], run.get("error")):
+                    self.event(db, owner, "run-state", run=run_id, state=run["state"], error=run.get("error"))
+            return run
+
+    def tick(self, limit: int = 4):
+        """Bounded fair reconciliation. No implicit heartbeat, cleanup or kill."""
+        with self.transaction() as db:
+            rows = [row for row in self.rows(db, "run") if row["state"] not in TERMINAL]
+        for row in sorted(rows, key=lambda row: row["last_poll"])[:limit]:
+            self.control(row["owner"], row["id"], "poll")
+
+    def status(self, owner: str):
+        with self.transaction() as db:
+            return {kind + "s": [row for row in self.rows(db, kind) if row["owner"] == owner]
+                    for kind in ("session", "binding", "run")}
+
+    def peers(self):
+        with self.transaction() as db:
+            return [{"run": row["id"], "owner": row["owner"], "state": row["state"],
+                     "devices": row.get("task", {}).get("granted_devices", [])}
+                    for row in self.rows(db, "run") if row["state"] not in TERMINAL]
+
+    def message(self, owner: str, target_run: str, text: str):
+        if not text.strip() or len(text) > 4000:
+            raise ValueError("message must contain 1..4000 characters")
+        with self.transaction() as db:
+            run = self.get(db, "run", target_run)
+            return self.event(db, run["owner"], "coordination-message", sender=owner, run=target_run, text=text)
+
+    def reply(self, owner: str, cursor: int, text: str):
+        if not text.strip() or len(text) > 4000:
+            raise ValueError("reply must contain 1..4000 characters")
+        with self.transaction() as db:
+            row = db.execute("SELECT owner,data FROM events WHERE id=?", (cursor,)).fetchone()
+            if row is None or row[0] != owner:
+                raise PermissionError("message belongs to another principal")
+            message = json.loads(row[1])
+            if "sender" not in message:
+                raise ValueError("event is not a message")
+            return self.event(db, message["sender"], "coordination-reply", sender=owner, reply_to=cursor, text=text)
+
+    def events(self, owner: str, after: int = 0, limit: int = 100):
+        with self.transaction() as db:
+            rows = db.execute("SELECT id,data FROM events WHERE owner=? AND id>? ORDER BY id LIMIT ?",
+                              (owner, after, min(100, max(1, limit)))).fetchall()
+            return {"events": [{"cursor": row[0], **json.loads(row[1])} for row in rows],
+                    "cursor": rows[-1][0] if rows else after}

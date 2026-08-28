@@ -248,10 +248,12 @@ class NpuCoordinator:
         state_dir: str | Path = DEFAULT_STATE_DIR,
         *,
         clock: Callable[[], float] = time.time,
+        expected_epoch: str | None = None,
     ) -> None:
         self.state_dir = Path(state_dir)
         self.db_path = self.state_dir / "coordinator.sqlite3"
         self.clock = clock
+        self.expected_epoch = expected_epoch
         self.state_dir.mkdir(parents=True, exist_ok=True)
         self._initialize()
 
@@ -352,6 +354,10 @@ class NpuCoordinator:
         connection = self._connect()
         try:
             connection.execute("BEGIN IMMEDIATE")
+            if self.expected_epoch is not None:
+                epoch = connection.execute("SELECT value FROM meta WHERE key='coordination_epoch'").fetchone()
+                if epoch is None or epoch["value"] != self.expected_epoch:
+                    raise CoordinationError("coordination epoch changed; reconcile ownership before retrying")
             yield connection
             connection.execute("COMMIT")
         except Exception:
@@ -1124,9 +1130,12 @@ def _confirmed_free_probe(
         # it free.  Unioning busy reasons makes one transient busy sample keep
         # the cooperative lease protected.
         combined_busy: dict[str, list[dict[str, Any]]] = {}
+        common_devices = set(int(device) for device in observations[0].get("devices", []))
         for item in observations:
+            common_devices.intersection_update(int(device) for device in item.get("devices", []))
             for device, reasons in item.get("busy", {}).items():
                 combined_busy.setdefault(str(device), []).extend(reasons)
+        latest["devices"] = sorted(common_devices)
         latest["busy"] = combined_busy
         latest["free"] = sorted(
             int(device)
@@ -1147,7 +1156,8 @@ def handle_request(
 ) -> dict[str, Any]:
     """Execute one structured coordinator request on the host."""
     action = request.get("action")
-    coordinator = NpuCoordinator(request.get("state_dir") or DEFAULT_STATE_DIR, clock=clock)
+    coordinator = NpuCoordinator(request.get("state_dir") or DEFAULT_STATE_DIR, clock=clock,
+                                 expected_epoch=request.get("coordination_epoch"))
     if action == "submit":
         return coordinator.submit(request)
     if action == "acquire":

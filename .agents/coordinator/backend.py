@@ -1,0 +1,70 @@
+"""Adapters to the existing remote-dev substrate and host NPU coordinator."""
+from __future__ import annotations
+
+import importlib.util
+import json
+import shlex
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / ".remote-dev"))
+sys.path.insert(0, str(ROOT / ".agents/lib"))
+from core.endpoint import resolve_endpoint
+from core.shell_ops import remote_bash
+
+spec = importlib.util.spec_from_file_location("pool_host_coordination", ROOT / ".agents/skills/session-management/scripts/npu_coordination.py")
+coord = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(coord)
+
+
+class RemoteBackend:
+    def host(self, runtime, request):
+        result = coord.ssh_execute(coord.LocalEndpoint(**runtime["host_endpoint"]),
+                                  coord.build_remote_command(request), timeout=45)
+        if result.returncode:
+            raise RuntimeError("host coordination failed; inspect endpoint logs and reconcile before retry")
+        payload = json.loads(result.stdout)
+        if payload.get("status") in {"failed", "needs_input", "probe_failed"}:
+            raise RuntimeError(payload.get("error", "host state unknown"))
+        return payload
+
+    @staticmethod
+    def bash(target, command):
+        result = remote_bash(resolve_endpoint(target), command=command, timeout_ms=45000,
+                             runtime_env=False)["result"]
+        if result["outcome"] != "success":
+            raise RuntimeError("runtime probe failed; see remote-dev state logs")
+        return Path(result["refs"]["stdout"]).read_text()
+
+    def inspect(self, runtime, *, idle=False, snapshots=None):
+        host = {**runtime["host_endpoint"], "root": "/", "cwd": "/"}
+        name = shlex.quote(runtime["container_name"])
+        info = json.loads(self.bash(host, f"docker inspect {name}"))[0]
+        if not info["State"]["Running"] or info["State"].get("Paused") or info["State"].get("Restarting"):
+            raise RuntimeError("prepared container is not running normally")
+        if idle:
+            rows = self.bash(host, f"docker top {name} -eo comm").splitlines()[1:]
+            allowed = {"bash", "sh", "sshd", "sleep", "tini", "tail", "cat", "init", "systemd"}
+            if not rows or any(row.strip() not in allowed for row in rows):
+                raise RuntimeError("container is not an idle prepared runtime; inspect its workers")
+        module = (ROOT / ".agents/lib/vaws_runtime_profile.py").read_text()
+        request = json.dumps({"root": runtime["endpoint"]["root"], "snapshots": snapshots or {}})
+        runner = '''
+import subprocess
+import sys
+args = json.loads(sys.argv[1])
+root = Path(args["root"])
+manifest = json.loads((root / ".vaws-runtime/ready-profile.json").read_text())
+verify(root, manifest)
+for name, expected in args["snapshots"].items():
+    repo = root / name
+    head = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
+    dirty = subprocess.check_output(["git", "-C", str(repo), "status", "--porcelain", "--untracked-files=all", "--ignore-submodules=dirty"], text=True)
+    if head != expected or dirty.strip():
+        raise ValueError("runtime source differs from pinned snapshot: " + name)
+print(json.dumps(manifest))
+'''
+        command = "python3 - " + shlex.quote(request) + " <<'VAWS_READY_PROBE'\n" + module + runner + "\nVAWS_READY_PROBE\n"
+        manifest = json.loads(self.bash(runtime["endpoint"], command))
+        return {**manifest, "container_id": info["Id"]}
