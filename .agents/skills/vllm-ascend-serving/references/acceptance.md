@@ -8,6 +8,10 @@
 - An accepted yield message, stopped launcher PID or failed SSH probe does
   not prove that independent EngineCore workers released their cards/ports.
 - Four-node K3 readiness remains outside this single-node wrapper's claim.
+- Source-only parity blocks serving before NPU probing/launch. Missing devices
+  do not count as a successful free-device probe.
+- Start/stop/status treat failed or malformed SSH PID probes as unknown;
+  stop must not mark the service stopped or release its port in that case.
 
 ## Workspace identity
 

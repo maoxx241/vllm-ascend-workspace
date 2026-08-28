@@ -39,6 +39,8 @@ GRACE_PERIOD_SECONDS = 5
 
 def check_alive(ep, pid: int) -> bool:
     r = ssh_exec(ep, f"kill -0 {pid} 2>/dev/null && echo alive || echo dead", check=False)
+    if r.returncode != 0 or r.stdout.strip() not in ("alive", "dead"):
+        raise RuntimeError("service process state is unknown; SSH failure is not proof of exit")
     return r.stdout.strip() == "alive"
 
 

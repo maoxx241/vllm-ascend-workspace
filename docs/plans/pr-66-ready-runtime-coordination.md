@@ -79,6 +79,8 @@ client and do not automatically wake a paused agent.
 - [x] Do not release leases merely because local worktree removal succeeded.
 - [x] Preserve branches, commits, and dirty child worktrees when reusing a session.
 - [x] Require a nonempty live NPU lease for managed serving, including restart.
+- [x] Reject source-only staging as serving parity; keep service state/ports
+      when SSH PID probes are unknown, and require visibility in free probes.
 
 ### 2. Make source synchronization and native reuse precise
 

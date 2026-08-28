@@ -17,9 +17,31 @@ if str(SCRIPTS) not in sys.path:
 
 from serve_start import service_runtime_dir  # noqa: E402
 import serve_start
+import serve_stop
+import serve_status
 
 
 class ServingIdentityTests(unittest.TestCase):
+    def test_lost_ssh_is_not_a_dead_process_in_any_service_entrypoint(self):
+        for module in (serve_start, serve_stop, serve_status):
+            with self.subTest(module=module.__name__), mock.patch.object(module, "ssh_exec", return_value=SimpleNamespace(returncode=255, stdout="")):
+                with self.assertRaisesRegex(RuntimeError, "unknown"):
+                    module.check_alive(object(), 123)
+
+    def test_stop_does_not_release_ports_on_unknown_process_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = SimpleNamespace(alias="test", endpoint=object(), session_id="session-test", state_repo_root=Path(tmp))
+            with mock.patch.object(serve_stop, "resolve_execution_target", return_value=target), \
+                 mock.patch.object(serve_stop, "file_lock", return_value=contextlib.nullcontext()), \
+                 mock.patch.object(serve_stop, "load_serving_state", return_value={"pid": 123, "port": 18000}), \
+                 mock.patch.object(serve_stop, "ssh_exec", return_value=SimpleNamespace(returncode=255, stdout="")), \
+                 mock.patch.object(serve_stop, "save_serving_state") as save, \
+                 mock.patch.object(serve_stop, "release_service_port") as release, \
+                 mock.patch.object(serve_stop, "print_json"):
+                self.assertEqual(serve_stop.main(["--session-id", "session-test"]), 1)
+                save.assert_not_called()
+                release.assert_not_called()
+
     def test_source_only_staging_blocks_before_npu_probe_or_launch(self):
         with tempfile.TemporaryDirectory() as tmp:
             target = SimpleNamespace(record={}, alias="test", endpoint=object(), runtime_base="/workspace",
