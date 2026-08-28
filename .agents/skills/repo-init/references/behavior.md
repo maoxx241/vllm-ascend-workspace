@@ -19,7 +19,7 @@ Relevant files:
 
 - `.vaws-local/workspace-identity.json`
 - `.vaws-local/machine-profile.json`
-- `.vaws-local/machine-inventory.json`
+- `<primary-worktree>/.vaws-local/machine-inventory.json` (shared across linked Git worktrees)
 
 Rules:
 

@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Local untracked state helpers for vllm-ascend-workspace.
 
-This module centralizes repo-local runtime state that should never be tracked.
+Machine inventory is shared through the primary Git worktree. Execution state
+remains local to the current worktree and should never be tracked.
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ import os
 import re
 import secrets
 import string
+import subprocess
 import tempfile
 import uuid
 from datetime import datetime, timezone
@@ -35,8 +37,42 @@ ROOT = Path(__file__).resolve().parents[2]
 STATE_DIR = ROOT / STATE_DIRNAME
 PROFILE_PATH = STATE_DIR / PROFILE_FILENAME
 IDENTITY_PATH = STATE_DIR / IDENTITY_FILENAME
-INVENTORY_PATH = STATE_DIR / INVENTORY_FILENAME
 SESSIONS_DIR = STATE_DIR / SESSIONS_DIRNAME
+
+
+def shared_workspace_root(repo_root: Path = ROOT) -> Path:
+    """Return the primary worktree that owns cross-worktree machine inventory."""
+    repo_root = repo_root.expanduser().resolve()
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo_root), "rev-parse", "--git-common-dir"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return repo_root
+    if result.returncode != 0 or not result.stdout.strip():
+        return repo_root
+    common_dir = Path(result.stdout.strip()).expanduser()
+    if not common_dir.is_absolute():
+        common_dir = repo_root / common_dir
+    common_dir = common_dir.resolve()
+    if common_dir.name.lower() == ".git" and common_dir.is_dir():
+        return common_dir.parent
+    return repo_root
+
+
+def shared_inventory_path(repo_root: Path = ROOT) -> Path:
+    return shared_workspace_root(repo_root) / STATE_DIRNAME / INVENTORY_FILENAME
+
+
+SHARED_WORKSPACE_ROOT = shared_workspace_root(ROOT)
+LOCAL_INVENTORY_PATH = STATE_DIR / INVENTORY_FILENAME
+INVENTORY_PATH = shared_inventory_path(ROOT)
 
 
 class WorkspaceStateError(RuntimeError):
@@ -387,6 +423,8 @@ def profile_summary(path: Path = PROFILE_PATH) -> dict[str, Any]:
         "state_dir": str(path.parent),
         "profile_path": str(path),
         "inventory_path": str(INVENTORY_PATH),
+        "inventory_scope": "git-common-worktree",
+        "shared_workspace_root": str(SHARED_WORKSPACE_ROOT),
         "sessions_path": str(SESSIONS_DIR),
         "exists": path.exists(),
         "choice_required": not path.exists(),
@@ -415,5 +453,11 @@ def profile_summary(path: Path = PROFILE_PATH) -> dict[str, Any]:
     return summary
 
 
-def resolve_inventory_read_path(preferred_path: Path = INVENTORY_PATH) -> Path:
+def resolve_inventory_read_path(
+    preferred_path: Path = INVENTORY_PATH,
+    *,
+    repo_root: Path = ROOT,
+) -> Path:
+    # An explicit path stays explicit. Missing canonical state is not permission
+    # to silently read a linked worktree's stale inventory or another clone.
     return preferred_path.expanduser().resolve()

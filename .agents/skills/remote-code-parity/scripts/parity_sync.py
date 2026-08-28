@@ -20,6 +20,7 @@ if str(LIB_DIR) not in sys.path:
     sys.path.insert(0, str(LIB_DIR))
 
 from vaws_session_state import load_session_lookup  # noqa: E402
+from vaws_local_state import shared_inventory_path, resolve_inventory_read_path  # noqa: E402
 
 
 DEFAULT_CONTAINER_USER = 'root'
@@ -32,11 +33,11 @@ def derive_workspace_id(repo_root: Path) -> str:
 
 
 def canonical_inventory_path(repo_root: Path) -> Path:
-    return repo_root / '.vaws-local' / 'machine-inventory.json'
+    return shared_inventory_path(repo_root)
 
 
 def load_machine_inventory(repo_root: Path) -> dict[str, Any]:
-    path = canonical_inventory_path(repo_root)
+    path = resolve_inventory_read_path(canonical_inventory_path(repo_root), repo_root=repo_root)
     if not path.exists():
         raise RuntimeError(
             f'machine inventory not found at {path}; register the machine first '

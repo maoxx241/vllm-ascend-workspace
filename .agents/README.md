@@ -162,7 +162,7 @@ Untracked workspace-local state lives under `.vaws-local/`:
 
 - `.vaws-local/workspace-identity.json`
 - `.vaws-local/machine-profile.json`
-- `.vaws-local/machine-inventory.json`
+- `<primary-worktree>/.vaws-local/machine-inventory.json` (shared by linked Git worktrees)
 - `.vaws-local/remote-code-parity/install-consents.json`
 - `.vaws-local/remote-code-parity/runtime-state.json`
 - `.vaws-local/serving/<machine-alias>.json`
@@ -201,7 +201,7 @@ streaming plus hash manifests, and performs dry-run-capable cleanup.
 
 Remote-code-parity transport is container-only after machine attach: use machine inventory to resolve the target, then push synthetic refs directly into the container-local cache root. Synthetic mirrors should also publish an advertised branch ref for the current snapshot so nested repos can be materialized without brittle submodule fetch behavior. Runtime installs should use the single A3-tested HuaweiCloud pip index, stream progress for long package steps, and keep consent/runtime-state writes atomic.
 
-The legacy repo-root `.machine-inventory.json` is compatibility input only and should not be reintroduced as the primary path.
+The legacy repo-root `.machine-inventory.json` and any pre-existing linked-worktree `.vaws-local/machine-inventory.json` are compatibility inputs only. New writes use the primary worktree inventory; session, serving, benchmark, profiling, log, and artifact state stays isolated under the current worktree's `.vaws-local/`.
 
 Key guardrail:
 

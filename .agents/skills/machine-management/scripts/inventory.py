@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Low-level local machine inventory helper for vllm-ascend-workspace.
+"""Low-level shared machine inventory helper for vllm-ascend-workspace.
 
-The canonical inventory lives under `.vaws-local/machine-inventory.json`.
-Prefer the task-oriented wrappers for normal add / verify / repair / remove
-workflows.
+The canonical inventory lives under the primary Git worktree's
+`.vaws-local/machine-inventory.json`, so linked worktrees see the same fleet.
+Execution state remains isolated in each worktree. Missing shared inventories
+do not fall back to legacy or per-worktree data. Inspect old files explicitly
+with --inventory and migrate only after choosing the authoritative records.
 """
 
 from __future__ import annotations
@@ -24,6 +26,8 @@ if str(LIB_DIR) not in sys.path:
 
 from vaws_local_state import (  # noqa: E402
     INVENTORY_PATH as DEFAULT_PATH,
+    LOCAL_INVENTORY_PATH,
+    SHARED_WORKSPACE_ROOT,
     ensure_state_dir,
     resolve_inventory_read_path,
     same_path,
@@ -272,6 +276,9 @@ def cmd_summary(args: argparse.Namespace) -> int:
         "schema_version": inventory["schema_version"],
         "inventory": str(active_path),
         "preferred_inventory": str(requested_path),
+        "inventory_scope": "git-common-worktree",
+        "shared_workspace_root": str(SHARED_WORKSPACE_ROOT),
+        "worktree_local_inventory": str(LOCAL_INVENTORY_PATH),
         "count": len(inventory["machines"]),
         "machines": [
             {
