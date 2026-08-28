@@ -70,6 +70,15 @@ def shared_inventory_path(repo_root: Path = ROOT) -> Path:
     return shared_workspace_root(repo_root) / STATE_DIRNAME / INVENTORY_FILENAME
 
 
+def agent_sessions_root(repo_root: Path = ROOT) -> Path:
+    """Native attachments share task identity across linked scaffold worktrees.
+
+    This is a local identity registry, never a second resource allocator.
+    Independent clones join a task only through an explicit context receipt.
+    """
+    return shared_workspace_root(repo_root) / STATE_DIRNAME / "agent-sessions"
+
+
 SHARED_WORKSPACE_ROOT = shared_workspace_root(ROOT)
 LOCAL_INVENTORY_PATH = STATE_DIR / INVENTORY_FILENAME
 INVENTORY_PATH = shared_inventory_path(ROOT)
@@ -426,6 +435,8 @@ def profile_summary(path: Path = PROFILE_PATH) -> dict[str, Any]:
         "inventory_scope": "git-common-worktree",
         "shared_workspace_root": str(SHARED_WORKSPACE_ROOT),
         "sessions_path": str(SESSIONS_DIR),
+        "agent_sessions_path": str(agent_sessions_root()),
+        "agent_sessions_scope": "git-common-worktree; explicit context across clones",
         "exists": path.exists(),
         "choice_required": not path.exists(),
         "username_rules": "3-32 chars, lowercase English letters and digits only",

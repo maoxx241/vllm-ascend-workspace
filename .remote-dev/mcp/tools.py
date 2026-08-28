@@ -21,6 +21,7 @@ from core.patch_ops import remote_apply_patch  # noqa: E402
 from core.search_ops import remote_glob, remote_grep  # noqa: E402
 from core.shell_ops import remote_bash  # noqa: E402
 from core.ssh_transport import run_script  # noqa: E402
+from core.vaws_ops import vaws_call  # noqa: E402
 from core.state_store import (  # noqa: E402
     artifacts_dir,
     jobs_dir,
@@ -57,6 +58,10 @@ def list_tools() -> list[dict[str, Any]]:
         "remote.artifact_push": "Push a local artifact through SSH streaming with hash verification.",
         "remote.context_snapshot": "Write a compact endpoint context snapshot.",
         "remote.probe": "Probe basic endpoint facts.",
+        "vaws.session": "Inspect this native session's VAWS task and bind actual business worktrees. Local only: no machine or coordinator is required. Use the context_file supplied by the session hook.",
+        "vaws.run": "Run the task's current source snapshot on a compatible prepared runtime. Automatically sync, acquire devices, launch, renew, observe and release; never install packages or create containers. Keep request_id unchanged on retry.",
+        "vaws.execution": "Observe, tail or stop one execution belonging to this VAWS task. Other tasks cannot be selected accidentally. Stop confirms process and NPU release.",
+        "vaws.finish": "Finish this VAWS task by stopping only its owned executions and releasing resources; preserve worktrees and evidence.",
     }
     # Grok's session registry rejects dotted names even when its MCP doctor
     # successfully lists them. Advertise the portable aliases to every client;
@@ -211,6 +216,8 @@ def canonical_name(name: str) -> str:
 def call_tool(name: str, arguments: dict[str, Any] | None) -> dict[str, Any]:
     args = arguments or {}
     name = canonical_name(name)
+    if name.startswith("vaws."):
+        return vaws_call(name, args)
     endpoint = None
     if name not in {"remote.job_status", "remote.job_tail", "remote.job_stop"} or any(args.get(k) for k in ("host", "port", "alias", "session_id", "session_file", "machine")):
         endpoint = resolve_endpoint(args)

@@ -1,8 +1,9 @@
 """Shared ready-runtime registry. Host NpuCoordinator remains card authority.
 
 One manager process owns this database. Transactions persist intent before
-remote calls, whose idempotent task ids survive manager restart. Neither this
-module nor its backend creates containers, installs packages or kills workers.
+remote calls, whose idempotent task ids survive manager restart. Managed jobs
+may stop only their recorded process families. This never creates containers,
+installs packages or stops an unrelated service.
 """
 from __future__ import annotations
 
@@ -18,6 +19,7 @@ from typing import Any
 
 from vaws_runtime_profile import digest
 from vaws_run_manifest import new_manifest, write_manifest, utc_now
+from vaws_managed_execution import ManagedExecution
 
 TERMINAL = {"released", "cancelled", "expired"}
 
@@ -41,7 +43,7 @@ def endpoint(value: dict[str, Any], *, container: bool = False) -> dict[str, Any
     return result
 
 
-class RuntimePool:
+class RuntimePool(ManagedExecution):
     def __init__(self, state_dir: Path, backend: Any, *, clock=time.time):
         self.state_dir, self.backend, self.clock = state_dir, backend, clock
         state_dir.mkdir(parents=True, exist_ok=True)
@@ -95,7 +97,12 @@ class RuntimePool:
             for old in self.rows(db, "session"):
                 if old["id"] == key:
                     if old["sources"] != sources:
-                        raise ValueError("session sources changed; use a new session id")
+                        bindings = [row for row in self.rows(db, "binding")
+                                    if row["intent"]["session"] == key and row["state"] != "returned"]
+                        if bindings:
+                            raise ValueError("return task runtimes before changing source worktree references")
+                        old["sources"] = sources
+                        self.put(db, "session", old)
                     return old
             row = {"id": key, "owner": owner, "session_id": session_id, "sources": sources}
             self.put(db, "session", row)
@@ -159,6 +166,7 @@ class RuntimePool:
                        "profile_key": profile_key, "build_key": observed["build_key"],
                        "service_ports": runtime["service_ports"],
                        "environment": {"VAWS_ENVIRONMENT_FINGERPRINT": profile_key},
+                       "build_env": observed["profile"].get("build_env", {}),
                        "launch_env": observed["profile"]["launch_env"],
                        "launch_preamble": observed.get("launch_preamble", "")}
                 runtime["state"] = "bound"
@@ -170,6 +178,17 @@ class RuntimePool:
             return {"status": "cache_miss", "reason": "no verified ready runtime matches the requested profile",
                     "provisioning_started": False}
 
+    def drain(self, runtime_id):
+        """Stop new checkouts, without stopping an owner's in-flight work."""
+        with self.lock, self.transaction() as db:
+            runtime = self.get(db, "runtime", runtime_id)
+            runtime["draining"] = True
+            if runtime["state"] != "bound":
+                runtime["state"] = "draining"
+            self.put(db, "runtime", runtime)
+            return {"runtime_id": runtime_id, "state": runtime["state"], "draining": True,
+                    "next": "Wait for existing bindings to return before maintenance; re-register after verification."}
+
     def return_runtime(self, owner: str, binding_id: str):
         with self.lock, self.transaction() as db:
             binding = self.owned(db, "binding", binding_id, owner)
@@ -178,11 +197,11 @@ class RuntimePool:
             runtime = self.get(db, "runtime", binding["runtime_id"])
             if binding["state"] != "returned":
                 binding["state"] = "returned"
-                runtime["state"] = "needs_repair"
+                runtime["state"] = "draining" if runtime.get("draining") else "needs_repair"
                 self.put(db, "binding", binding)
                 self.put(db, "runtime", runtime)
                 self.event(db, owner, "runtime-returned", binding=binding_id)
-            return {"status": "returned", "runtime_state": "needs_repair",
+            return {"status": "returned", "runtime_state": runtime["state"],
                     "next": "owner cleans only its workers; administrator re-verifies and registers the idle runtime"}
 
     def refresh(self, owner: str, binding_id: str):
@@ -246,7 +265,10 @@ class RuntimePool:
             self.export_manifest(run, binding)
             return self.control(owner, key, "poll")
 
-    def export_manifest(self, run, binding):
+    def export_manifest(self, run, binding, job=None):
+        if job is None:
+            with self.transaction() as db:
+                job = next((row for row in self.rows(db, "job") if row["id"] == run["id"]), None)
         manifest = new_manifest(run_type="debug", run_id="pool-" + run["id"], created_at=run["created_at"],
                                 workspace_snapshot=run["intent"]["snapshots"],
                                 environment={"profile_key": binding["profile_key"], "build_key": binding["build_key"],
@@ -257,16 +279,34 @@ class RuntimePool:
                               else "cancelled" if run["state"] in TERMINAL else "running" if run.get("task", {}).get("started_at") else "planned")
         manifest["updated_at"] = utc_now()
         manifest["environment"]["coordination"] = {"state": run["state"], "task_id": run["task_id"], "epoch": run["epoch"]}
+        if job:
+            manifest["environment"]["managed_execution"] = {
+                "job_id": job["job_id"], "state": job["state"], "runtime_id": binding["runtime_id"],
+                "remote_dir": job.get("remote", {}).get("remote_dir"),
+                "result": job.get("remote", {}).get("result"),
+            }
+            # Shell exit 0 alone does not establish a model-level pass.
+            if job["state"] in {"failed", "timeout"}:
+                manifest["status"] = "failed"
+            elif job["state"] == "cancelled":
+                manifest["status"] = "cancelled"
+            elif job["state"] in {"succeeded", "inconclusive"}:
+                manifest["status"] = "inconclusive"
         write_manifest(self.state_dir / "runs" / (run["id"] + ".json"), manifest)
 
-    def control(self, owner: str, run_id: str, action: str, pid: int = 0):
+    def control(self, owner: str, run_id: str, action: str, pid: int = 0, *, _managed=False,
+                process_guard=None, completion_confirmed=False):
         if action not in {"poll", "preflight", "activate", "heartbeat", "release", "cancel"}:
             raise ValueError("unsupported execution action")
+        if completion_confirmed and not _managed:
+            raise ValueError("only managed supervision can confirm descendant completion")
         with self.lock:
             with self.transaction() as db:
                 run = self.owned(db, "run", run_id, owner)
                 binding = self.owned(db, "binding", run["binding_id"], owner)
                 runtime = self.get(db, "runtime", binding["runtime_id"])
+                if not _managed and action != "poll" and any(job["id"] == run_id for job in self.rows(db, "job")):
+                    raise ValueError("managed execution owns this lease; use managed_execution_control")
             if run["state"] in TERMINAL:
                 return run
             try:
@@ -327,7 +367,9 @@ class RuntimePool:
                         if observed != runtime["attestation"]:
                             raise ValueError("runtime changed before launch")
                     reply = self.backend.host(runtime, {**request, "action": action,
-                              "fence_token": run.get("task", {}).get("fence_token"), "pid": pid})
+                              "fence_token": run.get("task", {}).get("fence_token"), "pid": pid,
+                              **({"completion_confirmed": True} if action == "release" and completion_confirmed else {}),
+                              **({"process_guard": process_guard} if action == "activate" and process_guard else {})})
                 if reply.get("task"):
                     run["task"], run["state"] = reply["task"], reply["task"]["state"]
                     run.pop("error", None)
@@ -348,16 +390,18 @@ class RuntimePool:
             return run
 
     def tick(self, limit: int = 4):
-        """Bounded fair reconciliation. No implicit heartbeat, cleanup or kill."""
+        """Observe manual leases and supervise explicitly registered jobs."""
         with self.transaction() as db:
-            rows = [row for row in self.rows(db, "run") if row["state"] not in TERMINAL]
+            managed = {row["id"] for row in self.rows(db, "job")}
+            rows = [row for row in self.rows(db, "run") if row["state"] not in TERMINAL and row["id"] not in managed]
         for row in sorted(rows, key=lambda row: row["last_poll"])[:limit]:
             self.control(row["owner"], row["id"], "poll")
+        self.managed_tick(limit)
 
     def status(self, owner: str):
         with self.transaction() as db:
             return {kind + "s": [row for row in self.rows(db, kind) if row["owner"] == owner]
-                    for kind in ("session", "binding", "run")}
+                    for kind in ("session", "binding", "run", "job")}
 
     def peers(self):
         with self.transaction() as db:
@@ -368,6 +412,7 @@ class RuntimePool:
     def catalog(self):
         with self.transaction() as db:
             return [{"runtime_id": row["id"], "state": row["state"],
+                     "draining": row.get("draining", False),
                      "profile_key": row["attestation"]["profile_key"],
                      "build_key": row["attestation"]["build_key"], "service_ports": row.get("service_ports", []),
                      "error": row.get("error")}

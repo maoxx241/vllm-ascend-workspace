@@ -17,12 +17,22 @@ from mcp.schemas import TOOL_SCHEMAS  # noqa: E402
 class CliHelpTests(unittest.TestCase):
     def test_cli_wrappers_have_help(self) -> None:
         scripts = sorted((ROOT / ".remote-dev" / "tools").glob("remote_*.py"))
-        expected_scripts = {ROOT / ".remote-dev" / "tools" / (name.replace(".", "_") + ".py") for name in TOOL_SCHEMAS}
+        expected_scripts = {ROOT / ".remote-dev" / "tools" / (name.replace(".", "_") + ".py")
+                            for name in TOOL_SCHEMAS if name.startswith("remote.")}
         self.assertEqual(set(scripts), expected_scripts)
         for script_path in scripts:
             script = str(script_path.relative_to(ROOT))
             with self.subTest(script=script):
                 proc = subprocess.run([sys.executable, str(script_path), "--help"], capture_output=True, text=True, check=False)
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                self.assertIn("usage:", proc.stdout)
+
+    def test_task_facade_uses_one_cli_without_endpoint_or_network_requirements(self):
+        script = ROOT / ".agents/scripts/vaws.py"
+        for args in (["--help"], ["attach", "--help"], ["session", "--help"],
+                     ["run", "--help"], ["execution", "--help"], ["finish", "--help"]):
+            with self.subTest(args=args):
+                proc = subprocess.run([sys.executable, str(script), *args], capture_output=True, text=True, check=False)
                 self.assertEqual(proc.returncode, 0, proc.stderr)
                 self.assertIn("usage:", proc.stdout)
 

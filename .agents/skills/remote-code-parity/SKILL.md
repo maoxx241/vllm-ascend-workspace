@@ -20,6 +20,12 @@ content changes with `source-only`; it never modifies running source or builds.
 Only materialize after all executions on that binding have been released.
 The watcher alone is not execution parity or model readiness.
 
+The task-facing `vaws_run` tool performs the materialize step automatically
+from its bound actual business worktrees before queueing the managed job.
+Retrying an uncertain launch uses the same execution id and pinned snapshot;
+it must not synchronize underneath a possibly running service. Stop/finish
+that execution before starting another code revision.
+
 ## Use this skill when
 
 - a remote smoke, service launch, or benchmark is about to start

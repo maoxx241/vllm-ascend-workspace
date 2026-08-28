@@ -5,6 +5,13 @@ description: Resolve, probe, execute, observe jobs, sync, manage service lifecyc
 
 # VAWS Remote Toolbox
 
+For a native-attached VAWS task, prefer the task-facing `vaws_run` and
+`vaws_execution` tools for supervised execution on a prepared runtime. They
+call this substrate behind the shared coordinator and retain host leases until
+owned processes and device occupancy are resolved. Do not pass their task,
+binding, or job ids as legacy `--session-id` values. Direct remote companion
+tools still use explicit endpoints and do not enforce a pool lease themselves.
+
 Compatibility note: `.remote-dev` is now the preferred local-tool-like surface
 for ordinary remote endpoint development. Use this skill when the task needs
 managed VAWS target resolution, session containers, parity/sync, service

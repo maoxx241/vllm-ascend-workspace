@@ -22,6 +22,47 @@ spec.loader.exec_module(coord)
 
 
 class RemoteBackend:
+    def job(self, runtime, job_id, action, **parameters):
+        source = (ROOT / ".remote-dev/core/managed_jobs.py").read_text()
+        request = {"root": runtime["endpoint"]["root"], "job_id": job_id, "action": action, **parameters}
+        command = ("python3 - " + shlex.quote(json.dumps(request)) + " <<'VAWS_MANAGED_JOB'\n"
+                   + "WORKER_SOURCE = " + repr(source)
+                   + "\nexec(compile(WORKER_SOURCE, '<vaws-managed-job>', 'exec'))\nVAWS_MANAGED_JOB\n")
+        return json.loads(self.bash(runtime["endpoint"], command))
+
+    def job_host_pid(self, runtime, receipt):
+        # Container PID namespaces differ from the physical host's allocator.
+        # Match both namespace PID and kernel start ticks within this container.
+        code = '''
+import json, subprocess
+from pathlib import Path
+request = json.loads(__import__('sys').argv[1])
+info = json.loads(subprocess.check_output(['docker','inspect','--format','{{json .}}',request['container_name']], text=True))
+if info['Id'] != request['container_id']:
+    raise RuntimeError('container identity changed before activation')
+receipt = request['receipt']
+if Path('/proc/sys/kernel/random/boot_id').read_text().strip() != receipt['boot_id']:
+    raise RuntimeError('host boot identity changed')
+rows = subprocess.check_output(['docker','top',request['container_name'],'-eo','pid'], text=True).splitlines()[1:]
+matches = []
+for row in rows:
+    pid = int(row.strip())
+    try:
+        fields = Path(f'/proc/{pid}/stat').read_text().rsplit(') ',1)[1].split()
+        status = Path(f'/proc/{pid}/status').read_text().splitlines()
+        namespace = next(line.split()[1:] for line in status if line.startswith('NSpid:'))
+        if int(namespace[-1]) == receipt['pid'] and fields[19] == receipt['start_ticks'] and fields[0] != 'Z':
+            matches.append(pid)
+    except FileNotFoundError:
+        continue
+if len(matches) != 1:
+    raise RuntimeError('cannot identify a unique host PID for the waiting supervisor')
+print(json.dumps({'pid':matches[0]}))
+'''
+        request = {"container_name": runtime["container_name"], "container_id": runtime["attestation"]["container_id"], "receipt": receipt}
+        command = "python3 - " + shlex.quote(json.dumps(request)) + " <<'VAWS_HOST_PID'\n" + code + "\nVAWS_HOST_PID\n"
+        return json.loads(self.bash({**runtime["host_endpoint"], "root": "/", "cwd": "/"}, command))["pid"]
+
     def catalog(self):
         inventory, path = _load_inventory(ROOT)
         return {"inventory_path": str(path), "machines": [
@@ -69,10 +110,11 @@ class RemoteBackend:
             raise RuntimeError("prepared container is not running normally")
         if idle:
             # Docker needs PID to map host ps rows back to the container.
-            rows = self.bash(host, f"docker top {name} -eo pid,comm").splitlines()[1:]
+            rows = self.bash(host, f"docker top {name} -eo pid,stat,comm").splitlines()[1:]
             allowed = {"bash", "sh", "sshd", "sshd-session", "sshd-auth", "sleep", "tini", "tail", "cat", "init", "systemd"}
-            processes = [row.split(None, 1) for row in rows]
-            if not processes or any(len(row) != 2 or not row[0].isdigit() or row[1].strip() not in allowed for row in processes):
+            processes = [row.split(None, 2) for row in rows]
+            if not processes or any(len(row) != 3 or not row[0].isdigit() or
+                                    (not row[1].startswith("Z") and row[2].strip() not in allowed) for row in processes):
                 raise RuntimeError("container is not an idle prepared runtime; inspect its workers")
             if runtime.get("service_ports"):
                 listeners = self.bash(host, "ss -H -ltn").splitlines()

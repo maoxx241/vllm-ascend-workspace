@@ -5,6 +5,21 @@ Claude Code, and other MCP-capable agents. Local work should still use native
 Read/Edit/Write/Bash/Glob/Grep/apply_patch tools. Remote work should use the
 matching remote companion tools and only add endpoint fields.
 
+The task facade adds `vaws_session`, `vaws_run`, `vaws_execution`, and
+`vaws_finish` to the same portable MCP server for Claude Code, Grok, Kimi Code,
+Codex and Cursor when the client's native hook, workspace trust and MCP
+approval are active. A native-session hook supplies local task context; new
+native sessions create new VAWS tasks and resume retains the old task. These
+are lifecycle contracts, not evidence that every client has loaded or approved
+them. The four tools hide runtime checkout, parity and supervised execution
+behind the agent's intent. Local tools and local task identity require no
+remote resources.
+See [native lifecycle setup](../.agents/coordinator/README.md#task-and-native-session-lifecycle).
+Existing `remote_*` names and endpoint semantics remain unchanged. Native hook
+acceptance must be checked separately from schema/transport compatibility; a
+Bash/CLI fallback, configuration-only result, or pending client approval is
+not a native MCP pass.
+
 Default endpoint fields:
 
 - `host`

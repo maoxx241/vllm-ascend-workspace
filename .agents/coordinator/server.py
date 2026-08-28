@@ -95,6 +95,13 @@ def create_app(pool, access, *, interval=2.0, allowed_hosts=None):
         return await invoke(pool.register, runtime_id, spec)
 
     @mcp.tool()
+    async def runtime_drain(runtime_id: str) -> dict:
+        """Administrator: prevent new checkouts; keep existing work intact until its owner releases it."""
+        if not principals[PRINCIPAL.get()].get("admin", False):
+            raise ToolError("runtime drain requires an administrator")
+        return await invoke(pool.drain, runtime_id)
+
+    @mcp.tool()
     async def runtime_checkout(session: str, profile_key: str, request_id: str, runtime_id: str = "") -> dict:
         """Exclusively bind a ready environment, without reserving NPUs or provisioning anything."""
         return await invoke(pool.checkout, PRINCIPAL.get(), session, profile_key, request_id, runtime_id)
@@ -121,6 +128,21 @@ def create_app(pool, access, *, interval=2.0, allowed_hosts=None):
     async def execution_control(run_id: str, action: str, pid: int = 0) -> dict:
         """poll/preflight/activate/heartbeat/release/cancel. Preflight immediately before launch; activate with its PID. Release only after stopping your workers."""
         return await invoke(pool.control, PRINCIPAL.get(), run_id, action, pid)
+
+    @mcp.tool()
+    async def managed_execution_start(binding_id: str, request_id: str, snapshots: dict[str, str],
+                                      expected_build_key: str, command: str, env: dict[str, str],
+                                      devices: list[int], npu_count: int = 0, timeout_seconds: int = 1800,
+                                      priority: int = 0, queue_seconds: int = 1800) -> dict:
+        """Run pinned code with an owned process receipt and automatic lease renewal/release. No install or container creation."""
+        return await invoke(pool.managed_start, PRINCIPAL.get(), binding_id, request_id, snapshots,
+                            expected_build_key, devices, npu_count, command, env, timeout_seconds,
+                            priority, queue_seconds)
+
+    @mcp.tool()
+    async def managed_execution_control(job_id: str, action: str = "status", force: bool = False) -> dict:
+        """Observe, tail or stop an owned managed job. Disconnect does not cancel execution; stopping retains leases until confirmed free."""
+        return await invoke(pool.managed_control, PRINCIPAL.get(), job_id, action, force)
 
     @mcp.tool()
     async def coordinator_status() -> dict:

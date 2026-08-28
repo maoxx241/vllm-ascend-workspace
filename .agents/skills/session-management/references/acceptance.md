@@ -66,7 +66,47 @@
 - Releasing a task requires repeated free observations; one transient busy sample keeps the lease protected.
 - An estimated duration overrun marks an active task overdue but does not release or preempt it.
 - Human/manual holds can reserve exact devices for a bounded future window and report conflicts without stopping existing work.
+
+## Native lifecycle acceptance status (2026-08-28)
+
+This matrix is separate from the resource-layer contract checks above. It
+records actual native-client results and does not treat setup, fallback calls,
+or pending approvals as passes:
+
+| Client | Result |
+| --- | --- |
+| Claude Code | Native new/resume and remote-dev calls passed; child association was exercised. |
+| Grok | Native new/resume and remote-dev calls passed; child sharing used explicit association. |
+| Kimi Code | Native new/resume identity observed; native MCP tools absent and remote calls used Bash fallback, so native MCP is unproven. |
+| Codex | Native hook review remains pending; the hardware run used an explicit public adapter, not automatic hooks. |
+| Cursor Agent | Normal workspace/MCP approval blocked the CLI attempt; no CLI lifecycle pass. |
+
+Three concurrent `gpt-5.6-luna` VAWS tasks used the explicit public adapter,
+separate source/runtime/port/card assignments, and real bounded NPU probes. The
+normal path and the subreaper rerun passed. A clean-environment setsid daemon
+remained tracked, stopped safely, and restarted against an edited snapshot;
+B/C retained process and source identity and continued answering NPU requests.
+Manager restart preserved all three jobs. Final CPU regression: 185 passed,
+plus six managed-process checks as uid 65534. No K3 model inference or production
+model correctness is claimed.
+
 # PR #66 ownership regressions
+
+Native-task/managed-execution acceptance (separate from earlier pool evidence):
+
+- For each of Claude Code, Grok, Kimi Code, Codex and Cursor, use actual native
+  starts/resumes and MCP calls: distinct native roots in one cwd must differ,
+  resume must preserve identity, and an explicit child association must share it.
+- Local-only creation/source binding/finish must not initialize an HTTP client.
+- The start gate must execute no user command before lease activation.
+- Lost prepare/go replies and manager restarts must not launch duplicates.
+- An expired heartbeat with a live CPU-initializing process must retain cards.
+- Three `gpt-5.6-luna` agents must use VAWS concurrently on an authorized host,
+  with actual source worktrees, distinct runtimes/ports/cards, overlapping work,
+  and recorded source/process identity. Stopping one must preserve peer PIDs
+  and successful peer work; then verify all owned processes and leases released.
+- Configuration, schema validation, mocked hook inputs, process liveness and
+  shell exit 0 are not substitutes for native-client or real NPU acceptance.
 
 - A refused/auth-failed/unreachable container SSH endpoint retains leases.
 - Missing metadata and a metadata-only `removed` status retain leases.

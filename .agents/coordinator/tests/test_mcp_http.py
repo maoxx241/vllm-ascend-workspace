@@ -11,6 +11,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import httpx2
 import uvicorn
@@ -22,6 +23,26 @@ from server import create_app
 
 
 class HttpTests(unittest.IsolatedAsyncioTestCase):
+    async def test_stdlib_task_client_initializes_and_calls_the_actual_mcp_server(self):
+        from vaws_task_client import CoordinatorClient
+
+        directory = self.root / "local/agent-sessions"
+        directory.mkdir(parents=True)
+        token = directory.parent / "token"
+        token.write_text("alice-secret-test")
+        token.chmod(0o600)
+        (directory.parent / "coordinator-client.json").write_text(json.dumps({"url": self.url, "token_file": str(token)}))
+
+        def invoke():
+            client = CoordinatorClient(directory)
+            first = client.call("session_open", session_id="local-task", sources={"va": "/actual/worktree"})
+            second = client.call("session_open", session_id="local-task", sources={"va": "/actual/worktree"})
+            return first, second
+
+        with mock.patch.dict("os.environ", {}, clear=True):
+            first, second = await asyncio.to_thread(invoke)
+        self.assertEqual(first["id"], second["id"])
+
     async def test_backend_import_does_not_shadow_the_official_mcp_sdk(self):
         result = await asyncio.to_thread(subprocess.run, [sys.executable, "-c",
             "import sys; sys.path.insert(0, " + repr(str(ROOT / ".agents/coordinator")) + "); import backend; from mcp.server import MCPServer"],
@@ -80,6 +101,7 @@ class HttpTests(unittest.IsolatedAsyncioTestCase):
             names = {tool.name for tool in (await alice.list_tools()).tools}
             self.assertIn("runtime_checkout", names)
             await self.call(bob, "runtime_register", {"runtime_id": "runtime-a", "spec": runtime_spec(1)}, error=True)
+            await self.call(bob, "runtime_drain", {"runtime_id": "runtime-a"}, error=True)
             for index in (1, 2):
                 await self.call(alice, "runtime_register", {"runtime_id": "runtime-" + str(index), "spec": runtime_spec(index)})
             a = await self.call(alice, "session_open", {"session_id": "task-a", "sources": {"va": "/clients/clone-a/va"}})

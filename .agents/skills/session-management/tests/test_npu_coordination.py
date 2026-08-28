@@ -10,6 +10,7 @@ import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[4]
 LIB_DIR = ROOT / ".agents" / "lib"
@@ -81,6 +82,45 @@ class CoordinationTests(unittest.TestCase):
         )
         self.assertEqual(result["task"]["agent_id"], "dce488a7-1af2-44b1-bb91-c3984743d33e")
         self.assertEqual(result["task"]["agent_alias"], "team42")
+
+    def test_managed_cpu_initialization_is_not_reallocated_after_heartbeat_expiry(self):
+        self.submit("guarded-task", devices=[0])
+        granted = self.coordinator.acquire("guarded-task", occupancy())
+        token = granted["task"]["fence_token"]
+        self.coordinator.preflight("guarded-task", token, occupancy())
+        guard = {"marker": "a" * 32, "boot_id": "test"}
+        with mock.patch("vaws_npu_coordination.process_guard_busy", return_value=True):
+            self.coordinator.activate("guarded-task", token, pid=1234, process_guard=guard, heartbeat_ttl_seconds=1)
+            import sqlite3
+            with sqlite3.connect(Path(self.temp.name) / "coordinator.sqlite3") as old_client:
+                with self.assertRaisesRegex(sqlite3.IntegrityError, "process guard"):
+                    old_client.execute("UPDATE tasks SET state='released' WHERE task_id='guarded-task'")
+            self.clock.advance(2)
+            self.assertEqual(self.coordinator.snapshot(occupancy())["tasks"][0]["state"], "orphaned_busy")
+            self.assertEqual(self.coordinator.release("guarded-task", token, occupancy())["status"], "orphaned_busy")
+            self.submit("waiting-task", devices=[0])
+            self.assertNotEqual(self.coordinator.acquire("waiting-task", occupancy())["status"], "granted")
+        with mock.patch("vaws_npu_coordination.process_guard_busy", return_value=False):
+            self.assertEqual(self.coordinator.acquire("waiting-task", occupancy())["status"], "granted")
+
+    def test_subreaper_lease_requires_completion_even_after_supervisor_disappears(self):
+        self.submit("retained-task", devices=[0])
+        token = self.coordinator.acquire("retained-task", occupancy())["task"]["fence_token"]
+        self.coordinator.preflight("retained-task", token, occupancy())
+        guard = {"marker": "b" * 32, "boot_id": "test", "retain_until_release": True}
+        with mock.patch("vaws_npu_coordination.process_guard_busy", return_value=True):
+            self.coordinator.activate("retained-task", token, pid=1234, process_guard=guard, heartbeat_ttl_seconds=1)
+        # No marked process is left, but GC lacks a descendant completion receipt.
+        def retained(value, *, completion_confirmed=False):
+            return bool(value) and not completion_confirmed
+        with mock.patch("vaws_npu_coordination.process_guard_busy", side_effect=retained):
+            self.clock.advance(2)
+            self.assertEqual(self.coordinator.snapshot(occupancy())["tasks"][0]["state"], "orphaned_busy")
+            self.assertEqual(self.coordinator.release("retained-task", token, occupancy())["status"], "orphaned_busy")
+            self.submit("retained-waiter", devices=[0])
+            self.assertNotEqual(self.coordinator.acquire("retained-waiter", occupancy())["status"], "granted")
+            self.assertEqual(self.coordinator.release("retained-task", token, occupancy(), completion_confirmed=True)["status"], "released")
+            self.assertEqual(self.coordinator.acquire("retained-waiter", occupancy())["status"], "granted")
 
     def activate(self, task_id: str, *, heartbeat_ttl: int = 10) -> int:
         granted = self.coordinator.acquire(task_id, occupancy(), grant_ttl_seconds=10)

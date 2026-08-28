@@ -25,6 +25,8 @@ class Backend:
         self.fail = False
         self.fail_after = None
         self.calls = []
+        self.jobs = {}
+        self.fail_job_after = None
         self.attestation = {"profile_key": "profile-a", "build_key": "native-a",
                             "profile": {"launch_env": {"VLLM_VERSION": "test"}}}
 
@@ -38,13 +40,36 @@ class Backend:
         if self.fail:
             raise TimeoutError("host unavailable")
         self.calls.append(("host", request["action"]))
-        result = handle_request({**request, "state_dir": str(self.state), "interval_seconds": 0.001},
-                                probe=lambda: {"status": "ok", "devices": [0, 1],
-                                               "busy": {str(d): ["test worker"] for d in self.busy}})
+        def guarded(value, *, completion_confirmed=False):
+            guard = json.loads(value) if isinstance(value, str) else value
+            return bool(guard) and (any(not job["quiet"] and job["receipt"]["process_guard"] == guard for job in self.jobs.values())
+                                   or (guard.get("retain_until_release") and not completion_confirmed))
+        with mock.patch("vaws_npu_coordination.process_guard_busy", side_effect=guarded):
+            result = handle_request({**request, "state_dir": str(self.state), "interval_seconds": 0.001},
+                                    probe=lambda: {"status": "ok", "devices": [0, 1],
+                                                   "busy": {str(d): ["test worker"] for d in self.busy}})
         if self.fail_after == request["action"]:
             self.fail_after = None
             raise TimeoutError("reply lost after host mutation")
         return result
+
+    def job(self, runtime, job_id, action, **params):
+        self.calls.append(("job", action))
+        if action == "prepare" and job_id not in self.jobs:
+            self.jobs[job_id] = {"state": "prepared", "quiet": False,
+                                 "receipt": {"pid": 4242, "process_guard": {"marker": job_id[-32:], "boot_id": "test-boot",
+                                                                          "retain_until_release": True}}}
+        if action == "go":
+            self.jobs[job_id]["state"] = "running"
+        if action == "stop" and job_id in self.jobs:
+            self.jobs[job_id].update(state="cancelled", quiet=True)
+        if self.fail_job_after == action:
+            self.fail_job_after = None
+            raise TimeoutError("lost job reply")
+        return copy.deepcopy(self.jobs.get(job_id, {"state": "absent", "quiet": True}))
+
+    def job_host_pid(self, runtime, receipt):
+        return receipt["pid"]
 
 
 def runtime_spec(number):
@@ -57,10 +82,11 @@ class BackendTests(unittest.TestCase):
         from backend import RemoteBackend
 
         backend = RemoteBackend()
-        for rows, idle in [("PID COMMAND\n123 sleep\n", True),
-                           ("PID COMMAND\n123 python\n", False),
-                           ("PID COMMAND\n", False),
-                           ("PID COMMAND\nbroken\n", False)]:
+        for rows, idle in [("PID STAT COMMAND\n123 S sleep\n", True),
+                           ("PID STAT COMMAND\n123 Z python\n124 S sleep\n", True),
+                           ("PID STAT COMMAND\n123 S python\n", False),
+                           ("PID STAT COMMAND\n", False),
+                           ("PID STAT COMMAND\nbroken\n", False)]:
             commands = []
 
             def bash(target, command):
@@ -68,7 +94,7 @@ class BackendTests(unittest.TestCase):
                 if command.startswith("docker inspect"):
                     return json.dumps({"Id": "container-1", "State": {"Running": True}})
                 if command.startswith("docker top"):
-                    self.assertTrue(command.endswith("-eo pid,comm"))
+                    self.assertTrue(command.endswith("-eo pid,stat,comm"))
                     return rows
                 if command.startswith("ss "):
                     return ""
@@ -221,6 +247,76 @@ class PoolTests(unittest.TestCase):
         samples = iter([{"status": "ok", "devices": [1], "busy": {}}, {"status": "ok", "devices": [0, 1], "busy": {}}])
         result = _confirmed_free_probe(samples=2, interval_seconds=0, probe=lambda: next(samples))
         self.assertEqual(result["free"], [1])
+
+    def managed(self, owner, binding, device=0, request_id="managed"):
+        return self.pool.managed_start(owner, binding["id"], request_id,
+                                       {"vllm": "a" * 40, "vllm-ascend": "b" * 40},
+                                       "native-a", [device], 0, "exec python task.py", {}, 60)
+
+    def test_managed_gate_renew_restart_and_stop_one_preserves_peer(self):
+        a, b = self.bind("alice", self.root / "a"), self.bind("bob", self.root / "b")
+        first, second = self.managed("alice", a), self.managed("bob", b, 1)
+        self.assertEqual((first["state"], second["state"]), ("running", "running"))
+        self.assertLess(self.backend.calls.index(("host", "activate")), self.backend.calls.index(("job", "go")))
+        with self.assertRaisesRegex(ValueError, "managed execution owns"):
+            self.pool.control("alice", first["id"], "release")
+        self.pool = RuntimePool(self.root / "manager", self.backend)
+        self.pool.tick()
+        self.assertIn(("host", "heartbeat"), self.backend.calls)
+        self.pool.managed_control("alice", first["id"], "stop")
+        ended = self.pool.managed_control("alice", first["id"])
+        self.assertEqual(ended["state"], "cancelled")
+        self.assertTrue(ended["runtime_returned"])
+        self.assertEqual(self.pool.status("bob")["jobs"][0]["state"], "running")
+        self.assertFalse(self.backend.jobs[second["job_id"]]["quiet"])
+        self.assertEqual(next(row for row in self.pool.catalog() if row["runtime_id"] == a["runtime_id"])["state"], "ready")
+
+    def test_lost_go_reply_reuses_the_same_job_and_does_not_prepare_again(self):
+        binding = self.bind("alice", self.root / "a")
+        self.backend.fail_job_after = "go"
+        job = self.managed("alice", binding)
+        self.assertEqual(job["state"], "uncertain")
+        restarted = RuntimePool(self.root / "manager", self.backend)
+        recovered = restarted.managed_control("alice", job["id"])
+        self.assertEqual(recovered["state"], "running")
+        self.assertEqual(self.backend.calls.count(("job", "prepare")), 1)
+        self.assertEqual(self.backend.calls.count(("job", "go")), 1)
+        with self.assertRaises(PermissionError):
+            restarted.managed_control("bob", job["id"], "stop")
+
+    def test_managed_finish_defers_release_for_real_device_occupancy(self):
+        binding = self.bind("alice", self.root / "a")
+        job = self.managed("alice", binding)
+        self.backend.jobs[job["job_id"]].update(state="succeeded", quiet=True, result={"state": "succeeded", "exit_code": 0})
+        self.backend.busy = [0]
+        result = self.pool.managed_control("alice", job["id"])
+        self.assertEqual((result["state"], result["lease_state"]), ("releasing", "orphaned_busy"))
+        self.backend.busy = []
+        result = self.pool.managed_control("alice", job["id"])
+        self.assertEqual(result["state"], "succeeded")
+        manifest = json.loads((self.root / "manager/runs" / (job["id"] + ".json")).read_text())
+        self.assertEqual(manifest["status"], "inconclusive")
+        self.assertEqual(manifest["environment"]["managed_execution"]["result"]["exit_code"], 0)
+
+    def test_task_worktrees_can_change_only_between_returned_bindings(self):
+        binding = self.bind("alice", self.root / "a")
+        with self.assertRaisesRegex(ValueError, "return task runtimes"):
+            self.pool.session_open("alice", "same-session-name", {"va": "/new/worktree"})
+        self.pool.return_runtime("alice", binding["id"])
+        result = self.pool.session_open("alice", "same-session-name", {"va": "/new/worktree"})
+        self.assertEqual(result["id"], binding["intent"]["session"])
+
+    def test_drain_waits_for_existing_managed_job_and_disables_automatic_reuse(self):
+        binding = self.bind("alice", self.root / "a")
+        job = self.managed("alice", binding)
+        self.assertEqual(self.pool.drain(binding["runtime_id"])["state"], "bound")
+        self.assertEqual(self.pool.managed_control("alice", job["id"])["state"], "running")
+        self.pool.managed_control("alice", job["id"], "stop")
+        self.pool.managed_control("alice", job["id"])
+        runtime = next(row for row in self.pool.catalog() if row["runtime_id"] == binding["runtime_id"])
+        self.assertEqual(runtime["state"], "draining")
+        self.pool.register(binding["runtime_id"], runtime_spec(1))
+        self.assertFalse(next(row for row in self.pool.catalog() if row["runtime_id"] == binding["runtime_id"])["draining"])
 
 
 class ProfileTests(unittest.TestCase):

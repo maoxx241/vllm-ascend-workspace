@@ -78,6 +78,15 @@ for domain workflows.
 
 ## Repo-wide rules
 
+- Native-attached VAWS tasks use one local task identity with many native
+  attachments. New native sessions create new tasks; resume keeps the original
+  task. Only explicit parent/user association joins another task; never infer
+  task identity from cwd or recent chat history.
+- Prefer `vaws_session/vaws_run/vaws_execution/vaws_finish` for task-facing pool
+  work. Bind actual business worktrees and keep local development available
+  without the coordinator. Do not pass new task/binding/job ids to legacy
+  session commands or create duplicate local NPU leases for pool executions.
+
 - The optional shared runtime pool is documented in `.agents/coordinator/README.md`.
   Pool bindings use its execution leases and ordinary remote-dev endpoints;
   do not create duplicate legacy local NPU leases or pass a binding id as a

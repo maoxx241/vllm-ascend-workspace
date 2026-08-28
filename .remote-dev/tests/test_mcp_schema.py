@@ -77,7 +77,7 @@ class McpSchemaTests(unittest.TestCase):
     def test_normal_tools_describe_endpoint_selector_requirement(self) -> None:
         job_tools = {"remote.job_status", "remote.job_tail", "remote.job_stop"}
         for name, schema in TOOL_SCHEMAS.items():
-            if name in job_tools:
+            if name in job_tools or name.startswith("vaws."):
                 self.assertNotIn(ENDPOINT_SELECTOR_DESCRIPTION, schema.get("description", ""))
             else:
                 self.assertIn(ENDPOINT_SELECTOR_DESCRIPTION, schema.get("description", ""), name)

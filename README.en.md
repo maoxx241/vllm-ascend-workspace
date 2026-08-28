@@ -9,8 +9,14 @@ A composable local development scaffold for working on [vLLM](https://github.com
 See the optional [independent coordination MCP](.agents/coordinator/README.md)
 for prepared-container, environment and native-artifact reuse. It is separate
 from vaws-top and restarts model services against pinned code snapshots.
-Two-client, two-card probe and edit/restart checks passed on host 154; full
-K3 model and four-node acceptance remain separate rollout gates.
+The task layer associates one VAWS session with multiple native tool sessions:
+new native sessions create new tasks, resume keeps the original task, and
+children inherit their parent's task. Actual business worktrees isolate code;
+local development needs no remote resources.
+Three Luna tasks passed overlapping NPU probes, manager restart, and isolated
+edit/restart checks on hosts 153/154. Kimi native MCP, Codex hook review and
+Cursor Agent approval remain open client acceptance gates. These probes do
+not establish full K3 model or four-node correctness.
 
 Developing vLLM Ascend typically involves editing code locally, running tests on remote Ascend NPU servers, and tracking upstream vLLM changes — all of which require repetitive Git, SSH, and environment configuration.
 

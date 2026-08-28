@@ -1,9 +1,39 @@
 ---
 name: session-management
-description: Create, list, inspect, remove, garbage-collect, and group isolated VAWS agent sessions, and optionally coordinate NPU task intent across independent agents on one host. Use before remote execution when tasks must not share worktrees, containers, serving state, or resource leases, when cooperative NPU queueing is requested, or when one distributed scenario needs an ordered set of existing sessions. Do not use for service lifecycle, code sync, benchmarks, or distributed failure diagnosis.
+description: Associate native agent sessions with local VAWS development tasks, bind actual business worktrees, and coordinate prepared remote runtimes and NPU leases. Also create, inspect, remove, and group legacy container-bound sessions. Use for parallel task isolation and session ownership, not model correctness or distributed failure diagnosis.
 ---
 
 # Session Management
+
+## Local task identity and native clients
+
+For the task-facing mode, use remote-dev's `vaws_session`, `vaws_run`,
+`vaws_execution` and `vaws_finish` tools. The native adapter supplies
+`context_file`; the user should not have to manage it. Configure once using
+`.agents/scripts/vaws_client_setup.py --client <client> --project <actual-repo>`
+(preview, then `--apply` after reviewing the changes). This does not grant
+client trust or authentication. See [lifecycle and client setup](../../coordinator/README.md#task-and-native-session-lifecycle).
+
+- A new user-created **native session** creates a new VAWS task, even in the same cwd.
+- Native **resume** continues the same native attachment and VAWS task.
+- Spawned children inherit through a native parent id or explicit
+  `VAWS_PARENT_CONTEXT`; a user-authorized new peer uses `VAWS_ATTACH_CONTEXT`.
+  Never infer association from cwd, branch, chat text, or newest transcript.
+- Bind the actual repository worktrees with `vaws_session(sources=...)`.
+  Create repository worktrees with native Git tools only when code isolation
+  is needed; never make another scaffold/submodule copy just to get a task id.
+- With no remote configuration, identity/source binding/native local tools
+  remain available. `vaws_run` is the first operation that contacts the fleet.
+- `vaws_run` materializes a pinned source snapshot into an exclusive prepared
+  runtime, then queues/activates a host lease and starts a supervised job.
+  It does not create containers, install dependencies or compile on a cache miss.
+- Closing a native session only detaches it. Explicit task finish stops owned
+  jobs, waits for process/device release, and preserves local worktrees.
+
+The native hook and managed-job additions require separate regression and
+real-client acceptance; the earlier two-card pool probe is not their evidence.
+
+## Legacy container-bound sessions
 
 When `.vaws-local/workspace-identity.json` contains a unified alias, new
 session container names inherit the base machine namespace. Session records
@@ -17,7 +47,7 @@ coordinator in [`.agents/coordinator/README.md`](../../coordinator/README.md)
 separates logical sessions from runtime bindings and per-run NPU leases.
 It uses existing remote-dev endpoints and the host NPU coordinator; it does
 not require `vaws-top`. Use its `session_open/runtime_checkout/execution_*`
-flow for that mode. Do not create an additional legacy local NPU lease for
+flow for advanced control, or the task-facing tools above. Do not create an additional legacy local NPU lease for
 the same execution or pass a pool binding id as a legacy session id.
 
 PR #67's shared inventory covers linked worktrees with one Git common-dir.

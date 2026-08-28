@@ -1,5 +1,31 @@
 # Behavior Reference
 
+## Task identity
+
+The local `agent-sessions` registry keys native attachments by client, native
+session id, and child id when a client shares the parent's session id.
+New native roots are independent; resume reactivates the existing attachment.
+VAWS tasks have one or more attachments. Detach is not task finish and cannot
+release hardware. Resume after an explicit finish reopens the same task with
+its history; it does not recreate completed executions.
+
+Source bindings point at actual Git worktrees. Worktrees may change between
+executions after existing runtime bindings are returned, without changing the
+VAWS task id. Native attachment state is observed metadata, not proof that a
+window is alive. Local identity is shared only through the Git common-dir or
+an explicit context receipt; resource arbitration always uses the shared
+remote coordinator and physical host authority.
+
+The managed execution protocol persists intent, prepares a waiting supervisor,
+identifies its host PID, activates the lease, and only then opens the start
+gate. The shared manager renews the persisted job independently of client
+connections. A Linux subreaper tracks descendants even after setsid or environment
+reset, and stays alive until they drain. A retained host guard covers CPU
+initialization and survives heartbeat expiry or supervisor loss. Cleanup signals
+only the verified family; the manager must confirm completed process supervision
+and repeatedly observe free devices before returning and re-verifying the runtime.
+Missing completion receipts retain ownership for reconciliation.
+
 ## Shared ready-runtime mode
 
 The optional independent HTTP MCP coordinator separates task identity,

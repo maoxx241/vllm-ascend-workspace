@@ -25,7 +25,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 DEFAULT_STATE_DIR = "/tmp/vaws-npu-coordinator/v1"
 DEFAULT_QUEUE_TTL_SECONDS = 3600
 DEFAULT_GRANT_TTL_SECONDS = 60
@@ -50,6 +50,40 @@ SAFE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{2,127}$")
 
 class CoordinationError(RuntimeError):
     """Raised for deterministic coordinator input or state failures."""
+
+
+def process_guard_busy(value: str | dict | None, *, completion_confirmed: bool = False) -> bool:
+    """Retain a managed lease while its process family can still use devices.
+
+    Empty NPU occupancy during CPU initialization is not proof of completion.
+    Subreaper jobs additionally require the manager's drained-process receipt;
+    a crashed supervisor may have lost clean-environment descendants. A marker
+    scan alone can never release these leases. Unreadable state retains them.
+    """
+    if not value:
+        return False
+    try:
+        guard = json.loads(value) if isinstance(value, str) else value
+        if not re.fullmatch(r"[0-9a-f]{32}", guard["marker"]):
+            return True
+        if Path("/proc/sys/kernel/random/boot_id").read_text().strip() != guard["boot_id"]:
+            return True
+        marker = ("VAWS_REMOTE_JOB_TOKEN=" + guard["marker"]).encode()
+        unknown = False
+        for process in Path("/proc").iterdir():
+            if not process.name.isdigit():
+                continue
+            try:
+                state = (process / "stat").read_text().rsplit(") ", 1)[1].split()[0]
+                if state != "Z" and marker in (process / "environ").read_bytes().split(b"\0"):
+                    return True
+            except (FileNotFoundError, ProcessLookupError):
+                continue
+            except PermissionError:
+                unknown = True
+        return unknown or (guard.get("retain_until_release") is True and not completion_confirmed)
+    except (OSError, ValueError, KeyError, TypeError, IndexError):
+        return True
 
 
 def utc_now_iso(epoch: float | None = None) -> str:
@@ -361,6 +395,24 @@ class NpuCoordinator:
                 except sqlite3.OperationalError as exc:
                     if "duplicate column" not in str(exc).lower():
                         raise
+            if "process_guard" not in task_columns:
+                try:
+                    connection.execute("ALTER TABLE tasks ADD COLUMN process_guard TEXT")
+                except sqlite3.OperationalError as exc:
+                    if "duplicate column" not in str(exc).lower():
+                        raise
+            # Older clients send the host protocol source with each request.
+            # They do not know about process guards. Do not let their generic
+            # "hardware free" UPDATE release a guarded CPU-initializing job.
+            connection.execute("""
+                CREATE TRIGGER IF NOT EXISTS protect_managed_process_release
+                BEFORE UPDATE OF state ON tasks
+                WHEN OLD.process_guard IS NOT NULL AND NEW.process_guard IS NOT NULL
+                     AND NEW.state IN ('released', 'cancelled', 'expired')
+                BEGIN
+                    SELECT RAISE(ABORT, 'managed process guard must be verified before release');
+                END
+            """)
             connection.execute(
                 "INSERT OR IGNORE INTO meta(key, value) VALUES('schema_version', ?)",
                 (str(SCHEMA_VERSION),),
@@ -429,6 +481,7 @@ class NpuCoordinator:
         payload["requested_devices"] = _load_devices(payload.get("requested_devices")) or None
         payload["granted_devices"] = _load_devices(payload.get("granted_devices"))
         payload["preemptible"] = bool(payload.get("preemptible"))
+        payload["process_guarded"] = bool(payload.pop("process_guard", None))
         for key in (
             "not_before",
             "latest_start",
@@ -715,6 +768,7 @@ class NpuCoordinator:
                 or visible is None
                 or not devices.issubset(visible)
                 or bool(devices & busy)
+                or process_guard_busy(row["process_guard"])
             )
             next_state = "orphaned_busy" if still_busy else "released"
             message = (
@@ -723,8 +777,8 @@ class NpuCoordinator:
                 else "heartbeat expired and hardware was observed free"
             )
             connection.execute(
-                "UPDATE tasks SET state=?, updated_at=?, message=? WHERE task_id=?",
-                (next_state, now, message, row["task_id"]),
+                "UPDATE tasks SET state=?, process_guard=CASE WHEN ?='released' THEN NULL ELSE process_guard END, updated_at=?, message=? WHERE task_id=?",
+                (next_state, next_state, now, message, row["task_id"]),
             )
             changes.append({"task_id": row["task_id"], "from": "active", "to": next_state})
             self._event(connection, "heartbeat-expired", task_id=row["task_id"], data={"to": next_state}, now=now)
@@ -732,9 +786,9 @@ class NpuCoordinator:
         if busy is not None and visible is not None:
             for row in connection.execute("SELECT * FROM tasks WHERE state='orphaned_busy'").fetchall():
                 devices = set(_load_devices(row["granted_devices"]))
-                if devices.issubset(visible) and not devices.intersection(busy):
+                if devices.issubset(visible) and not devices.intersection(busy) and not process_guard_busy(row["process_guard"]):
                     connection.execute(
-                        "UPDATE tasks SET state='released', updated_at=?, message=? WHERE task_id=?",
+                        "UPDATE tasks SET state='released', process_guard=NULL, updated_at=?, message=? WHERE task_id=?",
                         (now, "orphaned task hardware is now free", row["task_id"]),
                     )
                     changes.append({"task_id": row["task_id"], "from": "orphaned_busy", "to": "released"})
@@ -956,6 +1010,7 @@ class NpuCoordinator:
         token: int,
         *,
         pid: int,
+        process_guard: dict | None = None,
         heartbeat_ttl_seconds: int = DEFAULT_HEARTBEAT_TTL_SECONDS,
     ) -> dict[str, Any]:
         task_id = require_safe_id(task_id, label="task id")
@@ -963,6 +1018,16 @@ class NpuCoordinator:
             raise CoordinationError("pid must be >= 1")
         if heartbeat_ttl_seconds < 1:
             raise CoordinationError("heartbeat_ttl_seconds must be >= 1")
+        if process_guard is not None:
+            if (not isinstance(process_guard, dict)
+                    or not {"marker", "boot_id"}.issubset(process_guard)
+                    or set(process_guard) - {"marker", "boot_id", "retain_until_release"}
+                    or not re.fullmatch(r"[0-9a-f]{32}", str(process_guard.get("marker", "")))
+                    or not isinstance(process_guard.get("boot_id"), str)
+                    or ("retain_until_release" in process_guard and not isinstance(process_guard["retain_until_release"], bool))):
+                raise CoordinationError("invalid managed process guard")
+            if not process_guard_busy(process_guard, completion_confirmed=True):
+                raise CoordinationError("managed supervisor is no longer present")
         now = self.clock()
         with self._transaction() as connection:
             row = self._task_row(connection, task_id)
@@ -977,11 +1042,12 @@ class NpuCoordinator:
                 """
                 UPDATE tasks
                 SET state='active', pid=?, started_at=?, expected_end=?,
-                    heartbeat_at=?, heartbeat_deadline=?, activation_deadline=NULL,
+                    heartbeat_at=?, heartbeat_deadline=?, process_guard=?, activation_deadline=NULL,
                     updated_at=?, message=?
                 WHERE task_id=?
                 """,
-                (pid, now, expected_end, now, heartbeat_deadline, now, "task reported active", task_id),
+                (pid, now, expected_end, now, heartbeat_deadline,
+                 json.dumps(process_guard) if process_guard else None, now, "task reported active", task_id),
             )
             self._event(connection, "task-activated", task_id=task_id, data={"pid": pid}, now=now)
             row = self._task_row(connection, task_id)
@@ -1015,7 +1081,8 @@ class NpuCoordinator:
             row = self._task_row(connection, task_id)
         return {"status": "active", "task": self._serialize_task(row)}
 
-    def release(self, task_id: str, token: int, observed: dict[str, Any]) -> dict[str, Any]:
+    def release(self, task_id: str, token: int, observed: dict[str, Any], *,
+                completion_confirmed: bool = False) -> dict[str, Any]:
         task_id = require_safe_id(task_id, label="task id")
         now = self.clock()
         busy = self._busy_set(observed)
@@ -1033,10 +1100,11 @@ class NpuCoordinator:
                 if busy is not None and visible is not None
                 else sorted(devices)
             )
-            if busy is None or visible is None or conflicts:
+            if (busy is None or visible is None or conflicts
+                    or process_guard_busy(row["process_guard"], completion_confirmed=completion_confirmed)):
                 connection.execute(
                     "UPDATE tasks SET state='orphaned_busy', updated_at=?, message=? WHERE task_id=?",
-                    (now, "release requested but hardware remained busy or unknown", task_id),
+                    (now, "release requested but processes or hardware remained busy or unknown", task_id),
                 )
                 self._event(connection, "release-deferred", task_id=task_id, data={"devices": conflicts}, now=now)
                 row = self._task_row(connection, task_id)
@@ -1047,7 +1115,7 @@ class NpuCoordinator:
                     "occupancy": observed,
                 }
             connection.execute(
-                "UPDATE tasks SET state='released', updated_at=?, message=? WHERE task_id=?",
+                "UPDATE tasks SET state='released', process_guard=NULL, updated_at=?, message=? WHERE task_id=?",
                 (now, "hardware observed free; cooperative lease released", task_id),
             )
             self._event(connection, "task-released", task_id=task_id, now=now)
@@ -1073,11 +1141,12 @@ class NpuCoordinator:
                 or visible is None
                 or not devices.issubset(visible)
                 or bool(devices & busy)
+                or process_guard_busy(row["process_guard"])
             )
             next_state = "orphaned_busy" if still_busy else "cancelled"
             connection.execute(
-                "UPDATE tasks SET state=?, updated_at=?, message=? WHERE task_id=?",
-                (next_state, now, "cancel requested", task_id),
+                "UPDATE tasks SET state=?, process_guard=CASE WHEN ?='cancelled' THEN NULL ELSE process_guard END, updated_at=?, message=? WHERE task_id=?",
+                (next_state, next_state, now, "cancel requested", task_id),
             )
             self._event(connection, "task-cancelled", task_id=task_id, data={"to": next_state}, now=now)
             row = self._task_row(connection, task_id)
@@ -1206,6 +1275,7 @@ def handle_request(
             request["task_id"],
             int(request["fence_token"]),
             pid=int(request["pid"]),
+            process_guard=request.get("process_guard"),
             heartbeat_ttl_seconds=int(
                 request.get("heartbeat_ttl_seconds") or DEFAULT_HEARTBEAT_TTL_SECONDS
             ),
@@ -1224,7 +1294,8 @@ def handle_request(
             interval_seconds=float(request.get("interval_seconds") or 2.0),
             probe=probe,
         )
-        return coordinator.release(request["task_id"], int(request["fence_token"]), observed)
+        return coordinator.release(request["task_id"], int(request["fence_token"]), observed,
+                                   completion_confirmed=request.get("completion_confirmed") is True)
     if action == "cancel":
         return coordinator.cancel(request["task_id"], probe())
     if action == "hold-add":
