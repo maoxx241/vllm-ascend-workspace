@@ -38,36 +38,11 @@ from common import (
     ssh_stream_to_file,
     update_state,
 )
-
-
-VLLM_REINSTALL_PATTERNS = (
-    'requirements*',
-    'pyproject.toml',
-    'setup.py',
-    'setup.cfg',
-    'CMakeLists.txt',
-    'cmake/**',
-    'csrc/**',
-    '**/*.cu',
-    '**/*.cuh',
-    '**/*.cpp',
-    '**/*.cc',
-    '**/*.h',
-    '**/*.hpp',
-    '*.c', '*.cc', '*.cpp', '*.cxx', '*.cu', '*.cuh', '*.h', '*.hpp', '*.hxx',
-    '*.s', '*.S', '*.cmake', '*.proto',
+from vaws_build_inputs import (
+    VLLM_REINSTALL_PATTERNS, VLLM_ASCEND_REINSTALL_PATTERNS,
+    DEPENDENCY_INSTALL_PATTERNS, BUILD_INPUT_ENV_KEYS, build_input_fingerprints,
 )
 
-VLLM_ASCEND_REINSTALL_PATTERNS = VLLM_REINSTALL_PATTERNS + (
-    'vllm_ascend/_cann_ops_custom/**',
-)
-
-DEPENDENCY_INSTALL_PATTERNS = (
-    'requirements*',
-    'pyproject.toml',
-    'setup.py',
-    'setup.cfg',
-)
 
 DEFAULT_ENV_PREAMBLE = (
     'export PATH="${PATH:-/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin}"',
@@ -245,13 +220,6 @@ RUNTIME_INSTALL_ENV_KEYS = (
     'ASCEND_HOME_PATH',
 )
 
-BUILD_INPUT_ENV_KEYS = (
-    'CMAKE_BUILD_TYPE', 'SOC_VERSION', 'VAWS_SOC_VERSION',
-    'COMPILE_CUSTOM_KERNELS', 'VAWS_COMPILE_CUSTOM_KERNELS', 'VAWS_USE_CLANG15',
-    'C_COMPILER', 'CXX_COMPILER', 'CFLAGS', 'CXXFLAGS', 'ASCEND_HOME_PATH',
-    'VAWS_ENVIRONMENT_FINGERPRINT',
-)
-
 
 @dataclass
 class SubmoduleEntry:
@@ -279,6 +247,7 @@ class SnapshotRecord:
     changed_paths: list[str]
     submodules: list[dict[str, str]]
     build_inputs: dict[str, str] = field(default_factory=dict)
+    source_path: str | None = None
 
 
 def normalize_workspace_id(value: str) -> str:
@@ -387,14 +356,14 @@ def list_submodules(repo: Path) -> list[SubmoduleEntry]:
     return entries
 
 
-def discover_repo_tree(repo: Path, relpath: str = '.', submodule_name: str | None = None) -> RepoNode:
+def discover_repo_tree(repo: Path, relpath: str = '.', submodule_name: str | None = None, source_roots: dict[str, Path] | None = None) -> RepoNode:
     ensure_populated_worktree(repo, relpath)
     node = RepoNode(relpath=relpath, repo_path=repo, submodule_name=submodule_name)
     for entry in list_submodules(repo):
-        child_repo = repo / entry.path
         child_relpath = entry.path if relpath in ('', '.') else f'{relpath}/{entry.path}'
+        child_repo = (source_roots or {}).get(child_relpath, repo / entry.path)
         ensure_populated_worktree(child_repo, child_relpath)
-        node.children.append(discover_repo_tree(child_repo, child_relpath, entry.name))
+        node.children.append(discover_repo_tree(child_repo, child_relpath, entry.name, source_roots))
     return node
 
 
@@ -423,7 +392,7 @@ def git_tree_for_commit(repo: Path, commit: str | None) -> str | None:
 def reset_pathspecs(node: RepoNode, denylist: tuple[str, ...]) -> list[str]:
     specs: list[str] = []
     for child in node.children:
-        specs.append(child.repo_path.relative_to(node.repo_path).as_posix())
+        specs.append(PurePosixPath(child.relpath).relative_to(node.relpath).as_posix())
     for pattern in denylist:
         if any(ch in pattern for ch in '*?[]'):
             specs.append(f':(glob){pattern}')
@@ -496,7 +465,7 @@ def build_synthetic_snapshot(
         transport_only_child_paths: set[str] = set()
         for child in node.children:
             child_record = child_commits[child.relpath]
-            child_rel_to_repo = child.repo_path.relative_to(repo).as_posix()
+            child_rel_to_repo = PurePosixPath(child.relpath).relative_to(node.relpath).as_posix()
             source_gitlink = gitlink_for_path(repo, source_head, child_rel_to_repo)
             if (
                 source_gitlink
@@ -545,7 +514,7 @@ def build_synthetic_snapshot(
 
 def cleanup_synthetic_refs(workspace_root: Path, records: list[SnapshotRecord]) -> None:
     for record in records:
-        repo = workspace_root if record.relpath in ('', '.') else workspace_root / record.relpath
+        repo = record_source(workspace_root, record)
         git(repo, ['update-ref', '-d', record.ref], check=False)
 
 
@@ -1496,14 +1465,14 @@ def verify_runtime_commits(
     return verify_runtime_commits_map(container=container, runtime_root=runtime_root, expected=expected)
 
 
-def workspace_fingerprint(workspace_root: Path) -> str:
+def workspace_fingerprint(workspace_root: Path, source_roots: dict[str, Path] | None = None) -> str:
     """Hash dirty content, not just the names/status of dirty files.
 
     A second edit of an already modified file has identical porcelain status.
     Hash tracked diffs and untracked bytes so it cannot disappear in the fast
     path. Prefix the format to invalidate the old status-only cache.
     """
-    tree = discover_repo_tree(workspace_root, '.', None)
+    tree = discover_repo_tree(workspace_root, '.', None, source_roots)
     hasher = hashlib.sha256()
     for node in iter_postorder(tree):
         repo = node.repo_path
@@ -1527,32 +1496,6 @@ def workspace_fingerprint(workspace_root: Path) -> str:
     build_env = {key: os.environ[key] for key in BUILD_INPUT_ENV_KEYS if key in os.environ}
     hasher.update(json.dumps(build_env, sort_keys=True).encode('utf-8'))
     return 'content-v2:' + hasher.hexdigest()
-
-
-def build_input_fingerprints(repo: Path, commit: str, patterns: tuple[str, ...]) -> dict[str, str]:
-    """Fingerprint native/dependency trees, including submodule gitlinks.
-
-    Comparing with the *last installed* inputs catches reverting a dirty
-    native edit, which a diff against the current HEAD alone cannot detect.
-    """
-    native: list[str] = []
-    dependencies: list[str] = []
-    for entry in git(repo, ['ls-tree', '-r', '-z', commit]).stdout.split('\0'):
-        if not entry:
-            continue
-        metadata, path = entry.split('\t', 1)
-        mode, kind, oid = metadata.split()
-        token = f'{mode}\0{path}\0{oid}'
-        if kind == 'commit' or glob_match_any(path, patterns):
-            native.append(token)
-        if glob_match_any(path, DEPENDENCY_INSTALL_PATTERNS):
-            dependencies.append(token)
-    build_env = {key: os.environ[key] for key in BUILD_INPUT_ENV_KEYS if key in os.environ}
-    return {
-        'native': hashlib.sha256(json.dumps(sorted(native)).encode('utf-8')).hexdigest(),
-        'dependencies': hashlib.sha256(json.dumps(sorted(dependencies)).encode('utf-8')).hexdigest(),
-        'build_env': hashlib.sha256(json.dumps(build_env, sort_keys=True).encode('utf-8')).hexdigest(),
-    }
 
 
 def changed_build_inputs(current: dict[str, str], installed: dict[str, str] | None) -> tuple[bool, bool]:
@@ -1679,6 +1622,7 @@ def summary_payload(
         'container_cache_root': container_cache_root,
         'first_install': first_install,
         'snapshot_commits': {record.relpath: record.commit for record in records},
+        'build_inputs': {record.relpath: record.build_inputs for record in records if record.build_inputs},
         'runtime_commits': observed_runtime_commits,
         'reinstall': reinstall_status,
         'runtime_install_env': runtime_install_env or {},
@@ -1686,8 +1630,24 @@ def summary_payload(
     }
 
 
-def build_snapshot_records(workspace_root: Path, workspace_id: str, snapshot_id: str, denylist: tuple[str, ...]) -> list[SnapshotRecord]:
-    tree = discover_repo_tree(workspace_root, '.', None)
+def record_source(workspace_root: Path, record: SnapshotRecord) -> Path:
+    return Path(record.source_path) if record.source_path else workspace_root / record.relpath
+
+
+def parse_sources(values: list[str]) -> dict[str, Path]:
+    sources = {}
+    for value in values:
+        name, separator, path = value.partition('=')
+        if not separator or name not in ('vllm', 'vllm-ascend') or name in sources:
+            raise ValueError('--source must be a unique vllm=/actual/worktree or vllm-ascend=/actual/worktree')
+        candidate = Path(path).expanduser().resolve()
+        ensure_populated_worktree(candidate, name)
+        sources[name] = candidate
+    return sources
+
+
+def build_snapshot_records(workspace_root: Path, workspace_id: str, snapshot_id: str, denylist: tuple[str, ...], source_roots: dict[str, Path] | None = None) -> list[SnapshotRecord]:
+    tree = discover_repo_tree(workspace_root, '.', None, source_roots)
     child_records: dict[str, SnapshotRecord] = {}
     ordered_records: list[SnapshotRecord] = []
     for node in iter_postorder(tree):
@@ -1699,11 +1659,12 @@ def build_snapshot_records(workspace_root: Path, workspace_id: str, snapshot_id:
             child_commits=child_records,
         )
         child_records[node.relpath] = record
+        record.source_path = str(node.repo_path.resolve())
         ordered_records.append(record)
     for record in ordered_records:
         if record.relpath in ('vllm', 'vllm-ascend'):
             patterns = VLLM_REINSTALL_PATTERNS if record.relpath == 'vllm' else VLLM_ASCEND_REINSTALL_PATTERNS
-            record.build_inputs = build_input_fingerprints(workspace_root / record.relpath, record.commit, patterns)
+            record.build_inputs = build_input_fingerprints(record_source(workspace_root, record), record.commit, patterns)
     return ordered_records
 
 
@@ -1724,7 +1685,7 @@ def run_plan(args: argparse.Namespace) -> int:
     marker_dirname = validate_relative_posix_path(args.marker_dirname, label='marker dirname')
     root_preserve_paths = resolved_root_preserve_paths(marker_dirname, args.preserve_path)
     snapshot_id = args.snapshot_id or now_utc().replace(':', '').replace('-', '')
-    records = build_snapshot_records(workspace_root, workspace_id, snapshot_id, tuple(DEFAULT_DENYLIST))
+    records = build_snapshot_records(workspace_root, workspace_id, snapshot_id, tuple(DEFAULT_DENYLIST), parse_sources(getattr(args, 'source', [])))
     try:
         manifest = make_manifest(
             workspace_root=workspace_root,
@@ -1761,7 +1722,7 @@ def run_sync(args: argparse.Namespace) -> int:
     fingerprint: str | None = None
 
     emit_progress('snapshot-build', workspace_id=workspace_id, snapshot_id=snapshot_id)
-    records = build_snapshot_records(workspace_root, workspace_id, snapshot_id, tuple(DEFAULT_DENYLIST))
+    records = build_snapshot_records(workspace_root, workspace_id, snapshot_id, tuple(DEFAULT_DENYLIST), parse_sources(getattr(args, 'source', [])))
     manifest_path = manifest_path_for(container_cache_root, workspace_id, snapshot_id)
     current_phase = 'snapshot-built'
     try:
@@ -1883,7 +1844,7 @@ def run_sync(args: argparse.Namespace) -> int:
                     for record in records:
                         emit_progress('push-mirror', relpath=record.relpath, transport=args.transport)
                         transfer = push_snapshot_to_mirror(
-                            repo=workspace_root if record.relpath in ('', '.') else workspace_root / record.relpath,
+                            repo=record_source(workspace_root, record),
                             container=container,
                             mirror_path=mirror_path_for(container_cache_root, workspace_id, record),
                             container_cache_root=container_cache_root,
@@ -2099,7 +2060,7 @@ def run_sync(args: argparse.Namespace) -> int:
                 for record in records:
                     emit_progress('push-mirror', relpath=record.relpath, transport=args.transport)
                     transfer = push_snapshot_to_mirror(
-                        repo=workspace_root if record.relpath in ('', '.') else workspace_root / record.relpath,
+                        repo=record_source(workspace_root, record),
                         container=container,
                         mirror_path=mirror_path_for(container_cache_root, workspace_id, record),
                         container_cache_root=container_cache_root,
@@ -2329,6 +2290,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     def add_shared_arguments(target: argparse.ArgumentParser) -> None:
         target.add_argument('--workspace-root', required=True, help='Local workspace root.')
+        target.add_argument('--source', action='append', default=[], help='Use an actual external business worktree: vllm=/path or vllm-ascend=/path.')
         target.add_argument('--workspace-id', required=True, help='Stable workspace id used for container cache namespacing.')
         target.add_argument('--server-name', required=True)
         target.add_argument('--runtime-root', required=True)

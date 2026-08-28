@@ -9,6 +9,8 @@ import hashlib
 import importlib.metadata
 import json
 import os
+import re
+import shlex
 import shutil
 import sysconfig
 import tempfile
@@ -57,11 +59,28 @@ def profile_key(profile: dict[str, Any]) -> str:
             raise ValueError(f"profile requires {key}")
         if any(not isinstance(k, str) or not isinstance(v, str) for k, v in profile[key].items()):
             raise ValueError(f"{key} must contain string values")
+        if any(not re.fullmatch(r"[A-Z_][A-Z0-9_]*", k) for k in profile[key]):
+            raise ValueError("invalid profile environment variable name")
         if any(any(word in k.upper() for word in ("TOKEN", "PASSWORD", "SECRET", "CREDENTIAL")) for k in profile[key]):
             raise ValueError("profile environment must not contain secrets")
     if not profile.get("compatibility_evidence"):
         raise ValueError("profile requires an operator-reviewed compatibility evidence reference")
+    if not {"cann", "driver"}.issubset(profile.get("system_files", {})):
+        raise ValueError("profile requires actual CANN and driver version-file hashes")
+    for row in profile["system_files"].values():
+        if not Path(row["path"]).is_absolute() or len(row["sha256"]) != 64:
+            raise ValueError("system file identity requires an absolute path and SHA256")
     return digest(profile)
+
+
+def launch_preamble(profile: dict[str, Any]) -> str:
+    """Keep image-provided acl/native-compat paths when adding scoped paths."""
+    profile_key(profile)
+    lines = []
+    for key, value in sorted(profile["launch_env"].items()):
+        suffix = '${' + key + ':+:$' + key + '}' if key in {"PATH", "PYTHONPATH", "LD_LIBRARY_PATH"} else ""
+        lines.append(f"export {key}={shlex.quote(value)}\"{suffix}\"")
+    return "\n".join(lines)
 
 
 def build_key(profile: dict[str, Any], inputs: dict[str, Any]) -> str:
@@ -118,6 +137,9 @@ def verify(root: Path, manifest: dict[str, Any], *, check_environment: bool = Tr
         for key, package in PACKAGES.items():
             if importlib.metadata.version(package) != profile[key]:
                 raise ValueError(f"installed package changed: {package}")
+        for row in profile["system_files"].values():
+            if file_digest(Path(row["path"])) != row["sha256"]:
+                raise ValueError("CANN/driver/runtime support file changed")
 
 
 def publish(root: Path, cache: Path, manifest: dict[str, Any]) -> Path:
@@ -157,12 +179,12 @@ def restore(root: Path, bundle: Path, expected_build_key: str) -> None:
     verify(bundle, manifest, check_environment=False)
     for name in manifest["files"]:
         target = root / name
-        target.parent.mkdir(parents=True, exist_ok=True)
         # Reject symlinked destinations, including existing parent directories.
         for parent in [target, *target.parents]:
             if parent == root:
                 break
             if parent.is_symlink():
                 raise ValueError("unsafe artifact restore destination")
+        target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(bundle / name, target)
     verify(root, manifest)

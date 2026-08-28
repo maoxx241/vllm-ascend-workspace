@@ -17,6 +17,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from vaws_runtime_profile import digest
+from vaws_run_manifest import new_manifest, write_manifest
 
 TERMINAL = {"released", "cancelled", "expired"}
 
@@ -149,7 +150,8 @@ class RuntimePool:
                        "state": "bound", "endpoint": runtime["endpoint"],
                        "profile_key": profile_key, "build_key": observed["build_key"],
                        "environment": {"VAWS_ENVIRONMENT_FINGERPRINT": profile_key},
-                       "launch_env": observed["profile"]["launch_env"]}
+                       "launch_env": observed["profile"]["launch_env"],
+                       "launch_preamble": observed.get("launch_preamble", "")}
                 runtime["state"] = "bound"
                 with self.transaction() as db:
                     self.put(db, "runtime", runtime)
@@ -173,6 +175,26 @@ class RuntimePool:
                 self.event(db, owner, "runtime-returned", binding=binding_id)
             return {"status": "returned", "runtime_state": "needs_repair",
                     "next": "owner cleans only its workers; administrator re-verifies and registers the idle runtime"}
+
+    def refresh(self, owner: str, binding_id: str):
+        """Accept an owner's explicitly prepared new native bundle, before queueing."""
+        with self.lock:
+            with self.transaction() as db:
+                binding = self.owned(db, "binding", binding_id, owner)
+                if binding["state"] != "bound" or any(run["binding_id"] == binding_id and run["state"] not in TERMINAL for run in self.rows(db, "run")):
+                    raise ValueError("finish/release executions before refreshing prepared artifacts")
+                runtime = self.get(db, "runtime", binding["runtime_id"])
+            observed = self.backend.inspect(runtime, idle=True)
+            if observed["profile_key"] != binding["profile_key"]:
+                raise ValueError("environment changed; return it and request the new profile")
+            runtime["attestation"] = observed
+            binding["build_key"] = observed["build_key"]
+            binding["launch_preamble"] = observed.get("launch_preamble", "")
+            with self.transaction() as db:
+                self.put(db, "runtime", runtime)
+                self.put(db, "binding", binding)
+                self.event(db, owner, "runtime-refreshed", binding=binding_id, build_key=binding["build_key"])
+            return binding
 
     def request_run(self, owner: str, binding_id: str, request_id: str, snapshots: dict[str, str],
                     expected_build_key: str, devices: list[int], npu_count: int,
@@ -212,7 +234,20 @@ class RuntimePool:
             with self.transaction() as db:
                 self.put(db, "run", run)  # durable intent BEFORE the first host request
                 self.event(db, owner, "run-queued", run=key)
+            self.export_manifest(run, binding)
             return self.control(owner, key, "poll")
+
+    def export_manifest(self, run, binding):
+        manifest = new_manifest(run_type="debug", run_id="pool-" + run["id"],
+                                workspace_snapshot=run["intent"]["snapshots"],
+                                environment={"profile_key": binding["profile_key"], "build_key": binding["build_key"],
+                                             "endpoint": binding["endpoint"]},
+                                topology={"physical_devices": run.get("task", {}).get("granted_devices", [])})
+        # A released allocation says nothing about model correctness/readiness.
+        manifest["status"] = ("inconclusive" if run["state"] in TERMINAL and run.get("task", {}).get("started_at")
+                              else "cancelled" if run["state"] in TERMINAL else "running" if run["state"] == "active" else "planned")
+        manifest["coordination"] = {"state": run["state"], "task_id": run["task_id"], "epoch": run["epoch"]}
+        write_manifest(self.state_dir / "runs" / (run["id"] + ".json"), manifest)
 
     def control(self, owner: str, run_id: str, action: str, pid: int = 0):
         if action not in {"poll", "preflight", "activate", "heartbeat", "release", "cancel"}:
@@ -274,7 +309,8 @@ class RuntimePool:
                     raise ValueError(reply.get("error", "host probe did not return a task"))
                 run["environment"] = {"ASCEND_RT_VISIBLE_DEVICES": ",".join(map(str, run["task"].get("granted_devices", [])))}
             except Exception as exc:
-                run["state"] = "uncertain"
+                # No host epoch means no mutating host request was sent yet.
+                run["state"] = "uncertain" if run["epoch"] is not None else "pending"
                 run["error"] = str(exc)[:500]
             run["last_poll"] = self.clock()
             with self.transaction() as db:
@@ -282,6 +318,7 @@ class RuntimePool:
                 self.put(db, "run", run)
                 if (previous["state"], previous.get("error")) != (run["state"], run.get("error")):
                     self.event(db, owner, "run-state", run=run_id, state=run["state"], error=run.get("error"))
+            self.export_manifest(run, binding)
             return run
 
     def tick(self, limit: int = 4):

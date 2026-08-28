@@ -20,6 +20,7 @@ from starlette.responses import JSONResponse
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / ".agents/lib"))
 from vaws_ready_runtime import RuntimePool, safe_id
+from vaws_local_state import shared_workspace_root
 
 PRINCIPAL = contextvars.ContextVar("vaws_coordinator_principal")
 
@@ -64,16 +65,28 @@ def create_app(pool, access, *, interval=2.0, allowed_hosts=None):
         return await asyncio.to_thread(pool.session_open, PRINCIPAL.get(), session_id, sources)
 
     @mcp.tool()
+    async def machine_catalog() -> dict:
+        """Read the shared Git-common-dir machine directory; this is not a resource allocation."""
+        return await asyncio.to_thread(pool.backend.catalog)
+
+    @mcp.tool()
     async def runtime_register(runtime_id: str, spec: dict) -> dict:
         """Administrator: adopt an owned, idle, already prepared container after verification."""
         if not principals[PRINCIPAL.get()].get("admin", False):
             raise PermissionError("runtime registration requires an administrator")
+        if "machine" in spec:
+            spec = await asyncio.to_thread(pool.backend.resolve_registration, spec)
         return await asyncio.to_thread(pool.register, runtime_id, spec)
 
     @mcp.tool()
     async def runtime_checkout(session: str, profile_key: str, request_id: str, runtime_id: str = "") -> dict:
         """Exclusively bind a ready environment, without reserving NPUs or provisioning anything."""
         return await asyncio.to_thread(pool.checkout, PRINCIPAL.get(), session, profile_key, request_id, runtime_id)
+
+    @mcp.tool()
+    async def runtime_refresh(binding_id: str) -> dict:
+        """Verify a newly prepared native bundle while no execution is pending; never builds it."""
+        return await asyncio.to_thread(pool.refresh, PRINCIPAL.get(), binding_id)
 
     @mcp.tool()
     async def runtime_return(binding_id: str) -> dict:
@@ -145,7 +158,7 @@ def create_app(pool, access, *, interval=2.0, allowed_hosts=None):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--state-dir", type=Path, default=ROOT / ".vaws-local/coordinator")
+    parser.add_argument("--state-dir", type=Path, default=shared_workspace_root(ROOT) / ".vaws-local/coordinator")
     parser.add_argument("--access-file", type=Path, required=True)
     parser.add_argument("--port", type=int, default=8766)
     args = parser.parse_args()

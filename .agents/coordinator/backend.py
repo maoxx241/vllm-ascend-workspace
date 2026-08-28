@@ -12,6 +12,8 @@ sys.path.insert(0, str(ROOT / ".remote-dev"))
 sys.path.insert(0, str(ROOT / ".agents/lib"))
 from core.endpoint import resolve_endpoint
 from core.shell_ops import remote_bash
+from vaws_remote_toolbox import _load_inventory
+from vaws_runtime_profile import launch_preamble
 
 spec = importlib.util.spec_from_file_location("pool_host_coordination", ROOT / ".agents/skills/session-management/scripts/npu_coordination.py")
 coord = importlib.util.module_from_spec(spec)
@@ -19,6 +21,26 @@ spec.loader.exec_module(coord)
 
 
 class RemoteBackend:
+    def catalog(self):
+        inventory, path = _load_inventory(ROOT)
+        return {"inventory_path": str(path), "machines": [
+            {"alias": row.get("alias"), "host": row.get("host", {}).get("ip"),
+             "container_name": row.get("container", {}).get("name"),
+             "container_port": row.get("container", {}).get("ssh_port")}
+            for row in inventory["machines"]]}
+
+    def resolve_registration(self, spec):
+        if "machine" not in spec:
+            return spec
+        inventory, _ = _load_inventory(ROOT)
+        matches = [row for row in inventory["machines"] if row.get("alias") == spec["machine"]]
+        if len(matches) != 1:
+            raise ValueError("machine alias must resolve uniquely in the shared inventory")
+        host = matches[0]["host"]
+        return {"host_endpoint": {"host": host["ip"], "port": host.get("ssh_port", 22), "user": host.get("user", "root")},
+                "endpoint": {"host": host["ip"], "port": spec["port"], "root": spec["root"], "user": spec.get("user", "root")},
+                "container_name": spec["container_name"]}
+
     def host(self, runtime, request):
         result = coord.ssh_execute(coord.LocalEndpoint(**runtime["host_endpoint"]),
                                   coord.build_remote_command(request), timeout=45)
@@ -50,21 +72,27 @@ class RemoteBackend:
                 raise RuntimeError("container is not an idle prepared runtime; inspect its workers")
         module = (ROOT / ".agents/lib/vaws_runtime_profile.py").read_text()
         request = json.dumps({"root": runtime["endpoint"]["root"], "snapshots": snapshots or {}})
-        runner = '''
+        build_source = (ROOT / ".agents/lib/vaws_build_inputs.py").read_text()
+        runner = "\n_build_namespace = {}\nexec(" + repr(build_source) + ", _build_namespace)\n" + '''
 import subprocess
 import sys
 args = json.loads(sys.argv[1])
 root = Path(args["root"])
 manifest = json.loads((root / ".vaws-runtime/ready-profile.json").read_text())
 verify(root, manifest)
+if _build_namespace["runtime_build_inputs"](root, manifest["profile"], manifest["profile_key"]) != manifest["build_inputs"]:
+    raise ValueError("cache miss: installed native artifacts do not match current source inputs")
 for name, expected in args["snapshots"].items():
     repo = root / name
     head = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
-    dirty = subprocess.check_output(["git", "-C", str(repo), "status", "--porcelain", "--untracked-files=all", "--ignore-submodules=dirty"], text=True)
-    if head != expected or dirty.strip():
+    dirty = subprocess.check_output(["git", "-C", str(repo), "diff", "HEAD", "--name-only", "--ignore-submodules=dirty"], text=True)
+    untracked = subprocess.check_output(["git", "-C", str(repo), "ls-files", "--others", "--exclude-standard", "-z"], text=True)
+    private = {".vaws-runtime", ".remote-code-parity", "Mooncake"} if name == "." else set()
+    extras = [path for path in untracked.split("\\0") if path and path.split("/", 1)[0] not in private]
+    if head != expected or dirty.strip() or extras:
         raise ValueError("runtime source differs from pinned snapshot: " + name)
 print(json.dumps(manifest))
 '''
         command = "python3 - " + shlex.quote(request) + " <<'VAWS_READY_PROBE'\n" + module + runner + "\nVAWS_READY_PROBE\n"
         manifest = json.loads(self.bash(runtime["endpoint"], command))
-        return {**manifest, "container_id": info["Id"]}
+        return {**manifest, "container_id": info["Id"], "launch_preamble": launch_preamble(manifest["profile"])}

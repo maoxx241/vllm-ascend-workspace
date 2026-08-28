@@ -159,6 +159,7 @@ class ProfileTests(unittest.TestCase):
                 (root / name).write_text(name)
             profile = {key: "test-version" for key in PROFILE_FIELDS}
             profile.update(build_env={}, launch_env={"VLLM_VERSION": "test"}, compatibility_evidence="smoke.txt")
+            profile["system_files"] = {name: {"path": str(root / (name + ".txt")), "sha256": hashlib.sha256((name + ".txt").encode()).hexdigest()} for name in ["cann", "driver"]}
             inputs = {"vllm": "native-a", "vllm-ascend": "native-b"}
             manifest = capture(root, profile, inputs, {"kernels.so": "library", "binary_info_config.json": "metadata"}, {"cann": "cann.txt", "driver": "driver.txt", "smoke": "smoke.txt"})
             verify(root, manifest, check_environment=False)

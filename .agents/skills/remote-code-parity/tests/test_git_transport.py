@@ -48,6 +48,59 @@ def snapshot_record(relpath: str = "vllm"):
 
 
 class GitTransportTests(unittest.TestCase):
+    def test_external_business_worktrees_snapshot_without_reset_or_copy(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            root = base / "scaffold"
+            def git(repo, *args):
+                return subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, text=True).stdout.strip()
+            def init(repo):
+                repo.mkdir()
+                git(repo, "init")
+                git(repo, "config", "user.name", "Test")
+                git(repo, "config", "user.email", "test@example.invalid")
+                (repo / "model.py").write_text("original\n")
+                git(repo, "add", ".")
+                git(repo, "commit", "-m", "base")
+            init(root)
+            sources = {}
+            module_lines = []
+            for name in ("vllm", "vllm-ascend"):
+                repo = base / ("actual-" + name)
+                init(repo)
+                sources[name] = repo
+                module_lines.append(f'[submodule "{name}"]\n path = {name}\n url = {repo}\n')
+                git(root, "update-index", "--add", "--cacheinfo", "160000," + git(repo, "rev-parse", "HEAD") + "," + name)
+            (root / ".gitmodules").write_text("\n".join(module_lines))
+            git(root, "add", ".gitmodules")
+            git(root, "commit", "-m", "links")
+            (sources["vllm-ascend"] / "model.py").write_text("actual dirty edit\n")
+            before = {name: (git(repo, "rev-parse", "HEAD"), git(repo, "status", "--porcelain")) for name, repo in sources.items()}
+            records = parity.build_snapshot_records(root, "external", "snapshot", (), sources)
+            record = next(row for row in records if row.relpath == "vllm-ascend")
+            self.assertEqual(Path(record.source_path), sources["vllm-ascend"].resolve())
+            self.assertEqual(git(sources["vllm-ascend"], "show", record.commit + ":model.py"), "actual dirty edit")
+            self.assertFalse((root / "vllm-ascend").exists())
+            self.assertEqual(before, {name: (git(repo, "rev-parse", "HEAD"), git(repo, "status", "--porcelain")) for name, repo in sources.items()})
+            parity.cleanup_synthetic_refs(root, records)
+
+    def test_watcher_always_stages_and_acknowledges_only_pre_sync_content(self):
+        watcher = load_module("_parity_watcher_test", SCRIPTS / "parity_watch.py")
+        args = argparse.Namespace(apply_mode="auto", force_reinstall=False, dry_run=False,
+                                  print_manifest=True, workspace_root="/tmp/scaffold", source=[])
+        def sync(args):
+            self.assertEqual(args.apply_mode, "source-only")
+            print('{"status":"ready","snapshot_commits":{"vllm":"snapshot"}}')
+            return 0
+        with mock.patch.object(watcher.parity, "workspace_fingerprint", side_effect=["before", "during", "during"]), mock.patch.object(watcher.parity, "run_sync", side_effect=sync) as execute:
+            fingerprint, result = watcher.stage_once(args, None)
+            self.assertIsNotNone(result)
+            fingerprint, result = watcher.stage_once(args, fingerprint)
+            self.assertIsNotNone(result)
+            _, result = watcher.stage_once(args, fingerprint)
+            self.assertIsNone(result)
+            self.assertEqual(execute.call_count, 2)
+
     def test_dirty_file_content_and_untracked_edits_change_fingerprint(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

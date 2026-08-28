@@ -154,6 +154,8 @@ def build_low_level_command(derived: dict[str, Any], args: argparse.Namespace) -
     ]
     for preserve_path in derived['preserve_path']:
         cmd.extend(['--preserve-path', preserve_path])
+    for source in getattr(args, 'source', []):
+        cmd.extend(['--source', source])
     if args.snapshot_id:
         cmd.extend(['--snapshot-id', args.snapshot_id])
     if args.print_manifest:
@@ -176,6 +178,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument('--session-id', help='VAWS session id')
     parser.add_argument('--session-file', help='explicit session.json path')
     parser.add_argument('--repo-root', default='.')
+    parser.add_argument('--source', action='append', default=[])
     parser.add_argument('--workspace-id', default=None)
     parser.add_argument('--runtime-root', default=None)
     parser.add_argument('--container-user', default=DEFAULT_CONTAINER_USER)
