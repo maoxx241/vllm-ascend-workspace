@@ -22,6 +22,8 @@ docs/superpowers/
 !.grok/
 !.grok/config.example.toml
 .vaws-local/
+.vaws-runtime/
+.remote-code-parity/
 .remote-dev/state/
 .remote-dev/endpoints.local.json
 .machine-inventory.json

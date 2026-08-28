@@ -26,6 +26,9 @@ WORKSPACE_ID_PATTERN = re.compile(r'[^A-Za-z0-9._-]+')
 STATE_SUBDIR = Path('.vaws-local/remote-code-parity')
 DEFAULT_DENYLIST = (
     '.vaws-local/',
+    '.vaws-runtime/',
+    '.remote-code-parity/',
+    '.remote-dev/state/',
     '.workspace.local/',
     '.machine-inventory.json',
     '.codex/',

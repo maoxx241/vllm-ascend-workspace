@@ -37,7 +37,7 @@ class RemoteBackend:
         if len(matches) != 1:
             raise ValueError("machine alias must resolve uniquely in the shared inventory")
         host = matches[0]["host"]
-        return {"host_endpoint": {"host": host["ip"], "port": host.get("ssh_port", 22), "user": host.get("user", "root")},
+        return {"host_endpoint": {"host": host["ip"], "port": host.get("port", 22), "user": host.get("user", "root")},
                 "endpoint": {"host": host["ip"], "port": spec["port"], "root": spec["root"], "user": spec.get("user", "root")},
                 "container_name": spec["container_name"]}
 
@@ -67,7 +67,7 @@ class RemoteBackend:
             raise RuntimeError("prepared container is not running normally")
         if idle:
             rows = self.bash(host, f"docker top {name} -eo comm").splitlines()[1:]
-            allowed = {"bash", "sh", "sshd", "sleep", "tini", "tail", "cat", "init", "systemd"}
+            allowed = {"bash", "sh", "sshd", "sshd-session", "sshd-auth", "sleep", "tini", "tail", "cat", "init", "systemd"}
             if not rows or any(row.strip() not in allowed for row in rows):
                 raise RuntimeError("container is not an idle prepared runtime; inspect its workers")
         module = (ROOT / ".agents/lib/vaws_runtime_profile.py").read_text()

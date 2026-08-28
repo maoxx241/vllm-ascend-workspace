@@ -124,6 +124,28 @@ class PoolTests(unittest.TestCase):
         self.assertEqual(recovered["state"], "granted")
         self.assertEqual(recovered["task_id"], run["task_id"])
 
+    def test_lost_submit_reply_and_initial_connection_failure_recover(self):
+        binding = self.bind("alice", self.root / "a")
+        self.backend.fail_after = "submit"
+        run = self.request("alice", binding)
+        self.assertEqual(run["state"], "uncertain")
+        recovered = self.pool.control("alice", run["id"], "poll")
+        self.assertEqual(recovered["state"], "granted")
+        self.assertEqual(recovered["task_id"], run["task_id"])
+        from vaws_run_manifest import load_manifest
+        manifest = load_manifest(self.root / "manager/runs" / (run["id"] + ".json"))
+        self.assertEqual(manifest["status"], "planned")
+        self.assertEqual(manifest["environment"]["coordination"]["state"], "granted")
+
+    def test_native_refresh_is_forbidden_while_execution_is_unresolved(self):
+        binding = self.bind("alice", self.root / "a")
+        run = self.request("alice", binding)
+        with self.assertRaises(ValueError):
+            self.pool.refresh("alice", binding["id"])
+        self.pool.control("alice", run["id"], "release")
+        self.backend.attestation["build_key"] = "native-new"
+        self.assertEqual(self.pool.refresh("alice", binding["id"])["build_key"], "native-new")
+
     def test_epoch_change_fails_closed_and_host_enforces_fence_epoch(self):
         binding = self.bind("alice", self.root / "a")
         run = self.request("alice", binding)
@@ -175,6 +197,12 @@ class ProfileTests(unittest.TestCase):
                     verify(root, manifest)
             with self.assertRaises(ValueError):
                 capture(root, profile, inputs, {"kernels.so": "library"}, {})
+            from vaws_runtime_profile import launch_preamble
+            import os, subprocess
+            profile["launch_env"]["PYTHONPATH"] = "/scoped/source"
+            result = subprocess.check_output(["bash", "-c", launch_preamble(profile) + '\nprintf "%s" "$PYTHONPATH"'],
+                                              text=True, env={**os.environ, "PYTHONPATH": "/base/acl:/base/native-compat"})
+            self.assertEqual(result, "/scoped/source:/base/acl:/base/native-compat")
 
 
 if __name__ == "__main__":

@@ -10,6 +10,7 @@ import fcntl
 import hashlib
 import hmac
 import json
+import logging
 import sys
 from pathlib import Path
 
@@ -43,7 +44,10 @@ def create_app(pool, access, *, interval=2.0, allowed_hosts=None):
 
             async def reconcile():
                 while not stop.is_set():
-                    await asyncio.to_thread(pool.tick)
+                    try:
+                        await asyncio.to_thread(pool.tick)
+                    except Exception:
+                        logging.exception("Reconciliation failed; retain allocations and retry the next bounded tick")
                     try:
                         await asyncio.wait_for(stop.wait(), timeout=interval)
                     except TimeoutError:

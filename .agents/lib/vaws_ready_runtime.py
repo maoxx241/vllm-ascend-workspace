@@ -17,7 +17,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from vaws_runtime_profile import digest
-from vaws_run_manifest import new_manifest, write_manifest
+from vaws_run_manifest import new_manifest, write_manifest, utc_now
 
 TERMINAL = {"released", "cancelled", "expired"}
 
@@ -230,7 +230,7 @@ class RuntimePool:
                 raise ValueError("runtime/profile changed since checkout")
             run = {"id": key, "owner": owner, "binding_id": binding_id, "intent": intent,
                    "task_id": "pool-" + uuid.uuid4().hex, "state": "pending", "epoch": None,
-                   "deadline": self.clock() + queue_seconds, "last_poll": 0}
+                   "deadline": self.clock() + queue_seconds, "last_poll": 0, "created_at": utc_now(), "submitted": False}
             with self.transaction() as db:
                 self.put(db, "run", run)  # durable intent BEFORE the first host request
                 self.event(db, owner, "run-queued", run=key)
@@ -238,15 +238,16 @@ class RuntimePool:
             return self.control(owner, key, "poll")
 
     def export_manifest(self, run, binding):
-        manifest = new_manifest(run_type="debug", run_id="pool-" + run["id"],
+        manifest = new_manifest(run_type="debug", run_id="pool-" + run["id"], created_at=run["created_at"],
                                 workspace_snapshot=run["intent"]["snapshots"],
                                 environment={"profile_key": binding["profile_key"], "build_key": binding["build_key"],
                                              "endpoint": binding["endpoint"]},
                                 topology={"physical_devices": run.get("task", {}).get("granted_devices", [])})
         # A released allocation says nothing about model correctness/readiness.
         manifest["status"] = ("inconclusive" if run["state"] in TERMINAL and run.get("task", {}).get("started_at")
-                              else "cancelled" if run["state"] in TERMINAL else "running" if run["state"] == "active" else "planned")
-        manifest["coordination"] = {"state": run["state"], "task_id": run["task_id"], "epoch": run["epoch"]}
+                              else "cancelled" if run["state"] in TERMINAL else "running" if run.get("task", {}).get("started_at") else "planned")
+        manifest["updated_at"] = utc_now()
+        manifest["environment"]["coordination"] = {"state": run["state"], "task_id": run["task_id"], "epoch": run["epoch"]}
         write_manifest(self.state_dir / "runs" / (run["id"] + ".json"), manifest)
 
     def control(self, owner: str, run_id: str, action: str, pid: int = 0):
@@ -267,10 +268,14 @@ class RuntimePool:
                     if snapshot["coordination_epoch"] != run["epoch"]:
                         raise ValueError("host epoch changed; ownership requires operator reconciliation")
                     matches = [task for task in snapshot["tasks"] if task["task_id"] == run["task_id"]]
-                    if not matches:
+                    if not matches and run["submitted"]:
                         raise ValueError("host task disappeared; ownership remains unresolved")
-                    run["task"] = matches[0]
-                    run["state"] = matches[0]["state"]
+                    if matches:
+                        run["task"] = matches[0]
+                        run["state"] = matches[0]["state"]
+                        run["submitted"] = True
+                    else:
+                        run["state"] = "pending"
                     # Observation is not a retry of a possibly non-idempotent
                     # activate/preflight action. Caller observes before retry.
                     action = "poll"
@@ -281,15 +286,27 @@ class RuntimePool:
                         self.put(db, "run", run)
                 request = {"task_id": run["task_id"], "coordination_epoch": run["epoch"]}
                 if run["state"] == "pending":
+                    status = self.backend.host(runtime, {"action": "status", "no_probe": True, "coordination_epoch": run["epoch"]})
+                    existing = [task for task in status["tasks"] if task["task_id"] == run["task_id"]]
+                    if existing:
+                        run["task"], run["state"], run["submitted"] = existing[0], existing[0]["state"], True
+                    elif self.clock() >= run["deadline"] or action == "cancel":
+                        run["state"] = "expired" if action != "cancel" else "cancelled"
+                if run["state"] == "pending":
                     intent = run["intent"]
-                    submit = {**request, "action": "submit", "agent_id": owner,
+                    submit = {**request, "action": "submit", "agent_id": "mcp-" + digest(owner)[:32],
                               "session_id": binding["intent"]["session"], "container_name": runtime["container_name"],
                               "priority": intent["priority"], "latest_start": run["deadline"],
                               "estimated_duration_seconds": 1800}
                     submit.update({"devices": intent["devices"]} if intent["devices"] else {"npu_count": intent["npu_count"]})
                     reply = self.backend.host(runtime, submit)
                     run["task"], run["state"] = reply["task"], reply["task"]["state"]
-                if action == "poll":
+                    run["submitted"] = True
+                    with self.transaction() as db:
+                        self.put(db, "run", run)
+                if run["state"] in TERMINAL:
+                    reply = {"task": run.get("task", {"state": run["state"]})}
+                elif action == "poll":
                     if run["state"] == "queued":
                         reply = self.backend.host(runtime, {**request, "action": "acquire"})
                     else:

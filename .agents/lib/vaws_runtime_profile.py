@@ -177,7 +177,8 @@ def restore(root: Path, bundle: Path, expected_build_key: str) -> None:
     if manifest["build_key"] != expected_build_key or str(root.resolve()) != manifest["runtime_root"]:
         raise ValueError("cache miss: build identity or installation path differs")
     verify(bundle, manifest, check_environment=False)
-    for name in manifest["files"]:
+    names = set(manifest["files"]) | {row["path"] for row in manifest["evidence"].values()}
+    for name in names:
         target = root / name
         # Reject symlinked destinations, including existing parent directories.
         for parent in [target, *target.parents]:
@@ -185,6 +186,8 @@ def restore(root: Path, bundle: Path, expected_build_key: str) -> None:
                 break
             if parent.is_symlink():
                 raise ValueError("unsafe artifact restore destination")
+    for name in names:
+        target = root / name
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(bundle / name, target)
     verify(root, manifest)

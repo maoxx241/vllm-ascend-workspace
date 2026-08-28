@@ -84,7 +84,15 @@ def main():
             parser.error("restore requires --cache and --build-key")
         if len(args.build_key) != 64 or any(c not in "0123456789abcdef" for c in args.build_key):
             parser.error("build key must be a SHA256 digest")
-        restore(root, args.cache / args.build_key, args.build_key)
+        bundle = args.cache / args.build_key
+        manifest = json.loads((bundle / "manifest.json").read_text())
+        if runtime_build_inputs(root, manifest["profile"], manifest["profile_key"]) != manifest["build_inputs"]:
+            raise ValueError("cache miss: current source inputs differ from the requested bundle")
+        restore(root, bundle, args.build_key)
+        marker = root / ".vaws-runtime/ready-profile.json"
+        temporary = marker.with_suffix(".tmp")
+        temporary.write_text(json.dumps(manifest, sort_keys=True, indent=2) + "\n")
+        os.replace(temporary, marker)
         result = {"status": "restored", "build_key": args.build_key}
     print(json.dumps(result, sort_keys=True, indent=2))
 
