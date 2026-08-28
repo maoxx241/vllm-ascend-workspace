@@ -115,7 +115,7 @@ client and do not automatically wake a paused agent.
       event cursors and the zero-provisioning checkout path in CI/Linux.
 - [x] Run regression tests on Linux/remote containers; do not execute
       torch/torch_npu workloads on a local Mac.
-- [ ] Publish exact checks and remaining hardware/client validation in PR #66.
+- [x] Publish exact checks and remaining hardware/client validation in PR #66.
 - [ ] Hardware acceptance: two isolated code states, disjoint devices/ports,
       real requests, release/restart of one without affecting the other.
 - [ ] K3 acceptance is a separate exact-topology run with all-rank evidence and
@@ -193,3 +193,10 @@ has been marked K3-compatible solely from CI or an image name.
   17 scaffold safety tests, 5 shared-inventory tests and 12 parity tests.
 - Final-head verification is recorded in the PR description, including the
   evidence-refresh cache regression added after this passing snapshot.
+
+- `90e4e05`: all four checks passed after source-only serving rejection,
+  strict SSH PID probes and official-SDK import-order coverage. The checked
+  code ran 14 coordinator/HTTP, 32 session, 17 scaffold safety, 5 shared-inventory,
+  12 parity and 6 serving tests (Skill catalog 33141023915, Remote-dev
+  33141023931). PR #66 title/body now document the implemented initial path,
+  this evidence and the unperformed hardware/client rollout gates.
