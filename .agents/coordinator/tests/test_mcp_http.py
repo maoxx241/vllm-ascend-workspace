@@ -6,6 +6,8 @@ import contextlib
 import hashlib
 import json
 import socket
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -15,11 +17,17 @@ import uvicorn
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
-from test_coordinator import Backend, RuntimePool, runtime_spec
+from test_coordinator import Backend, RuntimePool, runtime_spec, ROOT
 from server import create_app
 
 
 class HttpTests(unittest.IsolatedAsyncioTestCase):
+    async def test_backend_import_does_not_shadow_the_official_mcp_sdk(self):
+        result = await asyncio.to_thread(subprocess.run, [sys.executable, "-c",
+            "import sys; sys.path.insert(0, " + repr(str(ROOT / ".agents/coordinator")) + "); import backend; from mcp.server import MCPServer"],
+            capture_output=True, text=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     async def asyncSetUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)

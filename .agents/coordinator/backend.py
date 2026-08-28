@@ -8,7 +8,8 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / ".remote-dev"))
+# Keep the installed MCP SDK ahead of remote-dev's unrelated `mcp/` package.
+sys.path.append(str(ROOT / ".remote-dev"))
 sys.path.insert(0, str(ROOT / ".agents/lib"))
 from core.endpoint import resolve_endpoint
 from core.shell_ops import remote_bash

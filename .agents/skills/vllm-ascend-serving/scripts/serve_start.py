@@ -318,6 +318,8 @@ def wait_for_devices_free(host_ep: SshEndpoint, devices: set[int], *, timeout: i
         try:
             npu_info = probe_npus(host_ep)
             busy = {int(dev) for dev in npu_info.get("busy", {}) if str(dev).isdigit()}
+            if not devices.issubset({int(dev) for dev in npu_info.get("devices", [])}):
+                return False
             if not (devices & busy):
                 return True
         except Exception as exc:
@@ -835,11 +837,10 @@ def main(argv: list[str] | None = None) -> int:
             emit_progress("parity-sync", "ensuring remote code parity")
             parity = run_parity(target.session_id, target.session_file)
             parity_status = parity.get("status")
-            # `auto` apply-mode returns `materialized` for pure-Python changes and
-            # `source-only` when only container-cache snapshots were published;
-            # both mean the runtime sources are in sync and it is safe to serve.
-            # `dry-run` intentionally applies nothing, so it is NOT accepted here.
-            if parity_status not in ("ready", "ok", "success", "skipped", "materialized", "source-only"):
+            # `auto` returns `materialized` after Python-only runtime updates.
+            # `source-only` only updates the cache, not the execution tree;
+            # neither that nor a dry run authorizes serving the new snapshot.
+            if parity_status not in ("ready", "ok", "success", "skipped", "materialized"):
                 print_json({
                     "status": "blocked",
                     "error": f"remote-code-parity did not return a ready state (got {parity_status!r})",

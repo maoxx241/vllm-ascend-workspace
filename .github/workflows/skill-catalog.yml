@@ -60,6 +60,7 @@ jobs:
           python -B -m unittest discover -s .agents/tests -p "test_vaws_scaffold_safety.py"
           python -B -m unittest discover -s .agents/tests -p "test_shared_inventory_state.py"
           python -B -m unittest discover -s .agents/skills/remote-code-parity/tests
+          python -B -m unittest discover -s .agents/skills/vllm-ascend-serving/tests
 
       - name: Validate parameterized Ray helpers
         run: bash -n scripts/ray_head.sh scripts/ray_worker.sh

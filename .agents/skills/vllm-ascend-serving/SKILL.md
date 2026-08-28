@@ -165,7 +165,7 @@ If a previous service is recorded for this session, it is stopped before launchi
 
 ### 3. Run remote-code-parity (start only)
 
-Unless `--skip-parity` is passed, `parity_sync.py` is called to ensure the container has the current local code. Parity statuses `ready`, `skipped`, `materialized`, and `source-only` all count as success (`materialized` is what `auto` apply-mode returns for pure-Python changes). Any other status blocks the start.
+Unless `--skip-parity` is passed, `parity_sync.py` is called to ensure the container has the current local code. Parity statuses `ready`, `skipped` (explicit image mode), and `materialized` count as success (`materialized` is what `auto` returns after pure-Python runtime updates). `source-only` and `dry-run` block startup: publishing to the cache does not update the execution tree.
 
 Note: if a previous service process survives SIGINT+SIGTERM+SIGKILL, start fails fast instead of launching a second instance against the same port/devices.
 
