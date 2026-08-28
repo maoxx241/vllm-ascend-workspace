@@ -72,7 +72,7 @@ for domain workflows.
 - Prefer `.remote-dev` remote companion tools or skill wrapper scripts over raw SSH / shell commands for remote operations.
 - Skill wrappers: progress on `stderr`, final JSON on `stdout`.
 - Use the remote-dev substrate for agent-facing remote read/edit/bash/search/patch/job/artifact work. Use the remote toolbox entrypoints as the managed VAWS compatibility backend before falling back to bare SSH.
-- For parallel managed remote work, create or reuse a `session-management` session and pass `--session-id` through parity, serving, benchmark, and profiling commands. Legacy `--machine` flows remain available for explicitly single-tenant work.
+- Remote work runs inside a `session-management` session. From inside the session worktree, parity, serving, benchmark, and profiling commands auto-resolve the session from the cwd binding; pass `--session-id` only when running outside the worktree or targeting another session. Domain skills have no `--machine` mode; `--machine` exists only for machine registration and `session_create.py` base-machine selection.
 - This repo targets Huawei Ascend NPU. Local machines (Mac/PC) cannot run `torch`/`torch_npu`-dependent code. Do not attempt local test execution — go straight to the remote container.
 
 ## Maintenance

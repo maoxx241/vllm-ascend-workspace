@@ -53,7 +53,7 @@ compatibility backend for managed VAWS sessions.
 
 ```bash
 python3 .agents/skills/ascend-profiling-analysis/scripts/profile_analyze.py \
-  (--machine <alias-or-ip> | --session-id <id> | --session-file <session.json>) \
+  [--session-id <id> | --session-file <session.json>] \
   ( --manifest <local-run-dir>/manifest.json
    | --remote-profile-root <remote-path> ) \
   [--tag <name>] \
@@ -72,6 +72,7 @@ python3 .agents/skills/ascend-profiling-analysis/scripts/profile_analyze.py \
 
 Flag notes:
 
+- Target resolution is **session-based**. With no target arg the session is auto-resolved by walking up from the current working directory to the nearest `.vaws-local/current-session.json` worktree binding — running from inside a session worktree needs zero target args. Pass `--session-id <id>` / `--session-file <session.json>` to target a session explicitly. When `--manifest` comes from a session-scoped collection, the session recorded in the manifest is picked up automatically.
 - `--local-output-dir`: explicit local dir to write pulled artifacts into. If omitted, defaults to `.vaws-local/profiling-analysis/runs/<timestamp>_<tag>/`. Pass `--overwrite` to allow a non-empty target.
 - `--remote-output-dir`: explicit **absolute** remote output dir. Useful with `--from-stage` / `--only-stage` to **reuse a previous run's normalize/segment artifacts** when iterating on classify / diagnostics / report. Default: `<remote-work-dir>/runs/<local-run-dir-name>`.
 - `--skip-html` / `--report-mode`: forwarded to the remote analyze stage. `full-raw` (default) renders the complete L1/L2/L3 HTML with operator cards backed by raw `kernel_details` rows. `summary` writes an HTML stub instead — use it for first-stage pipeline debugging when md+xlsx are enough and you don't want to wait for HTML rendering. `--skip-html` is the explicit kill-switch and overrides `--report-mode`.
@@ -81,7 +82,7 @@ Flag notes:
 
 行为：
 
-1. 解析 machine inventory 或 session state，得到目标容器 SSH endpoint。若 `--manifest` 来自 session-scoped collection 且未显式传 target，则优先使用 manifest 里的 `session_file` / `session_id`，确保分析在采集同一个 session 容器内运行。
+1. 解析 session state，得到目标容器 SSH endpoint：未显式传 target 时从 cwd 向上找最近的 `.vaws-local/current-session.json` worktree 绑定自动解析（在 session worktree 内运行零参数即可）；也可显式传 `--session-id` / `--session-file`。若 `--manifest` 来自 session-scoped collection 且未显式传 target，则优先使用 manifest 里记录的 `session_file` / `session_id`，确保分析在采集同一个 session 容器内运行。
 2. 解析输入：
    - `--manifest`：读取 `analysis_status`、`remote_profile_root`、`schema_version`；若不是 `ok` 直接失败。
    - `--remote-profile-root`：直接走原始路径（用于历史 profiling）。
@@ -95,7 +96,7 @@ Flag notes:
 
 ```bash
 python3 .agents/skills/ascend-profiling-analysis/scripts/profile_sweep.py \
-  --machine <alias-or-ip> \
+  [--session-id <id> | --session-file <session.json>] \
   --search-root <remote-path> [--search-root <remote-path> ...] \
   [--tag <name>] \
   [--limit <N>] \
@@ -109,6 +110,7 @@ python3 .agents/skills/ascend-profiling-analysis/scripts/profile_sweep.py \
 
 行为：
 
+- 目标同样是 session-based：零参数时从 cwd 向上自动解析 worktree 绑定的 session（在 session worktree 内运行即可），也可显式 `--session-id` / `--session-file`。
 - 通过 `python3 -m ascend_profile.sweep` 在远端发现所有含 `kernel_details.csv` 的 root，逐个 analyze，产 `sweep_summary.json`。
 - 拉回 `sweep_summary.json` 和每个 root 的 lightweight 产物。HTML 报告默认 **不** 拉回，因为 sweep 跑很多 root 时 HTML 累计可能上 GB；要拉就显式加 `--pull-html`。
 - sweep 默认在远端跑 `--skip-html` 以节省时间和磁盘；要为每个 root 都渲染 HTML，传 `--render-html` 并可选 `--report-mode`。
@@ -337,12 +339,17 @@ knowledge can't express it**. Suggested reading order:
    truth is still Python.)
 4. `scripts/ascend_profile/knowledge/communication_taxonomy.md` — HCCL /
    dispatch / combine semantics.
-5. `scripts/ascend_profile/knowledge/block_taxonomy.md` — how
+5. `scripts/ascend_profile/knowledge/segmentation_rules.yaml` — single
+   source of truth for the attention-family layer-anchor priors
+   (MLA / DSA / CSA layer-start markers + companion-only kernels) that
+   `segment.py:load_segmentation_rules()` consumes. Edit this YAML, not the
+   Python constants, when adding a new attention family's layer anchor.
+6. `scripts/ascend_profile/knowledge/block_taxonomy.md` — how
    `classify.decompose_layer_into_blocks` cuts layer → attention / ffn /
    moe / aicpu.
-6. `scripts/ascend_profile/knowledge/step_anatomy.md` — head / main / tail
+7. `scripts/ascend_profile/knowledge/step_anatomy.md` — head / main / tail
    / bubble definition; consumed by `summarize`.
-7. `scripts/ascend_profile/knowledge/known_counterexamples.md` — cases
+8. `scripts/ascend_profile/knowledge/known_counterexamples.md` — cases
    that previously broke segmentation / classification. **Add new cases
    here before patching Python.**
 

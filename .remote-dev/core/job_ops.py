@@ -289,24 +289,42 @@ def remote_job_status(endpoint: Endpoint | None, *, job_id: str) -> dict[str, An
             "set +e",
             f"status_path={shlex.quote(str(remote_dir / 'status.json'))}",
             f"pid_path={shlex.quote(str(remote_dir / 'pid'))}",
-            "if [ -f \"$status_path\" ]; then cat \"$status_path\"; else printf '%s\\n' '{\"status\":\"unknown\"}'; fi",
+            "if [ -f \"$status_path\" ]; then cat \"$status_path\"; else echo '__STATUS_MISSING__'; fi",
             "if [ -f \"$pid_path\" ]; then pid=$(cat \"$pid_path\"); if kill -0 \"$pid\" 2>/dev/null; then echo '__PID_ALIVE__=1'; else echo '__PID_ALIVE__=0'; fi; fi",
         ]
     )
     completed = run_script(endpoint, script, timeout_ms=20000)
     status_data: dict[str, Any] = {"status": "unknown"}
+    status_missing = False
+    status_parse_error: str | None = None
     pid_alive = None
     if completed.stdout:
         lines = completed.stdout.splitlines()
         if lines:
-            import contextlib
             import json
 
-            with contextlib.suppress(json.JSONDecodeError):
-                status_data = json.loads(lines[0])
+            if lines[0].strip() == "__STATUS_MISSING__":
+                status_missing = True
+            else:
+                try:
+                    status_data = json.loads(lines[0])
+                except json.JSONDecodeError as exc:
+                    status_parse_error = str(exc)
             for line in lines[1:]:
                 if line.startswith("__PID_ALIVE__="):
                     pid_alive = line.endswith("1")
+    # Never report "unknown + success" for a broken job dir: a missing or
+    # corrupt status.json is a real finding that must be surfaced, not masked.
+    if status_missing:
+        if pid_alive:
+            status_data = {"status": "running", "reason": "pid alive; status.json not written yet"}
+        else:
+            status_data = {
+                "status": "failed",
+                "reason": "status.json missing and pid not alive (job never started or job dir was removed)",
+            }
+    elif status_parse_error:
+        status_data = {"status": "failed", "reason": f"status.json is corrupt: {status_parse_error}"}
     if status_data.get("status") == "running" and pid_alive is False:
         status_data["status"] = "failed"
         status_data["reason"] = "pid is no longer alive but status was not finalized"
@@ -337,24 +355,39 @@ def remote_job_tail(endpoint: Endpoint | None, *, job_id: str, lines: int = 80, 
         lines = MAX_JOB_TAIL_LINES
     if lines < 1:
         lines = 1
+    # Surface missing log files explicitly instead of `2>/dev/null || true`,
+    # which made "job never wrote logs / wrong dir" indistinguishable from an
+    # empty log while still reporting success.
     commands: list[str] = []
-    if stream in {"stdout", "both"}:
-        commands.append(f"echo __STDOUT__; tail -n {int(lines)} {shlex.quote(str(remote_dir / 'stdout.log'))} 2>/dev/null | head -c {MAX_TEXT_CHARS} || true")
-    if stream in {"stderr", "both"}:
-        commands.append(f"echo __STDERR__; tail -n {int(lines)} {shlex.quote(str(remote_dir / 'stderr.log'))} 2>/dev/null | head -c {MAX_TEXT_CHARS} || true")
+    requested: list[str] = []
+    for name, marker in (("stdout", "__STDOUT__"), ("stderr", "__STDERR__")):
+        if stream not in {name, "both"}:
+            continue
+        requested.append(name)
+        log_path = shlex.quote(str(remote_dir / f"{name}.log"))
+        commands.append(
+            f"echo {marker}; if [ -f {log_path} ]; then tail -n {int(lines)} {log_path} "
+            f"| head -c {MAX_TEXT_CHARS}; else echo {marker}_MISSING; fi"
+        )
     completed = run_script(endpoint, "\n".join(commands), timeout_ms=20000)
-    text = compact_text(completed.stdout)
+    stdout_text = completed.stdout or ""
+    missing = [name for name in requested if f"__{name.upper()}___MISSING" in stdout_text]
+    for name in missing:
+        warnings.append(f"{name}.log does not exist in the remote job dir")
+    all_missing = bool(requested) and len(missing) == len(requested)
+    text = compact_text(stdout_text)
+    failed = completed.returncode != 0 or all_missing
     result = make_result(
         tool="remote.job_tail",
         target=endpoint.to_result_target(),
-        outcome="success" if completed.returncode == 0 else "failed",
-        status="ok" if completed.returncode == 0 else "failed",
+        outcome="failed" if failed else "success",
+        status="log_not_found" if all_missing else ("ok" if completed.returncode == 0 else "failed"),
         summary=f"Remote job tail for {job_id}.",
         started_at=started,
         duration_ms=_duration_ms(start),
         preview={"tail": text, "stderr": completed.stderr},
         warnings=warnings,
-        extra={"job_id": job_id, "lines": lines},
+        extra={"job_id": job_id, "lines": lines, "missing_logs": missing},
     )
     return {"text": text, "result": result}
 

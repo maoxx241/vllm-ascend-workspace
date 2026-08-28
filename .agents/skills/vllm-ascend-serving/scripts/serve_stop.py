@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Stop a vllm-ascend service on a workspace-managed remote container.
+"""Stop a vllm-ascend service on a session-managed remote container.
 
 Usage:
-    python3 serve_stop.py --machine <alias>
+    python3 serve_stop.py                     # auto-resolve bound session
     python3 serve_stop.py --session-id <id>
-    python3 serve_stop.py --machine <alias> --force
+    python3 serve_stop.py --session-id <id> --force
 
 Progress on stderr, final JSON on stdout.
 """
@@ -44,8 +44,7 @@ def check_alive(ep, pid: int) -> bool:
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
-    p.add_argument("--machine", help="machine alias or host IP")
-    p.add_argument("--session-id", help="VAWS session id")
+    p.add_argument("--session-id", help="VAWS session id; defaults to the bound session of the current worktree")
     p.add_argument("--session-file", help="explicit session.json path")
     p.add_argument("--force", action="store_true", help="use SIGKILL if graceful stop fails")
     return p
@@ -57,21 +56,18 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         target = resolve_execution_target(
-            args.machine,
             session_id=args.session_id,
             session_file=args.session_file,
         )
         alias = target.alias
         ep = target.endpoint
-        if target.session_id:
-            emit_progress("lock", f"acquiring serving lock for session {target.session_id}")
-            lock_stack.enter_context(
-                file_lock(session_lock_dir(target.state_repo_root) / f"{target.session_id}.serving.lock")
-            )
+        emit_progress("lock", f"acquiring serving lock for session {target.session_id}")
+        lock_stack.enter_context(
+            file_lock(session_lock_dir(target.state_repo_root) / f"{target.session_id}.serving.lock")
+        )
 
         state = load_serving_state(
-            alias,
-            session_id=target.session_id,
+            target.session_id,
             state_repo_root=target.state_repo_root,
         )
         if state is None:
@@ -101,18 +97,16 @@ def main(argv: list[str] | None = None) -> int:
             state["status"] = "stopped"
             state["stopped_at"] = now_utc()
             save_serving_state(
-                alias,
+                target.session_id,
                 state,
-                session_id=target.session_id,
                 state_repo_root=target.state_repo_root,
             )
-            if target.session_id:
-                release_service_port(
-                    repo_root=target.state_repo_root,
-                    machine_alias=alias,
-                    session_id=target.session_id,
-                    port=state.get("port"),
-                )
+            release_service_port(
+                repo_root=target.state_repo_root,
+                machine_alias=alias,
+                session_id=target.session_id,
+                port=state.get("port"),
+            )
             print_json({
                 "status": "stopped",
                 "machine": alias,
@@ -153,12 +147,11 @@ def main(argv: list[str] | None = None) -> int:
         state["status"] = "stopped" if stopped else "alive"
         state["stopped_at"] = now_utc()
         save_serving_state(
-            alias,
+            target.session_id,
             state,
-            session_id=target.session_id,
             state_repo_root=target.state_repo_root,
         )
-        if stopped and target.session_id:
+        if stopped:
             release_service_port(
                 repo_root=target.state_repo_root,
                 machine_alias=alias,
@@ -184,7 +177,6 @@ def main(argv: list[str] | None = None) -> int:
         print_json({
             "status": "failed",
             "error": str(exc),
-            "machine": getattr(args, "machine", None),
             "session_id": getattr(args, "session_id", None),
         })
         return 2

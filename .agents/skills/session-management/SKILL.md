@@ -27,9 +27,12 @@ Each session binds:
 - `session_create.py` creates a fresh generated id when no explicit/env id is provided; it does not reuse `.vaws-local/current-session.json` as a creation default.
 - Existing-session lookup commands may use `.vaws-local/current-session.json` as a convenience fallback.
 - Do not reuse the base machine container for new parallel tasks. New tasks should use `session_create.py`.
-- For NPU work, reserve devices during creation with `--devices` or `--npu-count`; session-aware serving uses that lease by default.
-- For session work, pass `--session-id <id>` or `--session-file <session.json>` to parity, serving, benchmark, profiling-collection, memory-profiling, and profiling-analysis entry points.
-- Never call legacy `serve_stop.py --machine <alias>` from a session-scoped task.
+- For NPU work, reserve devices during creation with `--devices` or `--npu-count`; session-aware serving uses that lease by default. `--npu-count` requires a successful host NPU probe (no guessing of device ranges); if the probe fails, fix it or pass explicit `--devices`.
+- `--reuse-existing` probes the existing container's SSH endpoint before reporting the session as reusable; a dead container returns `needs_repair` instead of a stale `ready`.
+- Marking a session `removed` (via `session_remove.py` or `mark_session_status`) always releases its NPU/port leases, even without `--release-leases`.
+- `session_remove.py --remove-worktree` auto-forces removal of a *clean* worktree (git always demands `--force` for submodule-containing worktrees); a worktree with local changes still requires an explicit `--force`.
+- Consumer entry points (parity, serving, benchmark, profiling-collection, memory-profiling, profiling-analysis) auto-resolve the session by walking up from the current working directory to the nearest `.vaws-local/current-session.json` worktree binding, so running them from inside the session worktree needs no target arg. Pass `--session-id <id>` or `--session-file <session.json>` only when running outside the worktree or targeting a different session.
+- Domain skill commands (serving, benchmark, profiling) are session-only; they have no `--machine` surface. `--machine` exists only on `session_create.py` (selects the base machine) and in machine-management (registration/verification).
 - Session removal should stop only that session's service and release only that session's leases.
 
 ## Entry Points
@@ -49,11 +52,27 @@ python3 .agents/skills/session-management/scripts/session_create.py \
 ```bash
 python3 .agents/skills/session-management/scripts/session_list.py
 python3 .agents/skills/session-management/scripts/session_status.py --session-id <id>
+python3 .agents/skills/session-management/scripts/session_diff.py
 python3 .agents/skills/session-management/scripts/session_remove.py --session-id <id> --remove-container --remove-worktree --release-leases
 python3 .agents/skills/session-management/scripts/session_gc.py
+python3 .agents/skills/session-management/scripts/session_gc.py --reap-dead --apply
 ```
 
+`session_gc.py` releases leases for sessions whose metadata is `removed` or
+unreadable (dry-run by default; add `--apply` to mutate). Add `--reap-dead` to
+also probe the container SSH endpoint of non-removed lease holders and reap
+leases whose container is *confirmed* gone (connection refused). This clears
+"zombie" sessions — left `ready` in local state after the container died — that
+otherwise hold NPU/port leases indefinitely and block the machine (as seen with
+`dsv4-w4a8-main-125` pinning all 8 cards for days). Inconclusive probes
+(timeouts) are never reaped, so a transient network blip cannot free an active
+session's leases.
+
 Progress is emitted on `stderr` as `__VAWS_SESSION_PROGRESS__=<json>`. Final output is JSON on `stdout`.
+
+`session_create.py` output includes a `next_steps` array that walks the agent through the recommended follow-up: `cd` into the worktree (all skill commands auto-resolve the session from there), run `session_diff.py` to review changes, and — in Cursor — use the cursor-app-control MCP tool `move_agent_to_root` to switch the agent workspace to the worktree. Switching to the worktree with `move_agent_to_root` after creation is recommended (not enforced): it makes every subsequent skill command auto-resolve this session with no target arg.
+
+`session_diff.py` summarizes all local changes of a session — the scaffold worktree plus each initialized submodule — against the recorded base. Run it with zero args from inside the worktree (auto-bind), or pass `--session-id <id>` / `--session-file <path>`; add `--stat` for full diffstat text. It emits one JSON object on `stdout` with `status`, `session_id`, `worktree_root`, `branch`, `base_ref`, `has_changes`, a `scaffold` object (`branch`, `head`, `base`, `uncommitted[]`, `commits[]`, `changed_files[]`, and `diffstat` when `--stat`), and a `submodules[]` array (same shape per submodule, plus `skipped` for uninitialized ones). The scaffold base is the session's `base_ref`; each submodule base is its recorded `base_commit`, falling back to the gitlink at `base_ref`.
 
 By default session creation uses a host-local prepared image cache keyed by the selected base image id. The first session for a base image may still install container SSH packages, then commits `vaws-session-prepared:<image-hash>-ssh-v2`; later sessions start from that prepared image and skip the repeated `openssh` package install and cached pip/pytest bootstrap. Use `--disable-prepared-image-cache` only when validating raw base-image bootstrap behavior.
 
@@ -70,7 +89,9 @@ Local untracked state lives under `.vaws-local/sessions/`:
 - `<session-id>/serving.json`
 - `<session-id>/benchmark/`
 
-Worktree bindings are written to `<worktree>/.vaws-local/current-session.json` and include the absolute base session file path so scripts run from the worktree can find the base session state.
+Worktree bindings are written to `<worktree>/.vaws-local/current-session.json` and include the absolute base session file path so scripts run from the worktree can find the base session state. This binding is what lets consumer commands auto-resolve the session by walking up from the current working directory.
+
+Worktree creation puts every initialized submodule (`vllm/`, `vllm-ascend/`) on branch `session/<id>` — no more detached HEAD — and records `{path, branch, base_commit}` for each under `local.submodule_branches` in the session state. `session_diff.py` uses those recorded `base_commit` values as each submodule's diff base.
 
 For explicit `--session-id --no-worktree` timing/debug sessions, `session_create.py` does not overwrite the repo-root `.vaws-local/current-session.json`; agents should pass `--session-id` or `--session-file` explicitly for those shared-root flows. Current-session binding writes are atomic so readers never observe partial JSON.
 

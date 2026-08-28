@@ -18,4 +18,8 @@
 - `session_remove.py --remove-container --release-leases` can skip `serve_stop.py` when no session serving state exists and still release leases after the container is removed or the stop result is `not_found`.
 - `session_remove.py` returns `needs_repair` instead of `removed` when requested container or worktree removal fails.
 - `session_gc.py` does not release leases for generic `failed` sessions.
-- Legacy `--machine` commands continue to work against the base machine state.
+- `session_create.py` output includes a `next_steps` array that instructs the agent to `cd` into the worktree, run `session_diff.py`, and (in Cursor) use the cursor-app-control `move_agent_to_root` tool to switch the agent workspace to the worktree.
+- Worktree creation puts every initialized submodule (`vllm/`, `vllm-ascend/`) on branch `session/<id>` (not detached HEAD) and records `{path, branch, base_commit}` under `local.submodule_branches`.
+- Consumer commands (parity, serving, benchmark, profiling-collection, memory-profiling, profiling-analysis) auto-resolve the session from the cwd worktree binding, so `--session-id` is optional when running from inside the worktree.
+- `session_diff.py` with no target args auto-binds from the cwd worktree, and `--session-id` / `--session-file` select a session explicitly. Its stdout JSON reports `status`, `session_id`, `worktree_root`, `branch`, `base_ref`, `has_changes`, a `scaffold` object, and a `submodules[]` array (with `skipped` for uninitialized submodules); `--stat` adds `diffstat` text. The scaffold base is `base_ref`; each submodule base is its recorded `base_commit`, falling back to the gitlink at `base_ref`.
+- Domain skill entry points reject `--machine`; the only remaining `--machine` surfaces are `session_create.py` (base machine selection) and machine-management registration/verification.

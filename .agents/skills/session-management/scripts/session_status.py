@@ -16,6 +16,7 @@ LIB_DIR = ROOT / ".agents" / "lib"
 if str(LIB_DIR) not in sys.path:
     sys.path.insert(0, str(LIB_DIR))
 
+from vaws_ssh import base_ssh_options  # noqa: E402
 from vaws_session_state import (  # noqa: E402
     load_session_lookup,
     session_live_leases,
@@ -40,12 +41,7 @@ def tail_output(value: str | bytes | None, limit: int = 500) -> str:
 def ssh_check(host: str, port: int, user: str = "root", script: str = "true") -> dict[str, Any]:
     cmd = [
         "ssh",
-        "-o",
-        "BatchMode=yes",
-        "-o",
-        "StrictHostKeyChecking=accept-new",
-        "-o",
-        "LogLevel=ERROR",
+        *base_ssh_options(),
         "-p",
         str(port),
         f"{user}@{host}",

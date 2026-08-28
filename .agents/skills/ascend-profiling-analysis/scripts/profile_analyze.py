@@ -6,7 +6,8 @@ Inputs (one of):
   --remote-profile-root <abs-path>            -- raw remote profiling root (historical)
 
 Behavior:
-  1. Resolve machine/session + SSH endpoint via inventory or session state.
+  1. Resolve the session + SSH endpoint (explicit --session-id/--session-file,
+     the manifest's recorded session, or the bound session of the cwd worktree).
   2. Tar-sync ``scripts/ascend_profile/`` to ``<remote-work-dir>/ascend_profile/``.
   3. Remote: ``python3 -m ascend_profile.analyze <ROOT> --output <OUT> --verbose``.
   4. Validate required artifacts exist on the remote.
@@ -38,8 +39,7 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         allow_abbrev=False,
     )
-    parser.add_argument("--machine", help="alias or IP from machine inventory")
-    parser.add_argument("--session-id", help="VAWS session id")
+    parser.add_argument("--session-id", help="VAWS session id; defaults to the bound session of the current worktree")
     parser.add_argument("--session-file", help="explicit session.json path")
     src = parser.add_mutually_exclusive_group(required=True)
     src.add_argument("--manifest", help="path to ascend-profiling-collection manifest.json")
@@ -278,11 +278,14 @@ def _validate_remote_artifacts(
         ) from e
 
 
-def _validate_segment_health(endpoint: common.SshEndpoint, remote_output_dir: str) -> None:
+def _validate_segment_health(endpoint: common.SshEndpoint, remote_output_dir: str) -> dict[str, Any]:
     """Surface segmentation hard errors / interior islands as failures.
 
     The framework already emits these in ``segment_manifest.json``; we just
-    refuse to declare success when they are non-zero.
+    refuse to declare success when they are non-zero. Returns a health summary
+    including per-rank segmentation strategies so a knowledge-base miss
+    (``exact_cover_knowledge_miss``) is visible at the top level instead of
+    being buried in the manifest.
     """
     cat = common.ssh_exec(
         endpoint,
@@ -318,6 +321,18 @@ def _validate_segment_health(endpoint: common.SshEndpoint, remote_output_dir: st
             f"(hard_error_count={hard}, interior_island_total={interior}); "
             "see segment_manifest.json for details"
         )
+
+    strategy_modes: dict[str, str] = {}
+    for rank in seg.get("rank_summaries", []) or []:
+        strategy = rank.get("segmentation_strategy") or {}
+        strategy_modes[str(rank.get("rank_id"))] = str(strategy.get("mode") or "unknown")
+    degraded_ranks = sorted(
+        rank_id for rank_id, mode in strategy_modes.items() if mode == "exact_cover_knowledge_miss"
+    )
+    return {
+        "strategy_modes": strategy_modes,
+        "degraded_ranks": degraded_ranks,
+    }
 
 
 def _diagnosis_counts(local_run_dir: Path) -> dict[str, int]:
@@ -402,11 +417,10 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     try:
         target = common.resolve_execution_target(
-            args.machine,
             session_id=args.session_id,
             session_file=args.session_file,
         )
-    except ValueError as exc:
+    except (ValueError, common.SessionStateError) as exc:
         common.print_json(
             {
                 "status": "failed",
@@ -577,8 +591,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         remote_manifest = _validate_remote_artifacts(
             endpoint, remote_output_dir, required_artifacts=required_artifacts
         )
+        segment_health: dict[str, Any] = {}
         if "segment_manifest.json" in required_artifacts:
-            _validate_segment_health(endpoint, remote_output_dir)
+            segment_health = _validate_segment_health(endpoint, remote_output_dir)
     except RuntimeError as exc:
         common.print_json(
             {
@@ -642,8 +657,23 @@ def main(argv: Sequence[str] | None = None) -> int:
         except (json.JSONDecodeError, OSError):
             html_status = "unknown"
 
+    # A knowledge-base miss falls back to exact-cover search; results are still
+    # produced but structure attribution is weaker, so surface it prominently
+    # instead of returning an indistinguishable clean "ok".
+    degraded_ranks = segment_health.get("degraded_ranks") or []
+    warnings: list[str] = []
+    if degraded_ranks:
+        warnings.append(
+            f"segmentation knowledge base did not match ranks {degraded_ranks}; "
+            "fell back to exact-cover search (weaker structure attribution). "
+            "Consider extending kernel_signatures.yaml for this model."
+        )
+
     output: dict[str, Any] = {
         "status": "ok",
+        "segmentation_degraded": bool(degraded_ranks),
+        "warnings": warnings,
+        "segmentation_strategies": segment_health.get("strategy_modes") or {},
         "machine": alias,
         "mode": target["mode"],
         "session_id": target["session_id"],

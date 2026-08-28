@@ -17,7 +17,8 @@ from typing import Any, Sequence
 ROOT = Path(__file__).resolve().parents[4]
 LIB_DIR = ROOT / ".agents" / "lib"
 MM_SCRIPTS = ROOT / ".agents" / "skills" / "machine-management" / "scripts"
-for _p in (str(LIB_DIR), str(MM_SCRIPTS)):
+_SELF_DIR = Path(__file__).resolve().parent
+for _p in (str(LIB_DIR), str(MM_SCRIPTS), str(_SELF_DIR)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
@@ -39,7 +40,9 @@ from vaws_session_state import (  # noqa: E402
     session_file_path,
     session_record_for_execution,
 )
+from session_gc import probe_container_alive  # noqa: E402
 from vaws_local_state import load_profile, utc_now_iso  # noqa: E402
+from vaws_ssh import base_ssh_options  # noqa: E402
 from vaws_validate import ValidationError, parse_device_csv  # noqa: E402
 
 PROGRESS_SENTINEL = "__VAWS_SESSION_PROGRESS__="
@@ -140,12 +143,7 @@ def host_port_available(record: dict[str, Any]) -> Any:
         script = f"! ss -ltnH 2>/dev/null | awk '{{print $4}}' | grep -Eq '[:.]({port})$'"
         cmd = [
             "ssh",
-            "-o",
-            "BatchMode=yes",
-            "-o",
-            "StrictHostKeyChecking=accept-new",
-            "-o",
-            "LogLevel=ERROR",
+            *base_ssh_options(),
             "-p",
             str(host.get("port", 22)),
             f"{host.get('user', 'root')}@{host['ip']}",
@@ -181,12 +179,7 @@ fi
 """
     cmd = [
         "ssh",
-        "-o",
-        "BatchMode=yes",
-        "-o",
-        "StrictHostKeyChecking=accept-new",
-        "-o",
-        "LogLevel=ERROR",
+        *base_ssh_options(),
         "-p",
         str(host.get("port", 22)),
         f"{host.get('user', 'root')}@{host['ip']}",
@@ -285,6 +278,31 @@ def existing_worktree_bound(path: Path) -> str | None:
     return str(sid) if sid else None
 
 
+def ensure_submodule_branches(worktree_root: Path, branch: str) -> list[dict[str, Any]]:
+    """Put every initialized submodule on the session branch.
+
+    Fresh ``submodule update --init`` checkouts leave submodules on a detached
+    HEAD, which makes agent commits easy to lose and hard to review. Creating
+    (or resetting) ``session/<id>`` at the current gitlink keeps all session
+    work on a named branch that ``session_diff.py`` and plain git can diff.
+    """
+    listing = run_git(
+        ["submodule", "foreach", "--quiet", "printf '%s\\n' \"$sm_path\""],
+        cwd=worktree_root,
+        check=False,
+    )
+    results: list[dict[str, Any]] = []
+    for rel_path in (line.strip() for line in listing.stdout.splitlines() if line.strip()):
+        sub_root = worktree_root / rel_path
+        if not (sub_root / ".git").exists():
+            continue
+        head = run_git(["rev-parse", "HEAD"], cwd=sub_root).stdout.strip()
+        run_git(["checkout", "-B", branch], cwd=sub_root)
+        results.append({"path": rel_path, "branch": branch, "base_commit": head})
+        emit_progress("worktree", f"submodule {rel_path} on branch {branch}", base_commit=head)
+    return results
+
+
 def ensure_worktree(
     *,
     session_id: str,
@@ -303,7 +321,13 @@ def ensure_worktree(
             emit_progress("worktree", "reusing bound worktree", path=str(worktree_root), branch=branch)
             emit_progress("worktree", "initializing submodules", path=str(worktree_root))
             run_git(["submodule", "update", "--init", "--recursive"], cwd=worktree_root)
-            return worktree_root, {"action": "reused", "path": str(worktree_root), "branch": branch}
+            submodules = ensure_submodule_branches(worktree_root, branch)
+            return worktree_root, {
+                "action": "reused",
+                "path": str(worktree_root),
+                "branch": branch,
+                "submodules": submodules,
+            }
         raise SessionStateError(
             f"worktree path already exists and is not bound to session {session_id}: {worktree_root}"
         )
@@ -325,12 +349,14 @@ def ensure_worktree(
     )
     emit_progress("worktree", "initializing submodules", path=str(worktree_root))
     run_git(["submodule", "update", "--init", "--recursive"], cwd=worktree_root)
+    submodules = ensure_submodule_branches(worktree_root, branch)
     return worktree_root, {
         "action": action,
         "path": str(worktree_root),
         "branch": branch,
         "base_ref": base_ref,
         "staging_binding": str(staging_binding),
+        "submodules": submodules,
     }
 
 
@@ -384,13 +410,37 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.reuse_existing:
             try:
                 existing = load_session_lookup(session_id=sid, repo_root=ROOT)
+                # Reuse must not blindly trust the stored "ready" status: the
+                # container may have died since. Probe its SSH endpoint so a
+                # dead container surfaces as needs_repair instead of being
+                # reported as a healthy reused session.
+                remote = existing.session.get("remote", {})
+                container = remote.get("container", {})
+                probe = probe_container_alive(
+                    str(remote.get("host", "")),
+                    int(container.get("ssh_port", 0) or 0),
+                    str(remote.get("host_user", "root")),
+                )
+                if probe.get("alive") is False:
+                    print_json(
+                        {
+                            "status": "needs_repair",
+                            "session_id": sid,
+                            "session_file": str(existing.session_file),
+                            "error": "session container is unreachable; run session_gc --reap-dead or recreate the session",
+                            "container_probe": probe,
+                            "reused": False,
+                        }
+                    )
+                    return 1
                 print_json(
                     {
                         "status": existing.session.get("status", "ready"),
                         "session_id": sid,
                         "session_file": str(existing.session_file),
                         "worktree_root": existing.session.get("local", {}).get("worktree_root"),
-                        "container": existing.session.get("remote", {}).get("container"),
+                        "container": container,
+                        "container_probe": probe,
                         "reused": True,
                     }
                 )
@@ -479,6 +529,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "base_repo_root": str(ROOT),
                 "branch": branch,
                 "base_ref": args.base_ref,
+                "submodule_branches": worktree_payload.get("submodules", []),
             },
             "remote": {
                 "host": base_record["host"]["ip"],
@@ -597,6 +648,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             session["status"] = "planned"
         save_session(session, repo_root=ROOT)
 
+        next_steps = [
+            f"cd {local_root}  # all skill commands auto-resolve this session from here",
+            "review changes anytime: python3 .agents/skills/session-management/scripts/session_diff.py",
+        ]
+        if not args.no_worktree:
+            next_steps.append(
+                "Cursor: use cursor-app-control move_agent_to_root to switch the agent workspace to the worktree"
+            )
         print_json(
             {
                 "status": session["status"],
@@ -608,6 +667,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "worktree": worktree_payload,
                 "current_session_binding": binding_payload,
                 "container_bootstrap": container_payload,
+                "next_steps": next_steps,
             }
         )
         return 0

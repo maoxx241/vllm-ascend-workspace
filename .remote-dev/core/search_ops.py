@@ -11,7 +11,6 @@ from .result import make_result, utc_now_iso
 from .ssh_transport import run_remote_python
 
 REMOTE_SEARCH_PY = r'''
-import fnmatch
 import glob as glob_mod
 import json
 import os
@@ -116,34 +115,46 @@ if op == "grep":
         }, sort_keys=True))
         raise SystemExit(0)
 
-    warnings.append("rg not found; used Python fallback")
-    matches = []
-    paths = [base] if base.is_file() else [p for p in base.rglob("*") if p.is_file()]
-    for path in paths:
-        rel = str(path.relative_to(base)) if base.is_dir() else path.name
-        if glob_pattern and not fnmatch.fnmatch(rel, glob_pattern):
-            continue
-        try:
-            text = path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
-        if pattern not in text:
-            continue
-        if output_mode == "files_with_matches":
-            matches.append(str(path))
-        elif output_mode == "count":
-            matches.append(f"{path}:{text.count(pattern)}")
-        else:
-            for idx, line in enumerate(text.splitlines(), start=1):
-                if pattern in line:
-                    if len(line) > max_line_chars:
-                        line = line[:max_line_chars] + "<remote-dev line truncated>"
-                    matches.append(f"{path}:{idx}:{line}")
-                    if len(matches) >= limit:
-                        break
-        if len(matches) >= limit:
-            break
-    print(json.dumps({"status": "ok", "engine": "python", "output_mode": output_mode, "matches": matches[:limit], "truncated": len(matches) >= limit, "warnings": warnings}, sort_keys=True))
+    # rg is unavailable: fall back to POSIX `grep -E`, which preserves regex
+    # semantics. Never silently degrade to substring matching, and fail fast on
+    # features grep cannot honor instead of returning semantically wrong "ok".
+    if multiline:
+        fail("rg_required", "multiline grep requires ripgrep (rg) on the remote host; install rg or drop multiline")
+    if type_name:
+        fail("rg_required", f"grep fallback cannot honor --type {type_name}; install ripgrep (rg) or use --glob")
+    grep_path = shutil.which("grep")
+    if not grep_path:
+        fail("grep_unavailable", "neither rg nor grep found on the remote host")
+    warnings.append("rg not found; used grep -E fallback (POSIX ERE semantics)")
+    cmd = [grep_path, "-r", "-E", "-I"]
+    if glob_pattern:
+        cmd.append(f"--include={glob_pattern}")
+    if output_mode == "files_with_matches":
+        cmd.append("-l")
+    elif output_mode == "count":
+        cmd.append("-c")
+    else:
+        cmd.append("-n")
+    cmd.extend(["--", pattern, str(base)])
+    proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    if proc.returncode not in (0, 1):
+        fail("failed", proc.stderr[-4000:])
+    lines = proc.stdout.splitlines()
+    if output_mode == "count":
+        # Match rg -c behavior: only report files with at least one match.
+        lines = [line for line in lines if not line.endswith(":0")]
+    truncated_line_count = 0
+    if output_mode == "content":
+        capped = []
+        for line in lines:
+            if len(line) > max_line_chars:
+                line = line[:max_line_chars] + "<remote-dev line truncated>"
+                truncated_line_count += 1
+            capped.append(line)
+        lines = capped
+        if truncated_line_count:
+            warnings.append(f"{truncated_line_count} line(s) truncated to {max_line_chars} chars")
+    print(json.dumps({"status": "ok", "engine": "grep", "output_mode": output_mode, "matches": lines[:limit], "truncated": len(lines) > limit, "warnings": warnings}, sort_keys=True))
     raise SystemExit(0)
 
 fail("unsupported_op", f"unsupported search op: {op}")

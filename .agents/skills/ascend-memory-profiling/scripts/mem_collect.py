@@ -16,7 +16,6 @@ Two modes of operation:
 **Attach mode** (--attach):
   Attach to a service already managed by the vllm-ascend-serving skill.
   Reads service state (port, PID, log paths, model config) from
-  `.vaws-local/serving/<alias>.json` or
   `.vaws-local/sessions/<session-id>/serving.json`.  Skips service start/stop.
   If the service was launched with --wrap-script pointing to the msprof
   wrapper, attach mode detects this, runs msprof export, and collects CSVs.
@@ -74,16 +73,16 @@ _ENV_ERROR_PATTERNS = [
 ]
 
 
-def _emit_env_recovery_hint(log_text: str, machine: str, session_id: str | None = None) -> None:
+def _emit_env_recovery_hint(log_text: str, session_id: str | None = None) -> None:
     """If log_text contains environment error patterns, emit structured recovery guidance."""
     if not log_text:
         return
     if not any(pat in log_text for pat in _ENV_ERROR_PATTERNS):
         return
-    target_arg = f"--session-id {session_id}" if session_id else f"--machine {machine}"
+    target_arg = f"--session-id {session_id}" if session_id else ""
     recovery_cmd = (
-        f"python3 .agents/skills/remote-code-parity/scripts/parity_sync.py "
-        f"{target_arg} --force-reinstall"
+        "python3 .agents/skills/remote-code-parity/scripts/parity_sync.py "
+        f"{target_arg} --force-reinstall".replace("  ", " ")
     )
     progress(
         "ENV_ERROR_DETECTED: Remote Python environment is broken. "
@@ -95,8 +94,7 @@ def _emit_env_recovery_hint(log_text: str, machine: str, session_id: str | None 
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Collect Ascend NPU memory profiling data")
-    p.add_argument("--machine", help="Machine alias or IP")
-    p.add_argument("--session-id", help="VAWS session id")
+    p.add_argument("--session-id", help="VAWS session id; defaults to the bound session of the current worktree")
     p.add_argument("--session-file", help="explicit session.json path")
     p.add_argument("--model", default="", help="Remote model weight path (auto-detected in attach mode)")
     p.add_argument("--tp", type=int, default=None, help="Tensor parallel size (auto-detected in attach mode)")
@@ -447,22 +445,20 @@ def collect_weight_manifest(ep: SshEndpoint, python: str, model_path: str, local
         return {}
 
 
-def _resolve_attach_state(machine: dict, args: argparse.Namespace) -> dict:
+def _resolve_attach_state(args: argparse.Namespace) -> dict:
     """Load and validate serving state for attach mode.
 
     Accepts 'ready', 'started', or 'stopped'.  When stopped, only msprof CSV
     collection and weight/config analysis are possible (no health check, no
     inference).
     """
-    alias = get_machine_alias(machine)
     state = load_serving_state(
-        alias,
-        session_id=args.session_id,
+        args.session_id,
         state_repo_root=getattr(args, "_state_repo_root", Path(__file__).resolve().parents[4]),
     )
     if state is None:
         raise SystemExit(
-            f"No serving state found for machine '{alias}'. "
+            f"No serving state found for session '{args.session_id}'. "
             "Start a service first with the vllm-ascend-serving skill, "
             "or run in standalone mode (without --attach)."
         )
@@ -470,7 +466,7 @@ def _resolve_attach_state(machine: dict, args: argparse.Namespace) -> dict:
     status = state.get("status", "unknown")
     if status not in ("ready", "started", "stopped"):
         raise SystemExit(
-            f"Service on '{alias}' has status '{status}'. "
+            f"Service for session '{args.session_id}' has status '{status}'. "
             "Expected 'ready', 'started', or 'stopped'. "
             "Start a service first with the vllm-ascend-serving skill."
         )
@@ -560,7 +556,6 @@ def _collect_serving_logs(ep: SshEndpoint, serving_state: dict, local_path: Path
 def main() -> None:
     args = parse_args()
     target = resolve_execution_target(
-        args.machine,
         session_id=args.session_id,
         session_file=args.session_file,
     )
@@ -568,21 +563,12 @@ def main() -> None:
     ep = target["endpoint"]
     args._state_repo_root = target["state_repo_root"]
     args._session = target.get("session")
-    if target["session_id"]:
-        args.session_id = target["session_id"]
-        args.session_file = target["session_file"]
-    if not args.machine:
-        args.machine = target["alias"]
+    args.session_id = target["session_id"]
+    args.session_file = target["session_file"]
 
     if args.attach:
         _main_attach(args, machine, ep)
     else:
-        if target["session_id"]:
-            raise SystemExit(
-                "session-scoped memory profiling requires --attach. "
-                "Start the service with vllm-ascend-serving --wrap-script first, "
-                "then run mem_collect.py --session-id <id> --attach."
-            )
         _main_standalone(args, machine, ep)
 
 
@@ -592,7 +578,7 @@ def _main_attach(
     ep: SshEndpoint,
 ) -> None:
     """Attach mode: profile a service already managed by vllm-ascend-serving."""
-    serving_state = _resolve_attach_state(machine, args)
+    serving_state = _resolve_attach_state(args)
     alias = get_machine_alias(machine)
 
     svc_model = serving_state.get("model", "")
@@ -662,10 +648,7 @@ def _main_attach(
         "msprof_enabled": msprof_used,
         "msprof_output_dir": msprof_data_dir,
         "run_dir": str(run_dir),
-        "serving_state_ref": (
-            f".vaws-local/sessions/{args.session_id}/serving.json"
-            if args.session_id else f".vaws-local/serving/{alias}.json"
-        ),
+        "serving_state_ref": f".vaws-local/sessions/{args.session_id}/serving.json",
         "serving_runtime_dir": svc_runtime_dir,
         "speculative_config": args.speculative_config,
         "compilation_config": args.compilation_config,
@@ -691,7 +674,7 @@ def _main_attach(
             wait_for_health(ep, port, timeout=args.health_timeout)
         except TimeoutError:
             log_text = _collect_serving_logs(ep, serving_state, run_dir)
-            _emit_env_recovery_hint(log_text, args.machine or "", args.session_id)
+            _emit_env_recovery_hint(log_text, args.session_id)
             raise SystemExit(
                 f"Service on port {port} is not responding to /health after "
                 f"{args.health_timeout}s. Check service status with the serving skill."
@@ -803,17 +786,42 @@ def _extract_serve_config_from_extra_args(
             i += 1
 
 
+def _release_standalone_port(args: argparse.Namespace, machine: dict, leased_port: int | None) -> None:
+    if leased_port is None:
+        return
+    from vaws_session_state import release_service_port
+
+    release_service_port(
+        repo_root=getattr(args, "_state_repo_root", Path(__file__).resolve().parents[4]),
+        machine_alias=get_machine_alias(machine),
+        session_id=args.session_id,
+        port=leased_port,
+    )
+
+
 def _main_standalone(
     args: argparse.Namespace,
     machine: dict,
     ep: SshEndpoint,
 ) -> None:
-    """Standalone mode: start service, profile, stop."""
+    """Standalone mode: start service, profile, stop (inside the session container)."""
     if not args.model:
         raise SystemExit("--model is required in standalone mode")
     tp = args.tp if args.tp is not None else 1
     dp = args.dp if args.dp is not None else 1
-    port = args.port if args.port is not None else 8901
+    leased_port = None
+    if args.port is not None:
+        port = args.port
+    else:
+        from vaws_session_state import allocate_service_port
+
+        port = allocate_service_port(
+            repo_root=getattr(args, "_state_repo_root", Path(__file__).resolve().parents[4]),
+            machine_alias=get_machine_alias(machine),
+            session_id=args.session_id,
+        )
+        leased_port = port
+        progress(f"Leased session service port {port} for standalone profiling")
     args.tp = tp
     args.dp = dp
     args.port = port
@@ -876,7 +884,8 @@ def _main_standalone(
         progress(f"ERROR: {e}")
         log_text = collect_vllm_logs(ep, remote_dir, run_dir)
         stop_service(ep)
-        _emit_env_recovery_hint(log_text, args.machine or "", args.session_id)
+        _release_standalone_port(args, machine, leased_port)
+        _emit_env_recovery_hint(log_text, args.session_id)
         manifest["error"] = str(e)
         print(json.dumps(manifest, indent=2, ensure_ascii=False))
         sys.exit(1)
@@ -891,6 +900,7 @@ def _main_standalone(
 
     # Phase 4: stop service
     stop_service(ep)
+    _release_standalone_port(args, machine, leased_port)
     time.sleep(5)
 
     # Phase 5: msprof export (via shared helper)

@@ -267,6 +267,9 @@ class WorktreeCreateTests(unittest.TestCase):
                     if fail_submodule:
                         raise RuntimeError("submodule update failed")
                     return SimpleNamespace(returncode=0, stdout="", stderr="")
+                if args[:2] == ["submodule", "foreach"]:
+                    events.append("submodule-branches")
+                    return SimpleNamespace(returncode=0, stdout="", stderr="")
                 raise AssertionError(f"unexpected git args: {args!r}")
 
             def fake_write_binding(repo_root, *, session_id, source, **_kwargs):
@@ -306,7 +309,7 @@ class WorktreeCreateTests(unittest.TestCase):
                 module.write_current_session_binding = original_write_binding
                 module.emit_progress = original_emit_progress
 
-            self.assertEqual(events, ["submodule-update"])
+            self.assertEqual(events, ["submodule-update", "submodule-branches"])
             self.assertEqual(reused_root, worktree_root.resolve())
             self.assertEqual(reused_payload["action"], "reused")
             binding = json.loads((worktree_root / ".vaws-local" / "current-session.json").read_text())
@@ -360,15 +363,28 @@ class RunStateIsolationTests(unittest.TestCase):
             ROOT / ".agents" / "skills" / "vllm-ascend-benchmark" / "scripts" / "_common.py",
         )
         original_root = module.ROOT
-        original_state_dir = module.BENCHMARK_STATE_DIR
         try:
             with tempfile.TemporaryDirectory() as tmp:
-                root = Path(tmp)
+                root = Path(tmp).resolve()
                 module.ROOT = root
-                module.BENCHMARK_STATE_DIR = root / ".vaws-local" / "benchmark"
+                session_dir = root / ".vaws-local" / "sessions" / "sess-a"
+                session_dir.mkdir(parents=True)
+                session_file = session_dir / "session.json"
+                session_file.write_text(
+                    json.dumps(
+                        {
+                            "schema_version": 1,
+                            "session_id": "sess-a",
+                            "base_machine": "machine-a",
+                            "local": {"worktree_root": str(root)},
+                            "remote": {"host": "173.131.1.2", "container": {"name": "c", "ssh_port": 46001}},
+                        }
+                    ),
+                    encoding="utf-8",
+                )
                 config = module.BenchConfig(
-                    machine="173.131.1.2",
                     session_id="sess-a",
+                    session_file=str(session_file),
                     model="/models/Qwen",
                 )
                 payload = {"status": "ok"}
@@ -383,7 +399,6 @@ class RunStateIsolationTests(unittest.TestCase):
                 self.assertEqual(saved["run_dir"], str(expected_parent))
         finally:
             module.ROOT = original_root
-            module.BENCHMARK_STATE_DIR = original_state_dir
 
 
 if __name__ == "__main__":

@@ -16,9 +16,9 @@ Multi-rank torch profiler setup/finalization can take much longer than an
 ordinary inference request, so the timeout is long by default.
 
 Usage:
-    python3 profile_control.py --machine <alias> --action start_profile
+    python3 profile_control.py --action start_profile          # bound session
     python3 profile_control.py --session-id <id> --action start_profile
-    python3 profile_control.py --machine <alias> --action stop_profile [--timeout 900]
+    python3 profile_control.py --session-id <id> --action stop_profile [--timeout 900]
 
 Progress on stderr, final JSON on stdout.
 """
@@ -101,8 +101,7 @@ def post_remote_action(ep, port: int, action: str, timeout: int) -> dict[str, An
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
-    p.add_argument("--machine", help="machine alias or host IP")
-    p.add_argument("--session-id", help="VAWS session id")
+    p.add_argument("--session-id", help="VAWS session id; defaults to the bound session of the current worktree")
     p.add_argument("--session-file", help="explicit session.json path")
     p.add_argument(
         "--action",
@@ -128,7 +127,6 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         target = resolve_execution_target(
-            args.machine,
             session_id=args.session_id,
             session_file=args.session_file,
         )
@@ -136,8 +134,7 @@ def main(argv: list[str] | None = None) -> int:
         ep = target.endpoint
 
         state = load_serving_state(
-            alias,
-            session_id=target.session_id,
+            target.session_id,
             state_repo_root=target.state_repo_root,
         )
         if state is None:
@@ -147,8 +144,8 @@ def main(argv: list[str] | None = None) -> int:
                 "session_id": target.session_id,
                 "action": args.action,
                 "message": (
-                    f"no serving state recorded for {alias}; start the service "
-                    "via vllm-ascend-serving first"
+                    f"no serving state recorded for session {target.session_id}; "
+                    "start the service via vllm-ascend-serving first"
                 ),
             })
             return 2
@@ -186,7 +183,6 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:
         print_json({
             "status": "failed",
-            "machine": getattr(args, "machine", None),
             "session_id": getattr(args, "session_id", None),
             "action": getattr(args, "action", None),
             "error": str(exc),

@@ -88,7 +88,7 @@ The orchestrator passes `--expected-ranks = tp * (dp or 1)` to `run_remote_analy
 "stop_result": { "status": "stopped", ... }
 ```
 
-If `stop_result.status` is `failed`, an orphan vLLM process may still be holding NPUs. Use the same target scope as the collection run (`serve_stop.py --session-id <id> --force` for session runs, or `serve_stop.py --machine <alias> --force` for legacy runs) and re-check `serve_probe_npus.py` before launching the next collection.
+If `stop_result.status` is `failed`, an orphan vLLM process may still be holding NPUs. Use the same session scope as the collection run (`serve_stop.py --force` from inside the worktree, or `serve_stop.py --session-id <id> --force`) and re-check `serve_probe_npus.py` before launching the next collection.
 
 ## When you need to re-collect (not re-analyse)
 

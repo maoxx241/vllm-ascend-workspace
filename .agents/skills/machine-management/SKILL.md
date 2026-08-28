@@ -176,8 +176,8 @@ When password bootstrap is required:
 7. choose or reuse the container name and container SSH port
 8. bootstrap or repair the managed container, including fixed container-side apt source configuration before package installation when needed
 9. persist the record into inventory
-10. best-effort mesh the new container with existing managed containers
-11. run final readiness verification
+10. mesh the new container with existing managed containers — a mesh failure downgrades the result to `needs_repair` (it is not silently swallowed)
+11. run final readiness verification; `last_verified_at` is stamped into inventory only after this verification succeeds, never at record-write time
 
 If inventory already contains the same alias or host IP, treat add as an idempotent attach-or-repair path instead of creating a duplicate record.
 

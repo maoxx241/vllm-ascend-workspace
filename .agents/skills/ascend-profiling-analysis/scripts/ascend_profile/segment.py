@@ -107,25 +107,43 @@ def primary_attention_category(event: NormalizedEvent) -> str | None:
     return sorted(matches)[0] if matches else None
 
 
-MLA_LAYER_START_CATEGORIES = (
-    "attention.mla",
-    "attention.mla.kv_norm_rope_cache",
-)
+@functools.lru_cache(maxsize=1)
+def load_segmentation_rules() -> dict[str, Any]:
+    """Load the attention-family layer-anchor prior knowledge.
 
-ATTENTION_COMPANION_ONLY_CATEGORIES = {
-    "attention.lightning_indexer",
-    "attention.mla.v_up_proj",
-    "attention.sparse_attn.v_up_proj",
-    "attention.sparse_sharedkv.metadata",
-    "attention.kv_compressor",
-    "attention.kvcomp.signpack",
-    "attention.kvcomp.cache_write",
-    "attention.kv_cache_io",
-}
+    Single source of truth is ``knowledge/segmentation_rules.yaml``. The
+    values were historically hard-coded here; keeping them in YAML makes the
+    DSA / CSA / MLA layer-anchor priors reviewable without code edits. This
+    is a prior-knowledge base, not a silent fallback: if the file is missing
+    or malformed we raise instead of guessing.
+    """
+
+    rules_path = Path(__file__).resolve().parent / "knowledge" / "segmentation_rules.yaml"
+    try:
+        import yaml  # type: ignore[import-untyped]
+    except ImportError as exc:  # pragma: no cover - yaml is a hard dependency
+        raise RuntimeError(
+            "PyYAML is required to load knowledge/segmentation_rules.yaml"
+        ) from exc
+    if not rules_path.exists():
+        raise RuntimeError(f"segmentation knowledge base missing: {rules_path}")
+    data = yaml.safe_load(rules_path.read_text(encoding="utf-8")) or {}
+    return {
+        "layer_start_categories": tuple(data.get("layer_start_categories") or ()),
+        "companion_only_categories": frozenset(data.get("companion_only_categories") or ()),
+        "companion_prefixes": tuple(data.get("companion_prefixes") or ()),
+    }
+
+
+def mla_layer_start_categories() -> tuple[str, ...]:
+    return load_segmentation_rules()["layer_start_categories"]
 
 
 def is_attention_companion_only(category: str) -> bool:
-    return category in ATTENTION_COMPANION_ONLY_CATEGORIES or category.startswith("attention.rope")
+    rules = load_segmentation_rules()
+    if category in rules["companion_only_categories"]:
+        return True
+    return any(category.startswith(prefix) for prefix in rules["companion_prefixes"])
 
 
 def primary_moe_category(event: NormalizedEvent) -> str | None:
@@ -258,7 +276,7 @@ def layer_anchor_events(events: Sequence[NormalizedEvent]) -> tuple[NormalizedEv
         )
     )
     if attention_events:
-        for category in MLA_LAYER_START_CATEGORIES:
+        for category in mla_layer_start_categories():
             anchors = tuple(event for event in attention_events if category in event.op_categories)
             if anchors:
                 return anchors
@@ -1889,6 +1907,48 @@ def build_model_guided_step_plans(
     return classified, summary
 
 
+def build_uniform_step_plans(frames: Sequence[LayerFrame]) -> tuple[list[StepPlan], dict[str, Any]] | None:
+    """Knowledge-guided fast path for cleanly periodic decode traces.
+
+    Steady-state decode profiles emit one selection-delimited body per step,
+    all with the same layer structure (e.g. dsv2-lite 27 layers, qwen3-30b 48
+    layers, dsv4 43-44 layers with an MTP spec tail folded in by
+    ``compose_step_plans``).  On those traces the selection frames are already
+    the exact step cover, so the expensive ``split_composite_frames`` +
+    interior-substructure classification + composite-body validation passes do
+    a large amount of work only to rediscover that uniform structure.
+
+    This path composes the selection frames (which also attaches MTP/Eagle
+    speculative tails), and if every resulting body has the *same* main-layer
+    count (>= 2), accepts them directly as complete steps.  This is provably
+    equivalent to the exact-cover output on uniform traces and is O(n) instead
+    of the template-search cost.  When the bodies are not uniform it returns
+    ``None`` so the caller falls through to the full exact-cover path — this is
+    a fast path, never a lossy shortcut.
+    """
+
+    plans = compose_step_plans(frames)
+    if len(plans) < 3:
+        return None
+    counts = [len(plan.main_layers) for plan in plans]
+    unique_counts = set(counts)
+    if len(unique_counts) != 1:
+        return None
+    period = counts[0]
+    if period < 2:
+        return None
+    if any(not plan.complete or plan.segment_type != "step" for plan in plans):
+        return None
+    summary = {
+        "mode": "knowledge_uniform_period",
+        "reason": "selection frames form a uniform step cover; skipped exact-cover search",
+        "input_frame_count": len(frames),
+        "step_count": len(plans),
+        "layers_per_step": period,
+    }
+    return list(plans), summary
+
+
 def sequence_counter(sequence: Sequence[str]) -> Counter[str]:
     return Counter(sequence)
 
@@ -3120,9 +3180,16 @@ def build_segments_for_rank(
 
     selection_frames = frames_from_selection(layers_observed, selection_rows)
     model_guided = build_model_guided_step_plans(selection_frames, model_context, events, row_numbers)
+    uniform_guided = None if model_guided is not None else build_uniform_step_plans(selection_frames)
     if model_guided is not None:
         plans, segmentation_strategy = model_guided
+    elif uniform_guided is not None:
+        plans, segmentation_strategy = uniform_guided
     else:
+        # Knowledge miss: neither model fingerprint nor a uniform periodic
+        # structure explained this rank. Fall back to the exact-cover search
+        # and label the strategy explicitly so the miss is visible rather than
+        # silent.
         frames = split_composite_frames(selection_frames, events, row_numbers)
         plans = merge_explained_windows_to_templates(
             classify_interior_substructure_plans(
@@ -3132,13 +3199,13 @@ def build_segments_for_rank(
             )
         )
         segmentation_strategy = {
-            "mode": "legacy_statistical_fallback",
+            "mode": "exact_cover_knowledge_miss",
             "input_frame_count": len(selection_frames),
             "post_split_frame_count": len(frames),
             "reason": (
-                "no usable expected_layers model context"
+                "no model fingerprint and non-uniform selection frames; used exact-cover search"
                 if model_context_expected_layers(model_context) is None
-                else "model-guided path produced no complete plans"
+                else "model-guided path produced no complete plans; used exact-cover search"
             ),
         }
     hard_errors.extend(validate_exact_cover(rank_id, events, row_numbers, plans))

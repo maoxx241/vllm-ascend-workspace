@@ -25,7 +25,8 @@ def test_analyze_wrapper_has_required_args() -> None:
     parser = profile_analyze._build_parser()
     opts = _option_set(parser)
     for required in (
-        "--machine",
+        "--session-id",
+        "--session-file",
         "--manifest",
         "--remote-profile-root",
         "--tag",
@@ -58,7 +59,8 @@ def test_sweep_wrapper_has_required_args() -> None:
     parser = profile_sweep._build_parser()
     opts = _option_set(parser)
     for required in (
-        "--machine",
+        "--session-id",
+        "--session-file",
         "--search-root",
         "--tag",
         "--limit",

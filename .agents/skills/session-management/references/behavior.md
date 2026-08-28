@@ -22,6 +22,10 @@ session/<session-id>
 
 If a worktree already exists and is bound to the same session, it is reused. If it is bound to a different session or has no binding, creation fails closed.
 
+Every initialized submodule (`vllm/`, `vllm-ascend/`) is checked out onto branch `session/<session-id>` at worktree creation time instead of being left in detached HEAD. For each submodule, `{path, branch, base_commit}` is recorded under `local.submodule_branches` in the session state. `session_diff.py` uses the recorded `base_commit` as the diff base for that submodule, falling back to the gitlink of `base_ref` when a submodule has no recorded entry.
+
+The worktree binding at `<worktree>/.vaws-local/current-session.json` lets consumer commands (parity, serving, benchmark, profiling, memory) auto-resolve the session by walking up from the current working directory. Running those commands from inside the worktree needs no `--session-id`; `--session-id` / `--session-file` remain available for out-of-worktree or cross-session invocations.
+
 ## Container Behavior
 
 Session containers use the base machine image, host mounts, workdir, and Ascend bootstrap logic, but get a distinct container name and SSH port.
@@ -62,6 +66,6 @@ When `session_remove.py --remove-container` sees no session serving state file, 
 
 `session_remove.py` marks a session `removed` only when the requested container/worktree removal succeeds. Failed removal leaves the session in `needs_repair`. `session_gc.py` releases leases for `removed` or missing-state sessions; it does not release leases for generic `failed` sessions because those may still protect partially created remote resources.
 
-## Legacy Compatibility
+## Machine vs Session Surfaces
 
-Legacy `--machine` flows continue to use the base machine container and machine-level state. Session-aware flows use `--session-id` or `--session-file` and state under `.vaws-local/sessions/<session-id>/`.
+Domain skills (serving, benchmark, profiling-collection, memory-profiling, profiling-analysis) are session-only: state lives under `.vaws-local/sessions/<session-id>/` and targets resolve via `--session-id`, `--session-file`, or the cwd worktree binding. `--machine` remains only where it means "base machine": `session_create.py` (which machine hosts the session container) and machine-management registration/verification.

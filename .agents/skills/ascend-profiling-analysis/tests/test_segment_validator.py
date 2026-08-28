@@ -35,11 +35,15 @@ from ascend_profile.segment import (  # noqa: E402
     LayerObservation,
     build_layers,
     build_model_guided_step_plans,
+    build_uniform_step_plans,
     StepPlan,
     classify_interior_substructure_plans,
     classify_residual_plans,
     compose_step_plans,
     event_role,
+    is_attention_companion_only,
+    load_segmentation_rules,
+    mla_layer_start_categories,
     validate_exact_cover,
     validate_unresolved_composite_bodies,
 )
@@ -121,6 +125,89 @@ def _build_test_layers(events: list[NormalizedEvent]) -> list[LayerObservation]:
         lambda event: event_role(event, "block_head"),
     )
     return build_layers(events, row_numbers, boundary_rows, anchor_boundary_rows, ())
+
+
+def _uniform_frames(period: int, step_count: int) -> list[LayerFrame]:
+    """Build ``step_count`` selection-delimited frames of ``period`` layers.
+
+    Mirrors what ``frames_from_selection`` produces for a clean periodic
+    decode trace: each body is preceded by a selection boundary and carries
+    an identical attention-bearing layer sequence.
+    """
+
+    signatures = [
+        f"attention:attention.flash_score|ffn:ffn_or_dense_compute#{i}"
+        for i in range(period)
+    ]
+    frames: list[LayerFrame] = []
+    row = 0
+    for step in range(step_count):
+        layers = tuple(_layer(i, sig, row_base=row) for i, sig in enumerate(signatures))
+        frames.append(
+            LayerFrame(
+                layers=layers,
+                reason="selection_delimited_body",
+                selection_before=(row - 1,),
+            )
+        )
+        row += period * 10
+    return frames
+
+
+def test_segmentation_rules_yaml_is_source_of_truth_for_anchors() -> None:
+    """The layer-anchor priors must come from the YAML knowledge base."""
+
+    rules = load_segmentation_rules()
+    assert "attention.mla" in rules["layer_start_categories"]
+    assert mla_layer_start_categories() == rules["layer_start_categories"]
+    # DSA / CSA / MLA companions fold into their enclosing layer.
+    for companion in (
+        "attention.mla.v_up_proj",
+        "attention.lightning_indexer",
+        "attention.kv_compressor",
+    ):
+        assert is_attention_companion_only(companion)
+    # rope kernels are companion-only via prefix match.
+    assert is_attention_companion_only("attention.rope.interleave")
+    # a genuine layer-start marker is NOT companion-only.
+    assert not is_attention_companion_only("attention.mla")
+
+
+def test_uniform_fast_path_accepts_clean_periodic_cover() -> None:
+    """A uniform selection-frame cover is accepted directly as complete steps
+    with the knowledge-driven strategy label, skipping exact-cover search."""
+
+    frames = _uniform_frames(period=27, step_count=8)
+    result = build_uniform_step_plans(frames)
+    assert result is not None
+    plans, strategy = result
+    assert strategy["mode"] == "knowledge_uniform_period"
+    assert strategy["layers_per_step"] == 27
+    assert strategy["step_count"] == len(plans) == 8
+    assert all(plan.complete and plan.segment_type == "step" for plan in plans)
+    assert all(len(plan.main_layers) == 27 for plan in plans)
+
+
+def test_uniform_fast_path_declines_when_not_uniform() -> None:
+    """A non-uniform trailing body must make the fast path defer to
+    exact-cover rather than mis-cover the rank."""
+
+    frames = _uniform_frames(period=48, step_count=6)
+    # Append a short trailing body (e.g. an incomplete final decode step).
+    row = frames[-1].layers[-1].row_end + 1
+    short = tuple(
+        _layer(i, f"attention:attention.flash_score#{i}", row_base=row)
+        for i in range(18)
+    )
+    frames.append(LayerFrame(layers=short, reason="selection_delimited_body", selection_before=(row - 1,)))
+    assert build_uniform_step_plans(frames) is None
+
+
+def test_uniform_fast_path_declines_single_layer_period() -> None:
+    """A degenerate period of one layer is not a meaningful step cover."""
+
+    frames = _uniform_frames(period=1, step_count=10)
+    assert build_uniform_step_plans(frames) is None
 
 
 def test_model_guided_segmentation_keeps_moe_phase_fragment_out_of_step_inventory() -> None:

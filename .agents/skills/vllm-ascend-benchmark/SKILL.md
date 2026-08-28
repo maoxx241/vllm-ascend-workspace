@@ -5,7 +5,7 @@ description: Run vLLM online-serving benchmarks on a workspace-managed remote co
 
 # vLLM Ascend Benchmark
 
-Run `vllm bench serve` on a **ready** workspace-managed remote container and produce structured performance results. Supports single-run and multi-run (warm-service) modes.
+Run `vllm bench serve` on a **ready** session-managed remote container and produce structured performance results. Supports single-run and multi-run (warm-service) modes.
 
 Remote substrate rule: use `.remote-dev` remote tools for ad hoc remote
 read/edit/bash/search/patch work around benchmark setup or result inspection.
@@ -14,7 +14,7 @@ compatibility backend for managed VAWS sessions.
 
 ## Use this skill when
 
-- the user asks to run a performance benchmark / throughput test on a managed machine
+- the user asks to run a performance benchmark / throughput test in a managed session
 - the user asks to compare performance before and after a code change
 - the user asks to verify there is no performance regression for a PR or commit
 
@@ -24,19 +24,21 @@ compatibility backend for managed VAWS sessions.
 - the task is running a full nightly CI matrix
 - the task is offline / batch inference
 - the user only wants to start or stop a service without benchmarking (use `vllm-ascend-serving`)
-- the machine is not yet ready in inventory (use `machine-management` first)
+- no session exists yet for the target (use `session-management` first)
 
 ## Critical rules
 
 - Benchmark parameters are assembled by the agent based on user intent and executed through the scripts below. The agent must not construct raw `vllm bench serve` commands and run them directly on the remote.
 - **User intent takes priority** over nightly configs. Nightly YAML files under `vllm-ascend/tests/e2e/nightly/single_node/models/configs/` are a **reference source** for discovering how to configure a given model or feature (MTP, graph mode, TP count, etc.), not an execution template to run verbatim.
 - Nightly configs are used as a **fallback** only when the user specifies a model but provides no other parameters.
-- After benchmarking, the service is automatically stopped. No residual processes should remain.
-- If service startup returns a non-ready result after launching a PID, benchmark cleanup still calls `serve_stop.py --force` for the same target.
-- For parallel agent work, use `session-management` first and call `bench_run.py --session-id <id>`. Cleanup then stops only that session's service.
+- Benchmarking is **session-only**. `bench_run.py` takes an optional `--session-id <id>` / `--session-file <path>`; when both are omitted, the session is auto-resolved from the nearest `.vaws-local/current-session.json` worktree binding (cwd upward), so running from inside a session worktree needs zero target arguments. If no binding is found, the command fails fast with instructions to pass `--session-id` or create a session with `session-management`'s `session_create.py`.
+- After benchmarking, the service is automatically stopped. No residual processes should remain. Cleanup stops only that session's service.
+- If service startup returns a non-ready result after launching a PID, benchmark cleanup still calls `serve_stop.py --force` for the same session.
 - Progress goes to `stderr` as `__VAWS_BENCHMARK_PROGRESS__=<json>`. Final result goes to `stdout` as JSON.
-- Keep local benchmark state under `.vaws-local/benchmark/` for legacy mode and `.vaws-local/sessions/<id>/benchmark/` for session-scoped workflows.
-- **Multi-state comparisons** (e.g. baseline vs PR vs modified) are orchestrated by the agent calling `bench_run.py` once per code state, not by a single script. The agent is responsible for switching code states (via worktree, checkout, or manual edit) and running parity between each state.
+- Keep local benchmark state under `.vaws-local/sessions/<session-id>/benchmark/`; results are written to `.vaws-local/sessions/<session-id>/benchmark/runs/`.
+- **Multi-state comparisons** (baseline vs PR vs modified) are a first-class workflow: use `bench_compare.py`, which checks out each git ref *in the container*, benchmarks every state with identical serve/bench args, and reports TPOT/throughput deltas. Do not hand-write a bespoke comparison script.
+- **Never hand-roll stale-process cleanup.** A past bespoke cleanup SIGTERM'd a session's dedicated sshd (`Exiting on signal 15`), dropped the container SSH port, and forced a rebuild. Use `--stale-cleanup` (backed by `safe_stale_cleanup`), which only reaps vLLM `EngineCore`/`Worker` children by name, skips PID 1, excludes anything matching `sshd`/`vaws`, and kills explicit pids only (never a process group).
+- **Backend is overridable.** The default is chat (`--backend openai-chat --endpoint /v1/chat/completions`). For completion-style models (e.g. DSV4) pass `--bench-args --backend openai --endpoint /v1/completions ...` and the default is not injected.
 
 ## Cross-platform launcher rule
 
@@ -46,8 +48,10 @@ compatibility backend for managed VAWS sessions.
 ## Public entry point
 
 ```bash
+# Inside a session worktree the session is auto-resolved — no target flag needed.
+# Outside a worktree, pass --session-id <id> (or --session-file <path>).
 python3 .agents/skills/vllm-ascend-benchmark/scripts/bench_run.py \
-  (--machine <alias-or-ip> | --session-id <id>) \
+  [--session-id <id> | --session-file <path>] \
   --model <remote-weight-path> \
   [--tp <N>] [--dp <N>] \
   [--runs <N>] \
@@ -69,9 +73,9 @@ python3 .agents/skills/vllm-ascend-benchmark/scripts/bench_run.py \
 
 ## Workflow
 
-### 1. Resolve the target machine
+### 1. Resolve the target session
 
-The `--machine` argument is looked up in the local machine inventory. The machine must already be managed and ready.
+The session comes from `--session-id` / `--session-file`, or is auto-resolved from the nearest `.vaws-local/current-session.json` worktree binding. If neither is given and no binding is found, the command fails fast and tells the user to pass `--session-id` or create a session with `session_create.py`.
 
 ### 2. Assemble configuration
 
@@ -85,7 +89,7 @@ When `--refer-nightly` is used, the YAML is parsed for `server_cmd`, `envs`, and
 
 ### 3. Stop any existing service
 
-If a service is already running on the target machine, stop it before proceeding.
+If a service is already running in the target session, stop it before proceeding.
 
 ### 4. Start the service
 
@@ -99,7 +103,10 @@ Executes `vllm bench serve` via SSH on the remote container against the running 
 
 ### 6. Stop the service
 
-Calls `serve_stop.py` to clean up after all runs complete.
+Calls `serve_stop.py` to clean up after all runs complete. If both the graceful
+and the forced stop fail, the result keeps the collected metrics but reports
+`"status": "cleanup_failed"` (plus a `cleanup_warning` field) and the script
+exits non-zero, because the service is still holding NPU memory.
 
 ### 7. Return structured JSON
 
@@ -108,7 +115,7 @@ Single-run output (`--runs 1`, the default):
 ```json
 {
   "status": "ok",
-  "machine": "173.131.1.2",
+  "session_id": "pr123",
   "model": "/home/weights/Qwen3.5-35B",
   "metrics": {
     "output_throughput": 1234.5,
@@ -125,7 +132,7 @@ Multi-run output (`--runs N` where N > 1):
 ```json
 {
   "status": "ok",
-  "machine": "173.131.1.2",
+  "session_id": "pr123",
   "model": "/home/weights/Qwen3.5-35B",
   "runs": 5,
   "warmup_runs": 1,
@@ -144,16 +151,34 @@ Multi-run output (`--runs N` where N > 1):
 }
 ```
 
-## Multi-state comparison pattern
+## Multi-state comparison (bench_compare.py)
 
-To compare performance across code states (e.g. baseline vs PR), the agent should:
+Compare performance across git states in one call. Each `--state LABEL=REF` is
+checked out **in the container** for vllm-ascend (and optionally vllm via
+`--vllm-ref`), then benchmarked with the shared serve/bench args so any delta
+is attributable to code. `REF` accepts `pr:NNNN` / `#NNNN` (GitHub PR head), a
+commit SHA, or a branch. Alignment is source-only — it never rebuilds custom
+ops (matching the common "对齐版本但不重编算子" workflow); if a kernel change
+requires a rebuild, do that through parity/serve first.
 
-1. For each code state, ensure the local workspace reflects that state (checkout, worktree, or revert).
-2. Call `bench_run.py` with `--runs N --warmup-runs M` for that state.
-3. Collect the JSON output for each state.
-4. Compare the `aggregated` metrics across states.
+```bash
+python3 .agents/skills/vllm-ascend-benchmark/scripts/bench_compare.py \
+  [--session-id <id> | --session-file <path>] \
+  --model <remote-weight-path> \
+  --state baseline=<commit> --state pr10741=pr:10741 \
+  [--vllm-ref <vllm-commit>] \
+  [--tp <N>] [--dp <N>] [--runs <N>] [--warmup-runs <M>] \
+  [--stale-cleanup] \
+  [--serve-args <arg> ...] \
+  [--bench-args <arg> ...]
+```
 
-The agent orchestrates the code-state switching and parity syncing between runs. This is more flexible and robust than a single script trying to manage git operations, because the agent can handle edge cases like cross-fork commits and submodule quirks.
+Output is a single JSON object with `comparison` (per-state mean TPOT,
+throughput, acceptance rate, and `delta_tpot_pct_vs_first`) plus full
+`state_results`. `--stale-cleanup` runs the SAFE cleanup before/after each
+state. The result is persisted under the session's `benchmark/runs/` dir.
+
+For a single state, keep using `bench_run.py`.
 
 ## Reference files
 

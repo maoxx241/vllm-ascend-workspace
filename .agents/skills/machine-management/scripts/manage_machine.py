@@ -29,6 +29,12 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Any, Sequence
 
+_LIB_DIR = pathlib.Path(__file__).resolve().parents[4] / ".agents" / "lib"
+if str(_LIB_DIR) not in sys.path:
+    sys.path.insert(0, str(_LIB_DIR))
+
+from vaws_ssh import control_master_options  # noqa: E402
+
 
 IMAGE_REGISTRY_NJU = "quay.nju.edu.cn/ascend/vllm-ascend"
 IMAGE_REGISTRY_OFFICIAL = "quay.io/ascend/vllm-ascend"
@@ -596,6 +602,7 @@ def ssh_command(
         "LogLevel=ERROR",
         "-o",
         "ConnectTimeout=10",
+        *control_master_options(),
     ]
     if identity_file is not None:
         command.extend(["-i", str(identity_file), "-o", "IdentitiesOnly=yes"])

@@ -8,13 +8,13 @@ keeps the existing scripts as the managed VAWS compatibility backend.
 
 ## Lifecycle
 
-1. **Resolve target** from local inventory or a VAWS session spec.
+1. **Resolve target session** from `--session-id` / `--session-file`, or auto-resolve from the nearest `.vaws-local/current-session.json` worktree binding (cwd upward); fail fast if none is found.
 2. **Assemble config** from user args + optional nightly reference.
-3. **Stop existing service** on the target target if any. In session mode this means only the session service.
-4. **Start service** via `serve_start.py` (which handles parity sync internally). If startup returns non-ready, call `serve_stop.py --force` for the same target before failing.
+3. **Stop existing service** in the target session if any; other sessions are never touched.
+4. **Start service** via `serve_start.py` (which handles parity sync internally). If startup returns non-ready, call `serve_stop.py --force` for the same session before failing.
 5. **Run benchmark iterations** via SSH on the remote container — all against the same warm service.
-6. **Stop service** via `serve_stop.py`, passing through `--session-id` when used.
-7. **Output structured JSON** on stdout.
+6. **Stop service** via `serve_stop.py` for the same session.
+7. **Output structured JSON** on stdout and persist the result under `.vaws-local/sessions/<session-id>/benchmark/runs/`.
 
 ## Configuration Priority
 
@@ -69,7 +69,7 @@ Given baseline throughput `T_b` and patched throughput `T_p`, compute the ratio 
 
 ## Remote Execution
 
-`vllm bench serve` runs inside the container via SSH. The result JSON file is written to `/tmp/` with a target token, local process id, and random suffix in the file name, then `cat`-ed back through the SSH session. The script parses the last JSON object from stdout. The unique file name matters because session containers can share the host `/tmp` mount on the same machine.
+`vllm bench serve` runs inside the session container via SSH. The result JSON file is written to `/tmp/` with a session token, local process id, and random suffix in the file name, then `cat`-ed back through the SSH session. The script parses the last JSON object from stdout. The unique file name matters because session containers can share the host `/tmp` mount on the same machine.
 
 ## Defaults
 
@@ -81,4 +81,4 @@ These are conservative defaults suitable for a quick smoke test. For production 
 
 ## State Management
 
-Benchmark results are not persisted locally by default. The structured JSON is returned on stdout for the agent or user to consume. The serving skill handles its own state under `.vaws-local/serving/` in legacy mode and `.vaws-local/sessions/<session-id>/serving.json` in session mode.
+The structured JSON is returned on stdout for the agent or user to consume, and each run's result is also written under `.vaws-local/sessions/<session-id>/benchmark/runs/`. The serving skill handles its own state at `.vaws-local/sessions/<session-id>/serving.json` — the only serving state location.

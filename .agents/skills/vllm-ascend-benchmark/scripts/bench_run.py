@@ -8,23 +8,23 @@ statistics.
 
 Usage examples:
 
-    # Minimal single run
-    python3 bench_run.py --machine 173.131.1.2 --model /home/weights/Qwen3.5-35B
+    # Minimal single run from inside a session worktree (auto-resolved session)
+    python3 bench_run.py --model /home/weights/Qwen3.5-35B
 
-    # Session-scoped single run
+    # Explicit session target
     python3 bench_run.py --session-id pr-123 --model /home/weights/Qwen3.5-35B
 
     # Multi-run with warmup (start service once, run 5 times, discard first)
-    python3 bench_run.py --machine 173.131.1.2 --model /home/weights/Qwen3.5-35B \\
+    python3 bench_run.py --session-id pr-123 --model /home/weights/Qwen3.5-35B \\
         --runs 5 --warmup-runs 1 --tp 4
 
     # With explicit serve and bench args
-    python3 bench_run.py --machine 173.131.1.2 --model /home/weights/Qwen3.5-35B \\
+    python3 bench_run.py --session-id pr-123 --model /home/weights/Qwen3.5-35B \\
         --tp 4 --serve-args --async-scheduling --compilation-config '{"cudagraph_mode":"FULL_DECODE_ONLY"}' \\
         --bench-args --num-prompts 128 --max-concurrency 32 --output-len 1500
 
     # Using a nightly config as reference
-    python3 bench_run.py --machine 173.131.1.2 --model /home/weights/Qwen3.5-35B \\
+    python3 bench_run.py --session-id pr-123 --model /home/weights/Qwen3.5-35B \\
         --refer-nightly Qwen3-Next-80B-A3B-Instruct-A2
 
 Progress on stderr as __VAWS_BENCHMARK_PROGRESS__=<json>.
@@ -62,8 +62,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="Run vllm bench serve benchmarks (single or multi-run).",
         allow_abbrev=False,
     )
-    p.add_argument("--machine", help="machine alias or IP")
-    p.add_argument("--session-id", help="VAWS session id")
+    p.add_argument("--session-id", help="VAWS session id; defaults to the bound session of the current worktree")
     p.add_argument("--session-file", help="explicit session.json path")
     p.add_argument("--model", required=True, help="remote model weight path")
     p.add_argument("--tp", "--tensor-parallel-size", type=int, default=None)
@@ -156,7 +155,6 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         config = assemble_config(
-            machine=args.machine,
             session_id=args.session_id,
             session_file=args.session_file,
             model=args.model,
@@ -187,9 +185,8 @@ def main(argv: list[str] | None = None) -> int:
         base_url = start_result["base_url"]
         served_model = start_result.get("served_model_name", Path(args.model).name)
         container_ip, container_port = _get_ssh_endpoint(
-            args.machine,
-            session_id=args.session_id,
-            session_file=args.session_file,
+            session_id=config.session_id,
+            session_file=config.session_file,
         )
 
         all_metrics: list[dict[str, Any]] = []
@@ -235,12 +232,18 @@ def main(argv: list[str] | None = None) -> int:
             if stop_result.get("status") not in ("stopped", "not_found"):
                 cleanup_warning = f"service may still be running: {stop_result}"
 
+        # Benchmark data is valid, but if the service could not be stopped it is
+        # still holding NPU memory. Do not report a clean "ok" in that case:
+        # surface a distinct status and a non-zero exit so callers/automation
+        # notice the leaked service instead of it being masked by a warning.
+        final_status = "cleanup_failed" if cleanup_warning else "ok"
+        exit_code = 1 if cleanup_warning else 0
+
         if total_runs == 1:
             emit_progress("done", f"benchmark complete, throughput={all_metrics[0].get('output_throughput', 'N/A')}")
             result_json: dict[str, Any] = {
-                "status": "ok",
-                "machine": args.machine,
-                "session_id": args.session_id,
+                "status": final_status,
+                "session_id": config.session_id,
                 "model": args.model,
                 "metrics": all_metrics[0],
                 "config": config.summary_dict(),
@@ -259,9 +262,8 @@ def main(argv: list[str] | None = None) -> int:
                 f"mean throughput={aggregated.get('output_throughput', {}).get('mean', 'N/A')}",
             )
             result_json = {
-                "status": "ok",
-                "machine": args.machine,
-                "session_id": args.session_id,
+                "status": final_status,
+                "session_id": config.session_id,
                 "model": args.model,
                 "runs": total_runs,
                 "warmup_runs": warmup_runs,
@@ -277,7 +279,7 @@ def main(argv: list[str] | None = None) -> int:
                 result_json["cleanup_warning"] = cleanup_warning
             write_local_result(config, result_json)
             print_json(result_json)
-        return 0
+        return exit_code
 
     except Exception as e:
         try:

@@ -16,6 +16,7 @@ Keep a **ready** remote runtime in exact code parity with the local `vllm-ascend
 
 ## Do not use this skill when
 
+- the task is ad-hoc remote verification (run one command, read a log, check remote state) with no dependency on local code changes — use `.remote-dev` `remote.bash` / `remote.read` directly; parity is never a prerequisite for that
 - the main task is adding or repairing a machine, SSH, or container bootstrap
 - the task is generic fork / remote topology setup
 - the task is ordinary local coding with no remote execution
@@ -29,7 +30,7 @@ Keep a **ready** remote runtime in exact code parity with the local `vllm-ascend
 - Do **not** use `scp`, `sftp`, `rsync`, `sshpass`, or `expect`.
 - Do **not** require GitHub credentials on the host or in the container.
 - Keep the sync path **container-only** after machine attach: no host storage root, no host mirror, no host lock.
-- For parallel agent work, use `parity_sync.py --session-id <id>`. Session mode derives the workspace root, container endpoint, workspace id, and container identity from `.vaws-local/sessions/<id>/session.json`.
+- Session is the default target surface. With no target arg, `parity_sync.py` auto-binds from the current worktree's `.vaws-local/current-session.json` binding; `--session-id <id>` / `--session-file <path>` are explicit alternatives. Session mode derives the workspace root, container endpoint, workspace id, and container identity from `.vaws-local/sessions/<id>/session.json`. `--machine <alias>` remains available as a legacy single-tenant machine surface.
 - Use synthetic snapshot refs so dirty working trees can move through Git transport.
 - Keep container cache / lock / manifest paths isolated by `workspace_id` under a container-local cache root.
 - Preserve runtime-private paths under `/vllm-workspace`, in particular `Mooncake/` (image-provided runtime) and `.vaws-runtime/` (workspace-managed runtime artifacts such as profiler dumps consumed by downstream skills). The exact list lives in `DEFAULT_ROOT_PRESERVE_PATHS` in `scripts/remote_code_parity.py`.
@@ -86,21 +87,23 @@ Container commands in this skill assume Linux shells.
 
 ## Script-first entry points
 
-Normal agent entrypoint:
+Normal agent entrypoint (session is the default target; run from inside the session worktree for zero-arg auto-bind):
 
-- POSIX: `python3 .agents/skills/remote-code-parity/scripts/parity_sync.py (--machine <alias-or-ip> | --session-id <id>) ...`
-- Windows: `py -3 .agents/skills/remote-code-parity/scripts/parity_sync.py --machine <alias-or-ip> ...`
+- POSIX: `python3 .agents/skills/remote-code-parity/scripts/parity_sync.py [--session-id <id> | --session-file <path>] ...`
+- Windows: `py -3 .agents/skills/remote-code-parity/scripts/parity_sync.py [--session-id <id> | --session-file <path>] ...`
+- Legacy machine surface: append `--machine <alias-or-ip>` for single-tenant base-container work.
 
 Apply-mode split:
 
+- `--apply-mode auto` (default): picks the cheapest sufficient tier automatically — no change at all hits the fingerprint fast path (single verify SSH, `status: ready`); pure Python changes run `materialize`; native/dependency/build-system changes (or a required first install) run `install`.
 - `--apply-mode source-only`: publish source snapshots to the container cache only; no runtime materialization and no install/rebuild.
 - `--apply-mode materialize`: publish snapshots and update the runtime source tree; no install/rebuild.
-- `--apply-mode install`: default full parity behavior with consent, materialization, install/rebuild triggers, and verification.
+- `--apply-mode install`: full parity behavior with consent, materialization, install/rebuild triggers, and verification.
 
 Agent-facing sync tools:
 
-- `python3 .agents/scripts/remote_sync_plan.py ... --mode source-only|materialize|install`
-- `python3 .agents/scripts/remote_sync_apply.py ... --mode source-only|materialize|install`
+- `python3 .agents/scripts/remote_sync_plan.py ... --mode auto|source-only|materialize|install`
+- `python3 .agents/scripts/remote_sync_apply.py ... --mode auto|source-only|materialize|install`
 
 Consent helper:
 
@@ -138,7 +141,7 @@ If the agent forgets to set sync mode, `parity_sync.py` returns `status: blocked
 
 ### 2. Resolve the ready target from inventory
 
-For normal agent work, start from `parity_sync.py`. Use `--session-id` when the task was created by `session-management`; use legacy `--machine` only for single-tenant base-container work.
+For normal agent work, start from `parity_sync.py`. The session is the default target: run it from inside the session worktree and the target auto-binds from the `.vaws-local/current-session.json` worktree binding, or pass `--session-id` / `--session-file` explicitly. Use legacy `--machine` only for single-tenant base-container work.
 
 Collect from local machine inventory:
 

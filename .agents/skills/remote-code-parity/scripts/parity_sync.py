@@ -35,15 +35,14 @@ def canonical_inventory_path(repo_root: Path) -> Path:
     return repo_root / '.vaws-local' / 'machine-inventory.json'
 
 
-def legacy_inventory_path(repo_root: Path) -> Path:
-    return repo_root / '.machine-inventory.json'
-
-
 def load_machine_inventory(repo_root: Path) -> dict[str, Any]:
-    for path in (canonical_inventory_path(repo_root), legacy_inventory_path(repo_root)):
-        if path.exists():
-            return json.loads(path.read_text(encoding='utf-8'))
-    return {'schema_version': 1, 'machines': []}
+    path = canonical_inventory_path(repo_root)
+    if not path.exists():
+        raise RuntimeError(
+            f'machine inventory not found at {path}; register the machine first '
+            'with machine-management/scripts/machine_add.py'
+        )
+    return json.loads(path.read_text(encoding='utf-8'))
 
 
 def resolve_machine_record(inventory: dict[str, Any], identifier: str) -> dict[str, Any]:
@@ -59,7 +58,9 @@ def resolve_machine_record(inventory: dict[str, Any], identifier: str) -> dict[s
 
 
 def build_derived_args(repo_root: Path, args: argparse.Namespace) -> dict[str, Any]:
-    if args.session_id or args.session_file:
+    if not args.machine:
+        # Session is the default surface; with no explicit id/file the session
+        # is auto-resolved from the nearest worktree binding (cwd upward).
         return build_derived_args_from_session(repo_root, args)
 
     inventory = load_machine_inventory(repo_root)
@@ -89,7 +90,7 @@ def build_derived_args(repo_root: Path, args: argparse.Namespace) -> dict[str, A
         'container_user': args.container_user,
         'preserve_path': list(args.preserve_path),
         'machine_record': record,
-        'inventory_path': str(canonical_inventory_path(repo_root) if canonical_inventory_path(repo_root).exists() else legacy_inventory_path(repo_root)),
+        'inventory_path': str(canonical_inventory_path(repo_root)),
     }
 
 
@@ -182,9 +183,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument('--dry-run', action='store_true')
     parser.add_argument(
         '--apply-mode',
-        choices=('source-only', 'materialize', 'install'),
-        default='install',
-        help='source-only publishes container-cache snapshots only; materialize updates runtime sources without install; install preserves the full parity behavior.',
+        choices=('auto', 'source-only', 'materialize', 'install'),
+        default='auto',
+        help='auto picks materialize for pure-Python changes and install only when native/dependency files changed; source-only publishes container-cache snapshots only; materialize updates runtime sources without install; install forces the full parity behavior.',
     )
     parser.add_argument('--print-derived-args', action='store_true')
     return parser
@@ -193,8 +194,6 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     args = build_parser().parse_args()
     repo_root = repo_root_from(Path(args.repo_root))
-    if not args.machine and not args.session_id and not args.session_file:
-        raise RuntimeError('--machine is required unless --session-id or --session-file is used')
     derived = build_derived_args(repo_root, args)
     state_repo_root = repo_root_from(Path(derived['workspace_root']))
     low_level_cmd = build_low_level_command(derived, args)

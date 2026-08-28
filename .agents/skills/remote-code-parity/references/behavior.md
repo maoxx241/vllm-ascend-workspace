@@ -12,12 +12,13 @@ This file defines the durable behavior of `remote-code-parity`.
 - Fail closed when parity cannot be proven.
 - Prove the final container-side commit ids instead of trusting command exit status alone.
 - Stream phase progress on `stderr` as `__VAWS_PARITY_PROGRESS__=<json>` and keep one final JSON payload on `stdout`.
-- Keep runtime-install phases attributable instead of collapsing them into one opaque step: uninstall, `vllm`, `vllm-ascend` requirements, `vllm-ascend`, import verification, and marker write should each surface their own progress event.
+- Keep runtime-install phases attributable instead of collapsing them into one opaque step: uninstall, build-compat preflight, `vllm`, `vllm-ascend` requirements, `vllm-ascend`, import verification, and marker write should each surface their own progress event.
 
 ## Apply-mode split
 
-The remote toolbox exposes parity through three explicit modes:
+The remote toolbox exposes parity through four modes:
 
+- `auto` (default): resolve the cheapest sufficient tier from detected changes — unchanged workspace fingerprint takes the no-change fast path; pure Python changes run as `materialize`; native/dependency/build-system changes or a pending first install run as `install`.
 - `source-only`: publish source snapshots to the container cache and upload a manifest; do not materialize runtime sources and do not install/rebuild.
 - `materialize`: publish snapshots and update runtime sources; do not install/rebuild.
 - `install`: full parity behavior, including first-install consent and reinstall triggers.
@@ -227,7 +228,9 @@ A trustworthy parity result records:
 - set `TORCH_DEVICE_BACKEND_AUTOLOAD=0` for the `vllm` editable install because `VLLM_TARGET_DEVICE=empty` does not need `torch_npu` during metadata generation
 - compute `VAWS_BUILD_JOBS=min(available CPUs, 128)` and export it through both `MAX_JOBS` and `CMAKE_BUILD_PARALLEL_LEVEL` so `vllm-ascend` top-level and nested CMake builds get bounded parallelism
 - keep dependency ownership in `pip install -r vllm-ascend/requirements.txt`, which pins the CANN-compatible `numpy` / `triton-ascend` stack
-- route pip installs through the single A3-tested HuaweiCloud index (`https://repo.huaweicloud.com/repository/pypi/simple`)
+- reconcile the hardware-coupled stack (`torch` / `torch-npu` / `triton` / `triton-ascend` / `torchvision` / `torchaudio`) per package at install time instead of installing the pins verbatim: if a package is already installed in the image, drop its requirement line (reinstalling would downgrade the image's tested runtime — the mirror often carries an older pin, e.g. torch 2.9.0 vs image 2.10.0); if a package is genuinely missing, keep it and add the public Ascend extra-index (`https://mirrors.huaweicloud.com/ascend/repos/pypi`) so it resolves from the internet exactly as `vllm-ascend/Dockerfile` pulls `torch_npu`/`triton-ascend` (these ship on OBS + the Ascend index, not the standard PyPI mirror). Without this, `pip install -r requirements.txt` hard-fails with "No matching distribution for triton-ascend".
+- before the multi-minute `vllm-ascend` custom-ops build, run a `check-build-compat` preflight: read the torch version pin in `vllm-ascend/CMakeLists.txt` (`VERSION_EQUAL "X.Y.Z"`) and compare it to the image's installed torch. On mismatch, fail fast with actionable guidance (switch to `image` sync mode, or check out a version-matched `vllm-ascend` commit) instead of failing deep in cmake with a confusing `kineto_LIBRARY-NOTFOUND` + `FATAL_ERROR`. A missing pin skips the preflight (never blocks).
+- route pip installs through the single A3-tested HuaweiCloud index (`https://repo.huaweicloud.com/repository/pypi/simple`), extended only with the Ascend extra-index for the requirements step when a hardware package is genuinely missing from the image
 - do not bootstrap, install, or invoke `uv` as part of parity
 - do not retry across mirror candidates or retry editable installs by dropping `--no-build-isolation`
 - if editable install fails, report the captured install log and fail closed instead of changing package sources, refreshing the packaging stack, or changing install flags

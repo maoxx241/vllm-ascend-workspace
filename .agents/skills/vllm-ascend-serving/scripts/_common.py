@@ -30,9 +30,9 @@ from vaws_remote_toolbox import (  # noqa: E402
     resolve_remote_target,
 )
 from vaws_session_state import session_serving_state_path  # noqa: E402
+from vaws_ssh import base_ssh_options  # noqa: E402
 from vaws_validate import parse_device_csv  # noqa: E402
 
-SERVING_STATE_DIR = ROOT / ".vaws-local" / "serving"
 PROGRESS_SENTINEL = "__VAWS_SERVING_PROGRESS__="
 
 
@@ -57,9 +57,7 @@ class ExecutionTarget:
 def _ssh_base_cmd(endpoint: SshEndpoint) -> list[str]:
     return [
         "ssh",
-        "-o", "BatchMode=yes",
-        "-o", "StrictHostKeyChecking=accept-new",
-        "-o", "LogLevel=ERROR",
+        *base_ssh_options(),
         "-p", str(endpoint.port),
         endpoint.destination(),
     ]
@@ -119,13 +117,16 @@ def host_endpoint(record: dict[str, Any]) -> SshEndpoint:
 
 
 def resolve_execution_target(
-    machine: str | None,
     *,
     session_id: str | None = None,
     session_file: str | Path | None = None,
 ) -> ExecutionTarget:
+    """Resolve the session execution target.
+
+    Serving is session-only: with no explicit id/file the session is
+    auto-resolved from the nearest worktree binding (cwd upward).
+    """
     remote = resolve_remote_target(
-        machine=machine,
         session_id=session_id,
         session_file=session_file,
         repo_root=ROOT,
@@ -149,36 +150,31 @@ def resolve_execution_target(
 # ---------------------------------------------------------------------------
 
 def load_serving_state(
-    machine_alias: str,
+    session_id: str,
     *,
-    session_id: str | None = None,
     state_repo_root: Path = ROOT,
 ) -> dict[str, Any] | None:
-    path = (
-        session_serving_state_path(session_id, state_repo_root)
-        if session_id
-        else SERVING_STATE_DIR / f"{machine_alias}.json"
-    )
+    path = session_serving_state_path(session_id, state_repo_root)
     if not path.exists():
         return None
     try:
         return json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return None
+    except (json.JSONDecodeError, OSError) as exc:
+        # A corrupt state file is NOT the same as "no service": treating it as
+        # None could double-launch or leave an old vllm process untracked.
+        raise RuntimeError(
+            f"serving state file is unreadable: {path} ({exc}); inspect the running "
+            f"service manually, then delete this file to reset the record"
+        ) from exc
 
 
 def save_serving_state(
-    machine_alias: str,
+    session_id: str,
     data: dict[str, Any],
     *,
-    session_id: str | None = None,
     state_repo_root: Path = ROOT,
 ) -> Path:
-    path = (
-        session_serving_state_path(session_id, state_repo_root)
-        if session_id
-        else SERVING_STATE_DIR / f"{machine_alias}.json"
-    )
+    path = session_serving_state_path(session_id, state_repo_root)
     ensure_state_dir(path.parent)
     handle, temp_name = tempfile.mkstemp(
         prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent)

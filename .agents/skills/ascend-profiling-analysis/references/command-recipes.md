@@ -1,7 +1,9 @@
 # Profiling Analysis Command Recipes
 
-All recipes assume the workspace root is the current working directory and the
-target machine is already managed and ready (see `machine-management`).
+All recipes assume you are running from inside the session worktree (the target
+session auto-resolves from the `.vaws-local/current-session.json` binding, so no
+target arg is needed) and the session container is already ready. Add
+`--session-id <id>` / `--session-file <path>` to target a session explicitly.
 
 ## Single-root: from a collection manifest
 
@@ -37,7 +39,6 @@ external pipeline), pass `--remote-profile-root` directly:
 
 ```bash
 python3 .agents/skills/ascend-profiling-analysis/scripts/profile_analyze.py \
-  --machine 173.131.1.2 \
   --remote-profile-root /tmp/prof_35b_tp4/s3 \
   --tag prof_35b_tp4_s3 \
   --verbose
@@ -54,7 +55,6 @@ locally (e.g. to grep for specific kernels), use `--keep-remote-output`:
 
 ```bash
 python3 .agents/skills/ascend-profiling-analysis/scripts/profile_analyze.py \
-  --machine 173.131.1.2 \
   --remote-profile-root /tmp/prof_35b_tp4/s3 \
   --tag prof_35b_tp4_s3_full \
   --keep-remote-output
@@ -69,7 +69,6 @@ To re-run the published 61-root regression baseline on a single machine:
 
 ```bash
 python3 .agents/skills/ascend-profiling-analysis/scripts/profile_sweep.py \
-  --machine 173.131.1.2 \
   --search-root /vllm-workspace/.vaws-runtime/serving \
   --search-root /tmp \
   --search-root /home/m00663269/transfer_dsv4 \
@@ -91,7 +90,6 @@ For a quick smoke test (analyze the first 5 discovered roots only):
 
 ```bash
 python3 .agents/skills/ascend-profiling-analysis/scripts/profile_sweep.py \
-  --machine 173.131.1.2 \
   --search-root /tmp \
   --tag smoke \
   --limit 5

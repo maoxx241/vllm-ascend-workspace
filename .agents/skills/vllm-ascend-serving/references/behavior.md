@@ -12,13 +12,13 @@ The core value of this skill is that all SSH escaping is handled inside `serve_s
 
 ## Launch lifecycle
 
-1. **resolve-target** — look up either the legacy machine alias or a session spec
-2. **lock** — in session mode, acquire the session serving lock so `start` and `stop` for the same session cannot race
+1. **resolve-target** — resolve the session from `--session-id` / `--session-file`, or auto-resolve from the nearest `.vaws-local/current-session.json` worktree binding (cwd upward); fail fast if none is found
+2. **lock** — acquire the session serving lock so `start` and `stop` for the same session cannot race
 3. **stop-existing** — if a previous service is recorded for that target, send SIGINT+SIGTERM
 4. **parity-sync** — call `parity_sync.py` (unless `--skip-parity`)
 5. **probe-npus** — check NPU device availability via `npu-smi info`; validate or auto-select devices
 6. **validate** — check model path exists remotely via `test -d` / `test -f`
-7. **allocate-port** — in session mode, snapshot listening ports once, allocate a leased port locally, then recheck the selected port before launch
+7. **allocate-port** — allocate the service port through the session port lease (snapshot listening ports once, lease locally, then recheck the selected port before launch); no ad-hoc free-port scanning
 8. **launch** — build and execute the launch script via SSH
 9. **persist-starting-state** — after PID capture, write serving state with `status=starting`
 10. **probe-health** — poll `GET /health` (HTTP 200)
@@ -26,17 +26,19 @@ The core value of this skill is that all SSH escaping is handled inside `serve_s
 12. **persist-final-state** — update serving state to `ready` or `started`
 13. **output** — print JSON to stdout
 
-## Session mode
+## Session targeting
 
-`serve_start.py`, `serve_status.py`, and `serve_stop.py` accept `--session-id` or `--session-file`. In this mode:
+`serve_start.py`, `serve_status.py`, and `serve_stop.py` are session-only. They accept optional `--session-id` or `--session-file`; when both are omitted, the session is auto-resolved by walking up from the current working directory to the nearest `.vaws-local/current-session.json` worktree binding, so running inside a session worktree needs zero target arguments. If no binding is found and no id/file is given, the command fails fast, telling the user to pass `--session-id` or create a session with `session-management`'s `session_create.py`. In all cases:
 
 - the SSH endpoint comes from the session container
 - parity is called with `parity_sync.py --session-id <id>`
-- the service port is allocated through `.vaws-local/sessions/leases.json`
+- the service port is allocated and released through the session lease (`.vaws-local/sessions/leases.json`)
 - leased NPU devices from the session are used as the default `ASCEND_RT_VISIBLE_DEVICES`
 - relaunch and stop read only `.vaws-local/sessions/<id>/serving.json`
 - stopping one session never reads or mutates another session's serving state
 - `serve_start.py` and `serve_stop.py` use `.vaws-local/sessions/locks/<id>.serving.lock` to serialize lifecycle changes for the same session
+
+`serve_probe_npus.py` is the exception with two mutually exclusive surfaces: `--machine <alias>` probes a registered machine host as a resource pool (machine-management scope), while `--session-id` / `--session-file` (or the cwd auto-bind) probes the session's base host.
 
 ## NPU device probing
 
@@ -50,7 +52,7 @@ Before launching, the script SSHes to the **bare-metal host** (port 22, via `hos
 Device selection logic:
 
 - If `--devices` is explicitly given, those specific devices are validated. If any are occupied, start returns `needs_input` with conflict details.
-- In session mode, if the session has leased NPU devices and `--devices` is not explicitly given, the launch defaults to the leased devices. If `--devices` is explicitly given, it must be a subset of the session lease.
+- If the session has leased NPU devices and `--devices` is not explicitly given, the launch defaults to the leased devices. If `--devices` is explicitly given, it must be a subset of the session lease.
 - If `--devices` is not given but `--tp` is, the first `tp` free devices are auto-selected. If not enough free devices exist, returns `needs_input`.
 - If neither is given, no device filtering is applied.
 - If `npu-smi` itself fails (e.g. driver not found), the probe is treated as non-fatal and launch proceeds with whatever devices the user specified.
@@ -60,7 +62,7 @@ Device selection logic:
 
 When `--relaunch` is used:
 
-- Previous launch parameters are loaded from `.vaws-local/serving/<alias>.json` in legacy mode or `.vaws-local/sessions/<session-id>/serving.json` in session mode.
+- Previous launch parameters are loaded from `.vaws-local/sessions/<session-id>/serving.json`.
 - Any CLI argument provided this time **overrides** the previous value
 - `--extra-env KEY=VALUE` is **merged** into the previous env map (new keys added, existing keys overwritten)
 - `--unset-env KEY` **removes** a key from the inherited env map
@@ -111,7 +113,7 @@ This directory contains:
 - `stderr.log` — vllm server stderr
 - `pid` — process ID file
 
-The `<workdir>` comes from the inventory record (typically `/vllm-workspace`).
+The `<workdir>` comes from the session record (typically `/vllm-workspace`).
 
 The vLLM process is launched **from** this runtime directory, not from `/vllm-workspace`, to prevent Python from resolving the `vllm` package to the source tree instead of the installed package.
 

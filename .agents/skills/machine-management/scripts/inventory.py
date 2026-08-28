@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """Low-level local machine inventory helper for vllm-ascend-workspace.
 
-The canonical inventory now lives under `.vaws-local/machine-inventory.json`.
-For compatibility, the helper will read the legacy repo-root
-`.machine-inventory.json` when the new path does not exist yet. Prefer the
-task-oriented wrappers for normal add / verify / repair / remove workflows.
+The canonical inventory lives under `.vaws-local/machine-inventory.json`.
+Prefer the task-oriented wrappers for normal add / verify / repair / remove
+workflows.
 """
 
 from __future__ import annotations
@@ -25,7 +24,6 @@ if str(LIB_DIR) not in sys.path:
 
 from vaws_local_state import (  # noqa: E402
     INVENTORY_PATH as DEFAULT_PATH,
-    LEGACY_INVENTORY_PATH,
     ensure_state_dir,
     resolve_inventory_read_path,
     same_path,
@@ -274,7 +272,6 @@ def cmd_summary(args: argparse.Namespace) -> int:
         "schema_version": inventory["schema_version"],
         "inventory": str(active_path),
         "preferred_inventory": str(requested_path),
-        "legacy_inventory": str(LEGACY_INVENTORY_PATH),
         "count": len(inventory["machines"]),
         "machines": [
             {
@@ -401,7 +398,6 @@ def cmd_put(args: argparse.Namespace) -> int:
     }
     if not same_path(active_path, requested_path):
         payload["loaded_from"] = str(active_path)
-        payload["migrated_from_legacy"] = same_path(active_path, LEGACY_INVENTORY_PATH)
     print(json.dumps(payload, indent=2, ensure_ascii=False))
     return 0
 
@@ -430,7 +426,6 @@ def cmd_remove(args: argparse.Namespace) -> int:
     }
     if not same_path(active_path, requested_path):
         payload["loaded_from"] = str(active_path)
-        payload["migrated_from_legacy"] = same_path(active_path, LEGACY_INVENTORY_PATH)
     print(json.dumps(payload, indent=2, ensure_ascii=False))
     return 0
 

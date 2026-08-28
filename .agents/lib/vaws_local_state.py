@@ -20,7 +20,6 @@ from typing import Any
 STATE_DIRNAME = ".vaws-local"
 PROFILE_FILENAME = "machine-profile.json"
 INVENTORY_FILENAME = "machine-inventory.json"
-LEGACY_INVENTORY_FILENAME = ".machine-inventory.json"
 SESSIONS_DIRNAME = "sessions"
 PROFILE_SCHEMA_VERSION = 1
 CONTAINER_PREFIX = "vaws-"
@@ -34,7 +33,6 @@ STATE_DIR = ROOT / STATE_DIRNAME
 PROFILE_PATH = STATE_DIR / PROFILE_FILENAME
 INVENTORY_PATH = STATE_DIR / INVENTORY_FILENAME
 SESSIONS_DIR = STATE_DIR / SESSIONS_DIRNAME
-LEGACY_INVENTORY_PATH = ROOT / LEGACY_INVENTORY_FILENAME
 
 
 class WorkspaceStateError(RuntimeError):
@@ -218,7 +216,6 @@ def profile_summary(path: Path = PROFILE_PATH) -> dict[str, Any]:
         "profile_path": str(path),
         "inventory_path": str(INVENTORY_PATH),
         "sessions_path": str(SESSIONS_DIR),
-        "legacy_inventory_path": str(LEGACY_INVENTORY_PATH),
         "exists": path.exists(),
         "choice_required": not path.exists(),
         "username_rules": "3-32 chars, lowercase English letters and digits only",
@@ -247,7 +244,4 @@ def profile_summary(path: Path = PROFILE_PATH) -> dict[str, Any]:
 
 
 def resolve_inventory_read_path(preferred_path: Path = INVENTORY_PATH) -> Path:
-    preferred_path = preferred_path.expanduser().resolve()
-    if same_path(preferred_path, INVENTORY_PATH) and not preferred_path.exists() and LEGACY_INVENTORY_PATH.exists():
-        return LEGACY_INVENTORY_PATH.expanduser().resolve()
-    return preferred_path
+    return preferred_path.expanduser().resolve()

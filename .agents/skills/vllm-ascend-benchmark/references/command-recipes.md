@@ -1,15 +1,19 @@
 # Benchmark Command Recipes
 
+All benchmark commands are session-scoped. When run from inside a session worktree
+(a directory with `.vaws-local/current-session.json`), the session is auto-resolved
+and **no target flag is needed** — that is the primary form shown below. Outside a
+worktree, add `--session-id <id>` (or `--session-file <path>`) explicitly.
+
 ## Single-run: minimal
 
 ```bash
 python3 .agents/skills/vllm-ascend-benchmark/scripts/bench_run.py \
-  --machine 173.131.1.2 \
   --model /home/weights/Qwen3.5-0.8B \
   --tp 1
 ```
 
-Session-scoped equivalent:
+Explicit session target:
 
 ```bash
 python3 .agents/skills/vllm-ascend-benchmark/scripts/bench_run.py \
@@ -22,7 +26,6 @@ python3 .agents/skills/vllm-ascend-benchmark/scripts/bench_run.py \
 
 ```bash
 python3 .agents/skills/vllm-ascend-benchmark/scripts/bench_run.py \
-  --machine 173.131.1.2 \
   --model /home/weights/Qwen3-Next-80B-A3B-Instruct \
   --tp 4 \
   --extra-env OMP_NUM_THREADS=10 \
@@ -50,7 +53,6 @@ Start the service once, run 5 iterations, discard the first as warmup, aggregate
 
 ```bash
 python3 .agents/skills/vllm-ascend-benchmark/scripts/bench_run.py \
-  --machine 173.131.1.2 \
   --model /home/weights/Qwen3.5-35B-A3B \
   --tp 4 \
   --runs 5 --warmup-runs 1 \
@@ -70,7 +72,6 @@ python3 .agents/skills/vllm-ascend-benchmark/scripts/bench_run.py \
 
 ```bash
 python3 .agents/skills/vllm-ascend-benchmark/scripts/bench_run.py \
-  --machine 173.131.1.2 \
   --model /home/weights/Qwen3-Next-80B-A3B-Instruct \
   --refer-nightly Qwen3-Next-80B-A3B-Instruct-A2
 ```
@@ -95,7 +96,7 @@ git -C vllm-ascend worktree add /tmp/bench-pr feat/optimize
 # State A: point vllm-ascend at baseline worktree, run benchmark
 # (agent handles symlinking or parity sync with the worktree path)
 python3 .agents/skills/vllm-ascend-benchmark/scripts/bench_run.py \
-  --machine 173.131.1.2 \
+  --session-id pr123 \
   --model /home/weights/Qwen3.5-35B-A3B \
   --tp 4 --runs 5 --warmup-runs 1 \
   --serve-args --async-scheduling \
@@ -103,7 +104,7 @@ python3 .agents/skills/vllm-ascend-benchmark/scripts/bench_run.py \
 
 # State B: switch to PR worktree, run same benchmark
 python3 .agents/skills/vllm-ascend-benchmark/scripts/bench_run.py \
-  --machine 173.131.1.2 \
+  --session-id pr123 \
   --model /home/weights/Qwen3.5-35B-A3B \
   --tp 4 --runs 5 --warmup-runs 1 \
   --serve-args --async-scheduling \
@@ -121,7 +122,6 @@ When worktrees are impractical (e.g. cross-fork commits not yet fetched):
 ```bash
 cd vllm-ascend && git checkout main && cd ..
 python3 .agents/skills/vllm-ascend-benchmark/scripts/bench_run.py \
-  --machine 173.131.1.2 \
   --model /home/weights/Qwen3.5-35B-A3B \
   --tp 4 --runs 5 --warmup-runs 1 \
   --serve-args --async-scheduling \
@@ -129,7 +129,6 @@ python3 .agents/skills/vllm-ascend-benchmark/scripts/bench_run.py \
 
 cd vllm-ascend && git checkout feat/optimize && cd ..
 python3 .agents/skills/vllm-ascend-benchmark/scripts/bench_run.py \
-  --machine 173.131.1.2 \
   --model /home/weights/Qwen3.5-35B-A3B \
   --tp 4 --runs 5 --warmup-runs 1 \
   --serve-args --async-scheduling \
@@ -137,4 +136,5 @@ python3 .agents/skills/vllm-ascend-benchmark/scripts/bench_run.py \
 ```
 
 The agent collects all JSON outputs and compares `aggregated.output_throughput.mean`,
-`aggregated.mean_ttft_ms.mean`, `aggregated.acceptance_rate.mean`, etc.
+`aggregated.mean_ttft_ms.mean`, `aggregated.acceptance_rate.mean`, etc. Each run's
+result JSON is also persisted under `.vaws-local/sessions/<session-id>/benchmark/runs/`.

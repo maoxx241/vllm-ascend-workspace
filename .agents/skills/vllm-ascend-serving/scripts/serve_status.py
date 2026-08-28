@@ -2,7 +2,7 @@
 """Check the status of a running vllm-ascend service.
 
 Usage:
-    python3 serve_status.py --machine <alias>
+    python3 serve_status.py                    # auto-resolve bound session
     python3 serve_status.py --session-id <id>
 
 Progress on stderr, final JSON on stdout.
@@ -62,8 +62,7 @@ def check_models(ep, port: int) -> dict[str, Any] | None:
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
-    p.add_argument("--machine", help="machine alias or host IP")
-    p.add_argument("--session-id", help="VAWS session id")
+    p.add_argument("--session-id", help="VAWS session id; defaults to the bound session of the current worktree")
     p.add_argument("--session-file", help="explicit session.json path")
     return p
 
@@ -73,7 +72,6 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         target = resolve_execution_target(
-            args.machine,
             session_id=args.session_id,
             session_file=args.session_file,
         )
@@ -81,8 +79,7 @@ def main(argv: list[str] | None = None) -> int:
         ep = target.endpoint
 
         state = load_serving_state(
-            alias,
-            session_id=target.session_id,
+            target.session_id,
             state_repo_root=target.state_repo_root,
         )
         if state is None:
@@ -128,12 +125,11 @@ def main(argv: list[str] | None = None) -> int:
         if status == "stopped":
             state["stopped_at"] = state.get("stopped_at") or state["status_checked_at"]
         save_serving_state(
-            alias,
+            target.session_id,
             state,
-            session_id=target.session_id,
             state_repo_root=target.state_repo_root,
         )
-        if status == "stopped" and target.session_id:
+        if status == "stopped":
             release_service_port(
                 repo_root=target.state_repo_root,
                 machine_alias=alias,
@@ -177,7 +173,6 @@ def main(argv: list[str] | None = None) -> int:
         print_json({
             "status": "failed",
             "error": str(exc),
-            "machine": getattr(args, "machine", None),
             "session_id": getattr(args, "session_id", None),
         })
         return 2

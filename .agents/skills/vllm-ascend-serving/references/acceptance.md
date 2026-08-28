@@ -1,18 +1,19 @@
 # Acceptance Criteria
 
-## A1. Fresh start — structured input
+## A1. Fresh start — auto-resolved session (zero target args)
 
-**Given** a ready managed machine with a valid model path,
-**When** `serve_start.py --machine <alias> --model <path> --tp 4` runs,
+**Given** the current working directory is inside a session worktree (a directory with `.vaws-local/current-session.json`) bound to a ready session with a valid model path,
+**When** `serve_start.py --model <path> --tp 4` runs with no `--session-id` / `--session-file`,
 **Then**:
+- the session is auto-resolved from the nearest worktree binding (cwd upward)
 - parity is executed before launching
-- a free port is auto-allocated
+- the service port is allocated through the session port lease
 - the service starts and `/health` returns 200
 - `/v1/models` returns the served model
 - stdout is a JSON object with `status=ready`, `base_url`, `pid`, `log_stdout`, `log_stderr`
-- `.vaws-local/serving/<alias>.json` is written
+- `.vaws-local/sessions/<session-id>/serving.json` is written
 
-## A1s. Fresh start — session target
+## A1s. Fresh start — explicit session target
 
 **Given** a ready session `s1`,
 **When** `serve_start.py --session-id s1 --model <path> --tp 2` runs,
@@ -21,21 +22,27 @@
 - the SSH endpoint is the session container
 - a session serving lock is held while the lifecycle state is mutated
 - the service state is written to `.vaws-local/sessions/s1/serving.json`
-- `.vaws-local/serving/<alias>.json` is not modified
+- no other session's serving state is modified
+
+## A1f. Fail fast — no session target
+
+**Given** no `--session-id` / `--session-file` is passed and no `.vaws-local/current-session.json` worktree binding is found walking up from the cwd,
+**When** `serve_start.py`, `serve_status.py`, or `serve_stop.py` runs,
+**Then** the command fails fast with a clear error telling the user to pass `--session-id` or create a session with `session-management`'s `session_create.py`, without touching any remote state.
 
 ## A2. Fresh start — model path not found
 
-**Given** a ready machine,
+**Given** a ready session,
 **When** `--model /nonexistent/path` is passed,
 **Then** returns `status=needs_input` with a clear error before launching.
 
 ## A3. Relaunch — same config
 
-**Given** a previous successful start recorded in `.vaws-local/serving/<alias>.json`,
-**When** `serve_start.py --machine <alias> --relaunch` runs,
+**Given** a previous successful start recorded in `.vaws-local/sessions/<session-id>/serving.json`,
+**When** `serve_start.py --relaunch` runs for that session,
 **Then**:
 - previous model, tp, devices, env, extra_args are reused
-- port is re-allocated (not inherited)
+- port is re-leased through the session lease (not inherited)
 - parity runs again
 - service starts successfully
 
@@ -60,7 +67,7 @@
 ## A7. Status — service running
 
 **Given** a running service,
-**When** `serve_status.py --machine <alias>` runs,
+**When** `serve_status.py` runs for that session (auto-resolved or `--session-id`),
 **Then** returns `status=ready`, `alive=true`, `health=true`, `models_ok=true`.
 
 ## A8. Status — service stopped
@@ -71,14 +78,14 @@
 
 ## A9. Status — no previous service
 
-**Given** no prior start for this machine,
+**Given** no prior start for this session,
 **When** `serve_status.py` runs,
 **Then** returns `status=not_found`.
 
 ## A10. Stop — graceful
 
 **Given** a running service,
-**When** `serve_stop.py --machine <alias>` runs,
+**When** `serve_stop.py` runs for that session,
 **Then**:
 - sends SIGINT first
 - waits, then SIGTERM if needed
@@ -94,7 +101,7 @@
 
 ## A12. Parity gate
 
-**Given** a ready machine where parity fails,
+**Given** a ready session where parity fails,
 **When** `serve_start.py` runs (without `--skip-parity`),
 **Then** returns `status=blocked` and does not launch.
 
@@ -105,8 +112,8 @@
 
 ## A14. Previous service cleanup
 
-**Given** a running service on the target machine,
-**When** a new `serve_start.py` runs for the same machine,
+**Given** a running service in the target session,
+**When** a new `serve_start.py` runs for the same session,
 **Then** the old service is stopped before the new one launches.
 
 ## A14s. Session cleanup scope
@@ -123,26 +130,26 @@
 
 ## A15. NPU probe — devices busy (cross-container via host)
 
-**Given** a machine where NPU 0 and 1 have running processes (possibly from other containers),
+**Given** a session whose base host has NPU 0 and 1 with running processes (possibly from other containers),
 **When** `serve_start.py --devices 0,1,2,3` is called,
 **Then** returns `status=needs_input` with conflict details showing which devices are busy (detected via host-level `npu-smi` with PID and/or HBM threshold).
 
 ## A16. NPU probe — auto-select
 
-**Given** a machine with 8 NPUs where 0,1 are busy and 2-7 are free,
+**Given** a session base host with 8 NPUs where 0,1 are busy and 2-7 are free,
 **When** `serve_start.py --tp 4` (no `--devices`) is called,
 **Then** auto-selects 4 free devices (e.g. `2,3,4,5`) and launches successfully.
 
 ## A17. NPU probe — not enough free
 
-**Given** a machine with 2 free NPUs,
+**Given** a session base host with 2 free NPUs,
 **When** `serve_start.py --tp 4` is called,
 **Then** returns `status=needs_input` explaining only 2 NPUs are free.
 
 ## A18. NPU probe standalone
 
-**When** `serve_probe_npus.py --machine <alias>` runs,
-**Then** returns JSON with `devices`, `busy` (with PID details), `hbm` (per-device HBM usage), `free`, `free_count`, and `hbm_busy_threshold_mb`. Probing is done on the bare-metal host for cross-container visibility.
+**When** `serve_probe_npus.py` runs with either surface — `--machine <alias>` for a resource-pool probe of a registered machine host, or `--session-id` / `--session-file` (or the cwd auto-bind) for the session's base host,
+**Then** returns JSON with `devices`, `busy` (with PID details), `hbm` (per-device HBM usage), `free`, `free_count`, and `hbm_busy_threshold_mb`. Probing is done on the bare-metal host for cross-container visibility. Passing both `--machine` and a session target is rejected as mutually exclusive.
 
 ## A19. Escaping safety
 

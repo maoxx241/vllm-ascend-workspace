@@ -25,8 +25,11 @@ Exit codes:
     2  -- the SSH or analyse() call itself failed
 
 Usage:
-    python3 run_remote_analyse.py (--machine <alias> | --session-id <id>) \\
+    python3 run_remote_analyse.py [--session-id <id>] \\
         --profile-root <path> [--expected-ranks <N>]
+
+With no --session-id/--session-file the bound session of the current worktree
+is used.
 
 The agent should always pass ``--expected-ranks`` when invoking this from a
 collection orchestrator (typically ``tp * (dp or 1)``); otherwise a partial
@@ -202,9 +205,8 @@ def analyse_profile_root(
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
-    target = p.add_mutually_exclusive_group(required=True)
-    target.add_argument("--machine", help="machine alias or host IP")
-    target.add_argument("--session-id", help="VAWS session id")
+    target = p.add_mutually_exclusive_group()
+    target.add_argument("--session-id", help="VAWS session id; defaults to the bound session of the current worktree")
     target.add_argument("--session-file", help="explicit session.json path")
     p.add_argument(
         "--profile-root",
@@ -233,7 +235,6 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         target = resolve_execution_target(
-            args.machine,
             session_id=args.session_id,
             session_file=args.session_file,
         )
@@ -263,7 +264,6 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:
         print_json({
             "status": "failed",
-            "machine": getattr(args, "machine", None),
             "session_id": getattr(args, "session_id", None),
             "session_file": getattr(args, "session_file", None),
             "profile_root": getattr(args, "profile_root", None),

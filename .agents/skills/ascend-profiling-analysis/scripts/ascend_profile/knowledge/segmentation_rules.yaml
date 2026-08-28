@@ -1,0 +1,81 @@
+version: 1
+
+# ----------------------------------------------------------------------------
+# Segmentation prior-knowledge base
+# ----------------------------------------------------------------------------
+# Single source of truth for the attention-family *layer-anchor* rules the
+# segmenter uses to turn normalized kernel categories into layer
+# observations. These were previously hard-coded as Python constants in
+# segment.py (MLA_LAYER_START_CATEGORIES / ATTENTION_COMPANION_ONLY_CATEGORIES);
+# they now live here so the DSA / CSA / MLA prior knowledge is reviewable and
+# extendable without touching code.
+#
+# Vocabulary note: the category strings below are the neutral op_categories
+# emitted by common.categories_and_roles (mirror of kernel_signatures.yaml).
+# Family names (mla / dsa / csa / hca) are only used as documentation labels;
+# the segmenter keys off the category strings.
+#
+# How the segmenter consumes this file (segment.py:load_segmentation_rules):
+#   * layer_start_categories  -> when a rank exposes attention anchors, prefer
+#     these categories as the single layer-frequency signal. A layer that
+#     begins with one of these markers owns the attention companions that
+#     follow it (they do not start a new layer).
+#   * companion_only_categories -> attention-labelled kernels that are never a
+#     standalone layer anchor; they always fold into the enclosing layer.
+#   * companion_prefixes -> same, matched by category prefix (e.g. rope).
+
+# Attention-family layer-start markers, in evidence priority order. The first
+# family whose markers are present in the rank drives layer frequency; the
+# remaining attention kernels in a layer window are companions.
+layer_start_categories:
+  # MLA (DeepSeek-V2 / V3): the MlaProlog / KvRmsNormRopeCache marker starts
+  # the layer; FIA score + V-up-proj are companions inside the same layer.
+  - attention.mla
+  - attention.mla.kv_norm_rope_cache
+
+# Attention-labelled kernels that must never open a new layer. They are
+# evidence of attention work but are structurally *inside* a layer that some
+# other anchor already opened. Covers MLA, DSA and CSA companion kernels.
+companion_only_categories:
+  # --- MLA companions ---
+  - attention.mla.v_up_proj
+  # --- DSA companions (DeepSeek-V3.2: Lightning Indexer + sparse shared-KV) ---
+  - attention.lightning_indexer
+  - attention.sparse_attn.v_up_proj
+  - attention.sparse_sharedkv.metadata
+  # --- CSA companions (DeepSeek-V4: KV compressor + indexer + sparse) ---
+  - attention.kv_compressor
+  - attention.kvcomp.signpack
+  - attention.kvcomp.cache_write
+  - attention.kv_cache_io
+
+# Category prefixes treated as companion-only (matched with str.startswith).
+companion_prefixes:
+  - attention.rope
+
+# Documentation-only: which family each companion set belongs to. The
+# segmenter does not read this; it exists so a human reviewer can see why a
+# category is a companion. Family discrimination itself lives in
+# attention_families.yaml (common.resolve_attention_family).
+family_notes:
+  mla:
+    layer_start: [attention.mla, attention.mla.kv_norm_rope_cache]
+    companions: [attention.mla.v_up_proj, attention.rope.*]
+  dsa:
+    # DSA reuses the MLA preprocessing markers as layer start; the sparse
+    # kernels are companions of that same layer.
+    layer_start: [attention.mla, attention.mla.kv_norm_rope_cache]
+    companions:
+      - attention.lightning_indexer
+      - attention.sparse_attn.v_up_proj
+      - attention.sparse_sharedkv.metadata
+  csa:
+    # CSA (DSV4) also opens on the MLA KV pipe (SFA backend reuses it); the
+    # compressor + indexer + sparse-sharedkv kernels are companions.
+    layer_start: [attention.mla, attention.mla.kv_norm_rope_cache]
+    companions:
+      - attention.kv_compressor
+      - attention.lightning_indexer
+      - attention.kvcomp.signpack
+      - attention.kvcomp.cache_write
+      - attention.kv_cache_io

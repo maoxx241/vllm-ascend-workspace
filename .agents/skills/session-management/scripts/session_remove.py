@@ -69,6 +69,17 @@ def stop_session(session_id: str, *, session_file: Path | None = None, force: bo
     return payload
 
 
+def worktree_is_clean(worktree_root: Path) -> bool:
+    """True when the worktree (including submodules) has no local changes."""
+    proc = subprocess.run(
+        ["git", "-C", str(worktree_root), "status", "--porcelain=v1", "--ignore-submodules=none"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return proc.returncode == 0 and not proc.stdout.strip()
+
+
 def stop_result_allows_lease_release(result: dict[str, Any]) -> bool:
     return result.get("returncode") == 0 and result.get("status") in {"not_found", "stopped"}
 
@@ -133,8 +144,14 @@ def main() -> int:
         if args.remove_worktree:
             worktree_root = Path(session["local"]["worktree_root"])
             emit_progress("worktree", "removing session worktree", path=str(worktree_root))
+            # Session worktrees always contain the vllm/vllm-ascend submodules,
+            # and git refuses to remove submodule-containing worktrees without
+            # --force even when they are clean — so the non-force path could
+            # never succeed. Auto-force only after proving the tree is clean;
+            # a dirty tree still requires an explicit --force from the caller.
+            auto_force = args.force or (worktree_root.exists() and worktree_is_clean(worktree_root))
             cmd = ["worktree", "remove"]
-            if args.force:
+            if auto_force:
                 cmd.extend(["--force", "--force"])
             cmd.append(str(worktree_root))
             proc = run_git(cmd)
@@ -142,7 +159,13 @@ def main() -> int:
                 "returncode": proc.returncode,
                 "stdout_tail": proc.stdout[-500:],
                 "stderr_tail": proc.stderr[-500:],
+                "auto_forced_clean": auto_force and not args.force,
             }
+            if proc.returncode != 0 and not args.force:
+                results["worktree"]["hint"] = (
+                    "worktree has local changes (or git refused removal); rerun with --force "
+                    "after confirming the changes are disposable"
+                )
 
         if args.release_leases:
             can_release = stop_result_allows_lease_release(results["stop"]) or container_result_allows_lease_release(

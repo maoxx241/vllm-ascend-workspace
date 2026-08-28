@@ -61,6 +61,17 @@ Managed VAWS `session_id`, `session_file`, and `machine` resolution remain
 available as compatibility modes. Host plus port is the default remote-dev
 surface.
 
+When no endpoint target is supplied at all, tools auto-bind to the session of
+the nearest worktree binding (walking upward from the cwd to a directory with
+`.vaws-local/current-session.json`). Inside a session worktree, `remote.bash`
+and friends therefore need zero endpoint arguments.
+
+Routing rule for quick verification: running a command, reading a file, or
+checking state on the remote container is a zero-sync operation — use
+`remote.bash` / `remote.read` / `remote.grep` directly. Never route "run one
+command remotely" through remote-code-parity; parity is only for making the
+remote code tree match local edits before execution.
+
 Remote read ledgers are scoped by `client_context_id` when supplied, then by
 `CLAUDE_SESSION_ID`, `CODEX_SESSION_ID`, `CODEX_RUN_ID`, and
 `REMOTE_DEV_SESSION_ID`. The MCP server sets `REMOTE_DEV_SESSION_ID` to a

@@ -31,6 +31,7 @@ from _workflow_common import (  # noqa: E402
     resolve_password_args,
     resolve_workflow_image,
     status_payload,
+    stamp_machine_verified,
     sync_mesh,
     upsert_machine_record,
     verify_machine,
@@ -134,6 +135,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     if existing_from_host
                     else "machine alias already exists in inventory and is ready"
                 )
+                stamp_machine_verified(existing["alias"])
                 print_json(
                     status_payload(
                         "ready",
@@ -332,6 +334,25 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             return 0
 
+        if not mesh.get("success", True):
+            print_json(
+                status_payload(
+                    "needs_repair",
+                    success=False,
+                    action="mesh-sync-failed",
+                    message="machine verified but SSH mesh sync to peers failed; cross-machine operations will not work until repaired",
+                    machine=machine_summary(record),
+                    host_auth=host_auth,
+                    probe=probe,
+                    container=container,
+                    inventory=inventory_payload,
+                    mesh=mesh,
+                    verify=verified,
+                )
+            )
+            return 0
+
+        stamp_machine_verified(record["alias"])
         action = "repaired" if existing is not None else "created"
         print_json(
             status_payload(

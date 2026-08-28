@@ -91,6 +91,31 @@ def load_current_session_binding(repo_root: Path) -> dict[str, Any] | None:
     return _load_json(repo_root / ".vaws-local" / CURRENT_SESSION_FILENAME)
 
 
+def find_session_binding(start: Path | None = None) -> tuple[Path, dict[str, Any]] | None:
+    """Walk upward from ``start`` (default: cwd) to the nearest directory that
+    carries a ``.vaws-local/current-session.json`` worktree binding.
+
+    Returns ``(binding_root, binding_data)`` or ``None``. This is what lets a
+    session worktree resolve its own session without ``--session-id``.
+    """
+    current = (start or Path.cwd()).expanduser()
+    try:
+        current = current.resolve()
+    except OSError:
+        return None
+    for candidate in (current, *current.parents):
+        binding_path = candidate / ".vaws-local" / CURRENT_SESSION_FILENAME
+        if not binding_path.exists():
+            continue
+        try:
+            data = _load_json(binding_path)
+        except WorkspaceStateError:
+            continue
+        if data and isinstance(data.get("session_id"), str):
+            return candidate, data
+    return None
+
+
 def write_current_session_binding(
     repo_root: Path,
     *,
@@ -192,6 +217,9 @@ def resolve_session_id(
             candidates.append(candidate)
 
     if use_current_binding:
+        cwd_binding = find_session_binding()
+        if cwd_binding is not None:
+            candidates.append((cwd_binding[1]["session_id"], "worktree-binding"))
         current = load_current_session_binding(repo_root)
         if current and isinstance(current.get("session_id"), str):
             candidates.append((current["session_id"], "current-session"))

@@ -43,7 +43,24 @@ python3 .agents/skills/session-management/scripts/session_create.py \
   --verification-mode full
 ```
 
-Use the session for parity and serving:
+`session_create.py` reports a `next_steps` array pointing at the recommended
+follow-up: `cd` into the worktree, run `session_diff.py` to review changes, and
+in Cursor use the cursor-app-control MCP tool `move_agent_to_root` to switch the
+agent workspace to the worktree. Once the agent is working from inside the
+worktree, every consumer command auto-resolves this session from the
+`.vaws-local/current-session.json` binding, so the `--session-id` flag shown
+below is optional (pass it only when running outside the worktree).
+
+Review everything a session changed (scaffold worktree + submodules):
+
+```bash
+python3 .agents/skills/session-management/scripts/session_diff.py            # bound session, from inside the worktree
+python3 .agents/skills/session-management/scripts/session_diff.py --stat     # add full diffstat text
+python3 .agents/skills/session-management/scripts/session_diff.py --session-id pr123
+```
+
+Use the session for parity and serving (from inside the worktree the
+`--session-id` is optional):
 
 ```bash
 python3 .agents/skills/remote-code-parity/scripts/parity_sync.py --session-id pr123
