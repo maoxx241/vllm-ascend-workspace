@@ -38,7 +38,7 @@ class ServingIdentityTests(unittest.TestCase):
                  mock.patch.object(serve_stop, "save_serving_state") as save, \
                  mock.patch.object(serve_stop, "release_service_port") as release, \
                  mock.patch.object(serve_stop, "print_json"):
-                self.assertEqual(serve_stop.main(["--session-id", "session-test"]), 1)
+                self.assertEqual(serve_stop.main(["--session-id", "session-test"]), 2)
                 save.assert_not_called()
                 release.assert_not_called()
 
