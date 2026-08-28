@@ -62,6 +62,69 @@ remain enabled. No monitor, Docker daemon on the manager, or model service is
 required. Service-manager installation is an operator deployment step, not
 performed by importing or running tests in this PR.
 
+### Coding clients
+
+Use the same HTTP manager from every client, with a separate non-admin token
+per principal. Keep the configuration below in private local files; the
+placeholder is not a token and must not be committed after replacement.
+The existing remote-dev MCP remains a separate server.
+
+Claude Code project `.mcp.json`, Kimi Code `.kimi-code/mcp.json`, and Cursor
+project `.cursor/mcp.json` accept this shape:
+
+```json
+{
+  "mcpServers": {
+    "vaws-coordinator": {
+      "type": "http",
+      "url": "http://127.0.0.1:8766/mcp",
+      "headers": {"Authorization": "Bearer <PRIVATE_CLIENT_TOKEN>"}
+    }
+  }
+}
+```
+
+For Claude Code, approve the project server or pass this private file through
+`--strict-mcp-config --mcp-config /absolute/path/config.json`. Kimi requires
+trusting the project folder before enabling its project MCP; start a new
+session after changing the server configuration. See the
+[Kimi MCP documentation](https://www.kimi.com/code/docs/kimi-code-cli/customization/mcp.html).
+In Cursor IDE, enable this source under **Tools & MCPs**, confirm that its
+14 tools are connected, and start a new agent. Cursor CLI authentication is
+separate from a working IDE session.
+
+Codex `.codex/config.toml` can use a token environment variable:
+
+```toml
+[mcp_servers.vaws_coordinator]
+url = "http://127.0.0.1:8766/mcp"
+bearer_token_env_var = "VAWS_COORDINATOR_TOKEN"
+```
+
+Export that principal's token in the environment launching Codex. Grok's
+project `.grok/config.toml` uses `headers`:
+
+```toml
+[mcp_servers.vaws-coordinator]
+url = "http://127.0.0.1:8766/mcp"
+enabled = true
+
+[mcp_servers.vaws-coordinator.headers]
+Authorization = "Bearer <PRIVATE_CLIENT_TOKEN>"
+```
+
+The coordinator tool names use underscores (`session_open`,
+`execution_request`, etc.). Client discovery prefixes may differ; do not
+rename existing remote-dev tools or use a dotted-name compatibility wrapper.
+
+To verify a new client, perform actual tool calls: open the same logical
+session twice and compare ids; inspect its owner-scoped status; request an
+unprepared profile and require `cache_miss` with `provisioning_started=false`;
+confirm that non-admin `runtime_register` fails; then inspect the runtime
+catalog and event cursor. A connection indicator or `tools/list` alone does
+not verify these contracts. Use a fresh private manager for an empty-catalog
+test; never reset a live manager to make an acceptance assertion pass.
+
 ## Prepare once, outside the launch path
 
 1. Use existing machine-management/session preparation and approved parity
@@ -100,10 +163,14 @@ python .agents/coordinator/prepare_runtime.py publish \
 ```
 
 Attestation checks installed versions/ABI/system-file hashes, executes import
-smoke (`torch_npu`, `vllm`, `vllm_ascend`, `acl`), fingerprints native inputs and
+smoke (`torch_npu`, `vllm`, `vllm_ascend`, `acl`, and the actual
+`vllm_ascend_C` extension), fingerprints native inputs and
 writes `.vaws-runtime/ready-profile.json`. It does not prove model correctness,
 all possible operator dependencies or multi-node compatibility. Bundles are
 atomically published by profile/build identity and verified before reuse.
+Declared native submodules must be populated, clean and tracked at their
+pinned commits. Their cache identity uses recursive file content, so a new
+task's synthetic commit metadata alone does not invalidate unchanged kernels.
 Restoration deliberately requires the same installation path; relocatability
 of editable installs/native operators is not assumed.
 
@@ -207,11 +274,79 @@ CI uses the actual HTTP MCP SDK with two principals and the real SQLite host
 protocol, but simulated container/occupancy probes. It covers competing
 management roots, authentication, ownership, restart, message cursors, no hidden
 provisioning, native inputs and complete-bundle corruption/missing-file cases.
-This is not five-client product certification or Ascend hardware acceptance.
 
-Remaining rollout gates: prepare a real owned pool slot, validate a warm-hit
-edit/sync/restart cycle, run two isolated services on disjoint cards/ports,
-and exercise K3's exact four-node topology with all-rank logs and a real request.
+Additional acceptance on 2026-08-28 used the real HTTP manager on K3 host 154:
+
+| Client | Actual entry point | Result |
+| --- | --- | --- |
+| Claude Code 2.1.143 | CLI with private HTTP MCP configuration | Seven contract checks passed |
+| Grok 1.0.5 | CLI with project HTTP MCP configuration | Seven contract checks passed |
+| Kimi Code 0.38.0 | CLI after trusting the isolated project folder | Seven contract checks passed |
+| Codex 0.147.0 | CLI with bearer-token environment variable | Seven contract checks passed |
+| Cursor | Authenticated IDE, enabled project MCP, fresh agent | Seven contract checks passed |
+
+Each client executed the calls described above, with a different principal.
+The server database independently contained exactly one session per principal,
+and no runtimes/bindings/executions from these contract checks. Cursor CLI was
+not authenticated on this workstation; its failed login check is not counted
+as a successful CLI test. These are bounded product checks, not certification
+of every model, client version or coordinator tool.
+
+Separate hardware acceptance used two real HTTP SDK clients, two independent
+source roots and two existing K3 containers on 154. Their observed environments
+were kept separate:
+
+| Profile | CANN | torch-npu | vLLM | vllm-ascend |
+| --- | --- | --- | --- | --- |
+| A | 9.1.0 | 2.10.0.post4.dev20260715 | 0.27.1+empty | 0.19.1rc2.dev1561+g33e849499 |
+| B | 9.0.1 | 2.10.0.post2 | 0.23.0+empty | 0.19.1rc2.dev984+g70768c876 |
+
+Both used Ascend910_9362, driver 25.5.3 and Python 3.12.13. The checks covered
+exclusive runtime checkout; competing requests for physical card 0; owner
+permission rejection; cooperative messages that did not release the lease;
+preflight, activation, heartbeat, observed-free release and queued handoff.
+Three separate bounded probe processes loaded their actual `vllm_ascend_C`
+extensions and completed real 256-by-256 NPU matrix multiplication requests.
+
+During A's first execution, two edits to the same dirty Python file were
+staged without changing the running source or result. After release,
+materialization skipped installation/build, and a new process returned the
+edited value with the same native build key. Removing required
+`binary_info_config.json` rejected execution before creating a run; restoring
+the complete cached bundle and refreshing the idle runtime succeeded. The
+tested profiles enumerated 1,074 and 1,031 required files respectively, plus
+their environment receipts.
+
+The first additional two-process parallel check exposed an occupancy bug:
+the old parser missed A3's pipe-separated NPU/Chip process columns, so these
+low-HBM workers appeared free. Both owned probes were stopped. After fixing
+the mapping to physical device ids and adding a regression, the repeated
+parallel check observed both processes on physical cards 0/1 and served real
+NPU requests on separate ports. Stopping A left B serving with the same PID.
+This was seven probe processes in total: three handoff/restart probes, two in
+the failed occupancy check, and two in its successful repeat. All seven host
+leases ended `released`, both bindings were returned to quarantine, and a
+final hardware probe found all 16 logical devices free. The temporary MCP,
+SSH forwarding and private transport listeners were stopped and their SSH
+credentials revoked; the existing containers and evidence were preserved.
+
+This required one-time transport/MCP setup and normalization of the deployed
+source copies before they were ready. The warm execution path created no
+containers, installed no packages and compiled nothing. Original K3 sources
+and compute dependencies were preserved; host 153 was not used. Historical
+native build flags were not recovered, so this does not establish reproducible
+build provenance. No K3 model inference, TP16/four-node readiness, full custom
+operator correctness or performance benchmark is claimed. Raw client traces,
+tool receipts, manifests and hardware logs remain in private untracked state.
+
+On upgrade, re-attest/publish prepared runtimes containing native submodules:
+their old commit-based input keys will fail the new content-based verification.
+No implicit rebuild or fallback to an old marker is performed.
+
+Remaining model acceptance: exercise K3's exact four-node topology with
+all-rank logs and a real model request. The bounded probes above validate the
+development substrate, not that model's service readiness or correctness.
 Multi-host atomic/gang allocation, pool auto-replenishment and transparent
 adapters for every legacy domain wrapper are not implemented in this version.
-No actual K3 CANN/vLLM version combination is shipped as verified in this PR.
+No production K3 compatibility profile is shipped as certified in this PR;
+the two observed environment combinations above passed import/probe checks only.

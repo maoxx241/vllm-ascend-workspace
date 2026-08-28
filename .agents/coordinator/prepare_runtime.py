@@ -15,17 +15,30 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / ".agents/lib"))
+sys.path.insert(0, str(ROOT / ".agents/skills/remote-code-parity/scripts"))
+from remote_code_parity import discover_repo_tree, iter_postorder
 from vaws_runtime_profile import capture, file_digest, profile_key, publish, restore, verify
 from vaws_build_inputs import runtime_build_inputs
+
+
+def require_clean_sources(root: Path):
+    for name in ("vllm", "vllm-ascend"):
+        for node in iter_postorder(discover_repo_tree(root / name, name)):
+            dirty = subprocess.check_output(["git", "-C", str(node.repo_path), "status", "--porcelain", "--untracked-files=all"], text=True)
+            if dirty.strip():
+                raise ValueError("attest a clean materialized parity snapshot, including child submodules")
+            for child in node.children:
+                path = child.repo_path.relative_to(node.repo_path).as_posix()
+                head = subprocess.check_output(["git", "-C", str(child.repo_path), "rev-parse", "HEAD"], text=True).strip()
+                entry = subprocess.check_output(["git", "-C", str(node.repo_path), "ls-tree", "HEAD", "--", path], text=True).strip()
+                if entry != f"160000 commit {head}\t{path}":
+                    raise ValueError("native submodule must be tracked at its pinned commit: " + child.relpath)
 
 
 def attest(root: Path, spec: dict):
     profile = spec["profile"]
     key = profile_key(profile)
-    for name in ("vllm", "vllm-ascend"):
-        dirty = subprocess.check_output(["git", "-C", str(root / name), "status", "--porcelain", "--untracked-files=all"], text=True)
-        if dirty.strip():
-            raise ValueError("attest a clean materialized parity snapshot, including child submodules")
+    require_clean_sources(root)
     inputs = runtime_build_inputs(root, profile, key)
     evidence_dir = root / ".vaws-runtime/profile-evidence"
     evidence_dir.mkdir(parents=True, exist_ok=True)
@@ -35,7 +48,7 @@ def attest(root: Path, spec: dict):
         if name in {"PATH", "PYTHONPATH", "LD_LIBRARY_PATH"} and not value:
             continue
         environment[name] = value + (":" + environment[name] if name in {"PATH", "PYTHONPATH", "LD_LIBRARY_PATH"} and environment.get(name) else "")
-    smoke = subprocess.run([sys.executable, "-c", "import torch_npu, vllm, vllm_ascend, acl"], env=environment,
+    smoke = subprocess.run([sys.executable, "-c", "import torch_npu, vllm, vllm_ascend, acl; import vllm_ascend.vllm_ascend_C"], env=environment,
                            capture_output=True, text=True, timeout=60)
     (evidence_dir / "smoke.json").write_text(json.dumps({"passed": smoke.returncode == 0,
                                                        "build_inputs": inputs, "profile_key": key,

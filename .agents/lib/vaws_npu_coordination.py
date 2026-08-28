@@ -133,6 +133,7 @@ def parse_npu_smi_info(output: str) -> dict[str, Any]:
     dev_ids: set[int] = set()
     header_ids: set[int] = set()
     hbm: dict[int, dict[str, int]] = {}
+    chip_devices: dict[tuple[int, int], int] = {}
     current_npu: int | None = None
     lines = output.splitlines()
 
@@ -141,6 +142,8 @@ def parse_npu_smi_info(output: str) -> dict[str, Any]:
             chip = re.match(r"\|\s*(\d+)\s+(\d+)\s+\|.*0000:", line)
             if chip:
                 dev_id = int(chip.group(2))
+                if current_npu is not None:
+                    chip_devices[(current_npu, int(chip.group(1)))] = dev_id
             elif current_npu is not None:
                 dev_id = current_npu
             else:
@@ -163,6 +166,7 @@ def parse_npu_smi_info(output: str) -> dict[str, Any]:
 
     process_busy: dict[int, list[dict[str, Any]]] = {}
     in_process_table = False
+    process_error = None
     for line in lines:
         if "Process name" in line or "Process memory" in line:
             in_process_table = True
@@ -170,9 +174,26 @@ def parse_npu_smi_info(output: str) -> dict[str, Any]:
         if in_process_table and "No running processes" in line:
             continue
         if in_process_table and line.startswith("|"):
+            columns = [column.strip() for column in line.split("|")[1:-1]]
+            # A3: | NPU Chip | PID | Process name | Memory |. Phy-ID from
+            # the device table is the allocation identity, not the NPU index.
+            if len(columns) >= 3 and re.fullmatch(r"\d+(?:\s+\d+)?", columns[0]):
+                identity = [int(value) for value in columns[0].split()]
+                device = chip_devices.get(tuple(identity)) if len(identity) == 2 else identity[0]
+                if device not in dev_ids or not columns[1].isdigit() or not columns[2]:
+                    process_error = "npu-smi process row has an unknown device or invalid PID/name"
+                    break
+                process_busy.setdefault(device, []).append(
+                    {"kind": "process", "pid": int(columns[1]), "name": columns[2]}
+                )
+                continue
+            # Preserve the older flat device/chip/PID/owner/name layout.
             match = re.match(r"\|\s*(\d+)\s+\S+\s+(\d+)\s+(\S+)\s+(\S+)", line)
             if match:
                 device = int(match.group(1))
+                if device not in dev_ids:
+                    process_error = "npu-smi process row has an unknown device"
+                    break
                 process_busy.setdefault(device, []).append(
                     {
                         "kind": "process",
@@ -181,6 +202,13 @@ def parse_npu_smi_info(output: str) -> dict[str, Any]:
                         "name": match.group(4),
                     }
                 )
+            elif any(columns):
+                process_error = "npu-smi process row could not be parsed"
+                break
+
+    if process_error or not in_process_table:
+        return {"status": "failed", "error": process_error or "npu-smi process table is missing",
+                "devices": sorted(dev_ids), "busy": {}, "free": []}
 
     busy: dict[int, list[dict[str, Any]]] = {}
     for device in sorted(dev_ids):

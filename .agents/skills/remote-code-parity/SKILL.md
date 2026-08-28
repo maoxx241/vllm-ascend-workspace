@@ -60,6 +60,7 @@ The watcher alone is not execution parity or model readiness.
   snapshot ids target-dependent or pulling upstream history into first sync.
 - Materialize child repos explicitly; do not rely on `git submodule update` to fetch synthetic child commits.
 - Synthetic commits are deterministic parentless tree snapshots. Keep the real `HEAD` as provenance and compare native/dependency input fingerprints with the last installed inputs; commit movement alone is not a rebuild reason.
+- Native submodules are fingerprinted recursively by file content, not their task-specific synthetic commit ids. Missing or unpopulated native dependencies cannot establish a cache hit.
 - If a clean child repo only differs from the parent through the parentless transport commit id, suppress that transport-only child gitlink path from the parent repo's `changed_paths`.
 - Use dynamic Python / pip discovery plus a shell-safe env preamble, and source optional Ascend env scripts under a `set +u` / `set -u` guard instead of relying on shell-specific variables.
 - Runtime dependency installs use the single A3-tested HuaweiCloud pip index. Do not configure default extra indexes, mirror fallback, or caller-provided pip index overrides in parity.

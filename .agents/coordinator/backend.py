@@ -68,9 +68,11 @@ class RemoteBackend:
         if not info["State"]["Running"] or info["State"].get("Paused") or info["State"].get("Restarting"):
             raise RuntimeError("prepared container is not running normally")
         if idle:
-            rows = self.bash(host, f"docker top {name} -eo comm").splitlines()[1:]
+            # Docker needs PID to map host ps rows back to the container.
+            rows = self.bash(host, f"docker top {name} -eo pid,comm").splitlines()[1:]
             allowed = {"bash", "sh", "sshd", "sshd-session", "sshd-auth", "sleep", "tini", "tail", "cat", "init", "systemd"}
-            if not rows or any(row.strip() not in allowed for row in rows):
+            processes = [row.split(None, 1) for row in rows]
+            if not processes or any(len(row) != 2 or not row[0].isdigit() or row[1].strip() not in allowed for row in processes):
                 raise RuntimeError("container is not an idle prepared runtime; inspect its workers")
             if runtime.get("service_ports"):
                 listeners = self.bash(host, "ss -H -ltn").splitlines()

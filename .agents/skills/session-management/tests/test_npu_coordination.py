@@ -260,6 +260,31 @@ class CoordinationTests(unittest.TestCase):
         self.assertEqual(parsed["busy"]["0"][0]["kind"], "hbm_threshold")
         self.assertEqual(parsed["busy"]["1"][0]["pid"], 4321)
 
+    def test_a3_process_columns_map_chip_to_physical_device_below_hbm_threshold(self):
+        devices = """
+| 0     Ascend910  | OK | 170 | 48 | 0 / 0 |
+| 0     0         | 0000:9D:00.0 | 0 | 0 / 0 | 3364 / 65536 |
+| 0     Ascend910  | OK | -   | 50 | 0 / 0 |
+| 1     1         | 0000:9F:00.0 | 0 | 0 / 0 | 2951 / 65536 |
+| 2     Ascend910  | OK | 170 | 48 | 0 / 0 |
+| 0     8         | 0000:89:00.0 | 0 | 0 / 0 | 3000 / 65536 |
+"""
+        header = '| NPU Chip | Process id | Process name | Process memory(MB) |\n'
+        rows = '| 0 0 | 4321 | python3 | 123 |\n| 0 1 | 4322 | python3 | 122 |\n| 2 0 | 4323 | worker | 120 |\n'
+        parsed = parse_npu_smi_info(devices + header + rows)
+        self.assertEqual(parsed['status'], 'ok')
+        self.assertEqual({key: value[0]['pid'] for key, value in parsed['busy'].items()},
+                         {'0': 4321, '1': 4322, '8': 4323})
+        self.assertEqual(parsed['free'], [])
+        self.submit('task-small-worker', devices=[1])
+        self.assertEqual(self.coordinator.acquire('task-small-worker', parsed)['status'], 'waiting')
+        for bad in [devices, devices + header + '| 0 9 | 4321 | python3 | 123 |\n',
+                    devices + header + '| 0 1 | unknown | python3 | 123 |\n']:
+            with self.subTest(output=bad):
+                unknown = parse_npu_smi_info(bad)
+                self.assertEqual(unknown['status'], 'failed')
+                self.assertEqual(unknown['free'], [])
+
 
 if __name__ == "__main__":
     unittest.main()

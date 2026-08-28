@@ -24,12 +24,30 @@ BUILD_INPUT_ENV_KEYS = (
 )
 
 
+def submodule_content(repo: Path, commit: str) -> str:
+    """Hash nested source content, not task-specific synthetic commit metadata."""
+    top = subprocess.check_output(['git', '-C', str(repo), 'rev-parse', '--show-toplevel'], text=True).strip()
+    if Path(top).resolve() != repo.resolve():
+        raise ValueError(f'native submodule is not populated: {repo}')
+    tree = subprocess.check_output(['git', '-C', str(repo), 'ls-tree', '-r', '-z', commit], text=True)
+    tokens = []
+    for entry in filter(None, tree.split('\0')):
+        metadata, path = entry.split('\t', 1)
+        mode, kind, oid = metadata.split()
+        if kind == 'commit':
+            oid = submodule_content(repo / path, oid)
+        tokens.append(f'{mode}\0{path}\0{oid}')
+    return hashlib.sha256(json.dumps(sorted(tokens)).encode()).hexdigest()
+
+
 def build_input_fingerprints(repo: Path, commit: str, patterns: tuple[str, ...], *, build_env=None) -> dict[str, str]:
     native, dependencies = [], []
     tree = subprocess.check_output(['git', '-C', str(repo), 'ls-tree', '-r', '-z', commit], text=True)
     for entry in filter(None, tree.split('\0')):
         metadata, path = entry.split('\t', 1)
         mode, kind, oid = metadata.split()
+        if kind == 'commit':
+            oid = submodule_content(repo / path, oid)
         token = f'{mode}\0{path}\0{oid}'
         if kind == 'commit' or any(fnmatch.fnmatch(path, pattern) for pattern in patterns):
             native.append(token)

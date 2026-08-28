@@ -52,6 +52,37 @@ def runtime_spec(number):
             "host_endpoint": {"host": "192.0.2.1", "port": 22}, "container_name": "prepared-" + str(number), "service_ports": [48000 + number]}
 
 
+class BackendTests(unittest.TestCase):
+    def test_docker_idle_probe_keeps_pid_column_and_rejects_workers(self):
+        from backend import RemoteBackend
+
+        backend = RemoteBackend()
+        for rows, idle in [("PID COMMAND\n123 sleep\n", True),
+                           ("PID COMMAND\n123 python\n", False),
+                           ("PID COMMAND\n", False),
+                           ("PID COMMAND\nbroken\n", False)]:
+            commands = []
+
+            def bash(target, command):
+                commands.append(command)
+                if command.startswith("docker inspect"):
+                    return json.dumps({"Id": "container-1", "State": {"Running": True}})
+                if command.startswith("docker top"):
+                    self.assertTrue(command.endswith("-eo pid,comm"))
+                    return rows
+                if command.startswith("ss "):
+                    return ""
+                return json.dumps({"profile": {"launch_env": {}}})
+
+            with self.subTest(rows=rows), mock.patch.object(backend, "bash", side_effect=bash), mock.patch("backend.launch_preamble", return_value=""):
+                if idle:
+                    self.assertEqual(backend.inspect(runtime_spec(1), idle=True)["container_id"], "container-1")
+                else:
+                    with self.assertRaisesRegex(RuntimeError, "not an idle"):
+                        backend.inspect(runtime_spec(1), idle=True)
+                    self.assertEqual(len(commands), 2)
+
+
 class PoolTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -193,6 +224,45 @@ class PoolTests(unittest.TestCase):
 
 
 class ProfileTests(unittest.TestCase):
+    def test_attestation_requires_populated_pinned_native_submodules(self):
+        import subprocess
+        from prepare_runtime import require_clean_sources
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+
+            def git(repo, *args):
+                return subprocess.run(['git', '-C', str(repo), *args], check=True, capture_output=True, text=True).stdout.strip()
+
+            def init(repo):
+                repo.mkdir(parents=True)
+                git(repo, 'init')
+                git(repo, 'config', 'user.name', 'Test')
+                git(repo, 'config', 'user.email', 'test@example.invalid')
+                (repo / 'kernel.cpp').write_text('native input\n')
+                git(repo, 'add', '.')
+                git(repo, 'commit', '-m', 'base')
+
+            for name in ('vllm', 'vllm-ascend'):
+                init(root / name)
+            va = root / 'vllm-ascend'
+            (va / '.gitmodules').write_text('[submodule "catlass"]\n path = csrc/catlass\n url = ./catlass\n')
+            (va / '.gitignore').write_text('csrc/catlass\n')
+            git(va, 'add', '.')
+            git(va, 'commit', '-m', 'declare native dependency')
+            with self.assertRaisesRegex(RuntimeError, 'missing'):
+                require_clean_sources(root)
+            child = va / 'csrc/catlass'
+            init(child)
+            with self.assertRaisesRegex(ValueError, 'tracked at its pinned commit'):
+                require_clean_sources(root)
+            git(va, 'update-index', '--add', '--cacheinfo', '160000,' + git(child, 'rev-parse', 'HEAD') + ',csrc/catlass')
+            git(va, 'commit', '-m', 'pin dependency')
+            require_clean_sources(root)
+            (child / 'kernel.cpp').write_text('uncommitted native change\n')
+            with self.assertRaisesRegex(ValueError, 'clean materialized'):
+                require_clean_sources(root)
+
     def test_complete_bundle_hashes_missing_metadata_env_and_cache_reuse(self):
         from vaws_runtime_profile import PROFILE_FIELDS
         with tempfile.TemporaryDirectory() as tmp:

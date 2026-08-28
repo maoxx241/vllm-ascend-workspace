@@ -7,10 +7,10 @@ A composable local development scaffold for working on [vLLM](https://github.com
 ## What problem does this solve
 
 See the optional [independent coordination MCP](.agents/coordinator/README.md)
-and [PR #66 implementation plan](docs/plans/pr-66-ready-runtime-coordination.md)
 for prepared-container, environment and native-artifact reuse. It is separate
 from vaws-top and restarts model services against pinned code snapshots.
-Real Ascend dual-task and four-node K3 acceptance remain separate rollout gates.
+Two-client, two-card probe and edit/restart checks passed on host 154; full
+K3 model and four-node acceptance remain separate rollout gates.
 
 Developing vLLM Ascend typically involves editing code locally, running tests on remote Ascend NPU servers, and tracking upstream vLLM changes — all of which require repetitive Git, SSH, and environment configuration.
 

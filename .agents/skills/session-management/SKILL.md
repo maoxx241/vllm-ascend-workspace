@@ -59,6 +59,7 @@ does not create another container or duplicate member leases.
 - Session removal should stop only that session's service and release only that session's leases.
 - Shared NPU coordination is an optional gentleman's agreement. It must not become a mandatory gate for existing serving, benchmark, profiling, or remote-command flows.
 - Shared coordination state is intentionally ephemeral under the remote host's `/tmp`; if it disappears, start a new coordination epoch and trust actual host occupancy over missing declarations.
+- Process occupancy blocks allocation even below the HBM threshold. A3 `NPU/Chip` process rows must map through the device table's `Phy-ID`; missing process tables or unrecognized process rows fail closed.
 
 ## Entry Points
 

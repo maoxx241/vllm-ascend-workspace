@@ -154,6 +154,40 @@ class GitTransportTests(unittest.TestCase):
                 self.assertEqual(parity.changed_build_inputs(inputs(), first), (True, False))
             self.assertEqual(parity.changed_build_inputs(first, None), (True, True))
 
+    def test_native_submodule_identity_ignores_commit_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            child = root / 'csrc' / 'catlass'
+            child.mkdir(parents=True)
+
+            def git(repo, *args):
+                return subprocess.run(['git', '-C', str(repo), *args], check=True, capture_output=True, text=True).stdout.strip()
+
+            for repo in (root, child):
+                git(repo, 'init')
+                git(repo, 'config', 'user.name', 'Test')
+                git(repo, 'config', 'user.email', 'test@example.invalid')
+            (child / 'kernel.cpp').write_text('native one\n')
+            git(child, 'add', '.')
+            git(child, 'commit', '-m', 'task-a snapshot')
+
+            def pin():
+                git(root, 'update-index', '--add', '--cacheinfo', '160000,' + git(child, 'rev-parse', 'HEAD') + ',csrc/catlass')
+                git(root, 'commit', '-m', 'pin native dependency')
+                return parity.build_input_fingerprints(root, 'HEAD', parity.VLLM_REINSTALL_PATTERNS)
+
+            first = pin()
+            git(child, 'commit', '--allow-empty', '-m', 'task-b snapshot of identical content')
+            self.assertEqual(pin(), first)
+            (child / 'kernel.cpp').write_text('native two\n')
+            git(child, 'commit', '-am', 'actual native change')
+            self.assertNotEqual(pin()['native'], first['native'])
+            # An unpopulated child must not fall back to its parent's Git root.
+            import shutil
+            shutil.rmtree(child / '.git')
+            with self.assertRaisesRegex(ValueError, 'not populated'):
+                parity.build_input_fingerprints(root, 'HEAD', parity.VLLM_REINSTALL_PATTERNS)
+
     def test_wrapper_forwards_default_transport(self) -> None:
         derived = {
             "workspace_root": "/worktree",
