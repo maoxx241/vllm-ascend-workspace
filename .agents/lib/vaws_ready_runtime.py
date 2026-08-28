@@ -106,7 +106,12 @@ class RuntimePool:
         safe_id(runtime_id)
         spec = {"endpoint": endpoint(spec["endpoint"], container=True),
                 "host_endpoint": endpoint(spec["host_endpoint"]),
-                "container_name": safe_id(spec["container_name"])}
+                "container_name": safe_id(spec["container_name"]), "service_ports": spec.get("service_ports", [])}
+        ports = spec["service_ports"]
+        if not isinstance(ports, list) or any(type(port) is not int or not 0 < port < 65536 for port in ports) or len(set(ports)) != len(ports):
+            raise ValueError("service_ports must contain distinct TCP ports")
+        if spec["endpoint"]["port"] in ports or spec["host_endpoint"]["port"] in ports:
+            raise ValueError("service ports cannot overlap SSH endpoints")
         with self.lock:
             with self.transaction() as db:
                 for other in self.rows(db, "runtime"):
@@ -115,6 +120,8 @@ class RuntimePool:
                             raise ValueError("runtime is still bound; return it first")
                     elif (other["endpoint"]["host"], other["endpoint"]["port"]) == (spec["endpoint"]["host"], spec["endpoint"]["port"]) or (other["host_endpoint"], other["container_name"]) == (spec["host_endpoint"], spec["container_name"]):
                         raise ValueError("container/endpoint already registered")
+                    elif other["host_endpoint"] == spec["host_endpoint"] and (set(other.get("service_ports", [])) | {other["endpoint"]["port"]}) & (set(ports) | {spec["endpoint"]["port"]}):
+                        raise ValueError("runtime ports overlap another registered runtime")
             observed = self.backend.inspect(spec, idle=True)
             row = {"id": runtime_id, **spec, "state": "ready", "attestation": observed}
             with self.transaction() as db:
@@ -141,14 +148,16 @@ class RuntimePool:
                     observed = self.backend.inspect(runtime, idle=True)
                     if observed != runtime["attestation"]:
                         raise ValueError("prepared environment changed; re-register it")
-                except Exception:
+                except Exception as exc:
                     runtime["state"] = "needs_repair"
+                    runtime["error"] = str(exc)[:500]
                     with self.transaction() as db:
                         self.put(db, "runtime", runtime)
                     continue
                 row = {"id": key, "owner": owner, "intent": intent, "runtime_id": runtime["id"],
                        "state": "bound", "endpoint": runtime["endpoint"],
                        "profile_key": profile_key, "build_key": observed["build_key"],
+                       "service_ports": runtime["service_ports"],
                        "environment": {"VAWS_ENVIRONMENT_FINGERPRINT": profile_key},
                        "launch_env": observed["profile"]["launch_env"],
                        "launch_preamble": observed.get("launch_preamble", "")}
@@ -225,7 +234,7 @@ class RuntimePool:
                         raise ValueError("binding already has an unresolved execution")
                 if binding["state"] != "bound" or expected_build_key != binding["build_key"]:
                     raise ValueError("cache miss or returned binding; prepare matching artifacts first")
-            observed = self.backend.inspect(runtime, snapshots=snapshots)
+            observed = self.backend.inspect(runtime, idle=True, snapshots=snapshots)
             if observed != runtime["attestation"]:
                 raise ValueError("runtime/profile changed since checkout")
             run = {"id": key, "owner": owner, "binding_id": binding_id, "intent": intent,
@@ -314,7 +323,7 @@ class RuntimePool:
                         reply = {"task": status["tasks"][0]}
                 else:
                     if action == "preflight":
-                        observed = self.backend.inspect(runtime, snapshots=run["intent"]["snapshots"])
+                        observed = self.backend.inspect(runtime, idle=True, snapshots=run["intent"]["snapshots"])
                         if observed != runtime["attestation"]:
                             raise ValueError("runtime changed before launch")
                     reply = self.backend.host(runtime, {**request, "action": action,
@@ -355,6 +364,14 @@ class RuntimePool:
             return [{"run": row["id"], "owner": row["owner"], "state": row["state"],
                      "devices": row.get("task", {}).get("granted_devices", [])}
                     for row in self.rows(db, "run") if row["state"] not in TERMINAL]
+
+    def catalog(self):
+        with self.transaction() as db:
+            return [{"runtime_id": row["id"], "state": row["state"],
+                     "profile_key": row["attestation"]["profile_key"],
+                     "build_key": row["attestation"]["build_key"], "service_ports": row.get("service_ports", []),
+                     "error": row.get("error")}
+                    for row in self.rows(db, "runtime")]
 
     def message(self, owner: str, target_run: str, text: str):
         if not text.strip() or len(text) > 4000:

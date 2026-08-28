@@ -1,5 +1,16 @@
 # Behavior Reference
 
+## Shared ready-runtime mode
+
+The optional independent HTTP MCP coordinator separates task identity,
+prepared-container checkout and host execution leases. All clients of a pool
+use one manager; linked worktree inventory sharing alone is not allocation.
+See [coordinator lifecycle](../../../coordinator/README.md). Never create local
+legacy NPU leases in addition to the pool's host-authoritative requests.
+Returning a container quarantines it until re-verification. Queue messages,
+accepted yield requests and SSH failures never release devices. There is no
+resident model-service pool.
+
 ## Workspace identity
 
 - new session containers use the base machine's persisted namespace

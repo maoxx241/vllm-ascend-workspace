@@ -32,6 +32,8 @@ def attest(root: Path, spec: dict):
     # Preserve the prepared image environment when overlaying launch settings.
     environment = os.environ.copy()
     for name, value in profile["launch_env"].items():
+        if name in {"PATH", "PYTHONPATH", "LD_LIBRARY_PATH"} and not value:
+            continue
         environment[name] = value + (":" + environment[name] if name in {"PATH", "PYTHONPATH", "LD_LIBRARY_PATH"} and environment.get(name) else "")
     smoke = subprocess.run([sys.executable, "-c", "import torch_npu, vllm, vllm_ascend, acl"], env=environment,
                            capture_output=True, text=True, timeout=60)

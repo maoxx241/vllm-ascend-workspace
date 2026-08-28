@@ -1,5 +1,18 @@
 # Acceptance
 
+## Shared prepared-runtime mode
+
+- Two authenticated clients with different management/source roots share one
+  exclusive runtime and host-card authority, not two local lease registries.
+- Real HTTP MCP calls verify ownership, queue progress, restart persistence,
+  event cursors and rejection of unauthorized registration/release.
+- Environment checkout never creates a container, installs dependencies or
+  builds native code. Unknown readiness leaves the slot unavailable.
+- Replying to a yield request does not change allocation state. Uncertain
+  release and changed host epochs retain ownership for reconciliation.
+- Hardware dual-service and K3 exact-topology acceptance remain separate from
+  mocked occupancy/containers in Linux CI; see the coordinator README.
+
 - New session records include `agent_identity.agent_id` and `agent_identity.alias` when available.
 - Unified aliases participate in new session container naming through the persisted machine namespace.
 - Missing identities and declined aliases preserve legacy behavior.

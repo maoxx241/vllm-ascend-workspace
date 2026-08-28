@@ -49,7 +49,7 @@ class Backend:
 
 def runtime_spec(number):
     return {"endpoint": {"host": "192.0.2.1", "port": 46000 + number, "root": "/vllm-workspace"},
-            "host_endpoint": {"host": "192.0.2.1", "port": 22}, "container_name": "prepared-" + str(number)}
+            "host_endpoint": {"host": "192.0.2.1", "port": 22}, "container_name": "prepared-" + str(number), "service_ports": [48000 + number]}
 
 
 class PoolTests(unittest.TestCase):
@@ -95,6 +95,10 @@ class PoolTests(unittest.TestCase):
         miss = self.pool.checkout("bob", session["id"], "missing", "missing")
         self.assertEqual(miss["status"], "cache_miss")
         self.assertFalse(miss["provisioning_started"])
+        spec = runtime_spec(3)
+        spec["service_ports"] = [48001]
+        with self.assertRaisesRegex(ValueError, "ports overlap"):
+            self.pool.register("port-conflict", spec)
 
     def test_yield_acceptance_and_timeout_never_release_or_reassign(self):
         binding = self.bind("alice", self.root / "a")
@@ -136,6 +140,23 @@ class PoolTests(unittest.TestCase):
         manifest = load_manifest(self.root / "manager/runs" / (run["id"] + ".json"))
         self.assertEqual(manifest["status"], "planned")
         self.assertEqual(manifest["environment"]["coordination"]["state"], "granted")
+        other = self.bind("bob", self.root / "b")
+        self.backend.fail_after = "status"
+        pending = self.request("bob", other)
+        self.assertEqual(pending["state"], "pending")
+        self.assertIsNone(pending["epoch"])
+        recovered = self.pool.control("bob", pending["id"], "poll")
+        self.assertEqual(recovered["state"], "queued")
+
+    def test_unsubmitted_request_expires_without_allocating_after_outage(self):
+        import time
+        binding = self.bind("alice", self.root / "a")
+        self.backend.fail_after = "status"
+        pending = self.request("alice", binding, queue_seconds=1)
+        self.pool.clock = lambda: time.time() + 60
+        expired = self.pool.control("alice", pending["id"], "poll")
+        self.assertEqual(expired["state"], "expired")
+        self.assertNotIn(("host", "submit"), self.backend.calls)
 
     def test_native_refresh_is_forbidden_while_execution_is_unresolved(self):
         binding = self.bind("alice", self.root / "a")

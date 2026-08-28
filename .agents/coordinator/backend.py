@@ -39,7 +39,7 @@ class RemoteBackend:
         host = matches[0]["host"]
         return {"host_endpoint": {"host": host["ip"], "port": host.get("port", 22), "user": host.get("user", "root")},
                 "endpoint": {"host": host["ip"], "port": spec["port"], "root": spec["root"], "user": spec.get("user", "root")},
-                "container_name": spec["container_name"]}
+                "container_name": spec["container_name"], "service_ports": spec.get("service_ports", [])}
 
     def host(self, runtime, request):
         result = coord.ssh_execute(coord.LocalEndpoint(**runtime["host_endpoint"]),
@@ -62,7 +62,8 @@ class RemoteBackend:
     def inspect(self, runtime, *, idle=False, snapshots=None):
         host = {**runtime["host_endpoint"], "root": "/", "cwd": "/"}
         name = shlex.quote(runtime["container_name"])
-        info = json.loads(self.bash(host, f"docker inspect {name}"))[0]
+        fields = shlex.quote('{"Id":{{json .Id}},"State":{{json .State}}}')
+        info = json.loads(self.bash(host, f"docker inspect --format {fields} {name}"))
         if not info["State"]["Running"] or info["State"].get("Paused") or info["State"].get("Restarting"):
             raise RuntimeError("prepared container is not running normally")
         if idle:
@@ -70,6 +71,11 @@ class RemoteBackend:
             allowed = {"bash", "sh", "sshd", "sshd-session", "sshd-auth", "sleep", "tini", "tail", "cat", "init", "systemd"}
             if not rows or any(row.strip() not in allowed for row in rows):
                 raise RuntimeError("container is not an idle prepared runtime; inspect its workers")
+            if runtime.get("service_ports"):
+                listeners = self.bash(host, "ss -H -ltn").splitlines()
+                occupied = {int(row.split()[3].rsplit(":", 1)[1]) for row in listeners if len(row.split()) >= 4}
+                if occupied.intersection(runtime["service_ports"]):
+                    raise RuntimeError("a reserved service port is still listening; resolve its owner before launch")
         module = (ROOT / ".agents/lib/vaws_runtime_profile.py").read_text()
         request = json.dumps({"root": runtime["endpoint"]["root"], "snapshots": snapshots or {}})
         build_source = (ROOT / ".agents/lib/vaws_build_inputs.py").read_text()

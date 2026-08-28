@@ -1,6 +1,6 @@
 # PR #66: ready runtimes and resource coordination
 
-Status: implementation plan, 2026-08-28. Checkboxes describe delivered and
+Status: implemented initial shared-runtime path, 2026-08-28; hardware rollout remains pending. Checkboxes describe delivered and
 verified work, not capabilities inferred from this document.
 
 ## Agreed outcome
@@ -74,44 +74,44 @@ client and do not automatically wake a paused agent.
 
 ### 1. Repair the current PR's safety boundaries
 
-- [ ] Do not classify container SSH failure as proof of container death.
-- [ ] Keep leases when metadata is unreadable or remote cleanup is unproven.
-- [ ] Do not release leases merely because local worktree removal succeeded.
-- [ ] Preserve branches, commits, and dirty child worktrees when reusing a session.
-- [ ] Require a nonempty live NPU lease for managed serving, including restart.
+- [x] Do not classify container SSH failure as proof of container death.
+- [x] Keep leases when metadata is unreadable or remote cleanup is unproven.
+- [x] Do not release leases merely because local worktree removal succeeded.
+- [x] Preserve branches, commits, and dirty child worktrees when reusing a session.
+- [x] Require a nonempty live NPU lease for managed serving, including restart.
 
 ### 2. Make source synchronization and native reuse precise
 
-- [ ] Record build-input fingerprints separately from complete source snapshots.
-- [ ] Reuse native installs for Python-only commits as well as uncommitted edits.
-- [ ] Invalidate on native/dependency changes, reversions, environment changes,
+- [x] Record build-input fingerprints separately from complete source snapshots.
+- [x] Reuse native installs for Python-only commits as well as uncommitted edits.
+- [x] Invalidate on native/dependency changes, reversions, environment changes,
       and missing artifacts; preserve vLLM-to-Ascend dependency invalidation.
-- [ ] Supply complete artifact/profile manifests and an explicit cache-miss path.
-- [ ] Add a local incremental-sync loop using existing parity/remote-dev
+- [x] Supply complete artifact/profile manifests and an explicit cache-miss path.
+- [x] Add a local incremental-sync loop using existing parity/remote-dev
       transport; edits target staging and launch pins the selected snapshot.
 
 ### 3. Add the independent coordinator and ready-runtime path
 
-- [ ] Add a shared, authenticated Streamable HTTP MCP entry point with persistent
+- [x] Add a shared, authenticated Streamable HTTP MCP entry point with persistent
       runtime/binding/event state and a bounded background reconciliation loop.
-- [ ] Register/adopt prepared runtimes, match exact environment profiles, and
+- [x] Register/adopt prepared runtimes, match exact environment profiles, and
       atomically check out an exclusive runtime without Docker/build operations.
-- [ ] Reuse host-side NPU coordination for requests, preflight, activation,
+- [x] Reuse host-side NPU coordination for requests, preflight, activation,
       heartbeat and release; expose queue/yield/reply/poll operations.
-- [ ] Return remote-dev endpoints and explicit session/run ownership rather
+- [x] Return remote-dev endpoints and explicit session/run ownership rather
       than binding a logical session permanently to one host.
-- [ ] Reconcile restart, expired requests, uncertain remote state, and return
+- [x] Reconcile restart, expired requests, uncertain remote state, and return
       to the pool conservatively. Persist state outside `/tmp` on the manager.
-- [ ] Keep first-time preparation and pool replenishment outside launch; reuse
+- [x] Keep first-time preparation and pool replenishment outside launch; reuse
       existing preparation tools rather than introducing a second installer.
 
 ### 4. Verification and PR publication
 
-- [ ] Extend existing lease/worktree/parity tests and add focused coordinator
+- [x] Extend existing lease/worktree/parity tests and add focused coordinator
       integration tests for two clients and competing requests.
-- [ ] Verify real MCP calls, authorization, restart persistence, queue progress,
+- [x] Verify real MCP calls, authorization, restart persistence, queue progress,
       event cursors and the zero-provisioning checkout path in CI/Linux.
-- [ ] Run regression tests on Linux/remote containers; do not execute
+- [x] Run regression tests on Linux/remote containers; do not execute
       torch/torch_npu workloads on a local Mac.
 - [ ] Publish exact checks and remaining hardware/client validation in PR #66.
 - [ ] Hardware acceptance: two isolated code states, disjoint devices/ports,
@@ -133,3 +133,57 @@ client and do not automatically wake a paused agent.
 Initial PR head: `065c99fff39b82491892f89e063eceb322a148d2`.
 The original PR reports a two-session hardware run; this update has not yet
 independently reproduced that report. Record new validation here as it runs.
+
+
+## Integration of merged PR #67
+
+Merged main `271c57f96e3ed25cf394f8571aad723bc0754fcd` into this branch,
+resolving the three inventory conflicts by behavior rather than whole-file
+selection. Preserve `shared_workspace_root/shared_inventory_path` and inventory
+scope metadata. Missing shared inventory remains an explicit execution error;
+legacy/per-worktree files are not implicit migration inputs. Old data can be
+inspected with an explicitly selected inventory path before a deliberate
+migration. Independent clones do not share a Git common-dir directory.
+
+Parity machine-mode inventory now uses that same shared resolver. Its tests
+cover stale local inventory, missing shared inventory, independent clones,
+and separate session roots. Session-id lookup does not use this machine loader.
+The coordinator can resolve registration through this machine directory while
+keeping runtime checkout and actual NPU allocation under their shared authorities.
+Tests use two principals with distinct management/source roots, not just two
+session ids in a single local lease file.
+
+## Initial delivery boundary
+
+The shared manager, authenticated HTTP MCP calls, prepared-runtime registration,
+checkout/return/refresh, declared TCP ports, host queue/fences, durable messages,
+external-worktree staging and native/profile manifests are implemented. It uses
+existing remote-dev and host coordination rather than a second SSH/NPU stack.
+Native bundle reuse is restricted to matching inputs, environment and installation
+path; relocation is not assumed. On the warm pool path use materialize, not a
+legacy automatic first install. A cache miss is explicit and preparation occurs
+separately.
+
+The first version has no multi-host atomic/gang allocation or automatic pool
+replenishment. Legacy domain wrappers are not transparent pool-binding adapters;
+use the documented coordinator plus remote-dev lifecycle. Direct/manual access
+can bypass cooperative scheduling and is not claimed to be hard isolation.
+
+No actual machine, CANN stack or model service was modified during this update.
+The old registered container endpoint refused connection; other observed host
+containers were not used. Real prepared-slot, dual-service, five-client product
+and exact four-node K3 validation remain outstanding. No version combination
+has been marked K3-compatible solely from CI or an image name.
+
+### New verification evidence
+
+- `ed874db`: safety/parity fixes passed Skill catalog and Remote-dev contracts.
+- `d21398d`: shared-inventory integration and actual two-client HTTP MCP tests
+  passed (Skill catalog run 33139603977, Remote-dev run 33139603969).
+- `e526d8d`: CI caught a Run Manifest v1 top-level field mismatch; this was not
+  a passing release. Fixed by placing coordination data under environment.
+- `1d8a6be`: both workflows passed again, including lost-grant/submit reply
+  recovery, Run Manifest v1 exports and external-source staging tests (Skill
+  catalog run 33140143240, Remote-dev run 33140143182).
+- Final-head verification will be recorded in the PR description after the
+  complete documentation and port-guard update passes.

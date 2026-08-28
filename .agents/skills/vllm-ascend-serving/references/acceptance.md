@@ -1,5 +1,14 @@
 # Acceptance Criteria
 
+## Prepared-runtime boundary
+
+- Pool checkout/MCP tests do not count as serving acceptance.
+- A new owned process must run the pinned source with matching native inputs;
+  all ranks and an actual request still need validation.
+- An accepted yield message, stopped launcher PID or failed SSH probe does
+  not prove that independent EngineCore workers released their cards/ports.
+- Four-node K3 readiness remains outside this single-node wrapper's claim.
+
 ## Workspace identity
 
 - a configured alias namespaces new service runtime directories

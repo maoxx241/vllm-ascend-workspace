@@ -6,6 +6,11 @@
 
 ## 这个项目解决什么问题
 
+跨任务的就绪环境复用见 [独立协调 MCP](.agents/coordinator/README.md) 和
+[PR #66 实施计划](docs/plans/pr-66-ready-runtime-coordination.md)。它与 vaws-top
+解耦，复用已准备的容器、环境和原生产物，按代码快照重新拉起模型服务。
+目前提供可选的协调入口；真实 Ascend 双任务和 K3 四机验收仍需单独完成。
+
 vLLM Ascend 的开发通常需要在本地编辑代码、在远程昇腾 NPU 服务器上运行测试，同时还要跟踪上游 vLLM 的变化。手动维护这套工作流涉及大量重复的 Git、SSH 和环境配置操作。
 
 `vllm-ascend-workspace` 把这些操作封装成一组 AI Agent 技能，你可以用自然语言让 Agent 代劳，也可以完全忽略这些技能、只把它当作一个普通的多仓库工作区。

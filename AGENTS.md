@@ -78,6 +78,13 @@ for domain workflows.
 
 ## Repo-wide rules
 
+- The optional shared runtime pool is documented in `.agents/coordinator/README.md`.
+  Pool bindings use its execution leases and ordinary remote-dev endpoints;
+  do not create duplicate legacy local NPU leases or pass a binding id as a
+  legacy session id. All clients of a pool must use the same manager.
+  Stage edits during runs; materialize and refresh native artifacts only
+  after its executions are released. Model services restart for changed code.
+
 - Never write secrets, passwords, or tokens into tracked files.
 - Keep VAWS runtime state under `.vaws-local/` and remote-dev endpoint/tool
   state under `.remote-dev/state/`. Both are untracked.

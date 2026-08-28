@@ -7,6 +7,14 @@ description: Start, check, or stop a single-node vLLM Ascend online service on a
 
 Manage the lifecycle of a **single-node colocated** `vllm-ascend` online service on an isolated VAWS session container.
 
+The optional [prepared-runtime MCP](../../coordinator/README.md) has a separate
+binding/execution lifecycle. Its bindings are not legacy session records and
+must not be fed to `serve_start.py --session-id`. In that mode use the
+coordinator's request/preflight/activate/heartbeat/release sequence and existing
+remote-dev job tools, with pinned source, declared service ports and a new
+service process. The legacy wrappers here are not yet transparent adapters for
+pool bindings. Do not allocate a second local NPU lease for the pool run.
+
 Remote substrate rule: use `.remote-dev` remote tools for ad hoc remote
 read/edit/bash/search/patch work around a service. Use this skill for the
 domain service lifecycle contract and keep its scripts as the compatibility

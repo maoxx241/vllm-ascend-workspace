@@ -1,5 +1,12 @@
 # Command Recipes
 
+For the optional shared prepared-runtime MCP, use the setup and agent loop in
+[the coordinator README](../../../coordinator/README.md). Its machine directory
+uses the existing Git common-dir inventory; do not duplicate discovery files.
+`runtime_checkout` returns ordinary remote-dev endpoint fields, while
+`execution_request` uses the existing host coordinator. Pool binding ids are
+not interchangeable with the legacy `--session-id` arguments below.
+
 Inspect the agent identity used for new session attribution:
 
 ```bash

@@ -1,5 +1,15 @@
 All parity helpers stream phase progress on `stderr` as `__VAWS_PARITY_PROGRESS__=<json>` and keep the final summary JSON on `stdout`.
 
+External worktrees: append `--source vllm=/actual/vllm --source
+vllm-ascend=/actual/vllm-ascend` to the wrapper or low-level helper. Do not
+copy those repositories into a second business checkout.
+
+For continuous staging, `parity_watch.py --interval 1 -- <low-level sync
+arguments>` accepts the direct endpoint/workspace arguments and always uses
+`source-only`. It emits one JSON line per transferred snapshot. See the
+[ready-runtime recipe](../../../coordinator/README.md) for the full example
+and the separate materialize/request/preflight/launch lifecycle.
+
 Remote toolbox sync planning:
 
 ```bash

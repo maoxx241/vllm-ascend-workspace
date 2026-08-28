@@ -7,6 +7,19 @@ description: Ensure a ready remote runtime runs the exact current local workspac
 
 Keep a **ready** remote runtime in exact code parity with the local `vllm-ascend-workspace` checkout.
 
+External business worktrees can be selected with repeatable
+`--source vllm=/actual/worktree --source vllm-ascend=/actual/worktree` on
+`parity_sync.py` or the low-level helper. Snapshots come from those exact
+worktrees without resetting them or maintaining copied branches.
+
+The opt-in [ready-runtime coordinator](../../coordinator/README.md) uses
+`--apply-mode materialize` for a compatible warm runtime, not a legacy first
+install. Its execution gate verifies source/build identity and complete native
+artifacts before allocating cards. `parity_watch.py` continuously publishes
+content changes with `source-only`; it never modifies running source or builds.
+Only materialize after all executions on that binding have been released.
+The watcher alone is not execution parity or model readiness.
+
 ## Use this skill when
 
 - a remote smoke, service launch, or benchmark is about to start

@@ -1,5 +1,15 @@
 # Behavior Reference
 
+## Optional prepared-runtime path
+
+See [the shared coordinator](../../../coordinator/README.md) for pool bindings.
+Legacy session wrappers remain separate. A pool launch uses an exact snapshot,
+the host coordinator's active fence and declared free TCP ports, then records
+the newly launched PID and heartbeats without waiting for model loading to
+finish. Environment-ready, PID-created, and model-ready are distinct states.
+Restart the service after development changes; do not reuse an old model
+process to claim that new source has been tested.
+
 ## Relationship to remote-dev
 
 Use `.remote-dev` tools for ad hoc remote read/edit/bash/search/patch around a

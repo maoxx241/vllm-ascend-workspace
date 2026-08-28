@@ -12,7 +12,19 @@ session/container names are never rewritten after an alias change.
 
 Create and maintain isolated VAWS sessions for parallel agent work.
 
-Each session binds:
+For cross-workspace development with prepared containers, the opt-in shared
+coordinator in [`.agents/coordinator/README.md`](../../coordinator/README.md)
+separates logical sessions from runtime bindings and per-run NPU leases.
+It uses existing remote-dev endpoints and the host NPU coordinator; it does
+not require `vaws-top`. Use its `session_open/runtime_checkout/execution_*`
+flow for that mode. Do not create an additional legacy local NPU lease for
+the same execution or pass a pool binding id as a legacy session id.
+
+PR #67's shared inventory covers linked worktrees with one Git common-dir.
+It does not turn the legacy local leases below into cross-workspace allocation.
+Independent clones must explicitly connect to the same coordinator service.
+
+The existing managed-session mode described below binds:
 
 - one local Git worktree
 - one remote session container

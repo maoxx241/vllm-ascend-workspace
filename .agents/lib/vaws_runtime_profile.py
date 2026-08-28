@@ -61,7 +61,7 @@ def profile_key(profile: dict[str, Any]) -> str:
             raise ValueError(f"{key} must contain string values")
         if any(not re.fullmatch(r"[A-Z_][A-Z0-9_]*", k) for k in profile[key]):
             raise ValueError("invalid profile environment variable name")
-        if any(any(word in k.upper() for word in ("TOKEN", "PASSWORD", "SECRET", "CREDENTIAL")) for k in profile[key]):
+        if any(re.search(r"(?:^|_)(?:API_?KEY|ACCESS_?KEY|AUTH|CREDENTIAL|PASS(?:WORD)?|SECRET|TOKEN)(?:_|$)", k) for k in profile[key]):
             raise ValueError("profile environment must not contain secrets")
     if not profile.get("compatibility_evidence"):
         raise ValueError("profile requires an operator-reviewed compatibility evidence reference")
@@ -78,6 +78,8 @@ def launch_preamble(profile: dict[str, Any]) -> str:
     profile_key(profile)
     lines = []
     for key, value in sorted(profile["launch_env"].items()):
+        if key in {"PATH", "PYTHONPATH", "LD_LIBRARY_PATH"} and not value:
+            continue
         suffix = '${' + key + ':+:$' + key + '}' if key in {"PATH", "PYTHONPATH", "LD_LIBRARY_PATH"} else ""
         lines.append(f"export {key}={shlex.quote(value)}\"{suffix}\"")
     return "\n".join(lines)
@@ -137,6 +139,9 @@ def verify(root: Path, manifest: dict[str, Any], *, check_environment: bool = Tr
         for key, package in PACKAGES.items():
             if importlib.metadata.version(package) != profile[key]:
                 raise ValueError(f"installed package changed: {package}")
+        for package, version in profile.get("packages", {}).items():
+            if importlib.metadata.version(package) != version:
+                raise ValueError(f"profile dependency changed: {package}")
         for row in profile["system_files"].values():
             if file_digest(Path(row["path"])) != row["sha256"]:
                 raise ValueError("CANN/driver/runtime support file changed")

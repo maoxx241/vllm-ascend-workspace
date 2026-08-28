@@ -2,6 +2,23 @@
 
 This file defines the durable behavior of `remote-code-parity`.
 
+## External worktrees and active experiments
+
+`--source` overrides the local source of a logical vllm/vllm-ascend submodule,
+including nested repositories. Parent gitlinks are updated only in synthetic
+snapshot indexes. Real source HEADs, branches, indexes and dirty changes are
+not reset. Transport and ref cleanup use the actual source repository.
+
+`parity_watch.py` hashes dirty content and publishes incremental `source-only`
+snapshots. It never materializes/builds, and acknowledges only the fingerprint
+captured before that transfer. Later edits remain eligible for another cycle.
+The shared coordinator pins and rechecks the actual runtime snapshot at
+request/preflight; staging newer commits cannot modify an active experiment.
+
+Machine-mode inventory uses `shared_inventory_path(repo_root)` exactly like
+machine-management/toolbox. Missing shared state is an error, not a fallback
+to a stale linked-worktree inventory. Session lookup does not use this loader.
+
 ## Core contract
 
 - Treat the local working tree as the source of truth.
