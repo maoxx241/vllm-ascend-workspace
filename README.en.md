@@ -27,6 +27,16 @@ If you use an Agent-capable IDE (Cursor, Windsurf, etc.) or terminal tool (Claud
 
 The Agent will detect your environment, install required tools, and configure Git remotes and forks.
 
+## Local NPU fleet monitoring
+
+The `npu-fleet-monitor` Skill deploys a persistent NPU fleet monitoring service. The application is maintained on the standalone `vaws-top` branch; the deployment entrypoint fetches that branch, creates a dedicated worktree, builds the frontend, and installs and enables a systemd user service:
+
+```bash
+python3 .agents/skills/npu-fleet-monitor/scripts/manage_monitor.py ensure
+```
+
+After deployment, open <http://127.0.0.1:8788>. The dashboard shows NPU/AICore, HBM, CPU, system memory, disk, mount, and Docker status with historical trends and heatmaps. Active browsers can request 1, 5, 10, or 30-second updates; the collector returns to its low-frequency cadence when no page is active. See [Local NPU Fleet Monitor deployment](docs/npu-fleet-monitor.md) for installation, operations, and data-directory details.
+
 ## Built-in skills
 
 
@@ -34,7 +44,8 @@ The Agent will detect your environment, install required tools, and configure Gi
 | ---------------------- | -------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
 | **repo-init**          | Install GitHub CLI, authenticate, initialize submodules, configure forks and remote topology | After first clone                                          |
 | **machine-management** | Add, verify, repair, or remove a remote Ascend NPU server and its managed container          | When setting up a remote NPU dev machine                   |
-| **session-management** | Create, inspect, and clean isolated sessions: local worktree, remote container, state namespace, and resource leases | For parallel remote work or multiple agents |
+| **npu-fleet-monitor**  | Build, start, inspect, or stop the local NPU dashboard from its standalone project worktree | When continuously monitoring fleet resources and history  |
+| **session-management** | Create, inspect, group, and clean isolated sessions: local worktree, remote container, state namespace, and resource leases | For parallel remote work, multiple agents, or PD deployments |
 | **remote-toolbox**    | Structured target/probe/exec/job/sync/service/artifact/cleanup tools for remote containers | When agents need local-tool-like control of a remote session container |
 | **remote-code-parity** | Sync the full local workspace state (including uncommitted changes) to a remote container    | Triggered automatically before remote test or service runs |
 | **modelscope**       | Download, resume, status-check, and SHA256-verify ModelScope model weights                  | When model weights need to be downloaded into an explicit local directory |
@@ -43,6 +54,18 @@ The Agent will detect your environment, install required tools, and configure Gi
 | **ascend-memory-profiling** | Profile and attribute HBM memory usage on Ascend NPU, with per-component breakdown and evidence chains | When you need to analyze memory consumption of a vLLM serving workload |
 | **ascend-profiling-collection** | Collect Ascend torch-profiler data: start service, bracket profile window, run workload, remote analyse, and write a manifest | When you need kernel_details/trace_view captures |
 | **ascend-profiling-analysis** | Analyze collected profiler roots/manifests and generate step/layer/operator/cross-rank reports | When you need to analyze profiling output |
+| **curate-workspace-knowledge** | Review, deduplicate, promote, merge, reject, or deprecate verified project knowledge candidates | When explicitly curating or maintaining project knowledge |
+| **vllm-ascend-graph-debug** | Diagnose graph compile, capture, replay, and graph/eager correctness divergence | When graph mode fails or diverges from eager mode |
+| **vllm-ascend-correctness-validation** | Compare baseline/candidate, eager/graph, offline/online, and AISBench correctness | When validating accuracy or normalized outputs |
+| **vllm-ascend-change-validation** | Derive validation plans from code diffs and aggregate PR evidence | When validating a workspace change or PR |
+| **vllm-ascend-performance-regression** | Run alternating A/B experiments and assess variance and regression thresholds | When deciding whether throughput or latency regressed |
+| **vllm-ascend-distributed-debug** | Diagnose topology, endpoint, collective, and per-rank distributed failures | When a failure depends on ranks, nodes, or parallel topology |
+| **ascend-operator-debug** | Reduce a model failure to one operator and run an explicit input/mode matrix | When building an isolated operator reproducer |
+| **ascend-triton-operator-development** | Produce a first correct Ascend Triton candidate from PyTorch or GPU Triton semantics | When creating or migrating a Triton operator |
+| **ascend-triton-kernel-validation** | Detect PyTorch fallback and execute an explicit correctness matrix | When validating an Ascend Triton candidate |
+| **ascend-triton-kernel-optimization** | Run profiler-driven optimization after correctness gates pass | When tuning a correct Ascend Triton kernel |
+| **ascend-triton-workflow** | Orchestrate development, validation, optimization, and Run Manifest evidence | When delivering an end-to-end Triton operator workflow |
+| **vllm-ascend-pd-serving** | Orchestrate grouped prefill/decode roles, connectors, rollback, and KV smoke | When deploying disaggregated PD serving |
 
 
 All skills are **optional**. Use any subset, or none at all.
@@ -88,6 +111,7 @@ When talking to an Agent:
 │   ├── skills/
 │   │   ├── repo-init/         # Workspace initialization skill
 │   │   ├── machine-management/    # Remote machine management skill
+│   │   ├── npu-fleet-monitor/     # Local NPU monitor deployment skill
 │   │   ├── session-management/    # Parallel session isolation skill
 │   │   ├── remote-toolbox/        # Structured remote toolbox
 │   │   ├── remote-code-parity/    # Code synchronization skill
@@ -96,7 +120,8 @@ When talking to an Agent:
 │   │   ├── vllm-ascend-benchmark/ # Performance benchmarking skill
 │   │   ├── ascend-memory-profiling/ # Memory profiling skill
 │   │   ├── ascend-profiling-collection/ # Torch profiler collection skill
-│   │   └── ascend-profiling-analysis/ # Profiling analysis/report skill
+│   │   ├── ascend-profiling-analysis/ # Profiling analysis/report skill
+│   │   └── curate-workspace-knowledge/ # Explicit knowledge curation skill
 │   ├── lib/               # Shared local-state library
 │   └── scripts/           # Shared helper scripts
 ├── .cursor/rules/         # Cursor IDE specific rules
@@ -146,6 +171,7 @@ This repository supports mainstream AI coding tools:
 
 - **repo-init** — Workspace initialization: GitHub CLI install, auth, submodules, fork & remote topology
 - **machine-management** — Remote machine management: add, verify, repair, remove Ascend NPU servers and managed containers
+- **npu-fleet-monitor** — Standalone-worktree monitoring service with automatic build, user-systemd startup, and loopback health checks
 - **remote-code-parity** — Code sync: push full local workspace state (including uncommitted changes) to remote containers
 - **vllm-ascend-serving** — Service launch: idle NPU detection, idle port detection, one-click vLLM Ascend inference serving
 - **vllm-ascend-benchmark** — Online performance benchmarking: single-run / multi-run (warm-service) mode, warmup exclusion, statistical aggregation; multi-state regression comparisons orchestrated by the Agent

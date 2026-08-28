@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "remote-dev": {
+      "type": "stdio",
+      "command": "python3",
+      "args": [".remote-dev/mcp/server.py"],
+      "env": {
+        "REMOTE_DEV_DEFAULT_USER": "root",
+        "REMOTE_DEV_DEFAULT_ROOT": "/vllm-workspace",
+        "REMOTE_DEV_DEFAULT_CWD": "/vllm-workspace"
+      }
+    }
+  }
+}

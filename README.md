@@ -27,6 +27,16 @@ git submodule update --init --recursive
 
 Agent 会自动检测你的环境、安装所需工具、配置 Git 远程仓库和 Fork。
 
+## 本地 NPU 集群监控
+
+仓库提供 `npu-fleet-monitor` Skill，用于部署持续运行的 NPU 集群监控服务。监控应用维护在独立的 `vaws-top` 分支；部署入口会自动获取该分支、创建专用 worktree、构建前端、安装并启用 systemd 用户服务：
+
+```bash
+python3 .agents/skills/npu-fleet-monitor/scripts/manage_monitor.py ensure
+```
+
+部署完成后访问 <http://127.0.0.1:8788>。页面集中展示 NPU/AICore、HBM、CPU、系统内存、磁盘、挂载点和 Docker 状态，并保存历史趋势与热力图。浏览器活跃时可选择 1、5、10 或 30 秒刷新；没有活跃页面时自动恢复低频采集。完整安装、运维和数据目录说明见 [NPU Fleet Monitor 本地部署](docs/npu-fleet-monitor.md)。
+
 ## 内置技能
 
 
@@ -34,7 +44,8 @@ Agent 会自动检测你的环境、安装所需工具、配置 Git 远程仓库
 | ------------------------ | ---------------------------------------------- | ------------------ |
 | **repo-init**            | 安装 GitHub CLI、登录 GitHub、初始化子模块、配置 Fork 和远程仓库拓扑 | 首次 clone 后初始化工作区   |
 | **machine-management**   | 添加、验证、修复或移除远程昇腾 NPU 服务器及其托管容器                  | 需要配置远程 NPU 开发机时    |
-| **session-management**   | 创建/检查/清理隔离 session：本地 worktree、远端容器、状态目录和资源 lease | 多 agent 或多任务并行远端执行时 |
+| **npu-fleet-monitor**    | 从独立项目 worktree 构建、拉起、检查或停止本地 NPU 监控页面            | 需要持续查看设备、主机和历史资源状态时 |
+| **session-management**   | 创建、检查、分组和清理隔离 session：本地 worktree、远端容器、状态目录和资源 lease | 多 agent、多任务或 PD 场景并行远端执行时 |
 | **remote-toolbox**       | 结构化解析/探测/执行/长任务/同步/服务/产物传输/清理远端容器              | Agent 需要像使用本地工具一样操作远端 session container 时 |
 | **remote-code-parity**   | 将本地工作区的完整状态（含未提交的修改）同步到远程容器                    | 在远程机器上运行测试或服务前自动触发 |
 | **modelscope**           | 下载、续传、查看进度并 SHA256 校验 ModelScope 模型权重                  | 需要把模型权重下载到明确目录时 |
@@ -43,6 +54,18 @@ Agent 会自动检测你的环境、安装所需工具、配置 Git 远程仓库
 | **ascend-memory-profiling** | 采集并分析昇腾 NPU 的 HBM 显存占用，按组件拆分并溯源 | 需要分析 vLLM 推理服务的显存占用时 |
 | **ascend-profiling-collection** | 采集 Ascend torch profiler：起服务、控制 profile 窗口、运行 workload、远端 analyse 并写 manifest | 需要采集 kernel_details/trace_view 时 |
 | **ascend-profiling-analysis** | 分析已采集的 profiler root/manifest，生成 step/layer/operator/cross-rank 诊断报告 | 需要分析 profiling 结果或生成报告时 |
+| **curate-workspace-knowledge** | 审核、去重、提升、合并、拒绝或废弃已验证的项目知识候选 | 显式要求沉淀、整理或维护项目知识时 |
+| **vllm-ascend-graph-debug** | 定位图编译、捕获、重放及 graph/eager 正确性分歧 | 图模式失败或与 eager 结果不一致时 |
+| **vllm-ascend-correctness-validation** | 对比 baseline/candidate、eager/graph、离线/在线和 AISBench 正确性 | 需要精度验证或输出对拍时 |
+| **vllm-ascend-change-validation** | 根据代码 diff 生成验证计划并汇总证据和 PR 报告 | 验证工作区变更或 PR 时 |
+| **vllm-ascend-performance-regression** | 运行交替 A/B 实验并分析波动和回退阈值 | 判断吞吐或延迟是否回退时 |
+| **vllm-ascend-distributed-debug** | 从拓扑、端点、collective 和逐 rank 事件诊断分布式故障 | 故障依赖多卡、多机或 rank 时 |
+| **ascend-operator-debug** | 将模型故障缩减为单算子并运行 dtype/shape/layout/mode 矩阵 | 需要最小化算子复现时 |
+| **ascend-triton-operator-development** | 从 PyTorch 或 GPU Triton 语义生成首个正确的 Ascend Triton 实现 | 新建或迁移 Triton 算子时 |
+| **ascend-triton-kernel-validation** | 检测 PyTorch fallback 并执行显式正确性矩阵 | 验证 Triton 候选实现时 |
+| **ascend-triton-kernel-optimization** | 在正确性门禁后执行 profiler 驱动的优化实验 | 优化已正确的 Triton kernel 时 |
+| **ascend-triton-workflow** | 编排开发、验证、优化和 Run Manifest 证据 | 交付完整 Triton 算子生命周期时 |
+| **vllm-ascend-pd-serving** | 编排 Session Group 上的 prefill/decode、connector、回滚和 KV smoke | 部署 PD 分离服务时 |
 
 
 所有技能都是**可选的**。你可以只用其中的一部分，也可以完全不用。
@@ -89,6 +112,7 @@ Agent 会自动检测你的环境、安装所需工具、配置 Git 远程仓库
 │   ├── skills/
 │   │   ├── repo-init/             # 工作区初始化技能
 │   │   ├── machine-management/    # 远程机器管理技能
+│   │   ├── npu-fleet-monitor/     # 本地 NPU 监控服务部署技能
 │   │   ├── session-management/    # 并行 Session 隔离技能
 │   │   ├── remote-toolbox/        # 远端结构化工具面
 │   │   ├── remote-code-parity/    # 代码同步技能
@@ -97,7 +121,8 @@ Agent 会自动检测你的环境、安装所需工具、配置 Git 远程仓库
 │   │   ├── vllm-ascend-benchmark/ # 性能基准测试技能
 │   │   ├── ascend-memory-profiling/ # 显存 profiling 技能
 │   │   ├── ascend-profiling-collection/ # torch profiler 采集技能
-│   │   └── ascend-profiling-analysis/ # profiling 分析报告技能
+│   │   ├── ascend-profiling-analysis/ # profiling 分析报告技能
+│   │   └── curate-workspace-knowledge/ # 显式知识整理技能
 │   ├── lib/               # 共享本地状态库
 │   └── scripts/           # 共享辅助脚本
 ├── .cursor/rules/         # Cursor IDE 专用规则
@@ -111,7 +136,9 @@ Agent 会自动检测你的环境、安装所需工具、配置 Git 远程仓库
 
 - **不强制任何流程** — 所有技能都可选，开发者自由选择使用哪些部分。
 - **本地状态不入库** — 用户特定的远程仓库、认证信息、机器配置等只存在于本地未跟踪的 `.vaws-local/` 目录中。
+- **统一 Agent 身份** — 项目初始化会静默持久化 UUID4，并可由用户选择统一别名；新容器、服务目录和服务环境使用该别名，已有资源不被重命名。
 - **并行任务隔离** — 远端并行执行优先使用 session：每个任务有独立本地 worktree、远端容器、状态目录和资源 lease。
+- **可选资源协调** — 独立 Agent 可通过宿主机 `/tmp` 中的共享 SQLite 队列发布 NPU 意向、排队和人工占用窗口；该协议只做君子协作，不强制拦截既有任务流程。
 - **远端操作结构化** — Agent 面向远端容器优先使用 remote toolbox，产出 JSON、可观测日志、可恢复 artifact manifest 和可清理状态。
 - **子模块指向社区** — `.gitmodules` 始终指向 `vllm-project` 的官方仓库，个人 Fork 是本地运行时配置。
 - **Agent 驱动，但不依赖 Agent** — 所有操作都可以手动完成，Agent 只是让流程更方便。
@@ -147,6 +174,7 @@ Agent 会自动检测你的环境、安装所需工具、配置 Git 远程仓库
 
 - [x] **repo-init** — 工作区初始化：GitHub CLI 安装、认证、子模块、Fork 与远程仓库拓扑配置
 - [x] **machine-management** — 远程机器管理：添加、验证、修复、移除昇腾 NPU 服务器及托管容器
+- [x] **npu-fleet-monitor** — 独立 worktree 监控服务：自动构建、systemd 用户服务拉起和回环健康检查
 - [x] **remote-code-parity** — 代码同步：将本地完整工作区状态（含未提交修改）同步到远程容器
 - [x] **vllm-ascend-serving** — 服务拉起：支持空闲 NPU 检测、空闲端口检测，一键拉起 vLLM Ascend 推理服务
 - [x] **vllm-ascend-benchmark** — 在线性能基准测试：支持单轮/多轮（warm-service）模式、预热轮剔除、统计聚合，多状态回归对比由 Agent 编排

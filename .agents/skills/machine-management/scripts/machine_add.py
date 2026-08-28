@@ -23,6 +23,7 @@ from _workflow_common import (  # noqa: E402
     host_target,
     image_request_matches_record,
     list_records,
+    local_image_discovery_blocker,
     load_or_create_profile,
     machine_summary,
     print_json,
@@ -35,6 +36,11 @@ from _workflow_common import (  # noqa: E402
     sync_mesh,
     upsert_machine_record,
     verify_machine,
+)
+from vaws_local_state import (  # noqa: E402
+    default_container_name,
+    effective_workspace_alias,
+    workspace_identity_summary,
 )
 
 
@@ -56,7 +62,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--image",
         help=(
-            "explicit image selector: `rc`, `main`, `stable`, or a full non-latest image reference; "
+            "explicit image selector: `local-latest`, `rc`, `main`, `stable`, or a full non-latest image reference; "
             "this workflow does not default implicitly"
         ),
     )
@@ -148,6 +154,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                             "machine_username": profile["machine_username"],
                             "container_name": profile["container_name"],
                         },
+                        workspace_identity=workspace_identity_summary(),
                         verify=verified,
                     )
                 )
@@ -195,6 +202,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         if probe.get("status") == "blocked":
             print_json(probe)
+            return 0
+        image_discovery_blocker = local_image_discovery_blocker(probe)
+        if image_discovery_blocker is not None:
+            print_json(image_discovery_blocker)
             return 0
         free_port = probe.get("free_port")
         if not isinstance(free_port, int) and existing is None:
@@ -255,8 +266,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         soc = detected_soc or existing_soc
 
-        namespace = existing.get("namespace") if existing is not None else profile["machine_username"]
-        container_name = existing["container"]["name"] if existing is not None else profile["container_name"]
+        unified_alias = effective_workspace_alias()
+        namespace = (
+            existing.get("namespace") if existing is not None else None
+        ) or unified_alias or profile["machine_username"]
+        container_name = (
+            existing["container"]["name"]
+            if existing is not None
+            else default_container_name(namespace)
+        )
         container_port = existing["container"]["ssh_port"] if existing is not None else free_port
         workdir = existing["container"]["workdir"] if existing is not None else args.workdir
 
@@ -324,6 +342,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "machine_username": profile["machine_username"],
                         "container_name": profile["container_name"],
                     },
+                    workspace_identity=workspace_identity_summary(),
                     host_auth=host_auth,
                     probe=probe,
                     container=container,
@@ -366,6 +385,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "machine_username": profile["machine_username"],
                     "container_name": profile["container_name"],
                 },
+                workspace_identity=workspace_identity_summary(),
                 host_auth=host_auth,
                 probe=probe,
                 container=container,

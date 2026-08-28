@@ -1,5 +1,12 @@
 # Acceptance Criteria
 
+## Workspace identity
+
+- a configured alias namespaces new service runtime directories
+- services receive the persistent agent UUID and configured alias variables
+- serving state records `agent_id`, `agent_alias`, and `project_alias`
+- no alias preserves the prior timestamp-only runtime directory layout
+
 ## A1. Fresh start — auto-resolved session (zero target args)
 
 **Given** the current working directory is inside a session worktree (a directory with `.vaws-local/current-session.json`) bound to a ready session with a valid model path,

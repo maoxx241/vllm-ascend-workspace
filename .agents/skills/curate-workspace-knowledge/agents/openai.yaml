@@ -1,0 +1,7 @@
+interface:
+  display_name: "Curate Workspace Knowledge"
+  short_description: "Review and promote verified workspace knowledge"
+  default_prompt: "Use $curate-workspace-knowledge to review, deduplicate, and promote verified knowledge candidates."
+
+policy:
+  allow_implicit_invocation: false

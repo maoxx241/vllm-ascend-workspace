@@ -1,0 +1,4 @@
+interface:
+  display_name: "Ascend Triton Kernel Optimization"
+  short_description: "Profile and optimize Ascend Triton kernel performance"
+  default_prompt: "Use $ascend-triton-kernel-optimization to profile and optimize this correct Ascend Triton kernel."

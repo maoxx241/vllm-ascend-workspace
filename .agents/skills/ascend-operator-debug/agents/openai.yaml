@@ -1,0 +1,4 @@
+interface:
+  display_name: "Ascend Operator Debug"
+  short_description: "Reduce and validate isolated Ascend operator failures"
+  default_prompt: "Use $ascend-operator-debug to reduce this failure to one Ascend operator call and validate it against a reference implementation."

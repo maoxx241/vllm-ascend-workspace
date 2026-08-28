@@ -1,0 +1,51 @@
+name: Remote-dev contracts
+
+on:
+  pull_request:
+    paths:
+      - ".remote-dev/**"
+      - ".mcp.json"
+      - ".cursor/mcp.json"
+      - ".codex/config.example.toml"
+      - ".grok/config.example.toml"
+      - ".github/workflows/remote-dev.yml"
+  push:
+    branches: [main]
+    paths:
+      - ".remote-dev/**"
+      - ".mcp.json"
+      - ".cursor/mcp.json"
+      - ".codex/config.example.toml"
+      - ".grok/config.example.toml"
+      - ".github/workflows/remote-dev.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  contracts:
+    name: MCP and remote safety (Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.9", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Test portable MCP schemas, dispatch, and remote safety
+        env:
+          PYTHONPATH: .remote-dev/tests
+        # Skill catalog/shim freshness is separate from the MCP contract.
+        # These tests use mocks or temporary local files; no SSH/NPU access.
+        run: >-
+          python -B -m unittest -v
+          test_mcp_schema test_patch_ops test_endpoint test_path_policy
+          test_remote_edit test_remote_write test_remote_read test_artifacts
+          test_hook_guard
+          test_cli_help.CliHelpTests.test_cli_wrappers_have_help
+          test_cli_help.CliHelpTests.test_cli_errors_return_result_contract_without_traceback

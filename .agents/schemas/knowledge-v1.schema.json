@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vllm-ascend-workspace.local/schemas/knowledge-v1.schema.json",
+  "title": "vLLM Ascend Workspace Knowledge Document v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "updated_at",
+    "entries"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "kind": {
+      "type": "string",
+      "minLength": 1
+    },
+    "updated_at": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+    },
+    "entries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "source",
+          "applicable_versions",
+          "updated_at",
+          "status",
+          "rule"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+          },
+          "source": {
+            "type": "string",
+            "minLength": 1
+          },
+          "applicable_versions": {
+            "type": "string",
+            "minLength": 1
+          },
+          "updated_at": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "status": {
+            "enum": [
+              "active",
+              "deprecated",
+              "experimental"
+            ]
+          },
+          "rule": {
+            "type": "object"
+          }
+        }
+      }
+    }
+  }
+}

@@ -5,6 +5,9 @@ All serving commands are session-scoped. When run from inside a session worktree
 and **no target flag is needed** — that is the primary form shown below. Outside a
 worktree, add `--session-id <id>` (or `--session-file <path>`) explicitly.
 
+The start workflow automatically consumes the local workspace identity. Check
+it before launch with `python3 .agents/scripts/workspace_identity.py summary`.
+
 ## Fresh start with basic params
 
 ```bash

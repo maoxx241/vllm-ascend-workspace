@@ -40,13 +40,49 @@ def print_json(data: dict[str, Any]) -> None:
     print(json.dumps(data, indent=2, ensure_ascii=False))
 
 
-def run_git(args: list[str], *, check: bool = False) -> subprocess.CompletedProcess[str]:
+def run_git(
+    args: list[str],
+    *,
+    cwd: Path = ROOT,
+    check: bool = False,
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        ["git", "-C", str(ROOT), *args],
+        ["git", "-C", str(cwd), *args],
         capture_output=True,
         text=True,
-        check=False,
+        check=check,
     )
+
+
+def remove_session_worktree(
+    worktree_root: Path,
+    *,
+    force: bool,
+    runner=run_git,
+) -> dict[str, Any]:
+    deinit: dict[str, Any] | None = None
+    if worktree_root.exists():
+        proc = runner(
+            ["submodule", "deinit", "--force", "--all"],
+            cwd=worktree_root,
+        )
+        deinit = {
+            "returncode": proc.returncode,
+            "stdout_tail": proc.stdout[-500:],
+            "stderr_tail": proc.stderr[-500:],
+        }
+
+    cmd = ["worktree", "remove"]
+    if force:
+        cmd.extend(["--force", "--force"])
+    cmd.append(str(worktree_root))
+    proc = runner(cmd, cwd=ROOT)
+    return {
+        "returncode": proc.returncode,
+        "stdout_tail": proc.stdout[-500:],
+        "stderr_tail": proc.stderr[-500:],
+        "submodule_deinit": deinit,
+    }
 
 
 def stop_session(session_id: str, *, session_file: Path | None = None, force: bool) -> dict[str, Any]:
@@ -105,6 +141,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args = build_parser().parse_args()
+    lookup = None
+    sid: str | None = None
     try:
         if not args.session_id and not args.session_file:
             print_json(
@@ -144,28 +182,19 @@ def main() -> int:
         if args.remove_worktree:
             worktree_root = Path(session["local"]["worktree_root"])
             emit_progress("worktree", "removing session worktree", path=str(worktree_root))
-            # Session worktrees always contain the vllm/vllm-ascend submodules,
-            # and git refuses to remove submodule-containing worktrees without
-            # --force even when they are clean — so the non-force path could
-            # never succeed. Auto-force only after proving the tree is clean;
-            # a dirty tree still requires an explicit --force from the caller.
-            auto_force = args.force or (worktree_root.exists() and worktree_is_clean(worktree_root))
-            cmd = ["worktree", "remove"]
-            if auto_force:
-                cmd.extend(["--force", "--force"])
-            cmd.append(str(worktree_root))
-            proc = run_git(cmd)
-            results["worktree"] = {
-                "returncode": proc.returncode,
-                "stdout_tail": proc.stdout[-500:],
-                "stderr_tail": proc.stderr[-500:],
-                "auto_forced_clean": auto_force and not args.force,
-            }
-            if proc.returncode != 0 and not args.force:
-                results["worktree"]["hint"] = (
-                    "worktree has local changes (or git refused removal); rerun with --force "
-                    "after confirming the changes are disposable"
-                )
+            # git refuses to remove submodule-containing worktrees without
+            # --force even when they are clean, and the submodule deinit inside
+            # remove_session_worktree discards local submodule changes. Without
+            # an explicit --force, only proceed after proving the tree
+            # (including submodules) is clean; then forcing is safe.
+            if not args.force and worktree_root.exists() and not worktree_is_clean(worktree_root):
+                results["worktree"] = {
+                    "returncode": 1,
+                    "error": "worktree has local changes; rerun with --force to discard them",
+                }
+            else:
+                results["worktree"] = remove_session_worktree(worktree_root, force=True)
+                results["worktree"]["auto_forced_clean"] = not args.force
 
         if args.release_leases:
             can_release = stop_result_allows_lease_release(results["stop"]) or container_result_allows_lease_release(
@@ -203,7 +232,24 @@ def main() -> int:
         print_json({"status": updated["status"], "session_id": sid, "results": results})
         return 0 if updated["status"] in {"removed", "stopped"} else 1
     except Exception as exc:
-        print_json({"status": "failed", "error": str(exc)})
+        payload: dict[str, Any] = {"status": "failed", "error": str(exc)}
+        if lookup is not None and sid is not None:
+            try:
+                updated = mark_session_status(
+                    repo_root=lookup.state_repo_root,
+                    session_id=sid,
+                    status="needs_repair",
+                )
+                payload.update(
+                    {
+                        "status": updated["status"],
+                        "session_id": sid,
+                        "leases_released": False,
+                    }
+                )
+            except Exception as state_exc:
+                payload["state_error"] = str(state_exc)
+        print_json(payload)
         return 2
 
 

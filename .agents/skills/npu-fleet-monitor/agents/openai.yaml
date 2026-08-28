@@ -1,0 +1,4 @@
+interface:
+  display_name: "NPU Fleet Monitor"
+  short_description: "Deploy and operate the local NPU monitoring dashboard"
+  default_prompt: "Use $npu-fleet-monitor to create or reuse the monitoring worktree, build it, start the local service, and verify health."

@@ -161,6 +161,13 @@ def image_selection_needs_input_payload(
             "required": True,
             "choices": [
                 {
+                    "value": machine_ops.IMAGE_SELECTOR_LOCAL_LATEST,
+                    "label": "newest local vllm-ascend image",
+                    "recommended": False,
+                    "resolution": "scan every image in the target host Docker daemon, keep machine-compatible repository basenames containing vllm-ascend, and choose the newest by image creation time",
+                    "use_when": "the target host already contains the desired vllm-ascend image and deployment should not pull from a registry",
+                },
+                {
                     "value": machine_ops.IMAGE_SELECTOR_RC,
                     "label": "latest official rc image",
                     "recommended": True,
@@ -226,7 +233,7 @@ def resolve_workflow_image(
     if existing_record is None:
         return None, image_selection_needs_input_payload(
             reason=(
-                f"{action} requires an explicit image choice; ask the user to choose `rc`, `main`, `stable`, or a custom non-latest image reference before continuing"
+                f"{action} requires an explicit image choice; ask the user to choose `local-latest`, `rc`, `main`, `stable`, or a custom non-latest image reference before continuing"
             )
         )
 
@@ -234,7 +241,7 @@ def resolve_workflow_image(
     if image_requires_explicit_reselection(current_image):
         return None, image_selection_needs_input_payload(
             reason=(
-                f"{action} cannot reuse the recorded image automatically because it is missing, ambiguous, or points at a forbidden moving tag; ask the user to choose `rc`, `main`, `stable`, or a custom non-latest image reference"
+                f"{action} cannot reuse the recorded image automatically because it is missing, ambiguous, or points at a forbidden moving tag; ask the user to choose `local-latest`, `rc`, `main`, `stable`, or a custom non-latest image reference"
             ),
             machine=existing_record["alias"],
             current_image=current_image,
@@ -507,6 +514,23 @@ def probe_host(
     return payload
 
 
+def local_image_discovery_blocker(probe: dict[str, Any]) -> dict[str, Any] | None:
+    image = probe.get("image")
+    if not isinstance(image, dict) or image.get("policy") != machine_ops.IMAGE_POLICY_LOCAL_LATEST:
+        return None
+    discovery = image.get("local_discovery")
+    if isinstance(discovery, dict) and discovery.get("selected_reference"):
+        return None
+    return status_payload(
+        "blocked",
+        success=False,
+        action="image-discovery",
+        message="no machine-compatible local vllm-ascend image was found on the target host",
+        local_image_discovery=discovery,
+        probe=probe,
+    )
+
+
 def bootstrap_container(
     target: machine_ops.SshTarget,
     *,
@@ -521,6 +545,7 @@ def bootstrap_container(
     public_key_file: str | None = None,
     replace_container_on_image_change: bool = False,
     use_prepared_image_cache: bool = False,
+    visible_devices: list[int] | None = None,
 ) -> dict[str, Any]:
     key_path, private_key, public_key, needs_input = ensure_local_public_key(public_key_file)
     if needs_input is not None:
@@ -542,6 +567,7 @@ def bootstrap_container(
             machine_type or "",
             soc or "",
             "true" if use_prepared_image_cache else "false",
+            ",".join(str(device) for device in (visible_devices or [])),
         ],
         batch_mode=True,
         timeout_seconds=machine_ops.DEFAULT_BOOTSTRAP_TIMEOUT_SECONDS,

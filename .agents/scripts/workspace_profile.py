@@ -24,6 +24,7 @@ from vaws_local_state import (  # noqa: E402
     ensure_profile,
     profile_summary,
     validate_machine_username,
+    workspace_identity_summary,
 )
 
 
@@ -33,6 +34,7 @@ def print_json(data: dict[str, object]) -> None:
 
 def cmd_summary(args: argparse.Namespace) -> int:
     payload = profile_summary(path=args.profile_path)
+    payload["workspace_identity"] = workspace_identity_summary()
     print_json(payload)
     return 0
 
@@ -64,6 +66,7 @@ def cmd_ensure(args: argparse.Namespace) -> int:
         "machine_username": profile["machine_username"],
         "container_name": profile["container_name"],
         "source": profile.get("source"),
+        "workspace_identity": workspace_identity_summary(),
     }
     print_json(payload)
     return 0

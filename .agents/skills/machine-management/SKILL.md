@@ -39,11 +39,12 @@ Ready does **not** imply code sync, rebuild, serving, or benchmark readiness.
 - Never write passwords or tokens into tracked files or `.vaws-local/`.
 - Never use `scp`, `sftp`, `sshpass`, or `expect` in this workflow.
 - Never default the container image silently. Ask the user to choose one of:
+  - `local-latest`: inspect every image in the target host Docker daemon, keep repositories whose basename contains `vllm-ascend` (including registry / namespace prefixes and names such as `company-vllm-ascend` or `vllm-ascend-dev`), filter them for the detected A2 / A3 / 310P machine type, and deploy the newest compatible image by Docker image creation time; this never pulls
   - `rc`: resolve the newest official prerelease `vllm-ascend` tag, then try `quay.nju.edu.cn/ascend/vllm-ascend:<tag>` first and `quay.io/ascend/vllm-ascend:<tag>` second; this is the recommended developer track
   - `main`: `quay.nju.edu.cn/ascend/vllm-ascend:main`, then `quay.io/ascend/vllm-ascend:main`
   - `stable`: resolve the latest official non-prerelease `vllm-ascend` release tag, then try NJU first and `quay.io` second
   - `custom`: a full image reference with a concrete non-`latest` tag or digest
-- Treat `auto`, `*:latest`, and bare repositories without a tag as forbidden defaults for managed-machine bootstrap.
+- Treat `auto`, direct `*:latest`, and bare repositories without a tag as forbidden defaults for managed-machine bootstrap; `local-latest` is the explicit bounded discovery policy, not a moving registry tag.
 - Report and persist the **actual selected image** for the managed container, not only the requested image policy.
 - Resolve hardware-specific image tags from the detected machine type whenever the user chose `rc`, `main`, or `stable`: A2 uses the base tag, A3 appends `-a3`, and 310P appends `-310p`.
 - Detect the machine type from `npu-smi info` / SoC output when possible; when detection is inconclusive, stop and ask for an explicit machine type override instead of guessing.
@@ -68,9 +69,9 @@ The primary bootstrap path must not depend on `ssh-copy-id`, `expect`, or any ot
 
 Use these task-oriented wrappers for normal agent work. They keep the parameter surface narrow and return structured JSON statuses such as `ready`, `needs_input`, `needs_repair`, `blocked`, `removed`, or `unmanaged`. They also stream phase progress on `stderr` as `__VAWS_PROGRESS__=<json>` while reserving `stdout` for one final machine-readable JSON payload.
 
-- `python3 .agents/skills/machine-management/scripts/machine_add.py --host <ip> --image <rc|main|stable|custom-ref> [--machine-type <A2|A3|310P>] [--machine-username <letters-or-digits> | --generate-machine-username] [--password-env NAME | --password-stdin | --password ...]`
+- `python3 .agents/skills/machine-management/scripts/machine_add.py --host <ip> --image <local-latest|rc|main|stable|custom-ref> [--machine-type <A2|A3|310P>] [--machine-username <letters-or-digits> | --generate-machine-username] [--password-env NAME | --password-stdin | --password ...]`
 - `python3 .agents/skills/machine-management/scripts/machine_verify.py --machine <alias-or-ip>`
-- `python3 .agents/skills/machine-management/scripts/machine_repair.py --machine <alias-or-ip> [--image <rc|main|stable|custom-ref>] [--machine-type <A2|A3|310P>] [--password-env NAME | --password-stdin | --password ...]`
+- `python3 .agents/skills/machine-management/scripts/machine_repair.py --machine <alias-or-ip> [--image <local-latest|rc|main|stable|custom-ref>] [--machine-type <A2|A3|310P>] [--password-env NAME | --password-stdin | --password ...]`
 - `python3 .agents/skills/machine-management/scripts/machine_remove.py --machine <alias-or-ip>`
 
 Design intent:
@@ -96,6 +97,7 @@ Keep alias compatibility in the parser layer, not in the main skill narrative.
 
 Local workspace-machine state lives under `.vaws-local/`:
 
+- `.vaws-local/workspace-identity.json`
 - `.vaws-local/machine-profile.json`
 - `.vaws-local/machine-inventory.json`
 
@@ -128,9 +130,13 @@ For `add` and any first-time attach flow:
 - reject spaces and symbols
 - default/random is allowed only after the user explicitly accepts it
 
-Use the resulting machine username as the stable namespace for collision-sensitive identifiers. For new containers, derive the name from that profile, for example `vaws-alice123`.
+Use the configured unified workspace alias as the stable namespace for new
+collision-sensitive identifiers when present; otherwise use the machine
+username. For example, alias `team42` creates `vaws-team42`.
 
-If inventory already records a container name for the target machine, keep using that recorded name even if the current local profile later changes.
+If inventory already records a namespace or container name for the target
+machine, keep using those recorded values even if the current identity or
+machine profile later changes. Alias changes never rename existing containers.
 
 ### 3. Probe first
 
@@ -168,7 +174,7 @@ When password bootstrap is required:
 `machine_add.py` should own this order:
 
 1. ensure or reuse the local machine profile
-2. ask for or reuse an explicit image choice; never fall back to `auto` or `latest`
+2. ask for or reuse an explicit image choice; `local-latest` performs bounded host-local discovery, while the other selectors keep their existing registry / custom-reference behavior
 3. if an existing record still points at a legacy or moving image tag, stop for re-selection before any `already-ready` shortcut
 4. ensure a local public key exists
 5. if needed, establish host key auth
@@ -216,6 +222,7 @@ Do not remove host firewall rules or host-level `authorized_keys` entries.
 - Quote remote-script arguments that may contain spaces, especially SSH public keys and mesh peer keys, before sending them through `ssh`.
 - Ensure `/run/sshd` exists before starting the dedicated `sshd`.
 - Image pulls should follow the selected mirror order and emit heartbeat-style progress so long `docker pull`, `apt-get update`, and `apt-get install` phases remain attributable. Persist the actually selected image in inventory, not only the selector.
+- `local-latest` should enumerate the target host's Docker images, report the filtered candidates and selected image ID, choose the newest compatible `vllm-ascend` image by `Created`, and fail clearly when no compatible local candidate exists. Recheck at bootstrap time and compare immutable image IDs when deciding whether an existing container matches.
 - Container bootstrap should leave behind `/etc/vaws/host-info.json`, `/etc/vaws/container-info.json`, and `/etc/profile.d/vaws-ascend-env.sh` so later verify / repair runs can see the recorded machine type, container type, and SoC quickly.
 - Container bootstrap should determine ATB C++ ABI once from the runtime Python when possible, write `VAWS_ATB_CXX_ABI`, source ATB with `--cxx_abi=<0|1>`, and patch common image startup files such as `/etc/profile` and `/root/.bashrc` when they source ATB without an explicit ABI.
 - Session-management may opt into the shared bootstrap helper's prepared image cache for short-lived session containers. Normal `machine_add.py` / `machine_repair.py` managed-base-container flows keep raw selected-image bootstrap behavior unless explicitly wired otherwise.

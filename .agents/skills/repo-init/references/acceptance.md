@@ -31,10 +31,12 @@ A successful run should satisfy all applicable items below.
 - allows partial completion
 - never writes personal remotes, secrets, or machine profile state into tracked files
 - preserves extra remotes
+- silently creates one persistent UUID4 in `.vaws-local/workspace-identity.json` during broad init
 
 ### Decision checkpoint
 
 - for broad init, the skill stops after the first probe summary and asks for:
+  - unified alias choice if the identity decision is pending
   - machine username choice if the profile is missing
   - repo topology choice
   - submodule-init choice
@@ -47,6 +49,8 @@ A successful run should satisfy all applicable items below.
 - the skill does not silently apply the recommended topology when the user only asked for generic init
 - if the user picks `custom`, the skill asks one follow-up text question for the literal username before mutating
 - the skill does not silently replace `custom` with the detected Git username
+- alias choices are `machine-username`, `custom`, and `none`; `custom` requires literal follow-up text
+- choosing `none` persists `alias_decision=declined` and prevents repeated prompts
 
 ### Local machine profile
 
@@ -57,6 +61,7 @@ A successful run should satisfy all applicable items below.
 - `repo_init_profile.py plan` returns the fixed-choice question when the profile is missing
 - `repo_init_profile.py apply --choice custom` without `--custom-username` returns `needs_input`
 - narrow Git-only tasks do not force profile creation
+- repeated identity initialization preserves the same UUID4
 
 ### Tooling and auth
 

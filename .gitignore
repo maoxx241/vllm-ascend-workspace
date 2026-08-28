@@ -18,13 +18,17 @@ docs/superpowers/
 .codex/*
 !.codex/
 !.codex/config.example.toml
+.grok/*
+!.grok/
+!.grok/config.example.toml
 .vaws-local/
 .remote-dev/state/
 .remote-dev/endpoints.local.json
 .machine-inventory.json
 .worktrees/
 
-# Cursor IDE — ignore all except rules and skills (those are tracked / shared)
+# Cursor IDE — share MCP configuration, rules, and skills only
 .cursor/*
+!.cursor/mcp.json
 !.cursor/rules/
 !.cursor/skills/

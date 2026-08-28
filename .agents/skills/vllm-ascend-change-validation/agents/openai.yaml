@@ -1,0 +1,4 @@
+interface:
+  display_name: "vLLM Ascend Change Validation"
+  short_description: "Map code changes to evidence-backed validation plans"
+  default_prompt: "Use $vllm-ascend-change-validation to analyze this diff, plan the minimum sufficient validation, and prepare a PR report."

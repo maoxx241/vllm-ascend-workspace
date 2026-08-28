@@ -2,6 +2,10 @@ Prefer the task wrappers for normal add / verify / repair / remove work. Wrapper
 
 # Machine-management command recipes
 
+When project initialization configured a unified alias, `machine_add.py`
+automatically uses it for new container namespaces; no extra machine flag is
+required. Inspect it with `python3 .agents/scripts/workspace_identity.py summary`.
+
 Prefer the task-oriented wrappers. Treat the low-level helpers as fallback maintenance tools.
 
 ## Public workflow wrappers
@@ -35,6 +39,16 @@ python3 .agents/skills/machine-management/scripts/machine_add.py \
 ```
 
 The wrapper will detect A2 / A3 / 310P from `npu-smi` when possible and append `-a3` or `-310p` automatically for selector-based images.
+
+To scan all images already present in the target host Docker daemon, filter the machine-compatible `vllm-ascend` images, and deploy the newest by image creation time without pulling:
+
+```bash
+python3 .agents/skills/machine-management/scripts/machine_add.py \
+  --host 173.125.1.2 \
+  --image local-latest
+```
+
+The structured probe and bootstrap output records the filtered candidates, selected reference, image ID, and creation time. If no compatible local image exists, the workflow stops in `image-discovery` instead of falling back to a registry.
 
 If `npu-smi` cannot identify the hardware cleanly, pass an explicit override:
 

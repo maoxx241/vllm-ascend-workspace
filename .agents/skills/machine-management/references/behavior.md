@@ -37,6 +37,7 @@ Rules:
 
 Relevant files:
 
+- `.vaws-local/workspace-identity.json`
 - `.vaws-local/machine-profile.json`
 - `.vaws-local/machine-inventory.json`
 
@@ -88,7 +89,8 @@ CLI ergonomics rules:
 
 ## Namespace and container naming contract
 
-The local machine profile provides a stable workspace machine username / namespace.
+The optional workspace identity alias provides the preferred resource
+namespace; the local machine profile remains the compatibility fallback.
 
 Rules:
 
@@ -97,7 +99,8 @@ Rules:
 - normalize to lowercase
 - default/random is valid only after the user explicitly accepts it
 - derive new container names from the namespace, for example `vaws-alice123`
-- if inventory already records a container name for a managed machine, keep using the recorded name for that machine
+- if inventory already records a namespace or container name for a managed machine, keep using the recorded values for that machine
+- changing an alias affects only new resources and never renames an existing container
 
 ## Ready vs not-ready
 
@@ -246,13 +249,16 @@ Do **not**:
 
 Image selection is an explicit decision gate, not an implicit default:
 
-1. ask the user to choose `rc`, `main`, `stable`, or a custom image reference before new-machine bootstrap
-2. `rc` resolves the newest official prerelease `vllm-ascend` tag at execution time, then tries `quay.nju.edu.cn/ascend/vllm-ascend:<tag>` first and `quay.io/ascend/vllm-ascend:<tag>` second; this is the recommended developer track
-3. `main` resolves to `quay.nju.edu.cn/ascend/vllm-ascend:main`, then `quay.io/ascend/vllm-ascend:main`
-4. `stable` resolves the latest official non-prerelease `vllm-ascend` release tag at execution time, then tries NJU first and `quay.io` second
-5. custom references must include a concrete non-`latest` tag or digest; `auto`, `*:latest`, and bare repositories without a tag are forbidden defaults
-6. if fresh pulls fail but one of the explicit candidate refs is already cached locally, reuse that cached image as a bounded fallback
-7. for non-destructive attach / repair, a recorded explicit non-`latest` image may be reused; ambiguous legacy images require another user choice
+1. ask the user to choose `local-latest`, `rc`, `main`, `stable`, or a custom image reference before new-machine bootstrap
+2. `local-latest` enumerates every image in the target host Docker daemon, keeps references whose repository basename contains `vllm-ascend` (so registry / namespace prefixes and repository-name prefixes or suffixes are supported), filters by the detected A2 / A3 / 310P tag suffix, and selects the newest compatible image by Docker `Created`; it does not pull
+3. host probe reports the filtered local image set, selected reference, selected immutable image ID, and creation time; bootstrap repeats discovery so deployment uses current host state
+4. an existing container satisfies `local-latest` only when its source image ID matches the newly selected image ID; matching tag text alone is insufficient
+5. `rc` resolves the newest official prerelease `vllm-ascend` tag at execution time, then tries `quay.nju.edu.cn/ascend/vllm-ascend:<tag>` first and `quay.io/ascend/vllm-ascend:<tag>` second; this is the recommended developer track
+6. `main` resolves to `quay.nju.edu.cn/ascend/vllm-ascend:main`, then `quay.io/ascend/vllm-ascend:main`
+7. `stable` resolves the latest official non-prerelease `vllm-ascend` release tag at execution time, then tries NJU first and `quay.io` second
+8. custom references must include a concrete non-`latest` tag or digest; `auto`, direct `*:latest`, and bare repositories without a tag are forbidden defaults
+9. if fresh pulls fail but one of the explicit candidate refs is already cached locally, reuse that cached image as a bounded fallback
+10. for non-destructive attach / repair, a recorded explicit non-`latest` image may be reused; ambiguous legacy images require another user choice
 
 Inventory should record the actual selected image, not only the requested selector string.
 

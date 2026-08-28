@@ -25,6 +25,7 @@ compatibility backend for managed sessions, sync, service adapters, and cleanup.
 
 - `.agents/skills/repo-init/` is the source-of-truth skill package for repository initialization.
 - `.agents/skills/machine-management/` is the source-of-truth skill package for remote machine attach, verify, repair, and removal workflows.
+- `.agents/skills/npu-fleet-monitor/` is the local deployment and lifecycle package for the standalone NPU fleet monitoring worktree and user service.
 - `.agents/skills/session-management/` is the source-of-truth skill package for isolated parallel agent sessions.
 - `.agents/skills/remote-toolbox/` is the compatibility skill package for managed VAWS target/probe/exec/job/sync/service/artifact/cleanup tools.
 - `.agents/skills/remote-code-parity/` is the source-of-truth skill package for remote code parity before remote execution.
@@ -34,8 +35,30 @@ compatibility backend for managed sessions, sync, service adapters, and cleanup.
 - `.agents/skills/ascend-memory-profiling/` is the source-of-truth skill package for profiling and attributing HBM memory usage on Ascend NPU for vLLM serving scenarios.
 - `.agents/skills/ascend-profiling-collection/` is the source-of-truth skill package for collecting Ascend torch-profiler traces and verified manifests.
 - `.agents/skills/ascend-profiling-analysis/` is the source-of-truth skill package for analyzing collected profiler roots/manifests and generating reports.
+- `.agents/skills/curate-workspace-knowledge/` is the explicit-only package for reviewing and promoting verified candidates into formal knowledge files.
+- `.agents/skills/vllm-ascend-graph-debug/` diagnoses graph compile, capture, replay, and graph/eager divergence.
+- `.agents/skills/vllm-ascend-correctness-validation/` compares normalized baseline/candidate and eager/graph correctness.
+- `.agents/skills/vllm-ascend-change-validation/` plans diff-driven validation and aggregates evidence.
+- `.agents/skills/vllm-ascend-performance-regression/` runs controlled alternating performance experiments.
+- `.agents/skills/vllm-ascend-distributed-debug/` records topology and per-rank distributed evidence.
+- `.agents/skills/ascend-operator-debug/` builds isolated Ascend operator case matrices.
+- `.agents/skills/ascend-triton-operator-development/` develops a first correct Ascend Triton candidate.
+- `.agents/skills/ascend-triton-kernel-validation/` gates fallback and correctness.
+- `.agents/skills/ascend-triton-kernel-optimization/` records profiler-driven tuning decisions.
+- `.agents/skills/ascend-triton-workflow/` links the Triton lifecycle through Run Manifest evidence.
+- `.agents/skills/vllm-ascend-pd-serving/` orchestrates grouped prefill/decode serving.
 - `.agents/scripts/workspace_profile.py` is the shared low-level helper for the local workspace machine profile.
+- `.agents/scripts/workspace_identity.py` manages the persistent local UUID4 and optional unified project/agent/resource alias.
+- `.agents/scripts/run_manifest.py` creates and validates shared Run Manifest v1 files.
+- `.agents/scripts/knowledge_validate.py` validates the versioned shared knowledge documents.
+- `.agents/scripts/knowledge_query.py` retrieves compact matching knowledge summaries and expands one entry only by id.
+- `.agents/scripts/knowledge_capture.py` records or merges one verified, redacted candidate without loading a Skill.
+- `.agents/hooks/knowledge_session_end.py` flushes only candidates explicitly deferred for the ending Codex session; it never reads the transcript.
+- `.agents/knowledge/` stores the empty formal document skeleton and any subsequently reviewed project knowledge.
+- `.agents/schemas/` stores the machine-readable Run Manifest and knowledge contracts.
 - `.agents/lib/vaws_local_state.py` is the shared library for untracked local runtime state.
+- `.agents/lib/vaws_run_manifest.py` is the shared Run Manifest v1 library for workflow correlation and artifact links.
+- `.agents/lib/vaws_knowledge.py` is the shared knowledge validation, capture, and query library.
 - `.agents/lib/vaws_session_id.py` and `.agents/lib/vaws_session_state.py` are the shared libraries for session identity, state, locks, and leases.
 - `.agents/lib/vaws_remote_toolbox.py` is the shared library for remote target resolution, SSH execution, job observation, artifact streaming, sync adapters, service adapters, and cleanup.
 - `.agents/lib/vaws_validate.py` is the shared validation library for agent-facing ids, environment names, path boundaries, and NPU device lists.
@@ -47,7 +70,7 @@ When a workflow has deterministic shell, SSH, Git, or local-state mechanics, pre
 
 Wrapper-style helpers should stream bounded phase progress on `stderr` and keep one final machine-readable JSON payload on `stdout`.
 
-For machine-management specifically, image selection is an explicit user decision gate: choose `rc`, `main`, `stable`, or a concrete custom image reference. `rc` is the recommended developer track. Do not silently fall back to `auto`, `latest`, or another moving tag.
+For machine-management specifically, image selection is an explicit user decision gate: choose `local-latest`, `rc`, `main`, `stable`, or a concrete custom image reference. `local-latest` scans the target host's Docker images and deploys the newest machine-compatible `vllm-ascend` image without pulling; `rc` remains the recommended registry-backed developer track. Do not silently fall back to `auto`, `latest`, or another moving tag.
 
 When you add or revise a helper script, keep the CLI alias-tolerant and give safe defaults for metadata that can be inferred. The goal is to reduce agent parameter brittleness, not to force one exact flag spelling.
 
@@ -60,10 +83,12 @@ Current primary helpers:
 - `machine-management/scripts/machine_verify.py`
 - `machine-management/scripts/machine_repair.py`
 - `machine-management/scripts/machine_remove.py`
+- `npu-fleet-monitor/scripts/manage_monitor.py`
 - `session-management/scripts/session_create.py`
 - `session-management/scripts/session_list.py`
 - `session-management/scripts/session_status.py`
 - `session-management/scripts/session_remove.py`
+- `session-management/scripts/session_group.py`
 - `session-management/scripts/session_gc.py`
 - `scripts/remote_target_resolve.py`
 - `scripts/remote_probe.py`
@@ -105,6 +130,22 @@ Current primary helpers:
 - `ascend-profiling-collection/scripts/run_remote_analyse.py`
 - `ascend-profiling-analysis/scripts/profile_analyze.py`
 - `ascend-profiling-analysis/scripts/profile_sweep.py`
+- `curate-workspace-knowledge/scripts/knowledge_curate.py`
+- `vllm-ascend-graph-debug/scripts/graph_debug_case.py`
+- `vllm-ascend-correctness-validation/scripts/correctness_run.py`
+- `vllm-ascend-change-validation/scripts/change_validation.py`
+- `vllm-ascend-performance-regression/scripts/performance_regression.py`
+- `vllm-ascend-distributed-debug/scripts/distributed_debug.py`
+- `ascend-operator-debug/scripts/operator_debug.py`
+- `ascend-triton-operator-development/scripts/triton_development.py`
+- `ascend-triton-kernel-validation/scripts/triton_validation.py`
+- `ascend-triton-kernel-optimization/scripts/triton_optimization.py`
+- `ascend-triton-workflow/scripts/triton_workflow.py`
+- `vllm-ascend-pd-serving/scripts/pd_serving.py`
+- `scripts/run_manifest.py`
+- `scripts/knowledge_validate.py`
+- `scripts/knowledge_query.py`
+- `scripts/knowledge_capture.py`
 - `scripts/workspace_profile.py`
 - `.agents/tests/test_vaws_scaffold_safety.py`
 
@@ -119,6 +160,7 @@ Reference files under `references/` are fallback detail, not the default executi
 
 Untracked workspace-local state lives under `.vaws-local/`:
 
+- `.vaws-local/workspace-identity.json`
 - `.vaws-local/machine-profile.json`
 - `.vaws-local/machine-inventory.json`
 - `.vaws-local/remote-code-parity/install-consents.json`
@@ -134,8 +176,17 @@ Untracked workspace-local state lives under `.vaws-local/`:
 - `.vaws-local/memory-profiling/`
 - `.vaws-local/ascend-profiling-collection/runs/`
 - `.vaws-local/profiling-analysis/runs/`
+- `.vaws-local/knowledge/candidates/`
+- `.vaws-local/knowledge/pending/<session-key>/`
+- `.vaws-local/knowledge/session-end/`
 
 Parallel remote work should use `session-management` first. A session owns a local worktree, a dedicated remote container, session-scoped serving/benchmark/profiling state, and resource leases. Existing `--machine` commands remain legacy-compatible for single-tenant workflows.
+
+Independent agents with separate workspace-local lease files may optionally use
+`session-management/scripts/npu_coordination.py`. It keeps an ephemeral,
+host-shared SQLite queue under `/tmp/vaws-npu-coordinator/v1/`, defers to actual
+host NPU occupancy and manual holds, and never becomes a mandatory execution
+gate.
 
 The remote-dev substrate is the preferred agent-facing surface once an endpoint
 exists. It resolves host/port direct endpoints by default, mirrors native
@@ -154,6 +205,7 @@ The legacy repo-root `.machine-inventory.json` is compatibility input only and s
 
 Key guardrail:
 
+- broad init silently creates the persistent workspace UUID4, but must ask once before setting or declining a unified alias
 - on a missing machine profile, `workspace_profile.py ensure` now requires either `--username` or `--generate`
 - broad init should normally go through `repo-init/scripts/repo_init_profile.py`, which narrows the machine-username choice to: detected Git username, random `agent#####`, or custom
 - this prevents silent default usernames during broad init or first machine attach

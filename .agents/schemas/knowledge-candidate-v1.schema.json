@@ -1,0 +1,193 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vllm-ascend-workspace.local/schemas/knowledge-candidate-v1.schema.json",
+  "title": "vLLM Ascend Workspace Knowledge Candidate v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "candidate_id",
+    "kind",
+    "summary",
+    "owner_skill",
+    "scope",
+    "fingerprints",
+    "symptom",
+    "root_cause",
+    "resolution",
+    "avoidance",
+    "applicable_versions",
+    "verification",
+    "evidence",
+    "confidence",
+    "status",
+    "occurrence_count",
+    "source",
+    "first_seen_at",
+    "last_seen_at",
+    "created_at",
+    "updated_at"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "candidate_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+    },
+    "kind": {
+      "enum": [
+        "version-compatibility",
+        "model-capabilities",
+        "parallelism-compatibility",
+        "backend-constraints",
+        "validation-rules",
+        "known-failure-signatures"
+      ]
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1
+    },
+    "owner_skill": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,127}$"
+    },
+    "scope": {
+      "type": "object"
+    },
+    "fingerprints": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "symptom": {
+      "type": "string",
+      "minLength": 1
+    },
+    "root_cause": {
+      "type": "string",
+      "minLength": 1
+    },
+    "resolution": {
+      "type": "string",
+      "minLength": 1
+    },
+    "avoidance": {
+      "type": "string"
+    },
+    "applicable_versions": {
+      "type": "string",
+      "minLength": 1
+    },
+    "verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "checks"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "passed",
+            "inconclusive"
+          ]
+        },
+        "checks": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "evidence": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "uri",
+          "stable"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uri": {
+            "type": "string",
+            "minLength": 1
+          },
+          "stable": {
+            "type": "boolean"
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        }
+      }
+    },
+    "confidence": {
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    "status": {
+      "const": "candidate"
+    },
+    "occurrence_count": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "session_id": {
+          "type": "string"
+        },
+        "run_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "commits": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "first_seen_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "last_seen_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}

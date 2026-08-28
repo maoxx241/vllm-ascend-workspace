@@ -1,9 +1,14 @@
 ---
 name: session-management
-description: Create, list, inspect, remove, and garbage-collect isolated VAWS agent sessions. Use before remote execution when multiple agent tasks must run in parallel without sharing local worktrees, remote containers, serving state, or resource leases.
+description: Create, list, inspect, remove, garbage-collect, and group isolated VAWS agent sessions, and optionally coordinate NPU task intent across independent agents on one host. Use before remote execution when tasks must not share worktrees, containers, serving state, or resource leases, when cooperative NPU queueing is requested, or when one distributed scenario needs an ordered set of existing sessions. Do not use for service lifecycle, code sync, benchmarks, or distributed failure diagnosis.
 ---
 
 # Session Management
+
+When `.vaws-local/workspace-identity.json` contains a unified alias, new
+session container names inherit the base machine namespace. Session records
+also snapshot `agent_id` and alias for cooperative attribution. Existing
+session/container names are never rewritten after an alias change.
 
 Create and maintain isolated VAWS sessions for parallel agent work.
 
@@ -13,6 +18,11 @@ Each session binds:
 - one remote session container
 - one `.vaws-local/sessions/<session-id>/` state namespace
 - local leases for container SSH port, service port, and optional NPU devices
+
+A session group binds two or more ready sessions with the same code and
+submodule snapshot, including content-level parity for dirty worktrees, plus
+explicit startup and reverse shutdown order. Grouping
+does not create another container or duplicate member leases.
 
 ## Use This Skill When
 
@@ -34,6 +44,8 @@ Each session binds:
 - Consumer entry points (parity, serving, benchmark, profiling-collection, memory-profiling, profiling-analysis) auto-resolve the session by walking up from the current working directory to the nearest `.vaws-local/current-session.json` worktree binding, so running them from inside the session worktree needs no target arg. Pass `--session-id <id>` or `--session-file <session.json>` only when running outside the worktree or targeting a different session.
 - Domain skill commands (serving, benchmark, profiling) are session-only; they have no `--machine` surface. `--machine` exists only on `session_create.py` (selects the base machine) and in machine-management (registration/verification).
 - Session removal should stop only that session's service and release only that session's leases.
+- Shared NPU coordination is an optional gentleman's agreement. It must not become a mandatory gate for existing serving, benchmark, profiling, or remote-command flows.
+- Shared coordination state is intentionally ephemeral under the remote host's `/tmp`; if it disappears, start a new coordination epoch and trust actual host occupancy over missing declarations.
 
 ## Entry Points
 
@@ -68,6 +80,38 @@ otherwise hold NPU/port leases indefinitely and block the machine (as seen with
 (timeouts) are never reaped, so a transient network blip cannot free an active
 session's leases.
 
+Optional cross-agent NPU coordination on the same bare-metal host:
+
+```bash
+python3 .agents/skills/session-management/scripts/npu_coordination.py \
+  --machine <alias-or-ip> submit \
+  --task-id <id> --npu-count 2 \
+  --estimated-duration-seconds 1800
+
+python3 .agents/skills/session-management/scripts/npu_coordination.py \
+  --machine <alias-or-ip> acquire --task-id <id>
+```
+
+The coordinator uses `/tmp/vaws-npu-coordinator/v1/coordinator.sqlite3` on the
+bare-metal host. It is advisory, does not alter existing local Session leases,
+and never stops an observed external or human process. It automatically
+publishes the persistent workspace UUID plus configured agent alias;
+`--agent-id` and `--agent-alias` remain explicit overrides.
+
+```bash
+python3 .agents/skills/session-management/scripts/session_group.py create \
+  --group-id <id> \
+  --member <name>=<session-id> \
+  --member <name>=<session-id> \
+  [--startup-order <name,name,...>]
+
+python3 .agents/skills/session-management/scripts/session_group.py status --group-id <id>
+python3 .agents/skills/session-management/scripts/session_group.py list
+python3 .agents/skills/session-management/scripts/session_group.py teardown \
+  --group-id <id> \
+  [--remove-containers] [--remove-worktrees] [--release-leases] [--force]
+```
+
 Progress is emitted on `stderr` as `__VAWS_SESSION_PROGRESS__=<json>`. Final output is JSON on `stdout`.
 
 `session_create.py` output includes a `next_steps` array that walks the agent through the recommended follow-up: `cd` into the worktree (all skill commands auto-resolve the session from there), run `session_diff.py` to review changes, and — in Cursor — use the cursor-app-control MCP tool `move_agent_to_root` to switch the agent workspace to the worktree. Switching to the worktree with `move_agent_to_root` after creation is recommended (not enforced): it makes every subsequent skill command auto-resolve this session with no target arg.
@@ -88,6 +132,7 @@ Local untracked state lives under `.vaws-local/sessions/`:
 - `<session-id>/session.json`
 - `<session-id>/serving.json`
 - `<session-id>/benchmark/`
+- `groups/<group-id>/group.json`
 
 Worktree bindings are written to `<worktree>/.vaws-local/current-session.json` and include the absolute base session file path so scripts run from the worktree can find the base session state. This binding is what lets consumer commands auto-resolve the session by walking up from the current working directory.
 

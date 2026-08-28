@@ -58,9 +58,12 @@ def list_tools() -> list[dict[str, Any]]:
         "remote.context_snapshot": "Write a compact endpoint context snapshot.",
         "remote.probe": "Probe basic endpoint facts.",
     }
+    # Grok's session registry rejects dotted names even when its MCP doctor
+    # successfully lists them. Advertise the portable aliases to every client;
+    # call_tool still accepts canonical dotted names for existing integrations.
     return [
-        {"name": name, "description": descriptions.get(name, name), "inputSchema": TOOL_SCHEMAS[name]}
-        for name in TOOL_SCHEMAS
+        {"name": alias, "description": descriptions.get(name, name), "inputSchema": TOOL_SCHEMAS[name]}
+        for alias, name in ALIASES.items()
     ]
 
 

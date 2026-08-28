@@ -41,7 +41,12 @@ from vaws_session_state import (  # noqa: E402
     session_record_for_execution,
 )
 from session_gc import probe_container_alive  # noqa: E402
-from vaws_local_state import load_profile, utc_now_iso  # noqa: E402
+from vaws_local_state import (  # noqa: E402
+    effective_workspace_alias,
+    load_profile,
+    load_workspace_identity,
+    utc_now_iso,
+)
 from vaws_ssh import base_ssh_options  # noqa: E402
 from vaws_validate import ValidationError, parse_device_csv  # noqa: E402
 
@@ -205,6 +210,7 @@ def verify_session_ssh(
     *,
     container_ssh_port: int,
     public_key_file: str | None,
+    visible_devices: list[int],
 ) -> dict[str, Any]:
     """Verify only host/container SSH for a newly bootstrapped session container."""
     try:
@@ -224,6 +230,33 @@ def verify_session_ssh(
     )
     host_check = machine_ops.check_direct_ssh(host, identity_file=identity_file)
     container_check = machine_ops.check_direct_ssh(container, identity_file=identity_file)
+    expected_visibility = ",".join(str(device) for device in visible_devices)
+    visibility_check: dict[str, Any] = {
+        "expected": expected_visibility,
+        "observed": None,
+        "matches": not expected_visibility,
+    }
+    if container_check.get("ok") and expected_visibility:
+        try:
+            result = machine_ops.run_local(
+                machine_ops.ssh_command(
+                    container,
+                    batch_mode=True,
+                    identity_file=identity_file,
+                )
+                + ["sh", "-c", "printf '%s' \"${ASCEND_RT_VISIBLE_DEVICES-}\""]
+            )
+            observed = result.stdout.strip()
+            visibility_check.update(
+                {
+                    "observed": observed,
+                    "matches": result.returncode == 0 and observed == expected_visibility,
+                    "returncode": result.returncode,
+                    "stderr": result.stderr.strip(),
+                }
+            )
+        except machine_ops.MachineManagementError as exc:
+            visibility_check.update({"matches": False, "error": str(exc)})
     payload: dict[str, Any] = {
         "verification_mode": "ssh",
         "identity_file": str(identity_file) if identity_file is not None else None,
@@ -234,6 +267,7 @@ def verify_session_ssh(
             "skipped": "session creation defaulted to SSH-only verification; use --verification-mode full for torch/torch_npu smoke",
         },
         "npu_smoke_skipped": True,
+        "device_visibility": visibility_check,
     }
     local_tool_errors = []
     for check in (host_check, container_check):
@@ -252,7 +286,11 @@ def verify_session_ssh(
             }
         )
         return payload
-    ready = bool(host_check.get("ok") and container_check.get("ok"))
+    ready = bool(
+        host_check.get("ok")
+        and container_check.get("ok")
+        and visibility_check.get("matches")
+    )
     payload.update(
         {
             "success": ready,
@@ -262,7 +300,9 @@ def verify_session_ssh(
         }
     )
     if not ready:
-        payload["message"] = "session container SSH is not ready"
+        payload["message"] = (
+            "session container SSH or leased-device visibility is not ready"
+        )
     return payload
 
 
@@ -456,7 +496,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         namespace = base_record.get("namespace")
         if not namespace:
             profile = load_profile()
-            namespace = profile.get("machine_username") if profile else None
+            namespace = effective_workspace_alias() or (
+                profile.get("machine_username") if profile else None
+            )
+        workspace_identity = load_workspace_identity()
 
         image = args.image or base_record["container"]["image"]
         workdir = args.workdir or base_record["container"].get("workdir", "/vllm-workspace")
@@ -523,6 +566,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             "session_id_source": resolved.source,
             "base_machine": alias,
             "workspace_id": sid,
+            "agent_identity": {
+                "agent_id": workspace_identity.get("agent_id") if workspace_identity else None,
+                "alias": workspace_identity.get("alias") if workspace_identity else None,
+            },
             "status": "creating",
             "local": {
                 "worktree_root": str(local_root),
@@ -545,6 +592,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "workdir": workdir,
                     "runtime_root": runtime_root,
                     "machine_type": base_record["container"].get("machine_type") or base_record["host"].get("machine_type"),
+                    "visible_devices": leases.get("npu_devices", []),
                 },
             },
             "leases": {
@@ -595,6 +643,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 public_key_file=args.public_key_file,
                 replace_container_on_image_change=args.replace_container_on_image_change,
                 use_prepared_image_cache=not args.disable_prepared_image_cache,
+                visible_devices=leases.get("npu_devices", []),
             )
             if container_payload.get("status") in {"needs_input", "needs_repair", "blocked"}:
                 session["status"] = "failed"
@@ -620,12 +669,42 @@ def main(argv: Sequence[str] | None = None) -> int:
                 emit_progress("verify", "running full session verification", session_id=sid)
                 verify = verify_machine(record)
                 verify["verification_mode"] = "full"
+                expected_visibility = ",".join(
+                    str(device) for device in leases.get("npu_devices", [])
+                )
+                smoke = verify.get("smoke", {})
+                observed_visibility = smoke.get("visible_devices")
+                observed_count = smoke.get("device_count")
+                visibility_matches = (
+                    not expected_visibility
+                    or (
+                        observed_visibility == expected_visibility
+                        and observed_count == len(leases.get("npu_devices", []))
+                    )
+                )
+                verify["device_visibility"] = {
+                    "expected": expected_visibility,
+                    "observed": observed_visibility,
+                    "observed_count": observed_count,
+                    "matches": visibility_matches,
+                }
+                if verify.get("status") == "ready" and not visibility_matches:
+                    verify.update(
+                        {
+                            "success": False,
+                            "ready": False,
+                            "status": "needs_repair",
+                            "action": "verify-found-device-visibility-drift",
+                            "message": "leased NPU visibility does not match the Session record",
+                        }
+                    )
             else:
                 emit_progress("verify", "checking session SSH readiness", session_id=sid)
                 verify = verify_session_ssh(
                     base_record,
                     container_ssh_port=leases["container_ssh_port"],
                     public_key_file=args.public_key_file,
+                    visible_devices=leases.get("npu_devices", []),
                 )
             container_payload["verify"] = verify
             if verify.get("status") != "ready":

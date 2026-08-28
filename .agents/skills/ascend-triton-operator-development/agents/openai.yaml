@@ -1,0 +1,4 @@
+interface:
+  display_name: "Ascend Triton Operator Development"
+  short_description: "Develop or migrate a correct Ascend Triton kernel"
+  default_prompt: "Use $ascend-triton-operator-development to develop or migrate this operator into a correct Ascend Triton kernel."
