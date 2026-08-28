@@ -191,7 +191,13 @@ Everything else defaults to parity-only, no reinstall.
 
 ### Trigger 2 — commit drift from last sync
 
-Compare each repo's real `source_head` commit with `last_head_commits` in `runtime-state.json`. Synthetic snapshot commits are parentless transport commits, so drift detection must use the underlying HEAD to avoid false positives from dirty pure-Python edits while still detecting submodule version switches. If the HEAD differs (e.g. submodule version switch via `git checkout`), trigger reinstall for that repo even when `changed_paths` is empty because the tree matches the new HEAD.
+Compare native/dependency input fingerprints against the last installed
+inputs. HEAD remains provenance, not an unconditional reinstall trigger.
+Fingerprints include submodule gitlinks and semantic build/profile settings;
+Python-only commits reuse artifacts, while native reversions invalidate them.
+Missing legacy fingerprints trigger one conservative rebuild. Remote commit
+verification also rejects tracked working-tree drift. The snapshot fast path
+checks the runtime-install marker and does not trust a status-only file hash.
 
 ### Trigger 3 — dependency cascade
 

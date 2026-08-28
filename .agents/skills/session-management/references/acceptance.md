@@ -53,3 +53,12 @@
 - Releasing a task requires repeated free observations; one transient busy sample keeps the lease protected.
 - An estimated duration overrun marks an active task overdue but does not release or preempt it.
 - Human/manual holds can reserve exact devices for a bounded future window and report conflicts without stopping existing work.
+# PR #66 ownership regressions
+
+- A refused/auth-failed/unreachable container SSH endpoint retains leases.
+- Missing metadata and a metadata-only `removed` status retain leases.
+- Successful local worktree removal with failed service stop cannot release
+  devices or mark remote resources removed.
+- Reusing a bound worktree preserves committed child branches and dirty files.
+- Empty or stale live NPU leases reject managed serving before stopping an
+  existing service or selecting hardware.

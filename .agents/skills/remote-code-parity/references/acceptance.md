@@ -157,3 +157,12 @@ Review these files together after every substantial skill edit:
 - `AGENTS.md`
 - `.agents/README.md`
 - `README.md`
+# Content and native reuse regressions
+
+- Two successive edits of the same dirty file produce distinct content
+  fingerprints; so do successive edits of an untracked file.
+- Committed Python-only changes preserve native build-input identity.
+- Native changes, reverting those changes, dependency changes and runtime
+  profile changes invalidate the corresponding installed inputs.
+- Missing legacy build-input state causes one migration rebuild.
+- Explicit source-only/materialize results are not native-runtime acceptance.

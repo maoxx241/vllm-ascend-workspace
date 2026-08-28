@@ -54,7 +54,7 @@ from _common import (
     select_devices,
     ssh_exec,
 )
-from vaws_session_state import allocate_service_port, file_lock, release_service_port, session_lock_dir
+from vaws_session_state import allocate_service_port, file_lock, release_service_port, session_lock_dir, require_session_npu_lease, SessionStateError
 from vaws_local_state import effective_workspace_alias, load_workspace_identity
 from vaws_validate import parse_device_csv, require_env_name
 
@@ -681,7 +681,15 @@ def main(argv: list[str] | None = None) -> int:
             launch_env = extra_env
             launch_extra_args = vllm_extra
 
-        leased_devices = _leased_devices_csv(target.session)
+        try:
+            live_devices = require_session_npu_lease(target.session, repo_root=target.state_repo_root)
+        except SessionStateError as exc:
+            print_json({
+                "status": "needs_repair", "session_id": target.session_id,
+                "error": str(exc),
+            })
+            return 1
+        leased_devices = ",".join(str(device) for device in live_devices)
         if leased_devices:
             try:
                 leased = _parse_devices_csv(leased_devices)

@@ -46,7 +46,7 @@ Keep a **ready** remote runtime in exact code parity with the local `vllm-ascend
   over the same trees; this gives receive-pack a common ancestor without making
   snapshot ids target-dependent or pulling upstream history into first sync.
 - Materialize child repos explicitly; do not rely on `git submodule update` to fetch synthetic child commits.
-- Synthetic commits are deterministic parentless tree snapshots. Keep each repo's real `HEAD` separately as `source_head` for reinstall drift detection instead of using it as the transport parent.
+- Synthetic commits are deterministic parentless tree snapshots. Keep the real `HEAD` as provenance and compare native/dependency input fingerprints with the last installed inputs; commit movement alone is not a rebuild reason.
 - If a clean child repo only differs from the parent through the parentless transport commit id, suppress that transport-only child gitlink path from the parent repo's `changed_paths`.
 - Use dynamic Python / pip discovery plus a shell-safe env preamble, and source optional Ascend env scripts under a `set +u` / `set -u` guard instead of relying on shell-specific variables.
 - Runtime dependency installs use the single A3-tested HuaweiCloud pip index. Do not configure default extra indexes, mirror fallback, or caller-provided pip index overrides in parity.
@@ -102,7 +102,7 @@ Normal agent entrypoint (session is the default target; run from inside the sess
 
 Apply-mode split:
 
-- `--apply-mode auto` (default): picks the cheapest sufficient tier automatically — no change at all hits the fingerprint fast path (single verify SSH, `status: ready`); pure Python changes run `materialize`; native/dependency/build-system changes (or a required first install) run `install`.
+- `--apply-mode auto` (default): unchanged content snapshots and installed build inputs use the verified snapshot fast path; Python-only changes run `materialize`; changed native/dependency/build inputs or a required first install run `install`. File-status fingerprints never authorize execution.
 - `--apply-mode source-only`: publish source snapshots to the container cache only; no runtime materialization and no install/rebuild.
 - `--apply-mode materialize`: publish snapshots and update the runtime source tree; no install/rebuild.
 - `--apply-mode install`: full parity behavior with consent, materialization, install/rebuild triggers, and verification.
@@ -252,7 +252,13 @@ After the first approved replacement, reinstall only when one of the following t
 
 **Trigger 2 — commit drift from last sync:**
 
-Compare each repo's real `source_head` commit with `last_head_commits` recorded in `runtime-state.json`. Synthetic snapshot commits are parentless transport commits, so drift detection must use the underlying source HEAD to catch submodule version switches without treating ordinary dirty Python edits as rebuild triggers. If a repo's HEAD changed (e.g. the user did `git checkout v0.8.0` inside `vllm/`), trigger reinstall for that repo even when `changed_paths` is empty.
+Compare the snapshot's native/dependency Git blobs, submodule gitlinks and
+semantic build environment with `installed_build_inputs` in runtime state.
+This handles committed Python-only changes without rebuilding and detects
+reverting previously installed dirty native changes. Missing legacy input
+records cause one conservative rebuild. A ready runtime profile supplies
+`VAWS_ENVIRONMENT_FINGERPRINT`; changing it invalidates native reuse. This does
+not infer compatibility for an unregistered or externally modified environment.
 
 **Trigger 3 — dependency cascade:**
 

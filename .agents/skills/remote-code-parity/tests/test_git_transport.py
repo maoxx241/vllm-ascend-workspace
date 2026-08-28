@@ -4,6 +4,8 @@ import argparse
 import importlib.util
 import subprocess
 import sys
+import tempfile
+import os
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -46,6 +48,59 @@ def snapshot_record(relpath: str = "vllm"):
 
 
 class GitTransportTests(unittest.TestCase):
+    def test_dirty_file_content_and_untracked_edits_change_fingerprint(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            def git(*args):
+                return subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True, text=True).stdout.strip()
+            git("init")
+            git("config", "user.name", "Test")
+            git("config", "user.email", "test@example.invalid")
+            path = root / "model.py"
+            path.write_text("base\n")
+            git("add", ".")
+            git("commit", "-m", "base")
+            path.write_text("edit one\n")
+            first = parity.workspace_fingerprint(root)
+            path.write_text("edit two\n")
+            second = parity.workspace_fingerprint(root)
+            self.assertNotEqual(first, second)
+            extra = root / "new.py"
+            extra.write_text("one\n")
+            third = parity.workspace_fingerprint(root)
+            extra.write_text("two\n")
+            self.assertNotEqual(third, parity.workspace_fingerprint(root))
+
+    def test_native_inputs_reuse_python_commits_and_detect_reverts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            def git(*args):
+                return subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True, text=True).stdout.strip()
+            git("init")
+            git("config", "user.name", "Test")
+            git("config", "user.email", "test@example.invalid")
+            (root / "model.py").write_text("base\n")
+            (root / "kernel.cpp").write_text("native one\n")
+            (root / "requirements.txt").write_text("dependency==1\n")
+            git("add", ".")
+            git("commit", "-m", "base")
+            def inputs():
+                return parity.build_input_fingerprints(root, "HEAD", parity.VLLM_REINSTALL_PATTERNS)
+            first = inputs()
+            (root / "model.py").write_text("python edit\n")
+            git("commit", "-am", "python only")
+            self.assertEqual(parity.changed_build_inputs(inputs(), first), (False, False))
+            (root / "kernel.cpp").write_text("native two\n")
+            git("commit", "-am", "native edit")
+            native = inputs()
+            self.assertEqual(parity.changed_build_inputs(native, first), (True, False))
+            git("revert", "--no-edit", "HEAD")
+            self.assertEqual(parity.changed_build_inputs(inputs(), native), (True, False))
+            self.assertEqual(inputs(), first)
+            with mock.patch.dict(os.environ, {"VAWS_ENVIRONMENT_FINGERPRINT": "different-profile"}):
+                self.assertEqual(parity.changed_build_inputs(inputs(), first), (True, False))
+            self.assertEqual(parity.changed_build_inputs(first, None), (True, True))
+
     def test_wrapper_forwards_default_transport(self) -> None:
         derived = {
             "workspace_root": "/worktree",

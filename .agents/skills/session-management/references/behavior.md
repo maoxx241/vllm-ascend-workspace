@@ -77,7 +77,14 @@ NPU leases are released by `session_remove.py --release-leases`, not by `serve_s
 
 When `session_remove.py --remove-container` sees no session serving state file, it skips the serving stop wrapper and relies on container removal to terminate any untracked process. This keeps teardown cheap for sessions that were created only for parity, bootstrap timing, or compile work.
 
-`session_remove.py` marks a session `removed` only when the requested container/worktree removal succeeds. Failed removal leaves the session in `needs_repair`. `session_gc.py` releases leases for `removed` or missing-state sessions; it does not release leases for generic `failed` sessions because those may still protect partially created remote resources.
+`session_remove.py` marks a session `removed` only after confirmed container
+removal and successful requested worktree cleanup. Confirmed container removal
+releases leases automatically. Local worktree removal alone retains remote
+leases; a failed stop leaves `needs_repair`. `--release-leases` requires
+confirmed container removal because stopping one PID does not release SSH
+ports or untracked workers. `session_gc.py --reap-dead --apply` requires host
+Docker proof and repeated free-device observations. Missing metadata, generic
+SSH failures and a metadata-only `removed` status are never release evidence.
 
 If remote cleanup raises before normal result aggregation, Session removal still
 persists `needs_repair` and keeps every lease. A transport exception must not

@@ -420,6 +420,19 @@ def session_live_leases(
     return live
 
 
+def require_session_npu_lease(session: dict[str, Any], *, repo_root: Path = ROOT) -> list[int]:
+    """Return currently owned devices, rejecting empty or stale snapshots."""
+    live = session_live_leases(
+        repo_root=repo_root, machine_alias=session["base_machine"], session_id=session["session_id"],
+    )["npu_devices"]
+    if not live:
+        raise SessionStateError("managed NPU execution requires an active nonempty lease; reserve devices before launch")
+    recorded = session.get("leases", {}).get("npu_devices", [])
+    if not isinstance(recorded, list) or sorted(recorded) != sorted(live):
+        raise SessionStateError("session device snapshot differs from its live lease; refusing stale device ownership")
+    return sorted(live)
+
+
 def release_all_session_leases(*, repo_root: Path = ROOT, session_id: str) -> None:
     sid = require_session_id(session_id)
     with file_lock(session_lock_dir(repo_root) / "leases.lock"):
@@ -586,14 +599,6 @@ def load_session(
     return load_session_lookup(session_id=session_id, session_file=session_file, repo_root=repo_root).session
 
 
-# Terminal statuses after which a session's leases must be released. Kept
-# narrow: only ``removed`` (the session is gone). Recoverable states such as
-# ``needs_repair`` / ``blocked`` intentionally keep their leases so a repair can
-# resume; a dead container in those states is reclaimed by ``session_gc
-# --reap-dead`` instead.
-_LEASE_RELEASING_STATUSES = frozenset({"removed"})
-
-
 def mark_session_status(
     *,
     repo_root: Path = ROOT,
@@ -608,12 +613,8 @@ def mark_session_status(
     if extra:
         session.update(extra)
     save_session(session, repo_root=lookup.state_repo_root)
-    # A session marked ``removed`` no longer owns anything, so its NPU/port
-    # leases must be freed. Binding release to the terminal transition (rather
-    # than only to session_remove's explicit --release-leases path) prevents the
-    # "zombie session holds leases forever" leak that starves the machine.
-    if status in _LEASE_RELEASING_STATUSES:
-        release_all_session_leases(repo_root=lookup.state_repo_root, session_id=session_id)
+    # Metadata transitions are not evidence that remote processes or ports
+    # have disappeared. The cleanup caller releases leases only after proof.
     return session
 
 

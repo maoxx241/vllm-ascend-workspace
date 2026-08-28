@@ -39,7 +39,8 @@ does not create another container or duplicate member leases.
 - Do not reuse the base machine container for new parallel tasks. New tasks should use `session_create.py`.
 - For NPU work, reserve devices during creation with `--devices` or `--npu-count`; session-aware serving uses that lease by default. `--npu-count` requires a successful host NPU probe (no guessing of device ranges); if the probe fails, fix it or pass explicit `--devices`.
 - `--reuse-existing` probes the existing container's SSH endpoint before reporting the session as reusable; a dead container returns `needs_repair` instead of a stale `ready`.
-- Marking a session `removed` (via `session_remove.py` or `mark_session_status`) always releases its NPU/port leases, even without `--release-leases`.
+- Metadata status changes never release remote leases. Confirmed container removal releases its leases even without `--release-leases`; worktree removal or stopping only the recorded service PID does not prove all remote resources are free.
+- Managed serving requires a nonempty live NPU lease matching the session snapshot. Empty or stale snapshots cannot fall through to idle-card selection.
 - `session_remove.py --remove-worktree` auto-forces removal of a *clean* worktree (git always demands `--force` for submodule-containing worktrees); a worktree with local changes still requires an explicit `--force`.
 - Consumer entry points (parity, serving, benchmark, profiling-collection, memory-profiling, profiling-analysis) auto-resolve the session by walking up from the current working directory to the nearest `.vaws-local/current-session.json` worktree binding, so running them from inside the session worktree needs no target arg. Pass `--session-id <id>` or `--session-file <session.json>` only when running outside the worktree or targeting a different session.
 - Domain skill commands (serving, benchmark, profiling) are session-only; they have no `--machine` surface. `--machine` exists only on `session_create.py` (selects the base machine) and in machine-management (registration/verification).
@@ -70,15 +71,11 @@ python3 .agents/skills/session-management/scripts/session_gc.py
 python3 .agents/skills/session-management/scripts/session_gc.py --reap-dead --apply
 ```
 
-`session_gc.py` releases leases for sessions whose metadata is `removed` or
-unreadable (dry-run by default; add `--apply` to mutate). Add `--reap-dead` to
-also probe the container SSH endpoint of non-removed lease holders and reap
-leases whose container is *confirmed* gone (connection refused). This clears
-"zombie" sessions — left `ready` in local state after the container died — that
-otherwise hold NPU/port leases indefinitely and block the machine (as seen with
-`dsv4-w4a8-main-125` pinning all 8 cards for days). Inconclusive probes
-(timeouts) are never reaped, so a transient network blip cannot free an active
-session's leases.
+`session_gc.py` reports stale metadata without releasing leases by default.
+`--reap-dead --apply` releases only after the host confirms an absent/stopped
+container and repeated NPU probes confirm its leased cards free. Missing or
+unreadable metadata, an old `removed` status, refused SSH connections, auth
+failures, and timeouts all retain leases until remote ownership is resolved.
 
 Optional cross-agent NPU coordination on the same bare-metal host:
 
@@ -137,6 +134,11 @@ Local untracked state lives under `.vaws-local/sessions/`:
 Worktree bindings are written to `<worktree>/.vaws-local/current-session.json` and include the absolute base session file path so scripts run from the worktree can find the base session state. This binding is what lets consumer commands auto-resolve the session by walking up from the current working directory.
 
 Worktree creation puts every initialized submodule (`vllm/`, `vllm-ascend/`) on branch `session/<id>` — no more detached HEAD — and records `{path, branch, base_commit}` for each under `local.submodule_branches` in the session state. `session_diff.py` uses those recorded `base_commit` values as each submodule's diff base.
+
+Reusing a bound worktree never updates initialized children to parent gitlinks
+or resets their branches. Existing commits and dirty content remain intact.
+If initial creation failed partway through submodule initialization, inspect
+and initialize only the missing children before retrying parity.
 
 For explicit `--session-id --no-worktree` timing/debug sessions, `session_create.py` does not overwrite the repo-root `.vaws-local/current-session.json`; agents should pass `--session-id` or `--session-file` explicitly for those shared-root flows. Current-session binding writes are atomic so readers never observe partial JSON.
 

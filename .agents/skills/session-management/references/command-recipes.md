@@ -221,3 +221,11 @@ python3 .agents/skills/session-management/scripts/npu_coordination.py \
 
 All commands are optional. Existing task flows remain valid without publishing
 or acquiring a cooperative task.
+# Lease cleanup safety
+
+Use `session_remove.py --session-id <id> --remove-container` to remove a
+container and release its leases after successful removal. Add
+`--remove-worktree` only when local worktree deletion is intended. A stop or
+local worktree deletion alone does not release all remote resource leases.
+For already stopped/absent containers use
+`session_gc.py --reap-dead --apply`; unknown host/device state retains leases.

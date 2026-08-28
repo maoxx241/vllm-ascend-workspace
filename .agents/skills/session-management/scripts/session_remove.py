@@ -196,16 +196,17 @@ def main() -> int:
                 results["worktree"] = remove_session_worktree(worktree_root, force=True)
                 results["worktree"]["auto_forced_clean"] = not args.force
 
-        if args.release_leases:
-            can_release = stop_result_allows_lease_release(results["stop"]) or container_result_allows_lease_release(
-                results.get("container")
-            )
+        container_removed = container_result_allows_lease_release(results.get("container"))
+        if args.release_leases or container_removed:
+            # A stopped model process does not free the container SSH port or
+            # prove that other container workers have exited.
+            can_release = container_removed
             if not can_release:
                 results["leases"] = {
                     "released": False,
                     "blocked": True,
                     "reason": (
-                        "service stop did not succeed and the session container was not removed; "
+                        "the session container was not confirmed removed; "
                         "refusing to release leases that may still protect live resources"
                     ),
                 }
@@ -216,12 +217,15 @@ def main() -> int:
             results["leases"] = {"released": True}
 
         if args.remove_container or args.remove_worktree:
-            remove_ok = True
-            if args.remove_container:
-                remove_ok = remove_ok and container_result_allows_lease_release(results.get("container"))
+            remove_ok = container_removed
             if args.remove_worktree:
                 remove_ok = remove_ok and results.get("worktree", {}).get("returncode") == 0
-            next_status = "removed" if remove_ok else "needs_repair"
+            if remove_ok:
+                next_status = "removed"
+            elif not args.remove_container and stop_result_allows_lease_release(results["stop"]) and results.get("worktree", {}).get("returncode") == 0:
+                next_status = "stopped"
+            else:
+                next_status = "needs_repair"
         else:
             next_status = "stopped" if stop_result_allows_lease_release(results["stop"]) else "needs_repair"
         updated = mark_session_status(

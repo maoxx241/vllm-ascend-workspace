@@ -318,12 +318,12 @@ def existing_worktree_bound(path: Path) -> str | None:
     return str(sid) if sid else None
 
 
-def ensure_submodule_branches(worktree_root: Path, branch: str) -> list[dict[str, Any]]:
+def ensure_submodule_branches(worktree_root: Path, branch: str, *, read_only: bool = False) -> list[dict[str, Any]]:
     """Put every initialized submodule on the session branch.
 
     Fresh ``submodule update --init`` checkouts leave submodules on a detached
     HEAD, which makes agent commits easy to lose and hard to review. Creating
-    (or resetting) ``session/<id>`` at the current gitlink keeps all session
+    ``session/<id>`` at the current gitlink keeps all session
     work on a named branch that ``session_diff.py`` and plain git can diff.
     """
     listing = run_git(
@@ -337,9 +337,14 @@ def ensure_submodule_branches(worktree_root: Path, branch: str) -> list[dict[str
         if not (sub_root / ".git").exists():
             continue
         head = run_git(["rev-parse", "HEAD"], cwd=sub_root).stdout.strip()
-        run_git(["checkout", "-B", branch], cwd=sub_root)
-        results.append({"path": rel_path, "branch": branch, "base_commit": head})
-        emit_progress("worktree", f"submodule {rel_path} on branch {branch}", base_commit=head)
+        current = run_git(["branch", "--show-current"], cwd=sub_root).stdout.strip()
+        if not read_only and current != branch:
+            # Never reset an existing branch. A name collision needs explicit
+            # resolution instead of moving committed work to a parent gitlink.
+            run_git(["checkout", "-b", branch], cwd=sub_root)
+            current = branch
+        results.append({"path": rel_path, "branch": current or None, "base_commit": head})
+        emit_progress("worktree", f"submodule {rel_path} preserved on {current or 'detached HEAD'}", base_commit=head)
     return results
 
 
@@ -359,9 +364,14 @@ def ensure_worktree(
         bound = existing_worktree_bound(worktree_root)
         if bound == session_id:
             emit_progress("worktree", "reusing bound worktree", path=str(worktree_root), branch=branch)
-            emit_progress("worktree", "initializing submodules", path=str(worktree_root))
-            run_git(["submodule", "update", "--init", "--recursive"], cwd=worktree_root)
-            submodules = ensure_submodule_branches(worktree_root, branch)
+            # Updating to the superproject gitlink here can discard the
+            # submodule branch selected by the agent, even when it is clean.
+            submodules = ensure_submodule_branches(worktree_root, branch, read_only=True)
+            try:
+                previous = load_session_lookup(session_id=session_id, repo_root=worktree_root).session
+            except SessionStateError:
+                previous = {}  # First creation can fail before writing a session record.
+            submodules = previous.get("local", {}).get("submodule_branches") or submodules
             return worktree_root, {
                 "action": "reused",
                 "path": str(worktree_root),

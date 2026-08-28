@@ -214,3 +214,9 @@ On failure, includes `stderr_tail` for diagnosis.
 - `.agents/skills/vllm-ascend-serving/references/behavior.md`
 - `.agents/skills/vllm-ascend-serving/references/command-recipes.md`
 - `.agents/skills/vllm-ascend-serving/references/acceptance.md`
+# Active NPU ownership
+
+Managed serving and relaunch require a nonempty live NPU lease matching the
+session snapshot before touching an existing service. Do not select free cards
+as a fallback for an empty lease, and do not trust a stale `session.json` after
+its live lease was released.

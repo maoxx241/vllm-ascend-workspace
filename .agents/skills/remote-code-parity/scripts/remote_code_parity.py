@@ -54,6 +54,8 @@ VLLM_REINSTALL_PATTERNS = (
     '**/*.cc',
     '**/*.h',
     '**/*.hpp',
+    '*.c', '*.cc', '*.cpp', '*.cxx', '*.cu', '*.cuh', '*.h', '*.hpp', '*.hxx',
+    '*.s', '*.S', '*.cmake', '*.proto',
 )
 
 VLLM_ASCEND_REINSTALL_PATTERNS = VLLM_REINSTALL_PATTERNS + (
@@ -204,6 +206,9 @@ PARITY_BRANCH_NAME = 'parity-current'
 TRANSFER_MODES = ('auto', 'git', 'bundle')
 
 REMOTE_RUNTIME_ENV_PASSTHROUGH = (
+    'CFLAGS',
+    'CXXFLAGS',
+    'VAWS_ENVIRONMENT_FINGERPRINT',
     'XDG_CACHE_HOME',
     'PIP_CACHE_DIR',
     'FETCHCONTENT_BASE_DIR',
@@ -240,6 +245,13 @@ RUNTIME_INSTALL_ENV_KEYS = (
     'ASCEND_HOME_PATH',
 )
 
+BUILD_INPUT_ENV_KEYS = (
+    'CMAKE_BUILD_TYPE', 'SOC_VERSION', 'VAWS_SOC_VERSION',
+    'COMPILE_CUSTOM_KERNELS', 'VAWS_COMPILE_CUSTOM_KERNELS', 'VAWS_USE_CLANG15',
+    'C_COMPILER', 'CXX_COMPILER', 'CFLAGS', 'CXXFLAGS', 'ASCEND_HOME_PATH',
+    'VAWS_ENVIRONMENT_FINGERPRINT',
+)
+
 
 @dataclass
 class SubmoduleEntry:
@@ -266,6 +278,7 @@ class SnapshotRecord:
     ref: str
     changed_paths: list[str]
     submodules: list[dict[str, str]]
+    build_inputs: dict[str, str] = field(default_factory=dict)
 
 
 def normalize_workspace_id(value: str) -> str:
@@ -1457,7 +1470,11 @@ def verify_runtime_commits_map(
     lines = ['set -eo pipefail']
     for relpath in expected:
         repo_dir = runtime_root if relpath in ('', '.') else str(Path(runtime_root) / relpath)
-        lines.append(f"printf '%s %s\\n' {quoted(relpath)} \"$(git -C {quoted(repo_dir)} rev-parse HEAD)\"")
+        lines.append(
+            f"if git -C {quoted(repo_dir)} diff --quiet HEAD --; then "
+            f"printf '%s %s\\n' {quoted(relpath)} \"$(git -C {quoted(repo_dir)} rev-parse HEAD)\"; "
+            f"else printf '%s %s\\n' {quoted(relpath)} dirty-runtime; fi"
+        )
     result = ssh_exec(container, '\n'.join(lines))
     observed: dict[str, str] = {}
     for line in result.stdout.splitlines():
@@ -1480,22 +1497,70 @@ def verify_runtime_commits(
 
 
 def workspace_fingerprint(workspace_root: Path) -> str:
-    """Cheap whole-tree content fingerprint: per-repo HEAD + porcelain status.
+    """Hash dirty content, not just the names/status of dirty files.
 
-    Captures exactly the inputs a synthetic ``git add -A`` snapshot would see,
-    without building one. Used to skip full snapshot construction when nothing
-    changed since the last successful sync.
+    A second edit of an already modified file has identical porcelain status.
+    Hash tracked diffs and untracked bytes so it cannot disappear in the fast
+    path. Prefix the format to invalidate the old status-only cache.
     """
     tree = discover_repo_tree(workspace_root, '.', None)
     hasher = hashlib.sha256()
     for node in iter_postorder(tree):
         repo = node.repo_path
         head = git_head(repo) or ''
-        status = git(repo, ['status', '--porcelain=v1', '-uall'], check=False).stdout
-        for token in (node.relpath, head, status):
+        dirty = git(repo, ['diff', '--binary', '--no-ext-diff', 'HEAD', '--']).stdout if head else ''
+        for token in (node.relpath, head, dirty):
             hasher.update(token.encode('utf-8'))
             hasher.update(b'\0')
-    return hasher.hexdigest()
+        untracked = git(repo, ['ls-files', '--others', '--exclude-standard', '-z']).stdout
+        for relpath in sorted(filter(None, untracked.split('\0'))):
+            path = repo / relpath
+            hasher.update(relpath.encode('utf-8') + b'\0')
+            hasher.update(str(path.lstat().st_mode).encode('ascii') + b'\0')
+            if path.is_symlink():
+                hasher.update(os.readlink(path).encode('utf-8'))
+            else:
+                with path.open('rb') as handle:
+                    for chunk in iter(lambda: handle.read(1024 * 1024), b''):
+                        hasher.update(chunk)
+            hasher.update(b'\0')
+    build_env = {key: os.environ[key] for key in BUILD_INPUT_ENV_KEYS if key in os.environ}
+    hasher.update(json.dumps(build_env, sort_keys=True).encode('utf-8'))
+    return 'content-v2:' + hasher.hexdigest()
+
+
+def build_input_fingerprints(repo: Path, commit: str, patterns: tuple[str, ...]) -> dict[str, str]:
+    """Fingerprint native/dependency trees, including submodule gitlinks.
+
+    Comparing with the *last installed* inputs catches reverting a dirty
+    native edit, which a diff against the current HEAD alone cannot detect.
+    """
+    native: list[str] = []
+    dependencies: list[str] = []
+    for entry in git(repo, ['ls-tree', '-r', '-z', commit]).stdout.split('\0'):
+        if not entry:
+            continue
+        metadata, path = entry.split('\t', 1)
+        mode, kind, oid = metadata.split()
+        token = f'{mode}\0{path}\0{oid}'
+        if kind == 'commit' or glob_match_any(path, patterns):
+            native.append(token)
+        if glob_match_any(path, DEPENDENCY_INSTALL_PATTERNS):
+            dependencies.append(token)
+    build_env = {key: os.environ[key] for key in BUILD_INPUT_ENV_KEYS if key in os.environ}
+    return {
+        'native': hashlib.sha256(json.dumps(sorted(native)).encode('utf-8')).hexdigest(),
+        'dependencies': hashlib.sha256(json.dumps(sorted(dependencies)).encode('utf-8')).hexdigest(),
+        'build_env': hashlib.sha256(json.dumps(build_env, sort_keys=True).encode('utf-8')).hexdigest(),
+    }
+
+
+def changed_build_inputs(current: dict[str, str], installed: dict[str, str] | None) -> tuple[bool, bool]:
+    if not installed:
+        return True, True  # One conservative rebuild migrates legacy state.
+    dependencies = current.get('dependencies') != installed.get('dependencies')
+    native = dependencies or any(current.get(key) != installed.get(key) for key in ('native', 'build_env'))
+    return native, dependencies
 
 
 def read_runtime_install_env(
@@ -1550,6 +1615,7 @@ def update_runtime_state(
             'first_reinstall_completed': first_reinstall_completed,
             'last_snapshot_commits': {record.relpath: record.commit for record in records},
             'last_head_commits': {record.relpath: record.source_head for record in records},
+            'installed_build_inputs': {record.relpath: record.build_inputs for record in records if record.build_inputs},
             'last_runtime_install_env': runtime_install_env or {},
             'last_fingerprint': fingerprint,
         }
@@ -1634,6 +1700,10 @@ def build_snapshot_records(workspace_root: Path, workspace_id: str, snapshot_id:
         )
         child_records[node.relpath] = record
         ordered_records.append(record)
+    for record in ordered_records:
+        if record.relpath in ('vllm', 'vllm-ascend'):
+            patterns = VLLM_REINSTALL_PATTERNS if record.relpath == 'vllm' else VLLM_ASCEND_REINSTALL_PATTERNS
+            record.build_inputs = build_input_fingerprints(workspace_root / record.relpath, record.commit, patterns)
     return ordered_records
 
 
@@ -1684,46 +1754,11 @@ def run_sync(args: argparse.Namespace) -> int:
     snapshot_id = args.snapshot_id or now_utc().replace(':', '').replace('-', '') + '-' + uuid.uuid4().hex[:8]
     container = SshEndpoint(host=args.container_host, port=args.container_port, user=args.container_user)
 
-    # Fingerprint fast path: when neither HEAD nor the dirty state of any repo
-    # changed since the last successful sync, skip the full-tree synthetic
-    # snapshot entirely and just verify the remote runtime commits.
+    # A run is identified by an actual content snapshot. A cached status-only
+    # fingerprint cannot authorize execution (nor can a watcher observation
+    # made while the user is editing). The snapshot-equality fast path below
+    # still skips transport/materialization/install when nothing changed.
     fingerprint: str | None = None
-    if not args.force_reinstall and not args.dry_run and not args.print_manifest and not args.snapshot_id:
-        emit_progress('fingerprint', workspace_id=workspace_id)
-        fingerprint = workspace_fingerprint(workspace_root)
-        fp_state = (
-            load_runtime_state(workspace_root)
-            .get('servers', {})
-            .get(args.server_name, {})
-            .get('containers', {})
-            .get(args.container_identity, {})
-        )
-        fp_last_commits = fp_state.get('last_snapshot_commits', {})
-        if fp_state.get('last_fingerprint') == fingerprint and fp_last_commits:
-            emit_progress('fingerprint-fast-path', fingerprint=fingerprint[:12])
-            observed = verify_runtime_commits_map(
-                container=container,
-                runtime_root=runtime_root,
-                expected=fp_last_commits,
-            )
-            if observed == fp_last_commits:
-                emit_progress('complete', status='ready', fast_path='fingerprint')
-                print(json_dump({
-                    'status': 'ready',
-                    'server_name': args.server_name,
-                    'container_identity': args.container_identity,
-                    'workspace_id': workspace_id,
-                    'container_cache_root': container_cache_root,
-                    'first_install': False,
-                    'snapshot_commits': fp_last_commits,
-                    'runtime_commits': observed,
-                    'reinstall': 'not-needed',
-                    'runtime_install_env': fp_state.get('last_runtime_install_env', {}),
-                    'reason': 'fingerprint unchanged since last sync',
-                    'fast_path': 'fingerprint',
-                }))
-                return 0
-            emit_progress('fingerprint-fast-path-miss', reason='remote runtime commits drifted')
 
     emit_progress('snapshot-build', workspace_id=workspace_id, snapshot_id=snapshot_id)
     records = build_snapshot_records(workspace_root, workspace_id, snapshot_id, tuple(DEFAULT_DENYLIST))
@@ -1732,13 +1767,6 @@ def run_sync(args: argparse.Namespace) -> int:
     try:
         try:
             record_map = {record.relpath: record for record in records}
-            reinstall_vllm = reinstall_required_for_repo(record_map['vllm'], VLLM_REINSTALL_PATTERNS) if 'vllm' in record_map else False
-            reinstall_vllm_ascend = reinstall_required_for_repo(record_map['vllm-ascend'], VLLM_ASCEND_REINSTALL_PATTERNS) if 'vllm-ascend' in record_map else False
-            vllm_dependency_changed = dependency_install_required_for_repo(record_map['vllm']) if 'vllm' in record_map else False
-            vllm_ascend_dependency_changed = dependency_install_required_for_repo(record_map['vllm-ascend']) if 'vllm-ascend' in record_map else False
-            vllm_head_drift = False
-            vllm_ascend_head_drift = False
-
             prior_runtime_state = load_runtime_state(workspace_root)
             last_container_state = (
                 prior_runtime_state
@@ -1748,37 +1776,14 @@ def run_sync(args: argparse.Namespace) -> int:
                 .get(args.container_identity, {})
             )
             last_commits = last_container_state.get('last_snapshot_commits', {})
-            last_head_commits = last_container_state.get('last_head_commits', {})
+            installed_inputs = last_container_state.get('installed_build_inputs', {})
 
-            def head_drift_flags(relpath: str, patterns: tuple[str, ...]) -> tuple[bool, bool, bool]:
-                """(drifted, needs_reinstall, deps_changed) for committed HEAD movement.
+            def changes(relpath: str) -> tuple[bool, bool]:
+                record = record_map.get(relpath)
+                return changed_build_inputs(record.build_inputs, installed_inputs.get(relpath)) if record else (False, False)
 
-                Installs are editable (`pip install -e .`), so committed
-                Python-only changes only need runtime sources materialized.
-                Only native/build-system paths (or an uncomputable diff)
-                force a rebuild.
-                """
-                if relpath not in record_map:
-                    return False, False, False
-                last_head = last_head_commits.get(relpath)
-                current_head = record_map[relpath].source_head
-                if not last_head or current_head == last_head:
-                    return False, False, False
-                repo = workspace_root / relpath
-                changed = committed_changed_paths(repo, last_head, current_head or '')
-                if changed is None:
-                    return True, True, True
-                needs_reinstall = any(glob_match_any(path, patterns) for path in changed)
-                deps_changed = any(glob_match_any(path, DEPENDENCY_INSTALL_PATTERNS) for path in changed)
-                return True, needs_reinstall, deps_changed
-
-            drift, needs_reinstall, _ = head_drift_flags('vllm', VLLM_REINSTALL_PATTERNS)
-            vllm_head_drift = drift
-            reinstall_vllm = reinstall_vllm or needs_reinstall
-            drift, needs_reinstall, deps_changed = head_drift_flags('vllm-ascend', VLLM_ASCEND_REINSTALL_PATTERNS)
-            vllm_ascend_head_drift = drift
-            reinstall_vllm_ascend = reinstall_vllm_ascend or needs_reinstall
-            vllm_ascend_dependency_changed = vllm_ascend_dependency_changed or deps_changed
+            reinstall_vllm, vllm_dependency_changed = changes('vllm')
+            reinstall_vllm_ascend, vllm_ascend_dependency_changed = changes('vllm-ascend')
             if reinstall_vllm and 'vllm-ascend' in record_map:
                 reinstall_vllm_ascend = True
 
@@ -1787,9 +1792,23 @@ def run_sync(args: argparse.Namespace) -> int:
                     reinstall_vllm = True
                 if 'vllm-ascend' in record_map:
                     reinstall_vllm_ascend = True
-            install_vllm_ascend_deps = vllm_ascend_dependency_changed
+            install_vllm_ascend_deps = vllm_ascend_dependency_changed or vllm_dependency_changed
 
             snapshot_commits = {record.relpath: record.commit for record in records}
+
+            if (
+                args.apply_mode in ('auto', 'install') and not args.dry_run
+                and not args.force_reinstall and not reinstall_vllm and not reinstall_vllm_ascend
+                and snapshot_commits == last_commits and last_container_state.get('first_reinstall_completed')
+            ):
+                marker = read_runtime_install_marker(container=container, runtime_root=runtime_root, marker_dirname=marker_dirname, dry_run=False)
+                if not first_install_needed(marker, args.container_identity, runtime_root):
+                    observed = verify_runtime_commits_map(container=container, runtime_root=runtime_root, expected=snapshot_commits)
+                    if observed == snapshot_commits:
+                        summary = summary_payload(status='ready', server_name=args.server_name, container_identity=args.container_identity, workspace_id=workspace_id, container_cache_root=container_cache_root, records=records, reinstall_status='not-needed', reason='snapshot and installed build inputs unchanged', first_install=False, runtime_install_env=last_container_state.get('last_runtime_install_env', {}), observed_runtime_commits=observed)
+                        summary['fast_path'] = 'snapshot'
+                        print(json_dump(summary))
+                        return 0
 
             auto_selected_materialize = False
             if args.apply_mode == 'auto':
@@ -1952,7 +1971,7 @@ def run_sync(args: argparse.Namespace) -> int:
                                 records=records,
                                 first_reinstall_completed=last_container_state.get('first_reinstall_completed', False),
                                 runtime_install_env=last_container_state.get('last_runtime_install_env', {}),
-                                fingerprint=fingerprint or workspace_fingerprint(workspace_root),
+                                fingerprint=fingerprint,
                             )
 
                     current_phase = 'finalize-manifest'
@@ -1990,39 +2009,6 @@ def run_sync(args: argparse.Namespace) -> int:
                 finally:
                     emit_progress('release-lock', lock_path=lock_path)
                     release_container_lock(container, lock_path, args.dry_run)
-
-            if (
-                not args.dry_run
-                and not reinstall_vllm
-                and not reinstall_vllm_ascend
-                and last_commits
-                and snapshot_commits == last_commits
-            ):
-                current_phase = 'fast-path-verify'
-                emit_progress(current_phase, snapshot_commits=snapshot_commits)
-                observed = verify_runtime_commits(
-                    container=container,
-                    runtime_root=runtime_root,
-                    records=records,
-                    dry_run=False,
-                )
-                if observed == snapshot_commits:
-                    emit_progress('complete', status='ready', fast_path=True)
-                    summary = summary_payload(
-                        status='ready',
-                        server_name=args.server_name,
-                        container_identity=args.container_identity,
-                        workspace_id=workspace_id,
-                        container_cache_root=container_cache_root,
-                        records=records,
-                        reinstall_status='not-needed',
-                        reason=None,
-                        first_install=False,
-                        runtime_install_env=last_container_state.get('last_runtime_install_env', {}),
-                        observed_runtime_commits=observed,
-                    )
-                    print(json_dump(summary))
-                    return 0
 
             current_phase = 'read-runtime-marker'
             emit_progress(current_phase, runtime_root=runtime_root)
@@ -2297,7 +2283,7 @@ def run_sync(args: argparse.Namespace) -> int:
                     or last_container_state.get('first_reinstall_completed', False)
                     or reinstall_status == 'performed',
                     runtime_install_env=runtime_install_env,
-                    fingerprint=fingerprint or workspace_fingerprint(workspace_root),
+                    fingerprint=fingerprint,
                 )
                 current_phase = 'finalize-manifest'
                 emit_progress(current_phase, manifest_path=manifest_path)
