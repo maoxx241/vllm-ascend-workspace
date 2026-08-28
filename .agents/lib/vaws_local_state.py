@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Local untracked state helpers for vllm-ascend-workspace.
 
-This module centralizes repo-local runtime state that should never be tracked.
+Machine inventory is shared through the primary Git worktree. Execution state
+remains local to the current worktree and should never be tracked.
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ import os
 import re
 import secrets
 import string
+import subprocess
 import tempfile
 import uuid
 from datetime import datetime, timezone
@@ -36,9 +38,44 @@ ROOT = Path(__file__).resolve().parents[2]
 STATE_DIR = ROOT / STATE_DIRNAME
 PROFILE_PATH = STATE_DIR / PROFILE_FILENAME
 IDENTITY_PATH = STATE_DIR / IDENTITY_FILENAME
-INVENTORY_PATH = STATE_DIR / INVENTORY_FILENAME
 SESSIONS_DIR = STATE_DIR / SESSIONS_DIRNAME
-LEGACY_INVENTORY_PATH = ROOT / LEGACY_INVENTORY_FILENAME
+
+
+def shared_workspace_root(repo_root: Path = ROOT) -> Path:
+    """Return the primary worktree that owns cross-worktree machine inventory."""
+    repo_root = repo_root.expanduser().resolve()
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo_root), "rev-parse", "--git-common-dir"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return repo_root
+    if result.returncode != 0 or not result.stdout.strip():
+        return repo_root
+    common_dir = Path(result.stdout.strip()).expanduser()
+    if not common_dir.is_absolute():
+        common_dir = repo_root / common_dir
+    common_dir = common_dir.resolve()
+    if common_dir.name.lower() == ".git" and common_dir.is_dir():
+        return common_dir.parent
+    return repo_root
+
+
+def shared_inventory_path(repo_root: Path = ROOT) -> Path:
+    return shared_workspace_root(repo_root) / STATE_DIRNAME / INVENTORY_FILENAME
+
+
+SHARED_WORKSPACE_ROOT = shared_workspace_root(ROOT)
+LOCAL_INVENTORY_PATH = STATE_DIR / INVENTORY_FILENAME
+INVENTORY_PATH = shared_inventory_path(ROOT)
+LEGACY_INVENTORY_PATH = SHARED_WORKSPACE_ROOT / LEGACY_INVENTORY_FILENAME
+LOCAL_LEGACY_INVENTORY_PATH = ROOT / LEGACY_INVENTORY_FILENAME
 
 
 class WorkspaceStateError(RuntimeError):
@@ -389,6 +426,8 @@ def profile_summary(path: Path = PROFILE_PATH) -> dict[str, Any]:
         "state_dir": str(path.parent),
         "profile_path": str(path),
         "inventory_path": str(INVENTORY_PATH),
+        "inventory_scope": "git-common-worktree",
+        "shared_workspace_root": str(SHARED_WORKSPACE_ROOT),
         "sessions_path": str(SESSIONS_DIR),
         "legacy_inventory_path": str(LEGACY_INVENTORY_PATH),
         "exists": path.exists(),
@@ -418,8 +457,22 @@ def profile_summary(path: Path = PROFILE_PATH) -> dict[str, Any]:
     return summary
 
 
-def resolve_inventory_read_path(preferred_path: Path = INVENTORY_PATH) -> Path:
+def resolve_inventory_read_path(
+    preferred_path: Path = INVENTORY_PATH,
+    *,
+    repo_root: Path = ROOT,
+) -> Path:
     preferred_path = preferred_path.expanduser().resolve()
-    if same_path(preferred_path, INVENTORY_PATH) and not preferred_path.exists() and LEGACY_INVENTORY_PATH.exists():
-        return LEGACY_INVENTORY_PATH.expanduser().resolve()
+    canonical_path = shared_inventory_path(repo_root).expanduser().resolve()
+    if same_path(preferred_path, canonical_path) and not preferred_path.exists():
+        repo_root = repo_root.expanduser().resolve()
+        fallbacks = (
+            repo_root / STATE_DIRNAME / INVENTORY_FILENAME,
+            shared_workspace_root(repo_root) / LEGACY_INVENTORY_FILENAME,
+            repo_root / LEGACY_INVENTORY_FILENAME,
+        )
+        for fallback in fallbacks:
+            fallback = fallback.expanduser().resolve()
+            if not same_path(fallback, preferred_path) and fallback.exists():
+                return fallback
     return preferred_path

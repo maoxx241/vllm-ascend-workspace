@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Low-level local machine inventory helper for vllm-ascend-workspace.
+"""Low-level shared machine inventory helper for vllm-ascend-workspace.
 
-The canonical inventory now lives under `.vaws-local/machine-inventory.json`.
-For compatibility, the helper will read the legacy repo-root
-`.machine-inventory.json` when the new path does not exist yet. Prefer the
-task-oriented wrappers for normal add / verify / repair / remove workflows.
+The canonical inventory lives under the primary Git worktree's
+`.vaws-local/machine-inventory.json`, so linked worktrees see the same fleet.
+Execution state remains isolated in each worktree. Compatibility fallbacks are
+read only until the next successful inventory write migrates them.
 """
 
 from __future__ import annotations
@@ -26,6 +26,9 @@ if str(LIB_DIR) not in sys.path:
 from vaws_local_state import (  # noqa: E402
     INVENTORY_PATH as DEFAULT_PATH,
     LEGACY_INVENTORY_PATH,
+    LOCAL_INVENTORY_PATH,
+    LOCAL_LEGACY_INVENTORY_PATH,
+    SHARED_WORKSPACE_ROOT,
     ensure_state_dir,
     resolve_inventory_read_path,
     same_path,
@@ -274,6 +277,9 @@ def cmd_summary(args: argparse.Namespace) -> int:
         "schema_version": inventory["schema_version"],
         "inventory": str(active_path),
         "preferred_inventory": str(requested_path),
+        "inventory_scope": "git-common-worktree",
+        "shared_workspace_root": str(SHARED_WORKSPACE_ROOT),
+        "worktree_local_inventory": str(LOCAL_INVENTORY_PATH),
         "legacy_inventory": str(LEGACY_INVENTORY_PATH),
         "count": len(inventory["machines"]),
         "machines": [
@@ -401,7 +407,11 @@ def cmd_put(args: argparse.Namespace) -> int:
     }
     if not same_path(active_path, requested_path):
         payload["loaded_from"] = str(active_path)
-        payload["migrated_from_legacy"] = same_path(active_path, LEGACY_INVENTORY_PATH)
+        payload["migrated_from_legacy"] = any(
+            same_path(active_path, candidate)
+            for candidate in (LEGACY_INVENTORY_PATH, LOCAL_LEGACY_INVENTORY_PATH)
+        )
+        payload["migrated_from_worktree_local"] = same_path(active_path, LOCAL_INVENTORY_PATH)
     print(json.dumps(payload, indent=2, ensure_ascii=False))
     return 0
 
@@ -430,7 +440,11 @@ def cmd_remove(args: argparse.Namespace) -> int:
     }
     if not same_path(active_path, requested_path):
         payload["loaded_from"] = str(active_path)
-        payload["migrated_from_legacy"] = same_path(active_path, LEGACY_INVENTORY_PATH)
+        payload["migrated_from_legacy"] = any(
+            same_path(active_path, candidate)
+            for candidate in (LEGACY_INVENTORY_PATH, LOCAL_LEGACY_INVENTORY_PATH)
+        )
+        payload["migrated_from_worktree_local"] = same_path(active_path, LOCAL_INVENTORY_PATH)
     print(json.dumps(payload, indent=2, ensure_ascii=False))
     return 0
 

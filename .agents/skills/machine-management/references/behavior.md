@@ -35,16 +35,17 @@ Rules:
 - wrapper scripts stream phase progress on `stderr` as `__VAWS_PROGRESS__=<json>` and keep one final JSON result on `stdout`
 - on a missing profile, `workspace_profile.py ensure` must use either `--username` or `--generate`
 
-Relevant files:
+Relevant files and scopes:
 
 - `.vaws-local/workspace-identity.json`
 - `.vaws-local/machine-profile.json`
-- `.vaws-local/machine-inventory.json`
+- `<primary-worktree>/.vaws-local/machine-inventory.json` — shared by all worktrees discovered through Git common-dir
+- `<current-worktree>/.vaws-local/sessions/`, `serving/`, benchmark, profiling, and other execution records — isolated per worktree
 
 Compatibility rule:
 
-- read legacy repo-root `.machine-inventory.json` when the new path is still absent
-- migrate to `.vaws-local/machine-inventory.json` on the next successful inventory write
+- read an existing worktree-local `.vaws-local/machine-inventory.json` or legacy `.machine-inventory.json` when the primary shared inventory is still absent
+- migrate fallback inventory to the primary worktree's `.vaws-local/machine-inventory.json` on the next successful write
 
 ## Public API surface contract
 

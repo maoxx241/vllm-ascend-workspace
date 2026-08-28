@@ -95,16 +95,18 @@ Keep alias compatibility in the parser layer, not in the main skill narrative.
 
 ## Local state
 
-Local workspace-machine state lives under `.vaws-local/`:
+Local workspace-machine state lives under `.vaws-local/`. Machine inventory is shared by every Git worktree through the primary worktree; execution state remains worktree-local:
 
 - `.vaws-local/workspace-identity.json`
 - `.vaws-local/machine-profile.json`
-- `.vaws-local/machine-inventory.json`
+- `<primary-worktree>/.vaws-local/machine-inventory.json` (shared)
+- `<current-worktree>/.vaws-local/sessions/`, `serving/`, benchmark, profiling, and other execution state (isolated)
 
 Compatibility note:
 
-- the helper still reads legacy repo-root `.machine-inventory.json` when the new path does not exist yet
-- the next successful inventory write migrates state to `.vaws-local/machine-inventory.json`
+- a linked worktree resolves the primary worktree through Git's common directory
+- when the shared inventory is absent, the helper can read a pre-existing worktree-local `.vaws-local/machine-inventory.json` or legacy `.machine-inventory.json`
+- the next successful inventory write migrates fallback data to the primary worktree's shared inventory
 
 ## Workflow
 

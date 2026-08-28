@@ -36,6 +36,7 @@ from vaws_local_state import (  # noqa: E402
     WorkspaceStateError,
     ensure_state_dir,
     resolve_inventory_read_path,
+    shared_inventory_path,
     utc_now_iso,
 )
 from vaws_session_state import (  # noqa: E402
@@ -256,13 +257,10 @@ def derive_workspace_id(repo_root: Path) -> str:
 
 
 def _load_inventory(repo_root: Path = ROOT) -> tuple[dict[str, Any], Path]:
-    preferred = repo_root / ".vaws-local" / "machine-inventory.json"
-    path = resolve_inventory_read_path(preferred)
+    preferred = shared_inventory_path(repo_root)
+    path = resolve_inventory_read_path(preferred, repo_root=repo_root)
     if not path.exists():
-        legacy = repo_root / ".machine-inventory.json"
-        if legacy.exists():
-            path = legacy
-        elif INVENTORY_PATH.exists():
+        if INVENTORY_PATH.exists():
             path = INVENTORY_PATH
         elif LEGACY_INVENTORY_PATH.exists():
             path = LEGACY_INVENTORY_PATH
