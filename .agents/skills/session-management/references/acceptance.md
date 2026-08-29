@@ -67,19 +67,24 @@
 - An estimated duration overrun marks an active task overdue but does not release or preempt it.
 - Human/manual holds can reserve exact devices for a bounded future window and report conflicts without stopping existing work.
 
-## Native lifecycle acceptance status (2026-08-28)
+## Native lifecycle acceptance status (2026-08-29)
 
 This matrix is separate from the resource-layer contract checks above. It
 records actual native-client results and does not treat setup, fallback calls,
-or pending approvals as passes:
+or pending approvals as passes. Each client ran headless in its own
+Git-initialized project with hooks installed by `vaws_client_setup.py`:
 
-| Client | Result |
-| --- | --- |
-| Claude Code | Native new/resume and remote-dev calls passed; child association was exercised. |
-| Grok | Native new/resume and remote-dev calls passed; child sharing used explicit association. |
-| Kimi Code | Native new/resume identity observed; native MCP tools absent and remote calls used Bash fallback, so native MCP is unproven. |
-| Codex | Native hook review remains pending; the hardware run used an explicit public adapter, not automatic hooks. |
-| Cursor Agent | Normal workspace/MCP approval blocked the CLI attempt; no CLI lifecycle pass. |
+| Client | Model | Result |
+| --- | --- | --- |
+| Claude Code 2.1.143 | deepseek-v4-flash | New/resume/distinct and explicit child association passed; native MCP `vaws_session` passed. |
+| Codex 0.147.0 | gpt-5.6-luna (effort max) | New/resume/distinct and explicit child association passed; native MCP `vaws_session` passed. |
+| Cursor agent 2026.08.25 | claude-opus-5-high | New/resume/distinct and explicit child association passed; native MCP `vaws_session` passed. |
+| Grok 1.0.13 | grok-4.6 | New/resume/distinct and explicit child association passed; native MCP `vaws_session` passed via the `use_tool` envelope. |
+| Kimi Code 0.38.0 | default | New/resume/distinct and explicit child association passed; native MCP `vaws_session` passed after normal workspace trust (native `mcp__remote-dev__vaws_session` tool call in the wire log). Untrusted workspaces silently skip project MCP configuration. |
+
+Earlier (2026-08-28): Claude Code and Grok passed new/resume plus remote-dev
+calls; Codex's native hook path was pending and Cursor Agent was blocked by
+approval prompts. Both gaps are closed by the 2026-08-29 runs above.
 
 Three concurrent `gpt-5.6-luna` VAWS tasks used the explicit public adapter,
 separate source/runtime/port/card assignments, and real bounded NPU probes. The

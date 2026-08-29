@@ -118,19 +118,27 @@ and [Cursor hooks documentation](https://cursor.com/docs/hooks).
 New native lifecycle behavior still needs actual client calls in addition to
 the regression fixtures; do not count earlier coordinator-only MCP acceptance.
 
-#### Native lifecycle acceptance status (2026-08-28)
+#### Native lifecycle acceptance status (2026-08-29)
 
 The following is the bounded result of actual client attempts; configuration,
 schema discovery, a connected server, and an explicit adapter are not native
-client acceptance:
+client acceptance. Each client ran headless in its own Git-initialized project
+with hooks installed by `vaws_client_setup.py`; distinct roots in one cwd,
+resume identity, and explicit child association were verified against the
+shared local registry:
 
-| Client | Native lifecycle result |
-| --- | --- |
-| Claude Code | New/resume and remote-dev calls passed; child association was exercised. |
-| Grok | New/resume and remote-dev calls passed; child sharing was exercised through explicit association. |
-| Kimi Code | Native new/resume identity was observed, but native MCP tools were absent; remote calls used a Bash fallback, so native MCP remains unproven. |
-| Codex | Native hook path remains pending normal review; the hardware run used an explicit public adapter and is not a hook acceptance. |
-| Cursor Agent | Blocked by the normal workspace/MCP approval prompt; no CLI lifecycle pass was established. |
+| Client | Model | Native lifecycle result |
+| --- | --- | --- |
+| Claude Code 2.1.143 | deepseek-v4-flash | New/resume/distinct passed; explicit child association shared the task; native MCP `vaws_session` returned the parent session id. |
+| Codex 0.147.0 | gpt-5.6-luna (effort max) | New/resume/distinct passed; explicit child association shared the task; native MCP `vaws_session` returned the parent session id. |
+| Cursor agent 2026.08.25 | claude-opus-5-high | New/resume/distinct passed; explicit child association shared the task; native MCP `vaws_session` returned the parent session id. |
+| Grok 1.0.13 | grok-4.6 | New/resume/distinct passed after normal project trust; explicit child association shared the task; native MCP `vaws_session` through the `use_tool` envelope returned the parent session id. |
+| Kimi Code 0.38.0 | default | New/resume/distinct passed; explicit child association shared the task. Native MCP `vaws_session` passed after the normal workspace trust flow; the session wire log shows `mcp.tools_discovered` and a native `mcp__remote-dev__vaws_session` tool call. Untrusted workspaces silently skip the project MCP, which earlier looked like an absent server. |
+
+Earlier (2026-08-28) results: Claude Code and Grok passed new/resume and
+remote-dev calls; Codex's native hook path was still pending and Cursor Agent
+was blocked by approval prompts. Both gaps are closed by the 2026-08-29 runs
+above.
 
 The three concurrent `gpt-5.6-luna` VAWS runs used the explicit public
 adapter, separate source/runtime/port/card assignments, and real bounded NPU

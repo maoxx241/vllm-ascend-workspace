@@ -67,6 +67,7 @@ This skill takes structured parameters, handles all SSH escaping and remote exec
 python3 .agents/skills/vllm-ascend-serving/scripts/serve_start.py \
   [--session-id <id> | --session-file <path>] \
   --model <remote-weight-path> \
+  [--preset <name>] \
   [--served-model-name <name>] \
   [--tp <N>] [--dp <N>] \
   [--devices <0,1,2,3>] \
@@ -77,6 +78,36 @@ python3 .agents/skills/vllm-ascend-serving/scripts/serve_start.py \
   [--skip-parity] \
   [-- <extra vllm serve args>]
 ```
+
+#### Serving presets
+
+`--preset <name>` applies a named, verified recipe from `presets/<name>.json`
+(tp/dp/port/devices/served-model-name/health-timeout/env/serve_args, plus an
+optional `vllm_version` pin). Explicit CLI args always override preset values;
+preset `env` merges under `--extra-env` per key; preset `serve_args` apply only
+when no `--` passthrough is given. Presets never carry a model weight path —
+`--model` stays required.
+
+When a preset is used, a **preflight** runs before any existing service is
+stopped: the pinned `vllm_version` is compared against the container's actual
+vllm, absolute `PYTHONPATH` entries must exist in the container, and
+JSON-valued serve args (`--additional-config`, `--model-loader-extra-config`,
+`--speculative-config`, `--compilation-config`) must parse. A failed preflight
+aborts with `phase: preflight` and leaves the running service untouched, so
+recipe/version drift never costs a multi-minute model load. Available presets:
+`dsv4-flash` (DeepSeek-V4-Flash W4A8 MTP, verified on A3 nightly CANN 9.1 /
+vllm 0.26.0).
+
+#### Staged readiness
+
+Readiness is not `/health` alone. `wait_for_ready` tracks startup phases from
+runtime-log markers (`weight-load` → `compile`/`graph-capture` → `health-ok` →
+`models-ok`), then requires one deterministic real request
+(`first-token-ok`, temperature 0) before reporting ready. The readiness output
+records the phase timeline; a timeout names the last observed phase (e.g.
+`graph-capture`, which legitimately takes 15–20 minutes on large models) so a
+stuck launch is diagnosable instead of an opaque 300s timeout. A lost SSH
+probe round-trip is treated as unknown, never as process exit.
 
 #### Launch wrapping (`--wrap-script`)
 
@@ -186,7 +217,9 @@ NPU availability is checked via `npu-smi info` on the **bare-metal host** (not t
 
 ### 6. Wait for readiness
 
-The script polls `/health` and `/v1/models` until both return success or the timeout expires.
+The script polls `/health` and `/v1/models` while tracking startup phases from
+runtime-log markers, then requires one deterministic real request before
+reporting ready. A timeout reports the last observed phase.
 
 ### 6a. Diagnose launch failure before any code change
 
