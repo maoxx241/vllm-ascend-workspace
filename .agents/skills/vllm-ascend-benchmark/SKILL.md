@@ -36,7 +36,9 @@ compatibility backend for managed VAWS sessions.
 - If service startup returns a non-ready result after launching a PID, benchmark cleanup still calls `serve_stop.py --force` for the same session.
 - Progress goes to `stderr` as `__VAWS_BENCHMARK_PROGRESS__=<json>`. Final result goes to `stdout` as JSON.
 - Keep local benchmark state under `.vaws-local/sessions/<session-id>/benchmark/`; results are written to `.vaws-local/sessions/<session-id>/benchmark/runs/`.
-- **Multi-state comparisons** (baseline vs PR vs modified) are a first-class workflow: use `bench_compare.py`, which checks out each git ref *in the container*, benchmarks every state with identical serve/bench args, and reports TPOT/throughput deltas. Do not hand-write a bespoke comparison script.
+- **Multi-state comparisons** (baseline vs PR vs modified) are a first-class workflow: use `bench_compare.py`, which checks out each git ref *in the container*, benchmarks every state with identical serve/bench args, and reports TPOT/throughput deltas. Do not hand-write a bespoke comparison script — put reusable model/service configurations into a named preset under `presets/` instead (see below). The old bespoke `.agents/scripts/dsv4_flash_benchmark.py` was deleted; `presets/dsv4-flash.json` carries its DSV4 Flash configuration, with the two loader args adapted for vllm ≥ 0.26 (`enable_multithread_load` as a JSON boolean, no `safetensors-load-strategy prefetch` — verified on real A3 hardware).
+- **Native-input gate.** `bench_compare.py` aligns source only and never rebuilds compiled custom ops. After each state's checkout it fingerprints the in-container `csrc`/`cmake`/requirements inputs and compares the digest against the first state's. A mismatch fails the run with an explanation (rebuild via parity first, or pass `--allow-stale-native` to downgrade to a loud `warnings` entry plus `native_input_changed: true`).
+- **Partial results are never lost.** Each completed state is persisted under the session's `benchmark/runs/` dir as it finishes; on any failure the error JSON still carries `partial_states` (completed labels) and `result_paths`.
 - **Never hand-roll stale-process cleanup.** A past bespoke cleanup SIGTERM'd a session's dedicated sshd (`Exiting on signal 15`), dropped the container SSH port, and forced a rebuild. Use `--stale-cleanup` (backed by `safe_stale_cleanup`), which only reaps vLLM `EngineCore`/`Worker` children by name, skips PID 1, excludes anything matching `sshd`/`vaws`, and kills explicit pids only (never a process group).
 - **Backend is overridable.** The default is chat (`--backend openai-chat --endpoint /v1/chat/completions`). For completion-style models (e.g. DSV4) pass `--bench-args --backend openai --endpoint /v1/completions ...` and the default is not injected.
 
@@ -53,23 +55,47 @@ compatibility backend for managed VAWS sessions.
 python3 .agents/skills/vllm-ascend-benchmark/scripts/bench_run.py \
   [--session-id <id> | --session-file <path>] \
   --model <remote-weight-path> \
+  [--preset <name>] \
   [--tp <N>] [--dp <N>] \
+  [--port <N>] [--devices <csv>] \
+  [--served-model-name <name>] [--health-timeout <sec>] \
   [--runs <N>] \
   [--warmup-runs <M>] \
   [--serve-args <arg> ...] \
   [--bench-args <arg> ...] \
   [--extra-env KEY=VALUE ...] \
+  [--bench-env KEY=VALUE ...] \
   [--refer-nightly <yaml-name>] \
-  [--port <N>] \
   [--skip-parity]
 ```
 
+- `--preset`: named preset JSON from the skill's `presets/` dir (e.g. `dsv4-flash`). Explicit CLI args override preset values.
 - `--runs`: number of benchmark iterations against the same warm service (default: 1). The service starts once and all runs hit the same warm instance.
 - `--warmup-runs`: number of initial runs to discard from aggregated statistics (default: 0). Must be less than `--runs`.
 - `--serve-args`: extra arguments forwarded to `vllm serve` (e.g. `--async-scheduling`, `--compilation-config '...'`)
 - `--bench-args`: extra arguments forwarded to `vllm bench serve` (e.g. `--num-prompts 128`, `--max-concurrency 32`)
 - `--extra-env`: environment variables for the service (e.g. `HCCL_BUFFSIZE=1024`)
+- `--bench-env`: environment variables exported in the bench-side remote shell before `vllm bench serve` (e.g. `PYTHONPATH=/vllm-workspace/vllm`)
 - `--refer-nightly`: name of a nightly YAML (without path prefix) to use as a configuration reference; user-provided args override anything from the YAML
+
+## Presets
+
+A preset is a JSON file under `.agents/skills/vllm-ascend-benchmark/presets/<name>.json` holding a reusable, model-specific benchmark configuration so it never has to be re-typed (or hand-scripted) per comparison. Recognized keys:
+
+- `tp`, `dp`, `port`, `devices`, `served_model_name`, `health_timeout` — service shape
+- `env` (object) — service env vars, merged over nightly with CLI `--extra-env` winning
+- `bench_env` (object) — bench-side remote-shell env vars (e.g. `PYTHONPATH`, `VLLM_VERSION`), CLI `--bench-env` wins
+- `serve_args` / `bench_args` (arrays) — full arg lists, replaced wholesale by CLI `--serve-args` / `--bench-args`
+- `vllm_ref` — vllm commit aligned in-container for every `bench_compare.py` state (CLI `--vllm-ref` wins)
+- `runs`, `warmup_runs` — iteration defaults for `bench_compare.py` (CLI wins, fallback 3/1)
+- `fixed_request_dataset` (`{input_len, output_len, path}`) — enables the generated fixed-token-count dataset in `bench_compare.py`
+- `bench_request_counts` (array of int) — request-count cases for `bench_compare.py`
+
+Per-field priority is always: **explicit CLI arg > preset > nightly YAML > built-in default**. A preset never carries a `model` key — the model weight path is machine-specific and `--model` stays required.
+
+Shipped presets:
+
+- `dsv4-flash` — DeepSeek-V4-Flash W4A8 MTP (tp8, port 30001, served name `dsv4-w4a8`, 6 runs / 1 warmup, fixed 512/512 config). This is the replacement for the deleted bespoke `.agents/scripts/dsv4_flash_benchmark.py`; do not re-create such one-off scripts — extend or add a preset instead.
 
 ## Workflow
 
@@ -83,7 +109,8 @@ Configuration is built with this priority:
 
 1. User-provided CLI args (highest priority)
 2. Agent-assembled args based on conversation context
-3. Nightly YAML as fallback when `--refer-nightly` is given and no user args override
+3. Named preset from `--preset` (per field)
+4. Nightly YAML as fallback when `--refer-nightly` is given and no user args override
 
 When `--refer-nightly` is used, the YAML is parsed for `server_cmd`, `envs`, and `benchmarks.perf` fields. Any user-provided `--serve-args`, `--bench-args`, or `--extra-env` override the corresponding YAML values.
 
@@ -159,24 +186,51 @@ checked out **in the container** for vllm-ascend (and optionally vllm via
 is attributable to code. `REF` accepts `pr:NNNN` / `#NNNN` (GitHub PR head), a
 commit SHA, or a branch. Alignment is source-only — it never rebuilds custom
 ops (matching the common "对齐版本但不重编算子" workflow); if a kernel change
-requires a rebuild, do that through parity/serve first.
+requires a rebuild, do that through parity/serve first. Parity sync is always
+skipped inside `bench_compare.py` (it would overwrite the checked-out state);
+there is no `--skip-parity` flag.
 
 ```bash
+# Preset-driven (DSV4 Flash baseline vs PR, fixed dataset + accuracy probe)
+python3 .agents/skills/vllm-ascend-benchmark/scripts/bench_compare.py \
+  --preset dsv4-flash \
+  --model /home/weights/DeepSeek-V4-Flash-w4a8-mtp \
+  --state baseline=<commit> --state pr10805=pr:10805 \
+  --stale-cleanup --fixed-request-dataset --accuracy-probe
+
+# Fully explicit
 python3 .agents/skills/vllm-ascend-benchmark/scripts/bench_compare.py \
   [--session-id <id> | --session-file <path>] \
   --model <remote-weight-path> \
   --state baseline=<commit> --state pr10741=pr:10741 \
-  [--vllm-ref <vllm-commit>] \
-  [--tp <N>] [--dp <N>] [--runs <N>] [--warmup-runs <M>] \
-  [--stale-cleanup] \
+  [--preset <name>] [--vllm-ref <vllm-commit>] \
+  [--tp <N>] [--dp <N>] [--port <N>] [--devices <csv>] \
+  [--served-model-name <name>] [--health-timeout <sec>] \
+  [--runs <N>] [--warmup-runs <M>] \
+  [--bench-request-counts 1,2] \
+  [--fixed-request-dataset [--fixed-input-len N] [--fixed-output-len N] \
+   [--fixed-dataset-path <path>] [--fixed-prompt <text>]] \
+  [--accuracy-probe [--accuracy-prompt <text>] [--accuracy-max-tokens N]] \
+  [--remote-patch-file <local.patch>] [--allow-stale-native] \
+  [--bench-env KEY=VALUE ...] [--stale-cleanup] \
   [--serve-args <arg> ...] \
   [--bench-args <arg> ...]
 ```
 
-Output is a single JSON object with `comparison` (per-state mean TPOT,
+Extra flags beyond `bench_run.py`:
+
+- `--bench-request-counts 1,2`: run one case per count on the same warm service; each count overrides both `--num-prompts` and `--max-concurrency` for that case. Cases are labeled `requests_<N>` (the unset case is `default`) and compared per case against the first state's same case.
+- `--fixed-request-dataset`: generate a JSONL dataset of identical fixed-token-count requests on the remote once before the state loop (it depends only on model/tokenizer), then bench it via `--dataset-name custom ... --skip-chat-template --disable-shuffle --ignore-eos`. Auto-enabled when the preset carries `fixed_request_dataset`; CLI `--fixed-*` flags override preset values. The result (incl. `prompt_sha256`) is recorded under `fixed_dataset` in the final JSON.
+- `--accuracy-probe`: after the service is ready and before benching, POST one temperature-0 completion and record `text_sha256`/`finish_reason`/`usage` per state, so silent numeric regressions surface alongside performance deltas.
+- `--remote-patch-file`: `git apply` a local patch to the in-container vllm-ascend checkout after each state's alignment (e.g. validation instrumentation), recorded per state.
+- `--allow-stale-native`: downgrade the native-input gate failure to a warning (see Critical rules).
+
+Output is a single JSON object with `comparison` (per-state, per-case mean TPOT,
 throughput, acceptance rate, and `delta_tpot_pct_vs_first`) plus full
-`state_results`. `--stale-cleanup` runs the SAFE cleanup before/after each
-state. The result is persisted under the session's `benchmark/runs/` dir.
+`state_results`, `preset`, `warnings`, `result_paths`, and `fixed_dataset`.
+`--stale-cleanup` runs the SAFE cleanup before/after each state. Every
+completed state is persisted under the session's `benchmark/runs/` dir as it
+finishes; a failure still prints `partial_states` and `result_paths`.
 
 For a single state, keep using `bench_run.py`.
 

@@ -27,6 +27,7 @@ NIGHTLY_CONFIGS_DIR = (
     ROOT / "vllm-ascend" / "tests" / "e2e" / "nightly"
     / "single_node" / "models" / "configs"
 )
+PRESETS_DIR = ROOT / ".agents" / "skills" / "vllm-ascend-benchmark" / "presets"
 PROGRESS_SENTINEL = "__VAWS_BENCHMARK_PROGRESS__="
 
 
@@ -201,6 +202,60 @@ def parse_nightly_yaml(yaml_name: str) -> NightlyReference | None:
 
 
 # ---------------------------------------------------------------------------
+# Benchmark presets
+# ---------------------------------------------------------------------------
+
+def load_preset(name: str) -> dict[str, Any]:
+    """Load a named benchmark preset from the skill's ``presets/`` directory.
+
+    ``name`` is a bare preset name (the ``.json`` suffix is optional); path
+    traversal is rejected. Raises ``ValueError`` for unknown presets or
+    malformed preset files.
+    """
+    stem = name[:-5] if name.endswith(".json") else name
+    if not stem or "/" in stem or "\\" in stem or ".." in stem:
+        raise ValueError(f"invalid preset name {name!r}: use a bare preset name")
+    path = PRESETS_DIR / f"{stem}.json"
+    if not path.is_file():
+        available = (
+            sorted(p.stem for p in PRESETS_DIR.glob("*.json"))
+            if PRESETS_DIR.is_dir()
+            else []
+        )
+        raise ValueError(
+            f"unknown preset {name!r}; available presets: "
+            + (", ".join(available) if available else "(none)")
+        )
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        raise ValueError(f"preset {name!r} is not valid JSON: {e}") from e
+    if not isinstance(data, dict):
+        raise ValueError(f"preset {name!r} must contain a JSON object")
+    return data
+
+
+def _preset_list(data: dict[str, Any], key: str) -> list[str] | None:
+    """Read a preset key as a list of strings, or None when absent."""
+    value = data.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, list):
+        raise ValueError(f"preset key {key!r} must be an array of strings")
+    return [str(item) for item in value]
+
+
+def _preset_env(data: dict[str, Any], key: str) -> dict[str, str]:
+    """Read a preset key as an env dict with validated variable names."""
+    value = data.get(key)
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError(f"preset key {key!r} must be an object of KEY: VALUE strings")
+    return {require_env_name(str(k)): str(v) for k, v in value.items()}
+
+
+# ---------------------------------------------------------------------------
 # Configuration assembly
 # ---------------------------------------------------------------------------
 
@@ -213,11 +268,17 @@ class BenchConfig:
     tp: int | None = None
     dp: int | None = None
     port: int | None = None
+    served_model_name: str = ""
+    devices: str | None = None
+    health_timeout: int | None = None
     serve_args: list[str] = field(default_factory=list)
     bench_args: list[str] = field(default_factory=list)
     env: dict[str, str] = field(default_factory=dict)
+    bench_env: dict[str, str] = field(default_factory=dict)
     skip_parity: bool = False
     nightly_ref: NightlyReference | None = None
+    preset_name: str | None = None
+    preset: dict[str, Any] | None = None
 
     def to_serve_start_args(self) -> list[str]:
         """Build CLI args for serve_start.py."""
@@ -226,12 +287,18 @@ class BenchConfig:
             args.extend(["--session-file", self.session_file])
         else:
             args.extend(["--session-id", self.session_id or ""])
+        if self.served_model_name:
+            args.extend(["--served-model-name", self.served_model_name])
         if self.tp is not None:
             args.extend(["--tp", str(self.tp)])
         if self.dp is not None:
             args.extend(["--dp", str(self.dp)])
         if self.port is not None:
             args.extend(["--port", str(self.port)])
+        if self.devices:
+            args.extend(["--devices", self.devices])
+        if self.health_timeout is not None:
+            args.extend(["--health-timeout", str(self.health_timeout)])
         for k, v in self.env.items():
             args.extend(["--extra-env", f"{k}={v}"])
         if self.skip_parity:
@@ -285,14 +352,24 @@ class BenchConfig:
             d["session_id"] = self.session_id
         if self.session_file:
             d["session_file"] = self.session_file
+        if self.preset_name:
+            d["preset"] = self.preset_name
         if self.tp is not None:
             d["tp"] = self.tp
+        if self.served_model_name:
+            d["served_model_name"] = self.served_model_name
+        if self.devices:
+            d["devices"] = self.devices
+        if self.health_timeout is not None:
+            d["health_timeout"] = self.health_timeout
         if self.serve_args:
             d["serve_args"] = self.serve_args
         if self.bench_args:
             d["bench_args"] = self.bench_args
         if self.env:
             d["env"] = self.env
+        if self.bench_env:
+            d["bench_env"] = self.bench_env
         return d
 
 
@@ -304,17 +381,32 @@ def assemble_config(
     tp: int | None = None,
     dp: int | None = None,
     port: int | None = None,
+    served_model_name: str | None = None,
+    devices: str | None = None,
+    health_timeout: int | None = None,
     serve_args: list[str] | None = None,
     bench_args: list[str] | None = None,
     extra_env: list[str] | None = None,
+    bench_env: list[str] | None = None,
     refer_nightly: str | None = None,
+    preset: str | None = None,
     skip_parity: bool = False,
 ) -> BenchConfig:
-    """Assemble a BenchConfig with user > nightly priority.
+    """Assemble a BenchConfig with CLI > preset > nightly > default priority.
 
     Benchmarks are session-only. The session is resolved once here (including
     worktree-binding auto-resolution) and pinned into the config so every
     downstream subprocess targets the same session explicitly.
+
+    ``preset`` names a JSON file under the skill's ``presets/`` directory.
+    Recognized preset keys: ``tp``, ``dp``, ``port``, ``devices``,
+    ``served_model_name``, ``health_timeout``, ``vllm_ref``, ``runs``,
+    ``warmup_runs``, ``env`` (object), ``bench_env`` (object), ``serve_args``
+    (array), ``bench_args`` (array), ``fixed_request_dataset`` (object) and
+    ``bench_request_counts`` (array of int). The resolved preset dict is kept
+    on ``cfg.preset`` so callers can read non-config keys (``vllm_ref``,
+    ``fixed_request_dataset``, ``bench_request_counts``, ``runs``,
+    ``warmup_runs``) from it.
     """
     lookup = load_session_lookup(
         session_id=session_id,
@@ -325,17 +417,25 @@ def assemble_config(
     if refer_nightly:
         nightly_ref = parse_nightly_yaml(refer_nightly)
 
+    preset_dict: dict[str, Any] | None = None
+    if preset:
+        preset_dict = load_preset(preset)
+
     cfg = BenchConfig(
         session_id=lookup.session["session_id"],
         session_file=str(lookup.session_file),
         model=model,
         skip_parity=skip_parity,
         nightly_ref=nightly_ref,
+        preset_name=preset,
+        preset=preset_dict,
     )
 
     # --- TP ---
     if tp is not None:
         cfg.tp = tp
+    elif preset_dict and preset_dict.get("tp") is not None:
+        cfg.tp = int(preset_dict["tp"])
     elif nightly_ref and "--tensor-parallel-size" in nightly_ref.server_cmd:
         idx = nightly_ref.server_cmd.index("--tensor-parallel-size")
         if idx + 1 < len(nightly_ref.server_cmd):
@@ -344,17 +444,42 @@ def assemble_config(
     # --- DP ---
     if dp is not None:
         cfg.dp = dp
+    elif preset_dict and preset_dict.get("dp") is not None:
+        cfg.dp = int(preset_dict["dp"])
     elif nightly_ref and "--data-parallel-size" in nightly_ref.server_cmd:
         idx = nightly_ref.server_cmd.index("--data-parallel-size")
         if idx + 1 < len(nightly_ref.server_cmd):
             cfg.dp = int(nightly_ref.server_cmd[idx + 1])
 
     # --- Port ---
-    cfg.port = port
+    if port is not None:
+        cfg.port = port
+    elif preset_dict and preset_dict.get("port") is not None:
+        cfg.port = int(preset_dict["port"])
 
-    # --- Serve args: user provided overrides nightly ---
+    # --- Served model name ---
+    if served_model_name:
+        cfg.served_model_name = served_model_name
+    elif preset_dict and preset_dict.get("served_model_name"):
+        cfg.served_model_name = str(preset_dict["served_model_name"])
+
+    # --- Devices ---
+    if devices:
+        cfg.devices = devices
+    elif preset_dict and preset_dict.get("devices"):
+        cfg.devices = str(preset_dict["devices"])
+
+    # --- Health timeout ---
+    if health_timeout is not None:
+        cfg.health_timeout = health_timeout
+    elif preset_dict and preset_dict.get("health_timeout") is not None:
+        cfg.health_timeout = int(preset_dict["health_timeout"])
+
+    # --- Serve args: user provided overrides preset, preset overrides nightly ---
     if serve_args:
         cfg.serve_args = list(serve_args)
+    elif preset_dict and _preset_list(preset_dict, "serve_args") is not None:
+        cfg.serve_args = _preset_list(preset_dict, "serve_args") or []
     elif nightly_ref:
         filtered = []
         skip_next = False
@@ -368,9 +493,11 @@ def assemble_config(
             filtered.append(arg)
         cfg.serve_args = filtered
 
-    # --- Bench args: user provided overrides nightly ---
+    # --- Bench args: user provided overrides preset, preset overrides nightly ---
     if bench_args:
         cfg.bench_args = list(bench_args)
+    elif preset_dict and _preset_list(preset_dict, "bench_args") is not None:
+        cfg.bench_args = _preset_list(preset_dict, "bench_args") or []
     elif nightly_ref and nightly_ref.bench_config:
         bc = nightly_ref.bench_config
         assembled: list[str] = []
@@ -382,11 +509,13 @@ def assemble_config(
             assembled.extend(["--max-concurrency", str(bc["batch_size"])])
         cfg.bench_args = assembled
 
-    # --- Env: merge nightly base + user overrides ---
+    # --- Service env: nightly base, preset overrides, user wins ---
     env: dict[str, str] = {}
     if nightly_ref:
         for key, value in nightly_ref.envs.items():
             env[require_env_name(key)] = value
+    if preset_dict:
+        env.update(_preset_env(preset_dict, "env"))
     if extra_env:
         for item in extra_env:
             if "=" not in item:
@@ -394,6 +523,18 @@ def assemble_config(
             k, v = item.split("=", 1)
             env[require_env_name(k)] = v
     cfg.env = env
+
+    # --- Bench-side env: preset base, user wins ---
+    benv: dict[str, str] = {}
+    if preset_dict:
+        benv.update(_preset_env(preset_dict, "bench_env"))
+    if bench_env:
+        for item in bench_env:
+            if "=" not in item:
+                raise ValueError(f"bad --bench-env {item!r}, expected KEY=VALUE")
+            k, v = item.split("=", 1)
+            benv[require_env_name(k)] = v
+    cfg.bench_env = benv
 
     return cfg
 
@@ -597,8 +738,16 @@ def run_bench_on_remote(
 
     bench_cmd = " ".join(shlex.quote(str(s)) for s in bench_cmd_parts)
 
+    # Bench-side env exports (e.g. PYTHONPATH/VLLM_VERSION) run after the
+    # Ascend preamble so they win over anything the preamble sets.
+    env_exports = "".join(
+        f"export {require_env_name(k)}={shlex.quote(v)}; "
+        for k, v in config.bench_env.items()
+    )
+
     remote_script = (
         _ascend_env_preamble()
+        + env_exports
         + f"cd /tmp && {bench_cmd} 2>&1 && cat /tmp/{result_filename}"
     )
 
@@ -640,6 +789,335 @@ def run_bench_on_remote(
         )
 
     return result_data
+
+
+# ---------------------------------------------------------------------------
+# Remote inspection / patching / dataset / probe helpers
+# ---------------------------------------------------------------------------
+
+def remote_native_input_digest(
+    container_ip: str,
+    container_port: int,
+    repo_dir: str = "/vllm-workspace/vllm-ascend",
+) -> dict[str, Any]:
+    """Fingerprint the in-container vllm-ascend native-build inputs.
+
+    Source alignment never rebuilds custom ops, so when csrc/cmake/
+    requirements change between states the compiled artifacts are stale.
+    The digest over ``csrc``, ``cmake``, ``CMakeLists.txt``, ``pyproject.toml``
+    and the requirements files lets callers detect that situation. Missing
+    paths are tolerated: the digest is the sha256 of an empty file list only
+    when there are genuinely no tracked native inputs.
+    """
+    import shlex
+
+    remote_script = "\n".join([
+        "set -uo pipefail",
+        f"cd {shlex.quote(repo_dir)} || exit 1",
+        "digest=$(git ls-files -z csrc cmake CMakeLists.txt pyproject.toml"
+        " requirements.txt requirements 2>/dev/null"
+        " | xargs -0 -r sha256sum 2>/dev/null | sha256sum | awk '{print $1}')",
+        "head=$(git rev-parse HEAD 2>/dev/null || true)",
+        'printf "digest=%s\\nhead=%s\\n" "${digest:-}" "${head:-}"',
+    ])
+    proc = ssh_run_script(container_ip, container_port, remote_script, timeout=120)
+    digest = ""
+    head = ""
+    for line in (proc.stdout or "").splitlines():
+        if line.startswith("digest="):
+            digest = line.split("=", 1)[1].strip()
+        elif line.startswith("head="):
+            head = line.split("=", 1)[1].strip()
+    return {
+        "status": "ok" if proc.returncode == 0 else "failed",
+        "digest": digest,
+        "head": head,
+        "returncode": proc.returncode,
+        "stderr_tail": (proc.stderr or "")[-400:],
+    }
+
+
+def apply_remote_patch(
+    container_ip: str,
+    container_port: int,
+    patch_file: Path,
+    repo_dir: str = "/vllm-workspace/vllm-ascend",
+) -> dict[str, Any]:
+    """git-apply a local patch file inside the remote repo checkout.
+
+    The patch is base64-transferred through the SSH channel, applied with
+    ``git apply``, and the resulting ``git status --short`` is returned for
+    traceability.
+    """
+    import base64
+    import shlex
+
+    patch_b64 = base64.b64encode(Path(patch_file).read_bytes()).decode("ascii")
+    remote_script = (
+        "set -euo pipefail\n"
+        "python3 - <<'PY'\n"
+        "import base64\n"
+        f"data = {patch_b64!r}\n"
+        "open('/tmp/vaws_bench_remote_patch.diff', 'wb').write(base64.b64decode(data))\n"
+        "PY\n"
+        f"cd {shlex.quote(repo_dir)}\n"
+        "git apply /tmp/vaws_bench_remote_patch.diff\n"
+        "git status --short\n"
+    )
+    proc = ssh_run_script(container_ip, container_port, remote_script, timeout=120)
+    return {
+        "status": "ok" if proc.returncode == 0 else "failed",
+        "returncode": proc.returncode,
+        "repo_dir": repo_dir,
+        "patch_file": str(patch_file),
+        "stdout_tail": (proc.stdout or "")[-2000:],
+        "stderr_tail": (proc.stderr or "")[-2000:],
+    }
+
+
+_FIXED_DATASET_REMOTE_PY = r'''
+import json
+import os
+from pathlib import Path
+
+from vllm.tokenizers import get_tokenizer
+
+model = os.environ["VAWS_FIXED_MODEL"]
+tokenizer_mode = os.environ["VAWS_FIXED_TOKENIZER_MODE"]
+target_len = int(os.environ["VAWS_FIXED_INPUT_LEN"])
+output_len = int(os.environ["VAWS_FIXED_OUTPUT_LEN"])
+num_rows = int(os.environ["VAWS_FIXED_NUM_ROWS"])
+dataset_path = Path(os.environ["VAWS_FIXED_DATASET_PATH"])
+prompt = os.environ.get("VAWS_FIXED_PROMPT") or ""
+
+tokenizer = get_tokenizer(model, tokenizer_mode=tokenizer_mode)
+
+def token_len(text: str) -> int:
+    return len(tokenizer(text).input_ids)
+
+if prompt:
+    actual_len = token_len(prompt)
+    if actual_len != target_len:
+        raise SystemExit(
+            f"fixed prompt token length mismatch: got {actual_len}, expected {target_len}"
+        )
+else:
+    prompt = ""
+    pieces = [
+        " token",
+        " data",
+        " request",
+        " benchmark",
+        " inference",
+        " model",
+        " a",
+        "x",
+    ]
+    for piece in pieces:
+        for repeat in range(1, target_len * 4 + 256):
+            candidate = piece * repeat
+            if token_len(candidate) == target_len:
+                prompt = candidate
+                break
+        if prompt:
+            break
+
+    if not prompt:
+        vocab_size = getattr(tokenizer, "vocab_size", None) or len(tokenizer)
+        for token_id in range(100, min(int(vocab_size), 50000)):
+            piece = tokenizer.decode([token_id], skip_special_tokens=True)
+            if not piece or token_len(piece) != 1:
+                continue
+            candidate = piece * target_len
+            if token_len(candidate) == target_len:
+                prompt = candidate
+                break
+
+    if not prompt:
+        raise SystemExit(f"failed to construct {target_len}-token fixed prompt")
+
+actual_len = token_len(prompt)
+rows = [
+    json.dumps(
+        {"prompt": prompt, "output_tokens": output_len},
+        ensure_ascii=False,
+    )
+    for _ in range(num_rows)
+]
+dataset_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+print(json.dumps({
+    "status": "ok",
+    "dataset_path": str(dataset_path),
+    "num_rows": num_rows,
+    "prompt_token_len": actual_len,
+    "output_len": output_len,
+    "prompt_sha256": __import__("hashlib").sha256(prompt.encode("utf-8")).hexdigest(),
+}, ensure_ascii=False))
+'''.strip()
+
+
+def prepare_fixed_request_dataset(
+    container_ip: str,
+    container_port: int,
+    *,
+    model: str,
+    tokenizer_mode: str,
+    input_len: int,
+    output_len: int,
+    path: str,
+    num_rows: int,
+    prompt: str | None = None,
+    env_preamble: str = "",
+) -> dict[str, Any]:
+    """Generate a custom JSONL dataset of identical fixed-length requests.
+
+    Runs on the remote container (it needs the model tokenizer). Every row is
+    ``{"prompt": ..., "output_tokens": output_len}`` and the prompt is built
+    to tokenize to exactly ``input_len`` tokens. Hard failures (token-count
+    mismatch, no constructible prompt) raise ``RuntimeError``.
+
+    ``env_preamble`` carries extra caller-supplied shell exports (e.g.
+    PYTHONPATH from the resolved bench_env) appended after the Ascend CANN
+    preamble so the vllm tokenizer imports from the aligned checkout.
+    """
+    import shlex
+
+    exports = [
+        f"export VAWS_FIXED_MODEL={shlex.quote(model)}",
+        f"export VAWS_FIXED_TOKENIZER_MODE={shlex.quote(tokenizer_mode)}",
+        f"export VAWS_FIXED_INPUT_LEN={int(input_len)}",
+        f"export VAWS_FIXED_OUTPUT_LEN={int(output_len)}",
+        f"export VAWS_FIXED_NUM_ROWS={int(num_rows)}",
+        f"export VAWS_FIXED_DATASET_PATH={shlex.quote(path)}",
+    ]
+    if prompt:
+        exports.append(f"export VAWS_FIXED_PROMPT={shlex.quote(prompt)}")
+
+    remote_script = (
+        _ascend_env_preamble()
+        + (env_preamble or "")
+        + "; ".join(exports)
+        + "; python3 - <<'PY'\n"
+        + _FIXED_DATASET_REMOTE_PY
+        + "\nPY\n"
+    )
+    proc = ssh_run_script(container_ip, container_port, remote_script, timeout=600)
+    if proc.returncode != 0:
+        raise RuntimeError(
+            "fixed request dataset preparation failed "
+            f"(rc={proc.returncode}):\n"
+            f"stdout: {(proc.stdout or '')[-2000:]}\n"
+            f"stderr: {(proc.stderr or '')[-2000:]}"
+        )
+    payload = _last_json_line(proc.stdout or "")
+    if payload is None:
+        raise RuntimeError(
+            "fixed request dataset preparation returned no JSON:\n"
+            f"{(proc.stdout or '')[-2000:]}"
+        )
+    return payload
+
+
+_ACCURACY_PROBE_REMOTE_PY = r'''
+import hashlib
+import json
+import os
+import urllib.error
+import urllib.request
+
+payload = json.loads(os.environ["VAWS_BENCH_ACCURACY_PAYLOAD"])
+url = os.environ["VAWS_BENCH_ACCURACY_URL"]
+data = json.dumps(payload).encode("utf-8")
+req = urllib.request.Request(
+    url,
+    data=data,
+    headers={"Content-Type": "application/json"},
+    method="POST",
+)
+try:
+    with urllib.request.urlopen(req, timeout=300) as resp:
+        body = resp.read().decode("utf-8")
+except urllib.error.HTTPError as exc:
+    body = exc.read().decode("utf-8", errors="replace")
+    print(json.dumps({"status": "failed", "http_status": exc.code, "body": body[:2000]}, ensure_ascii=False))
+    raise SystemExit(0)
+
+parsed = json.loads(body)
+choice = (parsed.get("choices") or [{}])[0]
+message = choice.get("message") or {}
+text = choice.get("text") or message.get("content") or ""
+out = {
+    "status": "ok",
+    "text_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+    "text": text,
+    "finish_reason": choice.get("finish_reason"),
+    "usage": parsed.get("usage"),
+}
+print(json.dumps(out, ensure_ascii=False))
+'''.strip()
+
+
+def run_accuracy_probe(
+    container_ip: str,
+    container_port: int,
+    *,
+    port: int,
+    model: str,
+    prompt: str,
+    max_tokens: int,
+) -> dict[str, Any]:
+    """POST one deterministic completion request and hash the returned text.
+
+    Temperature is pinned to 0 so the text is comparable across states. An
+    HTTP error from the service is reported as ``{"status": "failed",
+    "http_status": ..., "body": ...}`` without raising; transport-level
+    failures (SSH/remote python) still raise ``RuntimeError``.
+    """
+    import hashlib
+    import shlex
+
+    payload = {
+        "model": model,
+        "prompt": prompt,
+        "max_tokens": int(max_tokens),
+        "temperature": 0.0,
+        "stream": False,
+    }
+    remote_script = (
+        f"export VAWS_BENCH_ACCURACY_URL={shlex.quote(f'http://127.0.0.1:{port}/v1/completions')}\n"
+        f"export VAWS_BENCH_ACCURACY_PAYLOAD={shlex.quote(json.dumps(payload, ensure_ascii=False))}\n"
+        "python3 - <<'PY'\n"
+        + _ACCURACY_PROBE_REMOTE_PY
+        + "\nPY\n"
+    )
+    proc = ssh_run_script(container_ip, container_port, remote_script, timeout=420)
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"accuracy probe failed (rc={proc.returncode}):\n"
+            f"stdout: {(proc.stdout or '')[-2000:]}\n"
+            f"stderr: {(proc.stderr or '')[-2000:]}"
+        )
+    probe = _last_json_line(proc.stdout or "")
+    if probe is None:
+        raise RuntimeError(
+            f"accuracy probe returned no JSON:\n{(proc.stdout or '')[-2000:]}"
+        )
+    probe["prompt_sha256"] = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+    return probe
+
+
+def _last_json_line(stdout: str) -> dict[str, Any] | None:
+    """Parse the last ``{...}`` line of remote stdout as a JSON object."""
+    for line in reversed(stdout.strip().splitlines()):
+        line = line.strip()
+        if line.startswith("{"):
+            try:
+                parsed = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(parsed, dict):
+                return parsed
+    return None
 
 
 # ---------------------------------------------------------------------------

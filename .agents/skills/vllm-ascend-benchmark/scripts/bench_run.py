@@ -27,6 +27,10 @@ Usage examples:
     python3 bench_run.py --session-id pr-123 --model /home/weights/Qwen3.5-35B \\
         --refer-nightly Qwen3-Next-80B-A3B-Instruct-A2
 
+    # Using a named preset (explicit CLI args override preset values)
+    python3 bench_run.py --model /home/weights/DeepSeek-V4-Flash-w4a8-mtp \\
+        --preset dsv4-flash --runs 6 --warmup-runs 1
+
 Progress on stderr as __VAWS_BENCHMARK_PROGRESS__=<json>.
 Final result on stdout as a single JSON object.
 """
@@ -65,11 +69,22 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--session-id", help="VAWS session id; defaults to the bound session of the current worktree")
     p.add_argument("--session-file", help="explicit session.json path")
     p.add_argument("--model", required=True, help="remote model weight path")
+    p.add_argument("--preset",
+                   help="named benchmark preset from the skill's presets/ dir "
+                        "(e.g. dsv4-flash); explicit CLI args override preset values")
     p.add_argument("--tp", "--tensor-parallel-size", type=int, default=None)
     p.add_argument("--dp", "--data-parallel-size", type=int, default=None)
     p.add_argument("--port", type=int, default=None)
+    p.add_argument("--served-model-name", default=None,
+                   help="served model name for the API (default: preset or model basename)")
+    p.add_argument("--devices", default=None,
+                   help="ASCEND_RT_VISIBLE_DEVICES, e.g. 0,1,2,3,4,5,6,7")
+    p.add_argument("--health-timeout", type=int, default=None,
+                   help="service readiness timeout in seconds")
     p.add_argument("--extra-env", action="append", default=None,
                    help="KEY=VALUE env vars for the service (repeatable)")
+    p.add_argument("--bench-env", action="append", default=None,
+                   help="KEY=VALUE env vars for the bench-side remote shell (repeatable)")
     p.add_argument("--refer-nightly", default=None,
                    help="nightly YAML name as configuration reference")
     p.add_argument("--skip-parity", action="store_true")
@@ -161,10 +176,15 @@ def main(argv: list[str] | None = None) -> int:
             tp=args.tp,
             dp=args.dp,
             port=args.port,
+            served_model_name=args.served_model_name,
+            devices=args.devices,
+            health_timeout=args.health_timeout,
             serve_args=serve_args,
             bench_args=bench_args,
             extra_env=args.extra_env,
+            bench_env=args.bench_env,
             refer_nightly=args.refer_nightly,
+            preset=args.preset,
             skip_parity=args.skip_parity,
         )
 

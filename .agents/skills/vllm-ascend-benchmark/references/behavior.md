@@ -21,7 +21,7 @@ keeps the existing scripts as the managed VAWS compatibility backend.
 User-provided arguments always take priority:
 
 ```
-user CLI args  >  agent-assembled context  >  nightly YAML fallback
+user CLI args  >  agent-assembled context  >  named preset (--preset)  >  nightly YAML fallback
 ```
 
 Nightly YAML is a reference source for discovering how to configure a model/feature, not an execution template. When `--refer-nightly` is given:
@@ -30,6 +30,13 @@ Nightly YAML is a reference source for discovering how to configure a model/feat
 - `envs` are used as a base, with user `--extra-env` overriding.
 - `benchmarks.perf` fields (`num_prompts`, `max_out_len`, `batch_size`) are mapped to bench CLI args.
 - User-provided `--serve-args` / `--bench-args` completely override the nightly values.
+
+A named preset (`presets/<name>.json`) slots between user args and nightly: it can
+supply `tp`/`dp`/`port`/`devices`/`served_model_name`/`health_timeout`, service
+`env` and bench-side `bench_env` objects, `serve_args`/`bench_args` arrays,
+`vllm_ref`, `runs`/`warmup_runs`, a `fixed_request_dataset` object, and
+`bench_request_counts`. Any explicit CLI arg overrides the preset value for that
+field. Presets never carry a `model` path.
 
 ## Multi-Run (Warm-Service) Mode
 
@@ -51,13 +58,16 @@ The output JSON includes:
 
 ## Multi-State Comparison
 
-Comparing multiple code states (baseline, PR, modified) is **not** handled by a single benchmark script. Instead:
+Comparing multiple code states (baseline, PR, modified) is handled by `bench_compare.py` in a single call:
 
-1. The agent switches the local workspace to each code state.
-2. The agent calls `bench_run.py` once per state (each call does parity sync + service lifecycle + N runs).
-3. The agent compares the returned JSON metrics across states.
+1. Each `--state LABEL=REF` is checked out in the container for vllm-ascend (and vllm when `--vllm-ref`/preset `vllm_ref` is set). Alignment is source-only — it never rebuilds custom ops.
+2. Right after alignment, the state's native-input digest (`csrc`/`cmake`/requirements) is compared against the first state's. A mismatch fails the run (rebuild via parity first, or `--allow-stale-native` to downgrade to a `warnings` entry plus `native_input_changed: true`) because stale compiled artifacts would silently contaminate the comparison.
+3. Every state is served and benched with the identical assembled configuration — from explicit CLI args or a shared `--preset` — including optional request-count cases (`--bench-request-counts`), a generated fixed dataset (`--fixed-request-dataset`, prepared once before the state loop), a deterministic accuracy probe (`--accuracy-probe`), and an optional `git apply` of a local patch per state (`--remote-patch-file`).
+4. Each completed state is persisted immediately; on failure the error JSON still carries `partial_states` and `result_paths` so completed measurements are never lost.
 
-This keeps the benchmark script focused on one thing (reliable measurement) and leaves orchestration to the agent, which is better equipped to handle git worktrees, cross-fork commits, and submodule complexity.
+Only when `bench_compare.py` cannot express the setup does the agent fall back to
+orchestrating `bench_run.py` once per state (switching local worktrees between
+runs) and comparing the returned JSON itself.
 
 ### Comparison contract
 

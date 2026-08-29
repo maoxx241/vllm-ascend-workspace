@@ -76,12 +76,51 @@ python3 .agents/skills/vllm-ascend-benchmark/scripts/bench_run.py \
   --refer-nightly Qwen3-Next-80B-A3B-Instruct-A2
 ```
 
-## Multi-state comparison: agent-orchestrated
+## Preset-driven runs
 
-To compare multiple code states (baseline / PR / modified), the agent runs `bench_run.py`
-once per state, switching the local workspace between each. **Prefer git worktrees over
-checkout** — worktrees are safer, support parallel runs, and avoid polluting the main
-working tree.
+Named presets under `.agents/skills/vllm-ascend-benchmark/presets/` pin a reusable
+model/service configuration (tp/dp/port/devices/served name/health timeout, env,
+bench env, serve/bench args, vllm ref, runs/warmup, fixed dataset, request
+counts). Explicit CLI args override preset values per field; `--model` is always
+required because weight paths are machine-specific.
+
+`dsv4-flash` carries the DeepSeek-V4-Flash W4A8 MTP configuration and replaces
+the deleted bespoke `.agents/scripts/dsv4_flash_benchmark.py` — do not hand-write
+new one-off benchmark scripts; add or extend a preset instead.
+
+```bash
+# Single-run with the DSV4 Flash preset
+python3 .agents/skills/vllm-ascend-benchmark/scripts/bench_run.py \
+  --model /home/weights/DeepSeek-V4-Flash-w4a8-mtp \
+  --preset dsv4-flash \
+  --runs 6 --warmup-runs 1
+
+# Multi-state comparison with the same preset (baseline vs PR), fixed dataset,
+# deterministic accuracy probe, and safe stale cleanup
+python3 .agents/skills/vllm-ascend-benchmark/scripts/bench_compare.py \
+  --preset dsv4-flash \
+  --model /home/weights/DeepSeek-V4-Flash-w4a8-mtp \
+  --state baseline=<commit> --state pr10805=pr:10805 \
+  --stale-cleanup --fixed-request-dataset --accuracy-probe
+
+# Multiple request-count cases in one comparison (each count overrides
+# --num-prompts and --max-concurrency for its case)
+python3 .agents/skills/vllm-ascend-benchmark/scripts/bench_compare.py \
+  --preset dsv4-flash \
+  --model /home/weights/DeepSeek-V4-Flash-w4a8-mtp \
+  --state baseline=<commit> --state pr10805=pr:10805 \
+  --bench-request-counts 1,2 --fixed-request-dataset
+```
+
+## Multi-state comparison: agent-orchestrated (fallback)
+
+The preferred path is a single `bench_compare.py` call (see the preset examples
+above) — it aligns each git ref in-container, gates on native-input digests,
+and persists every completed state. Only when `bench_compare.py` cannot express
+the setup (e.g. each state needs a *different* local worktree synced through
+parity) does the agent run `bench_run.py` once per state, switching the local
+workspace between each. **Prefer git worktrees over checkout** — worktrees are
+safer, support parallel runs, and avoid polluting the main working tree.
 
 All runs must use identical `--serve-args`, `--bench-args`, `--extra-env`, and `--tp`.
 Only the code state should differ (see comparison contract in `behavior.md`).
