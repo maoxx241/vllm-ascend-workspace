@@ -13,6 +13,7 @@ python3 scripts/vaws-top.py npu 10.18.4.21 --live
 python3 scripts/vaws-top.py npu 10.18.4.21 --ultra-compact
 python3 scripts/vaws-top.py --json npu 10.18.4.21 --processes
 python3 scripts/vaws-top.py status 10.18.4.21
+python3 scripts/vaws-top.py status 10.18.4.21 --cache
 python3 scripts/vaws-top.py mounts 10.18.4.21 --live
 python3 scripts/vaws-top.py capacity --min-idle 4 --max-age 180 --tag A3
 ```
@@ -25,7 +26,7 @@ python3 scripts/vaws-top.py capacity --min-idle 4 --max-age 180 --tag A3
 1 idle util=0% hbm=5.9G/64.0G proc=0 owner=-
 ```
 
-需要机器可读结果时使用 `--json`。`--processes` 加入精简进程记录；`--process-details` 进一步加入 pwd 和启动命令。`--max-age 180` 可约束缓存新鲜度，超限时保持输出并以退出码 `3` 标记陈旧。需要重新采样时显式使用 `--live`，实时请求由服务内采集队列执行，调用端不会直接 SSH。
+需要机器可读结果时使用 `--json`。`--processes` 加入精简进程记录；`--process-details` 进一步加入 pwd 和启动命令。`--max-age 180` 可约束缓存新鲜度，超限时保持输出并以退出码 `3` 标记陈旧。`status` 默认实时采样；使用 `status HOST --cache` 可直接读取缓存。实时请求由服务内采集队列执行，调用端不会直接 SSH。
 
 `status` 汇总 NPU、CPU、内存、磁盘、Docker、占用进程/容器及可能的工号或姓名缩写；`mounts` 返回挂载源、文件系统、容量，并标出可能存放模型权重的挂载点；`capacity` 从新鲜缓存中筛选满足空闲 NPU 数量和标签的机器，低优先级服务器排在最后。
 

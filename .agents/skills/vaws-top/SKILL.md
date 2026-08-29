@@ -10,8 +10,8 @@ Use the running local monitor as the single server-status interface. Run command
 ## Boundaries
 
 - Prefer vaws-top over ad hoc SSH for fleet status. Its service owns remote probing, credentials, connection reuse, and snapshot collection.
-- `cache` is the default: it returns immediately and never triggers SSH. Use it for fleet discovery and shortlisting.
-- `live` requests one centralized probe and waits for a new snapshot. Use it only for the final candidate when freshness could change an experiment decision.
+- Fleet discovery, `capacity`, `npu`, and `mounts` default to cache and never trigger SSH.
+- CLI `status` defaults to live: it requests one centralized probe and waits for a new snapshot. Add `--cache` when a cached full-server view is sufficient.
 - The web/API service remains on `127.0.0.1` and has no login. Do not expose it through a public listener, reverse proxy, or port forward.
 - Capacity results are observations, not reservations. Use the owning session or workload workflow before starting an experiment.
 - Do not print or inspect `data/keys`, passwords, or `known_hosts` contents.
@@ -27,7 +27,7 @@ Use the running local monitor as the single server-status interface. Run command
 2. Inspect a candidate from cache:
 
    ```bash
-   python3 scripts/vaws-top.py status 10.18.4.21
+   python3 scripts/vaws-top.py status 10.18.4.21 --cache
    ```
 
    The compact result includes NPU/HBM, CPU, memory, disk pressure, Docker count, grouped NPU processes, containers, extracted employee IDs or initials, and likely model-weight mounts.
@@ -43,7 +43,7 @@ Use the running local monitor as the single server-status interface. Run command
 4. Immediately before choosing the server, refresh only that host:
 
    ```bash
-   python3 scripts/vaws-top.py status 10.18.4.21 --live --timeout 30
+   python3 scripts/vaws-top.py status 10.18.4.21 --timeout 30
    ```
 
 Do not follow a successful live result with a duplicate raw SSH occupancy query.
@@ -59,6 +59,7 @@ python3 scripts/vaws-top.py --json npu 10.18.4.21 --process-details
 ```
 
 - Add top-level `--json` for stable machine-readable output.
+- `status HOST` is live by default. Use `status HOST --cache` to avoid a new probe; `--live` remains an explicit alias for the default.
 - `--processes` includes compact PID, container, NPU memory, and ownership records.
 - `--process-details` additionally includes pwd, command, executable, and user. Keep those details out of the default response unless they help answer the request.
 - `npu --max-age N` prints the snapshot but exits `3` when it is missing or stale; it does not refresh implicitly.

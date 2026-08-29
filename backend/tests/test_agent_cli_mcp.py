@@ -23,6 +23,7 @@ def load_script(name: str):
 
 
 MCP = load_script("vaws-top-mcp.py")
+CLI = load_script("vaws-top.py")
 PAYLOAD = {
     "source": "cache",
     "server": {"id": "s1", "name": "a3", "host": "10.0.0.8", "enabled": True, "tags": [], "status": "online"},
@@ -49,6 +50,11 @@ class FakeClient:
 
 
 class AgentCliMcpTests(unittest.TestCase):
+    def test_status_defaults_to_live_with_explicit_cache_override(self) -> None:
+        self.assertEqual(CLI.parser().parse_args(["status", "10.0.0.8"]).mode, "live")
+        self.assertEqual(CLI.parser().parse_args(["status", "10.0.0.8", "--live"]).mode, "live")
+        self.assertEqual(CLI.parser().parse_args(["status", "10.0.0.8", "--cache"]).mode, "cache")
+
     def test_default_formatter_is_compact_and_decision_focused(self) -> None:
         output = format_npu(PAYLOAD)
         self.assertEqual(len(output.splitlines()), 2)

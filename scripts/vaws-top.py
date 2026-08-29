@@ -26,7 +26,10 @@ def parser() -> argparse.ArgumentParser:
     npu.add_argument("--ultra-compact", action="store_true", help="emit one summary line")
     status = sub.add_parser("status", help="show NPU, CPU, memory, Docker, processes, and storage")
     status.add_argument("host")
-    status.add_argument("--live", action="store_true")
+    status_mode = status.add_mutually_exclusive_group()
+    status_mode.add_argument("--live", dest="mode", action="store_const", const="live", help="request a fresh probe (default)")
+    status_mode.add_argument("--cache", dest="mode", action="store_const", const="cache", help="return the current cached snapshot")
+    status.set_defaults(mode="live")
     status.add_argument("--timeout", type=int, default=30)
     status.add_argument("--process-details", action="store_true")
     mounts = sub.add_parser("mounts", help="show mount points and likely model-weight storage")
@@ -61,7 +64,7 @@ def main(argv: list[str] | None = None) -> int:
                 return 3
         elif args.command in ("status", "mounts"):
             payload = client.server(
-                args.host, "live" if args.live else "cache", True,
+                args.host, args.mode if args.command == "status" else ("live" if args.live else "cache"), True,
                 getattr(args, "process_details", False), args.timeout,
             )
             if args.json:
