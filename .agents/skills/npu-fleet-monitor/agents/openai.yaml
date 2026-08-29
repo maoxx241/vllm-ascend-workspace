@@ -1,4 +1,4 @@
 interface:
   display_name: "NPU Fleet Monitor"
-  short_description: "Deploy and operate the local NPU monitoring dashboard"
-  default_prompt: "Use $npu-fleet-monitor to create or reuse the monitoring worktree, build it, start the local service, and verify health."
+  short_description: "Locate or deploy the standalone vaws-top service"
+  default_prompt: "Use $npu-fleet-monitor to locate or deploy vaws-top, then hand off to its project-local Agent Skill."
