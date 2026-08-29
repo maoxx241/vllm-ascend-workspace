@@ -36,7 +36,9 @@ setup = module_at("native_session_setup", ROOT / ".agents/scripts/vaws_client_se
 class AgentSessionTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
-        self.root = Path(self.temp.name)
+        # macOS /var is a /private/var symlink; resolve once so path equality
+        # checks against resolved hook/setup outputs hold on the dev machine.
+        self.root = Path(self.temp.name).resolve()
         self.store = AgentSessions(self.root / "state")
         self.environment = mock.patch.dict(os.environ, {}, clear=True)
         self.environment.start()
@@ -123,6 +125,36 @@ class AgentSessionTests(unittest.TestCase):
         self.assertEqual(hooks.handle("cursor", payloads["grok"], self.store), {})
         with self.store.transaction() as db:
             self.assertEqual(len(self.store.rows(db, "session")), 5)
+
+    def test_cursor_session_id_only_payload_attaches_and_grok_import_still_noops(self):
+        # A genuine Cursor payload is discriminated by cursor_version, not by
+        # the presence of conversation_id; Grok's Cursor-hook import carries
+        # Grok's camelCase hookEventName and no cursor_version.
+        payload = {"hook_event_name": "sessionStart", "sessionId": "cursor-session-id-only",
+                   "cursor_version": "test", "cwd": str(self.root)}
+        output = hooks.handle("cursor", payload, self.store)
+        context = self.store.native_context("cursor", "cursor-session-id-only")
+        self.assertIn("context_file", context)
+        self.assertTrue(output)
+        grok_import = {"hookEventName": "session_start", "sessionId": "grok-via-cursor", "cwd": str(self.root)}
+        self.assertEqual(hooks.handle("cursor", grok_import, self.store), {})
+        with self.assertRaises(ValueError):
+            self.store.native_context("cursor", "grok-via-cursor")
+
+    def test_kimi_hook_stays_silent_outside_project_and_on_errors(self):
+        script = ROOT / ".agents/hooks/vaws_session.py"
+        payload = {"hook_event_name": "UserPromptSubmit", "session_id": "kimi-outside",
+                   "cwd": str(self.root), "prompt": "hello"}
+        for args, stdin in (
+            (["--client", "kimi", "--project", str(self.root / "elsewhere")], payload),
+            (["--client", "kimi"], {**payload, "session_id": ""}),
+        ):
+            with self.subTest(args=args):
+                result = subprocess.run([sys.executable, str(script), *args], input=json.dumps(stdin),
+                                        capture_output=True, text=True, check=False)
+                self.assertEqual(result.returncode, 0)
+                self.assertNotIn("{}", result.stdout)
+                self.assertEqual(result.stdout.strip(), "")
 
     def test_pretool_hook_injects_context_and_subagent_detach_does_not_end_root(self):
         parent = self.attach()

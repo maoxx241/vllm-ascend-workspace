@@ -19,7 +19,7 @@ from typing import Any
 
 from vaws_runtime_profile import digest
 from vaws_run_manifest import new_manifest, write_manifest, utc_now
-from vaws_managed_execution import ManagedExecution
+from vaws_managed_execution import JOB_TERMINAL, ManagedExecution
 
 TERMINAL = {"released", "cancelled", "expired"}
 
@@ -388,6 +388,35 @@ class RuntimePool(ManagedExecution):
                     self.event(db, owner, "run-state", run=run_id, state=run["state"], error=run.get("error"))
             self.export_manifest(run, binding)
             return run
+
+    def reconcile(self, owner: str, run_id: str, reason: str):
+        """Force a wedged uncertain run terminal after operator inspection.
+
+        Host coordination state lives in /tmp and a reboot starts a new epoch,
+        which otherwise wedges every uncertain run of the pool forever. This
+        never probes or guesses ownership: the administrator asserts it after
+        inspecting the host, and the assertion is recorded as a durable event.
+        """
+        if not isinstance(reason, str) or not reason.strip() or len(reason) > 1000:
+            raise ValueError("record the host inspection evidence as a bounded reason")
+        with self.lock, self.transaction() as db:
+            run = self.get(db, "run", run_id)
+            if run["state"] != "uncertain":
+                raise ValueError("only an uncertain run wedged by lost host state can be reconciled")
+            run["state"] = "cancelled"
+            run["error"] = "operator reconcile: " + reason.strip()[:500]
+            self.put(db, "run", run)
+            jobs = [row for row in self.rows(db, "job")
+                    if row["id"] == run_id and row["state"] not in JOB_TERMINAL]
+            for job in jobs:
+                job.update(state="inconclusive", error="operator reconcile: " + reason.strip()[:500])
+                self.put(db, "job", job)
+            binding = self.get(db, "binding", run["binding_id"])
+            event = self.event(db, owner, "run-reconciled", run=run_id,
+                               reason=reason.strip()[:500], previous="uncertain")
+        self.export_manifest(run, binding, job=jobs[0] if jobs else None)
+        return {"run": run, "jobs": jobs, "event": event,
+                "next": "return the runtime for quarantine and re-verification before any reuse"}
 
     def tick(self, limit: int = 4):
         """Observe manual leases and supervise explicitly registered jobs."""

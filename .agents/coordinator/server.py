@@ -145,6 +145,13 @@ def create_app(pool, access, *, interval=2.0, allowed_hosts=None):
         return await invoke(pool.managed_control, PRINCIPAL.get(), job_id, action, force)
 
     @mcp.tool()
+    async def execution_reconcile(run_id: str, reason: str) -> dict:
+        """Administrator: force-terminate an uncertain run wedged by lost host state (e.g. a host reboot's new epoch), after inspecting real ownership. Recorded as a durable event; never a substitute for inspection."""
+        if not principals[PRINCIPAL.get()].get("admin", False):
+            raise ToolError("execution reconcile requires an administrator")
+        return await invoke(pool.reconcile, PRINCIPAL.get(), run_id, reason)
+
+    @mcp.tool()
     async def coordinator_status() -> dict:
         """Read this principal's persisted sessions, bindings and executions."""
         return await invoke(pool.status, PRINCIPAL.get())

@@ -55,6 +55,38 @@ class CliHelpTests(unittest.TestCase):
                 self.assertLessEqual(len(body.splitlines()), 60)
                 self.assertNotEqual(body, source.read_text(encoding="utf-8"))
 
+    def test_vaws_ops_import_defers_agents_lib_dependency(self) -> None:
+        # A standalone remote-dev deployment has no .agents/lib; importing the
+        # module must not require it or touch that path at import time.
+        code = (
+            "import sys; sys.path.insert(0, r'%s'); import core.vaws_ops; "
+            "print(any('.agents' in path for path in sys.path))" % REMOTE_DEV
+        )
+        proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=False)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(proc.stdout.strip(), "False")
+
+    def test_json_arguments_are_not_overridden_by_argparse_defaults(self) -> None:
+        code = """
+import importlib.util, json, sys
+from unittest import mock
+spec = importlib.util.spec_from_file_location("vaws_cli", r"%s")
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+captured = {}
+def fake(name, args):
+    captured.update(args)
+    return {"result": {"outcome": "success"}}
+argv = ["vaws.py", "execution", "--execution-id", "e1", "--json", json.dumps({"action": "stop"})]
+with mock.patch.object(module, "vaws_call", side_effect=fake), mock.patch.object(sys, "argv", argv):
+    module.main()
+print(json.dumps(captured))
+""" % (ROOT / ".agents/scripts/vaws.py")
+        proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=False)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        merged = json.loads(proc.stdout.strip().splitlines()[-1])
+        self.assertEqual(merged["action"], "stop")
+
     def test_cli_errors_return_result_contract_without_traceback(self) -> None:
         proc = subprocess.run(
             [

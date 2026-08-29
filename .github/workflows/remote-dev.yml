@@ -46,11 +46,11 @@ jobs:
           PYTHONPATH: .remote-dev/tests
         # Skill catalog/shim freshness is separate from the MCP contract.
         # Temporary files and bounded Linux process checks; no SSH/NPU access.
+        # The whole test_cli_help module runs so new CLI/shim freshness tests
+        # cannot silently lack a CI entry again.
         run: >-
           python -B -m unittest -v
           test_mcp_schema test_patch_ops test_endpoint test_path_policy
           test_remote_edit test_remote_write test_remote_read test_artifacts
           test_hook_guard test_managed_jobs
-          test_cli_help.CliHelpTests.test_cli_wrappers_have_help
-          test_cli_help.CliHelpTests.test_task_facade_uses_one_cli_without_endpoint_or_network_requirements
-          test_cli_help.CliHelpTests.test_cli_errors_return_result_contract_without_traceback
+          test_cli_help

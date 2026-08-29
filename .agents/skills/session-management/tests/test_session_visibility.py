@@ -107,6 +107,31 @@ class SessionVisibilityTests(unittest.TestCase):
                 visible_devices=[0, 1],
             )
 
+    def test_visibility_probe_inner_command_is_shell_quoted(self) -> None:
+        # SSH joins remote argv with spaces and does not re-quote; an unquoted
+        # `sh -c printf ...` reaches the container as bare `sh -c printf`.
+        captured = []
+        ready = {"ok": True, "returncode": 0, "stdout": "ok", "stderr": ""}
+        with (
+            mock.patch.object(session_create.machine_ops, "find_public_key", return_value=Path("/keys/id.pub")),
+            mock.patch.object(session_create.machine_ops, "private_key_for_public_key", return_value=Path("/keys/id")),
+            mock.patch.object(session_create.machine_ops, "check_direct_ssh", return_value=ready),
+            mock.patch.object(
+                session_create.machine_ops,
+                "run_local",
+                side_effect=lambda cmd: captured.append(cmd) or subprocess.CompletedProcess(cmd, 0, "0,1", ""),
+            ),
+        ):
+            result = session_create.verify_session_ssh(
+                {"host": {"ip": "192.0.2.1", "user": "root", "port": 22}},
+                container_ssh_port=46001,
+                public_key_file=None,
+                visible_devices=[0, 1],
+            )
+        self.assertEqual(result["status"], "ready")
+        remote = " ".join(captured[0][-3:])
+        self.assertEqual(remote, "sh -c 'printf '\"'\"'%s'\"'\"' \"${ASCEND_RT_VISIBLE_DEVICES-}\"'")
+
     def test_matching_visibility_is_ready(self) -> None:
         result = self.verify("0,1")
 

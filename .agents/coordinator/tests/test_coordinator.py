@@ -298,6 +298,58 @@ class PoolTests(unittest.TestCase):
         self.assertEqual(manifest["status"], "inconclusive")
         self.assertEqual(manifest["environment"]["managed_execution"]["result"]["exit_code"], 0)
 
+    def test_orphaned_busy_recovers_via_heartbeat_without_stopping_live_family(self):
+        binding = self.bind("alice", self.root / "a")
+        job = self.managed("alice", binding)
+        self.assertEqual(job["state"], "running")
+        import sqlite3
+        with sqlite3.connect(self.backend.state / "coordinator.sqlite3") as db:
+            db.execute("UPDATE tasks SET state='orphaned_busy'")
+        self.backend.calls.clear()
+        recovered = self.pool.managed_control("alice", job["id"])
+        self.assertEqual((recovered["state"], recovered["lease_state"]), ("running", "active"))
+        self.assertIn(("host", "heartbeat"), self.backend.calls)
+        self.assertNotIn(("job", "stop"), self.backend.calls)
+        self.assertFalse(self.backend.jobs[job["job_id"]]["quiet"])
+
+    def test_disappeared_job_directory_never_confirms_completion(self):
+        binding = self.bind("alice", self.root / "a")
+        job = self.managed("alice", binding)
+        self.backend.jobs.clear()  # the whole job directory vanished remotely
+        self.pool.managed_control("alice", job["id"], "stop")
+        result = self.pool.managed_control("alice", job["id"])
+        self.assertEqual(result["state"], "stopping")
+        self.assertNotIn(("host", "release"), self.backend.calls)
+
+    def test_deterministic_validation_failure_fails_terminally_without_retry(self):
+        binding = self.bind("alice", self.root / "a")
+        job = self.pool.managed_start("alice", binding["id"], "managed",
+                                      {"vllm": "a" * 40, "vllm-ascend": "b" * 40},
+                                      "wrong-build-key", [0], 0, "exec python task.py", {}, 60)
+        self.assertEqual(job["state"], "failed")
+        self.assertIn("cache miss", job["error"])
+        calls = list(self.backend.calls)
+        self.pool.managed_tick()
+        self.assertEqual(self.backend.calls, calls)
+
+    def test_operator_reconcile_unwedges_an_uncertain_run_and_records_event(self):
+        binding = self.bind("alice", self.root / "a")
+        job = self.managed("alice", binding)
+        import sqlite3
+        with sqlite3.connect(self.backend.state / "coordinator.sqlite3") as db:
+            db.execute("UPDATE meta SET value='new-epoch' WHERE key='coordination_epoch'")
+        wedged = self.pool.managed_control("alice", job["id"])
+        self.assertEqual(wedged["state"], "uncertain")
+        with self.assertRaises(ValueError):
+            self.pool.reconcile("admin", job["id"], "")
+        result = self.pool.reconcile("admin", job["id"], "host rebooted; epoch and tasks verified gone")
+        self.assertEqual(result["run"]["state"], "cancelled")
+        self.assertEqual(result["jobs"][0]["state"], "inconclusive")
+        self.assertEqual(self.pool.events("admin")["events"][-1]["kind"], "run-reconciled")
+        with self.assertRaises(ValueError):
+            self.pool.reconcile("admin", job["id"], "already terminal")
+        self.assertEqual(self.pool.return_runtime("alice", binding["id"])["status"], "returned")
+
     def test_task_worktrees_can_change_only_between_returned_bindings(self):
         binding = self.bind("alice", self.root / "a")
         with self.assertRaisesRegex(ValueError, "return task runtimes"):

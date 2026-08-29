@@ -25,6 +25,7 @@ for _p in (str(LIB_DIR), str(MM_SCRIPTS)):
 
 import inventory as inventory_store  # noqa: E402
 from vaws_local_state import ensure_state_dir  # noqa: E402
+from vaws_npu_coordination import parse_npu_smi_info  # noqa: E402
 from vaws_remote_toolbox import (  # noqa: E402
     SshEndpoint,
     resolve_remote_target,
@@ -192,84 +193,43 @@ def save_serving_state(
 
 
 # ---------------------------------------------------------------------------
+# Serving presets
+# ---------------------------------------------------------------------------
+
+PRESETS_DIR = ROOT / ".agents" / "skills" / "vllm-ascend-serving" / "presets"
+
+
+def load_preset(name: str) -> dict[str, Any]:
+    """Load a named serving preset from the skill's ``presets/`` directory.
+
+    ``name`` is a bare preset name (the ``.json`` suffix is optional); path
+    traversal is rejected. Raises ``ValueError`` for unknown presets or
+    malformed preset files.
+    """
+    stem = name[:-5] if name.endswith(".json") else name
+    if not stem or "/" in stem or "\\" in stem or ".." in stem:
+        raise ValueError(f"invalid preset name {name!r}: use a bare preset name")
+    path = PRESETS_DIR / f"{stem}.json"
+    if not path.is_file():
+        available = sorted(p.stem for p in PRESETS_DIR.glob("*.json")) if PRESETS_DIR.is_dir() else []
+        raise ValueError(
+            f"unknown preset {name!r}; available presets: "
+            + (", ".join(available) if available else "(none)")
+        )
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        raise ValueError(f"preset {name!r} is not valid JSON: {e}") from e
+    if not isinstance(data, dict):
+        raise ValueError(f"preset {name!r} must contain a JSON object")
+    return data
+
+
+# ---------------------------------------------------------------------------
 # NPU probe
 # ---------------------------------------------------------------------------
 
 _HBM_BUSY_THRESHOLD_MB = 4096
-
-
-def _parse_npu_smi(output: str) -> dict[str, Any]:
-    """Parse ``npu-smi info`` output into a structured dict.
-
-    Returns dict with keys: devices, total, busy, free, free_count, hbm,
-    hbm_busy_threshold_mb.
-    """
-    import re
-
-    dev_ids: set[int] = set()
-    hbm: dict[int, dict[str, int]] = {}
-    current_npu: int | None = None
-    lines = output.splitlines()
-
-    for line in lines:
-        hdr = re.match(r"\|\s*(\d+)\s+\d*\w+\d+\w*\s+\|", line)
-        if hdr:
-            current_npu = int(hdr.group(1))
-            dev_ids.add(current_npu)
-            continue
-        if current_npu is not None and "0000:" in line:
-            pairs = re.findall(r"(\d+)\s*/\s*(\d+)", line)
-            if len(pairs) >= 2:
-                hbm[current_npu] = {
-                    "used_mb": int(pairs[-1][0]),
-                    "total_mb": int(pairs[-1][1]),
-                }
-            current_npu = None
-
-    proc_busy: dict[int, list[dict[str, Any]]] = {}
-    in_proc = False
-    for line in lines:
-        if "Process name" in line or "Process memory" in line:
-            in_proc = True
-            continue
-        if in_proc and "No running processes" in line:
-            continue
-        if in_proc and line.startswith("|"):
-            m = re.match(r"\|\s*(\d+)\s+\S+\s+(\d+)\s+(\S+)\s+(\S+)", line)
-            if m:
-                dev = int(m.group(1))
-                proc_busy.setdefault(dev, []).append({
-                    "pid": int(m.group(2)),
-                    "owner": m.group(3),
-                    "name": m.group(4),
-                })
-
-    busy: dict[int, list[dict[str, Any]]] = {}
-    for dev in sorted(dev_ids):
-        reasons: list[dict[str, Any]] = []
-        if dev in proc_busy:
-            reasons.extend(proc_busy[dev])
-        h = hbm.get(dev)
-        if h and h["used_mb"] >= _HBM_BUSY_THRESHOLD_MB and dev not in proc_busy:
-            reasons.append({
-                "pid": None,
-                "name": "unknown (HBM occupied, likely another container)",
-                "hbm_used_mb": h["used_mb"],
-                "detection": "hbm_threshold",
-            })
-        if reasons:
-            busy[dev] = reasons
-
-    free = sorted(d for d in dev_ids if d not in busy)
-    return {
-        "devices": sorted(dev_ids),
-        "total": len(dev_ids),
-        "busy": {str(k): v for k, v in sorted(busy.items())},
-        "hbm": {str(k): v for k, v in sorted(hbm.items())},
-        "free": free,
-        "free_count": len(free),
-        "hbm_busy_threshold_mb": _HBM_BUSY_THRESHOLD_MB,
-    }
 
 
 def probe_npus(host_ep: SshEndpoint) -> dict[str, Any]:
@@ -280,6 +240,10 @@ def probe_npus(host_ep: SshEndpoint) -> dict[str, Any]:
     container, PID-namespace isolation hides other containers' workloads,
     making process-based occupancy detection unreliable.
 
+    Parsing reuses the coordinator's single-source ``parse_npu_smi_info``,
+    which maps A3 pipe-separated process rows through Phy-ID and fails closed
+    when the process table is missing or unparsable.  A failed parse raises
+    here as well: an unknown occupancy must never look like an empty busy set.
     As a secondary signal, HBM usage above ``_HBM_BUSY_THRESHOLD_MB`` marks a
     device as busy even when no visible PID is found (covers edge cases where
     npu-smi does not list the process).
@@ -290,7 +254,14 @@ def probe_npus(host_ep: SshEndpoint) -> dict[str, Any]:
             f"npu-smi on host failed (rc={result.returncode}): "
             f"{result.stderr[:500]}"
         )
-    parsed = _parse_npu_smi(result.stdout)
+    parsed = parse_npu_smi_info(result.stdout)
+    if parsed.get("status") != "ok":
+        raise RuntimeError(
+            "npu-smi occupancy parse failed; refusing to treat unknown "
+            f"occupancy as free: {parsed.get('error', 'unknown parse error')}"
+        )
+    parsed["total"] = len(parsed["devices"])
+    parsed["free_count"] = len(parsed["free"])
     parsed["npu_smi_ok"] = True
     return parsed
 

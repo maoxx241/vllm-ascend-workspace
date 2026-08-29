@@ -84,15 +84,32 @@ class ManagedExecution:
                     run = self.control(job["owner"], key, "poll", _managed=True)
                 job["lease_state"] = run["state"]
                 observed = self.backend.job(runtime, job["job_id"], "status")
+                job["had_receipt"] = bool(job.get("had_receipt") or observed.get("receipt")
+                                          or (job.get("remote") or {}).get("receipt"))
+                if observed.get("state") == "absent" and job["had_receipt"]:
+                    # A job directory that existed and then disappeared is lost
+                    # supervision, not a drained family. It must never satisfy
+                    # completion_confirmed or disable retain_until_release.
+                    observed = {**observed, "quiet": False}
                 job["remote"] = observed
                 if run["state"] in {"uncertain", "pending"}:
                     job.update(state="waiting" if run["state"] == "pending" else "uncertain", error=run.get("error"))
                     return self._save_managed(job)
 
-                lost_lease = run["state"] in LEASE_TERMINAL or run["state"] == "orphaned_busy"
                 timed_out = (observed.get("result") or {}).get("state") == "timeout"
                 if timed_out:
                     job["timed_out"] = True
+                if run["state"] == "orphaned_busy" and not job["cancel_requested"] and not timed_out:
+                    # Host quarantine is not proof of a dead family. Heartbeat
+                    # is the only recovery that moves orphaned_busy back to
+                    # active; a live marked family is never stopped here.
+                    run = self.control(job["owner"], key, "heartbeat", _managed=True)
+                    job["lease_state"] = run["state"]
+                    if run["state"] == "orphaned_busy":
+                        job.update(state="uncertain",
+                                   error="host quarantines the lease; the live family is preserved")
+                        return self._save_managed(job)
+                lost_lease = run["state"] in LEASE_TERMINAL
                 if job["cancel_requested"] or lost_lease or timed_out:
                     if not observed["quiet"]:
                         job["remote"] = self.backend.job(runtime, job["job_id"], "stop", force=job["force"])
@@ -139,6 +156,12 @@ class ManagedExecution:
                 else:
                     job.update(state=run["state"], lease_state=run["state"])
                 job.pop("error", None)
+            except ValueError as exc:
+                # Deterministic validation failures (bad snapshot, build_key
+                # mismatch, an unresolved execution on the binding) can never
+                # succeed on retry. Fail terminally instead of wedging the
+                # binding in an uncertain poll loop.
+                job.update(state="failed", error=str(exc)[:500])
             except Exception as exc:
                 job.update(state="uncertain", error=str(exc)[:500])
             return self._save_managed(job)

@@ -9,14 +9,18 @@ from pathlib import Path
 from .result import make_result
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / ".agents/lib"))
-from vaws_task_client import TaskClient
 
 
 def vaws_call(name, args):
     started = time.monotonic()
     target = {"kind": "vaws-task"}
     try:
+        # Lazy import: a standalone remote-dev deployment has no .agents/lib.
+        # An import-time hard dependency would take down every unrelated tool.
+        lib = str(ROOT / ".agents/lib")
+        if lib not in sys.path:
+            sys.path.insert(0, lib)
+        from vaws_task_client import TaskClient
         client = TaskClient(args.get("context_file", ""))
         target["session_id"] = client.context["session"]["id"]
         if name == "vaws.session":

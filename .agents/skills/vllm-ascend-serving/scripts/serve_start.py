@@ -45,6 +45,7 @@ from _common import (
     ROOT,
     SshEndpoint,
     emit_progress,
+    load_preset,
     load_serving_state,
     now_utc,
     print_json,
@@ -400,30 +401,72 @@ def diagnose_env_failure(
     }
 
 
-def probe_ready_once(ep: SshEndpoint, pid: int, port: int) -> dict[str, Any]:
-    """Alive + /health + /v1/models in a single SSH round-trip.
+_STAGE_MARKERS: list[tuple[str, str]] = [
+    ("uvicorn running", "http-up"),
+    ("application startup complete", "http-up"),
+    ("capturing", "graph-capture"),
+    ("graph capture", "graph-capture"),
+    ("aclgraph", "graph-capture"),
+    ("acl graph", "graph-capture"),
+    ("torch.compile", "compile"),
+    ("loading weights", "weight-load"),
+    ("loading safetensors", "weight-load"),
+    ("model loading", "weight-load"),
+]
+
+_STAGE_GREP = "loading weights|loading safetensors|model loading|torch\\.compile|capturing|aclgraph|acl graph|graph capture|uvicorn running|application startup complete"
+
+
+def classify_stage(text: str) -> str | None:
+    """Map a runtime log line to a startup phase, or None when unrecognized."""
+    lowered = text.lower()
+    for needle, stage in _STAGE_MARKERS:
+        if needle in lowered:
+            return stage
+    return None
+
+
+def probe_ready_once(
+    ep: SshEndpoint,
+    pid: int,
+    port: int,
+    *,
+    runtime_dir: str | None = None,
+) -> dict[str, Any]:
+    """Alive + /health + /v1/models (+ startup stage) in a single SSH round-trip.
 
     The readiness loop used to issue up to three separate SSH commands per
     tick; over a long model load that is hundreds of avoidable round-trips.
+    A failed SSH round-trip is ``probe_error`` (liveness unknown), never proof
+    of process exit.
     """
-    script = "\n".join(
-        [
-            f"if kill -0 {pid} 2>/dev/null; then echo __ALIVE__=1; else echo __ALIVE__=0; fi",
+    lines = [
+        f"if kill -0 {pid} 2>/dev/null; then echo __ALIVE__=1; else echo __ALIVE__=0; fi",
+        (
+            f"code=$(curl -s -o /dev/null -w '%{{http_code}}' --connect-timeout 3 "
+            f"http://127.0.0.1:{port}/health 2>/dev/null || echo 000)"
+        ),
+        'echo "__HEALTH__=$code"',
+        'if [ "$code" = "200" ]; then',
+        "  echo __MODELS_BEGIN__",
+        f"  curl -s --connect-timeout 3 http://127.0.0.1:{port}/v1/models 2>/dev/null",
+        "  echo",
+        "  echo __MODELS_END__",
+        "fi",
+    ]
+    if runtime_dir:
+        lines += [
+            "echo __STAGE_BEGIN__",
             (
-                f"code=$(curl -s -o /dev/null -w '%{{http_code}}' --connect-timeout 3 "
-                f"http://127.0.0.1:{port}/health 2>/dev/null || echo 000)"
+                f"tail -n 300 {shlex.quote(runtime_dir)}/stdout.log {shlex.quote(runtime_dir)}/stderr.log 2>/dev/null "
+                f"| grep -iE '{_STAGE_GREP}' | tail -1 | head -c 160"
             ),
-            'echo "__HEALTH__=$code"',
-            'if [ "$code" = "200" ]; then',
-            "  echo __MODELS_BEGIN__",
-            f"  curl -s --connect-timeout 3 http://127.0.0.1:{port}/v1/models 2>/dev/null",
-            "  echo",
-            "  echo __MODELS_END__",
-            "fi",
+            "echo",
+            "echo __STAGE_END__",
         ]
-    )
-    r = ssh_exec(ep, script, check=False)
+    r = ssh_exec(ep, "\n".join(lines), check=False)
     out = r.stdout or ""
+    probe_error = r.returncode != 0 and "__ALIVE__" not in out
     alive = "__ALIVE__=1" in out
     health_ok = "__HEALTH__=200" in out
     models: dict[str, Any] | None = None
@@ -435,7 +478,30 @@ def probe_ready_once(ep: SshEndpoint, pid: int, port: int) -> dict[str, Any]:
                 models = data
         except json.JSONDecodeError:
             models = None
-    return {"alive": alive, "health": health_ok, "models": models}
+    stage = None
+    if "__STAGE_BEGIN__" in out and "__STAGE_END__" in out:
+        marker = out.split("__STAGE_BEGIN__", 1)[1].split("__STAGE_END__", 1)[0].strip()
+        stage = classify_stage(marker)
+    return {"alive": alive, "health": health_ok, "models": models,
+            "stage": stage, "probe_error": probe_error}
+
+
+def probe_first_token(ep: SshEndpoint, port: int, served_model: str) -> dict[str, Any]:
+    """One deterministic real request; /health 200 alone is not a ready service."""
+    payload = json.dumps({"model": served_model, "prompt": "Hello", "max_tokens": 8, "temperature": 0})
+    script = (
+        f"code=$(curl -s -o /tmp/vaws_first_token.json -w '%{{http_code}}' --connect-timeout 3 --max-time 120 "
+        f"-X POST http://127.0.0.1:{port}/v1/completions -H 'Content-Type: application/json' "
+        f"-d {shlex.quote(payload)} 2>/dev/null || echo 000); "
+        "echo __CODE__=$code; head -c 400 /tmp/vaws_first_token.json 2>/dev/null"
+    )
+    r = ssh_exec(ep, script, check=False)
+    out = r.stdout or ""
+    return {
+        "ok": "__CODE__=200" in out,
+        "probe_error": r.returncode != 0 and "__CODE__" not in out,
+        "detail": out[-300:],
+    }
 
 
 def wait_for_ready(
@@ -444,14 +510,29 @@ def wait_for_ready(
     port: int,
     runtime_dir: str,
     timeout: int,
+    served_model: str,
 ) -> dict[str, Any]:
     start = time.monotonic()
     deadline = start + timeout
     health_ok = False
     models_ok = False
+    token_ok = False
+    phases: list[dict[str, Any]] = []
+
+    def mark(stage: str) -> None:
+        if not phases or phases[-1]["phase"] != stage:
+            phases.append({"phase": stage, "at_seconds": round(time.monotonic() - start, 1)})
+            emit_progress("probe", f"phase: {stage}")
+
+    def last_phase() -> str:
+        return phases[-1]["phase"] if phases else "launch"
 
     while time.monotonic() < deadline:
-        probe = probe_ready_once(ep, pid, port)
+        probe = probe_ready_once(ep, pid, port, runtime_dir=runtime_dir)
+        if probe.get("probe_error"):
+            # A lost SSH round-trip is not a dead process; keep waiting.
+            time.sleep(HEALTH_POLL_INTERVAL)
+            continue
         if not probe["alive"]:
             stderr_tail = read_remote_tail(ep, f"{runtime_dir}/stderr.log")
             return {
@@ -459,21 +540,38 @@ def wait_for_ready(
                 "alive": False,
                 "error": "process exited before becoming ready",
                 "stderr_tail": stderr_tail,
+                "phases": phases,
+                "last_phase": last_phase(),
                 "elapsed_seconds": round(time.monotonic() - start, 1),
             }
 
+        if probe.get("stage"):
+            mark(probe["stage"])
+
         if not health_ok and probe["health"]:
             health_ok = True
-            emit_progress("probe-health", "/health returned 200")
+            mark("health-ok")
 
         if health_ok and not models_ok and probe["models"] is not None:
             models_ok = True
-            emit_progress("probe-models", "/v1/models returned model list")
+            mark("models-ok")
 
-        if health_ok and models_ok:
+        if models_ok and not token_ok:
+            token = probe_first_token(ep, port, served_model)
+            if token.get("probe_error"):
+                time.sleep(HEALTH_POLL_INTERVAL)
+                continue
+            if token["ok"]:
+                token_ok = True
+                mark("first-token-ok")
+            else:
+                mark("first-token-failing")
+
+        if health_ok and models_ok and token_ok:
             return {
                 "ready": True,
                 "alive": True,
+                "phases": phases,
                 "elapsed_seconds": round(time.monotonic() - start, 1),
             }
 
@@ -484,9 +582,75 @@ def wait_for_ready(
         "alive": check_alive(ep, pid),
         "health": health_ok,
         "models": models_ok,
-        "error": f"timed out after {timeout}s waiting for service",
+        "first_token": token_ok,
+        "error": (
+            f"timed out after {timeout}s waiting for service "
+            f"(last phase: {last_phase()}); raise --health-timeout if this stage legitimately takes longer"
+        ),
+        "phases": phases,
+        "last_phase": last_phase(),
         "elapsed_seconds": round(time.monotonic() - start, 1),
     }
+
+
+# ---------------------------------------------------------------------------
+# Preset preflight
+# ---------------------------------------------------------------------------
+
+_JSON_VALUE_FLAGS = (
+    "--additional-config",
+    "--model-loader-extra-config",
+    "--speculative-config",
+    "--compilation-config",
+)
+
+
+def preflight_preset(
+    ep: SshEndpoint,
+    preset: dict[str, Any],
+    *,
+    runtime_base: str,
+    env: dict[str, str],
+    extra_args: list[str],
+) -> list[str]:
+    """Verify a preset against the actual container before touching any service.
+
+    Recipe/version drift is the most common launch-failure class (stale arg
+    types, CANN path moves, unverified vllm). Fail here, before a multi-minute
+    model load is wasted on it — and before any running service is stopped.
+    """
+    problems: list[str] = []
+    expected_vllm = str(preset.get("vllm_version") or "")
+    if expected_vllm:
+        version_file = f"{runtime_base}/vllm/vllm/_version.py"
+        r = ssh_exec(ep, f"grep -m1 '^__version__ = ' {shlex.quote(version_file)} 2>/dev/null || true", check=False)
+        match = re.search(r"'([0-9][^']*)'", r.stdout or "")
+        actual_vllm = match.group(1) if match else ""
+        if actual_vllm != expected_vllm:
+            problems.append(
+                f"preset is verified for vllm {expected_vllm}, but the container has "
+                f"{actual_vllm or 'an unreadable vllm version'}; use a preset verified for this image"
+            )
+    missing: list[str] = []
+    for entry in (env.get("PYTHONPATH") or "").split(":"):
+        entry = entry.strip()
+        if entry.startswith("/"):
+            r = ssh_exec(ep, f"test -d {shlex.quote(entry)}", check=False)
+            if r.returncode != 0:
+                missing.append(entry)
+    if missing:
+        problems.append("PYTHONPATH entries missing in the container: " + ", ".join(missing))
+    for flag in _JSON_VALUE_FLAGS:
+        if flag in extra_args:
+            idx = extra_args.index(flag)
+            if idx + 1 >= len(extra_args):
+                problems.append(f"{flag} has no value")
+                continue
+            try:
+                json.loads(extra_args[idx + 1])
+            except json.JSONDecodeError as exc:
+                problems.append(f"{flag} value is not valid JSON: {exc}")
+    return problems
 
 
 # ---------------------------------------------------------------------------
@@ -558,6 +722,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--session-id", help="VAWS session id; defaults to the bound session of the current worktree")
     p.add_argument("--session-file", help="explicit session.json path")
+    p.add_argument("--preset", help="named serving preset from the skill's presets/ directory; CLI args override preset values")
     p.add_argument("--model", help="absolute model weight path on the remote container")
     p.add_argument(
         "--served-model-name", "--served-name",
@@ -608,6 +773,25 @@ def main(argv: list[str] | None = None) -> int:
         vllm_extra = argv[idx + 1:]
 
     args = build_parser().parse_args(own_argv)
+
+    # ---- preset: named recipe as defaults under explicit CLI args ----
+    preset: dict[str, Any] | None = None
+    if args.preset:
+        preset = load_preset(args.preset)
+        if args.tp is None and preset.get("tp") is not None:
+            args.tp = int(preset["tp"])
+        if args.dp is None and preset.get("dp") is not None:
+            args.dp = int(preset["dp"])
+        if args.port is None and preset.get("port") is not None:
+            args.port = int(preset["port"])
+        if not args.devices and preset.get("devices"):
+            args.devices = str(preset["devices"])
+        if not args.served_model_name and preset.get("served_model_name"):
+            args.served_model_name = str(preset["served_model_name"])
+        if args.health_timeout == DEFAULT_HEALTH_TIMEOUT and preset.get("health_timeout"):
+            args.health_timeout = int(preset["health_timeout"])
+        if not vllm_extra and preset.get("serve_args"):
+            vllm_extra = [str(a) for a in preset["serve_args"]]
     lock_stack = contextlib.ExitStack()
 
     try:
@@ -639,6 +823,16 @@ def main(argv: list[str] | None = None) -> int:
             except ValueError as exc:
                 print_json({"status": "needs_input", "error": str(exc)})
                 return 1
+        if preset and preset.get("env"):
+            preset_env: dict[str, str] = {}
+            for key, value in (preset["env"] or {}).items():
+                try:
+                    preset_env[require_env_name(str(key))] = str(value)
+                except ValueError as exc:
+                    print_json({"status": "needs_input", "error": f"preset env: {exc}"})
+                    return 1
+            # CLI --extra-env wins over preset env per key.
+            extra_env = {**preset_env, **extra_env}
 
         # ---- resolve launch params (fresh or relaunch) ----
         if args.relaunch:
@@ -684,6 +878,23 @@ def main(argv: list[str] | None = None) -> int:
             devices = args.devices
             launch_env = extra_env
             launch_extra_args = vllm_extra
+
+        # ---- preset preflight: catch recipe/version drift before any stop/launch ----
+        if preset is not None:
+            problems = preflight_preset(
+                ep, preset, runtime_base=runtime_base,
+                env=launch_env, extra_args=launch_extra_args,
+            )
+            if problems:
+                print_json({
+                    "status": "failed",
+                    "phase": "preflight",
+                    "error": "preset preflight failed; the running service was left untouched",
+                    "problems": problems,
+                    "machine": alias,
+                })
+                return 1
+            emit_progress("preflight", f"preset {args.preset} checks passed")
 
         try:
             live_devices = require_session_npu_lease(target.session, repo_root=target.state_repo_root)
@@ -1015,7 +1226,8 @@ def main(argv: list[str] | None = None) -> int:
 
         # ---- probe readiness ----
         emit_progress("probe", f"waiting for ready (timeout={args.health_timeout}s)")
-        readiness = wait_for_ready(ep, pid, port, runtime_dir, timeout=args.health_timeout)
+        readiness = wait_for_ready(ep, pid, port, runtime_dir, timeout=args.health_timeout,
+                                   served_model=served_model_name)
 
         # ---- persist state (always, even if not ready — so stop can clean up) ----
         state["status"] = "ready" if readiness["ready"] else "started"

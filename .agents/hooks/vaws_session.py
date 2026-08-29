@@ -21,7 +21,7 @@ def handle(client: str, payload: dict, store: AgentSessions | None = None) -> di
     # the client's own adapter should create a root attachment.
     if client == "claude" and ("hookEventName" in payload or "cursor_version" in payload):
         return {}
-    if client == "cursor" and "sessionId" in payload and "conversation_id" not in payload:
+    if client == "cursor" and "hookEventName" in payload and "cursor_version" not in payload:
         return {}  # Grok also imports Cursor hooks by default.
     store = store or AgentSessions()
     event = str(payload.get("hook_event_name") or payload.get("hookEventName") or "")
@@ -77,10 +77,6 @@ def handle(client: str, payload: dict, store: AgentSessions | None = None) -> di
         nested_key = ""
         nested_arguments = arguments
         if client == "grok" and isinstance(arguments, dict):
-            # The native hook reports the qualified tool name, while its input
-            # retains Grok's use_tool envelope. Handle both the direct
-            # dispatcher name and this qualified-name form without guessing
-            # from cwd or transcript history.
             nested_name = str(arguments.get("tool_name") or arguments.get("toolName") or "")
             if nested_name:
                 name = nested_name
@@ -117,18 +113,20 @@ def main():
                        (payload.get("workspace_roots") or [str(Path.cwd())])[0]).resolve()
             project = args.project.expanduser().resolve()
             if cwd != project and project not in cwd.parents:
-                print("{}")
+                # Kimi appends stdout to the user prompt; a literal {} would
+                # pollute every prompt outside this project. Stay silent.
+                print("")
                 return 0
         output = handle(args.client, payload)
         # Kimi's UserPromptSubmit contract appends returned text, rather than
         # relying on Claude's additionalContext extension.
-        if args.client == "kimi" and payload.get("hook_event_name") == "UserPromptSubmit" and output:
-            print(output["hookSpecificOutput"]["additionalContext"])
+        if args.client == "kimi" and payload.get("hook_event_name") == "UserPromptSubmit":
+            print(output["hookSpecificOutput"]["additionalContext"] if output else "")
         else:
             print(json.dumps(output))
     except Exception as exc:
         print(f"VAWS local association unavailable: {exc}. Local tools remain usable.", file=sys.stderr)
-        print("{}")
+        print("")
     return 0
 
 

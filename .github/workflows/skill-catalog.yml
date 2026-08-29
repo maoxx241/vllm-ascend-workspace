@@ -62,6 +62,11 @@ jobs:
           python -B -m unittest discover -s .agents/skills/remote-code-parity/tests
           python -B -m unittest discover -s .agents/skills/vllm-ascend-serving/tests
 
+      - name: Run benchmark smoke and machine-management tests
+        run: |
+          python -B -m unittest discover -s .agents/skills/vllm-ascend-benchmark/tests
+          python -B -m unittest discover -s .agents/skills/machine-management/tests
+
       - name: Validate parameterized Ray helpers
         run: bash -n scripts/ray_head.sh scripts/ray_worker.sh
 

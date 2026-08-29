@@ -25,14 +25,14 @@ def main():
     attach.add_argument("--agent-id", default="")
     for name in ("session", "run", "execution", "finish"):
         child = sub.add_parser(name)
-        child.add_argument("--context-file", default="")
+        child.add_argument("--context-file")
         child.add_argument("--json", default="{}", help="Additional structured tool arguments")
         if name == "run":
             child.add_argument("--request-id", required=True)
             child.add_argument("--command", required=True)
         if name == "execution":
             child.add_argument("--execution-id", required=True)
-            child.add_argument("--action", choices=["status", "tail", "stop"], default="status")
+            child.add_argument("--action", choices=["status", "tail", "stop"])
     args = vars(parser.parse_args())
     operation = args.pop("operation")
     if operation == "attach":
@@ -41,7 +41,10 @@ def main():
         print(json.dumps(store.attach(**args), ensure_ascii=False))
         return 0
     extra = json.loads(args.pop("json"))
-    result = vaws_call("vaws." + operation, {**extra, **args})
+    # Unset argparse defaults (None) must not silently override --json keys:
+    # `--json '{"action":"stop"}'` degraded to a status query otherwise.
+    merged = {**extra, **{key: value for key, value in args.items() if value is not None}}
+    result = vaws_call("vaws." + operation, merged)
     print(json.dumps(result, ensure_ascii=False))
     return 0 if result["result"]["outcome"] == "success" else 1
 

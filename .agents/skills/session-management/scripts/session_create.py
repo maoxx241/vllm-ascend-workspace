@@ -244,7 +244,9 @@ def verify_session_ssh(
                     batch_mode=True,
                     identity_file=identity_file,
                 )
-                + ["sh", "-c", "printf '%s' \"${ASCEND_RT_VISIBLE_DEVICES-}\""]
+                # SSH joins remote argv with spaces and does not re-quote, so
+                # quote the inner command or `sh -c` receives bare `printf`.
+                + ["sh", "-c", shlex.quote("printf '%s' \"${ASCEND_RT_VISIBLE_DEVICES-}\"")]
             )
             observed = result.stdout.strip()
             visibility_check.update(
