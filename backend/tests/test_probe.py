@@ -18,6 +18,7 @@ from npu_fleet_monitor.probe import (
     parse_disks,
     parse_docker,
     parse_meminfo,
+    parse_mounts,
     parse_process_details,
     split_sections,
 )
@@ -36,6 +37,13 @@ class ProbeTests(unittest.TestCase):
         rows = parse_disks("Filesystem 1-blocks Used Available Capacity Mounted on\n/dev/sda 1000 800 200 80% /")
         self.assertEqual(rows[0]["used_percent"], 80)
         self.assertEqual(rows[0]["mount"], "/")
+
+    def test_findmnt_parser_flattens_nested_mounts(self) -> None:
+        mounts = parse_mounts(json.dumps({"filesystems": [{
+            "target": "/", "source": "/dev/root", "fstype": "ext4", "options": "rw",
+            "children": [{"target": "/data/models", "source": "nfs:/weights", "fstype": "nfs4", "options": "rw"}],
+        }]}))
+        self.assertEqual([mount["target"] for mount in mounts], ["/", "/data/models"])
 
     def test_docker_stats_and_npu_telemetry(self) -> None:
         docker = parse_docker(

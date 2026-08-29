@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
+from .agent_view import AgentQueryError, capacity_candidates, compact_server, find_server, npu_status, server_status
 from .db import Database
 from .scheduler import AdaptiveScheduler
 from .settings import Settings
@@ -73,6 +74,60 @@ class App:
         totals["idle_npu_count"] = totals["npu_count"] - totals["busy_npu_count"]
         return {"generated_at": int(time.time()), "totals": totals, "servers": rows, "runtime": self.scheduler.runtime_state()}
 
+    def agent_servers(self) -> dict[str, Any]:
+        snapshots = self.scheduler.snapshots()
+        return {
+            "source": "cache",
+            "servers": [compact_server(server, snapshots.get(server["id"])) for server in self.db.list_servers()],
+        }
+
+    def _agent_snapshot(
+        self, host: str, mode: str, *, force_infrastructure: bool = False, timeout: int = 30,
+    ) -> tuple[dict[str, Any], dict[str, Any] | None]:
+        snapshots = self.scheduler.snapshots()
+        server, snapshot = find_server(host, self.db.list_servers(), snapshots)
+        if mode not in ("cache", "live"):
+            raise AgentQueryError("mode must be cache or live")
+        if mode == "live":
+            if not server.get("enabled"):
+                raise AgentQueryError("live collection is disabled for this server", 409)
+            try:
+                snapshot = self.scheduler.collect_and_wait(
+                    server["id"], force_infrastructure=force_infrastructure, timeout=timeout,
+                )
+            except TimeoutError as exc:
+                raise AgentQueryError(str(exc), 504) from exc
+        return server, snapshot
+
+    def agent_npu(
+        self, host: str, include_processes: bool = False, detailed_processes: bool = False,
+        mode: str = "cache", timeout: int = 30,
+    ) -> dict[str, Any]:
+        server, snapshot = self._agent_snapshot(host, mode, timeout=timeout)
+        return npu_status(
+            server, snapshot, include_processes=include_processes, detailed_processes=detailed_processes,
+        )
+
+    def agent_server(
+        self, host: str, mode: str = "cache", include_processes: bool = True,
+        detailed_processes: bool = False, timeout: int = 30,
+    ) -> dict[str, Any]:
+        server, snapshot = self._agent_snapshot(host, mode, force_infrastructure=mode == "live", timeout=timeout)
+        return server_status(
+            server, snapshot, include_processes=include_processes,
+            detailed_processes=detailed_processes, include_infrastructure=True,
+        )
+
+    def agent_capacity(
+        self, min_idle_npus: int, max_age_seconds: int, tags: list[str], include_disabled: bool,
+    ) -> dict[str, Any]:
+        if not 0 <= min_idle_npus <= 64 or not 0 <= max_age_seconds <= 86400:
+            raise AgentQueryError("capacity limits are out of range")
+        return capacity_candidates(
+            self.db.list_servers(), self.scheduler.snapshots(), min_idle_npus=min_idle_npus,
+            max_age_seconds=max_age_seconds, tags=tags, include_disabled=include_disabled,
+        )
+
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "NPUFleetMonitor/0.1"
@@ -132,6 +187,48 @@ class Handler(BaseHTTPRequestHandler):
             return self.json_response({"status": "ok", "version": "0.1.0", "runtime": self.app.scheduler.runtime_state()})
         if parsed.path == "/api/overview":
             return self.json_response(self.app.overview())
+        if parsed.path == "/api/agent/servers":
+            return self.json_response(self.app.agent_servers())
+        if parsed.path == "/api/agent/npu":
+            query = parse_qs(parsed.query)
+            host = query.get("host", [""])[0]
+            include_processes = query.get("processes", ["0"])[0] in ("1", "true", "yes")
+            detailed_processes = query.get("details", ["0"])[0] in ("1", "true", "yes")
+            try:
+                timeout = int(query.get("timeout", ["30"])[0])
+                return self.json_response(self.app.agent_npu(
+                    host, include_processes, detailed_processes, query.get("mode", ["cache"])[0], timeout,
+                ))
+            except AgentQueryError as exc:
+                return self.json_response({"error": str(exc)}, exc.status)
+            except ValueError:
+                return self.json_response({"error": "timeout must be an integer"}, HTTPStatus.BAD_REQUEST)
+        if parsed.path == "/api/agent/server":
+            query = parse_qs(parsed.query)
+            try:
+                return self.json_response(self.app.agent_server(
+                    query.get("host", [""])[0], query.get("mode", ["cache"])[0],
+                    query.get("processes", ["1"])[0] in ("1", "true", "yes"),
+                    query.get("details", ["0"])[0] in ("1", "true", "yes"),
+                    int(query.get("timeout", ["30"])[0]),
+                ))
+            except AgentQueryError as exc:
+                return self.json_response({"error": str(exc)}, exc.status)
+            except ValueError:
+                return self.json_response({"error": "timeout must be an integer"}, HTTPStatus.BAD_REQUEST)
+        if parsed.path == "/api/agent/capacity":
+            query = parse_qs(parsed.query)
+            try:
+                tags = [tag.strip() for tag in query.get("tags", [""])[0].split(",") if tag.strip()]
+                return self.json_response(self.app.agent_capacity(
+                    int(query.get("min_idle_npus", ["1"])[0]),
+                    int(query.get("max_age_seconds", ["300"])[0]), tags,
+                    query.get("include_disabled", ["0"])[0] in ("1", "true", "yes"),
+                ))
+            except AgentQueryError as exc:
+                return self.json_response({"error": str(exc)}, exc.status)
+            except ValueError:
+                return self.json_response({"error": "capacity parameters must be integers"}, HTTPStatus.BAD_REQUEST)
         if parsed.path == "/api/servers":
             return self.json_response({"servers": self.app.db.list_servers()})
         if parsed.path == "/api/history":

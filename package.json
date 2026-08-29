@@ -11,7 +11,9 @@
     "start": "vinext start",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "test:backend": "PYTHONPATH=backend python3 -m unittest discover -s backend/tests -v",
-    "serve:local": "python3 scripts/supervisor.py"
+    "serve:local": "python3 scripts/supervisor.py",
+    "agent": "python3 scripts/vaws-top.py",
+    "mcp": "python3 scripts/vaws-top-mcp.py"
   },
   "dependencies": {
     "next": "16.3.3",

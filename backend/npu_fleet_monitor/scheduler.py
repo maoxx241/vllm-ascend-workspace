@@ -30,6 +30,7 @@ class AdaptiveScheduler:
         self._cycle_duration_ms: int | None = None
         self._collecting = False
         self._manual: set[str] = set()
+        self._force_infrastructure: set[str] = set()
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -60,10 +61,36 @@ class AdaptiveScheduler:
             self._leases.pop(client_id, None)
             self._condition.notify_all()
 
-    def collect_now(self, server_id: str | None = None) -> None:
+    def collect_now(self, server_id: str | None = None, force_infrastructure: bool = False) -> None:
         with self._condition:
             self._manual.add(server_id or "*")
+            if force_infrastructure:
+                self._force_infrastructure.add(server_id or "*")
             self._condition.notify_all()
+
+    def collect_and_wait(
+        self,
+        server_id: str,
+        *,
+        force_infrastructure: bool = False,
+        timeout: float = 30,
+    ) -> dict[str, Any]:
+        deadline = time.monotonic() + max(1, min(float(timeout), 60))
+        with self._condition:
+            previous = self._snapshots.get(server_id)
+            self._manual.add(server_id)
+            if force_infrastructure:
+                self._force_infrastructure.add(server_id)
+            self._condition.notify_all()
+            while not self._stop.is_set():
+                current = self._snapshots.get(server_id)
+                if current is not None and current is not previous:
+                    return dict(current)
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError(f"live collection timed out after {timeout:g}s")
+                self._condition.wait(timeout=remaining)
+        raise RuntimeError("collector is stopped")
 
     def _active_intervals(self) -> list[int]:
         now = time.monotonic()
@@ -110,10 +137,12 @@ class AdaptiveScheduler:
                     continue
                 targets = set(self._manual)
                 self._manual.clear()
+                force_infrastructure = set(self._force_infrastructure)
+                self._force_infrastructure.clear()
                 self._collecting = True
             started = time.monotonic()
             try:
-                self._collect_cycle(targets)
+                self._collect_cycle(targets, force_infrastructure)
             finally:
                 with self._condition:
                     self._collecting = False
@@ -124,7 +153,8 @@ class AdaptiveScheduler:
                 self.db.prune(self.settings.retention_days)
                 prune_at = time.monotonic() + 86400
 
-    def _collect_cycle(self, targets: set[str]) -> None:
+    def _collect_cycle(self, targets: set[str], force_infrastructure: set[str] | None = None) -> None:
+        force_infrastructure = force_infrastructure or set()
         servers = [server for server in self.db.list_servers() if server["enabled"]]
         if targets and "*" not in targets:
             servers = [server for server in servers if server["id"] in targets]
@@ -134,7 +164,11 @@ class AdaptiveScheduler:
         with ThreadPoolExecutor(max_workers=min(self.settings.max_workers, len(servers))) as pool:
             futures = {}
             for server in servers:
-                include_infra = now - self._last_infra.get(server["id"], 0) >= self.settings.infrastructure_interval
+                include_infra = (
+                    "*" in force_infrastructure
+                    or server["id"] in force_infrastructure
+                    or now - self._last_infra.get(server["id"], 0) >= self.settings.infrastructure_interval
+                )
                 futures[pool.submit(self.probe.collect, server, include_infra)] = (server, include_infra)
             for future in as_completed(futures):
                 server, include_infra = futures[future]
@@ -151,6 +185,7 @@ class AdaptiveScheduler:
                             "server_id": server["id"], "collected_at": int(time.time()),
                             "status": "offline", "error": str(exc)[-1200:],
                         }
+                        self._condition.notify_all()
                     continue
                 if include_infra:
                     self._last_infra[server["id"]] = time.monotonic()
@@ -162,3 +197,4 @@ class AdaptiveScheduler:
                 snapshot["status"] = "online"
                 with self._condition:
                     self._snapshots[server["id"]] = snapshot
+                    self._condition.notify_all()

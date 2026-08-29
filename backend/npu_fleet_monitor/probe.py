@@ -133,11 +133,18 @@ def parse_disks(text: str) -> list[dict[str, Any]]:
 def parse_mounts(text: str) -> list[dict[str, Any]]:
     try:
         payload = json.loads(text)
-        filesystems = payload.get("filesystems", [])
-        return [
-            {"target": item.get("target"), "source": item.get("source"), "fstype": item.get("fstype"), "options": item.get("options")}
-            for item in filesystems
-        ]
+        mounts = []
+
+        def append_filesystems(filesystems: list[dict[str, Any]]) -> None:
+            for item in filesystems:
+                mounts.append({
+                    "target": item.get("target"), "source": item.get("source"),
+                    "fstype": item.get("fstype"), "options": item.get("options"),
+                })
+                append_filesystems(item.get("children") or [])
+
+        append_filesystems(payload.get("filesystems", []))
+        return mounts
     except (json.JSONDecodeError, AttributeError):
         mounts = []
         for line in text.splitlines():
