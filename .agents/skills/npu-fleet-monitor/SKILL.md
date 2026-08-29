@@ -1,33 +1,19 @@
 ---
 name: npu-fleet-monitor
-description: Create or reuse the dedicated vaws-top worktree, build the dashboard, install or restart its loopback-only user service, and report local health. Use for requests to deploy, start, inspect, restart, or stop the workspace NPU fleet monitor. Do not use to launch workloads or manage remote development containers.
+description: Bootstrap or locate the standalone vaws-top worktree and provide its basic CLI/MCP query entrypoints. Use when vaws-top is not yet available, for basic fleet discovery and server inspection, or to deploy, inspect, restart, or stop its local service. Detailed fleet-query guidance lives on the vaws-top branch.
 ---
 
-# NPU Fleet Monitor
+# vaws-top entry
 
-Operate the local monitoring dashboard without mixing its standalone project history into `main`.
+Keep the application and its complete Agent instructions on the standalone `vaws-top` branch. This main-branch Skill is only the bootstrap entry.
 
-## Invariants
-
-- Keep application source on the standalone `vaws-top` branch; retain its independent project history.
-- Reuse an existing clean worktree attached to that branch. The helper creates the default independent worktree only when none exists.
-- Run the public helper outside the filesystem sandbox from its first call. It invokes the user systemd manager and starts a service that uses OpenSSH to probe managed hosts.
-- Keep the web and API listeners on `127.0.0.1`. This service has no web login and is intended only for the local machine.
-- Preserve the worktree's ignored `data/` directory across rebuilds. It contains historical SQLite data, a monitor-specific SSH key, and `known_hosts`; never print, stage, or copy those secrets into tracked files.
-- Reuse the workspace machine inventory and device-management utilities. Use `machine-management` separately when the inventory itself needs to change.
-- Do not use this workflow to start remote jobs, replace containers, or reserve NPUs.
-
-## Commands
-
-Deploy or reconcile the service:
+Run the helper on the host execution plane. Deploy or reconcile:
 
 ```bash
 python3 .agents/skills/npu-fleet-monitor/scripts/manage_monitor.py ensure
 ```
 
-The helper fetches `vaws-top` from a configured remote when needed, finds or creates its worktree, validates a clean source tree, runs the locked build and backend tests when the commit changed, installs the user unit, restarts it, and waits for `/api/health`.
-
-Inspect, restart, or stop it:
+Locate, inspect, restart, or stop:
 
 ```bash
 python3 .agents/skills/npu-fleet-monitor/scripts/manage_monitor.py status
@@ -35,10 +21,34 @@ python3 .agents/skills/npu-fleet-monitor/scripts/manage_monitor.py restart
 python3 .agents/skills/npu-fleet-monitor/scripts/manage_monitor.py stop
 ```
 
-Pass `--worktree /absolute/path` only when the default or discovered worktree is unsuitable. Pass `--branch` only for an intentional alternate monitor branch.
+The final JSON includes `worktree` and `agent_skill`. Use the returned `worktree` as `<vaws-top>` below.
 
-Read [references/acceptance.md](references/acceptance.md) when validating a deployment or diagnosing a failed health check. User-facing setup and operating notes are in [`docs/npu-fleet-monitor.md`](../../../docs/npu-fleet-monitor.md).
+## Basic CLI
 
-## Result
+```bash
+python3 <vaws-top>/scripts/vaws-top.py servers
+python3 <vaws-top>/scripts/vaws-top.py capacity --min-idle 4 --max-age 180
+python3 <vaws-top>/scripts/vaws-top.py status HOST
+python3 <vaws-top>/scripts/vaws-top.py status HOST --cache
+python3 <vaws-top>/scripts/vaws-top.py mounts HOST
+python3 <vaws-top>/scripts/vaws-top.py --json npu HOST --process-details
+```
 
-Report the source branch and commit, worktree path, unit state, local URL, health result, and whether a build ran. On success the enabled user unit survives terminal closure; browser activity controls 1/5/10/30-second sampling, while no active page returns the collector to its low-frequency interval.
+`status HOST` is live by default; add `--cache` when stored data is sufficient. `servers`, `capacity`, `mounts`, and `npu` use cached observations by default; commands that support it accept `--live`. Add `--json` for structured output. A live query asks the centralized service to probe once; do not follow a successful result with ad hoc SSH. Capacity is observed availability, not a reservation.
+
+## Basic MCP
+
+Run the stdio server directly or register it in the Agent's MCP configuration:
+
+```toml
+[mcp_servers.vaws_top]
+command = "python3"
+args = ["<vaws-top>/scripts/vaws-top-mcp.py"]
+env = { VAWS_TOP_URL = "http://127.0.0.1:8789" }
+```
+
+The basic tools are `list_npu_servers`, `find_npu_capacity`, `server_status`, `npu_status`, and `list_mounts`. Host-query tools default to cached data in MCP; pass `mode="live"` for a fresh centralized probe.
+
+Before advanced fleet selection, process attribution, mount discovery, or operational changes, read the returned `agent_skill` completely and follow it.
+
+Keep listeners on `127.0.0.1`, preserve the worktree's ignored `data/`, and never use this entry to launch workloads or reserve NPUs.

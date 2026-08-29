@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 from unittest import mock
 
@@ -52,6 +53,15 @@ class ManageMonitorTests(unittest.TestCase):
 
     def test_default_endpoint_is_loopback(self) -> None:
         self.assertTrue(MODULE.DEFAULT_URL.startswith("http://127.0.0.1:"))
+
+    def test_payload_exposes_project_local_agent_skill(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            worktree = Path(root)
+            with unittest.mock.patch.object(MODULE, "health", return_value=(True, {}, None)), unittest.mock.patch.object(
+                MODULE, "systemd_properties", return_value={}
+            ):
+                payload = MODULE.payload_for("status", "vaws-top", worktree, "abc", None)
+        self.assertEqual(payload["agent_skill"], str(worktree / ".agents/skills/vaws-top/SKILL.md"))
 
 
 if __name__ == "__main__":
