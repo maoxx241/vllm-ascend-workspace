@@ -1195,6 +1195,9 @@ def runtime_install_step_script(
         _line_re = r'^[[:space:]]*' + _pkg_group + r'[[:space:]]*($|[<>=!~;#[])'
         # awk uses the captured package name to test installability on the
         # image, so keep the group in a shell-friendly single expression.
+        # The terminated line regex is the MATCH gate: without it a bare
+        # prefix would misclassify e.g. ``torchao`` as image-provided ``torch``
+        # and silently drop the line from the install list.
         lines.extend(
             [
                 f'cd {quoted(str(Path(runtime_root) / "vllm-ascend"))}',
@@ -1202,7 +1205,11 @@ def runtime_install_step_script(
                 'dropped=""',
                 'kept_hw=""',
                 'while IFS= read -r req_line || [ -n "$req_line" ]; do',
-                f'  pkg="$(printf "%s" "$req_line" | grep -oiE {quoted("^[[:space:]]*" + _pkg_group)} | tr -d "[:space:]" | tr "[:upper:]" "[:lower:]")"',
+                f'  if printf "%s" "$req_line" | grep -qiE {quoted(_line_re)}; then',
+                f'    pkg="$(printf "%s" "$req_line" | grep -oiE {quoted("^[[:space:]]*" + _pkg_group)} | tr -d "[:space:]" | tr "[:upper:]" "[:lower:]")"',
+                '  else',
+                '    pkg=""',
+                '  fi',
                 '  if [ -n "$pkg" ]; then',
                 # Treat the package as image-provided if pip knows about it,
                 # regardless of the pinned version (prevents downgrade).
@@ -1546,7 +1553,6 @@ def update_runtime_state(
     records: list[SnapshotRecord],
     first_reinstall_completed: bool,
     runtime_install_env: dict[str, str] | None,
-    fingerprint: str | None = None,
 ) -> None:
     def apply_update(state: dict[str, Any]) -> None:
         server_state = state.setdefault('servers', {}).setdefault(server_name, {})
@@ -1561,7 +1567,6 @@ def update_runtime_state(
             'last_head_commits': {record.relpath: record.source_head for record in records},
             'installed_build_inputs': {record.relpath: record.build_inputs for record in records if record.build_inputs},
             'last_runtime_install_env': runtime_install_env or {},
-            'last_fingerprint': fingerprint,
         }
 
     update_state(repo_root, STATE_FILENAME, {'schema_version': 2, 'servers': {}}, apply_update)
@@ -1715,12 +1720,6 @@ def run_sync(args: argparse.Namespace) -> int:
     root_preserve_paths = resolved_root_preserve_paths(marker_dirname, args.preserve_path)
     snapshot_id = args.snapshot_id or now_utc().replace(':', '').replace('-', '') + '-' + uuid.uuid4().hex[:8]
     container = SshEndpoint(host=args.container_host, port=args.container_port, user=args.container_user)
-
-    # A run is identified by an actual content snapshot. A cached status-only
-    # fingerprint cannot authorize execution (nor can a watcher observation
-    # made while the user is editing). The snapshot-equality fast path below
-    # still skips transport/materialization/install when nothing changed.
-    fingerprint: str | None = None
 
     emit_progress('snapshot-build', workspace_id=workspace_id, snapshot_id=snapshot_id)
     records = build_snapshot_records(workspace_root, workspace_id, snapshot_id, tuple(DEFAULT_DENYLIST), parse_sources(getattr(args, 'source', [])))
@@ -1933,7 +1932,6 @@ def run_sync(args: argparse.Namespace) -> int:
                                 records=records,
                                 first_reinstall_completed=last_container_state.get('first_reinstall_completed', False),
                                 runtime_install_env=last_container_state.get('last_runtime_install_env', {}),
-                                fingerprint=fingerprint,
                             )
 
                     current_phase = 'finalize-manifest'
@@ -2245,7 +2243,6 @@ def run_sync(args: argparse.Namespace) -> int:
                     or last_container_state.get('first_reinstall_completed', False)
                     or reinstall_status == 'performed',
                     runtime_install_env=runtime_install_env,
-                    fingerprint=fingerprint,
                 )
                 current_phase = 'finalize-manifest'
                 emit_progress(current_phase, manifest_path=manifest_path)

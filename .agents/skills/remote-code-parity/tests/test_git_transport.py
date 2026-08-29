@@ -214,6 +214,23 @@ class GitTransportTests(unittest.TestCase):
         index = command.index("--transport")
         self.assertEqual(command[index + 1], "auto")
 
+    def test_requirements_filter_gates_on_terminated_package_names(self):
+        script = parity.runtime_install_step_script(
+            runtime_root="/vllm-workspace",
+            marker_dirname=".vaws-runtime",
+            container_identity="c1",
+            step="install-vllm-ascend-requirements",
+        )
+        # The match gate must require a terminator after the package name so
+        # torchao/torchdata/triton-windows can never be misread as the
+        # image-provided torch/triton and silently dropped from the install list.
+        self.assertIn("grep -qiE", script)
+        self.assertIn("($|[<>=!~;#[])", script)
+        # Extraction still happens only inside the gated branch.
+        gate = next(line for line in script.splitlines() if "grep -qiE" in line)
+        extract = next(line for line in script.splitlines() if "pkg=\"$(printf" in line)
+        self.assertLess(script.index(gate), script.index(extract))
+
     def test_git_remote_url_supports_ipv4_ipv6_and_escaped_paths(self) -> None:
         ipv4 = common.SshEndpoint(host="10.0.0.2", port=46001, user="root")
         ipv6 = common.SshEndpoint(host="2001:db8::2", port=22, user="build user")

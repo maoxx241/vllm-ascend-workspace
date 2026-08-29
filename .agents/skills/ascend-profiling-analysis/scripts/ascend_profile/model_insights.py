@@ -32,14 +32,6 @@ except ImportError:  # pragma: no cover
     from hardware_insights import memory_bandwidth_bytes_per_second, peak_flops_per_second  # type: ignore[no-redef]
 
 
-ASSUMED_CHIP = {
-    "name": "Ascend 910B assumed",
-    "cube_bf16_tflops": 376.0,
-    "vector_bf16_tflops": 150.0,
-    "hbm_tbps": 1.6,
-    "assumed": True,
-}
-
 KNOWLEDGE_DIR = Path(__file__).resolve().parent / "knowledge"
 MODEL_FINGERPRINTS_PATH = KNOWLEDGE_DIR / "model_fingerprints.json"
 
@@ -944,12 +936,6 @@ def operator_efficiency_rows(
                 "sustained_efficiency": round(achieved_tflops / (sustained_peak / 1e12), 6)
                 if achieved_tflops is not None and sustained_peak > 0
                 else None,
-                "ideal_us_assumed": round(ideal_theory_us, 3) if modeled and (theoretical_peak > 0 or peak_bw > 0) else None,
-                "reclaim_us_assumed": round(reclaim_sustained_us, 3) if modeled and (sustained_peak > 0 or peak_bw > 0) else None,
-                "roofline_efficiency_assumed": round(min(ideal_sustained_us / duration_us, 1.0), 6)
-                if modeled and duration_us > 0 and (sustained_peak > 0 or peak_bw > 0)
-                else None,
-                "assumed_chip": hardware_summary.get("hardware_model") or "unknown",
                 "confidence": "shape_estimate" if modeled else "unmodeled",
                 "sample_event_ids": [event.event_id for event in items[:16]],
             }

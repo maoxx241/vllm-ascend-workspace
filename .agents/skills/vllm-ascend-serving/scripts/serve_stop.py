@@ -147,7 +147,8 @@ def main(argv: list[str] | None = None) -> int:
 
         stopped = not check_alive(ep, pid)
         state["status"] = "stopped" if stopped else "alive"
-        state["stopped_at"] = now_utc()
+        if stopped:
+            state["stopped_at"] = now_utc()
         save_serving_state(
             target.session_id,
             state,

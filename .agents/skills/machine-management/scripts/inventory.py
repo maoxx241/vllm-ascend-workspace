@@ -372,7 +372,6 @@ def cmd_put(args: argparse.Namespace) -> int:
             "bootstrap_method": resolve_bootstrap_method(args.bootstrap_method, existing_record=target),
             "managed_by_skill": True,
             "created_by_skill": args.created_by_skill,
-            "last_verified_at": args.last_verified_at,
         }
         if host_machine_type is not None:
             record["host"]["machine_type"] = host_machine_type
@@ -508,7 +507,6 @@ def build_parser() -> argparse.ArgumentParser:
         default=True,
         help="mark whether the container was created by the skill (default: true)",
     )
-    put_cmd.add_argument("--last-verified-at")
     put_cmd.set_defaults(func=cmd_put)
 
     upsert_cmd = subparsers.add_parser("upsert", help="alias of put; insert or update one machine record")
@@ -560,7 +558,6 @@ def build_parser() -> argparse.ArgumentParser:
         default=True,
         help="mark whether the container was created by the skill (default: true)",
     )
-    upsert_cmd.add_argument("--last-verified-at")
     upsert_cmd.set_defaults(func=cmd_put)
 
     remove = subparsers.add_parser("remove", help="remove one machine record by alias or host IP")
