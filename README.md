@@ -19,6 +19,7 @@
 - 历史报表覆盖 1 小时到 90 天，包含聚合趋势，以及按日期和 2 小时时段排列的 CPU、内存、NPU、HBM 与逐卡 AICore 热力图；原始数据默认保留 90 天。
 - 默认只监听 `127.0.0.1`，不含登录功能，也不应直接暴露到外网。
 - 为 Agent 提供统一 CLI/MCP：可按 IP/主机名选择缓存或实时探查，筛选空闲算力，并查询 NPU、CPU、内存、容器/进程归属及挂载盘；SSH 始终封装在常驻采集器内。结构化 JSON 和完整参数见 [Agent CLI 与 MCP](docs/agent-access.md)。
+- Agent 的完整使用与决策约定随项目保存在 [`.agents/skills/vaws-top/SKILL.md`](.agents/skills/vaws-top/SKILL.md)，主工作区只需负责定位本 worktree。
 
 ## 目录和依赖
 

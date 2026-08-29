@@ -1,0 +1,4 @@
+interface:
+  display_name: "vaws-top"
+  short_description: "Inspect and choose local NPU fleet servers"
+  default_prompt: "Use $vaws-top to shortlist NPU capacity and inspect the selected server from cache or with one live refresh."
