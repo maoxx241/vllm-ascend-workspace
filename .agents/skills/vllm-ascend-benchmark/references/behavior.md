@@ -75,7 +75,7 @@ For performance regression comparisons, all runs must use identical core benchma
 
 ### Regression判定
 
-Given baseline throughput `T_b` and patched throughput `T_p`, compute the ratio `r = T_p / T_b`. If `r < 0.97`, the patched version is considered a throughput regression. The same threshold applies to `acceptance_rate` when speculative decoding is enabled. TTFT and TPOT regressions use inverted comparison (`r = T_b / T_p`) since lower is better for latency metrics.
+Given baseline throughput `T_b` and patched throughput `T_p`, compute the ratio `r = T_p / T_b`. If `r < 0.97`, the patched version is considered a throughput regression. The same threshold applies to `spec_decode_acceptance_rate` when speculative decoding is enabled. TTFT and TPOT regressions use inverted comparison (`r = T_b / T_p`) since lower is better for latency metrics.
 
 ## Remote Execution
 

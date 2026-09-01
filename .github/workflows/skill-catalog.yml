@@ -91,6 +91,14 @@ jobs:
       - name: Run PD-serving tests
         run: python -B -m unittest discover -s .agents/skills/vllm-ascend-pd-serving/tests
 
+      - name: Run memory-profiling tests
+        run: python -B -m unittest discover -s .agents/skills/ascend-memory-profiling/tests
+
+      - name: Run profiling-analysis tests
+        run: |
+          python -m pip install pytest -r .agents/skills/ascend-profiling-analysis/requirements.txt
+          python -B -m pytest .agents/skills/ascend-profiling-analysis/tests -q
+
   coordinator:
     runs-on: ubuntu-latest
     steps:

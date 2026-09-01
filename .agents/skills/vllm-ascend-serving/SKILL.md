@@ -47,6 +47,7 @@ This skill takes structured parameters, handles all SSH escaping and remote exec
 - `start` / `stop` operations for the same session are serialized with a serving lock; different sessions remain independent.
 - Once a remote PID is launched, `serve_start.py` writes `serving.json` with `status=starting` before health probing so `serve_stop.py` can clean up even if readiness later fails.
 - Service ports are always allocated and released through the session lease mechanism — there is no ad-hoc free-port scanning.
+- Managed serving and relaunch require a nonempty live NPU lease matching the session snapshot before touching an existing service. Free cards are never selected as a fallback for an empty lease, and a stale `session.json` is not trusted after its live lease was released.
 - All remote execution goes through the scripts — never construct raw SSH commands for serving.
 - Keep local runtime state under `.vaws-local/sessions/<id>/`.
 - Progress on `stderr` as `__VAWS_SERVING_PROGRESS__=<json>`, final result on `stdout` as JSON.
@@ -204,8 +205,9 @@ Note: if a previous service process survives SIGINT+SIGTERM+SIGKILL, start fails
 
 NPU availability is checked via `npu-smi info` on the **bare-metal host** (not the container). Host-level probing sees processes from all containers, bypassing PID namespace isolation. Devices with HBM usage above 4 GB are also marked busy to catch cross-container occupancy:
 
-- If `--devices` is specified, those devices are verified to be free. If any are busy, start is blocked with the conflict details.
-- If `--devices` is not specified but `--tp` is given, the first N free devices are automatically selected, where N = TP × DP (defaults to TP when DP is not set).
+- Managed serving requires a nonempty live NPU lease for the session; an empty or stale lease fails with `needs_repair` before anything else is touched.
+- If `--devices` is specified, it must be a subset of the session lease, and those devices are verified to be free. If any are busy, start is blocked with the conflict details.
+- If `--devices` is not specified, the session's leased devices are used — the first N of the sorted lease, where N = TP × DP (defaults to TP when DP is not set). Free cards outside the lease are never auto-selected.
 - If the host NPU probe fails or returns malformed data, start fails closed with `status=blocked` and `phase=probe-npus`. Cooperative leases cannot rule out unmanaged host workloads, so no port allocation or launch is attempted until occupancy is known.
 
 ### 5. Validate and launch
@@ -255,9 +257,3 @@ On failure, includes `stderr_tail` for diagnosis.
 - `.agents/skills/vllm-ascend-serving/references/behavior.md`
 - `.agents/skills/vllm-ascend-serving/references/command-recipes.md`
 - `.agents/skills/vllm-ascend-serving/references/acceptance.md`
-# Active NPU ownership
-
-Managed serving and relaunch require a nonempty live NPU lease matching the
-session snapshot before touching an existing service. Do not select free cards
-as a fallback for an empty lease, and do not trust a stale `session.json` after
-its live lease was released.

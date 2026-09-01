@@ -95,6 +95,25 @@ def test_peak_flops_selects_theoretical_and_sustained_dtype_paths() -> None:
     assert int8_sustained == 319.488e12
 
 
+def test_dtype_peak_key_maps_int4_fp8_hif8_to_int8_peak() -> None:
+    hardware = {"summary": {"int8_tops_theoretical": 491.52}}
+
+    for dtype in ("INT4", "FP8", "float8_e4m3fn", "HIF8"):
+        peak, source = peak_flops_per_second(hardware, work_class="matmul", dtype=dtype)
+        assert peak == 491.52e12, dtype
+        assert source == "cann_theoretical", dtype
+
+
+def test_unknown_dtype_reports_no_peak_instead_of_silent_fp16() -> None:
+    hardware = {"summary": {"fp16_tflops_theoretical": 245.76}}
+
+    peak, source = peak_flops_per_second(hardware, work_class="matmul", dtype="FP32")
+    assert (peak, source) == (0.0, "no_peak_for_dtype")
+
+    peak, source = peak_flops_per_second(hardware, work_class="attention", dtype="")
+    assert (peak, source) == (0.0, "no_peak_for_dtype")
+
+
 def test_operator_efficiency_uses_hardware_theory_and_sustained_peaks() -> None:
     hardware = {
         "summary": {

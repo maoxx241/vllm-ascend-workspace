@@ -259,7 +259,7 @@ def _kv_rows(cfg: Mapping[str, Any], features: Sequence[str]) -> list[dict[str, 
     qk_rope = _i(_first(cfg, "qk_rope_head_dim", "rope_head_dim", default=0))
     index_heads = _i(_first(cfg, "index_n_heads", default=0))
     index_dim = _i(_first(cfg, "index_head_dim", default=0))
-    dtype = str(_first(cfg, "dtype", default="bfloat16"))
+    dtype = str(_first(cfg, "dtype", "torch_dtype", default="bfloat16"))
     dt_bytes = dtype_bytes(dtype)
     rows: list[dict[str, Any]] = []
     full = kv_heads * head_dim * 2 * dt_bytes if kv_heads and head_dim else 0.0
@@ -876,7 +876,26 @@ def model_config_insights(config_path: Path | None) -> dict[str, Any]:
             "kv_cache_rows": [],
             "feature_rows": [],
         }
-    root = json.loads(config_path.read_text(encoding="utf-8"))
+    try:
+        root = json.loads(config_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        return {
+            "available": False,
+            "reason": f"model config is not valid JSON: {config_path} ({exc})",
+            "overview_rows": [],
+            "parameter_rows": [],
+            "kv_cache_rows": [],
+            "feature_rows": [],
+        }
+    if not isinstance(root, Mapping):
+        return {
+            "available": False,
+            "reason": f"model config is not a JSON object: {config_path}",
+            "overview_rows": [],
+            "parameter_rows": [],
+            "kv_cache_rows": [],
+            "feature_rows": [],
+        }
     cfg = _text_config(root)
     model_name = config_path.parent.name or str(_first(root, "model_type", default="unknown"))
     layers = _i(_first(cfg, "num_hidden_layers", "n_layers", default=0))

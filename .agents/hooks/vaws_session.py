@@ -16,13 +16,26 @@ sys.path.insert(0, str(ROOT / ".agents/lib"))
 from vaws_agent_session import AgentSessions, CLIENTS, load_context
 
 
+# Cross-client payload discriminators, pinned by each client's documented hook
+# contract and by the hook contract tests in session-management/tests:
+# - Grok payloads use the camelCase field `hookEventName` and never carry
+#   `cursor_version`; such a payload reaching the Claude or Cursor adapter is a
+#   Grok/IDE compatibility import and must no-op.
+# - A genuine Cursor payload carries `cursor_version` (Cursor hook input schema,
+#   cursor.com/docs/hooks) and distinguishes its event with the snake_case field
+#   `hook_event_name`; either marker means the payload is Cursor's own and the
+#   Cursor adapter should attach.
+# Only the client's own adapter may create a root attachment.
+GROK_EVENT_FIELD = "hookEventName"
+CURSOR_VERSION_FIELD = "cursor_version"
+
+
 def handle(client: str, payload: dict, store: AgentSessions | None = None) -> dict:
-    # Grok/IDE compatibility imports may also load Claude's configuration. Only
-    # the client's own adapter should create a root attachment.
-    if client == "claude" and ("hookEventName" in payload or "cursor_version" in payload):
+    if client == "claude" and (GROK_EVENT_FIELD in payload or CURSOR_VERSION_FIELD in payload):
         return {}
-    if client == "cursor" and "hookEventName" in payload and "cursor_version" not in payload:
-        return {}  # Grok also imports Cursor hooks by default.
+    # Grok also imports Cursor hooks by default.
+    if client == "cursor" and GROK_EVENT_FIELD in payload and CURSOR_VERSION_FIELD not in payload:
+        return {}
     store = store or AgentSessions()
     event = str(payload.get("hook_event_name") or payload.get("hookEventName") or "")
     normalized = re.sub(r"[^a-z]", "", event.lower())
@@ -62,7 +75,7 @@ def handle(client: str, payload: dict, store: AgentSessions | None = None) -> di
             store.detach(context)
             return {}
 
-    hint = ("VAWS task context: " + context["context_file"] + ". "
+    hint = ("VAWS task context:\n" + context["context_file"] + "\n"
             "Pass this as context_file to vaws_session/vaws_run/vaws_execution/vaws_finish. "
             "Local editing needs no remote resources. For a child or authorized cross-tool handoff, "
             "pass this context explicitly; a new user-initiated task must create its own VAWS session.")

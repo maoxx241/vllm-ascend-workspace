@@ -8,6 +8,7 @@ import json
 import os
 import re
 import socket
+import sys
 import tempfile
 import time
 from dataclasses import dataclass
@@ -550,7 +551,12 @@ def load_session_lookup(
             for state_root in _candidate_state_roots(repo_root, bindings):
                 try:
                     index = load_index(state_root)
-                except SessionStateError:
+                except SessionStateError as exc:
+                    # load_index degrades a missing index to an empty one, so
+                    # reaching here means an existing index is corrupted.
+                    # Degrade to the next candidate, but never silently.
+                    print(f"session index under {state_root} is corrupted ({exc}); trying the next candidate",
+                          file=sys.stderr)
                     continue
                 record = index.get("sessions", {}).get(sid)
                 if isinstance(record, dict) and isinstance(record.get("session_file"), str):

@@ -1413,8 +1413,9 @@ def read_runtime_install_marker(
     container: SshEndpoint,
     runtime_root: str,
     marker_dirname: str,
-    dry_run: bool,
 ) -> RuntimeInstallMarker:
+    # The marker read is a read-only remote cat, so it is safe under dry-run
+    # and takes no dry_run switch.
     path = marker_path_for(runtime_root, marker_dirname)
     script = '\n'.join(
         [
@@ -1762,7 +1763,7 @@ def run_sync(args: argparse.Namespace) -> int:
                 and not args.force_reinstall and not reinstall_vllm and not reinstall_vllm_ascend
                 and snapshot_commits == last_commits and last_container_state.get('first_reinstall_completed')
             ):
-                marker = read_runtime_install_marker(container=container, runtime_root=runtime_root, marker_dirname=marker_dirname, dry_run=False)
+                marker = read_runtime_install_marker(container=container, runtime_root=runtime_root, marker_dirname=marker_dirname)
                 if not first_install_needed(marker, args.container_identity, runtime_root):
                     observed = verify_runtime_commits_map(container=container, runtime_root=runtime_root, expected=snapshot_commits)
                     if observed == snapshot_commits:
@@ -1780,7 +1781,6 @@ def run_sync(args: argparse.Namespace) -> int:
                         container=container,
                         runtime_root=runtime_root,
                         marker_dirname=marker_dirname,
-                        dry_run=args.dry_run,
                     )
                     needs_install = first_install_needed(marker, args.container_identity, runtime_root)
                 args.apply_mode = 'install' if needs_install else 'materialize'
@@ -1976,7 +1976,6 @@ def run_sync(args: argparse.Namespace) -> int:
                 container=container,
                 runtime_root=runtime_root,
                 marker_dirname=marker_dirname,
-                dry_run=args.dry_run,
             )
             first_install = first_install_needed(marker, args.container_identity, runtime_root)
             if first_install:

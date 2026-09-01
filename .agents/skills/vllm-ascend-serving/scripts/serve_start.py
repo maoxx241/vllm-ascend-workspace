@@ -63,6 +63,9 @@ RUNTIME_DIR_BASE = ".vaws-runtime/serving"
 DEFAULT_HEALTH_TIMEOUT = 300
 HEALTH_POLL_INTERVAL = 5
 PORT_TAIL_RE = re.compile(r"[:.]([0-9]+)$")
+# Backstop for the parity subprocess; parity itself bounds git transport at
+# 900s, so an hour only fires on a genuinely stuck child.
+PARITY_TIMEOUT_SECONDS = 3600
 
 
 def service_runtime_dir(runtime_base: str, instance_ts: str, alias: str | None) -> str:
@@ -87,6 +90,7 @@ def run_parity(session_id: str, session_file: Path | None = None) -> dict[str, A
         stderr=subprocess.PIPE,
         text=True,
     )
+    stdout_lines: list[str] = []
     stderr_lines: list[str] = []
 
     def relay_stderr() -> None:
@@ -97,12 +101,30 @@ def run_parity(session_id: str, session_file: Path | None = None) -> dict[str, A
                 sys.stderr.write(line)
                 sys.stderr.flush()
 
+    def collect_stdout() -> None:
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            stdout_lines.append(line)
+
     thread = threading.Thread(target=relay_stderr, daemon=True)
     thread.start()
-    assert proc.stdout is not None
-    stdout = proc.stdout.read()
-    returncode = proc.wait()
+    stdout_thread = threading.Thread(target=collect_stdout, daemon=True)
+    stdout_thread.start()
+    try:
+        returncode = proc.wait(timeout=PARITY_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+        thread.join(timeout=1)
+        stdout_thread.join(timeout=1)
+        return {
+            "status": "failed",
+            "error": f"parity sync timed out after {PARITY_TIMEOUT_SECONDS}s",
+            "stderr_tail": "".join(stderr_lines)[-1000:],
+        }
     thread.join(timeout=1)
+    stdout_thread.join(timeout=1)
+    stdout = "".join(stdout_lines)
     stderr = "".join(stderr_lines)
     if returncode != 0:
         return {
@@ -180,19 +202,23 @@ def _parse_devices_csv(value: str) -> set[int]:
     return set(parse_device_csv(value) or [])
 
 
-def _leased_devices_csv(session: dict[str, Any] | None) -> str | None:
-    if not session:
-        return None
-    raw_devices = session.get("leases", {}).get("npu_devices", [])
-    if not isinstance(raw_devices, list) or not raw_devices:
-        return None
-    devices = [int(item) for item in raw_devices]
-    return ",".join(str(item) for item in sorted(devices))
-
-
 # ---------------------------------------------------------------------------
 # Launch script builder (the core escaping-safe layer)
 # ---------------------------------------------------------------------------
+
+def _require_heredoc_safe(value: str, label: str) -> str:
+    """Reject values that could break out of the launch script heredoc.
+
+    The vllm command is written into ``_serve.sh`` through a quoted heredoc.
+    ``shlex.quote`` does not help there: the heredoc body is literal text, so
+    a newline inside a token would split the ``exec`` line — and a line
+    matching the ``VAWS_SERVE_EOF`` delimiter would end the heredoc early and
+    execute the remainder as shell. Fail fast instead.
+    """
+    if "\n" in value or "\r" in value:
+        raise ValueError(f"{label} must not contain newline characters")
+    return value
+
 
 def build_launch_script(
     *,
@@ -250,18 +276,23 @@ def build_launch_script(
     # shadow the installed vllm package with the source tree.
     lines.append(f"cd {shlex.quote(runtime_dir)}")
 
-    # Build argv — every token individually quoted for bash safety
-    argv_tokens = ["vllm", "serve", shlex.quote(model)]
+    # Build argv — every token individually quoted for bash safety.
+    # Tokens land inside a quoted heredoc, where shlex.quote cannot contain
+    # newlines, so heredoc-bound values are validated first.
+    argv_tokens = ["vllm", "serve", shlex.quote(_require_heredoc_safe(model, "--model"))]
     argv_tokens.extend(["--host", "0.0.0.0"])
     argv_tokens.extend(["--port", str(port)])
     if served_model_name:
-        argv_tokens.extend(["--served-model-name", shlex.quote(served_model_name)])
+        argv_tokens.extend([
+            "--served-model-name",
+            shlex.quote(_require_heredoc_safe(served_model_name, "--served-model-name")),
+        ])
     if tp is not None:
         argv_tokens.extend(["--tensor-parallel-size", str(tp)])
     if dp is not None:
         argv_tokens.extend(["--data-parallel-size", str(dp)])
     for arg in extra_args:
-        argv_tokens.append(shlex.quote(arg))
+        argv_tokens.append(shlex.quote(_require_heredoc_safe(arg, "extra vllm arg")))
 
     cmd_str = " ".join(argv_tokens)
     stdout_log = f"{runtime_dir}/stdout.log"
@@ -339,6 +370,76 @@ def wait_for_devices_free(host_ep: SshEndpoint, devices: set[int], *, timeout: i
 def read_remote_tail(ep: SshEndpoint, remote_path: str, lines: int = 30) -> str:
     r = ssh_exec(ep, f"tail -{lines} {shlex.quote(remote_path)} 2>/dev/null || echo '(no log)'", check=False)
     return r.stdout.strip()
+
+
+def cleanup_failed_launch(ep: SshEndpoint, runtime_dir: str, launch_stdout: str) -> bool:
+    """Best-effort kill of a process that may have survived a failed launch.
+
+    A failed launch script (or unparseable PID output) can still have spawned
+    the service. Returns True only when no leftover process is confirmed —
+    either no PID was found, or every found PID was killed and verified dead.
+    False means the process state is unknown; the caller must keep the port
+    lease and report needs_repair.
+    """
+    candidates: set[int] = set()
+    stdout_lines = (launch_stdout or "").strip().splitlines()
+    if stdout_lines:
+        with contextlib.suppress(ValueError):
+            candidates.add(int(stdout_lines[-1].strip()))
+    pid_file = f"{runtime_dir}/pid"
+    pid_state = ssh_exec(ep, f"cat {shlex.quote(pid_file)} 2>/dev/null || true", check=False)
+    if pid_state.returncode != 0:
+        # Remote state is unreadable — cannot rule out a leftover process.
+        return False
+    for token in pid_state.stdout.split():
+        with contextlib.suppress(ValueError):
+            candidates.add(int(token))
+    for pid in sorted(candidates):
+        try:
+            if not check_alive(ep, pid):
+                continue
+        except RuntimeError:
+            return False
+        ssh_exec(
+            ep,
+            f"kill -15 {pid} 2>/dev/null || true; sleep 2; kill -9 {pid} 2>/dev/null || true",
+            check=False,
+        )
+        time.sleep(1)
+        try:
+            if check_alive(ep, pid):
+                return False
+        except RuntimeError:
+            return False
+    return True
+
+
+def abort_failed_launch(
+    *,
+    ep: SshEndpoint,
+    runtime_dir: str,
+    launch_stdout: str,
+    release_kwargs: dict[str, Any],
+    payload: dict[str, Any],
+) -> int:
+    """Finish a failed launch attempt.
+
+    The port lease is released only when cleanup confirms no leftover
+    process; otherwise the lease is kept and the result is needs_repair so a
+    human can inspect the container instead of losing track of the port.
+    """
+    if cleanup_failed_launch(ep, runtime_dir, launch_stdout):
+        release_service_port(**release_kwargs)
+        payload["status"] = "failed"
+    else:
+        payload["status"] = "needs_repair"
+        payload["error"] = (
+            f"{payload['error']}; a leftover process could not be confirmed "
+            "dead, so the service port lease was kept — inspect the container, "
+            "kill any leftover vllm process, then release the port lease"
+        )
+    print_json(payload)
+    return 1
 
 
 # ---------------------------------------------------------------------------
@@ -443,13 +544,13 @@ def probe_ready_once(
     lines = [
         f"if kill -0 {pid} 2>/dev/null; then echo __ALIVE__=1; else echo __ALIVE__=0; fi",
         (
-            f"code=$(curl -s -o /dev/null -w '%{{http_code}}' --connect-timeout 3 "
+            f"code=$(curl -s -o /dev/null -w '%{{http_code}}' --connect-timeout 3 --max-time 5 "
             f"http://127.0.0.1:{port}/health 2>/dev/null || echo 000)"
         ),
         'echo "__HEALTH__=$code"',
         'if [ "$code" = "200" ]; then',
         "  echo __MODELS_BEGIN__",
-        f"  curl -s --connect-timeout 3 http://127.0.0.1:{port}/v1/models 2>/dev/null",
+        f"  curl -s --connect-timeout 3 --max-time 5 http://127.0.0.1:{port}/v1/models 2>/dev/null",
         "  echo",
         "  echo __MODELS_END__",
         "fi",
@@ -466,7 +567,9 @@ def probe_ready_once(
         ]
     r = ssh_exec(ep, "\n".join(lines), check=False)
     out = r.stdout or ""
-    probe_error = r.returncode != 0 and "__ALIVE__" not in out
+    # Any nonzero rc means the round-trip did not complete cleanly; even an
+    # __ALIVE__=0 marker in torn output is not proof of process exit.
+    probe_error = r.returncode != 0
     alive = "__ALIVE__=1" in out
     health_ok = "__HEALTH__=200" in out
     models: dict[str, Any] | None = None
@@ -489,17 +592,20 @@ def probe_ready_once(
 def probe_first_token(ep: SshEndpoint, port: int, served_model: str) -> dict[str, Any]:
     """One deterministic real request; /health 200 alone is not a ready service."""
     payload = json.dumps({"model": served_model, "prompt": "Hello", "max_tokens": 8, "temperature": 0})
+    # $$ is the remote shell PID, so concurrent probes never share a body file.
     script = (
-        f"code=$(curl -s -o /tmp/vaws_first_token.json -w '%{{http_code}}' --connect-timeout 3 --max-time 120 "
+        "tmp=/tmp/vaws_first_token.$$.json; "
+        f"code=$(curl -s -o $tmp -w '%{{http_code}}' --connect-timeout 3 --max-time 120 "
         f"-X POST http://127.0.0.1:{port}/v1/completions -H 'Content-Type: application/json' "
         f"-d {shlex.quote(payload)} 2>/dev/null || echo 000); "
-        "echo __CODE__=$code; head -c 400 /tmp/vaws_first_token.json 2>/dev/null"
+        "echo __CODE__=$code; head -c 400 $tmp 2>/dev/null; rm -f $tmp"
     )
     r = ssh_exec(ep, script, check=False)
     out = r.stdout or ""
     return {
         "ok": "__CODE__=200" in out,
-        "probe_error": r.returncode != 0 and "__CODE__" not in out,
+        # Any nonzero rc is an unknown probe result, not proof of failure.
+        "probe_error": r.returncode != 0,
         "detail": out[-300:],
     }
 
@@ -641,13 +747,20 @@ def preflight_preset(
     if missing:
         problems.append("PYTHONPATH entries missing in the container: " + ", ".join(missing))
     for flag in _JSON_VALUE_FLAGS:
-        if flag in extra_args:
-            idx = extra_args.index(flag)
-            if idx + 1 >= len(extra_args):
-                problems.append(f"{flag} has no value")
+        # Validate every occurrence, in both "--flag value" and "--flag=value"
+        # forms — a bad second occurrence must not slip through.
+        for idx, arg in enumerate(extra_args):
+            if arg == flag:
+                if idx + 1 >= len(extra_args):
+                    problems.append(f"{flag} has no value")
+                    continue
+                value = extra_args[idx + 1]
+            elif arg.startswith(f"{flag}="):
+                value = arg[len(flag) + 1:]
+            else:
                 continue
             try:
-                json.loads(extra_args[idx + 1])
+                json.loads(value)
             except json.JSONDecodeError as exc:
                 problems.append(f"{flag} value is not valid JSON: {exc}")
     return problems
@@ -904,50 +1017,46 @@ def main(argv: list[str] | None = None) -> int:
                 "error": str(exc),
             })
             return 1
-        leased_devices = ",".join(str(device) for device in live_devices)
-        if leased_devices:
+        # require_session_npu_lease raises on an empty or stale lease, so
+        # live_devices is always a nonempty list of ints here.
+        leased = set(live_devices)
+        needed_devices = tp * (dp or 1) if tp is not None else None
+        if needed_devices is not None and len(leased) < needed_devices:
+            print_json({
+                "status": "needs_input",
+                "error": (
+                    f"session {target.session_id} leases {len(leased)} NPU devices "
+                    f"but launch needs {needed_devices} (tp={tp}, dp={dp or 1})"
+                ),
+                "machine": alias,
+                "mode": target.mode,
+                "session_id": target.session_id,
+            })
+            return 1
+        if devices:
             try:
-                leased = _parse_devices_csv(leased_devices)
+                requested = _parse_devices_csv(devices)
             except ValueError as exc:
-                print_json({"status": "needs_repair", "error": str(exc), "session_id": target.session_id})
+                print_json({"status": "needs_input", "error": str(exc)})
                 return 1
-            needed_devices = tp * (dp or 1) if tp is not None else None
-            if needed_devices is not None and len(leased) < needed_devices:
+            if not requested.issubset(leased):
                 print_json({
                     "status": "needs_input",
                     "error": (
-                        f"session {target.session_id} leases {len(leased)} NPU devices "
-                        f"but launch needs {needed_devices} (tp={tp}, dp={dp or 1})"
+                        f"requested devices {sorted(requested)} are outside "
+                        f"session {target.session_id} lease {sorted(leased)}"
                     ),
                     "machine": alias,
                     "mode": target.mode,
                     "session_id": target.session_id,
                 })
                 return 1
-            if devices:
-                try:
-                    requested = _parse_devices_csv(devices)
-                except ValueError as exc:
-                    print_json({"status": "needs_input", "error": str(exc)})
-                    return 1
-                if not requested.issubset(leased):
-                    print_json({
-                        "status": "needs_input",
-                        "error": (
-                            f"requested devices {sorted(requested)} are outside "
-                            f"session {target.session_id} lease {sorted(leased)}"
-                        ),
-                        "machine": alias,
-                        "mode": target.mode,
-                        "session_id": target.session_id,
-                    })
-                    return 1
-            else:
-                selected = sorted(leased)
-                if needed_devices is not None:
-                    selected = selected[:needed_devices]
-                devices = ",".join(str(item) for item in selected)
-                emit_progress("lease", f"using leased session devices: {devices}")
+        else:
+            selected = sorted(leased)
+            if needed_devices is not None:
+                selected = selected[:needed_devices]
+            devices = ",".join(str(item) for item in selected)
+            emit_progress("lease", f"using leased session devices: {devices}")
 
         # Validate the new launch target before touching an existing service.
         # A mistyped model path should be a needs_input response, not a reason
@@ -1004,7 +1113,15 @@ def main(argv: list[str] | None = None) -> int:
                 old_devices = _parse_devices_csv(str(prev_state.get("devices") or ""))
                 if old_devices:
                     emit_progress("stop-existing", f"waiting for old service devices to free: {sorted(old_devices)}")
-                    wait_for_devices_free(target.host_endpoint, old_devices)
+                    if not wait_for_devices_free(target.host_endpoint, old_devices):
+                        # Not fatal: the probe-npus gate below re-validates
+                        # occupancy before launch, but make the uncertainty
+                        # visible instead of dropping it.
+                        emit_progress(
+                            "stop-existing",
+                            f"old service devices not confirmed free after wait: {sorted(old_devices)}",
+                            warning="devices-may-still-be-busy",
+                        )
                 if not check_alive(ep, int(old_pid)):
                     prev_state["status"] = "stopped"
                     prev_state["stopped_at"] = now_utc()
@@ -1155,50 +1272,64 @@ def main(argv: list[str] | None = None) -> int:
             emit_progress("launch", f"starting vllm serve (wrapped by {wrap_script})")
         else:
             emit_progress("launch", "starting vllm serve")
-        script = build_launch_script(
-            runtime_dir=runtime_dir,
-            model=model,
-            served_model_name=served_model_name,
-            port=port,
-            tp=tp, dp=dp,
-            devices=devices,
-            extra_env=launch_env,
-            extra_args=launch_extra_args,
-            wrap_script=wrap_script,
-        )
+        port_release = {
+            "repo_root": target.state_repo_root,
+            "machine_alias": alias,
+            "session_id": target.session_id,
+            "port": port,
+        }
+        try:
+            script = build_launch_script(
+                runtime_dir=runtime_dir,
+                model=model,
+                served_model_name=served_model_name,
+                port=port,
+                tp=tp, dp=dp,
+                devices=devices,
+                extra_env=launch_env,
+                extra_args=launch_extra_args,
+                wrap_script=wrap_script,
+            )
+        except ValueError as exc:
+            # Rejected before anything ran remotely — safe to release the port.
+            release_service_port(**port_release)
+            print_json({
+                "status": "needs_input",
+                "error": str(exc),
+                "machine": alias,
+                "mode": target.mode,
+                "session_id": target.session_id,
+            })
+            return 1
         result = ssh_exec(ep, script, check=False)
         if result.returncode != 0:
-            print_json({
-                "status": "failed",
-                "error": "launch script failed",
-                "stderr_tail": result.stderr[-1000:],
-                "stdout_tail": result.stdout[-500:],
-                "machine": alias,
-            })
-            release_service_port(
-                repo_root=target.state_repo_root,
-                machine_alias=alias,
-                session_id=target.session_id,
-                port=port,
+            return abort_failed_launch(
+                ep=ep,
+                runtime_dir=runtime_dir,
+                launch_stdout=result.stdout,
+                release_kwargs=port_release,
+                payload={
+                    "error": "launch script failed",
+                    "stderr_tail": result.stderr[-1000:],
+                    "stdout_tail": result.stdout[-500:],
+                    "machine": alias,
+                },
             )
-            return 1
 
         pid_line = result.stdout.strip().splitlines()[-1].strip() if result.stdout.strip() else ""
         try:
             pid = int(pid_line)
         except ValueError:
-            print_json({
-                "status": "failed",
-                "error": f"cannot parse PID from launch output: {pid_line!r}",
-                "machine": alias,
-            })
-            release_service_port(
-                repo_root=target.state_repo_root,
-                machine_alias=alias,
-                session_id=target.session_id,
-                port=port,
+            return abort_failed_launch(
+                ep=ep,
+                runtime_dir=runtime_dir,
+                launch_stdout=result.stdout,
+                release_kwargs=port_release,
+                payload={
+                    "error": f"cannot parse PID from launch output: {pid_line!r}",
+                    "machine": alias,
+                },
             )
-            return 1
 
         emit_progress("launch", f"process started pid={pid}", pid=pid)
 

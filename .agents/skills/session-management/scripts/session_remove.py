@@ -106,9 +106,14 @@ def stop_session(session_id: str, *, session_file: Path | None = None, force: bo
 
 
 def worktree_is_clean(worktree_root: Path) -> bool:
-    """True when the worktree (including submodules) has no local changes."""
+    """True when the worktree (including submodules) has no local changes.
+
+    Ignored files count as unclean: session evidence such as `.vaws-local/`
+    run manifests is Git-ignored, and a plain porcelain check would report the
+    worktree clean while `worktree remove` silently destroys that evidence.
+    """
     proc = subprocess.run(
-        ["git", "-C", str(worktree_root), "status", "--porcelain=v1", "--ignore-submodules=none"],
+        ["git", "-C", str(worktree_root), "status", "--porcelain=v1", "--ignore-submodules=none", "--ignored"],
         capture_output=True,
         text=True,
         check=False,
@@ -186,11 +191,12 @@ def main() -> int:
             # --force even when they are clean, and the submodule deinit inside
             # remove_session_worktree discards local submodule changes. Without
             # an explicit --force, only proceed after proving the tree
-            # (including submodules) is clean; then forcing is safe.
+            # (including submodules and ignored evidence files) is clean; then
+            # forcing is safe.
             if not args.force and worktree_root.exists() and not worktree_is_clean(worktree_root):
                 results["worktree"] = {
                     "returncode": 1,
-                    "error": "worktree has local changes; rerun with --force to discard them",
+                    "error": "worktree has local changes or ignored files (e.g. .vaws-local evidence); rerun with --force to discard them",
                 }
             else:
                 results["worktree"] = remove_session_worktree(worktree_root, force=True)

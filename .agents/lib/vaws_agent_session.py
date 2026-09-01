@@ -47,11 +47,13 @@ class AgentSessions:
 
     @contextlib.contextmanager
     def transaction(self):
-        with sqlite3.connect(self.db_path, timeout=10) as db:
-            db.execute("PRAGMA journal_mode=WAL")
-            db.execute("PRAGMA synchronous=FULL")
-            db.execute("BEGIN IMMEDIATE")
-            yield db
+        # `with sqlite3.connect(...)` commits or rolls back but never closes.
+        with contextlib.closing(sqlite3.connect(self.db_path, timeout=10)) as db:
+            with db:
+                db.execute("PRAGMA journal_mode=WAL")
+                db.execute("PRAGMA synchronous=FULL")
+                db.execute("BEGIN IMMEDIATE")
+                yield db
 
     @staticmethod
     def get(db, kind, key):
@@ -126,13 +128,20 @@ class AgentSessions:
                 old = existing[0]
                 if parent and old["session_id"] != parent["session"]["id"]:
                     raise ValueError("native session already belongs to another task")
+                session = self.get(db, "session", old["session_id"])
+                if parent_context:
+                    # A child resume keeps the fresh-attach invariant: never
+                    # join a task whose finish has already started.
+                    if session["state"] != "open":
+                        raise ValueError("task is finished; explicitly reopen it before attaching")
+                elif session["state"] in {"finished", "finishing"}:
+                    # Root or explicit-association resume reopens the task. A
+                    # crashed vaws_finish wedges the session in "finishing";
+                    # resuming clears that wedge.
+                    session["state"] = "open"
+                    self.put(db, "session", session)
                 old.update(state="attached", resumed_at=now)
                 self.put(db, "attachment", old)
-                if not parent_context:
-                    session = self.get(db, "session", old["session_id"])
-                    if session["state"] == "finished":
-                        session["state"] = "open"
-                        self.put(db, "session", session)
         return self._publish(key)
 
     def native_context(self, client: str, native_session_id: str, agent_id: str = "") -> dict:
@@ -141,7 +150,8 @@ class AgentSessions:
                        if row["client"] == client and row["native_session_id"] == native_session_id
                        and (row.get("agent_id") or "") == agent_id and row["state"] == "attached"]
         if len(matches) != 1:
-            raise ValueError("native session association is missing or ambiguous; supply its explicit context")
+            raise ValueError("native session association is missing or ambiguous; recover by passing the "
+                             "task context file explicitly (context_file argument or VAWS_CONTEXT_FILE)")
         return self.context(matches[0]["id"])
 
     def bind_sources(self, context: dict, sources: dict[str, str]) -> dict:

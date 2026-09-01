@@ -42,7 +42,7 @@ def check_alive(ep, pid: int) -> bool:
 
 def check_health(ep, port: int) -> bool:
     script = (
-        f"curl -s -o /dev/null -w '%{{http_code}}' --connect-timeout 3"
+        f"curl -s -o /dev/null -w '%{{http_code}}' --connect-timeout 3 --max-time 5"
         f" http://127.0.0.1:{port}/health 2>/dev/null || echo 000"
     )
     r = ssh_exec(ep, script, check=False)
@@ -50,7 +50,7 @@ def check_health(ep, port: int) -> bool:
 
 
 def check_models(ep, port: int) -> dict[str, Any] | None:
-    script = f"curl -s --connect-timeout 3 http://127.0.0.1:{port}/v1/models 2>/dev/null || true"
+    script = f"curl -s --connect-timeout 3 --max-time 5 http://127.0.0.1:{port}/v1/models 2>/dev/null || true"
     r = ssh_exec(ep, script, check=False)
     text = r.stdout.strip()
     if not text:

@@ -175,5 +175,5 @@ python3 .agents/skills/vllm-ascend-benchmark/scripts/bench_run.py \
 ```
 
 The agent collects all JSON outputs and compares `aggregated.output_throughput.mean`,
-`aggregated.mean_ttft_ms.mean`, `aggregated.acceptance_rate.mean`, etc. Each run's
+`aggregated.mean_ttft_ms.mean`, `aggregated.spec_decode_acceptance_rate.mean`, etc. Each run's
 result JSON is also persisted under `.vaws-local/sessions/<session-id>/benchmark/runs/`.

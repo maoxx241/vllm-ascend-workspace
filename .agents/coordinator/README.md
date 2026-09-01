@@ -414,10 +414,18 @@ and is staging evidence, not a ready model endpoint.
    Only `poll` may submit a locally pending, unsubmitted request to the manager.
    `preflight`, `activate`, `heartbeat`, and `release` reject that state without
    contacting the host; `cancel` records local cancellation without submitting it.
+   A never-submitted pending request cancels or expires locally even while its
+   host stays unreachable, because no host mutation was ever sent for it.
 7. Stop only this run's workers, then request `release`. The host must observe
    every leased device free in repeated samples. `runtime_return` quarantines
-   the container until an administrator re-verifies it; it never kills a
-   process or infers successful cleanup from a client timeout.
+   the container until it is re-verified; it never kills a process or infers
+   successful cleanup from a client timeout. For managed jobs the manager
+   performs this re-verification itself: finishing supervision re-registers the
+   runtime through `runtime_register`, which re-runs the same idle-container
+   inspection and full profile/source verification an administrator would run.
+   If that verification fails, the runtime stays quarantined in `needs_repair`
+   until an administrator inspects it and registers it manually; returning a
+   plain (non-managed) binding always needs that administrator re-registration.
 
 The Linux execution supervisor is a child subreaper and remains responsible
 for the complete descendant family until every child has exited and the
@@ -454,6 +462,18 @@ missing previously submitted task stays `uncertain`; inspect real ownership
 before manual reconciliation. Do not delete state to make a resource appear
 available. Manager restart preserves bindings/events; the host's `/tmp` epoch
 remains explicitly separate from that durable state.
+
+If a managed job's remote directory disappears while its card lease stays
+active, the job wedges in `stopping`: the manager never infers completion from
+a lost directory, and the host retain guard keeps the cards allocated.
+Recovery is an explicit operator action: inspect the host, confirm the job
+directory is gone and the process family is dead, then call
+`execution_reconcile(run_id, reason, evidence=..., force_release=true)`. The
+bounded evidence string is required and is recorded in the durable
+`run-reconciled` event; `force_release` releases the host lease with confirmed
+completion so the retain guard is cleared and the cards are freed. Without
+evidence the reconcile is rejected — the default stays fail-closed. Afterwards
+return the runtime for quarantine and re-verification before any reuse.
 
 ## Acceptance boundary: resource layer (separate from native lifecycle)
 

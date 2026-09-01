@@ -432,7 +432,7 @@ class RunStateIsolationTests(unittest.TestCase):
                             "session_id": "sess-a",
                             "base_machine": "machine-a",
                             "local": {"worktree_root": str(root)},
-                            "remote": {"host": "173.131.1.2", "container": {"name": "c", "ssh_port": 46001}},
+                            "remote": {"host": "192.0.2.10", "container": {"name": "c", "ssh_port": 46001}},
                         }
                     ),
                     encoding="utf-8",

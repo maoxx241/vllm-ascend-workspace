@@ -256,6 +256,77 @@ class AgentSessionTests(unittest.TestCase):
             sync.assert_called_once()
         self.assertEqual(calls.count("managed_execution_start"), 1)
 
+    def test_attach_rejects_child_inheritance_and_association_together(self):
+        parent = self.attach()
+        with self.assertRaisesRegex(ValueError, "choose child inheritance or an explicit task association"):
+            self.attach("other", parent_context=parent["context_file"], association=parent["context_file"])
+
+    def test_execution_request_id_reuse_must_keep_the_same_spec(self):
+        context = self.attach()
+        row = self.store.execution(context, "req", {"command": "one"})
+        self.assertEqual(self.store.execution(context, "req", {"command": "one"})["id"], row["id"])
+        with self.assertRaisesRegex(ValueError, "reused with different arguments"):
+            self.store.execution(context, "req", {"command": "two"})
+
+    def test_root_resume_clears_the_finishing_wedge(self):
+        context = self.attach()
+        with self.store.transaction() as db:
+            session = self.store.get(db, "session", context["session"]["id"])
+            session["state"] = "finishing"  # A crashed vaws_finish never completed.
+            self.store.put(db, "session", session)
+        task = TaskClient(context["context_file"], client_factory=mock.Mock(side_effect=AssertionError("offline")))
+        with self.assertRaisesRegex(ValueError, "resume the task"):
+            task.store.execution(task.context, "req", {"command": "x"})
+        self.assertEqual(self.attach()["session"]["state"], "open")
+        self.assertEqual(task.store.execution(task.context, "req", {"command": "x"})["phase"], "planned")
+
+    def test_child_resume_of_finished_task_fails_closed_until_root_reopens(self):
+        parent = self.attach()
+        child = self.attach("child-a", client="claude", parent_context=parent["context_file"])
+        task = TaskClient(parent["context_file"], client_factory=mock.Mock(side_effect=AssertionError("offline")))
+        self.assertEqual(task.finish()["state"], "finished")
+        with self.assertRaisesRegex(ValueError, "explicitly reopen it before attaching"):
+            self.attach("child-a", client="claude", parent_context=parent["context_file"])
+        self.attach()  # Explicit root resume reopens the task.
+        resumed = self.attach("child-a", client="claude", parent_context=parent["context_file"])
+        self.assertEqual(resumed["attachment"]["id"], child["attachment"]["id"])
+
+    def test_session_end_detaches_root_and_compact_resume_guides_explicit_context(self):
+        context = self.attach()
+        payload = {"session_id": "root-a", "cwd": str(self.root)}
+        output = hooks.handle("codex", {**payload, "hook_event_name": "SessionEnd"}, self.store)
+        self.assertEqual(output, {})
+        self.assertEqual(self.store.context(context["attachment"]["id"])["attachment"]["state"], "detached")
+        with self.assertRaisesRegex(ValueError, "VAWS_CONTEXT_FILE"):
+            hooks.handle("codex", {**payload, "hook_event_name": "SessionStart", "source": "compact"}, self.store)
+
+    def test_subagent_stop_for_unknown_child_records_and_detaches_it(self):
+        parent = self.attach()
+        payload = {"hook_event_name": "SubagentStop", "session_id": "root-a", "agent_id": "ghost", "cwd": str(self.root)}
+        self.assertEqual(hooks.handle("codex", payload, self.store), {})
+        with self.store.transaction() as db:
+            ghosts = [row for row in self.store.rows(db, "attachment") if row.get("agent_id") == "ghost"]
+        self.assertEqual(len(ghosts), 1)
+        self.assertEqual(ghosts[0]["state"], "detached")
+        self.assertEqual(ghosts[0]["session_id"], parent["session"]["id"])
+        self.assertEqual(ghosts[0]["parent_id"], parent["attachment"]["id"])
+        self.assertEqual(self.store.context(parent["attachment"]["id"])["attachment"]["state"], "attached")
+
+    def test_hint_prints_context_path_on_its_own_line(self):
+        context = self.attach("hint-path")
+        output = hooks.handle("codex", {"hook_event_name": "UserPromptSubmit", "session_id": "hint-path",
+                                        "cwd": str(self.root)}, self.store)
+        hint = output["hookSpecificOutput"]["additionalContext"]
+        self.assertIn(context["context_file"], hint.splitlines())
+
+    def test_hook_timeout_covers_the_hook_git_calls(self):
+        groups = setup.hook_groups("claude", self.root)
+        self.assertTrue(all(entry["timeout"] >= 12 for group in groups.values() for entry in group[0]["hooks"]))
+        import tomllib
+        kimi = self.root / "kimi-private.toml"
+        result = tomllib.loads(setup.configuration("kimi", self.root, kimi_config=kimi)[kimi])
+        self.assertTrue(all(item["timeout"] >= 12 for item in result["hooks"]))
+
 
 if __name__ == "__main__":
     unittest.main()

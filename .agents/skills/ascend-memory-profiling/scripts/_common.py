@@ -23,7 +23,6 @@ for _p in (str(LIB_DIR), str(MM_SCRIPTS)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-import inventory as inventory_store  # noqa: E402
 from vaws_local_state import ensure_state_dir  # noqa: E402
 from vaws_ssh import base_ssh_options  # noqa: E402
 from vaws_session_state import (  # noqa: E402
@@ -105,19 +104,6 @@ def ssh_bg_exec(
 def progress(msg: str, **extra: Any) -> None:
     payload = {"msg": msg, **extra}
     print(f"{PROGRESS_SENTINEL}{json.dumps(payload, ensure_ascii=False)}", file=sys.stderr, flush=True)
-
-
-def resolve_machine(identifier: str) -> dict[str, Any]:
-    read_path = inventory_store.read_inventory_path(
-        inventory_store.preferred_inventory_path(inventory_store.DEFAULT_PATH)
-    )
-    inv = inventory_store.load_inventory(read_path)
-    for m in inv.get("machines", []):
-        alias = m.get("alias", "")
-        host_ip = m.get("host", {}).get("ip", "") if isinstance(m.get("host"), dict) else m.get("host", "")
-        if alias == identifier or host_ip == identifier:
-            return m
-    raise ValueError(f"Machine '{identifier}' not found in inventory")
 
 
 def endpoint_from_machine(machine: dict[str, Any]) -> SshEndpoint:

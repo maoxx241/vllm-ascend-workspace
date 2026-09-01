@@ -325,6 +325,36 @@ class CoordinationTests(unittest.TestCase):
                 self.assertEqual(unknown['status'], 'failed')
                 self.assertEqual(unknown['free'], [])
 
+    def test_process_identity_columns_follow_the_device_table_layout(self):
+        devices = """
+| 0     Ascend910  | OK | 170 | 48 | 0 / 0 |
+| 0     0         | 0000:9D:00.0 | 0 | 0 / 0 | 3364 / 65536 |
+"""
+        header = '| NPU Chip | Process id | Process name | Process memory(MB) |\n'
+        # A multi-chip (NPU, Chip) -> Phy-ID table makes a lone first column an
+        # ambiguous NPU index. Fail closed instead of misattributing the process.
+        single = parse_npu_smi_info(devices + header + '| 0 | 4321 | python3 | 123 |\n')
+        self.assertEqual(single['status'], 'failed')
+        self.assertEqual(single['free'], [])
+        unknown = parse_npu_smi_info(devices + header + '| 0 9 | 4321 | python3 | 123 |\n')
+        self.assertEqual(unknown['status'], 'failed')
+        self.assertEqual(unknown['free'], [])
+        accepted = parse_npu_smi_info(devices + header + '| 0 0 | 4321 | python3 | 123 |\n')
+        self.assertEqual(accepted['status'], 'ok')
+        self.assertEqual(accepted['busy']['0'][0]['pid'], 4321)
+        # Without any (NPU, Chip) table the layout is flat and the lone column
+        # is the device identity itself.
+        flat = """
+| 0     910B4      | OK              41.8        0                0 / 0 |
+| 1     910B4      | OK              41.8        0                0 / 0 |
+| NPU   Chip       | Process id      Process name             Process memory(MB) |
+| 1 | 4321 | python | 100 |
+"""
+        parsed = parse_npu_smi_info(flat)
+        self.assertEqual(parsed['status'], 'ok')
+        self.assertEqual(parsed['busy']['1'][0]['pid'], 4321)
+        self.assertEqual(parsed['free'], [0])
+
 
 if __name__ == "__main__":
     unittest.main()

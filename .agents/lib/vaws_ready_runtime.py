@@ -48,18 +48,30 @@ class RuntimePool(ManagedExecution):
         self.state_dir, self.backend, self.clock = state_dir, backend, clock
         state_dir.mkdir(parents=True, exist_ok=True)
         self.db_path = state_dir / "coordinator.sqlite3"
+        # The global lock guards only short database sections and the entity
+        # lock registry. Remote host calls run under per-entity locks, so one
+        # hung host blocks only its own runtime/run/job, never every principal
+        # or another run's heartbeat (which the host expires after its TTL).
         self.lock = threading.RLock()
+        self._entity_locks: dict[tuple[str, str], threading.Lock] = {}
         with self.transaction() as db:
             db.execute("CREATE TABLE IF NOT EXISTS records(kind TEXT, id TEXT, data TEXT NOT NULL, PRIMARY KEY(kind,id))")
             db.execute("CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY AUTOINCREMENT, owner TEXT NOT NULL, data TEXT NOT NULL)")
 
+    def _entity_lock(self, kind: str, key: str) -> threading.Lock:
+        """Per-entity lock serializing remote-call sections for one resource."""
+        with self.lock:
+            return self._entity_locks.setdefault((kind, key), threading.Lock())
+
     @contextlib.contextmanager
     def transaction(self):
-        with sqlite3.connect(self.db_path, timeout=60) as db:
-            db.execute("PRAGMA journal_mode=WAL")
-            db.execute("PRAGMA synchronous=FULL")
-            db.execute("BEGIN IMMEDIATE")
-            yield db
+        # The connection context manager commits/rolls back but never closes.
+        with contextlib.closing(sqlite3.connect(self.db_path, timeout=60)) as db:
+            with db:
+                db.execute("PRAGMA journal_mode=WAL")
+                db.execute("PRAGMA synchronous=FULL")
+                db.execute("BEGIN IMMEDIATE")
+                yield db
 
     @staticmethod
     def get(db, kind, key):
@@ -119,62 +131,86 @@ class RuntimePool(ManagedExecution):
             raise ValueError("service_ports must contain distinct TCP ports")
         if spec["endpoint"]["port"] in ports or spec["host_endpoint"]["port"] in ports:
             raise ValueError("service ports cannot overlap SSH endpoints")
-        with self.lock:
-            with self.transaction() as db:
-                for other in self.rows(db, "runtime"):
-                    if other["id"] == runtime_id:
-                        if other["state"] == "bound":
-                            raise ValueError("runtime is still bound; return it first")
-                    elif (other["endpoint"]["host"], other["endpoint"]["port"]) == (spec["endpoint"]["host"], spec["endpoint"]["port"]) or (other["host_endpoint"], other["container_name"]) == (spec["host_endpoint"], spec["container_name"]):
-                        raise ValueError("container/endpoint already registered")
-                    elif other["host_endpoint"] == spec["host_endpoint"] and (set(other.get("service_ports", [])) | {other["endpoint"]["port"]}) & (set(ports) | {spec["endpoint"]["port"]}):
-                        raise ValueError("runtime ports overlap another registered runtime")
+        with self._entity_lock("runtime", runtime_id):
+            with self.lock, self.transaction() as db:
+                self._check_registration(db, runtime_id, spec)
+            # The probe runs outside the global lock; conflicts are re-checked
+            # against fresh state before committing, so concurrent registrations
+            # of the same container under different ids still fail closed.
             observed = self.backend.inspect(spec, idle=True)
             row = {"id": runtime_id, **spec, "state": "ready", "attestation": observed}
-            with self.transaction() as db:
+            with self.lock, self.transaction() as db:
+                self._check_registration(db, runtime_id, spec)
                 self.put(db, "runtime", row)
             return row
+
+    def _check_registration(self, db, runtime_id: str, spec: dict[str, Any]):
+        ports = spec["service_ports"]
+        for other in self.rows(db, "runtime"):
+            if other["id"] == runtime_id:
+                if other["state"] == "bound":
+                    raise ValueError("runtime is still bound; return it first")
+            elif (other["endpoint"]["host"], other["endpoint"]["port"]) == (spec["endpoint"]["host"], spec["endpoint"]["port"]) or (other["host_endpoint"], other["container_name"]) == (spec["host_endpoint"], spec["container_name"]):
+                raise ValueError("container/endpoint already registered")
+            elif other["host_endpoint"] == spec["host_endpoint"] and (set(other.get("service_ports", [])) | {other["endpoint"]["port"]}) & (set(ports) | {spec["endpoint"]["port"]}):
+                raise ValueError("runtime ports overlap another registered runtime")
 
     def checkout(self, owner: str, session: str, profile_key: str, request_id: str, runtime_id: str = ""):
         safe_id(request_id)
         key = digest([owner, request_id])
         intent = {"session": session, "profile_key": profile_key, "runtime_id": runtime_id}
-        with self.lock:
-            with self.transaction() as db:
+        with self._entity_lock("checkout", key):
+            with self.lock, self.transaction() as db:
                 self.owned(db, "session", session, owner)
                 for binding in self.rows(db, "binding"):
                     if binding["id"] == key:
                         if binding["intent"] != intent:
                             raise ValueError("request id reused with different checkout parameters")
+                        if binding["state"] != "bound":
+                            raise ValueError("this checkout request id belongs to a returned binding; use a new request id")
                         return binding
-                candidates = [row for row in self.rows(db, "runtime") if row["state"] == "ready"
+                candidates = [row["id"] for row in self.rows(db, "runtime") if row["state"] == "ready"
                               and row["attestation"]["profile_key"] == profile_key
                               and (not runtime_id or row["id"] == runtime_id)]
-            for runtime in candidates:
-                try:
-                    observed = self.backend.inspect(runtime, idle=True)
-                    if observed != runtime["attestation"]:
-                        raise ValueError("prepared environment changed; re-register it")
-                except Exception as exc:
-                    runtime["state"] = "needs_repair"
-                    runtime["error"] = str(exc)[:500]
-                    with self.transaction() as db:
-                        self.put(db, "runtime", runtime)
-                    continue
-                row = {"id": key, "owner": owner, "intent": intent, "runtime_id": runtime["id"],
-                       "state": "bound", "endpoint": runtime["endpoint"],
-                       "profile_key": profile_key, "build_key": observed["build_key"],
-                       "service_ports": runtime["service_ports"],
-                       "environment": {"VAWS_ENVIRONMENT_FINGERPRINT": profile_key},
-                       "build_env": observed["profile"].get("build_env", {}),
-                       "launch_env": observed["profile"]["launch_env"],
-                       "launch_preamble": observed.get("launch_preamble", "")}
-                runtime["state"] = "bound"
-                with self.transaction() as db:
-                    self.put(db, "runtime", runtime)
-                    self.put(db, "binding", row)
-                    self.event(db, owner, "runtime-bound", binding=key, runtime=runtime["id"])
-                return row
+            for candidate in candidates:
+                with self._entity_lock("runtime", candidate):
+                    with self.lock, self.transaction() as db:
+                        runtime = self.get(db, "runtime", candidate)
+                        if runtime["state"] != "ready" or runtime["attestation"]["profile_key"] != profile_key:
+                            continue
+                    # Probes stay outside the global lock: a hung host blocks
+                    # only this candidate, never other principals' runtimes.
+                    try:
+                        observed = self.backend.inspect(runtime, idle=True)
+                        if observed != runtime["attestation"]:
+                            raise ValueError("prepared environment changed; re-register it")
+                    except Exception as exc:
+                        with self.lock, self.transaction() as db:
+                            latest = self.get(db, "runtime", candidate)
+                            if latest["state"] == "ready" and latest["attestation"] == runtime["attestation"]:
+                                latest["state"] = "needs_repair"
+                                latest["error"] = str(exc)[:500]
+                                self.put(db, "runtime", latest)
+                        continue
+                    row = {"id": key, "owner": owner, "intent": intent, "runtime_id": runtime["id"],
+                           "state": "bound", "endpoint": runtime["endpoint"],
+                           "profile_key": profile_key, "build_key": observed["build_key"],
+                           "service_ports": runtime["service_ports"],
+                           "environment": {"VAWS_ENVIRONMENT_FINGERPRINT": profile_key},
+                           "build_env": observed["profile"].get("build_env", {}),
+                           "launch_env": observed["profile"]["launch_env"],
+                           "launch_preamble": observed.get("launch_preamble", "")}
+                    with self.lock, self.transaction() as db:
+                        # Re-validate after the lock-free probe: a concurrent
+                        # drain/return/re-register must win over this snapshot.
+                        latest = self.get(db, "runtime", candidate)
+                        if latest["state"] != "ready" or latest["attestation"] != runtime["attestation"]:
+                            continue
+                        latest["state"] = "bound"
+                        self.put(db, "runtime", latest)
+                        self.put(db, "binding", row)
+                        self.event(db, owner, "runtime-bound", binding=key, runtime=runtime["id"])
+                    return row
             return {"status": "cache_miss", "reason": "no verified ready runtime matches the requested profile",
                     "provisioning_started": False}
 
@@ -202,12 +238,14 @@ class RuntimePool(ManagedExecution):
                 self.put(db, "runtime", runtime)
                 self.event(db, owner, "runtime-returned", binding=binding_id)
             return {"status": "returned", "runtime_state": runtime["state"],
-                    "next": "owner cleans only its workers; administrator re-verifies and registers the idle runtime"}
+                    "next": "owner cleans only its workers; managed supervision re-registers automatically "
+                            "through register's full idle/profile verification, otherwise an administrator "
+                            "re-verifies and registers the idle runtime"}
 
     def refresh(self, owner: str, binding_id: str):
         """Accept an owner's explicitly prepared new native bundle, before queueing."""
-        with self.lock:
-            with self.transaction() as db:
+        with self._entity_lock("binding", binding_id):
+            with self.lock, self.transaction() as db:
                 binding = self.owned(db, "binding", binding_id, owner)
                 if binding["state"] != "bound" or any(run["binding_id"] == binding_id and run["state"] not in TERMINAL for run in self.rows(db, "run")):
                     raise ValueError("finish/release executions before refreshing prepared artifacts")
@@ -215,10 +253,16 @@ class RuntimePool(ManagedExecution):
             observed = self.backend.inspect(runtime, idle=True)
             if observed["profile_key"] != binding["profile_key"]:
                 raise ValueError("environment changed; return it and request the new profile")
-            runtime["attestation"] = observed
-            binding["build_key"] = observed["build_key"]
-            binding["launch_preamble"] = observed.get("launch_preamble", "")
-            with self.transaction() as db:
+            with self.lock, self.transaction() as db:
+                # Re-read after the lock-free probe; a concurrent return or
+                # execution request invalidates the earlier snapshot.
+                binding = self.owned(db, "binding", binding_id, owner)
+                if binding["state"] != "bound" or any(run["binding_id"] == binding_id and run["state"] not in TERMINAL for run in self.rows(db, "run")):
+                    raise ValueError("finish/release executions before refreshing prepared artifacts")
+                runtime = self.get(db, "runtime", binding["runtime_id"])
+                runtime["attestation"] = observed
+                binding["build_key"] = observed["build_key"]
+                binding["launch_preamble"] = observed.get("launch_preamble", "")
                 self.put(db, "runtime", runtime)
                 self.put(db, "binding", binding)
                 self.event(db, owner, "runtime-refreshed", binding=binding_id, build_key=binding["build_key"])
@@ -240,8 +284,8 @@ class RuntimePool(ManagedExecution):
         key = digest([owner, binding_id, request_id])
         intent = {"snapshots": snapshots, "build_key": expected_build_key, "devices": devices,
                   "npu_count": npu_count, "priority": priority, "queue_seconds": queue_seconds}
-        with self.lock:
-            with self.transaction() as db:
+        with self._entity_lock("binding", binding_id):
+            with self.lock, self.transaction() as db:
                 binding = self.owned(db, "binding", binding_id, owner)
                 runtime = self.get(db, "runtime", binding["runtime_id"])
                 for run in self.rows(db, "run"):
@@ -259,7 +303,14 @@ class RuntimePool(ManagedExecution):
             run = {"id": key, "owner": owner, "binding_id": binding_id, "intent": intent,
                    "task_id": "pool-" + uuid.uuid4().hex, "state": "pending", "epoch": None,
                    "deadline": self.clock() + queue_seconds, "last_poll": 0, "created_at": utc_now(), "submitted": False}
-            with self.transaction() as db:
+            with self.lock, self.transaction() as db:
+                # Re-validate after the lock-free probe: a concurrent return or
+                # refresh must not be overwritten by this stale snapshot.
+                binding = self.owned(db, "binding", binding_id, owner)
+                if binding["state"] != "bound" or expected_build_key != binding["build_key"]:
+                    raise ValueError("cache miss or returned binding; prepare matching artifacts first")
+                if any(other["binding_id"] == binding_id and other["state"] not in TERMINAL for other in self.rows(db, "run")):
+                    raise ValueError("binding already has an unresolved execution")
                 self.put(db, "run", run)  # durable intent BEFORE the first host request
                 self.event(db, owner, "run-queued", run=key)
             self.export_manifest(run, binding)
@@ -300,8 +351,8 @@ class RuntimePool(ManagedExecution):
             raise ValueError("unsupported execution action")
         if completion_confirmed and not _managed:
             raise ValueError("only managed supervision can confirm descendant completion")
-        with self.lock:
-            with self.transaction() as db:
+        with self._entity_lock("run", run_id):
+            with self.lock, self.transaction() as db:
                 run = self.owned(db, "run", run_id, owner)
                 binding = self.owned(db, "binding", run["binding_id"], owner)
                 runtime = self.get(db, "runtime", binding["runtime_id"])
@@ -333,10 +384,17 @@ class RuntimePool(ManagedExecution):
                     # activate/preflight action. Caller observes before retry.
                     action = "poll"
                 if run["epoch"] is None:
-                    status = self.backend.host(runtime, {"action": "status", "no_probe": True})
-                    run["epoch"] = status["coordination_epoch"]
-                    with self.transaction() as db:
-                        self.put(db, "run", run)
+                    if action == "cancel" or self.clock() >= run["deadline"]:
+                        # No mutating host request was ever sent for this run,
+                        # so a local cancel/expire is safe even while the host
+                        # stays unreachable; it is the escape hatch for a
+                        # never-submitted pending run.
+                        run["state"] = "cancelled" if action == "cancel" else "expired"
+                    else:
+                        status = self.backend.host(runtime, {"action": "status", "no_probe": True})
+                        run["epoch"] = status["coordination_epoch"]
+                        with self.lock, self.transaction() as db:
+                            self.put(db, "run", run)
                 request = {"task_id": run["task_id"], "coordination_epoch": run["epoch"]}
                 if run["state"] == "pending":
                     status = self.backend.host(runtime, {"action": "status", "no_probe": True, "coordination_epoch": run["epoch"]})
@@ -355,7 +413,7 @@ class RuntimePool(ManagedExecution):
                     reply = self.backend.host(runtime, submit)
                     run["task"], run["state"] = reply["task"], reply["task"]["state"]
                     run["submitted"] = True
-                    with self.transaction() as db:
+                    with self.lock, self.transaction() as db:
                         self.put(db, "run", run)
                 if run["state"] in TERMINAL:
                     reply = {"task": run.get("task", {"state": run["state"]})}
@@ -385,7 +443,7 @@ class RuntimePool(ManagedExecution):
                 run["state"] = "uncertain" if run["epoch"] is not None else "pending"
                 run["error"] = str(exc)[:500]
             run["last_poll"] = self.clock()
-            with self.transaction() as db:
+            with self.lock, self.transaction() as db:
                 previous = self.get(db, "run", run_id)
                 self.put(db, "run", run)
                 if (previous["state"], previous.get("error")) != (run["state"], run.get("error")):
@@ -393,31 +451,63 @@ class RuntimePool(ManagedExecution):
             self.export_manifest(run, binding)
             return run
 
-    def reconcile(self, owner: str, run_id: str, reason: str):
-        """Force a wedged uncertain run terminal after operator inspection.
+    def reconcile(self, owner: str, run_id: str, reason: str, *, evidence: str = "", force_release: bool = False):
+        """Force a wedged run terminal after operator inspection.
 
         Host coordination state lives in /tmp and a reboot starts a new epoch,
-        which otherwise wedges every uncertain run of the pool forever. This
-        never probes or guesses ownership: the administrator asserts it after
-        inspecting the host, and the assertion is recorded as a durable event.
+        which otherwise wedges every uncertain run of the pool forever. A
+        managed job whose remote directory disappeared while its lease stayed
+        active wedges in `stopping` with the host retain guard holding its
+        cards; terminating that wedge additionally requires explicit inspection
+        evidence, and `force_release` releases the host lease with confirmed
+        completion so the retain guard is cleared. This never probes or guesses
+        ownership: the administrator asserts it after inspecting the host, and
+        the assertion is recorded as a durable event.
         """
         if not isinstance(reason, str) or not reason.strip() or len(reason) > 1000:
             raise ValueError("record the host inspection evidence as a bounded reason")
-        with self.lock, self.transaction() as db:
-            run = self.get(db, "run", run_id)
-            if run["state"] != "uncertain":
-                raise ValueError("only an uncertain run wedged by lost host state can be reconciled")
-            run["state"] = "cancelled"
-            run["error"] = "operator reconcile: " + reason.strip()[:500]
-            self.put(db, "run", run)
-            jobs = [row for row in self.rows(db, "job")
-                    if row["id"] == run_id and row["state"] not in JOB_TERMINAL]
-            for job in jobs:
-                job.update(state="inconclusive", error="operator reconcile: " + reason.strip()[:500])
-                self.put(db, "job", job)
-            binding = self.get(db, "binding", run["binding_id"])
-            event = self.event(db, owner, "run-reconciled", run=run_id,
-                               reason=reason.strip()[:500], previous="uncertain")
+        evidence = evidence.strip() if isinstance(evidence, str) else ""
+        if len(evidence) > 2000:
+            raise ValueError("evidence must be at most 2000 characters")
+        if force_release and not evidence:
+            raise ValueError("a host-side force release requires recorded inspection evidence")
+        safe_id(owner)
+        safe_id(run_id)
+        with self._entity_lock("job", run_id), self._entity_lock("run", run_id):
+            with self.lock, self.transaction() as db:
+                run = self.get(db, "run", run_id)
+                binding = self.owned(db, "binding", run["binding_id"], run["owner"])
+                runtime = self.get(db, "runtime", binding["runtime_id"])
+                jobs = [row for row in self.rows(db, "job")
+                        if row["id"] == run_id and row["state"] not in JOB_TERMINAL]
+                vanished = any(job["state"] == "stopping" and job.get("had_receipt")
+                               and (job.get("remote") or {}).get("state") == "absent" for job in jobs)
+                if run["state"] in TERMINAL:
+                    raise ValueError("run is already terminal")
+                previous = run["state"]
+                if previous != "uncertain" and not (evidence and vanished):
+                    raise ValueError("only an uncertain run wedged by lost host state, or an evidenced "
+                                     "vanished-job wedge, can be reconciled")
+            if force_release and run["epoch"] is not None:
+                # The operator asserts the process family is dead; confirm
+                # completion so the host clears the retain guard and the card
+                # lease actually ends. A failure aborts before any state change.
+                reply = self.backend.host(runtime, {"action": "release", "task_id": run["task_id"],
+                                                    "coordination_epoch": run["epoch"],
+                                                    "fence_token": run.get("task", {}).get("fence_token"),
+                                                    "completion_confirmed": True})
+                if reply.get("task", {}).get("state") != "released":
+                    raise RuntimeError("host did not release the lease; re-inspect before reconciling")
+            with self.lock, self.transaction() as db:
+                run["state"] = "cancelled"
+                run["error"] = "operator reconcile: " + reason.strip()[:500]
+                self.put(db, "run", run)
+                for job in jobs:
+                    job.update(state="inconclusive", error="operator reconcile: " + reason.strip()[:500])
+                    self.put(db, "job", job)
+                event = self.event(db, owner, "run-reconciled", run=run_id,
+                                   reason=reason.strip()[:500], previous=previous,
+                                   evidence=evidence[:500], force_release=force_release)
         self.export_manifest(run, binding, job=jobs[0] if jobs else None)
         return {"run": run, "jobs": jobs, "event": event,
                 "next": "return the runtime for quarantine and re-verification before any reuse"}

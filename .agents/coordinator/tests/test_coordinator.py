@@ -108,6 +108,34 @@ class BackendTests(unittest.TestCase):
                         backend.inspect(runtime_spec(1), idle=True)
                     self.assertEqual(len(commands), 2)
 
+    def test_bash_failure_carries_outcome_and_bounded_stderr_without_command(self):
+        from backend import RemoteBackend
+
+        backend = RemoteBackend()
+        target = {"host": "192.0.2.1", "port": 22, "user": "root"}
+        with tempfile.TemporaryDirectory() as tmp:
+            stdout = Path(tmp) / "stdout.log"
+            stderr = Path(tmp) / "stderr.log"
+            stdout.write_text("")
+            stderr.write_text("padding line\n" * 100 + "final: device probe permission denied")
+            result = {"outcome": "failed", "status": "nonzero_exit", "exit_code": 17,
+                      "refs": {"stdout": str(stdout), "stderr": str(stderr)}}
+            with mock.patch("backend.resolve_endpoint", side_effect=lambda value: value), \
+                    mock.patch("backend.remote_bash", return_value={"result": result}):
+                with self.assertRaises(RuntimeError) as caught:
+                    backend.bash(target, "echo SECRET-TOKEN-VALUE")
+            message = str(caught.exception)
+            self.assertIn("failed/nonzero_exit", message)
+            self.assertIn("exit 17", message)
+            self.assertIn("permission denied", message)
+            self.assertNotIn("SECRET-TOKEN-VALUE", message)
+            self.assertLessEqual(len(message), 400)  # bounded tail only
+            blocked = {"outcome": "blocked", "status": "cwd_outside_root"}
+            with mock.patch("backend.resolve_endpoint", side_effect=lambda value: value), \
+                    mock.patch("backend.remote_bash", return_value={"result": blocked}):
+                with self.assertRaisesRegex(RuntimeError, "blocked/cwd_outside_root"):
+                    backend.bash(target, "true")
+
 
 class PoolTests(unittest.TestCase):
     def setUp(self):
@@ -399,6 +427,167 @@ class PoolTests(unittest.TestCase):
         self.pool.register(binding["runtime_id"], runtime_spec(1))
         self.assertFalse(next(row for row in self.pool.catalog() if row["runtime_id"] == binding["runtime_id"])["draining"])
 
+    def test_a_hung_host_probe_blocks_only_its_own_runtime(self):
+        import threading
+        entered, release = threading.Event(), threading.Event()
+        original = self.backend.inspect
+
+        def inspect(runtime, **kwargs):
+            if runtime.get("container_name") == "prepared-1":
+                entered.set()
+                release.wait(10)
+            return original(runtime, **kwargs)
+
+        self.backend.inspect = inspect
+        try:
+            alice = self.pool.session_open("alice", "hang-a", {"va": str(self.root / "ha")})
+            bob = self.pool.session_open("bob", "hang-b", {"va": str(self.root / "hb")})
+            with ThreadPoolExecutor(2) as workers:
+                stuck = workers.submit(self.pool.checkout, "alice", alice["id"], "profile-a", "hang-a", "runtime-a")
+                self.assertTrue(entered.wait(10))
+                other = workers.submit(self.pool.checkout, "bob", bob["id"], "profile-a", "hang-b", "runtime-b")
+                self.assertEqual(other.result(timeout=10)["state"], "bound")
+                release.set()
+                self.assertEqual(stuck.result(timeout=10)["state"], "bound")
+        finally:
+            release.set()
+
+    def test_concurrent_checkout_races_never_double_bind_a_runtime(self):
+        pool = RuntimePool(self.root / "single", self.backend)
+        pool.register("runtime-c", runtime_spec(3))
+        session = pool.session_open("alice", "race-session", {"va": str(self.root / "r")})
+        with ThreadPoolExecutor(4) as workers:
+            results = list(workers.map(lambda index: pool.checkout("alice", session["id"], "profile-a", "race-" + str(index)), range(4)))
+        bound = [row for row in results if row.get("state") == "bound"]
+        self.assertEqual(len(bound), 1)
+        self.assertEqual(bound[0]["runtime_id"], "runtime-c")
+        self.assertTrue(all(row.get("status") == "cache_miss" for row in results if row is not bound[0]))
+        self.assertEqual(next(row for row in pool.catalog() if row["runtime_id"] == "runtime-c")["state"], "bound")
+        with ThreadPoolExecutor(2) as workers:
+            replays = list(workers.map(lambda _: pool.checkout("alice", session["id"], "profile-a", "race-0"), range(2)))
+        self.assertEqual({row["id"] for row in replays}, {bound[0]["id"]})
+
+    def test_concurrent_conflicting_registration_has_exactly_one_winner(self):
+        def attempt(index):
+            try:
+                return self.pool.register("duplicate-" + str(index), runtime_spec(9))
+            except ValueError as exc:
+                return str(exc)
+
+        with ThreadPoolExecutor(2) as workers:
+            results = list(workers.map(attempt, range(2)))
+        self.assertEqual(sum(isinstance(row, dict) for row in results), 1)
+        self.assertTrue(any(isinstance(row, str) and "already registered" in row for row in results))
+
+    def test_never_submitted_pending_run_cancels_and_expires_while_host_stays_down(self):
+        import time
+        binding = self.bind("alice", self.root / "a")
+        self.backend.fail_after = "status"
+        pending = self.request("alice", binding)
+        self.assertEqual((pending["state"], pending["epoch"]), ("pending", None))
+        self.backend.fail = True  # the host never comes back
+        calls = list(self.backend.calls)
+        cancelled = self.pool.control("alice", pending["id"], "cancel")
+        self.assertEqual(cancelled["state"], "cancelled")
+        self.assertEqual(self.backend.calls, calls)  # no host contact at all
+
+        self.backend.fail = False
+        self.backend.fail_after = "status"
+        second = self.pool.request_run("alice", binding["id"], "request-2",
+                                       {"vllm": "a" * 40, "vllm-ascend": "b" * 40}, "native-a", [0], 0, queue_seconds=1)
+        self.assertEqual(second["state"], "pending")
+        self.backend.fail = True
+        self.pool.clock = lambda: time.time() + 60
+        calls = list(self.backend.calls)
+        expired = self.pool.control("alice", second["id"], "poll")
+        self.assertEqual(expired["state"], "expired")
+        self.assertEqual(self.backend.calls, calls)
+        self.assertNotIn(("host", "submit"), self.backend.calls)
+
+    def test_checkout_replay_of_a_returned_binding_fails_explicitly(self):
+        binding = self.bind("alice", self.root / "a")
+        self.assertEqual(self.bind("alice", self.root / "a")["id"], binding["id"])
+        self.pool.return_runtime("alice", binding["id"])
+        with self.assertRaisesRegex(ValueError, "returned binding"):
+            self.bind("alice", self.root / "a")
+        fresh = self.pool.checkout("alice", binding["intent"]["session"], "profile-a", "checkout-2")
+        self.assertEqual(fresh["state"], "bound")
+        self.assertNotEqual(fresh["id"], binding["id"])
+        # The returned runtime stays quarantined; the fresh request binds the
+        # other ready runtime instead of replaying the dead binding.
+        self.assertNotEqual(fresh["runtime_id"], binding["runtime_id"])
+        quarantined = next(row for row in self.pool.catalog() if row["runtime_id"] == binding["runtime_id"])
+        self.assertEqual(quarantined["state"], "needs_repair")
+
+    def test_transaction_closes_connections_and_rolls_back(self):
+        import sqlite3
+        with self.assertRaises(RuntimeError):
+            with self.pool.transaction() as db:
+                db.execute("INSERT INTO records VALUES('kind','ident','{}')")
+                raise RuntimeError("boom")
+        with self.pool.transaction() as db:
+            self.assertIsNone(db.execute("SELECT data FROM records WHERE kind='kind'").fetchone())
+            handle = db
+        with self.assertRaises(sqlite3.ProgrammingError):
+            handle.execute("SELECT 1")
+
+    def test_checkout_marks_a_drifted_runtime_needs_repair_and_binds_the_next_candidate(self):
+        original = self.backend.inspect
+
+        def inspect(runtime, **kwargs):
+            observed = original(runtime, **kwargs)
+            if runtime.get("container_name") == "prepared-1":
+                observed["build_key"] = "drifted"
+            return observed
+
+        self.backend.inspect = inspect
+        binding = self.bind("alice", self.root / "a")
+        self.assertEqual(binding["runtime_id"], "runtime-b")
+        drifted = next(row for row in self.pool.catalog() if row["runtime_id"] == "runtime-a")
+        self.assertEqual(drifted["state"], "needs_repair")
+        self.assertIn("prepared environment changed", drifted["error"])
+        session = self.pool.session_open("bob", "bob-session", {"va": str(self.root / "b")})
+        self.assertEqual(self.pool.checkout("bob", session["id"], "profile-a", "bob", "runtime-a")["status"], "cache_miss")
+
+    def test_reconcile_defends_identifiers_and_binding_ownership_consistency(self):
+        binding = self.bind("alice", self.root / "a")
+        run = self.request("alice", binding)
+        with self.assertRaisesRegex(ValueError, "invalid identifier"):
+            self.pool.reconcile("admin", "bad id!", "host inspected")
+        with self.assertRaisesRegex(ValueError, "invalid identifier"):
+            self.pool.reconcile("bad admin!", run["id"], "host inspected")
+        with self.assertRaisesRegex(ValueError, "uncertain"):
+            self.pool.reconcile("admin", run["id"], "host inspected", evidence="looked")
+        with self.pool.transaction() as db:
+            corrupted = self.pool.get(db, "binding", binding["id"])
+            corrupted["owner"] = "bob"
+            self.pool.put(db, "binding", corrupted)
+        with self.assertRaises(PermissionError):
+            self.pool.reconcile("admin", run["id"], "host inspected")
+
+    def test_reconcile_terminates_a_vanished_job_wedge_only_with_evidence(self):
+        binding = self.bind("alice", self.root / "a")
+        job = self.managed("alice", binding)
+        self.assertEqual(job["state"], "running")
+        self.backend.jobs.clear()  # the whole job directory vanished remotely
+        self.pool.managed_control("alice", job["id"], "stop")
+        self.assertEqual(self.pool.managed_control("alice", job["id"])["state"], "stopping")
+        reason = "job directory vanished while the lease stayed active"
+        with self.assertRaisesRegex(ValueError, "evidence"):
+            self.pool.reconcile("admin", job["id"], reason, force_release=True)
+        with self.assertRaisesRegex(ValueError, "uncertain"):
+            self.pool.reconcile("admin", job["id"], reason)
+        self.backend.calls.clear()
+        result = self.pool.reconcile("admin", job["id"], reason,
+                                     evidence="host ls shows no job directory; docker top shows no family",
+                                     force_release=True)
+        self.assertEqual(result["run"]["state"], "cancelled")
+        self.assertEqual(result["jobs"][0]["state"], "inconclusive")
+        self.assertEqual(self.backend.calls, [("host", "release")])
+        self.assertTrue(result["event"]["force_release"])
+        self.assertIn("no job directory", result["event"]["evidence"])
+        self.assertEqual(self.pool.return_runtime("alice", binding["id"])["status"], "returned")
+
 
 class ProfileTests(unittest.TestCase):
     def test_attestation_requires_populated_pinned_native_submodules(self):
@@ -480,6 +669,27 @@ class ProfileTests(unittest.TestCase):
             result = subprocess.check_output(["bash", "-c", launch_preamble(profile) + '\nprintf "%s" "$PYTHONPATH"'],
                                               text=True, env={**os.environ, "PYTHONPATH": "/base/acl:/base/native-compat"})
             self.assertEqual(result, "/scoped/source:/base/acl:/base/native-compat")
+
+    def test_attest_records_smoke_timeout_as_evidence(self):
+        import subprocess
+        import prepare_runtime
+        from vaws_runtime_profile import PROFILE_FIELDS
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            profile = {key: "test-version" for key in PROFILE_FIELDS}
+            profile.update(build_env={}, launch_env={}, compatibility_evidence="smoke-ref",
+                           system_files={name: {"path": str(root / (name + ".txt")), "sha256": "0" * 64} for name in ("cann", "driver")})
+            with mock.patch("prepare_runtime.require_clean_sources"), \
+                    mock.patch("prepare_runtime.runtime_build_inputs", return_value={"vllm": "native-a"}), \
+                    mock.patch("prepare_runtime.subprocess.run",
+                               side_effect=subprocess.TimeoutExpired(cmd="smoke", timeout=60)):
+                with self.assertRaisesRegex(ValueError, "timed out"):
+                    prepare_runtime.attest(root, {"profile": profile, "files": {}})
+            evidence = json.loads((root / ".vaws-runtime/profile-evidence/smoke.json").read_text())
+            self.assertFalse(evidence["passed"])
+            self.assertIn("timed out", evidence["error"])
+            self.assertEqual(evidence["build_inputs"], {"vllm": "native-a"})
 
 
 if __name__ == "__main__":

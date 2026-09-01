@@ -208,7 +208,7 @@ def analyze_profile(
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     parser.add_argument("profile_root")
     parser.add_argument("--output", required=True)
     parser.add_argument("--verbose", action="store_true")

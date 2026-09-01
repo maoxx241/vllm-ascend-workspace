@@ -7,6 +7,7 @@ full pipeline.
 """
 from __future__ import annotations
 
+import subprocess
 from types import SimpleNamespace
 from unittest import mock
 
@@ -136,6 +137,69 @@ def test_required_remote_python_dependency_selects_importable_interpreter() -> N
     assert py == "/usr/local/python3.10/bin/python3"
 
 
+def test_remote_python_probe_timeout_required_fails_closed() -> None:
+    with mock.patch.object(
+        common,
+        "ssh_exec",
+        side_effect=subprocess.TimeoutExpired(cmd="ssh", timeout=30),
+    ):
+        try:
+            common.remote_python_with_module(object(), "yaml", required=True)
+        except RuntimeError as exc:
+            assert "timed out" in str(exc)
+            assert "'yaml'" in str(exc)
+        else:
+            raise AssertionError("required probe timeout must raise RuntimeError")
+
+
+def test_remote_python_probe_timeout_optional_falls_back_to_python3() -> None:
+    with mock.patch.object(
+        common,
+        "ssh_exec",
+        side_effect=subprocess.TimeoutExpired(cmd="ssh", timeout=30),
+    ):
+        py = common.remote_python_with_module(object(), "yaml", required=False)
+    assert py == "python3"
+
+
+def test_ssh_base_cmd_sets_default_connect_timeout() -> None:
+    endpoint = common.SshEndpoint(host="example.internal", port=22, user="root")
+    cmd = " ".join(common._ssh_base_cmd(endpoint))
+    assert f"ConnectTimeout={common.SSH_CONNECT_TIMEOUT_SECONDS}" in cmd
+
+
+def test_all_stage_parsers_disable_abbrev() -> None:
+    """acceptance.md: every argparse parser must set allow_abbrev=False."""
+    from ascend_profile import (
+        analyze,
+        classify,
+        cross_rank,
+        diagnostics,
+        normalize,
+        report,
+        segment,
+        summarize,
+        sweep,
+    )
+
+    stage_modules = (
+        analyze,
+        classify,
+        cross_rank,
+        diagnostics,
+        normalize,
+        report,
+        segment,
+        summarize,
+        sweep,
+    )
+    for module in stage_modules:
+        parser = module.build_parser()
+        assert parser.allow_abbrev is False, f"{module.__name__} parser must set allow_abbrev=False"
+    for wrapper in (profile_analyze, profile_sweep):
+        assert wrapper._build_parser().allow_abbrev is False
+
+
 if __name__ == "__main__":
     test_analyze_wrapper_has_required_args()
     test_analyze_wrapper_input_is_mutually_exclusive()
@@ -143,4 +207,8 @@ if __name__ == "__main__":
     test_report_mode_choices_only_summary_and_full_raw()
     test_required_remote_python_dependency_fails_closed()
     test_required_remote_python_dependency_selects_importable_interpreter()
+    test_remote_python_probe_timeout_required_fails_closed()
+    test_remote_python_probe_timeout_optional_falls_back_to_python3()
+    test_ssh_base_cmd_sets_default_connect_timeout()
+    test_all_stage_parsers_disable_abbrev()
     print("ok")

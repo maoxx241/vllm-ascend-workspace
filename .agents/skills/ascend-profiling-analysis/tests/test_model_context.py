@@ -2,9 +2,20 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from unittest import mock
 
+from ascend_profile import model_context
 from ascend_profile.common import NormalizedEvent
 from ascend_profile.model_context import resolve_model_context
+
+
+def _no_network():
+    """Guard: any external config fetch during these tests is a bug."""
+    return mock.patch.object(
+        model_context,
+        "_read_url_text",
+        side_effect=AssertionError("unexpected external network access in test"),
+    )
 
 
 def _event(
@@ -72,13 +83,14 @@ def test_operator_fingerprint_matches_qwen35_family_from_linear_moe() -> None:
 
 
 def test_operator_fingerprint_matches_dsa_without_confusing_dsv4() -> None:
-    context = resolve_model_context(
-        events=[
-            _event("e1", "LightningIndexer", categories=("attention.lightning_indexer",), roles=("attention_aux",)),
-            _event("e2", "SparseAttnSharedKV", categories=("attention.sparse_sharedkv",), roles=("attention",)),
-            _event("e3", "MoeGatingTopK", categories=("moe.gating",), roles=("moe",)),
-        ]
-    )
+    with _no_network():
+        context = resolve_model_context(
+            events=[
+                _event("e1", "LightningIndexer", categories=("attention.lightning_indexer",), roles=("attention_aux",)),
+                _event("e2", "SparseAttnSharedKV", categories=("attention.sparse_sharedkv",), roles=("attention",)),
+                _event("e3", "MoeGatingTopK", categories=("moe.gating",), roles=("moe",)),
+            ]
+        )
 
     assert context["model_name"] == "DeepSeek DSA sparse-attention family"
     assert context["source"] == "profile_operator_fingerprint:operator_match"
@@ -120,3 +132,109 @@ def test_local_config_context_does_not_require_catalog_match(tmp_path: Path) -> 
     assert context["model_name"] == "toy"
     assert context["expected_layers"] == 7
     assert "moe" in context["features"]
+
+
+def test_invalid_model_config_degrades_gracefully(tmp_path: Path) -> None:
+    config = tmp_path / "config.json"
+    config.write_text("{ not valid json", encoding="utf-8")
+
+    context = resolve_model_context(model_id="toy", model_config=config)
+
+    assert context["available"] is False
+    assert context["expected_layers"] is None
+    assert context["matched_reasons"] == [f"config_parse_error:{config}"]
+    assert any("not valid JSON" in item for item in context["limitations"])
+
+
+def test_non_object_model_config_degrades_gracefully(tmp_path: Path) -> None:
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps(["not", "a", "model"]), encoding="utf-8")
+
+    context = resolve_model_context(model_config=config)
+
+    assert context["available"] is False
+    assert any("not a JSON object" in item for item in context["limitations"])
+
+
+def test_fuzzy_model_id_substring_hit_is_capped_at_medium() -> None:
+    # "dsv2lite" is long enough to substring-match, but a fuzzy hit must
+    # never be reported as high confidence.
+    with _no_network():
+        context = resolve_model_context(model_id="xxdsv2liteyy")
+
+    assert context["model_name"] == "DeepSeek-V2-Lite"
+    assert context["confidence"] == "medium"
+    assert "fuzzy_model_id_match" in context["matched_reasons"]
+    assert context["expected_layers"] == 27
+
+
+def test_exact_model_id_hit_keeps_high_confidence() -> None:
+    with _no_network():
+        context = resolve_model_context(model_id="DeepSeek-V2-Lite")
+
+    assert context["model_name"] == "DeepSeek-V2-Lite"
+    assert context["confidence"] == "high"
+    assert "fuzzy_model_id_match" not in context["matched_reasons"]
+
+
+def test_short_alias_does_not_substring_match_arbitrary_ids() -> None:
+    models = model_context.load_model_fingerprints()
+
+    matches, _kind = model_context._catalog_matches_by_model_id("xxdsaxx", models)
+    assert matches == []
+
+    # A whole-token hit on a short alias is still allowed.
+    matches, kind = model_context._catalog_matches_by_model_id("my dsa build", models)
+    assert kind == "fuzzy"
+    assert [item["model_name"] for item in matches] == ["DeepSeek DSA sparse-attention family"]
+
+
+def test_family_display_name_is_not_turned_into_repo_candidates() -> None:
+    family = {
+        "model_name": "DeepSeek DSA sparse-attention family",
+        "aliases": ["dsa", "deepseek-dsa"],
+    }
+
+    assert model_context._repo_id_candidates("DeepSeek DSA sparse-attention family", family) == []
+
+
+def test_external_fetch_skips_invalid_repo_ids_without_network() -> None:
+    family = {
+        "model_name": "DeepSeek DSA sparse-attention family",
+        "aliases": ["dsa"],
+    }
+    with _no_network():
+        config, resolution = model_context.fetch_external_model_config(
+            "DeepSeek DSA sparse-attention family", family
+        )
+
+    assert config is None
+    assert resolution["status"] == "not_found"
+    assert resolution["attempts"] == []
+
+
+def test_external_fetch_still_uses_valid_repo_ids() -> None:
+    payload = json.dumps({"num_hidden_layers": 9})
+    with mock.patch.object(model_context, "_read_url_text", return_value=payload) as reader:
+        config, resolution = model_context.fetch_external_model_config("deepseek-ai/DeepSeek-V4-Pro", None)
+
+    assert config is not None
+    assert resolution["status"] == "ok"
+    assert resolution["repo_id"] == "deepseek-ai/DeepSeek-V4-Pro"
+    assert resolution["expected_layers"] == 9
+    assert reader.call_count == 1
+    assert "huggingface.co/deepseek-ai/DeepSeek-V4-Pro" in reader.call_args_list[0].args[0]
+
+
+def test_family_context_tolerates_non_numeric_expected_layers() -> None:
+    resolved = model_context._single_or_family_context(
+        model_id="toy",
+        matches=[{"model_name": "toy family"}],
+        candidate_contexts=[
+            {"available": True, "model_name": "toy-a", "expected_layers": "unknown"},
+            {"available": True, "model_name": "toy-b", "expected_layers": 61},
+        ],
+        observed_features=[],
+    )
+
+    assert resolved["candidate_expected_layers"] == [61]

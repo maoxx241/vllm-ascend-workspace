@@ -197,7 +197,8 @@ def build_parser() -> argparse.ArgumentParser:
                         "checkout after each state's source alignment")
     p.add_argument("--allow-stale-native", action="store_true",
                    help="warn instead of fail when csrc/cmake/requirements inputs differ "
-                        "between states (compiled artifacts are NOT rebuilt)")
+                        "between states, or when the native-input digest itself is "
+                        "unavailable (compiled artifacts are NOT rebuilt either way)")
     return p
 
 
@@ -514,7 +515,8 @@ def _compare(states: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def main(argv: list[str] | None = None) -> int:
     raw_argv = argv if argv is not None else sys.argv[1:]
     main_argv, serve_args, bench_args = _split_sections(raw_argv)
-    args = build_parser().parse_args(main_argv)
+    parser = build_parser()
+    args = parser.parse_args(main_argv)
 
     states: list[dict[str, Any]] = []
     result_paths: list[str] = []
@@ -533,7 +535,8 @@ def main(argv: list[str] | None = None) -> int:
         warmup = args.warmup_runs
         if warmup is None:
             warmup = int(preset["warmup_runs"]) if preset and preset.get("warmup_runs") is not None else 1
-        warmup = max(0, min(warmup, runs - 1))
+        if warmup < 0 or warmup >= runs:
+            parser.error(f"--warmup-runs ({warmup}) must be >= 0 and less than --runs ({runs})")
 
         # --- vllm ref: CLI > preset ---
         vllm_ref = args.vllm_ref or (str(preset["vllm_ref"]) if preset and preset.get("vllm_ref") else None)
@@ -707,6 +710,7 @@ def main(argv: list[str] | None = None) -> int:
             "states": [s["label"] for s in states],
             "comparison": _compare(states),
             "state_results": states,
+            "config": config.summary_dict(),
             "serve_args": serve_args,
             "bench_args": bench_args,
             "warnings": warnings,

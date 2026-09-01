@@ -50,6 +50,31 @@ class SshTransportTests(unittest.TestCase):
         self.assertEqual(args[-1].split(" ", 2)[:2], ["bash", "-c"])
         self.assertIn("path with spaces", args[-1])
 
+    @staticmethod
+    def _control_path(options: list[str]) -> str:
+        return next(option for option in options if option.startswith("ControlPath="))
+
+    def test_control_path_is_scoped_per_identity_file(self) -> None:
+        # OpenSSH %C does not hash the identity file, so endpoints that differ
+        # only by SSH key must get distinct ControlPath sockets (D9).
+        with mock.patch.object(ssh_transport, "_MUX_READY", True):
+            plain = self._control_path(ssh_transport._control_master_options())
+            first = self._control_path(ssh_transport._control_master_options("/keys/a"))
+            second = self._control_path(ssh_transport._control_master_options("/keys/b"))
+        self.assertTrue(plain.endswith("/%C"))
+        self.assertNotEqual(first, second)
+        self.assertNotEqual(first, plain)
+        self.assertTrue(first.startswith(plain))
+
+    def test_ssh_base_cmd_passes_identity_file_into_control_path(self) -> None:
+        with_identity = Endpoint(host="1.2.3.4", port=46000, identity_file="/keys/a")
+        with mock.patch.object(ssh_transport, "_MUX_READY", True):
+            options = ssh_transport._control_master_options(with_identity.identity_file)
+            expected = self._control_path(options)
+            cmd = ssh_transport.ssh_base_cmd(with_identity)
+        self.assertIn(expected, cmd)
+        self.assertIn("/keys/a", cmd)
+
 
 if __name__ == "__main__":
     unittest.main()

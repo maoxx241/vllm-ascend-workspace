@@ -36,6 +36,14 @@ from vaws_validate import parse_device_csv  # noqa: E402
 
 PROGRESS_SENTINEL = "__VAWS_SERVING_PROGRESS__="
 
+# Always bound the TCP connect phase: without it a dead host can hang an SSH
+# command for minutes (kernel default). Established connections are unaffected
+# by ConnectTimeout.
+SSH_CONNECT_TIMEOUT_SECONDS = 15
+# Hard cap for a single SSH round-trip. Must exceed the slowest remote probe
+# (first-token curl allows --max-time 120).
+SSH_EXEC_DEFAULT_TIMEOUT_SECONDS = 180
+
 
 # ---------------------------------------------------------------------------
 # SSH
@@ -58,7 +66,7 @@ class ExecutionTarget:
 def _ssh_base_cmd(endpoint: SshEndpoint) -> list[str]:
     return [
         "ssh",
-        *base_ssh_options(),
+        *base_ssh_options(connect_timeout=SSH_CONNECT_TIMEOUT_SECONDS),
         "-p", str(endpoint.port),
         endpoint.destination(),
     ]
@@ -69,9 +77,17 @@ def ssh_exec(
     script: str,
     *,
     check: bool = True,
+    timeout: float | None = SSH_EXEC_DEFAULT_TIMEOUT_SECONDS,
 ) -> subprocess.CompletedProcess[str]:
     cmd = [*_ssh_base_cmd(endpoint), "bash", "-c", shlex.quote(script)]
-    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        # A timed-out probe is an unknown result (same shape as a lost SSH
+        # connection, rc 255), never proof of remote success or failure.
+        result = subprocess.CompletedProcess(
+            cmd, 255, "", f"ssh_exec timed out after {exc.timeout}s"
+        )
     if check and result.returncode != 0:
         raise RuntimeError(
             f"remote command failed (rc={result.returncode}):\n"
@@ -229,9 +245,6 @@ def load_preset(name: str) -> dict[str, Any]:
 # NPU probe
 # ---------------------------------------------------------------------------
 
-_HBM_BUSY_THRESHOLD_MB = 4096
-
-
 def probe_npus(host_ep: SshEndpoint) -> dict[str, Any]:
     """Probe NPU device availability via the **host** (bare-metal) SSH.
 
@@ -244,9 +257,9 @@ def probe_npus(host_ep: SshEndpoint) -> dict[str, Any]:
     which maps A3 pipe-separated process rows through Phy-ID and fails closed
     when the process table is missing or unparsable.  A failed parse raises
     here as well: an unknown occupancy must never look like an empty busy set.
-    As a secondary signal, HBM usage above ``_HBM_BUSY_THRESHOLD_MB`` marks a
-    device as busy even when no visible PID is found (covers edge cases where
-    npu-smi does not list the process).
+    As a secondary signal, HBM usage above the parser's
+    ``hbm_busy_threshold_mb`` marks a device as busy even when no visible PID
+    is found (covers edge cases where npu-smi does not list the process).
     """
     result = ssh_exec(host_ep, "npu-smi info", check=False)
     if result.returncode != 0:

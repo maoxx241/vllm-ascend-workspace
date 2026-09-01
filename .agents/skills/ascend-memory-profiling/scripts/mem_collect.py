@@ -291,7 +291,7 @@ def send_inference(
     cmd = (
         f"curl -s {api_endpoint} "
         f'-H "Content-Type: application/json" '
-        f"-d '{payload}'"
+        f"-d {shlex.quote(payload)}"
     )
     r = ssh_exec(ep, cmd, timeout=180)
     try:
@@ -825,97 +825,100 @@ def _main_standalone(
     args.tp = tp
     args.dp = dp
     args.port = port
-    if not args.devices:
-        session = getattr(args, "_session", None)
-        leased_devices = session.get("leases", {}).get("npu_devices", []) if isinstance(session, dict) else []
-        if leased_devices:
-            selected = sorted(int(item) for item in leased_devices)
-            need = tp * dp
-            if len(selected) < need:
-                raise SystemExit(
-                    f"session {args.session_id} leases {len(selected)} NPU devices "
-                    f"but standalone memory profiling needs {need} (tp={tp}, dp={dp})"
-                )
-            args.devices = ",".join(str(item) for item in selected[:need])
-            progress(f"Using leased session devices: {args.devices}")
-
-    model_tag = Path(args.model).name.replace("/", "_")
-    run_dir = ensure_run_dir(tag=args.tag or model_tag)
-    remote_dir = unique_remote_tmp("vaws_memprof", args.session_id)
-
-    progress(f"Output directory: {run_dir}")
-    ssh_exec(ep, f"mkdir -p {remote_dir}")
-
-    python = find_python(ep)
-    progress(f"Python: {python}")
-
-    # Pre-flight: verify msprof is available
-    check_msprof_available(ep)
-
-    manifest: dict = {
-        "mode": "standalone",
-        "session_id": args.session_id,
-        "session_file": args.session_file,
-        "model": args.model,
-        "tp": tp,
-        "dp": dp,
-        "devices": _compute_devices(args),
-        "gpu_memory_utilization": args.gpu_memory_utilization,
-        "max_model_len": args.max_model_len,
-        "msprof_enabled": True,
-        "run_dir": str(run_dir),
-        "speculative_config": args.speculative_config,
-        "compilation_config": args.compilation_config,
-        "additional_config": args.additional_config,
-        "quantization": args.quantization,
-        "enforce_eager": args.enforce_eager,
-        "image_url": args.image_url,
-    }
-
-    # Phase 0: baseline
-    manifest["baseline_hbm"] = collect_npu_smi(ep, "baseline", run_dir)
-
-    # Phase 1: start service (always with msprof for traceable memory data)
-    start_service_with_msprof(ep, args, python, remote_dir)
-
+    # The leased service port must be released on every exit path, not just the
+    # health-check timeout; a failure in any phase below would otherwise leak it.
     try:
-        manifest["startup_seconds"] = wait_for_health(ep, port, args.health_timeout)
-    except TimeoutError as e:
-        progress(f"ERROR: {e}")
-        log_text = collect_vllm_logs(ep, remote_dir, run_dir)
+        if not args.devices:
+            session = getattr(args, "_session", None)
+            leased_devices = session.get("leases", {}).get("npu_devices", []) if isinstance(session, dict) else []
+            if leased_devices:
+                selected = sorted(int(item) for item in leased_devices)
+                need = tp * dp
+                if len(selected) < need:
+                    raise SystemExit(
+                        f"session {args.session_id} leases {len(selected)} NPU devices "
+                        f"but standalone memory profiling needs {need} (tp={tp}, dp={dp})"
+                    )
+                args.devices = ",".join(str(item) for item in selected[:need])
+                progress(f"Using leased session devices: {args.devices}")
+
+        model_tag = Path(args.model).name.replace("/", "_")
+        run_dir = ensure_run_dir(tag=args.tag or model_tag)
+        remote_dir = unique_remote_tmp("vaws_memprof", args.session_id)
+
+        progress(f"Output directory: {run_dir}")
+        ssh_exec(ep, f"mkdir -p {remote_dir}")
+
+        python = find_python(ep)
+        progress(f"Python: {python}")
+
+        # Pre-flight: verify msprof is available
+        check_msprof_available(ep)
+
+        manifest: dict = {
+            "mode": "standalone",
+            "session_id": args.session_id,
+            "session_file": args.session_file,
+            "model": args.model,
+            "tp": tp,
+            "dp": dp,
+            "devices": _compute_devices(args),
+            "gpu_memory_utilization": args.gpu_memory_utilization,
+            "max_model_len": args.max_model_len,
+            "msprof_enabled": True,
+            "run_dir": str(run_dir),
+            "speculative_config": args.speculative_config,
+            "compilation_config": args.compilation_config,
+            "additional_config": args.additional_config,
+            "quantization": args.quantization,
+            "enforce_eager": args.enforce_eager,
+            "image_url": args.image_url,
+        }
+
+        # Phase 0: baseline
+        manifest["baseline_hbm"] = collect_npu_smi(ep, "baseline", run_dir)
+
+        # Phase 1: start service (always with msprof for traceable memory data)
+        start_service_with_msprof(ep, args, python, remote_dir)
+
+        try:
+            manifest["startup_seconds"] = wait_for_health(ep, port, args.health_timeout)
+        except TimeoutError as e:
+            progress(f"ERROR: {e}")
+            log_text = collect_vllm_logs(ep, remote_dir, run_dir)
+            stop_service(ep)
+            _emit_env_recovery_hint(log_text, args.session_id)
+            manifest["error"] = str(e)
+            print(json.dumps(manifest, indent=2, ensure_ascii=False))
+            sys.exit(1)
+
+        # Phase 2: after ready
+        manifest["after_ready_hbm"] = collect_npu_smi(ep, "after_ready", run_dir)
+        collect_vllm_logs(ep, remote_dir, run_dir)
+
+        # Phase 3: inference
+        manifest["inference_response"] = send_inference(ep, args, port=port)
+        manifest["after_infer_hbm"] = collect_npu_smi(ep, "after_infer", run_dir)
+
+        # Phase 4: stop service
         stop_service(ep)
-        _release_standalone_port(args, machine, leased_port)
-        _emit_env_recovery_hint(log_text, args.session_id)
-        manifest["error"] = str(e)
+        time.sleep(5)
+
+        # Phase 5: msprof export (via shared helper)
+        run_msprof_export(ep, f"{remote_dir}/msprof_data")
+        manifest["msprof_csvs"] = collect_msprof_csvs(ep, remote_dir, run_dir)
+
+        # Phase 6: model config + weight manifest
+        manifest["model_config"] = collect_model_config(ep, args.model, run_dir)
+        manifest["weight_manifest_collected"] = bool(
+            collect_weight_manifest(ep, python, args.model, run_dir)
+        )
+
+        (run_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False))
+        progress(f"Collection complete. Data saved to {run_dir}")
         print(json.dumps(manifest, indent=2, ensure_ascii=False))
-        sys.exit(1)
-
-    # Phase 2: after ready
-    manifest["after_ready_hbm"] = collect_npu_smi(ep, "after_ready", run_dir)
-    collect_vllm_logs(ep, remote_dir, run_dir)
-
-    # Phase 3: inference
-    manifest["inference_response"] = send_inference(ep, args, port=port)
-    manifest["after_infer_hbm"] = collect_npu_smi(ep, "after_infer", run_dir)
-
-    # Phase 4: stop service
-    stop_service(ep)
-    _release_standalone_port(args, machine, leased_port)
-    time.sleep(5)
-
-    # Phase 5: msprof export (via shared helper)
-    run_msprof_export(ep, f"{remote_dir}/msprof_data")
-    manifest["msprof_csvs"] = collect_msprof_csvs(ep, remote_dir, run_dir)
-
-    # Phase 6: model config + weight manifest
-    manifest["model_config"] = collect_model_config(ep, args.model, run_dir)
-    manifest["weight_manifest_collected"] = bool(
-        collect_weight_manifest(ep, python, args.model, run_dir)
-    )
-
-    (run_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False))
-    progress(f"Collection complete. Data saved to {run_dir}")
-    print(json.dumps(manifest, indent=2, ensure_ascii=False))
+    finally:
+        _release_standalone_port(args, machine, leased_port)
 
 
 if __name__ == "__main__":

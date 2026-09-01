@@ -7,6 +7,7 @@ import json
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -15,12 +16,14 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[4]
 SCRIPTS = ROOT / ".agents/skills/vllm-ascend-benchmark/scripts"
 PRESETS = ROOT / ".agents/skills/vllm-ascend-benchmark/presets"
+FIXTURES = ROOT / ".agents/skills/vllm-ascend-benchmark/tests/fixtures"
 
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
 import _common  # noqa: E402
 import bench_compare  # noqa: E402
+import bench_run  # noqa: E402
 
 FAKE_LOOKUP = SimpleNamespace(
     session={"session_id": "s"},
@@ -262,6 +265,166 @@ class CompareTests(unittest.TestCase):
         self.assertEqual(base_case2["mean_tpot_ms"], 20.0)
 
 
+class RealBenchResultFixtureTests(unittest.TestCase):
+    """End-to-end over a fixture shaped like real `vllm bench serve
+    --save-result` output (see the fixture's `_source` note for provenance:
+    vllm/vllm/benchmarks/serve.py:971-1062)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.fixture = json.loads(
+            (FIXTURES / "vllm_bench_serve_result.json").read_text(encoding="utf-8")
+        )
+
+    def test_extract_metrics_aligns_with_real_output_keys(self):
+        metrics = _common.extract_metrics(self.fixture)
+        self.assertEqual(metrics["total_input_tokens"], 32768)
+        self.assertEqual(metrics["total_output_tokens"], 32768)
+        self.assertEqual(metrics["total_token_throughput"], 1070.24)
+        self.assertEqual(metrics["output_throughput"], 535.12)
+        self.assertEqual(metrics["request_throughput"], 1.0452)
+        self.assertEqual(metrics["mean_tpot_ms"], 28.41)
+        self.assertEqual(metrics["median_ttft_ms"], 118.21)
+        self.assertEqual(metrics["p99_tpot_ms"], 31.27)
+        self.assertEqual(metrics["mean_e2el_ms"], 14612.3)
+        self.assertEqual(metrics["spec_decode_acceptance_rate"], 0.5702)
+        # Keys that never existed in the real output are not extracted.
+        self.assertNotIn("acceptance_rate", metrics)
+        self.assertNotIn("total_input", metrics)
+        self.assertNotIn("total_output", metrics)
+        # Provenance and raw per-request arrays do not leak into metrics.
+        self.assertNotIn("_source", metrics)
+        self.assertNotIn("input_lens", metrics)
+
+    def test_extract_aggregate_compare_end_to_end(self):
+        def state(label, tpot_scale):
+            raw = dict(self.fixture)
+            raw["mean_tpot_ms"] = self.fixture["mean_tpot_ms"] * tpot_scale
+            metrics = [_common.extract_metrics(raw) for _ in range(3)]
+            return {
+                "label": label,
+                "cases": [{
+                    "case": "default",
+                    "request_count": None,
+                    "aggregated": bench_compare._aggregate(metrics, 1),
+                }],
+            }
+
+        states = [state("baseline", 1.0), state("pr", 1.1)]
+        agg = states[0]["cases"][0]["aggregated"]
+        # Warmup run discarded: 3 runs - 1 warmup = 2 statistical runs.
+        self.assertEqual(agg["count"], 2)
+        self.assertAlmostEqual(agg["mean_tpot_ms"]["mean"], 28.41, places=4)
+        self.assertAlmostEqual(agg["total_token_throughput"]["mean"], 1070.24, places=4)
+        self.assertAlmostEqual(agg["spec_decode_acceptance_rate"]["mean"], 0.5702, places=4)
+        self.assertNotIn("acceptance_rate", agg)
+
+        rows = bench_compare._compare(states)
+        self.assertEqual(len(rows), 2)
+        base, pr = rows
+        self.assertEqual(base["label"], "baseline")
+        self.assertEqual(base["delta_tpot_pct_vs_first"], 0.0)
+        self.assertEqual(pr["label"], "pr")
+        self.assertAlmostEqual(pr["delta_tpot_pct_vs_first"], 10.0, places=2)
+        self.assertEqual(pr["output_throughput"], 535.12)
+        self.assertAlmostEqual(pr["spec_decode_acceptance_rate"], 0.5702, places=4)
+
+
+class StreamingTimeoutTests(unittest.TestCase):
+    def test_run_json_command_streaming_times_out_and_kills(self):
+        start = time.monotonic()
+        returncode, payload, _stdout, stderr = _common._run_json_command_streaming(
+            [sys.executable, "-c", "import time; time.sleep(30)"],
+            timeout=1,
+        )
+        self.assertLess(time.monotonic() - start, 15)
+        self.assertEqual(returncode, 124)
+        self.assertIsNone(payload)
+        self.assertIn("timed out after", stderr)
+
+    def test_run_json_command_streaming_without_timeout_unchanged(self):
+        returncode, payload, _stdout, _stderr = _common._run_json_command_streaming(
+            [sys.executable, "-c", "import json; print(json.dumps({'ok': 1}))"],
+        )
+        self.assertEqual(returncode, 0)
+        self.assertEqual(payload, {"ok": 1})
+
+    def test_call_serve_start_bounds_subprocess_by_health_timeout(self):
+        cfg = _common.BenchConfig(session_id="s", model="/m", health_timeout=1200)
+        with mock.patch.object(
+            _common, "_run_json_command_streaming",
+            return_value=(0, {"status": "ready"}, '{"status": "ready"}', ""),
+        ) as m:
+            _common.call_serve_start(cfg)
+        self.assertEqual(
+            m.call_args.kwargs["timeout"],
+            1200 + _common._SERVE_START_TIMEOUT_MARGIN,
+        )
+
+    def test_call_serve_start_timeout_falls_back_to_serving_default(self):
+        cfg = _common.BenchConfig(session_id="s", model="/m")
+        with mock.patch.object(
+            _common, "_run_json_command_streaming",
+            return_value=(0, {"status": "ready"}, '{"status": "ready"}', ""),
+        ) as m:
+            _common.call_serve_start(cfg)
+        self.assertEqual(
+            m.call_args.kwargs["timeout"],
+            _common._SERVE_START_DEFAULT_HEALTH_TIMEOUT
+            + _common._SERVE_START_TIMEOUT_MARGIN,
+        )
+
+
+class WarmupValidationTests(unittest.TestCase):
+    def test_bench_run_rejects_warmup_ge_runs(self):
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit) as cm:
+            bench_run.main(["--model", "/m", "--runs", "2", "--warmup-runs", "2"])
+        self.assertEqual(cm.exception.code, 2)
+        self.assertIn("must be >= 0 and less than --runs", stderr.getvalue())
+
+    def test_bench_run_accepts_valid_warmup(self):
+        # warmup < runs passes validation; the run then proceeds past argument
+        # handling (assemble_config is mocked to stop before any remote work).
+        try:
+            with mock.patch.object(
+                bench_run, "assemble_config", side_effect=RuntimeError("stop here")
+            ), contextlib.redirect_stdout(io.StringIO()), \
+                    contextlib.redirect_stderr(io.StringIO()):
+                rc = bench_run.main(["--model", "/m", "--runs", "2", "--warmup-runs", "1"])
+        except SystemExit:
+            self.fail("valid --warmup-runs must not trigger parser.error")
+        self.assertEqual(rc, 2)
+
+    def test_bench_compare_rejects_warmup_ge_runs(self):
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit) as cm:
+            bench_compare.main([
+                "--model", "/m", "--state", "a=aaa",
+                "--runs", "1", "--warmup-runs", "1",
+            ])
+        self.assertEqual(cm.exception.code, 2)
+        self.assertIn("must be >= 0 and less than --runs", stderr.getvalue())
+
+    def test_bench_compare_rejects_negative_warmup(self):
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit) as cm:
+            bench_compare.main([
+                "--model", "/m", "--state", "a=aaa",
+                "--runs", "3", "--warmup-runs", "-1",
+            ])
+        self.assertEqual(cm.exception.code, 2)
+        self.assertIn("must be >= 0 and less than --runs", stderr.getvalue())
+
+    def test_allow_stale_native_help_covers_unavailable_digest(self):
+        parser = bench_compare.build_parser()
+        action = next(
+            a for a in parser._actions if "--allow-stale-native" in a.option_strings
+        )
+        self.assertIn("digest", action.help)
+        self.assertIn("unavailable", action.help)
+
+
 class RemoteHelperTests(unittest.TestCase):
     def test_native_input_digest_parses_remote_output(self):
         proc = subprocess.CompletedProcess(
@@ -275,6 +438,18 @@ class RemoteHelperTests(unittest.TestCase):
         script = m.call_args[0][2]
         self.assertIn("git ls-files", script)
         self.assertIn("csrc", script)
+
+    def test_native_input_digest_covers_untracked_nonignored_files(self):
+        # Untracked (but not gitignored) native sources must move the digest;
+        # ignored build artifacts stay excluded via --exclude-standard.
+        proc = subprocess.CompletedProcess(
+            [], 0, stdout="digest=abc123\nhead=def456\n", stderr="",
+        )
+        with mock.patch.object(_common, "ssh_run_script", return_value=proc) as m:
+            _common.remote_native_input_digest("10.0.0.1", 2222)
+        script = m.call_args[0][2]
+        self.assertIn("--others --exclude-standard", script)
+        self.assertIn("sort -z", script)
 
     def test_prepare_fixed_request_dataset_parses_remote_json(self):
         payload = json.dumps({
@@ -453,6 +628,16 @@ class BenchCompareMainTests(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertNotIn("native_input_changed", out)
         self.assertEqual(out["warnings"], [])
+
+    def test_final_result_includes_config_summary(self):
+        rc, out, _ = self._run_main(
+            ["--state", "baseline=aaa"],
+            [{"status": "ok", "digest": "d1", "head": "h1"}],
+        )
+        self.assertEqual(rc, 0, out)
+        # The effective assembled config is traceable even when preset-driven.
+        self.assertEqual(out["config"]["model"], "/m")
+        self.assertEqual(out["config"]["session_id"], "s")
 
     def test_unavailable_native_digest_fails_closed(self):
         rc, out, written = self._run_main(

@@ -73,6 +73,10 @@ def check_shims() -> list[str]:
         errors.append(f"missing Claude skill shim: {missing}")
     for extra in sorted(observed_names - expected_names):
         errors.append(f"extra Claude skill shim: {extra}")
+    for name in sorted(observed_names & expected_names):
+        for path in sorted((CLAUDE_SKILLS / name).iterdir()):
+            if path.name != "SKILL.md":
+                errors.append(f"unexpected file in Claude skill shim {name}: {path.name}")
     for skill_dir in source_skill_dirs():
         target = CLAUDE_SKILLS / skill_dir.name / "SKILL.md"
         if not target.exists():

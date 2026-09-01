@@ -10,7 +10,23 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT / ".agents/lib"), str(ROOT / ".remote-dev")]
 from vaws_agent_session import AgentSessions, CLIENTS, load_context
+from core.result import make_result
 from core.vaws_ops import vaws_call
+
+
+def error_payload(tool: str, *, outcome: str, status: str, error: str) -> dict:
+    """Same result contract as the remote-dev CLI wrappers: errors print a
+    result JSON (never a traceback) and exit non-zero."""
+    result = make_result(
+        tool=tool,
+        target={"kind": "vaws-task"},
+        outcome=outcome,  # type: ignore[arg-type]
+        status=status,
+        summary=f"{tool} {status}.",
+        preview={"stderr": error[-4000:]},
+        extra={"error": error},
+    )
+    return {"text": result["summary"] + "\n" + error + "\n", "result": result}
 
 
 def main():
@@ -37,10 +53,19 @@ def main():
     operation = args.pop("operation")
     if operation == "attach":
         inherited = args["parent_context"] or args["association"]
-        store = AgentSessions(Path(load_context(inherited)["state_dir"])) if inherited else AgentSessions()
-        print(json.dumps(store.attach(**args), ensure_ascii=False))
+        try:
+            store = AgentSessions(Path(load_context(inherited)["state_dir"])) if inherited else AgentSessions()
+            payload = store.attach(**args)
+        except Exception as exc:  # noqa: BLE001
+            print(json.dumps(error_payload("vaws.attach", outcome="failed", status="attach_failed", error=f"{type(exc).__name__}: {exc}"), ensure_ascii=False))
+            return 1
+        print(json.dumps(payload, ensure_ascii=False))
         return 0
-    extra = json.loads(args.pop("json"))
+    try:
+        extra = json.loads(args.pop("json"))
+    except json.JSONDecodeError as exc:
+        print(json.dumps(error_payload("vaws." + operation, outcome="needs_input", status="invalid_json", error=f"invalid --json: {exc}"), ensure_ascii=False))
+        return 1
     # Unset argparse defaults (None) must not silently override --json keys:
     # `--json '{"action":"stop"}'` degraded to a status query otherwise.
     merged = {**extra, **{key: value for key, value in args.items() if value is not None}}

@@ -194,6 +194,35 @@ class SessionRemoveTests(unittest.TestCase):
         )
         self.assertIsNone(result["submodule_deinit"])
 
+    def test_ignored_evidence_files_make_worktree_unclean(self) -> None:
+        # `.vaws-local/` run evidence is Git-ignored; a clean check without
+        # `--ignored` would let `worktree remove` silently destroy it.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+
+            def git(*args: str) -> None:
+                subprocess.run(
+                    ["git", "-C", str(root), *args],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+
+            git("init")
+            git("config", "user.name", "Test")
+            git("config", "user.email", "test@example.invalid")
+            (root / ".gitignore").write_text(".vaws-local/\n", encoding="utf-8")
+            git("add", ".")
+            git("commit", "-m", "base")
+
+            self.assertTrue(session_remove.worktree_is_clean(root))
+
+            evidence = root / ".vaws-local"
+            evidence.mkdir()
+            (evidence / "run-manifest.json").write_text("{}", encoding="utf-8")
+
+            self.assertFalse(session_remove.worktree_is_clean(root))
+
 
 if __name__ == "__main__":
     unittest.main()

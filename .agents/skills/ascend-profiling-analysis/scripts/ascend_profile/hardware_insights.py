@@ -366,13 +366,26 @@ def build_hardware_insights(
     }
 
 
-def _dtype_peak_key(dtype: str) -> str:
+def _dtype_peak_key(dtype: str) -> str | None:
+    """Map a dtype token to the closest available peak field.
+
+    Only fp16/bf16/int8 peaks are recorded in the hardware knowledge base.
+    int4 cubes share the integer TOPS counter family (CANN DtypeMKN shows
+    int4 doubling int8 K, so int8_tops is a conservative lower bound), and
+    fp8/hif8 8-bit float matmuls run at the same 8-bit op rate as int8 on
+    chips that expose them.  Dtypes with no modeled peak return ``None`` so
+    callers can say ``no_peak_for_dtype`` instead of silently assuming fp16.
+    """
     text = str(dtype or "").lower()
-    if "int8" in text or "s8" in text or "u8" in text:
+    if "int8" in text or "s8" in text or "u8" in text or "int4" in text or "u4" in text:
+        return "int8_tops"
+    if "fp8" in text or "float8" in text or "hif8" in text or "e4m3" in text or "e5m2" in text:
         return "int8_tops"
     if "bf16" in text or "bfloat16" in text:
         return "bf16_tflops"
-    return "fp16_tflops"
+    if "fp16" in text or "float16" in text or "half" in text:
+        return "fp16_tflops"
+    return None
 
 
 def peak_flops_per_second(
@@ -390,6 +403,8 @@ def peak_flops_per_second(
     if work_class not in {"matmul", "attention"}:
         return 0.0, "no_peak_for_work_class"
     key = _dtype_peak_key(dtype)
+    if key is None:
+        return 0.0, "no_peak_for_dtype"
     if sustained:
         sustained_key = {
             "fp16_tflops": "fp16_tflops_sustained",

@@ -408,6 +408,8 @@ def is_git_worktree(path: Path) -> bool:
 
 
 def ensure_local_git_identity(repo: Path) -> tuple[str | None, str | None]:
+    # Despite the name this is read-only: it never sets git config, it only
+    # reports the identity (if any) that snapshot commits would record.
     name = git(repo, ['config', '--get', 'user.name'], check=False).stdout.strip() or None
     email = git(repo, ['config', '--get', 'user.email'], check=False).stdout.strip() or None
     return name, email

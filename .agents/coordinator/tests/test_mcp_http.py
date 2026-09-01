@@ -141,6 +141,11 @@ class HttpTests(unittest.IsolatedAsyncioTestCase):
             headers["Origin"] = "https://evil.example"
             self.assertEqual((await http.post(self.url, headers=headers, json={})).status_code, 403)
 
+    async def test_non_http_scopes_never_bypass_authentication(self):
+        app = create_app(self.pool, self.access)
+        with self.assertRaisesRegex(RuntimeError, "websocket"):
+            await app({"type": "websocket"}, None, None)
+
 
 if __name__ == "__main__":
     unittest.main()

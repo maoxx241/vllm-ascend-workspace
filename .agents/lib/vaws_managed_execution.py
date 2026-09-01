@@ -64,8 +64,10 @@ class ManagedExecution:
         return self.managed_advance(job_id) if job["state"] not in JOB_TERMINAL else job
 
     def managed_advance(self, key):
-        with self.lock:
-            with self.transaction() as db:
+        # Per-job lock: remote probes/supervision for one job never block
+        # another job's advancement; the global lock guards only DB sections.
+        with self._entity_lock("job", key):
+            with self.lock, self.transaction() as db:
                 job = self.get(db, "job", key)
                 binding = self.owned(db, "binding", job["binding_id"], job["owner"])
                 runtime = self.get(db, "runtime", binding["runtime_id"])
@@ -191,6 +193,10 @@ class ManagedExecution:
         self.return_runtime(job["owner"], binding["id"])
         # Re-verify the returned runtime before another client can receive it.
         # Cleaning consists only of the owned process family; code/records stay.
+        # This automatic re-registration is verification-equivalent to the
+        # administrator path named by runtime_return: register() re-runs the
+        # same idle-container inspection plus full profile/source verification,
+        # and any failure leaves the runtime quarantined in needs_repair.
         try:
             if not runtime.get("draining"):
                 self.register(runtime["id"], {key: runtime[key] for key in ("host_endpoint", "endpoint", "container_name", "service_ports")})

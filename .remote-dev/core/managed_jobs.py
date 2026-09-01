@@ -117,9 +117,12 @@ def job_status(directory):
     elif result:
         state = result["state"]
     elif (directory / "stop.json").exists():
+        # Only legacy receipts without subreaper supervision reach this branch:
+        # their supervisor could exit on stop without publishing result.json.
+        # A subreaper worker always publishes a result, even for cancellation.
         state = "cancelled"
     else:
-        state = result["state"] if result else "lost_outcome"
+        state = "lost_outcome"
     public = {key: value for key, value in receipt.items() if key != "marker"}
     # A random ownership marker is not a credential. The physical host retains
     # the lease while any marked process is alive, even before NPU initialization.
@@ -290,4 +293,10 @@ if __name__ == "__main__":
     if sys.argv[1] == "--worker":
         worker(Path(sys.argv[2]))
     else:
-        print(json.dumps(control_job(json.loads(sys.argv[1]), WORKER_SOURCE)))
+        worker_source = globals().get("WORKER_SOURCE")
+        if worker_source is None:
+            raise SystemExit(
+                "WORKER_SOURCE is undefined: this entrypoint only works when the "
+                "remote-dev transport wrapper injects it before exec'ing this module"
+            )
+        print(json.dumps(control_job(json.loads(sys.argv[1]), worker_source)))

@@ -156,17 +156,17 @@
 **When** `serve_start.py --devices 0,1,2,3` is called,
 **Then** returns `status=needs_input` with conflict details showing which devices are busy (detected via host-level `npu-smi` with PID and/or HBM threshold).
 
-## A16. NPU probe — auto-select
+## A16. NPU probe — lease-derived devices
 
-**Given** a session base host with 8 NPUs where 0,1 are busy and 2-7 are free,
+**Given** a session with a live lease on NPUs 2,3,4,5,6,7 (all free on the host),
 **When** `serve_start.py --tp 4` (no `--devices`) is called,
-**Then** auto-selects 4 free devices (e.g. `2,3,4,5`) and launches successfully.
+**Then** uses the first 4 devices of the sorted lease (`2,3,4,5`) and launches successfully; free cards outside the lease are never auto-selected.
 
-## A17. NPU probe — not enough free
+## A17. NPU probe — lease smaller than requested parallelism
 
-**Given** a session base host with 2 free NPUs,
+**Given** a session leasing only 2 NPUs,
 **When** `serve_start.py --tp 4` is called,
-**Then** returns `status=needs_input` explaining only 2 NPUs are free.
+**Then** returns `status=needs_input` explaining the session leases 2 NPU devices but the launch needs 4.
 
 ## A18. NPU probe standalone
 

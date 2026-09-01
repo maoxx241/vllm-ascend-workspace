@@ -11,6 +11,7 @@ from .result import make_result, utc_now_iso
 from .ssh_transport import run_remote_python
 
 REMOTE_SEARCH_PY = r'''
+import fnmatch
 import glob as glob_mod
 import json
 import os
@@ -122,11 +123,23 @@ if op == "grep":
         fail("rg_required", "multiline grep requires ripgrep (rg) on the remote host; install rg or drop multiline")
     if type_name:
         fail("rg_required", f"grep fallback cannot honor --type {type_name}; install ripgrep (rg) or use --glob")
+    if glob_pattern and "/" in glob_pattern:
+        # grep --include matches file basenames only; a path-anchored glob
+        # like "src/**/*.py" cannot be honored faithfully.
+        fail("rg_required", f"grep fallback cannot honor path-anchored --glob {glob_pattern}; install ripgrep (rg) or use a basename glob")
     grep_path = shutil.which("grep")
     if not grep_path:
         fail("grep_unavailable", "neither rg nor grep found on the remote host")
     warnings.append("rg not found; used grep -E fallback (POSIX ERE semantics)")
     cmd = [grep_path, "-r", "-E", "-I"]
+    # Align with rg defaults, which skip .git and hidden directories while
+    # descending. grep applies --exclude-dir to the base operand itself, so
+    # skip a pattern that matches the explicitly requested base (rg searches
+    # an explicitly named hidden or .git path).
+    for exclude_dir in (".git", ".*"):
+        if fnmatch.fnmatch(base.name, exclude_dir):
+            continue
+        cmd.append(f"--exclude-dir={exclude_dir}")
     if glob_pattern:
         cmd.append(f"--include={glob_pattern}")
     if output_mode == "files_with_matches":

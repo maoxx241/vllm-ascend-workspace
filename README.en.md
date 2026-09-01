@@ -9,10 +9,11 @@ A composable local development scaffold for working on [vLLM](https://github.com
 See the optional [independent coordination MCP](.agents/coordinator/README.md)
 for prepared-container, environment and native-artifact reuse. It is separate
 from vaws-top and restarts model services against pinned code snapshots.
-The task layer associates one VAWS session with multiple native tool sessions:
+The task layer associates one VAWS task with multiple native tool sessions:
 new native sessions create new tasks, resume keeps the original task, and
-children inherit their parent's task. Actual business worktrees isolate code;
-local development needs no remote resources.
+child agents join their parent's task only through explicit association.
+Actual business worktrees isolate code; local development needs no remote
+resources.
 Three Luna tasks passed overlapping NPU probes, manager restart, and isolated
 edit/restart checks on hosts 153/154. Kimi native MCP, Codex hook review and
 Cursor Agent approval remain open client acceptance gates. These probes do
@@ -133,9 +134,24 @@ When talking to an Agent:
 │   │   ├── ascend-memory-profiling/ # Memory profiling skill
 │   │   ├── ascend-profiling-collection/ # Torch profiler collection skill
 │   │   ├── ascend-profiling-analysis/ # Profiling analysis/report skill
-│   │   └── curate-workspace-knowledge/ # Explicit knowledge curation skill
+│   │   ├── curate-workspace-knowledge/ # Explicit knowledge curation skill
+│   │   ├── vllm-ascend-graph-debug/ # Graph compile/capture/replay diagnosis skill
+│   │   ├── vllm-ascend-correctness-validation/ # Correctness comparison skill
+│   │   ├── vllm-ascend-change-validation/ # Change validation evidence skill
+│   │   ├── vllm-ascend-performance-regression/ # Performance regression A/B skill
+│   │   ├── vllm-ascend-distributed-debug/ # Distributed failure diagnosis skill
+│   │   ├── ascend-operator-debug/ # Single-operator reproducer skill
+│   │   ├── ascend-triton-operator-development/ # Triton operator development/migration skill
+│   │   ├── ascend-triton-kernel-validation/ # Triton kernel correctness matrix skill
+│   │   ├── ascend-triton-kernel-optimization/ # Triton kernel optimization skill
+│   │   ├── ascend-triton-workflow/ # End-to-end Triton orchestration skill
+│   │   └── vllm-ascend-pd-serving/ # PD-disaggregated serving orchestration skill
+│   ├── coordinator/       # Optional shared runtime pool coordinator
+│   ├── hooks/             # Agent session hooks
+│   ├── knowledge/         # Verified workspace knowledge
 │   ├── lib/               # Shared local-state library
-│   └── scripts/           # Shared helper scripts
+│   ├── scripts/           # Shared helper scripts
+│   └── tests/             # Pure-Python regression tests
 ├── .cursor/rules/         # Cursor IDE specific rules
 ├── .trae/                 # TRAE IDE specific rules and skills
 ├── AGENTS.md              # Cross-tool Agent instructions (Agents read this)

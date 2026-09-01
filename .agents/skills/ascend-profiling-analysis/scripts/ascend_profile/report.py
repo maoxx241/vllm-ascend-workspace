@@ -1270,7 +1270,7 @@ def render_report(
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     parser.add_argument("--output", required=True)
     parser.add_argument("--skip-html", action="store_true")
     parser.add_argument(

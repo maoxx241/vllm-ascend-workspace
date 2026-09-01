@@ -24,17 +24,20 @@ The core value of this skill is that all SSH escaping is handled inside `serve_s
 
 1. **resolve-target** — resolve the session from `--session-id` / `--session-file`, or auto-resolve from the nearest `.vaws-local/current-session.json` worktree binding (cwd upward); fail fast if none is found
 2. **lock** — acquire the session serving lock so `start` and `stop` for the same session cannot race
-3. **stop-existing** — if a previous service is recorded for that target, send SIGINT+SIGTERM
-4. **parity-sync** — call `parity_sync.py` (unless `--skip-parity`)
-5. **probe-npus** — check NPU device availability via `npu-smi info`; validate or auto-select devices
-6. **validate** — check model path exists remotely via `test -d` / `test -f`
-7. **allocate-port** — allocate the service port through the session port lease (snapshot listening ports once, lease locally, then recheck the selected port before launch); no ad-hoc free-port scanning
-8. **launch** — build and execute the launch script via SSH
-9. **persist-starting-state** — after PID capture, write serving state with `status=starting`
-10. **probe-health** — poll `GET /health` (HTTP 200)
-11. **probe-models** — poll `GET /v1/models` (non-empty `data` array)
-12. **persist-final-state** — update serving state to `ready` or `started`
-13. **output** — print JSON to stdout
+3. **preflight** — with `--preset`, verify the recipe against the container (vllm version pin, absolute `PYTHONPATH` entries, JSON-valued serve args) before any running service is touched
+4. **lease-gate** — require a nonempty live session NPU lease (`require_session_npu_lease`); an explicit `--devices` must be a lease subset, otherwise the first TP×DP devices of the sorted lease are used
+5. **validate** — check model path exists remotely via `test -d` / `test -f` before touching any running service
+6. **stop-existing** — if a previous service is recorded for that target, send SIGINT+SIGTERM (then SIGKILL if it survives) and wait for its devices to free
+7. **parity-sync** — call `parity_sync.py` (unless `--skip-parity`)
+8. **probe-npus** — check NPU device availability via `npu-smi info` on the host; validate the leased/requested devices against actual occupancy
+9. **allocate-port** — allocate the service port through the session port lease (snapshot listening ports once, lease locally, then recheck the selected port before launch); no ad-hoc free-port scanning
+10. **launch** — build and execute the launch script via SSH; on a failed launch or unparseable PID, a best-effort cleanup (PID file / stdout PID, kill + confirm) runs first and the port lease is released only when no leftover process is confirmed — otherwise the lease is kept and the result is `needs_repair`
+11. **persist-starting-state** — after PID capture, write serving state with `status=starting`
+12. **probe-health** — poll `GET /health` (HTTP 200)
+13. **probe-models** — poll `GET /v1/models` (non-empty `data` array)
+14. **probe-first-token** — one deterministic real request (`temperature 0`) before reporting ready
+15. **persist-final-state** — update serving state to `ready` or `started`
+16. **output** — print JSON to stdout
 
 ## Session targeting
 
@@ -61,10 +64,9 @@ Before launching, the script SSHes to the **bare-metal host** (port 22, via `hos
 
 Device selection logic:
 
-- If `--devices` is explicitly given, those specific devices are validated. If any are occupied, start returns `needs_input` with conflict details.
-- If the session has leased NPU devices and `--devices` is not explicitly given, the launch defaults to the leased devices. If `--devices` is explicitly given, it must be a subset of the session lease.
-- If `--devices` is not given but `--tp` is, the first `tp` free devices are auto-selected. If not enough free devices exist, returns `needs_input`.
-- If neither is given, no device filtering is applied.
+- Managed serving requires a nonempty live NPU lease for the session (`require_session_npu_lease`); an empty or stale lease fails closed with `needs_repair`.
+- If `--devices` is explicitly given, it must be a subset of the session lease; those devices are validated against host occupancy and start returns `needs_input` with conflict details if any are busy.
+- If `--devices` is not given, the launch uses the session's leased devices: the first `tp × dp` entries of the sorted lease (`tp` alone when `dp` is unset, the whole lease when neither is given). If the lease holds fewer devices than `tp × dp`, start returns `needs_input`. Free cards outside the lease are never auto-selected.
 - If the host probe fails or returns malformed data, start fails closed with `status=blocked` and `phase=probe-npus`. Cooperative leases cannot exclude unmanaged host workloads, so the wrapper does not allocate a port or launch a process while occupancy is unknown.
 - On relaunch, inherited `--devices` are re-validated against current availability.
 
@@ -103,6 +105,8 @@ Installation note: parity installs with the HuaweiCloud pip index and handles `n
 ## Extra args escaping
 
 Extra vllm args after `--` are passed to `vllm serve` as individual tokens. Each token is independently `shlex.quote`-wrapped for bash safety. This means JSON values like `--additional-config '{"key":"value"}'` are correctly preserved through the SSH + bash layers — double quotes inside JSON are not consumed.
+
+Tokens written into the `_serve.sh` heredoc (model path, served model name, extra args) must not contain newlines; such values are rejected with `needs_input` before launch, because a literal newline could split the heredoc body or terminate it early.
 
 The args are stored in local state as a flat list of strings. On relaunch, the inherited list is used as-is without re-splitting.
 

@@ -122,19 +122,14 @@ def _config_context_fields(
 
 def _operator_profile(events: Sequence[NormalizedEvent] | None) -> dict[str, Any]:
     if not events:
-        return {"categories": set(), "roles": set(), "names": set(), "category_counts": {}}
+        return {"categories": set(), "roles": set(), "names": set()}
     cats = {cat for event in events for cat in event.op_categories}
     roles = {role for event in events for role in event.op_roles}
     names = {normalized_name_key(event.name_raw) for event in events}
-    category_counts = {
-        category: sum(1 for event in events if category in event.op_categories)
-        for category in cats
-    }
     return {
         "categories": cats,
         "roles": roles,
         "names": names,
-        "category_counts": category_counts,
     }
 
 
@@ -184,27 +179,36 @@ def _event_features(events: Sequence[NormalizedEvent] | None) -> list[str]:
     return _features_from_operator_profile(_operator_profile(events))
 
 
-def _match_catalog_by_model_id(model_id: str | None, models: Sequence[Mapping[str, Any]]) -> Mapping[str, Any] | None:
-    if not model_id:
-        return None
-    target = _norm(model_id)
-    if not target:
-        return None
-    for model in models:
-        if target in _catalog_names(model):
-            return model
-    for model in models:
-        if any(target in name or name in target for name in _catalog_names(model)):
-            return model
-    return None
+def _alias_is_substring_hit(name: str, target: str, raw_target: str) -> bool:
+    """Guard the ``name in target`` fuzzy direction.
+
+    Short normalized aliases such as ``dsa`` or ``gdn`` would otherwise
+    attach to any id that happens to contain those letters.  Require a
+    minimum alias length for plain substring hits; shorter aliases only
+    count when they match a whole token of the raw (un-normalized) id.
+    """
+    if name not in target:
+        return False
+    if len(name) >= 6:
+        return True
+    return name in re.findall(r"[a-z0-9]+", raw_target.lower())
 
 
-def _catalog_matches_by_model_id(model_id: str | None, models: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+def _catalog_matches_by_model_id(
+    model_id: str | None,
+    models: Sequence[Mapping[str, Any]],
+) -> tuple[list[Mapping[str, Any]], str]:
+    """Return ``(matches, kind)`` where kind is ``exact`` or ``fuzzy``.
+
+    Callers must treat fuzzy hits as weaker evidence: a single fuzzy hit is
+    not a high-confidence identification.
+    """
     if not model_id:
-        return []
+        return [], "none"
+    raw_target = str(model_id)
     target = _norm(model_id)
     if not target:
-        return []
+        return [], "none"
     exact: list[Mapping[str, Any]] = []
     fuzzy: list[Mapping[str, Any]] = []
     for model in models:
@@ -212,9 +216,13 @@ def _catalog_matches_by_model_id(model_id: str | None, models: Sequence[Mapping[
         if target in names:
             exact.append(model)
             continue
-        if any(target in name or name in target for name in names):
+        if any(target in name for name in names) or any(
+            _alias_is_substring_hit(name, target, raw_target) for name in names
+        ):
             fuzzy.append(model)
-    return exact or fuzzy
+    if exact:
+        return exact, "exact"
+    return fuzzy, "fuzzy"
 
 
 def _catalog_lookup(models: Sequence[Mapping[str, Any]], value: Any) -> Mapping[str, Any] | None:
@@ -498,25 +506,45 @@ def _append_unique(values: list[str], value: Any) -> None:
     values.append(text)
 
 
+# HF/ModelScope repo ids are exactly ``org/name`` with no whitespace; catalog
+# family display names ("DeepSeek DSA sparse-attention family") must never be
+# turned into real external config requests.
+_HF_REPO_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$")
+_HF_REPO_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+def _is_probable_repo_id(value: Any) -> bool:
+    return bool(_HF_REPO_ID_RE.match(str(value or "").strip()))
+
+
+def _is_probable_repo_name(value: Any) -> bool:
+    return bool(_HF_REPO_NAME_RE.match(str(value or "").strip()))
+
+
 def _repo_id_candidates(model_id: str | None, matched: Mapping[str, Any] | None = None) -> list[str]:
     candidates: list[str] = []
+
+    def add(candidate: Any) -> None:
+        text = str(candidate or "").strip()
+        if _is_probable_repo_id(text):
+            _append_unique(candidates, text)
+
     if matched is not None:
         for item in matched.get("hub_ids") or []:
-            _append_unique(candidates, item)
+            add(item)
         for item in matched.get("aliases") or []:
-            if "/" in str(item):
-                _append_unique(candidates, item)
+            add(item)
     if model_id:
-        _append_unique(candidates, model_id)
+        add(model_id)
         if "/" not in model_id:
             normalized = _norm(model_id)
             if "deepseek" in normalized or normalized.startswith("dsv"):
-                _append_unique(candidates, f"deepseek-ai/{model_id}")
+                add(f"deepseek-ai/{model_id}")
             if "qwen" in normalized:
-                _append_unique(candidates, f"Qwen/{model_id}")
+                add(f"Qwen/{model_id}")
             if "glm" in normalized or "zai" in normalized:
-                _append_unique(candidates, f"zai-org/{model_id}")
-                _append_unique(candidates, f"THUDM/{model_id}")
+                add(f"zai-org/{model_id}")
+                add(f"THUDM/{model_id}")
     return candidates
 
 
@@ -624,7 +652,7 @@ def fetch_external_model_config(
     """
 
     repo_ids = _repo_id_candidates(model_id, matched)
-    if model_id and "/" not in model_id:
+    if model_id and "/" not in model_id and _is_probable_repo_name(model_id):
         for repo_id in _hf_search_model_ids(model_id):
             _append_unique(repo_ids, repo_id)
     attempts: list[dict[str, Any]] = []
@@ -755,7 +783,13 @@ def _single_or_family_context(
     if len(candidate_contexts) == 1:
         return dict(candidate_contexts[0])
     model_names = [str(item.get("model_name") or "") for item in candidate_contexts if item.get("model_name")]
-    expected_layers = sorted({int(item["expected_layers"]) for item in candidate_contexts if item.get("expected_layers")})
+    expected_layers = sorted(
+        {
+            layers
+            for layers in (_i(item.get("expected_layers"), default=0) for item in candidate_contexts)
+            if layers > 0
+        }
+    )
     visible_counts = sorted(
         {
             int(value)
@@ -821,7 +855,16 @@ def resolve_model_context(
     }
 
     if model_config is not None and model_config.is_file():
-        root = json.loads(model_config.read_text(encoding="utf-8"))
+        try:
+            root = json.loads(model_config.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            context["matched_reasons"] = [f"config_parse_error:{model_config}"]
+            context["limitations"] = [f"--model-config is not valid JSON ({model_config}): {exc}"]
+            return context
+        if not isinstance(root, Mapping):
+            context["matched_reasons"] = [f"config_parse_error:{model_config}"]
+            context["limitations"] = [f"--model-config is not a JSON object ({model_config})"]
+            return context
         context.update(
             _config_context_fields(
                 root=root,
@@ -834,7 +877,7 @@ def resolve_model_context(
         return context
 
     if model_id:
-        matches = _catalog_matches_by_model_id(model_id, models)
+        matches, match_kind = _catalog_matches_by_model_id(model_id, models)
         if matches:
             candidate_contexts = _resolve_catalog_model_contexts(
                 model_id=model_id,
@@ -849,6 +892,14 @@ def resolve_model_context(
                 observed_features=observed_features,
             )
             resolved["model_id"] = model_id
+            if match_kind == "fuzzy":
+                # A fuzzy substring hit is weaker evidence than an exact
+                # catalog-name hit; never report it as high confidence.
+                if resolved.get("confidence") == "high":
+                    resolved["confidence"] = "medium"
+                reasons = resolved.setdefault("matched_reasons", [])
+                if isinstance(reasons, list) and "fuzzy_model_id_match" not in reasons:
+                    reasons.append("fuzzy_model_id_match")
             return resolved
 
         structure_features = _user_structure_features(model_id)

@@ -64,9 +64,9 @@ def create_app(pool, access, *, interval=2.0, allowed_hosts=None):
     mcp = MCPServer("vaws-coordinator", lifespan=lifespan,
                     instructions="Reuse prepared runtimes. Stage edits before execution; pin snapshots, preflight and activate each run. Poll events for cooperative messages. Never infer release from a reply or timeout.")
 
-    async def invoke(function, *args):
+    async def invoke(function, *args, **kwargs):
         try:
-            return await asyncio.to_thread(function, *args)
+            return await asyncio.to_thread(function, *args, **kwargs)
         except (ValueError, PermissionError, RuntimeError) as exc:
             raise ToolError(str(exc)) from exc
 
@@ -145,11 +145,11 @@ def create_app(pool, access, *, interval=2.0, allowed_hosts=None):
         return await invoke(pool.managed_control, PRINCIPAL.get(), job_id, action, force)
 
     @mcp.tool()
-    async def execution_reconcile(run_id: str, reason: str) -> dict:
-        """Administrator: force-terminate an uncertain run wedged by lost host state (e.g. a host reboot's new epoch), after inspecting real ownership. Recorded as a durable event; never a substitute for inspection."""
+    async def execution_reconcile(run_id: str, reason: str, evidence: str = "", force_release: bool = False) -> dict:
+        """Administrator: force-terminate an uncertain run wedged by lost host state (e.g. a host reboot's new epoch), after inspecting real ownership. With explicit inspection evidence it also terminates a run wedged by a vanished managed-job directory; force_release additionally clears the host retain guard so the card lease ends. Recorded as a durable event; never a substitute for inspection."""
         if not principals[PRINCIPAL.get()].get("admin", False):
             raise ToolError("execution reconcile requires an administrator")
-        return await invoke(pool.reconcile, PRINCIPAL.get(), run_id, reason)
+        return await invoke(pool.reconcile, PRINCIPAL.get(), run_id, reason, evidence=evidence, force_release=force_release)
 
     @mcp.tool()
     async def coordinator_status() -> dict:
@@ -183,8 +183,12 @@ def create_app(pool, access, *, interval=2.0, allowed_hosts=None):
     app = mcp.streamable_http_app(stateless_http=True, json_response=True, transport_security=security)
 
     async def authenticated(scope, receive, send):
-        if scope["type"] != "http":
+        if scope["type"] == "lifespan":
             return await app(scope, receive, send)
+        if scope["type"] != "http":
+            # The MCP app serves no websocket routes; never let another scope
+            # type bypass bearer authentication.
+            raise RuntimeError("unsupported ASGI scope type: " + scope["type"])
         headers = dict(scope["headers"])
         auth = headers.get(b"authorization", b"")
         token = auth[7:] if auth.startswith(b"Bearer ") else b""

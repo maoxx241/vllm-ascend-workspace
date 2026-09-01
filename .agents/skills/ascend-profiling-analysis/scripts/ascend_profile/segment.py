@@ -1650,18 +1650,6 @@ def model_context_max_anchor_multiplier(model_context: dict[str, Any] | None) ->
     return max(1, min(value, 8))
 
 
-def model_guided_complete_threshold(expected_layers: int | None, visible_counts: Sequence[int] = ()) -> int:
-    # Known model constraints are used as a semantic guard, not as a hard
-    # duration/row-count score.  A complete rank-local body should expose a
-    # substantial fraction of the model layers; tiny MoE/attention phase
-    # fragments such as 1/3/6 observed anchors must stay residual windows.
-    if visible_counts:
-        return max(2, min(visible_counts))
-    if expected_layers is None:
-        return 0
-    return max(2, math.floor(expected_layers * (1.0 - 0.15)))
-
-
 def model_guided_target_layer_count(
     observed_layers: int,
     model_context: dict[str, Any] | None,
@@ -1820,7 +1808,6 @@ def build_model_guided_step_plans(
     visible_counts = model_context_visible_layer_counts(model_context)
     if expected_layers is None and not visible_counts:
         return None
-    threshold = model_guided_complete_threshold(expected_layers, visible_counts)
     tolerance = model_context_complete_layer_tolerance(model_context)
     plans: list[StepPlan] = []
     complete_indexes: list[int] = []
@@ -1841,7 +1828,6 @@ def build_model_guided_step_plans(
                         f"profile_visible_layers={list(visible_counts)},"
                         f"target_layers={target_layers},"
                         f"observed_layers={len(frame.layers)},"
-                        f"threshold={threshold},"
                         f"tolerance={tolerance}"
                     ),
                 )
@@ -1858,7 +1844,6 @@ def build_model_guided_step_plans(
                     f"expected_layers={expected_layers},"
                     f"profile_visible_layers={list(visible_counts)},"
                     f"observed_layers={len(frame.layers)},"
-                    f"threshold={threshold},"
                     f"tolerance={tolerance}"
                 ),
                 segment_type="partial_body_window",
@@ -1897,7 +1882,6 @@ def build_model_guided_step_plans(
         "selection_evidence": model_context.get("selection_evidence") if model_context else None,
         "expected_layers": expected_layers,
         "profile_visible_layer_counts": list(visible_counts),
-        "complete_threshold": threshold,
         "complete_layer_tolerance": tolerance,
         "max_anchor_multiplier": model_context_max_anchor_multiplier(model_context),
         "input_frame_count": len(frames),
@@ -3526,7 +3510,7 @@ def segment_profile(
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     parser.add_argument("--output", required=True, help="analysis output directory containing normalized_event_index.jsonl/csv")
     parser.add_argument("--model-id", help="optional model id/name used for model-guided segmentation")
     parser.add_argument("--model-config", help="optional config.json path used for model-guided segmentation")

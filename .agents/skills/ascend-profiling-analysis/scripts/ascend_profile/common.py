@@ -33,8 +33,10 @@ _DTYPE_BYTES: dict[str, float] = {
     "S8": 1.0,
     "FP8": 1.0,
     "FLOAT8": 1.0,
-    "FLOAT8_E4M3FN": 1.0,
-    "FLOAT8_E5M2": 1.0,
+    # dtype_bytes() strips underscores before lookup, so the keys must be the
+    # normalized spellings (the FP8/FLOAT8 keys above are the fallback).
+    "FLOAT8E4M3FN": 1.0,
+    "FLOAT8E5M2": 1.0,
     "UINT16": 2.0,
     "INT16": 2.0,
     "FP16": 2.0,
@@ -580,9 +582,11 @@ def estimate_attention_flops(
 def estimate_vector_flops(task_type: str, name: str, shapes: Sequence[Sequence[int]]) -> float | None:
     token = fold_text(f"{task_type} {name}").upper()
     factor: float | None = None
-    for key, value in _VECTOR_FLOPS_PER_ELEM.items():
+    # Match longer (more specific) keys first: "ADDRMSNORM" contains both
+    # "ADD" and "RMSNORM", and insertion order must not decide the outcome.
+    for key in sorted(_VECTOR_FLOPS_PER_ELEM, key=len, reverse=True):
         if key in token:
-            factor = value
+            factor = _VECTOR_FLOPS_PER_ELEM[key]
             break
     if factor is None:
         factor = 1.0

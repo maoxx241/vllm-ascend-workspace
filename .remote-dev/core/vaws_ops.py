@@ -40,6 +40,11 @@ def vaws_call(name, args):
         else:
             raise ValueError("unknown VAWS operation")
         outcome = "blocked" if status in {"uncertain", "waiting_for_runtime"} else "failed" if status == "failed" else "timeout" if status == "timeout" else "success"
+        if name == "vaws.finish" and outcome == "success" and status != "finished":
+            # finish only completes in the terminal "finished" state; states
+            # like "finishing" mean executions are still stopping, which must
+            # not read as a successful finish.
+            outcome = "blocked"
         result = make_result(tool=name, target=target, outcome=outcome, status=status,
                              summary="VAWS " + status.replace("_", " "),
                              duration_ms=int((time.monotonic() - started) * 1000), extra={"data": value})

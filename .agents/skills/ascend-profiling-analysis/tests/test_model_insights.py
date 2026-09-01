@@ -191,3 +191,47 @@ def test_model_parameter_estimate_honors_decoder_sparse_step_and_mlp_only_layers
     # Qwen-style sparse layers are 1, 3, 5; layer 3 is explicitly dense.
     assert rows["moe_routed_experts"]["params"] == 2 * 4 * 3 * 1024 * 512
     assert rows["dense_swiglu_ffn"]["params"] == 4 * 3 * 1024 * 2048
+
+
+def test_model_config_insights_handles_broken_json(tmp_path) -> None:
+    path = tmp_path / "config.json"
+    path.write_text("{ not valid json", encoding="utf-8")
+
+    insights = model_config_insights(path)
+
+    assert insights["available"] is False
+    assert "not valid JSON" in insights["reason"]
+    assert insights["parameter_rows"] == []
+
+
+def test_model_config_insights_handles_non_object_json(tmp_path) -> None:
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps([1, 2, 3]), encoding="utf-8")
+
+    insights = model_config_insights(path)
+
+    assert insights["available"] is False
+    assert "not a JSON object" in insights["reason"]
+
+
+def test_kv_cache_estimate_falls_back_to_torch_dtype(tmp_path) -> None:
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps(
+            {
+                "model_type": "toy",
+                "hidden_size": 128,
+                "num_attention_heads": 4,
+                "num_key_value_heads": 2,
+                "num_hidden_layers": 2,
+                "torch_dtype": "float32",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    insights = model_config_insights(path)
+    full = next(row for row in insights["kv_cache_rows"] if row["cache_type"] == "full_gqa_or_mha")
+
+    # 2 kv heads * 32 head_dim * 2 (K+V) * 4 bytes (float32 via torch_dtype).
+    assert full["bytes_per_token_per_layer"] == 512.0

@@ -1589,7 +1589,7 @@ def summarize_profile(
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     parser.add_argument("--output", required=True)
     parser.add_argument("--model-id", help="optional user-supplied model id/name for report context")
     parser.add_argument("--model-config", help="optional config.json path available on this analysis host")

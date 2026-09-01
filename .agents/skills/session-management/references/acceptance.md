@@ -40,6 +40,9 @@
 - `parity_sync.py --session-id s1` derives `workspace_id=s1` and `container_identity=<s1-container>@<runtime-root>`.
 - `session_remove.py --remove-container --release-leases` can skip `serve_stop.py` when no session serving state exists and still release leases after the container is removed or the stop result is `not_found`.
 - `session_remove.py --remove-worktree` deinitializes populated submodules before asking Git to remove the worktree.
+- `session_remove.py --remove-worktree` without `--force` refuses to remove a worktree that has local changes or ignored files (e.g. `.vaws-local/` run evidence); `--force` discards them explicitly.
+- `session_create.py --reuse-existing` probes the session container SSH endpoint and reports `needs_repair` unless the probe confirms the container is alive; an inconclusive probe never surfaces the stored `ready` status.
+- `session_create.py --reuse-existing` never releases the existing session's leases: local probe failures are treated as inconclusive, and lease rollback only covers leases allocated by the current run.
 - `session_remove.py` returns `needs_repair` instead of `removed` when requested container or worktree removal fails.
 - An exception during remote cleanup marks the Session `needs_repair` and keeps its leases.
 - `session_gc.py` does not release leases for generic `failed` sessions.
@@ -47,7 +50,7 @@
 - Worktree creation puts every initialized submodule (`vllm/`, `vllm-ascend/`) on branch `session/<id>` (not detached HEAD) and records `{path, branch, base_commit}` under `local.submodule_branches`.
 - Consumer commands (parity, serving, benchmark, profiling-collection, memory-profiling, profiling-analysis) auto-resolve the session from the cwd worktree binding, so `--session-id` is optional when running from inside the worktree.
 - `session_diff.py` with no target args auto-binds from the cwd worktree, and `--session-id` / `--session-file` select a session explicitly. Its stdout JSON reports `status`, `session_id`, `worktree_root`, `branch`, `base_ref`, `has_changes`, a `scaffold` object, and a `submodules[]` array (with `skipped` for uninitialized submodules); `--stat` adds `diffstat` text. The scaffold base is `base_ref`; each submodule base is its recorded `base_commit`, falling back to the gitlink at `base_ref`.
-- Domain skill entry points reject `--machine`; the only remaining `--machine` surfaces are `session_create.py` (base machine selection) and machine-management registration/verification.
+- Domain skill session entry points resolve their target from the cwd worktree binding (or `--session-id` / `--session-file`) rather than `--machine`; the remaining `--machine` surfaces are `session_create.py` (base machine selection), machine-management registration/verification, and the compatibility/probe entry points `parity_sync.py`, `serve_probe_npus.py`, and `npu_coordination.py`.
 - A session group requires at least two unique ready sessions.
 - Group creation fails when live workspace or recursive submodule snapshots differ.
 - Dirty snapshots include a content digest of tracked changes, untracked files,

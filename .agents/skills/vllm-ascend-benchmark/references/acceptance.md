@@ -26,7 +26,7 @@
 - [ ] `aggregated` contains `count`, and per-metric `mean`, `stddev`, `values`.
 - [ ] `per_run` lists all runs with `run` number and `warmup` boolean.
 - [ ] If a run fails mid-sequence, service is stopped and `completed_runs` are reported.
-- [ ] `--warmup-runs` is clamped to at most `--runs - 1`.
+- [ ] `--warmup-runs` >= `--runs` (or a negative value) is rejected with a parser error (exit 2); it must be less than `--runs`.
 
 ## Progress reporting
 

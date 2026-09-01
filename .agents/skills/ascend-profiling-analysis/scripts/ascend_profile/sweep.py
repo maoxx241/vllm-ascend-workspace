@@ -389,7 +389,7 @@ def sweep_roots(
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     parser.add_argument("--search-root", action="append", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--limit", type=int)

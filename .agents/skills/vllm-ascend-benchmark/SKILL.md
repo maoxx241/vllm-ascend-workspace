@@ -36,7 +36,7 @@ compatibility backend for managed VAWS sessions.
 - If service startup returns a non-ready result after launching a PID, benchmark cleanup still calls `serve_stop.py --force` for the same session.
 - Progress goes to `stderr` as `__VAWS_BENCHMARK_PROGRESS__=<json>`. Final result goes to `stdout` as JSON.
 - Keep local benchmark state under `.vaws-local/sessions/<session-id>/benchmark/`; results are written to `.vaws-local/sessions/<session-id>/benchmark/runs/`.
-- **Multi-state comparisons** (baseline vs PR vs modified) are a first-class workflow: use `bench_compare.py`, which checks out each git ref *in the container*, benchmarks every state with identical serve/bench args, and reports TPOT/throughput deltas. Do not hand-write a bespoke comparison script — put reusable model/service configurations into a named preset under `presets/` instead (see below). The old bespoke `.agents/scripts/dsv4_flash_benchmark.py` was deleted; `presets/dsv4-flash.json` carries its DSV4 Flash configuration, with the two loader args adapted for vllm ≥ 0.26 (`enable_multithread_load` as a JSON boolean, no `safetensors-load-strategy prefetch` — verified on real A3 hardware).
+- **Multi-state comparisons** (baseline vs PR vs modified) are a first-class workflow: use `bench_compare.py`, which checks out each git ref *in the container*, benchmarks every state with identical serve/bench args, and reports TPOT/throughput deltas. Do not hand-write a bespoke comparison script — put reusable model/service configurations into a named preset under `presets/` instead (see below). The old bespoke `.agents/scripts/dsv4_flash_benchmark.py` was deleted; `presets/dsv4-flash.json` carries its DSV4 Flash configuration, with the two loader args adapted (`enable_multithread_load` as a JSON boolean; the old `--safetensors-load-strategy prefetch` was dropped in favor of multithreaded loading — the flag still exists at the pinned vllm ref 967c5c3b, so this is a deliberate replacement, not an upstream removal — verified on real A3 hardware). Note `bench_compare.py` runs back-to-back iterations with no inter-run sleep (the old script slept 15s between rounds), so absolute numbers are not directly comparable to historical bespoke-script results.
 - **Native-input gate.** `bench_compare.py` aligns source only and never rebuilds compiled custom ops. After each state's checkout and optional `--remote-patch-file` application, it fingerprints the effective in-container `csrc`/`cmake`/requirements inputs and compares the digest against the first state's. A mismatch fails the run with an explanation. An unavailable digest also fails closed. Pass `--allow-stale-native` only to explicitly downgrade either condition to a loud warning plus `native_input_changed: true` or `native_input_unverified: true`.
 - **Partial results are never lost.** Each completed state is persisted under the session's `benchmark/runs/` dir as it finishes; on any failure the error JSON still carries `partial_states` (completed labels) and `result_paths`.
 - **Never hand-roll stale-process cleanup.** A past bespoke cleanup SIGTERM'd a session's dedicated sshd (`Exiting on signal 15`), dropped the container SSH port, and forced a rebuild. Use `--stale-cleanup` (backed by `safe_stale_cleanup`), which only reaps vLLM `EngineCore`/`Worker` children by name, skips PID 1, excludes anything matching `sshd`/`vaws`, and kills explicit pids only (never a process group).
@@ -148,7 +148,7 @@ Single-run output (`--runs 1`, the default):
     "output_throughput": 1234.5,
     "mean_tpot_ms": 12.3,
     "mean_ttft_ms": 45.6,
-    "acceptance_rate": 0.85
+    "spec_decode_acceptance_rate": 0.85
   },
   "config": { "tp": 4, "serve_args": [...], "bench_args": [...], "env": {...} }
 }
@@ -167,7 +167,7 @@ Multi-run output (`--runs N` where N > 1):
     "count": 4,
     "output_throughput": { "mean": 165.2, "stddev": 2.1, "values": [163.5, 165.1, 166.8, 165.4] },
     "mean_ttft_ms": { "mean": 1020.5, "stddev": 15.3, "values": [...] },
-    "acceptance_rate": { "mean": 0.572, "stddev": 0.01, "values": [...] }
+    "spec_decode_acceptance_rate": { "mean": 0.572, "stddev": 0.01, "values": [...] }
   },
   "per_run": [
     { "run": 1, "warmup": true, "metrics": {...} },
@@ -226,8 +226,9 @@ Extra flags beyond `bench_run.py`:
 - `--allow-stale-native`: downgrade the native-input gate failure to a warning (see Critical rules).
 
 Output is a single JSON object with `comparison` (per-state, per-case mean TPOT,
-throughput, acceptance rate, and `delta_tpot_pct_vs_first`) plus full
-`state_results`, `preset`, `warnings`, `result_paths`, and `fixed_dataset`.
+throughput, spec-decode acceptance rate, and `delta_tpot_pct_vs_first`) plus full
+`state_results`, the effective `config` summary (so preset-driven serve/bench
+args stay traceable), `preset`, `warnings`, `result_paths`, and `fixed_dataset`.
 `--stale-cleanup` runs the SAFE cleanup before/after each state. Every
 completed state is persisted under the session's `benchmark/runs/` dir as it
 finishes; a failure still prints `partial_states` and `result_paths`.

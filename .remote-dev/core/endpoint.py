@@ -158,8 +158,10 @@ def resolve_endpoint(payload: dict[str, Any]) -> Endpoint:
     if payload.get("session_id") or payload.get("session_file") or payload.get("machine"):
         return _endpoint_from_managed(payload)
     # No explicit target: auto-bind to the session of the nearest worktree
-    # binding (cwd upward). This is what lets `remote.bash` run zero-config
-    # inside a session worktree.
+    # binding. The cwd-upward walk is bounded at repo_root() (see
+    # vaws_session_id.find_session_binding), so a stale binding above the
+    # repository cannot silently redirect selector-less calls. This is what
+    # lets `remote.bash` run zero-config inside a session worktree.
     try:
         return _endpoint_from_managed(payload)
     except EndpointError as exc:

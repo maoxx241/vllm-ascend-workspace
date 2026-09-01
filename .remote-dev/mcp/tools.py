@@ -46,7 +46,7 @@ def list_tools() -> list[dict[str, Any]]:
         "remote.multi_edit": "Apply multiple exact edits atomically to one remote file.",
         "remote.bash": "Run a remote shell command with Bash-like semantics, logs, preview, and optional background job.",
         "remote.glob": "Find remote paths with ** glob semantics.",
-        "remote.grep": "Search remote files with rg-compatible semantics and Python fallback.",
+        "remote.grep": "Search remote files with rg-compatible semantics and a grep -E (POSIX ERE) fallback.",
         "remote.ls": "List a remote directory without reading file contents.",
         "remote.monitor": "Start a background remote command for monitoring.",
         "remote.apply_patch": "Apply a Codex apply_patch payload or unified diff on a remote endpoint.",

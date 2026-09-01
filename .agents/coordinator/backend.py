@@ -98,7 +98,13 @@ print(json.dumps({'pid':matches[0]}))
         result = remote_bash(resolve_endpoint(target), command=command, timeout_ms=45000,
                              runtime_env=False)["result"]
         if result["outcome"] != "success":
-            raise RuntimeError("runtime probe failed; see remote-dev state logs")
+            # The command itself may embed job environment, so the error
+            # carries only the outcome and a bounded stderr tail; full logs
+            # stay in the referenced remote-dev state files.
+            refs = result.get("refs") or {}
+            stderr = Path(refs["stderr"]).read_text(errors="replace")[-300:].strip() if refs.get("stderr") else ""
+            raise RuntimeError(f"runtime probe failed ({result['outcome']}/{result.get('status')}, "
+                               f"exit {result.get('exit_code')}): {stderr or 'no stderr'}")
         return Path(result["refs"]["stdout"]).read_text()
 
     def inspect(self, runtime, *, idle=False, snapshots=None):

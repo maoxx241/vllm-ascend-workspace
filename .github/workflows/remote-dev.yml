@@ -42,15 +42,9 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - name: Test portable MCP schemas, dispatch, and remote safety
-        env:
-          PYTHONPATH: .remote-dev/tests
-        # Skill catalog/shim freshness is separate from the MCP contract.
-        # Temporary files and bounded Linux process checks; no SSH/NPU access.
-        # The whole test_cli_help module runs so new CLI/shim freshness tests
-        # cannot silently lack a CI entry again.
-        run: >-
-          python -B -m unittest -v
-          test_mcp_schema test_patch_ops test_endpoint test_path_policy
-          test_remote_edit test_remote_write test_remote_read test_artifacts
-          test_hook_guard test_managed_jobs
-          test_cli_help
+        # Discovery runs every module in .remote-dev/tests so new tests (CLI
+        # freshness, grep fallback semantics, mux, auto-bind, job lifecycle)
+        # cannot silently lack a CI entry again. Each test module puts the
+        # substrate on sys.path itself. Temporary files and bounded Linux
+        # process checks; no SSH/NPU access; Linux-only modules self-skip.
+        run: python -B -m unittest discover -s .remote-dev/tests

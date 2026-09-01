@@ -30,6 +30,13 @@ NIGHTLY_CONFIGS_DIR = (
 PRESETS_DIR = ROOT / ".agents" / "skills" / "vllm-ascend-benchmark" / "presets"
 PROGRESS_SENTINEL = "__VAWS_BENCHMARK_PROGRESS__="
 
+# Mirrors serve_start.py's DEFAULT_HEALTH_TIMEOUT; used to bound the
+# serve_start subprocess when the config does not pin an explicit timeout.
+_SERVE_START_DEFAULT_HEALTH_TIMEOUT = 300
+# Subprocess budget beyond the readiness wait: covers parity sync, remote
+# process spawn and the final state/JSON write after the service is ready.
+_SERVE_START_TIMEOUT_MARGIN = 300
+
 
 # ---------------------------------------------------------------------------
 # Progress / output helpers
@@ -89,7 +96,14 @@ def _run_json_command_streaming(
     cmd: list[str],
     *,
     progress_markers: tuple[str, ...] = (),
+    timeout: float | None = None,
 ) -> tuple[int, dict[str, Any] | None, str, str]:
+    """Run a JSON-emitting subprocess, relaying matching stderr lines live.
+
+    When ``timeout`` (seconds) is set, a watchdog kills the child once it
+    elapses; the call then returns returncode 124 with a timeout note appended
+    to stderr and no parsed payload (partial stdout is not trusted).
+    """
     proc = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
@@ -98,6 +112,7 @@ def _run_json_command_streaming(
         cwd=str(ROOT),
     )
     stderr_lines: list[str] = []
+    timed_out = False
 
     def relay_stderr() -> None:
         assert proc.stderr is not None
@@ -107,13 +122,31 @@ def _run_json_command_streaming(
                 sys.stderr.write(line)
                 sys.stderr.flush()
 
+    def kill_on_timeout() -> None:
+        nonlocal timed_out
+        timed_out = True
+        proc.kill()
+
     thread = threading.Thread(target=relay_stderr, daemon=True)
     thread.start()
+    watchdog = threading.Timer(timeout, kill_on_timeout) if timeout is not None else None
+    if watchdog is not None:
+        watchdog.daemon = True
+        watchdog.start()
     assert proc.stdout is not None
     stdout = proc.stdout.read()
     returncode = proc.wait()
+    if watchdog is not None:
+        watchdog.cancel()
     thread.join(timeout=1)
     stderr = "".join(stderr_lines)
+    if timed_out:
+        returncode = 124
+        stderr += (
+            f"\ncommand timed out after {timeout}s and was killed: "
+            f"{' '.join(str(c) for c in cmd[:3])} ...\n"
+        )
+        return returncode, None, stdout, stderr
     payload = None
     if stdout.strip():
         try:
@@ -544,14 +577,26 @@ def assemble_config(
 # ---------------------------------------------------------------------------
 
 def call_serve_start(config: BenchConfig) -> dict[str, Any]:
-    """Call serve_start.py and return its JSON output."""
+    """Call serve_start.py and return its JSON output.
+
+    The subprocess is bounded by the effective health timeout (config value,
+    else serve_start.py's default) plus ``_SERVE_START_TIMEOUT_MARGIN`` for
+    parity sync, remote spawn and the final state write; on timeout the
+    raised error carries the watchdog note from ``_run_json_command_streaming``.
+    """
     script = str(SERVING_SCRIPTS / "serve_start.py")
     cmd = [sys.executable, script] + config.to_serve_start_args()
 
+    health_timeout = (
+        config.health_timeout
+        if config.health_timeout is not None
+        else _SERVE_START_DEFAULT_HEALTH_TIMEOUT
+    )
     emit_progress("serve_start", f"starting service: {config.model}")
     returncode, data, stdout, stderr = _run_json_command_streaming(
         cmd,
         progress_markers=("__VAWS_SERVING_PROGRESS__=", "__VAWS_PARITY_PROGRESS__="),
+        timeout=health_timeout + _SERVE_START_TIMEOUT_MARGIN,
     )
 
     if not stdout.strip():
@@ -804,18 +849,23 @@ def remote_native_input_digest(
 
     Source alignment never rebuilds custom ops, so when csrc/cmake/
     requirements change between states the compiled artifacts are stale.
-    The digest over ``csrc``, ``cmake``, ``CMakeLists.txt``, ``pyproject.toml``
-    and the requirements files lets callers detect that situation. Missing
-    paths are tolerated: the digest is the sha256 of an empty file list only
-    when there are genuinely no tracked native inputs.
+    The digest covers ``csrc``, ``cmake``, ``CMakeLists.txt``,
+    ``pyproject.toml`` and the requirements files — both tracked files and
+    untracked-but-not-ignored ones (``git ls-files --others
+    --exclude-standard``), so an uncommitted new source file still changes
+    the fingerprint while ignored build artifacts (``build/`` etc.) stay
+    excluded. Missing paths are tolerated: the digest is the sha256 of an
+    empty file list only when there are genuinely no native inputs.
     """
     import shlex
 
+    native_paths = "csrc cmake CMakeLists.txt pyproject.toml requirements.txt requirements"
     remote_script = "\n".join([
         "set -uo pipefail",
         f"cd {shlex.quote(repo_dir)} || exit 1",
-        "digest=$(git ls-files -z csrc cmake CMakeLists.txt pyproject.toml"
-        " requirements.txt requirements 2>/dev/null"
+        f"digest=$({{ git ls-files -z -- {native_paths};"
+        f" git ls-files -z --others --exclude-standard -- {native_paths}; }}"
+        " 2>/dev/null | sort -z"
         " | xargs -0 -r sha256sum 2>/dev/null | sha256sum | awk '{print $1}')",
         "head=$(git rev-parse HEAD 2>/dev/null || true)",
         'printf "digest=%s\\nhead=%s\\n" "${digest:-}" "${head:-}"',
@@ -1125,13 +1175,20 @@ def _last_json_line(stdout: str) -> dict[str, Any] | None:
 # ---------------------------------------------------------------------------
 
 def extract_metrics(raw_result: dict[str, Any]) -> dict[str, Any]:
-    """Extract key metrics from vllm bench serve result JSON."""
+    """Extract key metrics from vllm bench serve result JSON.
+
+    Keys mirror the real ``--save-result`` output (vllm/benchmarks/serve.py:
+    the result dict plus the spec-decode and percentile-metric blocks). Note
+    the totals are ``total_input_tokens`` / ``total_output_tokens`` and the
+    spec-decode acceptance metric is ``spec_decode_acceptance_rate``; a bare
+    ``acceptance_rate`` key has never existed in the result JSON.
+    """
     metrics: dict[str, Any] = {}
 
-    for key in ("output_throughput", "mean_tpot_ms", "mean_ttft_ms",
-                "median_tpot_ms", "median_ttft_ms", "acceptance_rate",
+    for key in ("output_throughput", "total_token_throughput", "mean_tpot_ms",
+                "mean_ttft_ms", "median_tpot_ms", "median_ttft_ms",
                 "spec_decode_acceptance_rate", "p99_tpot_ms", "p99_ttft_ms",
-                "total_input", "total_output", "request_throughput",
+                "total_input_tokens", "total_output_tokens", "request_throughput",
                 "mean_e2el_ms", "median_e2el_ms"):
         if key in raw_result:
             val = raw_result[key]

@@ -213,7 +213,16 @@ def parse_npu_smi_info(output: str) -> dict[str, Any]:
             # the device table is the allocation identity, not the NPU index.
             if len(columns) >= 3 and re.fullmatch(r"\d+(?:\s+\d+)?", columns[0]):
                 identity = [int(value) for value in columns[0].split()]
-                device = chip_devices.get(tuple(identity)) if len(identity) == 2 else identity[0]
+                if len(identity) == 2:
+                    device = chip_devices.get(tuple(identity))
+                elif chip_devices:
+                    # A parsed (NPU, Chip) -> Phy-ID table means a multi-chip
+                    # layout. A lone column is then an NPU index, not a phy-id;
+                    # guessing would attach the process to the wrong device and
+                    # report the real one as free. Fail closed instead.
+                    device = None
+                else:
+                    device = identity[0]
                 if device not in dev_ids or not columns[1].isdigit() or not columns[2]:
                     process_error = "npu-smi process row has an unknown device or invalid PID/name"
                     break

@@ -22,6 +22,10 @@ from vaws_agent_session import CLIENTS
 
 EVENTS = ("SessionStart", "SessionEnd", "SubagentStart", "SubagentStop", "PreToolUse", "UserPromptSubmit")
 
+# The hook performs up to two `git rev-parse` calls with a 5s timeout each
+# (vaws_agent_session.worktree_reference); a 3s budget would kill a healthy hook.
+HOOK_TIMEOUT_SECONDS = 12
+
 
 def hook_groups(client, project):
     command = shlex.join([sys.executable, str(ROOT / ".agents/hooks/vaws_session.py"),
@@ -29,7 +33,8 @@ def hook_groups(client, project):
     if client == "cursor":
         return {event[0].lower() + event[1:]: [{"command": command}]
                 for event in EVENTS if event not in {"PreToolUse", "UserPromptSubmit"}}
-    return {event: [{"hooks": [{"type": "command", "command": command, "timeout": 3}]}] for event in EVENTS}
+    return {event: [{"hooks": [{"type": "command", "command": command, "timeout": HOOK_TIMEOUT_SECONDS}]}]
+            for event in EVENTS}
 
 
 def merge_json(path, *, hooks=None, mcp=False):
@@ -90,8 +95,8 @@ def configuration(client, project, *, kimi_config=None):
     if client == "kimi":
         path = kimi_config or Path(os.environ.get("KIMI_CODE_HOME", str(Path.home() / ".kimi-code"))) / "config.toml"
         command = groups["SessionStart"][0]["hooks"][0]["command"]
-        body = "\n".join("[[hooks]]\nevent = " + json.dumps(event) + "\ncommand = " + json.dumps(command) + "\ntimeout = 3\n"
-                         for event in EVENTS)
+        body = "\n".join("[[hooks]]\nevent = " + json.dumps(event) + "\ncommand = " + json.dumps(command) +
+                         "\ntimeout = " + str(HOOK_TIMEOUT_SECONDS) + "\n" for event in EVENTS)
         project_key = hashlib.sha256(str(project).encode()).hexdigest()[:16]
         files[path] = managed_toml(path, "session-" + project_key, body)
     return files

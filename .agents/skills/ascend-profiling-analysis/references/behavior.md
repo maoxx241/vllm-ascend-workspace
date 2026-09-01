@@ -170,7 +170,11 @@ early model resolver enumerates the concrete variants registered in
 only a concrete candidate whose public/local config or validated
 profile-visible layer hint matches the current profile.  Quantization and data
 format suffixes are ignored for structure selection and remain dtype/weight
-metadata only.
+metadata only.  Substring (non-exact) catalog hits are weaker evidence and are
+capped at `medium` confidence; only an exact catalog-name match can report
+`high`.  External `config.json` fetches are skipped for candidates that are
+not plausible `org/name` repo ids, so family display names never turn into
+real Hugging Face / ModelScope requests.
 
 The early resolver has two fast knowledge paths before any statistical
 fallback:
@@ -216,7 +220,10 @@ Current measured knowledge includes Ascend910B4 / A2 32G from remote 131:
 - INT8 `npu_quant_matmul` sustained factor: `0.65`.
 
 MFU denominators use theoretical peak. Operator roofline/reclaim ranking uses
-sustained peak when a measured factor is available.
+sustained peak when a measured factor is available.  Only FP16/BF16/INT8 peaks
+are modeled: INT4 and FP8/HiF8 dtypes use the INT8 op-rate peak as the closest
+available denominator, and dtypes with no modeled peak report
+`no_peak_for_dtype` instead of silently assuming FP16.
 
 ## Failure policy
 

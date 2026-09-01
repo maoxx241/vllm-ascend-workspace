@@ -118,7 +118,7 @@ python3 .agents/skills/vllm-ascend-serving/scripts/serve_start.py \
   --health-timeout 1200
 ```
 
-## Start with auto-selected devices (just specify tp)
+## Start with lease-derived devices (just specify tp)
 
 ```bash
 python3 .agents/skills/vllm-ascend-serving/scripts/serve_start.py \
@@ -126,7 +126,7 @@ python3 .agents/skills/vllm-ascend-serving/scripts/serve_start.py \
   --tp 4
 ```
 
-The script probes NPUs, finds 4 free devices, and auto-selects them (session-leased devices take priority when present).
+Without `--devices`, the launch uses the first 4 devices of the session's live NPU lease and verifies them free via the host probe. Free cards outside the lease are never auto-selected.
 
 ## Probe NPU availability before deciding
 
@@ -152,13 +152,18 @@ This probes the **bare-metal host** (not the container) for cross-container NPU 
 {
   "status": "ok",
   "machine": "blue-a",
-  "total": 8,
+  "session_id": null,
+  "collected_at": "2026-08-11T12:00:00Z",
   "devices": [0, 1, 2, 3, 4, 5, 6, 7],
-  "busy": {"0": [{"pid": 12345, "owner": "root", "name": "python3"}],
-           "1": [{"pid": 12345, "owner": "root", "name": "python3"}]},
-  "hbm": {"0": 8192, "1": 8192, "2": 0, "3": 0},
+  "busy": {
+    "0": [{"kind": "process", "pid": 12345, "name": "python3"}],
+    "1": [{"kind": "hbm_threshold", "hbm_used_mb": 8192, "threshold_mb": 4096}]
+  },
+  "hbm": {"0": {"used_mb": 3364, "total_mb": 65536}, "1": {"used_mb": 8192, "total_mb": 65536}},
   "free": [2, 3, 4, 5, 6, 7],
   "free_count": 6,
+  "total": 8,
+  "npu_smi_ok": true,
   "hbm_busy_threshold_mb": 4096
 }
 ```

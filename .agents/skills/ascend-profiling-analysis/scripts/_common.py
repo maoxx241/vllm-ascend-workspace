@@ -45,6 +45,7 @@ ANALYSIS_STATE_DIR = ROOT / ".vaws-local" / "profiling-analysis" / "runs"
 PROGRESS_SENTINEL = "__VAWS_PROFILE_ANALYSIS_PROGRESS__="
 
 DEFAULT_REMOTE_WORK_DIR = "/tmp/ascend_profile_framework"
+SSH_CONNECT_TIMEOUT_SECONDS = 15
 # The analysis framework lives next to this file as a sibling package; it is
 # tar-synced to the remote work dir's ``ascend_profile/`` subpath and invoked
 # as ``python3 -m ascend_profile.<stage>`` from that work dir.
@@ -258,7 +259,7 @@ def print_json(data: dict[str, Any]) -> None:
 def _ssh_base_cmd(endpoint: SshEndpoint) -> list[str]:
     return [
         "ssh",
-        *base_ssh_options(),
+        *base_ssh_options(connect_timeout=SSH_CONNECT_TIMEOUT_SECONDS),
         "-o", "ServerAliveInterval=30",
         "-o", "ServerAliveCountMax=10",
         "-p", str(endpoint.port),
@@ -606,12 +607,21 @@ def remote_python_with_module(
         "python3",
     ]
     for cand in candidates:
-        check = ssh_exec(
-            endpoint,
-            f"{cand} -c 'import {module}' 2>/dev/null && echo OK || true",
-            check=False,
-            timeout=30,
-        )
+        try:
+            check = ssh_exec(
+                endpoint,
+                f"{cand} -c 'import {module}' 2>/dev/null && echo OK || true",
+                check=False,
+                timeout=30,
+            )
+        except subprocess.TimeoutExpired as exc:
+            if required:
+                raise RuntimeError(
+                    f"remote python probe timed out after {exc.timeout}s while "
+                    f"checking required module {module!r} with candidate {cand!r}; "
+                    "check SSH connectivity before starting analysis"
+                ) from exc
+            continue
         if "OK" in check.stdout:
             return cand
     if required:

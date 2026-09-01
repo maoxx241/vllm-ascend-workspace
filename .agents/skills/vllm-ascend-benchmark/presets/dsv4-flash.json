@@ -1,5 +1,5 @@
 {
-  "description": "DeepSeek-V4-Flash W4A8 MTP fixed benchmark configuration. Replaces the deleted .agents/scripts/dsv4_flash_benchmark.py; keep these values stable across baseline/PR states so comparisons are attributable to code only. The model weight path is machine-specific and stays a required CLI arg. Env values are verified on A3 nightly CANN 9.1 / vllm 0.26.0 images (2026-08-29 E2E on 192.168.13.154); override them per image via --extra-env/--bench-env on other generations.",
+  "description": "DeepSeek-V4-Flash W4A8 MTP fixed benchmark configuration. Replaces the deleted .agents/scripts/dsv4_flash_benchmark.py; keep these values stable across baseline/PR states so comparisons are attributable to code only. The model weight path is machine-specific and stays a required CLI arg. Env values are verified on A3 nightly CANN 9.1 / vllm 0.26.0 images (2026-08-29 E2E on an A3 host); override them per image via --extra-env/--bench-env on other generations.",
   "tp": 8,
   "dp": 1,
   "port": 30001,

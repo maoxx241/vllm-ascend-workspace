@@ -48,8 +48,18 @@ def attest(root: Path, spec: dict):
         if name in {"PATH", "PYTHONPATH", "LD_LIBRARY_PATH"} and not value:
             continue
         environment[name] = value + (":" + environment[name] if name in {"PATH", "PYTHONPATH", "LD_LIBRARY_PATH"} and environment.get(name) else "")
-    smoke = subprocess.run([sys.executable, "-c", "import torch_npu, vllm, vllm_ascend, acl; import vllm_ascend.vllm_ascend_C"], env=environment,
-                           capture_output=True, text=True, timeout=60)
+    try:
+        smoke = subprocess.run([sys.executable, "-c", "import torch_npu, vllm, vllm_ascend, acl; import vllm_ascend.vllm_ascend_C"], env=environment,
+                               capture_output=True, text=True, timeout=60)
+    except subprocess.TimeoutExpired as exc:
+        stderr = exc.stderr or ""
+        if isinstance(stderr, bytes):
+            stderr = stderr.decode("utf-8", "replace")
+        (evidence_dir / "smoke.json").write_text(json.dumps({"passed": False,
+                                                             "build_inputs": inputs, "profile_key": key,
+                                                             "error": "import smoke timed out after 60s",
+                                                             "stderr": stderr[-8000:]}, indent=2))
+        raise ValueError("import smoke timed out; inspect .vaws-runtime/profile-evidence/smoke.json") from exc
     (evidence_dir / "smoke.json").write_text(json.dumps({"passed": smoke.returncode == 0,
                                                        "build_inputs": inputs, "profile_key": key,
                                                        "stderr": smoke.stderr[-8000:]}, indent=2))

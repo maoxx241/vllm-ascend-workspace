@@ -450,6 +450,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     session_path: Path | None = None
     binding_payload: dict[str, Any] | None = None
+    # Lease rollback below only applies to leases this run allocated itself.
+    # The --reuse-existing path (and any failure before allocation) must never
+    # release the leases of a pre-existing active session.
+    leases_allocated = False
     try:
         resolved = resolve_session_id(
             explicit=args.session_id,
@@ -465,21 +469,30 @@ def main(argv: Sequence[str] | None = None) -> int:
                 # Reuse must not blindly trust the stored "ready" status: the
                 # container may have died since. Probe its SSH endpoint so a
                 # dead container surfaces as needs_repair instead of being
-                # reported as a healthy reused session.
+                # reported as a healthy reused session. probe_container_alive
+                # never returns alive=False (an unreachable SSH endpoint is
+                # inconclusive, alive=None), so anything short of a confirmed
+                # alive=True must be treated as unavailable.
                 remote = existing.session.get("remote", {})
                 container = remote.get("container", {})
-                probe = probe_container_alive(
-                    str(remote.get("host", "")),
-                    int(container.get("ssh_port", 0) or 0),
-                    str(remote.get("host_user", "root")),
-                )
-                if probe.get("alive") is False:
+                try:
+                    probe = probe_container_alive(
+                        str(remote.get("host", "")),
+                        int(container.get("ssh_port", 0) or 0),
+                        str(remote.get("host_user", "root")),
+                    )
+                except Exception as exc:
+                    # A local probe failure (missing ssh, DNS, ...) must not
+                    # escape into the creation rollback path and release the
+                    # existing session's leases; treat it as inconclusive.
+                    probe = {"alive": None, "reason": f"container probe raised: {exc}"}
+                if probe.get("alive") is not True:
                     print_json(
                         {
                             "status": "needs_repair",
                             "session_id": sid,
                             "session_file": str(existing.session_file),
-                            "error": "session container is unreachable; run session_gc --reap-dead or recreate the session",
+                            "error": "session container probe did not confirm a live container; run session_gc --reap-dead or recreate the session",
                             "container_probe": probe,
                             "reused": False,
                         }
@@ -569,6 +582,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             container_ssh_port_range=args.container_ssh_port_range,
             port_available=host_port_availability(base_record),
         )
+        leases_allocated = True
 
         container_name = session_container_name(namespace, sid)
         now = utc_now_iso()
@@ -763,15 +777,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 0
     except ValidationError as exc:
-        if "sid" in locals():
+        if "sid" in locals() and leases_allocated:
             with contextlib.suppress(Exception):
                 release_all_session_leases(repo_root=ROOT, session_id=sid)
         print_json({"status": "needs_input", "error": str(exc)})
         return 1
     except Exception as exc:
         if "sid" in locals():
-            with contextlib.suppress(Exception):
-                release_all_session_leases(repo_root=ROOT, session_id=sid)
+            if leases_allocated:
+                with contextlib.suppress(Exception):
+                    release_all_session_leases(repo_root=ROOT, session_id=sid)
             if session_path is not None:
                 with contextlib.suppress(Exception):
                     failed_session = load_session_lookup(session_file=session_path, repo_root=ROOT).session

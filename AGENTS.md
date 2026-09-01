@@ -86,14 +86,12 @@ for domain workflows.
   work. Bind actual business worktrees and keep local development available
   without the coordinator. Do not pass new task/binding/job ids to legacy
   session commands or create duplicate local NPU leases for pool executions.
-
 - The optional shared runtime pool is documented in `.agents/coordinator/README.md`.
   Pool bindings use its execution leases and ordinary remote-dev endpoints;
   do not create duplicate legacy local NPU leases or pass a binding id as a
   legacy session id. All clients of a pool must use the same manager.
   Stage edits during runs; materialize and refresh native artifacts only
   after its executions are released. Model services restart for changed code.
-
 - Never write secrets, passwords, or tokens into tracked files.
 - Keep VAWS runtime state under `.vaws-local/` and remote-dev endpoint/tool
   state under `.remote-dev/state/`. Both are untracked.
@@ -106,7 +104,7 @@ for domain workflows.
 - Invoke `curate-workspace-knowledge` only for explicit knowledge review or promotion; normal workflows use the shared capture and query scripts directly.
 - Before reporting a blocking problem or asking the user to intervene, query `.agents/knowledge/` with `.agents/scripts/knowledge_query.py` using the observed failure signature. State explicitly when no verified match exists.
 - Use the remote-dev substrate for agent-facing remote read/edit/bash/search/patch/job/artifact work. Use the remote toolbox entrypoints as the managed VAWS compatibility backend before falling back to bare SSH.
-- Remote work runs inside a `session-management` session. From inside the session worktree, parity, serving, benchmark, and profiling commands auto-resolve the session from the cwd binding; pass `--session-id` only when running outside the worktree or targeting another session. Domain skills have no `--machine` mode; `--machine` exists only for machine registration and `session_create.py` base-machine selection.
+- Remote work runs inside a `session-management` session. From inside the session worktree, parity, serving, benchmark, and profiling commands auto-resolve the session from the cwd binding; pass `--session-id` only when running outside the worktree or targeting another session. Domain skill commands (serving, benchmark, profiling) are session-only; `--machine` exists only for machine registration and `session_create.py` base-machine selection. Legacy compatibility surfaces still accept `--machine`: `remote-code-parity/scripts/parity_sync.py`, `session-management/scripts/npu_coordination.py`, and `vllm-ascend-serving/scripts/serve_probe_npus.py`.
 - This repo targets Huawei Ascend NPU. Local machines (Mac/PC) cannot run `torch`/`torch_npu`-dependent code. Do not attempt local test execution — go straight to the remote container.
 
 ## Maintenance

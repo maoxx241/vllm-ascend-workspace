@@ -8,6 +8,7 @@ import json
 import os
 import shlex
 import signal
+import subprocess
 import sys
 import tempfile
 import time
@@ -128,6 +129,35 @@ class ManagedJobTests(unittest.TestCase):
             self.assertTrue(process_guard_busy(first["receipt"]["process_guard"]))
             self.assertFalse(process_guard_busy(first["receipt"]["process_guard"], completion_confirmed=True))
         self.assertFalse((self.root / "should-not-run").exists())
+
+    def test_legacy_receipt_stop_without_result_reports_cancelled(self):
+        # Receipts without subreaper supervision predate result.json publication;
+        # their stop request is the only terminal signal job_status can see.
+        identifier = "vaws-" + "c" * 64
+        directory = self.root / ".vaws-runtime/remote-dev/jobs" / identifier
+        directory.mkdir(parents=True)
+        pid = 2**22
+        while Path(f"/proc/{pid}").exists():
+            pid -= 1
+        (directory / "receipt.json").write_text(json.dumps({
+            "pid": pid, "ppid": 1, "pgid": pid, "start_ticks": "0",
+            "boot_id": Path("/proc/sys/kernel/random/boot_id").read_text().strip(),
+            "marker": "d" * 32, "job_id": identifier, "prepared_at": time.time()}))
+        (directory / "stop.json").write_text("{}")
+        observed = self.call(identifier, "status")
+        self.assertEqual(observed["state"], "cancelled")
+        self.assertTrue(observed["quiet"])
+
+
+class ManagedJobEntrypointTests(unittest.TestCase):
+    def test_main_without_wrapper_injected_worker_source_fails_with_clear_message(self):
+        script = ROOT / ".remote-dev/core/managed_jobs.py"
+        request = {"root": str(ROOT), "job_id": "vaws-" + "e" * 64, "action": "status"}
+        completed = subprocess.run(
+            [sys.executable, str(script), json.dumps(request)],
+            capture_output=True, text=True, check=False)
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("WORKER_SOURCE is undefined", completed.stderr)
 
 
 if __name__ == "__main__":

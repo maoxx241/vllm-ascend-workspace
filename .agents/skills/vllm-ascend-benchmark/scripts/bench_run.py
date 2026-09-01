@@ -160,10 +160,15 @@ def main(argv: list[str] | None = None) -> int:
     raw_argv = argv if argv is not None else sys.argv[1:]
     main_argv, manual_serve_args, manual_bench_args = _split_sections(raw_argv)
 
-    args = build_parser().parse_args(main_argv)
+    parser = build_parser()
+    args = parser.parse_args(main_argv)
 
     total_runs: int = max(1, args.runs)
-    warmup_runs: int = max(0, min(args.warmup_runs, total_runs - 1))
+    if args.warmup_runs < 0 or args.warmup_runs >= total_runs:
+        parser.error(
+            f"--warmup-runs ({args.warmup_runs}) must be >= 0 and less than --runs ({total_runs})"
+        )
+    warmup_runs: int = args.warmup_runs
 
     serve_args = manual_serve_args if manual_serve_args is not None else getattr(args, "serve_args", None)
     bench_args = manual_bench_args if manual_bench_args is not None else getattr(args, "bench_args", None)
