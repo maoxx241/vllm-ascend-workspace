@@ -588,12 +588,17 @@ def load_collection_manifest(manifest_path: Path) -> dict[str, Any]:
     return data
 
 
-def remote_python_with_module(endpoint: SshEndpoint, module: str) -> str:
+def remote_python_with_module(
+    endpoint: SshEndpoint,
+    module: str,
+    *,
+    required: bool = False,
+) -> str:
     """Find a python3 on the remote host that can import ``module``.
 
-    Defaults match ascend-memory-profiling for consistency. Falls back to
-    plain ``python3`` so that hosts without a CANN-specific interpreter still
-    work for static analysis of a kernel_details.csv (no torch_npu needed).
+    Defaults match ascend-memory-profiling for consistency. Optional probes
+    fall back to plain ``python3``; required probes fail closed so a missing
+    analysis dependency is reported before framework sync or execution.
     """
     candidates = [
         "/usr/local/python3.11.14/bin/python3",
@@ -609,8 +614,13 @@ def remote_python_with_module(endpoint: SshEndpoint, module: str) -> str:
         )
         if "OK" in check.stdout:
             return cand
-    # Final fallback: ascend-profile-analysis only needs stdlib (no torch_npu),
-    # so plain python3 is acceptable even if the import probe failed.
+    if required:
+        raise RuntimeError(
+            f"no supported remote Python can import required module {module!r}; "
+            "prepare the runtime with the profiling-analysis requirements "
+            "before starting analysis"
+        )
+    # Optional callers retain the historical fallback to plain python3.
     return "python3"
 
 

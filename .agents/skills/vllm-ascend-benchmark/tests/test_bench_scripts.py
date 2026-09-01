@@ -351,9 +351,10 @@ class RemoteHelperTests(unittest.TestCase):
 
 
 class BenchCompareMainTests(unittest.TestCase):
-    def _run_main(self, extra_args, digests):
+    def _run_main(self, extra_args, digests, *, call_order=None):
         cfg = _common.BenchConfig(session_id="s", model="/m")
         written = []
+        call_order = call_order if call_order is not None else []
 
         def fake_write(config, result):
             result["result_path"] = f"/tmp/runs/result_{len(written)}.json"
@@ -361,6 +362,15 @@ class BenchCompareMainTests(unittest.TestCase):
             return Path(result["result_path"])
 
         digest_iter = iter(digests)
+
+        def fake_digest(*args, **kwargs):
+            call_order.append("digest")
+            return next(digest_iter)
+
+        def fake_patch(*args, **kwargs):
+            call_order.append("patch")
+            return {"status": "ok", "changed_files": ["vllm_ascend/csrc/op.cpp"]}
+
         patches = [
             mock.patch.object(bench_compare, "_get_ssh_endpoint",
                               return_value=("10.0.0.1", 2222)),
@@ -368,7 +378,9 @@ class BenchCompareMainTests(unittest.TestCase):
             mock.patch.object(bench_compare, "remote_align_source",
                               return_value={"status": "ok", "heads": {}}),
             mock.patch.object(bench_compare, "remote_native_input_digest",
-                              side_effect=lambda *a, **k: next(digest_iter)),
+                              side_effect=fake_digest),
+            mock.patch.object(bench_compare, "apply_remote_patch",
+                              side_effect=fake_patch),
             mock.patch.object(bench_compare, "call_serve_start",
                               return_value={"status": "ready",
                                             "base_url": "http://127.0.0.1:30001",
@@ -441,6 +453,43 @@ class BenchCompareMainTests(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertNotIn("native_input_changed", out)
         self.assertEqual(out["warnings"], [])
+
+    def test_unavailable_native_digest_fails_closed(self):
+        rc, out, written = self._run_main(
+            ["--state", "baseline=aaa"],
+            [{"status": "failed", "digest": None, "error": "ssh timeout"}],
+        )
+        self.assertEqual(rc, 2)
+        self.assertEqual(out["status"], "failed")
+        self.assertIn("digest is unavailable", out["error"])
+        self.assertIn("--allow-stale-native", out["error"])
+        self.assertEqual(written, [])
+
+    def test_unavailable_native_digest_requires_explicit_warning_override(self):
+        rc, out, _ = self._run_main(
+            ["--state", "baseline=aaa", "--allow-stale-native"],
+            [{"status": "failed", "digest": None, "error": "ssh timeout"}],
+        )
+        self.assertEqual(rc, 0)
+        self.assertTrue(out["native_input_unverified"])
+        self.assertTrue(any("NATIVE INPUTS UNVERIFIED" in w for w in out["warnings"]))
+
+    def test_remote_patch_is_applied_before_native_digest(self):
+        order = []
+        rc, out, _ = self._run_main(
+            [
+                "--state", "baseline=aaa",
+                "--remote-patch-file", "/tmp/native-change.patch",
+            ],
+            [{"status": "ok", "digest": "post-patch", "head": "h1"}],
+            call_order=order,
+        )
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(order, ["patch", "digest"])
+        self.assertEqual(
+            out["state_results"][0]["native_input_digest"]["digest"],
+            "post-patch",
+        )
 
     def test_skip_parity_flag_removed(self):
         stderr = io.StringIO()

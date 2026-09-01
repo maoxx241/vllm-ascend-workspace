@@ -97,6 +97,7 @@
 
 - [ ] Scripts use `python3` everywhere; no shebang dependence on a specific interpreter path.
 - [ ] All argparse parsers set `allow_abbrev=False` to prevent accidental prefix matching.
+- [ ] Analyze and sweep fail with `phase=dependency_preflight` before remote sync when no supported remote Python can import the required `yaml` module.
 
 ## Boundaries (regression-protective)
 
@@ -115,3 +116,4 @@
 - [ ] `python3 -m pytest .agents/skills/ascend-profiling-analysis/tests/test_stage_validation.py` passes (wrapper validates only the artifact set the chosen stage window should produce; `--only-stage normalize` no longer requires `report/report.md`).
 - [ ] `python3 -m pytest .agents/skills/ascend-profiling-analysis/tests/test_semantic_conventions.py` passes (`knowledge/semantic_conventions.yaml` enum catalogue stays in sync with Python `op_type` / `finding_type` / `alignment_method` / `report_mode` emissions).
 - [ ] `python3 -m pytest .agents/skills/ascend-profiling-analysis/tests/test_hardware_insights.py` passes (CANN peak derivation and sustained-factor roofline fields).
+- [ ] `python3 -m pytest .agents/skills/ascend-profiling-analysis/tests/test_model_insights.py` passes (including full-Q MLA and mixed dense/MoE parameter schedules).

@@ -200,6 +200,32 @@ class ServingIdentityTests(unittest.TestCase):
                 probe.assert_not_called()
                 self.assertEqual(ssh.call_count, 1)  # model-path existence only
 
+    def test_host_npu_probe_failure_blocks_before_port_or_launch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = SimpleNamespace(
+                record={}, alias="test", endpoint=object(), host_endpoint=object(),
+                runtime_base="/workspace", mode="session", session_id="session-test",
+                session_file=None, session={}, state_repo_root=Path(tmp),
+            )
+            with mock.patch.object(serve_start, "resolve_execution_target", return_value=target), \
+                 mock.patch.object(serve_start, "file_lock", return_value=contextlib.nullcontext()), \
+                 mock.patch.object(serve_start, "require_session_npu_lease", return_value=[0]), \
+                 mock.patch.object(serve_start, "load_serving_state", return_value=None), \
+                 mock.patch.object(serve_start, "ssh_exec", return_value=SimpleNamespace(returncode=0)), \
+                 mock.patch.object(serve_start, "probe_npus", side_effect=RuntimeError("npu-smi parse failed")), \
+                 mock.patch.object(serve_start, "remote_port_availability") as port_probe, \
+                 mock.patch.object(serve_start, "print_json") as output:
+                rc = serve_start.main([
+                    "--model", "/models/test", "--tp", "1", "--devices", "0",
+                    "--skip-parity",
+                ])
+
+            self.assertEqual(rc, 1)
+            self.assertEqual(output.call_args.args[0]["status"], "blocked")
+            self.assertEqual(output.call_args.args[0]["phase"], "probe-npus")
+            self.assertIn("occupancy could not be verified", output.call_args.args[0]["error"])
+            port_probe.assert_not_called()
+
     def test_missing_device_is_not_a_successful_free_probe(self):
         with mock.patch.object(serve_start, "probe_npus", return_value={"devices": [], "busy": {}}):
             self.assertFalse(serve_start.wait_for_devices_free(object(), {0}, timeout=0))

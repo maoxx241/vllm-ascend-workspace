@@ -10,6 +10,8 @@
 - Four-node K3 readiness remains outside this single-node wrapper's claim.
 - Source-only parity blocks serving before NPU probing/launch. Missing devices
   do not count as a successful free-device probe.
+- A failed or malformed host NPU probe blocks startup before port allocation or
+  launch; a cooperative lease does not prove the host is free of unmanaged work.
 - Start/stop/status treat failed or malformed SSH PID probes as unknown;
   stop must not mark the service stopped or release its port in that case.
 
@@ -170,6 +172,12 @@
 
 **When** `serve_probe_npus.py` runs with either surface — `--machine <alias>` for a resource-pool probe of a registered machine host, or `--session-id` / `--session-file` (or the cwd auto-bind) for the session's base host,
 **Then** returns JSON with `devices`, `busy` (with PID details), `hbm` (per-device HBM usage), `free`, `free_count`, and `hbm_busy_threshold_mb`. Probing is done on the bare-metal host for cross-container visibility. Passing both `--machine` and a session target is rejected as mutually exclusive.
+
+## A18a. NPU probe failure blocks launch
+
+**Given** the host `npu-smi` probe fails or returns malformed data,
+**When** `serve_start.py` is called even for explicitly leased or requested devices,
+**Then** it returns `status=blocked` and `phase=probe-npus` without allocating a port or launching a process.
 
 ## A19. Escaping safety
 

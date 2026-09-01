@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import json
+
 from ascend_profile.common import NormalizedEvent
 from ascend_profile.model_insights import (
     candidate_model_rows,
+    model_config_insights,
     operator_efficiency_rows,
     profile_inferred_model_insights,
 )
@@ -119,3 +122,72 @@ def test_operator_efficiency_rows_rank_shape_derived_work() -> None:
     assert rows[0]["estimated_flops"] == 2_000_000_000.0
     assert rows[0]["achieved_tflops"] > 0
     assert rows[0]["confidence"] == "shape_estimate"
+
+
+def test_model_parameter_estimate_handles_full_q_mla_and_mixed_dense_moe(tmp_path) -> None:
+    config = {
+        "hidden_size": 4096,
+        "vocab_size": 1000,
+        "num_hidden_layers": 4,
+        "num_attention_heads": 32,
+        "kv_lora_rank": 512,
+        "qk_nope_head_dim": 128,
+        "qk_rope_head_dim": 64,
+        "v_head_dim": 128,
+        "num_experts": 8,
+        "num_experts_per_tok": 2,
+        "moe_intermediate_size": 1024,
+        "intermediate_size": 11008,
+        "first_k_dense_replace": 2,
+        "moe_layer_freq": 1,
+        "tie_word_embeddings": True,
+    }
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps(config), encoding="utf-8")
+
+    insights = model_config_insights(path)
+    rows = {row["component"]: row for row in insights["parameter_rows"]}
+
+    full_q_per_layer = 4096 * 32 * (128 + 64)
+    kv_per_layer = 4096 * (512 + 64) + 512 * 32 * (128 + 128)
+    o_proj_per_layer = 32 * 128 * 4096
+    assert rows["attention_mla"]["params"] == 4 * (
+        full_q_per_layer + kv_per_layer + o_proj_per_layer
+    )
+    assert "full_q_proj" in rows["attention_mla"]["formula"]
+
+    # Layers 0-1 are dense; layers 2-3 are MoE.
+    assert rows["moe_routed_experts"]["params"] == 2 * 8 * 3 * 4096 * 1024
+    assert rows["moe_router"]["params"] == 2 * 4096 * 8
+    assert rows["dense_swiglu_ffn"]["params"] == 2 * 3 * 4096 * 11008
+    assert insights["parameter_totals"]["total_params"] == sum(
+        row["params"] for row in rows.values()
+    )
+
+
+def test_model_parameter_estimate_honors_decoder_sparse_step_and_mlp_only_layers(tmp_path) -> None:
+    config = {
+        "hidden_size": 1024,
+        "num_hidden_layers": 6,
+        "num_attention_heads": 8,
+        "num_key_value_heads": 2,
+        "head_dim": 128,
+        "num_experts": 4,
+        "num_experts_per_tok": 2,
+        "moe_intermediate_size": 512,
+        "intermediate_size": 2048,
+        "decoder_sparse_step": 2,
+        "mlp_only_layers": [3],
+        "tie_word_embeddings": True,
+    }
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps(config), encoding="utf-8")
+
+    rows = {
+        row["component"]: row
+        for row in model_config_insights(path)["parameter_rows"]
+    }
+
+    # Qwen-style sparse layers are 1, 3, 5; layer 3 is explicitly dense.
+    assert rows["moe_routed_experts"]["params"] == 2 * 4 * 3 * 1024 * 512
+    assert rows["dense_swiglu_ffn"]["params"] == 4 * 3 * 1024 * 2048

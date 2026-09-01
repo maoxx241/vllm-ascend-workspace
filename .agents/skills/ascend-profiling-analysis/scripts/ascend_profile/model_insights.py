@@ -134,6 +134,17 @@ def _parameter_rows(root: Mapping[str, Any], cfg: Mapping[str, Any]) -> tuple[li
     experts = _i(_first(cfg, "num_experts", "n_routed_experts", default=0))
     top_k = _i(_first(cfg, "num_experts_per_tok", "n_activated_experts", default=0))
     shared_inter = _i(_first(cfg, "shared_expert_intermediate_size", default=0))
+    first_dense_layers = max(_i(_first(cfg, "first_k_dense_replace", default=0)), 0)
+    raw_moe_frequency = _first(cfg, "moe_layer_freq", default=None)
+    raw_decoder_sparse_step = _first(cfg, "decoder_sparse_step", default=None)
+    moe_frequency = max(_i(raw_moe_frequency, 1), 1)
+    decoder_sparse_step = max(_i(raw_decoder_sparse_step, 1), 1)
+    raw_mlp_only_layers = cfg.get("mlp_only_layers")
+    mlp_only_layers = (
+        {_i(layer_idx, -1) for layer_idx in raw_mlp_only_layers}
+        if isinstance(raw_mlp_only_layers, list)
+        else set()
+    )
 
     rows: list[dict[str, Any]] = []
 
@@ -155,11 +166,19 @@ def _parameter_rows(root: Mapping[str, Any], cfg: Mapping[str, Any]) -> tuple[li
         add("embedding", embedding, embedding, "vocab_size * hidden_size")
 
     if q_lora or kv_lora:
-        q_path = hidden * q_lora + q_lora * heads * (qk_nope + qk_rope)
+        if q_lora:
+            q_path = hidden * q_lora + q_lora * heads * (qk_nope + qk_rope)
+            q_formula = "q_a + q_b"
+        else:
+            # MLA variants without Q LoRA retain a full Q projection. Treating
+            # q_lora_rank=0 as a zero-sized low-rank path omits the entire Q
+            # matrix from the parameter estimate.
+            q_path = hidden * heads * (qk_nope + qk_rope)
+            q_formula = "full_q_proj"
         kv_path = hidden * (kv_lora + qk_rope) + kv_lora * heads * (qk_nope + v_head)
         o_proj = heads * v_head * hidden
         attn = layers * (q_path + kv_path + o_proj)
-        add("attention_mla", attn, attn, "layers * (q_a + q_b + kv_a + kv_b + o_proj)")
+        add("attention_mla", attn, attn, f"layers * ({q_formula} + kv_a + kv_b + o_proj)")
     elif hidden and heads and head_dim:
         q_proj = hidden * heads * head_dim
         kv_proj = 2 * hidden * kv_heads * head_dim
@@ -168,14 +187,55 @@ def _parameter_rows(root: Mapping[str, Any], cfg: Mapping[str, Any]) -> tuple[li
         add("attention_gqa_or_mha", attn, attn, "layers * (q_proj + k_proj + v_proj + o_proj)")
 
     if experts and moe_inter:
+        def is_moe_layer(layer_idx: int) -> bool:
+            if layer_idx in mlp_only_layers:
+                return False
+            if raw_moe_frequency is not None:
+                # DeepSeek/Kimi/AXK-style convention.
+                return layer_idx >= first_dense_layers and layer_idx % moe_frequency == 0
+            if raw_decoder_sparse_step is not None:
+                # Qwen-style convention counts layers from one.
+                return (layer_idx + 1) % decoder_sparse_step == 0
+            return layer_idx >= first_dense_layers
+
+        moe_layer_count = sum(
+            1
+            for layer_idx in range(layers)
+            if is_moe_layer(layer_idx)
+        )
+        dense_layer_count = max(layers - moe_layer_count, 0)
         expert_params_per_layer = experts * 3 * hidden * moe_inter
         active_expert_params = max(top_k, 1) * 3 * hidden * moe_inter
         gate = hidden * experts
         shared = 3 * hidden * shared_inter if shared_inter else 0
-        add("moe_routed_experts", layers * expert_params_per_layer, layers * active_expert_params, "layers * experts * 3 * hidden * moe_intermediate")
-        if shared:
-            add("moe_shared_expert", layers * shared, layers * shared, "layers * 3 * hidden * shared_expert_intermediate")
-        add("moe_router", layers * gate, layers * gate, "layers * hidden * experts")
+        if moe_layer_count:
+            add(
+                "moe_routed_experts",
+                moe_layer_count * expert_params_per_layer,
+                moe_layer_count * active_expert_params,
+                "moe_layers * experts * 3 * hidden * moe_intermediate",
+            )
+            if shared:
+                add(
+                    "moe_shared_expert",
+                    moe_layer_count * shared,
+                    moe_layer_count * shared,
+                    "moe_layers * 3 * hidden * shared_expert_intermediate",
+                )
+            add(
+                "moe_router",
+                moe_layer_count * gate,
+                moe_layer_count * gate,
+                "moe_layers * hidden * experts",
+            )
+        if dense_layer_count and intermediate:
+            dense = dense_layer_count * 3 * hidden * intermediate
+            add(
+                "dense_swiglu_ffn",
+                dense,
+                dense,
+                "dense_layers * 3 * hidden * intermediate_size",
+            )
     elif intermediate:
         dense = layers * 3 * hidden * intermediate
         add("dense_swiglu_ffn", dense, dense, "layers * 3 * hidden * intermediate_size")

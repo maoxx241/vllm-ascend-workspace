@@ -13,11 +13,12 @@ keeps the existing scripts as the managed VAWS compatibility backend.
    - `--manifest <local-run-dir>/manifest.json` → produced by `ascend-profiling-collection`. We require `analysis_status == "ok"` and a non-empty `remote_profile_root`.
    - `--remote-profile-root <abs-path>` → raw remote path (used for historical roots not collected through the collection skill).
    - Optional context: `--model-id`, `--model-config`, `--hardware-model`, and `--hardware-profile` are passed to the remote analysis. Local `--model-config` / `--hardware-profile` files are uploaded into the remote run dir first.
-3. **Parity sync** (light): tar-over-ssh only `scripts/ascend_profile/` from the local skill dir to `<remote-work-dir>/ascend_profile/`. Excludes `__pycache__` and `*.pyc`. Does **not** touch `.vaws-runtime/` or sync the entire repo.
-4. **Remote analyze**: run `python3 -m ascend_profile.analyze <ROOT> --output <OUT> --verbose` from inside `<remote-work-dir>`. stdout/stderr is streamed back so the agent can see stage timings live.
-5. **Validate artifacts**: every required artifact must exist, and `segment_manifest.json` must have `hard_errors == 0` and `interior_island_total == 0`.
-6. **Pull artifacts**: lightweight by default (`report/`, `*_manifest.json`, `diagnosis_findings.json`, summary CSVs, `step_segments.json`, `layer_segments.json`, `structure_evidence_graph.json`, `evidence_index.csv`, `raw_kernel_index.csv`). Use `--keep-remote-output` to mirror the entire remote output dir locally.
-7. **Emit JSON** on stdout. Progress lines (`__VAWS_PROFILE_ANALYSIS_PROGRESS__=...`) go to stderr.
+3. **Dependency preflight**: select a supported remote Python that can import `yaml`. If no interpreter satisfies the skill's `requirements.txt`, return `phase=dependency_preflight` before syncing or running analysis.
+4. **Parity sync** (light): tar-over-ssh only `scripts/ascend_profile/` from the local skill dir to `<remote-work-dir>/ascend_profile/`. Excludes `__pycache__` and `*.pyc`. Does **not** touch `.vaws-runtime/` or sync the entire repo.
+5. **Remote analyze**: run `python3 -m ascend_profile.analyze <ROOT> --output <OUT> --verbose` from inside `<remote-work-dir>`. stdout/stderr is streamed back so the agent can see stage timings live.
+6. **Validate artifacts**: every required artifact must exist, and `segment_manifest.json` must have `hard_errors == 0` and `interior_island_total == 0`.
+7. **Pull artifacts**: lightweight by default (`report/`, `*_manifest.json`, `diagnosis_findings.json`, summary CSVs, `step_segments.json`, `layer_segments.json`, `structure_evidence_graph.json`, `evidence_index.csv`, `raw_kernel_index.csv`). Use `--keep-remote-output` to mirror the entire remote output dir locally.
+8. **Emit JSON** on stdout. Progress lines (`__VAWS_PROFILE_ANALYSIS_PROGRESS__=...`) go to stderr.
 
 ## Required artifacts (single-root `analyze`)
 

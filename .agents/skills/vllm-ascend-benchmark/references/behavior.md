@@ -61,7 +61,7 @@ The output JSON includes:
 Comparing multiple code states (baseline, PR, modified) is handled by `bench_compare.py` in a single call:
 
 1. Each `--state LABEL=REF` is checked out in the container for vllm-ascend (and vllm when `--vllm-ref`/preset `vllm_ref` is set). Alignment is source-only — it never rebuilds custom ops.
-2. Right after alignment, the state's native-input digest (`csrc`/`cmake`/requirements) is compared against the first state's. A mismatch fails the run (rebuild via parity first, or `--allow-stale-native` to downgrade to a `warnings` entry plus `native_input_changed: true`) because stale compiled artifacts would silently contaminate the comparison.
+2. After alignment and any optional `git apply` from `--remote-patch-file`, the effective state's native-input digest (`csrc`/`cmake`/requirements) is compared against the first state's. A mismatch fails the run because stale compiled artifacts would silently contaminate the comparison. An unavailable digest also fails closed. `--allow-stale-native` explicitly downgrades either condition to a `warnings` entry plus `native_input_changed: true` or `native_input_unverified: true`.
 3. Every state is served and benched with the identical assembled configuration — from explicit CLI args or a shared `--preset` — including optional request-count cases (`--bench-request-counts`), a generated fixed dataset (`--fixed-request-dataset`, prepared once before the state loop), a deterministic accuracy probe (`--accuracy-probe`), and an optional `git apply` of a local patch per state (`--remote-patch-file`).
 4. Each completed state is persisted immediately; on failure the error JSON still carries `partial_states` and `result_paths` so completed measurements are never lost.
 

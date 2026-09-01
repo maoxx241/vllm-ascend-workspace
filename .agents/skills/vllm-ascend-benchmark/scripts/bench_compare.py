@@ -377,17 +377,6 @@ def _run_one_state(
     if align.get("status") != "ok":
         raise RuntimeError(f"[{label}] source alignment failed: {align}")
 
-    # Fingerprint native-build inputs right after alignment so a csrc/cmake/
-    # requirements change between states is caught before serving (compiled
-    # artifacts are not rebuilt by source-only alignment).
-    native_digest = remote_native_input_digest(container_ip, container_port)
-    emit_progress(
-        "native_gate",
-        f"[{label}] native input digest={(native_digest.get('digest') or 'unknown')[:16]}",
-    )
-    if native_gate is not None:
-        native_gate(label, native_digest)
-
     patch_result: dict[str, Any] | None = None
     if args.remote_patch_file:
         patch_result = apply_remote_patch(
@@ -396,6 +385,17 @@ def _run_one_state(
         emit_progress("remote_patch", f"[{label}] patch status={patch_result.get('status')}")
         if patch_result.get("status") != "ok":
             raise RuntimeError(f"[{label}] remote patch failed: {patch_result}")
+
+    # Fingerprint the effective source state, including an optional remote
+    # patch. Compiled artifacts are not rebuilt by source alignment or patch
+    # application, so this gate must observe the final native-build inputs.
+    native_digest = remote_native_input_digest(container_ip, container_port)
+    emit_progress(
+        "native_gate",
+        f"[{label}] native input digest={(native_digest.get('digest') or 'unknown')[:16]}",
+    )
+    if native_gate is not None:
+        native_gate(label, native_digest)
 
     if args.stale_cleanup:
         pre = safe_stale_cleanup(container_ip, container_port)
@@ -520,6 +520,7 @@ def main(argv: list[str] | None = None) -> int:
     result_paths: list[str] = []
     warnings: list[str] = []
     native_input_changed = False
+    native_input_unverified = False
 
     try:
         preset = load_preset(args.preset) if args.preset else None
@@ -631,11 +632,33 @@ def main(argv: list[str] | None = None) -> int:
         gate_state: dict[str, Any] = {"digest": None}
 
         def _native_gate(label: str, digest_result: dict[str, Any]) -> None:
-            nonlocal native_input_changed
-            digest = (digest_result or {}).get("digest") or ""
-            if digest_result.get("status") != "ok" or not digest:
-                emit_progress("native_gate", f"[{label}] digest unavailable, gate skipped")
-                return
+            nonlocal native_input_changed, native_input_unverified
+            result = digest_result or {}
+            digest = result.get("digest") or ""
+            if result.get("status") != "ok" or not digest:
+                detail = (
+                    result.get("error")
+                    or result.get("stderr_tail")
+                    or result.get("stderr")
+                    or "empty digest"
+                )
+                if args.allow_stale_native:
+                    native_input_unverified = True
+                    warnings.append(
+                        f"NATIVE INPUTS UNVERIFIED: state '{label}' digest is unavailable "
+                        f"({detail}); compiled custom-op parity is unknown."
+                    )
+                    emit_progress(
+                        "native_gate",
+                        f"[{label}] WARNING: digest unavailable, continuing (--allow-stale-native)",
+                    )
+                    return
+                raise RuntimeError(
+                    f"[{label}] native build input digest is unavailable ({detail}); refusing "
+                    "to compare source states without proving compiled custom-op parity. "
+                    "Repair the remote digest probe, or pass --allow-stale-native to proceed "
+                    "with an explicit unverified warning."
+                )
             if gate_state["digest"] is None:
                 gate_state["digest"] = digest
                 return
@@ -693,6 +716,8 @@ def main(argv: list[str] | None = None) -> int:
         }
         if native_input_changed:
             result["native_input_changed"] = True
+        if native_input_unverified:
+            result["native_input_unverified"] = True
         # Persist the combined result under the session benchmark runs dir.
         write_local_result(config, result)
         print_json(result)

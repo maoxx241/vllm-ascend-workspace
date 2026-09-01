@@ -309,6 +309,10 @@ class RuntimePool(ManagedExecution):
                     raise ValueError("managed execution owns this lease; use managed_execution_control")
             if run["state"] in TERMINAL:
                 return run
+            if run["state"] == "pending" and action not in {"poll", "cancel"}:
+                raise ValueError(
+                    f"cannot {action} an unsubmitted pending execution; poll it first"
+                )
             try:
                 if run["state"] == "uncertain":
                     # A previous timed-out action may have succeeded. Recover by
@@ -341,7 +345,7 @@ class RuntimePool(ManagedExecution):
                         run["task"], run["state"], run["submitted"] = existing[0], existing[0]["state"], True
                     elif self.clock() >= run["deadline"] or action == "cancel":
                         run["state"] = "expired" if action != "cancel" else "cancelled"
-                if run["state"] == "pending":
+                if run["state"] == "pending" and action == "poll":
                     intent = run["intent"]
                     submit = {**request, "action": "submit", "agent_id": "mcp-" + digest(owner)[:32],
                               "session_id": binding["intent"]["session"], "container_name": runtime["container_name"],

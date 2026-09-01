@@ -7,8 +7,12 @@ full pipeline.
 """
 from __future__ import annotations
 
+from types import SimpleNamespace
+from unittest import mock
+
 import conftest  # noqa: F401
 
+import _common as common
 import profile_analyze
 import profile_sweep
 
@@ -106,9 +110,37 @@ def test_report_mode_choices_only_summary_and_full_raw() -> None:
     assert "interactive" not in sweep_choices
 
 
+def test_required_remote_python_dependency_fails_closed() -> None:
+    with mock.patch.object(
+        common,
+        "ssh_exec",
+        return_value=SimpleNamespace(returncode=0, stdout="", stderr=""),
+    ):
+        try:
+            common.remote_python_with_module(object(), "yaml", required=True)
+        except RuntimeError as exc:
+            assert "required module 'yaml'" in str(exc)
+        else:
+            raise AssertionError("required remote dependency probe must fail closed")
+
+
+def test_required_remote_python_dependency_selects_importable_interpreter() -> None:
+    results = iter(
+        [
+            SimpleNamespace(returncode=0, stdout="", stderr=""),
+            SimpleNamespace(returncode=0, stdout="OK\n", stderr=""),
+        ]
+    )
+    with mock.patch.object(common, "ssh_exec", side_effect=lambda *a, **k: next(results)):
+        py = common.remote_python_with_module(object(), "yaml", required=True)
+    assert py == "/usr/local/python3.10/bin/python3"
+
+
 if __name__ == "__main__":
     test_analyze_wrapper_has_required_args()
     test_analyze_wrapper_input_is_mutually_exclusive()
     test_sweep_wrapper_has_required_args()
     test_report_mode_choices_only_summary_and_full_raw()
+    test_required_remote_python_dependency_fails_closed()
+    test_required_remote_python_dependency_selects_importable_interpreter()
     print("ok")

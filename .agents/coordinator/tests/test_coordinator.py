@@ -215,6 +215,35 @@ class PoolTests(unittest.TestCase):
         self.assertEqual(expired["state"], "expired")
         self.assertNotIn(("host", "submit"), self.backend.calls)
 
+    def test_unsubmitted_pending_run_rejects_non_poll_actions_without_host_mutation(self):
+        binding = self.bind("alice", self.root / "a")
+        self.backend.fail_after = "status"
+        pending = self.request("alice", binding)
+        self.assertEqual(pending["state"], "pending")
+        self.assertIsNone(pending["epoch"])
+
+        calls_before = list(self.backend.calls)
+        for action in ("preflight", "activate", "heartbeat", "release"):
+            with self.subTest(action=action), self.assertRaisesRegex(
+                ValueError, "unsubmitted pending execution; poll it first"
+            ):
+                self.pool.control("alice", pending["id"], action)
+            self.assertEqual(self.backend.calls, calls_before)
+            observed = self.pool.status("alice")["runs"][0]
+            self.assertEqual(observed["state"], "pending")
+            self.assertFalse(observed["submitted"])
+
+    def test_unsubmitted_pending_run_can_cancel_without_submit(self):
+        binding = self.bind("alice", self.root / "a")
+        self.backend.fail_after = "status"
+        pending = self.request("alice", binding)
+        calls_before = len(self.backend.calls)
+
+        cancelled = self.pool.control("alice", pending["id"], "cancel")
+
+        self.assertEqual(cancelled["state"], "cancelled")
+        self.assertNotIn(("host", "submit"), self.backend.calls[calls_before:])
+
     def test_native_refresh_is_forbidden_while_execution_is_unresolved(self):
         binding = self.bind("alice", self.root / "a")
         run = self.request("alice", binding)

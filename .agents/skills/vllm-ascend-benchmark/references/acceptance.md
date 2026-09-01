@@ -40,6 +40,8 @@
 - [ ] Regression comparisons must use identical `--serve-args`, `--bench-args`, `--extra-env`, and `--tp` across states.
 - [ ] Only the code state (branch / commit / worktree) changes between runs.
 - [ ] If any configuration parameter differs, the agent explicitly records the difference and labels the result as a configuration comparison.
+- [ ] The native-input digest is computed after checkout and any per-state remote patch, so it describes the effective source that will run.
+- [ ] A missing or invalid native-input digest fails before serving unless `--allow-stale-native` was explicitly passed; the override records `native_input_unverified: true` and a loud warning.
 
 ## Configuration priority
 

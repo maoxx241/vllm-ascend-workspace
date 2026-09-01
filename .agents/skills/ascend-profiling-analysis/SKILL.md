@@ -124,7 +124,8 @@ python3 .agents/skills/ascend-profiling-analysis/scripts/profile_sweep.py \
    - 优先 `--manifest`（来自 collection skill）。如果 `manifest.analysis_status == "missing_kernel_details"` 立即停止，把这个状态原样回给用户，不试图分析空 root。
    - 其次 `--remote-profile-root`，要求是远端绝对路径。
 2. **远端就绪**
-   - 通过 `machine-management` 确认机器 ready；本 skill 不重复实现 ready 检查，但调用前会 ping 一下 `which python3`。
+   - 通过 `machine-management` 确认机器 ready；本 skill 不重复实现完整 machine-ready 检查。
+   - 远端 Python 必须能导入 `PyYAML`；wrapper 在同步/分析前 fail-closed 预检。缺失时按本 skill 的 `requirements.txt` 准备 runtime，不在分析过程中临时改环境。
    - tar-sync 只 `scripts/ascend_profile/` 这一个子目录到 `<remote-work-dir>/ascend_profile/`，避免污染 `.vaws-runtime`。
 3. **执行分析**
    - 单 root：`analyze.py`；多 root：`sweep.py`。

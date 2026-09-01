@@ -206,7 +206,7 @@ NPU availability is checked via `npu-smi info` on the **bare-metal host** (not t
 
 - If `--devices` is specified, those devices are verified to be free. If any are busy, start is blocked with the conflict details.
 - If `--devices` is not specified but `--tp` is given, the first N free devices are automatically selected, where N = TP × DP (defaults to TP when DP is not set).
-- If NPU probe fails (e.g. driver issue), it is treated as a non-fatal warning and launch continues with user-specified devices.
+- If the host NPU probe fails or returns malformed data, start fails closed with `status=blocked` and `phase=probe-npus`. Cooperative leases cannot rule out unmanaged host workloads, so no port allocation or launch is attempted until occupancy is known.
 
 ### 5. Validate and launch
 

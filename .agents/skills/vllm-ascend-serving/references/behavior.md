@@ -65,7 +65,7 @@ Device selection logic:
 - If the session has leased NPU devices and `--devices` is not explicitly given, the launch defaults to the leased devices. If `--devices` is explicitly given, it must be a subset of the session lease.
 - If `--devices` is not given but `--tp` is, the first `tp` free devices are auto-selected. If not enough free devices exist, returns `needs_input`.
 - If neither is given, no device filtering is applied.
-- If `npu-smi` itself fails (e.g. driver not found), the probe is treated as non-fatal and launch proceeds with whatever devices the user specified.
+- If the host probe fails or returns malformed data, start fails closed with `status=blocked` and `phase=probe-npus`. Cooperative leases cannot exclude unmanaged host workloads, so the wrapper does not allocate a port or launch a process while occupancy is unknown.
 - On relaunch, inherited `--devices` are re-validated against current availability.
 
 ## Relaunch merge rules

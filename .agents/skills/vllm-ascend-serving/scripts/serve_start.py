@@ -1071,33 +1071,42 @@ def main(argv: list[str] | None = None) -> int:
         try:
             npu_info = probe_npus(h_ep)
         except RuntimeError as exc:
-            npu_info = None
-            emit_progress("probe-npus", f"NPU probe failed (non-fatal): {exc}")
+            print_json({
+                "status": "blocked",
+                "phase": "probe-npus",
+                "error": (
+                    "host NPU occupancy could not be verified; refusing to launch "
+                    f"because session leases do not exclude unmanaged workloads: {exc}"
+                ),
+                "machine": alias,
+                "mode": target.mode,
+                "session_id": target.session_id,
+            })
+            return 1
 
-        if npu_info is not None:
-            try:
-                resolved_devices, device_error = select_devices(
-                    npu_info, requested_devices=devices, tp=tp, dp=dp,
-                )
-            except ValueError as exc:
-                print_json({"status": "needs_input", "error": str(exc), "npu_info": npu_info})
-                return 1
-            if device_error:
-                print_json({
-                    "status": "needs_input",
-                    "error": device_error,
-                    "npu_info": npu_info,
-                    "machine": alias,
-                })
-                return 1
-            if resolved_devices is not None:
-                devices = resolved_devices
-                emit_progress(
-                    "probe-npus",
-                    f"using devices: {devices}",
-                    free=npu_info.get("free"),
-                    busy=list(npu_info.get("busy", {}).keys()),
-                )
+        try:
+            resolved_devices, device_error = select_devices(
+                npu_info, requested_devices=devices, tp=tp, dp=dp,
+            )
+        except ValueError as exc:
+            print_json({"status": "needs_input", "error": str(exc), "npu_info": npu_info})
+            return 1
+        if device_error:
+            print_json({
+                "status": "needs_input",
+                "error": device_error,
+                "npu_info": npu_info,
+                "machine": alias,
+            })
+            return 1
+        if resolved_devices is not None:
+            devices = resolved_devices
+            emit_progress(
+                "probe-npus",
+                f"using devices: {devices}",
+                free=npu_info.get("free"),
+                busy=list(npu_info.get("busy", {}).keys()),
+            )
 
         # ---- port ----
         emit_progress("allocate-port", "allocating session service port")

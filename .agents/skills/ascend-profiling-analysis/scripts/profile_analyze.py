@@ -442,6 +442,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
 
     try:
+        py = common.remote_python_with_module(endpoint, "yaml", required=True)
+    except RuntimeError as exc:
+        common.print_json(
+            {
+                "status": "failed",
+                "phase": "dependency_preflight",
+                "error": str(exc),
+                "machine": alias,
+                "session_id": target["session_id"],
+            }
+        )
+        return 2
+
+    try:
         run_dir = common.ensure_run_dir(
             args.tag,
             explicit_dir=args.local_output_dir,
@@ -511,7 +525,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 3
 
     # Phase 2: remote analyze
-    py = common.remote_python_with_module(endpoint, "csv")  # csv always present
     extra_flags: list[str] = []
     if args.verbose:
         extra_flags.append("--verbose")

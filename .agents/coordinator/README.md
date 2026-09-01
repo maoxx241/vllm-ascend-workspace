@@ -411,6 +411,9 @@ and is staging evidence, not a ready model endpoint.
    base acl/native-compat paths. Start a new owned service/job, activate with
    its PID promptly (do not wait for weight loading), and heartbeat while it
    runs. Readiness still needs all ranks and an actual model request.
+   Only `poll` may submit a locally pending, unsubmitted request to the manager.
+   `preflight`, `activate`, `heartbeat`, and `release` reject that state without
+   contacting the host; `cancel` records local cancellation without submitting it.
 7. Stop only this run's workers, then request `release`. The host must observe
    every leased device free in repeated samples. `runtime_return` quarantines
    the container until an administrator re-verifies it; it never kills a
