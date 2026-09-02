@@ -38,7 +38,7 @@ python3 .agents/skills/machine-management/scripts/machine_add.py \
   --image rc
 ```
 
-The wrapper will detect A2 / A3 / 310P from `npu-smi` when possible and append `-a3` or `-310p` automatically for selector-based images.
+The wrapper detects A2 / A3 / A5 / 310P from detailed `npu-smi` board fields when possible and appends `-a3`, `-a5`, or `-310p` automatically for selector-based images. For A3 the probe prefers the combined `Chip Name + NPU Name` result (for example `Ascend910_9362`); an exact bare `Ascend910` token is retained only as a compatibility fallback.
 
 To scan all images already present in the target host Docker daemon, filter the machine-compatible `vllm-ascend` images, and deploy the newest by image creation time without pulling:
 

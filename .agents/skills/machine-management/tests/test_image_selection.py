@@ -37,6 +37,30 @@ class LocalLatestImageTests(unittest.TestCase):
         self.assertEqual(resolution.mirror_order, ())
         self.assertEqual(resolution.machine_type, "A3")
 
+    def test_discovery_recognizes_a5_image_suffixes(self) -> None:
+        images = [
+            {
+                "Id": "sha256:a5",
+                "Created": "2026-09-02T12:00:00Z",
+                "RepoTags": [
+                    "quay.io/ascend/vllm-ascend:main-a5",
+                    "quay.io/ascend/vllm-ascend:v0.12.0-950dt",
+                ],
+                "RepoDigests": [],
+            },
+            {
+                "Id": "sha256:a3",
+                "Created": "2026-09-02T13:00:00Z",
+                "RepoTags": ["quay.io/ascend/vllm-ascend:main-a3"],
+                "RepoDigests": [],
+            },
+        ]
+
+        result = discover(images, "A5")
+
+        self.assertEqual(result["eligible_count"], 1)
+        self.assertEqual(result["selected_image_id"], "sha256:a5")
+
     def test_discovery_filters_repository_and_machine_type_then_uses_created_time(self) -> None:
         images = [
             {

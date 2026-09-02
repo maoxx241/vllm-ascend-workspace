@@ -92,10 +92,11 @@ SEMVER_TAG_PATTERN = re.compile(
     r"^v?(?P<major>\d+)\.(?P<minor>\d+)\.(?P<patch>\d+)(?:(?P<kind>rc)(?P<kind_number>\d+))?$",
     re.IGNORECASE,
 )
-MACHINE_TYPE_CHOICES = ("A2", "A3", "310P")
+MACHINE_TYPE_CHOICES = ("A2", "A3", "A5", "310P")
 IMAGE_SUFFIX_BY_MACHINE_TYPE = {
     "A2": "",
     "A3": "-a3",
+    "A5": "-a5",
     "310P": "-310p",
 }
 SOC_TO_MACHINE_TYPE = {
@@ -124,6 +125,8 @@ SOC_TO_MACHINE_TYPE = {
     "ascend310p3vir08": "310P",
 }
 SOC_MATCH_ORDER = sorted(SOC_TO_MACHINE_TYPE, key=len, reverse=True)
+ASCEND_950_SOC_PATTERN = re.compile(r"\bascend950[a-z0-9_-]*", re.IGNORECASE)
+BARE_ASCEND_910_PATTERN = re.compile(r"\bascend910\b", re.IGNORECASE)
 
 
 LOCAL_IMAGE_DISCOVERY_PY = r'''
@@ -144,6 +147,8 @@ def _vaws_image_ref_machine_type(ref):
     if last_colon <= last_slash:
         return None
     tag = ref[last_colon + 1:].lower()
+    if any(marker in tag for marker in ("-a5", "-950dt", "-950pr")):
+        return "A5"
     if "-310p" in tag:
         return "310P"
     if "-a3" in tag:
@@ -248,7 +253,7 @@ def normalize_machine_type(value: str | None) -> str | None:
     normalized = value.strip().upper().replace("_", "")
     if normalized == "310P":
         return "310P"
-    if normalized in {"A2", "A3"}:
+    if normalized in {"A2", "A3", "A5"}:
         return normalized
     raise MachineManagementError(
         f"unsupported machine type {value!r}; expected one of: {', '.join(MACHINE_TYPE_CHOICES)}"
@@ -262,13 +267,72 @@ def normalize_soc_token(value: str | None) -> str | None:
     return normalized or None
 
 
+def npu_smi_value(text: str | None, field: str) -> str | None:
+    """Return one labelled value from npu-smi's colon-delimited output."""
+    if not text:
+        return None
+    pattern = re.compile(
+        rf"^\s*{re.escape(field)}\s*:\s*(.*?)\s*$", re.IGNORECASE | re.MULTILINE
+    )
+    match = pattern.search(text)
+    if match is None:
+        return None
+    value = match.group(1).strip()
+    return value or None
+
+
+def canonical_soc_from_board_text(text: str | None) -> str | None:
+    """Build the full SoC token from a detailed ``npu-smi -t board`` result.
+
+    A2/310P report the architecture prefix in ``Chip Type``. A3 and A5 report
+    the distinguishing part in ``NPU Name``. This mirrors the official CANN
+    query contract and vllm-ascend's setup-time chip detection.
+    """
+    chip_name = npu_smi_value(text, "Chip Name")
+    if not chip_name:
+        return None
+    chip_type = npu_smi_value(text, "Chip Type")
+    npu_name = npu_smi_value(text, "NPU Name")
+    normalized_chip_name = re.sub(r"\s+", "", chip_name)
+    normalized_chip_type = re.sub(r"\s+", "", chip_type or "")
+    normalized_npu_name = re.sub(r"\s+", "", npu_name or "")
+    lowered_chip_name = normalized_chip_name.lower()
+
+    if "310" in lowered_chip_name and normalized_chip_type:
+        return normalize_soc_token(normalized_chip_type + normalized_chip_name)
+    if "910" in lowered_chip_name:
+        if normalized_chip_type:
+            return normalize_soc_token(normalized_chip_type + normalized_chip_name)
+        if normalized_npu_name:
+            return normalize_soc_token(
+                f"{normalized_chip_name}_{normalized_npu_name}"
+            )
+    if "950" in lowered_chip_name and normalized_npu_name:
+        return normalize_soc_token(f"{normalized_chip_name}_{normalized_npu_name}")
+    return normalize_soc_token(normalized_chip_name)
+
+
+def machine_type_from_soc(soc: str | None) -> str | None:
+    normalized = normalize_soc_token(soc)
+    if normalized is None:
+        return None
+    if normalized.startswith("ascend950"):
+        return "A5"
+    return SOC_TO_MACHINE_TYPE.get(normalized)
+
+
 def detect_machine_type_from_text(text: str | None) -> tuple[str | None, str | None]:
     if not text:
         return None, None
     normalized = text.lower()
+    ascend_950_match = ASCEND_950_SOC_PATTERN.search(normalized)
+    if ascend_950_match is not None:
+        return ascend_950_match.group(0).lower(), "A5"
     for token in SOC_MATCH_ORDER:
         if token in normalized:
             return token, SOC_TO_MACHINE_TYPE[token]
+    if BARE_ASCEND_910_PATTERN.search(normalized) is not None:
+        return "ascend910", "A3"
     return None, None
 
 
@@ -320,6 +384,8 @@ def infer_machine_type_from_image(ref: str | None) -> str | None:
     if tag is None:
         return None
     lowered = tag.lower()
+    if any(marker in lowered for marker in ("-a5", "-950dt", "-950pr")):
+        return "A5"
     if "-310p" in lowered:
         return "310P"
     if "-a3" in lowered:
@@ -1127,6 +1193,7 @@ fi
 import json
 import os
 import pathlib
+import re
 import shutil
 import socket
 import subprocess
@@ -1177,6 +1244,9 @@ result: dict[str, object] = {
         "commands": [],
         "detected_soc": None,
         "machine_type": None,
+        "detection_source": None,
+        "persisted_soc": None,
+        "persisted_machine_type": None,
         "success": False,
         "sourced_scripts": [line for line in sourced_scripts.splitlines() if line],
         "env": {
@@ -1269,13 +1339,10 @@ if result["docker"]["present"]:
                 rows.append({"name": name, "status": status, "image": actual_image})
         result["managed_containers"] = rows
 
-combined_probe_text: list[str] = []
-for label, cmd in [
-    ("info", ["npu-smi", "info"]),
-    ("info-list", ["npu-smi", "info", "-l"]),
-    ("board-0", ["npu-smi", "info", "-t", "board", "-i", "0"]),
-    ("common-0", ["npu-smi", "info", "-t", "common", "-i", "0"]),
-]:
+fresh_probe_text: list[str] = []
+
+
+def probe_command(label: str, cmd: list[str]) -> str:
     rc, out, err = run(cmd, env=os.environ.copy())
     entry = {
         "label": label,
@@ -1288,20 +1355,142 @@ for label, cmd in [
     if rc == 0:
         result["npu_probe"]["success"] = True
         if out:
-            combined_probe_text.append(out)
+            fresh_probe_text.append(out)
         if err:
-            combined_probe_text.append(err)
+            fresh_probe_text.append(err)
+    return out if rc == 0 else ""
+
+
+def npu_smi_value(text: str, field: str) -> Optional[str]:
+    match = re.search(
+        rf"^\s*{re.escape(field)}\s*:\s*(.*?)\s*$",
+        text,
+        flags=re.IGNORECASE | re.MULTILINE,
+    )
+    if match is None:
+        return None
+    value = match.group(1).strip()
+    return value or None
+
+
+def first_npu_chip_ids(text: str) -> tuple[Optional[int], Optional[int]]:
+    for line in text.splitlines():
+        parts = line.split()
+        if len(parts) < 3 or not parts[0].isdigit() or not parts[1].isdigit():
+            continue
+        if any(part.lower().startswith("ascend") for part in parts[2:]):
+            return int(parts[0]), int(parts[1])
+    return None, None
+
+
+def canonical_soc_from_board_text(text: str) -> Optional[str]:
+    chip_name = npu_smi_value(text, "Chip Name")
+    if not chip_name:
+        return None
+    chip_type = npu_smi_value(text, "Chip Type")
+    npu_name = npu_smi_value(text, "NPU Name")
+    chip_name = re.sub(r"\s+", "", chip_name)
+    chip_type = re.sub(r"\s+", "", chip_type or "")
+    npu_name = re.sub(r"\s+", "", npu_name or "")
+    lowered_chip_name = chip_name.lower()
+    if "310" in lowered_chip_name and chip_type:
+        return (chip_type + chip_name).lower()
+    if "910" in lowered_chip_name:
+        if chip_type:
+            return (chip_type + chip_name).lower()
+        if npu_name:
+            return f"{chip_name}_{npu_name}".lower()
+    if "950" in lowered_chip_name and npu_name:
+        return f"{chip_name}_{npu_name}".lower()
+    return chip_name.lower()
+
+
+def machine_type_from_soc(soc: Optional[str]) -> Optional[str]:
+    if not soc:
+        return None
+    normalized = soc.strip().lower()
+    if normalized.startswith("ascend950"):
+        return "A5"
+    return SOC_TO_MACHINE_TYPE.get(normalized)
+
+
+def detect_from_text(text: str) -> tuple[Optional[str], Optional[str]]:
+    normalized = text.lower()
+    ascend_950_match = re.search(r"\bascend950[a-z0-9_-]*", normalized)
+    if ascend_950_match is not None:
+        return ascend_950_match.group(0), "A5"
+    for token in SOC_MATCH_ORDER:
+        if token in normalized:
+            return token, SOC_TO_MACHINE_TYPE[token]
+    if re.search(r"\bascend910\b", normalized) is not None:
+        return "ascend910", "A3"
+    return None, None
+
+
+probe_command("info", ["npu-smi", "info"])
+info_list = probe_command("info-list", ["npu-smi", "info", "-l"])
+info_map = probe_command("info-map", ["npu-smi", "info", "-m"])
+
+npu_id_text = npu_smi_value(info_list, "NPU ID")
+npu_id = int(npu_id_text) if npu_id_text and npu_id_text.isdigit() else 0
+mapped_npu_id, mapped_chip_id = first_npu_chip_ids(info_map)
+if mapped_npu_id is not None:
+    npu_id = mapped_npu_id
+chip_id = mapped_chip_id if mapped_chip_id is not None else 0
+result["npu_probe"]["query_npu_id"] = npu_id
+result["npu_probe"]["query_chip_id"] = chip_id
+
+board_device = probe_command(
+    "board-device",
+    ["npu-smi", "info", "-t", "board", "-i", str(npu_id)],
+)
+board_chip = probe_command(
+    "board-chip",
+    [
+        "npu-smi",
+        "info",
+        "-t",
+        "board",
+        "-i",
+        str(npu_id),
+        "-c",
+        str(chip_id),
+    ],
+)
+probe_command(
+    "common-device",
+    ["npu-smi", "info", "-t", "common", "-i", str(npu_id)],
+)
+
+board_device_soc = canonical_soc_from_board_text(board_device)
+board_chip_soc = canonical_soc_from_board_text(board_chip)
+precise_candidates = [
+    ("board-device", board_device_soc),
+    ("board-chip", board_chip_soc),
+]
+for source, soc in precise_candidates:
+    machine_type = machine_type_from_soc(soc)
+    if machine_type is not None:
+        result["npu_probe"]["detected_soc"] = soc
+        result["npu_probe"]["machine_type"] = machine_type
+        result["npu_probe"]["detection_source"] = source
+        break
+
+if result["npu_probe"]["machine_type"] is None:
+    soc, machine_type = detect_from_text("\n".join(fresh_probe_text))
+    if machine_type is not None:
+        result["npu_probe"]["detected_soc"] = soc
+        result["npu_probe"]["machine_type"] = machine_type
+        result["npu_probe"]["detection_source"] = "npu-smi-text"
 
 soc_from_env = os.environ.get("SOC_VERSION") or os.environ.get("VAWS_NPU_SOC")
-if soc_from_env:
-    combined_probe_text.append(soc_from_env)
-
-normalized_probe_text = "\n".join(combined_probe_text).lower()
-for token in SOC_MATCH_ORDER:
-    if token in normalized_probe_text:
-        result["npu_probe"]["detected_soc"] = token
-        result["npu_probe"]["machine_type"] = SOC_TO_MACHINE_TYPE[token]
-        break
+persisted_soc, persisted_machine_type = detect_from_text(soc_from_env or "")
+result["npu_probe"]["persisted_soc"] = persisted_soc
+result["npu_probe"]["persisted_machine_type"] = persisted_machine_type
+if result["npu_probe"]["machine_type"] is None and persisted_machine_type is not None:
+    result["npu_probe"]["detected_soc"] = persisted_soc
+    result["npu_probe"]["machine_type"] = persisted_machine_type
+    result["npu_probe"]["detection_source"] = "persisted-env-fallback"
 
 result["detected_soc"] = result["npu_probe"]["detected_soc"]
 result["machine_type"] = result["npu_probe"]["machine_type"]
@@ -1313,6 +1502,15 @@ result["prerequisites_ok"] = bool(
 result["warnings"] = []
 if result["machine_type"] is None:
     result["warnings"].append("machine type could not be inferred from npu-smi output; pass an explicit override if needed")
+if (
+    result["npu_probe"]["detection_source"] != "persisted-env-fallback"
+    and persisted_soc is not None
+    and result["detected_soc"] is not None
+    and persisted_soc != result["detected_soc"]
+):
+    result["warnings"].append(
+        "persisted SOC metadata differs from the fresh npu-smi board query; using the fresh hardware result"
+    )
 
 if image.get("policy") == "__LOCAL_IMAGE_DISCOVERY_POLICY__":
     discovery_machine_type = image.get("machine_type") or result["machine_type"]
@@ -1512,6 +1710,10 @@ infer_type_from_image() {
   image_ref="$1"
   lowered="$(printf '%s' "$image_ref" | tr '[:upper:]' '[:lower:]')"
   case "$lowered" in
+    *-a5*|*-950dt*|*-950pr*)
+      printf 'A5\n'
+      return 0
+      ;;
     *-310p*)
       printf '310P\n'
       return 0
