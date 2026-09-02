@@ -157,7 +157,7 @@ Accuracy beats coverage. The script exits non-zero (status `failed`) when **any*
   `analysis_status == "missing_kernel_details"`
 
 The last condition is the canonical "device-side data did not land" failure
-documented in `doc/profiling-inventory.md`. Treat all of the above as
+documented in `references/behavior.md` ("Output verification"). Treat all of the above as
 **re-collect required**, not as something the analysis skill can recover from.
 
 If the orchestrator fails after `serve_start`, it always tries to stop the service (graceful, then `--force`) so no orphan vLLM process is left behind.

@@ -18,6 +18,7 @@ LIB_DIR = ROOT / ".agents" / "lib"
 if str(LIB_DIR) not in sys.path:
     sys.path.insert(0, str(LIB_DIR))
 
+from vaws_remote_toolbox import ascend_env_preamble  # noqa: E402
 from vaws_session_state import load_session_lookup, session_benchmark_dir  # noqa: E402
 from vaws_ssh import base_ssh_options  # noqa: E402
 from vaws_validate import require_env_name  # noqa: E402
@@ -750,17 +751,14 @@ def remote_align_source(
 
 
 def _ascend_env_preamble() -> str:
-    """Shell preamble that sources the Ascend CANN environment."""
-    return (
-        "set -e; "
-        "if [ -f /etc/profile.d/vaws-ascend-env.sh ]; then"
-        "  set +u; source /etc/profile.d/vaws-ascend-env.sh; set -u;"
-        " fi; "
-        'export LD_LIBRARY_PATH='
-        '"/usr/local/Ascend/driver/lib64/driver'
-        ':/usr/local/Ascend/driver/lib64'
-        '${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"; '
-    )
+    """Shell preamble that sources the Ascend CANN environment.
+
+    Canonical form lives in ``vaws_remote_toolbox.ascend_env_preamble``; the
+    trailing newline keeps this prefix concatenation-safe for the one-line
+    remote scripts below (the historical copy was a ``; ``-terminated
+    one-liner — semantically identical, differently formatted).
+    """
+    return ascend_env_preamble(set_e=True, export_driver_lib=True) + "\n"
 
 
 def run_bench_on_remote(

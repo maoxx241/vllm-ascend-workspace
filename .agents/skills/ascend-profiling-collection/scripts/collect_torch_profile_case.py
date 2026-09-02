@@ -20,7 +20,7 @@ forwards ``--profiler-config`` to ``vllm serve``.
 
 Failure policy: if any rank's ``kernel_details.csv`` is missing after analyse
 (the canonical "device data did not land" case from
-``profiling-inventory.md``), the run is reported as failed and exits non-zero
+``references/behavior.md`` "Output verification"), the run is reported as failed and exits non-zero
 even though every previous step succeeded. Downstream analysis must not
 process degenerate roots silently.
 """
@@ -684,7 +684,7 @@ def main(argv: list[str] | None = None) -> int:
         manifest["error"] = (
             "profiling collection produced an unusable trace ("
             + "; ".join(reasons)
-            + "); re-collect required, see profiling-inventory.md"
+            + "); re-collect required, see SKILL.md Failure policy"
         )
         (run_dir / "manifest.json").write_text(
             json.dumps(manifest, indent=2, ensure_ascii=False) + "\n",

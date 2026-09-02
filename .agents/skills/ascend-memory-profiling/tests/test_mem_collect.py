@@ -22,6 +22,10 @@ for path in (str(SCRIPTS), str(LIB)):
 
 
 def load_module():
+    # Another skill's test suite may already have cached a different
+    # ``_common`` in sys.modules; force ``from _common import ...`` inside
+    # mem_collect.py to resolve to this skill's own scripts/_common.py.
+    sys.modules.pop("_common", None)
     spec = importlib.util.spec_from_file_location("_mem_collect_test", SCRIPTS / "mem_collect.py")
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)

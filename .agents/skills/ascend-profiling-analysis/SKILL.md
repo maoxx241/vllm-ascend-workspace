@@ -334,7 +334,8 @@ knowledge can't express it**. Suggested reading order:
 2. `scripts/ascend_profile/knowledge/semantic_conventions.yaml` — enums for
    `op_type` / `block_kind` / `finding_type` / `alignment_method`. New
    values must be added here first so downstream schema tests stay green.
-3. `scripts/ascend_profile/knowledge/operator_taxonomy.md` + Python
+3. `scripts/ascend_profile/knowledge/index.md` ("Operator taxonomy") +
+   `kernel_signatures.yaml` + Python
    `common.categories_and_roles()` — kernel name → `(op_categories,
    op_roles)`. (Rule loader from YAML is on the roadmap; current source of
    truth is still Python.)

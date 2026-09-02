@@ -11,8 +11,9 @@ shell-safe Ascend env preamble.
 The agent always passes ``--profile-root`` (the directory that contains one or
 more ``*_ascend_pt`` subdirectories, typically
 ``<runtime_dir>/<torch_profiler_dir>``). Every matching subdirectory is
-analysed in sorted order, then verified -- ``profiling-inventory.md``
-documents several captures where ``analyse`` "succeeded" but produced no
+analysed in sorted order, then verified -- ``references/behavior.md``
+("Output verification") documents several captures where ``analyse``
+"succeeded" but produced no
 ``kernel_details.csv`` (short capture window, missing FRAMEWORK data), so
 verification turns that failure mode into a hard exit instead of letting
 downstream analysis silently process degenerate roots.
@@ -115,7 +116,7 @@ def classify_status(outputs: dict[str, Any]) -> str:
     - ``ok``: every expected output present
     - ``missing_kernel_details``: kernel_details.csv missing (the canonical
       "analyse ran but device data did not land" case from
-      ``profiling-inventory.md``)
+      ``references/behavior.md`` "Output verification")
     - ``partial``: some other expected file is missing
     """
     if not outputs["kernel_details_csv"]["exists"]:
