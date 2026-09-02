@@ -328,6 +328,85 @@ class PoolTests(unittest.TestCase):
         self.assertFalse(self.backend.jobs[second["job_id"]]["quiet"])
         self.assertEqual(next(row for row in self.pool.catalog() if row["runtime_id"] == a["runtime_id"])["state"], "ready")
 
+    def test_managed_stop_is_not_overwritten_by_an_inflight_advance(self):
+        import threading
+
+        binding = self.bind("alice", self.root / "a")
+        job = self.managed("alice", binding)
+        advance_at_save = threading.Event()
+        release_advance = threading.Event()
+        stop_persisted = threading.Event()
+        advance_thread: dict[str, int] = {}
+        stop_thread: dict[str, int] = {}
+        original_save = self.pool._save_managed
+        original_put = self.pool.put
+        delayed_once = {"armed": True}
+
+        def delayed_save(row):
+            if (delayed_once["armed"] and threading.get_ident() == advance_thread.get("ident")
+                    and not row["cancel_requested"]):
+                delayed_once["armed"] = False
+                advance_at_save.set()
+                if not release_advance.wait(5):
+                    raise TimeoutError("test did not release the in-flight advance")
+            return original_save(row)
+
+        def tracked_put(db, kind, row):
+            result = original_put(db, kind, row)
+            if (kind == "job" and row["id"] == job["id"] and row["cancel_requested"]
+                    and threading.get_ident() == stop_thread.get("ident")):
+                stop_persisted.set()
+            return result
+
+        def advance():
+            advance_thread["ident"] = threading.get_ident()
+            return self.pool.managed_advance(job["id"])
+
+        def stop():
+            stop_thread["ident"] = threading.get_ident()
+            return self.pool.managed_control("alice", job["id"], "stop", force=True)
+
+        with mock.patch.object(self.pool, "_save_managed", side_effect=delayed_save), \
+                mock.patch.object(self.pool, "put", side_effect=tracked_put), \
+                ThreadPoolExecutor(2) as workers:
+            advance_future = workers.submit(advance)
+            self.assertTrue(advance_at_save.wait(5))
+            stop_future = workers.submit(stop)
+            try:
+                self.assertTrue(stop_persisted.wait(5))
+            finally:
+                release_advance.set()
+            advance_future.result(timeout=5)
+            stopped = stop_future.result(timeout=5)
+
+        self.assertTrue(stopped["cancel_requested"])
+        self.assertTrue(stopped["force"])
+        self.assertEqual(stopped["state"], "stopping")
+        self.assertIn(("job", "stop"), self.backend.calls)
+        self.assertTrue(self.backend.jobs[job["job_id"]]["quiet"])
+
+    def test_malformed_remote_job_reply_keeps_live_job_retryable(self):
+        binding = self.bind("alice", self.root / "a")
+        job = self.managed("alice", binding)
+        original_job = self.backend.job
+        malformed_once = {"armed": True}
+
+        def malformed_reply(runtime, job_id, action, **params):
+            if action == "status" and malformed_once["armed"]:
+                malformed_once["armed"] = False
+                raise json.JSONDecodeError("truncated remote JSON", "{", 1)
+            return original_job(runtime, job_id, action, **params)
+
+        self.backend.job = malformed_reply
+        uncertain = self.pool.managed_control("alice", job["id"])
+        self.assertEqual((uncertain["state"], uncertain["lease_state"]), ("uncertain", "active"))
+        self.assertEqual(self.backend.jobs[job["job_id"]]["state"], "running")
+
+        recovered = self.pool.managed_tick()
+        self.assertIsNone(recovered)
+        persisted = self.pool.status("alice")["jobs"][0]
+        self.assertEqual((persisted["state"], persisted["lease_state"]), ("running", "active"))
+
     def test_lost_go_reply_reuses_the_same_job_and_does_not_prepare_again(self):
         binding = self.bind("alice", self.root / "a")
         self.backend.fail_job_after = "go"

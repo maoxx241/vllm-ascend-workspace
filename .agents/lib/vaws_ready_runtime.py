@@ -19,7 +19,7 @@ from typing import Any
 
 from vaws_runtime_profile import digest
 from vaws_run_manifest import new_manifest, write_manifest, utc_now
-from vaws_managed_execution import JOB_TERMINAL, ManagedExecution
+from vaws_managed_execution import ExecutionRequestError, JOB_TERMINAL, ManagedExecution
 
 TERMINAL = {"released", "cancelled", "expired"}
 
@@ -271,16 +271,19 @@ class RuntimePool(ManagedExecution):
     def request_run(self, owner: str, binding_id: str, request_id: str, snapshots: dict[str, str],
                     expected_build_key: str, devices: list[int], npu_count: int,
                     priority: int = 0, queue_seconds: int = 1800):
-        safe_id(request_id)
+        try:
+            safe_id(request_id)
+        except ValueError as exc:
+            raise ExecutionRequestError(str(exc)) from exc
         if bool(devices) == bool(npu_count) or any(type(d) is not int or d < 0 for d in devices) or len(set(devices)) != len(devices) or npu_count < 0:
-            raise ValueError("supply distinct physical devices OR a positive npu_count")
+            raise ExecutionRequestError("supply distinct physical devices OR a positive npu_count")
         if not 1 <= queue_seconds <= 86400:
-            raise ValueError("queue_seconds must be between 1 and 86400")
+            raise ExecutionRequestError("queue_seconds must be between 1 and 86400")
         if not {"vllm", "vllm-ascend"}.issubset(snapshots) or any(not re.fullmatch(r"[0-9a-f]{40,64}", commit) for commit in snapshots.values()):
-            raise ValueError("pin the complete parity snapshot map before requesting cards")
+            raise ExecutionRequestError("pin the complete parity snapshot map before requesting cards")
         for name in snapshots:
             if name != "." and (PurePosixPath(name).is_absolute() or ".." in PurePosixPath(name).parts):
-                raise ValueError("unsafe snapshot path")
+                raise ExecutionRequestError("unsafe snapshot path")
         key = digest([owner, binding_id, request_id])
         intent = {"snapshots": snapshots, "build_key": expected_build_key, "devices": devices,
                   "npu_count": npu_count, "priority": priority, "queue_seconds": queue_seconds}
@@ -291,15 +294,15 @@ class RuntimePool(ManagedExecution):
                 for run in self.rows(db, "run"):
                     if run["id"] == key:
                         if run["intent"] != intent:
-                            raise ValueError("run request id reused with different parameters")
+                            raise ExecutionRequestError("run request id reused with different parameters")
                         return run
                     if run["binding_id"] == binding_id and run["state"] not in TERMINAL:
-                        raise ValueError("binding already has an unresolved execution")
+                        raise ExecutionRequestError("binding already has an unresolved execution")
                 if binding["state"] != "bound" or expected_build_key != binding["build_key"]:
-                    raise ValueError("cache miss or returned binding; prepare matching artifacts first")
+                    raise ExecutionRequestError("cache miss or returned binding; prepare matching artifacts first")
             observed = self.backend.inspect(runtime, idle=True, snapshots=snapshots)
             if observed != runtime["attestation"]:
-                raise ValueError("runtime/profile changed since checkout")
+                raise ExecutionRequestError("runtime/profile changed since checkout")
             run = {"id": key, "owner": owner, "binding_id": binding_id, "intent": intent,
                    "task_id": "pool-" + uuid.uuid4().hex, "state": "pending", "epoch": None,
                    "deadline": self.clock() + queue_seconds, "last_poll": 0, "created_at": utc_now(), "submitted": False}
@@ -308,9 +311,9 @@ class RuntimePool(ManagedExecution):
                 # refresh must not be overwritten by this stale snapshot.
                 binding = self.owned(db, "binding", binding_id, owner)
                 if binding["state"] != "bound" or expected_build_key != binding["build_key"]:
-                    raise ValueError("cache miss or returned binding; prepare matching artifacts first")
+                    raise ExecutionRequestError("cache miss or returned binding; prepare matching artifacts first")
                 if any(other["binding_id"] == binding_id and other["state"] not in TERMINAL for other in self.rows(db, "run")):
-                    raise ValueError("binding already has an unresolved execution")
+                    raise ExecutionRequestError("binding already has an unresolved execution")
                 self.put(db, "run", run)  # durable intent BEFORE the first host request
                 self.event(db, owner, "run-queued", run=key)
             self.export_manifest(run, binding)

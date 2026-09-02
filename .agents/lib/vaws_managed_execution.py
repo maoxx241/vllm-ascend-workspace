@@ -14,6 +14,10 @@ JOB_TERMINAL = {"succeeded", "failed", "timeout", "cancelled", "inconclusive"}
 LEASE_TERMINAL = {"released", "cancelled", "expired"}
 
 
+class ExecutionRequestError(ValueError):
+    """A permanent request-validation failure that cannot succeed on retry."""
+
+
 class ManagedExecution:
     def managed_start(self, owner, binding_id, request_id, snapshots, expected_build_key,
                       devices, npu_count, command, env, timeout_seconds=1800,
@@ -55,7 +59,7 @@ class ManagedExecution:
             binding = self.owned(db, "binding", job["binding_id"], owner)
             runtime = self.get(db, "runtime", binding["runtime_id"])
             if action == "stop":
-                job.update(cancel_requested=True, force=bool(force))
+                job.update(cancel_requested=True, force=bool(job.get("force") or force))
                 self.put(db, "job", job)
             elif action not in {"status", "tail"}:
                 raise ValueError("managed execution action must be status, tail or stop")
@@ -158,7 +162,7 @@ class ManagedExecution:
                 else:
                     job.update(state=run["state"], lease_state=run["state"])
                 job.pop("error", None)
-            except ValueError as exc:
+            except ExecutionRequestError as exc:
                 # Deterministic validation failures (bad snapshot, build_key
                 # mismatch, an unresolved execution on the binding) can never
                 # succeed on retry. Fail terminally instead of wedging the
@@ -171,6 +175,13 @@ class ManagedExecution:
     def _save_managed(self, job):
         job["last_poll"] = self.clock()
         with self.transaction() as db:
+            # Stop intent is monotonic. A concurrent control request may have
+            # persisted cancellation while this advancement was doing remote
+            # work from an older snapshot; never overwrite it on save.
+            current = self.get(db, "job", job["id"])
+            if current.get("cancel_requested"):
+                job["cancel_requested"] = True
+                job["force"] = bool(job.get("force") or current.get("force"))
             self.put(db, "job", job)
             runs = [row for row in self.rows(db, "run") if row["id"] == job["id"]]
             binding = self.get(db, "binding", job["binding_id"])
