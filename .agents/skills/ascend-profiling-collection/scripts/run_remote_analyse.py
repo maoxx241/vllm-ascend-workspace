@@ -82,14 +82,19 @@ def list_ascend_pt_dirs(ep, profile_root: str) -> list[str]:
     return [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
 
-def run_analyse(ep, remote_dir: str) -> None:
-    """Run torch_npu.profiler.profiler.analyse(remote_dir) on the container."""
+def run_analyse(ep, remote_dir: str, *, timeout: float = 1800) -> None:
+    """Run torch_npu.profiler.profiler.analyse(remote_dir) on the container.
+
+    analyse() parses every raw trace under the rank dir; multi-rank MoE
+    captures routinely exceed the generic 180s ssh_exec default, so this
+    call carries its own generous bound.
+    """
     py = (
         "from torch_npu.profiler.profiler import analyse\n"
         f"analyse({json.dumps(remote_dir)})\n"
     )
     script = f"{ASCEND_ENV_PREAMBLE}\npython3 -c {shlex.quote(py)}\n"
-    result = ssh_exec(ep, script, check=False)
+    result = ssh_exec(ep, script, check=False, timeout=timeout)
     if result.returncode != 0:
         raise RuntimeError(
             f"remote analyse({remote_dir!r}) failed (rc={result.returncode}):\n"
@@ -131,6 +136,7 @@ def analyse_profile_root(
     profile_root: str,
     *,
     expected_ranks: int | None = None,
+    analyse_timeout: float = 1800,
 ) -> dict[str, Any]:
     """Discover, analyse, and verify every *_ascend_pt under profile_root.
 
@@ -164,7 +170,7 @@ def analyse_profile_root(
     analysed: list[dict[str, Any]] = []
     for path in targets:
         emit_progress("analyse", f"analysing {path}")
-        run_analyse(ep, path)
+        run_analyse(ep, path, timeout=analyse_timeout)
         outputs = verify_outputs(ep, path)
         status = classify_status(outputs)
         analysed.append({
@@ -228,6 +234,12 @@ def build_parser() -> argparse.ArgumentParser:
             "was complete"
         ),
     )
+    p.add_argument(
+        "--analyse-timeout",
+        type=float,
+        default=1800,
+        help="per-rank timeout in seconds for the remote analyse() call",
+    )
     return p
 
 
@@ -244,7 +256,8 @@ def main(argv: list[str] | None = None) -> int:
 
         emit_progress("discover", f"listing *_ascend_pt under {args.profile_root}")
         bundle = analyse_profile_root(
-            ep, args.profile_root, expected_ranks=args.expected_ranks
+            ep, args.profile_root, expected_ranks=args.expected_ranks,
+            analyse_timeout=args.analyse_timeout,
         )
         bundle["machine"] = alias
         bundle["mode"] = target.mode

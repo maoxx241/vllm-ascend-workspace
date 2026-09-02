@@ -330,6 +330,8 @@ def _build_serve_args(args: argparse.Namespace, profiler_config: dict[str, Any])
     ])
     if args.skip_parity:
         serve_args.append("--skip-parity")
+    if args.health_timeout is not None:
+        serve_args.extend(["--health-timeout", str(args.health_timeout)])
 
     serve_args.append("--")
     serve_args.extend([
@@ -452,6 +454,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--request-timeout", type=int, default=DEFAULT_REQUEST_TIMEOUT,
                    help="per chat-completions request timeout (seconds)")
+    p.add_argument(
+        "--health-timeout", type=int, default=None,
+        help=("passthrough to serve_start --health-timeout; large quantized "
+              "models loading from shared storage routinely exceed the 300s "
+              "default while still making progress"),
+    )
     p.add_argument(
         "--profile-control-timeout", type=int,
         default=DEFAULT_PROFILE_CONTROL_TIMEOUT,

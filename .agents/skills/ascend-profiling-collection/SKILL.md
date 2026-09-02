@@ -72,7 +72,7 @@ python3 .agents/skills/ascend-profiling-collection/scripts/collect_torch_profile
   [--prompt-tokens <N>] [--followup-output-tokens <N>] \
   [--benchmark-total-requests <N>] [--benchmark-concurrency <N>] \
   [--benchmark-success-threshold <f>] \
-  [--request-timeout <s>] [--profile-control-timeout <s>] \
+  [--request-timeout <s>] [--profile-control-timeout <s>] [--health-timeout <s>] \
   [--torch-profiler-dir <relpath>] [--torch-profiler-with-stack] \
   [--image-path <local-path>] [--image-height <px>] \
   [--skip-parity]
@@ -118,7 +118,7 @@ The script reads the service port from `.vaws-local/sessions/<id>/serving.json` 
 ```bash
 python3 .agents/skills/ascend-profiling-collection/scripts/run_remote_analyse.py \
   [--session-id <id> | --session-file <path>] --profile-root <remote-path> \
-  [--expected-ranks <N>]
+  [--expected-ranks <N>] [--analyse-timeout <s>]
 ```
 
 Discovers every `*_ascend_pt` under `--profile-root`, runs `torch_npu.profiler.profiler.analyse()` on each, and verifies that `ASCEND_PROFILER_OUTPUT/kernel_details.csv` and `trace_view.json` landed. Exits non-zero if any rank is incomplete.
