@@ -130,3 +130,42 @@ def test_html_status_and_report_mode_enums():
         f"report_mode values emitted by report.py but missing in YAML: "
         f"{sorted(missing)}"
     )
+
+
+def test_anomaly_tag_enum_matches_summarize():
+    """Every anomaly tag summarize.py can emit must be listed in the YAML."""
+    src = (
+        Path(__file__).resolve().parent.parent
+        / "scripts"
+        / "ascend_profile"
+        / "summarize.py"
+    ).read_text()
+    python_values = set(re.findall(r"tags\.append\(\s*[\"']([A-Z_]+)[\"']", src))
+    yaml_values = _load_enum("anomaly_tag")
+    missing = python_values - yaml_values
+    assert not missing, (
+        f"anomaly_tag values emitted by summarize.py but missing in "
+        f"semantic_conventions.yaml: {sorted(missing)}"
+    )
+    # ``RECURRING_BUBBLE_PATTERN`` is rank-scoped (rank_summary.csv +
+    # diagnostics finding), never a per-step tag; the YAML documents that.
+    assert "RECURRING_BUBBLE_PATTERN" in yaml_values
+
+
+def test_soft_root_cause_label_enum_matches_host_trace():
+    """Every soft-attribution label host_trace.py can emit must be listed."""
+    src = (
+        Path(__file__).resolve().parent.parent
+        / "scripts"
+        / "ascend_profile"
+        / "host_trace.py"
+    ).read_text()
+    python_values = set(
+        re.findall(r"[\"'](possible_[a-z_]+|insufficient_evidence)[\"']", src)
+    )
+    yaml_values = _load_enum("soft_root_cause_label")
+    missing = python_values - yaml_values
+    assert not missing, (
+        f"soft_root_cause_label values emitted by host_trace.py but missing "
+        f"in semantic_conventions.yaml: {sorted(missing)}"
+    )

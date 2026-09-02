@@ -38,6 +38,7 @@ names:
 - `normalize.py`
 - `segment.py`
 - `summarize.py`
+- `host_trace.py`  (host-side `trace_view.json` streaming parse + bubble soft attribution)
 - `cross_rank.py`
 - `diagnostics.py`
 - `report.py`

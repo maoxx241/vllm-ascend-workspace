@@ -7,6 +7,12 @@ without any Ascend NPU hardware, GPU, or remote SSH:
   (`common.resolve_attention_family`) against kernel bags from real traces,
   and verifies the HTML report (`html_report.detect_attention_subtype`) uses
   the same resolution so test contract and report output cannot drift.
+- `test_bubble_attribution.py` — covers the idle-pattern detection salvaged
+  from the retired user-level `ascend-profiling-anomaly` skill: edge-gap
+  anomaly tags (`PRELAUNCH_GAP_HEAVY` / `TAIL_GAP_HEAVY`), the rank-level
+  recurring-bubble rollup + `recurring_bubble_pattern` finding,
+  `PARTIAL_CAPTURE_BOUNDARY` conservatism, and host-side soft attribution
+  (`host_trace.py`) with and without `trace_view.json`.
 - `test_hardware_insights.py` — verifies hardware peak loading
   (static theoretical peaks, CANN platform config parsing,
   `peak_flops_per_second`) and the derived operator-efficiency rows.

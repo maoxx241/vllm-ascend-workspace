@@ -1005,6 +1005,7 @@ def markdown_report(output_dir: Path, report_id: str) -> str:
             "- `report.xlsx:raw_kernel_index` maps normalized event ids back to original `kernel_details.csv` rows.",
             "- `report.xlsx:cross_rank_alignment` contains cross-rank step/operator alignment evidence.",
             "- `diagnosis_findings.json` is the machine-readable claim source for this Markdown report.",
+            "- `report.xlsx:bubble_windows` rows carry per-bubble host-side soft attribution (`soft_attribution.soft_root_cause_labels`, salvaged from the retired anomaly skill's rulebook §11) when `trace_view.json` was registered for the rank.",
             "",
             "## 15. Limitations",
             "",
@@ -1015,9 +1016,16 @@ def markdown_report(output_dir: Path, report_id: str) -> str:
             "- Model fingerprint matching narrows candidates; vocab can be inferred only when lm_head/logits shapes are visible, and tensor parallelism may expose only a shard.",
             "- MFU is only a real capture-hardware metric when the selected hardware comes from profiling provenance, a collection manifest, a hardware profile, or explicit user input.",
             "- Operator FLOPs / bytes / roofline estimates are derived ranking signals, not diagnosis findings.",
-            "",
         ]
     )
+    # Host-trace soft-attribution status from the summarize stage: missing
+    # trace_view.json or truncated retention must be visible here, not
+    # just in summary_manifest.json.
+    host_trace = summary_manifest.get("host_trace") or {}
+    for item in host_trace.get("limitations") or []:
+        if str(item).strip():
+            lines.append(f"- {item}")
+    lines.append("")
     return "\n".join(lines)
 
 

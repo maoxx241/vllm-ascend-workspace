@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from collections import defaultdict
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -194,6 +195,65 @@ def diagnose_rank_workload(rank_rows: Sequence[Mapping[str, Any]], step_rows: Se
     return findings
 
 
+def diagnose_recurring_bubbles(rank_rows: Sequence[Mapping[str, Any]], step_rows: Sequence[Mapping[str, Any]]) -> list[DiagnosisFinding]:
+    """Rank-level recurring-bubble finding (rulebook §10 of the retired
+    ascend-profiling-anomaly skill: >= 60% of complete steps with
+    ``bubble_count > 0``).
+
+    The flag and the dominant idle family are computed in
+    ``summarize.recurring_bubble_rollup`` and read back from
+    ``rank_summary.csv``; per-step evidence ids come from the bubbling
+    steps in ``step_summary.csv`` (capped at 8 so the finding stays
+    readable).
+    """
+
+    bubbling_evidence_by_rank: dict[str, list[str]] = defaultdict(list)
+    for row in step_rows:
+        if row.get("segment_type") != "step":
+            continue
+        if as_float(row, "bubble_count") <= 0:
+            continue
+        rank_id = str(row.get("rank_id") or "")
+        evidence_ids = parse_jsonish(row.get("evidence_ids"), [])
+        if evidence_ids:
+            bubbling_evidence_by_rank[rank_id].append(str(evidence_ids[0]))
+    findings: list[DiagnosisFinding] = []
+    for row in rank_rows:
+        if str(row.get("recurring_bubble_pattern")).lower() != "true":
+            continue
+        rank_id = str(row.get("rank_id") or "")
+        evidence = tuple(bubbling_evidence_by_rank.get(rank_id, [])[:8])
+        limitations: tuple[str, ...] = ()
+        if not evidence:
+            limitations = (
+                "Aggregate over step_summary.csv rows for this rank; no per-step "
+                "evidence id was available to reference.",
+            )
+        findings.append(
+            finding(
+                finding_type="recurring_bubble_pattern",
+                scope="rank",
+                summary=(
+                    f"Rank {rank_id} shows device-idle bubbles in "
+                    f"{as_float(row, 'bubble_recurrence_ratio') * 100:.0f}% of its steps "
+                    f"(dominant idle pattern: {row.get('dominant_idle_pattern')})."
+                ),
+                severity="medium",
+                confidence="medium",
+                rank_ids=(rank_id,),
+                evidence_ids=evidence,
+                metrics={
+                    "bubble_recurrence_ratio": as_float(row, "bubble_recurrence_ratio"),
+                    "bubbling_step_count": row.get("bubbling_step_count"),
+                    "dominant_idle_pattern": row.get("dominant_idle_pattern"),
+                    "step_count": row.get("step_count"),
+                },
+                limitations=limitations,
+            )
+        )
+    return findings
+
+
 def diagnose_profile(output_dir: Path) -> dict[str, Any]:
     alignment_rows = csv_rows(output_dir / "cross_rank_alignment.csv")
     rank_rows = csv_rows(output_dir / "rank_summary.csv")
@@ -202,6 +262,7 @@ def diagnose_profile(output_dir: Path) -> dict[str, Any]:
     aicpu_rows = csv_rows(output_dir / "aicpu_summary.csv")
     findings = diagnose_cross_rank(alignment_rows)
     findings.extend(diagnose_rank_workload(rank_rows, step_rows))
+    findings.extend(diagnose_recurring_bubbles(rank_rows, step_rows))
     for row in wait_rows:
         if str(row.get("is_false_hotspot_risk")).lower() == "true":
             # ``wait_anchor_ops.csv`` is itself the per-kernel evidence

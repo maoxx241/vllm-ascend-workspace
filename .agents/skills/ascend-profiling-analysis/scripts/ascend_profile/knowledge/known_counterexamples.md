@@ -1,5 +1,26 @@
 # Known Counterexamples
 
+## Salvaged anomaly rules (provenance note)
+
+The edge-gap / recurrence / capture-boundary / host-attribution rules in
+`summarize.py` + `host_trace.py` were salvaged from the retired user-level
+`ascend-profiling-anomaly` skill (`scripts/reference_host_gap_branch.py`,
+`references/rulebook.md` §10/§11/§12). Thresholds were carried over
+unchanged (`>= max(1.0 ms, 10% wall)` edge gaps, `>= 60%` step recurrence,
+`0.2 / 0.05 / 0.1` host-coverage boundaries, wait-anchor `0.95 / 10 us /
+top-10`, AICPU `0.9 / 0.2`). Two deliberate divergences from the old
+prototype, both conservative:
+
+- The old skill's step windows came from row-midpoint tiling, so
+  prelaunch/tail gaps were intra-window; this project's windows are
+  event-derived, so the gaps are measured against neighbouring segments
+  (exact cover makes that the same idle). Capture edges report `None`
+  (unknown), never zero.
+- `RECURRING_BUBBLE_PATTERN` gained a `>= 3 complete steps` minimum-vote
+  guard, and `PARTIAL_CAPTURE_BOUNDARY` requires the incomplete boundary
+  segment to hold at least half the median complete-step event count —
+  the old rulebook tagged on any capture-edge anomaly.
+
 ## GLM5 MLA + sparse attention + MTP
 
 - Capture: `D:\profiling\test\8K-1K-W8A8-TP8-MTP3-1BS`

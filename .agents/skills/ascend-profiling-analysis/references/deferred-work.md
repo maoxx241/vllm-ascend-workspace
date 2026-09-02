@@ -83,7 +83,8 @@ without editing Python. See review §6.5 for the proposed shape.
 
 **Partial progress:** `scripts/ascend_profile/knowledge/semantic_conventions.yaml`
 now pins the enum catalogue (`op_type`, `op_roles`, `op_categories`,
-`bound_family`, `block_kind`, `finding_type`, `alignment_method`,
+`bound_family`, `block_kind`, `finding_type`, `anomaly_tag`,
+`dominant_idle_pattern`, `soft_root_cause_label`, `alignment_method`,
 `alignment_confidence`, `html_status`, `report_mode`).
 `tests/test_semantic_conventions.py` keeps Python and YAML in sync. The
 next step is replacing the Python rule body of `categories_and_roles()`
@@ -182,9 +183,32 @@ restructuring touch `segment.py` together.
 Acceptance: dsv4 prefill segment stage finishes in < 60 s; existing
 unit tests in `tests/test_segment_validator.py` continue to pass.
 
-## 11. `ascend-profiling-anomaly` overlap
+## 11. `ascend-profiling-anomaly` overlap — RESOLVED (deprecate)
 
 The user-level `ascend-profiling-anomaly` skill (in `.claude/`) still
 operates on raw kernel_details for ad-hoc anomaly hunts. Once this
 skill stabilizes, decide whether to (a) deprecate the anomaly skill,
 or (b) have it call into this skill's framework as a thin orchestrator.
+
+**Resolution (profiling-skills refactor, Phase 2):** option (a). The
+anomaly skill's unique detection capabilities were salvaged into this
+framework with thresholds unchanged (its rulebook §10/§11/§12):
+
+- `PRELAUNCH_GAP_HEAVY` / `TAIL_GAP_HEAVY` step tags and
+  `prelaunch_gap_ms` / `tail_gap_ms` columns (`summarize.neighbor_gap_map`,
+  `summarize.anomaly_tags`);
+- rank-level `RECURRING_BUBBLE_PATTERN` rollup + `dominant_idle_pattern`
+  (`summarize.recurring_bubble_rollup`, `diagnostics.diagnose_recurring_bubbles`);
+- conservative `PARTIAL_CAPTURE_BOUNDARY`
+  (`summarize.apply_partial_capture_boundary_tags`);
+- host-side bubble soft attribution from `trace_view.json`
+  (`host_trace.py`, `evidence/bubble_windows.jsonl:soft_attribution`).
+
+Already covered before the salvage (verified identical thresholds):
+bubble detection (`common.bubble_windows`, `DEVICE_IDLE_GAP_HEAVY` /
+`INTERNAL_BUBBLE_HEAVY`), wait-anchor false hotspots
+(`0.95 / 10 us / top-10`), AICPU exposure (`0.9 / 0.2`). The anomaly
+skill's Mode-1 orchestration (collect + analyze) is owned by
+`ascend-profiling-collection`; its `--machine` entry is deprecated.
+The old skill keeps a DEPRECATED banner pointing here and is no longer
+maintained.
