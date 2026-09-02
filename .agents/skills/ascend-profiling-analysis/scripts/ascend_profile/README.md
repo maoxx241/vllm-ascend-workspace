@@ -258,9 +258,11 @@ Never hide an anomaly because the root cause is unclear.  Emit the anomaly with
 
 ## Schema
 
-The schema draft lives in `schemas/analysis_bundle.schema.json`.  It is designed
-to be permissive enough for iteration while keeping core ids and evidence fields
-stable.
+There is no JSON-schema registry: the earlier `schemas/analysis_bundle.schema.json`
+draft had zero consumers and was deleted.  The artifact contract is pinned by the
+per-stage `*_manifest.json` files, `knowledge/semantic_conventions.yaml` (enum
+values), and the schema tests under
+`.agents/skills/ascend-profiling-analysis/tests/`.
 
 ## Agent skill
 

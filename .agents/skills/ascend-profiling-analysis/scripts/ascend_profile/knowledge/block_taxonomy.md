@@ -82,7 +82,7 @@ Family names follow the **DeepSeek papers**, not the CANN backend
 class (DSA and CSA both route through `AscendSFABackend` on Ascend,
 but they are different paper architectures distinguished by whether
 the Compressor kernel is present). The decision is implemented exactly
-once in `common.resolve_attention_family(categories)`, where
+once in `rules.resolve_attention_family(categories)`, where
 `categories` is the union of `op_categories` emitted by
 `categories_and_roles` for the events in the block. The HTML report
 function `detect_attention_subtype` is a thin wrapper around that
@@ -114,7 +114,7 @@ resolver, so the report and the unit-test contract cannot drift apart.
    `KvRmsNormRopeCache` which are picked up earlier in the decision
    order, so MLA blocks still pin cleanly to `mla`.)
 
-7. **Shape-based refinement (best-effort)** — `common.refine_dense_attention_from_shapes`:
+7. **Shape-based refinement (best-effort)** — `rules.refine_dense_attention_from_shapes`:
 
    After step 6 lands on `gqa_or_mha`, we read
    `kernel_details.csv:Input Shapes` for the FIA / UnpadFA events in
@@ -182,8 +182,9 @@ the per-operator drill-down lives in `block_summary.csv:top_ops` and
 `operator_summary.csv`.
 
 If a future taxonomy needs finer granularity, the rule is the same as
-the rest of this codebase: declare an explicit role in
-`common.py:categories_and_roles`, surface it as a new `block_kind`
+the rest of this codebase: declare an explicit rule in
+`kernel_signatures.yaml:match_rules` (evaluated by
+`rules.categories_and_roles`), surface it as a new `block_kind`
 above, and document the boundary rule here -- never grep kernel names
 inline.
 

@@ -207,7 +207,7 @@ families:
       MHA / GQA / MQA — it returns the umbrella ``gqa_or_mha``.
 
       Shape-based refinement (best-effort) — implemented in
-      ``common.refine_dense_attention_from_shapes`` and invoked by
+      ``rules.refine_dense_attention_from_shapes`` and invoked by
       ``html_report.detect_attention_subtype``:
         ``kernel_details.csv:Input Shapes`` records the Q/K tensors
         per event. When those shapes are present and pass sanity
@@ -308,9 +308,50 @@ cheat_sheet:
       7. Otherwise  →  family = attn.
   overlay:
     - "If ``attention.kvcomp.topk`` is present, append ``+kvc`` to the family label."
+  # ------------------------------------------------------------------
+  # Machine-readable form of the decision order above. LOADED AT RUNTIME
+  # by ``rules.resolve_attention_family``; keep it in lockstep with the
+  # prose ``decision_order`` (the prose explains *why*, this list is what
+  # the code evaluates).
+  #
+  # Each step is ``{family, all?, any?, none?}``: the step matches when
+  # every ``all`` category is present, at least one ``any`` category is
+  # present (if given), and no ``none`` category is present. Steps are
+  # evaluated in order; the first match wins. A step with no condition
+  # keys is the unconditional fallback (``attn``).
+  #
+  # The conditions are written for short-circuit evaluation: a later step
+  # may rely on earlier steps having failed (e.g. ``linear`` needs no
+  # ``none`` list because any block carrying MLA / sparse markers resolves
+  # earlier). Do NOT read a step's condition as a standalone definition —
+  # read the ordered list.
+  resolver:
+    - family: csa
+      all: [attention.kv_compressor, attention.lightning_indexer, attention.sparse_sharedkv]
+    - family: hca
+      all: [attention.kv_compressor, attention.flash_score]
+      none: [attention.lightning_indexer, attention.sparse_sharedkv]
+    - family: dsa
+      all: [attention.lightning_indexer, attention.sparse_sharedkv]
+      none: [attention.kv_compressor]
+    - family: mla
+      # ``attention.mla`` itself is emitted together with
+      # ``attention.mla.preprocess`` by the preprocess rule; it is listed
+      # so the resolver condition mirrors the historical Python exactly.
+      any: [attention.mla, attention.mla.preprocess, attention.mla.kv_norm_rope_cache, attention.mla.v_up_proj]
+      none: [attention.kv_compressor, attention.lightning_indexer, attention.sparse_sharedkv]
+    - family: linear
+      all: [attention.linear_or_mamba]
+    - family: gqa_or_mha
+      all: [attention.flash_score]
+    - family: attn
+  overlay_rule:
+    when_any: [attention.kvcomp.topk]
+    suffix: "+kvc"
   implementation: |
     The decision is implemented exactly once in
-    ``common.resolve_attention_family(categories)``;
+    ``rules.resolve_attention_family(categories)``, which loads the
+    structured ``resolver`` / ``overlay_rule`` above from this file;
     ``html_report.detect_attention_subtype`` and
     ``tests/test_attention_families.py`` both consume that single
     function so the report output and the test contract cannot drift.

@@ -5,7 +5,7 @@ description: Analyze Ascend NPU torch profiler output (kernel_details.csv / trac
 
 # Ascend Profiling Analysis
 
-> Status: **experimental / beta**. 当前 PR 主要提供：远端 pipeline、evidence-chained report、HTML 三级聚焦视图、stage selector。**主动 knowledge 仍在 Python 内（`common.py:categories_and_roles`、`segment.py` 切分规则、`classify.py` block 拆分等）**，YAML 化 knowledge 已起步（见 [Knowledge map](#knowledge-map-for-agents)）但尚未替换 Python 规则。新模型 / 新算子族碰到问题时，仍可能需要改 Python，请把 counterexample 落到 `knowledge/known_counterexamples.md` 再改代码。
+> Status: **experimental / beta**. 当前 PR 主要提供：远端 pipeline、evidence-chained report、HTML 三级聚焦视图、stage selector。Knowledge 已分层：kernel 分类规则（`kernel_signatures.yaml:match_rules`）、attention 家族判定（`attention_families.yaml:cheat_sheet.resolver`）、diagnosis 阈值与文案（`diagnosis_rules.yaml`）、segment 层锚点先验（`segmentation_rules.yaml`）均为运行时加载的 YAML；仍在 Python 内的是 `segment.py` 切分策略、`classify.py` block 拆分、以及 finding 的触发条件（见 [Knowledge map](#knowledge-map-for-agents)）。新模型 / 新算子族碰到问题时，优先改 knowledge YAML；改 Python 前请把 counterexample 落到 `knowledge/known_counterexamples.md`。
 
 Remote substrate rule: use `.remote-dev` remote tools for ad hoc remote
 read/edit/bash/search/patch work around profiling roots and generated reports.
@@ -338,10 +338,9 @@ knowledge can't express it**. Suggested reading order:
    `op_type` / `block_kind` / `finding_type` / `alignment_method`. New
    values must be added here first so downstream schema tests stay green.
 3. `scripts/ascend_profile/knowledge/index.md` ("Operator taxonomy") +
-   `kernel_signatures.yaml` + Python
-   `common.categories_and_roles()` — kernel name → `(op_categories,
-   op_roles)`. (Rule loader from YAML is on the roadmap; current source of
-   truth is still Python.)
+   `kernel_signatures.yaml`（`match_rules:` 段即运行时规则）+
+   `rules.categories_and_roles()` — kernel name → `(op_categories,
+   op_roles)`.（规则已由 YAML 驱动：改分类只动 YAML；loader 在 `rules.py`。）
 4. `scripts/ascend_profile/knowledge/communication_taxonomy.md` — HCCL /
    dispatch / combine semantics.
 5. `scripts/ascend_profile/knowledge/segmentation_rules.yaml` — single
@@ -386,9 +385,9 @@ artifacts are reused.
     ascend_profile/            # analysis framework, runs remotely as a package
       analyze.py normalize.py segment.py classify.py summarize.py
       cross_rank.py diagnostics.py report.py html_report.py sweep.py
-      common.py
-      knowledge/               # taxonomy / pipeline / step-anatomy docs
-      schemas/                 # analysis_bundle.schema.json
+      common.py                # facade; real modules: models.py store.py
+                               # sources.py pipeline.py work.py rules.py metrics.py
+      knowledge/               # taxonomy rules / enums / thresholds (YAML) + docs
       README.md                # framework data contract
 ```
 

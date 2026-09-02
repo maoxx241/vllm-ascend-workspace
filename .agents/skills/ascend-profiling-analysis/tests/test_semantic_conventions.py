@@ -62,7 +62,11 @@ def test_op_type_enum_matches_python():
 
 
 def test_finding_type_enum_matches_diagnostics():
-    """Every diagnostics finding_type literal must be in the YAML."""
+    """Every diagnostics finding_type literal must be in the YAML.
+
+    Sources checked: the ``finding_type="..."`` literals at the
+    ``diagnostics.py`` call sites AND the ``findings:`` keys of
+    ``knowledge/diagnosis_rules.yaml`` (the runtime metadata source)."""
     src = (
         Path(__file__).resolve().parent.parent
         / "scripts"
@@ -72,11 +76,22 @@ def test_finding_type_enum_matches_diagnostics():
     python_values = set(re.findall(r"finding_type\s*=\s*[\"']([^\"']+)[\"']", src))
     # ``finding_type=finding_type`` is a parameter pass-through; drop it.
     python_values.discard("finding_type")
+    rules_doc = YAML.safe_load(
+        (KNOWLEDGE_DIR / "diagnosis_rules.yaml").read_text()
+    )
+    yaml_finding_types = set((rules_doc.get("findings") or {}).keys())
     yaml_values = _load_enum("finding_type")
-    missing = python_values - yaml_values
+    missing = (python_values | yaml_finding_types) - yaml_values
     assert not missing, (
-        f"finding_type values emitted by diagnostics.py but missing in "
-        f"semantic_conventions.yaml: {sorted(missing)}"
+        f"finding_type values emitted by diagnostics.py / diagnosis_rules.yaml "
+        f"but missing in semantic_conventions.yaml: {sorted(missing)}"
+    )
+    # Parity: every finding_type emitted in Python must carry metadata in
+    # diagnosis_rules.yaml, and every YAML entry must be emitted somewhere.
+    assert python_values == yaml_finding_types, (
+        "diagnostics.py finding_type literals and diagnosis_rules.yaml "
+        f"findings: keys drifted: only in Python: {sorted(python_values - yaml_finding_types)}, "
+        f"only in YAML: {sorted(yaml_finding_types - python_values)}"
     )
 
 

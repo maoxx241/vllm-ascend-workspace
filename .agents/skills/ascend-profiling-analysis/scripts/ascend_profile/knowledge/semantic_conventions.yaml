@@ -2,8 +2,9 @@ version: 1
 
 # Stable enumerations used across CSV / JSON artifacts in this skill.
 #
-# Source of truth for these enums lives in Python today
-# (``common.py:categories_and_roles``, ``classify.py:decompose_layer_into_blocks``,
+# Source of truth for these enums lives in the emitting code
+# (``kernel_signatures.yaml:match_rules`` via ``rules.categories_and_roles``,
+# ``classify.py:decompose_layer_into_blocks``,
 # ``cross_rank.py``, ``diagnostics.py``, ``summarize.py:anomaly_tags``,
 # ``host_trace.py``). This YAML is the *contract* layer:
 # adding a new value here is the first step before extending Python so that
@@ -174,12 +175,12 @@ attributes:
 
       Two-stage decision:
 
-        Stage A (category-driven, in ``common.resolve_attention_family``):
+        Stage A (category-driven, in ``rules.resolve_attention_family``):
           From kernel categories alone we can't pick between MHA / GQA
           / MQA, so the resolver returns the umbrella ``gqa_or_mha``.
 
         Stage B (shape-driven, best-effort, in
-        ``common.refine_dense_attention_from_shapes``):
+        ``rules.refine_dense_attention_from_shapes``):
           ``kernel_details.csv`` carries an ``Input Shapes`` cell per
           event. For FIA / UnpadFA events we parse the Q/K tensor
           dims (last axis = head_dim, second-to-last = num_heads),

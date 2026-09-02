@@ -4,7 +4,7 @@ Lightweight unit/integration tests for the skill. Designed to run locally
 without any Ascend NPU hardware, GPU, or remote SSH:
 
 - `test_attention_families.py` — pins the attention family resolver
-  (`common.resolve_attention_family`) against kernel bags from real traces,
+  (`rules.resolve_attention_family`) against kernel bags from real traces,
   and verifies the HTML report (`html_report.detect_attention_subtype`) uses
   the same resolution so test contract and report output cannot drift.
 - `test_bubble_attribution.py` — covers the idle-pattern detection salvaged
@@ -50,7 +50,7 @@ without any Ascend NPU hardware, GPU, or remote SSH:
 - `test_timeout.py` — verifies `ssh_stream` honours the wall-clock
   timeout even when the remote command produces no output.
 - `test_work_estimates.py` — regression tests for the shape-derived
-  byte/FLOP estimates in `ascend_profile.common` (substring-matched factor
+  byte/FLOP estimates in `ascend_profile.work` (substring-matched factor
   tables).
 
 `pytest` is the only test dependency beyond the runtime requirements in

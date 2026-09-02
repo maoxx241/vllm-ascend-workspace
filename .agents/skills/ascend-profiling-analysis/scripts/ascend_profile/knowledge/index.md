@@ -6,10 +6,14 @@ the skill — it tells you which knowledge files are *active rules* and
 which are *reference docs*. Files here are versioned alongside the
 analysis code; treat them as part of the contract.
 
-> Status: most active rules still live in Python (see "Roadmap" below).
-> The YAML / Markdown files below are the canonical *contract* that
-> Python must keep in sync with. Schema tests in
-> `.agents/skills/ascend-profiling-analysis/tests/` enforce a subset.
+> Status: kernel classification (`kernel_signatures.yaml:match_rules`),
+> attention-family resolution (`attention_families.yaml:cheat_sheet.resolver`),
+> segmentation layer anchors (`segmentation_rules.yaml`), and diagnosis
+> thresholds/wording (`diagnosis_rules.yaml`) are all **loaded at runtime**
+> from YAML. Still in Python: `segment.py` strategy, `classify.py` block
+> decomposition, and the finding trigger conditions in `diagnostics.py`.
+> Schema tests in `.agents/skills/ascend-profiling-analysis/tests/` enforce
+> the enum contracts.
 
 ## Files in this directory
 
@@ -27,10 +31,11 @@ explicitly — do not read a citation as runtime consumption.
 | `block_taxonomy.md` | Reference | none at runtime — cited in code comments / report prose | attention / ffn / moe block decomposition + companion-layer rule |
 | `step_class_grouping.md` | Reference | none at runtime — cited in code comments / report prose | strict shape-equality class signature rules for steps / layers / blocks |
 | `communication_taxonomy.md` | Reference | none at runtime — cited in code comments / report prose | HCCL collective op kinds, sub-task primitives (Notify Wait / RDMASend / Memcpy / Reduce_Inline), `mix_comm_aiv` fused kernels, level-0 vs level-1 capture limits |
-| `kernel_signatures.yaml` | **Contract** (active reference, Python mirrors it) | `tests/test_kernel_signatures.py` only | flat inventory mapping each profile kernel name → category labels + `evidence: path:line` in vllm / vllm-ascend. Authoritative source when adding a new kernel rule; mirrored by hand in `common.categories_and_roles`, never loaded at runtime |
-| `attention_families.yaml` | **Contract** (document-level) | none — mirrored by hand in `common.resolve_attention_family` / `html_report.detect_attention_subtype` and in `tests/test_attention_families.py` | paper-aligned families MLA / DSA / CSA / HCA / GQA / linear / dense. Each family declares the **combination** of category signatures (must_have / must_not_have) that uniquely identifies it on Ascend; SFA is the in-code name for DeepSeek-V3.2 / V4 sparse attention (NOT "NSA" / "CSA"). CANN backend names are documented but never used as family labels |
-| `moe_families.yaml` | **Contract** (document-level) | none — mirrored by hand in `common` MoE/FFN resolution and in `tests/test_moe_families.py` | MC2 / fused MC2 / dense FFN families. **Note:** the `HC*` / `MHC*` prefix kernels (`HCPreSinkhorn`, `HCPreInvRMS`, `HCPost`, `MhcRmsNorm`) are NOT moe.gating sub-kernels — they are **structural block-head helpers** that prefix both attention and MoE blocks and stay under `block_head.mhc_prefix` |
+| `kernel_signatures.yaml` | **Contract** (active) | `rules.categories_and_roles` (loads `match_rules:` at runtime) + `tests/test_kernel_signatures.py` | flat inventory mapping each profile kernel name → category labels + `evidence: path:line` in vllm / vllm-ascend, plus the ordered `match_rules:` rule list that drives classification. Authoritative source when adding a new kernel rule — edit the YAML, the matcher loads it |
+| `attention_families.yaml` | **Contract** (active) | `rules.resolve_attention_family` (loads `cheat_sheet.resolver` / `overlay_rule` at runtime) + `tests/test_attention_families.py` | paper-aligned families MLA / DSA / CSA / HCA / GQA / linear / dense. Each family declares the **combination** of category signatures (must_have / must_not_have) that uniquely identifies it on Ascend; the machine-readable decision order lives in `cheat_sheet.resolver` next to the prose cheat-sheet. CANN backend names are documented but never used as family labels |
+| `moe_families.yaml` | **Contract** (document-level) | none — mirrored by hand in `tests/test_moe_families.py` (no production consumer) | MC2 / fused MC2 / dense FFN families. **Note:** the `HC*` / `MHC*` prefix kernels (`HCPreSinkhorn`, `HCPreInvRMS`, `HCPost`, `MhcRmsNorm`) are NOT moe.gating sub-kernels — they are **structural block-head helpers** that prefix both attention and MoE blocks and stay under `block_head.mhc_prefix` |
 | `segmentation_rules.yaml` | **Contract** (active) | `segment.py:load_segmentation_rules` | attention-family layer-anchor priors: MLA/DSA/CSA layer-start markers + companion-only kernels. Single source of truth for what were the hard-coded `MLA_LAYER_START_CATEGORIES` / `ATTENTION_COMPANION_ONLY_CATEGORIES` constants |
+| `diagnosis_rules.yaml` | **Contract** (active) | `diagnostics.py:load_diagnosis_rules` | finding thresholds, severity/confidence, summary templates, and static limitations for every `finding_type`. The trigger *conditions* intentionally stay in `diagnostics.py` (no rule DSL) |
 | `hardware_peak_measurements.json` | **Contract** (active) | `hardware_insights.py:load_hardware_measurements` | measured sustained factors per SoC (e.g. Ascend910B4 / A2 32G) used to turn theoretical peaks into attainable denominators |
 | `hardware_theoretical_peaks_cann9_0_0.json` | **Contract** (active) | `hardware_insights.py:load_static_theoretical_peaks` | static CANN 9.0.0 theoretical-peak snapshot, used when the analysis host's `platform_config/*.ini` cannot be parsed |
 | `model_architectures.yaml` | Reference (document-level) | none — human/agent reference table | HF arch → (attention family, FFN family) high-level map. This skill's input is `ascend_pt/` profiling output — never HF `config.json` — so the file is *not consumed at runtime* by any analysis stage. The report's "model structure" line is derived from observed kernel signatures via `html_report.guess_model_structure`, not from this YAML. Also documents the future `attention_family_mismatch` diagnostic |
@@ -52,7 +57,7 @@ enum. Headline categories:
   present in one block (see `attention_families.yaml`); the
   refinement of the `gqa_or_mha` umbrella into `mha` / `gqa` /
   `mqa` is a best-effort heuristic over `Input Shapes`, see
-  `common.refine_dense_attention_from_shapes`.
+  `rules.refine_dense_attention_from_shapes`.
   - `attention.flash_score`          — dense flash-style score kernel
                                        (`FusedInferAttentionScore[V*]`,
                                        `UnpadFlashAttention`). Neutral
@@ -199,26 +204,30 @@ and reference it from the analysis stage that consumes it.
    then enforces that nothing leaks values outside the enum.
 2. **New kernel taxonomy rule** (e.g. a new attention sub-type or new
    MoE fused kernel name):
-   1. Add an entry to `kernel_signatures.yaml` with `evidence: path:line`
-      pointing at the vllm / vllm-ascend source. **Anything without
-      evidence is rejected at review.**
-   2. If the kernel introduces a new family or changes a family's
-      "must-have" set, update `attention_families.yaml` or
+   1. Add the match rule under `kernel_signatures.yaml:match_rules.rules`
+      (ordered; use `unless_category` / `not_predicate` when the rule
+      depends on earlier rules) — this is the runtime rule, no Python edit.
+   2. Add an inventory entry under `kernel_signatures.yaml:kernels` with
+      `evidence: path:line` pointing at the vllm / vllm-ascend source.
+      **Anything without evidence is rejected at review.**
+   3. If the kernel introduces a new family or changes a family's
+      "must-have" set, update `attention_families.yaml` (including
+      `cheat_sheet.resolver` when the decision order changes) or
       `moe_families.yaml` accordingly.
-   3. Mirror the rule in `common.categories_and_roles()` (Python still
-      runs the matcher today; YAML is the contract).
    4. Add the new category / role value to `semantic_conventions.yaml`.
    5. `tests/test_kernel_signatures.py` checks the YAML structurally
-      (categories must be valid `semantic_conventions.yaml:op_categories`
-      values) and behaviourally for a curated set of real kernel names —
-      extend the curated cases when you add a rule. Note the test does
-      **not** do a full Python↔YAML parity sweep; keeping the mirror
-      complete is on the reviewer.
+      (loader validation; every emittable category/role must be a valid
+      `semantic_conventions.yaml` enum value — the matcher is YAML-driven,
+      so Python↔YAML parity is structural) and behaviourally for a curated
+      set of real kernel names — extend the curated cases when you add a
+      rule.
 3. **New block decomposition variant**: update `block_taxonomy.md`
    first; then `classify.decompose_layer_into_blocks`. Re-run from
    `--from-stage classify`.
 4. **New diagnosis rule**: add `finding_type` to
-   `semantic_conventions.yaml`, then emit it from `diagnostics.py`.
+   `semantic_conventions.yaml`, add the thresholds / severity / confidence /
+   message template entry to `diagnosis_rules.yaml`, then emit it from
+   `diagnostics.py` (conditions stay in Python).
    The evidence-chain validator in `report.py` will reject any finding
    lacking `evidence_ids` / `alignment_ids` / `limitations`.
 5. **New known model or architecture fast path**: add the exact/fuzzy model
@@ -270,12 +279,11 @@ re-executed.
 See `references/deferred-work.md` in the skill root. The biggest
 remaining "knowledge externalization" items are:
 
-- **YAML-driven matcher** — replace the Python rule list in
-  `common.categories_and_roles()` with a loader that reads
-  `kernel_signatures.yaml` + `attention_families.yaml` +
-  `moe_families.yaml` directly. Today Python mirrors the YAML by hand;
-  `tests/test_kernel_signatures.py` enforces structural validity plus a
-  curated set of behavioural cases, not full parity.
+- ~~**YAML-driven matcher**~~ — done: `rules.categories_and_roles` loads
+  `kernel_signatures.yaml:match_rules` at runtime, and
+  `rules.resolve_attention_family` loads
+  `attention_families.yaml:cheat_sheet.resolver`. `moe_families.yaml`
+  remains document-level (no production consumer).
 - **`segmentation_strategy.yaml`** — remaining anchor priority, boundary
   markers, residual policy, and repair-rule enablement; consumed by
   `segment.py`. (The layer-anchor priors are already externalized in
@@ -287,7 +295,9 @@ remaining "knowledge externalization" items are:
   evidence table above.
 - **`known_counterexamples.md`** — fixture cases the segmenter /
   classifier must keep passing.
-- **`diagnosis_rules.yaml`** — declarative rule pack for
-  `diagnostics.py`, including the `attention_family_mismatch` and
+- **`diagnosis_rules.yaml`** — partially done: thresholds, severity,
+  confidence, and message templates are externalized and loaded by
+  `diagnostics.py`; the trigger conditions stay in Python by design.
+  Still open: the `attention_family_mismatch` and
   `block_pattern_unexpected` checks documented in
   `model_architectures.yaml`.

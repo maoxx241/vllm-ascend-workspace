@@ -22,6 +22,7 @@ try:
         write_csv,
         write_json,
     )
+    from .store import to_float
 except ImportError:  # pragma: no cover
     import sys
 
@@ -38,6 +39,7 @@ except ImportError:  # pragma: no cover
         write_csv,
         write_json,
     )
+    from store import to_float  # type: ignore[no-redef]
 
 
 def find_kernel_details(search_root: Path) -> list[Path]:
@@ -120,15 +122,6 @@ def step_inventory(output_dir: Path) -> dict[str, Any]:
     }
 
 
-def _f(value: Any, default: float = 0.0) -> float:
-    try:
-        if value is None or value == "":
-            return default
-        return float(value)
-    except (TypeError, ValueError):
-        return default
-
-
 def cross_root_rollup_rows(results: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     """Build a one-row-per-root cross-root comparison table.
 
@@ -160,7 +153,7 @@ def cross_root_rollup_rows(results: Sequence[Mapping[str, Any]]) -> list[dict[st
 
         normalize_manifest = read_json(out_dir / "normalize_manifest.json", default={}) or {}
         rank_summary = csv_rows(out_dir / "rank_summary.csv")
-        wall_total_ms = sum(_f(row.get("wall_ms")) for row in rank_summary)
+        wall_total_ms = sum(to_float(row.get("wall_ms")) for row in rank_summary)
         step_total = sum(int(row.get("step_count") or 0) for row in rank_summary)
 
         # Heaviest step class.
@@ -168,7 +161,7 @@ def cross_root_rollup_rows(results: Sequence[Mapping[str, Any]]) -> list[dict[st
         heaviest_step = None
         heaviest_step_score = -1.0
         for row in step_class_rows:
-            score = _f(row.get("wall_ms_mean")) * float(row.get("member_count") or 0)
+            score = to_float(row.get("wall_ms_mean")) * float(row.get("member_count") or 0)
             if score > heaviest_step_score:
                 heaviest_step_score = score
                 heaviest_step = row
@@ -179,7 +172,7 @@ def cross_root_rollup_rows(results: Sequence[Mapping[str, Any]]) -> list[dict[st
         kind_total_grand = 0.0
         for row in block_class_rows:
             kind = str(row.get("block_kind") or "other")
-            wall_sum = _f(row.get("wall_ms_sum"))
+            wall_sum = to_float(row.get("wall_ms_sum"))
             kind_total[kind] = kind_total.get(kind, 0.0) + wall_sum
             kind_total_grand += wall_sum
         kind_share: dict[str, float] = {}
@@ -188,15 +181,15 @@ def cross_root_rollup_rows(results: Sequence[Mapping[str, Any]]) -> list[dict[st
 
         # HCCL summary.
         hccl_class_rows = csv_rows(out_dir / "hccl_class_summary.csv")
-        hccl_wall_ms = sum(_f(row.get("duration_sum_us")) for row in hccl_class_rows) / 1000.0
+        hccl_wall_ms = sum(to_float(row.get("duration_sum_us")) for row in hccl_class_rows) / 1000.0
         heaviest_hccl = None
         heaviest_hccl_score = -1.0
         for row in hccl_class_rows:
-            score = _f(row.get("duration_sum_us"))
+            score = to_float(row.get("duration_sum_us"))
             if score > heaviest_hccl_score:
                 heaviest_hccl_score = score
                 heaviest_hccl = row
-        max_skew = max((_f(row.get("rank_skew_ratio")) for row in hccl_class_rows), default=0.0)
+        max_skew = max((to_float(row.get("rank_skew_ratio")) for row in hccl_class_rows), default=0.0)
 
         rollup_row = {
             "root": root,
@@ -215,10 +208,10 @@ def cross_root_rollup_rows(results: Sequence[Mapping[str, Any]]) -> list[dict[st
             "top_step_class_id": (heaviest_step or {}).get("step_class_id"),
             "top_step_family": (heaviest_step or {}).get("step_family"),
             "top_step_members": (heaviest_step or {}).get("member_count"),
-            "top_step_wall_ms_mean": _f((heaviest_step or {}).get("wall_ms_mean")),
-            "top_step_wall_ms_p50": _f((heaviest_step or {}).get("wall_ms_p50")),
-            "top_step_wall_ms_p90": _f((heaviest_step or {}).get("wall_ms_p90")),
-            "top_step_bubble_ratio_mean": _f((heaviest_step or {}).get("bubble_ratio_mean")),
+            "top_step_wall_ms_mean": to_float((heaviest_step or {}).get("wall_ms_mean")),
+            "top_step_wall_ms_p50": to_float((heaviest_step or {}).get("wall_ms_p50")),
+            "top_step_wall_ms_p90": to_float((heaviest_step or {}).get("wall_ms_p90")),
+            "top_step_bubble_ratio_mean": to_float((heaviest_step or {}).get("bubble_ratio_mean")),
             "block_kind_wall_share": kind_share,
             "block_kind_wall_ms_sum": kind_total,
             "hccl_total_ms": round(hccl_wall_ms, 3),
@@ -226,8 +219,8 @@ def cross_root_rollup_rows(results: Sequence[Mapping[str, Any]]) -> list[dict[st
             "hccl_top_kind": (heaviest_hccl or {}).get("hccl_op_kind"),
             "hccl_top_comm_aiv_fused": (heaviest_hccl or {}).get("comm_aiv_fused"),
             "hccl_top_calls": int((heaviest_hccl or {}).get("call_count") or 0),
-            "hccl_top_duration_ms": _f((heaviest_hccl or {}).get("duration_sum_us")) / 1000.0,
-            "hccl_top_rank_skew_ratio": _f((heaviest_hccl or {}).get("rank_skew_ratio")),
+            "hccl_top_duration_ms": to_float((heaviest_hccl or {}).get("duration_sum_us")) / 1000.0,
+            "hccl_top_rank_skew_ratio": to_float((heaviest_hccl or {}).get("rank_skew_ratio")),
             "hccl_max_rank_skew_ratio": round(max_skew, 6),
             "profile_root_label": normalize_manifest.get("profile_root"),
         }

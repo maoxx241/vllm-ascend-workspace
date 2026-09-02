@@ -24,34 +24,16 @@ from typing import Any, Mapping, Sequence
 try:
     from .common import NormalizedEvent, dtype_bytes, quantile
     from .hardware_insights import memory_bandwidth_bytes_per_second, peak_flops_per_second
+    from .model_context import MODEL_FINGERPRINTS_PATH, load_model_fingerprints
+    from .store import first_present, text_config, to_float, to_int
 except ImportError:  # pragma: no cover
     import sys
 
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from common import NormalizedEvent, dtype_bytes, quantile  # type: ignore[no-redef]
     from hardware_insights import memory_bandwidth_bytes_per_second, peak_flops_per_second  # type: ignore[no-redef]
-
-
-KNOWLEDGE_DIR = Path(__file__).resolve().parent / "knowledge"
-MODEL_FINGERPRINTS_PATH = KNOWLEDGE_DIR / "model_fingerprints.json"
-
-
-def _f(value: Any, default: float = 0.0) -> float:
-    try:
-        if value is None or value == "":
-            return default
-        return float(value)
-    except (TypeError, ValueError):
-        return default
-
-
-def _i(value: Any, default: int = 0) -> int:
-    try:
-        if value is None or value == "":
-            return default
-        return int(float(value))
-    except (TypeError, ValueError):
-        return default
+    from model_context import MODEL_FINGERPRINTS_PATH, load_model_fingerprints  # type: ignore[no-redef]
+    from store import first_present, text_config, to_float, to_int  # type: ignore[no-redef]
 
 
 def _safe_i(value: Any) -> int | None:
@@ -61,18 +43,6 @@ def _safe_i(value: Any) -> int | None:
         return int(float(value))
     except (TypeError, ValueError):
         return None
-
-
-def _first(mapping: Mapping[str, Any], *keys: str, default: Any = None) -> Any:
-    for key in keys:
-        if key in mapping and mapping[key] not in (None, ""):
-            return mapping[key]
-    return default
-
-
-def _text_config(config: Mapping[str, Any]) -> Mapping[str, Any]:
-    text = config.get("text_config")
-    return text if isinstance(text, Mapping) else config
 
 
 def _fmt_params(value: float) -> str:
@@ -89,8 +59,8 @@ def _layer_kind_counts(cfg: Mapping[str, Any], n_layers: int) -> Counter[str]:
     layer_types = cfg.get("layer_types")
     if isinstance(layer_types, list) and layer_types:
         return Counter(str(item) for item in layer_types)
-    if _i(_first(cfg, "full_attention_interval", default=0)) > 0 and n_layers > 0:
-        interval = _i(cfg.get("full_attention_interval"))
+    if to_int(first_present(cfg, "full_attention_interval", default=0)) > 0 and n_layers > 0:
+        interval = to_int(cfg.get("full_attention_interval"))
         full = n_layers // interval
         return Counter({"linear_attention": max(n_layers - full, 0), "full_attention": full})
     return Counter({"default": n_layers})
@@ -99,13 +69,13 @@ def _layer_kind_counts(cfg: Mapping[str, Any], n_layers: int) -> Counter[str]:
 def _attention_features(root: Mapping[str, Any], cfg: Mapping[str, Any]) -> list[str]:
     features: list[str] = []
     layer_types = cfg.get("layer_types") if isinstance(cfg.get("layer_types"), list) else []
-    if _i(_first(cfg, "q_lora_rank", "kv_lora_rank", default=0)) > 0:
+    if to_int(first_present(cfg, "q_lora_rank", "kv_lora_rank", default=0)) > 0:
         features.append("mla")
-    if any("linear" in str(item).lower() for item in layer_types) or _i(_first(cfg, "linear_attention_dim", "linear_key_head_dim", default=0)) > 0:
+    if any("linear" in str(item).lower() for item in layer_types) or to_int(first_present(cfg, "linear_attention_dim", "linear_key_head_dim", default=0)) > 0:
         features.append("linear_attention")
-    if any("full" in str(item).lower() for item in layer_types) or _i(_first(cfg, "num_key_value_heads", "n_kv_heads", default=0)) > 0:
+    if any("full" in str(item).lower() for item in layer_types) or to_int(first_present(cfg, "num_key_value_heads", "n_kv_heads", default=0)) > 0:
         features.append("gqa_or_mha")
-    if _i(_first(cfg, "index_topk", default=0)) > 0 or _i(_first(cfg, "index_n_heads", default=0)) > 0:
+    if to_int(first_present(cfg, "index_topk", default=0)) > 0 or to_int(first_present(cfg, "index_n_heads", default=0)) > 0:
         features.append("dsa_indexer")
     if isinstance(cfg.get("compress_ratios"), list):
         features.append("kv_compressor")
@@ -118,30 +88,30 @@ def _attention_features(root: Mapping[str, Any], cfg: Mapping[str, Any]) -> list
 
 
 def _parameter_rows(root: Mapping[str, Any], cfg: Mapping[str, Any]) -> tuple[list[dict[str, Any]], dict[str, float]]:
-    hidden = _i(_first(cfg, "hidden_size", "dim", default=0))
-    vocab = _i(_first(cfg, "vocab_size", default=0))
-    layers = _i(_first(cfg, "num_hidden_layers", "n_layers", default=0))
-    heads = _i(_first(cfg, "num_attention_heads", "n_heads", default=0))
-    kv_heads = _i(_first(cfg, "num_key_value_heads", "n_kv_heads", default=heads))
-    head_dim = _i(_first(cfg, "head_dim", default=(hidden // heads if heads else 0)))
-    q_lora = _i(_first(cfg, "q_lora_rank", default=0))
-    kv_lora = _i(_first(cfg, "kv_lora_rank", default=0))
-    qk_rope = _i(_first(cfg, "qk_rope_head_dim", "rope_head_dim", default=0))
-    qk_nope = _i(_first(cfg, "qk_nope_head_dim", default=max(head_dim - qk_rope, 0)))
-    v_head = _i(_first(cfg, "v_head_dim", default=head_dim))
-    intermediate = _i(_first(cfg, "intermediate_size", "ffn_dim", default=0))
-    moe_inter = _i(_first(cfg, "moe_intermediate_size", "moe_inter_dim", default=intermediate))
-    experts = _i(_first(cfg, "num_experts", "n_routed_experts", default=0))
-    top_k = _i(_first(cfg, "num_experts_per_tok", "n_activated_experts", default=0))
-    shared_inter = _i(_first(cfg, "shared_expert_intermediate_size", default=0))
-    first_dense_layers = max(_i(_first(cfg, "first_k_dense_replace", default=0)), 0)
-    raw_moe_frequency = _first(cfg, "moe_layer_freq", default=None)
-    raw_decoder_sparse_step = _first(cfg, "decoder_sparse_step", default=None)
-    moe_frequency = max(_i(raw_moe_frequency, 1), 1)
-    decoder_sparse_step = max(_i(raw_decoder_sparse_step, 1), 1)
+    hidden = to_int(first_present(cfg, "hidden_size", "dim", default=0))
+    vocab = to_int(first_present(cfg, "vocab_size", default=0))
+    layers = to_int(first_present(cfg, "num_hidden_layers", "n_layers", default=0))
+    heads = to_int(first_present(cfg, "num_attention_heads", "n_heads", default=0))
+    kv_heads = to_int(first_present(cfg, "num_key_value_heads", "n_kv_heads", default=heads))
+    head_dim = to_int(first_present(cfg, "head_dim", default=(hidden // heads if heads else 0)))
+    q_lora = to_int(first_present(cfg, "q_lora_rank", default=0))
+    kv_lora = to_int(first_present(cfg, "kv_lora_rank", default=0))
+    qk_rope = to_int(first_present(cfg, "qk_rope_head_dim", "rope_head_dim", default=0))
+    qk_nope = to_int(first_present(cfg, "qk_nope_head_dim", default=max(head_dim - qk_rope, 0)))
+    v_head = to_int(first_present(cfg, "v_head_dim", default=head_dim))
+    intermediate = to_int(first_present(cfg, "intermediate_size", "ffn_dim", default=0))
+    moe_inter = to_int(first_present(cfg, "moe_intermediate_size", "moe_inter_dim", default=intermediate))
+    experts = to_int(first_present(cfg, "num_experts", "n_routed_experts", default=0))
+    top_k = to_int(first_present(cfg, "num_experts_per_tok", "n_activated_experts", default=0))
+    shared_inter = to_int(first_present(cfg, "shared_expert_intermediate_size", default=0))
+    first_dense_layers = max(to_int(first_present(cfg, "first_k_dense_replace", default=0)), 0)
+    raw_moe_frequency = first_present(cfg, "moe_layer_freq", default=None)
+    raw_decoder_sparse_step = first_present(cfg, "decoder_sparse_step", default=None)
+    moe_frequency = max(to_int(raw_moe_frequency, 1), 1)
+    decoder_sparse_step = max(to_int(raw_decoder_sparse_step, 1), 1)
     raw_mlp_only_layers = cfg.get("mlp_only_layers")
     mlp_only_layers = (
-        {_i(layer_idx, -1) for layer_idx in raw_mlp_only_layers}
+        {to_int(layer_idx, -1) for layer_idx in raw_mlp_only_layers}
         if isinstance(raw_mlp_only_layers, list)
         else set()
     )
@@ -251,15 +221,15 @@ def _parameter_rows(root: Mapping[str, Any], cfg: Mapping[str, Any]) -> tuple[li
 
 
 def _kv_rows(cfg: Mapping[str, Any], features: Sequence[str]) -> list[dict[str, Any]]:
-    hidden = _i(_first(cfg, "hidden_size", "dim", default=0))
-    heads = _i(_first(cfg, "num_attention_heads", "n_heads", default=0))
-    kv_heads = _i(_first(cfg, "num_key_value_heads", "n_kv_heads", default=heads))
-    head_dim = _i(_first(cfg, "head_dim", default=(hidden // heads if heads else 0)))
-    kv_lora = _i(_first(cfg, "kv_lora_rank", default=0))
-    qk_rope = _i(_first(cfg, "qk_rope_head_dim", "rope_head_dim", default=0))
-    index_heads = _i(_first(cfg, "index_n_heads", default=0))
-    index_dim = _i(_first(cfg, "index_head_dim", default=0))
-    dtype = str(_first(cfg, "dtype", "torch_dtype", default="bfloat16"))
+    hidden = to_int(first_present(cfg, "hidden_size", "dim", default=0))
+    heads = to_int(first_present(cfg, "num_attention_heads", "n_heads", default=0))
+    kv_heads = to_int(first_present(cfg, "num_key_value_heads", "n_kv_heads", default=heads))
+    head_dim = to_int(first_present(cfg, "head_dim", default=(hidden // heads if heads else 0)))
+    kv_lora = to_int(first_present(cfg, "kv_lora_rank", default=0))
+    qk_rope = to_int(first_present(cfg, "qk_rope_head_dim", "rope_head_dim", default=0))
+    index_heads = to_int(first_present(cfg, "index_n_heads", default=0))
+    index_dim = to_int(first_present(cfg, "index_head_dim", default=0))
+    dtype = str(first_present(cfg, "dtype", "torch_dtype", default="bfloat16"))
     dt_bytes = dtype_bytes(dtype)
     rows: list[dict[str, Any]] = []
     full = kv_heads * head_dim * 2 * dt_bytes if kv_heads and head_dim else 0.0
@@ -285,9 +255,9 @@ def _kv_rows(cfg: Mapping[str, Any], features: Sequence[str]) -> list[dict[str, 
             }
         )
     if "linear_attention" in features:
-        lin_heads = _i(_first(cfg, "linear_num_key_heads", "num_attention_heads", "n_heads", default=heads))
-        lin_key = _i(_first(cfg, "linear_key_head_dim", "head_dim", default=head_dim))
-        lin_val = _i(_first(cfg, "linear_value_head_dim", "head_dim", default=head_dim))
+        lin_heads = to_int(first_present(cfg, "linear_num_key_heads", "num_attention_heads", "n_heads", default=heads))
+        lin_key = to_int(first_present(cfg, "linear_key_head_dim", "head_dim", default=head_dim))
+        lin_val = to_int(first_present(cfg, "linear_value_head_dim", "head_dim", default=head_dim))
         state = lin_heads * lin_key * lin_val * dt_bytes
         rows.append(
             {
@@ -311,7 +281,7 @@ def _kv_rows(cfg: Mapping[str, Any], features: Sequence[str]) -> list[dict[str, 
         )
     ratios = cfg.get("compress_ratios")
     if isinstance(ratios, list) and ratios and head_dim:
-        nonzero = [float(item) for item in ratios if _f(item) > 0]
+        nonzero = [float(item) for item in ratios if to_float(item) > 0]
         if nonzero:
             min_ratio = min(nonzero)
             max_ratio = max(nonzero)
@@ -333,14 +303,14 @@ def _feature_rows(root: Mapping[str, Any], cfg: Mapping[str, Any], features: Seq
     def add(name: str, priority: str, reason: str, evidence: str) -> None:
         rows.append({"feature": name, "priority": priority, "reason": reason, "config_evidence": evidence})
 
-    if _i(_first(cfg, "num_experts", "n_routed_experts", default=0)) > 0:
+    if to_int(first_present(cfg, "num_experts", "n_routed_experts", default=0)) > 0:
         add("FusedMoE / grouped expert matmul", "P1", "MoE dispatch, routed expert GEMM, and combine dominate token-parallel inference paths.", "num_experts/n_routed_experts")
     if "mla" in features:
         add("FusedMLAProj", "P1", "MLA splits Q/KV into low-rank projections; fusing projection and cache preparation reduces launch and memory traffic.", "q_lora_rank/kv_lora_rank")
         add("MLA absorption cache path", "P1", "KV cache can be stored in latent space; runtime needs an absorption-aware attention/cache manager.", "kv_lora_rank + qk_rope_head_dim")
     if "linear_attention" in features:
         add("FusedGatedDeltaRule / FusedSimpleGLA", "P0", "Linear attention uses recurrent-state update kernels rather than dense KV attention.", "layer_types contains linear_attention")
-        if _i(_first(cfg, "linear_conv_kernel_dim", default=0)) > 0:
+        if to_int(first_present(cfg, "linear_conv_kernel_dim", default=0)) > 0:
             add("FusedCausalConv1d", "P1", "Linear-attention front-end includes causal convolution over token states.", "linear_conv_kernel_dim")
     if "dsa_indexer" in features:
         add("FusedDSAIndexer", "P0", "Sparse attention needs top-k index scoring and gather-friendly metadata generation.", "index_topk/index_n_heads")
@@ -365,7 +335,7 @@ def _shape_samples(event: NormalizedEvent) -> tuple[list[list[int]], list[list[i
 
 
 def _add_candidate(counter: Counter[int], value: Any, *, min_value: int = 1, max_value: int = 1_000_000) -> None:
-    intval = _i(value)
+    intval = to_int(value)
     if min_value <= intval <= max_value:
         counter[intval] += 1
 
@@ -674,14 +644,6 @@ def _feature_matches(observed: set[str], expected: set[str]) -> tuple[int, list[
     return len(matched), matched, missing
 
 
-def _load_model_fingerprints(path: Path = MODEL_FINGERPRINTS_PATH) -> list[dict[str, Any]]:
-    if not path.is_file():
-        return []
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    models = payload.get("models") if isinstance(payload, Mapping) else []
-    return [dict(item) for item in models or [] if isinstance(item, Mapping)]
-
-
 def _field_hint_match(field: str, inferred_value: Any, values: Sequence[Any]) -> tuple[float, str | None]:
     inferred = _safe_i(inferred_value)
     if inferred is None:
@@ -709,7 +671,7 @@ def candidate_model_rows(
 ) -> list[dict[str, Any]]:
     """Match profiling-derived fingerprints against a local candidate catalog."""
 
-    models = _load_model_fingerprints(fingerprint_path)
+    models = load_model_fingerprints(fingerprint_path)
     observed = set(observed_features)
     inferred_by_field = {
         "expected_layers": _best_value(inferred_rows, "num_hidden_layers"),
@@ -896,9 +858,9 @@ def model_config_insights(config_path: Path | None) -> dict[str, Any]:
             "kv_cache_rows": [],
             "feature_rows": [],
         }
-    cfg = _text_config(root)
-    model_name = config_path.parent.name or str(_first(root, "model_type", default="unknown"))
-    layers = _i(_first(cfg, "num_hidden_layers", "n_layers", default=0))
+    cfg = text_config(root)
+    model_name = config_path.parent.name or str(first_present(root, "model_type", default="unknown"))
+    layers = to_int(first_present(cfg, "num_hidden_layers", "n_layers", default=0))
     layer_counts = _layer_kind_counts(cfg, layers)
     features = _attention_features(root, cfg)
     parameter_rows, parameter_totals = _parameter_rows(root, cfg)
@@ -906,12 +868,12 @@ def model_config_insights(config_path: Path | None) -> dict[str, Any]:
     feature_rows = _feature_rows(root, cfg, features)
     overview_rows = [
         {"key": "model_name", "value": model_name},
-        {"key": "model_type", "value": _first(cfg, "model_type", default=_first(root, "model_type", default="unknown"))},
+        {"key": "model_type", "value": first_present(cfg, "model_type", default=first_present(root, "model_type", default="unknown"))},
         {"key": "architectures", "value": root.get("architectures", [])},
-        {"key": "hidden_size", "value": _first(cfg, "hidden_size", "dim", default=None)},
+        {"key": "hidden_size", "value": first_present(cfg, "hidden_size", "dim", default=None)},
         {"key": "num_layers", "value": layers},
-        {"key": "num_attention_heads", "value": _first(cfg, "num_attention_heads", "n_heads", default=None)},
-        {"key": "num_key_value_heads", "value": _first(cfg, "num_key_value_heads", "n_kv_heads", default=None)},
+        {"key": "num_attention_heads", "value": first_present(cfg, "num_attention_heads", "n_heads", default=None)},
+        {"key": "num_key_value_heads", "value": first_present(cfg, "num_key_value_heads", "n_kv_heads", default=None)},
         {"key": "attention_features", "value": features},
         {"key": "layer_type_counts", "value": dict(layer_counts)},
         {"key": "total_params_estimate", "value": _fmt_params(parameter_totals["total_params"])},
@@ -944,8 +906,8 @@ def operator_efficiency_rows(
         duration_us = sum(float(event.duration_us) for event in items)
         if duration_us <= 0:
             continue
-        flops = sum(_f(event.shape_features.get("estimated_flops")) for event in items)
-        bytes_est = sum(_f(event.shape_features.get("estimated_bytes")) for event in items)
+        flops = sum(to_float(event.shape_features.get("estimated_flops")) for event in items)
+        bytes_est = sum(to_float(event.shape_features.get("estimated_bytes")) for event in items)
         classes = Counter(str(event.shape_features.get("estimated_work_class") or "unknown") for event in items)
         dtype_counts = Counter(str(event.shape_features.get("estimated_dtype") or "") for event in items if event.shape_features.get("estimated_dtype"))
         work_class = classes.most_common(1)[0][0] if classes else "unknown"

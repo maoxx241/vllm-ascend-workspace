@@ -24,7 +24,7 @@ version: 1
 #   basis — most importantly the Q / K head counts on FIA /
 #   UnpadFlashAttention events, which feed the shape-refinement step
 #   that upgrades ``gqa_or_mha`` to ``mha`` / ``gqa`` / ``mqa`` (see
-#   ``common.refine_dense_attention_from_shapes`` and
+#   ``rules.refine_dense_attention_from_shapes`` and
 #   ``attention_families.yaml:gqa_or_mha.sub_kinds``).
 #
 #   That means:
