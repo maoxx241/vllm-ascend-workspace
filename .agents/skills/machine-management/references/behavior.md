@@ -246,12 +246,44 @@ Do **not**:
 - remove host-level `authorized_keys`
 - guess at unmanaged containers
 
+## Hardware detection contract
+
+The fresh `npu-smi` hardware result is authoritative. Persisted VAWS metadata
+is useful for fallback and drift reporting, but it must never override a
+successful detailed board query.
+
+Probe in this order:
+
+1. run `npu-smi info -l` to obtain an NPU ID
+2. run `npu-smi info -m` to obtain an NPU/chip pair when the driver exposes it
+3. run `npu-smi info -t board -i <npu-id>`; this is the complete form used by Ascend 950/A5
+4. run `npu-smi info -t board -i <npu-id> -c <chip-id>`; this exposes the A2/A3/310P chip fields
+5. construct the canonical SoC:
+   - A2: `Chip Type + Chip Name`, for example `Ascend` + `910B4` -> `ascend910b4`
+   - A3: `Chip Name + "_" + NPU Name`, for example `Ascend910` + `9362` -> `ascend910_9362`
+   - A5: `Chip Name + "_" + NPU Name`; classify any canonical token beginning with `ascend950` as A5
+   - 310P: `Chip Type + Chip Name`, for example `Ascend` + `310P3` -> `ascend310p3`
+
+If detailed board queries fail, exact SoC tokens in fresh `npu-smi` output may
+be used. An exact bare `Ascend910` token is accepted as an A3 compatibility
+fallback, but it must not replace the more precise `Ascend910_<NPU Name>` result
+when that result is available. Only after all fresh hardware paths are
+inconclusive may `SOC_VERSION` / `VAWS_NPU_SOC`, inventory metadata, or image
+suffixes be used as a fallback. Report a warning when fresh and persisted SoC
+values disagree.
+
+Primary references:
+
+- Huawei CANN, [obtaining the SoC version with `npu-smi`](https://www.hiascend.com/document/detail/zh/CANNCommunityEdition/910beta2/API/ascendcopapi/atlasascendc_api_07_1039.html)
+- vLLM Ascend, [`setup.py` hardware detection and SoC mapping](https://github.com/vllm-project/vllm-ascend/blob/main/setup.py)
+- vLLM Ascend, [official image-build hardware suffix matrix](https://github.com/vllm-project/vllm-ascend/blob/main/.github/workflows/schedule_image_build_and_push.yaml)
+
 ## Image selection policy
 
 Image selection is an explicit decision gate, not an implicit default:
 
 1. ask the user to choose `local-latest`, `rc`, `main`, `stable`, or a custom image reference before new-machine bootstrap
-2. `local-latest` enumerates every image in the target host Docker daemon, keeps references whose repository basename contains `vllm-ascend` (so registry / namespace prefixes and repository-name prefixes or suffixes are supported), filters by the detected A2 / A3 / 310P tag suffix, and selects the newest compatible image by Docker `Created`; it does not pull
+2. `local-latest` enumerates every image in the target host Docker daemon, keeps references whose repository basename contains `vllm-ascend` (so registry / namespace prefixes and repository-name prefixes or suffixes are supported), filters by the detected A2 / A3 / A5 / 310P tag suffix, and selects the newest compatible image by Docker `Created`; it does not pull
 3. host probe reports the filtered local image set, selected reference, selected immutable image ID, and creation time; bootstrap repeats discovery so deployment uses current host state
 4. an existing container satisfies `local-latest` only when its source image ID matches the newly selected image ID; matching tag text alone is insufficient
 5. `rc` resolves the newest official prerelease `vllm-ascend` tag at execution time, then tries `quay.nju.edu.cn/ascend/vllm-ascend:<tag>` first and `quay.io/ascend/vllm-ascend:<tag>` second; this is the recommended developer track
@@ -260,6 +292,7 @@ Image selection is an explicit decision gate, not an implicit default:
 8. custom references must include a concrete non-`latest` tag or digest; `auto`, direct `*:latest`, and bare repositories without a tag are forbidden defaults
 9. if fresh pulls fail but one of the explicit candidate refs is already cached locally, reuse that cached image as a bounded fallback
 10. for non-destructive attach / repair, a recorded explicit non-`latest` image may be reused; ambiguous legacy images require another user choice
+11. selector-based image tags are hardware-specific: base for A2, `-a3` for A3, `-a5` for A5, and `-310p` for 310P
 
 Inventory should record the actual selected image, not only the requested selector string.
 

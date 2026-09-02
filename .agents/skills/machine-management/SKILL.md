@@ -39,15 +39,17 @@ Ready does **not** imply code sync, rebuild, serving, or benchmark readiness.
 - Never write passwords or tokens into tracked files or `.vaws-local/`.
 - Never use `scp`, `sftp`, `sshpass`, or `expect` in this workflow.
 - Never default the container image silently. Ask the user to choose one of:
-  - `local-latest`: inspect every image in the target host Docker daemon, keep repositories whose basename contains `vllm-ascend` (including registry / namespace prefixes and names such as `company-vllm-ascend` or `vllm-ascend-dev`), filter them for the detected A2 / A3 / 310P machine type, and deploy the newest compatible image by Docker image creation time; this never pulls
+  - `local-latest`: inspect every image in the target host Docker daemon, keep repositories whose basename contains `vllm-ascend` (including registry / namespace prefixes and names such as `company-vllm-ascend` or `vllm-ascend-dev`), filter them for the detected A2 / A3 / A5 / 310P machine type, and deploy the newest compatible image by Docker image creation time; this never pulls
   - `rc`: resolve the newest official prerelease `vllm-ascend` tag, then try `quay.nju.edu.cn/ascend/vllm-ascend:<tag>` first and `quay.io/ascend/vllm-ascend:<tag>` second; this is the recommended developer track
   - `main`: `quay.nju.edu.cn/ascend/vllm-ascend:main`, then `quay.io/ascend/vllm-ascend:main`
   - `stable`: resolve the latest official non-prerelease `vllm-ascend` release tag, then try NJU first and `quay.io` second
   - `custom`: a full image reference with a concrete non-`latest` tag or digest
 - Treat `auto`, direct `*:latest`, and bare repositories without a tag as forbidden defaults for managed-machine bootstrap; `local-latest` is the explicit bounded discovery policy, not a moving registry tag.
 - Report and persist the **actual selected image** for the managed container, not only the requested image policy.
-- Resolve hardware-specific image tags from the detected machine type whenever the user chose `rc`, `main`, or `stable`: A2 uses the base tag, A3 appends `-a3`, and 310P appends `-310p`.
-- Detect the machine type from `npu-smi info` / SoC output when possible; when detection is inconclusive, stop and ask for an explicit machine type override instead of guessing.
+- Resolve hardware-specific image tags from the detected machine type whenever the user chose `rc`, `main`, or `stable`: A2 uses the base tag, A3 appends `-a3`, A5 appends `-a5`, and 310P appends `-310p`.
+- Prefer a fresh detailed `npu-smi` board query over the bare `Ascend910` label. Query an NPU ID with `npu-smi info -l`, query both board forms (`-t board -i <id>` and `-t board -i <id> -c <chip-id>`), and construct the SoC from `Chip Type` / `Chip Name` / `NPU Name` as applicable. In particular, `Chip Name: Ascend910` plus `NPU Name: 9362` means `ascend910_9362` / A3. If detailed queries are unavailable, accept an exact bare `Ascend910` token as an A3 compatibility fallback.
+- Treat `/etc/profile.d/vaws-ascend-env.sh`, `SOC_VERSION`, `VAWS_NPU_SOC`, inventory, and image-name inference as fallbacks or consistency hints only. A successful fresh detailed hardware query wins when old persisted metadata disagrees.
+- When detection remains inconclusive, stop and ask for an explicit machine type override instead of guessing.
 - Persist `host.machine_type`, `host.soc`, and `container.machine_type` into inventory, and write matching metadata under `/etc/vaws/` plus `/etc/profile.d/vaws-ascend-env.sh` on the host and inside the managed container.
 - Before running `apt-get update` / `apt-get install` inside the container, rewrite apt sources to the fixed A3-tested NJU mirror (`mirrors.nju.edu.cn`). Do not spend bootstrap time probing alternate mirrors.
 - Prepend `/usr/local/Ascend/driver/lib64/common`, `/usr/local/Ascend/driver/lib64/driver`, and `/usr/local/Ascend/driver/lib64` before calling `npu-smi` or the smoke test; source `/etc/profile.d/vaws-ascend-env.sh` when it exists.
@@ -69,9 +71,9 @@ The primary bootstrap path must not depend on `ssh-copy-id`, `expect`, or any ot
 
 Use these task-oriented wrappers for normal agent work. They keep the parameter surface narrow and return structured JSON statuses such as `ready`, `needs_input`, `needs_repair`, `blocked`, `removed`, or `unmanaged`. They also stream phase progress on `stderr` as `__VAWS_PROGRESS__=<json>` while reserving `stdout` for one final machine-readable JSON payload.
 
-- `python3 .agents/skills/machine-management/scripts/machine_add.py --host <ip> --image <local-latest|rc|main|stable|custom-ref> [--machine-type <A2|A3|310P>] [--machine-username <letters-or-digits> | --generate-machine-username] [--password-env NAME | --password-stdin | --password ...]`
+- `python3 .agents/skills/machine-management/scripts/machine_add.py --host <ip> --image <local-latest|rc|main|stable|custom-ref> [--machine-type <A2|A3|A5|310P>] [--machine-username <letters-or-digits> | --generate-machine-username] [--password-env NAME | --password-stdin | --password ...]`
 - `python3 .agents/skills/machine-management/scripts/machine_verify.py --machine <alias-or-ip>`
-- `python3 .agents/skills/machine-management/scripts/machine_repair.py --machine <alias-or-ip> [--image <local-latest|rc|main|stable|custom-ref>] [--machine-type <A2|A3|310P>] [--password-env NAME | --password-stdin | --password ...]`
+- `python3 .agents/skills/machine-management/scripts/machine_repair.py --machine <alias-or-ip> [--image <local-latest|rc|main|stable|custom-ref>] [--machine-type <A2|A3|A5|310P>] [--password-env NAME | --password-stdin | --password ...]`
 - `python3 .agents/skills/machine-management/scripts/machine_remove.py --machine <alias-or-ip>`
 
 Design intent:
@@ -149,7 +151,7 @@ Before any mutation, inspect:
 - whether a local public key already exists
 - whether host SSH by key already works
 - whether Docker and required Ascend/NPU paths exist on the host
-- whether `npu-smi` / SoC output identifies the host as A2, A3, or 310P
+- whether detailed `npu-smi` board output identifies the host as A2, A3, A5, or 310P
 - whether a free high SSH port exists
 - whether a managed container already exists
 

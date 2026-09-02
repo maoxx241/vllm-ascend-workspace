@@ -38,7 +38,7 @@ SCHEMA_VERSION = 1
 STATE_LOCK_SUFFIX = ".lock"
 DEFAULT_LOCK_TIMEOUT_SECONDS = 15.0
 DEFAULT_LOCK_POLL_SECONDS = 0.05
-MACHINE_TYPE_CHOICES = ("A2", "A3", "310P")
+MACHINE_TYPE_CHOICES = ("A2", "A3", "A5", "310P")
 
 
 class InventoryError(RuntimeError):
@@ -470,7 +470,7 @@ def build_parser() -> argparse.ArgumentParser:
     put_cmd.add_argument("--host-ip", "--host", dest="host_ip", required=True)
     put_cmd.add_argument("--host-port", "--host-ssh-port", dest="host_port", type=int, default=22)
     put_cmd.add_argument("--host-user", "--user", dest="host_user", default="root")
-    put_cmd.add_argument("--host-machine-type", "--machine-type", dest="host_machine_type", help="host machine type metadata, for example A2, A3, or 310P")
+    put_cmd.add_argument("--host-machine-type", "--machine-type", dest="host_machine_type", help="host machine type metadata, for example A2, A3, A5, or 310P")
     put_cmd.add_argument("--host-soc", "--soc", dest="host_soc", help="host SoC token metadata, for example ascend910b1")
     put_cmd.add_argument("--container-name", "--name", dest="container_name", required=True)
     put_cmd.add_argument(
@@ -490,7 +490,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--container-machine-type",
         "--container-type",
         dest="container_machine_type",
-        help="container hardware type metadata, for example A2, A3, or 310P",
+        help="container hardware type metadata, for example A2, A3, A5, or 310P",
     )
     put_cmd.add_argument(
         "--bootstrap-method",
@@ -521,7 +521,7 @@ def build_parser() -> argparse.ArgumentParser:
     upsert_cmd.add_argument("--host-ip", "--host", dest="host_ip", required=True)
     upsert_cmd.add_argument("--host-port", "--host-ssh-port", dest="host_port", type=int, default=22)
     upsert_cmd.add_argument("--host-user", "--user", dest="host_user", default="root")
-    upsert_cmd.add_argument("--host-machine-type", "--machine-type", dest="host_machine_type", help="host machine type metadata, for example A2, A3, or 310P")
+    upsert_cmd.add_argument("--host-machine-type", "--machine-type", dest="host_machine_type", help="host machine type metadata, for example A2, A3, A5, or 310P")
     upsert_cmd.add_argument("--host-soc", "--soc", dest="host_soc", help="host SoC token metadata, for example ascend910b1")
     upsert_cmd.add_argument("--container-name", "--name", dest="container_name", required=True)
     upsert_cmd.add_argument(
@@ -541,7 +541,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--container-machine-type",
         "--container-type",
         dest="container_machine_type",
-        help="container hardware type metadata, for example A2, A3, or 310P",
+        help="container hardware type metadata, for example A2, A3, A5, or 310P",
     )
     upsert_cmd.add_argument(
         "--bootstrap-method",

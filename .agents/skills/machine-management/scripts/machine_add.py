@@ -252,7 +252,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "blocked",
                     success=False,
                     action="detect-machine-type",
-                    message="host probe succeeded but machine type could not be inferred; rerun with --machine-type A2|A3|310P",
+                    message="host probe succeeded but machine type could not be inferred; rerun with --machine-type A2|A3|A5|310P",
                     probe=probe,
                 )
             )

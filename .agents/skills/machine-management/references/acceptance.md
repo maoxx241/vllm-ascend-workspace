@@ -79,7 +79,10 @@ These should not trigger `machine-management` unless machine readiness is the ob
 - if the user already supplied the host password in the request, the skill prefers scripted bootstrap before asking the user to run a manual command
 - the primary bootstrap path does not depend on `ssh-copy-id`
 - the skill checks Docker and required Ascend/NPU prerequisites before container creation
-- the host probe captures `machine_type` and `soc` from `npu-smi` / SoC output when possible and returns a clear override request when it cannot
+- the host probe captures `machine_type` and `soc` from fresh detailed `npu-smi` board output when possible and returns a clear override request when it cannot
+- `Chip Name: Ascend910` plus `NPU Name: 9362` resolves to `ascend910_9362` / A3; if detailed board fields are unavailable, an exact bare `Ascend910` token remains an A3 compatibility fallback
+- A2 is derived from `Chip Type + Chip Name`, A3 and A5 from `Chip Name + NPU Name`, and any canonical `ascend950*` SoC resolves to A5
+- a successful fresh board query outranks stale `SOC_VERSION`, `VAWS_NPU_SOC`, inventory, and image-name hints; disagreement is surfaced as a warning
 - the managed container uses host networking, required devices, required Ascend mounts, and `/vllm-workspace` as the workdir
 - the skill configures a dedicated container `sshd` on a high port without brittle inline edits to `/etc/ssh/sshd_config`
 - the container bootstrap ensures `/run/sshd` exists
@@ -88,7 +91,7 @@ These should not trigger `machine-management` unless machine readiness is the ob
 - when a caller explicitly requests the prepared-image cache, the helper reports `prepared_image`, `used_prepared_image_cache`, and `created_prepared_image_cache` in the bootstrap payload
 - `machine_add.py` persists final alias, namespace, host identity, container name, image, and SSH port into inventory without the agent having to call `inventory.py put`
 - the recorded inventory image is the actual selected image after mirror resolution and pull / cache fallback
-- selector-based image resolution is hardware-aware: A2 keeps the base tag, A3 appends `-a3`, and 310P appends `-310p`
+- selector-based image resolution is hardware-aware: A2 keeps the base tag, A3 appends `-a3`, A5 appends `-a5`, and 310P appends `-310p`
 - `local-latest` scans the target host Docker daemon, accepts repository basenames containing `vllm-ascend` (including registry / namespace prefixes and repository-name prefixes or suffixes), filters by machine type, and selects the newest compatible image by Docker creation time without pulling
 - probe and bootstrap payloads expose `local_image_discovery`, the selected reference, and `selected_image_id`; an empty compatible set fails in the image-discovery phase
 - an existing container selected through `local-latest` is compared by immutable source image ID, so a reused tag that now points at a newer image triggers replacement when replacement consent is present
