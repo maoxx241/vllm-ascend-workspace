@@ -2,7 +2,8 @@
 """Shared utilities for ascend-profiling-analysis scripts.
 
 Responsibilities kept minimal on purpose:
-  - resolve a machine (alias or IP) to an SSH endpoint via inventory
+  - resolve the session target (explicit --session-id/--session-file or the
+    bound session of the cwd worktree) to an SSH endpoint
   - run remote bash commands and stream stdout/stderr back
   - tar-sync the framework subtree (``scripts/ascend_profile/``) to the
     remote work dir
@@ -29,19 +30,22 @@ from typing import Any, Iterable
 
 ROOT = Path(__file__).resolve().parents[4]
 LIB_DIR = ROOT / ".agents" / "lib"
-MM_SCRIPTS = ROOT / ".agents" / "skills" / "machine-management" / "scripts"
 
-for _p in (str(LIB_DIR), str(MM_SCRIPTS)):
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
+if str(LIB_DIR) not in sys.path:
+    sys.path.insert(0, str(LIB_DIR))
 
-import inventory as inventory_store  # noqa: E402
-from vaws_session_state import load_session_lookup, session_record_for_execution  # noqa: E402
+from vaws_session_state import (  # noqa: E402
+    SessionStateError,
+    load_session_lookup,
+    session_record_for_execution,
+)
+from vaws_ssh import base_ssh_options  # noqa: E402
 
 ANALYSIS_STATE_DIR = ROOT / ".vaws-local" / "profiling-analysis" / "runs"
 PROGRESS_SENTINEL = "__VAWS_PROFILE_ANALYSIS_PROGRESS__="
 
 DEFAULT_REMOTE_WORK_DIR = "/tmp/ascend_profile_framework"
+SSH_CONNECT_TIMEOUT_SECONDS = 15
 # The analysis framework lives next to this file as a sibling package; it is
 # tar-synced to the remote work dir's ``ascend_profile/`` subpath and invoked
 # as ``python3 -m ascend_profile.<stage>`` from that work dir.
@@ -134,6 +138,20 @@ LIGHTWEIGHT_PULL_PATHS = (
     "block_class_summary.csv",
     "operator_summary.csv",
     "operator_class_summary.csv",
+    "operator_efficiency_summary.csv",
+    "model_insights.json",
+    "model_context_summary.csv",
+    "model_inferred_config.csv",
+    "model_feature_summary.csv",
+    "model_layer_type_summary.csv",
+    "model_candidate_summary.csv",
+    "model_config_overview.csv",
+    "model_parameter_estimate.csv",
+    "model_kv_cache_estimate.csv",
+    "model_config_feature_summary.csv",
+    "hardware_insights.json",
+    "hardware_summary.csv",
+    "hardware_theoretical_peaks.csv",
     "hccl_op_summary.csv",
     "hccl_class_summary.csv",
     "wait_anchor_ops.csv",
@@ -166,22 +184,6 @@ class SshEndpoint:
         return f"{self.user}@{self.host}"
 
 
-def resolve_machine(identifier: str) -> dict[str, Any]:
-    read_path = inventory_store.read_inventory_path(
-        inventory_store.preferred_inventory_path(inventory_store.DEFAULT_PATH)
-    )
-    inv = inventory_store.load_inventory(read_path)
-    for m in inv.get("machines", []):
-        alias = m.get("alias", "")
-        host = m.get("host", {})
-        host_ip = host.get("ip", "") if isinstance(host, dict) else host
-        if alias == identifier or host_ip == identifier:
-            return m
-    raise ValueError(
-        f"machine '{identifier}' not found in inventory; run machine-management skill first"
-    )
-
-
 def endpoint_from_machine(machine: dict[str, Any]) -> SshEndpoint:
     host_info = machine.get("host", {})
     container_info = machine.get("container", {})
@@ -207,38 +209,29 @@ def get_machine_alias(machine: dict[str, Any]) -> str:
 
 
 def resolve_execution_target(
-    machine: str | None,
     *,
     session_id: str | None = None,
     session_file: str | Path | None = None,
 ) -> dict[str, Any]:
-    if session_id or session_file:
-        lookup = load_session_lookup(
-            session_id=session_id,
-            session_file=session_file,
-            repo_root=ROOT,
-        )
-        record = session_record_for_execution(lookup.session)
-        return {
-            "mode": "session",
-            "record": record,
-            "alias": get_machine_alias(record),
-            "endpoint": endpoint_from_machine(record),
-            "session_id": lookup.session["session_id"],
-            "session_file": str(lookup.session_file),
-            "session": lookup.session,
-        }
-    if not machine:
-        raise ValueError("--machine is required unless --session-id or --session-file is used")
-    record = resolve_machine(machine)
+    """Resolve the session execution target (session-only).
+
+    With no explicit id/file the session is auto-resolved from the nearest
+    worktree binding (cwd upward).
+    """
+    lookup = load_session_lookup(
+        session_id=session_id,
+        session_file=session_file,
+        repo_root=ROOT,
+    )
+    record = session_record_for_execution(lookup.session)
     return {
-        "mode": "legacy",
+        "mode": "session",
         "record": record,
         "alias": get_machine_alias(record),
         "endpoint": endpoint_from_machine(record),
-        "session_id": None,
-        "session_file": None,
-        "session": None,
+        "session_id": lookup.session["session_id"],
+        "session_file": str(lookup.session_file),
+        "session": lookup.session,
     }
 
 
@@ -266,11 +259,9 @@ def print_json(data: dict[str, Any]) -> None:
 def _ssh_base_cmd(endpoint: SshEndpoint) -> list[str]:
     return [
         "ssh",
-        "-o", "BatchMode=yes",
-        "-o", "StrictHostKeyChecking=accept-new",
+        *base_ssh_options(connect_timeout=SSH_CONNECT_TIMEOUT_SECONDS),
         "-o", "ServerAliveInterval=30",
         "-o", "ServerAliveCountMax=10",
-        "-o", "LogLevel=ERROR",
         "-p", str(endpoint.port),
         endpoint.destination(),
     ]
@@ -393,9 +384,7 @@ def _ssh_pipe_cmd(endpoint: SshEndpoint, remote_cmd: str) -> list[str]:
     """SSH command that runs a remote shell snippet, suitable for tar piping."""
     return [
         "ssh",
-        "-o", "BatchMode=yes",
-        "-o", "StrictHostKeyChecking=accept-new",
-        "-o", "LogLevel=ERROR",
+        *base_ssh_options(),
         "-p", str(endpoint.port),
         endpoint.destination(),
         remote_cmd,
@@ -600,12 +589,17 @@ def load_collection_manifest(manifest_path: Path) -> dict[str, Any]:
     return data
 
 
-def remote_python_with_module(endpoint: SshEndpoint, module: str) -> str:
+def remote_python_with_module(
+    endpoint: SshEndpoint,
+    module: str,
+    *,
+    required: bool = False,
+) -> str:
     """Find a python3 on the remote host that can import ``module``.
 
-    Defaults match ascend-memory-profiling for consistency. Falls back to
-    plain ``python3`` so that hosts without a CANN-specific interpreter still
-    work for static analysis of a kernel_details.csv (no torch_npu needed).
+    Defaults match ascend-memory-profiling for consistency. Optional probes
+    fall back to plain ``python3``; required probes fail closed so a missing
+    analysis dependency is reported before framework sync or execution.
     """
     candidates = [
         "/usr/local/python3.11.14/bin/python3",
@@ -613,16 +607,30 @@ def remote_python_with_module(endpoint: SshEndpoint, module: str) -> str:
         "python3",
     ]
     for cand in candidates:
-        check = ssh_exec(
-            endpoint,
-            f"{cand} -c 'import {module}' 2>/dev/null && echo OK || true",
-            check=False,
-            timeout=30,
-        )
+        try:
+            check = ssh_exec(
+                endpoint,
+                f"{cand} -c 'import {module}' 2>/dev/null && echo OK || true",
+                check=False,
+                timeout=30,
+            )
+        except subprocess.TimeoutExpired as exc:
+            if required:
+                raise RuntimeError(
+                    f"remote python probe timed out after {exc.timeout}s while "
+                    f"checking required module {module!r} with candidate {cand!r}; "
+                    "check SSH connectivity before starting analysis"
+                ) from exc
+            continue
         if "OK" in check.stdout:
             return cand
-    # Final fallback: ascend-profile-analysis only needs stdlib (no torch_npu),
-    # so plain python3 is acceptable even if the import probe failed.
+    if required:
+        raise RuntimeError(
+            f"no supported remote Python can import required module {module!r}; "
+            "prepare the runtime with the profiling-analysis requirements "
+            "before starting analysis"
+        )
+    # Optional callers retain the historical fallback to plain python3.
     return "python3"
 
 

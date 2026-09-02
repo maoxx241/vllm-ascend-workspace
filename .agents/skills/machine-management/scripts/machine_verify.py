@@ -17,6 +17,7 @@ from _workflow_common import (  # noqa: E402
     find_record,
     machine_summary,
     print_json,
+    stamp_machine_verified,
     status_payload,
     verify_machine,
 )
@@ -51,6 +52,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             progress_cb=lambda phase, message: emit_progress(action="verify", phase=phase, message=message, machine=record["alias"]),
         )
         if verified.get("status") == "ready":
+            stamp_machine_verified(record["alias"])
             print_json(verified)
             return 0
         if verified.get("status") == "blocked":

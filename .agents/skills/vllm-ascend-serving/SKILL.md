@@ -5,7 +5,15 @@ description: Start, check, or stop a single-node vLLM Ascend online service on a
 
 # vLLM Ascend Serving
 
-Manage the lifecycle of a **single-node colocated** `vllm-ascend` online service on a workspace-managed ready remote container or an isolated VAWS session container.
+Manage the lifecycle of a **single-node colocated** `vllm-ascend` online service on an isolated VAWS session container.
+
+The optional [prepared-runtime MCP](../../coordinator/README.md) has a separate
+binding/execution lifecycle. Its bindings are not legacy session records and
+must not be fed to `serve_start.py --session-id`. In that mode use the
+coordinator's request/preflight/activate/heartbeat/release sequence and existing
+remote-dev job tools, with pinned source, declared service ports and a new
+service process. The legacy wrappers here are not yet transparent adapters for
+pool bindings. Do not allocate a second local NPU lease for the pool run.
 
 Remote substrate rule: use `.remote-dev` remote tools for ad hoc remote
 read/edit/bash/search/patch work around a service. Use this skill for the
@@ -16,7 +24,7 @@ This skill takes structured parameters, handles all SSH escaping and remote exec
 
 ## Use this skill when
 
-- the user asks to start / launch / pull up a vllm-ascend service on a managed machine
+- the user asks to start / launch / pull up a vllm-ascend service in a managed session
 - the user asks to restart or relaunch a service (possibly with changed flags or env)
 - the user asks to check if a running service is alive / ready
 - the user asks to stop a running service
@@ -28,18 +36,20 @@ This skill takes structured parameters, handles all SSH escaping and remote exec
 - the task is syncing code to the remote container (use `remote-code-parity`)
 - the task is running benchmarks (a separate skill's responsibility)
 - the task is offline inference
-- the machine is not yet ready in inventory
+- no session exists yet for the target (use `session-management` first)
 
 ## Critical rules
 
+- Serving is **session-only**. `serve_start.py`, `serve_status.py`, and `serve_stop.py` take an optional `--session-id <id>` / `--session-file <path>`. When both are omitted, the session is auto-resolved by walking up from the current working directory to the nearest `.vaws-local/current-session.json` worktree binding — running from inside a session worktree needs zero target arguments. If no binding is found, the command fails fast with instructions to pass `--session-id` or create a session with `session-management`'s `session_create.py`.
 - `start` automatically runs `remote-code-parity` before launching. If parity fails, start is blocked.
 - `status` and `stop` do not require parity.
-- For parallel agent work, use `session-management` first and pass `--session-id <id>`. Session mode reads and writes `.vaws-local/sessions/<id>/serving.json` and never stops another session's service.
-- Session mode serializes `start` / `stop` operations for the same session with a serving lock; different sessions remain independent.
+- Each session reads and writes only `.vaws-local/sessions/<id>/serving.json` and never stops another session's service.
+- `start` / `stop` operations for the same session are serialized with a serving lock; different sessions remain independent.
 - Once a remote PID is launched, `serve_start.py` writes `serving.json` with `status=starting` before health probing so `serve_stop.py` can clean up even if readiness later fails.
-- Legacy `--machine` mode remains supported and keeps the previous machine-level singleton behavior.
+- Service ports are always allocated and released through the session lease mechanism — there is no ad-hoc free-port scanning.
+- Managed serving and relaunch require a nonempty live NPU lease matching the session snapshot before touching an existing service. Free cards are never selected as a fallback for an empty lease, and a stale `session.json` is not trusted after its live lease was released.
 - All remote execution goes through the scripts — never construct raw SSH commands for serving.
-- Keep local runtime state under `.vaws-local/serving/` for legacy mode and `.vaws-local/sessions/<id>/` for session mode.
+- Keep local runtime state under `.vaws-local/sessions/<id>/`.
 - Progress on `stderr` as `__VAWS_SERVING_PROGRESS__=<json>`, final result on `stdout` as JSON.
 - With a unified workspace alias, new runtime directories use `.vaws-runtime/serving/<alias>/<timestamp>/` and the service receives `VAWS_AGENT_ID`, `VAWS_AGENT_ALIAS`, and `VAWS_PROJECT_ALIAS`. Without an alias, preserve the legacy layout.
 
@@ -53,9 +63,12 @@ This skill takes structured parameters, handles all SSH escaping and remote exec
 ### Start a service
 
 ```bash
+# Inside a session worktree the session is auto-resolved — no target flag needed.
+# Outside a worktree, pass --session-id <id> (or --session-file <path>).
 python3 .agents/skills/vllm-ascend-serving/scripts/serve_start.py \
-  (--machine <alias-or-ip> | --session-id <id>) \
+  [--session-id <id> | --session-file <path>] \
   --model <remote-weight-path> \
+  [--preset <name>] \
   [--served-model-name <name>] \
   [--tp <N>] [--dp <N>] \
   [--devices <0,1,2,3>] \
@@ -66,6 +79,36 @@ python3 .agents/skills/vllm-ascend-serving/scripts/serve_start.py \
   [--skip-parity] \
   [-- <extra vllm serve args>]
 ```
+
+#### Serving presets
+
+`--preset <name>` applies a named, verified recipe from `presets/<name>.json`
+(tp/dp/port/devices/served-model-name/health-timeout/env/serve_args, plus an
+optional `vllm_version` pin). Explicit CLI args always override preset values;
+preset `env` merges under `--extra-env` per key; preset `serve_args` apply only
+when no `--` passthrough is given. Presets never carry a model weight path —
+`--model` stays required.
+
+When a preset is used, a **preflight** runs before any existing service is
+stopped: the pinned `vllm_version` is compared against the container's actual
+vllm, absolute `PYTHONPATH` entries must exist in the container, and
+JSON-valued serve args (`--additional-config`, `--model-loader-extra-config`,
+`--speculative-config`, `--compilation-config`) must parse. A failed preflight
+aborts with `phase: preflight` and leaves the running service untouched, so
+recipe/version drift never costs a multi-minute model load. Available presets:
+`dsv4-flash` (DeepSeek-V4-Flash W4A8 MTP, verified on A3 nightly CANN 9.1 /
+vllm 0.26.0).
+
+#### Staged readiness
+
+Readiness is not `/health` alone. `wait_for_ready` tracks startup phases from
+runtime-log markers (`weight-load` → `compile`/`graph-capture` → `health-ok` →
+`models-ok`), then requires one deterministic real request
+(`first-token-ok`, temperature 0) before reporting ready. The readiness output
+records the phase timeline; a timeout names the last observed phase (e.g.
+`graph-capture`, which legitimately takes 15–20 minutes on large models) so a
+stuck launch is diagnosable instead of an opaque 300s timeout. A lost SSH
+probe round-trip is treated as unknown, never as process exit.
 
 #### Launch wrapping (`--wrap-script`)
 
@@ -78,30 +121,39 @@ The `wrap_script` path is recorded in the serving state so downstream skills can
 ### Relaunch with previous config
 
 ```bash
-# Exact same config
-python3 .agents/skills/vllm-ascend-serving/scripts/serve_start.py \
-  --machine <alias> --relaunch
+# Exact same config (inside a session worktree — session auto-resolved)
+python3 .agents/skills/vllm-ascend-serving/scripts/serve_start.py --relaunch
 
 # Add a debug env
 python3 .agents/skills/vllm-ascend-serving/scripts/serve_start.py \
-  --machine <alias> --relaunch --extra-env VLLM_LOGGING_LEVEL=DEBUG
+  --relaunch --extra-env VLLM_LOGGING_LEVEL=DEBUG
 
 # Remove an env from previous config
 python3 .agents/skills/vllm-ascend-serving/scripts/serve_start.py \
-  --machine <alias> --relaunch --unset-env MY_DEBUG_FLAG
+  --relaunch --unset-env MY_DEBUG_FLAG
 
 # Remove a vllm arg from previous config (use = to avoid argparse ambiguity)
 python3 .agents/skills/vllm-ascend-serving/scripts/serve_start.py \
-  --machine <alias> --relaunch --unset-args=--enforce-eager
+  --relaunch --unset-args=--enforce-eager
 
-# Relaunch with a different model
+# Relaunch with a different model, targeting an explicit session
 python3 .agents/skills/vllm-ascend-serving/scripts/serve_start.py \
-  --machine <alias> --relaunch --model /data/models/OtherModel
+  --session-id <id> --relaunch --model /data/models/OtherModel
 ```
 
 ### Probe NPU device availability
 
+`serve_probe_npus.py` is the one entry point with two mutually exclusive target surfaces:
+
 ```bash
+# Probe the session's base host (inside a session worktree — auto-resolved)
+python3 .agents/skills/vllm-ascend-serving/scripts/serve_probe_npus.py
+
+# Explicit session target
+python3 .agents/skills/vllm-ascend-serving/scripts/serve_probe_npus.py \
+  --session-id <id>
+
+# Resource-pool probe of a registered machine host (machine-management scope)
 python3 .agents/skills/vllm-ascend-serving/scripts/serve_probe_npus.py \
   --machine <alias-or-ip>
 ```
@@ -112,20 +164,19 @@ Returns which NPU devices are free, which are busy (with PID and HBM details), p
 
 ```bash
 python3 .agents/skills/vllm-ascend-serving/scripts/serve_status.py \
-  (--machine <alias-or-ip> | --session-id <id>)
+  [--session-id <id> | --session-file <path>]
 ```
 
 ### Stop
 
 ```bash
 python3 .agents/skills/vllm-ascend-serving/scripts/serve_stop.py \
-  (--machine <alias-or-ip> | --session-id <id>) [--force]
+  [--session-id <id> | --session-file <path>] [--force]
 ```
 
 ## Local state
 
-Per-machine launch state is stored under `.vaws-local/serving/<alias>.json`.
-Session launch state is stored under `.vaws-local/sessions/<session-id>/serving.json`.
+Session launch state is stored under `.vaws-local/sessions/<session-id>/serving.json` — this is the only serving state location.
 
 This file records the last successful launch parameters (model, tp, devices,
 env, extra args, port, pid, log paths, runtime_dir, wrap_script) plus the
@@ -136,36 +187,41 @@ During launch the same file may temporarily contain `status=starting`; this is s
 
 ## Workflow
 
-### 1. Resolve the target machine
+### 1. Resolve the target session
 
-The `--machine` argument is looked up in the local machine inventory. The machine must already be managed and ready.
+The session comes from `--session-id` / `--session-file`, or is auto-resolved from the nearest `.vaws-local/current-session.json` worktree binding (walking up from the current working directory). If neither is given and no binding is found, the command fails fast and tells the user to pass `--session-id` or create a session with `session_create.py`.
 
 ### 2. Stop any existing service
 
-If a previous service is recorded for this target, it is stopped before launching a new one. In session mode this target is the session, not the base machine, so other sessions on the same host are not touched.
+If a previous service is recorded for this session, it is stopped before launching a new one. The target is the session, not the base machine, so other sessions on the same host are not touched.
 
 ### 3. Run remote-code-parity (start only)
 
-Unless `--skip-parity` is passed, `parity_sync.py` is called to ensure the container has the current local code. If parity fails, start is blocked.
+Unless `--skip-parity` is passed, `parity_sync.py` is called to ensure the container has the current local code. Parity statuses `ready`, `skipped` (explicit image mode), and `materialized` count as success (`materialized` is what `auto` returns after pure-Python runtime updates). `source-only` and `dry-run` block startup: publishing to the cache does not update the execution tree.
+
+Note: if a previous service process survives SIGINT+SIGTERM+SIGKILL, start fails fast instead of launching a second instance against the same port/devices.
 
 ### 4. Probe NPUs
 
 NPU availability is checked via `npu-smi info` on the **bare-metal host** (not the container). Host-level probing sees processes from all containers, bypassing PID namespace isolation. Devices with HBM usage above 4 GB are also marked busy to catch cross-container occupancy:
 
-- If `--devices` is specified, those devices are verified to be free. If any are busy, start is blocked with the conflict details.
-- If `--devices` is not specified but `--tp` is given, the first N free devices are automatically selected, where N = TP × DP (defaults to TP when DP is not set).
-- If NPU probe fails (e.g. driver issue), it is treated as a non-fatal warning and launch continues with user-specified devices.
+- Managed serving requires a nonempty live NPU lease for the session; an empty or stale lease fails with `needs_repair` before anything else is touched.
+- If `--devices` is specified, it must be a subset of the session lease, and those devices are verified to be free. If any are busy, start is blocked with the conflict details.
+- If `--devices` is not specified, the session's leased devices are used — the first N of the sorted lease, where N = TP × DP (defaults to TP when DP is not set). Free cards outside the lease are never auto-selected.
+- If the host NPU probe fails or returns malformed data, start fails closed with `status=blocked` and `phase=probe-npus`. Cooperative leases cannot rule out unmanaged host workloads, so no port allocation or launch is attempted until occupancy is known.
 
 ### 5. Validate and launch
 
 - Model path is checked for existence on the remote container.
-- A free port is auto-detected (or the explicit `--port` is used).
+- The service port is allocated through the session port lease (or the explicit `--port` is used); there is no ad-hoc free-port scanning.
 - A bash launch script is built internally with proper escaping — the agent never sees or edits this script.
 - The process is started via `nohup` + `disown` and detached from the SSH session.
 
 ### 6. Wait for readiness
 
-The script polls `/health` and `/v1/models` until both return success or the timeout expires.
+The script polls `/health` and `/v1/models` while tracking startup phases from
+runtime-log markers, then requires one deterministic real request before
+reporting ready. A timeout reports the last observed phase.
 
 ### 6a. Diagnose launch failure before any code change
 
@@ -183,7 +239,7 @@ On success:
 ```json
 {
   "status": "ready",
-  "machine": "blue-a",
+  "session_id": "pr123",
   "base_url": "http://10.0.0.8:38721",
   "port": 38721,
   "pid": 12345,

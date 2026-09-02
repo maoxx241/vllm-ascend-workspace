@@ -3,8 +3,9 @@
 
 The canonical inventory lives under the primary Git worktree's
 `.vaws-local/machine-inventory.json`, so linked worktrees see the same fleet.
-Execution state remains isolated in each worktree. Compatibility fallbacks are
-read only until the next successful inventory write migrates them.
+Execution state remains isolated in each worktree. Missing shared inventories
+do not fall back to legacy or per-worktree data. Inspect old files explicitly
+with --inventory and migrate only after choosing the authoritative records.
 """
 
 from __future__ import annotations
@@ -25,9 +26,7 @@ if str(LIB_DIR) not in sys.path:
 
 from vaws_local_state import (  # noqa: E402
     INVENTORY_PATH as DEFAULT_PATH,
-    LEGACY_INVENTORY_PATH,
     LOCAL_INVENTORY_PATH,
-    LOCAL_LEGACY_INVENTORY_PATH,
     SHARED_WORKSPACE_ROOT,
     ensure_state_dir,
     resolve_inventory_read_path,
@@ -280,7 +279,6 @@ def cmd_summary(args: argparse.Namespace) -> int:
         "inventory_scope": "git-common-worktree",
         "shared_workspace_root": str(SHARED_WORKSPACE_ROOT),
         "worktree_local_inventory": str(LOCAL_INVENTORY_PATH),
-        "legacy_inventory": str(LEGACY_INVENTORY_PATH),
         "count": len(inventory["machines"]),
         "machines": [
             {
@@ -374,7 +372,6 @@ def cmd_put(args: argparse.Namespace) -> int:
             "bootstrap_method": resolve_bootstrap_method(args.bootstrap_method, existing_record=target),
             "managed_by_skill": True,
             "created_by_skill": args.created_by_skill,
-            "last_verified_at": args.last_verified_at,
         }
         if host_machine_type is not None:
             record["host"]["machine_type"] = host_machine_type
@@ -407,11 +404,6 @@ def cmd_put(args: argparse.Namespace) -> int:
     }
     if not same_path(active_path, requested_path):
         payload["loaded_from"] = str(active_path)
-        payload["migrated_from_legacy"] = any(
-            same_path(active_path, candidate)
-            for candidate in (LEGACY_INVENTORY_PATH, LOCAL_LEGACY_INVENTORY_PATH)
-        )
-        payload["migrated_from_worktree_local"] = same_path(active_path, LOCAL_INVENTORY_PATH)
     print(json.dumps(payload, indent=2, ensure_ascii=False))
     return 0
 
@@ -440,11 +432,6 @@ def cmd_remove(args: argparse.Namespace) -> int:
     }
     if not same_path(active_path, requested_path):
         payload["loaded_from"] = str(active_path)
-        payload["migrated_from_legacy"] = any(
-            same_path(active_path, candidate)
-            for candidate in (LEGACY_INVENTORY_PATH, LOCAL_LEGACY_INVENTORY_PATH)
-        )
-        payload["migrated_from_worktree_local"] = same_path(active_path, LOCAL_INVENTORY_PATH)
     print(json.dumps(payload, indent=2, ensure_ascii=False))
     return 0
 
@@ -520,7 +507,6 @@ def build_parser() -> argparse.ArgumentParser:
         default=True,
         help="mark whether the container was created by the skill (default: true)",
     )
-    put_cmd.add_argument("--last-verified-at")
     put_cmd.set_defaults(func=cmd_put)
 
     upsert_cmd = subparsers.add_parser("upsert", help="alias of put; insert or update one machine record")
@@ -572,7 +558,6 @@ def build_parser() -> argparse.ArgumentParser:
         default=True,
         help="mark whether the container was created by the skill (default: true)",
     )
-    upsert_cmd.add_argument("--last-verified-at")
     upsert_cmd.set_defaults(func=cmd_put)
 
     remove = subparsers.add_parser("remove", help="remove one machine record by alias or host IP")

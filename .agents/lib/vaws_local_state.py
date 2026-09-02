@@ -24,7 +24,6 @@ STATE_DIRNAME = ".vaws-local"
 PROFILE_FILENAME = "machine-profile.json"
 IDENTITY_FILENAME = "workspace-identity.json"
 INVENTORY_FILENAME = "machine-inventory.json"
-LEGACY_INVENTORY_FILENAME = ".machine-inventory.json"
 SESSIONS_DIRNAME = "sessions"
 PROFILE_SCHEMA_VERSION = 1
 IDENTITY_SCHEMA_VERSION = 1
@@ -71,11 +70,18 @@ def shared_inventory_path(repo_root: Path = ROOT) -> Path:
     return shared_workspace_root(repo_root) / STATE_DIRNAME / INVENTORY_FILENAME
 
 
+def agent_sessions_root(repo_root: Path = ROOT) -> Path:
+    """Native attachments share task identity across linked scaffold worktrees.
+
+    This is a local identity registry, never a second resource allocator.
+    Independent clones join a task only through an explicit context receipt.
+    """
+    return shared_workspace_root(repo_root) / STATE_DIRNAME / "agent-sessions"
+
+
 SHARED_WORKSPACE_ROOT = shared_workspace_root(ROOT)
 LOCAL_INVENTORY_PATH = STATE_DIR / INVENTORY_FILENAME
 INVENTORY_PATH = shared_inventory_path(ROOT)
-LEGACY_INVENTORY_PATH = SHARED_WORKSPACE_ROOT / LEGACY_INVENTORY_FILENAME
-LOCAL_LEGACY_INVENTORY_PATH = ROOT / LEGACY_INVENTORY_FILENAME
 
 
 class WorkspaceStateError(RuntimeError):
@@ -429,7 +435,8 @@ def profile_summary(path: Path = PROFILE_PATH) -> dict[str, Any]:
         "inventory_scope": "git-common-worktree",
         "shared_workspace_root": str(SHARED_WORKSPACE_ROOT),
         "sessions_path": str(SESSIONS_DIR),
-        "legacy_inventory_path": str(LEGACY_INVENTORY_PATH),
+        "agent_sessions_path": str(agent_sessions_root()),
+        "agent_sessions_scope": "git-common-worktree; explicit context across clones",
         "exists": path.exists(),
         "choice_required": not path.exists(),
         "username_rules": "3-32 chars, lowercase English letters and digits only",
@@ -462,17 +469,6 @@ def resolve_inventory_read_path(
     *,
     repo_root: Path = ROOT,
 ) -> Path:
-    preferred_path = preferred_path.expanduser().resolve()
-    canonical_path = shared_inventory_path(repo_root).expanduser().resolve()
-    if same_path(preferred_path, canonical_path) and not preferred_path.exists():
-        repo_root = repo_root.expanduser().resolve()
-        fallbacks = (
-            repo_root / STATE_DIRNAME / INVENTORY_FILENAME,
-            shared_workspace_root(repo_root) / LEGACY_INVENTORY_FILENAME,
-            repo_root / LEGACY_INVENTORY_FILENAME,
-        )
-        for fallback in fallbacks:
-            fallback = fallback.expanduser().resolve()
-            if not same_path(fallback, preferred_path) and fallback.exists():
-                return fallback
-    return preferred_path
+    # An explicit path stays explicit. Missing canonical state is not permission
+    # to silently read a linked worktree's stale inventory or another clone.
+    return preferred_path.expanduser().resolve()

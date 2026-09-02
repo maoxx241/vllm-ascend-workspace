@@ -64,7 +64,8 @@ These should not trigger `machine-management` unless machine readiness is the ob
 
 - every linked Git worktree resolves the same machine inventory under the primary worktree's `.vaws-local/`
 - inventory reads from machine-management, serving, benchmark, profiling, session creation, and remote-toolbox use that shared path
-- a pre-existing linked-worktree inventory remains readable as a migration fallback only when the shared inventory is absent
+- a pre-existing linked-worktree inventory never masks a missing shared inventory; toolbox and parity machine lookup fail explicitly
+- independent clones retain separate inventories; only worktrees sharing the same Git common directory share this directory
 - the next successful inventory mutation writes the primary shared inventory
 - session bindings, leases, serving state, benchmark runs, profiling runs, logs, and artifacts remain under the current worktree's `.vaws-local/`
 

@@ -808,6 +808,23 @@ def cleanup_mesh(record: dict[str, Any], *, peers: Sequence[dict[str, Any]]) -> 
     return {"attempted": len(peers), "success": overall_success, "peers": results}
 
 
+def stamp_machine_verified(alias: str) -> None:
+    """Record that verify_machine just succeeded for ``alias``.
+
+    This is the only place that is allowed to set ``last_verified_at``, so the
+    inventory can never claim a machine was verified when verification failed.
+    """
+    requested_path = inventory_store.preferred_inventory_path(inventory_store.DEFAULT_PATH)
+    with inventory_store.inventory_lock(requested_path):
+        active_path = inventory_store.read_inventory_path(requested_path)
+        inventory = inventory_store.load_inventory(active_path)
+        matches = inventory_store._find_matches(inventory, alias=alias)  # noqa: SLF001
+        if not matches:
+            raise WorkflowError(f"cannot stamp verification: machine {alias!r} not found in inventory")
+        matches[0]["last_verified_at"] = utc_now_iso()
+        inventory_store.save_inventory(requested_path, inventory)
+
+
 def choose_alias(*, explicit_alias: str | None, host: str) -> str:
     value = (explicit_alias or host).strip()
     if not value:
@@ -868,7 +885,10 @@ def upsert_machine_record(
                 ),
                 "managed_by_skill": True,
                 "created_by_skill": True,
-                "last_verified_at": utc_now_iso(),
+                # Never stamp verification time at write; only a successful
+                # verify_machine run may claim the machine was verified (see
+                # stamp_machine_verified). Preserve whatever was proven before.
+                "last_verified_at": target.get("last_verified_at") if target is not None else None,
             }
             if host_machine_type is not None:
                 record["host"]["machine_type"] = host_machine_type
@@ -906,10 +926,6 @@ def upsert_machine_record(
     }
     if not inventory_store.same_path(state.active_path, state.requested_path):
         payload["loaded_from"] = str(state.active_path)
-        payload["migrated_from_legacy"] = inventory_store.same_path(
-            state.active_path,
-            inventory_store.LEGACY_INVENTORY_PATH,
-        )
     return payload, record
 
 
@@ -950,10 +966,6 @@ def remove_machine_record(identifier: str) -> tuple[dict[str, Any], dict[str, An
     }
     if not inventory_store.same_path(state.active_path, state.requested_path):
         payload["loaded_from"] = str(state.active_path)
-        payload["migrated_from_legacy"] = inventory_store.same_path(
-            state.active_path,
-            inventory_store.LEGACY_INVENTORY_PATH,
-        )
     return payload, target
 
 

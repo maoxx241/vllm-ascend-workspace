@@ -1,12 +1,13 @@
 # Command Recipes
 
-These are the expected shapes the agent should call. Every invocation is a single shot — there is no "warm collection" mode.
+These are the expected shapes the agent should call. Every invocation is a single shot — there is no "warm collection" mode. Collection is session-scoped: run from inside the session worktree and the session auto-resolves from the `.vaws-local/current-session.json` binding, so no target arg is needed.
 
 ## Minimal text case in eager mode
 
+Run from inside the session worktree (target auto-resolved):
+
 ```bash
 python3 .agents/skills/ascend-profiling-collection/scripts/collect_torch_profile_case.py \
-  --machine blue-a \
   --model /home/weights/Qwen3-8B \
   --served-model-name Qwen3-8B \
   --tp 1 \
@@ -16,7 +17,7 @@ python3 .agents/skills/ascend-profiling-collection/scripts/collect_torch_profile
   --benchmark-output-tokens 64
 ```
 
-Session-scoped equivalent:
+To target a session explicitly (e.g. from outside its worktree), add `--session-id`:
 
 ```bash
 python3 .agents/skills/ascend-profiling-collection/scripts/collect_torch_profile_case.py \
@@ -34,7 +35,6 @@ python3 .agents/skills/ascend-profiling-collection/scripts/collect_torch_profile
 
 ```bash
 python3 .agents/skills/ascend-profiling-collection/scripts/collect_torch_profile_case.py \
-  --machine blue-a \
   --model /home/weights/Qwen3.5-35B-A3B \
   --served-model-name Qwen3.5-35B-A3B \
   --tp 4 --dp 2 --enable-expert-parallel \
@@ -51,7 +51,6 @@ python3 .agents/skills/ascend-profiling-collection/scripts/collect_torch_profile
 
 ```bash
 python3 .agents/skills/ascend-profiling-collection/scripts/collect_torch_profile_case.py \
-  --machine blue-b \
   --model /home/weights/Qwen3.5-VL \
   --served-model-name Qwen3.5-VL \
   --tp 4 \
@@ -68,7 +67,6 @@ python3 .agents/skills/ascend-profiling-collection/scripts/collect_torch_profile
 
 ```bash
 python3 .agents/skills/ascend-profiling-collection/scripts/collect_torch_profile_case.py \
-  --machine blue-a \
   --model /home/weights/DeepSeek-V3 \
   --served-model-name DeepSeek-V3 \
   --tp 8 \
@@ -87,10 +85,11 @@ Use this when a previous collection ran but `analyse()` was skipped or the agent
 
 ```bash
 python3 .agents/skills/ascend-profiling-collection/scripts/run_remote_analyse.py \
-  --machine blue-a \
   --profile-root /vllm-workspace/.vaws-runtime/serving/<timestamp>/vllm_profile \
   --expected-ranks 8
 ```
+
+Run from inside the session worktree (target auto-resolved), or add `--session-id <id>` / `--session-file <path>` to target a session explicitly.
 
 Exit 0 means every rank produced `kernel_details.csv` and `trace_view.json` AND the directory count matched `--expected-ranks` (typically `tp * (dp or 1)`). Non-zero means re-collection is needed. Always pass `--expected-ranks` against fresh roots — without it a partial capture where some ranks never produced a directory looks "clean".
 
@@ -100,19 +99,19 @@ For debugging the control plane in isolation. The serving skill must have launch
 
 ```bash
 python3 .agents/skills/ascend-profiling-collection/scripts/profile_control.py \
-  --machine blue-a --action start_profile --timeout 900
+  --action start_profile --timeout 900
 
 # ... agent sends workload via curl / openai client / etc ...
 
 python3 .agents/skills/ascend-profiling-collection/scripts/profile_control.py \
-  --machine blue-a --action stop_profile --timeout 900
+  --action stop_profile --timeout 900
 ```
 
-The script reads the service port from `.vaws-local/serving/<alias>.json`, or from `.vaws-local/sessions/<id>/serving.json` when called with `--session-id`.
+The script reads the service port from `.vaws-local/sessions/<id>/serving.json` for the resolved session (auto-resolved from the worktree binding, or named by `--session-id` / `--session-file`).
 
 ## What NOT to do
 
-- Do not run `collect_torch_profile_case.py` against a machine the user has not added to inventory. Route via `machine-management` first.
+- Do not run `collect_torch_profile_case.py` against a session whose container is not yet ready. Create the session with `session-management` (which bootstraps via `machine-management`) first.
 - Do not pass `--profiler-config` through `--serve-args` of `vllm-ascend-benchmark` to "sneak" profiling into a benchmark run; benchmarks should not own profiler windows.
 - Do not call `torch_npu.profiler.profiler.analyse()` from the local Mac. The collection / re-analyse scripts run it inside the container.
 - Do not share state with `.vaws-local/service-torch-profiler/` (the old prototype location). The new skill writes only to `.vaws-local/ascend-profiling-collection/runs/`.

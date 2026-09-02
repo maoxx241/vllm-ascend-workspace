@@ -23,8 +23,8 @@ for _p in (str(LIB_DIR), str(MM_SCRIPTS)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-import inventory as inventory_store  # noqa: E402
 from vaws_local_state import ensure_state_dir  # noqa: E402
+from vaws_ssh import base_ssh_options  # noqa: E402
 from vaws_session_state import (  # noqa: E402
     load_session_lookup,
     session_record_for_execution,
@@ -32,7 +32,6 @@ from vaws_session_state import (  # noqa: E402
 )
 
 MEMPROF_STATE_DIR = ROOT / ".vaws-local" / "memory-profiling"
-SERVING_STATE_DIR = ROOT / ".vaws-local" / "serving"
 PROGRESS_SENTINEL = "__VAWS_MEMPROF_PROGRESS__="
 SAFE_TOKEN_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 
@@ -58,9 +57,7 @@ class SshEndpoint:
 def _ssh_base_cmd(endpoint: SshEndpoint) -> list[str]:
     return [
         "ssh",
-        "-o", "BatchMode=yes",
-        "-o", "StrictHostKeyChecking=accept-new",
-        "-o", "LogLevel=ERROR",
+        *base_ssh_options(),
         "-p", str(endpoint.port),
         endpoint.destination(),
     ]
@@ -109,19 +106,6 @@ def progress(msg: str, **extra: Any) -> None:
     print(f"{PROGRESS_SENTINEL}{json.dumps(payload, ensure_ascii=False)}", file=sys.stderr, flush=True)
 
 
-def resolve_machine(identifier: str) -> dict[str, Any]:
-    read_path = inventory_store.read_inventory_path(
-        inventory_store.preferred_inventory_path(inventory_store.DEFAULT_PATH)
-    )
-    inv = inventory_store.load_inventory(read_path)
-    for m in inv.get("machines", []):
-        alias = m.get("alias", "")
-        host_ip = m.get("host", {}).get("ip", "") if isinstance(m.get("host"), dict) else m.get("host", "")
-        if alias == identifier or host_ip == identifier:
-            return m
-    raise ValueError(f"Machine '{identifier}' not found in inventory")
-
-
 def endpoint_from_machine(machine: dict[str, Any]) -> SshEndpoint:
     host_info = machine.get("host", {})
     container_info = machine.get("container", {})
@@ -143,40 +127,30 @@ def endpoint_from_machine(machine: dict[str, Any]) -> SshEndpoint:
 
 
 def resolve_execution_target(
-    machine: str | None,
     *,
     session_id: str | None = None,
     session_file: str | None = None,
 ) -> dict[str, Any]:
-    if session_id or session_file:
-        lookup = load_session_lookup(
-            session_id=session_id,
-            session_file=session_file,
-            repo_root=ROOT,
-        )
-        record = session_record_for_execution(lookup.session)
-        return {
-            "mode": "session",
-            "record": record,
-            "alias": record["alias"],
-            "endpoint": endpoint_from_machine(record),
-            "session_id": lookup.session["session_id"],
-            "session_file": str(lookup.session_file),
-            "session": lookup.session,
-            "state_repo_root": lookup.state_repo_root,
-        }
-    if not machine:
-        raise ValueError("--machine is required unless --session-id or --session-file is used")
-    record = resolve_machine(machine)
+    """Resolve the session execution target (session-only).
+
+    With no explicit id/file the session is auto-resolved from the nearest
+    worktree binding (cwd upward).
+    """
+    lookup = load_session_lookup(
+        session_id=session_id,
+        session_file=session_file,
+        repo_root=ROOT,
+    )
+    record = session_record_for_execution(lookup.session)
     return {
-        "mode": "legacy",
+        "mode": "session",
         "record": record,
-        "alias": get_machine_alias(record),
+        "alias": record["alias"],
         "endpoint": endpoint_from_machine(record),
-        "session_id": None,
-        "session_file": None,
-        "session": None,
-        "state_repo_root": ROOT,
+        "session_id": lookup.session["session_id"],
+        "session_file": str(lookup.session_file),
+        "session": lookup.session,
+        "state_repo_root": lookup.state_repo_root,
     }
 
 
@@ -224,22 +198,17 @@ def find_python(endpoint: SshEndpoint) -> str:
 
 
 def load_serving_state(
-    machine_alias: str,
+    session_id: str,
     *,
-    session_id: str | None = None,
     state_repo_root: Path = ROOT,
 ) -> dict[str, Any] | None:
-    """Read the serving skill's persisted state for a given machine.
+    """Read the serving skill's persisted state for a session.
 
     Returns None if no state file exists or it's unparseable.
     The state dict contains: model, pid, port, runtime_dir, log_stdout,
     log_stderr, tp, dp, devices, status, started_at, etc.
     """
-    path = (
-        session_serving_state_path(session_id, state_repo_root)
-        if session_id
-        else SERVING_STATE_DIR / f"{machine_alias}.json"
-    )
+    path = session_serving_state_path(session_id, state_repo_root)
     if not path.exists():
         return None
     try:

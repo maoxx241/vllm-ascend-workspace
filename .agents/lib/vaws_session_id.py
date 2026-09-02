@@ -91,6 +91,46 @@ def load_current_session_binding(repo_root: Path) -> dict[str, Any] | None:
     return _load_json(repo_root / ".vaws-local" / CURRENT_SESSION_FILENAME)
 
 
+def _binding_walk_stop() -> Path:
+    """Repo root bounding the binding walk: the repository that contains this
+    ``.agents/lib`` copy — the session worktree root when running inside one.
+    """
+    return Path(__file__).resolve().parents[2]
+
+
+def find_session_binding(start: Path | None = None) -> tuple[Path, dict[str, Any]] | None:
+    """Walk upward from ``start`` (default: cwd) to the nearest directory that
+    carries a ``.vaws-local/current-session.json`` worktree binding.
+
+    Returns ``(binding_root, binding_data)`` or ``None``. This is what lets a
+    session worktree resolve its own session without ``--session-id``.
+
+    The walk stops after checking ``_binding_walk_stop()`` — the repo (or
+    worktree) root — so a stale binding above the repository cannot silently
+    redirect selector-less commands run anywhere beneath it. When ``start``
+    is outside that repository the stop is never reached and the walk keeps
+    its legacy unbounded behavior (up to the filesystem root).
+    """
+    current = (start or Path.cwd()).expanduser()
+    try:
+        current = current.resolve()
+    except OSError:
+        return None
+    stop_at = _binding_walk_stop()
+    for candidate in (current, *current.parents):
+        binding_path = candidate / ".vaws-local" / CURRENT_SESSION_FILENAME
+        if binding_path.exists():
+            try:
+                data = _load_json(binding_path)
+            except WorkspaceStateError:
+                data = None
+            if data and isinstance(data.get("session_id"), str):
+                return candidate, data
+        if candidate == stop_at:
+            break
+    return None
+
+
 def write_current_session_binding(
     repo_root: Path,
     *,
@@ -192,6 +232,9 @@ def resolve_session_id(
             candidates.append(candidate)
 
     if use_current_binding:
+        cwd_binding = find_session_binding()
+        if cwd_binding is not None:
+            candidates.append((cwd_binding[1]["session_id"], "worktree-binding"))
         current = load_current_session_binding(repo_root)
         if current and isinstance(current.get("session_id"), str):
             candidates.append((current["session_id"], "current-session"))

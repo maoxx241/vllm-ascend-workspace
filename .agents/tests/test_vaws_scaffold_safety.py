@@ -8,6 +8,7 @@ import json
 import sys
 import tempfile
 import unittest
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -25,6 +26,8 @@ from vaws_session_state import (  # noqa: E402
     allocate_session_leases,
     release_service_port,
     session_live_leases,
+    require_session_npu_lease,
+    release_all_session_leases,
 )
 from vaws_validate import (  # noqa: E402
     ValidationError,
@@ -176,6 +179,21 @@ class RemoteToolboxSafetyTests(unittest.TestCase):
 
 
 class LeaseValidationTests(unittest.TestCase):
+    def test_npu_execution_rejects_empty_and_stale_session_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            session = {"base_machine": "host", "session_id": "task", "leases": {"npu_devices": []}}
+            with self.assertRaisesRegex(SessionStateError, "nonempty lease"):
+                require_session_npu_lease(session, repo_root=root)
+            allocate_session_leases(repo_root=root, machine_alias="host", session_id="task", requested_devices=[0], available_devices=[0, 1])
+            with self.assertRaisesRegex(SessionStateError, "differs"):
+                require_session_npu_lease(session, repo_root=root)
+            session["leases"]["npu_devices"] = [0]
+            self.assertEqual(require_session_npu_lease(session, repo_root=root), [0])
+            release_all_session_leases(repo_root=root, session_id="task")
+            with self.assertRaisesRegex(SessionStateError, "nonempty lease"):
+                require_session_npu_lease(session, repo_root=root)
+
     def test_session_lease_validates_devices_against_host_probe(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -267,6 +285,9 @@ class WorktreeCreateTests(unittest.TestCase):
                     if fail_submodule:
                         raise RuntimeError("submodule update failed")
                     return SimpleNamespace(returncode=0, stdout="", stderr="")
+                if args[:2] == ["submodule", "foreach"]:
+                    events.append("submodule-branches")
+                    return SimpleNamespace(returncode=0, stdout="", stderr="")
                 raise AssertionError(f"unexpected git args: {args!r}")
 
             def fake_write_binding(repo_root, *, session_id, source, **_kwargs):
@@ -306,12 +327,49 @@ class WorktreeCreateTests(unittest.TestCase):
                 module.write_current_session_binding = original_write_binding
                 module.emit_progress = original_emit_progress
 
-            self.assertEqual(events, ["submodule-update"])
+            self.assertEqual(events, ["submodule-branches"])
             self.assertEqual(reused_root, worktree_root.resolve())
             self.assertEqual(reused_payload["action"], "reused")
             binding = json.loads((worktree_root / ".vaws-local" / "current-session.json").read_text())
             self.assertEqual(binding["session_id"], "sess-abc")
             self.assertEqual(binding["source"], "session_create-staging")
+
+    def test_reuse_preserves_child_commit_branch_and_dirty_source(self) -> None:
+        module = load_session_create_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            child = root / "upstream"
+            worktree = root / "worktree"
+            child.mkdir()
+            worktree.mkdir()
+
+            def git(path, *args):
+                return subprocess.run(["git", "-C", str(path), *args], check=True, capture_output=True, text=True).stdout.strip()
+
+            for repo in (child, worktree):
+                git(repo, "init")
+                git(repo, "config", "user.email", "test@example.invalid")
+                git(repo, "config", "user.name", "Test")
+            (child / "code.py").write_text("original\n")
+            git(child, "add", ".")
+            git(child, "commit", "-m", "base")
+            git(worktree, "-c", "protocol.file.allow=always", "submodule", "add", str(child), "vllm")
+            git(worktree, "commit", "-am", "pin old child")
+            sub = worktree / "vllm"
+            git(sub, "config", "user.email", "test@example.invalid")
+            git(sub, "config", "user.name", "Test")
+            git(sub, "checkout", "-b", "developer-work")
+            (sub / "code.py").write_text("committed change\n")
+            git(sub, "commit", "-am", "keep me")
+            head = git(sub, "rev-parse", "HEAD")
+            (sub / "code.py").write_text("uncommitted change\n")
+            binding = worktree / ".vaws-local" / "current-session.json"
+            binding.parent.mkdir()
+            binding.write_text(json.dumps({"session_id": "task"}))
+            module.ensure_worktree(session_id="task", branch="session/task", base_ref="HEAD", worktree_root=worktree, no_worktree=False)
+            self.assertEqual(git(sub, "rev-parse", "HEAD"), head)
+            self.assertEqual(git(sub, "branch", "--show-current"), "developer-work")
+            self.assertEqual((sub / "code.py").read_text(), "uncommitted change\n")
 
 
 class RunStateIsolationTests(unittest.TestCase):
@@ -360,15 +418,28 @@ class RunStateIsolationTests(unittest.TestCase):
             ROOT / ".agents" / "skills" / "vllm-ascend-benchmark" / "scripts" / "_common.py",
         )
         original_root = module.ROOT
-        original_state_dir = module.BENCHMARK_STATE_DIR
         try:
             with tempfile.TemporaryDirectory() as tmp:
-                root = Path(tmp)
+                root = Path(tmp).resolve()
                 module.ROOT = root
-                module.BENCHMARK_STATE_DIR = root / ".vaws-local" / "benchmark"
+                session_dir = root / ".vaws-local" / "sessions" / "sess-a"
+                session_dir.mkdir(parents=True)
+                session_file = session_dir / "session.json"
+                session_file.write_text(
+                    json.dumps(
+                        {
+                            "schema_version": 1,
+                            "session_id": "sess-a",
+                            "base_machine": "machine-a",
+                            "local": {"worktree_root": str(root)},
+                            "remote": {"host": "192.0.2.10", "container": {"name": "c", "ssh_port": 46001}},
+                        }
+                    ),
+                    encoding="utf-8",
+                )
                 config = module.BenchConfig(
-                    machine="173.131.1.2",
                     session_id="sess-a",
+                    session_file=str(session_file),
                     model="/models/Qwen",
                 )
                 payload = {"status": "ok"}
@@ -383,7 +454,6 @@ class RunStateIsolationTests(unittest.TestCase):
                 self.assertEqual(saved["run_dir"], str(expected_parent))
         finally:
             module.ROOT = original_root
-            module.BENCHMARK_STATE_DIR = original_state_dir
 
 
 if __name__ == "__main__":

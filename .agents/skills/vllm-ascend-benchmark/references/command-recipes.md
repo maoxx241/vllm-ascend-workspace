@@ -1,15 +1,19 @@
 # Benchmark Command Recipes
 
+All benchmark commands are session-scoped. When run from inside a session worktree
+(a directory with `.vaws-local/current-session.json`), the session is auto-resolved
+and **no target flag is needed** — that is the primary form shown below. Outside a
+worktree, add `--session-id <id>` (or `--session-file <path>`) explicitly.
+
 ## Single-run: minimal
 
 ```bash
 python3 .agents/skills/vllm-ascend-benchmark/scripts/bench_run.py \
-  --machine 173.131.1.2 \
   --model /home/weights/Qwen3.5-0.8B \
   --tp 1
 ```
 
-Session-scoped equivalent:
+Explicit session target:
 
 ```bash
 python3 .agents/skills/vllm-ascend-benchmark/scripts/bench_run.py \
@@ -22,7 +26,6 @@ python3 .agents/skills/vllm-ascend-benchmark/scripts/bench_run.py \
 
 ```bash
 python3 .agents/skills/vllm-ascend-benchmark/scripts/bench_run.py \
-  --machine 173.131.1.2 \
   --model /home/weights/Qwen3-Next-80B-A3B-Instruct \
   --tp 4 \
   --extra-env OMP_NUM_THREADS=10 \
@@ -50,7 +53,6 @@ Start the service once, run 5 iterations, discard the first as warmup, aggregate
 
 ```bash
 python3 .agents/skills/vllm-ascend-benchmark/scripts/bench_run.py \
-  --machine 173.131.1.2 \
   --model /home/weights/Qwen3.5-35B-A3B \
   --tp 4 \
   --runs 5 --warmup-runs 1 \
@@ -70,17 +72,55 @@ python3 .agents/skills/vllm-ascend-benchmark/scripts/bench_run.py \
 
 ```bash
 python3 .agents/skills/vllm-ascend-benchmark/scripts/bench_run.py \
-  --machine 173.131.1.2 \
   --model /home/weights/Qwen3-Next-80B-A3B-Instruct \
   --refer-nightly Qwen3-Next-80B-A3B-Instruct-A2
 ```
 
-## Multi-state comparison: agent-orchestrated
+## Preset-driven runs
 
-To compare multiple code states (baseline / PR / modified), the agent runs `bench_run.py`
-once per state, switching the local workspace between each. **Prefer git worktrees over
-checkout** — worktrees are safer, support parallel runs, and avoid polluting the main
-working tree.
+Named presets under `.agents/skills/vllm-ascend-benchmark/presets/` pin a reusable
+model/service configuration (tp/dp/port/devices/served name/health timeout, env,
+bench env, serve/bench args, vllm ref, runs/warmup, fixed dataset, request
+counts). Explicit CLI args override preset values per field; `--model` is always
+required because weight paths are machine-specific.
+
+`dsv4-flash` carries the DeepSeek-V4-Flash W4A8 MTP configuration and replaces
+the deleted bespoke `.agents/scripts/dsv4_flash_benchmark.py` — do not hand-write
+new one-off benchmark scripts; add or extend a preset instead.
+
+```bash
+# Single-run with the DSV4 Flash preset
+python3 .agents/skills/vllm-ascend-benchmark/scripts/bench_run.py \
+  --model /home/weights/DeepSeek-V4-Flash-w4a8-mtp \
+  --preset dsv4-flash \
+  --runs 6 --warmup-runs 1
+
+# Multi-state comparison with the same preset (baseline vs PR), fixed dataset,
+# deterministic accuracy probe, and safe stale cleanup
+python3 .agents/skills/vllm-ascend-benchmark/scripts/bench_compare.py \
+  --preset dsv4-flash \
+  --model /home/weights/DeepSeek-V4-Flash-w4a8-mtp \
+  --state baseline=<commit> --state pr10805=pr:10805 \
+  --stale-cleanup --fixed-request-dataset --accuracy-probe
+
+# Multiple request-count cases in one comparison (each count overrides
+# --num-prompts and --max-concurrency for its case)
+python3 .agents/skills/vllm-ascend-benchmark/scripts/bench_compare.py \
+  --preset dsv4-flash \
+  --model /home/weights/DeepSeek-V4-Flash-w4a8-mtp \
+  --state baseline=<commit> --state pr10805=pr:10805 \
+  --bench-request-counts 1,2 --fixed-request-dataset
+```
+
+## Multi-state comparison: agent-orchestrated (fallback)
+
+The preferred path is a single `bench_compare.py` call (see the preset examples
+above) — it aligns each git ref in-container, gates on native-input digests,
+and persists every completed state. Only when `bench_compare.py` cannot express
+the setup (e.g. each state needs a *different* local worktree synced through
+parity) does the agent run `bench_run.py` once per state, switching the local
+workspace between each. **Prefer git worktrees over checkout** — worktrees are
+safer, support parallel runs, and avoid polluting the main working tree.
 
 All runs must use identical `--serve-args`, `--bench-args`, `--extra-env`, and `--tp`.
 Only the code state should differ (see comparison contract in `behavior.md`).
@@ -95,7 +135,7 @@ git -C vllm-ascend worktree add /tmp/bench-pr feat/optimize
 # State A: point vllm-ascend at baseline worktree, run benchmark
 # (agent handles symlinking or parity sync with the worktree path)
 python3 .agents/skills/vllm-ascend-benchmark/scripts/bench_run.py \
-  --machine 173.131.1.2 \
+  --session-id pr123 \
   --model /home/weights/Qwen3.5-35B-A3B \
   --tp 4 --runs 5 --warmup-runs 1 \
   --serve-args --async-scheduling \
@@ -103,7 +143,7 @@ python3 .agents/skills/vllm-ascend-benchmark/scripts/bench_run.py \
 
 # State B: switch to PR worktree, run same benchmark
 python3 .agents/skills/vllm-ascend-benchmark/scripts/bench_run.py \
-  --machine 173.131.1.2 \
+  --session-id pr123 \
   --model /home/weights/Qwen3.5-35B-A3B \
   --tp 4 --runs 5 --warmup-runs 1 \
   --serve-args --async-scheduling \
@@ -121,7 +161,6 @@ When worktrees are impractical (e.g. cross-fork commits not yet fetched):
 ```bash
 cd vllm-ascend && git checkout main && cd ..
 python3 .agents/skills/vllm-ascend-benchmark/scripts/bench_run.py \
-  --machine 173.131.1.2 \
   --model /home/weights/Qwen3.5-35B-A3B \
   --tp 4 --runs 5 --warmup-runs 1 \
   --serve-args --async-scheduling \
@@ -129,7 +168,6 @@ python3 .agents/skills/vllm-ascend-benchmark/scripts/bench_run.py \
 
 cd vllm-ascend && git checkout feat/optimize && cd ..
 python3 .agents/skills/vllm-ascend-benchmark/scripts/bench_run.py \
-  --machine 173.131.1.2 \
   --model /home/weights/Qwen3.5-35B-A3B \
   --tp 4 --runs 5 --warmup-runs 1 \
   --serve-args --async-scheduling \
@@ -137,4 +175,5 @@ python3 .agents/skills/vllm-ascend-benchmark/scripts/bench_run.py \
 ```
 
 The agent collects all JSON outputs and compares `aggregated.output_throughput.mean`,
-`aggregated.mean_ttft_ms.mean`, `aggregated.acceptance_rate.mean`, etc.
+`aggregated.mean_ttft_ms.mean`, `aggregated.spec_decode_acceptance_rate.mean`, etc. Each run's
+result JSON is also persisted under `.vaws-local/sessions/<session-id>/benchmark/runs/`.

@@ -10,6 +10,7 @@ import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[4]
 LIB_DIR = ROOT / ".agents" / "lib"
@@ -81,6 +82,45 @@ class CoordinationTests(unittest.TestCase):
         )
         self.assertEqual(result["task"]["agent_id"], "dce488a7-1af2-44b1-bb91-c3984743d33e")
         self.assertEqual(result["task"]["agent_alias"], "team42")
+
+    def test_managed_cpu_initialization_is_not_reallocated_after_heartbeat_expiry(self):
+        self.submit("guarded-task", devices=[0])
+        granted = self.coordinator.acquire("guarded-task", occupancy())
+        token = granted["task"]["fence_token"]
+        self.coordinator.preflight("guarded-task", token, occupancy())
+        guard = {"marker": "a" * 32, "boot_id": "test"}
+        with mock.patch("vaws_npu_coordination.process_guard_busy", return_value=True):
+            self.coordinator.activate("guarded-task", token, pid=1234, process_guard=guard, heartbeat_ttl_seconds=1)
+            import sqlite3
+            with sqlite3.connect(Path(self.temp.name) / "coordinator.sqlite3") as old_client:
+                with self.assertRaisesRegex(sqlite3.IntegrityError, "process guard"):
+                    old_client.execute("UPDATE tasks SET state='released' WHERE task_id='guarded-task'")
+            self.clock.advance(2)
+            self.assertEqual(self.coordinator.snapshot(occupancy())["tasks"][0]["state"], "orphaned_busy")
+            self.assertEqual(self.coordinator.release("guarded-task", token, occupancy())["status"], "orphaned_busy")
+            self.submit("waiting-task", devices=[0])
+            self.assertNotEqual(self.coordinator.acquire("waiting-task", occupancy())["status"], "granted")
+        with mock.patch("vaws_npu_coordination.process_guard_busy", return_value=False):
+            self.assertEqual(self.coordinator.acquire("waiting-task", occupancy())["status"], "granted")
+
+    def test_subreaper_lease_requires_completion_even_after_supervisor_disappears(self):
+        self.submit("retained-task", devices=[0])
+        token = self.coordinator.acquire("retained-task", occupancy())["task"]["fence_token"]
+        self.coordinator.preflight("retained-task", token, occupancy())
+        guard = {"marker": "b" * 32, "boot_id": "test", "retain_until_release": True}
+        with mock.patch("vaws_npu_coordination.process_guard_busy", return_value=True):
+            self.coordinator.activate("retained-task", token, pid=1234, process_guard=guard, heartbeat_ttl_seconds=1)
+        # No marked process is left, but GC lacks a descendant completion receipt.
+        def retained(value, *, completion_confirmed=False):
+            return bool(value) and not completion_confirmed
+        with mock.patch("vaws_npu_coordination.process_guard_busy", side_effect=retained):
+            self.clock.advance(2)
+            self.assertEqual(self.coordinator.snapshot(occupancy())["tasks"][0]["state"], "orphaned_busy")
+            self.assertEqual(self.coordinator.release("retained-task", token, occupancy())["status"], "orphaned_busy")
+            self.submit("retained-waiter", devices=[0])
+            self.assertNotEqual(self.coordinator.acquire("retained-waiter", occupancy())["status"], "granted")
+            self.assertEqual(self.coordinator.release("retained-task", token, occupancy(), completion_confirmed=True)["status"], "released")
+            self.assertEqual(self.coordinator.acquire("retained-waiter", occupancy())["status"], "granted")
 
     def activate(self, task_id: str, *, heartbeat_ttl: int = 10) -> int:
         granted = self.coordinator.acquire(task_id, occupancy(), grant_ttl_seconds=10)
@@ -259,6 +299,61 @@ class CoordinationTests(unittest.TestCase):
         self.assertEqual(sorted(parsed["busy"]), ["0", "1"])
         self.assertEqual(parsed["busy"]["0"][0]["kind"], "hbm_threshold")
         self.assertEqual(parsed["busy"]["1"][0]["pid"], 4321)
+
+    def test_a3_process_columns_map_chip_to_physical_device_below_hbm_threshold(self):
+        devices = """
+| 0     Ascend910  | OK | 170 | 48 | 0 / 0 |
+| 0     0         | 0000:9D:00.0 | 0 | 0 / 0 | 3364 / 65536 |
+| 0     Ascend910  | OK | -   | 50 | 0 / 0 |
+| 1     1         | 0000:9F:00.0 | 0 | 0 / 0 | 2951 / 65536 |
+| 2     Ascend910  | OK | 170 | 48 | 0 / 0 |
+| 0     8         | 0000:89:00.0 | 0 | 0 / 0 | 3000 / 65536 |
+"""
+        header = '| NPU Chip | Process id | Process name | Process memory(MB) |\n'
+        rows = '| 0 0 | 4321 | python3 | 123 |\n| 0 1 | 4322 | python3 | 122 |\n| 2 0 | 4323 | worker | 120 |\n'
+        parsed = parse_npu_smi_info(devices + header + rows)
+        self.assertEqual(parsed['status'], 'ok')
+        self.assertEqual({key: value[0]['pid'] for key, value in parsed['busy'].items()},
+                         {'0': 4321, '1': 4322, '8': 4323})
+        self.assertEqual(parsed['free'], [])
+        self.submit('task-small-worker', devices=[1])
+        self.assertEqual(self.coordinator.acquire('task-small-worker', parsed)['status'], 'waiting')
+        for bad in [devices, devices + header + '| 0 9 | 4321 | python3 | 123 |\n',
+                    devices + header + '| 0 1 | unknown | python3 | 123 |\n']:
+            with self.subTest(output=bad):
+                unknown = parse_npu_smi_info(bad)
+                self.assertEqual(unknown['status'], 'failed')
+                self.assertEqual(unknown['free'], [])
+
+    def test_process_identity_columns_follow_the_device_table_layout(self):
+        devices = """
+| 0     Ascend910  | OK | 170 | 48 | 0 / 0 |
+| 0     0         | 0000:9D:00.0 | 0 | 0 / 0 | 3364 / 65536 |
+"""
+        header = '| NPU Chip | Process id | Process name | Process memory(MB) |\n'
+        # A multi-chip (NPU, Chip) -> Phy-ID table makes a lone first column an
+        # ambiguous NPU index. Fail closed instead of misattributing the process.
+        single = parse_npu_smi_info(devices + header + '| 0 | 4321 | python3 | 123 |\n')
+        self.assertEqual(single['status'], 'failed')
+        self.assertEqual(single['free'], [])
+        unknown = parse_npu_smi_info(devices + header + '| 0 9 | 4321 | python3 | 123 |\n')
+        self.assertEqual(unknown['status'], 'failed')
+        self.assertEqual(unknown['free'], [])
+        accepted = parse_npu_smi_info(devices + header + '| 0 0 | 4321 | python3 | 123 |\n')
+        self.assertEqual(accepted['status'], 'ok')
+        self.assertEqual(accepted['busy']['0'][0]['pid'], 4321)
+        # Without any (NPU, Chip) table the layout is flat and the lone column
+        # is the device identity itself.
+        flat = """
+| 0     910B4      | OK              41.8        0                0 / 0 |
+| 1     910B4      | OK              41.8        0                0 / 0 |
+| NPU   Chip       | Process id      Process name             Process memory(MB) |
+| 1 | 4321 | python | 100 |
+"""
+        parsed = parse_npu_smi_info(flat)
+        self.assertEqual(parsed['status'], 'ok')
+        self.assertEqual(parsed['busy']['1'][0]['pid'], 4321)
+        self.assertEqual(parsed['free'], [0])
 
 
 if __name__ == "__main__":

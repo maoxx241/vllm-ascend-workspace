@@ -5,6 +5,21 @@ Claude Code, and other MCP-capable agents. Local work should still use native
 Read/Edit/Write/Bash/Glob/Grep/apply_patch tools. Remote work should use the
 matching remote companion tools and only add endpoint fields.
 
+The task facade adds `vaws_session`, `vaws_run`, `vaws_execution`, and
+`vaws_finish` to the same portable MCP server for Claude Code, Grok, Kimi Code,
+Codex and Cursor when the client's native hook, workspace trust and MCP
+approval are active. A native-session hook supplies local task context; new
+native sessions create new VAWS tasks and resume retains the old task. These
+are lifecycle contracts, not evidence that every client has loaded or approved
+them. The four tools hide runtime checkout, parity and supervised execution
+behind the agent's intent. Local tools and local task identity require no
+remote resources.
+See [native lifecycle setup](../.agents/coordinator/README.md#task-and-native-session-lifecycle).
+Existing `remote_*` names and endpoint semantics remain unchanged. Native hook
+acceptance must be checked separately from schema/transport compatibility; a
+Bash/CLI fallback, configuration-only result, or pending client approval is
+not a native MCP pass.
+
 Default endpoint fields:
 
 - `host`
@@ -65,6 +80,17 @@ files are:
 Managed VAWS `session_id`, `session_file`, and `machine` resolution remain
 available as compatibility modes. Host plus port is the default remote-dev
 surface.
+
+When no endpoint target is supplied at all, tools auto-bind to the session of
+the nearest worktree binding (walking upward from the cwd to a directory with
+`.vaws-local/current-session.json`). Inside a session worktree, `remote.bash`
+and friends therefore need zero endpoint arguments.
+
+Routing rule for quick verification: running a command, reading a file, or
+checking state on the remote container is a zero-sync operation — use
+`remote.bash` / `remote.read` / `remote.grep` directly. Never route "run one
+command remotely" through remote-code-parity; parity is only for making the
+remote code tree match local edits before execution.
 
 Remote read ledgers are scoped by `client_context_id` when supplied, then by
 `CLAUDE_SESSION_ID`, `CODEX_SESSION_ID`, `CODEX_RUN_ID`, and

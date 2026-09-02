@@ -1,12 +1,22 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import shlex
 import subprocess
+import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from .endpoint import Endpoint
+
+_MUX_DIR = Path.home() / ".ssh" / "vaws-mux"
+
+# Decide mux-dir readiness once per process (see .agents/lib/vaws_ssh.py for the
+# rationale). None = undecided, True/False = usable / not usable.
+_MUX_READY: bool | None = None
 
 
 @dataclass
@@ -15,6 +25,43 @@ class RemoteCompleted:
     stdout: str
     stderr: str
     timed_out: bool = False
+
+
+def _control_master_options(identity_file: str | None = None) -> list[str]:
+    """OpenSSH connection reuse; shares the mux dir with the .agents tooling.
+
+    Prepared once per process. On failure we emit a single visible warning
+    instead of silently disabling reuse (which reads as "the remote is slow").
+    """
+    global _MUX_READY
+    if _MUX_READY is None:
+        try:
+            _MUX_DIR.mkdir(parents=True, exist_ok=True)
+            os.chmod(_MUX_DIR, 0o700)
+            _MUX_READY = True
+        except OSError as exc:
+            sys.stderr.write(
+                f"[remote-dev] WARNING: SSH ControlMaster disabled; could not "
+                f"prepare {_MUX_DIR} ({exc}). Remote tool calls will pay a fresh "
+                f"SSH handshake each time. Fix ~/.ssh permissions to restore reuse.\n"
+            )
+            _MUX_READY = False
+    if not _MUX_READY:
+        return []
+    # OpenSSH's %C hashes host/port/user but not the identity file; without a
+    # per-key suffix two endpoints that differ only by SSH key would silently
+    # share one master connection.
+    key_suffix = ""
+    if identity_file:
+        key_suffix = "-" + hashlib.sha256(identity_file.encode("utf-8")).hexdigest()[:12]
+    return [
+        "-o",
+        "ControlMaster=auto",
+        "-o",
+        f"ControlPath={_MUX_DIR}/%C{key_suffix}",
+        "-o",
+        "ControlPersist=120",
+    ]
 
 
 def ssh_base_cmd(endpoint: Endpoint) -> list[str]:
@@ -28,6 +75,7 @@ def ssh_base_cmd(endpoint: Endpoint) -> list[str]:
         "LogLevel=ERROR",
         "-o",
         f"ConnectTimeout={max(1, int(endpoint.connect_timeout_ms / 1000))}",
+        *_control_master_options(endpoint.identity_file),
     ]
     if endpoint.identity_file:
         cmd.extend(["-i", endpoint.identity_file])

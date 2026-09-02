@@ -1,5 +1,15 @@
 All parity helpers stream phase progress on `stderr` as `__VAWS_PARITY_PROGRESS__=<json>` and keep the final summary JSON on `stdout`.
 
+External worktrees: append `--source vllm=/actual/vllm --source
+vllm-ascend=/actual/vllm-ascend` to the wrapper or low-level helper. Do not
+copy those repositories into a second business checkout.
+
+For continuous staging, `parity_watch.py --interval 1 -- <low-level sync
+arguments>` accepts the direct endpoint/workspace arguments and always uses
+`source-only`. It emits one JSON line per transferred snapshot. See the
+[ready-runtime recipe](../../../coordinator/README.md) for the full example
+and the separate materialize/request/preflight/launch lifecycle.
+
 Remote toolbox sync planning:
 
 ```bash
@@ -113,22 +123,16 @@ python3 .agents/skills/remote-code-parity/scripts/install_consent.py batch-set \
   --approved-by-user
 ```
 
-## Inspect the derived sync arguments from inventory
+## Normal sync against a session (default)
+
+Run from inside the session worktree; the target auto-binds from the
+`.vaws-local/current-session.json` worktree binding:
 
 ```bash
-python3 .agents/skills/remote-code-parity/scripts/parity_sync.py \
-  --machine blue-a \
-  --print-derived-args
+python3 .agents/skills/remote-code-parity/scripts/parity_sync.py
 ```
 
-## Normal sync against a managed machine
-
-```bash
-python3 .agents/skills/remote-code-parity/scripts/parity_sync.py \
-  --machine blue-a
-```
-
-## Normal sync against an isolated session
+To target a session explicitly (e.g. from outside its worktree):
 
 ```bash
 python3 .agents/skills/remote-code-parity/scripts/parity_sync.py \
@@ -136,6 +140,26 @@ python3 .agents/skills/remote-code-parity/scripts/parity_sync.py \
 ```
 
 This syncs the session worktree to the session container and uses `workspace_id=pr123` unless explicitly overridden.
+
+## Inspect the derived sync arguments
+
+```bash
+python3 .agents/skills/remote-code-parity/scripts/parity_sync.py \
+  --print-derived-args
+```
+
+Add `--session-id <id>` / `--session-file <path>` when not running from inside
+the session worktree.
+
+## Legacy: sync against a managed base machine
+
+`--machine` is the legacy single-tenant machine surface; prefer the session
+forms above for parallel agent work.
+
+```bash
+python3 .agents/skills/remote-code-parity/scripts/parity_sync.py \
+  --machine blue-a
+```
 
 ## Select or benchmark mirror transport
 
@@ -172,11 +196,10 @@ Synthetic commits are deterministic parentless tree snapshots. Clean child repos
 
 ```bash
 python3 .agents/skills/remote-code-parity/scripts/parity_sync.py \
-  --machine blue-a \
   --force-reinstall
 ```
 
-Unconditionally reinstalls both `vllm` and `vllm-ascend` even when no files changed. Useful for recovering from a broken editable install or validating the install pipeline.
+Run from inside the session worktree (target auto-bound), or add `--session-id <id>` / `--machine <alias>` (legacy). Unconditionally reinstalls both `vllm` and `vllm-ascend` even when no files changed. Useful for recovering from a broken editable install or validating the install pipeline.
 
 ## Runtime install cache / compile knobs
 
@@ -190,7 +213,6 @@ CMAKE_BUILD_TYPE=Release \
 PIP_CACHE_DIR=/root/.cache/pip \
 FETCHCONTENT_BASE_DIR=/root/.cache/vaws/fetchcontent \
 python3 .agents/skills/remote-code-parity/scripts/parity_sync.py \
-  --machine blue-a \
   --force-reinstall
 ```
 
@@ -202,18 +224,20 @@ The cache/compile values shown above are exported into the remote install shell 
 
 ```bash
 python3 .agents/skills/remote-code-parity/scripts/parity_sync.py \
-  --machine blue-a \
   --dry-run
 ```
+
+Run from inside the session worktree (target auto-bound), or add `--session-id <id>` / `--machine <alias>` (legacy).
 
 ## Override runtime root or preserve an extra runtime-private path
 
 ```bash
 python3 .agents/skills/remote-code-parity/scripts/parity_sync.py \
-  --machine blue-a \
   --runtime-root /vllm-workspace \
   --preserve-path model-cache
 ```
+
+Run from inside the session worktree (target auto-bound), or add `--session-id <id>` / `--machine <alias>` (legacy).
 
 ## Low-level sync helper
 

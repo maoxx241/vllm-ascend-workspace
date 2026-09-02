@@ -3,7 +3,8 @@
 
 This is a thin wrapper around ``ascend_profile.sweep`` (which already
 discovers roots and aggregates results). The wrapper handles:
-  - inventory lookup
+  - session target resolution (explicit --session-id/--session-file or the
+    bound session of the cwd worktree)
   - tar-sync of ``scripts/ascend_profile/`` to the remote work dir
   - launching ``sweep`` on the remote
   - pulling back ``sweep_summary.json`` and ``sweep_class_rollup.csv``
@@ -61,7 +62,8 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         allow_abbrev=False,
     )
-    parser.add_argument("--machine", required=True, help="alias or IP from machine inventory")
+    parser.add_argument("--session-id", help="VAWS session id; defaults to the bound session of the current worktree")
+    parser.add_argument("--session-file", help="explicit session.json path")
     parser.add_argument(
         "--search-root",
         action="append",
@@ -188,16 +190,44 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     started = time.time()
 
-    machine = common.resolve_machine(args.machine)
-    alias = common.get_machine_alias(machine)
-    endpoint = common.endpoint_from_machine(machine)
+    try:
+        target = common.resolve_execution_target(
+            session_id=args.session_id,
+            session_file=args.session_file,
+        )
+    except (ValueError, common.SessionStateError) as exc:
+        common.print_json(
+            {
+                "status": "failed",
+                "phase": "resolve",
+                "error": str(exc),
+            }
+        )
+        return 2
+    alias = target["alias"]
+    endpoint = target["endpoint"]
     common.progress(
         "resolve",
-        "machine resolved",
+        "target resolved",
         machine=alias,
+        session_id=target["session_id"],
         host=endpoint.host,
         ssh_port=endpoint.port,
     )
+
+    try:
+        py = common.remote_python_with_module(endpoint, "yaml", required=True)
+    except RuntimeError as exc:
+        common.print_json(
+            {
+                "status": "failed",
+                "phase": "dependency_preflight",
+                "error": str(exc),
+                "machine": alias,
+                "session_id": target["session_id"],
+            }
+        )
+        return 2
 
     try:
         run_dir = common.ensure_run_dir(
@@ -243,7 +273,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 3
 
     # Phase 2: remote sweep
-    py = common.remote_python_with_module(endpoint, "csv")
     sweep_args_parts: list[str] = [
         f"--search-root {common.quote_remote(root)}" for root in args.search_root
     ]

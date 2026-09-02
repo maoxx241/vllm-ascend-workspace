@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:
       - ".remote-dev/**"
+      - ".agents/lib/**"
+      - ".agents/scripts/vaws.py"
       - ".mcp.json"
       - ".cursor/mcp.json"
       - ".codex/config.example.toml"
@@ -13,6 +15,8 @@ on:
     branches: [main]
     paths:
       - ".remote-dev/**"
+      - ".agents/lib/**"
+      - ".agents/scripts/vaws.py"
       - ".mcp.json"
       - ".cursor/mcp.json"
       - ".codex/config.example.toml"
@@ -38,14 +42,9 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - name: Test portable MCP schemas, dispatch, and remote safety
-        env:
-          PYTHONPATH: .remote-dev/tests
-        # Skill catalog/shim freshness is separate from the MCP contract.
-        # These tests use mocks or temporary local files; no SSH/NPU access.
-        run: >-
-          python -B -m unittest -v
-          test_mcp_schema test_patch_ops test_endpoint test_path_policy
-          test_remote_edit test_remote_write test_remote_read test_artifacts
-          test_hook_guard
-          test_cli_help.CliHelpTests.test_cli_wrappers_have_help
-          test_cli_help.CliHelpTests.test_cli_errors_return_result_contract_without_traceback
+        # Discovery runs every module in .remote-dev/tests so new tests (CLI
+        # freshness, grep fallback semantics, mux, auto-bind, job lifecycle)
+        # cannot silently lack a CI entry again. Each test module puts the
+        # substrate on sys.path itself. Temporary files and bounded Linux
+        # process checks; no SSH/NPU access; Linux-only modules self-skip.
+        run: python -B -m unittest discover -s .remote-dev/tests

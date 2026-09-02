@@ -4,6 +4,8 @@ import argparse
 import importlib.util
 import subprocess
 import sys
+import tempfile
+import os
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -46,6 +48,146 @@ def snapshot_record(relpath: str = "vllm"):
 
 
 class GitTransportTests(unittest.TestCase):
+    def test_external_business_worktrees_snapshot_without_reset_or_copy(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            root = base / "scaffold"
+            def git(repo, *args):
+                return subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, text=True).stdout.strip()
+            def init(repo):
+                repo.mkdir()
+                git(repo, "init")
+                git(repo, "config", "user.name", "Test")
+                git(repo, "config", "user.email", "test@example.invalid")
+                (repo / "model.py").write_text("original\n")
+                git(repo, "add", ".")
+                git(repo, "commit", "-m", "base")
+            init(root)
+            sources = {}
+            module_lines = []
+            for name in ("vllm", "vllm-ascend"):
+                repo = base / ("actual-" + name)
+                init(repo)
+                sources[name] = repo
+                module_lines.append(f'[submodule "{name}"]\n path = {name}\n url = {repo}\n')
+                git(root, "update-index", "--add", "--cacheinfo", "160000," + git(repo, "rev-parse", "HEAD") + "," + name)
+            (root / ".gitmodules").write_text("\n".join(module_lines))
+            git(root, "add", ".gitmodules")
+            git(root, "commit", "-m", "links")
+            (sources["vllm-ascend"] / "model.py").write_text("actual dirty edit\n")
+            before = {name: (git(repo, "rev-parse", "HEAD"), git(repo, "status", "--porcelain")) for name, repo in sources.items()}
+            records = parity.build_snapshot_records(root, "external", "snapshot", (), sources)
+            record = next(row for row in records if row.relpath == "vllm-ascend")
+            self.assertEqual(Path(record.source_path), sources["vllm-ascend"].resolve())
+            self.assertEqual(git(sources["vllm-ascend"], "show", record.commit + ":model.py"), "actual dirty edit")
+            self.assertFalse((root / "vllm-ascend").exists())
+            self.assertEqual(before, {name: (git(repo, "rev-parse", "HEAD"), git(repo, "status", "--porcelain")) for name, repo in sources.items()})
+            parity.cleanup_synthetic_refs(root, records)
+
+    def test_watcher_always_stages_and_acknowledges_only_pre_sync_content(self):
+        watcher = load_module("_parity_watcher_test", SCRIPTS / "parity_watch.py")
+        args = argparse.Namespace(apply_mode="auto", force_reinstall=False, dry_run=False,
+                                  print_manifest=True, workspace_root="/tmp/scaffold", source=[])
+        def sync(args):
+            self.assertEqual(args.apply_mode, "source-only")
+            print('{"status":"ready","snapshot_commits":{"vllm":"snapshot"}}')
+            return 0
+        with mock.patch.object(watcher.parity, "workspace_fingerprint", side_effect=["before", "during", "during"]), mock.patch.object(watcher.parity, "run_sync", side_effect=sync) as execute:
+            fingerprint, result = watcher.stage_once(args, None)
+            self.assertIsNotNone(result)
+            fingerprint, result = watcher.stage_once(args, fingerprint)
+            self.assertIsNotNone(result)
+            _, result = watcher.stage_once(args, fingerprint)
+            self.assertIsNone(result)
+            self.assertEqual(execute.call_count, 2)
+
+    def test_dirty_file_content_and_untracked_edits_change_fingerprint(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            def git(*args):
+                return subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True, text=True).stdout.strip()
+            git("init")
+            git("config", "user.name", "Test")
+            git("config", "user.email", "test@example.invalid")
+            path = root / "model.py"
+            path.write_text("base\n")
+            git("add", ".")
+            git("commit", "-m", "base")
+            path.write_text("edit one\n")
+            first = parity.workspace_fingerprint(root)
+            path.write_text("edit two\n")
+            second = parity.workspace_fingerprint(root)
+            self.assertNotEqual(first, second)
+            extra = root / "new.py"
+            extra.write_text("one\n")
+            third = parity.workspace_fingerprint(root)
+            extra.write_text("two\n")
+            self.assertNotEqual(third, parity.workspace_fingerprint(root))
+
+    def test_native_inputs_reuse_python_commits_and_detect_reverts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            def git(*args):
+                return subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True, text=True).stdout.strip()
+            git("init")
+            git("config", "user.name", "Test")
+            git("config", "user.email", "test@example.invalid")
+            (root / "model.py").write_text("base\n")
+            (root / "kernel.cpp").write_text("native one\n")
+            (root / "requirements.txt").write_text("dependency==1\n")
+            git("add", ".")
+            git("commit", "-m", "base")
+            def inputs():
+                return parity.build_input_fingerprints(root, "HEAD", parity.VLLM_REINSTALL_PATTERNS)
+            first = inputs()
+            (root / "model.py").write_text("python edit\n")
+            git("commit", "-am", "python only")
+            self.assertEqual(parity.changed_build_inputs(inputs(), first), (False, False))
+            (root / "kernel.cpp").write_text("native two\n")
+            git("commit", "-am", "native edit")
+            native = inputs()
+            self.assertEqual(parity.changed_build_inputs(native, first), (True, False))
+            git("revert", "--no-edit", "HEAD")
+            self.assertEqual(parity.changed_build_inputs(inputs(), native), (True, False))
+            self.assertEqual(inputs(), first)
+            with mock.patch.dict(os.environ, {"VAWS_ENVIRONMENT_FINGERPRINT": "different-profile"}):
+                self.assertEqual(parity.changed_build_inputs(inputs(), first), (True, False))
+            self.assertEqual(parity.changed_build_inputs(first, None), (True, True))
+
+    def test_native_submodule_identity_ignores_commit_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            child = root / 'csrc' / 'catlass'
+            child.mkdir(parents=True)
+
+            def git(repo, *args):
+                return subprocess.run(['git', '-C', str(repo), *args], check=True, capture_output=True, text=True).stdout.strip()
+
+            for repo in (root, child):
+                git(repo, 'init')
+                git(repo, 'config', 'user.name', 'Test')
+                git(repo, 'config', 'user.email', 'test@example.invalid')
+            (child / 'kernel.cpp').write_text('native one\n')
+            git(child, 'add', '.')
+            git(child, 'commit', '-m', 'task-a snapshot')
+
+            def pin():
+                git(root, 'update-index', '--add', '--cacheinfo', '160000,' + git(child, 'rev-parse', 'HEAD') + ',csrc/catlass')
+                git(root, 'commit', '-m', 'pin native dependency')
+                return parity.build_input_fingerprints(root, 'HEAD', parity.VLLM_REINSTALL_PATTERNS)
+
+            first = pin()
+            git(child, 'commit', '--allow-empty', '-m', 'task-b snapshot of identical content')
+            self.assertEqual(pin(), first)
+            (child / 'kernel.cpp').write_text('native two\n')
+            git(child, 'commit', '-am', 'actual native change')
+            self.assertNotEqual(pin()['native'], first['native'])
+            # An unpopulated child must not fall back to its parent's Git root.
+            import shutil
+            shutil.rmtree(child / '.git')
+            with self.assertRaisesRegex(ValueError, 'not populated'):
+                parity.build_input_fingerprints(root, 'HEAD', parity.VLLM_REINSTALL_PATTERNS)
+
     def test_wrapper_forwards_default_transport(self) -> None:
         derived = {
             "workspace_root": "/worktree",
@@ -71,6 +213,23 @@ class GitTransportTests(unittest.TestCase):
 
         index = command.index("--transport")
         self.assertEqual(command[index + 1], "auto")
+
+    def test_requirements_filter_gates_on_terminated_package_names(self):
+        script = parity.runtime_install_step_script(
+            runtime_root="/vllm-workspace",
+            marker_dirname=".vaws-runtime",
+            container_identity="c1",
+            step="install-vllm-ascend-requirements",
+        )
+        # The match gate must require a terminator after the package name so
+        # torchao/torchdata/triton-windows can never be misread as the
+        # image-provided torch/triton and silently dropped from the install list.
+        self.assertIn("grep -qiE", script)
+        self.assertIn("($|[<>=!~;#[])", script)
+        # Extraction still happens only inside the gated branch.
+        gate = next(line for line in script.splitlines() if "grep -qiE" in line)
+        extract = next(line for line in script.splitlines() if "pkg=\"$(printf" in line)
+        self.assertLess(script.index(gate), script.index(extract))
 
     def test_git_remote_url_supports_ipv4_ipv6_and_escaped_paths(self) -> None:
         ipv4 = common.SshEndpoint(host="10.0.0.2", port=46001, user="root")

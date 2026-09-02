@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import bisect
 import functools
+import math
 import re
 from collections import Counter
 from dataclasses import dataclass
@@ -35,10 +36,12 @@ try:
         group_by_rank,
         load_events,
         metrics_for_events,
+        read_json,
         stable_id,
         utc_now,
         write_json,
     )
+    from .model_context import resolve_model_context
 except ImportError:  # pragma: no cover
     import sys
 
@@ -56,10 +59,12 @@ except ImportError:  # pragma: no cover
         group_by_rank,
         load_events,
         metrics_for_events,
+        read_json,
         stable_id,
         utc_now,
         write_json,
     )
+    from model_context import resolve_model_context  # type: ignore[no-redef]
 
 
 def event_role(event: NormalizedEvent, role: str) -> bool:
@@ -102,25 +107,43 @@ def primary_attention_category(event: NormalizedEvent) -> str | None:
     return sorted(matches)[0] if matches else None
 
 
-MLA_LAYER_START_CATEGORIES = (
-    "attention.mla",
-    "attention.mla.kv_norm_rope_cache",
-)
+@functools.lru_cache(maxsize=1)
+def load_segmentation_rules() -> dict[str, Any]:
+    """Load the attention-family layer-anchor prior knowledge.
 
-ATTENTION_COMPANION_ONLY_CATEGORIES = {
-    "attention.lightning_indexer",
-    "attention.mla.v_up_proj",
-    "attention.sparse_attn.v_up_proj",
-    "attention.sparse_sharedkv.metadata",
-    "attention.kv_compressor",
-    "attention.kvcomp.signpack",
-    "attention.kvcomp.cache_write",
-    "attention.kv_cache_io",
-}
+    Single source of truth is ``knowledge/segmentation_rules.yaml``. The
+    values were historically hard-coded here; keeping them in YAML makes the
+    DSA / CSA / MLA layer-anchor priors reviewable without code edits. This
+    is a prior-knowledge base, not a silent fallback: if the file is missing
+    or malformed we raise instead of guessing.
+    """
+
+    rules_path = Path(__file__).resolve().parent / "knowledge" / "segmentation_rules.yaml"
+    try:
+        import yaml  # type: ignore[import-untyped]
+    except ImportError as exc:  # pragma: no cover - yaml is a hard dependency
+        raise RuntimeError(
+            "PyYAML is required to load knowledge/segmentation_rules.yaml"
+        ) from exc
+    if not rules_path.exists():
+        raise RuntimeError(f"segmentation knowledge base missing: {rules_path}")
+    data = yaml.safe_load(rules_path.read_text(encoding="utf-8")) or {}
+    return {
+        "layer_start_categories": tuple(data.get("layer_start_categories") or ()),
+        "companion_only_categories": frozenset(data.get("companion_only_categories") or ()),
+        "companion_prefixes": tuple(data.get("companion_prefixes") or ()),
+    }
+
+
+def mla_layer_start_categories() -> tuple[str, ...]:
+    return load_segmentation_rules()["layer_start_categories"]
 
 
 def is_attention_companion_only(category: str) -> bool:
-    return category in ATTENTION_COMPANION_ONLY_CATEGORIES or category.startswith("attention.rope")
+    rules = load_segmentation_rules()
+    if category in rules["companion_only_categories"]:
+        return True
+    return any(category.startswith(prefix) for prefix in rules["companion_prefixes"])
 
 
 def primary_moe_category(event: NormalizedEvent) -> str | None:
@@ -253,7 +276,7 @@ def layer_anchor_events(events: Sequence[NormalizedEvent]) -> tuple[NormalizedEv
         )
     )
     if attention_events:
-        for category in MLA_LAYER_START_CATEGORIES:
+        for category in mla_layer_start_categories():
             anchors = tuple(event for event in attention_events if category in event.op_categories)
             if anchors:
                 return anchors
@@ -1564,6 +1587,352 @@ def split_composite_frames(frames: Sequence[LayerFrame], events: Sequence[Normal
         current = refined
 
 
+def model_context_expected_layers(model_context: dict[str, Any] | None) -> int | None:
+    if not model_context or not model_context.get("available"):
+        return None
+    try:
+        value = int(float(model_context.get("expected_layers") or 0))
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
+def model_context_segment_hints(model_context: dict[str, Any] | None) -> dict[str, Any]:
+    if not model_context or not model_context.get("available"):
+        return {}
+    hints = model_context.get("segment_hints")
+    return dict(hints) if isinstance(hints, dict) else {}
+
+
+def positive_int_values(values: Any) -> tuple[int, ...]:
+    if not isinstance(values, (list, tuple)):
+        return ()
+    results: list[int] = []
+    for value in values:
+        try:
+            parsed = int(float(value))
+        except (TypeError, ValueError):
+            continue
+        if parsed > 0:
+            results.append(parsed)
+    return tuple(sorted(set(results)))
+
+
+def model_context_visible_layer_counts(model_context: dict[str, Any] | None) -> tuple[int, ...]:
+    hints = model_context_segment_hints(model_context)
+    return positive_int_values(hints.get("profile_visible_layer_counts"))
+
+
+def model_context_candidate_contexts(model_context: dict[str, Any] | None) -> tuple[dict[str, Any], ...]:
+    if not model_context or not model_context.get("available"):
+        return ()
+    candidates = model_context.get("candidate_model_contexts")
+    if isinstance(candidates, list) and candidates:
+        return tuple(dict(item) for item in candidates if isinstance(item, dict) and item.get("available"))
+    return (model_context,)
+
+
+def model_context_complete_layer_tolerance(model_context: dict[str, Any] | None) -> float:
+    hints = model_context_segment_hints(model_context)
+    try:
+        value = float(hints.get("complete_layer_tolerance", 0.15))
+    except (TypeError, ValueError):
+        return 0.15
+    return min(max(value, 0.0), 1.0)
+
+
+def model_context_max_anchor_multiplier(model_context: dict[str, Any] | None) -> int:
+    hints = model_context_segment_hints(model_context)
+    try:
+        value = int(float(hints.get("max_anchor_multiplier", 1)))
+    except (TypeError, ValueError):
+        return 1
+    return max(1, min(value, 8))
+
+
+def model_guided_target_layer_count(
+    observed_layers: int,
+    model_context: dict[str, Any] | None,
+) -> int | None:
+    visible_counts = model_context_visible_layer_counts(model_context)
+    if visible_counts:
+        tolerance = model_context_complete_layer_tolerance(model_context)
+        nearest = min(visible_counts, key=lambda target: (abs(observed_layers - target), target))
+        lower = max(1, math.floor(nearest * (1.0 - tolerance)))
+        upper = max(nearest, math.ceil(nearest * (1.0 + tolerance)))
+        if lower <= observed_layers <= upper:
+            return nearest
+
+        max_multiplier = model_context_max_anchor_multiplier(model_context)
+        if max_multiplier > 1:
+            multiplier_targets = [
+                target
+                for target in visible_counts
+                if observed_layers > target
+                and observed_layers % target == 0
+                and observed_layers // target <= max_multiplier
+            ]
+            if multiplier_targets:
+                return max(multiplier_targets)
+        return None
+
+    expected_layers = model_context_expected_layers(model_context)
+    if expected_layers is None:
+        return None
+    tolerance = model_context_complete_layer_tolerance(model_context)
+    lower = max(1, math.floor(expected_layers * (1.0 - tolerance)))
+    upper = max(expected_layers, math.ceil(expected_layers * (1.0 + tolerance)))
+    if not (lower <= observed_layers <= upper):
+        return None
+    return expected_layers if observed_layers > expected_layers else observed_layers
+
+
+def select_model_context_for_frames(
+    frames: Sequence[LayerFrame],
+    model_context: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    candidates = model_context_candidate_contexts(model_context)
+    if not candidates:
+        return None
+    if len(candidates) == 1:
+        return candidates[0]
+
+    scored: list[tuple[int, int, int, dict[str, Any], list[dict[str, Any]]]] = []
+    for candidate in candidates:
+        matches: list[dict[str, Any]] = []
+        total_distance = 0
+        visible_bonus = 1 if model_context_visible_layer_counts(candidate) else 0
+        for index, frame in enumerate(frames):
+            if not frame_has_primary_attention(frame):
+                continue
+            observed = len(frame.layers)
+            target = model_guided_target_layer_count(observed, candidate)
+            if target is None:
+                continue
+            matches.append({"frame_index": index, "observed_layers": observed, "target_layers": target})
+            total_distance += abs(observed - target)
+        if matches:
+            scored.append((len(matches), visible_bonus, -total_distance, candidate, matches))
+    if not scored:
+        return None
+
+    scored.sort(key=lambda item: (item[0], item[1], item[2], str(item[3].get("model_name") or "")), reverse=True)
+    best = scored[0]
+    tied = [
+        item for item in scored
+        if (item[0], item[1], item[2]) == (best[0], best[1], best[2])
+    ]
+    if len(tied) > 1:
+        best_counts = {
+            (
+                tuple(model_context_visible_layer_counts(item[3])),
+                model_context_expected_layers(item[3]),
+            )
+            for item in tied
+        }
+        if len(best_counts) > 1:
+            return None
+
+    selected = dict(best[3])
+    selected["selected_from_model_family"] = model_context.get("model_name") if model_context else None
+    selected["selection_evidence"] = {
+        "reason": "profile_frame_layer_count_matched_candidate",
+        "matched_frames": best[4],
+        "candidate_count": len(candidates),
+        "candidate_model_names": [
+            str(item.get("model_name") or "") for item in candidates if item.get("model_name")
+        ],
+    }
+    return selected
+
+
+def coalesce_frame_to_model_layers(
+    frame: LayerFrame,
+    target_layers: int,
+    events: Sequence[NormalizedEvent],
+    row_numbers: Sequence[int],
+) -> LayerFrame:
+    observed = len(frame.layers)
+    if target_layers <= 0 or observed <= target_layers:
+        return frame
+    logical_layers: list[LayerObservation] = []
+    for index in range(target_layers):
+        start = (index * observed) // target_layers
+        end = ((index + 1) * observed) // target_layers
+        if end <= start:
+            end = start + 1
+        if index + 1 == target_layers:
+            end = observed
+        group = frame.layers[start:end]
+        if not group:
+            continue
+        anchors: list[NormalizedEvent] = []
+        for layer in group:
+            anchors.extend(layer.anchors)
+        row_start = group[0].row_start
+        row_end = group[-1].row_end
+        layer_events = event_slice(events, row_numbers, row_start, row_end)
+        signature = layer_structure_signature(layer_events, anchors)
+        logical_layers.append(
+            LayerObservation(
+                index=len(logical_layers),
+                row_start=row_start,
+                row_end=row_end,
+                anchors=tuple(anchors),
+                signature=signature,
+                regime_key=layer_regime_key(signature),
+            )
+        )
+    if not logical_layers:
+        return frame
+    return LayerFrame(
+        layers=tuple(logical_layers),
+        reason=(
+            f"{frame.reason}+model_guided_layer_coalesce:"
+            f"{observed}->{len(logical_layers)}"
+        ),
+        selection_before=frame.selection_before,
+        selection_after=frame.selection_after,
+        tags=frame_tags(frame, extra=("model_guided_layer_coalesce",)),
+    )
+
+
+def build_model_guided_step_plans(
+    frames: Sequence[LayerFrame],
+    model_context: dict[str, Any] | None,
+    events: Sequence[NormalizedEvent],
+    row_numbers: Sequence[int],
+) -> tuple[list[StepPlan], dict[str, Any]] | None:
+    model_context = select_model_context_for_frames(frames, model_context)
+    expected_layers = model_context_expected_layers(model_context)
+    visible_counts = model_context_visible_layer_counts(model_context)
+    if expected_layers is None and not visible_counts:
+        return None
+    tolerance = model_context_complete_layer_tolerance(model_context)
+    plans: list[StepPlan] = []
+    complete_indexes: list[int] = []
+    for index, frame in enumerate(frames):
+        has_attention = frame_has_primary_attention(frame)
+        target_layers = model_guided_target_layer_count(len(frame.layers), model_context) if has_attention else None
+        is_complete = target_layers is not None
+        if is_complete and target_layers is not None:
+            logical = coalesce_frame_to_model_layers(frame, target_layers, events, row_numbers)
+            plans.append(
+                StepPlan(
+                    frames=(logical,),
+                    main_frame_count=1,
+                    reason=(
+                        "model_guided_body:"
+                        f"model={model_context.get('model_name')},"
+                        f"expected_layers={expected_layers},"
+                        f"profile_visible_layers={list(visible_counts)},"
+                        f"target_layers={target_layers},"
+                        f"observed_layers={len(frame.layers)},"
+                        f"tolerance={tolerance}"
+                    ),
+                )
+            )
+            complete_indexes.append(index)
+            continue
+        plans.append(
+            StepPlan(
+                frames=(frame,),
+                main_frame_count=1,
+                reason=(
+                    "model_guided_fragment:"
+                    f"model={model_context.get('model_name')},"
+                    f"expected_layers={expected_layers},"
+                    f"profile_visible_layers={list(visible_counts)},"
+                    f"observed_layers={len(frame.layers)},"
+                    f"tolerance={tolerance}"
+                ),
+                segment_type="partial_body_window",
+                complete=False,
+            )
+        )
+    if not complete_indexes:
+        return None
+    first_complete = complete_indexes[0]
+    last_complete = complete_indexes[-1]
+    classified: list[StepPlan] = []
+    for index, plan in enumerate(plans):
+        if plan.complete:
+            classified.append(plan)
+            continue
+        if index < first_complete:
+            segment_type = "head"
+        elif index > last_complete:
+            segment_type = "tail"
+        else:
+            segment_type = "partial_body_window"
+        classified.append(
+            StepPlan(
+                frames=plan.frames,
+                main_frame_count=plan.main_frame_count,
+                reason=plan.reason + f"+classified_{segment_type}",
+                segment_type=segment_type,
+                complete=False,
+            )
+        )
+    summary = {
+        "mode": "model_guided",
+        "model_name": model_context.get("model_name") if model_context else None,
+        "model_context_source": model_context.get("source") if model_context else None,
+        "selected_from_model_family": model_context.get("selected_from_model_family") if model_context else None,
+        "selection_evidence": model_context.get("selection_evidence") if model_context else None,
+        "expected_layers": expected_layers,
+        "profile_visible_layer_counts": list(visible_counts),
+        "complete_layer_tolerance": tolerance,
+        "max_anchor_multiplier": model_context_max_anchor_multiplier(model_context),
+        "input_frame_count": len(frames),
+        "complete_plan_count": len(complete_indexes),
+        "residual_plan_count": len(frames) - len(complete_indexes),
+    }
+    return classified, summary
+
+
+def build_uniform_step_plans(frames: Sequence[LayerFrame]) -> tuple[list[StepPlan], dict[str, Any]] | None:
+    """Knowledge-guided fast path for cleanly periodic decode traces.
+
+    Steady-state decode profiles emit one selection-delimited body per step,
+    all with the same layer structure (e.g. dsv2-lite 27 layers, qwen3-30b 48
+    layers, dsv4 43-44 layers with an MTP spec tail folded in by
+    ``compose_step_plans``).  On those traces the selection frames are already
+    the exact step cover, so the expensive ``split_composite_frames`` +
+    interior-substructure classification + composite-body validation passes do
+    a large amount of work only to rediscover that uniform structure.
+
+    This path composes the selection frames (which also attaches MTP/Eagle
+    speculative tails), and if every resulting body has the *same* main-layer
+    count (>= 2), accepts them directly as complete steps.  This is provably
+    equivalent to the exact-cover output on uniform traces and is O(n) instead
+    of the template-search cost.  When the bodies are not uniform it returns
+    ``None`` so the caller falls through to the full exact-cover path — this is
+    a fast path, never a lossy shortcut.
+    """
+
+    plans = compose_step_plans(frames)
+    if len(plans) < 3:
+        return None
+    counts = [len(plan.main_layers) for plan in plans]
+    unique_counts = set(counts)
+    if len(unique_counts) != 1:
+        return None
+    period = counts[0]
+    if period < 2:
+        return None
+    if any(not plan.complete or plan.segment_type != "step" for plan in plans):
+        return None
+    summary = {
+        "mode": "knowledge_uniform_period",
+        "reason": "selection frames form a uniform step cover; skipped exact-cover search",
+        "input_frame_count": len(frames),
+        "step_count": len(plans),
+        "layers_per_step": period,
+    }
+    return list(plans), summary
+
+
 def sequence_counter(sequence: Sequence[str]) -> Counter[str]:
     return Counter(sequence)
 
@@ -2585,7 +2954,8 @@ def validate_exact_cover(rank_id: str, events: Sequence[NormalizedEvent], row_nu
         previous_end = plan.frames[-1].row_end
     complete_plans = [plan for plan in plans if plan.complete]
     hard_errors.extend(validate_embedded_short_steps(rank_id, complete_plans))
-    hard_errors.extend(validate_unresolved_composite_bodies(rank_id, complete_plans))
+    if not all(plan.reason.startswith("model_guided_body:") for plan in complete_plans):
+        hard_errors.extend(validate_unresolved_composite_bodies(rank_id, complete_plans))
     for index, plan in enumerate(plans):
         if plan.complete or plan.segment_type in {"head", "tail"}:
             continue
@@ -2740,9 +3110,13 @@ def add_evidence(
     )
 
 
-def build_segments_for_rank(rank_id: str, events: Sequence[NormalizedEvent]) -> tuple[list[StepSegment], list[LayerSegment], list[StructureObservation], list[EvidenceRef], list[dict[str, Any]]]:
+def build_segments_for_rank(
+    rank_id: str,
+    events: Sequence[NormalizedEvent],
+    model_context: dict[str, Any] | None = None,
+) -> tuple[list[StepSegment], list[LayerSegment], list[StructureObservation], list[EvidenceRef], list[dict[str, Any]], dict[str, Any]]:
     if not events:
-        return [], [], [], [], []
+        return [], [], [], [], [], {"mode": "no_events"}
     events = sorted(events, key=lambda event: event.row_idx)
     row_numbers = tuple(event.row_idx for event in events)
     boundary_rows = dedup_adjacent_event_rows(
@@ -2786,16 +3160,38 @@ def build_segments_for_rank(rank_id: str, events: Sequence[NormalizedEvent]) -> 
                 evidence_ids=(evidence_id,),
             )
         )
-        return segments, layer_segments, observations, evidence, hard_errors
+        return segments, layer_segments, observations, evidence, hard_errors, {"mode": "no_structural_layers"}
 
-    frames = split_composite_frames(frames_from_selection(layers_observed, selection_rows), events, row_numbers)
-    plans = merge_explained_windows_to_templates(
-        classify_interior_substructure_plans(
-            classify_edge_no_attention_plans(
-                classify_residual_plans(merge_adjacent_template_fragment_plans(compose_step_plans(frames)))
+    selection_frames = frames_from_selection(layers_observed, selection_rows)
+    model_guided = build_model_guided_step_plans(selection_frames, model_context, events, row_numbers)
+    uniform_guided = None if model_guided is not None else build_uniform_step_plans(selection_frames)
+    if model_guided is not None:
+        plans, segmentation_strategy = model_guided
+    elif uniform_guided is not None:
+        plans, segmentation_strategy = uniform_guided
+    else:
+        # Knowledge miss: neither model fingerprint nor a uniform periodic
+        # structure explained this rank. Fall back to the exact-cover search
+        # and label the strategy explicitly so the miss is visible rather than
+        # silent.
+        frames = split_composite_frames(selection_frames, events, row_numbers)
+        plans = merge_explained_windows_to_templates(
+            classify_interior_substructure_plans(
+                classify_edge_no_attention_plans(
+                    classify_residual_plans(merge_adjacent_template_fragment_plans(compose_step_plans(frames)))
+                )
             )
         )
-    )
+        segmentation_strategy = {
+            "mode": "exact_cover_knowledge_miss",
+            "input_frame_count": len(selection_frames),
+            "post_split_frame_count": len(frames),
+            "reason": (
+                "no model fingerprint and non-uniform selection frames; used exact-cover search"
+                if model_context_expected_layers(model_context) is None
+                else "model-guided path produced no complete plans; used exact-cover search"
+            ),
+        }
     hard_errors.extend(validate_exact_cover(rank_id, events, row_numbers, plans))
 
     first_step_start = plans[0].frames[0].row_start if plans else events[0].row_idx
@@ -2977,7 +3373,7 @@ def build_segments_for_rank(rank_id: str, events: Sequence[NormalizedEvent]) -> 
                 )
             )
 
-    return segments, layer_segments, observations, evidence, hard_errors
+    return segments, layer_segments, observations, evidence, hard_errors, segmentation_strategy
 
 
 def interior_unclassified_segments(segments: Sequence[StepSegment]) -> list[StepSegment]:
@@ -2995,9 +3391,24 @@ def interior_unclassified_segments(segments: Sequence[StepSegment]) -> list[Step
     ]
 
 
-def segment_profile(output_dir: Path) -> dict[str, Any]:
+def segment_profile(
+    output_dir: Path,
+    *,
+    model_id: str | None = None,
+    model_config: Path | None = None,
+) -> dict[str, Any]:
     event_path = output_dir / "normalized_event_index.jsonl"
     events = load_events(event_path)
+    analysis_context = read_json(output_dir / "analysis_context.json", default={}) or {}
+    if model_id is None:
+        model_id = analysis_context.get("model_id")
+    if model_config is None and analysis_context.get("model_config"):
+        model_config = Path(str(analysis_context.get("model_config")))
+    model_context = resolve_model_context(
+        model_id=model_id,
+        model_config=model_config,
+        events=events,
+    )
     grouped = group_by_rank(events)
     all_segments: list[StepSegment] = []
     all_layers: list[LayerSegment] = []
@@ -3006,7 +3417,11 @@ def segment_profile(output_dir: Path) -> dict[str, Any]:
     rank_summaries: list[dict[str, Any]] = []
     hard_errors: list[dict[str, Any]] = []
     for rank_id, rank_events in grouped.items():
-        segments, layers, observations, evidence, rank_errors = build_segments_for_rank(rank_id, rank_events)
+        segments, layers, observations, evidence, rank_errors, segmentation_strategy = build_segments_for_rank(
+            rank_id,
+            rank_events,
+            model_context=model_context,
+        )
         interior_islands = interior_unclassified_segments(segments)
         if interior_islands:
             rank_errors.append(
@@ -3044,6 +3459,7 @@ def segment_profile(output_dir: Path) -> dict[str, Any]:
                         if segment.segment_type == "step" and segment.main_layer_count is not None
                     }
                 ),
+                "segmentation_strategy": segmentation_strategy,
                 "hard_error_count": len(rank_errors),
             }
         )
@@ -3062,7 +3478,9 @@ def segment_profile(output_dir: Path) -> dict[str, Any]:
             "layer_segments": "layer_segments.json",
             "structure_evidence_graph": "structure_evidence_graph.json",
             "segment_manifest": "segment_manifest.json",
+            "segment_model_context": "segment_model_context.json",
         },
+        "model_context": model_context,
         "rank_summaries": rank_summaries,
         "segment_count": len(all_segments),
         "layer_count": len(all_layers),
@@ -3083,6 +3501,7 @@ def segment_profile(output_dir: Path) -> dict[str, Any]:
             "evidence": all_evidence,
         },
     )
+    write_json(output_dir / "segment_model_context.json", model_context)
     write_json(output_dir / "segment_manifest.json", manifest)
     if hard_errors:
         summary = "; ".join(f"{item.get('rank_id')}:{item.get('error_type')}" for item in hard_errors[:8])
@@ -3091,14 +3510,20 @@ def segment_profile(output_dir: Path) -> dict[str, Any]:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     parser.add_argument("--output", required=True, help="analysis output directory containing normalized_event_index.jsonl/csv")
+    parser.add_argument("--model-id", help="optional model id/name used for model-guided segmentation")
+    parser.add_argument("--model-config", help="optional config.json path used for model-guided segmentation")
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    manifest = segment_profile(Path(args.output))
+    manifest = segment_profile(
+        Path(args.output),
+        model_id=args.model_id,
+        model_config=Path(args.model_config) if args.model_config else None,
+    )
     emit_stage_json({"stage": "segment", "segment_count": manifest["segment_count"], "layer_count": manifest["layer_count"]})
     return 0
 

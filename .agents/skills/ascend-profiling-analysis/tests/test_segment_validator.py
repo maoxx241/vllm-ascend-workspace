@@ -34,11 +34,16 @@ from ascend_profile.segment import (  # noqa: E402
     LayerFrame,
     LayerObservation,
     build_layers,
+    build_model_guided_step_plans,
+    build_uniform_step_plans,
     StepPlan,
     classify_interior_substructure_plans,
     classify_residual_plans,
     compose_step_plans,
     event_role,
+    is_attention_companion_only,
+    load_segmentation_rules,
+    mla_layer_start_categories,
     validate_exact_cover,
     validate_unresolved_composite_bodies,
 )
@@ -120,6 +125,323 @@ def _build_test_layers(events: list[NormalizedEvent]) -> list[LayerObservation]:
         lambda event: event_role(event, "block_head"),
     )
     return build_layers(events, row_numbers, boundary_rows, anchor_boundary_rows, ())
+
+
+def _uniform_frames(period: int, step_count: int) -> list[LayerFrame]:
+    """Build ``step_count`` selection-delimited frames of ``period`` layers.
+
+    Mirrors what ``frames_from_selection`` produces for a clean periodic
+    decode trace: each body is preceded by a selection boundary and carries
+    an identical attention-bearing layer sequence.
+    """
+
+    signatures = [
+        f"attention:attention.flash_score|ffn:ffn_or_dense_compute#{i}"
+        for i in range(period)
+    ]
+    frames: list[LayerFrame] = []
+    row = 0
+    for step in range(step_count):
+        layers = tuple(_layer(i, sig, row_base=row) for i, sig in enumerate(signatures))
+        frames.append(
+            LayerFrame(
+                layers=layers,
+                reason="selection_delimited_body",
+                selection_before=(row - 1,),
+            )
+        )
+        row += period * 10
+    return frames
+
+
+def test_segmentation_rules_yaml_is_source_of_truth_for_anchors() -> None:
+    """The layer-anchor priors must come from the YAML knowledge base."""
+
+    rules = load_segmentation_rules()
+    assert "attention.mla" in rules["layer_start_categories"]
+    assert mla_layer_start_categories() == rules["layer_start_categories"]
+    # DSA / CSA / MLA companions fold into their enclosing layer.
+    for companion in (
+        "attention.mla.v_up_proj",
+        "attention.lightning_indexer",
+        "attention.kv_compressor",
+    ):
+        assert is_attention_companion_only(companion)
+    # rope kernels are companion-only via prefix match.
+    assert is_attention_companion_only("attention.rope.interleave")
+    # a genuine layer-start marker is NOT companion-only.
+    assert not is_attention_companion_only("attention.mla")
+
+
+def test_uniform_fast_path_accepts_clean_periodic_cover() -> None:
+    """A uniform selection-frame cover is accepted directly as complete steps
+    with the knowledge-driven strategy label, skipping exact-cover search."""
+
+    frames = _uniform_frames(period=27, step_count=8)
+    result = build_uniform_step_plans(frames)
+    assert result is not None
+    plans, strategy = result
+    assert strategy["mode"] == "knowledge_uniform_period"
+    assert strategy["layers_per_step"] == 27
+    assert strategy["step_count"] == len(plans) == 8
+    assert all(plan.complete and plan.segment_type == "step" for plan in plans)
+    assert all(len(plan.main_layers) == 27 for plan in plans)
+
+
+def test_uniform_fast_path_declines_when_not_uniform() -> None:
+    """A non-uniform trailing body must make the fast path defer to
+    exact-cover rather than mis-cover the rank."""
+
+    frames = _uniform_frames(period=48, step_count=6)
+    # Append a short trailing body (e.g. an incomplete final decode step).
+    row = frames[-1].layers[-1].row_end + 1
+    short = tuple(
+        _layer(i, f"attention:attention.flash_score#{i}", row_base=row)
+        for i in range(18)
+    )
+    frames.append(LayerFrame(layers=short, reason="selection_delimited_body", selection_before=(row - 1,)))
+    assert build_uniform_step_plans(frames) is None
+
+
+def test_uniform_fast_path_declines_single_layer_period() -> None:
+    """A degenerate period of one layer is not a meaningful step cover."""
+
+    frames = _uniform_frames(period=1, step_count=10)
+    assert build_uniform_step_plans(frames) is None
+
+
+def test_model_guided_segmentation_keeps_moe_phase_fragment_out_of_step_inventory() -> None:
+    """Known-model segmentation must not promote a tiny MoE phase body to a
+    complete step just because it is a recurring local structure.
+
+    DSV4/Qwen3.5 EP traces can alternate attention-bearing bodies with
+    no-attention fragments such as ``[dispatch, expert_gmm, expert_gmm]``.
+    With an expected model-layer count available, the large attention bodies
+    are complete step candidates and the phase fragment is retained only as a
+    partial body window.
+    """
+
+    left = LayerFrame(
+        layers=tuple(
+            _layer(i, "attention:attention.sparse_sharedkvx1|moe:moe.gatingx1", row_base=0)
+            for i in range(16)
+        ),
+        reason="selection_delimited_body",
+    )
+    moe_fragment = LayerFrame(
+        layers=tuple(
+            _layer(i, sig, row_base=1000)
+            for i, sig in enumerate(
+                (
+                    "moe:moe.dispatchx1",
+                    "moe:moe.expert_matmulx1",
+                    "moe:moe.expert_matmulx1",
+                )
+            )
+        ),
+        reason="selection_delimited_body+no_attention_moe_suffix",
+    )
+    right = LayerFrame(
+        layers=tuple(
+            _layer(i, "attention:attention.sparse_sharedkvx1|moe:moe.gatingx1", row_base=2000)
+            for i in range(16)
+        ),
+        reason="selection_delimited_body",
+    )
+
+    result = build_model_guided_step_plans(
+        (left, moe_fragment, right),
+        {
+            "available": True,
+            "model_name": "SyntheticMoE",
+            "source": "test",
+            "expected_layers": 8,
+            "segment_hints": {
+                "profile_visible_layer_counts": [8],
+                "max_anchor_multiplier": 2,
+            },
+        },
+        events=(),
+        row_numbers=(),
+    )
+
+    assert result is not None
+    plans, summary = result
+    assert summary["mode"] == "model_guided"
+    assert [plan.complete for plan in plans] == [True, False, True]
+    assert plans[1].segment_type == "partial_body_window"
+    assert len(plans[0].main_layers) == 8
+    assert len(plans[2].main_layers) == 8
+
+
+def test_model_guided_segmentation_coalesces_dsv4_flash_body_to_visible_layers() -> None:
+    """DSV4 flash profiles expose a 43-layer main body in the current
+    catalog even when raw anchors drift to 44.  The known visible body length
+    must win over config-level ``expected_layers``.
+    """
+
+    body = LayerFrame(
+        layers=tuple(
+            _layer(i, "attention:attention.sparse_sharedkvx1|moe:moe.gatingx1", row_base=0)
+            for i in range(44)
+        ),
+        reason="selection_delimited_body",
+    )
+
+    result = build_model_guided_step_plans(
+        (body,),
+        {
+            "available": True,
+            "model_name": "DeepSeek-V4-Pro",
+            "source": "test",
+            "expected_layers": 61,
+            "segment_hints": {
+                "profile_visible_layer_counts": [43],
+                "complete_layer_tolerance": 0.15,
+            },
+        },
+        events=(),
+        row_numbers=(),
+    )
+
+    assert result is not None
+    plans, summary = result
+    assert summary["profile_visible_layer_counts"] == [43]
+    assert [plan.complete for plan in plans] == [True]
+    assert len(plans[0].main_layers) == 43
+    assert "target_layers=43" in plans[0].reason
+
+
+def test_model_guided_family_context_selects_dsv4_flash_variant() -> None:
+    """A fuzzy ``dsv4`` context must enumerate Flash/Pro candidates and select
+    the one supported by profile-visible layer evidence.
+    """
+
+    body = LayerFrame(
+        layers=tuple(
+            _layer(i, "attention:attention.sparse_sharedkvx1|moe:moe.gatingx1", row_base=0)
+            for i in range(44)
+        ),
+        reason="selection_delimited_body",
+    )
+
+    result = build_model_guided_step_plans(
+        (body,),
+        {
+            "available": True,
+            "model_name": "DeepSeek-V4 family",
+            "source": "test",
+            "expected_layers": None,
+            "candidate_model_contexts": [
+                {
+                    "available": True,
+                    "model_name": "DeepSeek-V4-Pro",
+                    "source": "test",
+                    "expected_layers": 61,
+                    "segment_hints": {},
+                },
+                {
+                    "available": True,
+                    "model_name": "DeepSeek-V4-Flash",
+                    "source": "test",
+                    "expected_layers": 43,
+                    "segment_hints": {
+                        "profile_visible_layer_counts": [43],
+                        "complete_layer_tolerance": 0.15,
+                    },
+                },
+            ],
+        },
+        events=(),
+        row_numbers=(),
+    )
+
+    assert result is not None
+    plans, summary = result
+    assert summary["model_name"] == "DeepSeek-V4-Flash"
+    assert summary["selected_from_model_family"] == "DeepSeek-V4 family"
+    assert len(plans[0].main_layers) == 43
+
+
+def test_model_guided_exact_pro_does_not_accept_flash_body_without_visible_hint() -> None:
+    """An exact 61-layer Pro config must not accept a 43-layer Flash body when
+    there is no catalog-visible layer hint that explains the shorter body.
+    """
+
+    body = LayerFrame(
+        layers=tuple(
+            _layer(i, "attention:attention.sparse_sharedkvx1|moe:moe.gatingx1", row_base=0)
+            for i in range(43)
+        ),
+        reason="selection_delimited_body",
+    )
+
+    result = build_model_guided_step_plans(
+        (body,),
+        {
+            "available": True,
+            "model_name": "DeepSeek-V4-Pro",
+            "source": "test",
+            "expected_layers": 61,
+            "segment_hints": {},
+        },
+        events=(),
+        row_numbers=(),
+    )
+
+    assert result is None
+
+
+def test_model_guided_segmentation_keeps_short_speculative_body_partial() -> None:
+    """MTP/Eagle-like short bodies can contain attention or MoE evidence, but
+    they must not enter complete step inventory unless the catalog has an
+    explicit speculative template for that model/profile mode.
+    """
+
+    main_left = LayerFrame(
+        layers=tuple(
+            _layer(i, "attention:attention.sparse_sharedkvx1|moe:moe.gatingx1", row_base=0)
+            for i in range(43)
+        ),
+        reason="selection_delimited_body",
+    )
+    speculative = LayerFrame(
+        layers=tuple(
+            _layer(i, "attention:attention.sparse_sharedkvx1|moe:moe.gatingx1", row_base=1000)
+            for i in range(5)
+        ),
+        reason="selection_delimited_body+eagle_or_mtp_tail",
+    )
+    main_right = LayerFrame(
+        layers=tuple(
+            _layer(i, "attention:attention.sparse_sharedkvx1|moe:moe.gatingx1", row_base=2000)
+            for i in range(43)
+        ),
+        reason="selection_delimited_body",
+    )
+
+    result = build_model_guided_step_plans(
+        (main_left, speculative, main_right),
+        {
+            "available": True,
+            "model_name": "DeepSeek-V4-Pro",
+            "source": "test",
+            "expected_layers": 61,
+            "segment_hints": {
+                "profile_visible_layer_counts": [43],
+                "complete_layer_tolerance": 0.15,
+                "speculative_body_policy": "shorter_attention_or_moe_body_is_partial_until_catalog_has_explicit_speculative_layers",
+            },
+        },
+        events=(),
+        row_numbers=(),
+    )
+
+    assert result is not None
+    plans, _summary = result
+    assert [plan.complete for plan in plans] == [True, False, True]
+    assert plans[1].segment_type == "partial_body_window"
+    assert len(plans[1].main_layers) == 5
 
 
 def test_mla_sparse_attention_subunits_stay_in_one_layer() -> None:

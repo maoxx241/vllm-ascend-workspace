@@ -8,24 +8,28 @@ statistics.
 
 Usage examples:
 
-    # Minimal single run
-    python3 bench_run.py --machine 173.131.1.2 --model /home/weights/Qwen3.5-35B
+    # Minimal single run from inside a session worktree (auto-resolved session)
+    python3 bench_run.py --model /home/weights/Qwen3.5-35B
 
-    # Session-scoped single run
+    # Explicit session target
     python3 bench_run.py --session-id pr-123 --model /home/weights/Qwen3.5-35B
 
     # Multi-run with warmup (start service once, run 5 times, discard first)
-    python3 bench_run.py --machine 173.131.1.2 --model /home/weights/Qwen3.5-35B \\
+    python3 bench_run.py --session-id pr-123 --model /home/weights/Qwen3.5-35B \\
         --runs 5 --warmup-runs 1 --tp 4
 
     # With explicit serve and bench args
-    python3 bench_run.py --machine 173.131.1.2 --model /home/weights/Qwen3.5-35B \\
+    python3 bench_run.py --session-id pr-123 --model /home/weights/Qwen3.5-35B \\
         --tp 4 --serve-args --async-scheduling --compilation-config '{"cudagraph_mode":"FULL_DECODE_ONLY"}' \\
         --bench-args --num-prompts 128 --max-concurrency 32 --output-len 1500
 
     # Using a nightly config as reference
-    python3 bench_run.py --machine 173.131.1.2 --model /home/weights/Qwen3.5-35B \\
+    python3 bench_run.py --session-id pr-123 --model /home/weights/Qwen3.5-35B \\
         --refer-nightly Qwen3-Next-80B-A3B-Instruct-A2
+
+    # Using a named preset (explicit CLI args override preset values)
+    python3 bench_run.py --model /home/weights/DeepSeek-V4-Flash-w4a8-mtp \\
+        --preset dsv4-flash --runs 6 --warmup-runs 1
 
 Progress on stderr as __VAWS_BENCHMARK_PROGRESS__=<json>.
 Final result on stdout as a single JSON object.
@@ -62,15 +66,25 @@ def build_parser() -> argparse.ArgumentParser:
         description="Run vllm bench serve benchmarks (single or multi-run).",
         allow_abbrev=False,
     )
-    p.add_argument("--machine", help="machine alias or IP")
-    p.add_argument("--session-id", help="VAWS session id")
+    p.add_argument("--session-id", help="VAWS session id; defaults to the bound session of the current worktree")
     p.add_argument("--session-file", help="explicit session.json path")
     p.add_argument("--model", required=True, help="remote model weight path")
+    p.add_argument("--preset",
+                   help="named benchmark preset from the skill's presets/ dir "
+                        "(e.g. dsv4-flash); explicit CLI args override preset values")
     p.add_argument("--tp", "--tensor-parallel-size", type=int, default=None)
     p.add_argument("--dp", "--data-parallel-size", type=int, default=None)
     p.add_argument("--port", type=int, default=None)
+    p.add_argument("--served-model-name", default=None,
+                   help="served model name for the API (default: preset or model basename)")
+    p.add_argument("--devices", default=None,
+                   help="ASCEND_RT_VISIBLE_DEVICES, e.g. 0,1,2,3,4,5,6,7")
+    p.add_argument("--health-timeout", type=int, default=None,
+                   help="service readiness timeout in seconds")
     p.add_argument("--extra-env", action="append", default=None,
                    help="KEY=VALUE env vars for the service (repeatable)")
+    p.add_argument("--bench-env", action="append", default=None,
+                   help="KEY=VALUE env vars for the bench-side remote shell (repeatable)")
     p.add_argument("--refer-nightly", default=None,
                    help="nightly YAML name as configuration reference")
     p.add_argument("--skip-parity", action="store_true")
@@ -146,27 +160,36 @@ def main(argv: list[str] | None = None) -> int:
     raw_argv = argv if argv is not None else sys.argv[1:]
     main_argv, manual_serve_args, manual_bench_args = _split_sections(raw_argv)
 
-    args = build_parser().parse_args(main_argv)
+    parser = build_parser()
+    args = parser.parse_args(main_argv)
 
     total_runs: int = max(1, args.runs)
-    warmup_runs: int = max(0, min(args.warmup_runs, total_runs - 1))
+    if args.warmup_runs < 0 or args.warmup_runs >= total_runs:
+        parser.error(
+            f"--warmup-runs ({args.warmup_runs}) must be >= 0 and less than --runs ({total_runs})"
+        )
+    warmup_runs: int = args.warmup_runs
 
     serve_args = manual_serve_args if manual_serve_args is not None else getattr(args, "serve_args", None)
     bench_args = manual_bench_args if manual_bench_args is not None else getattr(args, "bench_args", None)
 
     try:
         config = assemble_config(
-            machine=args.machine,
             session_id=args.session_id,
             session_file=args.session_file,
             model=args.model,
             tp=args.tp,
             dp=args.dp,
             port=args.port,
+            served_model_name=args.served_model_name,
+            devices=args.devices,
+            health_timeout=args.health_timeout,
             serve_args=serve_args,
             bench_args=bench_args,
             extra_env=args.extra_env,
+            bench_env=args.bench_env,
             refer_nightly=args.refer_nightly,
+            preset=args.preset,
             skip_parity=args.skip_parity,
         )
 
@@ -187,9 +210,8 @@ def main(argv: list[str] | None = None) -> int:
         base_url = start_result["base_url"]
         served_model = start_result.get("served_model_name", Path(args.model).name)
         container_ip, container_port = _get_ssh_endpoint(
-            args.machine,
-            session_id=args.session_id,
-            session_file=args.session_file,
+            session_id=config.session_id,
+            session_file=config.session_file,
         )
 
         all_metrics: list[dict[str, Any]] = []
@@ -235,12 +257,18 @@ def main(argv: list[str] | None = None) -> int:
             if stop_result.get("status") not in ("stopped", "not_found"):
                 cleanup_warning = f"service may still be running: {stop_result}"
 
+        # Benchmark data is valid, but if the service could not be stopped it is
+        # still holding NPU memory. Do not report a clean "ok" in that case:
+        # surface a distinct status and a non-zero exit so callers/automation
+        # notice the leaked service instead of it being masked by a warning.
+        final_status = "cleanup_failed" if cleanup_warning else "ok"
+        exit_code = 1 if cleanup_warning else 0
+
         if total_runs == 1:
             emit_progress("done", f"benchmark complete, throughput={all_metrics[0].get('output_throughput', 'N/A')}")
             result_json: dict[str, Any] = {
-                "status": "ok",
-                "machine": args.machine,
-                "session_id": args.session_id,
+                "status": final_status,
+                "session_id": config.session_id,
                 "model": args.model,
                 "metrics": all_metrics[0],
                 "config": config.summary_dict(),
@@ -259,9 +287,8 @@ def main(argv: list[str] | None = None) -> int:
                 f"mean throughput={aggregated.get('output_throughput', {}).get('mean', 'N/A')}",
             )
             result_json = {
-                "status": "ok",
-                "machine": args.machine,
-                "session_id": args.session_id,
+                "status": final_status,
+                "session_id": config.session_id,
                 "model": args.model,
                 "runs": total_runs,
                 "warmup_runs": warmup_runs,
@@ -277,7 +304,7 @@ def main(argv: list[str] | None = None) -> int:
                 result_json["cleanup_warning"] = cleanup_warning
             write_local_result(config, result_json)
             print_json(result_json)
-        return 0
+        return exit_code
 
     except Exception as e:
         try:

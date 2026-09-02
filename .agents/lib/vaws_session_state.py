@@ -8,6 +8,7 @@ import json
 import os
 import re
 import socket
+import sys
 import tempfile
 import time
 from dataclasses import dataclass
@@ -15,7 +16,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable
 
 from vaws_local_state import ROOT, STATE_DIR, WorkspaceStateError, ensure_state_dir, utc_now_iso
-from vaws_session_id import load_current_session_binding, normalize_session_id
+from vaws_session_id import find_session_binding, load_current_session_binding, normalize_session_id
 from vaws_validate import parse_device_csv
 
 SESSION_SCHEMA_VERSION = 1
@@ -319,7 +320,16 @@ def allocate_session_leases(
                     )
             allocated_devices = list(requested_devices)
         elif npu_count:
-            candidates = sorted(available_set) if available_set is not None else list(range(64))
+            if available_set is None:
+                # Without a host probe we cannot know how many NPUs exist or
+                # which are busy; guessing a fixed device range would hand out
+                # devices that may not exist. Fail fast instead of masking the
+                # probe failure.
+                raise SessionStateError(
+                    "cannot allocate by --npu-count: host NPU probe data is unavailable; "
+                    "fix the probe or request explicit --devices"
+                )
+            candidates = sorted(available_set)
             for dev in candidates:
                 if _resource_owner(bucket, "npu_devices", str(dev)) in {None, sid}:
                     allocated_devices.append(dev)
@@ -411,6 +421,19 @@ def session_live_leases(
     return live
 
 
+def require_session_npu_lease(session: dict[str, Any], *, repo_root: Path = ROOT) -> list[int]:
+    """Return currently owned devices, rejecting empty or stale snapshots."""
+    live = session_live_leases(
+        repo_root=repo_root, machine_alias=session["base_machine"], session_id=session["session_id"],
+    )["npu_devices"]
+    if not live:
+        raise SessionStateError("managed NPU execution requires an active nonempty lease; reserve devices before launch")
+    recorded = session.get("leases", {}).get("npu_devices", [])
+    if not isinstance(recorded, list) or sorted(recorded) != sorted(live):
+        raise SessionStateError("session device snapshot differs from its live lease; refusing stale device ownership")
+    return sorted(live)
+
+
 def release_all_session_leases(*, repo_root: Path = ROOT, session_id: str) -> None:
     sid = require_session_id(session_id)
     with file_lock(session_lock_dir(repo_root) / "leases.lock"):
@@ -464,11 +487,12 @@ def save_session(session: dict[str, Any], *, repo_root: Path = ROOT) -> Path:
     return path
 
 
-def _session_file_from_binding(repo_root: Path, session_id: str | None) -> Path | None:
-    binding = load_current_session_binding(repo_root)
+def _binding_session_file(binding: dict[str, Any] | None, session_id: str | None) -> Path | None:
     if not binding:
         return None
     bound_id = normalize_session_id(str(binding.get("session_id", "")))
+    if bound_id is None:
+        return None
     if session_id is not None and bound_id != require_session_id(session_id):
         return None
     session_file = binding.get("session_file")
@@ -476,8 +500,39 @@ def _session_file_from_binding(repo_root: Path, session_id: str | None) -> Path 
         return Path(session_file).expanduser().resolve()
     base_repo_root = binding.get("base_repo_root")
     if isinstance(base_repo_root, str) and base_repo_root:
-        return session_file_path(bound_id or require_session_id(session_id or ""), Path(base_repo_root))
+        return session_file_path(bound_id, Path(base_repo_root))
     return None
+
+
+def _session_file_from_binding(repo_root: Path, session_id: str | None) -> Path | None:
+    return _binding_session_file(load_current_session_binding(repo_root), session_id)
+
+
+def _candidate_bindings(repo_root: Path) -> list[dict[str, Any]]:
+    """Bindings that can resolve a session, most specific first.
+
+    The cwd-upward worktree binding wins over the repo-root binding so that a
+    command run inside a session worktree always resolves to that session.
+    """
+    bindings: list[dict[str, Any]] = []
+    found = find_session_binding()
+    if found is not None:
+        bindings.append(found[1])
+    root_binding = load_current_session_binding(repo_root)
+    if root_binding:
+        bindings.append(root_binding)
+    return bindings
+
+
+def _candidate_state_roots(repo_root: Path, bindings: list[dict[str, Any]]) -> list[Path]:
+    roots = [repo_root.expanduser().resolve()]
+    for binding in bindings:
+        base = binding.get("base_repo_root")
+        if isinstance(base, str) and base:
+            base_path = Path(base).expanduser().resolve()
+            if base_path not in roots:
+                roots.append(base_path)
+    return roots
 
 
 def load_session_lookup(
@@ -491,25 +546,47 @@ def load_session_lookup(
         path = Path(session_file).expanduser().resolve()
     else:
         path = None
+        bindings = _candidate_bindings(repo_root)
         if sid is not None:
-            index = load_index(repo_root)
-            record = index.get("sessions", {}).get(sid)
-            if isinstance(record, dict) and isinstance(record.get("session_file"), str):
-                candidate = Path(record["session_file"])
-                path = candidate if candidate.is_absolute() else repo_root / candidate
-            else:
-                candidate = session_file_path(sid, repo_root)
+            for state_root in _candidate_state_roots(repo_root, bindings):
+                try:
+                    index = load_index(state_root)
+                except SessionStateError as exc:
+                    # load_index degrades a missing index to an empty one, so
+                    # reaching here means an existing index is corrupted.
+                    # Degrade to the next candidate, but never silently.
+                    print(f"session index under {state_root} is corrupted ({exc}); trying the next candidate",
+                          file=sys.stderr)
+                    continue
+                record = index.get("sessions", {}).get(sid)
+                if isinstance(record, dict) and isinstance(record.get("session_file"), str):
+                    candidate = Path(record["session_file"])
+                    path = candidate if candidate.is_absolute() else state_root / candidate
+                    break
+                candidate = session_file_path(sid, state_root)
                 if candidate.exists():
                     path = candidate
+                    break
         if path is None:
-            path = _session_file_from_binding(repo_root, sid)
-        if path is None and sid is None:
-            binding = load_current_session_binding(repo_root)
-            if binding and isinstance(binding.get("session_id"), str):
-                sid = require_session_id(binding["session_id"])
-                path = _session_file_from_binding(repo_root, sid) or session_file_path(sid, repo_root)
+            for binding in bindings:
+                candidate = _binding_session_file(binding, sid)
+                if candidate is not None:
+                    path = candidate
+                    if sid is None:
+                        sid = require_session_id(str(binding["session_id"]))
+                    break
         if path is None:
-            raise SessionStateError("session id or session file is required")
+            if sid is not None:
+                raise SessionStateError(
+                    f"session {sid!r} was not found in any known session index; "
+                    "create it with session-management/scripts/session_create.py "
+                    "or pass --session-file explicitly"
+                )
+            raise SessionStateError(
+                "no session target: pass --session-id/--session-file, or run from "
+                "inside a session worktree (a directory with .vaws-local/current-session.json). "
+                "Create a session with session-management/scripts/session_create.py."
+            )
     if not path.exists():
         raise SessionStateError(f"session file does not exist: {path}")
     session = validate_session(_load_json(path), where=str(path))
@@ -542,6 +619,8 @@ def mark_session_status(
     if extra:
         session.update(extra)
     save_session(session, repo_root=lookup.state_repo_root)
+    # Metadata transitions are not evidence that remote processes or ports
+    # have disappeared. The cleanup caller releases leases only after proof.
     return session
 
 

@@ -1,5 +1,18 @@
 # Remote-code-parity acceptance criteria
 
+## Prepared runtimes and external sources
+
+- Snapshot actual external worktrees without resetting HEAD/index/dirty files
+  or creating a second copy under the scaffold.
+- A second edit to an already dirty file triggers staging again. A no-change
+  watcher cycle transfers nothing; a concurrent edit is not falsely acknowledged.
+- The watcher is always source-only. Runtime materialization occurs only
+  between released executions, followed by a pinned-snapshot preflight.
+- Shared machine inventory is identical through machine-management, toolbox
+  and parity machine mode; stale linked-worktree files do not mask its absence.
+- Native-input identity is shared between parity and runtime verification,
+  including dependency, build-environment, submodule and revert invalidation.
+
 ## Trigger examples
 
 These should trigger `remote-code-parity` directly or as an automatic internal step:
@@ -157,3 +170,12 @@ Review these files together after every substantial skill edit:
 - `AGENTS.md`
 - `.agents/README.md`
 - `README.md`
+# Content and native reuse regressions
+
+- Two successive edits of the same dirty file produce distinct content
+  fingerprints; so do successive edits of an untracked file.
+- Committed Python-only changes preserve native build-input identity.
+- Native changes, reverting those changes, dependency changes and runtime
+  profile changes invalidate the corresponding installed inputs.
+- Missing legacy build-input state causes one migration rebuild.
+- Explicit source-only/materialize results are not native-runtime acceptance.

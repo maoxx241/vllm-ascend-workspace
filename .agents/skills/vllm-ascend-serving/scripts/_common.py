@@ -25,15 +25,24 @@ for _p in (str(LIB_DIR), str(MM_SCRIPTS)):
 
 import inventory as inventory_store  # noqa: E402
 from vaws_local_state import ensure_state_dir  # noqa: E402
+from vaws_npu_coordination import parse_npu_smi_info  # noqa: E402
 from vaws_remote_toolbox import (  # noqa: E402
     SshEndpoint,
     resolve_remote_target,
 )
 from vaws_session_state import session_serving_state_path  # noqa: E402
+from vaws_ssh import base_ssh_options  # noqa: E402
 from vaws_validate import parse_device_csv  # noqa: E402
 
-SERVING_STATE_DIR = ROOT / ".vaws-local" / "serving"
 PROGRESS_SENTINEL = "__VAWS_SERVING_PROGRESS__="
+
+# Always bound the TCP connect phase: without it a dead host can hang an SSH
+# command for minutes (kernel default). Established connections are unaffected
+# by ConnectTimeout.
+SSH_CONNECT_TIMEOUT_SECONDS = 15
+# Hard cap for a single SSH round-trip. Must exceed the slowest remote probe
+# (first-token curl allows --max-time 120).
+SSH_EXEC_DEFAULT_TIMEOUT_SECONDS = 180
 
 
 # ---------------------------------------------------------------------------
@@ -57,9 +66,7 @@ class ExecutionTarget:
 def _ssh_base_cmd(endpoint: SshEndpoint) -> list[str]:
     return [
         "ssh",
-        "-o", "BatchMode=yes",
-        "-o", "StrictHostKeyChecking=accept-new",
-        "-o", "LogLevel=ERROR",
+        *base_ssh_options(connect_timeout=SSH_CONNECT_TIMEOUT_SECONDS),
         "-p", str(endpoint.port),
         endpoint.destination(),
     ]
@@ -70,9 +77,17 @@ def ssh_exec(
     script: str,
     *,
     check: bool = True,
+    timeout: float | None = SSH_EXEC_DEFAULT_TIMEOUT_SECONDS,
 ) -> subprocess.CompletedProcess[str]:
     cmd = [*_ssh_base_cmd(endpoint), "bash", "-c", shlex.quote(script)]
-    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        # A timed-out probe is an unknown result (same shape as a lost SSH
+        # connection, rc 255), never proof of remote success or failure.
+        result = subprocess.CompletedProcess(
+            cmd, 255, "", f"ssh_exec timed out after {exc.timeout}s"
+        )
     if check and result.returncode != 0:
         raise RuntimeError(
             f"remote command failed (rc={result.returncode}):\n"
@@ -119,13 +134,16 @@ def host_endpoint(record: dict[str, Any]) -> SshEndpoint:
 
 
 def resolve_execution_target(
-    machine: str | None,
     *,
     session_id: str | None = None,
     session_file: str | Path | None = None,
 ) -> ExecutionTarget:
+    """Resolve the session execution target.
+
+    Serving is session-only: with no explicit id/file the session is
+    auto-resolved from the nearest worktree binding (cwd upward).
+    """
     remote = resolve_remote_target(
-        machine=machine,
         session_id=session_id,
         session_file=session_file,
         repo_root=ROOT,
@@ -149,36 +167,31 @@ def resolve_execution_target(
 # ---------------------------------------------------------------------------
 
 def load_serving_state(
-    machine_alias: str,
+    session_id: str,
     *,
-    session_id: str | None = None,
     state_repo_root: Path = ROOT,
 ) -> dict[str, Any] | None:
-    path = (
-        session_serving_state_path(session_id, state_repo_root)
-        if session_id
-        else SERVING_STATE_DIR / f"{machine_alias}.json"
-    )
+    path = session_serving_state_path(session_id, state_repo_root)
     if not path.exists():
         return None
     try:
         return json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return None
+    except (json.JSONDecodeError, OSError) as exc:
+        # A corrupt state file is NOT the same as "no service": treating it as
+        # None could double-launch or leave an old vllm process untracked.
+        raise RuntimeError(
+            f"serving state file is unreadable: {path} ({exc}); inspect the running "
+            f"service manually, then delete this file to reset the record"
+        ) from exc
 
 
 def save_serving_state(
-    machine_alias: str,
+    session_id: str,
     data: dict[str, Any],
     *,
-    session_id: str | None = None,
     state_repo_root: Path = ROOT,
 ) -> Path:
-    path = (
-        session_serving_state_path(session_id, state_repo_root)
-        if session_id
-        else SERVING_STATE_DIR / f"{machine_alias}.json"
-    )
+    path = session_serving_state_path(session_id, state_repo_root)
     ensure_state_dir(path.parent)
     handle, temp_name = tempfile.mkstemp(
         prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent)
@@ -196,85 +209,41 @@ def save_serving_state(
 
 
 # ---------------------------------------------------------------------------
-# NPU probe
+# Serving presets
 # ---------------------------------------------------------------------------
 
-_HBM_BUSY_THRESHOLD_MB = 4096
+PRESETS_DIR = ROOT / ".agents" / "skills" / "vllm-ascend-serving" / "presets"
 
 
-def _parse_npu_smi(output: str) -> dict[str, Any]:
-    """Parse ``npu-smi info`` output into a structured dict.
+def load_preset(name: str) -> dict[str, Any]:
+    """Load a named serving preset from the skill's ``presets/`` directory.
 
-    Returns dict with keys: devices, total, busy, free, free_count, hbm,
-    hbm_busy_threshold_mb.
+    ``name`` is a bare preset name (the ``.json`` suffix is optional); path
+    traversal is rejected. Raises ``ValueError`` for unknown presets or
+    malformed preset files.
     """
-    import re
+    stem = name[:-5] if name.endswith(".json") else name
+    if not stem or "/" in stem or "\\" in stem or ".." in stem:
+        raise ValueError(f"invalid preset name {name!r}: use a bare preset name")
+    path = PRESETS_DIR / f"{stem}.json"
+    if not path.is_file():
+        available = sorted(p.stem for p in PRESETS_DIR.glob("*.json")) if PRESETS_DIR.is_dir() else []
+        raise ValueError(
+            f"unknown preset {name!r}; available presets: "
+            + (", ".join(available) if available else "(none)")
+        )
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        raise ValueError(f"preset {name!r} is not valid JSON: {e}") from e
+    if not isinstance(data, dict):
+        raise ValueError(f"preset {name!r} must contain a JSON object")
+    return data
 
-    dev_ids: set[int] = set()
-    hbm: dict[int, dict[str, int]] = {}
-    current_npu: int | None = None
-    lines = output.splitlines()
 
-    for line in lines:
-        hdr = re.match(r"\|\s*(\d+)\s+\d*\w+\d+\w*\s+\|", line)
-        if hdr:
-            current_npu = int(hdr.group(1))
-            dev_ids.add(current_npu)
-            continue
-        if current_npu is not None and "0000:" in line:
-            pairs = re.findall(r"(\d+)\s*/\s*(\d+)", line)
-            if len(pairs) >= 2:
-                hbm[current_npu] = {
-                    "used_mb": int(pairs[-1][0]),
-                    "total_mb": int(pairs[-1][1]),
-                }
-            current_npu = None
-
-    proc_busy: dict[int, list[dict[str, Any]]] = {}
-    in_proc = False
-    for line in lines:
-        if "Process name" in line or "Process memory" in line:
-            in_proc = True
-            continue
-        if in_proc and "No running processes" in line:
-            continue
-        if in_proc and line.startswith("|"):
-            m = re.match(r"\|\s*(\d+)\s+\S+\s+(\d+)\s+(\S+)\s+(\S+)", line)
-            if m:
-                dev = int(m.group(1))
-                proc_busy.setdefault(dev, []).append({
-                    "pid": int(m.group(2)),
-                    "owner": m.group(3),
-                    "name": m.group(4),
-                })
-
-    busy: dict[int, list[dict[str, Any]]] = {}
-    for dev in sorted(dev_ids):
-        reasons: list[dict[str, Any]] = []
-        if dev in proc_busy:
-            reasons.extend(proc_busy[dev])
-        h = hbm.get(dev)
-        if h and h["used_mb"] >= _HBM_BUSY_THRESHOLD_MB and dev not in proc_busy:
-            reasons.append({
-                "pid": None,
-                "name": "unknown (HBM occupied, likely another container)",
-                "hbm_used_mb": h["used_mb"],
-                "detection": "hbm_threshold",
-            })
-        if reasons:
-            busy[dev] = reasons
-
-    free = sorted(d for d in dev_ids if d not in busy)
-    return {
-        "devices": sorted(dev_ids),
-        "total": len(dev_ids),
-        "busy": {str(k): v for k, v in sorted(busy.items())},
-        "hbm": {str(k): v for k, v in sorted(hbm.items())},
-        "free": free,
-        "free_count": len(free),
-        "hbm_busy_threshold_mb": _HBM_BUSY_THRESHOLD_MB,
-    }
-
+# ---------------------------------------------------------------------------
+# NPU probe
+# ---------------------------------------------------------------------------
 
 def probe_npus(host_ep: SshEndpoint) -> dict[str, Any]:
     """Probe NPU device availability via the **host** (bare-metal) SSH.
@@ -284,9 +253,13 @@ def probe_npus(host_ep: SshEndpoint) -> dict[str, Any]:
     container, PID-namespace isolation hides other containers' workloads,
     making process-based occupancy detection unreliable.
 
-    As a secondary signal, HBM usage above ``_HBM_BUSY_THRESHOLD_MB`` marks a
-    device as busy even when no visible PID is found (covers edge cases where
-    npu-smi does not list the process).
+    Parsing reuses the coordinator's single-source ``parse_npu_smi_info``,
+    which maps A3 pipe-separated process rows through Phy-ID and fails closed
+    when the process table is missing or unparsable.  A failed parse raises
+    here as well: an unknown occupancy must never look like an empty busy set.
+    As a secondary signal, HBM usage above the parser's
+    ``hbm_busy_threshold_mb`` marks a device as busy even when no visible PID
+    is found (covers edge cases where npu-smi does not list the process).
     """
     result = ssh_exec(host_ep, "npu-smi info", check=False)
     if result.returncode != 0:
@@ -294,7 +267,14 @@ def probe_npus(host_ep: SshEndpoint) -> dict[str, Any]:
             f"npu-smi on host failed (rc={result.returncode}): "
             f"{result.stderr[:500]}"
         )
-    parsed = _parse_npu_smi(result.stdout)
+    parsed = parse_npu_smi_info(result.stdout)
+    if parsed.get("status") != "ok":
+        raise RuntimeError(
+            "npu-smi occupancy parse failed; refusing to treat unknown "
+            f"occupancy as free: {parsed.get('error', 'unknown parse error')}"
+        )
+    parsed["total"] = len(parsed["devices"])
+    parsed["free_count"] = len(parsed["free"])
     parsed["npu_smi_ok"] = True
     return parsed
 

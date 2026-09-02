@@ -1,5 +1,12 @@
 # Command Recipes
 
+For the optional shared prepared-runtime MCP, use the setup and agent loop in
+[the coordinator README](../../../coordinator/README.md). Its machine directory
+uses the existing Git common-dir inventory; do not duplicate discovery files.
+`runtime_checkout` returns ordinary remote-dev endpoint fields, while
+`execution_request` uses the existing host coordinator. Pool binding ids are
+not interchangeable with the legacy `--session-id` arguments below.
+
 Inspect the agent identity used for new session attribution:
 
 ```bash
@@ -70,7 +77,24 @@ python3 .agents/skills/session-management/scripts/session_create.py \
   --verification-mode full
 ```
 
-Use the session for parity and serving:
+`session_create.py` reports a `next_steps` array pointing at the recommended
+follow-up: `cd` into the worktree, run `session_diff.py` to review changes, and
+in Cursor use the cursor-app-control MCP tool `move_agent_to_root` to switch the
+agent workspace to the worktree. Once the agent is working from inside the
+worktree, every consumer command auto-resolves this session from the
+`.vaws-local/current-session.json` binding, so the `--session-id` flag shown
+below is optional (pass it only when running outside the worktree).
+
+Review everything a session changed (scaffold worktree + submodules):
+
+```bash
+python3 .agents/skills/session-management/scripts/session_diff.py            # bound session, from inside the worktree
+python3 .agents/skills/session-management/scripts/session_diff.py --stat     # add full diffstat text
+python3 .agents/skills/session-management/scripts/session_diff.py --session-id pr123
+```
+
+Use the session for parity and serving (from inside the worktree the
+`--session-id` is optional):
 
 ```bash
 python3 .agents/skills/remote-code-parity/scripts/parity_sync.py --session-id pr123
@@ -204,3 +228,11 @@ python3 .agents/skills/session-management/scripts/npu_coordination.py \
 
 All commands are optional. Existing task flows remain valid without publishing
 or acquiring a cooperative task.
+# Lease cleanup safety
+
+Use `session_remove.py --session-id <id> --remove-container` to remove a
+container and release its leases after successful removal. Add
+`--remove-worktree` only when local worktree deletion is intended. A stop or
+local worktree deletion alone does not release all remote resource leases.
+For already stopped/absent containers use
+`session_gc.py --reap-dead --apply`; unknown host/device state retains leases.

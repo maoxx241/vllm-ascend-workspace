@@ -44,8 +44,8 @@ Relevant files and scopes:
 
 Compatibility rule:
 
-- read an existing worktree-local `.vaws-local/machine-inventory.json` or legacy `.machine-inventory.json` when the primary shared inventory is still absent
-- migrate fallback inventory to the primary worktree's `.vaws-local/machine-inventory.json` on the next successful write
+- never substitute worktree-local or legacy data when the primary shared inventory is absent
+- old data requires an explicit `--inventory <path>` inspection and a separately chosen migration; no automatic merge or migration occurs
 
 ## Public API surface contract
 

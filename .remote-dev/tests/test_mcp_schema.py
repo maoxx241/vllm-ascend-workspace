@@ -77,7 +77,7 @@ class McpSchemaTests(unittest.TestCase):
     def test_normal_tools_describe_endpoint_selector_requirement(self) -> None:
         job_tools = {"remote.job_status", "remote.job_tail", "remote.job_stop"}
         for name, schema in TOOL_SCHEMAS.items():
-            if name in job_tools:
+            if name in job_tools or name.startswith("vaws."):
                 self.assertNotIn(ENDPOINT_SELECTOR_DESCRIPTION, schema.get("description", ""))
             else:
                 self.assertIn(ENDPOINT_SELECTOR_DESCRIPTION, schema.get("description", ""), name)
@@ -119,10 +119,22 @@ class McpSchemaTests(unittest.TestCase):
     def test_missing_endpoint_is_rejected_before_tool_execution(self) -> None:
         from core.errors import EndpointError
 
-        with patch.object(mcp_tools, "remote_apply_patch") as execute:
-            with self.assertRaises(EndpointError):
-                mcp_tools.call_tool("remote.apply_patch", {"patch": "test"})
-            execute.assert_not_called()
+        lib_dir = str(REPO_ROOT / ".agents" / "lib")
+        if lib_dir not in sys.path:
+            sys.path.insert(0, lib_dir)
+        import vaws_remote_toolbox
+
+        # Hermetic regardless of the developer machine's own session bindings:
+        # simulate "no endpoint target anywhere" so the auto-bind path fails.
+        with patch.object(
+            vaws_remote_toolbox,
+            "resolve_remote_target",
+            side_effect=vaws_remote_toolbox.RemoteToolboxError("no session target (test)"),
+        ):
+            with patch.object(mcp_tools, "remote_apply_patch") as execute:
+                with self.assertRaises(EndpointError):
+                    mcp_tools.call_tool("remote.apply_patch", {"patch": "test"})
+                execute.assert_not_called()
 
     def test_missing_patch_is_rejected_before_remote_execution(self) -> None:
         import core.patch_ops as patch_ops

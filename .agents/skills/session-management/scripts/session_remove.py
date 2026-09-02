@@ -105,6 +105,22 @@ def stop_session(session_id: str, *, session_file: Path | None = None, force: bo
     return payload
 
 
+def worktree_is_clean(worktree_root: Path) -> bool:
+    """True when the worktree (including submodules) has no local changes.
+
+    Ignored files count as unclean: session evidence such as `.vaws-local/`
+    run manifests is Git-ignored, and a plain porcelain check would report the
+    worktree clean while `worktree remove` silently destroys that evidence.
+    """
+    proc = subprocess.run(
+        ["git", "-C", str(worktree_root), "status", "--porcelain=v1", "--ignore-submodules=none", "--ignored"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return proc.returncode == 0 and not proc.stdout.strip()
+
+
 def stop_result_allows_lease_release(result: dict[str, Any]) -> bool:
     return result.get("returncode") == 0 and result.get("status") in {"not_found", "stopped"}
 
@@ -171,18 +187,32 @@ def main() -> int:
         if args.remove_worktree:
             worktree_root = Path(session["local"]["worktree_root"])
             emit_progress("worktree", "removing session worktree", path=str(worktree_root))
-            results["worktree"] = remove_session_worktree(worktree_root, force=args.force)
+            # git refuses to remove submodule-containing worktrees without
+            # --force even when they are clean, and the submodule deinit inside
+            # remove_session_worktree discards local submodule changes. Without
+            # an explicit --force, only proceed after proving the tree
+            # (including submodules and ignored evidence files) is clean; then
+            # forcing is safe.
+            if not args.force and worktree_root.exists() and not worktree_is_clean(worktree_root):
+                results["worktree"] = {
+                    "returncode": 1,
+                    "error": "worktree has local changes or ignored files (e.g. .vaws-local evidence); rerun with --force to discard them",
+                }
+            else:
+                results["worktree"] = remove_session_worktree(worktree_root, force=True)
+                results["worktree"]["auto_forced_clean"] = not args.force
 
-        if args.release_leases:
-            can_release = stop_result_allows_lease_release(results["stop"]) or container_result_allows_lease_release(
-                results.get("container")
-            )
+        container_removed = container_result_allows_lease_release(results.get("container"))
+        if args.release_leases or container_removed:
+            # A stopped model process does not free the container SSH port or
+            # prove that other container workers have exited.
+            can_release = container_removed
             if not can_release:
                 results["leases"] = {
                     "released": False,
                     "blocked": True,
                     "reason": (
-                        "service stop did not succeed and the session container was not removed; "
+                        "the session container was not confirmed removed; "
                         "refusing to release leases that may still protect live resources"
                     ),
                 }
@@ -193,12 +223,15 @@ def main() -> int:
             results["leases"] = {"released": True}
 
         if args.remove_container or args.remove_worktree:
-            remove_ok = True
-            if args.remove_container:
-                remove_ok = remove_ok and container_result_allows_lease_release(results.get("container"))
+            remove_ok = container_removed
             if args.remove_worktree:
                 remove_ok = remove_ok and results.get("worktree", {}).get("returncode") == 0
-            next_status = "removed" if remove_ok else "needs_repair"
+            if remove_ok:
+                next_status = "removed"
+            elif not args.remove_container and stop_result_allows_lease_release(results["stop"]) and results.get("worktree", {}).get("returncode") == 0:
+                next_status = "stopped"
+            else:
+                next_status = "needs_repair"
         else:
             next_status = "stopped" if stop_result_allows_lease_release(results["stop"]) else "needs_repair"
         updated = mark_session_status(

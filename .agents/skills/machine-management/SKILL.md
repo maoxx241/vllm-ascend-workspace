@@ -105,8 +105,8 @@ Local workspace-machine state lives under `.vaws-local/`. Machine inventory is s
 Compatibility note:
 
 - a linked worktree resolves the primary worktree through Git's common directory
-- when the shared inventory is absent, the helper can read a pre-existing worktree-local `.vaws-local/machine-inventory.json` or legacy `.machine-inventory.json`
-- the next successful inventory write migrates fallback data to the primary worktree's shared inventory
+- missing shared inventory never silently falls back to worktree-local or legacy data
+- inspect old records using an explicit `--inventory <path>`; reconcile conflicting records before explicitly migrating them to the shared path
 
 ## Workflow
 
@@ -184,8 +184,8 @@ When password bootstrap is required:
 7. choose or reuse the container name and container SSH port
 8. bootstrap or repair the managed container, including fixed container-side apt source configuration before package installation when needed
 9. persist the record into inventory
-10. best-effort mesh the new container with existing managed containers
-11. run final readiness verification
+10. mesh the new container with existing managed containers — a mesh failure downgrades the result to `needs_repair` (it is not silently swallowed)
+11. run final readiness verification; `last_verified_at` is stamped into inventory only after this verification succeeds, never at record-write time
 
 If inventory already contains the same alias or host IP, treat add as an idempotent attach-or-repair path instead of creating a duplicate record.
 

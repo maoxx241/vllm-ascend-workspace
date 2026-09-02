@@ -38,34 +38,11 @@ from common import (
     ssh_stream_to_file,
     update_state,
 )
-
-
-VLLM_REINSTALL_PATTERNS = (
-    'requirements*',
-    'pyproject.toml',
-    'setup.py',
-    'setup.cfg',
-    'CMakeLists.txt',
-    'cmake/**',
-    'csrc/**',
-    '**/*.cu',
-    '**/*.cuh',
-    '**/*.cpp',
-    '**/*.cc',
-    '**/*.h',
-    '**/*.hpp',
+from vaws_build_inputs import (
+    VLLM_REINSTALL_PATTERNS, VLLM_ASCEND_REINSTALL_PATTERNS,
+    DEPENDENCY_INSTALL_PATTERNS, BUILD_INPUT_ENV_KEYS, build_input_fingerprints,
 )
 
-VLLM_ASCEND_REINSTALL_PATTERNS = VLLM_REINSTALL_PATTERNS + (
-    'vllm_ascend/_cann_ops_custom/**',
-)
-
-DEPENDENCY_INSTALL_PATTERNS = (
-    'requirements*',
-    'pyproject.toml',
-    'setup.py',
-    'setup.cfg',
-)
 
 DEFAULT_ENV_PREAMBLE = (
     'export PATH="${PATH:-/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin}"',
@@ -156,6 +133,41 @@ PIP_INDEX_NAME = 'huaweicloud'
 PIP_INDEX_URL = 'https://repo.huaweicloud.com/repository/pypi/simple'
 PIP_TRUSTED_HOST = 'repo.huaweicloud.com'
 
+# Hardware-coupled packages that the paired vLLM-Ascend base image ships at
+# CANN-matched versions. vllm-ascend/requirements.txt pins these
+# (e.g. torch==2.9.0, torch-npu==2.9.0, triton-ascend==3.2.0), but per
+# vllm-ascend's own Dockerfile they are NOT installed from the standard
+# huaweicloud PyPI mirror -- torch(+cpu) comes from download.pytorch.org and
+# torch_npu / triton-ascend come from Huawei OBS wheels and the Ascend repo
+# index (see ASCEND_PIP_EXTRA_INDEX_URL). So a plain
+# ``pip install -r requirements.txt`` against our mirror hard-fails with
+# "No matching distribution".
+#
+# Handling (decided per package at install time, see
+# ``install-vllm-ascend-requirements``):
+#   * If the image already provides the package (any version installed), drop
+#     the pinned line -- reinstalling would downgrade the image's tested stack
+#     (image ships torch 2.10.0 / triton-ascend 3.2.1) and break the runtime.
+#     ``verify-deps`` already treats torch-npu this way.
+#   * If the package is genuinely missing, keep the line and add the Ascend
+#     extra-index so it can be pulled from the public Ascend repo, matching
+#     how the Dockerfile obtains it.
+# Canonical (PEP 503) names.
+IMAGE_PROVIDED_REQUIREMENT_NAMES = (
+    'torch',
+    'torchvision',
+    'torchaudio',
+    'torch-npu',
+    'triton',
+    'triton-ascend',
+)
+
+# Public Ascend package index, as used by vllm-ascend/Dockerfile
+# (``PIP_EXTRA_INDEX_URL=https://mirrors.huaweicloud.com/ascend/repos/pypi``).
+# torch_npu / triton-ascend live here (and on OBS), not on the standard mirror.
+ASCEND_PIP_EXTRA_INDEX_URL = 'https://mirrors.huaweicloud.com/ascend/repos/pypi'
+ASCEND_PIP_TRUSTED_HOST = 'mirrors.huaweicloud.com'
+
 DEFAULT_CONTAINER_CACHE_ROOT = '/root/.cache/vaws/remote-code-parity'
 DEFAULT_MARKER_DIRNAME = '.remote-code-parity'
 DEFAULT_GIT_TRANSPORT_TIMEOUT_SECONDS = 900.0
@@ -169,6 +181,10 @@ PARITY_BRANCH_NAME = 'parity-current'
 TRANSFER_MODES = ('auto', 'git', 'bundle')
 
 REMOTE_RUNTIME_ENV_PASSTHROUGH = (
+    'CMAKE_ARGS', 'LDFLAGS', 'CC', 'CXX', 'VLLM_TARGET_DEVICE',
+    'CFLAGS',
+    'CXXFLAGS',
+    'VAWS_ENVIRONMENT_FINGERPRINT',
     'XDG_CACHE_HOME',
     'PIP_CACHE_DIR',
     'FETCHCONTENT_BASE_DIR',
@@ -231,6 +247,8 @@ class SnapshotRecord:
     ref: str
     changed_paths: list[str]
     submodules: list[dict[str, str]]
+    build_inputs: dict[str, str] = field(default_factory=dict)
+    source_path: str | None = None
 
 
 def normalize_workspace_id(value: str) -> str:
@@ -339,14 +357,14 @@ def list_submodules(repo: Path) -> list[SubmoduleEntry]:
     return entries
 
 
-def discover_repo_tree(repo: Path, relpath: str = '.', submodule_name: str | None = None) -> RepoNode:
+def discover_repo_tree(repo: Path, relpath: str = '.', submodule_name: str | None = None, source_roots: dict[str, Path] | None = None) -> RepoNode:
     ensure_populated_worktree(repo, relpath)
     node = RepoNode(relpath=relpath, repo_path=repo, submodule_name=submodule_name)
     for entry in list_submodules(repo):
-        child_repo = repo / entry.path
         child_relpath = entry.path if relpath in ('', '.') else f'{relpath}/{entry.path}'
+        child_repo = (source_roots or {}).get(child_relpath, repo / entry.path)
         ensure_populated_worktree(child_repo, child_relpath)
-        node.children.append(discover_repo_tree(child_repo, child_relpath, entry.name))
+        node.children.append(discover_repo_tree(child_repo, child_relpath, entry.name, source_roots))
     return node
 
 
@@ -375,7 +393,7 @@ def git_tree_for_commit(repo: Path, commit: str | None) -> str | None:
 def reset_pathspecs(node: RepoNode, denylist: tuple[str, ...]) -> list[str]:
     specs: list[str] = []
     for child in node.children:
-        specs.append(child.repo_path.relative_to(node.repo_path).as_posix())
+        specs.append(PurePosixPath(child.relpath).relative_to(node.relpath).as_posix())
     for pattern in denylist:
         if any(ch in pattern for ch in '*?[]'):
             specs.append(f':(glob){pattern}')
@@ -448,7 +466,7 @@ def build_synthetic_snapshot(
         transport_only_child_paths: set[str] = set()
         for child in node.children:
             child_record = child_commits[child.relpath]
-            child_rel_to_repo = child.repo_path.relative_to(repo).as_posix()
+            child_rel_to_repo = PurePosixPath(child.relpath).relative_to(node.relpath).as_posix()
             source_gitlink = gitlink_for_path(repo, source_head, child_rel_to_repo)
             if (
                 source_gitlink
@@ -497,7 +515,7 @@ def build_synthetic_snapshot(
 
 def cleanup_synthetic_refs(workspace_root: Path, records: list[SnapshotRecord]) -> None:
     for record in records:
-        repo = workspace_root if record.relpath in ('', '.') else workspace_root / record.relpath
+        repo = record_source(workspace_root, record)
         git(repo, ['update-ref', '-d', record.ref], check=False)
 
 
@@ -1020,6 +1038,21 @@ def dependency_install_required_for_repo(record: SnapshotRecord) -> bool:
     return any(glob_match_any(path, DEPENDENCY_INSTALL_PATTERNS) for path in record.changed_paths)
 
 
+def committed_changed_paths(repo: Path, last_head: str, current_head: str) -> list[str] | None:
+    """Paths changed between the last synced HEAD and the current HEAD.
+
+    Returns ``None`` when the diff cannot be computed (e.g. the old commit was
+    garbage-collected), in which case callers must fall back to the
+    conservative reinstall behavior.
+    """
+    if last_head == current_head:
+        return []
+    result = git(repo, ['diff', '--name-only', f'{last_head}..{current_head}'], check=False)
+    if result.returncode != 0:
+        return None
+    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+
+
 def runtime_install_step_script(
     *,
     runtime_root: str,
@@ -1143,10 +1176,98 @@ def runtime_install_step_script(
             ]
         )
     elif step == 'install-vllm-ascend-requirements':
+        # The hardware-coupled stack (torch / torch_npu / triton-ascend /
+        # torchvision / torchaudio) is decided per package at install time:
+        #   - already installed in the image -> drop the pinned line (avoid
+        #     downgrading the image's tested runtime);
+        #   - genuinely missing -> keep it and add the public Ascend
+        #     extra-index so it resolves from mirrors.huaweicloud.com/ascend,
+        #     exactly like vllm-ascend/Dockerfile pulls torch_npu/triton.
+        # Regex matches the requirement name at line start, terminated by a
+        # version op / marker / comment / EOL, so ``torch`` never swallows
+        # ``torchvision``. Constant names are already PEP 503 canonical.
+        _names = sorted(
+            {name.strip().lower() for name in IMAGE_PROVIDED_REQUIREMENT_NAMES},
+            key=len,
+            reverse=True,
+        )
+        _pkg_group = '(' + '|'.join(_names) + ')'
+        _line_re = r'^[[:space:]]*' + _pkg_group + r'[[:space:]]*($|[<>=!~;#[])'
+        # awk uses the captured package name to test installability on the
+        # image, so keep the group in a shell-friendly single expression.
+        # The terminated line regex is the MATCH gate: without it a bare
+        # prefix would misclassify e.g. ``torchao`` as image-provided ``torch``
+        # and silently drop the line from the install list.
         lines.extend(
             [
                 f'cd {quoted(str(Path(runtime_root) / "vllm-ascend"))}',
-                'pip_install_fast "runtime-install-vllm-ascend-requirements" "installing vllm-ascend requirements" 900 install -r requirements.txt',
+                'filtered_req="$(mktemp -t vaws-req.XXXXXX.txt)"',
+                'dropped=""',
+                'kept_hw=""',
+                'while IFS= read -r req_line || [ -n "$req_line" ]; do',
+                f'  if printf "%s" "$req_line" | grep -qiE {quoted(_line_re)}; then',
+                f'    pkg="$(printf "%s" "$req_line" | grep -oiE {quoted("^[[:space:]]*" + _pkg_group)} | tr -d "[:space:]" | tr "[:upper:]" "[:lower:]")"',
+                '  else',
+                '    pkg=""',
+                '  fi',
+                '  if [ -n "$pkg" ]; then',
+                # Treat the package as image-provided if pip knows about it,
+                # regardless of the pinned version (prevents downgrade).
+                '    if "$PYTHON" -m pip show "$pkg" >/dev/null 2>&1; then',
+                '      dropped="$dropped $pkg"',
+                '      continue',
+                '    else',
+                '      kept_hw="$kept_hw $pkg"',
+                '    fi',
+                '  fi',
+                '  printf "%s\\n" "$req_line" >> "$filtered_req"',
+                'done < requirements.txt',
+                '[ -n "$dropped" ] && emit_progress "runtime-req-filter" '
+                '"image provides:$dropped" 5 || true',
+                # If any hardware package is genuinely missing, allow the
+                # public Ascend index for this install only.
+                'req_index_args=""',
+                '[ -n "$kept_hw" ] && emit_progress "runtime-req-ascend-index" '
+                f'"pulling from ascend index:$kept_hw" 5 && req_index_args={quoted("--extra-index-url " + ASCEND_PIP_EXTRA_INDEX_URL + " --trusted-host " + ASCEND_PIP_TRUSTED_HOST)} || true',
+                'pip_install_fast "runtime-install-vllm-ascend-requirements" '
+                '"installing vllm-ascend requirements (image stack reconciled)" 900 '
+                'install $req_index_args -r "$filtered_req"',
+                'rm -f "$filtered_req"',
+            ]
+        )
+    elif step == 'check-build-compat':
+        # Fail fast BEFORE the multi-minute custom-ops build when the
+        # checked-out vllm-ascend submodule is not version-matched to the base
+        # image. vllm-ascend/CMakeLists.txt hard-pins the expected torch
+        # version (``if(NOT TORCH_VERSION VERSION_EQUAL "X.Y.Z")
+        # message(FATAL_ERROR ...)``); if it disagrees with the image's torch
+        # the cmake configure aborts deep in the build (the confusing
+        # "kineto_LIBRARY-NOTFOUND" + FATAL_ERROR we hit on qwen35-125). Detect
+        # the mismatch up front and tell the user how to resolve it instead of
+        # wasting the build time. This is a preflight, never a silent skip.
+        lines.extend(
+            [
+                f'cd {quoted(str(Path(runtime_root) / "vllm-ascend"))}',
+                'required_torch="$(grep -oE \'VERSION_EQUAL[[:space:]]*"[0-9]+\\.[0-9]+\\.[0-9]+"\' CMakeLists.txt 2>/dev/null | grep -oE \'[0-9]+\\.[0-9]+\\.[0-9]+\' | head -1)"',
+                'if [ -z "$required_torch" ]; then',
+                '  echo "build-compat: no torch version pin in CMakeLists.txt; skipping preflight"',
+                'else',
+                '  installed_torch="$("$PYTHON" -c \'import torch; print(torch.__version__.split("+")[0])\' 2>/dev/null || true)"',
+                '  if [ -z "$installed_torch" ]; then',
+                '    echo "ERROR: cannot import torch in the image to check build compatibility" >&2',
+                '    exit 1',
+                '  fi',
+                '  if [ "$required_torch" != "$installed_torch" ]; then',
+                '    echo "ERROR: vllm-ascend custom-ops build requires torch==$required_torch but this image ships torch==$installed_torch." >&2',
+                '    echo "The checked-out vllm-ascend submodule is not version-matched to the base image, so building custom ops will fail in cmake." >&2',
+                '    echo "Resolve by either:" >&2',
+                '    echo "  (a) skip rebuilding custom ops and use the image stack:" >&2',
+                '    echo "      install_consent.py set-sync-mode --sync-mode image --approved-by-user" >&2',
+                '    echo "  (b) check out a vllm-ascend commit whose CMakeLists expects torch $installed_torch." >&2',
+                '    exit 1',
+                '  fi',
+                '  echo "build-compat: image torch $installed_torch matches vllm-ascend requirement"',
+                'fi',
             ]
         )
     elif step == 'install-vllm-ascend':
@@ -1226,8 +1347,10 @@ def runtime_install_step_script(
                 '            raise',
                 '        if not requirement_satisfied(r, installed):',
                 '            errors.append(f"{r.name}{r.specifier} (installed {installed})")',
-                '    except Exception:',
-                '        pass',
+                '    except Exception as exc:',
+                '        # Do NOT swallow: a missing package (raised above) or an',
+                '        # unparseable requirement is a real verification failure.',
+                '        errors.append(f"{raw!r} could not be verified: {exc!r}")',
                 'if errors:',
                 '    for e in errors:',
                 '        print(f"MISMATCH: {e}", file=sys.stderr)',
@@ -1290,8 +1413,9 @@ def read_runtime_install_marker(
     container: SshEndpoint,
     runtime_root: str,
     marker_dirname: str,
-    dry_run: bool,
 ) -> RuntimeInstallMarker:
+    # The marker read is a read-only remote cat, so it is safe under dry-run
+    # and takes no dry_run switch.
     path = marker_path_for(runtime_root, marker_dirname)
     script = '\n'.join(
         [
@@ -1315,6 +1439,28 @@ def first_install_needed(marker: RuntimeInstallMarker, container_identity: str, 
     return marker.record.get('container_identity') != container_identity or marker.record.get('runtime_root') != runtime_root
 
 
+def verify_runtime_commits_map(
+    *,
+    container: SshEndpoint,
+    runtime_root: str,
+    expected: dict[str, str],
+) -> dict[str, str]:
+    lines = ['set -eo pipefail']
+    for relpath in expected:
+        repo_dir = runtime_root if relpath in ('', '.') else str(Path(runtime_root) / relpath)
+        lines.append(
+            f"if git -C {quoted(repo_dir)} diff --quiet HEAD --; then "
+            f"printf '%s %s\\n' {quoted(relpath)} \"$(git -C {quoted(repo_dir)} rev-parse HEAD)\"; "
+            f"else printf '%s %s\\n' {quoted(relpath)} dirty-runtime; fi"
+        )
+    result = ssh_exec(container, '\n'.join(lines))
+    observed: dict[str, str] = {}
+    for line in result.stdout.splitlines():
+        relpath, commit = line.split(maxsplit=1)
+        observed[relpath] = commit
+    return observed
+
+
 def verify_runtime_commits(
     *,
     container: SshEndpoint,
@@ -1325,16 +1471,48 @@ def verify_runtime_commits(
     expected = {record.relpath: record.commit for record in records}
     if dry_run:
         return expected
-    lines = ['set -eo pipefail']
-    for relpath in expected:
-        repo_dir = runtime_root if relpath in ('', '.') else str(Path(runtime_root) / relpath)
-        lines.append(f"printf '%s %s\\n' {quoted(relpath)} \"$(git -C {quoted(repo_dir)} rev-parse HEAD)\"")
-    result = ssh_exec(container, '\n'.join(lines))
-    observed: dict[str, str] = {}
-    for line in result.stdout.splitlines():
-        relpath, commit = line.split(maxsplit=1)
-        observed[relpath] = commit
-    return observed
+    return verify_runtime_commits_map(container=container, runtime_root=runtime_root, expected=expected)
+
+
+def workspace_fingerprint(workspace_root: Path, source_roots: dict[str, Path] | None = None) -> str:
+    """Hash dirty content, not just the names/status of dirty files.
+
+    A second edit of an already modified file has identical porcelain status.
+    Hash tracked diffs and untracked bytes so it cannot disappear in the fast
+    path. Prefix the format to invalidate the old status-only cache.
+    """
+    tree = discover_repo_tree(workspace_root, '.', None, source_roots)
+    hasher = hashlib.sha256()
+    for node in iter_postorder(tree):
+        repo = node.repo_path
+        head = git_head(repo) or ''
+        dirty = git(repo, ['diff', '--binary', '--no-ext-diff', 'HEAD', '--']).stdout if head else ''
+        for token in (node.relpath, head, dirty):
+            hasher.update(token.encode('utf-8'))
+            hasher.update(b'\0')
+        untracked = git(repo, ['ls-files', '--others', '--exclude-standard', '-z']).stdout
+        for relpath in sorted(filter(None, untracked.split('\0'))):
+            path = repo / relpath
+            hasher.update(relpath.encode('utf-8') + b'\0')
+            hasher.update(str(path.lstat().st_mode).encode('ascii') + b'\0')
+            if path.is_symlink():
+                hasher.update(os.readlink(path).encode('utf-8'))
+            else:
+                with path.open('rb') as handle:
+                    for chunk in iter(lambda: handle.read(1024 * 1024), b''):
+                        hasher.update(chunk)
+            hasher.update(b'\0')
+    build_env = {key: os.environ[key] for key in BUILD_INPUT_ENV_KEYS if key in os.environ}
+    hasher.update(json.dumps(build_env, sort_keys=True).encode('utf-8'))
+    return 'content-v2:' + hasher.hexdigest()
+
+
+def changed_build_inputs(current: dict[str, str], installed: dict[str, str] | None) -> tuple[bool, bool]:
+    if not installed:
+        return True, True  # One conservative rebuild migrates legacy state.
+    dependencies = current.get('dependencies') != installed.get('dependencies')
+    native = dependencies or any(current.get(key) != installed.get(key) for key in ('native', 'build_env'))
+    return native, dependencies
 
 
 def read_runtime_install_env(
@@ -1388,6 +1566,7 @@ def update_runtime_state(
             'first_reinstall_completed': first_reinstall_completed,
             'last_snapshot_commits': {record.relpath: record.commit for record in records},
             'last_head_commits': {record.relpath: record.source_head for record in records},
+            'installed_build_inputs': {record.relpath: record.build_inputs for record in records if record.build_inputs},
             'last_runtime_install_env': runtime_install_env or {},
         }
 
@@ -1450,6 +1629,7 @@ def summary_payload(
         'container_cache_root': container_cache_root,
         'first_install': first_install,
         'snapshot_commits': {record.relpath: record.commit for record in records},
+        'build_inputs': {record.relpath: record.build_inputs for record in records if record.build_inputs},
         'runtime_commits': observed_runtime_commits,
         'reinstall': reinstall_status,
         'runtime_install_env': runtime_install_env or {},
@@ -1457,8 +1637,24 @@ def summary_payload(
     }
 
 
-def build_snapshot_records(workspace_root: Path, workspace_id: str, snapshot_id: str, denylist: tuple[str, ...]) -> list[SnapshotRecord]:
-    tree = discover_repo_tree(workspace_root, '.', None)
+def record_source(workspace_root: Path, record: SnapshotRecord) -> Path:
+    return Path(record.source_path) if record.source_path else workspace_root / record.relpath
+
+
+def parse_sources(values: list[str]) -> dict[str, Path]:
+    sources = {}
+    for value in values:
+        name, separator, path = value.partition('=')
+        if not separator or name not in ('vllm', 'vllm-ascend') or name in sources:
+            raise ValueError('--source must be a unique vllm=/actual/worktree or vllm-ascend=/actual/worktree')
+        candidate = Path(path).expanduser().resolve()
+        ensure_populated_worktree(candidate, name)
+        sources[name] = candidate
+    return sources
+
+
+def build_snapshot_records(workspace_root: Path, workspace_id: str, snapshot_id: str, denylist: tuple[str, ...], source_roots: dict[str, Path] | None = None) -> list[SnapshotRecord]:
+    tree = discover_repo_tree(workspace_root, '.', None, source_roots)
     child_records: dict[str, SnapshotRecord] = {}
     ordered_records: list[SnapshotRecord] = []
     for node in iter_postorder(tree):
@@ -1470,7 +1666,12 @@ def build_snapshot_records(workspace_root: Path, workspace_id: str, snapshot_id:
             child_commits=child_records,
         )
         child_records[node.relpath] = record
+        record.source_path = str(node.repo_path.resolve())
         ordered_records.append(record)
+    for record in ordered_records:
+        if record.relpath in ('vllm', 'vllm-ascend'):
+            patterns = VLLM_REINSTALL_PATTERNS if record.relpath == 'vllm' else VLLM_ASCEND_REINSTALL_PATTERNS
+            record.build_inputs = build_input_fingerprints(record_source(workspace_root, record), record.commit, patterns)
     return ordered_records
 
 
@@ -1491,7 +1692,7 @@ def run_plan(args: argparse.Namespace) -> int:
     marker_dirname = validate_relative_posix_path(args.marker_dirname, label='marker dirname')
     root_preserve_paths = resolved_root_preserve_paths(marker_dirname, args.preserve_path)
     snapshot_id = args.snapshot_id or now_utc().replace(':', '').replace('-', '')
-    records = build_snapshot_records(workspace_root, workspace_id, snapshot_id, tuple(DEFAULT_DENYLIST))
+    records = build_snapshot_records(workspace_root, workspace_id, snapshot_id, tuple(DEFAULT_DENYLIST), parse_sources(getattr(args, 'source', [])))
     try:
         manifest = make_manifest(
             workspace_root=workspace_root,
@@ -1522,19 +1723,12 @@ def run_sync(args: argparse.Namespace) -> int:
     container = SshEndpoint(host=args.container_host, port=args.container_port, user=args.container_user)
 
     emit_progress('snapshot-build', workspace_id=workspace_id, snapshot_id=snapshot_id)
-    records = build_snapshot_records(workspace_root, workspace_id, snapshot_id, tuple(DEFAULT_DENYLIST))
+    records = build_snapshot_records(workspace_root, workspace_id, snapshot_id, tuple(DEFAULT_DENYLIST), parse_sources(getattr(args, 'source', [])))
     manifest_path = manifest_path_for(container_cache_root, workspace_id, snapshot_id)
     current_phase = 'snapshot-built'
     try:
         try:
             record_map = {record.relpath: record for record in records}
-            reinstall_vllm = reinstall_required_for_repo(record_map['vllm'], VLLM_REINSTALL_PATTERNS) if 'vllm' in record_map else False
-            reinstall_vllm_ascend = reinstall_required_for_repo(record_map['vllm-ascend'], VLLM_ASCEND_REINSTALL_PATTERNS) if 'vllm-ascend' in record_map else False
-            vllm_dependency_changed = dependency_install_required_for_repo(record_map['vllm']) if 'vllm' in record_map else False
-            vllm_ascend_dependency_changed = dependency_install_required_for_repo(record_map['vllm-ascend']) if 'vllm-ascend' in record_map else False
-            vllm_head_drift = False
-            vllm_ascend_head_drift = False
-
             prior_runtime_state = load_runtime_state(workspace_root)
             last_container_state = (
                 prior_runtime_state
@@ -1544,13 +1738,14 @@ def run_sync(args: argparse.Namespace) -> int:
                 .get(args.container_identity, {})
             )
             last_commits = last_container_state.get('last_snapshot_commits', {})
-            last_head_commits = last_container_state.get('last_head_commits', {})
-            if 'vllm' in record_map and last_head_commits.get('vllm') and record_map['vllm'].source_head != last_head_commits['vllm']:
-                vllm_head_drift = True
-                reinstall_vllm = True
-            if 'vllm-ascend' in record_map and last_head_commits.get('vllm-ascend') and record_map['vllm-ascend'].source_head != last_head_commits['vllm-ascend']:
-                vllm_ascend_head_drift = True
-                reinstall_vllm_ascend = True
+            installed_inputs = last_container_state.get('installed_build_inputs', {})
+
+            def changes(relpath: str) -> tuple[bool, bool]:
+                record = record_map.get(relpath)
+                return changed_build_inputs(record.build_inputs, installed_inputs.get(relpath)) if record else (False, False)
+
+            reinstall_vllm, vllm_dependency_changed = changes('vllm')
+            reinstall_vllm_ascend, vllm_ascend_dependency_changed = changes('vllm-ascend')
             if reinstall_vllm and 'vllm-ascend' in record_map:
                 reinstall_vllm_ascend = True
 
@@ -1559,9 +1754,45 @@ def run_sync(args: argparse.Namespace) -> int:
                     reinstall_vllm = True
                 if 'vllm-ascend' in record_map:
                     reinstall_vllm_ascend = True
-            install_vllm_ascend_deps = vllm_ascend_dependency_changed or vllm_ascend_head_drift
+            install_vllm_ascend_deps = vllm_ascend_dependency_changed or vllm_dependency_changed
 
             snapshot_commits = {record.relpath: record.commit for record in records}
+
+            if (
+                args.apply_mode in ('auto', 'install') and not args.dry_run
+                and not args.force_reinstall and not reinstall_vllm and not reinstall_vllm_ascend
+                and snapshot_commits == last_commits and last_container_state.get('first_reinstall_completed')
+            ):
+                marker = read_runtime_install_marker(container=container, runtime_root=runtime_root, marker_dirname=marker_dirname)
+                if not first_install_needed(marker, args.container_identity, runtime_root):
+                    observed = verify_runtime_commits_map(container=container, runtime_root=runtime_root, expected=snapshot_commits)
+                    if observed == snapshot_commits:
+                        summary = summary_payload(status='ready', server_name=args.server_name, container_identity=args.container_identity, workspace_id=workspace_id, container_cache_root=container_cache_root, records=records, reinstall_status='not-needed', reason='snapshot and installed build inputs unchanged', first_install=False, runtime_install_env=last_container_state.get('last_runtime_install_env', {}), observed_runtime_commits=observed)
+                        summary['fast_path'] = 'snapshot'
+                        print(json_dump(summary))
+                        return 0
+
+            auto_selected_materialize = False
+            if args.apply_mode == 'auto':
+                needs_install = args.force_reinstall or reinstall_vllm or reinstall_vllm_ascend or install_vllm_ascend_deps
+                if not needs_install and not args.dry_run:
+                    current_phase = 'auto-apply-mode'
+                    marker = read_runtime_install_marker(
+                        container=container,
+                        runtime_root=runtime_root,
+                        marker_dirname=marker_dirname,
+                    )
+                    needs_install = first_install_needed(marker, args.container_identity, runtime_root)
+                args.apply_mode = 'install' if needs_install else 'materialize'
+                auto_selected_materialize = args.apply_mode == 'materialize'
+                emit_progress(
+                    'auto-apply-mode',
+                    selected=args.apply_mode,
+                    reinstall_vllm=reinstall_vllm,
+                    reinstall_vllm_ascend=reinstall_vllm_ascend,
+                    dependency_install=install_vllm_ascend_deps,
+                )
+
             if args.apply_mode in {'source-only', 'materialize'}:
                 runtime_install_env: dict[str, str] = {}
                 manifest = make_manifest(
@@ -1613,7 +1844,7 @@ def run_sync(args: argparse.Namespace) -> int:
                     for record in records:
                         emit_progress('push-mirror', relpath=record.relpath, transport=args.transport)
                         transfer = push_snapshot_to_mirror(
-                            repo=workspace_root if record.relpath in ('', '.') else workspace_root / record.relpath,
+                            repo=record_source(workspace_root, record),
                             container=container,
                             mirror_path=mirror_path_for(container_cache_root, workspace_id, record),
                             container_cache_root=container_cache_root,
@@ -1685,6 +1916,23 @@ def run_sync(args: argparse.Namespace) -> int:
                             print(json_dump(summary))
                             return 1
                         status = 'materialized'
+                        if auto_selected_materialize:
+                            # Auto mode proved no native/dependency changes, so
+                            # recording this snapshot keeps future runs on the
+                            # fingerprint fast path without hiding install needs.
+                            current_phase = 'update-local-state'
+                            emit_progress(current_phase, server_name=args.server_name)
+                            update_runtime_state(
+                                repo_root=workspace_root,
+                                server_name=args.server_name,
+                                container_identity=args.container_identity,
+                                runtime_root=runtime_root,
+                                container_cache_root=container_cache_root,
+                                marker_dirname=marker_dirname,
+                                records=records,
+                                first_reinstall_completed=last_container_state.get('first_reinstall_completed', False),
+                                runtime_install_env=last_container_state.get('last_runtime_install_env', {}),
+                            )
 
                     current_phase = 'finalize-manifest'
                     emit_progress(current_phase, manifest_path=manifest_path, apply_mode=args.apply_mode)
@@ -1722,46 +1970,12 @@ def run_sync(args: argparse.Namespace) -> int:
                     emit_progress('release-lock', lock_path=lock_path)
                     release_container_lock(container, lock_path, args.dry_run)
 
-            if (
-                not args.dry_run
-                and not reinstall_vllm
-                and not reinstall_vllm_ascend
-                and last_commits
-                and snapshot_commits == last_commits
-            ):
-                current_phase = 'fast-path-verify'
-                emit_progress(current_phase, snapshot_commits=snapshot_commits)
-                observed = verify_runtime_commits(
-                    container=container,
-                    runtime_root=runtime_root,
-                    records=records,
-                    dry_run=False,
-                )
-                if observed == snapshot_commits:
-                    emit_progress('complete', status='ready', fast_path=True)
-                    summary = summary_payload(
-                        status='ready',
-                        server_name=args.server_name,
-                        container_identity=args.container_identity,
-                        workspace_id=workspace_id,
-                        container_cache_root=container_cache_root,
-                        records=records,
-                        reinstall_status='not-needed',
-                        reason=None,
-                        first_install=False,
-                        runtime_install_env=last_container_state.get('last_runtime_install_env', {}),
-                        observed_runtime_commits=observed,
-                    )
-                    print(json_dump(summary))
-                    return 0
-
             current_phase = 'read-runtime-marker'
             emit_progress(current_phase, runtime_root=runtime_root)
             marker = read_runtime_install_marker(
                 container=container,
                 runtime_root=runtime_root,
                 marker_dirname=marker_dirname,
-                dry_run=args.dry_run,
             )
             first_install = first_install_needed(marker, args.container_identity, runtime_root)
             if first_install:
@@ -1844,7 +2058,7 @@ def run_sync(args: argparse.Namespace) -> int:
                 for record in records:
                     emit_progress('push-mirror', relpath=record.relpath, transport=args.transport)
                     transfer = push_snapshot_to_mirror(
-                        repo=workspace_root if record.relpath in ('', '.') else workspace_root / record.relpath,
+                        repo=record_source(workspace_root, record),
                         container=container,
                         mirror_path=mirror_path_for(container_cache_root, workspace_id, record),
                         container_cache_root=container_cache_root,
@@ -1915,6 +2129,15 @@ def run_sync(args: argparse.Namespace) -> int:
                             stream_progress=True,
                         )
                     if reinstall_vllm_ascend:
+                        emit_progress('runtime-install-check-build-compat')
+                        run_runtime_install_step(
+                            container=container,
+                            runtime_root=runtime_root,
+                            marker_dirname=marker_dirname,
+                            container_identity=args.container_identity,
+                            step='check-build-compat',
+                            stream_progress=True,
+                        )
                         if install_vllm_ascend_deps:
                             emit_progress('runtime-install-vllm-ascend-requirements', requirements='requirements.txt')
                             run_runtime_install_step(
@@ -2064,6 +2287,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     def add_shared_arguments(target: argparse.ArgumentParser) -> None:
         target.add_argument('--workspace-root', required=True, help='Local workspace root.')
+        target.add_argument('--source', action='append', default=[], help='Use an actual external business worktree: vllm=/path or vllm-ascend=/path.')
         target.add_argument('--workspace-id', required=True, help='Stable workspace id used for container cache namespacing.')
         target.add_argument('--server-name', required=True)
         target.add_argument('--runtime-root', required=True)
@@ -2093,9 +2317,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sync.add_argument(
         '--apply-mode',
-        choices=('source-only', 'materialize', 'install'),
-        default='install',
-        help='source-only publishes snapshots only; materialize updates runtime sources without install/rebuild; install keeps full parity behavior.',
+        choices=('auto', 'source-only', 'materialize', 'install'),
+        default='auto',
+        help='auto picks materialize for pure-Python changes and install only when native/dependency files changed (or first install); source-only publishes snapshots only; materialize updates runtime sources without install/rebuild; install forces the full parity behavior.',
     )
 
     return parser

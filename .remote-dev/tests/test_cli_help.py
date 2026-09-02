@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -17,12 +19,22 @@ from mcp.schemas import TOOL_SCHEMAS  # noqa: E402
 class CliHelpTests(unittest.TestCase):
     def test_cli_wrappers_have_help(self) -> None:
         scripts = sorted((ROOT / ".remote-dev" / "tools").glob("remote_*.py"))
-        expected_scripts = {ROOT / ".remote-dev" / "tools" / (name.replace(".", "_") + ".py") for name in TOOL_SCHEMAS}
+        expected_scripts = {ROOT / ".remote-dev" / "tools" / (name.replace(".", "_") + ".py")
+                            for name in TOOL_SCHEMAS if name.startswith("remote.")}
         self.assertEqual(set(scripts), expected_scripts)
         for script_path in scripts:
             script = str(script_path.relative_to(ROOT))
             with self.subTest(script=script):
                 proc = subprocess.run([sys.executable, str(script_path), "--help"], capture_output=True, text=True, check=False)
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                self.assertIn("usage:", proc.stdout)
+
+    def test_task_facade_uses_one_cli_without_endpoint_or_network_requirements(self):
+        script = ROOT / ".agents/scripts/vaws.py"
+        for args in (["--help"], ["attach", "--help"], ["session", "--help"],
+                     ["run", "--help"], ["execution", "--help"], ["finish", "--help"]):
+            with self.subTest(args=args):
+                proc = subprocess.run([sys.executable, str(script), *args], capture_output=True, text=True, check=False)
                 self.assertEqual(proc.returncode, 0, proc.stderr)
                 self.assertIn("usage:", proc.stdout)
 
@@ -35,6 +47,32 @@ class CliHelpTests(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
 
+    def test_claude_skill_shim_check_reports_unexpected_files(self) -> None:
+        spec = importlib.util.spec_from_file_location(
+            "sync_claude_skills", ROOT / ".remote-dev" / "tools" / "sync_claude_skills.py"
+        )
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            source_dir = tmp_path / "agents-skills" / "demo-skill"
+            source_dir.mkdir(parents=True)
+            (source_dir / "SKILL.md").write_text(
+                "---\nname: demo-skill\ndescription: Demo skill.\n---\n\n# Demo\n",
+                encoding="utf-8",
+            )
+            shim_dir = tmp_path / "claude-skills" / "demo-skill"
+            shim_dir.mkdir(parents=True)
+            module.AGENTS_SKILLS = tmp_path / "agents-skills"
+            module.CLAUDE_SKILLS = tmp_path / "claude-skills"
+            (shim_dir / "SKILL.md").write_text(module.expected_skill_body(source_dir), encoding="utf-8")
+            self.assertEqual(module.check_shims(), [])
+            (shim_dir / "legacy-notes.md").write_text("stale\n", encoding="utf-8")
+            self.assertEqual(
+                module.check_shims(),
+                ["unexpected file in Claude skill shim demo-skill: legacy-notes.md"],
+            )
+
     def test_claude_skills_are_lightweight_shims(self) -> None:
         for source in sorted((ROOT / ".agents" / "skills").glob("*/SKILL.md")):
             target = ROOT / ".claude" / "skills" / source.parent.name / "SKILL.md"
@@ -44,6 +82,38 @@ class CliHelpTests(unittest.TestCase):
                 self.assertIn(f"`.agents/skills/{source.parent.name}/SKILL.md`", body)
                 self.assertLessEqual(len(body.splitlines()), 60)
                 self.assertNotEqual(body, source.read_text(encoding="utf-8"))
+
+    def test_vaws_ops_import_defers_agents_lib_dependency(self) -> None:
+        # A standalone remote-dev deployment has no .agents/lib; importing the
+        # module must not require it or touch that path at import time.
+        code = (
+            "import sys; sys.path.insert(0, r'%s'); import core.vaws_ops; "
+            "print(any('.agents' in path for path in sys.path))" % REMOTE_DEV
+        )
+        proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=False)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(proc.stdout.strip(), "False")
+
+    def test_json_arguments_are_not_overridden_by_argparse_defaults(self) -> None:
+        code = """
+import importlib.util, json, sys
+from unittest import mock
+spec = importlib.util.spec_from_file_location("vaws_cli", r"%s")
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+captured = {}
+def fake(name, args):
+    captured.update(args)
+    return {"result": {"outcome": "success"}}
+argv = ["vaws.py", "execution", "--execution-id", "e1", "--json", json.dumps({"action": "stop"})]
+with mock.patch.object(module, "vaws_call", side_effect=fake), mock.patch.object(sys, "argv", argv):
+    module.main()
+print(json.dumps(captured))
+""" % (ROOT / ".agents/scripts/vaws.py")
+        proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=False)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        merged = json.loads(proc.stdout.strip().splitlines()[-1])
+        self.assertEqual(merged["action"], "stop")
 
     def test_cli_errors_return_result_contract_without_traceback(self) -> None:
         proc = subprocess.run(
@@ -63,6 +133,46 @@ class CliHelpTests(unittest.TestCase):
         self.assertEqual(payload["result"]["schema_version"], "remote-dev.result.v1")
         self.assertEqual(payload["result"]["tool"], "remote.job_status")
         self.assertEqual(payload["result"]["outcome"], "needs_input")
+
+    def test_vaws_cli_bad_json_returns_result_contract_without_traceback(self) -> None:
+        proc = subprocess.run(
+            [sys.executable, str(ROOT / ".agents/scripts/vaws.py"), "session", "--json", "{not json"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertNotIn("Traceback", proc.stdout + proc.stderr)
+        payload = json.loads(proc.stdout)
+        self.assertEqual(payload["result"]["schema_version"], "remote-dev.result.v1")
+        self.assertEqual(payload["result"]["tool"], "vaws.session")
+        self.assertEqual(payload["result"]["status"], "invalid_json")
+        self.assertEqual(payload["result"]["outcome"], "needs_input")
+
+    def test_vaws_cli_attach_error_returns_result_contract_without_traceback(self) -> None:
+        proc = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / ".agents/scripts/vaws.py"),
+                "attach",
+                "--client",
+                "kimi",
+                "--native-session-id",
+                "native-test",
+                "--parent-context",
+                "/nonexistent/vaws-agent-context.json",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertNotIn("Traceback", proc.stdout + proc.stderr)
+        payload = json.loads(proc.stdout)
+        self.assertEqual(payload["result"]["schema_version"], "remote-dev.result.v1")
+        self.assertEqual(payload["result"]["tool"], "vaws.attach")
+        self.assertEqual(payload["result"]["status"], "attach_failed")
+        self.assertEqual(payload["result"]["outcome"], "failed")
 
 
 if __name__ == "__main__":

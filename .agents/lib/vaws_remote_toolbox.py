@@ -30,8 +30,6 @@ from pathlib import Path, PurePosixPath
 from typing import Any, BinaryIO, Iterable, Sequence
 
 from vaws_local_state import (  # noqa: E402
-    INVENTORY_PATH,
-    LEGACY_INVENTORY_PATH,
     ROOT,
     WorkspaceStateError,
     ensure_state_dir,
@@ -39,6 +37,7 @@ from vaws_local_state import (  # noqa: E402
     shared_inventory_path,
     utc_now_iso,
 )
+from vaws_ssh import base_ssh_options  # noqa: E402
 from vaws_session_state import (  # noqa: E402
     load_leases,
     load_session_lookup,
@@ -161,9 +160,7 @@ class RemoteTarget:
                 session_serving_state_path(self.session_id, self.state_repo_root)
             )
         else:
-            state_paths["serving_state"] = str(
-                self.state_repo_root / ".vaws-local" / "serving" / f"{self.alias}.json"
-            )
+            state_paths["serving_state"] = None
         return {
             "mode": self.mode,
             "alias": self.alias,
@@ -260,12 +257,10 @@ def _load_inventory(repo_root: Path = ROOT) -> tuple[dict[str, Any], Path]:
     preferred = shared_inventory_path(repo_root)
     path = resolve_inventory_read_path(preferred, repo_root=repo_root)
     if not path.exists():
-        if INVENTORY_PATH.exists():
-            path = INVENTORY_PATH
-        elif LEGACY_INVENTORY_PATH.exists():
-            path = LEGACY_INVENTORY_PATH
-        else:
-            return {"schema_version": 1, "machines": []}, path
+        raise RemoteToolboxError(
+            f"machine inventory not found at {preferred}; register the machine first "
+            "with machine-management/scripts/machine_add.py"
+        )
     return _load_json(path), path
 
 
@@ -317,7 +312,9 @@ def resolve_remote_target(
     repo_root = repo_root.expanduser().resolve()
     if machine and (session_id or session_file):
         raise RemoteToolboxError("use exactly one target surface: --machine or --session-id/--session-file")
-    if session_id or session_file:
+    if not machine:
+        # Session is the default target surface. With no explicit id/file the
+        # lookup auto-binds via the nearest worktree binding (cwd upward).
         lookup = load_session_lookup(
             session_id=session_id,
             session_file=session_file,
@@ -352,8 +349,6 @@ def resolve_remote_target(
             leased_devices=[int(item) for item in session.get("leases", {}).get("npu_devices", [])],
         )
 
-    if not machine:
-        raise RemoteToolboxError("--machine is required unless --session-id or --session-file is used")
     record, _ = _find_machine_record(machine, repo_root)
     container = record["container"]
     runtime_root = container.get("runtime_root") or container.get("workdir") or "/vllm-workspace"
@@ -376,14 +371,12 @@ def resolve_remote_target(
 
 
 def _ssh_base_cmd(endpoint: SshEndpoint) -> list[str]:
+    # Always bound the TCP connect phase: without it a dead host can hang an
+    # SSH command for minutes (kernel default) when no subprocess timeout is
+    # passed. Established connections are unaffected by ConnectTimeout.
     return [
         "ssh",
-        "-o",
-        "BatchMode=yes",
-        "-o",
-        "StrictHostKeyChecking=accept-new",
-        "-o",
-        "LogLevel=ERROR",
+        *base_ssh_options(connect_timeout=15),
         "-p",
         str(endpoint.port),
         endpoint.destination(),
@@ -440,39 +433,6 @@ def _runtime_env_lines(enabled: bool) -> list[str]:
     ]
 
 
-def _probe_effective_environment(
-    target: RemoteTarget,
-    *,
-    cwd: str,
-    env: dict[str, str],
-    runtime_env: bool,
-) -> dict[str, Any]:
-    script = "\n".join(
-        [
-            "set +e",
-            *_runtime_env_lines(runtime_env),
-            *_remote_env_exports(env),
-            f"cd {shlex.quote(cwd)} 2>/dev/null || true",
-            "PYTHON=$(command -v python3 2>/dev/null || command -v python 2>/dev/null || true)",
-            "if [ -z \"$PYTHON\" ]; then printf '%s\\n' '{\"status\":\"ok\",\"python\":{\"available\":false}}'; exit 0; fi",
-            "\"$PYTHON\" - <<'PY'",
-            "import json, os, sys",
-            "print(json.dumps({",
-            "  'status': 'ok',",
-            "  'cwd': os.getcwd(),",
-            "  'python': {'available': True, 'executable': sys.executable, 'version': sys.version.split()[0]},",
-            "  'ascend_home': os.environ.get('ASCEND_HOME_PATH'),",
-            "}, sort_keys=True))",
-            "PY",
-        ]
-    )
-    try:
-        payload = _remote_json(target.container_endpoint, script, timeout=20)
-    except Exception as exc:  # noqa: BLE001
-        return {"status": "failed", "error": str(exc)}
-    return payload
-
-
 def remote_exec(
     target: RemoteTarget,
     *,
@@ -512,12 +472,6 @@ def remote_exec(
         stdout = _decode_timeout_stream(exc.stdout)
         stderr = _decode_timeout_stream(exc.stderr)
         status = "timeout"
-    effective_environment = _probe_effective_environment(
-        target,
-        cwd=cwd,
-        env=env,
-        runtime_env=runtime_env,
-    )
     stdout_path = log_dir / "stdout.log"
     stderr_path = log_dir / "stderr.log"
     meta_path = log_dir / "meta.json"
@@ -537,7 +491,6 @@ def remote_exec(
             "runtime_env": runtime_env,
             "env_keys": sorted(env),
             "timeout_seconds": timeout,
-            "effective": effective_environment,
         },
         "stdout_tail": tail_text(stdout),
         "stderr_tail": tail_text(stderr),
@@ -760,10 +713,12 @@ PY
 
 
 def _load_serving_state_for_target(target: RemoteTarget) -> tuple[dict[str, Any] | None, Path]:
-    if target.session_id:
-        path = session_serving_state_path(target.session_id, target.state_repo_root)
-    else:
-        path = target.state_repo_root / ".vaws-local" / "serving" / f"{target.alias}.json"
+    if not target.session_id:
+        raise RemoteToolboxError(
+            "serving state is session-scoped; resolve the target through a session "
+            "(--session-id/--session-file or a bound worktree)"
+        )
+    path = session_serving_state_path(target.session_id, target.state_repo_root)
     if not path.exists():
         return None, path
     try:
@@ -773,6 +728,8 @@ def _load_serving_state_for_target(target: RemoteTarget) -> tuple[dict[str, Any]
 
 
 def probe_service_state(target: RemoteTarget) -> dict[str, Any]:
+    if not target.session_id:
+        return {"state_path": None, "recorded": False, "note": "serving state is session-scoped"}
     state, path = _load_serving_state_for_target(target)
     payload: dict[str, Any] = {"state_path": str(path), "recorded": state is not None}
     if not state:
@@ -1579,7 +1536,7 @@ def sync_plan(target: RemoteTarget, *, mode: str, force_reinstall: bool = False)
         reasons = _repo_install_reasons(repo)
         if reasons:
             install_reasons[repo.get("relpath", ".")] = reasons
-    will_install = mode == "install" and (
+    will_install = mode in {"install", "auto"} and (
         force_reinstall or bool(install_reasons) or consent.get("decision") != "allow"
     )
     if mode == "source-only":
@@ -1590,6 +1547,12 @@ def sync_plan(target: RemoteTarget, *, mode: str, force_reinstall: bool = False)
         action = "publish snapshot and materialize runtime source tree without install/rebuild"
         will_materialize = True
         will_install = False
+    elif mode == "auto":
+        action = (
+            "auto-tier: materialize for pure-Python changes, install only when "
+            "native/dependency files changed or first install"
+        )
+        will_materialize = True
     else:
         action = "publish snapshot, materialize runtime source tree, and run install/rebuild when required"
         will_materialize = True
@@ -1680,13 +1643,16 @@ def call_service(action: str, target: RemoteTarget, extra_args: list[str]) -> di
     }
     if action not in script_map:
         raise RemoteToolboxError(f"unsupported service action: {action}")
+    if not target.session_id:
+        raise RemoteToolboxError(
+            "service operations require a session target; create one with "
+            "session-management/scripts/session_create.py and pass --session-id"
+        )
     cmd = [sys.executable, str(script_map[action])]
     if target.session_file:
         cmd.extend(["--session-file", str(target.session_file)])
-    elif target.session_id:
-        cmd.extend(["--session-id", target.session_id])
     else:
-        cmd.extend(["--machine", target.alias])
+        cmd.extend(["--session-id", target.session_id])
     cmd.extend(extra_args)
     rc, payload, stdout, stderr = _run_json_command(cmd, relay_stderr=True)
     status = payload.get("status", "failed")
@@ -1943,7 +1909,10 @@ def cli_exec(argv: Sequence[str] | None = None) -> int:
             command_args = list(args.command_args)
             if command_args and command_args[0] == "--":
                 command_args = command_args[1:]
-            command = " ".join(command_args)
+            # Re-quote each argv token: a plain " ".join would flatten
+            # `-- bash -c 'a && b'` into `bash -c a && b`, silently changing
+            # what runs on the remote side.
+            command = shlex.join(command_args)
         if not command:
             raise RemoteToolboxError("--command or command after -- is required")
         env = _parse_env_items(args.env)
@@ -2067,7 +2036,7 @@ def cli_job_collect(argv: Sequence[str] | None = None) -> int:
 def cli_sync_plan(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Plan remote code sync without mutating runtime.", allow_abbrev=False)
     add_target_args(parser)
-    parser.add_argument("--mode", choices=("source-only", "materialize", "install"), required=True)
+    parser.add_argument("--mode", choices=("auto", "source-only", "materialize", "install"), default="auto")
     parser.add_argument("--force-reinstall", action="store_true")
     args = parser.parse_args(argv)
     started_at = now_iso()
@@ -2082,7 +2051,7 @@ def cli_sync_plan(argv: Sequence[str] | None = None) -> int:
 def cli_sync_apply(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Apply remote code sync in a selected mode.", allow_abbrev=False)
     add_target_args(parser)
-    parser.add_argument("--mode", choices=("source-only", "materialize", "install"), required=True)
+    parser.add_argument("--mode", choices=("auto", "source-only", "materialize", "install"), default="auto")
     parser.add_argument("--force-reinstall", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)

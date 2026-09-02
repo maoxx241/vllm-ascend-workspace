@@ -84,7 +84,7 @@ interactive calls should use the client's confirmation flow.
 - Path containment, symlink checks, read ledgers, patch atomicity, and SSH
   execution behavior are unchanged. No client-specific schema fork is needed.
 
-## Verification, 2026-08-27
+## Transport/MCP compatibility verification (pre-lifecycle), 2026-08-27
 
 PR #64 code/config revision `1f93400` was exercised from the VAWS checkout. Each
 model performed four sequential MCP calls in a newly created remote scratch
@@ -92,6 +92,12 @@ directory: patch a new file, read it, replace its content with `remote_multi_edi
 and read it again. Final content and SHA256 were independently checked remotely.
 A successful process exit or a server listed as connected does not count as a
 passing test.
+
+This section is the earlier remote-dev transport/schema contract evidence. Its
+four-call rows do not establish the later native-session lifecycle. In
+particular, a Kimi fallback call, a Cursor IDE result, or a client that still
+needs native hook/workspace/MCP approval must not be reported as a native
+lifecycle pass.
 
 | Client / model | Version | Four-call result |
 | --- | --- | --- |

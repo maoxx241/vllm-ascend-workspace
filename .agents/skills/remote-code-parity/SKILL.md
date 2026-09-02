@@ -7,6 +7,25 @@ description: Ensure a ready remote runtime runs the exact current local workspac
 
 Keep a **ready** remote runtime in exact code parity with the local `vllm-ascend-workspace` checkout.
 
+External business worktrees can be selected with repeatable
+`--source vllm=/actual/worktree --source vllm-ascend=/actual/worktree` on
+`parity_sync.py` or the low-level helper. Snapshots come from those exact
+worktrees without resetting them or maintaining copied branches.
+
+The opt-in [ready-runtime coordinator](../../coordinator/README.md) uses
+`--apply-mode materialize` for a compatible warm runtime, not a legacy first
+install. Its execution gate verifies source/build identity and complete native
+artifacts before allocating cards. `parity_watch.py` continuously publishes
+content changes with `source-only`; it never modifies running source or builds.
+Only materialize after all executions on that binding have been released.
+The watcher alone is not execution parity or model readiness.
+
+The task-facing `vaws_run` tool performs the materialize step automatically
+from its bound actual business worktrees before queueing the managed job.
+Retrying an uncertain launch uses the same execution id and pinned snapshot;
+it must not synchronize underneath a possibly running service. Stop/finish
+that execution before starting another code revision.
+
 ## Use this skill when
 
 - a remote smoke, service launch, or benchmark is about to start
@@ -16,6 +35,7 @@ Keep a **ready** remote runtime in exact code parity with the local `vllm-ascend
 
 ## Do not use this skill when
 
+- the task is ad-hoc remote verification (run one command, read a log, check remote state) with no dependency on local code changes — use `.remote-dev` `remote.bash` / `remote.read` directly; parity is never a prerequisite for that
 - the main task is adding or repairing a machine, SSH, or container bootstrap
 - the task is generic fork / remote topology setup
 - the task is ordinary local coding with no remote execution
@@ -29,7 +49,7 @@ Keep a **ready** remote runtime in exact code parity with the local `vllm-ascend
 - Do **not** use `scp`, `sftp`, `rsync`, `sshpass`, or `expect`.
 - Do **not** require GitHub credentials on the host or in the container.
 - Keep the sync path **container-only** after machine attach: no host storage root, no host mirror, no host lock.
-- For parallel agent work, use `parity_sync.py --session-id <id>`. Session mode derives the workspace root, container endpoint, workspace id, and container identity from `.vaws-local/sessions/<id>/session.json`.
+- Session is the default target surface. With no target arg, `parity_sync.py` auto-binds from the current worktree's `.vaws-local/current-session.json` binding; `--session-id <id>` / `--session-file <path>` are explicit alternatives. Session mode derives the workspace root, container endpoint, workspace id, and container identity from `.vaws-local/sessions/<id>/session.json`. `--machine <alias>` remains available as a legacy single-tenant machine surface.
 - Use synthetic snapshot refs so dirty working trees can move through Git transport.
 - Keep container cache / lock / manifest paths isolated by `workspace_id` under a container-local cache root.
 - Preserve runtime-private paths under `/vllm-workspace`, in particular `Mooncake/` (image-provided runtime) and `.vaws-runtime/` (workspace-managed runtime artifacts such as profiler dumps consumed by downstream skills). The exact list lives in `DEFAULT_ROOT_PRESERVE_PATHS` in `scripts/remote_code_parity.py`.
@@ -45,7 +65,8 @@ Keep a **ready** remote runtime in exact code parity with the local `vllm-ascend
   over the same trees; this gives receive-pack a common ancestor without making
   snapshot ids target-dependent or pulling upstream history into first sync.
 - Materialize child repos explicitly; do not rely on `git submodule update` to fetch synthetic child commits.
-- Synthetic commits are deterministic parentless tree snapshots. Keep each repo's real `HEAD` separately as `source_head` for reinstall drift detection instead of using it as the transport parent.
+- Synthetic commits are deterministic parentless tree snapshots. Keep the real `HEAD` as provenance and compare native/dependency input fingerprints with the last installed inputs; commit movement alone is not a rebuild reason.
+- Native submodules are fingerprinted recursively by file content, not their task-specific synthetic commit ids. Missing or unpopulated native dependencies cannot establish a cache hit.
 - If a clean child repo only differs from the parent through the parentless transport commit id, suppress that transport-only child gitlink path from the parent repo's `changed_paths`.
 - Use dynamic Python / pip discovery plus a shell-safe env preamble, and source optional Ascend env scripts under a `set +u` / `set -u` guard instead of relying on shell-specific variables.
 - Runtime dependency installs use the single A3-tested HuaweiCloud pip index. Do not configure default extra indexes, mirror fallback, or caller-provided pip index overrides in parity.
@@ -93,21 +114,23 @@ Container commands in this skill assume Linux shells.
 
 ## Script-first entry points
 
-Normal agent entrypoint:
+Normal agent entrypoint (session is the default target; run from inside the session worktree for zero-arg auto-bind):
 
-- POSIX: `python3 .agents/skills/remote-code-parity/scripts/parity_sync.py (--machine <alias-or-ip> | --session-id <id>) ...`
-- Windows: `py -3 .agents/skills/remote-code-parity/scripts/parity_sync.py --machine <alias-or-ip> ...`
+- POSIX: `python3 .agents/skills/remote-code-parity/scripts/parity_sync.py [--session-id <id> | --session-file <path>] ...`
+- Windows: `py -3 .agents/skills/remote-code-parity/scripts/parity_sync.py [--session-id <id> | --session-file <path>] ...`
+- Legacy machine surface: append `--machine <alias-or-ip>` for single-tenant base-container work.
 
 Apply-mode split:
 
+- `--apply-mode auto` (default): unchanged content snapshots and installed build inputs use the verified snapshot fast path; Python-only changes run `materialize`; changed native/dependency/build inputs or a required first install run `install`. File-status fingerprints never authorize execution.
 - `--apply-mode source-only`: publish source snapshots to the container cache only; no runtime materialization and no install/rebuild.
 - `--apply-mode materialize`: publish snapshots and update the runtime source tree; no install/rebuild.
-- `--apply-mode install`: default full parity behavior with consent, materialization, install/rebuild triggers, and verification.
+- `--apply-mode install`: full parity behavior with consent, materialization, install/rebuild triggers, and verification.
 
 Agent-facing sync tools:
 
-- `python3 .agents/scripts/remote_sync_plan.py ... --mode source-only|materialize|install`
-- `python3 .agents/scripts/remote_sync_apply.py ... --mode source-only|materialize|install`
+- `python3 .agents/scripts/remote_sync_plan.py ... --mode auto|source-only|materialize|install`
+- `python3 .agents/scripts/remote_sync_apply.py ... --mode auto|source-only|materialize|install`
 
 Consent helper:
 
@@ -153,7 +176,7 @@ If the agent forgets to set sync mode, `parity_sync.py` returns `status: blocked
 
 ### 2. Resolve the ready target from inventory
 
-For normal agent work, start from `parity_sync.py`. Use `--session-id` when the task was created by `session-management`; use legacy `--machine` only for single-tenant base-container work.
+For normal agent work, start from `parity_sync.py`. The session is the default target: run it from inside the session worktree and the target auto-binds from the `.vaws-local/current-session.json` worktree binding, or pass `--session-id` / `--session-file` explicitly. Use legacy `--machine` only for single-tenant base-container work.
 
 Collect from local machine inventory:
 
@@ -249,7 +272,13 @@ After the first approved replacement, reinstall only when one of the following t
 
 **Trigger 2 — commit drift from last sync:**
 
-Compare each repo's real `source_head` commit with `last_head_commits` recorded in `runtime-state.json`. Synthetic snapshot commits are parentless transport commits, so drift detection must use the underlying source HEAD to catch submodule version switches without treating ordinary dirty Python edits as rebuild triggers. If a repo's HEAD changed (e.g. the user did `git checkout v0.8.0` inside `vllm/`), trigger reinstall for that repo even when `changed_paths` is empty.
+Compare the snapshot's native/dependency Git blobs, submodule gitlinks and
+semantic build environment with `installed_build_inputs` in runtime state.
+This handles committed Python-only changes without rebuilding and detects
+reverting previously installed dirty native changes. Missing legacy input
+records cause one conservative rebuild. A ready runtime profile supplies
+`VAWS_ENVIRONMENT_FINGERPRINT`; changing it invalidates native reuse. This does
+not infer compatibility for an unregistered or externally modified environment.
 
 **Trigger 3 — dependency cascade:**
 

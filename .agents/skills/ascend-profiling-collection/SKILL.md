@@ -48,14 +48,14 @@ This skill is **only** about collection: start a profiled service, bracket a wor
   2. number of `*_ascend_pt` directories does not match `tp * (dp or 1)`
   3. workload was not real — follow-up request failed or benchmark wave fell below `--benchmark-success-threshold`
 - Progress on `stderr` as `__VAWS_PROFILING_COLLECTION_PROGRESS__=<json>`. Final manifest on `stdout` as one JSON object.
-- For parallel agent work, create a session first and pass `--session-id <id>`. Service start/stop and parity then stay scoped to that session.
-- Local state lives under `.vaws-local/ascend-profiling-collection/runs/` for collection manifests; serving/parity state follows the target mode.
+- Collection is **session-scoped**. Run the entry points from inside a session worktree and they auto-resolve the session by walking up to the nearest `.vaws-local/current-session.json` binding — no target args needed. Pass `--session-id <id>` / `--session-file <path>` explicitly only when running from outside the worktree. Service start/stop and parity stay scoped to that session.
+- Local state lives under `.vaws-local/ascend-profiling-collection/runs/` for collection manifests; serving/parity state lives under the session namespace.
 
 ## Public entry point
 
 ```bash
 python3 .agents/skills/ascend-profiling-collection/scripts/collect_torch_profile_case.py \
-  (--machine <alias-or-ip> | --session-id <id>) \
+  [--session-id <id> | --session-file <path>] \
   --model <remote-weight-path> \
   --served-model-name <name> \
   --tp <N> \
@@ -80,11 +80,12 @@ python3 .agents/skills/ascend-profiling-collection/scripts/collect_torch_profile
 
 ### Required parameters and why
 
+The target session is auto-resolved from the current worktree binding, so no target arg is required when running from inside a session worktree. Add `--session-id <id>` / `--session-file <path>` only to target a session from outside its worktree.
+
 The script intentionally has no Qwen-specific defaults. The agent must always pass:
 
 | Required arg | Why |
 | --- | --- |
-| `--machine` or `--session-id` | Target container; sessions are preferred for parallel work |
 | `--model` / `--served-model-name` | Different cases need different models, no safe default |
 | `--tp` | Hardware shape; never assume it |
 | `--mode` | The profile is meaningless without recording which graph mode produced it |
@@ -103,20 +104,20 @@ The agent can call these directly if it already has a service running and only w
 ```bash
 # Start a profile window on a service that the serving skill already launched
 python3 .agents/skills/ascend-profiling-collection/scripts/profile_control.py \
-  (--machine <alias> | --session-id <id>) --action start_profile [--timeout 900]
+  [--session-id <id> | --session-file <path>] --action start_profile [--timeout 900]
 
 # Close it
 python3 .agents/skills/ascend-profiling-collection/scripts/profile_control.py \
-  (--machine <alias> | --session-id <id>) --action stop_profile [--timeout 900]
+  [--session-id <id> | --session-file <path>] --action stop_profile [--timeout 900]
 ```
 
-The script reads the service port from `.vaws-local/serving/<alias>.json` in legacy mode or `.vaws-local/sessions/<id>/serving.json` in session mode. A service must be running.
+The script reads the service port from `.vaws-local/sessions/<id>/serving.json` for the resolved session (auto-resolved from the worktree binding, or the one named by `--session-id` / `--session-file`). A service must be running.
 
 ### Re-run `analyse()` on an existing root
 
 ```bash
 python3 .agents/skills/ascend-profiling-collection/scripts/run_remote_analyse.py \
-  --machine <alias> --profile-root <remote-path> \
+  [--session-id <id> | --session-file <path>] --profile-root <remote-path> \
   [--expected-ranks <N>]
 ```
 
@@ -126,7 +127,7 @@ Always pass `--expected-ranks` (typically `tp * (dp or 1)`) when running this ag
 
 ## Workflow
 
-1. **Resolve machine** via inventory; container endpoint comes from `machine-management`.
+1. **Resolve session** from the worktree binding (or `--session-id` / `--session-file`); the session container endpoint comes from the session's remote state, which `machine-management` bootstrapped.
 2. **Build serving args** — encode `--profiler-config` (always written) and the chosen graph mode.
 3. **Start service** by shelling out to `serve_start.py`. Parity sync is automatic via the serving skill.
 4. **Open SSH tunnel** to the service port so workload requests can be assembled locally (multimodal payloads need local image encoding).

@@ -25,7 +25,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 DEFAULT_STATE_DIR = "/tmp/vaws-npu-coordinator/v1"
 DEFAULT_QUEUE_TTL_SECONDS = 3600
 DEFAULT_GRANT_TTL_SECONDS = 60
@@ -50,6 +50,40 @@ SAFE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{2,127}$")
 
 class CoordinationError(RuntimeError):
     """Raised for deterministic coordinator input or state failures."""
+
+
+def process_guard_busy(value: str | dict | None, *, completion_confirmed: bool = False) -> bool:
+    """Retain a managed lease while its process family can still use devices.
+
+    Empty NPU occupancy during CPU initialization is not proof of completion.
+    Subreaper jobs additionally require the manager's drained-process receipt;
+    a crashed supervisor may have lost clean-environment descendants. A marker
+    scan alone can never release these leases. Unreadable state retains them.
+    """
+    if not value:
+        return False
+    try:
+        guard = json.loads(value) if isinstance(value, str) else value
+        if not re.fullmatch(r"[0-9a-f]{32}", guard["marker"]):
+            return True
+        if Path("/proc/sys/kernel/random/boot_id").read_text().strip() != guard["boot_id"]:
+            return True
+        marker = ("VAWS_REMOTE_JOB_TOKEN=" + guard["marker"]).encode()
+        unknown = False
+        for process in Path("/proc").iterdir():
+            if not process.name.isdigit():
+                continue
+            try:
+                state = (process / "stat").read_text().rsplit(") ", 1)[1].split()[0]
+                if state != "Z" and marker in (process / "environ").read_bytes().split(b"\0"):
+                    return True
+            except (FileNotFoundError, ProcessLookupError):
+                continue
+            except PermissionError:
+                unknown = True
+        return unknown or (guard.get("retain_until_release") is True and not completion_confirmed)
+    except (OSError, ValueError, KeyError, TypeError, IndexError):
+        return True
 
 
 def utc_now_iso(epoch: float | None = None) -> str:
@@ -133,6 +167,7 @@ def parse_npu_smi_info(output: str) -> dict[str, Any]:
     dev_ids: set[int] = set()
     header_ids: set[int] = set()
     hbm: dict[int, dict[str, int]] = {}
+    chip_devices: dict[tuple[int, int], int] = {}
     current_npu: int | None = None
     lines = output.splitlines()
 
@@ -141,6 +176,8 @@ def parse_npu_smi_info(output: str) -> dict[str, Any]:
             chip = re.match(r"\|\s*(\d+)\s+(\d+)\s+\|.*0000:", line)
             if chip:
                 dev_id = int(chip.group(2))
+                if current_npu is not None:
+                    chip_devices[(current_npu, int(chip.group(1)))] = dev_id
             elif current_npu is not None:
                 dev_id = current_npu
             else:
@@ -163,6 +200,7 @@ def parse_npu_smi_info(output: str) -> dict[str, Any]:
 
     process_busy: dict[int, list[dict[str, Any]]] = {}
     in_process_table = False
+    process_error = None
     for line in lines:
         if "Process name" in line or "Process memory" in line:
             in_process_table = True
@@ -170,9 +208,35 @@ def parse_npu_smi_info(output: str) -> dict[str, Any]:
         if in_process_table and "No running processes" in line:
             continue
         if in_process_table and line.startswith("|"):
+            columns = [column.strip() for column in line.split("|")[1:-1]]
+            # A3: | NPU Chip | PID | Process name | Memory |. Phy-ID from
+            # the device table is the allocation identity, not the NPU index.
+            if len(columns) >= 3 and re.fullmatch(r"\d+(?:\s+\d+)?", columns[0]):
+                identity = [int(value) for value in columns[0].split()]
+                if len(identity) == 2:
+                    device = chip_devices.get(tuple(identity))
+                elif chip_devices:
+                    # A parsed (NPU, Chip) -> Phy-ID table means a multi-chip
+                    # layout. A lone column is then an NPU index, not a phy-id;
+                    # guessing would attach the process to the wrong device and
+                    # report the real one as free. Fail closed instead.
+                    device = None
+                else:
+                    device = identity[0]
+                if device not in dev_ids or not columns[1].isdigit() or not columns[2]:
+                    process_error = "npu-smi process row has an unknown device or invalid PID/name"
+                    break
+                process_busy.setdefault(device, []).append(
+                    {"kind": "process", "pid": int(columns[1]), "name": columns[2]}
+                )
+                continue
+            # Preserve the older flat device/chip/PID/owner/name layout.
             match = re.match(r"\|\s*(\d+)\s+\S+\s+(\d+)\s+(\S+)\s+(\S+)", line)
             if match:
                 device = int(match.group(1))
+                if device not in dev_ids:
+                    process_error = "npu-smi process row has an unknown device"
+                    break
                 process_busy.setdefault(device, []).append(
                     {
                         "kind": "process",
@@ -181,6 +245,13 @@ def parse_npu_smi_info(output: str) -> dict[str, Any]:
                         "name": match.group(4),
                     }
                 )
+            elif any(columns):
+                process_error = "npu-smi process row could not be parsed"
+                break
+
+    if process_error or not in_process_table:
+        return {"status": "failed", "error": process_error or "npu-smi process table is missing",
+                "devices": sorted(dev_ids), "busy": {}, "free": []}
 
     busy: dict[int, list[dict[str, Any]]] = {}
     for device in sorted(dev_ids):
@@ -248,10 +319,12 @@ class NpuCoordinator:
         state_dir: str | Path = DEFAULT_STATE_DIR,
         *,
         clock: Callable[[], float] = time.time,
+        expected_epoch: str | None = None,
     ) -> None:
         self.state_dir = Path(state_dir)
         self.db_path = self.state_dir / "coordinator.sqlite3"
         self.clock = clock
+        self.expected_epoch = expected_epoch
         self.state_dir.mkdir(parents=True, exist_ok=True)
         self._initialize()
 
@@ -331,6 +404,24 @@ class NpuCoordinator:
                 except sqlite3.OperationalError as exc:
                     if "duplicate column" not in str(exc).lower():
                         raise
+            if "process_guard" not in task_columns:
+                try:
+                    connection.execute("ALTER TABLE tasks ADD COLUMN process_guard TEXT")
+                except sqlite3.OperationalError as exc:
+                    if "duplicate column" not in str(exc).lower():
+                        raise
+            # Older clients send the host protocol source with each request.
+            # They do not know about process guards. Do not let their generic
+            # "hardware free" UPDATE release a guarded CPU-initializing job.
+            connection.execute("""
+                CREATE TRIGGER IF NOT EXISTS protect_managed_process_release
+                BEFORE UPDATE OF state ON tasks
+                WHEN OLD.process_guard IS NOT NULL AND NEW.process_guard IS NOT NULL
+                     AND NEW.state IN ('released', 'cancelled', 'expired')
+                BEGIN
+                    SELECT RAISE(ABORT, 'managed process guard must be verified before release');
+                END
+            """)
             connection.execute(
                 "INSERT OR IGNORE INTO meta(key, value) VALUES('schema_version', ?)",
                 (str(SCHEMA_VERSION),),
@@ -352,6 +443,10 @@ class NpuCoordinator:
         connection = self._connect()
         try:
             connection.execute("BEGIN IMMEDIATE")
+            if self.expected_epoch is not None:
+                epoch = connection.execute("SELECT value FROM meta WHERE key='coordination_epoch'").fetchone()
+                if epoch is None or epoch["value"] != self.expected_epoch:
+                    raise CoordinationError("coordination epoch changed; reconcile ownership before retrying")
             yield connection
             connection.execute("COMMIT")
         except Exception:
@@ -395,6 +490,7 @@ class NpuCoordinator:
         payload["requested_devices"] = _load_devices(payload.get("requested_devices")) or None
         payload["granted_devices"] = _load_devices(payload.get("granted_devices"))
         payload["preemptible"] = bool(payload.get("preemptible"))
+        payload["process_guarded"] = bool(payload.pop("process_guard", None))
         for key in (
             "not_before",
             "latest_start",
@@ -681,6 +777,7 @@ class NpuCoordinator:
                 or visible is None
                 or not devices.issubset(visible)
                 or bool(devices & busy)
+                or process_guard_busy(row["process_guard"])
             )
             next_state = "orphaned_busy" if still_busy else "released"
             message = (
@@ -689,8 +786,8 @@ class NpuCoordinator:
                 else "heartbeat expired and hardware was observed free"
             )
             connection.execute(
-                "UPDATE tasks SET state=?, updated_at=?, message=? WHERE task_id=?",
-                (next_state, now, message, row["task_id"]),
+                "UPDATE tasks SET state=?, process_guard=CASE WHEN ?='released' THEN NULL ELSE process_guard END, updated_at=?, message=? WHERE task_id=?",
+                (next_state, next_state, now, message, row["task_id"]),
             )
             changes.append({"task_id": row["task_id"], "from": "active", "to": next_state})
             self._event(connection, "heartbeat-expired", task_id=row["task_id"], data={"to": next_state}, now=now)
@@ -698,9 +795,9 @@ class NpuCoordinator:
         if busy is not None and visible is not None:
             for row in connection.execute("SELECT * FROM tasks WHERE state='orphaned_busy'").fetchall():
                 devices = set(_load_devices(row["granted_devices"]))
-                if devices.issubset(visible) and not devices.intersection(busy):
+                if devices.issubset(visible) and not devices.intersection(busy) and not process_guard_busy(row["process_guard"]):
                     connection.execute(
-                        "UPDATE tasks SET state='released', updated_at=?, message=? WHERE task_id=?",
+                        "UPDATE tasks SET state='released', process_guard=NULL, updated_at=?, message=? WHERE task_id=?",
                         (now, "orphaned task hardware is now free", row["task_id"]),
                     )
                     changes.append({"task_id": row["task_id"], "from": "orphaned_busy", "to": "released"})
@@ -922,6 +1019,7 @@ class NpuCoordinator:
         token: int,
         *,
         pid: int,
+        process_guard: dict | None = None,
         heartbeat_ttl_seconds: int = DEFAULT_HEARTBEAT_TTL_SECONDS,
     ) -> dict[str, Any]:
         task_id = require_safe_id(task_id, label="task id")
@@ -929,6 +1027,16 @@ class NpuCoordinator:
             raise CoordinationError("pid must be >= 1")
         if heartbeat_ttl_seconds < 1:
             raise CoordinationError("heartbeat_ttl_seconds must be >= 1")
+        if process_guard is not None:
+            if (not isinstance(process_guard, dict)
+                    or not {"marker", "boot_id"}.issubset(process_guard)
+                    or set(process_guard) - {"marker", "boot_id", "retain_until_release"}
+                    or not re.fullmatch(r"[0-9a-f]{32}", str(process_guard.get("marker", "")))
+                    or not isinstance(process_guard.get("boot_id"), str)
+                    or ("retain_until_release" in process_guard and not isinstance(process_guard["retain_until_release"], bool))):
+                raise CoordinationError("invalid managed process guard")
+            if not process_guard_busy(process_guard, completion_confirmed=True):
+                raise CoordinationError("managed supervisor is no longer present")
         now = self.clock()
         with self._transaction() as connection:
             row = self._task_row(connection, task_id)
@@ -943,11 +1051,12 @@ class NpuCoordinator:
                 """
                 UPDATE tasks
                 SET state='active', pid=?, started_at=?, expected_end=?,
-                    heartbeat_at=?, heartbeat_deadline=?, activation_deadline=NULL,
+                    heartbeat_at=?, heartbeat_deadline=?, process_guard=?, activation_deadline=NULL,
                     updated_at=?, message=?
                 WHERE task_id=?
                 """,
-                (pid, now, expected_end, now, heartbeat_deadline, now, "task reported active", task_id),
+                (pid, now, expected_end, now, heartbeat_deadline,
+                 json.dumps(process_guard) if process_guard else None, now, "task reported active", task_id),
             )
             self._event(connection, "task-activated", task_id=task_id, data={"pid": pid}, now=now)
             row = self._task_row(connection, task_id)
@@ -981,7 +1090,8 @@ class NpuCoordinator:
             row = self._task_row(connection, task_id)
         return {"status": "active", "task": self._serialize_task(row)}
 
-    def release(self, task_id: str, token: int, observed: dict[str, Any]) -> dict[str, Any]:
+    def release(self, task_id: str, token: int, observed: dict[str, Any], *,
+                completion_confirmed: bool = False) -> dict[str, Any]:
         task_id = require_safe_id(task_id, label="task id")
         now = self.clock()
         busy = self._busy_set(observed)
@@ -999,10 +1109,11 @@ class NpuCoordinator:
                 if busy is not None and visible is not None
                 else sorted(devices)
             )
-            if busy is None or visible is None or conflicts:
+            if (busy is None or visible is None or conflicts
+                    or process_guard_busy(row["process_guard"], completion_confirmed=completion_confirmed)):
                 connection.execute(
                     "UPDATE tasks SET state='orphaned_busy', updated_at=?, message=? WHERE task_id=?",
-                    (now, "release requested but hardware remained busy or unknown", task_id),
+                    (now, "release requested but processes or hardware remained busy or unknown", task_id),
                 )
                 self._event(connection, "release-deferred", task_id=task_id, data={"devices": conflicts}, now=now)
                 row = self._task_row(connection, task_id)
@@ -1013,7 +1124,7 @@ class NpuCoordinator:
                     "occupancy": observed,
                 }
             connection.execute(
-                "UPDATE tasks SET state='released', updated_at=?, message=? WHERE task_id=?",
+                "UPDATE tasks SET state='released', process_guard=NULL, updated_at=?, message=? WHERE task_id=?",
                 (now, "hardware observed free; cooperative lease released", task_id),
             )
             self._event(connection, "task-released", task_id=task_id, now=now)
@@ -1039,11 +1150,12 @@ class NpuCoordinator:
                 or visible is None
                 or not devices.issubset(visible)
                 or bool(devices & busy)
+                or process_guard_busy(row["process_guard"])
             )
             next_state = "orphaned_busy" if still_busy else "cancelled"
             connection.execute(
-                "UPDATE tasks SET state=?, updated_at=?, message=? WHERE task_id=?",
-                (next_state, now, "cancel requested", task_id),
+                "UPDATE tasks SET state=?, process_guard=CASE WHEN ?='cancelled' THEN NULL ELSE process_guard END, updated_at=?, message=? WHERE task_id=?",
+                (next_state, next_state, now, "cancel requested", task_id),
             )
             self._event(connection, "task-cancelled", task_id=task_id, data={"to": next_state}, now=now)
             row = self._task_row(connection, task_id)
@@ -1124,9 +1236,12 @@ def _confirmed_free_probe(
         # it free.  Unioning busy reasons makes one transient busy sample keep
         # the cooperative lease protected.
         combined_busy: dict[str, list[dict[str, Any]]] = {}
+        common_devices = set(int(device) for device in observations[0].get("devices", []))
         for item in observations:
+            common_devices.intersection_update(int(device) for device in item.get("devices", []))
             for device, reasons in item.get("busy", {}).items():
                 combined_busy.setdefault(str(device), []).extend(reasons)
+        latest["devices"] = sorted(common_devices)
         latest["busy"] = combined_busy
         latest["free"] = sorted(
             int(device)
@@ -1147,7 +1262,8 @@ def handle_request(
 ) -> dict[str, Any]:
     """Execute one structured coordinator request on the host."""
     action = request.get("action")
-    coordinator = NpuCoordinator(request.get("state_dir") or DEFAULT_STATE_DIR, clock=clock)
+    coordinator = NpuCoordinator(request.get("state_dir") or DEFAULT_STATE_DIR, clock=clock,
+                                 expected_epoch=request.get("coordination_epoch"))
     if action == "submit":
         return coordinator.submit(request)
     if action == "acquire":
@@ -1168,6 +1284,7 @@ def handle_request(
             request["task_id"],
             int(request["fence_token"]),
             pid=int(request["pid"]),
+            process_guard=request.get("process_guard"),
             heartbeat_ttl_seconds=int(
                 request.get("heartbeat_ttl_seconds") or DEFAULT_HEARTBEAT_TTL_SECONDS
             ),
@@ -1186,7 +1303,8 @@ def handle_request(
             interval_seconds=float(request.get("interval_seconds") or 2.0),
             probe=probe,
         )
-        return coordinator.release(request["task_id"], int(request["fence_token"]), observed)
+        return coordinator.release(request["task_id"], int(request["fence_token"]), observed,
+                                   completion_confirmed=request.get("completion_confirmed") is True)
     if action == "cancel":
         return coordinator.cancel(request["task_id"], probe())
     if action == "hold-add":

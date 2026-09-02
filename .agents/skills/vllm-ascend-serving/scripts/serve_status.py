@@ -2,7 +2,7 @@
 """Check the status of a running vllm-ascend service.
 
 Usage:
-    python3 serve_status.py --machine <alias>
+    python3 serve_status.py                    # auto-resolve bound session
     python3 serve_status.py --session-id <id>
 
 Progress on stderr, final JSON on stdout.
@@ -35,12 +35,14 @@ from vaws_session_state import release_service_port
 
 def check_alive(ep, pid: int) -> bool:
     r = ssh_exec(ep, f"kill -0 {pid} 2>/dev/null && echo alive || echo dead", check=False)
+    if r.returncode != 0 or r.stdout.strip() not in ("alive", "dead"):
+        raise RuntimeError("service process state is unknown; SSH failure is not proof of exit")
     return r.stdout.strip() == "alive"
 
 
 def check_health(ep, port: int) -> bool:
     script = (
-        f"curl -s -o /dev/null -w '%{{http_code}}' --connect-timeout 3"
+        f"curl -s -o /dev/null -w '%{{http_code}}' --connect-timeout 3 --max-time 5"
         f" http://127.0.0.1:{port}/health 2>/dev/null || echo 000"
     )
     r = ssh_exec(ep, script, check=False)
@@ -48,7 +50,7 @@ def check_health(ep, port: int) -> bool:
 
 
 def check_models(ep, port: int) -> dict[str, Any] | None:
-    script = f"curl -s --connect-timeout 3 http://127.0.0.1:{port}/v1/models 2>/dev/null || true"
+    script = f"curl -s --connect-timeout 3 --max-time 5 http://127.0.0.1:{port}/v1/models 2>/dev/null || true"
     r = ssh_exec(ep, script, check=False)
     text = r.stdout.strip()
     if not text:
@@ -62,8 +64,7 @@ def check_models(ep, port: int) -> dict[str, Any] | None:
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
-    p.add_argument("--machine", help="machine alias or host IP")
-    p.add_argument("--session-id", help="VAWS session id")
+    p.add_argument("--session-id", help="VAWS session id; defaults to the bound session of the current worktree")
     p.add_argument("--session-file", help="explicit session.json path")
     return p
 
@@ -73,7 +74,6 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         target = resolve_execution_target(
-            args.machine,
             session_id=args.session_id,
             session_file=args.session_file,
         )
@@ -81,8 +81,7 @@ def main(argv: list[str] | None = None) -> int:
         ep = target.endpoint
 
         state = load_serving_state(
-            alias,
-            session_id=target.session_id,
+            target.session_id,
             state_repo_root=target.state_repo_root,
         )
         if state is None:
@@ -128,12 +127,11 @@ def main(argv: list[str] | None = None) -> int:
         if status == "stopped":
             state["stopped_at"] = state.get("stopped_at") or state["status_checked_at"]
         save_serving_state(
-            alias,
+            target.session_id,
             state,
-            session_id=target.session_id,
             state_repo_root=target.state_repo_root,
         )
-        if status == "stopped" and target.session_id:
+        if status == "stopped":
             release_service_port(
                 repo_root=target.state_repo_root,
                 machine_alias=alias,
@@ -177,7 +175,6 @@ def main(argv: list[str] | None = None) -> int:
         print_json({
             "status": "failed",
             "error": str(exc),
-            "machine": getattr(args, "machine", None),
             "session_id": getattr(args, "session_id", None),
         })
         return 2

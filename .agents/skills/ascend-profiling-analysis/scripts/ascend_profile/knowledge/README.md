@@ -18,6 +18,8 @@ analysis code; treat them as part of the contract.
 | `attention_families.yaml` | MLA / SFA / KVComp / linear / dense families. Each family declares the **combination** of category signatures (must_have / must_not_have) that uniquely identifies it on Ascend; SFA is the in-code name for DeepSeek-V3.2 / V4 sparse attention (NOT "NSA" / "CSA"). | `common.categories_and_roles`, `html_report.detect_attention_subtype`, `tests/test_attention_families.py` |
 | `moe_families.yaml` | MC2 / fused MC2 / dense FFN families. Also explicitly documents that the HC* / MHC* prefix kernels (`HCPreSinkhorn`, `HCPreInvRMS`, `HCPost`, `MhcRmsNorm`) are **structural block-head helpers** that appear before BOTH attention and MoE blocks — they stay under `block_head.mhc_prefix` and must NOT be conflated with `moe.gating`. | `common.categories_and_roles`, `tests/test_moe_families.py` |
 | `model_architectures.yaml` | HF arch → (attention family, FFN family) high-level map. **Static knowledge / documentation only.** This skill's input is `ascend_pt/` profiling output — never HF `config.json` — so the file is *not consumed at runtime* by any analysis stage. The report's "model structure" line (e.g. `27L · mla+moe`) is derived from observed kernel signatures via `html_report.guess_model_structure`, not from this YAML. Use it as a human reference table when reasoning about which kernel signatures *should* be seen for each architecture. | (none — documentation) |
+| `model_fingerprints.json` | Concrete model/variant fingerprint catalog. Structural fields must be backed by config evidence or validated profile-visible hints; fuzzy families enumerate variants. `operator_match` entries declare fast profile-category signatures for early model-family resolution. | `model_context.py`, `model_insights.py`, `segment.py` |
+| `model_knowledge_todo.md` | Unverified model facts and missing profile-mode knowledge to collect before promoting into `model_fingerprints.json`. | humans / agents |
 
 | `known_counterexamples.md` | Concrete profiling patterns that previously broke segmentation / classification. Add a case here before changing Python rules. | `segment.py`, `classify.py`, reviewer audit |
 
@@ -28,7 +30,20 @@ The maintenance rule is simple:
 
 - Prefer abstract roles over exact kernel names.
 - Store exact names as implementation evidence for a role.
-- Do not store model size or layer count as core logic.
+- Do not store model size or layer count as core Python logic.  Known-model
+  structural fields may live in `model_fingerprints.json` only when they are
+  backed by `config.json` evidence from an explicit file, Hugging Face,
+  ModelScope, or by a validated profile-visible hint.
+- Fuzzy family names must enumerate concrete structural variants.  For example,
+  `dsv4` resolves through Flash/Pro candidates, and `qwen3.5` resolves through
+  the known public parameter variants.  Quantization and data format suffixes
+  are not structural variants; they affect dtype/weight-size analysis only.
+- Model-family fast matching belongs in `model_fingerprints.json:operator_match`,
+  not in ad hoc segment heuristics.  Use strong category combinations where
+  possible: `attention.kv_compressor` for DSV4, `attention.lightning_indexer`
+  + `attention.sparse_sharedkv` without compressor for DSA, and `moe.gating`
+  + `attention.linear_or_mamba` for Qwen3.5/GDN-like hybrids.  `moe.gating`
+  alone is generic MoE evidence only.
 - If a rule uses shape, stream, time, or rank context, record that context in
   the rule name and output evidence.
 
@@ -188,4 +203,3 @@ Known counterexamples should be explicit and testable.  For example:
 - Attention-like kernels can represent LLM, VIT, VAE, encoder, or another
   future component.  Do not infer semantic component names without supporting
   evidence.
-

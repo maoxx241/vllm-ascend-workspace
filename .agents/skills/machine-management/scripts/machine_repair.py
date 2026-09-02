@@ -30,6 +30,7 @@ from _workflow_common import (  # noqa: E402
     resolve_password_args,
     resolve_workflow_image,
     status_payload,
+    stamp_machine_verified,
     sync_mesh,
     upsert_machine_record,
     verify_machine,
@@ -286,6 +287,26 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             return 0
 
+        if not mesh.get("success", True):
+            print_json(
+                status_payload(
+                    "needs_repair",
+                    success=False,
+                    action="mesh-sync-failed",
+                    message="machine verified but SSH mesh sync to peers failed; cross-machine operations will not work until repaired",
+                    machine=machine_summary(updated_record),
+                    verify_before=verified_before,
+                    host_auth=host_auth,
+                    probe=probe,
+                    container=container,
+                    inventory=inventory_payload,
+                    mesh=mesh,
+                    verify=verified_after,
+                )
+            )
+            return 0
+
+        stamp_machine_verified(updated_record["alias"])
         print_json(
             status_payload(
                 "ready",

@@ -16,12 +16,19 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
+_LIB_DIR = Path(__file__).resolve().parents[4] / '.agents' / 'lib'
+if str(_LIB_DIR) not in sys.path:
+    sys.path.insert(0, str(_LIB_DIR))
+
+from vaws_ssh import base_ssh_options  # noqa: E402
+
 WORKSPACE_ID_PATTERN = re.compile(r'[^A-Za-z0-9._-]+')
 STATE_SUBDIR = Path('.vaws-local/remote-code-parity')
-LEGACY_STATE_DIR = Path('.vaws-local')
-
 DEFAULT_DENYLIST = (
     '.vaws-local/',
+    '.vaws-runtime/',
+    '.remote-code-parity/',
+    '.remote-dev/state/',
     '.workspace.local/',
     '.machine-inventory.json',
     '.codex/',
@@ -132,17 +139,10 @@ def canonical_state_path(repo_root: Path, filename: str) -> Path:
     return state_dir(repo_root) / filename
 
 
-def legacy_state_path(repo_root: Path, filename: str) -> Path:
-    return repo_root / LEGACY_STATE_DIR / filename
-
-
 def load_state(repo_root: Path, filename: str, default: Any) -> Any:
     canonical = canonical_state_path(repo_root, filename)
     if canonical.exists():
         return json.loads(canonical.read_text(encoding='utf-8'))
-    legacy = legacy_state_path(repo_root, filename)
-    if legacy.exists():
-        return json.loads(legacy.read_text(encoding='utf-8'))
     return default
 
 
@@ -163,9 +163,6 @@ def _atomic_write_json(path: Path, data: Any) -> None:
 def save_state(repo_root: Path, filename: str, data: Any) -> Path:
     path = canonical_state_path(repo_root, filename)
     _atomic_write_json(path, data)
-    legacy = legacy_state_path(repo_root, filename)
-    if legacy != path:
-        legacy.unlink(missing_ok=True)
     return path
 
 
@@ -241,12 +238,7 @@ def quoted(script: str) -> str:
 def _ssh_base_cmd(endpoint: SshEndpoint) -> list[str]:
     return [
         'ssh',
-        '-o',
-        'BatchMode=yes',
-        '-o',
-        'StrictHostKeyChecking=accept-new',
-        '-o',
-        'LogLevel=ERROR',
+        *base_ssh_options(),
         '-p',
         str(endpoint.port),
         endpoint.destination(),
@@ -416,6 +408,8 @@ def is_git_worktree(path: Path) -> bool:
 
 
 def ensure_local_git_identity(repo: Path) -> tuple[str | None, str | None]:
+    # Despite the name this is read-only: it never sets git config, it only
+    # reports the identity (if any) that snapshot commits would record.
     name = git(repo, ['config', '--get', 'user.name'], check=False).stdout.strip() or None
     email = git(repo, ['config', '--get', 'user.email'], check=False).stdout.strip() or None
     return name, email

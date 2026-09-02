@@ -55,6 +55,18 @@ jobs:
       - name: Run session-management tests
         run: python -B -m unittest discover -s .agents/skills/session-management/tests
 
+      - name: Run scaffold ownership and parity regressions
+        run: |
+          python -B -m unittest discover -s .agents/tests -p "test_vaws_scaffold_safety.py"
+          python -B -m unittest discover -s .agents/tests -p "test_shared_inventory_state.py"
+          python -B -m unittest discover -s .agents/skills/remote-code-parity/tests
+          python -B -m unittest discover -s .agents/skills/vllm-ascend-serving/tests
+
+      - name: Run benchmark smoke and machine-management tests
+        run: |
+          python -B -m unittest discover -s .agents/skills/vllm-ascend-benchmark/tests
+          python -B -m unittest discover -s .agents/skills/machine-management/tests
+
       - name: Validate parameterized Ray helpers
         run: bash -n scripts/ray_head.sh scripts/ray_worker.sh
 
@@ -78,3 +90,22 @@ jobs:
 
       - name: Run PD-serving tests
         run: python -B -m unittest discover -s .agents/skills/vllm-ascend-pd-serving/tests
+
+      - name: Run memory-profiling tests
+        run: python -B -m unittest discover -s .agents/skills/ascend-memory-profiling/tests
+
+      - name: Run profiling-analysis tests
+        run: |
+          python -m pip install pytest -r .agents/skills/ascend-profiling-analysis/requirements.txt
+          python -B -m pytest .agents/skills/ascend-profiling-analysis/tests -q
+
+  coordinator:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -r .agents/coordinator/requirements.txt
+      - name: Runtime pool, artifacts and real HTTP MCP contracts
+        run: python -B -m unittest discover -s .agents/coordinator/tests -v

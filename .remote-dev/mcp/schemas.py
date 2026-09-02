@@ -96,4 +96,22 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
 }
 
 
+def task_schema(properties, required=()):
+    return {"type": "object", "properties": {"context_file": {"type": "string", "description": "Local task context supplied by the native session hook; never guess from cwd or newest history."}, **properties},
+            "required": list(required), "additionalProperties": False}
+
+
+TOOL_SCHEMAS.update({
+    "vaws.session": task_schema({"sources": {"type": "object", "additionalProperties": {"type": "string"}}}),
+    "vaws.run": task_schema({
+        "request_id": {"type": "string"}, "command": {"type": "string"},
+        "profile_key": {"type": "string"}, "runtime_id": {"type": "string"},
+        "devices": {"type": "array", "items": {"type": "integer"}}, "npu_count": {"type": "integer", "default": 1},
+        "env": {"type": "object", "additionalProperties": {"type": "string"}},
+        "timeout_seconds": {"type": "integer", "default": 1800},
+    }, ("request_id", "command")),
+    "vaws.execution": task_schema({"execution_id": {"type": "string"}, "action": {"type": "string", "enum": ["status", "tail", "stop"]}, "force": {"type": "boolean"}}, ("execution_id",)),
+    "vaws.finish": task_schema({"force": {"type": "boolean"}}),
+})
+
 ALIASES: dict[str, str] = {name.replace(".", "_"): name for name in TOOL_SCHEMAS}

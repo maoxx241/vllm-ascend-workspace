@@ -6,7 +6,8 @@ Inputs (one of):
   --remote-profile-root <abs-path>            -- raw remote profiling root (historical)
 
 Behavior:
-  1. Resolve machine/session + SSH endpoint via inventory or session state.
+  1. Resolve the session + SSH endpoint (explicit --session-id/--session-file,
+     the manifest's recorded session, or the bound session of the cwd worktree).
   2. Tar-sync ``scripts/ascend_profile/`` to ``<remote-work-dir>/ascend_profile/``.
   3. Remote: ``python3 -m ascend_profile.analyze <ROOT> --output <OUT> --verbose``.
   4. Validate required artifacts exist on the remote.
@@ -18,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import shlex
 import sys
 import time
@@ -37,8 +39,7 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         allow_abbrev=False,
     )
-    parser.add_argument("--machine", help="alias or IP from machine inventory")
-    parser.add_argument("--session-id", help="VAWS session id")
+    parser.add_argument("--session-id", help="VAWS session id; defaults to the bound session of the current worktree")
     parser.add_argument("--session-file", help="explicit session.json path")
     src = parser.add_mutually_exclusive_group(required=True)
     src.add_argument("--manifest", help="path to ascend-profiling-collection manifest.json")
@@ -99,6 +100,28 @@ def _build_parser() -> argparse.ArgumentParser:
             "cards backed by raw kernel_details rows."
         ),
     )
+    parser.add_argument("--model-id", help="optional model id/name for report context")
+    parser.add_argument(
+        "--model-config",
+        help=(
+            "optional config.json for comparison. If the path exists locally, "
+            "the wrapper uploads it into this run's remote output dir; "
+            "otherwise it is treated as a remote path."
+        ),
+    )
+    parser.add_argument("--hardware-model", help="optional capture hardware model, e.g. Ascend910B4")
+    parser.add_argument(
+        "--hardware-profile",
+        help=(
+            "optional hardware_profile.json. If the path exists locally, the "
+            "wrapper uploads it; otherwise it is treated as a remote path."
+        ),
+    )
+    parser.add_argument(
+        "--no-cann-hardware-scan",
+        action="store_true",
+        help="disable remote CANN platform_config scanning",
+    )
     parser.add_argument(
         "--from-stage",
         choices=("normalize", "segment", "classify", "summarize", "cross_rank", "diagnostics", "report"),
@@ -116,6 +139,53 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--verbose", action="store_true")
     return parser
+
+
+def _manifest_default_hardware_model(manifest: dict[str, Any] | None) -> str | None:
+    if not manifest:
+        return None
+    for key in ("hardware_model", "npu_name", "device_name", "chip_name", "soc_version"):
+        value = manifest.get(key)
+        if value:
+            return str(value)
+    snapshot = manifest.get("hardware_snapshot")
+    if isinstance(snapshot, dict):
+        for key in ("hardware_model", "npu_name", "device_name", "chip_name", "soc_version"):
+            value = snapshot.get(key)
+            if value:
+                return str(value)
+        devices = snapshot.get("devices")
+        if isinstance(devices, list) and devices:
+            first = devices[0] if isinstance(devices[0], dict) else {}
+            for key in ("name", "hardware_model", "chip_name", "soc_version"):
+                value = first.get(key)
+                if value:
+                    return str(value)
+    return None
+
+
+def _maybe_upload_local_file(
+    endpoint: common.SshEndpoint,
+    run_dir: Path,
+    local_or_remote: str | None,
+    remote_output_dir: str,
+    *,
+    upload_subdir: str,
+) -> str | None:
+    if not local_or_remote:
+        return None
+    path = Path(local_or_remote).expanduser()
+    if not path.is_file():
+        return local_or_remote
+    upload_dir = run_dir / upload_subdir
+    if upload_dir.exists():
+        shutil.rmtree(upload_dir)
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    dst = upload_dir / path.name
+    shutil.copy2(path, dst)
+    remote_dir = f"{remote_output_dir.rstrip('/')}/{upload_subdir}"
+    common.sync_to_remote(endpoint, upload_dir, remote_dir)
+    return f"{remote_dir}/{path.name}"
 
 
 def _resolve_input(args: argparse.Namespace) -> dict[str, Any]:
@@ -208,11 +278,14 @@ def _validate_remote_artifacts(
         ) from e
 
 
-def _validate_segment_health(endpoint: common.SshEndpoint, remote_output_dir: str) -> None:
+def _validate_segment_health(endpoint: common.SshEndpoint, remote_output_dir: str) -> dict[str, Any]:
     """Surface segmentation hard errors / interior islands as failures.
 
     The framework already emits these in ``segment_manifest.json``; we just
-    refuse to declare success when they are non-zero.
+    refuse to declare success when they are non-zero. Returns a health summary
+    including per-rank segmentation strategies so a knowledge-base miss
+    (``exact_cover_knowledge_miss``) is visible at the top level instead of
+    being buried in the manifest.
     """
     cat = common.ssh_exec(
         endpoint,
@@ -248,6 +321,18 @@ def _validate_segment_health(endpoint: common.SshEndpoint, remote_output_dir: st
             f"(hard_error_count={hard}, interior_island_total={interior}); "
             "see segment_manifest.json for details"
         )
+
+    strategy_modes: dict[str, str] = {}
+    for rank in seg.get("rank_summaries", []) or []:
+        strategy = rank.get("segmentation_strategy") or {}
+        strategy_modes[str(rank.get("rank_id"))] = str(strategy.get("mode") or "unknown")
+    degraded_ranks = sorted(
+        rank_id for rank_id, mode in strategy_modes.items() if mode == "exact_cover_knowledge_miss"
+    )
+    return {
+        "strategy_modes": strategy_modes,
+        "degraded_ranks": degraded_ranks,
+    }
 
 
 def _diagnosis_counts(local_run_dir: Path) -> dict[str, int]:
@@ -287,6 +372,7 @@ def _write_local_run_meta(
     manifest_path: str | None,
     stage_timings: list[dict[str, Any]],
     elapsed_s: float,
+    analysis_context: dict[str, Any],
 ) -> None:
     meta = {
         "schema_version": 1,
@@ -298,6 +384,7 @@ def _write_local_run_meta(
         "collection_manifest": manifest_path,
         "stage_timings": stage_timings,
         "elapsed_s": round(elapsed_s, 6),
+        "analysis_context": analysis_context,
     }
     (run_dir / "skill_run.json").write_text(
         json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -325,14 +412,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     if manifest is not None and not args.session_id and not args.session_file:
         args.session_id = manifest.get("session_id")
         args.session_file = manifest.get("session_file")
+    if manifest is not None and not args.hardware_model:
+        args.hardware_model = _manifest_default_hardware_model(manifest)
 
     try:
         target = common.resolve_execution_target(
-            args.machine,
             session_id=args.session_id,
             session_file=args.session_file,
         )
-    except ValueError as exc:
+    except (ValueError, common.SessionStateError) as exc:
         common.print_json(
             {
                 "status": "failed",
@@ -352,6 +440,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         host=endpoint.host,
         ssh_port=endpoint.port,
     )
+
+    try:
+        py = common.remote_python_with_module(endpoint, "yaml", required=True)
+    except RuntimeError as exc:
+        common.print_json(
+            {
+                "status": "failed",
+                "phase": "dependency_preflight",
+                "error": str(exc),
+                "machine": alias,
+                "session_id": target["session_id"],
+            }
+        )
+        return 2
 
     try:
         run_dir = common.ensure_run_dir(
@@ -396,6 +498,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         common.sync_to_remote(
             endpoint, common.FRAMEWORK_LOCAL_DIR, remote_framework_dir
         )
+        remote_model_config = _maybe_upload_local_file(
+            endpoint,
+            run_dir,
+            args.model_config,
+            remote_output_dir,
+            upload_subdir="input_model_config",
+        )
+        remote_hardware_profile = _maybe_upload_local_file(
+            endpoint,
+            run_dir,
+            args.hardware_profile,
+            remote_output_dir,
+            upload_subdir="input_hardware_profile",
+        )
     except (RuntimeError, FileNotFoundError) as exc:
         common.print_json(
             {
@@ -409,7 +525,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 3
 
     # Phase 2: remote analyze
-    py = common.remote_python_with_module(endpoint, "csv")  # csv always present
     extra_flags: list[str] = []
     if args.verbose:
         extra_flags.append("--verbose")
@@ -422,12 +537,22 @@ def main(argv: Sequence[str] | None = None) -> int:
         extra_flags.extend(["--to-stage", args.to_stage])
     if args.only_stage:
         extra_flags.extend(["--only-stage", args.only_stage])
+    if args.model_id:
+        extra_flags.extend(["--model-id", args.model_id])
+    if remote_model_config:
+        extra_flags.extend(["--model-config", remote_model_config])
+    if args.hardware_model:
+        extra_flags.extend(["--hardware-model", args.hardware_model])
+    if remote_hardware_profile:
+        extra_flags.extend(["--hardware-profile", remote_hardware_profile])
+    if args.no_cann_hardware_scan:
+        extra_flags.append("--no-cann-hardware-scan")
     cmd = (
         f"set -e; cd {common.quote_remote(remote_work_dir)} && "
         f"{py} -m {common.FRAMEWORK_PYTHON_MODULE}.analyze "
         f"{common.quote_remote(remote_profile_root)} "
         f"--output {common.quote_remote(remote_output_dir)} "
-        + " ".join(extra_flags)
+        + " ".join(common.quote_remote(item) for item in extra_flags)
     )
     common.progress(
         "analyze",
@@ -479,8 +604,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         remote_manifest = _validate_remote_artifacts(
             endpoint, remote_output_dir, required_artifacts=required_artifacts
         )
+        segment_health: dict[str, Any] = {}
         if "segment_manifest.json" in required_artifacts:
-            _validate_segment_health(endpoint, remote_output_dir)
+            segment_health = _validate_segment_health(endpoint, remote_output_dir)
     except RuntimeError as exc:
         common.print_json(
             {
@@ -520,6 +646,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     elapsed = time.time() - started
     stage_timings = remote_manifest.get("stage_timings", [])
+    analysis_context = remote_manifest.get("analysis_context", {}) or {}
     _write_local_run_meta(
         run_dir,
         machine=alias,
@@ -528,6 +655,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         manifest_path=input_info.get("manifest_path"),
         stage_timings=stage_timings,
         elapsed_s=elapsed,
+        analysis_context=analysis_context,
     )
 
     stage_results = remote_manifest.get("stage_results", {}) or {}
@@ -542,8 +670,23 @@ def main(argv: Sequence[str] | None = None) -> int:
         except (json.JSONDecodeError, OSError):
             html_status = "unknown"
 
+    # A knowledge-base miss falls back to exact-cover search; results are still
+    # produced but structure attribution is weaker, so surface it prominently
+    # instead of returning an indistinguishable clean "ok".
+    degraded_ranks = segment_health.get("degraded_ranks") or []
+    warnings: list[str] = []
+    if degraded_ranks:
+        warnings.append(
+            f"segmentation knowledge base did not match ranks {degraded_ranks}; "
+            "fell back to exact-cover search (weaker structure attribution). "
+            "Consider extending kernel_signatures.yaml for this model."
+        )
+
     output: dict[str, Any] = {
         "status": "ok",
+        "segmentation_degraded": bool(degraded_ranks),
+        "warnings": warnings,
+        "segmentation_strategies": segment_health.get("strategy_modes") or {},
         "machine": alias,
         "mode": target["mode"],
         "session_id": target["session_id"],
@@ -561,6 +704,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "report_xlsx": str(run_dir / "report" / "report.xlsx"),
         "report_html": str(run_dir / "report" / "report.html"),
         "html_status": html_status,
+        "analysis_context": analysis_context,
         "elapsed_s": round(elapsed, 6),
     }
     common.print_json(output)

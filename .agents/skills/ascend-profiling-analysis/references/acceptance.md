@@ -10,6 +10,8 @@
 - [ ] When neither input is supplied (or both are), argparse rejects the invocation.
 - [ ] `--local-output-dir` is honoured: when set, pulled artifacts land there; existing non-empty targets are rejected unless `--overwrite` is also given.
 - [ ] `--skip-html` / `--report-mode {summary,full-raw}` / `--from-stage` / `--to-stage` / `--only-stage` are forwarded verbatim to the remote `ascend_profile.analyze` invocation.
+- [ ] `--model-id`, `--model-config`, `--hardware-model`, `--hardware-profile`, and `--no-cann-hardware-scan` are forwarded to the remote `ascend_profile.analyze` invocation.
+- [ ] Local `--model-config` and `--hardware-profile` files are uploaded into the run's remote output dir before remote analysis; non-local paths are treated as remote paths.
 - [ ] `--remote-output-dir <abs>` overrides the default `<remote-work-dir>/runs/<local-run-dir-name>`. Used to point a follow-up partial rerun (`--from-stage classify`) at a previous remote run so normalize/segment artifacts are reused.
 - [ ] Stage-aware artifact validation: `--only-stage normalize` succeeds without requiring `report/report.md`, while a full pipeline run still demands the complete artifact set. Segment-health validation only runs when segmentation is in the stage window.
 
@@ -33,16 +35,24 @@
 - [ ] If any required artifact is missing, the script returns `status: "failed"` with `phase: "artifact_validation"`.
 - [ ] If `segment_manifest.json` reports `hard_error_count > 0` (or legacy list-form `hard_errors` non-empty) or `interior_island_total > 0`, the script returns `status: "failed"` with `phase: "artifact_validation"`.
 - [ ] `render_report` raises `RuntimeError` when any diagnosis finding lacks both evidence ids and an explicit limitation; the wrapper surfaces that as `phase: "remote_analyze"` with the evidence-chain error message.
+- [ ] `report.md` includes a Profile-Derived Model Fingerprint section before Step Class View, and XLSX includes `model_inferred_config`, `model_feature_summary`, `model_layer_type_summary`, `model_candidate_summary`, and `operator_efficiency_summary` sheets.
+- [ ] `report.md` includes a Hardware Peak And MFU Context section, and XLSX includes `hardware_summary` and `hardware_theoretical_peaks` sheets.
+- [ ] Model fingerprint generation does not require `config.json`; vocab inference is reported as `vocab_size_or_lm_head_shard` only when lm_head/logits or large-output matmul shapes are visible.
+- [ ] Parameter inference from profiler shapes is labelled as a rank-visible lower bound unless TP/EP/DP strategy is known.
+- [ ] CANN theoretical peaks are derived from `platform_config/*.ini`; Ascend910B4 / A2 32G sustained factors are read from `knowledge/hardware_peak_measurements.json` (`0.95` for FP16/BF16 dense matmul, `0.65` for INT8 quant matmul).
+- [ ] Operator efficiency rows expose theoretical peak, sustained peak, MFU/theoretical efficiency, and sustained efficiency when hardware context is available.
 
 ### Artifact pull
 
 - [ ] By default, only the lightweight pull set is transferred back through manifest-verified SSH streaming (see `behavior.md`).
 - [ ] `--keep-remote-output` transfers the entire remote output dir locally through the same artifact path.
 - [ ] `normalized_event_index.csv` and `evidence/bubble_windows.jsonl` are excluded from the lightweight pull.
+- [ ] The lightweight pull set includes `operator_efficiency_summary.csv`, `model_insights.json`, `model_context_summary.csv`, `model_inferred_config.csv`, `model_feature_summary.csv`, `model_layer_type_summary.csv`, `model_candidate_summary.csv`, `model_config_overview.csv`, `model_parameter_estimate.csv`, `model_kv_cache_estimate.csv`, `model_config_feature_summary.csv`, `hardware_insights.json`, `hardware_summary.csv`, and `hardware_theoretical_peaks.csv`.
 
 ### Output JSON
 
 - [ ] On success, stdout JSON contains: `status: "ok"`, `machine`, `remote_profile_root`, `remote_output_dir`, `local_output_dir`, `stage_timings`, `rank_count`, `event_count`, `segment_count`, `layer_count`, `diagnosis_counts`, `report_md`, `report_xlsx`, `report_html`, `html_status`, `elapsed_s`.
+- [ ] On success, stdout JSON contains `analysis_context` with the model/hardware context used by the remote run.
 - [ ] On failure, stdout JSON contains: `status: "failed"`, `phase`, `error`, plus context (`machine`, `remote_profile_root`, `remote_output_dir` where applicable).
 - [ ] Progress lines on stderr are prefixed with `__VAWS_PROFILE_ANALYSIS_PROGRESS__=`.
 - [ ] Final JSON is the only thing written to stdout.
@@ -87,6 +97,7 @@
 
 - [ ] Scripts use `python3` everywhere; no shebang dependence on a specific interpreter path.
 - [ ] All argparse parsers set `allow_abbrev=False` to prevent accidental prefix matching.
+- [ ] Analyze and sweep fail with `phase=dependency_preflight` before remote sync when no supported remote Python can import the required `yaml` module.
 
 ## Boundaries (regression-protective)
 
@@ -104,3 +115,5 @@
 - [ ] `python3 .agents/skills/ascend-profiling-analysis/tests/test_timeout.py` exits 0 (silent-hang wall-clock regression).
 - [ ] `python3 -m pytest .agents/skills/ascend-profiling-analysis/tests/test_stage_validation.py` passes (wrapper validates only the artifact set the chosen stage window should produce; `--only-stage normalize` no longer requires `report/report.md`).
 - [ ] `python3 -m pytest .agents/skills/ascend-profiling-analysis/tests/test_semantic_conventions.py` passes (`knowledge/semantic_conventions.yaml` enum catalogue stays in sync with Python `op_type` / `finding_type` / `alignment_method` / `report_mode` emissions).
+- [ ] `python3 -m pytest .agents/skills/ascend-profiling-analysis/tests/test_hardware_insights.py` passes (CANN peak derivation and sustained-factor roofline fields).
+- [ ] `python3 -m pytest .agents/skills/ascend-profiling-analysis/tests/test_model_insights.py` passes (including full-Q MLA and mixed dense/MoE parameter schedules).

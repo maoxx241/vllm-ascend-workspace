@@ -61,6 +61,9 @@ def _load_serving_common():
 
 
 SERVING = _load_serving_common()
+# Loading serving common put LIB_DIR on sys.path.
+from vaws_ssh import base_ssh_options  # noqa: E402
+
 SshEndpoint = SERVING.SshEndpoint
 ssh_exec = SERVING.ssh_exec
 resolve_machine = SERVING.resolve_machine
@@ -170,10 +173,8 @@ def open_local_tunnel(ep, remote_port: int):
     local_port = _find_free_local_port()
     cmd = [
         "ssh",
-        "-o", "BatchMode=yes",
-        "-o", "StrictHostKeyChecking=accept-new",
+        *base_ssh_options(),
         "-o", "ExitOnForwardFailure=yes",
-        "-o", "LogLevel=ERROR",
         "-N",
         "-L", f"127.0.0.1:{local_port}:127.0.0.1:{remote_port}",
         "-p", str(ep.port),
@@ -282,7 +283,6 @@ def call_serve_start(extra_args: list[str]) -> dict[str, Any]:
 
 
 def call_serve_stop(
-    machine: str | None,
     *,
     session_id: str | None = None,
     session_file: str | None = None,
@@ -293,10 +293,6 @@ def call_serve_stop(
         cmd.extend(["--session-file", session_file])
     elif session_id:
         cmd.extend(["--session-id", session_id])
-    else:
-        if not machine:
-            raise RuntimeError("machine is required unless session_id or session_file is provided")
-        cmd.extend(["--machine", machine])
     if force:
         cmd.append("--force")
     return call_json_command(cmd)

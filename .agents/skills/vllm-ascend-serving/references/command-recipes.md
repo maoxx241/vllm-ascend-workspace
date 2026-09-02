@@ -1,5 +1,10 @@
 # Command Recipes
 
+All serving commands are session-scoped. When run from inside a session worktree
+(a directory with `.vaws-local/current-session.json`), the session is auto-resolved
+and **no target flag is needed** — that is the primary form shown below. Outside a
+worktree, add `--session-id <id>` (or `--session-file <path>`) explicitly.
+
 The start workflow automatically consumes the local workspace identity. Check
 it before launch with `python3 .agents/scripts/workspace_identity.py summary`.
 
@@ -7,13 +12,12 @@ it before launch with `python3 .agents/scripts/workspace_identity.py summary`.
 
 ```bash
 python3 .agents/skills/vllm-ascend-serving/scripts/serve_start.py \
-  --machine blue-a \
   --model /data/models/Qwen3-32B \
   --tp 4 \
   --devices 0,1,2,3
 ```
 
-## Fresh start in an isolated session
+## Fresh start with an explicit session target
 
 ```bash
 python3 .agents/skills/vllm-ascend-serving/scripts/serve_start.py \
@@ -22,13 +26,12 @@ python3 .agents/skills/vllm-ascend-serving/scripts/serve_start.py \
   --tp 4
 ```
 
-Session mode uses the session container and writes state under `.vaws-local/sessions/pr123/serving.json`.
+Both forms use the session container and write state under `.vaws-local/sessions/<session-id>/serving.json`.
 
 ## Fresh start with extra vllm args
 
 ```bash
 python3 .agents/skills/vllm-ascend-serving/scripts/serve_start.py \
-  --machine blue-a \
   --model /data/models/Qwen3-32B \
   --served-model-name qwen3-32b \
   --tp 4 \
@@ -40,15 +43,14 @@ python3 .agents/skills/vllm-ascend-serving/scripts/serve_start.py \
 ## Relaunch with same config (e.g. after code change)
 
 ```bash
-python3 .agents/skills/vllm-ascend-serving/scripts/serve_start.py \
-  --machine blue-a --relaunch
+python3 .agents/skills/vllm-ascend-serving/scripts/serve_start.py --relaunch
 ```
 
 ## Relaunch with extra debug env
 
 ```bash
 python3 .agents/skills/vllm-ascend-serving/scripts/serve_start.py \
-  --machine blue-a --relaunch \
+  --relaunch \
   --extra-env VLLM_LOGGING_LEVEL=DEBUG \
   --extra-env VLLM_TRACE_FUNCTION=1
 ```
@@ -57,7 +59,7 @@ python3 .agents/skills/vllm-ascend-serving/scripts/serve_start.py \
 
 ```bash
 python3 .agents/skills/vllm-ascend-serving/scripts/serve_start.py \
-  --machine blue-a --relaunch \
+  --relaunch \
   --unset-env VLLM_TRACE_FUNCTION
 ```
 
@@ -65,7 +67,7 @@ python3 .agents/skills/vllm-ascend-serving/scripts/serve_start.py \
 
 ```bash
 python3 .agents/skills/vllm-ascend-serving/scripts/serve_start.py \
-  --machine blue-a --relaunch \
+  --relaunch \
   --model /data/models/DeepSeek-V3 \
   --served-model-name deepseek-v3
 ```
@@ -74,7 +76,7 @@ python3 .agents/skills/vllm-ascend-serving/scripts/serve_start.py \
 
 ```bash
 python3 .agents/skills/vllm-ascend-serving/scripts/serve_start.py \
-  --machine blue-a --relaunch \
+  --relaunch \
   --unset-args=--max-model-len
 ```
 
@@ -84,7 +86,7 @@ Note: use `=` syntax to prevent argparse from treating `--max-model-len` as a se
 
 ```bash
 python3 .agents/skills/vllm-ascend-serving/scripts/serve_start.py \
-  --machine blue-a --relaunch \
+  --relaunch \
   --unset-args=--enforce-eager
 ```
 
@@ -94,40 +96,50 @@ Boolean flags like `--enforce-eager` are removed alone (the next token is not co
 
 ```bash
 python3 .agents/skills/vllm-ascend-serving/scripts/serve_start.py \
-  --machine blue-a --relaunch --skip-parity
+  --relaunch --skip-parity
 ```
 
 ## Start with a forced port
 
 ```bash
 python3 .agents/skills/vllm-ascend-serving/scripts/serve_start.py \
-  --machine blue-a \
   --model /data/models/Qwen3-32B \
   --tp 4 --port 8000
 ```
+
+Without `--port`, the service port is leased through the session lease mechanism.
 
 ## Start with extended health timeout (for very large models)
 
 ```bash
 python3 .agents/skills/vllm-ascend-serving/scripts/serve_start.py \
-  --machine blue-a \
   --model /data/models/DeepSeek-V3-685B \
   --tp 8 \
   --health-timeout 1200
 ```
 
-## Start with auto-selected devices (just specify tp)
+## Start with lease-derived devices (just specify tp)
 
 ```bash
 python3 .agents/skills/vllm-ascend-serving/scripts/serve_start.py \
-  --machine blue-a \
   --model /data/models/Qwen3-32B \
   --tp 4
 ```
 
-The script probes NPUs, finds 4 free devices, and auto-selects them.
+Without `--devices`, the launch uses the first 4 devices of the session's live NPU lease and verifies them free via the host probe. Free cards outside the lease are never auto-selected.
 
 ## Probe NPU availability before deciding
+
+```bash
+# Probe the session's base host (inside a session worktree)
+python3 .agents/skills/vllm-ascend-serving/scripts/serve_probe_npus.py
+
+# Or with an explicit session target
+python3 .agents/skills/vllm-ascend-serving/scripts/serve_probe_npus.py \
+  --session-id pr123
+```
+
+For resource-pool probing of a registered machine host (machine-management scope), `serve_probe_npus.py` alternatively accepts `--machine <alias-or-ip>` — the two surfaces are mutually exclusive:
 
 ```bash
 python3 .agents/skills/vllm-ascend-serving/scripts/serve_probe_npus.py \
@@ -140,13 +152,18 @@ This probes the **bare-metal host** (not the container) for cross-container NPU 
 {
   "status": "ok",
   "machine": "blue-a",
-  "total": 8,
+  "session_id": null,
+  "collected_at": "2026-08-11T12:00:00Z",
   "devices": [0, 1, 2, 3, 4, 5, 6, 7],
-  "busy": {"0": [{"pid": 12345, "owner": "root", "name": "python3"}],
-           "1": [{"pid": 12345, "owner": "root", "name": "python3"}]},
-  "hbm": {"0": 8192, "1": 8192, "2": 0, "3": 0},
+  "busy": {
+    "0": [{"kind": "process", "pid": 12345, "name": "python3"}],
+    "1": [{"kind": "hbm_threshold", "hbm_used_mb": 8192, "threshold_mb": 4096}]
+  },
+  "hbm": {"0": {"used_mb": 3364, "total_mb": 65536}, "1": {"used_mb": 8192, "total_mb": 65536}},
   "free": [2, 3, 4, 5, 6, 7],
   "free_count": 6,
+  "total": 8,
+  "npu_smi_ok": true,
   "hbm_busy_threshold_mb": 4096
 }
 ```
@@ -154,11 +171,10 @@ This probes the **bare-metal host** (not the container) for cross-container NPU 
 ## Check status
 
 ```bash
-python3 .agents/skills/vllm-ascend-serving/scripts/serve_status.py \
-  --machine blue-a
+python3 .agents/skills/vllm-ascend-serving/scripts/serve_status.py
 ```
 
-Session status:
+Explicit session target:
 
 ```bash
 python3 .agents/skills/vllm-ascend-serving/scripts/serve_status.py \
@@ -168,11 +184,10 @@ python3 .agents/skills/vllm-ascend-serving/scripts/serve_status.py \
 ## Stop gracefully
 
 ```bash
-python3 .agents/skills/vllm-ascend-serving/scripts/serve_stop.py \
-  --machine blue-a
+python3 .agents/skills/vllm-ascend-serving/scripts/serve_stop.py
 ```
 
-Session stop:
+Explicit session target:
 
 ```bash
 python3 .agents/skills/vllm-ascend-serving/scripts/serve_stop.py \
@@ -182,15 +197,13 @@ python3 .agents/skills/vllm-ascend-serving/scripts/serve_stop.py \
 ## Force stop
 
 ```bash
-python3 .agents/skills/vllm-ascend-serving/scripts/serve_stop.py \
-  --machine blue-a --force
+python3 .agents/skills/vllm-ascend-serving/scripts/serve_stop.py --force
 ```
 
 ## Start with Ascend W8A8 quantization
 
 ```bash
 python3 .agents/skills/vllm-ascend-serving/scripts/serve_start.py \
-  --machine blue-a \
   --model /data/models/Qwen3-32B-W8A8 \
   --tp 4 \
   -- --enforce-eager --max-model-len 4096 --quantization ascend --trust-remote-code
@@ -200,7 +213,6 @@ python3 .agents/skills/vllm-ascend-serving/scripts/serve_start.py \
 
 ```bash
 python3 .agents/skills/vllm-ascend-serving/scripts/serve_start.py \
-  --machine blue-a \
   --model /data/models/Qwen3.5-35B-A3B \
   --tp 8 \
   -- --enforce-eager --max-model-len 2048 --trust-remote-code
@@ -210,7 +222,6 @@ python3 .agents/skills/vllm-ascend-serving/scripts/serve_start.py \
 
 ```bash
 python3 .agents/skills/vllm-ascend-serving/scripts/serve_start.py \
-  --machine blue-a \
   --model /data/models/Qwen3-32B \
   --tp 4 \
   -- --enforce-eager --additional-config '{"torchair_graph_config":{"enabled":false}}'
@@ -222,7 +233,6 @@ JSON double quotes are preserved through the SSH escaping layers.
 
 ```bash
 python3 .agents/skills/vllm-ascend-serving/scripts/serve_start.py \
-  --machine blue-a \
   --model /data/models/Qwen3-32B \
   --tp 4 \
   -- --enforce-eager --enable-chunked-prefill
@@ -232,7 +242,6 @@ python3 .agents/skills/vllm-ascend-serving/scripts/serve_start.py \
 
 ```bash
 python3 .agents/skills/vllm-ascend-serving/scripts/serve_start.py \
-  --machine blue-a \
   --model /data/models/Qwen3-32B \
   --tp 4 \
   -- --enforce-eager --enable-prefix-caching

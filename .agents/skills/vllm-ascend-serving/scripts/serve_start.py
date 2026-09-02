@@ -1,24 +1,23 @@
 #!/usr/bin/env python3
-"""Start a vllm-ascend online service on a workspace-managed remote container.
+"""Start a vllm-ascend online service on a session-managed remote container.
+
+Serving is session-only. Inside a session worktree the session is
+auto-resolved, so no target flag is needed.
 
 Usage examples:
 
-    # Fresh start with explicit params
-    python3 serve_start.py --machine blue-a --model /data/models/Qwen3-32B \\
+    # From inside a session worktree (auto-resolved session)
+    python3 serve_start.py --model /data/models/Qwen3-32B --tp 4
+
+    # Explicit session target
+    python3 serve_start.py --session-id pr-123 --model /data/models/Qwen3-32B \\
         --tp 4 --devices 0,1,2,3 -- --max-model-len 4096
 
-    # Session-scoped start for parallel agent work
-    python3 serve_start.py --session-id pr-123 --model /data/models/Qwen3-32B \\
-        --tp 4 --devices 0,1,2,3
-
     # Relaunch with same config
-    python3 serve_start.py --machine blue-a --relaunch
+    python3 serve_start.py --session-id pr-123 --relaunch
 
     # Relaunch with a new env variable
-    python3 serve_start.py --machine blue-a --relaunch --extra-env VLLM_USE_V1=1
-
-    # Relaunch and remove an old env
-    python3 serve_start.py --machine blue-a --relaunch --unset-env MY_DEBUG
+    python3 serve_start.py --session-id pr-123 --relaunch --extra-env VLLM_USE_V1=1
 
 Progress on stderr as __VAWS_SERVING_PROGRESS__=<json>.
 Final result on stdout as a single JSON object.
@@ -46,6 +45,7 @@ from _common import (
     ROOT,
     SshEndpoint,
     emit_progress,
+    load_preset,
     load_serving_state,
     now_utc,
     print_json,
@@ -55,7 +55,7 @@ from _common import (
     select_devices,
     ssh_exec,
 )
-from vaws_session_state import allocate_service_port, file_lock, release_service_port, session_lock_dir
+from vaws_session_state import allocate_service_port, file_lock, release_service_port, session_lock_dir, require_session_npu_lease, SessionStateError
 from vaws_local_state import effective_workspace_alias, load_workspace_identity
 from vaws_validate import parse_device_csv, require_env_name
 
@@ -63,6 +63,9 @@ RUNTIME_DIR_BASE = ".vaws-runtime/serving"
 DEFAULT_HEALTH_TIMEOUT = 300
 HEALTH_POLL_INTERVAL = 5
 PORT_TAIL_RE = re.compile(r"[:.]([0-9]+)$")
+# Backstop for the parity subprocess; parity itself bounds git transport at
+# 900s, so an hour only fires on a genuinely stuck child.
+PARITY_TIMEOUT_SECONDS = 3600
 
 
 def service_runtime_dir(runtime_base: str, instance_ts: str, alias: str | None) -> str:
@@ -74,15 +77,12 @@ def service_runtime_dir(runtime_base: str, instance_ts: str, alias: str | None) 
 # Parity
 # ---------------------------------------------------------------------------
 
-def run_parity(machine: str | None, session_id: str | None, session_file: Path | None = None) -> dict[str, Any]:
+def run_parity(session_id: str, session_file: Path | None = None) -> dict[str, Any]:
     parity_script = ROOT / ".agents" / "skills" / "remote-code-parity" / "scripts" / "parity_sync.py"
     if session_file is not None:
         cmd = [sys.executable, str(parity_script), "--session-file", str(session_file)]
-    elif session_id:
-        cmd = [sys.executable, str(parity_script), "--session-id", session_id]
     else:
-        assert machine is not None
-        cmd = [sys.executable, str(parity_script), "--machine", machine]
+        cmd = [sys.executable, str(parity_script), "--session-id", session_id]
     proc = subprocess.Popen(
         cmd,
         cwd=str(ROOT),
@@ -90,6 +90,7 @@ def run_parity(machine: str | None, session_id: str | None, session_file: Path |
         stderr=subprocess.PIPE,
         text=True,
     )
+    stdout_lines: list[str] = []
     stderr_lines: list[str] = []
 
     def relay_stderr() -> None:
@@ -100,12 +101,30 @@ def run_parity(machine: str | None, session_id: str | None, session_file: Path |
                 sys.stderr.write(line)
                 sys.stderr.flush()
 
+    def collect_stdout() -> None:
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            stdout_lines.append(line)
+
     thread = threading.Thread(target=relay_stderr, daemon=True)
     thread.start()
-    assert proc.stdout is not None
-    stdout = proc.stdout.read()
-    returncode = proc.wait()
+    stdout_thread = threading.Thread(target=collect_stdout, daemon=True)
+    stdout_thread.start()
+    try:
+        returncode = proc.wait(timeout=PARITY_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+        thread.join(timeout=1)
+        stdout_thread.join(timeout=1)
+        return {
+            "status": "failed",
+            "error": f"parity sync timed out after {PARITY_TIMEOUT_SECONDS}s",
+            "stderr_tail": "".join(stderr_lines)[-1000:],
+        }
     thread.join(timeout=1)
+    stdout_thread.join(timeout=1)
+    stdout = "".join(stdout_lines)
     stderr = "".join(stderr_lines)
     if returncode != 0:
         return {
@@ -126,33 +145,6 @@ def run_parity(machine: str | None, session_id: str | None, session_file: Path |
 # ---------------------------------------------------------------------------
 # Port allocation
 # ---------------------------------------------------------------------------
-
-def find_free_port(ep: SshEndpoint) -> int:
-    script = (
-        "python3 -c \"\n"
-        "import socket, random, json\n"
-        "for _ in range(50):\n"
-        "    port = random.randint(30000, 60000)\n"
-        "    try:\n"
-        "        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)\n"
-        "        s.bind(('0.0.0.0', port))\n"
-        "        s.close()\n"
-        "        print(json.dumps({'port': port}))\n"
-        "        exit(0)\n"
-        "    except OSError:\n"
-        "        continue\n"
-        "print(json.dumps({'error': 'no free port found'}))\n"
-        "exit(1)\n"
-        "\""
-    )
-    result = ssh_exec(ep, script, check=False)
-    if result.returncode != 0:
-        raise RuntimeError(f"port discovery failed: {result.stderr[:500]}")
-    data = json.loads(result.stdout.strip())
-    if "error" in data:
-        raise RuntimeError(data["error"])
-    return data["port"]
-
 
 def remote_port_available(ep: SshEndpoint, port: int) -> bool:
     script = (
@@ -210,19 +202,23 @@ def _parse_devices_csv(value: str) -> set[int]:
     return set(parse_device_csv(value) or [])
 
 
-def _leased_devices_csv(session: dict[str, Any] | None) -> str | None:
-    if not session:
-        return None
-    raw_devices = session.get("leases", {}).get("npu_devices", [])
-    if not isinstance(raw_devices, list) or not raw_devices:
-        return None
-    devices = [int(item) for item in raw_devices]
-    return ",".join(str(item) for item in sorted(devices))
-
-
 # ---------------------------------------------------------------------------
 # Launch script builder (the core escaping-safe layer)
 # ---------------------------------------------------------------------------
+
+def _require_heredoc_safe(value: str, label: str) -> str:
+    """Reject values that could break out of the launch script heredoc.
+
+    The vllm command is written into ``_serve.sh`` through a quoted heredoc.
+    ``shlex.quote`` does not help there: the heredoc body is literal text, so
+    a newline inside a token would split the ``exec`` line — and a line
+    matching the ``VAWS_SERVE_EOF`` delimiter would end the heredoc early and
+    execute the remainder as shell. Fail fast instead.
+    """
+    if "\n" in value or "\r" in value:
+        raise ValueError(f"{label} must not contain newline characters")
+    return value
+
 
 def build_launch_script(
     *,
@@ -280,18 +276,23 @@ def build_launch_script(
     # shadow the installed vllm package with the source tree.
     lines.append(f"cd {shlex.quote(runtime_dir)}")
 
-    # Build argv — every token individually quoted for bash safety
-    argv_tokens = ["vllm", "serve", shlex.quote(model)]
+    # Build argv — every token individually quoted for bash safety.
+    # Tokens land inside a quoted heredoc, where shlex.quote cannot contain
+    # newlines, so heredoc-bound values are validated first.
+    argv_tokens = ["vllm", "serve", shlex.quote(_require_heredoc_safe(model, "--model"))]
     argv_tokens.extend(["--host", "0.0.0.0"])
     argv_tokens.extend(["--port", str(port)])
     if served_model_name:
-        argv_tokens.extend(["--served-model-name", shlex.quote(served_model_name)])
+        argv_tokens.extend([
+            "--served-model-name",
+            shlex.quote(_require_heredoc_safe(served_model_name, "--served-model-name")),
+        ])
     if tp is not None:
         argv_tokens.extend(["--tensor-parallel-size", str(tp)])
     if dp is not None:
         argv_tokens.extend(["--data-parallel-size", str(dp)])
     for arg in extra_args:
-        argv_tokens.append(shlex.quote(arg))
+        argv_tokens.append(shlex.quote(_require_heredoc_safe(arg, "extra vllm arg")))
 
     cmd_str = " ".join(argv_tokens)
     stdout_log = f"{runtime_dir}/stdout.log"
@@ -338,28 +339,9 @@ def build_launch_script(
 
 def check_alive(ep: SshEndpoint, pid: int) -> bool:
     r = ssh_exec(ep, f"kill -0 {pid} 2>/dev/null && echo alive || echo dead", check=False)
+    if r.returncode != 0 or r.stdout.strip() not in ("alive", "dead"):
+        raise RuntimeError("service process state is unknown; SSH failure is not proof of exit")
     return r.stdout.strip() == "alive"
-
-
-def check_health(ep: SshEndpoint, port: int) -> bool:
-    script = f"curl -s -o /dev/null -w '%{{http_code}}' --connect-timeout 3 http://127.0.0.1:{port}/health 2>/dev/null || echo 000"
-    r = ssh_exec(ep, script, check=False)
-    return r.stdout.strip() == "200"
-
-
-def check_models(ep: SshEndpoint, port: int) -> dict[str, Any] | None:
-    script = f"curl -s --connect-timeout 3 http://127.0.0.1:{port}/v1/models 2>/dev/null || true"
-    r = ssh_exec(ep, script, check=False)
-    text = r.stdout.strip()
-    if not text:
-        return None
-    try:
-        data = json.loads(text)
-        if data.get("data"):
-            return data
-    except json.JSONDecodeError:
-        pass
-    return None
 
 
 def wait_for_devices_free(host_ep: SshEndpoint, devices: set[int], *, timeout: int = 45) -> bool:
@@ -370,10 +352,16 @@ def wait_for_devices_free(host_ep: SshEndpoint, devices: set[int], *, timeout: i
         try:
             npu_info = probe_npus(host_ep)
             busy = {int(dev) for dev in npu_info.get("busy", {}) if str(dev).isdigit()}
+            if not devices.issubset({int(dev) for dev in npu_info.get("devices", [])}):
+                return False
             if not (devices & busy):
                 return True
-        except Exception:
-            return True
+        except Exception as exc:
+            # A failed probe means we cannot confirm the devices are free.
+            # Fail closed (report "not free") rather than masking a possibly
+            # still-busy device as available.
+            sys.stderr.write(f"[serve_start] device-free probe failed: {exc}\n")
+            return False
         if time.time() >= deadline:
             return False
         time.sleep(3)
@@ -382,6 +370,76 @@ def wait_for_devices_free(host_ep: SshEndpoint, devices: set[int], *, timeout: i
 def read_remote_tail(ep: SshEndpoint, remote_path: str, lines: int = 30) -> str:
     r = ssh_exec(ep, f"tail -{lines} {shlex.quote(remote_path)} 2>/dev/null || echo '(no log)'", check=False)
     return r.stdout.strip()
+
+
+def cleanup_failed_launch(ep: SshEndpoint, runtime_dir: str, launch_stdout: str) -> bool:
+    """Best-effort kill of a process that may have survived a failed launch.
+
+    A failed launch script (or unparseable PID output) can still have spawned
+    the service. Returns True only when no leftover process is confirmed —
+    either no PID was found, or every found PID was killed and verified dead.
+    False means the process state is unknown; the caller must keep the port
+    lease and report needs_repair.
+    """
+    candidates: set[int] = set()
+    stdout_lines = (launch_stdout or "").strip().splitlines()
+    if stdout_lines:
+        with contextlib.suppress(ValueError):
+            candidates.add(int(stdout_lines[-1].strip()))
+    pid_file = f"{runtime_dir}/pid"
+    pid_state = ssh_exec(ep, f"cat {shlex.quote(pid_file)} 2>/dev/null || true", check=False)
+    if pid_state.returncode != 0:
+        # Remote state is unreadable — cannot rule out a leftover process.
+        return False
+    for token in pid_state.stdout.split():
+        with contextlib.suppress(ValueError):
+            candidates.add(int(token))
+    for pid in sorted(candidates):
+        try:
+            if not check_alive(ep, pid):
+                continue
+        except RuntimeError:
+            return False
+        ssh_exec(
+            ep,
+            f"kill -15 {pid} 2>/dev/null || true; sleep 2; kill -9 {pid} 2>/dev/null || true",
+            check=False,
+        )
+        time.sleep(1)
+        try:
+            if check_alive(ep, pid):
+                return False
+        except RuntimeError:
+            return False
+    return True
+
+
+def abort_failed_launch(
+    *,
+    ep: SshEndpoint,
+    runtime_dir: str,
+    launch_stdout: str,
+    release_kwargs: dict[str, Any],
+    payload: dict[str, Any],
+) -> int:
+    """Finish a failed launch attempt.
+
+    The port lease is released only when cleanup confirms no leftover
+    process; otherwise the lease is kept and the result is needs_repair so a
+    human can inspect the container instead of losing track of the port.
+    """
+    if cleanup_failed_launch(ep, runtime_dir, launch_stdout):
+        release_service_port(**release_kwargs)
+        payload["status"] = "failed"
+    else:
+        payload["status"] = "needs_repair"
+        payload["error"] = (
+            f"{payload['error']}; a leftover process could not be confirmed "
+            "dead, so the service port lease was kept — inspect the container, "
+            "kill any leftover vllm process, then release the port lease"
+        )
+    print_json(payload)
+    return 1
 
 
 # ---------------------------------------------------------------------------
@@ -403,7 +461,6 @@ _ENV_ERROR_PATTERNS: list[tuple[str, str]] = [
 
 def diagnose_env_failure(
     stderr_tail: str,
-    machine: str,
     *,
     session_id: str | None = None,
 ) -> dict[str, Any] | None:
@@ -423,14 +480,14 @@ def diagnose_env_failure(
     if not matched_tags:
         return None
 
-    recovery_target = f"--session-id {session_id}" if session_id else f"--machine {machine}"
+    recovery_parts = ["python3 .agents/skills/remote-code-parity/scripts/parity_sync.py"]
+    if session_id:
+        recovery_parts.append(f"--session-id {session_id}")
+    recovery_parts.append("--force-reinstall")
     return {
         "error_tags": sorted(set(matched_tags)),
         "cause": "remote Python package version mismatch",
-        "recovery_command": (
-            f"python3 .agents/skills/remote-code-parity/scripts/parity_sync.py "
-            f"{recovery_target} --force-reinstall"
-        ),
+        "recovery_command": " ".join(recovery_parts),
         "recovery_description": (
             "Re-run parity sync with --force-reinstall to rebuild "
             "vllm and vllm-ascend in the correct order with pinned dependencies."
@@ -445,43 +502,182 @@ def diagnose_env_failure(
     }
 
 
+_STAGE_MARKERS: list[tuple[str, str]] = [
+    ("uvicorn running", "http-up"),
+    ("application startup complete", "http-up"),
+    ("capturing", "graph-capture"),
+    ("graph capture", "graph-capture"),
+    ("aclgraph", "graph-capture"),
+    ("acl graph", "graph-capture"),
+    ("torch.compile", "compile"),
+    ("loading weights", "weight-load"),
+    ("loading safetensors", "weight-load"),
+    ("model loading", "weight-load"),
+]
+
+_STAGE_GREP = "loading weights|loading safetensors|model loading|torch\\.compile|capturing|aclgraph|acl graph|graph capture|uvicorn running|application startup complete"
+
+
+def classify_stage(text: str) -> str | None:
+    """Map a runtime log line to a startup phase, or None when unrecognized."""
+    lowered = text.lower()
+    for needle, stage in _STAGE_MARKERS:
+        if needle in lowered:
+            return stage
+    return None
+
+
+def probe_ready_once(
+    ep: SshEndpoint,
+    pid: int,
+    port: int,
+    *,
+    runtime_dir: str | None = None,
+) -> dict[str, Any]:
+    """Alive + /health + /v1/models (+ startup stage) in a single SSH round-trip.
+
+    The readiness loop used to issue up to three separate SSH commands per
+    tick; over a long model load that is hundreds of avoidable round-trips.
+    A failed SSH round-trip is ``probe_error`` (liveness unknown), never proof
+    of process exit.
+    """
+    lines = [
+        f"if kill -0 {pid} 2>/dev/null; then echo __ALIVE__=1; else echo __ALIVE__=0; fi",
+        (
+            f"code=$(curl -s -o /dev/null -w '%{{http_code}}' --connect-timeout 3 --max-time 5 "
+            f"http://127.0.0.1:{port}/health 2>/dev/null || echo 000)"
+        ),
+        'echo "__HEALTH__=$code"',
+        'if [ "$code" = "200" ]; then',
+        "  echo __MODELS_BEGIN__",
+        f"  curl -s --connect-timeout 3 --max-time 5 http://127.0.0.1:{port}/v1/models 2>/dev/null",
+        "  echo",
+        "  echo __MODELS_END__",
+        "fi",
+    ]
+    if runtime_dir:
+        lines += [
+            "echo __STAGE_BEGIN__",
+            (
+                f"tail -n 300 {shlex.quote(runtime_dir)}/stdout.log {shlex.quote(runtime_dir)}/stderr.log 2>/dev/null "
+                f"| grep -iE '{_STAGE_GREP}' | tail -1 | head -c 160"
+            ),
+            "echo",
+            "echo __STAGE_END__",
+        ]
+    r = ssh_exec(ep, "\n".join(lines), check=False)
+    out = r.stdout or ""
+    # Any nonzero rc means the round-trip did not complete cleanly; even an
+    # __ALIVE__=0 marker in torn output is not proof of process exit.
+    probe_error = r.returncode != 0
+    alive = "__ALIVE__=1" in out
+    health_ok = "__HEALTH__=200" in out
+    models: dict[str, Any] | None = None
+    if "__MODELS_BEGIN__" in out and "__MODELS_END__" in out:
+        body = out.split("__MODELS_BEGIN__", 1)[1].split("__MODELS_END__", 1)[0].strip()
+        try:
+            data = json.loads(body)
+            if data.get("data"):
+                models = data
+        except json.JSONDecodeError:
+            models = None
+    stage = None
+    if "__STAGE_BEGIN__" in out and "__STAGE_END__" in out:
+        marker = out.split("__STAGE_BEGIN__", 1)[1].split("__STAGE_END__", 1)[0].strip()
+        stage = classify_stage(marker)
+    return {"alive": alive, "health": health_ok, "models": models,
+            "stage": stage, "probe_error": probe_error}
+
+
+def probe_first_token(ep: SshEndpoint, port: int, served_model: str) -> dict[str, Any]:
+    """One deterministic real request; /health 200 alone is not a ready service."""
+    payload = json.dumps({"model": served_model, "prompt": "Hello", "max_tokens": 8, "temperature": 0})
+    # $$ is the remote shell PID, so concurrent probes never share a body file.
+    script = (
+        "tmp=/tmp/vaws_first_token.$$.json; "
+        f"code=$(curl -s -o $tmp -w '%{{http_code}}' --connect-timeout 3 --max-time 120 "
+        f"-X POST http://127.0.0.1:{port}/v1/completions -H 'Content-Type: application/json' "
+        f"-d {shlex.quote(payload)} 2>/dev/null || echo 000); "
+        "echo __CODE__=$code; head -c 400 $tmp 2>/dev/null; rm -f $tmp"
+    )
+    r = ssh_exec(ep, script, check=False)
+    out = r.stdout or ""
+    return {
+        "ok": "__CODE__=200" in out,
+        # Any nonzero rc is an unknown probe result, not proof of failure.
+        "probe_error": r.returncode != 0,
+        "detail": out[-300:],
+    }
+
+
 def wait_for_ready(
     ep: SshEndpoint,
     pid: int,
     port: int,
     runtime_dir: str,
     timeout: int,
+    served_model: str,
 ) -> dict[str, Any]:
     start = time.monotonic()
     deadline = start + timeout
     health_ok = False
     models_ok = False
+    token_ok = False
+    phases: list[dict[str, Any]] = []
+
+    def mark(stage: str) -> None:
+        if not phases or phases[-1]["phase"] != stage:
+            phases.append({"phase": stage, "at_seconds": round(time.monotonic() - start, 1)})
+            emit_progress("probe", f"phase: {stage}")
+
+    def last_phase() -> str:
+        return phases[-1]["phase"] if phases else "launch"
 
     while time.monotonic() < deadline:
-        if not check_alive(ep, pid):
+        probe = probe_ready_once(ep, pid, port, runtime_dir=runtime_dir)
+        if probe.get("probe_error"):
+            # A lost SSH round-trip is not a dead process; keep waiting.
+            time.sleep(HEALTH_POLL_INTERVAL)
+            continue
+        if not probe["alive"]:
             stderr_tail = read_remote_tail(ep, f"{runtime_dir}/stderr.log")
             return {
                 "ready": False,
                 "alive": False,
                 "error": "process exited before becoming ready",
                 "stderr_tail": stderr_tail,
+                "phases": phases,
+                "last_phase": last_phase(),
                 "elapsed_seconds": round(time.monotonic() - start, 1),
             }
 
-        if not health_ok:
-            health_ok = check_health(ep, port)
-            if health_ok:
-                emit_progress("probe-health", "/health returned 200")
+        if probe.get("stage"):
+            mark(probe["stage"])
 
-        if health_ok and not models_ok:
-            if check_models(ep, port) is not None:
-                models_ok = True
-                emit_progress("probe-models", "/v1/models returned model list")
+        if not health_ok and probe["health"]:
+            health_ok = True
+            mark("health-ok")
 
-        if health_ok and models_ok:
+        if health_ok and not models_ok and probe["models"] is not None:
+            models_ok = True
+            mark("models-ok")
+
+        if models_ok and not token_ok:
+            token = probe_first_token(ep, port, served_model)
+            if token.get("probe_error"):
+                time.sleep(HEALTH_POLL_INTERVAL)
+                continue
+            if token["ok"]:
+                token_ok = True
+                mark("first-token-ok")
+            else:
+                mark("first-token-failing")
+
+        if health_ok and models_ok and token_ok:
             return {
                 "ready": True,
                 "alive": True,
+                "phases": phases,
                 "elapsed_seconds": round(time.monotonic() - start, 1),
             }
 
@@ -492,9 +688,82 @@ def wait_for_ready(
         "alive": check_alive(ep, pid),
         "health": health_ok,
         "models": models_ok,
-        "error": f"timed out after {timeout}s waiting for service",
+        "first_token": token_ok,
+        "error": (
+            f"timed out after {timeout}s waiting for service "
+            f"(last phase: {last_phase()}); raise --health-timeout if this stage legitimately takes longer"
+        ),
+        "phases": phases,
+        "last_phase": last_phase(),
         "elapsed_seconds": round(time.monotonic() - start, 1),
     }
+
+
+# ---------------------------------------------------------------------------
+# Preset preflight
+# ---------------------------------------------------------------------------
+
+_JSON_VALUE_FLAGS = (
+    "--additional-config",
+    "--model-loader-extra-config",
+    "--speculative-config",
+    "--compilation-config",
+)
+
+
+def preflight_preset(
+    ep: SshEndpoint,
+    preset: dict[str, Any],
+    *,
+    runtime_base: str,
+    env: dict[str, str],
+    extra_args: list[str],
+) -> list[str]:
+    """Verify a preset against the actual container before touching any service.
+
+    Recipe/version drift is the most common launch-failure class (stale arg
+    types, CANN path moves, unverified vllm). Fail here, before a multi-minute
+    model load is wasted on it — and before any running service is stopped.
+    """
+    problems: list[str] = []
+    expected_vllm = str(preset.get("vllm_version") or "")
+    if expected_vllm:
+        version_file = f"{runtime_base}/vllm/vllm/_version.py"
+        r = ssh_exec(ep, f"grep -m1 '^__version__ = ' {shlex.quote(version_file)} 2>/dev/null || true", check=False)
+        match = re.search(r"'([0-9][^']*)'", r.stdout or "")
+        actual_vllm = match.group(1) if match else ""
+        if actual_vllm != expected_vllm:
+            problems.append(
+                f"preset is verified for vllm {expected_vllm}, but the container has "
+                f"{actual_vllm or 'an unreadable vllm version'}; use a preset verified for this image"
+            )
+    missing: list[str] = []
+    for entry in (env.get("PYTHONPATH") or "").split(":"):
+        entry = entry.strip()
+        if entry.startswith("/"):
+            r = ssh_exec(ep, f"test -d {shlex.quote(entry)}", check=False)
+            if r.returncode != 0:
+                missing.append(entry)
+    if missing:
+        problems.append("PYTHONPATH entries missing in the container: " + ", ".join(missing))
+    for flag in _JSON_VALUE_FLAGS:
+        # Validate every occurrence, in both "--flag value" and "--flag=value"
+        # forms — a bad second occurrence must not slip through.
+        for idx, arg in enumerate(extra_args):
+            if arg == flag:
+                if idx + 1 >= len(extra_args):
+                    problems.append(f"{flag} has no value")
+                    continue
+                value = extra_args[idx + 1]
+            elif arg.startswith(f"{flag}="):
+                value = arg[len(flag) + 1:]
+            else:
+                continue
+            try:
+                json.loads(value)
+            except json.JSONDecodeError as exc:
+                problems.append(f"{flag} value is not valid JSON: {exc}")
+    return problems
 
 
 # ---------------------------------------------------------------------------
@@ -564,9 +833,9 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         allow_abbrev=False,
     )
-    p.add_argument("--machine", help="machine alias or host IP")
-    p.add_argument("--session-id", help="VAWS session id; uses the session container and state namespace")
+    p.add_argument("--session-id", help="VAWS session id; defaults to the bound session of the current worktree")
     p.add_argument("--session-file", help="explicit session.json path")
+    p.add_argument("--preset", help="named serving preset from the skill's presets/ directory; CLI args override preset values")
     p.add_argument("--model", help="absolute model weight path on the remote container")
     p.add_argument(
         "--served-model-name", "--served-name",
@@ -617,14 +886,32 @@ def main(argv: list[str] | None = None) -> int:
         vllm_extra = argv[idx + 1:]
 
     args = build_parser().parse_args(own_argv)
+
+    # ---- preset: named recipe as defaults under explicit CLI args ----
+    preset: dict[str, Any] | None = None
+    if args.preset:
+        preset = load_preset(args.preset)
+        if args.tp is None and preset.get("tp") is not None:
+            args.tp = int(preset["tp"])
+        if args.dp is None and preset.get("dp") is not None:
+            args.dp = int(preset["dp"])
+        if args.port is None and preset.get("port") is not None:
+            args.port = int(preset["port"])
+        if not args.devices and preset.get("devices"):
+            args.devices = str(preset["devices"])
+        if not args.served_model_name and preset.get("served_model_name"):
+            args.served_model_name = str(preset["served_model_name"])
+        if args.health_timeout == DEFAULT_HEALTH_TIMEOUT and preset.get("health_timeout"):
+            args.health_timeout = int(preset["health_timeout"])
+        if not vllm_extra and preset.get("serve_args"):
+            vllm_extra = [str(a) for a in preset["serve_args"]]
     lock_stack = contextlib.ExitStack()
 
     try:
         # ---- resolve target ----
-        target_label = args.session_id or args.session_file or args.machine
+        target_label = args.session_id or args.session_file or "bound session"
         emit_progress("resolve-target", f"looking up {target_label}")
         target = resolve_execution_target(
-            args.machine,
             session_id=args.session_id,
             session_file=args.session_file,
         )
@@ -632,11 +919,10 @@ def main(argv: list[str] | None = None) -> int:
         alias = target.alias
         ep = target.endpoint
         runtime_base = target.runtime_base
-        if target.session_id:
-            emit_progress("lock", f"acquiring serving lock for session {target.session_id}")
-            lock_stack.enter_context(
-                file_lock(session_lock_dir(target.state_repo_root) / f"{target.session_id}.serving.lock")
-            )
+        emit_progress("lock", f"acquiring serving lock for session {target.session_id}")
+        lock_stack.enter_context(
+            file_lock(session_lock_dir(target.state_repo_root) / f"{target.session_id}.serving.lock")
+        )
 
         # ---- parse env overrides ----
         extra_env: dict[str, str] = {}
@@ -650,18 +936,27 @@ def main(argv: list[str] | None = None) -> int:
             except ValueError as exc:
                 print_json({"status": "needs_input", "error": str(exc)})
                 return 1
+        if preset and preset.get("env"):
+            preset_env: dict[str, str] = {}
+            for key, value in (preset["env"] or {}).items():
+                try:
+                    preset_env[require_env_name(str(key))] = str(value)
+                except ValueError as exc:
+                    print_json({"status": "needs_input", "error": f"preset env: {exc}"})
+                    return 1
+            # CLI --extra-env wins over preset env per key.
+            extra_env = {**preset_env, **extra_env}
 
         # ---- resolve launch params (fresh or relaunch) ----
         if args.relaunch:
             previous = load_serving_state(
-                alias,
-                session_id=target.session_id,
+                target.session_id,
                 state_repo_root=target.state_repo_root,
             )
             if previous is None:
                 print_json({
                     "status": "failed",
-                    "error": f"no previous launch state for {alias}; cannot --relaunch without a prior start",
+                    "error": f"no previous launch state for session {target.session_id}; cannot --relaunch without a prior start",
                     "machine": alias,
                 })
                 return 1
@@ -697,50 +992,71 @@ def main(argv: list[str] | None = None) -> int:
             launch_env = extra_env
             launch_extra_args = vllm_extra
 
-        leased_devices = _leased_devices_csv(target.session)
-        if target.session_id and leased_devices:
-            try:
-                leased = _parse_devices_csv(leased_devices)
-            except ValueError as exc:
-                print_json({"status": "needs_repair", "error": str(exc), "session_id": target.session_id})
+        # ---- preset preflight: catch recipe/version drift before any stop/launch ----
+        if preset is not None:
+            problems = preflight_preset(
+                ep, preset, runtime_base=runtime_base,
+                env=launch_env, extra_args=launch_extra_args,
+            )
+            if problems:
+                print_json({
+                    "status": "failed",
+                    "phase": "preflight",
+                    "error": "preset preflight failed; the running service was left untouched",
+                    "problems": problems,
+                    "machine": alias,
+                })
                 return 1
-            needed_devices = tp * (dp or 1) if tp is not None else None
-            if needed_devices is not None and len(leased) < needed_devices:
+            emit_progress("preflight", f"preset {args.preset} checks passed")
+
+        try:
+            live_devices = require_session_npu_lease(target.session, repo_root=target.state_repo_root)
+        except SessionStateError as exc:
+            print_json({
+                "status": "needs_repair", "session_id": target.session_id,
+                "error": str(exc),
+            })
+            return 1
+        # require_session_npu_lease raises on an empty or stale lease, so
+        # live_devices is always a nonempty list of ints here.
+        leased = set(live_devices)
+        needed_devices = tp * (dp or 1) if tp is not None else None
+        if needed_devices is not None and len(leased) < needed_devices:
+            print_json({
+                "status": "needs_input",
+                "error": (
+                    f"session {target.session_id} leases {len(leased)} NPU devices "
+                    f"but launch needs {needed_devices} (tp={tp}, dp={dp or 1})"
+                ),
+                "machine": alias,
+                "mode": target.mode,
+                "session_id": target.session_id,
+            })
+            return 1
+        if devices:
+            try:
+                requested = _parse_devices_csv(devices)
+            except ValueError as exc:
+                print_json({"status": "needs_input", "error": str(exc)})
+                return 1
+            if not requested.issubset(leased):
                 print_json({
                     "status": "needs_input",
                     "error": (
-                        f"session {target.session_id} leases {len(leased)} NPU devices "
-                        f"but launch needs {needed_devices} (tp={tp}, dp={dp or 1})"
+                        f"requested devices {sorted(requested)} are outside "
+                        f"session {target.session_id} lease {sorted(leased)}"
                     ),
                     "machine": alias,
                     "mode": target.mode,
                     "session_id": target.session_id,
                 })
                 return 1
-            if devices:
-                try:
-                    requested = _parse_devices_csv(devices)
-                except ValueError as exc:
-                    print_json({"status": "needs_input", "error": str(exc)})
-                    return 1
-                if not requested.issubset(leased):
-                    print_json({
-                        "status": "needs_input",
-                        "error": (
-                            f"requested devices {sorted(requested)} are outside "
-                            f"session {target.session_id} lease {sorted(leased)}"
-                        ),
-                        "machine": alias,
-                        "mode": target.mode,
-                        "session_id": target.session_id,
-                    })
-                    return 1
-            else:
-                selected = sorted(leased)
-                if needed_devices is not None:
-                    selected = selected[:needed_devices]
-                devices = ",".join(str(item) for item in selected)
-                emit_progress("lease", f"using leased session devices: {devices}")
+        else:
+            selected = sorted(leased)
+            if needed_devices is not None:
+                selected = selected[:needed_devices]
+            devices = ",".join(str(item) for item in selected)
+            emit_progress("lease", f"using leased session devices: {devices}")
 
         # Validate the new launch target before touching an existing service.
         # A mistyped model path should be a needs_input response, not a reason
@@ -757,32 +1073,29 @@ def main(argv: list[str] | None = None) -> int:
             })
             return 1
 
-        # ---- stop existing service on this machine ----
+        # ---- stop existing service for this session ----
         prev_state = load_serving_state(
-            alias,
-            session_id=target.session_id,
+            target.session_id,
             state_repo_root=target.state_repo_root,
         )
         if prev_state and prev_state.get("pid"):
             old_pid = prev_state["pid"]
-            scope = f"session {target.session_id}" if target.session_id else f"machine {alias}"
+            scope = f"session {target.session_id}"
             if not check_alive(ep, int(old_pid)):
                 emit_progress("stop-existing", f"previous service for {scope} is already stopped (pid={old_pid})")
                 prev_state["status"] = "stopped"
                 prev_state["stopped_at"] = now_utc()
                 save_serving_state(
-                    alias,
+                    target.session_id,
                     prev_state,
-                    session_id=target.session_id,
                     state_repo_root=target.state_repo_root,
                 )
-                if target.session_id:
-                    release_service_port(
-                        repo_root=target.state_repo_root,
-                        machine_alias=alias,
-                        session_id=target.session_id,
-                        port=prev_state.get("port"),
-                    )
+                release_service_port(
+                    repo_root=target.state_repo_root,
+                    machine_alias=alias,
+                    session_id=target.session_id,
+                    port=prev_state.get("port"),
+                )
             else:
                 emit_progress("stop-existing", f"stopping previous service for {scope} (pid={old_pid})")
                 ssh_exec(
@@ -800,42 +1113,67 @@ def main(argv: list[str] | None = None) -> int:
                 old_devices = _parse_devices_csv(str(prev_state.get("devices") or ""))
                 if old_devices:
                     emit_progress("stop-existing", f"waiting for old service devices to free: {sorted(old_devices)}")
-                    wait_for_devices_free(target.host_endpoint, old_devices)
+                    if not wait_for_devices_free(target.host_endpoint, old_devices):
+                        # Not fatal: the probe-npus gate below re-validates
+                        # occupancy before launch, but make the uncertainty
+                        # visible instead of dropping it.
+                        emit_progress(
+                            "stop-existing",
+                            f"old service devices not confirmed free after wait: {sorted(old_devices)}",
+                            warning="devices-may-still-be-busy",
+                        )
                 if not check_alive(ep, int(old_pid)):
                     prev_state["status"] = "stopped"
                     prev_state["stopped_at"] = now_utc()
                     save_serving_state(
-                        alias,
+                        target.session_id,
                         prev_state,
-                        session_id=target.session_id,
                         state_repo_root=target.state_repo_root,
                     )
-                    if target.session_id:
-                        release_service_port(
-                            repo_root=target.state_repo_root,
-                            machine_alias=alias,
-                            session_id=target.session_id,
-                            port=prev_state.get("port"),
-                        )
+                    release_service_port(
+                        repo_root=target.state_repo_root,
+                        machine_alias=alias,
+                        session_id=target.session_id,
+                        port=prev_state.get("port"),
+                    )
                 else:
+                    # The previous API server survived SIGINT+SIGTERM+SIGKILL.
+                    # Launching now would create a second instance fighting for
+                    # the same port/NPU devices, so fail fast instead of masking
+                    # it by recording "stopping" and continuing.
                     prev_state["status"] = "stopping"
                     prev_state["status_checked_at"] = now_utc()
                     save_serving_state(
-                        alias,
+                        target.session_id,
                         prev_state,
-                        session_id=target.session_id,
                         state_repo_root=target.state_repo_root,
                     )
+                    print_json({
+                        "status": "failed",
+                        "error": (
+                            f"previous service pid={old_pid} did not exit after "
+                            "SIGINT+SIGTERM+SIGKILL; refusing to launch a second "
+                            "instance. Investigate the stuck process, then retry."
+                        ),
+                        "machine": alias,
+                        "mode": target.mode,
+                        "session_id": target.session_id,
+                        "previous_pid": old_pid,
+                    })
+                    return 1
 
         # ---- parity gate ----
         if not args.skip_parity:
             emit_progress("parity-sync", "ensuring remote code parity")
-            parity = run_parity(args.machine, target.session_id, target.session_file)
+            parity = run_parity(target.session_id, target.session_file)
             parity_status = parity.get("status")
-            if parity_status not in ("ready", "ok", "success", "skipped"):
+            # `auto` returns `materialized` after Python-only runtime updates.
+            # `source-only` only updates the cache, not the execution tree;
+            # neither that nor a dry run authorizes serving the new snapshot.
+            if parity_status not in ("ready", "ok", "success", "skipped", "materialized"):
                 print_json({
                     "status": "blocked",
-                    "error": "remote-code-parity did not return ready",
+                    "error": f"remote-code-parity did not return a ready state (got {parity_status!r})",
                     "parity": parity,
                     "machine": alias,
                 })
@@ -850,65 +1188,68 @@ def main(argv: list[str] | None = None) -> int:
         try:
             npu_info = probe_npus(h_ep)
         except RuntimeError as exc:
-            npu_info = None
-            emit_progress("probe-npus", f"NPU probe failed (non-fatal): {exc}")
+            print_json({
+                "status": "blocked",
+                "phase": "probe-npus",
+                "error": (
+                    "host NPU occupancy could not be verified; refusing to launch "
+                    f"because session leases do not exclude unmanaged workloads: {exc}"
+                ),
+                "machine": alias,
+                "mode": target.mode,
+                "session_id": target.session_id,
+            })
+            return 1
 
-        if npu_info is not None:
-            try:
-                resolved_devices, device_error = select_devices(
-                    npu_info, requested_devices=devices, tp=tp, dp=dp,
-                )
-            except ValueError as exc:
-                print_json({"status": "needs_input", "error": str(exc), "npu_info": npu_info})
-                return 1
-            if device_error:
-                print_json({
-                    "status": "needs_input",
-                    "error": device_error,
-                    "npu_info": npu_info,
-                    "machine": alias,
-                })
-                return 1
-            if resolved_devices is not None:
-                devices = resolved_devices
-                emit_progress(
-                    "probe-npus",
-                    f"using devices: {devices}",
-                    free=npu_info.get("free"),
-                    busy=list(npu_info.get("busy", {}).keys()),
-                )
+        try:
+            resolved_devices, device_error = select_devices(
+                npu_info, requested_devices=devices, tp=tp, dp=dp,
+            )
+        except ValueError as exc:
+            print_json({"status": "needs_input", "error": str(exc), "npu_info": npu_info})
+            return 1
+        if device_error:
+            print_json({
+                "status": "needs_input",
+                "error": device_error,
+                "npu_info": npu_info,
+                "machine": alias,
+            })
+            return 1
+        if resolved_devices is not None:
+            devices = resolved_devices
+            emit_progress(
+                "probe-npus",
+                f"using devices: {devices}",
+                free=npu_info.get("free"),
+                busy=list(npu_info.get("busy", {}).keys()),
+            )
 
         # ---- port ----
-        if target.session_id:
-            emit_progress("allocate-port", "allocating session service port")
-            port_available = remote_port_availability(ep)
-            port = allocate_service_port(
+        emit_progress("allocate-port", "allocating session service port")
+        port_available = remote_port_availability(ep)
+        port = allocate_service_port(
+            repo_root=target.state_repo_root,
+            machine_alias=alias,
+            session_id=target.session_id,
+            requested_port=args.port,
+            port_available=port_available,
+        )
+        if not remote_port_available(ep, port):
+            release_service_port(
                 repo_root=target.state_repo_root,
                 machine_alias=alias,
                 session_id=target.session_id,
-                requested_port=args.port,
-                port_available=port_available,
+                port=port,
             )
-            if not remote_port_available(ep, port):
-                release_service_port(
-                    repo_root=target.state_repo_root,
-                    machine_alias=alias,
-                    session_id=target.session_id,
-                    port=port,
-                )
-                print_json({
-                    "status": "failed",
-                    "error": f"allocated service port {port} became unavailable before launch",
-                    "machine": alias,
-                    "mode": target.mode,
-                    "session_id": target.session_id,
-                })
-                return 1
-        elif args.port:
-            port = args.port
-        else:
-            emit_progress("allocate-port", "finding free port")
-            port = find_free_port(ep)
+            print_json({
+                "status": "failed",
+                "error": f"allocated service port {port} became unavailable before launch",
+                "machine": alias,
+                "mode": target.mode,
+                "session_id": target.session_id,
+            })
+            return 1
         emit_progress("allocate-port", f"port {port}", port=port)
 
         # ---- launch ----
@@ -931,52 +1272,64 @@ def main(argv: list[str] | None = None) -> int:
             emit_progress("launch", f"starting vllm serve (wrapped by {wrap_script})")
         else:
             emit_progress("launch", "starting vllm serve")
-        script = build_launch_script(
-            runtime_dir=runtime_dir,
-            model=model,
-            served_model_name=served_model_name,
-            port=port,
-            tp=tp, dp=dp,
-            devices=devices,
-            extra_env=launch_env,
-            extra_args=launch_extra_args,
-            wrap_script=wrap_script,
-        )
+        port_release = {
+            "repo_root": target.state_repo_root,
+            "machine_alias": alias,
+            "session_id": target.session_id,
+            "port": port,
+        }
+        try:
+            script = build_launch_script(
+                runtime_dir=runtime_dir,
+                model=model,
+                served_model_name=served_model_name,
+                port=port,
+                tp=tp, dp=dp,
+                devices=devices,
+                extra_env=launch_env,
+                extra_args=launch_extra_args,
+                wrap_script=wrap_script,
+            )
+        except ValueError as exc:
+            # Rejected before anything ran remotely — safe to release the port.
+            release_service_port(**port_release)
+            print_json({
+                "status": "needs_input",
+                "error": str(exc),
+                "machine": alias,
+                "mode": target.mode,
+                "session_id": target.session_id,
+            })
+            return 1
         result = ssh_exec(ep, script, check=False)
         if result.returncode != 0:
-            print_json({
-                "status": "failed",
-                "error": "launch script failed",
-                "stderr_tail": result.stderr[-1000:],
-                "stdout_tail": result.stdout[-500:],
-                "machine": alias,
-            })
-            if target.session_id:
-                release_service_port(
-                    repo_root=target.state_repo_root,
-                    machine_alias=alias,
-                    session_id=target.session_id,
-                    port=port,
-                )
-            return 1
+            return abort_failed_launch(
+                ep=ep,
+                runtime_dir=runtime_dir,
+                launch_stdout=result.stdout,
+                release_kwargs=port_release,
+                payload={
+                    "error": "launch script failed",
+                    "stderr_tail": result.stderr[-1000:],
+                    "stdout_tail": result.stdout[-500:],
+                    "machine": alias,
+                },
+            )
 
         pid_line = result.stdout.strip().splitlines()[-1].strip() if result.stdout.strip() else ""
         try:
             pid = int(pid_line)
         except ValueError:
-            print_json({
-                "status": "failed",
-                "error": f"cannot parse PID from launch output: {pid_line!r}",
-                "machine": alias,
-            })
-            if target.session_id:
-                release_service_port(
-                    repo_root=target.state_repo_root,
-                    machine_alias=alias,
-                    session_id=target.session_id,
-                    port=port,
-                )
-            return 1
+            return abort_failed_launch(
+                ep=ep,
+                runtime_dir=runtime_dir,
+                launch_stdout=result.stdout,
+                release_kwargs=port_release,
+                payload={
+                    "error": f"cannot parse PID from launch output: {pid_line!r}",
+                    "machine": alias,
+                },
+            )
 
         emit_progress("launch", f"process started pid={pid}", pid=pid)
 
@@ -1006,23 +1359,22 @@ def main(argv: list[str] | None = None) -> int:
         if wrap_script:
             state["wrap_script"] = wrap_script
         save_serving_state(
-            alias,
+            target.session_id,
             state,
-            session_id=target.session_id,
             state_repo_root=target.state_repo_root,
         )
 
         # ---- probe readiness ----
         emit_progress("probe", f"waiting for ready (timeout={args.health_timeout}s)")
-        readiness = wait_for_ready(ep, pid, port, runtime_dir, timeout=args.health_timeout)
+        readiness = wait_for_ready(ep, pid, port, runtime_dir, timeout=args.health_timeout,
+                                   served_model=served_model_name)
 
         # ---- persist state (always, even if not ready — so stop can clean up) ----
         state["status"] = "ready" if readiness["ready"] else "started"
         state["readiness_checked_at"] = now_utc()
         save_serving_state(
-            alias,
+            target.session_id,
             state,
-            session_id=target.session_id,
             state_repo_root=target.state_repo_root,
         )
 
@@ -1057,7 +1409,7 @@ def main(argv: list[str] | None = None) -> int:
         if not readiness["ready"]:
             stderr_tail = readiness.get("stderr_tail") or read_remote_tail(ep, f"{runtime_dir}/stderr.log")
             output["stderr_tail"] = stderr_tail
-            diagnosis = diagnose_env_failure(stderr_tail, alias, session_id=target.session_id)
+            diagnosis = diagnose_env_failure(stderr_tail, session_id=target.session_id)
             if diagnosis:
                 output["env_diagnosis"] = diagnosis
                 emit_progress("diagnosis", diagnosis["recovery_command"],
@@ -1068,13 +1420,12 @@ def main(argv: list[str] | None = None) -> int:
 
     except Exception as exc:
         error_msg = str(exc)
-        machine_id = getattr(args, "machine", None) or ""
         result: dict[str, Any] = {
             "status": "failed",
             "error": error_msg,
-            "machine": machine_id,
+            "session_id": getattr(args, "session_id", None),
         }
-        diagnosis = diagnose_env_failure(error_msg, machine_id, session_id=getattr(args, "session_id", None))
+        diagnosis = diagnose_env_failure(error_msg, session_id=getattr(args, "session_id", None))
         if diagnosis:
             result["env_diagnosis"] = diagnosis
         print_json(result)

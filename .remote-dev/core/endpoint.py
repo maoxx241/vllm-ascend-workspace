@@ -128,6 +128,7 @@ def _endpoint_from_managed(payload: dict[str, Any]) -> Endpoint:
     except Exception as exc:  # noqa: BLE001
         raise EndpointError(f"failed to resolve managed target: {exc}") from exc
     endpoint = target.container_endpoint
+    is_session = bool(getattr(target, "session_id", None))
     return Endpoint(
         host=endpoint.host,
         port=int(endpoint.port),
@@ -137,8 +138,8 @@ def _endpoint_from_managed(payload: dict[str, Any]) -> Endpoint:
         runtime_env=bool(payload.get("runtime_env", True)),
         identity_file=str(payload["identity_file"]) if payload.get("identity_file") else None,
         connect_timeout_ms=int(payload.get("connect_timeout_ms") or 10000),
-        kind="managed-session" if payload.get("session_id") or payload.get("session_file") else "managed-machine",
-        alias=str(payload.get("session_id") or payload.get("machine") or target.alias),
+        kind="managed-session" if is_session else "managed-machine",
+        alias=str(payload.get("session_id") or payload.get("machine") or getattr(target, "session_id", None) or target.alias),
         source={"vaws_target": target.to_dict()},
     )
 
@@ -156,4 +157,16 @@ def resolve_endpoint(payload: dict[str, Any]) -> Endpoint:
         return _direct_endpoint(merged)
     if payload.get("session_id") or payload.get("session_file") or payload.get("machine"):
         return _endpoint_from_managed(payload)
-    raise EndpointError("provide host+port, alias, session_id/session_file, or machine")
+    # No explicit target: auto-bind to the session of the nearest worktree
+    # binding. The cwd-upward walk is bounded at repo_root() (see
+    # vaws_session_id.find_session_binding), so a stale binding above the
+    # repository cannot silently redirect selector-less calls. This is what
+    # lets `remote.bash` run zero-config inside a session worktree.
+    try:
+        return _endpoint_from_managed(payload)
+    except EndpointError as exc:
+        raise EndpointError(
+            "no endpoint target: provide host+port, alias, session_id/session_file, "
+            "or machine — or run from inside a session worktree "
+            f"(a directory with .vaws-local/current-session.json). Underlying: {exc}"
+        ) from exc

@@ -1,5 +1,42 @@
 # Behavior Reference
 
+## Task identity
+
+The local `agent-sessions` registry keys native attachments by client, native
+session id, and child id when a client shares the parent's session id.
+New native roots are independent; resume reactivates the existing attachment.
+VAWS tasks have one or more attachments. Detach is not task finish and cannot
+release hardware. Resume after an explicit finish reopens the same task with
+its history; it does not recreate completed executions.
+
+Source bindings point at actual Git worktrees. Worktrees may change between
+executions after existing runtime bindings are returned, without changing the
+VAWS task id. Native attachment state is observed metadata, not proof that a
+window is alive. Local identity is shared only through the Git common-dir or
+an explicit context receipt; resource arbitration always uses the shared
+remote coordinator and physical host authority.
+
+The managed execution protocol persists intent, prepares a waiting supervisor,
+identifies its host PID, activates the lease, and only then opens the start
+gate. The shared manager renews the persisted job independently of client
+connections. A Linux subreaper tracks descendants even after setsid or environment
+reset, and stays alive until they drain. A retained host guard covers CPU
+initialization and survives heartbeat expiry or supervisor loss. Cleanup signals
+only the verified family; the manager must confirm completed process supervision
+and repeatedly observe free devices before returning and re-verifying the runtime.
+Missing completion receipts retain ownership for reconciliation.
+
+## Shared ready-runtime mode
+
+The optional independent HTTP MCP coordinator separates task identity,
+prepared-container checkout and host execution leases. All clients of a pool
+use one manager; linked worktree inventory sharing alone is not allocation.
+See [coordinator lifecycle](../../../coordinator/README.md). Never create local
+legacy NPU leases in addition to the pool's host-authoritative requests.
+Returning a container quarantines it until re-verification. Queue messages,
+accepted yield requests and SSH failures never release devices. There is no
+resident model-service pool.
+
 ## Workspace identity
 
 - new session containers use the base machine's persisted namespace
@@ -30,6 +67,10 @@ session/<session-id>
 ```
 
 If a worktree already exists and is bound to the same session, it is reused. If it is bound to a different session or has no binding, creation fails closed.
+
+Every initialized submodule (`vllm/`, `vllm-ascend/`) is checked out onto branch `session/<session-id>` at worktree creation time instead of being left in detached HEAD. For each submodule, `{path, branch, base_commit}` is recorded under `local.submodule_branches` in the session state. `session_diff.py` uses the recorded `base_commit` as the diff base for that submodule, falling back to the gitlink of `base_ref` when a submodule has no recorded entry.
+
+The worktree binding at `<worktree>/.vaws-local/current-session.json` lets consumer commands (parity, serving, benchmark, profiling, memory) auto-resolve the session by walking up from the current working directory. Running those commands from inside the worktree needs no `--session-id`; `--session-id` / `--session-file` remain available for out-of-worktree or cross-session invocations.
 
 ## Container Behavior
 
@@ -73,7 +114,14 @@ NPU leases are released by `session_remove.py --release-leases`, not by `serve_s
 
 When `session_remove.py --remove-container` sees no session serving state file, it skips the serving stop wrapper and relies on container removal to terminate any untracked process. This keeps teardown cheap for sessions that were created only for parity, bootstrap timing, or compile work.
 
-`session_remove.py` marks a session `removed` only when the requested container/worktree removal succeeds. Failed removal leaves the session in `needs_repair`. `session_gc.py` releases leases for `removed` or missing-state sessions; it does not release leases for generic `failed` sessions because those may still protect partially created remote resources.
+`session_remove.py` marks a session `removed` only after confirmed container
+removal and successful requested worktree cleanup. Confirmed container removal
+releases leases automatically. Local worktree removal alone retains remote
+leases; a failed stop leaves `needs_repair`. `--release-leases` requires
+confirmed container removal because stopping one PID does not release SSH
+ports or untracked workers. `session_gc.py --reap-dead --apply` requires host
+Docker proof and repeated free-device observations. Missing metadata, generic
+SSH failures and a metadata-only `removed` status are never release evidence.
 
 If remote cleanup raises before normal result aggregation, Session removal still
 persists `needs_repair` and keeps every lease. A transport exception must not
@@ -143,6 +191,6 @@ The protocol cannot prevent a non-participating human or agent from starting in
 the final probe-to-launch window. It provides coordination and auditability, not
 device enforcement.
 
-## Legacy Compatibility
+## Machine vs Session Surfaces
 
-Legacy `--machine` flows continue to use the base machine container and machine-level state. Session-aware flows use `--session-id` or `--session-file` and state under `.vaws-local/sessions/<session-id>/`.
+Domain skills (serving, benchmark, profiling-collection, memory-profiling, profiling-analysis) are session-only: state lives under `.vaws-local/sessions/<session-id>/` and targets resolve via `--session-id`, `--session-file`, or the cwd worktree binding. `--machine` remains only where it means "base machine": `session_create.py` (which machine hosts the session container) and machine-management registration/verification.
