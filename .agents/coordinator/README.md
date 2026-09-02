@@ -116,42 +116,9 @@ These adapters follow the native contracts in the
 [Kimi hooks documentation](https://moonshotai.github.io/kimi-code/en/customization/hooks),
 and [Cursor hooks documentation](https://cursor.com/docs/hooks).
 New native lifecycle behavior still needs actual client calls in addition to
-the regression fixtures; do not count earlier coordinator-only MCP acceptance.
-
-#### Native lifecycle acceptance status (2026-08-29)
-
-The following is the bounded result of actual client attempts; configuration,
-schema discovery, a connected server, and an explicit adapter are not native
-client acceptance. Each client ran headless in its own Git-initialized project
-with hooks installed by `vaws_client_setup.py`; distinct roots in one cwd,
-resume identity, and explicit child association were verified against the
-shared local registry:
-
-| Client | Model | Native lifecycle result |
-| --- | --- | --- |
-| Claude Code 2.1.143 | deepseek-v4-flash | New/resume/distinct passed; explicit child association shared the task; native MCP `vaws_session` returned the parent session id. |
-| Codex 0.147.0 | gpt-5.6-luna (effort max) | New/resume/distinct passed; explicit child association shared the task; native MCP `vaws_session` returned the parent session id. |
-| Cursor agent 2026.08.25 | claude-opus-5-high | New/resume/distinct passed; explicit child association shared the task; native MCP `vaws_session` returned the parent session id. |
-| Grok 1.0.13 | grok-4.6 | New/resume/distinct passed after normal project trust; explicit child association shared the task; native MCP `vaws_session` through the `use_tool` envelope returned the parent session id. |
-| Kimi Code 0.38.0 | default | New/resume/distinct passed; explicit child association shared the task. Native MCP `vaws_session` passed after the normal workspace trust flow; the session wire log shows `mcp.tools_discovered` and a native `mcp__remote-dev__vaws_session` tool call. Untrusted workspaces silently skip the project MCP, which earlier looked like an absent server. |
-
-Earlier (2026-08-28) results: Claude Code and Grok passed new/resume and
-remote-dev calls; Codex's native hook path was still pending and Cursor Agent
-was blocked by approval prompts. Both gaps are closed by the 2026-08-29 runs
-above.
-
-The three concurrent `gpt-5.6-luna` VAWS runs used the explicit public
-adapter, separate source/runtime/port/card assignments, and real bounded NPU
-probe requests. Both the initial lifecycle run and the subreaper rerun passed:
-manager restart preserved all three jobs and service PIDs; a clean-environment
-setsid daemon remained tracked and was stopped without affecting either peer.
-Editing/restarting A changed its PID and snapshot while retaining its native
-build key; B/C kept their PIDs, snapshots and successful NPU responses. This is
-substrate evidence, not K3 model inference or production model correctness.
-
-The final CPU candidate passed 185 tests on host 154, plus the six Linux
-managed-process checks under uid 65534. That ordinary-user check prevents
-unrelated root-owned processes from being mistaken for this job's descendants.
+the regression fixtures. Configuration, schema discovery, a connected server,
+or a direct adapter call establishes control-plane compatibility only; it does
+not establish the native client lifecycle.
 
 ### Task-facing execution
 
@@ -311,8 +278,8 @@ test; never reset a live manager to make an acceptance assertion pass.
    Optional `packages` pins additional installed dependencies (for example
    NumPy or Triton). Record build flags from the actual successful build recipe;
    a handwritten manifest cannot infer what an arbitrary old library was built
-   against. K3 profiles must also record their required `VLLM_VERSION` and full
-   `VLLM_PLUGINS` selection; no default version pair is silently selected.
+   against. Record deployment-required values such as `VLLM_VERSION` and the
+   full `VLLM_PLUGINS` selection explicitly; no version pair is inferred.
 4. `files` explicitly enumerates every runtime output relative to the runtime
    root, mapping each path to a role. At minimum it needs `library` and
    `metadata` roles. For Ascend custom operators include the kernel library,
@@ -475,89 +442,22 @@ completion so the retain guard is cleared and the cards are freed. Without
 evidence the reconcile is rejected — the default stays fail-closed. Afterwards
 return the runtime for quarantine and re-verification before any reuse.
 
-## Acceptance boundary: resource layer (separate from native lifecycle)
+## Validation boundaries and current limits
 
 CI uses the actual HTTP MCP SDK with two principals and the real SQLite host
 protocol, but simulated container/occupancy probes. It covers competing
 management roots, authentication, ownership, restart, message cursors, no hidden
 provisioning, native inputs and complete-bundle corruption/missing-file cases.
 
-Additional resource-layer contract acceptance on 2026-08-28 used the real HTTP
-manager on K3 host 154. These checks validate the coordinator/MCP contract;
-they are not the native-session lifecycle matrix above:
-
-| Client | Actual entry point | Result |
-| --- | --- | --- |
-| Claude Code 2.1.143 | CLI with private HTTP MCP configuration | Seven contract checks passed |
-| Grok 1.0.5 | CLI with project HTTP MCP configuration | Seven contract checks passed |
-| Kimi Code 0.38.0 | CLI after trusting the isolated project folder | Seven contract checks passed |
-| Codex 0.147.0 | CLI with bearer-token environment variable | Seven contract checks passed |
-| Cursor | Authenticated IDE, enabled project MCP, fresh agent | Seven contract checks passed |
-
-Each client executed the calls described above, with a different principal.
-The server database independently contained exactly one session per principal,
-and no runtimes/bindings/executions from these contract checks. Cursor CLI was
-not authenticated on this workstation; its failed login check is not counted
-as a successful CLI test. These are bounded product checks, not certification
-of every model, client version or coordinator tool. They must not be reported as
-native lifecycle passes when a client used a fallback or still needs hook,
-workspace or MCP approval.
-
-Separate hardware acceptance used two real HTTP SDK clients, two independent
-source roots and two existing K3 containers on 154. Their observed environments
-were kept separate:
-
-| Profile | CANN | torch-npu | vLLM | vllm-ascend |
-| --- | --- | --- | --- | --- |
-| A | 9.1.0 | 2.10.0.post4.dev20260715 | 0.27.1+empty | 0.19.1rc2.dev1561+g33e849499 |
-| B | 9.0.1 | 2.10.0.post2 | 0.23.0+empty | 0.19.1rc2.dev984+g70768c876 |
-
-Both used Ascend910_9362, driver 25.5.3 and Python 3.12.13. The checks covered
-exclusive runtime checkout; competing requests for physical card 0; owner
-permission rejection; cooperative messages that did not release the lease;
-preflight, activation, heartbeat, observed-free release and queued handoff.
-Three separate bounded probe processes loaded their actual `vllm_ascend_C`
-extensions and completed real 256-by-256 NPU matrix multiplication requests.
-
-During A's first execution, two edits to the same dirty Python file were
-staged without changing the running source or result. After release,
-materialization skipped installation/build, and a new process returned the
-edited value with the same native build key. Removing required
-`binary_info_config.json` rejected execution before creating a run; restoring
-the complete cached bundle and refreshing the idle runtime succeeded. The
-tested profiles enumerated 1,074 and 1,031 required files respectively, plus
-their environment receipts.
-
-The first additional two-process parallel check exposed an occupancy bug:
-the old parser missed A3's pipe-separated NPU/Chip process columns, so these
-low-HBM workers appeared free. Both owned probes were stopped. After fixing
-the mapping to physical device ids and adding a regression, the repeated
-parallel check observed both processes on physical cards 0/1 and served real
-NPU requests on separate ports. Stopping A left B serving with the same PID.
-This was seven probe processes in total: three handoff/restart probes, two in
-the failed occupancy check, and two in its successful repeat. All seven host
-leases ended `released`, both bindings were returned to quarantine, and a
-final hardware probe found all 16 logical devices free. The temporary MCP,
-SSH forwarding and private transport listeners were stopped and their SSH
-credentials revoked; the existing containers and evidence were preserved.
-
-This required one-time transport/MCP setup and normalization of the deployed
-source copies before they were ready. The warm execution path created no
-containers, installed no packages and compiled nothing. Original K3 sources
-and compute dependencies were preserved; host 153 was not used. Historical
-native build flags were not recovered, so this does not establish reproducible
-build provenance. No K3 model inference, TP16/four-node readiness, full custom
-operator correctness or performance benchmark is claimed. Raw client traces,
-tool receipts, manifests and hardware logs remain in private untracked state.
+Treat native client lifecycle, real hardware execution, model service readiness,
+operator correctness, and performance as separate evidence tiers. Passing the
+control-plane suite does not establish any of them. Record environment identity,
+all-rank logs, bounded real requests, and requested metrics in the PR validation
+report when those claims are required.
 
 On upgrade, re-attest/publish prepared runtimes containing native submodules:
 their old commit-based input keys will fail the new content-based verification.
 No implicit rebuild or fallback to an old marker is performed.
 
-Remaining model acceptance: exercise K3's exact four-node topology with
-all-rank logs and a real model request. The bounded probes above validate the
-development substrate, not that model's service readiness or correctness.
 Multi-host atomic/gang allocation, pool auto-replenishment and transparent
 adapters for every legacy domain wrapper are not implemented in this version.
-No production K3 compatibility profile is shipped as certified in this PR;
-the two observed environment combinations above passed import/probe checks only.

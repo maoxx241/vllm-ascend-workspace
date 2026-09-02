@@ -6,19 +6,6 @@ A composable local development scaffold for working on [vLLM](https://github.com
 
 ## What problem does this solve
 
-See the optional [independent coordination MCP](.agents/coordinator/README.md)
-for prepared-container, environment and native-artifact reuse. It is separate
-from vaws-top and restarts model services against pinned code snapshots.
-The task layer associates one VAWS task with multiple native tool sessions:
-new native sessions create new tasks, resume keeps the original task, and
-child agents join their parent's task only through explicit association.
-Actual business worktrees isolate code; local development needs no remote
-resources.
-Three Luna tasks passed overlapping NPU probes, manager restart, and isolated
-edit/restart checks on hosts 153/154. Kimi native MCP, Codex hook review and
-Cursor Agent approval remain open client acceptance gates. These probes do
-not establish full K3 model or four-node correctness.
-
 Developing vLLM Ascend typically involves editing code locally, running tests on remote Ascend NPU servers, and tracking upstream vLLM changes — all of which require repetitive Git, SSH, and environment configuration.
 
 `vllm-ascend-workspace` wraps these operations into a set of AI Agent skills. You can ask an Agent to handle them in natural language, or ignore the skills entirely and use it as a plain multi-repo workspace.
@@ -134,24 +121,9 @@ When talking to an Agent:
 │   │   ├── ascend-memory-profiling/ # Memory profiling skill
 │   │   ├── ascend-profiling-collection/ # Torch profiler collection skill
 │   │   ├── ascend-profiling-analysis/ # Profiling analysis/report skill
-│   │   ├── curate-workspace-knowledge/ # Explicit knowledge curation skill
-│   │   ├── vllm-ascend-graph-debug/ # Graph compile/capture/replay diagnosis skill
-│   │   ├── vllm-ascend-correctness-validation/ # Correctness comparison skill
-│   │   ├── vllm-ascend-change-validation/ # Change validation evidence skill
-│   │   ├── vllm-ascend-performance-regression/ # Performance regression A/B skill
-│   │   ├── vllm-ascend-distributed-debug/ # Distributed failure diagnosis skill
-│   │   ├── ascend-operator-debug/ # Single-operator reproducer skill
-│   │   ├── ascend-triton-operator-development/ # Triton operator development/migration skill
-│   │   ├── ascend-triton-kernel-validation/ # Triton kernel correctness matrix skill
-│   │   ├── ascend-triton-kernel-optimization/ # Triton kernel optimization skill
-│   │   ├── ascend-triton-workflow/ # End-to-end Triton orchestration skill
-│   │   └── vllm-ascend-pd-serving/ # PD-disaggregated serving orchestration skill
-│   ├── coordinator/       # Optional shared runtime pool coordinator
-│   ├── hooks/             # Agent session hooks
-│   ├── knowledge/         # Verified workspace knowledge
+│   │   └── curate-workspace-knowledge/ # Explicit knowledge curation skill
 │   ├── lib/               # Shared local-state library
-│   ├── scripts/           # Shared helper scripts
-│   └── tests/             # Pure-Python regression tests
+│   └── scripts/           # Shared helper scripts
 ├── .cursor/rules/         # Cursor IDE specific rules
 ├── .trae/                 # TRAE IDE specific rules and skills
 ├── AGENTS.md              # Cross-tool Agent instructions (Agents read this)

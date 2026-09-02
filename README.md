@@ -6,15 +6,6 @@
 
 ## 这个项目解决什么问题
 
-跨任务的就绪环境复用见 [独立协调 MCP](.agents/coordinator/README.md)。它与 vaws-top
-解耦，复用已准备的容器、环境和原生产物，按代码快照重新拉起模型服务。
-当前采用可选的协调入口。新的任务层把一个 VAWS task 关联到多个工具 session：
-新建工具 session 创建新任务，resume 保留原任务，子 agent 经显式关联加入父任务；
-业务 worktree 只负责代码隔离，无远端资源也能继续本地开发。
-已在 153/154 完成三个 Luna 任务的 NPU 探针并行、协调器重启，以及单任务编辑/重启
-不影响其他任务的验证。原生客户端验收仍有 Kimi MCP、Codex hook review 和 Cursor
-Agent 授权待完成；完整 K3 模型和四机验收也不在这份探针证据内。
-
 vLLM Ascend 的开发通常需要在本地编辑代码、在远程昇腾 NPU 服务器上运行测试，同时还要跟踪上游 vLLM 的变化。手动维护这套工作流涉及大量重复的 Git、SSH 和环境配置操作。
 
 `vllm-ascend-workspace` 把这些操作封装成一组 AI Agent 技能，你可以用自然语言让 Agent 代劳，也可以完全忽略这些技能、只把它当作一个普通的多仓库工作区。
@@ -131,24 +122,9 @@ python3 .agents/skills/npu-fleet-monitor/scripts/manage_monitor.py ensure
 │   │   ├── ascend-memory-profiling/ # 显存 profiling 技能
 │   │   ├── ascend-profiling-collection/ # torch profiler 采集技能
 │   │   ├── ascend-profiling-analysis/ # profiling 分析报告技能
-│   │   ├── curate-workspace-knowledge/ # 显式知识整理技能
-│   │   ├── vllm-ascend-graph-debug/ # 图编译/捕获/重放诊断技能
-│   │   ├── vllm-ascend-correctness-validation/ # 正确性对拍技能
-│   │   ├── vllm-ascend-change-validation/ # 变更验证证据汇总技能
-│   │   ├── vllm-ascend-performance-regression/ # 性能回归 A/B 实验技能
-│   │   ├── vllm-ascend-distributed-debug/ # 分布式故障诊断技能
-│   │   ├── ascend-operator-debug/ # 单算子最小化复现技能
-│   │   ├── ascend-triton-operator-development/ # Triton 算子开发/迁移技能
-│   │   ├── ascend-triton-kernel-validation/ # Triton kernel 正确性矩阵技能
-│   │   ├── ascend-triton-kernel-optimization/ # Triton kernel 优化实验技能
-│   │   ├── ascend-triton-workflow/ # Triton 端到端编排技能
-│   │   └── vllm-ascend-pd-serving/ # PD 分离服务编排技能
-│   ├── coordinator/       # 可选共享运行时池协调器
-│   ├── hooks/             # Agent 会话钩子
-│   ├── knowledge/         # 已验证工作区知识
+│   │   └── curate-workspace-knowledge/ # 显式知识整理技能
 │   ├── lib/               # 共享本地状态库
-│   ├── scripts/           # 共享辅助脚本
-│   └── tests/             # 纯 Python 回归测试
+│   └── scripts/           # 共享辅助脚本
 ├── .cursor/rules/         # Cursor IDE 专用规则
 ├── .trae/                 # TRAE IDE 专用规则与技能
 ├── AGENTS.md              # 跨工具 Agent 指令（AI Agent 读这个）
