@@ -61,8 +61,18 @@ def control_master_options() -> list[str]:
     ]
 
 
-def base_ssh_options(*, connect_timeout: int | None = None) -> list[str]:
-    """Non-interactive, fail-fast SSH options shared by all scaffold tools."""
+def base_ssh_options(
+    *,
+    connect_timeout: int | None = None,
+    mux: bool = True,
+) -> list[str]:
+    """Non-interactive, fail-fast SSH options shared by all scaffold tools.
+
+    Pass ``mux=False`` for long-lived connections (e.g. ``ssh -N -L`` tunnels):
+    ControlMaster delegates ``-N`` forwards to the mux master and the client
+    exits rc=0 immediately, tearing the tunnel down; ssh's first-option-wins
+    semantics make later ``ControlMaster=no`` overrides ineffective.
+    """
     options = [
         "-o", "BatchMode=yes",
         "-o", "StrictHostKeyChecking=accept-new",
@@ -70,5 +80,6 @@ def base_ssh_options(*, connect_timeout: int | None = None) -> list[str]:
     ]
     if connect_timeout is not None:
         options.extend(["-o", f"ConnectTimeout={max(1, connect_timeout)}"])
-    options.extend(control_master_options())
+    if mux:
+        options.extend(control_master_options())
     return options

@@ -143,7 +143,10 @@ def open_local_tunnel(ep, remote_port: int):
     local_port = _find_free_local_port()
     cmd = [
         "ssh",
-        *base_ssh_options(),
+        # mux=False: the tunnel must own a dedicated long-lived connection.
+        # With ControlMaster the `-N -L` client delegates the forward to the
+        # mux master and exits rc=0 immediately, tearing the tunnel down.
+        *base_ssh_options(mux=False),
         "-o", "ExitOnForwardFailure=yes",
         "-N",
         "-L", f"127.0.0.1:{local_port}:127.0.0.1:{remote_port}",
