@@ -235,9 +235,13 @@ def print_json(data: dict[str, Any]) -> None:
 # ---------------------------------------------------------------------------
 
 def _ssh_base_cmd(endpoint: SshEndpoint) -> list[str]:
+    # mux=False: this builder serves ssh_stream's hour-scale sessions, and a
+    # muxed channel can outlive the remote side without noticing (observed:
+    # remote analyze completed, mux master alive, session client hung until
+    # the local timeout). Same failure class as the collection tunnel.
     return [
         "ssh",
-        *base_ssh_options(connect_timeout=SSH_CONNECT_TIMEOUT_SECONDS),
+        *base_ssh_options(connect_timeout=SSH_CONNECT_TIMEOUT_SECONDS, mux=False),
         "-o", "ServerAliveInterval=30",
         "-o", "ServerAliveCountMax=10",
         "-p", str(endpoint.port),
