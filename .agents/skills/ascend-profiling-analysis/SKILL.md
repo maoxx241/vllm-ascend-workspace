@@ -301,6 +301,16 @@ XLSX 包新增 sheet：`step_anatomy`、`step_class_summary`、`layer_class_summ
 }
 ```
 
+## Workspace knowledge hooks
+
+产物拉回本地后、stdout 输出前，wrapper 会用工作区知识库（`.agents/knowledge/`，经 `.agents/lib/vaws_knowledge.py`）对 `analysis_summary` 做**本地视图层富化**——远端产物与 manifest 一律不改，富化结果回写本地拉回的 `report/analysis_summary.json`，stdout 嵌入同一份富化版本：
+
+- **findings 知识引用**：每个 rollup 组用 `finding_type + summary` 查 `known-failure-signatures`（顺带 `validation-rules`），取 top-3（score>0）填入该组的 `knowledge_refs`：`{entry_id, kind, summary, resolution, applicable_versions, score}`。无命中保持空数组；空知识库是合法状态。
+- **layer_validation 回填**：仅当 `expected_layers` 为 null（无 config.json、无 fingerprint catalog 层数）时，用 `--model-id` 或 `identity.model.candidate_names` 查 `model-capabilities`；命中且条目 `rule.expected_layers` 有值时回填，`expected_source` 标为 `knowledge:<entry_id>`，按已检测层数（min/max + outlier inventory）重算 `layers_match`（mismatch 时 status 从 `ok` 翻成 `degraded`），并写 `layers_note` 说明来源。条目层数字段为 null（如 config-driven 的 GLM-5）时不回填。
+- **容错**：知识库目录缺失 / 文档校验失败 / lib 不可导入 → stderr progress 说明，refs 全空、layer_validation 不动，主流程不受影响。
+
+**沉淀提示**：当一次分析确认了新的可复用诊断（症状 + 根因 + 修复），先用 `.agents/scripts/knowledge_capture.py` 落成本地候选（`.vaws-local/knowledge/candidates/`，untracked），经评审后再 promote 进 `.agents/knowledge/` 正式库；不要直接手写正式条目以外的旁门通道。
+
 ## Failure policy
 
 必须报错（hard fail，`status != "ok"`）的情况：

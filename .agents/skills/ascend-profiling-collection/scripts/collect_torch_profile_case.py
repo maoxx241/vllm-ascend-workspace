@@ -70,9 +70,146 @@ DEFAULT_PROFILE_CONTROL_TIMEOUT = 600
 DEFAULT_REQUEST_TIMEOUT = 900
 POST_STOP_FLUSH_SECONDS = 5
 
+# Workspace knowledge hooks (local, best-effort):
+#   * before collection starts, ``knowledge_preflight_advisories`` queries the
+#     workspace knowledge store with "<model> tp<N> <mode>" and records hits in
+#     the manifest's ``knowledge_advisories`` field (advisory only);
+#   * when a hard-fail gate trips, ``knowledge_failure_matches`` queries
+#     known-failure-signatures with the observed error text and attaches the
+#     matches (with resolution) to ``manifest.error.knowledge_matches``.
+# A missing/invalid knowledge dir degrades both hooks to explicit empty
+# arrays with a progress note; collection itself is never blocked.
+KNOWLEDGE_DIR = ROOT / ".agents" / "knowledge"
+KNOWLEDGE_ADVISORY_KINDS = (
+    "model-capabilities",
+    "parallelism-compatibility",
+    "known-failure-signatures",
+)
+KNOWLEDGE_QUERY_LIMIT = 3
+
 VL_DEFAULT_IMAGE = (
     ROOT / "vllm-ascend" / "tests" / "e2e" / "310p" / "data" / "qwen.png"
 )
+
+
+# ---------------------------------------------------------------------------
+# Workspace knowledge hooks (advisory only, never blocking)
+# ---------------------------------------------------------------------------
+
+def _knowledge_api() -> tuple[Any, Any, Any] | None:
+    """Lazily import the workspace knowledge API; None when unavailable.
+
+    Importing this skill's ``_common`` already put ``.agents/lib`` on
+    sys.path (via the serving skill's common). The import stays lazy so a
+    broken/missing lib can never block collection.
+    """
+    try:
+        from vaws_knowledge import (  # type: ignore[import-not-found]
+            KnowledgeError,
+            get_knowledge_entry,
+            query_knowledge,
+        )
+    except ImportError:
+        return None
+    return KnowledgeError, query_knowledge, get_knowledge_entry
+
+
+def knowledge_preflight_advisories(
+    model_name: str,
+    tp: int,
+    mode: str,
+    *,
+    knowledge_dir: Path | None = None,
+) -> list[dict[str, Any]]:
+    """Query the knowledge store with "<model> tp<N> <mode>" before collecting.
+
+    Returns one advisory per hit (entry_id/kind/summary/score) across
+    model-capabilities, parallelism-compatibility and known-failure-signatures
+    (limit 3 per kind). Empty array on no hits, empty store, or any
+    knowledge-side failure.
+    """
+    knowledge_dir = knowledge_dir or KNOWLEDGE_DIR
+    api = _knowledge_api()
+    if api is None:
+        emit_progress("knowledge", "vaws_knowledge not importable; preflight advisory skipped")
+        return []
+    KnowledgeError, query_knowledge, _ = api
+    query = f"{model_name} tp{tp} {mode}"
+    advisories: list[dict[str, Any]] = []
+    try:
+        for kind in KNOWLEDGE_ADVISORY_KINDS:
+            for match in query_knowledge(
+                knowledge_dir=knowledge_dir,
+                query=query,
+                kinds=[kind],
+                limit=KNOWLEDGE_QUERY_LIMIT,
+            ):
+                advisories.append(
+                    {
+                        "entry_id": match["id"],
+                        "kind": match["kind"],
+                        "summary": match["summary"],
+                        "score": match["score"],
+                    }
+                )
+    except Exception as exc:  # noqa: BLE001 - advisories must never block collection
+        emit_progress("knowledge", f"preflight advisory skipped: {exc}")
+        return []
+    return advisories
+
+
+def knowledge_failure_matches(
+    signature_text: str,
+    *,
+    knowledge_dir: Path | None = None,
+) -> list[dict[str, Any]]:
+    """Match an observed failure signature against known-failure-signatures.
+
+    Returns the top-3 matches (entry_id/kind/summary/resolution/score);
+    explicit empty array when nothing matches or the store is unusable.
+    """
+    knowledge_dir = knowledge_dir or KNOWLEDGE_DIR
+    api = _knowledge_api()
+    if api is None:
+        emit_progress("knowledge", "vaws_knowledge not importable; failure-signature lookup skipped")
+        return []
+    KnowledgeError, query_knowledge, get_knowledge_entry = api
+    try:
+        matches = query_knowledge(
+            knowledge_dir=knowledge_dir,
+            query=signature_text,
+            kinds=["known-failure-signatures"],
+            limit=KNOWLEDGE_QUERY_LIMIT,
+        )
+        out: list[dict[str, Any]] = []
+        for match in matches:
+            resolution = ""
+            full = get_knowledge_entry(knowledge_dir=knowledge_dir, entry_id=match["id"])
+            if full:
+                rule = full.get("entry", {}).get("rule", {})
+                if isinstance(rule, dict):
+                    resolution = str(rule.get("resolution") or "")
+            out.append(
+                {
+                    "entry_id": match["id"],
+                    "kind": match["kind"],
+                    "summary": match["summary"],
+                    "resolution": resolution,
+                    "score": match["score"],
+                }
+            )
+    except Exception as exc:  # noqa: BLE001 - failure reporting must not recurse
+        emit_progress("knowledge", f"failure-signature lookup skipped: {exc}")
+        return []
+    return out
+
+
+def _failure_payload(message: str) -> dict[str, Any]:
+    """Manifest ``error`` object: message + knowledge matches for the text."""
+    return {
+        "message": message,
+        "knowledge_matches": knowledge_failure_matches(message),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -594,6 +731,19 @@ def main(argv: list[str] | None = None) -> int:
     service_result: dict[str, Any] | None = None
     stop_result: dict[str, Any] | None = None
     try:
+        # Preflight knowledge advisory: known capabilities/compatibility/
+        # failure signatures for this exact "<model> tp<N> <mode>" shape.
+        # Advisory only -- recorded in the manifest, never blocks collection.
+        advisories = knowledge_preflight_advisories(
+            args.served_model_name, args.tp, args.mode
+        )
+        manifest["knowledge_advisories"] = advisories
+        emit_progress(
+            "knowledge",
+            f"preflight advisories: {len(advisories)} knowledge entrie(s) matched",
+            advisories=[item["entry_id"] for item in advisories] or None,
+        )
+
         emit_progress("serve_start", f"starting service on session {args.session_id}")
         service_result = call_serve_start(serve_args)
         manifest["service_result"] = service_result
@@ -711,7 +861,7 @@ def main(argv: list[str] | None = None) -> int:
         if workload_worst != "ok":
             reasons.append(f"workload_status={workload_worst}")
         manifest["status"] = "failed"
-        manifest["error"] = (
+        manifest["error"] = _failure_payload(
             "profiling collection produced an unusable trace ("
             + "; ".join(reasons)
             + "); re-collect required, see SKILL.md Failure policy"
@@ -725,7 +875,7 @@ def main(argv: list[str] | None = None) -> int:
 
     except Exception as exc:  # noqa: BLE001
         manifest["status"] = "failed"
-        manifest["error"] = str(exc)
+        manifest["error"] = _failure_payload(str(exc))
         manifest["failed_at"] = now_utc()
         if stop_result is None:
             try:

@@ -180,6 +180,15 @@ documented in `references/behavior.md` ("Output verification"). Treat all of the
 
 If the orchestrator fails after `serve_start`, it always tries to stop the service (graceful, then `--force`) so no orphan vLLM process is left behind.
 
+## Workspace knowledge hooks
+
+Both hooks are local, advisory-only views over the workspace knowledge store (`.agents/knowledge/`, via `.agents/lib/vaws_knowledge.py`); a missing/invalid knowledge dir degrades them to explicit empty arrays with a stderr progress note — collection is never blocked:
+
+- **Preflight advisories**: before `serve_start`, the orchestrator queries `model-capabilities` / `parallelism-compatibility` / `known-failure-signatures` with `<served-model-name> tp<N> <mode>` (limit 3 per kind). Hits land in the manifest's `knowledge_advisories` array (`{entry_id, kind, summary, score}`) and are printed to stderr progress. Use them as hints (e.g. a model's verified TP/mode or a known container pitfall), not as gates.
+- **Failure-gate enrichment**: when any hard-fail gate trips (service not ready, workload not real, `rank_count_mismatch`, `missing_kernel_details`), the observed error text is queried against `known-failure-signatures` (limit 3). Matches — including each entry's `resolution` — are written to `manifest.error.knowledge_matches`, and `manifest.error` becomes an object `{message, knowledge_matches}` instead of a bare string. The same object is the stdout failure JSON. No match → explicit empty array.
+
+**沉淀提示**: when a collection failure turns into a confirmed new diagnosis (symptom + root cause + verified fix), capture it with `.agents/scripts/knowledge_capture.py` as a local candidate (`.vaws-local/knowledge/candidates/`, untracked); promotion into `.agents/knowledge/` happens only through reviewed project changes.
+
 ## Manifest schema
 
 The manifest is the input contract for the analysis skill. Important fields:
@@ -206,7 +215,8 @@ The manifest is the input contract for the analysis skill. Important fields:
 | `analyse_wall_s` | Wall-clock seconds of the parallel per-rank analyse phase |
 | `analyse_parallelism` | Effective analyse parallelism used (`min(rank_count, --analyse-parallelism)`, default cap 8) |
 | `status` | `ok` / `failed`. `ok` requires both `analysis_status == "ok"` and `workload_status.status == "ok"` |
-| `error` | Set when `status == failed`; lists which gate(s) tripped |
+| `error` | Set when `status == failed`: an object `{message, knowledge_matches}` — `message` lists which gate(s) tripped, `knowledge_matches` carries the top-3 known-failure-signature entries (with `resolution`) matching the error text, or an explicit empty array |
+| `knowledge_advisories` | Preflight knowledge hits for `<served-model-name> tp<N> <mode>` across model-capabilities / parallelism-compatibility / known-failure-signatures (`{entry_id, kind, summary, score}`); advisory only, `[]` when nothing matched |
 
 ## Reference files
 

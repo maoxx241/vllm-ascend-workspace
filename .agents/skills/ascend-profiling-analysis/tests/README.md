@@ -29,6 +29,13 @@ without any Ascend NPU hardware, GPU, or remote SSH:
   `peak_flops_per_second`) and the derived operator-efficiency rows.
 - `test_html_diagnosis_key.py` — regression for the HTML report reading
   the `diagnosis_findings` key (not `findings`).
+- `test_knowledge_enrichment.py` — pins the wrapper-side workspace knowledge
+  hooks (`profile_analyze._enrich_analysis_summary_with_knowledge`): findings
+  rollup groups get `knowledge_refs` from a temporary synthetic knowledge dir
+  (hit / miss / empty store / missing dir / invalid document), and
+  `layer_validation.expected_layers` backfill fires only when the pipeline
+  left it null (source marked `knowledge:<entry_id>`, `layers_match`
+  recomputed, ok→degraded on mismatch, config-driven entries skipped).
 - `test_kernel_signatures.py` — pins the contract between Python's
   `categories_and_roles` rule list and `knowledge/kernel_signatures.yaml`:
   the YAML parses, its categories are valid per

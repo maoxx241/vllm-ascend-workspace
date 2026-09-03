@@ -24,7 +24,7 @@ import shlex
 import sys
 import time
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
 try:
     from . import _common as common  # type: ignore[import-not-found]
@@ -278,6 +278,228 @@ def _read_local_analysis_summary(run_dir: Path) -> dict[str, Any] | None:
     except (json.JSONDecodeError, OSError):
         return None
     return data if isinstance(data, dict) else None
+
+
+# ---------------------------------------------------------------------------
+# Workspace knowledge enrichment (local view layer over the pulled summary)
+#
+# After the artifacts are pulled back, the wrapper enriches the *local* copy
+# of report/analysis_summary.json with matches from the workspace knowledge
+# store (.agents/knowledge/):
+#
+#   * every findings rollup group gets its ``knowledge_refs`` placeholder
+#     filled with the top-3 known-failure-signature / validation-rule entries
+#     matching ``finding_type + summary`` (resolution included);
+#   * when ``layer_validation.expected_layers`` is null (no config.json, no
+#     fingerprint-catalog layer count) the model identity (``--model-id`` or
+#     identity.model.candidate_names) is looked up in model-capabilities and a
+#     hit with a layer count backfills ``expected_layers`` with
+#     ``expected_source = "knowledge:<entry_id>"``.
+#
+# The remote artifacts and the remote manifest are never touched: enrichment
+# is a local view layer. A missing/invalid knowledge dir degrades to empty
+# refs with a progress note -- the analysis result itself is unaffected.
+# ---------------------------------------------------------------------------
+
+KNOWLEDGE_DIR = common.ROOT / ".agents" / "knowledge"
+KNOWLEDGE_FINDING_KINDS = ("known-failure-signatures", "validation-rules")
+KNOWLEDGE_MODEL_KINDS = ("model-capabilities",)
+KNOWLEDGE_QUERY_LIMIT = 3
+
+
+def _knowledge_api() -> tuple[Any, Any, Any] | None:
+    """Lazily import the workspace knowledge API; None when unavailable.
+
+    ``_common`` already put ``.agents/lib`` on sys.path. The import stays
+    lazy so a broken/missing lib can never break the analysis wrapper.
+    """
+    try:
+        from vaws_knowledge import (  # type: ignore[import-not-found]
+            KnowledgeError,
+            get_knowledge_entry,
+            query_knowledge,
+        )
+    except ImportError:
+        return None
+    return KnowledgeError, query_knowledge, get_knowledge_entry
+
+
+def _knowledge_refs_for_finding(
+    knowledge_dir: Path,
+    api: tuple[Any, Any, Any],
+    finding_type: str,
+    summary: str,
+) -> list[dict[str, Any]]:
+    """Top-3 knowledge refs for one findings rollup group.
+
+    Only score > 0 matches come back from ``query_knowledge``; each ref is
+    completed with the entry's ``resolution`` via ``get_knowledge_entry``.
+    """
+    _, query_knowledge, get_knowledge_entry = api
+    query = f"{finding_type} {summary}".strip()
+    if not query:
+        return []
+    refs: list[dict[str, Any]] = []
+    for match in query_knowledge(
+        knowledge_dir=knowledge_dir,
+        query=query,
+        kinds=list(KNOWLEDGE_FINDING_KINDS),
+        limit=KNOWLEDGE_QUERY_LIMIT,
+    ):
+        resolution = ""
+        full = get_knowledge_entry(knowledge_dir=knowledge_dir, entry_id=match["id"])
+        if full:
+            rule = full.get("entry", {}).get("rule", {})
+            if isinstance(rule, Mapping):
+                resolution = str(rule.get("resolution") or "")
+        refs.append(
+            {
+                "entry_id": match["id"],
+                "kind": match["kind"],
+                "summary": match["summary"],
+                "resolution": resolution,
+                "applicable_versions": match.get("applicable_versions", ""),
+                "score": match["score"],
+            }
+        )
+    return refs
+
+
+def _backfill_layer_validation_from_knowledge(
+    summary: dict[str, Any],
+    knowledge_dir: Path,
+    api: tuple[Any, Any, Any],
+    model_id: str | None,
+) -> str | None:
+    """Backfill ``layer_validation.expected_layers`` from model-capabilities.
+
+    Only fires when the pipeline itself found no expected layer count (no
+    user config.json, no fingerprint-catalog entry). Returns the knowledge
+    entry id used for the backfill, or None.
+    """
+    lv = summary.get("layer_validation")
+    if not isinstance(lv, dict) or lv.get("expected_layers") is not None:
+        return None
+    identity = summary.get("identity") or {}
+    model = identity.get("model") or {}
+    names: list[str] = []
+    if model_id:
+        names.append(str(model_id))
+    for name in model.get("candidate_names") or []:
+        text = str(name or "").strip()
+        if text and text not in names:
+            names.append(text)
+    if not names:
+        return None
+
+    _, query_knowledge, get_knowledge_entry = api
+    for name in names:
+        matches = query_knowledge(
+            knowledge_dir=knowledge_dir,
+            query=name,
+            kinds=list(KNOWLEDGE_MODEL_KINDS),
+            limit=KNOWLEDGE_QUERY_LIMIT,
+        )
+        for match in matches:
+            full = get_knowledge_entry(knowledge_dir=knowledge_dir, entry_id=match["id"])
+            rule = (full or {}).get("entry", {}).get("rule", {})
+            layers = rule.get("expected_layers") if isinstance(rule, Mapping) else None
+            if isinstance(layers, bool) or not isinstance(layers, int) or layers <= 0:
+                continue
+            entry_id = str(match["id"])
+            lv["expected_layers"] = layers
+            lv["expected_source"] = f"knowledge:{entry_id}"
+
+            # Recompute layers_match against the already-detected layer
+            # counts. The summary carries min/max plus full inventories only
+            # for per-rank outliers, so membership is exact for the outliers
+            # and boundary-based for the modal inventory.
+            detected = lv.get("detected_layers") or {}
+            d_min = detected.get("min")
+            d_max = detected.get("max")
+            if d_min is None and d_max is None:
+                lv["layers_match"] = None
+            else:
+                outlier_inventories = [
+                    outlier.get("layer_count_inventory") or []
+                    for outlier in detected.get("per_rank_outliers") or []
+                    if isinstance(outlier, Mapping)
+                ]
+                lv["layers_match"] = bool(
+                    layers == d_min
+                    or layers == d_max
+                    or any(layers in inventory for inventory in outlier_inventories)
+                )
+            if lv["layers_match"] is False and lv.get("status") == "ok":
+                lv["status"] = "degraded"
+            lv["layers_note"] = (
+                f"expected_layers backfilled from workspace knowledge entry "
+                f"'{entry_id}' (matched model name {name!r}); neither "
+                "config.json nor the fingerprint catalog provided a layer "
+                "count. layers_match was recomputed against detected min/max "
+                "and per-rank outlier inventories."
+            )
+            return entry_id
+    return None
+
+
+def _enrich_analysis_summary_with_knowledge(
+    summary: dict[str, Any] | None,
+    *,
+    knowledge_dir: Path = KNOWLEDGE_DIR,
+    model_id: str | None = None,
+) -> dict[str, Any] | None:
+    """Fill knowledge placeholders in the pulled analysis_summary (in place).
+
+    Best-effort: an unreadable/invalid knowledge dir leaves every
+    ``knowledge_refs`` empty and ``layer_validation`` untouched, with a
+    progress note on stderr. An empty-but-valid store is a legal state and
+    yields empty refs without any note-worthy failure.
+    """
+    if not isinstance(summary, dict):
+        return summary
+    api = _knowledge_api()
+    if api is None:
+        common.progress(
+            "knowledge",
+            "vaws_knowledge not importable; knowledge enrichment skipped (refs stay empty)",
+        )
+        return summary
+    try:
+        groups = [
+            group
+            for group in summary.get("findings") or []
+            if isinstance(group, Mapping)
+        ]
+        attached = 0
+        for group in groups:
+            refs = _knowledge_refs_for_finding(
+                knowledge_dir,
+                api,
+                str(group.get("finding_type") or ""),
+                str(group.get("summary") or ""),
+            )
+            group["knowledge_refs"] = refs
+            attached += bool(refs)
+        backfill_entry = _backfill_layer_validation_from_knowledge(
+            summary, knowledge_dir, api, model_id
+        )
+    except Exception as exc:  # noqa: BLE001 - knowledge must never break analysis
+        common.progress(
+            "knowledge",
+            f"knowledge enrichment skipped: {exc}",
+        )
+        for group in summary.get("findings") or []:
+            if isinstance(group, dict) and isinstance(group.get("knowledge_refs"), list):
+                group["knowledge_refs"] = []
+        return summary
+    common.progress(
+        "knowledge",
+        "knowledge enrichment done",
+        finding_groups_with_refs=attached,
+        layer_backfill=backfill_entry,
+    )
+    return summary
 
 
 def _validate_remote_artifacts(
@@ -635,6 +857,25 @@ def main(argv: Sequence[str] | None = None) -> int:
             "report/analysis_summary.json not pulled (older root or partial stage window); embedding null",
             local_output_dir=str(run_dir),
         )
+    else:
+        # Local view-layer enrichment from the workspace knowledge store
+        # (findings knowledge_refs + layer backfill). The remote artifacts
+        # and manifest stay untouched; the enriched summary is written back
+        # over the local pulled copy so the file on disk and the stdout
+        # embedding agree.
+        analysis_summary = _enrich_analysis_summary_with_knowledge(
+            analysis_summary, model_id=args.model_id
+        )
+        try:
+            (run_dir / "report" / "analysis_summary.json").write_text(
+                json.dumps(analysis_summary, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+        except OSError as exc:
+            common.progress(
+                "analysis_summary",
+                f"failed to write enriched analysis_summary.json back: {exc}; stdout keeps the enriched copy",
+            )
 
     elapsed = time.time() - started
     stage_timings = remote_manifest.get("stage_timings", [])

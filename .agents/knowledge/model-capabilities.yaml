@@ -1,6 +1,229 @@
 {
   "schema_version": 1,
   "kind": "model-capabilities",
-  "updated_at": "2026-08-11",
-  "entries": []
+  "updated_at": "2026-09-03",
+  "entries": [
+    {
+      "id": "model-qwen3-8b",
+      "status": "active",
+      "source": "workspace profiling validation 2026-09 (collection + analysis skills)",
+      "applicable_versions": "vllm-ascend workspace images on Atlas A3; structural fields are quantization-invariant",
+      "updated_at": "2026-09-03",
+      "first_seen": "2026-09",
+      "scope": {
+        "applies_to": ["profiling layer validation", "collection preflight"],
+        "hardware_generation": "A3"
+      },
+      "rule": {
+        "summary": "Qwen3-8B: 36-layer dense GQA model (dense flash attention + RoPE, no MoE); verified TP1 enforce_eager on A3",
+        "expected_layers": 36,
+        "structure": {
+          "attention_family": "dense_flash_attention",
+          "moe": false,
+          "linear_attention": false,
+          "features": ["dense_flash_attention", "rope"]
+        },
+        "verified_configs": [
+          {"tp": 1, "mode": "enforce_eager", "hardware": "A3"}
+        ],
+        "verified_at": "2026-09",
+        "fingerprints": ["qwen3-8b", "qwen/qwen3-8b"],
+        "notes": "Dense GQA body (model_type qwen3): hidden 4096, 32 attention heads, 8 KV heads, head_dim 128. Layer count verified from the shared-storage config.json and confirmed by profile-visible layer inventory."
+      }
+    },
+    {
+      "id": "model-deepseek-v2-lite",
+      "status": "active",
+      "source": "workspace profiling validation 2026-09 (collection + analysis skills)",
+      "applicable_versions": "vllm-ascend workspace images on Atlas A3; structural fields are quantization-invariant",
+      "updated_at": "2026-09-03",
+      "first_seen": "2026-09",
+      "scope": {
+        "applies_to": ["profiling layer validation", "collection preflight"],
+        "hardware_generation": "A3"
+      },
+      "rule": {
+        "summary": "DeepSeek-V2-Lite: 27-layer MLA + MoE model; verified TP1 on A3",
+        "expected_layers": 27,
+        "structure": {
+          "attention_family": "mla",
+          "moe": true,
+          "linear_attention": false,
+          "features": ["moe", "mla"]
+        },
+        "verified_configs": [
+          {"tp": 1, "mode": "enforce_eager", "hardware": "A3"}
+        ],
+        "verified_at": "2026-09",
+        "fingerprints": ["deepseek-v2-lite", "dsv2-lite", "dsv2lite", "deepseekv2liteforcausallm"],
+        "notes": "Standard 27-layer MLA+MoE body (hidden 2048, 16 attention heads, 64 experts). MTP/Eagle-style short speculative bodies must not enter the step layer inventory."
+      }
+    },
+    {
+      "id": "model-qwen3.5-35b-a3b",
+      "status": "active",
+      "source": "workspace profiling validation 2026-09 (collection + analysis skills)",
+      "applicable_versions": "vllm-ascend workspace images on Atlas A3; structural fields are quantization-invariant",
+      "updated_at": "2026-09-03",
+      "first_seen": "2026-09",
+      "scope": {
+        "applies_to": ["profiling layer validation", "collection preflight"],
+        "hardware_generation": "A3"
+      },
+      "rule": {
+        "summary": "Qwen3.5-35B-A3B: 40-layer hybrid linear/full-attention MoE model; verified TP2 on A3",
+        "expected_layers": 40,
+        "structure": {
+          "attention_family": "hybrid_linear_attention",
+          "moe": true,
+          "linear_attention": true,
+          "features": ["moe", "linear_attention_or_mamba", "dense_flash_attention", "rope"]
+        },
+        "verified_configs": [
+          {"tp": 2, "mode": "enforce_eager", "hardware": "A3"}
+        ],
+        "verified_at": "2026-09",
+        "fingerprints": ["qwen3.5-35b-a3b", "qwen35-35b", "qwen/qwen3.5-35b-a3b"],
+        "notes": "model_type qwen3_5_moe_text: 40 decoder layers in a repeating 3x linear_attention + 1x full_attention hybrid pattern; 256 experts, head_dim 256."
+      }
+    },
+    {
+      "id": "model-qwen3-vl-30b-a3b",
+      "status": "active",
+      "source": "workspace profiling validation 2026-09 (collection + analysis skills)",
+      "applicable_versions": "vllm-ascend workspace images on Atlas A3; structural fields are quantization-invariant",
+      "updated_at": "2026-09-03",
+      "first_seen": "2026-09",
+      "scope": {
+        "applies_to": ["profiling layer validation", "collection preflight"],
+        "hardware_generation": "A3"
+      },
+      "rule": {
+        "summary": "Qwen3-VL-30B-A3B: 48-layer dense-attention MoE VLM (decoder layers; vision encoder excluded); verified TP2 on A3",
+        "expected_layers": 48,
+        "structure": {
+          "attention_family": "dense_flash_attention",
+          "moe": true,
+          "linear_attention": false,
+          "features": ["moe", "dense_flash_attention", "rope"]
+        },
+        "verified_configs": [
+          {"tp": 2, "mode": "enforce_eager", "hardware": "A3"}
+        ],
+        "verified_at": "2026-09",
+        "fingerprints": ["qwen3-vl-30b-a3b", "qwen3-vl-30b-a3b-instruct", "qwen3_vl_moe", "qwen/qwen3-vl-30b-a3b-instruct"],
+        "notes": "model_type qwen3_vl_moe_text text_config: 48 decoder layers (hidden 2048, 128 experts); the vision encoder is not part of the decoder layer count."
+      }
+    },
+    {
+      "id": "model-deepseek-v4-flash",
+      "status": "active",
+      "source": "workspace profiling validation 2026-09 (collection + analysis skills)",
+      "applicable_versions": "vllm-ascend workspace images on Atlas A3; structural fields are quantization-invariant",
+      "updated_at": "2026-09-03",
+      "first_seen": "2026-09",
+      "scope": {
+        "applies_to": ["profiling layer validation", "collection preflight"],
+        "hardware_generation": "A3"
+      },
+      "rule": {
+        "summary": "DeepSeek-V4-Flash: 43-layer sparse-attention MoE model (KV compressor + DSA/CSA indexer); verified TP4 on A3",
+        "expected_layers": 43,
+        "structure": {
+          "attention_family": "dsa_csa_sparse",
+          "moe": true,
+          "linear_attention": false,
+          "features": ["moe", "kv_compressor", "dsa_or_csa_indexer", "sparse_sharedkv", "csa", "hca"]
+        },
+        "verified_configs": [
+          {"tp": 4, "mode": "enforce_eager", "hardware": "A3"}
+        ],
+        "verified_at": "2026-09",
+        "fingerprints": ["deepseek-v4-flash", "deepseekv4-flash", "deepseek-ai/deepseek-v4-flash"],
+        "notes": "Profile-visible main body is 43 layers (hidden 4096, 64 heads, head_dim 512, 256 experts). Known MTP/Eagle-like short bodies must not enter the step inventory until an explicit speculative-layer template exists."
+      }
+    },
+    {
+      "id": "model-deepseek-v3.1",
+      "status": "active",
+      "source": "workspace profiling validation 2026-09 (collection + analysis skills)",
+      "applicable_versions": "vllm-ascend workspace images on Atlas A3; verified with the w4a8-mtp-QuaRot quantized checkpoint; structural fields are quantization-invariant",
+      "updated_at": "2026-09-03",
+      "first_seen": "2026-09",
+      "scope": {
+        "applies_to": ["profiling layer validation", "collection preflight"],
+        "hardware_generation": "A3"
+      },
+      "rule": {
+        "summary": "DeepSeek-V3.1: 61-layer MLA + MoE model; verified TP8 on A3 with the w4a8-mtp-QuaRot quantized checkpoint (MTP speculative decoding)",
+        "expected_layers": 61,
+        "structure": {
+          "attention_family": "mla",
+          "moe": true,
+          "linear_attention": false,
+          "features": ["moe", "mla"]
+        },
+        "verified_configs": [
+          {"tp": 8, "mode": "enforce_eager", "hardware": "A3", "quantization": "w4a8-mtp-QuaRot", "speculative": "mtp"}
+        ],
+        "verified_at": "2026-09",
+        "fingerprints": ["deepseek-v3.1", "deepseek-v3-1", "deepseek_v3", "deepseek-ai/deepseek-v3.1"],
+        "notes": "model_type deepseek_v3: 61 layers (hidden 7168, 128 heads, 256 experts, first_k_dense_replace 3). Quantization variants (w4a8/w8a8/QuaRot) do not change structural fields; the MTP head is speculative, not part of the 61-layer main body."
+      }
+    },
+    {
+      "id": "model-deepseek-v4-pro",
+      "status": "active",
+      "source": "workspace profiling validation 2026-09 (collection + analysis skills)",
+      "applicable_versions": "vllm-ascend workspace images on Atlas A3; structural fields are quantization-invariant",
+      "updated_at": "2026-09-03",
+      "first_seen": "2026-09",
+      "scope": {
+        "applies_to": ["profiling layer validation", "collection preflight"],
+        "hardware_generation": "A3"
+      },
+      "rule": {
+        "summary": "DeepSeek-V4-Pro: 61-layer sparse-attention MoE model (KV compressor + DSA/CSA indexer); verified TP16 on A3; needs gpu-memory-utilization 0.95",
+        "expected_layers": 61,
+        "structure": {
+          "attention_family": "dsa_csa_sparse",
+          "moe": true,
+          "linear_attention": false,
+          "features": ["moe", "kv_compressor", "dsa_or_csa_indexer", "sparse_sharedkv", "csa", "hca"]
+        },
+        "verified_configs": [
+          {"tp": 16, "mode": "enforce_eager", "hardware": "A3", "gpu_memory_utilization": 0.95}
+        ],
+        "verified_at": "2026-09",
+        "fingerprints": ["deepseek-v4-pro", "deepseekv4-pro", "deepseek-ai/deepseek-v4-pro"],
+        "notes": "hidden 7168, 128 heads, head_dim 512, 384 experts. Serving constraint: use gpu-memory-utilization=0.95 on A3 (the default 0.85 leaves too little headroom for this checkpoint)."
+      }
+    },
+    {
+      "id": "model-glm-5",
+      "status": "active",
+      "source": "user-confirmed structure note 2026-09; no verified profile collected yet",
+      "applicable_versions": "vllm-ascend workspace images on Atlas A3; layer count is config-driven until a verified profile lands",
+      "updated_at": "2026-09-03",
+      "first_seen": "2026-09",
+      "scope": {
+        "applies_to": ["collection preflight", "candidate listing"],
+        "hardware_generation": "A3"
+      },
+      "rule": {
+        "summary": "GLM-5: DSA sparse-attention MoE (same structure family as DeepSeek-V3.2: lightning indexer + sparse shared-KV, no KV compressor); layer count config-driven",
+        "expected_layers": null,
+        "structure": {
+          "attention_family": "dsa_sparse",
+          "moe": true,
+          "linear_attention": false,
+          "features": ["moe", "dsa", "dsa_or_csa_indexer", "sparse_sharedkv"]
+        },
+        "verified_configs": [],
+        "verified_at": "2026-09",
+        "fingerprints": ["glm-5", "glm5", "glm5forcausallm"],
+        "notes": "User-confirmed 2026-09: GLM-5 shares the DSA (DeepSeek-V3.2) sparse-attention structure. expected_layers stays null on purpose: read num_hidden_layers from the model's config.json instead of guessing; replace with a verified count once a GLM-5 profile is collected."
+      }
+    }
+  ]
 }
