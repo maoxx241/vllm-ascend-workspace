@@ -502,6 +502,38 @@ def _enrich_analysis_summary_with_knowledge(
     return summary
 
 
+def _ssh_exec_with_retry(
+    endpoint: common.SshEndpoint,
+    command: str,
+    *,
+    timeout: float,
+    attempts: int = 3,
+    backoff_s: float = 5.0,
+):
+    """ssh_exec with bounded retries for transient transport stalls.
+
+    Right after a long-running streamed remote command closes, the first
+    follow-up ssh_exec on a shared control connection can stall past its
+    timeout even though the remote side is healthy (observed 2026-09-03:
+    artifact validation hung 120s immediately after an 11-minute analyze
+    stream finished; a manual retry 30s later returned in 0.2s).
+    """
+
+    last_exc: Exception | None = None
+    for attempt in range(attempts):
+        try:
+            return common.ssh_exec(endpoint, command, check=True, timeout=timeout)
+        except Exception as exc:  # noqa: BLE001 - transport-level retry
+            last_exc = exc
+            if attempt + 1 < attempts:
+                common.progress(
+                    "ssh_retry",
+                    f"ssh_exec attempt {attempt + 1}/{attempts} failed ({exc}); retrying",
+                )
+                time.sleep(backoff_s * (attempt + 1))
+    raise last_exc  # type: ignore[misc]
+
+
 def _validate_remote_artifacts(
     endpoint: common.SshEndpoint,
     remote_output_dir: str,
@@ -515,14 +547,13 @@ def _validate_remote_artifacts(
     flagged for not producing ``report/report.md``.
     """
     quoted = common.quote_remote(remote_output_dir)
-    listing = common.ssh_exec(
+    listing = _ssh_exec_with_retry(
         endpoint,
         "set -e; "
         f"cd {quoted} && "
         "for f in "
         + " ".join(common.quote_remote(p) for p in required_artifacts)
         + "; do test -f \"$f\" && echo OK:\"$f\" || echo MISSING:\"$f\"; done",
-        check=True,
         timeout=120,
     )
     missing = [
@@ -535,10 +566,9 @@ def _validate_remote_artifacts(
             f"required artifacts missing in {remote_output_dir}: {missing}"
         )
 
-    cat = common.ssh_exec(
+    cat = _ssh_exec_with_retry(
         endpoint,
         f"cat {common.quote_remote(remote_output_dir + '/manifest.json')}",
-        check=True,
         timeout=60,
     )
     try:
@@ -558,10 +588,9 @@ def _validate_segment_health(endpoint: common.SshEndpoint, remote_output_dir: st
     (``exact_cover_knowledge_miss``) is visible at the top level instead of
     being buried in the manifest.
     """
-    cat = common.ssh_exec(
+    cat = _ssh_exec_with_retry(
         endpoint,
         f"cat {common.quote_remote(remote_output_dir + '/segment_manifest.json')}",
-        check=True,
         timeout=60,
     )
     try:
