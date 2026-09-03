@@ -1,355 +1,745 @@
 {
-  "schema_version": 1,
-  "models": [
-    {
-      "model_name": "DeepSeek-V4-Pro",
-      "aliases": ["deepseekv4-pro", "DeepSeek-V4-Pro"],
-      "hub_ids": ["deepseek-ai/DeepSeek-V4-Pro"],
-      "family": "deepseek",
-      "expected_layers": 61,
-      "features": ["moe", "kv_compressor", "dsa_or_csa_indexer", "sparse_sharedkv", "csa", "hca"],
-      "field_hints": {
-        "hidden_size": [7168],
-        "num_attention_heads": [128],
-        "head_dim": [512],
-        "num_experts": [384],
-        "intermediate_size": [3072],
-        "vocab_size": [129280],
-        "profile_seq_len_common": [128]
-      },
-      "source_note": "Layer count and field hints verified from deepseek-ai/DeepSeek-V4-Pro config.json; quantization/data type variants do not change these structural fields."
+ "schema_version": 1,
+ "models": [
+  {
+   "model_name": "DeepSeek-V4-Pro",
+   "aliases": [
+    "deepseekv4-pro",
+    "DeepSeek-V4-Pro"
+   ],
+   "hub_ids": [
+    "deepseek-ai/DeepSeek-V4-Pro"
+   ],
+   "family": "deepseek",
+   "expected_layers": 61,
+   "features": [
+    "moe",
+    "kv_compressor",
+    "dsa_or_csa_indexer",
+    "sparse_sharedkv",
+    "csa",
+    "hca"
+   ],
+   "field_hints": {
+    "hidden_size": [
+     7168
+    ],
+    "num_attention_heads": [
+     128
+    ],
+    "head_dim": [
+     512
+    ],
+    "num_experts": [
+     384
+    ],
+    "intermediate_size": [
+     3072
+    ],
+    "vocab_size": [
+     129280
+    ],
+    "profile_seq_len_common": [
+     128
+    ]
+   },
+   "source_note": "Layer count and field hints verified from deepseek-ai/DeepSeek-V4-Pro config.json; quantization/data type variants do not change these structural fields."
+  },
+  {
+   "model_name": "DeepSeek-V4-Flash",
+   "aliases": [
+    "deepseekv4-flash",
+    "DeepSeek-V4-Flash"
+   ],
+   "hub_ids": [
+    "deepseek-ai/DeepSeek-V4-Flash"
+   ],
+   "family": "deepseek",
+   "expected_layers": 43,
+   "features": [
+    "moe",
+    "kv_compressor",
+    "dsa_or_csa_indexer",
+    "sparse_sharedkv",
+    "csa",
+    "hca"
+   ],
+   "field_hints": {
+    "hidden_size": [
+     4096
+    ],
+    "num_attention_heads": [
+     64
+    ],
+    "head_dim": [
+     512
+    ],
+    "num_experts": [
+     256
+    ],
+    "vocab_size": [
+     129280
+    ],
+    "profile_seq_len_common": [
+     128
+    ]
+   },
+   "segment_hints": {
+    "profile_visible_layer_counts": [
+     43
+    ],
+    "complete_layer_tolerance": 0.15,
+    "speculative_decoding_families": [
+     "mtp",
+     "eagle"
+    ],
+    "speculative_body_policy": "shorter_attention_or_moe_body_is_partial_until_catalog_has_explicit_speculative_layers",
+    "notes": [
+     "DSV4 flash profile-visible main body is 43 layers.",
+     "Known MTP/Eagle-like short bodies must not enter step inventory unless an explicit speculative-layer template is added."
+    ]
+   },
+   "source_note": "Layer count and field hints verified from deepseek-ai/DeepSeek-V4-Flash config.json; quantization/data type variants do not change these structural fields."
+  },
+  {
+   "model_name": "DeepSeek-V3.1",
+   "aliases": [
+    "deepseek-v3.1",
+    "DeepSeek-V3.1",
+    "deepseek-v3-1",
+    "deepseek_v3"
+   ],
+   "hub_ids": [
+    "deepseek-ai/DeepSeek-V3.1"
+   ],
+   "family": "deepseek",
+   "expected_layers": 61,
+   "features": [
+    "moe",
+    "mla"
+   ],
+   "field_hints": {
+    "hidden_size": [
+     7168
+    ],
+    "num_attention_heads": [
+     128
+    ],
+    "num_experts": [
+     256
+    ],
+    "moe_intermediate_size": [
+     2048
+    ],
+    "kv_lora_rank": [
+     512
+    ],
+    "q_lora_rank": [
+     1536
+    ],
+    "first_k_dense_replace": [
+     3
+    ],
+    "vocab_size": [
+     129280
+    ]
+   },
+   "source_note": "Layer count and field hints verified from the shared-storage DeepSeek-V3.1-w4a8-mtp-QuaRot config.json (model_type deepseek_v3); quantization variants (w4a8/w8a8/QuaRot) do not change these structural fields."
+  },
+  {
+   "model_name": "Qwen3-8B",
+   "aliases": [
+    "qwen3-8b",
+    "Qwen3-8B"
+   ],
+   "hub_ids": [
+    "Qwen/Qwen3-8B"
+   ],
+   "family": "qwen",
+   "expected_layers": 36,
+   "features": [
+    "dense_flash_attention",
+    "rope"
+   ],
+   "field_hints": {
+    "hidden_size": [
+     4096
+    ],
+    "num_attention_heads": [
+     32
+    ],
+    "num_key_value_heads": [
+     8
+    ],
+    "head_dim": [
+     128
+    ],
+    "intermediate_size": [
+     12288
+    ],
+    "vocab_size": [
+     151936
+    ]
+   },
+   "source_note": "Layer count and field hints verified from the shared-storage Qwen3-8B config.json (model_type qwen3, dense GQA). Qwen3ForCausalLM is shared across Qwen3 dense sizes and is intentionally not an alias."
+  },
+  {
+   "model_name": "Qwen3-VL-30B-A3B-Instruct",
+   "aliases": [
+    "qwen3-vl-30b-a3b-instruct",
+    "Qwen3-VL-30B-A3B-Instruct",
+    "qwen3_vl_moe"
+   ],
+   "hub_ids": [
+    "Qwen/Qwen3-VL-30B-A3B-Instruct"
+   ],
+   "family": "qwen",
+   "expected_layers": 48,
+   "features": [
+    "moe",
+    "dense_flash_attention",
+    "rope"
+   ],
+   "field_hints": {
+    "hidden_size": [
+     2048
+    ],
+    "num_attention_heads": [
+     32
+    ],
+    "num_key_value_heads": [
+     4
+    ],
+    "head_dim": [
+     128
+    ],
+    "num_experts": [
+     128
+    ],
+    "intermediate_size": [
+     6144
+    ],
+    "moe_intermediate_size": [
+     768
+    ],
+    "vocab_size": [
+     151936
+    ]
+   },
+   "source_note": "Layer count and field hints verified from the shared-storage Qwen3-VL-30B-A3B-Instruct config.json text_config (model_type qwen3_vl_moe_text, 48 decoder layers; vision encoder is not part of the decoder layer count)."
+  },
+  {
+   "model_name": "Qwen3.5-35B-A3B",
+   "aliases": [
+    "qwen3.5-35b-a3b",
+    "Qwen3.5-35B-A3B",
+    "qwen35-35b"
+   ],
+   "hub_ids": [
+    "Qwen/Qwen3.5-35B-A3B"
+   ],
+   "family": "qwen",
+   "expected_layers": 40,
+   "features": [
+    "moe",
+    "linear_attention_or_mamba",
+    "dense_flash_attention",
+    "rope"
+   ],
+   "field_hints": {
+    "hidden_size": [
+     2048
+    ],
+    "num_attention_heads": [
+     16
+    ],
+    "num_key_value_heads": [
+     2
+    ],
+    "head_dim": [
+     256
+    ],
+    "num_experts": [
+     256
+    ],
+    "moe_intermediate_size": [
+     512
+    ],
+    "vocab_size": [
+     248320
+    ]
+   },
+   "source_note": "Layer count and field hints verified from the shared-storage Qwen3.5-35B-A3B config.json text_config (model_type qwen3_5_moe_text): 40 decoder layers in a repeating 3x linear_attention + 1x full_attention hybrid pattern."
+  },
+  {
+   "model_name": "DeepSeek-V4 family",
+   "aliases": [
+    "dsv4",
+    "deepseekv4",
+    "DeepSeekV4ForCausalLM"
+   ],
+   "family": "deepseek",
+   "expected_layers": null,
+   "features": [
+    "moe",
+    "kv_compressor",
+    "dsa_or_csa_indexer",
+    "sparse_sharedkv",
+    "csa",
+    "hca"
+   ],
+   "operator_match": {
+    "required_any": [
+     "attention.kv_compressor"
+    ],
+    "optional": [
+     "attention.lightning_indexer",
+     "attention.sparse_sharedkv",
+     "attention.flash_score",
+     "moe.gating"
+    ],
+    "weights": {
+     "attention.kv_compressor": 10,
+     "attention.lightning_indexer": 3,
+     "attention.sparse_sharedkv": 3,
+     "attention.flash_score": 1,
+     "moe.gating": 1
     },
-    {
-      "model_name": "DeepSeek-V4-Flash",
-      "aliases": ["deepseekv4-flash", "DeepSeek-V4-Flash"],
-      "hub_ids": ["deepseek-ai/DeepSeek-V4-Flash"],
-      "family": "deepseek",
-      "expected_layers": 43,
-      "features": ["moe", "kv_compressor", "dsa_or_csa_indexer", "sparse_sharedkv", "csa", "hca"],
-      "field_hints": {
-        "hidden_size": [4096],
-        "num_attention_heads": [64],
-        "head_dim": [512],
-        "num_experts": [256],
-        "vocab_size": [129280],
-        "profile_seq_len_common": [128]
-      },
-      "segment_hints": {
-        "profile_visible_layer_counts": [43],
-        "complete_layer_tolerance": 0.15,
-        "speculative_decoding_families": ["mtp", "eagle"],
-        "speculative_body_policy": "shorter_attention_or_moe_body_is_partial_until_catalog_has_explicit_speculative_layers",
-        "notes": [
-          "DSV4 flash profile-visible main body is 43 layers.",
-          "Known MTP/Eagle-like short bodies must not enter step inventory unless an explicit speculative-layer template is added."
-        ]
-      },
-      "source_note": "Layer count and field hints verified from deepseek-ai/DeepSeek-V4-Flash config.json; quantization/data type variants do not change these structural fields."
+    "base_score": 2
+   },
+   "variants": [
+    "DeepSeek-V4-Flash",
+    "DeepSeek-V4-Pro"
+   ],
+   "field_hints": {},
+   "source_note": "Fuzzy DSV4 entry. Enumerate Flash/Pro variants and resolve by public config plus profiling evidence; do not guess layer count from the family name."
+  },
+  {
+   "model_name": "Qwen3.5-397B-A17B",
+   "aliases": [
+    "qwen3.5-397b-a17b",
+    "Qwen3.5-397B-A17B"
+   ],
+   "hub_ids": [
+    "Qwen/Qwen3.5-397B-A17B"
+   ],
+   "family": "qwen",
+   "expected_layers": 60,
+   "features": [
+    "moe",
+    "linear_attention_or_mamba",
+    "dense_flash_attention",
+    "rope"
+   ],
+   "field_hints": {
+    "hidden_size": [
+     4096
+    ],
+    "num_attention_heads": [
+     32
+    ],
+    "num_key_value_heads": [
+     2
+    ],
+    "head_dim": [
+     256
+    ],
+    "num_experts": [
+     512
+    ],
+    "intermediate_size": [
+     1024
+    ],
+    "vocab_size": [
+     248320
+    ]
+   },
+   "segment_hints": {
+    "profile_visible_layer_counts": [
+     40,
+     41
+    ],
+    "complete_layer_tolerance": 0.08,
+    "speculative_decoding_families": [
+     "mtp",
+     "eagle"
+    ],
+    "speculative_body_policy": "shorter_attention_or_moe_body_is_partial_until_catalog_has_explicit_speculative_layers",
+    "notes": [
+     "Current Qwen3.5 validation profiles expose 40/41 rank-visible main layers; collect more mode-specific profiles before narrowing this further."
+    ]
+   },
+   "source_note": "Fingerprints distilled from refs/model_analysis/Qwen3.5-397B-A17B config and profiling-observable linear/full-attention MoE kernel families; use only as candidate matching evidence."
+  },
+  {
+   "model_name": "Qwen3.5-122B-A10B",
+   "aliases": [
+    "qwen3.5-122b-a10b",
+    "Qwen3.5-122B-A10B"
+   ],
+   "hub_ids": [
+    "Qwen/Qwen3.5-122B-A10B"
+   ],
+   "family": "qwen",
+   "expected_layers": 48,
+   "features": [
+    "moe",
+    "linear_attention_or_mamba",
+    "dense_flash_attention",
+    "rope"
+   ],
+   "field_hints": {
+    "hidden_size": [
+     3072
+    ],
+    "num_experts": [
+     256
+    ],
+    "vocab_size": [
+     248320
+    ]
+   },
+   "source_note": "Layer count and field hints verified from Qwen/Qwen3.5-122B-A10B config.json."
+  },
+  {
+   "model_name": "Qwen3.5-9B",
+   "aliases": [
+    "qwen3.5-9b",
+    "Qwen3.5-9B"
+   ],
+   "hub_ids": [
+    "Qwen/Qwen3.5-9B"
+   ],
+   "family": "qwen",
+   "expected_layers": 32,
+   "features": [
+    "dense_flash_attention",
+    "rope"
+   ],
+   "field_hints": {
+    "hidden_size": [
+     4096
+    ],
+    "vocab_size": [
+     248320
+    ]
+   },
+   "source_note": "Layer count and field hints verified from Qwen/Qwen3.5-9B config.json."
+  },
+  {
+   "model_name": "Qwen3.5-4B",
+   "aliases": [
+    "qwen3.5-4b",
+    "Qwen3.5-4B"
+   ],
+   "hub_ids": [
+    "Qwen/Qwen3.5-4B"
+   ],
+   "family": "qwen",
+   "expected_layers": 32,
+   "features": [
+    "dense_flash_attention",
+    "rope"
+   ],
+   "field_hints": {
+    "hidden_size": [
+     2560
+    ],
+    "vocab_size": [
+     248320
+    ]
+   },
+   "source_note": "Layer count and field hints verified from Qwen/Qwen3.5-4B config.json."
+  },
+  {
+   "model_name": "Qwen3.5-0.8B",
+   "aliases": [
+    "qwen3.5-0.8b",
+    "Qwen3.5-0.8B"
+   ],
+   "hub_ids": [
+    "Qwen/Qwen3.5-0.8B"
+   ],
+   "family": "qwen",
+   "expected_layers": 24,
+   "features": [
+    "dense_flash_attention",
+    "rope"
+   ],
+   "field_hints": {
+    "hidden_size": [
+     1024
+    ],
+    "vocab_size": [
+     248320
+    ]
+   },
+   "source_note": "Layer count and field hints verified from Qwen/Qwen3.5-0.8B config.json."
+  },
+  {
+   "model_name": "Qwen3.5 family",
+   "aliases": [
+    "qwen3.5",
+    "qwen35",
+    "qwen3_5",
+    "qwen3_5_moe",
+    "Qwen3_5MoeForConditionalGeneration"
+   ],
+   "family": "qwen",
+   "expected_layers": null,
+   "features": [
+    "moe",
+    "linear_attention_or_mamba",
+    "dense_flash_attention",
+    "rope"
+   ],
+   "operator_match": {
+    "required_all": [
+     "moe.gating",
+     "attention.linear_or_mamba"
+    ],
+    "optional": [
+     "attention.flash_score",
+     "attention.rope"
+    ],
+    "weights": {
+     "moe.gating": 3,
+     "attention.linear_or_mamba": 7,
+     "attention.flash_score": 1,
+     "attention.rope": 1
     },
-    {
-      "model_name": "DeepSeek-V3.1",
-      "aliases": ["deepseek-v3.1", "DeepSeek-V3.1", "deepseek-v3-1", "deepseek_v3"],
-      "hub_ids": ["deepseek-ai/DeepSeek-V3.1"],
-      "family": "deepseek",
-      "expected_layers": 61,
-      "features": ["moe", "mla"],
-      "field_hints": {
-        "hidden_size": [7168],
-        "num_attention_heads": [128],
-        "num_experts": [256],
-        "moe_intermediate_size": [2048],
-        "kv_lora_rank": [512],
-        "q_lora_rank": [1536],
-        "first_k_dense_replace": [3],
-        "vocab_size": [129280]
-      },
-      "source_note": "Layer count and field hints verified from the shared-storage DeepSeek-V3.1-w4a8-mtp-QuaRot config.json (model_type deepseek_v3); quantization variants (w4a8/w8a8/QuaRot) do not change these structural fields."
+    "base_score": 1
+   },
+   "variants": [
+    "Qwen3.5-0.8B",
+    "Qwen3.5-4B",
+    "Qwen3.5-9B",
+    "Qwen3.5-35B-A3B",
+    "Qwen3.5-122B-A10B",
+    "Qwen3.5-397B-A17B"
+   ],
+   "field_hints": {},
+   "source_note": "Fuzzy Qwen3.5 entry. Enumerate known public parameter variants and resolve by config plus profiling evidence; quantization/data type variants are not structural variants."
+  },
+  {
+   "model_name": "DeepSeek-V2-Lite",
+   "aliases": [
+    "dsv2",
+    "dsv2lite",
+    "dsv2-lite",
+    "deepseek-v2-lite",
+    "DeepseekV2LiteForCausalLM"
+   ],
+   "family": "deepseek",
+   "expected_layers": 27,
+   "features": [
+    "moe",
+    "mla"
+   ],
+   "field_hints": {
+    "hidden_size": [
+     2048
+    ],
+    "num_attention_heads": [
+     16
+    ],
+    "num_experts": [
+     64
+    ]
+   },
+   "segment_hints": {
+    "profile_visible_layer_counts": [
+     27
+    ],
+    "complete_layer_tolerance": 0.1,
+    "speculative_decoding_families": [
+     "mtp",
+     "eagle"
+    ],
+    "speculative_body_policy": "shorter_attention_or_moe_body_is_partial_until_catalog_has_explicit_speculative_layers",
+    "notes": [
+     "DSV2-Lite catalog entry currently assumes the standard 27-layer MLA+MoE body; add separate decode/prefill hints if validation profiles diverge."
+    ]
+   },
+   "source_note": "DeepSeek-V2-Lite MLA+MoE catalog entry for model-guided segmentation and DSV2 profiling regression."
+  },
+  {
+   "model_name": "DeepSeek DSA sparse-attention family",
+   "aliases": [
+    "dsa",
+    "deepseek-dsa",
+    "DeepSeekV32ForCausalLM",
+    "DeepseekV32ForCausalLM"
+   ],
+   "family": "deepseek",
+   "expected_layers": null,
+   "features": [
+    "moe",
+    "dsa",
+    "dsa_or_csa_indexer",
+    "sparse_sharedkv"
+   ],
+   "operator_match": {
+    "required_all": [
+     "attention.lightning_indexer",
+     "attention.sparse_sharedkv"
+    ],
+    "forbidden": [
+     "attention.kv_compressor"
+    ],
+    "optional": [
+     "moe.gating",
+     "attention.flash_score"
+    ],
+    "weights": {
+     "attention.lightning_indexer": 6,
+     "attention.sparse_sharedkv": 6,
+     "moe.gating": 1,
+     "attention.flash_score": 1
     },
-    {
-      "model_name": "Qwen3-8B",
-      "aliases": ["qwen3-8b", "Qwen3-8B"],
-      "hub_ids": ["Qwen/Qwen3-8B"],
-      "family": "qwen",
-      "expected_layers": 36,
-      "features": ["dense_flash_attention", "rope"],
-      "field_hints": {
-        "hidden_size": [4096],
-        "num_attention_heads": [32],
-        "num_key_value_heads": [8],
-        "head_dim": [128],
-        "intermediate_size": [12288],
-        "vocab_size": [151936]
-      },
-      "source_note": "Layer count and field hints verified from the shared-storage Qwen3-8B config.json (model_type qwen3, dense GQA). Qwen3ForCausalLM is shared across Qwen3 dense sizes and is intentionally not an alias."
+    "base_score": 1
+   },
+   "field_hints": {},
+   "source_note": "Generic DSA sparse-attention fallback: lightning indexer plus sparse shared-KV without KV compressor. Add concrete variants and layer counts when public configs/profiles are collected."
+  },
+  {
+   "model_name": "DeepSeek-V3/V2 MLA MoE family",
+   "aliases": [
+    "DeepseekV2ForCausalLM",
+    "DeepseekV3ForCausalLM"
+   ],
+   "family": "deepseek",
+   "expected_layers": null,
+   "features": [
+    "moe",
+    "mla"
+   ],
+   "operator_match": {
+    "required_all": [
+     "attention.mla",
+     "moe.gating"
+    ],
+    "forbidden": [
+     "attention.kv_compressor",
+     "attention.linear_or_mamba"
+    ],
+    "optional": [
+     "attention.flash_score"
+    ],
+    "weights": {
+     "attention.mla": 6,
+     "moe.gating": 2,
+     "attention.flash_score": 1
     },
-    {
-      "model_name": "Qwen3-VL-30B-A3B-Instruct",
-      "aliases": ["qwen3-vl-30b-a3b-instruct", "Qwen3-VL-30B-A3B-Instruct", "qwen3_vl_moe"],
-      "hub_ids": ["Qwen/Qwen3-VL-30B-A3B-Instruct"],
-      "family": "qwen",
-      "expected_layers": 48,
-      "features": ["moe", "dense_flash_attention", "rope"],
-      "field_hints": {
-        "hidden_size": [2048],
-        "num_attention_heads": [32],
-        "num_key_value_heads": [4],
-        "head_dim": [128],
-        "num_experts": [128],
-        "intermediate_size": [6144],
-        "moe_intermediate_size": [768],
-        "vocab_size": [151936]
-      },
-      "source_note": "Layer count and field hints verified from the shared-storage Qwen3-VL-30B-A3B-Instruct config.json text_config (model_type qwen3_vl_moe_text, 48 decoder layers; vision encoder is not part of the decoder layer count)."
+    "base_score": 1
+   },
+   "field_hints": {},
+   "source_note": "Generic MLA+MoE fallback when sparse/compressor signatures are absent."
+  },
+  {
+   "model_name": "Qwen MoE GQA family",
+   "aliases": [
+    "Qwen2MoeForCausalLM",
+    "Qwen3MoeForCausalLM"
+   ],
+   "family": "qwen",
+   "expected_layers": null,
+   "features": [
+    "moe",
+    "dense_flash_attention"
+   ],
+   "operator_match": {
+    "required_all": [
+     "moe.gating",
+     "attention.flash_score"
+    ],
+    "forbidden": [
+     "attention.linear_or_mamba",
+     "attention.kv_compressor",
+     "attention.mla"
+    ],
+    "optional": [
+     "attention.rope"
+    ],
+    "weights": {
+     "moe.gating": 3,
+     "attention.flash_score": 4,
+     "attention.rope": 1
     },
-    {
-      "model_name": "Qwen3.5-35B-A3B",
-      "aliases": ["qwen3.5-35b-a3b", "Qwen3.5-35B-A3B", "qwen35-35b"],
-      "hub_ids": ["Qwen/Qwen3.5-35B-A3B"],
-      "family": "qwen",
-      "expected_layers": 40,
-      "features": ["moe", "linear_attention_or_mamba", "dense_flash_attention", "rope"],
-      "field_hints": {
-        "hidden_size": [2048],
-        "num_attention_heads": [16],
-        "num_key_value_heads": [2],
-        "head_dim": [256],
-        "num_experts": [256],
-        "moe_intermediate_size": [512],
-        "vocab_size": [248320]
-      },
-      "source_note": "Layer count and field hints verified from the shared-storage Qwen3.5-35B-A3B config.json text_config (model_type qwen3_5_moe_text): 40 decoder layers in a repeating 3x linear_attention + 1x full_attention hybrid pattern."
+    "base_score": 1
+   },
+   "field_hints": {},
+   "source_note": "Generic Qwen-style dense flash-attention MoE fallback."
+  },
+  {
+   "model_name": "Qwen3-Next / GDN linear-attention family",
+   "aliases": [
+    "Qwen3NextForCausalLM",
+    "GDN"
+   ],
+   "family": "qwen",
+   "expected_layers": null,
+   "features": [
+    "linear_attention_or_mamba"
+   ],
+   "operator_match": {
+    "required_all": [
+     "attention.linear_or_mamba"
+    ],
+    "forbidden": [
+     "attention.kv_compressor",
+     "attention.mla"
+    ],
+    "optional": [
+     "attention.rope"
+    ],
+    "weights": {
+     "attention.linear_or_mamba": 6,
+     "attention.rope": 1
     },
-    {
-      "model_name": "DeepSeek-V4 family",
-      "aliases": ["dsv4", "deepseekv4", "DeepSeekV4ForCausalLM"],
-      "family": "deepseek",
-      "expected_layers": null,
-      "features": ["moe", "kv_compressor", "dsa_or_csa_indexer", "sparse_sharedkv", "csa", "hca"],
-      "operator_match": {
-        "required_any": ["attention.kv_compressor"],
-        "optional": ["attention.lightning_indexer", "attention.sparse_sharedkv", "attention.flash_score", "moe.gating"],
-        "weights": {
-          "attention.kv_compressor": 10,
-          "attention.lightning_indexer": 3,
-          "attention.sparse_sharedkv": 3,
-          "attention.flash_score": 1,
-          "moe.gating": 1
-        },
-        "base_score": 2
-      },
-      "variants": ["DeepSeek-V4-Flash", "DeepSeek-V4-Pro"],
-      "field_hints": {},
-      "source_note": "Fuzzy DSV4 entry. Enumerate Flash/Pro variants and resolve by public config plus profiling evidence; do not guess layer count from the family name."
+    "base_score": 1
+   },
+   "field_hints": {},
+   "source_note": "Generic GDN/Mamba/linear-attention fallback when recurrent gated delta or causal-conv kernels are visible."
+  },
+  {
+   "model_name": "GLM-5 (DSA sparse-attention)",
+   "aliases": [
+    "glm5",
+    "glm-5",
+    "GLM-5",
+    "Glm5ForCausalLM"
+   ],
+   "family": "glm",
+   "expected_layers": null,
+   "features": [
+    "moe",
+    "dsa",
+    "dsa_or_csa_indexer",
+    "sparse_sharedkv"
+   ],
+   "operator_match": {
+    "required_all": [
+     "attention.lightning_indexer",
+     "attention.sparse_sharedkv"
+    ],
+    "forbidden": [
+     "attention.kv_compressor"
+    ],
+    "optional": [
+     "moe.gating",
+     "attention.flash_score"
+    ],
+    "weights": {
+     "attention.lightning_indexer": 6,
+     "attention.sparse_sharedkv": 6,
+     "moe.gating": 1,
+     "attention.flash_score": 1
     },
-    {
-      "model_name": "Qwen3.5-397B-A17B",
-      "aliases": ["qwen3.5-397b-a17b", "Qwen3.5-397B-A17B"],
-      "hub_ids": ["Qwen/Qwen3.5-397B-A17B"],
-      "family": "qwen",
-      "expected_layers": 60,
-      "features": ["moe", "linear_attention_or_mamba", "dense_flash_attention", "rope"],
-      "field_hints": {
-        "hidden_size": [4096],
-        "num_attention_heads": [32],
-        "num_key_value_heads": [2],
-        "head_dim": [256],
-        "num_experts": [512],
-        "intermediate_size": [1024],
-        "vocab_size": [248320]
-      },
-      "segment_hints": {
-        "profile_visible_layer_counts": [40, 41],
-        "complete_layer_tolerance": 0.08,
-        "speculative_decoding_families": ["mtp", "eagle"],
-        "speculative_body_policy": "shorter_attention_or_moe_body_is_partial_until_catalog_has_explicit_speculative_layers",
-        "notes": [
-          "Current Qwen3.5 validation profiles expose 40/41 rank-visible main layers; collect more mode-specific profiles before narrowing this further."
-        ]
-      },
-      "source_note": "Fingerprints distilled from refs/model_analysis/Qwen3.5-397B-A17B config and profiling-observable linear/full-attention MoE kernel families; use only as candidate matching evidence."
-    },
-    {
-      "model_name": "Qwen3.5-122B-A10B",
-      "aliases": ["qwen3.5-122b-a10b", "Qwen3.5-122B-A10B"],
-      "hub_ids": ["Qwen/Qwen3.5-122B-A10B"],
-      "family": "qwen",
-      "expected_layers": 48,
-      "features": ["moe", "linear_attention_or_mamba", "dense_flash_attention", "rope"],
-      "field_hints": {
-        "hidden_size": [3072],
-        "num_experts": [256],
-        "vocab_size": [248320]
-      },
-      "source_note": "Layer count and field hints verified from Qwen/Qwen3.5-122B-A10B config.json."
-    },
-    {
-      "model_name": "Qwen3.5-9B",
-      "aliases": ["qwen3.5-9b", "Qwen3.5-9B"],
-      "hub_ids": ["Qwen/Qwen3.5-9B"],
-      "family": "qwen",
-      "expected_layers": 32,
-      "features": ["dense_flash_attention", "rope"],
-      "field_hints": {
-        "hidden_size": [4096],
-        "vocab_size": [248320]
-      },
-      "source_note": "Layer count and field hints verified from Qwen/Qwen3.5-9B config.json."
-    },
-    {
-      "model_name": "Qwen3.5-4B",
-      "aliases": ["qwen3.5-4b", "Qwen3.5-4B"],
-      "hub_ids": ["Qwen/Qwen3.5-4B"],
-      "family": "qwen",
-      "expected_layers": 32,
-      "features": ["dense_flash_attention", "rope"],
-      "field_hints": {
-        "hidden_size": [2560],
-        "vocab_size": [248320]
-      },
-      "source_note": "Layer count and field hints verified from Qwen/Qwen3.5-4B config.json."
-    },
-    {
-      "model_name": "Qwen3.5-0.8B",
-      "aliases": ["qwen3.5-0.8b", "Qwen3.5-0.8B"],
-      "hub_ids": ["Qwen/Qwen3.5-0.8B"],
-      "family": "qwen",
-      "expected_layers": 24,
-      "features": ["dense_flash_attention", "rope"],
-      "field_hints": {
-        "hidden_size": [1024],
-        "vocab_size": [248320]
-      },
-      "source_note": "Layer count and field hints verified from Qwen/Qwen3.5-0.8B config.json."
-    },
-    {
-      "model_name": "Qwen3.5 family",
-      "aliases": ["qwen3.5", "qwen35", "qwen3_5", "qwen3_5_moe", "Qwen3_5MoeForConditionalGeneration"],
-      "family": "qwen",
-      "expected_layers": null,
-      "features": ["moe", "linear_attention_or_mamba", "dense_flash_attention", "rope"],
-      "operator_match": {
-        "required_all": ["moe.gating", "attention.linear_or_mamba"],
-        "optional": ["attention.flash_score", "attention.rope"],
-        "weights": {
-          "moe.gating": 3,
-          "attention.linear_or_mamba": 7,
-          "attention.flash_score": 1,
-          "attention.rope": 1
-        },
-        "base_score": 1
-      },
-      "variants": [
-        "Qwen3.5-0.8B",
-        "Qwen3.5-4B",
-        "Qwen3.5-9B",
-        "Qwen3.5-35B-A3B",
-        "Qwen3.5-122B-A10B",
-        "Qwen3.5-397B-A17B"
-      ],
-      "field_hints": {},
-      "source_note": "Fuzzy Qwen3.5 entry. Enumerate known public parameter variants and resolve by config plus profiling evidence; quantization/data type variants are not structural variants."
-    },
-    {
-      "model_name": "DeepSeek-V2-Lite",
-      "aliases": ["dsv2", "dsv2lite", "dsv2-lite", "deepseek-v2-lite", "DeepseekV2LiteForCausalLM"],
-      "family": "deepseek",
-      "expected_layers": 27,
-      "features": ["moe", "mla"],
-      "field_hints": {
-        "hidden_size": [2048],
-        "num_attention_heads": [16],
-        "num_experts": [64]
-      },
-      "segment_hints": {
-        "profile_visible_layer_counts": [27],
-        "complete_layer_tolerance": 0.1,
-        "speculative_decoding_families": ["mtp", "eagle"],
-        "speculative_body_policy": "shorter_attention_or_moe_body_is_partial_until_catalog_has_explicit_speculative_layers",
-        "notes": [
-          "DSV2-Lite catalog entry currently assumes the standard 27-layer MLA+MoE body; add separate decode/prefill hints if validation profiles diverge."
-        ]
-      },
-      "source_note": "DeepSeek-V2-Lite MLA+MoE catalog entry for model-guided segmentation and DSV2 profiling regression."
-    },
-    {
-      "model_name": "DeepSeek DSA sparse-attention family",
-      "aliases": ["dsa", "deepseek-dsa", "DeepSeekV32ForCausalLM", "DeepseekV32ForCausalLM"],
-      "family": "deepseek",
-      "expected_layers": null,
-      "features": ["moe", "dsa", "dsa_or_csa_indexer", "sparse_sharedkv"],
-      "operator_match": {
-        "required_all": ["attention.lightning_indexer", "attention.sparse_sharedkv"],
-        "forbidden": ["attention.kv_compressor"],
-        "optional": ["moe.gating", "attention.flash_score"],
-        "weights": {
-          "attention.lightning_indexer": 6,
-          "attention.sparse_sharedkv": 6,
-          "moe.gating": 1,
-          "attention.flash_score": 1
-        },
-        "base_score": 1
-      },
-      "field_hints": {},
-      "source_note": "Generic DSA sparse-attention fallback: lightning indexer plus sparse shared-KV without KV compressor. Add concrete variants and layer counts when public configs/profiles are collected."
-    },
-    {
-      "model_name": "DeepSeek-V3/V2 MLA MoE family",
-      "aliases": ["DeepseekV2ForCausalLM", "DeepseekV3ForCausalLM"],
-      "family": "deepseek",
-      "expected_layers": null,
-      "features": ["moe", "mla"],
-      "operator_match": {
-        "required_all": ["attention.mla", "moe.gating"],
-        "forbidden": ["attention.kv_compressor", "attention.linear_or_mamba"],
-        "optional": ["attention.flash_score"],
-        "weights": {
-          "attention.mla": 6,
-          "moe.gating": 2,
-          "attention.flash_score": 1
-        },
-        "base_score": 1
-      },
-      "field_hints": {},
-      "source_note": "Generic MLA+MoE fallback when sparse/compressor signatures are absent."
-    },
-    {
-      "model_name": "Qwen MoE GQA family",
-      "aliases": ["Qwen2MoeForCausalLM", "Qwen3MoeForCausalLM"],
-      "family": "qwen",
-      "expected_layers": null,
-      "features": ["moe", "dense_flash_attention"],
-      "operator_match": {
-        "required_all": ["moe.gating", "attention.flash_score"],
-        "forbidden": ["attention.linear_or_mamba", "attention.kv_compressor", "attention.mla"],
-        "optional": ["attention.rope"],
-        "weights": {
-          "moe.gating": 3,
-          "attention.flash_score": 4,
-          "attention.rope": 1
-        },
-        "base_score": 1
-      },
-      "field_hints": {},
-      "source_note": "Generic Qwen-style dense flash-attention MoE fallback."
-    },
-    {
-      "model_name": "Qwen3-Next / GDN linear-attention family",
-      "aliases": ["Qwen3NextForCausalLM", "GDN"],
-      "family": "qwen",
-      "expected_layers": null,
-      "features": ["linear_attention_or_mamba"],
-      "operator_match": {
-        "required_all": ["attention.linear_or_mamba"],
-        "forbidden": ["attention.kv_compressor", "attention.mla"],
-        "optional": ["attention.rope"],
-        "weights": {
-          "attention.linear_or_mamba": 6,
-          "attention.rope": 1
-        },
-        "base_score": 1
-      },
-      "field_hints": {},
-      "source_note": "Generic GDN/Mamba/linear-attention fallback when recurrent gated delta or causal-conv kernels are visible."
-    }
-  ]
+    "base_score": 0
+   },
+   "field_hints": {},
+   "source_note": "User-confirmed 2026-09: GLM-5 shares the DSA (DeepSeek-V3.2) sparse-attention structure — lightning indexer + sparse attention, no KV compressor. Layer count is config-driven until a verified profile is collected. base_score=0 keeps the generic DeepSeek DSA family as the operator-match winner for unidentified DSA profiles; this entry resolves via aliases / candidate listing."
+  }
+ ]
 }
