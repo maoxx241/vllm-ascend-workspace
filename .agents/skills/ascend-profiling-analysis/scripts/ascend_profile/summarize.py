@@ -1532,9 +1532,15 @@ def summarize_profile(
     hardware_profile: Path | None = None,
     scan_cann_hardware: bool = True,
     write_raw_index: bool = False,
+    events: Sequence[NormalizedEvent] | None = None,
+    events_by_rank: Mapping[str, Sequence[NormalizedEvent]] | None = None,
 ) -> dict[str, Any]:
-    events = load_events(output_dir / "normalized_event_index.jsonl")
-    events_by_rank = group_by_rank(events)
+    # In-process hand-off from the full-pipeline runner; stage-only runs
+    # keep loading from disk.
+    if events is None:
+        events = load_events(output_dir / "normalized_event_index.jsonl")
+    if events_by_rank is None:
+        events_by_rank = group_by_rank(events)
     segments = load_step_segments(output_dir / "step_segments.json")
     layers = load_layer_segments(output_dir / "layer_segments.json")
     blocks = load_block_segments(output_dir / "block_segments.json")

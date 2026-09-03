@@ -360,10 +360,19 @@ def _pairs_in_range(
     return tuple(pair for pair in pair_at[left:right] if pair is not None)
 
 
-def classify_profile(output_dir: Path) -> dict[str, Any]:
+def classify_profile(
+    output_dir: Path,
+    *,
+    events: Sequence[NormalizedEvent] | None = None,
+    events_by_rank: Mapping[str, Sequence[NormalizedEvent]] | None = None,
+) -> dict[str, Any]:
     output_dir = Path(output_dir)
-    events = load_events(output_dir / "normalized_event_index.jsonl")
-    events_by_rank = group_by_rank(events)
+    # In-process hand-off from the full-pipeline runner; stage-only runs
+    # keep loading from disk.
+    if events is None:
+        events = load_events(output_dir / "normalized_event_index.jsonl")
+    if events_by_rank is None:
+        events_by_rank = group_by_rank(events)
     # One streaming pass per rank up front.  Every block/layer/step class
     # signature below is the non-None subsequence of one contiguous slice
     # of these pair arrays, so no walk ever re-slices, re-sorts, or

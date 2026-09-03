@@ -6,7 +6,7 @@ from __future__ import annotations
 import argparse
 from collections import defaultdict
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
 try:
     from .common import (
@@ -255,8 +255,15 @@ def build_operator_alignments(events: Sequence[NormalizedEvent], *, bucket_us: f
     return alignments
 
 
-def cross_rank_profile(output_dir: Path) -> dict[str, Any]:
-    events = load_events(output_dir / "normalized_event_index.jsonl")
+def cross_rank_profile(
+    output_dir: Path,
+    *,
+    events: Sequence[NormalizedEvent] | None = None,
+) -> dict[str, Any]:
+    # In-process hand-off from the full-pipeline runner; stage-only runs
+    # keep loading from disk.
+    if events is None:
+        events = load_events(output_dir / "normalized_event_index.jsonl")
     segments = load_step_segments(output_dir / "step_segments.json")
     step_alignments = build_step_alignments(segments)
     operator_alignments = build_operator_alignments(events)

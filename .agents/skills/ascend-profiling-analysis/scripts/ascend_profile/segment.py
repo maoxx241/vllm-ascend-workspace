@@ -21,7 +21,7 @@ import re
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
 try:
     from .common import (
@@ -3413,9 +3413,15 @@ def segment_profile(
     *,
     model_id: str | None = None,
     model_config: Path | None = None,
+    events: Sequence[NormalizedEvent] | None = None,
+    events_by_rank: Mapping[str, Sequence[NormalizedEvent]] | None = None,
 ) -> dict[str, Any]:
-    event_path = output_dir / "normalized_event_index.jsonl"
-    events = load_events(event_path)
+    # In-process hand-off: the full-pipeline runner passes the already
+    # normalized events through, skipping a multi-million-row disk re-parse.
+    # Stage-only runs (``--from-stage``) keep loading from disk.
+    if events is None:
+        event_path = output_dir / "normalized_event_index.jsonl"
+        events = load_events(event_path)
     analysis_context = read_json(output_dir / "analysis_context.json", default={}) or {}
     if model_id is None:
         model_id = analysis_context.get("model_id")
@@ -3426,7 +3432,7 @@ def segment_profile(
         model_config=model_config,
         events=events,
     )
-    grouped = group_by_rank(events)
+    grouped = events_by_rank if events_by_rank is not None else group_by_rank(events)
     all_segments: list[StepSegment] = []
     all_layers: list[LayerSegment] = []
     all_observations: list[StructureObservation] = []

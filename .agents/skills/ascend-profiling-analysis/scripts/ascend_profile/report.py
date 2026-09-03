@@ -1293,6 +1293,7 @@ def render_report(
     *,
     skip_html: bool = False,
     report_mode: str = "full-raw",
+    events=None,
 ) -> dict[str, Any]:
     report_dir = output_dir / "report"
     report_dir.mkdir(parents=True, exist_ok=True)
@@ -1347,7 +1348,7 @@ def render_report(
                 import sys as _sys
                 _sys.path.insert(0, str(Path(__file__).resolve().parent))
                 from html_report import build_html_report  # type: ignore[no-redef]
-            build_html_report(output_dir, html_path)
+            build_html_report(output_dir, html_path, events=events)
         except Exception as exc:  # noqa: BLE001
             html_status = "error"
             html_error = f"{type(exc).__name__}: {exc}"

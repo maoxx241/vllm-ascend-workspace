@@ -10,7 +10,7 @@ from typing import Any, Callable, Sequence
 
 try:
     from .classify import classify_profile
-    from .common import SCHEMA_VERSION, TOOL_VERSION, emit_stage_json, read_json, utc_now, write_json
+    from .common import SCHEMA_VERSION, TOOL_VERSION, emit_stage_json, group_by_rank, read_json, utc_now, write_json
     from .cross_rank import cross_rank_profile
     from .diagnostics import diagnose_profile
     from .normalize import normalize_profile
@@ -22,7 +22,7 @@ except ImportError:  # pragma: no cover
 
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from classify import classify_profile  # type: ignore[no-redef]
-    from common import SCHEMA_VERSION, TOOL_VERSION, emit_stage_json, read_json, utc_now, write_json  # type: ignore[no-redef]
+    from common import SCHEMA_VERSION, TOOL_VERSION, emit_stage_json, group_by_rank, read_json, utc_now, write_json  # type: ignore[no-redef]
     from cross_rank import cross_rank_profile  # type: ignore[no-redef]
     from diagnostics import diagnose_profile  # type: ignore[no-redef]
     from normalize import normalize_profile  # type: ignore[no-redef]
@@ -131,6 +131,14 @@ def analyze_profile(
 
     stage_results: dict[str, Any] = {}
 
+    # In-process event hand-off: normalize materializes the full event list
+    # once; downstream stages receive it (plus the rank grouping) instead of
+    # re-parsing the normalized index from disk. Resumed runs
+    # (``--from-stage`` past normalize) leave both as None and each stage
+    # falls back to its on-disk loader.
+    pipeline_events: list | None = None
+    pipeline_events_by_rank: dict | None = None
+
     def maybe_run(name: str, runner: Callable[[], dict[str, Any]]) -> None:
         idx = STAGE_ORDER.index(name)
         if idx < start_idx or idx > end_idx:
@@ -139,13 +147,35 @@ def analyze_profile(
         timings.append(timing)
         stage_results[name] = result
 
-    # normalize returns ``(events, manifest)``; only the manifest part is a
-    # stage result. Persisting the tuple would serialize millions of events
-    # into manifest.json (and breaks sweep/wrapper consumers which expect a
-    # dict). Event hand-off to downstream stages is wired separately (A1b).
-    maybe_run("normalize", lambda: normalize_profile(profile_root, output_dir)[1])
-    maybe_run("segment",   lambda: segment_profile(output_dir, model_id=model_id, model_config=model_config))
-    maybe_run("classify",  lambda: classify_profile(output_dir))
+    def run_normalize() -> dict[str, Any]:
+        nonlocal pipeline_events, pipeline_events_by_rank
+        events, manifest = normalize_profile(profile_root, output_dir)
+        # Keep the events only when a downstream stage will consume them in
+        # this process; otherwise let them be garbage-collected.
+        if end_idx > STAGE_ORDER.index("normalize"):
+            pipeline_events = events
+            pipeline_events_by_rank = group_by_rank(events)
+        return manifest
+
+    maybe_run("normalize", run_normalize)
+    maybe_run(
+        "segment",
+        lambda: segment_profile(
+            output_dir,
+            model_id=model_id,
+            model_config=model_config,
+            events=pipeline_events,
+            events_by_rank=pipeline_events_by_rank,
+        ),
+    )
+    maybe_run(
+        "classify",
+        lambda: classify_profile(
+            output_dir,
+            events=pipeline_events,
+            events_by_rank=pipeline_events_by_rank,
+        ),
+    )
     maybe_run(
         "summarize",
         lambda: summarize_profile(
@@ -155,13 +185,20 @@ def analyze_profile(
             hardware_model=hardware_model,
             hardware_profile=hardware_profile,
             scan_cann_hardware=scan_cann_hardware,
+            events=pipeline_events,
+            events_by_rank=pipeline_events_by_rank,
         ),
     )
-    maybe_run("cross_rank", lambda: cross_rank_profile(output_dir))
+    maybe_run("cross_rank", lambda: cross_rank_profile(output_dir, events=pipeline_events))
     maybe_run("diagnostics", lambda: diagnose_profile(output_dir))
     maybe_run(
         "report",
-        lambda: render_report(output_dir, skip_html=skip_html, report_mode=report_mode),
+        lambda: render_report(
+            output_dir,
+            skip_html=skip_html,
+            report_mode=report_mode,
+            events=pipeline_events,
+        ),
     )
 
     # Pull individual variables back so the manifest section below stays

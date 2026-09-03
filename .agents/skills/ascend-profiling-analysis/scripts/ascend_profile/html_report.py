@@ -1243,7 +1243,7 @@ def events_in_row_range(events_by_row: list, row_start: int, row_end: int, rank_
     return out
 
 
-def load_bundle(root: Path) -> Bundle:
+def load_bundle(root: Path, *, events=None) -> Bundle:
     b = Bundle(root=root)
     b.rank_summary = load_csv(root / "rank_summary.csv")
     b.step_summary = load_csv(root / "step_summary.csv")
@@ -1273,8 +1273,13 @@ def load_bundle(root: Path) -> Bundle:
     b.layer_segments = _load_segments(root / "layer_segments.json", "layer_segments")
     b.block_segments = _load_segments(root / "block_segments.json", "block_segments")
     _build_layer_seg_rank_index(b)
-    print(f"loading events from normalized_event_index.csv ...", file=sys.stderr)
-    b.events = _load_events(root / "normalized_event_index.csv")
+    if events is None:
+        print(f"loading events from normalized_event_index.csv ...", file=sys.stderr)
+        b.events = _load_events(root / "normalized_event_index.csv")
+    else:
+        # In-process hand-off from the full-pipeline runner: adapt the
+        # already-normalized events instead of re-parsing the CSV.
+        b.events = [Event.from_normalized(event) for event in events]
     b.events.sort(key=lambda e: e.row_idx)
     _build_rank_event_index(b.events)
     print(f"  loaded {len(b.events)} events", file=sys.stderr)
@@ -3121,6 +3126,8 @@ def _render_l3_layer(b: "Bundle", view_id: str, parent_seg_id: str,
 def build_html_report(
     analysis_root: Path | str,
     output_path: Path | str,
+    *,
+    events=None,
 ) -> Path:
     """Render the v7 SPA HTML report for the given analysis root.
 
@@ -3133,7 +3140,7 @@ def build_html_report(
     root = Path(analysis_root)
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
-    b = load_bundle(root)
+    b = load_bundle(root, events=events)
     title = f"Ascend Profiling · {os.path.basename(str(root).rstrip('/'))}"
     html_out = "".join([
         render_head(title),
