@@ -139,7 +139,11 @@ def analyze_profile(
         timings.append(timing)
         stage_results[name] = result
 
-    maybe_run("normalize", lambda: normalize_profile(profile_root, output_dir))
+    # normalize returns ``(events, manifest)``; only the manifest part is a
+    # stage result. Persisting the tuple would serialize millions of events
+    # into manifest.json (and breaks sweep/wrapper consumers which expect a
+    # dict). Event hand-off to downstream stages is wired separately (A1b).
+    maybe_run("normalize", lambda: normalize_profile(profile_root, output_dir)[1])
     maybe_run("segment",   lambda: segment_profile(output_dir, model_id=model_id, model_config=model_config))
     maybe_run("classify",  lambda: classify_profile(output_dir))
     maybe_run(
