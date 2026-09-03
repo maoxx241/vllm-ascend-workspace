@@ -15,10 +15,11 @@ import hashlib
 import json
 import re
 import zipfile
+from collections.abc import Mapping
 from dataclasses import asdict, is_dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, Iterator, Mapping, Sequence
+from typing import Any, Iterable, Iterator, Sequence
 from xml.sax.saxutils import escape
 
 
@@ -51,6 +52,11 @@ def to_plain(value: Any) -> Any:
     if isinstance(value, (list, tuple)):
         return [to_plain(item) for item in value]
     return value
+
+
+# Primitive fast path shared by csv_value / write_jsonl: these types pass
+# through to_plain unchanged, so the dataclass/Mapping checks are pure cost.
+_PLAIN_PASSTHROUGH = (str, int, float, bool, type(None))
 
 
 def write_json(path: Path, payload: Any) -> None:
@@ -129,6 +135,8 @@ def csv_rows(path: Path) -> list[dict[str, str]]:
 
 
 def csv_value(value: Any) -> Any:
+    if isinstance(value, _PLAIN_PASSTHROUGH):
+        return value
     value = to_plain(value)
     if isinstance(value, (dict, list, tuple)):
         return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
