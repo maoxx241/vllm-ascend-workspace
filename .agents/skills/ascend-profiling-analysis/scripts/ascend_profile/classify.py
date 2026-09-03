@@ -38,6 +38,7 @@ import hashlib
 import json
 import re
 from collections import defaultdict
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
@@ -85,12 +86,18 @@ BLOCK_KINDS: tuple[str, ...] = ("attention", "ffn", "moe", "aicpu", "other")
 HARD_KINDS: frozenset[str] = frozenset({"attention", "ffn", "moe"})
 
 
+@lru_cache(maxsize=None)
 def _normalized_name_key(name: str) -> str:
     """Strip kernel-id digits/hex so call_count families stay merged.
 
     Mirrors ``segment.normalized_name_key`` so step/layer/block class
     signatures are aligned with the layer-period structure_signature
     convention.  Kept inline here to avoid a circular import.
+
+    Memoized: this is a pure ``str -> str`` mapping and profiles have only
+    a few thousand distinct raw names, while every shape-bearing event
+    used to trigger the five regex substitutions below once per
+    block/layer/step walk.
     """
 
     text = name.lower()
@@ -265,6 +272,11 @@ def _shape_pairs(events: Iterable[NormalizedEvent]) -> tuple[tuple[str, str], ..
     Only events that actually carry a ``shape_signature`` participate in
     the class fingerprint -- shape-less events (e.g. RmsNorm, Argmax)
     are ignored.  Order is the row-index order from kernel_details.csv.
+
+    Retained as the semantic reference for the class fingerprint; the hot
+    path now derives the same pairs from the shared per-rank pair array
+    (``_rank_pair_index`` + ``_pairs_in_range``) and tests assert the two
+    stay equivalent.
     """
 
     pairs: list[tuple[str, str]] = []
@@ -302,17 +314,64 @@ def _class_id(
     return f"{prefix}_{digest}", True
 
 
-def _row_indexes_by_rank(
-    events_by_rank: Mapping[str, Sequence[NormalizedEvent]],
-) -> dict[str, list[int]]:
-    return {rank: [event.row_idx for event in events] for rank, events in events_by_rank.items()}
+def _rank_pair_index(
+    events: Sequence[NormalizedEvent],
+) -> tuple[list[int], list[tuple[str, str] | None]]:
+    """Single streaming pass over one rank's events (row order).
+
+    Returns ``(row_indexes, pair_at)`` where ``pair_at[i]`` is the
+    ``(normalized_name, shape_signature)`` pair for shape-bearing events
+    and ``None`` otherwise.  ``shape_signature`` is already a ``str`` (see
+    ``models.NormalizedEvent``), so no conversion is needed here.
+
+    Any block/layer/step class signature is the non-``None`` subsequence
+    of one contiguous slice of ``pair_at`` -- identical content and order
+    to running ``_shape_pairs`` over the sliced events, because per-rank
+    ``row_idx`` is unique, so row order equals ``(row_idx, start_us)``
+    order.  This replaces the former three independent block/layer/step
+    signature walks (and their per-walk re-slicing, re-sorting, and
+    re-normalization of every event) with one shared pass.
+    """
+
+    row_indexes = [event.row_idx for event in events]
+    pair_at: list[tuple[str, str] | None] = []
+    append = pair_at.append
+    for event in events:
+        sig = event.shape_signature
+        if sig:
+            append((_normalized_name_key(event.name_raw), sig))
+        else:
+            append(None)
+    return row_indexes, pair_at
+
+
+def _pairs_in_range(
+    row_indexes: Sequence[int],
+    pair_at: Sequence[tuple[str, str] | None],
+    row_start: int,
+    row_end: int,
+) -> tuple[tuple[str, str], ...]:
+    """Shape pairs for one row range, as a ``pair_at`` subsequence."""
+
+    if row_end < row_start:
+        return ()
+    left = bisect.bisect_left(row_indexes, int(row_start))
+    right = bisect.bisect_right(row_indexes, int(row_end))
+    return tuple(pair for pair in pair_at[left:right] if pair is not None)
 
 
 def classify_profile(output_dir: Path) -> dict[str, Any]:
     output_dir = Path(output_dir)
     events = load_events(output_dir / "normalized_event_index.jsonl")
     events_by_rank = group_by_rank(events)
-    row_indexes = _row_indexes_by_rank(events_by_rank)
+    # One streaming pass per rank up front.  Every block/layer/step class
+    # signature below is the non-None subsequence of one contiguous slice
+    # of these pair arrays, so no walk ever re-slices, re-sorts, or
+    # re-normalizes the raw events.
+    pair_index_by_rank = {
+        rank: _rank_pair_index(rank_events)
+        for rank, rank_events in events_by_rank.items()
+    }
     steps = load_step_segments(output_dir / "step_segments.json")
     layers = load_layer_segments(output_dir / "layer_segments.json")
 
@@ -324,22 +383,18 @@ def classify_profile(output_dir: Path) -> dict[str, Any]:
 
     block_segments: list[BlockSegment] = []
     blocks_by_layer: dict[str, list[BlockSegment]] = {}
-    block_events: dict[str, list[NormalizedEvent]] = {}
-    layer_events: dict[str, list[NormalizedEvent]] = {}
 
     for layer in layers:
         rank_events = events_by_rank.get(layer.rank_id, [])
-        rank_rows = row_indexes.get(layer.rank_id, [])
+        rank_rows, _rank_pairs = pair_index_by_rank.get(layer.rank_id, ([], []))
+        # The per-layer event slice feeds only the block decomposition and
+        # is released once the layer is done; no per-event lists are kept
+        # alive across layers.
         events_in_layer = _event_slice(rank_events, rank_rows, layer.row_start, layer.row_end)
-        layer_events[layer.layer_id] = events_in_layer
         raw_blocks = decompose_layer_into_blocks(layer, events_in_layer)
         layer_blocks = _build_block_segments(layer, raw_blocks)
         blocks_by_layer[layer.layer_id] = layer_blocks
         block_segments.extend(layer_blocks)
-        # Record events per block (using row range, since raw_blocks event lists are
-        # still aligned with our slicing rule).
-        for block, raw in zip(layer_blocks, [b for b in raw_blocks if b["events"]]):
-            block_events[block.block_id] = list(raw["events"])
 
     # ---- Class signatures -------------------------------------------------
     step_classes: dict[str, dict[str, Any]] = {}
@@ -351,8 +406,8 @@ def classify_profile(output_dir: Path) -> dict[str, Any]:
 
     # Block classes are computed first so layer classes can reference them.
     for block in block_segments:
-        evs = block_events.get(block.block_id, [])
-        pairs = _shape_pairs(evs)
+        rank_rows, rank_pairs = pair_index_by_rank.get(block.rank_id, ([], []))
+        pairs = _pairs_in_range(rank_rows, rank_pairs, block.row_start, block.row_end)
         class_id, has_shape = _class_id(
             "blk_cls",
             None,  # block class is structure-agnostic; the layer class carries structure
@@ -375,8 +430,8 @@ def classify_profile(output_dir: Path) -> dict[str, Any]:
 
     for layer in layers:
         layer_blocks = blocks_by_layer.get(layer.layer_id, [])
-        evs = layer_events.get(layer.layer_id, [])
-        pairs = _shape_pairs(evs)
+        rank_rows, rank_pairs = pair_index_by_rank.get(layer.rank_id, ([], []))
+        pairs = _pairs_in_range(rank_rows, rank_pairs, layer.row_start, layer.row_end)
         block_kinds = tuple(b.block_kind for b in layer_blocks)
         block_class_ids = tuple(block_class_by_id.get(b.block_id, "") for b in layer_blocks)
         scope = f"{'->'.join(block_kinds) or 'empty'}|companion={int(any(b.companion_layer for b in layer_blocks))}"
@@ -405,10 +460,11 @@ def classify_profile(output_dir: Path) -> dict[str, Any]:
     for step in steps:
         if step.segment_type != "step":
             continue
-        rank_events = events_by_rank.get(step.rank_id, [])
-        rank_rows = row_indexes.get(step.rank_id, [])
-        evs = _event_slice(rank_events, rank_rows, step.row_start, step.row_end)
-        pairs = _shape_pairs(evs)
+        # The step row range deliberately includes head/tail events that
+        # belong to no layer, so step pairs are read straight from the
+        # rank-level pair array, never stitched from layer pairs.
+        rank_rows, rank_pairs = pair_index_by_rank.get(step.rank_id, ([], []))
+        pairs = _pairs_in_range(rank_rows, rank_pairs, step.row_start, step.row_end)
         layer_ids = [lyr.layer_id for lyr in layers_by_step.get(str(step.segment_id), [])]
         layer_class_ids = tuple(layer_class_by_id.get(lid, "") for lid in layer_ids)
         scope = f"layers={len(layer_ids)}|main={step.main_layer_count or 0}"
