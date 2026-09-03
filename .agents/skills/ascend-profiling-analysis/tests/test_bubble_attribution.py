@@ -309,6 +309,10 @@ def _write_trace(path, events) -> None:
     path.write_text(json.dumps({"traceEvents": events, "deviceProperties": [{"id": 0}]}), encoding="utf-8")
 
 
+def _write_cann_trace(path, events) -> None:
+    path.write_text(json.dumps(events), encoding="utf-8")
+
+
 def test_streaming_parse_filters_host_categories(tmp_path) -> None:
     trace = tmp_path / "trace_view.json"
     _write_trace(
@@ -348,6 +352,30 @@ def test_collect_host_events_respects_window_filter(tmp_path) -> None:
     )
     events, _ = host_trace.collect_host_events(trace, [(1000.0, 2000.0)])
     assert events == []
+
+
+def test_streaming_parse_accepts_cann_top_level_array(tmp_path) -> None:
+    trace = tmp_path / "trace_view.json"
+    _write_cann_trace(
+        trace,
+        [
+            {"ph": "X", "ts": 1000.0, "dur": 500.0, "name": "MatMulV2", "cat": "kernel", "pid": 0, "tid": 2},
+            {
+                "ph": "X",
+                "ts": 1100.0,
+                "dur": 600.0,
+                "name": "aclrtSynchronizeStream",
+                "cat": "AscendCL",
+                "pid": 123,
+                "tid": 7,
+                "args": {"Call Stack": "a.py:1 -> {weird}"},
+            },
+        ],
+    )
+    events, stats = host_trace.collect_host_events(trace, [(900.0, 2000.0)])
+    assert [event.name for event in events] == ["aclrtSynchronizeStream"]
+    assert stats["objects_scanned"] == 2
+    assert stats["host_events_seen"] == 1
 
 
 def test_soft_attribution_sync_marker_label() -> None:
@@ -416,7 +444,7 @@ def test_attribute_bubbles_without_trace_degrades_gracefully(tmp_path) -> None:
 
 def test_attribute_bubbles_with_trace(tmp_path) -> None:
     trace = tmp_path / "trace_view.json"
-    _write_trace(
+    _write_cann_trace(
         trace,
         [
             {"ph": "X", "ts": 1000.0, "dur": 800.0, "name": "aclrtMemcpyAsync", "cat": "AscendCL", "pid": 1, "tid": 3},
@@ -439,6 +467,24 @@ def test_attribute_bubbles_with_trace(tmp_path) -> None:
     assert status["status"] == "ok"
     assert status["bubbles_attributed"] == 1
     assert status["limitations"] == []
+
+
+def test_attribute_bubbles_without_parsed_host_events_does_not_guess(tmp_path) -> None:
+    trace = tmp_path / "trace_view.json"
+    _write_cann_trace(
+        trace,
+        [
+            {"ph": "X", "ts": 1000.0, "dur": 800.0, "name": "MatMulV2", "cat": "kernel", "pid": 0, "tid": 2},
+        ],
+    )
+    bubbles = [{"evidence_id": "evd_b0", "rank_id": "rank_0", "start_us": 1000.0, "end_us": 2000.0}]
+    rows, status = host_trace.attribute_bubbles(bubbles, {"rank_0": trace})
+    assert rows[0]["soft_attribution"] is None
+    assert status["status"] == "missing"
+    assert status["bubbles_attributed"] == 0
+    assert status["ranks_with_trace"] == ["rank_0"]
+    assert status["ranks_without_host_events"] == ["rank_0"]
+    assert status["limitations"], "hostless trace must surface a limitation"
 
 
 def test_attribute_bubbles_no_bubbles() -> None:

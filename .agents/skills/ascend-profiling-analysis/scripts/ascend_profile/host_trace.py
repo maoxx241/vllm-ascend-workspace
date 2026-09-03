@@ -12,8 +12,9 @@ host launch lag, or untraced host blocking. Labels are soft evidence,
 never asserted root causes.
 
 ``trace_view.json`` can reach gigabytes, so parsing is streaming: a
-brace-matching state machine extracts one event object at a time and
-only events overlapping the bubble windows are retained.
+brace-matching state machine extracts one event object at a time from
+either CANN's top-level event array or a Chrome trace object wrapper,
+and only events overlapping the bubble windows are retained.
 """
 
 from __future__ import annotations
@@ -86,14 +87,16 @@ class HostEvent:
 def _iter_trace_objects(path: Path, *, chunk_size: int = 1 << 20) -> Iterator[str]:
     """Yield raw ``{...}`` object texts nested inside the trace document.
 
-    Chrome trace files are one big JSON document; we walk the text with
-    a brace-depth state machine (string/escape aware, so braces inside
-    ``args`` strings do not confuse it) and yield every outermost object
-    below the root. Memory stays bounded by the largest single event
-    object, independent of file size.
+    CANN emits both a top-level event array and a Chrome trace object
+    wrapper. We walk the text with a brace-depth state machine
+    (string/escape aware, so braces inside ``args`` strings do not
+    confuse it) and yield every outermost event candidate below the
+    root. Memory stays bounded by the largest single event object,
+    independent of file size.
     """
 
     depth = 0
+    root_token: str | None = None
     obj_depth: int | None = None
     buf: list[str] = []
     in_string = False
@@ -104,6 +107,8 @@ def _iter_trace_objects(path: Path, *, chunk_size: int = 1 << 20) -> Iterator[st
             if not chunk:
                 break
             for ch in chunk:
+                if root_token is None and not (ch.isspace() or ch == "\ufeff"):
+                    root_token = ch
                 if in_string:
                     if obj_depth is not None:
                         buf.append(ch)
@@ -121,7 +126,11 @@ def _iter_trace_objects(path: Path, *, chunk_size: int = 1 << 20) -> Iterator[st
                     continue
                 if ch == "{":
                     depth += 1
-                    if depth >= 2 and obj_depth is None:
+                    # A top-level array contains event objects at brace
+                    # depth 1. A wrapped Chrome trace keeps them below
+                    # the root object at brace depth 2.
+                    event_depth = 1 if root_token == "[" else 2
+                    if depth >= event_depth and obj_depth is None:
                         obj_depth = depth
                         buf.append("{")
                     elif obj_depth is not None:
@@ -354,7 +363,11 @@ def attribute_bubbles(
         "bubbles_total": len(bubbles),
         "bubbles_attributed": 0,
         "ranks_with_trace": [],
+        "ranks_with_host_events": [],
         "ranks_without_trace": [],
+        "ranks_without_host_events": [],
+        "trace_objects_scanned": 0,
+        "host_events_seen": 0,
         "host_events_retained": 0,
         "truncated": False,
         "limitations": [],
@@ -369,22 +382,38 @@ def attribute_bubbles(
             continue
         windows = [(float(row.get("start_us") or 0.0), float(row.get("end_us") or 0.0)) for row in rows]
         events, stats = collect_host_events(path, windows, max_events=max_events)
+        status["ranks_with_trace"].append(rank_id)
+        status["trace_objects_scanned"] += int(stats["objects_scanned"])
+        status["host_events_seen"] += int(stats["host_events_seen"])
         status["host_events_retained"] += int(stats["retained"])
         status["truncated"] = bool(status["truncated"] or stats["truncated"])
+        if not stats["host_events_seen"]:
+            status["ranks_without_host_events"].append(rank_id)
+            continue
         for row, (start_us, end_us) in zip(rows, windows):
             attribution = soft_attribution_for_window(start_us, end_us, events)
             attribution["source_path"] = str(path)
             row["soft_attribution"] = attribution
         status["bubbles_attributed"] += len(rows)
-        status["ranks_with_trace"].append(rank_id)
+        status["ranks_with_host_events"].append(rank_id)
 
-    if status["ranks_with_trace"]:
-        status["status"] = "ok"
+    if status["ranks_with_host_events"]:
+        status["status"] = (
+            "partial"
+            if status["ranks_without_trace"] or status["ranks_without_host_events"]
+            else "ok"
+        )
     if status["ranks_without_trace"]:
         status["limitations"].append(
             "trace_view.json not available for rank(s) "
             + ", ".join(status["ranks_without_trace"])
             + "; bubble soft attribution skipped there and host-side root causes are not asserted."
+        )
+    if status["ranks_without_host_events"]:
+        status["limitations"].append(
+            "no complete host events were parsed from trace_view.json for rank(s) "
+            + ", ".join(status["ranks_without_host_events"])
+            + "; bubble soft attribution skipped there because an empty host-event set cannot distinguish missing host data from untraced host blocking."
         )
     if status["truncated"]:
         status["limitations"].append(
