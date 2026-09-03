@@ -1,6 +1,6 @@
 ---
 name: ascend-profiling-collection
-description: Collect one Ascend torch-profiler case end-to-end on a workspace-managed remote NPU container. Starts a profiled vLLM service, brackets a workload with /start_profile and /stop_profile, runs analyse(), verifies kernel_details.csv landed, and writes a manifest the analysis skill can consume. Use for requests like "采集 profiling", "torch profiler 跑一个 case", "采一份 profile 出来", "采 profiling 给我分析". Do not use for pure performance benchmarking, HBM/memory profiling, or for analysing already-collected profiling data (that is the analysis skill's job).
+description: Collect one Ascend torch-profiler case end-to-end on a workspace-managed remote NPU container. Starts a profiled vLLM service, brackets a workload with /start_profile and /stop_profile, runs analyse() (db export by default), verifies the per-rank ascend_pytorch_profiler_*.db landed, and writes a manifest the analysis skill can consume. Use for requests like "采集 profiling", "torch profiler 跑一个 case", "采一份 profile 出来", "采 profiling 给我分析". Do not use for pure performance benchmarking, HBM/memory profiling, or for analysing already-collected profiling data (that is the analysis skill's job).
 ---
 
 # Ascend Profiling Collection
@@ -12,7 +12,7 @@ read/edit/bash/search/patch work around profile setup and output inspection.
 Use this skill for the domain collection workflow and keep its scripts as the
 compatibility backend for managed VAWS sessions.
 
-This skill is **only** about collection: start a profiled service, bracket a workload with `/start_profile` and `/stop_profile`, run `torch_npu.profiler.profiler.analyse(...)`, verify the device-side data actually landed, and write a manifest. Interpreting the resulting `kernel_details.csv` is a separate concern owned by the analysis skill.
+This skill is **only** about collection: start a profiled service, bracket a workload with `/start_profile` and `/stop_profile`, run `torch_npu.profiler.profiler.analyse(...)`, verify the device-side data actually landed, and write a manifest. By default analyse() runs with `export_type=Constant.Db`, so each rank produces only `ASCEND_PROFILER_OUTPUT/ascend_pytorch_profiler_*.db` — the analysis skill rebuilds the kernel_details event stream directly from the db, and the multi-GB text exports (`trace_view.json`, CSVs) are skipped. Interpreting the data is a separate concern owned by the analysis skill.
 
 ## Use this skill when
 
@@ -44,7 +44,7 @@ This skill is **only** about collection: start a profiled service, bracket a wor
 - `--profiler-config` is the only profiling-related thing the serving skill knows about, and only because vLLM accepts it as an opaque blob.
 - Run profiling **inside the remote container**. Never copy raw `*_ascend_pt` directories back to the local Mac.
 - Hard-fail in three cases (all detailed in "Failure policy"):
-  1. any rank's `kernel_details.csv` is missing after `analyse()`
+  1. any rank's expected analyse output is missing after `analyse()` — the per-rank db in the default `--analyse-export db` mode, `kernel_details.csv` in text/both mode
   2. number of `*_ascend_pt` directories does not match `tp * (dp or 1)`
   3. workload was not real — follow-up request failed or benchmark wave fell below `--benchmark-success-threshold`
 - Progress on `stderr` as `__VAWS_PROFILING_COLLECTION_PROGRESS__=<json>`. Final manifest on `stdout` as one JSON object.
@@ -74,6 +74,7 @@ python3 .agents/skills/ascend-profiling-collection/scripts/collect_torch_profile
   [--benchmark-success-threshold <f>] \
   [--request-timeout <s>] [--profile-control-timeout <s>] [--health-timeout <s>] \
   [--torch-profiler-dir <relpath>] [--torch-profiler-with-stack] \
+  [--analyse-export {db|text|both}] \
   [--image-path <local-path>] [--image-height <px>] \
   [--skip-parity]
 ```
@@ -118,10 +119,21 @@ The script reads the service port from `.vaws-local/sessions/<id>/serving.json` 
 ```bash
 python3 .agents/skills/ascend-profiling-collection/scripts/run_remote_analyse.py \
   [--session-id <id> | --session-file <path>] --profile-root <remote-path> \
-  [--expected-ranks <N>] [--analyse-timeout <s>] [--analyse-parallelism <N>]
+  [--expected-ranks <N>] [--analyse-timeout <s>] [--analyse-parallelism <N>] \
+  [--analyse-export {db|text|both}]
 ```
 
-Discovers every `*_ascend_pt` under `--profile-root` and runs `torch_npu.profiler.profiler.analyse()` on each **concurrently on the container** (one SSH call, `xargs -P`; effective parallelism `min(rank_count, --analyse-parallelism)`, default 8 — per-rank analyse is CPU-bound and the containers have hundreds of cores, so TP16 no longer analyses 16 ranks serially). Each rank's stdout/stderr is captured in `<dir>/analyse_parallel.log`; per-rank exit codes are aggregated and any non-zero rank fails the run. `--analyse-timeout` is the overall wall-clock bound for the parallel phase (default 1800s, *not* multiplied by rank count; a remote `timeout(1)` wrapper kills stuck ranks). Afterwards it verifies that `ASCEND_PROFILER_OUTPUT/kernel_details.csv` and `trace_view.json` landed per rank. Exits non-zero if any rank is incomplete.
+Discovers every `*_ascend_pt` under `--profile-root` and runs `torch_npu.profiler.profiler.analyse()` on each **concurrently on the container** (one SSH call, `xargs -P`; effective parallelism `min(rank_count, --analyse-parallelism)`, default 8 — per-rank analyse is CPU-bound and the containers have hundreds of cores, so TP16 no longer analyses 16 ranks serially). Each rank's stdout/stderr is captured in `<dir>/analyse_parallel.log`; per-rank exit codes are aggregated and any non-zero rank fails the run. `--analyse-timeout` is the overall wall-clock bound for the parallel phase (default 1800s, *not* multiplied by rank count; a remote `timeout(1)` wrapper kills stuck ranks).
+
+`--analyse-export` selects the `export_type` passed to `analyse()`:
+
+| Mode | analyse() call | Verified per rank |
+| --- | --- | --- |
+| `db` (default) | `analyse(dir, export_type=Constant.Db)` — skips all text exports | newest `ASCEND_PROFILER_OUTPUT/ascend_pytorch_profiler_*.db` exists and is non-empty |
+| `text` | `analyse(dir, export_type=Constant.Text)` | `kernel_details.csv` + `trace_view.json` exist (historical contract) |
+| `both` | `analyse(dir, export_type=[Constant.Text, Constant.Db])` | same as `text` |
+
+The `Constant` import (`from torch_npu.profiler.analysis.prof_common_func._constant import Constant`) runs inside the generated per-rank payload so it always resolves against the container's torch_npu. On old CANN without db export support, analyse() raises (`is_support_export_db()`); that surfaces as a rank failure with the torch_npu error in `analyse_parallel.log` — use `--analyse-export text` on such hosts. Exits non-zero if any rank is incomplete.
 
 Always pass `--expected-ranks` (typically `tp * (dp or 1)`) when running this against a fresh capture: without it a partial collection where some ranks never produced a directory looks "clean" because every directory that *did* land was complete. The orchestrator passes this automatically.
 
@@ -136,7 +148,7 @@ Always pass `--expected-ranks` (typically `tp * (dp or 1)`) when running this ag
 7. **POST `/stop_profile`**.
 8. **Stop service** by shelling out to `serve_stop.py`.
 9. **Discover and analyse** every `*_ascend_pt` under `<runtime_dir>/<torch_profiler_dir>` via `run_remote_analyse.py` (parallel across ranks, see above).
-10. **Verify outputs** per rank; classify each as `ok | partial | missing_kernel_details`.
+10. **Verify outputs** per rank (db mode: non-empty per-rank db; text/both: `kernel_details.csv` + `trace_view.json`); classify each as `ok | partial | missing_kernel_details`.
 11. **Write manifest** to `.vaws-local/ascend-profiling-collection/runs/<timestamp>_<tag>/manifest.json`.
 
 ## Failure policy
@@ -153,8 +165,14 @@ Accuracy beats coverage. The script exits non-zero (status `failed`) when **any*
   → `analysis_status == "rank_count_mismatch"`. Some rank never dumped its
   profiler data; even if every directory that *did* land is complete, the
   topology is broken and downstream cross-rank analysis would be wrong.
-- any rank's `kernel_details.csv` is missing after `analyse()` →
-  `analysis_status == "missing_kernel_details"`
+- any rank's expected analyse output is missing after `analyse()` →
+  `analysis_status == "missing_kernel_details"`. In the default
+  `--analyse-export db` mode this means the rank's
+  `ascend_pytorch_profiler_*.db` was not produced or is empty; in text/both
+  mode it means `kernel_details.csv` is missing. The manifest's
+  `expected_output_kind` field (`db` / `csv`) records which artifact the
+  enum refers to; the enum set itself is unchanged so downstream gates keep
+  working.
 
 The last condition is the canonical "device-side data did not land" failure
 documented in `references/behavior.md` ("Output verification"). Treat all of the above as
@@ -175,14 +193,16 @@ The manifest is the input contract for the analysis skill. Important fields:
 | `request_kind`, `prompt_tokens`, `benchmark_output_tokens`, `followup_output_tokens`, `benchmark_total_requests`, `benchmark_concurrency`, `benchmark_success_threshold` | What workload produced the trace and what success bar it had to clear |
 | `expected_ranks` | `tp * (dp or 1)` — what `analyse()` was told to enforce |
 | `torch_profiler_with_stack`, `torch_profiler_dir` | Profiler depth and on-disk location |
+| `analyse_export` | `db` (default) / `text` / `both` — the `export_type` analyse() was run with |
 | `serve_args` | Exact `serve_start.py` argv (audit trail) |
 | `service_result`, `start_profile`, `stop_profile`, `stop_result` | Sub-call outputs |
 | `benchmark_results`, `followup_result` | Per-request status / latency / response body |
 | `workload_status` | `{status, bench_total, bench_ok, bench_success_rate, bench_threshold, followup_ok}` — workload hard gate |
 | `remote_profile_root` | Path the analysis skill passes to its `analyze.py` |
-| `remote_profile_dirs` | Per-rank `{path, outputs, analysis_status}` |
+| `remote_profile_dirs` | Per-rank `{path, outputs, analysis_status}`; `outputs` carries `export_type` plus `db_path` (db mode; csv fields are null) or `kernel_details_csv` / `trace_view_json` (text/both mode) |
 | `rank_count` | Number of `*_ascend_pt` directories actually found |
 | `analysis_status` | `ok` / `partial` / `rank_count_mismatch` / `missing_kernel_details` — analysis hard gate |
+| `expected_output_kind` | `db` / `csv` — which artifact `missing_kernel_details` refers to under this run's `analyse_export` |
 | `analyse_wall_s` | Wall-clock seconds of the parallel per-rank analyse phase |
 | `analyse_parallelism` | Effective analyse parallelism used (`min(rank_count, --analyse-parallelism)`, default cap 8) |
 | `status` | `ok` / `failed`. `ok` requires both `analysis_status == "ok"` and `workload_status.status == "ok"` |

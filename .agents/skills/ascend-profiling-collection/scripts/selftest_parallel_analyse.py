@@ -7,11 +7,17 @@ remote container would run can be executed locally against fake
 
 1. command shape -- one ``timeout --kill-after``-wrapped ``xargs -P``
    pipeline, generated script parses under ``bash -n``;
-2. per-rank logs -- every rank's stdout/stderr lands in
+2. analyse payload -- each ``--analyse-export`` mode (db/text/both) embeds
+   an ``analyse(..., export_type=...)`` call and the on-container Constant
+   import in the generated script;
+3. output verification -- ``verify_outputs_local`` + ``classify_status``
+   db/text/both branches against fake ``ASCEND_PROFILER_OUTPUT`` trees
+   (db present/empty/missing, csv/trace present/missing);
+4. per-rank logs -- every rank's stdout/stderr lands in
    ``<dir>/analyse_parallel.log``;
-3. exit-code aggregation -- ``parse_parallel_results`` recovers every
+5. exit-code aggregation -- ``parse_parallel_results`` recovers every
    per-rank rc; any non-zero rank makes the driver exit non-zero;
-4. timeout behaviour (only when a real GNU timeout(1) is available) -- a
+6. timeout behaviour (only when a real GNU timeout(1) is available) -- a
    rank stuck past ``timeout_s`` yields rc 124 and no result line for that
    rank while the other ranks still complete.
 
@@ -24,6 +30,7 @@ Run: python3 scripts/selftest_parallel_analyse.py
 from __future__ import annotations
 
 import os
+import shlex
 import shutil
 import stat
 import subprocess
@@ -36,11 +43,18 @@ if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 
 from run_remote_analyse import (  # noqa: E402
+    ANALYSE_EXPORT_MODES,
+    ANALYSE_PY,
+    ASCEND_OUTPUT_DIRNAME,
+    CONSTANT_IMPORT,
     PARALLEL_LOG_NAME,
     RESULTS_BEGIN,
     RESULTS_END,
+    build_analyse_py,
     build_parallel_analyse_script,
+    classify_status,
     parse_parallel_results,
+    verify_outputs_local,
 )
 
 STUB_PY = (
@@ -127,6 +141,55 @@ def main() -> int:
         and "xargs -0 -P 4 -n 1 bash -c" in script0,
     )
 
+    # -- Case 0b: per-mode analyse payload embeds export_type ----------------
+    mode_expectations = {
+        "db": "export_type=Constant.Db",
+        "text": "export_type=Constant.Text",
+        "both": "export_type=[Constant.Text, Constant.Db]",
+    }
+    check(
+        "mode expectations cover exactly the supported modes",
+        set(mode_expectations) == set(ANALYSE_EXPORT_MODES),
+    )
+    for mode, expr in mode_expectations.items():
+        py = build_analyse_py(mode)
+        check(f"payload[{mode}]: analyse() call carries {expr}", expr in py)
+        check(
+            f"payload[{mode}]: on-container Constant import present",
+            CONSTANT_IMPORT in py
+            and "torch_npu.profiler.analysis.prof_common_func._constant"
+            in CONSTANT_IMPORT,
+        )
+        script_mode = build_parallel_analyse_script(
+            dirs0, parallelism=2, timeout_s=60, export_mode=mode,
+        )
+        check(
+            f"script[{mode}]: embeds the shlex-quoted mode payload",
+            f"PY_CODE={shlex.quote(py)}" in script_mode,
+        )
+    check(
+        "default ANALYSE_PY is the db payload",
+        "export_type=Constant.Db" in ANALYSE_PY,
+    )
+    check(
+        "default script payload matches default ANALYSE_PY",
+        f"PY_CODE={shlex.quote(ANALYSE_PY)}" in script0,
+    )
+    try:
+        build_analyse_py("nope")
+    except ValueError:
+        check("payload: invalid mode raises ValueError", True)
+    else:
+        check("payload: invalid mode raises ValueError", False)
+    try:
+        build_parallel_analyse_script(
+            dirs0, parallelism=2, timeout_s=60, export_mode="nope",
+        )
+    except ValueError:
+        check("script: invalid export_mode raises ValueError", True)
+    else:
+        check("script: invalid export_mode raises ValueError", False)
+
     # -- Case 1: all ranks succeed ------------------------------------------
     dirs1 = make_rank_dirs(
         tmp / "case_ok", [f"rank{i}_ascend_pt" for i in range(5)],
@@ -208,6 +271,117 @@ def main() -> int:
     junk = f"{RESULTS_BEGIN}\nnot-a-rc-line\n5\t/some/dir\n{RESULTS_END}\n"
     check("parse: junk lines skipped, valid rows kept",
           parse_parallel_results(junk) == {"/some/dir": 5})
+
+    # -- Case 5: verify/classify against local fake rank dirs ----------------
+    vroot = tmp / "case_verify"
+
+    def make_rank(name: str) -> Path:
+        rank = vroot / name / "rank0_ascend_pt"
+        (rank / ASCEND_OUTPUT_DIRNAME).mkdir(parents=True)
+        return rank
+
+    # db mode: non-empty db -> ok
+    rank = make_rank("db_ok")
+    out = rank / ASCEND_OUTPUT_DIRNAME
+    db_old = out / "ascend_pytorch_profiler_0_100.db"
+    db_new = out / "ascend_pytorch_profiler_0_200.db"
+    db_old.write_bytes(b"old")
+    db_new.write_bytes(b"new!")
+    os.utime(db_old, (1_000_000, 1_000_000))
+    os.utime(db_new, (2_000_000, 2_000_000))
+    outputs = verify_outputs_local(rank, "db")
+    check(
+        "verify db: newest non-empty db picked",
+        outputs["db_path"]["path"] == str(db_new)
+        and outputs["db_path"]["exists"]
+        and outputs["db_path"]["non_empty"],
+        f"got {outputs['db_path']}",
+    )
+    check(
+        "verify db: csv fields are None in db mode",
+        outputs["kernel_details_csv"] is None
+        and outputs["trace_view_json"] is None,
+    )
+    check("verify db: export_type recorded", outputs["export_type"] == "db")
+    check("classify db: ok", classify_status(outputs) == "ok")
+
+    # db mode: no db at all -> missing_kernel_details
+    rank = make_rank("db_missing")
+    outputs = verify_outputs_local(rank, "db")
+    check(
+        "verify db: no db file -> path None, exists False",
+        outputs["db_path"]["path"] is None
+        and outputs["db_path"]["exists"] is False
+        and outputs["db_path"]["non_empty"] is False,
+    )
+    check(
+        "classify db: missing -> missing_kernel_details",
+        classify_status(outputs) == "missing_kernel_details",
+    )
+
+    # db mode: empty db -> missing_kernel_details (exists but not non_empty)
+    rank = make_rank("db_empty")
+    (rank / ASCEND_OUTPUT_DIRNAME / "ascend_pytorch_profiler_0_1.db").write_bytes(b"")
+    outputs = verify_outputs_local(rank, "db")
+    check(
+        "verify db: empty db -> exists True, non_empty False",
+        outputs["db_path"]["exists"] is True
+        and outputs["db_path"]["non_empty"] is False,
+    )
+    check(
+        "classify db: empty -> missing_kernel_details",
+        classify_status(outputs) == "missing_kernel_details",
+    )
+
+    # db mode: ASCEND_PROFILER_OUTPUT dir itself absent -> missing_kernel_details
+    rank_nodir = vroot / "db_no_output_dir" / "rank0_ascend_pt"
+    rank_nodir.mkdir(parents=True)
+    outputs = verify_outputs_local(rank_nodir, "db")
+    check(
+        "classify db: no output dir -> missing_kernel_details",
+        outputs["db_path"]["exists"] is False
+        and classify_status(outputs) == "missing_kernel_details",
+    )
+
+    # text mode: historical csv + trace_view checks
+    rank = make_rank("text_ok")
+    out = rank / ASCEND_OUTPUT_DIRNAME
+    (out / "kernel_details.csv").write_text("header\n", encoding="utf-8")
+    (out / "trace_view.json").write_text("{}\n", encoding="utf-8")
+    outputs = verify_outputs_local(rank, "text")
+    check(
+        "verify text: csv + trace_view exist, db_path None",
+        outputs["kernel_details_csv"]["exists"]
+        and outputs["trace_view_json"]["exists"]
+        and outputs["db_path"] is None
+        and outputs["export_type"] == "text",
+    )
+    check("classify text: ok", classify_status(outputs) == "ok")
+
+    rank = make_rank("text_no_trace")
+    (rank / ASCEND_OUTPUT_DIRNAME / "kernel_details.csv").write_text("h\n", encoding="utf-8")
+    outputs = verify_outputs_local(rank, "both")
+    check(
+        "classify both: trace_view missing -> partial",
+        classify_status(outputs) == "partial",
+    )
+
+    rank = make_rank("text_no_csv")
+    (rank / ASCEND_OUTPUT_DIRNAME / "trace_view.json").write_text("{}\n", encoding="utf-8")
+    outputs = verify_outputs_local(rank, "text")
+    check(
+        "classify text: csv missing -> missing_kernel_details",
+        classify_status(outputs) == "missing_kernel_details",
+    )
+
+    # legacy outputs shape (no export_type key) still classifies as before
+    legacy = {
+        "kernel_details_csv": {"path": "x", "exists": True},
+        "trace_view_json": {"path": "y", "exists": False},
+    }
+    check("classify legacy shape -> partial", classify_status(legacy) == "partial")
+    legacy["trace_view_json"]["exists"] = True
+    check("classify legacy shape -> ok", classify_status(legacy) == "ok")
 
     print()
     if _FAILURES:

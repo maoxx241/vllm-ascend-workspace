@@ -18,9 +18,11 @@ The skill never modifies code in serving / parity / benchmark; it only
 orchestrates them. The serving skill stays profiling-agnostic -- it only
 forwards ``--profiler-config`` to ``vllm serve``.
 
-Failure policy: if any rank's ``kernel_details.csv`` is missing after analyse
-(the canonical "device data did not land" case from
-``references/behavior.md`` "Output verification"), the run is reported as failed and exits non-zero
+Failure policy: if any rank's expected analyse output is missing after
+analyse (the per-rank ``ascend_pytorch_profiler_*.db`` in the default db
+export mode; ``kernel_details.csv`` in text/both mode -- the canonical
+"device data did not land" case from ``references/behavior.md`` "Output
+verification"), the run is reported as failed and exits non-zero
 even though every previous step succeeded. Downstream analysis must not
 process degenerate roots silently.
 """
@@ -60,7 +62,7 @@ from _common import (
     unique_collection_run_dir,
 )
 from profile_control import post_remote_action
-from run_remote_analyse import analyse_profile_root
+from run_remote_analyse import ANALYSE_EXPORT_MODES, analyse_profile_root
 
 
 DEFAULT_TORCH_PROFILER_DIRNAME = "vllm_profile"
@@ -473,6 +475,20 @@ def build_parser() -> argparse.ArgumentParser:
                    help="relative dir under runtime_dir where vLLM writes traces")
     p.add_argument("--torch-profiler-with-stack", action="store_true")
 
+    # Optional: analyse() export shape
+    p.add_argument(
+        "--analyse-export",
+        choices=ANALYSE_EXPORT_MODES,
+        default="db",
+        help=(
+            "export_type passed to torch_npu analyse(): 'db' (default) writes "
+            "only ascend_pytorch_profiler_*.db per rank (the analysis skill "
+            "rebuilds the kernel event stream from it); 'text' writes the "
+            "historical kernel_details.csv + trace_view.json; 'both' writes "
+            "everything"
+        ),
+    )
+
     # Optional: VL workload
     p.add_argument(
         "--image-path", default=None,
@@ -561,6 +577,7 @@ def main(argv: list[str] | None = None) -> int:
         "api_server_count": args.api_server_count,
         "torch_profiler_with_stack": bool(args.torch_profiler_with_stack),
         "torch_profiler_dir": args.torch_profiler_dir,
+        "analyse_export": args.analyse_export,
         "prompt_tokens": args.prompt_tokens,
         "benchmark_output_tokens": args.benchmark_output_tokens,
         "followup_output_tokens": args.followup_output_tokens,
@@ -658,15 +675,18 @@ def main(argv: list[str] | None = None) -> int:
         expected_ranks = manifest["expected_ranks"]
         emit_progress(
             "analyse",
-            f"analysing {profile_root} (expected_ranks={expected_ranks})",
+            f"analysing {profile_root} (expected_ranks={expected_ranks}, "
+            f"export={args.analyse_export})",
         )
         analyse_bundle = analyse_profile_root(
             ep, profile_root, expected_ranks=expected_ranks,
+            analyse_export=args.analyse_export,
         )
         manifest["remote_profile_root"] = profile_root
         manifest["remote_profile_dirs"] = analyse_bundle["dirs"]
         manifest["rank_count"] = analyse_bundle.get("rank_count")
         manifest["analysis_status"] = analyse_bundle["analysis_status"]
+        manifest["expected_output_kind"] = analyse_bundle.get("expected_output_kind")
         manifest["analyse_wall_s"] = analyse_bundle.get("analyse_wall_s")
         manifest["analyse_parallelism"] = analyse_bundle.get("analyse_parallelism")
         manifest["completed_at"] = now_utc()

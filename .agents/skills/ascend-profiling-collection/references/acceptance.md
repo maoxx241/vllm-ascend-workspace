@@ -54,15 +54,21 @@ A non-2xx status here means the profiler window was never actually open, even if
 
 Inspect `benchmark_results[*].error` / `body` to decide whether the request shape (`--prompt-tokens`, `--benchmark-output-tokens`, `--max-model-len`) was wrong for the model before re-collecting.
 
-## 5. Every rank produced kernel_details.csv
+## 5. Every rank produced its expected analyse output
+
+With the default `--analyse-export db`:
 
 ```jsonc
+"analyse_export": "db",
+"expected_output_kind": "db",
 "remote_profile_dirs": [
   {
     "path": "...rank.../ascend_pt",
     "outputs": {
-      "kernel_details_csv": { "exists": true, ... },
-      "trace_view_json":    { "exists": true, ... }
+      "export_type": "db",
+      "db_path": { "path": ".../ASCEND_PROFILER_OUTPUT/ascend_pytorch_profiler_....db", "exists": true, "non_empty": true },
+      "kernel_details_csv": null,
+      "trace_view_json": null
     },
     "analysis_status": "ok"
   },
@@ -70,7 +76,7 @@ Inspect `benchmark_results[*].error` / `body` to decide whether the request shap
 ]
 ```
 
-Any per-rank `analysis_status` other than `ok` invalidates the whole root for downstream analysis. The orchestrator will already have set the top-level `analysis_status` accordingly.
+With `--analyse-export text|both` the per-rank `outputs` instead carries `kernel_details_csv` / `trace_view_json` with `exists: true` (and `db_path: null`). Any per-rank `analysis_status` other than `ok` invalidates the whole root for downstream analysis. The orchestrator will already have set the top-level `analysis_status` accordingly.
 
 ## 6. Number of rank dirs matches expected topology
 
@@ -94,7 +100,7 @@ If `stop_result.status` is `failed`, an orphan vLLM process may still be holding
 
 The following symptoms cannot be fixed offline:
 
-- `analysis_status == "missing_kernel_details"` on any rank
+- `analysis_status == "missing_kernel_details"` on any rank (in the default db export mode: the rank's `ascend_pytorch_profiler_*.db` did not land or is empty)
 - `analysis_status == "rank_count_mismatch"` (a rank failed to dump anything)
 - `workload_status.status != "ok"` (no real model traffic during the window)
 - `*_ascend_pt/PROF_*/device_*/data` is suspiciously small (kilobytes vs. expected MB)
