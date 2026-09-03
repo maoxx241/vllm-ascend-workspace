@@ -118,10 +118,10 @@ The script reads the service port from `.vaws-local/sessions/<id>/serving.json` 
 ```bash
 python3 .agents/skills/ascend-profiling-collection/scripts/run_remote_analyse.py \
   [--session-id <id> | --session-file <path>] --profile-root <remote-path> \
-  [--expected-ranks <N>] [--analyse-timeout <s>]
+  [--expected-ranks <N>] [--analyse-timeout <s>] [--analyse-parallelism <N>]
 ```
 
-Discovers every `*_ascend_pt` under `--profile-root`, runs `torch_npu.profiler.profiler.analyse()` on each, and verifies that `ASCEND_PROFILER_OUTPUT/kernel_details.csv` and `trace_view.json` landed. Exits non-zero if any rank is incomplete.
+Discovers every `*_ascend_pt` under `--profile-root` and runs `torch_npu.profiler.profiler.analyse()` on each **concurrently on the container** (one SSH call, `xargs -P`; effective parallelism `min(rank_count, --analyse-parallelism)`, default 8 — per-rank analyse is CPU-bound and the containers have hundreds of cores, so TP16 no longer analyses 16 ranks serially). Each rank's stdout/stderr is captured in `<dir>/analyse_parallel.log`; per-rank exit codes are aggregated and any non-zero rank fails the run. `--analyse-timeout` is the overall wall-clock bound for the parallel phase (default 1800s, *not* multiplied by rank count; a remote `timeout(1)` wrapper kills stuck ranks). Afterwards it verifies that `ASCEND_PROFILER_OUTPUT/kernel_details.csv` and `trace_view.json` landed per rank. Exits non-zero if any rank is incomplete.
 
 Always pass `--expected-ranks` (typically `tp * (dp or 1)`) when running this against a fresh capture: without it a partial collection where some ranks never produced a directory looks "clean" because every directory that *did* land was complete. The orchestrator passes this automatically.
 
@@ -135,7 +135,7 @@ Always pass `--expected-ranks` (typically `tp * (dp or 1)`) when running this ag
 6. **Send benchmark wave** (concurrent chat-completions) followed by **one follow-up tail request**. The follow-up is intentionally short to capture a clean steady-state step.
 7. **POST `/stop_profile`**.
 8. **Stop service** by shelling out to `serve_stop.py`.
-9. **Discover and analyse** every `*_ascend_pt` under `<runtime_dir>/<torch_profiler_dir>` via `run_remote_analyse.py`.
+9. **Discover and analyse** every `*_ascend_pt` under `<runtime_dir>/<torch_profiler_dir>` via `run_remote_analyse.py` (parallel across ranks, see above).
 10. **Verify outputs** per rank; classify each as `ok | partial | missing_kernel_details`.
 11. **Write manifest** to `.vaws-local/ascend-profiling-collection/runs/<timestamp>_<tag>/manifest.json`.
 
@@ -183,6 +183,8 @@ The manifest is the input contract for the analysis skill. Important fields:
 | `remote_profile_dirs` | Per-rank `{path, outputs, analysis_status}` |
 | `rank_count` | Number of `*_ascend_pt` directories actually found |
 | `analysis_status` | `ok` / `partial` / `rank_count_mismatch` / `missing_kernel_details` — analysis hard gate |
+| `analyse_wall_s` | Wall-clock seconds of the parallel per-rank analyse phase |
+| `analyse_parallelism` | Effective analyse parallelism used (`min(rank_count, --analyse-parallelism)`, default cap 8) |
 | `status` | `ok` / `failed`. `ok` requires both `analysis_status == "ok"` and `workload_status.status == "ok"` |
 | `error` | Set when `status == failed`; lists which gate(s) tripped |
 

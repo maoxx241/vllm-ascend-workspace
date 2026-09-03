@@ -667,6 +667,8 @@ def main(argv: list[str] | None = None) -> int:
         manifest["remote_profile_dirs"] = analyse_bundle["dirs"]
         manifest["rank_count"] = analyse_bundle.get("rank_count")
         manifest["analysis_status"] = analyse_bundle["analysis_status"]
+        manifest["analyse_wall_s"] = analyse_bundle.get("analyse_wall_s")
+        manifest["analyse_parallelism"] = analyse_bundle.get("analyse_parallelism")
         manifest["completed_at"] = now_utc()
 
         # Hard gate: degenerate roots OR a workload that did not actually
