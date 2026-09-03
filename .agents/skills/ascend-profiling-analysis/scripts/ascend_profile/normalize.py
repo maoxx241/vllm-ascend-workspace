@@ -105,12 +105,20 @@ def _resolve_rank_source(
         probe = probe_db_schema(kernel_db)
         if not probe["ok"]:
             return kernel_csv, kernel_db, None, f"db schema probe failed: {_probe_summary(probe)}"
-        return kernel_csv, kernel_db, SOURCE_KIND_DB, None
+        note = None
+        optional_missing = probe.get("optional_missing") or {}
+        if optional_missing:
+            note = "db lacks optional tables (no comm rows contributed): " + ", ".join(sorted(optional_missing))
+        return kernel_csv, kernel_db, SOURCE_KIND_DB, note
     # auto
     if kernel_db is not None:
         probe = probe_db_schema(kernel_db)
         if probe["ok"]:
-            return kernel_csv, kernel_db, SOURCE_KIND_DB, None
+            note = None
+            optional_missing = probe.get("optional_missing") or {}
+            if optional_missing:
+                note = "db lacks optional tables (no comm rows contributed): " + ", ".join(sorted(optional_missing))
+            return kernel_csv, kernel_db, SOURCE_KIND_DB, note
         note = f"db schema probe failed ({_probe_summary(probe)})"
         if kernel_csv is not None:
             return kernel_csv, kernel_db, SOURCE_KIND_CSV, note + "; fell back to kernel_details.csv"

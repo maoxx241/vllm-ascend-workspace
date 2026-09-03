@@ -239,6 +239,10 @@ def test_shipped_mapping_file_is_valid() -> None:
     assert len(mapping["pmu_defs"]) == 24
     assert set(mapping["required_tables"]) == {
         "TASK", "COMPUTE_TASK_INFO", "TASK_PMU_INFO", "STRING_IDS",
+    }
+    # TP1 captures (no HCCL) omit the comm tables entirely from the db, so
+    # they must stay optional (verified 2026-09-03 on Qwen3-8B TP1).
+    assert set(mapping["optional_tables"]) == {
         "COMMUNICATION_OP", "COMMUNICATION_SCHEDULE_TASK_INFO",
     }
     assert mapping["invalid_id"] == INVALID_ID
@@ -287,9 +291,72 @@ def test_probe_db_schema_missing_file(tmp_path: Path) -> None:
     assert probe["error"]
 
 
+def test_probe_db_schema_comm_tables_optional(tmp_path: Path) -> None:
+    """TP1 captures have no HCCL: the COMMUNICATION_* tables are absent from
+    the db entirely. The probe must pass and report them as optional-missing
+    (zero comm rows), never fail closed."""
+    db_path = tmp_path / "tp1.db"
+    con = sqlite3.connect(db_path)
+    con.executescript(
+        """
+        CREATE TABLE TASK(startNs INTEGER, endNs INTEGER, deviceId INTEGER, connectionId INTEGER,
+                          globalTaskId INTEGER, globalPid INTEGER, taskType INTEGER, contextId INTEGER,
+                          streamId INTEGER, taskId INTEGER, modelId INTEGER);
+        CREATE TABLE COMPUTE_TASK_INFO(name INTEGER, globalTaskId INTEGER, blockNum INTEGER,
+                          mixBlockNum INTEGER, taskType INTEGER, opType INTEGER, inputFormats INTEGER,
+                          inputDataTypes INTEGER, inputShapes INTEGER, outputFormats INTEGER,
+                          outputDataTypes INTEGER, outputShapes INTEGER, attrInfo INTEGER,
+                          opState INTEGER, hf32Eligible INTEGER, gridDim INTEGER, blockDim INTEGER);
+        CREATE TABLE TASK_PMU_INFO(globalTaskId INTEGER, name INTEGER, value NUMERIC);
+        CREATE TABLE STRING_IDS(id INTEGER, value TEXT);
+        """
+    )
+    con.commit()
+    con.close()
+    probe = probe_db_schema(db_path)
+    assert probe["ok"], probe
+    assert probe["missing"] == {}
+    assert set(probe["optional_missing"]) == {"COMMUNICATION_OP", "COMMUNICATION_SCHEDULE_TASK_INFO"}
+
+
 # ----------------------------------------------------------------------------
 # row reconstruction
 # ----------------------------------------------------------------------------
+
+
+def test_rows_without_comm_tables(tmp_path: Path) -> None:
+    """A db without COMMUNICATION_* tables (TP1, no HCCL) still yields its
+    compute rows; zero comm rows are contributed instead of an error."""
+    db_path = tmp_path / "ascend_pytorch_profiler_0.db"
+    con = sqlite3.connect(db_path)
+    con.executescript(
+        """
+        CREATE TABLE TASK(startNs INTEGER, endNs INTEGER, deviceId INTEGER, connectionId INTEGER,
+                          globalTaskId INTEGER, globalPid INTEGER, taskType INTEGER, contextId INTEGER,
+                          streamId INTEGER, taskId INTEGER, modelId INTEGER);
+        CREATE TABLE COMPUTE_TASK_INFO(name INTEGER, globalTaskId INTEGER, blockNum INTEGER,
+                          mixBlockNum INTEGER, taskType INTEGER, opType INTEGER, inputFormats INTEGER,
+                          inputDataTypes INTEGER, inputShapes INTEGER, outputFormats INTEGER,
+                          outputDataTypes INTEGER, outputShapes INTEGER, attrInfo INTEGER,
+                          opState INTEGER, hf32Eligible INTEGER, gridDim INTEGER, blockDim INTEGER);
+        CREATE TABLE TASK_PMU_INFO(globalTaskId INTEGER, name INTEGER, value NUMERIC);
+        CREATE TABLE STRING_IDS(id INTEGER, value TEXT);
+        """
+    )
+    for name, str_id in list(SID.items()) + list(PMU_METRIC_IDS.items()):
+        con.execute("INSERT INTO STRING_IDS VALUES (?,?)", (str_id, name))
+    _insert_task(con, start=1_000_000, end=1_001_520, gtid=10, task_type="KERNEL_AIVEC", stream=47, task_id=7)
+    _insert_cti(
+        con, name="aclnnFill_FillAiCore_Fill", gtid=10, block=1, mix=0,
+        core="AI_VECTOR_CORE", op_type="Fill",
+        shapes=('"1;"', "INT32", "ND", '"4,8"', "INT32", "ND"),
+    )
+    con.commit()
+    con.close()
+    rows = list(iter_kernel_events_from_db(db_path))
+    assert len(rows) == 1
+    assert rows[0][1]["Name"] == "aclnnFill_FillAiCore_Fill"
+    assert rows[0][1]["Accelerator Core"] == "AI_VECTOR_CORE"
 
 
 def test_row_union_and_start_time_order(fixture_db: Path) -> None:

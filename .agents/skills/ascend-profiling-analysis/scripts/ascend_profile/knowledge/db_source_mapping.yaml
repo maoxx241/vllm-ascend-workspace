@@ -26,6 +26,10 @@ schema_probe:
       [name, globalTaskId, blockNum, mixBlockNum, taskType, opType, inputFormats, inputDataTypes, inputShapes, outputFormats, outputDataTypes, outputShapes, opState, hf32Eligible]
     TASK_PMU_INFO: [globalTaskId, name, value]
     STRING_IDS: [id, value]
+    # Communication tables are OPTIONAL: TP1 captures (no HCCL) omit them
+    # entirely from the db (verified 2026-09-03 on Qwen3-8B TP1). When absent
+    # the adapter contributes zero comm rows and records a source note.
+  optional_tables:
     COMMUNICATION_OP: [opName, startNs, endNs, opType, deviceId]
     COMMUNICATION_SCHEDULE_TASK_INFO: [name, globalTaskId, taskType, opType]
 

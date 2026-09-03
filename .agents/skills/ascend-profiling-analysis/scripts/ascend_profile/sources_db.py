@@ -87,6 +87,12 @@ def _validate_mapping(path: Path, doc: Mapping[str, Any]) -> dict[str, Any]:
     required_tables: dict[str, list[str]] = {}
     for table, columns in probe["required_tables"].items():
         required_tables[str(table)] = _require_str_list(path, f"schema_probe.required_tables.{table}", columns)
+    optional_tables: dict[str, list[str]] = {}
+    raw_optional = probe.get("optional_tables") or {}
+    if not isinstance(raw_optional, Mapping):
+        raise _schema_error(path, "schema_probe.optional_tables", "must be a mapping when present")
+    for table, columns in raw_optional.items():
+        optional_tables[str(table)] = _require_str_list(path, f"schema_probe.optional_tables.{table}", columns)
 
     csv_header = tuple(_require_str_list(path, "csv_header", doc.get("csv_header")))
     if len(set(csv_header)) != len(csv_header):
@@ -192,6 +198,7 @@ def _validate_mapping(path: Path, doc: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "csv_header": csv_header,
         "required_tables": required_tables,
+        "optional_tables": optional_tables,
         "invalid_id": sentinels["invalid_id"],
         "not_available": sentinels["not_available"],
         "kernel_task_types": tuple(kernel_task_types),
@@ -257,7 +264,20 @@ def probe_db_schema(db_path: str | Path, *, mapping: Mapping[str, Any] | None = 
             absent = [column for column in columns if column not in present_cols]
             if absent:
                 missing[table] = absent
+        # Optional tables (e.g. COMMUNICATION_* — absent on TP1 captures with
+        # no HCCL) never gate ``ok``; their absence is reported so the caller
+        # can note that the db legitimately contributes zero comm rows.
+        optional_missing: dict[str, list[str]] = {}
+        for table, columns in (mapping.get("optional_tables") or {}).items():
+            if table not in present_tables:
+                optional_missing[table] = list(columns)
+                continue
+            present_cols = {row[1] for row in con.execute(f"PRAGMA table_info({table})")}
+            absent = [column for column in columns if column not in present_cols]
+            if absent:
+                optional_missing[table] = absent
         result["missing"] = missing
+        result["optional_missing"] = optional_missing
         result["ok"] = not missing
     except sqlite3.Error as exc:
         result["error"] = f"probe failed: {exc}"
@@ -344,6 +364,10 @@ def _collect_records(con: sqlite3.Connection, rt: _Runtime) -> list[tuple]:
 
     records: list[tuple] = []
 
+    # Optional comm tables are absent on captures without HCCL (e.g. TP1);
+    # then the adapter simply contributes zero comm rows.
+    present_tables = {row[0] for row in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+
     compute_cols = rt.mapping["compute_string_fields"]
     int_cols = rt.mapping["compute_int_fields"]
     cti_select = ["c.rowid", "c.globalTaskId", "t.startNs", "t.endNs", "t.deviceId", "t.streamId", "t.taskId", "t.modelId", "t.contextId"]
@@ -358,20 +382,22 @@ def _collect_records(con: sqlite3.Connection, rt: _Runtime) -> list[tuple]:
         payload = (end_ns, device_id, stream_id, task_id, model_id, context_id, cti_rowid, strings, ints)
         records.append((start_ns, KIND_COMPUTE, (task_id or 0, global_task_id or 0), payload))
 
-    for rowid, op_name, op_type, start_ns, end_ns, device_id in con.execute(
-        "SELECT rowid, opName, opType, startNs, endNs, deviceId FROM COMMUNICATION_OP"
-    ):
-        payload = (end_ns, device_id, rt.text(op_name), rt.text(op_type))
-        records.append((start_ns, KIND_COMM_HCOM, (0, rowid), payload))
+    if "COMMUNICATION_OP" in present_tables:
+        for rowid, op_name, op_type, start_ns, end_ns, device_id in con.execute(
+            "SELECT rowid, opName, opType, startNs, endNs, deviceId FROM COMMUNICATION_OP"
+        ):
+            payload = (end_ns, device_id, rt.text(op_name), rt.text(op_type))
+            records.append((start_ns, KIND_COMM_HCOM, (0, rowid), payload))
 
-    for row in con.execute(
-        "SELECT s.globalTaskId, s.name, s.opType, s.taskType, "
-        "t.startNs, t.endNs, t.deviceId, t.streamId, t.taskId, t.modelId, t.contextId "
-        "FROM COMMUNICATION_SCHEDULE_TASK_INFO s JOIN TASK t ON t.globalTaskId = s.globalTaskId"
-    ):
-        (global_task_id, name, op_type, task_type, start_ns, end_ns, device_id, stream_id, task_id, model_id, context_id) = row
-        payload = (end_ns, device_id, stream_id, task_id, model_id, context_id, rt.text(name), rt.text(op_type), rt.text(task_type))
-        records.append((start_ns, KIND_COMM_AICPU, (task_id or 0, global_task_id or 0), payload))
+    if "COMMUNICATION_SCHEDULE_TASK_INFO" in present_tables and "TASK" in present_tables:
+        for row in con.execute(
+            "SELECT s.globalTaskId, s.name, s.opType, s.taskType, "
+            "t.startNs, t.endNs, t.deviceId, t.streamId, t.taskId, t.modelId, t.contextId "
+            "FROM COMMUNICATION_SCHEDULE_TASK_INFO s JOIN TASK t ON t.globalTaskId = s.globalTaskId"
+        ):
+            (global_task_id, name, op_type, task_type, start_ns, end_ns, device_id, stream_id, task_id, model_id, context_id) = row
+            payload = (end_ns, device_id, stream_id, task_id, model_id, context_id, rt.text(name), rt.text(op_type), rt.text(task_type))
+            records.append((start_ns, KIND_COMM_AICPU, (task_id or 0, global_task_id or 0), payload))
 
     return records
 
