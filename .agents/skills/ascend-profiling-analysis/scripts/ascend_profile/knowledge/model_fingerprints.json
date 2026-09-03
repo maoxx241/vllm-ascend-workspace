@@ -353,9 +353,9 @@
     },
     {
       "model_name": "GLM-5 (DSA sparse-attention)",
-      "aliases": ["glm5", "glm-5", "GLM-5", "Glm5ForCausalLM"],
+      "aliases": ["glm5", "glm-5", "GLM-5", "Glm5ForCausalLM", "GlmMoeDsaForCausalLM", "glm_moe_dsa", "GLM-5.1", "GLM-5.2"],
       "family": "glm",
-      "expected_layers": null,
+      "expected_layers": 78,
       "features": ["moe", "dsa", "dsa_or_csa_indexer", "sparse_sharedkv"],
       "operator_match": {
         "required_all": ["attention.lightning_indexer", "attention.sparse_sharedkv"],
@@ -369,8 +369,30 @@
         },
         "base_score": 0
       },
-      "field_hints": {},
-      "source_note": "User-confirmed 2026-09: GLM-5 shares the DSA (DeepSeek-V3.2) sparse-attention structure — lightning indexer + sparse attention, no KV compressor. base_score=0 keeps the generic DeepSeek DSA family as the operator-match winner for unidentified DSA profiles; this entry resolves via aliases / candidate listing. Layer count is config-driven until a verified profile is collected."
+      "field_hints": {"num_hidden_layers": [78], "first_k_dense_replace": [3], "n_routed_experts": [256], "hidden_size": [6144]},
+      "source_note": "User-confirmed 2026-09: GLM-5 shares the DSA (DeepSeek-V3.2) sparse-attention structure — lightning indexer + sparse attention, no KV compressor. base_score=0 keeps the generic DeepSeek DSA family as the operator-match winner for unidentified DSA profiles; this entry resolves via aliases / candidate listing. Layer count from config.json on shared storage (GLM-5.1-w4a8 / GLM-5.2, verified 2026-09-03): num_hidden_layers=78, first_k_dense_replace=3, num_nextn_predict_layers=1, n_routed_experts=256, hidden_size=6144."
+    },
+    {
+      "model_name": "Kimi-K3 (KDA + gating-MLA period-4 hybrid)",
+      "aliases": ["k3", "kimi-k3", "Kimi-K3", "kimi_k3", "KimiK3ForConditionalGeneration", "kimi_linear"],
+      "family": "kimi",
+      "expected_layers": 93,
+      "features": ["moe", "linear_attention_or_mamba", "gating_mla", "kda", "multimodal"],
+      "operator_match": {
+        "required_all": ["attention.linear_or_mamba", "moe.gating"],
+        "forbidden": ["attention.kv_compressor", "attention.lightning_indexer", "attention.sparse_sharedkv"],
+        "optional": ["attention.mla", "attention.flash_score", "attention.rope"],
+        "weights": {
+          "attention.linear_or_mamba": 5,
+          "moe.gating": 3,
+          "attention.mla": 2,
+          "attention.flash_score": 1,
+          "attention.rope": 1
+        },
+        "base_score": 0
+      },
+      "field_hints": {"num_hidden_layers": [93], "n_routed_experts": [896], "num_shared_experts": [2], "hidden_size": [7168]},
+      "source_note": "User-confirmed 2026-09: 93 layers, cycle of 3x KDA (Kimi Delta Attention, linear) + 1x gating MLA. Verified via config.json on shared storage (Kimi-K3 / Kimi-K3-w4a8, 2026-09-03): num_hidden_layers=93, linear_attn_config.full_attn_layers=[4,8,...,88,92,93] (period-4, tail layers 92/93 both full attention), mla_use_output_gate=true, 896 routed experts top-16 + 2 shared, moe_layer_freq=1, no MTP, multimodal (27-layer vision tower). base_score=0 so generic GDN/MLA families win their own profiles; K3 resolves when linear-attention and MLA kernels coexist (which forbids the pure-GDN family). First K3 capture should validate KDA kernel aliases via the anchor-degradation candidate list."
     }
   ]
 }
