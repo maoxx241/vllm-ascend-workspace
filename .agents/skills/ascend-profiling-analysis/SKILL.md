@@ -21,7 +21,7 @@ compatibility backend for managed VAWS sessions.
 - 用户提供一个 profiling root 路径（远端或工作区路径），或者 `ascend-profiling-collection` 写出的 `manifest.json`，要求分析。
 - 用户问 step / layer / operator 统计、跨 rank 对齐、bubble、AICPU、wait anchor。
 - 用户怀疑通信慢、EP 负载不均、快慢卡、陪跑/dummy rank、workload 非对称。
-- 用户需要带 evidence 链的 `report.md` / `report.xlsx` / `report.html`（HTML 报告是单文件零依赖，含交互式 Single-step Inspector、bubble tracing axis、可缩放多流时间轴、46 字段算子卡）。
+- 用户需要带 evidence 链的 `report.md` / `report.xlsx` / `report.html`（v2 渲染器：瘦壳 + gzip 资产按需加载，含交互式 Single-step Inspector、bubble tracing axis、可缩放多流时间轴、46 字段算子卡；agent 直接消费 `report/analysis_summary.json`——层数校验/KPI/rollup findings/知识引用一份紧凑 JSON)。
 - 用户要在多个 profiling root 之间扫一遍 (sweep) 并对比。
 
 ## Do not use this skill when
@@ -62,7 +62,9 @@ python3 .agents/skills/ascend-profiling-analysis/scripts/profile_analyze.py \
   [--remote-output-dir <absolute-remote-output-dir>] \
   [--remote-timeout 3600] \
   [--keep-remote-output] \
+  [--mode fast|full] \        # fast 为默认：跳 xlsx/host-trace/全量 HTML，精益拉回
   [--skip-html] [--report-mode summary|full-raw] \
+  [--html-renderer v2|legacy] [--html-single-file] \
   [--model-id <hf-or-modelscope-id>] [--model-config <local-or-remote-config.json>] \
   [--hardware-model <Ascend910B4|...>] [--hardware-profile <local-or-remote-json>] \
   [--no-cann-hardware-scan] \
@@ -75,7 +77,8 @@ Flag notes:
 - Target resolution is **session-based**. With no target arg the session is auto-resolved by walking up from the current working directory to the nearest `.vaws-local/current-session.json` worktree binding — running from inside a session worktree needs zero target args. Pass `--session-id <id>` / `--session-file <session.json>` to target a session explicitly. When `--manifest` comes from a session-scoped collection, the session recorded in the manifest is picked up automatically.
 - `--local-output-dir`: explicit local dir to write pulled artifacts into. If omitted, defaults to `.vaws-local/profiling-analysis/runs/<timestamp>_<tag>/`. Pass `--overwrite` to allow a non-empty target.
 - `--remote-output-dir`: explicit **absolute** remote output dir. Useful with `--from-stage` / `--only-stage` to **reuse a previous run's normalize/segment artifacts** when iterating on classify / diagnostics / report. Default: `<remote-work-dir>/runs/<local-run-dir-name>`.
-- `--skip-html` / `--report-mode`: forwarded to the remote analyze stage. `full-raw` (default) renders the complete L1/L2/L3 HTML with operator cards backed by raw `kernel_details` rows. `summary` writes an HTML stub instead — use it for first-stage pipeline debugging when md+xlsx are enough and you don't want to wait for HTML rendering. `--skip-html` is the explicit kill-switch and overrides `--report-mode`.
+- `--mode fast|full`（**默认 fast**):fast 让远端 analyze 跳过 xlsx、host-trace 归因与全量 HTML(`--skip-xlsx --skip-host-trace --report-mode summary`)，拉回 17 项精益清单（report.md + analysis_summary.json + manifests + class 级 CSV + findings);`analysis_summary.json` 会完整嵌入 stdout JSON——agent 一次调用拿到结论。full 保持旧行为（全量产物 + 全量拉回清单）。fast 与显式 `--report-mode/--skip-html` 同给时 fast 强制 summary。
+- `--skip-html` / `--report-mode` / `--html-renderer` / `--html-single-file`: forwarded to the remote analyze stage。full 模式下 HTML 默认走 **v2 渲染器**（瘦壳 report.html + `assets/*.json.gz` 懒加载；全量数据保留，operator card/时间轴按需渲染；`file://` 直开只有 L1 可用，需 http.server 或 `--html-single-file`)。`--html-renderer legacy` 回退到旧的单文件渲染器（仅小规模 root 适用）。`full-raw`/`summary` 语义不变。
 - `--model-id` / `--model-config`: optional model context. If `--model-config` points to a local file, the wrapper uploads it into the remote run dir before analysis; otherwise it is treated as a remote path. The report still performs profiling-first inference when config is absent.
 - `--hardware-model` / `--hardware-profile`: optional capture-hardware context. Use this when the profiling root is historical and the current remote host is not proven to be the capture host. CANN theoretical peaks are scanned from the analysis host by default; `--no-cann-hardware-scan` disables that scan.
 - `--from-stage` / `--to-stage` / `--only-stage`: resume / partial re-runs; require the prior stages' manifest files already exist in the remote output dir. The wrapper validates only the artifacts the chosen stage *should* produce, so `--only-stage normalize` no longer demands `report/report.md`.
@@ -88,9 +91,9 @@ Flag notes:
    - `--remote-profile-root`：直接走原始路径（用于历史 profiling）。
 3. 通过 tar-over-ssh 把当前 `scripts/ascend_profile/` 同步到远端 `<remote-work-dir>/ascend_profile/`（仅这一个子目录，去掉 `__pycache__`/`*.pyc`）。
 4. 远端跑 `python3 -m ascend_profile.analyze <REMOTE_ROOT> --output <REMOTE_OUT> --verbose`。
-5. 校验远端产物：`manifest.json`、`segment_manifest.json`、`diagnosis_findings.json`、`report/report.md`、`report/report.xlsx`、`report/report.html` 必须存在（HTML 生成失败时仍会留下带错误说明的占位 html，`report/manifest.json` 中的 `html_status` 字段会标 `error`）。
-6. 拉回轻量产物（`report/`、所有 `*_manifest.json`、`diagnosis_findings.json`、`evidence_index.csv`、`raw_kernel_index.csv`、CSV 摘要），不拉 `normalized_event_index.csv` / `evidence/bubble_windows.jsonl` 这种大文件，除非给了 `--keep-remote-output` 才整目录拉回。
-7. 把摘要、diagnosis 计数、stage timing 整理成 stdout JSON。
+5. 校验远端产物：fast 模式必备 `manifest.json`、`segment_manifest.json`、`diagnosis_findings.json`、`report/report.md`、`report/analysis_summary.json`;full 模式另加 `report/report.xlsx`、`report/report.html`（HTML 生成失败时仍会留下带错误说明的占位 html，`report/manifest.json` 中的 `html_status` 字段会标 `error`)。
+6. 拉回轻量产物：fast 模式为 17 项精益清单；full 模式拉回 `report/`（含 assets/)、所有 `*_manifest.json`、`diagnosis_findings.json`、CSV 摘要等。两种模式都不拉 `normalized_event_index.csv` / `evidence/bubble_windows.jsonl` 这种大文件，除非给了 `--keep-remote-output` 才整目录拉回。
+7. 知识库富化（见下文 Workspace knowledge hooks)+ 把摘要、diagnosis 计数、stage timing、`analysis_summary` 全文整理成 stdout JSON。
 
 ### Multi-root sweep
 
@@ -152,6 +155,7 @@ python3 .agents/skills/ascend-profiling-analysis/scripts/profile_sweep.py \
   "remote_output_dir": "/tmp/ascend_profile_framework/runs/20260507_xxx",
   "local_output_dir": ".vaws-local/profiling-analysis/runs/20260507_xxx",
   "stage_timings": [{"stage": "normalize", "elapsed_s": 12.3}, ...],
+  "mode": "fast",
   "rank_count": 4,
   "event_count": 1234567,
   "segment_count": 87,
@@ -159,9 +163,12 @@ python3 .agents/skills/ascend-profiling-analysis/scripts/profile_sweep.py \
   "diagnosis_counts": {"high": 1, "medium": 3, "low": 5},
   "report_md": ".vaws-local/profiling-analysis/runs/20260507_xxx/report/report.md",
   "report_xlsx": ".vaws-local/profiling-analysis/runs/20260507_xxx/report/report.xlsx",
-  "report_html": ".vaws-local/profiling-analysis/runs/20260507_xxx/report/report.html"
+  "report_html": ".vaws-local/profiling-analysis/runs/20260507_xxx/report/report.html",
+  "analysis_summary": {"schema_version": 1, "identity": {...}, "layer_validation": {...}, "kpis": {...}, "findings": [...], ...}
 }
 ```
+
+`analysis_summary` 是 agent 的主要消费对象（完整 schema 见 `references/behavior.md` 与本文件「Workspace knowledge hooks」一节）：层数校验（expected vs detected + per-rank 离群）、KPI（step wall 分位数/bubble/comm 占比/bound_family/top 类）、rollup 后的 findings（含 knowledge_refs）、产物地图、limitations。fast 模式下 `report_xlsx` 为 null。
 
 ### Per-step / per-operator pipeline artifacts
 
@@ -402,11 +409,15 @@ artifacts are reused.
     profile_sweep.py           # multi-root entry point
     ascend_profile/            # analysis framework, runs remotely as a package
       analyze.py normalize.py segment.py classify.py summarize.py
-      cross_rank.py diagnostics.py report.py html_report.py sweep.py
+      cross_rank.py diagnostics.py report.py sweep.py
+      analysis_summary.py      # agent-facing compact conclusion (report stage)
+      html_report.py           # legacy single-file renderer (--html-renderer legacy)
+      html_report_v2/          # thin-shell renderer + gzipped lazy assets (default)
       sources_db.py            # db-direct input source (ascend_pytorch_profiler_*.db)
       common.py                # facade; real modules: models.py store.py
                                # sources.py pipeline.py work.py rules.py metrics.py
       knowledge/               # taxonomy rules / enums / thresholds (YAML) + docs
+                               # + db_source_mapping.yaml (db→CSV field mapping)
       README.md                # framework data contract
     dev/
       golden_db_vs_csv.py      # db-vs-CSV golden equivalence checker (remote)

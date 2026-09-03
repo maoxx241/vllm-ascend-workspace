@@ -26,6 +26,7 @@ Share denominators (documented so consumers do not have to guess):
 
 from __future__ import annotations
 
+import re
 from collections import Counter
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -51,6 +52,11 @@ ROLLUP_RANK_LIMIT = 8
 ROLLUP_SEGMENT_SAMPLE_LIMIT = 4
 ROLLUP_EVIDENCE_SAMPLE_LIMIT = 4
 ROLLUP_LIMITATION_LIMIT = 3
+
+# Digit runs in finding summaries are per-instance values (durations, skews);
+# long hex ids (segment/claim ids) are per-instance too. Normalizing both
+# collapses one logical issue into a single rollup group.
+_SUMMARY_NUM_RE = re.compile(r"[0-9a-f]{12,}|\d+(?:\.\d+)?")
 
 TOP_STEP_CLASS_LIMIT = 5
 TOP_OPERATOR_CLASS_LIMIT = 10
@@ -444,7 +450,14 @@ def rollup_findings(
     *,
     limit: int = ROLLUP_GROUP_LIMIT,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """Group findings by ``(finding_type, severity, summary)``.
+    """Group findings by ``(finding_type, severity, normalized_summary)``.
+
+    Summaries carry per-instance interpolated numbers (durations, skews),
+    which would fragment one logical issue into hundreds of groups (measured
+    on dsv3.1 TP8: 5114 ``communication_collective_slow`` findings -> 160
+    groups). For grouping we normalize digit runs to ``#``; the displayed
+    ``summary`` stays the first member's verbatim text, with
+    ``summary_variants`` counting distinct raw summaries in the group.
 
     Returns ``(groups, counts)`` where ``groups`` is sorted by severity
     (critical > high > medium > low > info) then occurrence count and capped
@@ -454,20 +467,22 @@ def rollup_findings(
     """
     grouped: dict[tuple[str, str, str], list[Mapping[str, Any]]] = {}
     for finding in findings:
+        raw_summary = str(finding.get("summary") or "")
         key = (
             str(finding.get("finding_type") or "unknown"),
             str(finding.get("severity") or "info"),
-            str(finding.get("summary") or ""),
+            _SUMMARY_NUM_RE.sub("#", raw_summary),
         )
         grouped.setdefault(key, []).append(finding)
 
     groups: list[dict[str, Any]] = []
-    for (finding_type, severity, summary), members in grouped.items():
+    for (finding_type, severity, _norm_summary), members in grouped.items():
         rank_ids: list[str] = []
         segment_ids: list[str] = []
         evidence_sample: list[str] = []
         best_confidence: str | None = None
         group_limitations: list[str] = []
+        summary_variants = len({str(member.get("summary") or "") for member in members})
         for member in members:
             for rank_id in member.get("rank_ids") or []:
                 text = str(rank_id)
@@ -496,7 +511,10 @@ def rollup_findings(
                 "finding_type": finding_type,
                 "severity": severity,
                 "occurrences": len(members),
-                "summary": summary,
+                # Representative verbatim summary (first member); the group
+                # may fold several numeric variants of the same template.
+                "summary": str(members[0].get("summary") or ""),
+                "summary_variants": summary_variants,
                 "affected": {"rank_ids": rank_ids, "segment_ids": segment_ids},
                 "evidence_sample": evidence_sample,
                 "confidence": best_confidence,
