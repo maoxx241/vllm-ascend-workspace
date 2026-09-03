@@ -334,6 +334,169 @@ def _shape_samples(event: NormalizedEvent) -> tuple[list[list[int]], list[list[i
     )
 
 
+class _EventInsightScan:
+    """Single shared pass over normalized events for the profiling-derived
+    insight helpers.
+
+    ``_infer_attention_shapes`` / ``_infer_matmul_shapes`` (with its
+    lm-head-vocab and parameter-estimate sub-scans), ``_attention_feature_rows``
+    and ``operator_efficiency_rows`` each used to sweep the full event list
+    on their own -- five-plus passes over millions of events in the
+    summarize stage. They all key off the same per-event facts
+    (``set(op_categories)``, the work-class string, the shape samples), so
+    this accumulator materialises those once per event and feeds every
+    inference branch in one loop. The finalised results are identical to
+    the per-function scans: each branch keeps its original filter, counter
+    update order, and evidence-capping rules exactly.
+    """
+
+    def __init__(self, events: Sequence[NormalizedEvent]) -> None:
+        # _infer_attention_shapes state
+        self.head_dims: Counter[int] = Counter()
+        self.q_heads: Counter[int] = Counter()
+        self.kv_heads: Counter[int] = Counter()
+        self.seq_lengths: Counter[int] = Counter()
+        self.attn_evidence: list[str] = []
+        # _infer_matmul_shapes state
+        self.hidden: Counter[int] = Counter()
+        self.intermediate: Counter[int] = Counter()
+        self.expert_counts: Counter[int] = Counter()
+        self.matmul_evidence: list[str] = []
+        # _infer_vocab_from_lm_head state
+        self.vocab_strong: Counter[int] = Counter()
+        self.vocab_weak: Counter[int] = Counter()
+        self.vocab_evidence: list[str] = []
+        # _rank_visible_matmul_parameter_estimate state
+        self.weight_signatures: set[tuple[str, str, tuple[int, ...]]] = set()
+        self.weight_examples: list[dict[str, Any]] = []
+        # _attention_feature_rows state
+        self.cat_counter: Counter[str] = Counter()
+        # operator_efficiency_rows state
+        self.efficiency_groups: dict[tuple[str, str, str, str], list[NormalizedEvent]] = defaultdict(list)
+        for event in events:
+            self.add(event)
+
+    def add(self, event: NormalizedEvent) -> None:
+        cats = set(event.op_categories)
+        # Feature histogram over *every* event. The original counts tuple
+        # occurrences (``for cat in event.op_categories``), not the set.
+        self.cat_counter.update(event.op_categories)
+        role_key = ",".join(event.op_roles) or "unknown"
+        self.efficiency_groups[(event.name_raw, event.task_type, event.op_type, role_key)].append(event)
+
+        shapes: tuple[list[list[int]], list[list[int]]] | None = None
+
+        # --- _infer_attention_shapes branch ---
+        if (
+            "attention.flash_score" in cats
+            or "attention.sparse_sharedkv" in cats
+            or "attention.linear_or_mamba" in cats
+        ):
+            ins, outs = shapes = _shape_samples(event)
+            for shape in [*ins, *outs]:
+                if len(shape) >= 4:
+                    _add_candidate(self.head_dims, shape[-1], min_value=16, max_value=4096)
+                    _add_candidate(self.seq_lengths, shape[-2], min_value=1)
+                    _add_candidate(self.q_heads, shape[-3] if len(shape) > 4 else shape[1], min_value=1, max_value=4096)
+            if len(ins) >= 2 and len(ins[0]) >= 4 and len(ins[1]) >= 4:
+                _add_candidate(self.q_heads, ins[0][1], min_value=1, max_value=4096)
+                _add_candidate(self.kv_heads, ins[1][1], min_value=1, max_value=4096)
+            if len(self.attn_evidence) < 16:
+                self.attn_evidence.append(event.event_id)
+
+        # --- matmul-family branches: _infer_matmul_shapes,
+        #     _infer_vocab_from_lm_head and
+        #     _rank_visible_matmul_parameter_estimate share one filter ---
+        work = str(event.shape_features.get("estimated_work_class") or "")
+        if work == "matmul" or "compute.matmul" in cats:
+            if shapes is None:
+                shapes = _shape_samples(event)
+            ins, outs = shapes
+            # _infer_matmul_shapes body; its ``if not ins: continue`` skips
+            # only its own remainder -- the vocab / parameter sub-scans below
+            # still run for empty-``ins`` events, as in the original passes.
+            if ins:
+                first = ins[0]
+                second = ins[1] if len(ins) > 1 else []
+                if len(first) >= 2:
+                    _add_candidate(self.hidden, first[-1], min_value=512, max_value=65536)
+                if len(second) >= 2:
+                    _add_candidate(self.hidden, second[-2], min_value=512, max_value=65536)
+                    _add_candidate(self.intermediate, second[-1], min_value=512, max_value=262144)
+                if len(second) >= 3 and ("moe.expert_matmul" in cats or "moe" in event.op_roles):
+                    _add_candidate(self.expert_counts, second[0], min_value=2, max_value=100000)
+                for out in outs:
+                    if len(out) >= 2:
+                        _add_candidate(self.intermediate, out[-1], min_value=512, max_value=262144)
+                if len(self.matmul_evidence) < 16:
+                    self.matmul_evidence.append(event.event_id)
+            # _infer_vocab_from_lm_head body (evidence capped per qualifying
+            # dim, exactly like the original loop).
+            dims: list[int] = []
+            weight = _matmul_weight_shape(ins)
+            if len(weight) >= 2:
+                dims.extend([weight[-2], weight[-1]])
+            for out in outs:
+                if len(out) >= 2:
+                    dims.append(out[-1])
+            is_hint = _lm_head_name_hint(event)
+            for dim in dims:
+                # Most modern LLM vocabularies are well above
+                # hidden/intermediate head dims.
+                if 16_000 <= int(dim) <= 1_000_000:
+                    (self.vocab_strong if is_hint else self.vocab_weak)[int(dim)] += 1
+                    if len(self.vocab_evidence) < 16:
+                        self.vocab_evidence.append(event.event_id)
+            # _rank_visible_matmul_parameter_estimate body
+            if weight:
+                sig = (event.name_raw, event.task_type, tuple(int(dim) for dim in weight))
+                if sig not in self.weight_signatures:
+                    self.weight_signatures.add(sig)
+                    if len(self.weight_examples) < 16:
+                        self.weight_examples.append(
+                            {
+                                "event_id": event.event_id,
+                                "name": event.name_raw,
+                                "task_type": event.task_type,
+                                "weight_shape": list(weight),
+                                "weight_elements": _shape_numel(weight),
+                            }
+                        )
+
+    def attention_shapes(self) -> dict[str, Any]:
+        return {
+            "head_dim_candidates": _top_candidates(self.head_dims),
+            "num_attention_heads_candidates": _top_candidates(self.q_heads),
+            "num_key_value_heads_candidates": _top_candidates(self.kv_heads),
+            "seq_len_candidates": _top_candidates(self.seq_lengths),
+            "sample_event_ids": self.attn_evidence,
+        }
+
+    def matmul_shapes(self) -> dict[str, Any]:
+        vocab = {
+            "lm_head_name_hint_candidates": _top_candidates(self.vocab_strong),
+            "large_output_dim_candidates": _top_candidates(self.vocab_weak),
+            "sample_event_ids": self.vocab_evidence,
+        }
+        params = {
+            "rank_visible_weight_param_lower_bound": sum(
+                _shape_numel(shape) for _name, _task, shape in self.weight_signatures
+            ),
+            "distinct_weight_signatures": len(self.weight_signatures),
+            "sample_weight_shapes": self.weight_examples,
+        }
+        return {
+            "hidden_size_candidates": _top_candidates(self.hidden),
+            "intermediate_size_candidates": _top_candidates(self.intermediate),
+            "num_experts_candidates": _top_candidates(self.expert_counts),
+            "vocab_size_or_lm_head_shard_candidates": vocab["lm_head_name_hint_candidates"]
+            or vocab["large_output_dim_candidates"],
+            "lm_head_shape_inference": vocab,
+            "parameter_estimate": params,
+            "sample_event_ids": self.matmul_evidence,
+        }
+
+
 def _add_candidate(counter: Counter[int], value: Any, *, min_value: int = 1, max_value: int = 1_000_000) -> None:
     intval = to_int(value)
     if min_value <= intval <= max_value:
@@ -459,80 +622,20 @@ def _rank_visible_matmul_parameter_estimate(events: Sequence[NormalizedEvent]) -
     }
 
 
-def _infer_attention_shapes(events: Sequence[NormalizedEvent]) -> dict[str, Any]:
-    head_dims: Counter[int] = Counter()
-    q_heads: Counter[int] = Counter()
-    kv_heads: Counter[int] = Counter()
-    seq_lengths: Counter[int] = Counter()
-    evidence: list[str] = []
-    for event in events:
-        cats = set(event.op_categories)
-        if "attention.flash_score" not in cats and "attention.sparse_sharedkv" not in cats and "attention.linear_or_mamba" not in cats:
-            continue
-        ins, outs = _shape_samples(event)
-        shapes = [*ins, *outs]
-        for shape in shapes:
-            if len(shape) >= 4:
-                _add_candidate(head_dims, shape[-1], min_value=16, max_value=4096)
-                _add_candidate(seq_lengths, shape[-2], min_value=1)
-                _add_candidate(q_heads, shape[-3] if len(shape) > 4 else shape[1], min_value=1, max_value=4096)
-        if len(ins) >= 2 and len(ins[0]) >= 4 and len(ins[1]) >= 4:
-            _add_candidate(q_heads, ins[0][1], min_value=1, max_value=4096)
-            _add_candidate(kv_heads, ins[1][1], min_value=1, max_value=4096)
-        if len(evidence) < 16:
-            evidence.append(event.event_id)
-    return {
-        "head_dim_candidates": _top_candidates(head_dims),
-        "num_attention_heads_candidates": _top_candidates(q_heads),
-        "num_key_value_heads_candidates": _top_candidates(kv_heads),
-        "seq_len_candidates": _top_candidates(seq_lengths),
-        "sample_event_ids": evidence,
-    }
+def _infer_attention_shapes(events: Sequence[NormalizedEvent], *, scan: _EventInsightScan | None = None) -> dict[str, Any]:
+    if scan is None:
+        scan = _EventInsightScan(events)
+    return scan.attention_shapes()
 
 
-def _infer_matmul_shapes(events: Sequence[NormalizedEvent]) -> dict[str, Any]:
-    hidden: Counter[int] = Counter()
-    intermediate: Counter[int] = Counter()
-    expert_counts: Counter[int] = Counter()
-    evidence: list[str] = []
-    for event in events:
-        work = str(event.shape_features.get("estimated_work_class") or "")
-        cats = set(event.op_categories)
-        if work != "matmul" and "compute.matmul" not in cats:
-            continue
-        ins, outs = _shape_samples(event)
-        if not ins:
-            continue
-        first = ins[0]
-        second = ins[1] if len(ins) > 1 else []
-        if len(first) >= 2:
-            _add_candidate(hidden, first[-1], min_value=512, max_value=65536)
-        if len(second) >= 2:
-            _add_candidate(hidden, second[-2], min_value=512, max_value=65536)
-            _add_candidate(intermediate, second[-1], min_value=512, max_value=262144)
-        if len(second) >= 3 and ("moe.expert_matmul" in cats or "moe" in event.op_roles):
-            _add_candidate(expert_counts, second[0], min_value=2, max_value=100000)
-        for out in outs:
-            if len(out) >= 2:
-                _add_candidate(intermediate, out[-1], min_value=512, max_value=262144)
-        if len(evidence) < 16:
-            evidence.append(event.event_id)
-    vocab = _infer_vocab_from_lm_head(events)
-    params = _rank_visible_matmul_parameter_estimate(events)
-    return {
-        "hidden_size_candidates": _top_candidates(hidden),
-        "intermediate_size_candidates": _top_candidates(intermediate),
-        "num_experts_candidates": _top_candidates(expert_counts),
-        "vocab_size_or_lm_head_shard_candidates": vocab["lm_head_name_hint_candidates"]
-        or vocab["large_output_dim_candidates"],
-        "lm_head_shape_inference": vocab,
-        "parameter_estimate": params,
-        "sample_event_ids": evidence,
-    }
+def _infer_matmul_shapes(events: Sequence[NormalizedEvent], *, scan: _EventInsightScan | None = None) -> dict[str, Any]:
+    if scan is None:
+        scan = _EventInsightScan(events)
+    return scan.matmul_shapes()
 
 
-def _attention_feature_rows(events: Sequence[NormalizedEvent]) -> tuple[list[dict[str, Any]], list[str]]:
-    cat_counter = Counter(cat for event in events for cat in event.op_categories)
+def _attention_feature_rows(events: Sequence[NormalizedEvent], *, scan: _EventInsightScan | None = None) -> tuple[list[dict[str, Any]], list[str]]:
+    cat_counter = scan.cat_counter if scan is not None else Counter(cat for event in events for cat in event.op_categories)
     rows: list[dict[str, Any]] = []
     features: list[str] = []
 
@@ -762,12 +865,16 @@ def profile_inferred_model_insights(
     events: Sequence[NormalizedEvent],
     step_rows: Sequence[Mapping[str, Any]],
     layer_rows: Sequence[Mapping[str, Any]],
+    *,
+    scan: _EventInsightScan | None = None,
 ) -> dict[str, Any]:
     """Infer model-architecture hints directly from profiling artifacts."""
 
-    attention_shape = _infer_attention_shapes(events)
-    matmul_shape = _infer_matmul_shapes(events)
-    feature_rows, features = _attention_feature_rows(events)
+    if scan is None:
+        scan = _EventInsightScan(events)
+    attention_shape = scan.attention_shapes()
+    matmul_shape = scan.matmul_shapes()
+    feature_rows, features = _attention_feature_rows(events, scan=scan)
     layer_type_rows = _layer_type_summary(layer_rows)
     features = _profile_feature_set(feature_rows, layer_type_rows)
     layer_count_candidates: Counter[int] = Counter()
@@ -895,11 +1002,16 @@ def model_config_insights(config_path: Path | None) -> dict[str, Any]:
 def operator_efficiency_rows(
     events: Sequence[NormalizedEvent],
     hardware: Mapping[str, Any] | None = None,
+    *,
+    scan: _EventInsightScan | None = None,
 ) -> list[dict[str, Any]]:
-    grouped: dict[tuple[str, str, str, str], list[NormalizedEvent]] = defaultdict(list)
-    for event in events:
-        role_key = ",".join(event.op_roles) or "unknown"
-        grouped[(event.name_raw, event.task_type, event.op_type, role_key)].append(event)
+    if scan is not None:
+        grouped = scan.efficiency_groups
+    else:
+        grouped: dict[tuple[str, str, str, str], list[NormalizedEvent]] = defaultdict(list)
+        for event in events:
+            role_key = ",".join(event.op_roles) or "unknown"
+            grouped[(event.name_raw, event.task_type, event.op_type, role_key)].append(event)
 
     rows: list[dict[str, Any]] = []
     for (name, task, op_type, roles), items in grouped.items():
