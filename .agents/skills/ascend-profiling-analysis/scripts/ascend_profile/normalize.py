@@ -20,6 +20,7 @@ try:
         discover_rank_dirs,
         has_pipeline_signal,
         infer_rank_id,
+        kernel_db_path,
         kernel_details_path,
         op_type_from_event,
         sha256_file,
@@ -30,6 +31,7 @@ try:
         write_json,
     )
     from .sources import KernelRowAccessor, shape_signature_from_text
+    from .sources_db import db_row_reader, probe_db_schema
     from .work import estimated_work_from_fields
 except ImportError:  # pragma: no cover - direct script execution
     import sys
@@ -45,6 +47,7 @@ except ImportError:  # pragma: no cover - direct script execution
         discover_rank_dirs,
         has_pipeline_signal,
         infer_rank_id,
+        kernel_db_path,
         kernel_details_path,
         op_type_from_event,
         sha256_file,
@@ -55,11 +58,66 @@ except ImportError:  # pragma: no cover - direct script execution
         write_json,
     )
     from sources import KernelRowAccessor, shape_signature_from_text  # type: ignore[no-redef]
+    from sources_db import db_row_reader, probe_db_schema  # type: ignore[no-redef]
     from work import estimated_work_from_fields  # type: ignore[no-redef]
 
 
 def maybe_sha256(path: Path, enabled: bool) -> str | None:
     return sha256_file(path) if enabled else None
+
+
+SOURCE_CHOICES = ("auto", "db", "csv")
+SOURCE_KIND_CSV = "kernel_details_csv"
+SOURCE_KIND_DB = "kernel_details_db"
+
+
+def _probe_summary(probe: Mapping[str, Any]) -> str:
+    if probe.get("error"):
+        return str(probe["error"])
+    missing = probe.get("missing") or {}
+    return "missing " + ", ".join(f"{table}({','.join(cols)})" for table, cols in sorted(missing.items()))
+
+
+def _resolve_rank_source(
+    rank_dir: Path,
+    mode: str,
+) -> tuple[Path | None, Path | None, str | None, str | None]:
+    """Pick the kernel event source for one rank directory.
+
+    Returns ``(kernel_csv, kernel_db, source_kind, note)``.  ``source_kind``
+    is None when no usable source exists (the rank is skipped, mirroring the
+    historical missing-csv behaviour); ``note`` carries a human-readable
+    reason for fallbacks and skips, recorded in the manifest.
+
+    ``auto`` prefers the profiler db whenever it exists and passes the
+    schema probe (fail-closed), and falls back to kernel_details.csv.
+    """
+
+    kernel_csv = kernel_details_path(rank_dir)
+    kernel_db = kernel_db_path(rank_dir)
+    if mode == "csv":
+        if kernel_csv is None:
+            return kernel_csv, kernel_db, None, "no kernel_details.csv found (--source csv)"
+        return kernel_csv, kernel_db, SOURCE_KIND_CSV, None
+    if mode == "db":
+        if kernel_db is None:
+            return kernel_csv, kernel_db, None, "no ascend_pytorch_profiler_*.db found (--source db)"
+        probe = probe_db_schema(kernel_db)
+        if not probe["ok"]:
+            return kernel_csv, kernel_db, None, f"db schema probe failed: {_probe_summary(probe)}"
+        return kernel_csv, kernel_db, SOURCE_KIND_DB, None
+    # auto
+    if kernel_db is not None:
+        probe = probe_db_schema(kernel_db)
+        if probe["ok"]:
+            return kernel_csv, kernel_db, SOURCE_KIND_DB, None
+        note = f"db schema probe failed ({_probe_summary(probe)})"
+        if kernel_csv is not None:
+            return kernel_csv, kernel_db, SOURCE_KIND_CSV, note + "; fell back to kernel_details.csv"
+        return kernel_csv, kernel_db, None, note + "; no kernel_details.csv fallback"
+    if kernel_csv is not None:
+        return kernel_csv, kernel_db, SOURCE_KIND_CSV, None
+    return kernel_csv, kernel_db, None, None
 
 
 EVENT_FIELDNAMES = [
@@ -198,6 +256,7 @@ def normalize_profile(
     *,
     hash_sources: bool = False,
     write_jsonl: bool = False,
+    source: str = "auto",
 ) -> tuple[list[NormalizedEvent], dict[str, Any]]:
     """Normalize raw profiling files; return ``(events, manifest)``.
 
@@ -205,12 +264,22 @@ def normalize_profile(
     ``normalized_event_index.csv`` (same row order); the full-pipeline
     runner hands it to downstream stages so they don't re-parse the CSV.
     Only the manifest is persisted to ``stage_results`` / JSON.
+
+    ``source`` selects the kernel event input per rank: ``auto`` prefers the
+    profiler sqlite db when present and probe-clean (falling back to
+    kernel_details.csv), ``db``/``csv`` force one input.  Both sources feed
+    the identical row loop below; the db adapter reproduces the
+    kernel_details.csv column layout, so downstream stages see no difference.
     """
+    if source not in SOURCE_CHOICES:
+        raise ValueError(f"unknown source mode {source!r}; expected one of {SOURCE_CHOICES}")
+    source_mode = source  # the rank loop reuses the name ``source`` for SourceRef
     profile_root = profile_root.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     profile_id = stable_id("profile", profile_root)
     rank_dirs = discover_rank_dirs(profile_root)
     sources: list[SourceRef] = []
+    source_notes: list[str] = []
     rank_summaries: list[dict[str, Any]] = []
     events: list[NormalizedEvent] = []
     event_count = 0
@@ -223,14 +292,17 @@ def normalize_profile(
         jsonl_handle = jsonl_path.open("w", encoding="utf-8") if write_jsonl else None
         for ordinal, rank_dir in enumerate(rank_dirs):
             rank_id = infer_rank_id(rank_dir, ordinal)
-            kernel_csv = kernel_details_path(rank_dir)
-            if kernel_csv is None:
+            kernel_csv, kernel_db, source_kind, source_note = _resolve_rank_source(rank_dir, source_mode)
+            if source_note:
+                source_notes.append(f"{rank_id}: {source_note}")
+            if source_kind is None:
                 continue
+            source_path = kernel_csv if source_kind == SOURCE_KIND_CSV else kernel_db
             source = SourceRef(
-                source_id=stable_id("src", profile_id, rank_id, kernel_csv),
-                kind="kernel_details_csv",
-                path=str(kernel_csv),
-                sha256=maybe_sha256(kernel_csv, hash_sources),
+                source_id=stable_id("src", profile_id, rank_id, source_path),
+                kind=source_kind,
+                path=str(source_path),
+                sha256=maybe_sha256(source_path, hash_sources),
                 rank_id=rank_id,
                 row_start=0,
                 row_end=None,
@@ -257,7 +329,10 @@ def normalize_profile(
             # serialized shape_features JSON text is cached on the same key.
             work_estimate_cache: dict[tuple[str, ...], dict[str, Any]] = {}
             shape_features_json_cache: dict[tuple[str, ...], str] = {}
-            accessor, kernel_rows = _kernel_row_reader(kernel_csv)
+            if source_kind == SOURCE_KIND_DB:
+                accessor, kernel_rows = db_row_reader(kernel_db)
+            else:
+                accessor, kernel_rows = _kernel_row_reader(kernel_csv)
             for row_idx, row in kernel_rows:
                 name = accessor.name(row)
                 task = accessor.task_type(row)
@@ -345,7 +420,9 @@ def normalize_profile(
                 {
                     "rank_id": rank_id,
                     "rank_dir": str(rank_dir),
-                    "kernel_details_csv": str(kernel_csv),
+                    "kernel_details_csv": str(kernel_csv) if kernel_csv else None,
+                    "kernel_details_db": str(kernel_db) if kernel_db else None,
+                    "source_kind": source_kind,
                     "event_count": rank_event_count,
                     "row_count": rank_event_count,
                     "start_us": rank_start_us,
@@ -377,6 +454,9 @@ def normalize_profile(
         "pipeline_coverage": round(pipeline_event_count / event_count, 6) if event_count else 0.0,
         "hash_sources": hash_sources,
         "write_jsonl": write_jsonl,
+        "source": source_mode,
+        "source_kinds": {item["rank_id"]: item["source_kind"] for item in rank_summaries},
+        "source_notes": source_notes,
         "files": {
             "normalized_event_index": "normalized_event_index.csv",
             "normalized_event_index_jsonl": "normalized_event_index.jsonl" if write_jsonl else None,
@@ -396,6 +476,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", required=True)
     parser.add_argument("--hash-sources", action="store_true")
     parser.add_argument("--write-jsonl", action="store_true")
+    parser.add_argument(
+        "--source",
+        choices=SOURCE_CHOICES,
+        default="auto",
+        help="kernel event input: auto = profiler db when present and probe-clean, else kernel_details.csv",
+    )
     return parser
 
 
@@ -406,6 +492,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         Path(args.output),
         hash_sources=bool(args.hash_sources),
         write_jsonl=bool(args.write_jsonl),
+        source=str(args.source),
     )
     print(
         {
@@ -413,6 +500,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             "rank_count": manifest["rank_count"],
             "event_count": manifest["event_count"],
             "pipeline_coverage": manifest.get("pipeline_coverage"),
+            "source_kinds": manifest.get("source_kinds"),
+            "source_notes": manifest.get("source_notes"),
         }
     )
     return 0

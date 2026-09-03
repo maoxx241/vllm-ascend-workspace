@@ -12,7 +12,7 @@ read/edit/bash/search/patch work around profiling roots and generated reports.
 Use this skill for the domain analysis workflow and keep its scripts as the
 compatibility backend for managed VAWS sessions.
 
-读取 Ascend NPU torch profiler 的产物 (`kernel_details.csv`, `trace_view.json`, `op_summary`, `communication.json` 等)，做 **normalize → segment → summarize → cross-rank → diagnostics → report** 的端到端分析，产物全部可追溯到原始 row range。
+读取 Ascend NPU torch profiler 的产物 (`kernel_details.csv` 或直接读 `ascend_pytorch_profiler_*.db`，以及 `trace_view.json`, `op_summary`, `communication.json` 等)，做 **normalize → segment → summarize → cross-rank → diagnostics → report** 的端到端分析，产物全部可追溯到原始 row range。
 
 本 skill 只消费已经采集好的 profiling root，**不负责采集**，不负责服务生命周期，不负责 benchmark。
 
@@ -356,6 +356,14 @@ knowledge can't express it**. Suggested reading order:
 8. `scripts/ascend_profile/knowledge/known_counterexamples.md` — cases
    that previously broke segmentation / classification. **Add new cases
    here before patching Python.**
+9. `scripts/ascend_profile/knowledge/db_source_mapping.yaml` — db-direct
+   输入源的映射规则：normalize 可直接从 `ascend_pytorch_profiler_*.db`
+   重建与 kernel_details.csv 完全一致的 46 列事件流（`--source auto`
+   默认优先 db，probe 不过则回退 CSV）。schema 要求、STRING_IDS 字段映射、
+   PMU metric→列名、cube_utilization 公式、通信行常量、以及已采纳的
+   db 语义差异（`documented_differences`）都在这个 YAML 里；等价性由
+   `scripts/dev/golden_db_vs_csv.py` 用同一份 capture 的 db+CSV 对全量
+   逐行逐字段验证。
 
 Rule-change invalidation (which stage to rerun via `--from-stage`):
 
@@ -385,10 +393,13 @@ artifacts are reused.
     ascend_profile/            # analysis framework, runs remotely as a package
       analyze.py normalize.py segment.py classify.py summarize.py
       cross_rank.py diagnostics.py report.py html_report.py sweep.py
+      sources_db.py            # db-direct input source (ascend_pytorch_profiler_*.db)
       common.py                # facade; real modules: models.py store.py
                                # sources.py pipeline.py work.py rules.py metrics.py
       knowledge/               # taxonomy rules / enums / thresholds (YAML) + docs
       README.md                # framework data contract
+    dev/
+      golden_db_vs_csv.py      # db-vs-CSV golden equivalence checker (remote)
 ```
 
 本 skill 的 wrapper（`profile_analyze.py` / `profile_sweep.py`）只做远端编排和产物搬运，**不复制分析逻辑**。框架本身的数据契约见 `scripts/ascend_profile/README.md`。

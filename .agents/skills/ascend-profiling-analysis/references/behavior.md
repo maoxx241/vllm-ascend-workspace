@@ -262,7 +262,8 @@ report claim
   → evidence id (evidence_index.csv / structure_evidence_graph.json)
   → event / segment / alignment id
   → source path + row range (raw_kernel_index.csv)
-  → original kernel_details.csv / trace_view.json / op_summary / communication.json
+  → original kernel_details.csv (or the equivalent db-direct event stream from
+    ascend_pytorch_profiler_*.db) / trace_view.json / op_summary / communication.json
 ```
 
 If a claim cannot be backed at row level, the agent must surface it as a `limitation`, not a conclusion.

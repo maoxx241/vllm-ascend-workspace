@@ -1,0 +1,263 @@
+# db-direct input source mapping: rebuild the ``kernel_details.csv`` event
+# stream directly from ``ascend_pytorch_profiler_*.db`` (torch_npu / CANN
+# msprofiler sqlite schema, META_DATA SCHEMA_VERSION 1.2.0).
+#
+# Consumed at runtime by ``sources_db.py`` — adding or adjusting a mapping
+# rule is a YAML edit, not a code edit. The loader validates this file
+# strictly and fails fast on schema violations.
+#
+# All rules below were reverse-engineered from a golden db+CSV pair captured
+# from the same profile run (dsv3.1 TP8 rank4, 350,091 CSV rows). See
+# ``documented_differences`` for the fields where the closed-source msprof
+# exporter's output cannot be bit-reproduced from the db and the adapter
+# adopts db-native semantics instead.
+
+version: 1
+
+# ---------------------------------------------------------------------------
+# Schema probe: tables/columns the adapter needs. ``probe_db_schema`` fails
+# closed (ok=false) when any entry is missing.
+# ---------------------------------------------------------------------------
+schema_probe:
+  required_tables:
+    TASK:
+      [globalTaskId, startNs, endNs, deviceId, connectionId, globalPid, taskType, contextId, streamId, taskId, modelId]
+    COMPUTE_TASK_INFO:
+      [name, globalTaskId, blockNum, mixBlockNum, taskType, opType, inputFormats, inputDataTypes, inputShapes, outputFormats, outputDataTypes, outputShapes, opState, hf32Eligible]
+    TASK_PMU_INFO: [globalTaskId, name, value]
+    STRING_IDS: [id, value]
+    COMMUNICATION_OP: [opName, startNs, endNs, opType, deviceId]
+    COMMUNICATION_SCHEDULE_TASK_INFO: [name, globalTaskId, taskType, opType]
+
+# The exact kernel_details.csv column layout the adapter reproduces. Every
+# emitted row carries these keys in this order, so the positional
+# ``KernelRowAccessor`` fast path consumes db rows unchanged.
+csv_header:
+  - Device_id
+  - Model ID
+  - Task ID
+  - Stream ID
+  - Name
+  - Type
+  - OP State
+  - Accelerator Core
+  - Start Time(us)
+  - Duration(us)
+  - Wait Time(us)
+  - Block Num
+  - Mix Block Num
+  - HF32 Eligible
+  - Input Shapes
+  - Input Data Types
+  - Input Formats
+  - Output Shapes
+  - Output Data Types
+  - Output Formats
+  - Context ID
+  - aicore_time(us)
+  - aic_total_cycles
+  - aic_mac_time(us)
+  - aic_mac_ratio
+  - aic_scalar_time(us)
+  - aic_scalar_ratio
+  - aic_mte1_time(us)
+  - aic_mte1_ratio
+  - aic_mte2_time(us)
+  - aic_mte2_ratio
+  - aic_fixpipe_time(us)
+  - aic_fixpipe_ratio
+  - aic_icache_miss_rate
+  - aiv_time(us)
+  - aiv_total_cycles
+  - aiv_vec_time(us)
+  - aiv_vec_ratio
+  - aiv_scalar_time(us)
+  - aiv_scalar_ratio
+  - aiv_mte2_time(us)
+  - aiv_mte2_ratio
+  - aiv_mte3_time(us)
+  - aiv_mte3_ratio
+  - aiv_icache_miss_rate
+  - cube_utilization(%)
+
+sentinels:
+  # UINT32_MAX: CANN "invalid" marker for modelId/contextId. The exporter
+  # prints it verbatim for Model ID but renders Context ID as N/A.
+  invalid_id: 4294967295
+  not_available: "N/A"
+
+# TASK.taskType values (resolved through STRING_IDS at runtime) whose rows
+# are exported device kernels. Used by the Wait Time idle-gap rule to pick
+# the previous exported task on a stream. MIX kernels have two TASK rows
+# (AIC + AIV part); only the part referenced by COMPUTE_TASK_INFO.globalTaskId
+# is exported, so the gap rule runs over the exported set, not all TASK rows.
+kernel_task_types:
+  - KERNEL_AIVEC
+  - KERNEL_AICORE
+  - KERNEL_MIX_AIC
+  - KERNEL_MIX_AIV
+  - KERNEL_AICPU
+
+# ---------------------------------------------------------------------------
+# Row kinds and the union rule. kernel_details.csv rows are exactly:
+#   COMPUTE_TASK_INFO (joined 1:1 to TASK on globalTaskId)
+#   + COMMUNICATION_OP              (one "hcom_*" row per op)
+#   + COMMUNICATION_SCHEDULE_TASK_INFO joined to TASK (one "*AicpuKernel" row per op)
+# sorted by Start Time(us) ascending.
+# ---------------------------------------------------------------------------
+row_kinds:
+  compute:
+    # STRING_IDS-resolved COMPUTE_TASK_INFO fields -> CSV columns.
+    string_fields:
+      Name: name
+      Type: opType
+      Accelerator Core: taskType
+      OP State: opState
+      HF32 Eligible: hf32Eligible
+      Input Shapes: inputShapes
+      Input Data Types: inputDataTypes
+      Input Formats: inputFormats
+      Output Shapes: outputShapes
+      Output Data Types: outputDataTypes
+      Output Formats: outputFormats
+    int_fields:
+      Block Num: blockNum
+      Mix Block Num: mixBlockNum
+    # Device_id/Model ID/Task ID/Stream ID/Context ID/Start/Duration come
+    # from the joined TASK row; Model ID prints the raw modelId (invalid_id
+    # sentinel included), Context ID maps invalid_id -> N/A.
+  comm_hcom:
+    # COMMUNICATION_OP row: Name <- opName, Type <- opType (both STRING_IDS),
+    # Start/Duration <- startNs/endNs, Device_id <- deviceId.
+    accelerator_core: COMMUNICATION
+    constants:
+      Model ID: "4294967295"
+      Task ID: N/A
+      Stream ID: N/A
+      OP State: N/A
+      Block Num: "0"
+      Mix Block Num: N/A
+      HF32 Eligible: N/A
+      Input Shapes: N/A
+      Input Data Types: N/A
+      Input Formats: N/A
+      Output Shapes: N/A
+      Output Data Types: N/A
+      Output Formats: N/A
+      Context ID: N/A
+    pmu_columns: N/A
+  comm_aicpu:
+    # COMMUNICATION_SCHEDULE_TASK_INFO joined to TASK: Name <- name,
+    # Type <- opType, Accelerator Core <- taskType (all STRING_IDS),
+    # Start/Duration/Task ID/Stream ID/Device_id/Context ID <- TASK.
+    # OP State/HF32 Eligible are exporter defaults, not db data. Block Num /
+    # Mix Block Num exist in the CSV for these rows (e.g. 14/20/40) but have
+    # no counterpart anywhere in the db schema — see documented_differences.
+    constants:
+      OP State: dynamic
+      HF32 Eligible: "NO"
+      Block Num: N/A
+      Mix Block Num: N/A
+      Input Shapes: N/A
+      Input Data Types: N/A
+      Input Formats: N/A
+      Output Shapes: N/A
+      Output Data Types: N/A
+      Output Formats: N/A
+    pmu_columns: N/A
+
+# ---------------------------------------------------------------------------
+# PMU pivot. TASK_PMU_INFO.globalTaskId references COMPUTE_TASK_INFO.rowid
+# (NOT COMPUTE_TASK_INFO.globalTaskId). Each compute row has exactly one row
+# per metric. ``aiv_mac_*`` and ``aiv_mte1_*`` metrics exist in the db but
+# have no kernel_details.csv column and are intentionally dropped.
+# Cell format: str(round(value * scale, decimals)); int: str(int(value)).
+# Missing metric values emit 0 formatted per the column rule (every compute
+# row in a healthy capture carries the full metric set).
+# ---------------------------------------------------------------------------
+pmu_metrics:
+  aicore_time(us):        {metric: aic_total_time, scale: 0.001, decimals: 3}
+  aic_total_cycles:       {metric: aic_total_cycles, format: int}
+  aic_mac_time(us):       {metric: aic_mac_time, scale: 0.001, decimals: 3}
+  aic_mac_ratio:          {metric: aic_mac_ratio, scale: 1.0, decimals: 3}
+  aic_scalar_time(us):    {metric: aic_scalar_time, scale: 0.001, decimals: 3}
+  aic_scalar_ratio:       {metric: aic_scalar_ratio, scale: 1.0, decimals: 3}
+  aic_mte1_time(us):      {metric: aic_mte1_time, scale: 0.001, decimals: 3}
+  aic_mte1_ratio:         {metric: aic_mte1_ratio, scale: 1.0, decimals: 3}
+  aic_mte2_time(us):      {metric: aic_mte2_time, scale: 0.001, decimals: 3}
+  aic_mte2_ratio:         {metric: aic_mte2_ratio, scale: 1.0, decimals: 3}
+  aic_fixpipe_time(us):   {metric: aic_fixpipe_time, scale: 0.001, decimals: 3}
+  aic_fixpipe_ratio:      {metric: aic_fixpipe_ratio, scale: 1.0, decimals: 3}
+  aic_icache_miss_rate:   {metric: aic_icache_miss_rate, scale: 1.0, decimals: 3}
+  aiv_time(us):           {metric: aiv_total_time, scale: 0.001, decimals: 3}
+  aiv_total_cycles:       {metric: aiv_total_cycles, format: int}
+  aiv_vec_time(us):       {metric: aiv_vec_time, scale: 0.001, decimals: 3}
+  aiv_vec_ratio:          {metric: aiv_vec_ratio, scale: 1.0, decimals: 3}
+  aiv_scalar_time(us):    {metric: aiv_scalar_time, scale: 0.001, decimals: 3}
+  aiv_scalar_ratio:       {metric: aiv_scalar_ratio, scale: 1.0, decimals: 3}
+  aiv_mte2_time(us):      {metric: aiv_mte2_time, scale: 0.001, decimals: 3}
+  aiv_mte2_ratio:         {metric: aiv_mte2_ratio, scale: 1.0, decimals: 3}
+  aiv_mte3_time(us):      {metric: aiv_mte3_time, scale: 0.001, decimals: 3}
+  aiv_mte3_ratio:         {metric: aiv_mte3_ratio, scale: 1.0, decimals: 3}
+  aiv_icache_miss_rate:   {metric: aiv_icache_miss_rate, scale: 1.0, decimals: 3}
+
+derived_metrics:
+  # cube_utilization(%) = aic_total_time * Block Num / (duration_ns * total_cores) * 100, %.3f.
+  # Rationale: aic_total_time is the per-block average busy time
+  # (aic_total_cycles / blockNum / aic_freq); multiplying back by blockNum
+  # and dividing by the SoC's AIC array size yields the whole-array cube
+  # utilization.  Vector-only rows (aic_total_time == 0) render as 0.000.
+  # total_cores is a platform constant (Ascend910B: 20 AIC; NPU_INFO.name
+  # identifies the chip).  Verified against the golden pair on all core
+  # types (AI_CORE 8/16/20, MIX_AIC 4..20, MIX_AIV).
+  cube_utilization(%):
+    formula: aic_time_per_duration_per_total_cores
+    numerator_metric: aic_total_time
+    block_num_column: Block Num
+    total_cores: 20
+    decimals: 3
+
+# Time columns: Start Time(us) and Duration(us) are exact integer-ns decimal
+# insertions (ns[:-3] + "." + ns[-3:], zero-padded to 3 decimals) — NOT float
+# formatting. The CSV export appends a literal trailing TAB to Start Time
+# cells; the adapter drops that artifact (downstream strips whitespace).
+# Wait Time(us) prints %f-style with 6 decimals in the CSV.
+time_columns:
+  start_decimals: 3
+  duration_decimals: 3
+  wait_decimals: 6
+  csv_start_trailing_tab: true
+  adapter_emit_trailing_tab: false
+
+# ---------------------------------------------------------------------------
+# Wait Time: db-native idle-gap semantics (documented adoption, see below).
+#   streamed rows (compute + aicpu): startNs - max(endNs of previous exported
+#     task on the same stream), 0 when none.
+#   hcom rows (no stream): startNs - max(endNs of any exported task incl.
+#     comm ops device-wide), 0 when none.
+# ---------------------------------------------------------------------------
+wait_time:
+  rule: idle_gap_previous_exported_end
+  clamp_zero: true
+
+# ---------------------------------------------------------------------------
+# Fields where the closed-source msprof exporter (msprof_analysis.so) cannot
+# be bit-reproduced from the db. The adapter emits the db-native semantics
+# below; the golden verifier reports these fields under their adopted rule
+# instead of as unexplained mismatches.
+# ---------------------------------------------------------------------------
+documented_differences:
+  - field: Wait Time(us)
+    csv_semantics: exporter queue-wait computed from raw device-tick records with per-slice clock calibration (pre-calibration data not stored in the db)
+    db_semantics: idle gap between this task's startNs and the previous exported task's endNs (same stream for compute/aicpu rows, device-wide incl. comm ops for hcom rows)
+    evidence: golden pair shows agreement within ~0.25us on the majority of rows but systematic divergence wherever the exporter's raw-tick queue model differs from ns-domain table arithmetic (observed up to ~1.5ms on individual rows)
+  - field: Block Num / Mix Block Num (comm_aicpu rows)
+    csv_semantics: real per-kernel values from the raw aicpu device stream (e.g. 14/20/40)
+    db_semantics: not present anywhere in the db schema (COMMUNICATION_SCHEDULE_TASK_INFO carries only name/globalTaskId/taskType/opType); adapter emits N/A
+    evidence: COMMUNICATION_SCHEDULE_TASK_INFO and TASK have no block columns; TASK_PMU_INFO is empty for aicpu globalTaskIds
+  - field: Start Time(us) trailing TAB
+    csv_semantics: every Start Time cell carries a literal trailing tab character (op_summary export artifact)
+    db_semantics: adapter emits the plain numeric cell; downstream parsing strips whitespace so semantics are unchanged
+  - field: row order at exact Start Time ties
+    csv_semantics: ties (4 rows in the golden pair, AI_CPU vs AI_VECTOR_CORE) follow no reproducible rule (not kind, not globalTaskId, not taskId)
+    db_semantics: adapter orders ties deterministically by (kind, taskId, globalTaskId); the golden verifier compares tie groups as unordered sets

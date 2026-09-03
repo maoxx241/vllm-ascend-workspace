@@ -69,15 +69,36 @@ def infer_rank_id(rank_dir: Path, ordinal: int) -> str:
 
 def discover_rank_dirs(root: Path) -> list[Path]:
     root = root.resolve()
-    if root.is_file() and root.name == "kernel_details.csv":
+    if root.is_file() and (root.name == "kernel_details.csv" or _is_kernel_db_name(root.name)):
         return [root.parent.parent if root.parent.name == "ASCEND_PROFILER_OUTPUT" else root.parent]
-    if (root / "kernel_details.csv").is_file() or (root / "ASCEND_PROFILER_OUTPUT" / "kernel_details.csv").is_file():
+    if (
+        (root / "kernel_details.csv").is_file()
+        or (root / "ASCEND_PROFILER_OUTPUT" / "kernel_details.csv").is_file()
+        or any(root.glob("ascend_pytorch_profiler_*.db"))
+        or any((root / "ASCEND_PROFILER_OUTPUT").glob("ascend_pytorch_profiler_*.db"))
+    ):
         return [root]
     candidates: set[Path] = set()
-    for path in root.rglob("kernel_details.csv"):
-        parent = path.parent.parent if path.parent.name == "ASCEND_PROFILER_OUTPUT" else path.parent
-        candidates.add(parent)
+    for pattern in ("kernel_details.csv", "ascend_pytorch_profiler_*.db"):
+        for path in root.rglob(pattern):
+            parent = path.parent.parent if path.parent.name == "ASCEND_PROFILER_OUTPUT" else path.parent
+            candidates.add(parent)
     return sorted(candidates, key=lambda item: str(item))
+
+
+def _is_kernel_db_name(name: str) -> bool:
+    return name.startswith("ascend_pytorch_profiler_") and name.endswith(".db")
+
+
+def kernel_db_path(rank_dir: Path) -> Path | None:
+    """Locate the torch_npu profiler sqlite db for a rank directory."""
+
+    for base in (rank_dir, rank_dir / "ASCEND_PROFILER_OUTPUT"):
+        matches = sorted(base.glob("ascend_pytorch_profiler_*.db"))
+        if matches:
+            return matches[0]
+    matches = sorted(rank_dir.glob("**/ascend_pytorch_profiler_*.db"))
+    return matches[0] if matches else None
 
 
 def kernel_details_path(rank_dir: Path) -> Path | None:
