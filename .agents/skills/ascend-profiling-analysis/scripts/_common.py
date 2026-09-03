@@ -141,17 +141,12 @@ LIGHTWEIGHT_PULL_PATHS = (
     "summary_manifest.json",
     "cross_rank_manifest.json",
     "diagnosis_findings.json",
-    "evidence_index.csv",
-    "raw_kernel_index.csv",
     "rank_summary.csv",
     "step_summary.csv",
     "step_anatomy.csv",
     "step_class_summary.csv",
-    "layer_summary.csv",
     "layer_class_summary.csv",
-    "block_summary.csv",
     "block_class_summary.csv",
-    "operator_summary.csv",
     "operator_class_summary.csv",
     "operator_efficiency_summary.csv",
     "model_insights.json",
@@ -171,18 +166,18 @@ LIGHTWEIGHT_PULL_PATHS = (
     "hccl_class_summary.csv",
     "wait_anchor_ops.csv",
     "aicpu_summary.csv",
-    "cross_rank_alignment.csv",
-    "cross_rank_alignment.json",
-    "step_segments.json",
-    "layer_segments.json",
-    "block_segments.json",
-    "class_signatures.json",
-    "structure_evidence_graph.json",
     "report/manifest.json",
     "report/report.md",
     "report/report.xlsx",
     "report/report.html",
     "report/analysis_summary.json",
+    # html_report_v2's lazy-loaded data; without it the pulled report.html
+    # is a dead shell outside the remote host.
+    "report/assets",
+    # Per-row giants (block_summary.csv, layer_summary.csv, operator_summary.csv,
+    # evidence_index.csv, cross_rank_alignment.*, *_segments.json,
+    # class_signatures.json, structure_evidence_graph.json, raw_kernel_index.csv)
+    # stay on the remote; use --keep-remote-output to mirror everything.
 )
 
 # Fast-mode pull list (profile_analyze --mode fast): only the agent-facing

@@ -1166,6 +1166,19 @@ def sheet_rows(output_dir: Path, *, bundle: Mapping[str, Any] | None = None) -> 
             "finding_types": dict(Counter(str(item.get("finding_type") or "unknown") for item in findings)),
         }
     ]
+
+    def _capped(name: str, rows: list[Mapping[str, Any]], limit: int) -> list[Mapping[str, Any]]:
+        """Cap per-instance sheets; a 131k-row block table makes the xlsx
+        100MB+ and unusable in Excel anyway. Class-level sheets stay full."""
+        if len(rows) <= limit:
+            return rows
+        marker = {key: "" for key in (rows[0].keys() if rows else [])}
+        marker[next(iter(marker), "note")] = (
+            f"__truncated__ {name}: showing first {limit} of {len(rows)} rows; "
+            f"full data in {name}.csv on the analysis host."
+        )
+        return list(rows[:limit]) + [marker]
+
     return {
         "README": [
             {
@@ -1179,14 +1192,14 @@ def sheet_rows(output_dir: Path, *, bundle: Mapping[str, Any] | None = None) -> 
         ],
         "case_summary": case_summary,
         "rank_summary": csvs["rank_summary"],
-        "step_summary": csvs["step_summary"],
-        "step_anatomy": csvs["step_anatomy"],
+        "step_summary": _capped("step_summary", csvs["step_summary"], 50_000),
+        "step_anatomy": _capped("step_anatomy", csvs["step_anatomy"], 50_000),
         "step_class_summary": csvs["step_class_summary"],
-        "layer_summary": csvs["layer_summary"],
+        "layer_summary": _capped("layer_summary", csvs["layer_summary"], 20_000),
         "layer_class_summary": csvs["layer_class_summary"],
-        "block_summary": csvs["block_summary"],
+        "block_summary": _capped("block_summary", csvs["block_summary"], 5_000),
         "block_class_summary": csvs["block_class_summary"],
-        "operator_summary": csvs["operator_summary"],
+        "operator_summary": _capped("operator_summary", csvs["operator_summary"], 20_000),
         "operator_class_summary": csvs["operator_class_summary"],
         "operator_efficiency_summary": csvs["operator_efficiency_summary"],
         "model_inferred_config": csvs["model_inferred_config"],
