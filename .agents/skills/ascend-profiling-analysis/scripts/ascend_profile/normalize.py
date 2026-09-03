@@ -7,69 +7,55 @@ import argparse
 import csv
 import json
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Iterator, Mapping, Sequence
 
 try:
     from .common import (
         NormalizedEvent,
+        PIPELINE_FIELDS,
         SCHEMA_VERSION,
         SourceRef,
         TOOL_VERSION,
         categories_and_roles,
-        core_from_row,
         discover_rank_dirs,
-        event_time_from_row,
-        estimated_work_from_row,
         has_pipeline_signal,
         infer_rank_id,
-        iter_csv_rows,
         kernel_details_path,
-        name_from_row,
         op_type_from_event,
-        pick,
-        pipeline_breakdown_from_row,
         sha256_file,
-        shape_signature,
         stable_id,
-        stream_from_row,
         supplemental_sources,
-        task_type_from_row,
         utc_now,
         to_plain,
         write_json,
     )
+    from .sources import KernelRowAccessor, shape_signature_from_text
+    from .work import estimated_work_from_fields
 except ImportError:  # pragma: no cover - direct script execution
     import sys
 
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from common import (  # type: ignore[no-redef]
         NormalizedEvent,
+        PIPELINE_FIELDS,
         SCHEMA_VERSION,
         SourceRef,
         TOOL_VERSION,
         categories_and_roles,
-        core_from_row,
         discover_rank_dirs,
-        event_time_from_row,
-        estimated_work_from_row,
         has_pipeline_signal,
         infer_rank_id,
-        iter_csv_rows,
         kernel_details_path,
-        name_from_row,
         op_type_from_event,
-        pick,
-        pipeline_breakdown_from_row,
         sha256_file,
-        shape_signature,
         stable_id,
-        stream_from_row,
         supplemental_sources,
-        task_type_from_row,
         utc_now,
         to_plain,
         write_json,
     )
+    from sources import KernelRowAccessor, shape_signature_from_text  # type: ignore[no-redef]
+    from work import estimated_work_from_fields  # type: ignore[no-redef]
 
 
 def maybe_sha256(path: Path, enabled: bool) -> str | None:
@@ -100,6 +86,10 @@ EVENT_FIELDNAMES = [
 
 _JSON_TEXT_CACHE: dict[tuple[Any, ...], str] = {}
 
+# Roles that make an event worth a ``shape_signature`` (mirrors the
+# historical ``set(roles).intersection({...})`` check in the row loop).
+_SHAPE_RELEVANT_ROLES = frozenset({"attention", "moe", "compute", "communication"})
+
 
 def tuple_json_text(values: tuple[Any, ...]) -> str:
     cached = _JSON_TEXT_CACHE.get(values)
@@ -109,28 +99,97 @@ def tuple_json_text(values: tuple[Any, ...]) -> str:
     return cached
 
 
-def event_csv_row(event: NormalizedEvent) -> dict[str, Any]:
-    return {
-        "event_id": event.event_id,
-        "profile_id": event.profile_id,
-        "rank_id": event.rank_id,
-        "source_id": event.source_id,
-        "row_idx": event.row_idx,
-        "name_raw": event.name_raw,
-        "task_type": event.task_type,
-        "accelerator_core": event.accelerator_core,
-        "stream_id": event.stream_id,
-        "start_us": event.start_us,
-        "end_us": event.end_us,
-        "duration_us": event.duration_us,
-        "wait_us": event.wait_us,
-        "op_categories": tuple_json_text(event.op_categories),
-        "op_roles": tuple_json_text(event.op_roles),
-        "shape_signature": event.shape_signature or "",
-        "shape_features": "{}" if not event.shape_features else json.dumps(event.shape_features, ensure_ascii=False, separators=(",", ":")),
-        "pipeline_us": "{}" if not event.pipeline_us else json.dumps(event.pipeline_us, ensure_ascii=False, separators=(",", ":")),
-        "op_type": event.op_type,
-    }
+# Pre-serialized ``"key":`` fragments for ``pipeline_json_text``.  Keys come
+# from the fixed pipeline schema, so the quoted form never changes;
+# precomputing shaves per-row f-string overhead.
+_PIPELINE_KEY_PREFIX: dict[str, str] = {key: f'"{key}":' for key in PIPELINE_FIELDS}
+
+
+def pipeline_json_text(pipeline_us: Mapping[str, float]) -> str:
+    """Byte-identical fast path for ``json.dumps(pipeline_us, separators=(",", ":"))``.
+
+    Keys are the fixed ``PIPELINE_FIELDS`` identifiers (``[a-z0-9_]`` only,
+    so no JSON escaping is needed) and values are finite floats, which the
+    JSON encoder renders with ``float.__repr__`` — the same ``repr`` used
+    here.
+    """
+
+    if not pipeline_us:
+        return "{}"
+    prefixes = _PIPELINE_KEY_PREFIX
+    return "{" + ",".join(prefixes[key] + repr(value) for key, value in pipeline_us.items()) + "}"
+
+
+def _kernel_row_reader(kernel_csv: Path) -> tuple[KernelRowAccessor, Iterator[tuple[int, list[str]]]]:
+    """Open a kernel_details.csv for positional row iteration.
+
+    Returns the header-resolved accessor plus a ``(row_idx, fields)``
+    iterator over data rows (zero-based, matching ``store.iter_csv_rows``).
+    The file handle travels with the iterator and closes when it is
+    exhausted.
+    """
+
+    handle = kernel_csv.open("r", encoding="utf-8-sig", newline="")
+    reader = csv.reader(handle)
+    header = next(reader, None) or []
+
+    def rows() -> Iterator[tuple[int, list[str]]]:
+        try:
+            for row_idx, fields in enumerate(reader):
+                yield row_idx, fields
+        finally:
+            handle.close()
+
+    return KernelRowAccessor(header), rows()
+
+
+def event_csv_fields(
+    event: NormalizedEvent,
+    *,
+    shape_features_json: str | None = None,
+    pipeline_us_json: str | None = None,
+) -> tuple[Any, ...]:
+    """Event row as a tuple in ``EVENT_FIELDNAMES`` order.
+
+    ``shape_features_json`` / ``pipeline_us_json`` let hot loops pass
+    pre-serialized (and cached) JSON text; when omitted the dict is dumped
+    here, identical to ``event_csv_row``.
+    """
+
+    if shape_features_json is None:
+        shape_features_json = "{}" if not event.shape_features else json.dumps(event.shape_features, ensure_ascii=False, separators=(",", ":"))
+    if pipeline_us_json is None:
+        pipeline_us_json = "{}" if not event.pipeline_us else json.dumps(event.pipeline_us, ensure_ascii=False, separators=(",", ":"))
+    return (
+        event.event_id,
+        event.profile_id,
+        event.rank_id,
+        event.source_id,
+        event.row_idx,
+        event.name_raw,
+        event.task_type,
+        event.accelerator_core,
+        event.stream_id,
+        event.start_us,
+        event.end_us,
+        event.duration_us,
+        event.wait_us,
+        tuple_json_text(event.op_categories),
+        tuple_json_text(event.op_roles),
+        event.shape_signature or "",
+        shape_features_json,
+        pipeline_us_json,
+        event.op_type,
+    )
+
+
+def event_csv_row(
+    event: NormalizedEvent,
+    *,
+    shape_features_json: str | None = None,
+    pipeline_us_json: str | None = None,
+) -> dict[str, Any]:
+    return dict(zip(EVENT_FIELDNAMES, event_csv_fields(event, shape_features_json=shape_features_json, pipeline_us_json=pipeline_us_json)))
 
 
 def normalize_profile(
@@ -139,20 +198,28 @@ def normalize_profile(
     *,
     hash_sources: bool = False,
     write_jsonl: bool = False,
-) -> dict[str, Any]:
+) -> tuple[list[NormalizedEvent], dict[str, Any]]:
+    """Normalize raw profiling files; return ``(events, manifest)``.
+
+    The in-memory event list is the same data written to
+    ``normalized_event_index.csv`` (same row order); the full-pipeline
+    runner hands it to downstream stages so they don't re-parse the CSV.
+    Only the manifest is persisted to ``stage_results`` / JSON.
+    """
     profile_root = profile_root.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     profile_id = stable_id("profile", profile_root)
     rank_dirs = discover_rank_dirs(profile_root)
     sources: list[SourceRef] = []
     rank_summaries: list[dict[str, Any]] = []
+    events: list[NormalizedEvent] = []
     event_count = 0
     event_path = output_dir / "normalized_event_index.csv"
     jsonl_path = output_dir / "normalized_event_index.jsonl"
 
     with event_path.open("w", encoding="utf-8", newline="") as event_handle:
-        writer = csv.DictWriter(event_handle, fieldnames=EVENT_FIELDNAMES)
-        writer.writeheader()
+        writer = csv.writer(event_handle)
+        writer.writerow(EVENT_FIELDNAMES)
         jsonl_handle = jsonl_path.open("w", encoding="utf-8") if write_jsonl else None
         for ordinal, rank_dir in enumerate(rank_dirs):
             rank_id = infer_rank_id(rank_dir, ordinal)
@@ -184,25 +251,39 @@ def normalize_profile(
             rank_start_us: float | None = None
             rank_end_us: float | None = None
             last_row_idx: int | None = None
-            for row_idx, row in iter_csv_rows(kernel_csv):
-                name = name_from_row(row)
-                task = task_type_from_row(row)
-                core = core_from_row(row)
-                stream_id = stream_from_row(row)
-                start_us, end_us, duration_us, wait_us = event_time_from_row(row)
+            # The work estimate depends only on (name, task_type, op_type)
+            # plus the four raw shape/dtype cells, so memoize on those raw
+            # strings and skip shape/dtype parsing for repeated combos. The
+            # serialized shape_features JSON text is cached on the same key.
+            work_estimate_cache: dict[tuple[str, ...], dict[str, Any]] = {}
+            shape_features_json_cache: dict[tuple[str, ...], str] = {}
+            accessor, kernel_rows = _kernel_row_reader(kernel_csv)
+            for row_idx, row in kernel_rows:
+                name = accessor.name(row)
+                task = accessor.task_type(row)
+                core = accessor.core(row)
+                stream_id = accessor.stream(row)
+                start_us, end_us, duration_us, wait_us = accessor.event_time(row)
                 categories, roles = categories_and_roles(name, task, core)
-                pipeline_us = pipeline_breakdown_from_row(row)
+                pipeline_us = accessor.pipeline_breakdown(row)
                 event_op_type = op_type_from_event(core, pipeline_us)
-                if set(roles).intersection({"attention", "moe", "compute", "communication"}):
-                    shape_sig, _shape_features = shape_signature(row)
+                if not _SHAPE_RELEVANT_ROLES.isdisjoint(roles):
+                    shape_sig = shape_signature_from_text(accessor.shape_text(row))[0]
                 else:
                     shape_sig = None
-                shape_features: dict[str, Any] = estimated_work_from_row(
-                    row,
-                    name=name,
-                    task_type=task,
-                    op_type=event_op_type,
-                )
+                work_key = (name, task, event_op_type, *accessor.work_fields(row))
+                shape_features = work_estimate_cache.get(work_key)
+                if shape_features is None:
+                    shape_features = estimated_work_from_fields(
+                        name=name,
+                        task_type=task,
+                        op_type=event_op_type,
+                        input_shapes_raw=work_key[3],
+                        output_shapes_raw=work_key[4],
+                        input_dtypes_raw=work_key[5],
+                        output_dtypes_raw=work_key[6],
+                    )
+                    work_estimate_cache[work_key] = shape_features
                 if has_pipeline_signal(pipeline_us):
                     rank_pipeline_event_count += 1
                 raw_ref = SourceRef(
@@ -236,9 +317,15 @@ def normalize_profile(
                     op_type=event_op_type,
                     raw_fields_ref=raw_ref,
                 )
-                writer.writerow(event_csv_row(event))
+                shape_features_json = shape_features_json_cache.get(work_key)
+                if shape_features_json is None:
+                    shape_features_json = json.dumps(shape_features, ensure_ascii=False, separators=(",", ":"))
+                    shape_features_json_cache[work_key] = shape_features_json
+                pipeline_us_json = pipeline_json_text(pipeline_us)
+                writer.writerow(event_csv_fields(event, shape_features_json=shape_features_json, pipeline_us_json=pipeline_us_json))
                 if jsonl_handle is not None:
                     jsonl_handle.write(json.dumps(to_plain(event), ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n")
+                events.append(event)
                 rank_event_count += 1
                 event_count += 1
                 rank_start_us = start_us if rank_start_us is None else min(rank_start_us, start_us)
@@ -300,7 +387,7 @@ def normalize_profile(
     }
     write_json(output_dir / "source_index.json", {"sources": sources})
     write_json(output_dir / "normalize_manifest.json", manifest)
-    return manifest
+    return events, manifest
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -314,7 +401,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    manifest = normalize_profile(
+    _events, manifest = normalize_profile(
         Path(args.profile_root),
         Path(args.output),
         hash_sources=bool(args.hash_sources),

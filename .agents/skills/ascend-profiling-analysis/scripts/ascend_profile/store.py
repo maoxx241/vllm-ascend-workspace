@@ -171,6 +171,85 @@ def pick(row: Mapping[str, Any], keys: Sequence[str], default: str = "") -> str:
     return default
 
 
+def resolve_pick_keys(row_keys: Iterable[str], keys: Sequence[str]) -> tuple[str, ...]:
+    """Resolve ``pick`` candidate aliases to the row's actual column names.
+
+    The candidate→column mapping is fixed for a whole CSV file (all
+    ``csv.DictReader`` rows share the header), so hot loops can resolve
+    once from the header instead of letting ``pick`` re-fold every
+    candidate against the row key set on each call.  The result preserves
+    candidate order, drops aliases absent from the row, and de-duplicates
+    aliases that fold to the same actual column (a repeated lookup of one
+    column can never change the outcome, so this stays exactly equivalent
+    to calling ``pick`` with the original candidates).
+    """
+
+    lowered = row_key_lookup(tuple(str(key) for key in row_keys))
+    resolved: list[str] = []
+    seen: set[str] = set()
+    for key in keys:
+        actual = lowered.get(key.strip().lower())
+        if actual is None or actual in seen:
+            continue
+        seen.add(actual)
+        resolved.append(actual)
+    return tuple(resolved)
+
+
+def pick_resolved(row: Mapping[str, Any], resolved_keys: Sequence[str], default: str = "") -> str:
+    """``pick`` against keys pre-resolved by ``resolve_pick_keys``.
+
+    Same semantics as ``pick``: first column with a non-empty stripped
+    value wins, ``default`` when none qualifies.
+    """
+
+    for actual in resolved_keys:
+        value = str(row.get(actual, "")).strip()
+        if value:
+            return value
+    return default
+
+
+def resolve_pick_positions(header: Sequence[str], keys: Sequence[str]) -> tuple[int, ...]:
+    """Positional twin of ``resolve_pick_keys`` for ``csv.reader`` rows.
+
+    Resolves candidate aliases to column *indices* into ``header``.  When
+    several header cells fold to the same lowercase name the LAST one wins,
+    mirroring ``row_key_lookup`` (and therefore ``csv.DictReader``, where a
+    later duplicate column overwrites the earlier value).
+    """
+
+    lowered: dict[str, int] = {}
+    for idx, key in enumerate(header):
+        lowered[str(key).strip().lower()] = idx
+    resolved: list[int] = []
+    seen: set[int] = set()
+    for key in keys:
+        pos = lowered.get(key.strip().lower())
+        if pos is None or pos in seen:
+            continue
+        seen.add(pos)
+        resolved.append(pos)
+    return tuple(resolved)
+
+
+def pick_at(row: Sequence[str], positions: Sequence[int], default: str = "") -> str:
+    """``pick_resolved`` for positional (``csv.reader``) rows.
+
+    Short-row parity with ``csv.DictReader`` + ``pick``: a missing trailing
+    cell surfaces as ``None`` there, which ``pick`` stringifies to the
+    literal ``"None"``; we reproduce that instead of silently defaulting.
+    """
+
+    row_len = len(row)
+    for pos in positions:
+        value = row[pos] if pos < row_len else None
+        text = str(value).strip()
+        if text:
+            return text
+    return default
+
+
 def try_float(value: Any, default: float = 0.0) -> float:
     if value is None:
         return default
