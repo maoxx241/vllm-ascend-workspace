@@ -100,6 +100,19 @@ def _build_parser() -> argparse.ArgumentParser:
             "cards backed by raw kernel_details rows."
         ),
     )
+    parser.add_argument(
+        "--mode",
+        choices=("fast", "full"),
+        default="fast",
+        help=(
+            "output depth. 'fast' (default) runs the remote analyze with "
+            "--skip-xlsx --skip-host-trace --report-mode summary and pulls "
+            "back only the compact agent-facing artifacts (report.md, "
+            "analysis_summary.json, *_manifest.json, class-level CSVs); "
+            "--report-mode/--skip-html are ignored in this mode. 'full' "
+            "keeps the historical behavior (xlsx + host trace + full pull)."
+        ),
+    )
     parser.add_argument("--model-id", help="optional model id/name for report context")
     parser.add_argument(
         "--model-config",
@@ -225,10 +238,46 @@ def _resolve_end_stage(
     return "report"
 
 
-def _required_artifacts_for(end_stage: str) -> tuple[str, ...]:
+def _required_artifacts_for(end_stage: str, mode: str = "full") -> tuple[str, ...]:
+    if mode == "fast" and end_stage == "report":
+        return common.REQUIRED_SINGLE_ARTIFACTS_FAST
     return common.REQUIRED_ARTIFACTS_BY_END_STAGE.get(
         end_stage, common.REQUIRED_SINGLE_ARTIFACTS
     )
+
+
+def _mode_analyze_flags(mode: str, *, skip_html: bool, report_mode: str) -> list[str]:
+    """Mode-dependent flags forwarded to the remote analyze command."""
+    if mode == "fast":
+        # Fast: md + analysis_summary.json only -- no xlsx, no host-trace
+        # scan, HTML stays a stub (report-mode summary implies it).
+        return ["--skip-xlsx", "--skip-host-trace", "--report-mode", "summary"]
+    flags: list[str] = []
+    if skip_html:
+        flags.append("--skip-html")
+    flags.extend(["--report-mode", report_mode])
+    return flags
+
+
+def _pull_paths_for_mode(mode: str) -> tuple[str, ...]:
+    return common.FAST_PULL_PATHS if mode == "fast" else common.LIGHTWEIGHT_PULL_PATHS
+
+
+def _read_local_analysis_summary(run_dir: Path) -> dict[str, Any] | None:
+    """Pulled ``report/analysis_summary.json`` as a dict, or None.
+
+    Older roots (analyzed before the summary existed) simply do not have the
+    file; a malformed one is treated the same so the wrapper never hard-fails
+    on an optional enrichment.
+    """
+    path = run_dir / "report" / "analysis_summary.json"
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    return data if isinstance(data, dict) else None
 
 
 def _validate_remote_artifacts(
@@ -481,9 +530,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     extra_flags: list[str] = []
     if args.verbose:
         extra_flags.append("--verbose")
-    if args.skip_html:
-        extra_flags.append("--skip-html")
-    extra_flags.extend(["--report-mode", args.report_mode])
+    extra_flags.extend(
+        _mode_analyze_flags(args.mode, skip_html=bool(args.skip_html), report_mode=args.report_mode)
+    )
     if args.from_stage:
         extra_flags.extend(["--from-stage", args.from_stage])
     if args.to_stage:
@@ -541,7 +590,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     # *should* exist after that stage. Segment health is re-validated
     # whenever ``segment_manifest.json`` is part of the expected set.
     end_stage = _resolve_end_stage(args.only_stage, args.from_stage, args.to_stage)
-    required_artifacts = _required_artifacts_for(end_stage)
+    required_artifacts = _required_artifacts_for(end_stage, args.mode)
     try:
         remote_manifest = _validate_remote_artifacts(
             endpoint, remote_output_dir, required_artifacts=required_artifacts
@@ -565,7 +614,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             remote_output_dir,
             run_dir,
             keep_remote_output=args.keep_remote_output,
-            include_paths=common.LIGHTWEIGHT_PULL_PATHS,
+            include_paths=_pull_paths_for_mode(args.mode),
         )
     except RuntimeError as exc:
         return common.fail_return(
@@ -574,6 +623,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             machine=alias,
             remote_profile_root=remote_profile_root,
             remote_output_dir=remote_output_dir,
+        )
+
+    # Embed the agent-first summary in the stdout JSON. Missing on roots
+    # analyzed before analysis_summary.json existed -- keep it null and say
+    # so in the progress stream rather than failing the run.
+    analysis_summary = _read_local_analysis_summary(run_dir)
+    if analysis_summary is None:
+        common.progress(
+            "analysis_summary",
+            "report/analysis_summary.json not pulled (older root or partial stage window); embedding null",
+            local_output_dir=str(run_dir),
         )
 
     elapsed = time.time() - started
@@ -616,6 +676,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     output: dict[str, Any] = {
         "status": "ok",
+        "mode": args.mode,
         "segmentation_degraded": bool(degraded_ranks),
         "warnings": warnings,
         "segmentation_strategies": segment_health.get("strategy_modes") or {},
@@ -632,6 +693,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "segment_count": segment_info.get("segment_count"),
         "layer_count": segment_info.get("layer_count"),
         "diagnosis_counts": _diagnosis_counts(run_dir),
+        "analysis_summary": analysis_summary,
         "report_md": str(run_dir / "report" / "report.md"),
         "report_xlsx": str(run_dir / "report" / "report.xlsx"),
         "report_html": str(run_dir / "report" / "report.html"),

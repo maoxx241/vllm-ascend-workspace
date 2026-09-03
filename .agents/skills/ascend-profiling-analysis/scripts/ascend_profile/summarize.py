@@ -1532,6 +1532,7 @@ def summarize_profile(
     hardware_profile: Path | None = None,
     scan_cann_hardware: bool = True,
     write_raw_index: bool = False,
+    skip_host_trace: bool = False,
     events: Sequence[NormalizedEvent] | None = None,
     events_by_rank: Mapping[str, Sequence[NormalizedEvent]] | None = None,
 ) -> dict[str, Any]:
@@ -1608,8 +1609,33 @@ def summarize_profile(
     wait_rows = wait_anchor_rows(operator_rows)
     aicpu = aicpu_rows(events_by_rank)
     bubbles = bubble_evidence_rows(step_rows)
-    source_index = read_json(output_dir / "source_index.json", default={}) or {}
-    bubbles, host_trace_status = attribute_bubbles(bubbles, trace_view_paths_by_rank(source_index))
+    if skip_host_trace:
+        # Fast mode: skip the trace_view.json scan entirely. Bubbles keep
+        # ``soft_attribution = None`` (same shape as the graceful-degradation
+        # path in host_trace.attribute_bubbles) and the status is recorded as
+        # "skipped" so the report Limitations section surfaces it.
+        for row in bubbles:
+            row["soft_attribution"] = None
+        host_trace_status = {
+            "status": "skipped",
+            "bubbles_total": len(bubbles),
+            "bubbles_attributed": 0,
+            "ranks_with_trace": [],
+            "ranks_with_host_events": [],
+            "ranks_without_trace": [],
+            "ranks_without_host_events": [],
+            "trace_objects_scanned": 0,
+            "host_events_seen": 0,
+            "host_events_retained": 0,
+            "truncated": False,
+            "limitations": [
+                "host trace attribution skipped (--skip-host-trace); bubble "
+                "soft_attribution is null and host-side root causes are not asserted."
+            ],
+        }
+    else:
+        source_index = read_json(output_dir / "source_index.json", default={}) or {}
+        bubbles, host_trace_status = attribute_bubbles(bubbles, trace_view_paths_by_rank(source_index))
     evidence = evidence_index_rows(step_rows, layer_rows, bubbles)
     pipeline_event_count = sum(1 for event in events if has_pipeline_signal(event.pipeline_us))
     pipeline_coverage = round(pipeline_event_count / len(events), 6) if events else 0.0
@@ -1824,6 +1850,15 @@ def build_parser() -> argparse.ArgumentParser:
             "sheet, so the standalone CSV is pure duplication at scale)"
         ),
     )
+    parser.add_argument(
+        "--skip-host-trace",
+        action="store_true",
+        help=(
+            "skip host-side bubble soft attribution (trace_view.json scan). "
+            "Bubbles keep soft_attribution=null and summary_manifest's "
+            "host_trace.status is recorded as 'skipped'."
+        ),
+    )
     return parser
 
 
@@ -1837,6 +1872,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         hardware_profile=Path(args.hardware_profile) if args.hardware_profile else None,
         scan_cann_hardware=not bool(args.no_cann_hardware_scan),
         write_raw_index=bool(args.write_raw_index),
+        skip_host_trace=bool(args.skip_host_trace),
     )
     emit_stage_json({"stage": "summarize", "counts": manifest["counts"]})
     return 0

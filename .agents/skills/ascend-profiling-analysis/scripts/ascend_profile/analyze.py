@@ -93,6 +93,8 @@ def analyze_profile(
     verbose: bool = False,
     skip_html: bool = False,
     report_mode: str = "full-raw",
+    skip_xlsx: bool = False,
+    skip_host_trace: bool = False,
     from_stage: str | None = None,
     to_stage: str | None = None,
     only_stage: str | None = None,
@@ -185,6 +187,7 @@ def analyze_profile(
             hardware_model=hardware_model,
             hardware_profile=hardware_profile,
             scan_cann_hardware=scan_cann_hardware,
+            skip_host_trace=skip_host_trace,
             events=pipeline_events,
             events_by_rank=pipeline_events_by_rank,
         ),
@@ -197,6 +200,8 @@ def analyze_profile(
             output_dir,
             skip_html=skip_html,
             report_mode=report_mode,
+            skip_xlsx=skip_xlsx,
+            stage_timings=timings,
             events=pipeline_events,
         ),
     )
@@ -272,6 +277,24 @@ def build_parser() -> argparse.ArgumentParser:
             "kernel_details rows."
         ),
     )
+    parser.add_argument(
+        "--skip-xlsx",
+        action="store_true",
+        help=(
+            "skip report.xlsx (fast mode): the workbook duplicates the "
+            "summary CSVs and analysis_summary.json; the report manifest "
+            "records xlsx_status=skipped."
+        ),
+    )
+    parser.add_argument(
+        "--skip-host-trace",
+        action="store_true",
+        help=(
+            "skip host-side bubble soft attribution in the summarize stage "
+            "(fast mode): trace_view.json is not scanned, bubbles keep "
+            "soft_attribution=null, host_trace.status=skipped."
+        ),
+    )
     parser.add_argument("--model-id", help="optional user-supplied model id/name for report context")
     parser.add_argument("--model-config", help="optional config.json path available on this analysis host")
     parser.add_argument("--hardware-model", help="optional capture hardware model, e.g. Ascend910B4")
@@ -314,6 +337,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         verbose=bool(args.verbose),
         skip_html=bool(args.skip_html),
         report_mode=args.report_mode,
+        skip_xlsx=bool(args.skip_xlsx),
+        skip_host_trace=bool(args.skip_host_trace),
         from_stage=args.from_stage,
         to_stage=args.to_stage,
         only_stage=args.only_stage,
@@ -330,6 +355,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         "stage_timings": manifest["stage_timings"],
         "skip_html": bool(args.skip_html),
         "report_mode": args.report_mode,
+        "skip_xlsx": bool(args.skip_xlsx),
+        "skip_host_trace": bool(args.skip_host_trace),
         "model_id": args.model_id,
         "hardware_model": args.hardware_model,
     })

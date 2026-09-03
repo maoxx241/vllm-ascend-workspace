@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 try:
+    from .analysis_summary import build_analysis_summary
     from .common import (
         SCHEMA_VERSION,
         TOOL_VERSION,
@@ -27,6 +28,7 @@ except ImportError:  # pragma: no cover
     import sys
 
     sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from analysis_summary import build_analysis_summary  # type: ignore[no-redef]
     from common import (
         # type: ignore[no-redef]
         SCHEMA_VERSION,
@@ -1293,6 +1295,10 @@ def render_report(
     *,
     skip_html: bool = False,
     report_mode: str = "full-raw",
+    skip_xlsx: bool = False,
+    stage_timings: Sequence[Mapping[str, Any]] | None = None,
+    html_renderer: str = "v2",
+    html_single_file: bool = False,
     events=None,
 ) -> dict[str, Any]:
     report_dir = output_dir / "report"
@@ -1313,17 +1319,31 @@ def render_report(
 
     markdown = markdown_report(output_dir, report_id, bundle=bundle)
     (report_dir / "report.md").write_text(markdown, encoding="utf-8")
-    sheets = sheet_rows(output_dir, bundle=bundle)
-    write_xlsx(report_dir / "report.xlsx", sheets)
+    # The XLSX workbook is the heaviest report artifact (every summary CSV
+    # re-encoded as sheets). ``skip_xlsx`` (fast mode) drops it entirely; the
+    # manifest then reports ``xlsx_status="skipped"`` and a null sheet_map,
+    # and analysis_summary.json plus the CSVs carry the same numbers.
+    sheets: dict[str, list[Mapping[str, Any]]] | None = None
+    if not skip_xlsx:
+        sheets = sheet_rows(output_dir, bundle=bundle)
+        write_xlsx(report_dir / "report.xlsx", sheets)
 
-    # HTML report (rich, single-file, zero-dependency). Three modes:
+    # HTML report (rich, zero-dependency). Three modes:
     #   * summary  — skip entirely; stub file explains. Used for
     #                first-stage pipeline debugging where md+xlsx is
     #                enough and HTML render time would just slow the
     #                feedback loop.
-    #   * full-raw — render the complete L1/L2/L3 SPA with raw kernel
+    #   * full-raw — render the complete L1/L2/L3 report with raw kernel
     #                rows attached to operator cards (default).
     # ``skip_html=True`` forces summary regardless of mode.
+    # Renderer choice (orthogonal to mode):
+    #   * v2     — thin shell + gzipped assets/ + on-demand browser rendering
+    #              (default; scales to multi-million-event captures);
+    #   * legacy — the pre-v2 single-file SPA (kept as a fallback; produces
+    #              very large HTML on big captures).
+    # ``html_single_file`` asks v2 to embed all assets (base64+gzip) into one
+    # HTML file; v2 refuses with a clear error when the estimate exceeds the
+    # single-file threshold.
     html_path = report_dir / "report.html"
     html_status = "ok"
     html_error: str | None = None
@@ -1342,13 +1362,27 @@ def render_report(
         )
     else:
         try:
-            try:
-                from .html_report import build_html_report
-            except ImportError:  # pragma: no cover
-                import sys as _sys
-                _sys.path.insert(0, str(Path(__file__).resolve().parent))
-                from html_report import build_html_report  # type: ignore[no-redef]
-            build_html_report(output_dir, html_path, events=events)
+            if html_renderer == "legacy":
+                try:
+                    from .html_report import build_html_report
+                except ImportError:  # pragma: no cover
+                    import sys as _sys
+                    _sys.path.insert(0, str(Path(__file__).resolve().parent))
+                    from html_report import build_html_report  # type: ignore[no-redef]
+                build_html_report(output_dir, html_path, events=events)
+            else:
+                try:
+                    from .html_report_v2 import build_html_report_v2
+                except ImportError:  # pragma: no cover
+                    import sys as _sys
+                    _sys.path.insert(0, str(Path(__file__).resolve().parent))
+                    from html_report_v2 import build_html_report_v2  # type: ignore[no-redef]
+                build_html_report_v2(
+                    output_dir,
+                    html_path,
+                    events=events,
+                    single_file=html_single_file,
+                )
         except Exception as exc:  # noqa: BLE001
             html_status = "error"
             html_error = f"{type(exc).__name__}: {exc}"
@@ -1361,6 +1395,20 @@ def render_report(
                 encoding="utf-8",
             )
 
+    # Agent-first compact summary (analysis_summary.json). Built after the
+    # HTML block so ``html_status`` is final; numbers all come from the same
+    # bundle as the human reports.
+    analysis_summary = build_analysis_summary(
+        output_dir,
+        bundle=bundle,
+        html_status=html_status,
+        report_mode=effective_mode,
+        skip_xlsx=skip_xlsx,
+        stage_timings=stage_timings,
+    )
+    write_json(report_dir / "analysis_summary.json", analysis_summary)
+
+    host_trace_status = (bundle["manifests"]["summary"].get("host_trace") or {}).get("status")
     manifest = {
         "schema_version": SCHEMA_VERSION,
         "tool_version": TOOL_VERSION,
@@ -1370,13 +1418,19 @@ def render_report(
         "output_dir": str(report_dir),
         "files": {
             "markdown": "report.md",
-            "xlsx": "report.xlsx",
+            "xlsx": None if skip_xlsx else "report.xlsx",
             "html": "report.html",
+            "analysis_summary": "analysis_summary.json",
             "manifest": "manifest.json",
         },
         "html_status": html_status,
         "report_mode": effective_mode,
-        "sheet_map": {name: name for name in sheets},
+        "html_renderer": html_renderer,
+        "html_single_file": bool(html_single_file) if html_renderer == "v2" else False,
+        "xlsx_status": "skipped" if skip_xlsx else "ok",
+        "skip_xlsx": bool(skip_xlsx),
+        "host_trace_status": host_trace_status,
+        "sheet_map": ({name: name for name in sheets} if sheets is not None else None),
         "claim_ids": [item.get("claim_id") for item in bundle["findings"]],
         "evidence_chain": {
             "findings_checked": chain["findings_checked"],
@@ -1396,6 +1450,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", required=True)
     parser.add_argument("--skip-html", action="store_true")
     parser.add_argument(
+        "--skip-xlsx",
+        action="store_true",
+        help=(
+            "skip report.xlsx entirely (fast mode): the workbook is the "
+            "heaviest report artifact and every number in it is also in the "
+            "summary CSVs / analysis_summary.json. The manifest records "
+            "xlsx_status=skipped and a null sheet_map."
+        ),
+    )
+    parser.add_argument(
         "--report-mode",
         choices=("summary", "full-raw"),
         default="full-raw",
@@ -1404,6 +1468,26 @@ def build_parser() -> argparse.ArgumentParser:
             "pipeline debugging when md+xlsx is enough. "
             "full-raw: render the complete L1/L2/L3 HTML with operator "
             "cards backed by raw kernel_details rows."
+        ),
+    )
+    parser.add_argument(
+        "--html-renderer",
+        choices=("v2", "legacy"),
+        default="v2",
+        help=(
+            "v2 (default): thin-shell report.html + gzipped assets/ loaded "
+            "on demand — scales to multi-million-event captures. "
+            "legacy: the pre-v2 single-file SPA (fallback; very large HTML "
+            "on big captures)."
+        ),
+    )
+    parser.add_argument(
+        "--html-single-file",
+        action="store_true",
+        help=(
+            "v2 only: embed all assets (base64+gzip) into report.html so it "
+            "works over file://; refused with a clear error when the "
+            "estimated size exceeds the 20 MB single-file threshold."
         ),
     )
     return parser
@@ -1415,11 +1499,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         Path(args.output),
         skip_html=bool(args.skip_html),
         report_mode=args.report_mode,
+        skip_xlsx=bool(args.skip_xlsx),
+        html_renderer=args.html_renderer,
+        html_single_file=bool(args.html_single_file),
     )
     emit_stage_json({
         "stage": "report",
         "output_dir": manifest["output_dir"],
         "html_status": manifest.get("html_status"),
+        "html_renderer": manifest.get("html_renderer"),
+        "xlsx_status": manifest.get("xlsx_status"),
     })
     return 0
 
