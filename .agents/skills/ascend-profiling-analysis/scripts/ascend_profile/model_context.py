@@ -19,43 +19,18 @@ from typing import Any, Mapping, Sequence
 
 try:
     from .common import NormalizedEvent
+    from .store import KNOWLEDGE_DIR, first_present, norm_text, text_config, to_int
 except ImportError:  # pragma: no cover
     import sys
 
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from common import NormalizedEvent  # type: ignore[no-redef]
+    from store import KNOWLEDGE_DIR, first_present, norm_text, text_config, to_int  # type: ignore[no-redef]
 
-
-KNOWLEDGE_DIR = Path(__file__).resolve().parent / "knowledge"
 MODEL_FINGERPRINTS_PATH = KNOWLEDGE_DIR / "model_fingerprints.json"
 CONFIG_FILENAMES = ("config.json", "configuration.json")
 EXTERNAL_CONFIG_TIMEOUT_S = 8
 MAX_EXTERNAL_CONFIG_BYTES = 2 * 1024 * 1024
-
-
-def _norm(value: Any) -> str:
-    return re.sub(r"[^a-z0-9]+", "", str(value or "").lower())
-
-
-def _i(value: Any, default: int = 0) -> int:
-    try:
-        if value is None or value == "":
-            return default
-        return int(float(value))
-    except (TypeError, ValueError):
-        return default
-
-
-def _first(mapping: Mapping[str, Any], *keys: str, default: Any = None) -> Any:
-    for key in keys:
-        if key in mapping and mapping[key] not in (None, ""):
-            return mapping[key]
-    return default
-
-
-def _text_config(config: Mapping[str, Any]) -> Mapping[str, Any]:
-    text = config.get("text_config")
-    return text if isinstance(text, Mapping) else config
 
 
 def load_model_fingerprints(path: Path = MODEL_FINGERPRINTS_PATH) -> list[dict[str, Any]]:
@@ -67,24 +42,24 @@ def load_model_fingerprints(path: Path = MODEL_FINGERPRINTS_PATH) -> list[dict[s
 
 
 def _catalog_names(model: Mapping[str, Any]) -> set[str]:
-    names = {_norm(model.get("model_name"))}
-    names.update(_norm(item) for item in model.get("aliases") or [])
-    names.update(_norm(item) for item in model.get("hub_ids") or [])
+    names = {norm_text(model.get("model_name"))}
+    names.update(norm_text(item) for item in model.get("aliases") or [])
+    names.update(norm_text(item) for item in model.get("hub_ids") or [])
     return {item for item in names if item}
 
 
 def _config_features(root: Mapping[str, Any], cfg: Mapping[str, Any]) -> list[str]:
     features: list[str] = []
-    if _i(_first(cfg, "num_experts", "n_routed_experts", default=0)) > 0:
+    if to_int(first_present(cfg, "num_experts", "n_routed_experts", default=0)) > 0:
         features.append("moe")
-    if _i(_first(cfg, "q_lora_rank", "kv_lora_rank", default=0)) > 0:
+    if to_int(first_present(cfg, "q_lora_rank", "kv_lora_rank", default=0)) > 0:
         features.append("mla")
     if isinstance(cfg.get("compress_ratios"), list):
         features.append("kv_compressor")
     layer_types = cfg.get("layer_types") if isinstance(cfg.get("layer_types"), list) else []
     if any("linear" in str(item).lower() for item in layer_types):
         features.append("linear_attention_or_mamba")
-    if _i(_first(cfg, "index_topk", "index_n_heads", default=0)) > 0:
+    if to_int(first_present(cfg, "index_topk", "index_n_heads", default=0)) > 0:
         features.append("dsa_or_csa_indexer")
     if isinstance(root.get("vision_config"), Mapping):
         features.append("vision")
@@ -92,8 +67,8 @@ def _config_features(root: Mapping[str, Any], cfg: Mapping[str, Any]) -> list[st
 
 
 def _config_layers(root: Mapping[str, Any]) -> int | None:
-    cfg = _text_config(root)
-    layers = _i(_first(cfg, "num_hidden_layers", "n_layers", "num_layers", default=0))
+    cfg = text_config(root)
+    layers = to_int(first_present(cfg, "num_hidden_layers", "n_layers", "num_layers", default=0))
     return layers if layers > 0 else None
 
 
@@ -105,7 +80,7 @@ def _config_context_fields(
     observed_features: Sequence[str],
     matched_reasons: Sequence[str],
 ) -> dict[str, Any]:
-    cfg = _text_config(root)
+    cfg = text_config(root)
     layers = _config_layers(root)
     cfg_features = _config_features(root, cfg)
     return {
@@ -206,7 +181,7 @@ def _catalog_matches_by_model_id(
     if not model_id:
         return [], "none"
     raw_target = str(model_id)
-    target = _norm(model_id)
+    target = norm_text(model_id)
     if not target:
         return [], "none"
     exact: list[Mapping[str, Any]] = []
@@ -226,7 +201,7 @@ def _catalog_matches_by_model_id(
 
 
 def _catalog_lookup(models: Sequence[Mapping[str, Any]], value: Any) -> Mapping[str, Any] | None:
-    target = _norm(value)
+    target = norm_text(value)
     if not target:
         return None
     for model in models:
@@ -239,7 +214,7 @@ def _dedupe_models(models: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     seen: set[str] = set()
     for model in models:
-        key = _norm(model.get("model_name")) or json.dumps(model, sort_keys=True)
+        key = norm_text(model.get("model_name")) or json.dumps(model, sort_keys=True)
         if key in seen:
             continue
         seen.add(key)
@@ -371,7 +346,7 @@ STRUCTURE_HINT_FEATURE_ALIASES: tuple[tuple[str, tuple[str, ...]], ...] = (
 
 
 def _user_structure_features(text: str | None) -> list[str]:
-    normalized = _norm(text)
+    normalized = norm_text(text)
     if not normalized:
         return []
     features: list[str] = []
@@ -537,7 +512,7 @@ def _repo_id_candidates(model_id: str | None, matched: Mapping[str, Any] | None 
     if model_id:
         add(model_id)
         if "/" not in model_id:
-            normalized = _norm(model_id)
+            normalized = norm_text(model_id)
             if "deepseek" in normalized or normalized.startswith("dsv"):
                 add(f"deepseek-ai/{model_id}")
             if "qwen" in normalized:
@@ -602,7 +577,7 @@ def _hf_search_model_ids(query: str, limit: int = 5) -> list[str]:
         return []
     if not isinstance(payload, list):
         return []
-    target = _norm(query)
+    target = norm_text(query)
     results: list[str] = []
     for item in payload:
         if not isinstance(item, Mapping):
@@ -614,7 +589,7 @@ def _hf_search_model_ids(query: str, limit: int = 5) -> list[str]:
         # exact normalized match.  Suffix variants such as "-0324" must be
         # supplied by the user or the catalog; otherwise layer count would be a
         # repository-choice guess rather than config evidence.
-        if _norm(repo_id.rsplit("/", 1)[-1]) == target:
+        if norm_text(repo_id.rsplit("/", 1)[-1]) == target:
             _append_unique(results, repo_id)
     return results
 
@@ -786,7 +761,7 @@ def _single_or_family_context(
     expected_layers = sorted(
         {
             layers
-            for layers in (_i(item.get("expected_layers"), default=0) for item in candidate_contexts)
+            for layers in (to_int(item.get("expected_layers"), default=0) for item in candidate_contexts)
             if layers > 0
         }
     )
@@ -868,7 +843,7 @@ def resolve_model_context(
         context.update(
             _config_context_fields(
                 root=root,
-                model_name=model_id or model_config.parent.name or str(_first(_text_config(root), "model_type", default="config_model")),
+                model_name=model_id or model_config.parent.name or str(first_present(text_config(root), "model_type", default="config_model")),
                 source=str(model_config),
                 observed_features=observed_features,
                 matched_reasons=["config.num_hidden_layers"] if _config_layers(root) else ["config"],

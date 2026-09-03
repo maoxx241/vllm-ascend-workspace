@@ -19,12 +19,10 @@ remotely.
 from __future__ import annotations
 
 import json
-import os
 import shlex
 import subprocess
 import sys
 import time
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -34,6 +32,14 @@ LIB_DIR = ROOT / ".agents" / "lib"
 if str(LIB_DIR) not in sys.path:
     sys.path.insert(0, str(LIB_DIR))
 
+from vaws_local_state import allocate_run_dir  # noqa: E402
+from vaws_remote_toolbox import (  # noqa: E402
+    SshEndpoint,
+    container_endpoint_from_record,
+    emit_progress as _lib_emit_progress,
+    print_json as _lib_print_json,
+    ssh_exec,
+)
 from vaws_session_state import (  # noqa: E402
     SessionStateError,
     load_session_lookup,
@@ -52,10 +58,6 @@ SSH_CONNECT_TIMEOUT_SECONDS = 15
 FRAMEWORK_LOCAL_DIR = Path(__file__).resolve().parent / "ascend_profile"
 FRAMEWORK_REMOTE_SUBPATH = "ascend_profile"
 FRAMEWORK_PYTHON_MODULE = "ascend_profile"
-
-# Back-compat aliases (will be removed once all call sites use the new names).
-TOOLS_LOCAL_DIR = FRAMEWORK_LOCAL_DIR
-TOOLS_REMOTE_SUBPATH = FRAMEWORK_REMOTE_SUBPATH
 
 REQUIRED_SINGLE_ARTIFACTS = (
     "manifest.json",
@@ -171,33 +173,8 @@ LIGHTWEIGHT_PULL_PATHS = (
 
 
 # ---------------------------------------------------------------------------
-# SSH endpoint
+# SSH endpoint (SshEndpoint itself is imported from vaws_remote_toolbox)
 # ---------------------------------------------------------------------------
-
-@dataclass(frozen=True)
-class SshEndpoint:
-    host: str
-    port: int
-    user: str = "root"
-
-    def destination(self) -> str:
-        return f"{self.user}@{self.host}"
-
-
-def endpoint_from_machine(machine: dict[str, Any]) -> SshEndpoint:
-    host_info = machine.get("host", {})
-    container_info = machine.get("container", {})
-    if isinstance(host_info, dict):
-        ip = host_info.get("ip", "")
-        host_port = int(host_info.get("port", 22))
-        user = host_info.get("user", "root")
-    else:
-        ip = host_info
-        host_port = 22
-        user = "root"
-    ssh_port = int(container_info.get("ssh_port", host_port))
-    return SshEndpoint(host=ip, port=ssh_port, user=user)
-
 
 def get_machine_alias(machine: dict[str, Any]) -> str:
     host = machine.get("host", {})
@@ -228,7 +205,7 @@ def resolve_execution_target(
         "mode": "session",
         "record": record,
         "alias": get_machine_alias(record),
-        "endpoint": endpoint_from_machine(record),
+        "endpoint": container_endpoint_from_record(record),
         "session_id": lookup.session["session_id"],
         "session_file": str(lookup.session_file),
         "session": lookup.session,
@@ -236,61 +213,40 @@ def resolve_execution_target(
 
 
 # ---------------------------------------------------------------------------
-# Progress / output
+# Progress / output (thin wrappers over the lib primitives; they keep this
+# skill's sentinel prefix and historical function names)
 # ---------------------------------------------------------------------------
 
 def progress(phase: str, message: str, **extra: Any) -> None:
-    payload: dict[str, Any] = {"phase": phase, "message": message}
-    payload.update({k: v for k, v in extra.items() if v is not None})
-    sys.stderr.write(PROGRESS_SENTINEL + json.dumps(payload, ensure_ascii=False) + "\n")
-    sys.stderr.flush()
+    _lib_emit_progress(phase, message, sentinel=PROGRESS_SENTINEL, **extra)
 
 
 def print_json(data: dict[str, Any]) -> None:
-    json.dump(data, sys.stdout, ensure_ascii=False, indent=2)
-    sys.stdout.write("\n")
-    sys.stdout.flush()
+    _lib_print_json(data)
 
 
 # ---------------------------------------------------------------------------
 # Remote command execution
+#
+# ``ssh_exec`` is imported from vaws_remote_toolbox (bounded connect phase,
+# wall-clock timeout mapped to rc=255). ``_ssh_base_cmd`` stays local because
+# ``ssh_stream`` adds ServerAlive keepalive options for long-running streams
+# (and the timeout regression tests patch it).
 # ---------------------------------------------------------------------------
 
 def _ssh_base_cmd(endpoint: SshEndpoint) -> list[str]:
+    # mux=False: this builder serves ssh_stream's hour-scale sessions, and a
+    # muxed channel can outlive the remote side without noticing (observed:
+    # remote analyze completed, mux master alive, session client hung until
+    # the local timeout). Same failure class as the collection tunnel.
     return [
         "ssh",
-        *base_ssh_options(connect_timeout=SSH_CONNECT_TIMEOUT_SECONDS),
+        *base_ssh_options(connect_timeout=SSH_CONNECT_TIMEOUT_SECONDS, mux=False),
         "-o", "ServerAliveInterval=30",
         "-o", "ServerAliveCountMax=10",
         "-p", str(endpoint.port),
         endpoint.destination(),
     ]
-
-
-def ssh_exec(
-    endpoint: SshEndpoint,
-    script: str,
-    *,
-    check: bool = True,
-    timeout: int | None = None,
-) -> subprocess.CompletedProcess[str]:
-    """Run a one-shot bash snippet on the remote host."""
-    cmd = [*_ssh_base_cmd(endpoint), "bash", "-c", shlex.quote(script)]
-    result = subprocess.run(
-        cmd, capture_output=True, text=True, check=False, timeout=timeout
-    )
-    if check and result.returncode != 0:
-        tail_err = result.stderr.strip().splitlines()[-50:]
-        raise RuntimeError(
-            "remote command failed (rc={rc})\n"
-            "  cmd: {cmd}\n"
-            "  stderr tail:\n{err}".format(
-                rc=result.returncode,
-                cmd=script.strip().splitlines()[0][:200],
-                err="\n".join(tail_err),
-            )
-        )
-    return result
 
 
 def ssh_stream(
@@ -533,8 +489,8 @@ def ensure_run_dir(
     - When ``explicit_dir`` is given, it is used verbatim.  If the path
       already exists and is non-empty, ``FileExistsError`` is raised unless
       ``overwrite=True``.
-    - Otherwise a fresh ``<state-dir>/<timestamp>_<tag>/`` directory is
-      created under ``.vaws-local/profiling-analysis/runs/``.
+    - Otherwise a fresh ``<state-dir>/<utc-timestamp>_<tag>/`` directory is
+      allocated (collision-safe) under ``.vaws-local/profiling-analysis/runs/``.
     """
     if explicit_dir:
         d = Path(explicit_dir).expanduser().resolve()
@@ -551,11 +507,7 @@ def ensure_run_dir(
         d.mkdir(parents=True, exist_ok=True)
         return d
 
-    ts = time.strftime("%Y%m%d_%H%M%S")
-    name = f"{ts}_{tag}" if tag else ts
-    d = ANALYSIS_STATE_DIR / name
-    d.mkdir(parents=True, exist_ok=True)
-    return d
+    return allocate_run_dir(ANALYSIS_STATE_DIR, tag)
 
 
 def load_collection_manifest(manifest_path: Path) -> dict[str, Any]:
@@ -636,3 +588,148 @@ def remote_python_with_module(
 
 def quote_remote(path: str) -> str:
     return shlex.quote(path)
+
+
+# ---------------------------------------------------------------------------
+# Wrapper orchestration (shared by profile_analyze.py / profile_sweep.py)
+#
+# Failure contract: every failure prints one {"status": "failed", ...} JSON
+# object on stdout and returns a phase-scoped exit code:
+#   2 = pre-remote setup (manifest_validation / resolve / dependency_preflight
+#       / setup)
+#   3 = parity_sync (framework tar-sync)
+#   4 = remote execution (remote_analyze / remote_sweep)
+#   5 = validation (artifact_validation / summary_pull)
+#   6 = artifact_pull
+# ---------------------------------------------------------------------------
+
+WRAPPER_PHASE_EXIT_CODES = {
+    "manifest_validation": 2,
+    "resolve": 2,
+    "dependency_preflight": 2,
+    "setup": 2,
+    "parity_sync": 3,
+    "remote_analyze": 4,
+    "remote_sweep": 4,
+    "artifact_validation": 5,
+    "summary_pull": 5,
+    "artifact_pull": 6,
+}
+
+
+def fail_return(phase: str, error: Any, **extra: Any) -> int:
+    """Print the wrapper failure JSON for ``phase`` and return its exit code.
+
+    Extra fields whose value is None are dropped so each wrapper keeps its
+    historical payload shape.
+    """
+    payload: dict[str, Any] = {"status": "failed", "phase": phase, "error": str(error)}
+    payload.update({k: v for k, v in extra.items() if v is not None})
+    print_json(payload)
+    return WRAPPER_PHASE_EXIT_CODES[phase]
+
+
+def resolve_wrapper_target(
+    *,
+    session_id: str | None = None,
+    session_file: str | Path | None = None,
+) -> tuple[dict[str, Any] | None, int | None]:
+    """Resolve the session target; on failure emit phase=resolve (exit 2)."""
+    try:
+        return resolve_execution_target(session_id=session_id, session_file=session_file), None
+    except (ValueError, SessionStateError) as exc:
+        return None, fail_return("resolve", exc)
+
+
+def require_remote_python(
+    endpoint: SshEndpoint,
+    *,
+    alias: str,
+    session_id: str | None,
+    module: str = "yaml",
+) -> tuple[str | None, int | None]:
+    """Preflight a remote python that can import ``module`` (exit 2 on failure)."""
+    try:
+        return remote_python_with_module(endpoint, module, required=True), None
+    except RuntimeError as exc:
+        return None, fail_return(
+            "dependency_preflight", exc, machine=alias, session_id=session_id
+        )
+
+
+def prepare_run_dir(
+    tag: str,
+    *,
+    explicit_dir: str | None = None,
+    overwrite: bool = False,
+    alias: str,
+    session_id: str | None = None,
+) -> tuple[Path | None, int | None]:
+    """Create the local run dir (exit 2 on failure) and log the setup line."""
+    try:
+        run_dir = ensure_run_dir(tag, explicit_dir=explicit_dir, overwrite=overwrite)
+    except FileExistsError as exc:
+        return None, fail_return("setup", exc, machine=alias, session_id=session_id)
+    progress("setup", "local run dir created", path=str(run_dir))
+    return run_dir, None
+
+
+def sync_framework(
+    endpoint: SshEndpoint, remote_work_dir: str, remote_output_dir: str
+) -> str:
+    """Create the remote dirs and tar-sync ``scripts/ascend_profile/``.
+
+    Returns the remote framework dir. Raises RuntimeError / FileNotFoundError;
+    callers convert with ``fail_return("parity_sync", ...)`` (exit 3).
+    """
+    remote_framework_dir = f"{remote_work_dir}/{FRAMEWORK_REMOTE_SUBPATH}"
+    ssh_exec(
+        endpoint,
+        f"mkdir -p {quote_remote(remote_framework_dir)} "
+        f"{quote_remote(remote_output_dir)}",
+        check=True,
+        timeout=60,
+    )
+    sync_to_remote(endpoint, FRAMEWORK_LOCAL_DIR, remote_framework_dir)
+    return remote_framework_dir
+
+
+def stream_remote_command(
+    endpoint: SshEndpoint,
+    cmd: str,
+    *,
+    forward_prefix: str,
+    timeout: int | None,
+    fail_phase: str,
+    **fail_extra: Any,
+) -> tuple[int | None, int | None]:
+    """Run ``ssh_stream`` with the wall-clock budget.
+
+    Returns ``(rc, None)`` on completion; a wall-clock TimeoutError prints the
+    ``fail_phase`` failure JSON (exit 4) and returns ``(None, code)``.
+    """
+    try:
+        return ssh_stream(endpoint, cmd, forward_prefix=forward_prefix, timeout=timeout), None
+    except TimeoutError as exc:
+        return None, fail_return(fail_phase, exc, **fail_extra)
+
+
+def pull_artifacts(
+    endpoint: SshEndpoint,
+    remote_output_dir: str,
+    run_dir: Path,
+    *,
+    keep_remote_output: bool,
+    include_paths: Iterable[str],
+) -> None:
+    """Pull artifacts back to the local run dir.
+
+    Raises RuntimeError; callers convert with ``fail_return("artifact_pull",
+    ...)`` (exit 6).
+    """
+    if keep_remote_output:
+        sync_from_remote(endpoint, remote_output_dir, run_dir)
+    else:
+        sync_from_remote(
+            endpoint, remote_output_dir, run_dir, include_paths=include_paths
+        )

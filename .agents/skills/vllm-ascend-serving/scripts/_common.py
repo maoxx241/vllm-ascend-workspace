@@ -28,6 +28,7 @@ from vaws_local_state import ensure_state_dir  # noqa: E402
 from vaws_npu_coordination import parse_npu_smi_info  # noqa: E402
 from vaws_remote_toolbox import (  # noqa: E402
     SshEndpoint,
+    ascend_env_preamble,
     resolve_remote_target,
 )
 from vaws_session_state import session_serving_state_path  # noqa: E402
@@ -79,6 +80,9 @@ def ssh_exec(
     check: bool = True,
     timeout: float | None = SSH_EXEC_DEFAULT_TIMEOUT_SECONDS,
 ) -> subprocess.CompletedProcess[str]:
+    # Serving keeps its own copy so the serving surface stays untouched;
+    # vaws_remote_toolbox.ssh_exec is the equivalent shared implementation
+    # for new code.
     cmd = [*_ssh_base_cmd(endpoint), "bash", "-c", shlex.quote(script)]
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=timeout)

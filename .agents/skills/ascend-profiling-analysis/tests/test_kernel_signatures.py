@@ -1,15 +1,14 @@
 """Regression tests for ``knowledge/kernel_signatures.yaml``.
 
-This file pins the contract between Python's ``categories_and_roles``
-rule list and the YAML knowledge inventory. The intent is to make
-"someone adds a new kernel rule in Python but forgets the YAML" a CI
-failure rather than a silent drift.
+This file pins the contract between the runtime kernel matcher and the
+YAML knowledge inventory. Since the matcher (``rules.categories_and_roles``)
+is *driven by* the ``match_rules:`` section of this YAML, full Python↔YAML
+parity is structural; what remains to guard:
 
-Two checks:
-
-1. **Structural** — the YAML parses, every category listed under
-   ``kernels[].categories`` is a valid value in
-   ``semantic_conventions.yaml:op_categories``.
+1. **Structural** — the YAML parses, the production loader accepts it,
+   every category / role the matcher can emit is a valid value in
+   ``semantic_conventions.yaml``, and every category listed under
+   ``kernels[].categories`` is a valid value too.
 2. **Behavioural** — fed a curated set of profile kernel names
    (taken from real DSV2 / DSV4 / Qwen3 / Mamba traces — see source
    citations next to each case), ``categories_and_roles`` returns the
@@ -96,6 +95,115 @@ def test_deprecated_categories_table(kernel_sig_doc, op_categories_enum):
             f"deprecated_categories: {old!r} maps to {new!r}, but {new!r} is "
             f"not in op_categories enum"
         )
+
+
+# ----------------------------------------------------------------------------
+# match_rules: the runtime matcher is driven by this YAML section, so full
+# Python↔YAML parity is structural now. What still needs guarding:
+#   * every category / role the matcher can emit is declared in
+#     semantic_conventions.yaml (otherwise artifacts leak un-declared
+#     values);
+#   * the production loader's schema validation rejects malformed docs
+#     with actionable errors.
+# ----------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def match_rules_doc(kernel_sig_doc) -> dict:
+    section = kernel_sig_doc.get("match_rules")
+    assert isinstance(section, dict), (
+        "kernel_signatures.yaml needs a match_rules: section — it is the "
+        "runtime input of rules.categories_and_roles"
+    )
+    return section
+
+
+def _match_rule_effects(doc: dict) -> tuple[set[str], set[str]]:
+    categories: set[str] = set()
+    roles: set[str] = set()
+    for rule in doc["rules"]:
+        for effect in rule.get("branches") or [rule]:
+            categories.update(effect.get("add_categories") or ())
+            roles.update(effect.get("add_roles") or ())
+    return categories, roles
+
+
+def test_match_rules_accepted_by_production_loader():
+    """The shipped file must pass the same strict schema validation the
+    runtime loader applies."""
+    from ascend_profile import rules  # noqa: E402
+
+    predicates, loaded = rules._load_match_rules(KERNEL_SIG_PATH)
+    assert loaded, "match_rules.rules must be non-empty"
+    ids = [rule["id"] for rule in loaded]
+    assert len(ids) == len(set(ids)), "rule ids must be unique"
+    assert "fused_mc2_kernel" in predicates
+
+
+def test_match_rules_categories_in_enum(match_rules_doc, op_categories_enum):
+    """Every category the matcher can emit (including branch effects) must
+    be a declared op_categories enum value."""
+    categories, _ = _match_rule_effects(match_rules_doc)
+    missing = categories - op_categories_enum
+    assert not missing, (
+        f"match_rules can emit categories not declared in "
+        f"semantic_conventions.yaml:op_categories: {sorted(missing)}"
+    )
+
+
+def test_match_rules_roles_in_enum(match_rules_doc):
+    """Every role the matcher can emit must be a declared op_roles enum value."""
+    roles_enum = set(_load_yaml(SEMCONV_PATH)["attributes"]["op_roles"]["values"])
+    _, roles = _match_rule_effects(match_rules_doc)
+    missing = roles - roles_enum
+    assert not missing, (
+        f"match_rules can emit roles not declared in "
+        f"semantic_conventions.yaml:op_roles: {sorted(missing)}"
+    )
+
+
+def test_match_rules_schema_validation_errors(tmp_path):
+    """Malformed match_rules docs must fail with clear RuntimeErrors."""
+    from ascend_profile import rules  # noqa: E402
+
+    def _doc(rule_extra=None, predicates=None):
+        rule = {"id": "r1", "when": {"any_of": ["x"]}, "add_categories": ["compute.matmul"]}
+        rule.update(rule_extra or {})
+        return {"match_rules": {"predicates": predicates or {}, "rules": [rule]}}
+
+    cases = [
+        (_doc({"when": {"anyoff": ["x"]}}), "unknown condition keys"),
+        (_doc({"when": {"predicate": "nope"}}), "undefined predicate"),
+        (_doc({"id": "r1"}, None), None),  # valid baseline
+        (
+            {"match_rules": {"rules": [
+                {"id": "r1", "when": {"any_of": ["x"]}, "add_categories": ["compute.matmul"]},
+                {"id": "r1", "when": {"any_of": ["y"]}, "add_categories": ["compute.aux"]},
+            ]}},
+            "duplicate rule id",
+        ),
+        (
+            {"match_rules": {"rules": [
+                {"id": "r1", "when": {"any_of": ["x"]}, "branches": [
+                    {"add_categories": ["compute.matmul"]},
+                    {"when": {"any_of": ["y"]}, "add_categories": ["compute.aux"]},
+                ]},
+            ]}},
+            "must be the last branch",
+        ),
+        (
+            {"match_rules": {"rules": [{"id": "r1", "when": {"any_of": ["x"]}}]}},
+            "no effect",
+        ),
+    ]
+    for doc, needle in cases:
+        path = tmp_path / "bad.yaml"
+        path.write_text(YAML.safe_dump(doc), encoding="utf-8")
+        if needle is None:
+            rules._load_match_rules(path)
+            continue
+        with pytest.raises(RuntimeError, match=needle):
+            rules._load_match_rules(path)
 
 
 # ----------------------------------------------------------------------------

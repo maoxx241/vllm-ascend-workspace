@@ -5,13 +5,10 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import shlex
 import subprocess
 import sys
-import time
 import uuid
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -23,7 +20,13 @@ for _p in (str(LIB_DIR), str(MM_SCRIPTS)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-from vaws_local_state import ensure_state_dir  # noqa: E402
+from vaws_local_state import allocate_run_dir  # noqa: E402
+from vaws_remote_toolbox import (  # noqa: E402
+    SshEndpoint,
+    container_endpoint_from_record,
+    emit_progress as _lib_emit_progress,
+    ssh_exec,
+)
 from vaws_ssh import base_ssh_options  # noqa: E402
 from vaws_session_state import (  # noqa: E402
     load_session_lookup,
@@ -33,7 +36,6 @@ from vaws_session_state import (  # noqa: E402
 
 MEMPROF_STATE_DIR = ROOT / ".vaws-local" / "memory-profiling"
 PROGRESS_SENTINEL = "__VAWS_MEMPROF_PROGRESS__="
-SAFE_TOKEN_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 
 ENV_PREAMBLE = (
     "source /usr/local/Ascend/ascend-toolkit/set_env.sh 2>/dev/null; "
@@ -44,15 +46,9 @@ ENV_PREAMBLE = (
 )
 
 
-@dataclass(frozen=True)
-class SshEndpoint:
-    host: str
-    port: int
-    user: str = "root"
-
-    def destination(self) -> str:
-        return f"{self.user}@{self.host}"
-
+# SshEndpoint and ssh_exec are imported from vaws_remote_toolbox. The local
+# ``_ssh_base_cmd`` stays for the upload / write / background helpers below,
+# which historically ran without a connect timeout.
 
 def _ssh_base_cmd(endpoint: SshEndpoint) -> list[str]:
     return [
@@ -61,23 +57,6 @@ def _ssh_base_cmd(endpoint: SshEndpoint) -> list[str]:
         "-p", str(endpoint.port),
         endpoint.destination(),
     ]
-
-
-def ssh_exec(
-    endpoint: SshEndpoint,
-    script: str,
-    *,
-    check: bool = True,
-    timeout: int | None = None,
-) -> subprocess.CompletedProcess[str]:
-    cmd = [*_ssh_base_cmd(endpoint), "bash", "-c", shlex.quote(script)]
-    result = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=timeout)
-    if check and result.returncode != 0:
-        raise RuntimeError(
-            f"remote command failed (rc={result.returncode}):\n"
-            f"stderr: {result.stderr[:2000]}"
-        )
-    return result
 
 
 def ssh_upload(endpoint: SshEndpoint, local_path: Path, remote_path: str) -> None:
@@ -102,28 +81,8 @@ def ssh_bg_exec(
 
 
 def progress(msg: str, **extra: Any) -> None:
-    payload = {"msg": msg, **extra}
-    print(f"{PROGRESS_SENTINEL}{json.dumps(payload, ensure_ascii=False)}", file=sys.stderr, flush=True)
-
-
-def endpoint_from_machine(machine: dict[str, Any]) -> SshEndpoint:
-    host_info = machine.get("host", {})
-    container_info = machine.get("container", {})
-
-    if isinstance(host_info, dict):
-        ip = host_info.get("ip", "")
-        host_port = host_info.get("port", 22)
-        user = host_info.get("user", "root")
-    else:
-        ip = host_info
-        host_port = 22
-        user = "root"
-
-    ssh_port = container_info.get("ssh_port", host_port)
-    if container_info.get("ssh_port") is not None:
-        user = container_info.get("user", "root")
-
-    return SshEndpoint(host=ip, port=ssh_port, user=user)
+    """Skill progress wrapper: keeps this skill's sentinel, delegates to lib."""
+    _lib_emit_progress("memprof", msg, sentinel=PROGRESS_SENTINEL, **extra)
 
 
 def resolve_execution_target(
@@ -146,7 +105,7 @@ def resolve_execution_target(
         "mode": "session",
         "record": record,
         "alias": record["alias"],
-        "endpoint": endpoint_from_machine(record),
+        "endpoint": container_endpoint_from_record(record),
         "session_id": lookup.session["session_id"],
         "session_file": str(lookup.session_file),
         "session": lookup.session,
@@ -154,33 +113,8 @@ def resolve_execution_target(
     }
 
 
-def _safe_run_token(value: str, *, fallback: str = "run", max_len: int = 80) -> str:
-    token = SAFE_TOKEN_RE.sub("-", value.strip()).strip(".-_")
-    if not token:
-        token = fallback
-    if len(token) <= max_len:
-        return token
-    digest = uuid.uuid5(uuid.NAMESPACE_URL, token).hex[:8]
-    keep = max(1, max_len - len(digest) - 1)
-    return f"{token[:keep].rstrip('.-_')}-{digest}"
-
-
 def ensure_run_dir(tag: str = "") -> Path:
-    ts = time.strftime("%Y%m%d_%H%M%S")
-    tag_token = _safe_run_token(tag, fallback="memory") if tag else ""
-    for _ in range(10):
-        suffix = f"{os.getpid()}_{uuid.uuid4().hex[:8]}"
-        parts = [ts]
-        if tag_token:
-            parts.append(tag_token)
-        parts.append(suffix)
-        d = MEMPROF_STATE_DIR / "_".join(parts)
-        try:
-            d.mkdir(parents=True, exist_ok=False)
-            return d
-        except FileExistsError:
-            continue
-    raise RuntimeError("failed to allocate a unique memory profiling run directory")
+    return allocate_run_dir(MEMPROF_STATE_DIR, tag)
 
 
 def find_python(endpoint: SshEndpoint) -> str:

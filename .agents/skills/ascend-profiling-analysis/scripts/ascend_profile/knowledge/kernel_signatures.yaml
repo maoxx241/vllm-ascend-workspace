@@ -4,7 +4,7 @@ version: 1
 # Kernel signature inventory
 # ----------------------------------------------------------------------------
 # Map from "kernel name in kernel_details.csv (Name column, after
-# common.fold_text)" to the *category labels* this skill emits in
+# store.fold_text)" to the *category labels* this skill emits in
 # op_categories. Categories are deliberately **neutral**: the same kernel
 # can serve more than one architecture (e.g. the Compressor kernel runs in
 # both V4 CSA and V4 HCA layers), and the architecture family is decided
@@ -26,15 +26,333 @@ version: 1
 
 schema_notes:
   folding: |
-    Profile names are folded via common.fold_text before matching: lowercase,
-    drop "aclnn"/"aclop"/"kernel"/"infer" prefixes/suffixes and trailing
-    "_<digits>". So "aclnnLightningIndexerQuant" reduces to
-    "lightningindexerquant".
+    Profile names are folded via store.fold_text before matching: lowercase,
+    then strip every non-alphanumeric character. So "aclnnLightningIndexerQuant"
+    reduces to "aclnnlightningindexerquant". Rules match **substrings** of the
+    folded text, so prefixes like "aclnn" need no special handling.
   conflict_resolution: |
     When more than one rule matches a name, all matching categories are
     added — the kernel may legitimately span multiple roles (e.g. fused
     MoE compute + collective communication). Family resolution operates on
     the *set* of categories present in a block, not on a single kernel.
+
+# ----------------------------------------------------------------------------
+# Match rules (LOADED AT RUNTIME by rules.categories_and_roles)
+# ----------------------------------------------------------------------------
+# This is the machine-consumed form of the inventory below: an ordered rule
+# list evaluated against ``text = fold_text(name + " " + task_type + " "
+# + accelerator_core)`` with two pieces of mutable state — the category set
+# accumulated so far and named text predicates. Semantics:
+#
+#   * Rules evaluate in list order; effects are set-union into categories /
+#     roles. Order matters only for conditions that read the accumulated
+#     category set (``unless_category`` / ``unless_category_prefix``).
+#   * A rule condition ("when") is a clause dict; all keys in a clause are
+#     ANDed:
+#       any_of:                 any token is a substring of the folded text
+#       all_of:                 every token is a substring
+#       none_of:                no token is a substring
+#       starts_with_any:        folded text starts with any token
+#       unless_category:        category not in the accumulated set
+#       unless_category_prefix: no accumulated category starts with the prefix
+#       predicate / not_predicate: named entry from ``predicates:`` below
+#       match_any:              list of sub-clauses, ORed (one level deep;
+#                               sub-clauses may not nest another match_any)
+#   * ``branches`` (optional) evaluate in order after ``when`` matches; the
+#     first branch whose own ``when`` matches applies. A branch without
+#     ``when`` is the fall-through (else). With no ``branches``, the rule's
+#     own add_categories / add_roles apply.
+#
+# Loader: ``ascend_profile/rules.py`` — schema errors raise RuntimeError
+# naming this file, the rule id, and the offending key.
+match_rules:
+  predicates:
+    # Fused MC2 single-kernel path (dispatch + expert compute + combine in
+    # one op). Beware substring collisions: ``DispatchGmmCombineDecode``
+    # contains ``gmm`` but is NOT a standalone expert matmul; the broad
+    # dispatch/combine/gmm rules below are guarded by this predicate.
+    fused_mc2_kernel:
+      any_of: [dispatchffncombine, ffncombine, dispatchgmmcombine]
+
+  rules:
+    # --- Communication (HCCL) -------------------------------------------
+    - id: communication.collective
+      when: {any_of: [hccl, hcom, allreduce, allgather, reducescatter, alltoall]}
+      add_categories: [communication.collective]
+      add_roles: [communication]
+    # The four sub-kind rules below are the flattened form of what used to
+    # be nested ifs under the collective rule; each sub-token is also in the
+    # collective token list, so flattening changes nothing.
+    - id: communication.allreduce
+      when: {any_of: [allreduce]}
+      add_categories: [communication.allreduce]
+    - id: communication.allgather
+      when: {any_of: [allgather]}
+      add_categories: [communication.allgather]
+    - id: communication.reducescatter
+      when: {any_of: [reducescatter]}
+      add_categories: [communication.reducescatter]
+    - id: communication.alltoallv
+      when: {any_of: [alltoall]}
+      add_categories: [communication.alltoallv]
+
+    # --- Attention: sparse-attention building blocks ---------------------
+    #     These appear in BOTH DSA (V3.2) and CSA (V4). The architecture
+    #     family is decided later from the *combination* (see
+    #     html_report.detect_attention_subtype):
+    #       - kv_compressor + lightning_indexer + sparse_sharedkv  -> CSA (V4)
+    #       - lightning_indexer + sparse_sharedkv, no kv_compressor -> DSA (V3.2)
+    #       - kv_compressor + dense FIA, no indexer/sparse_sharedkv -> HCA (V4)
+    - id: attention.sparse_sharedkv
+      when: {any_of: [sparseattnsharedkv, sparseattentionsharedkv, sharedkv]}
+      branches:
+        - when: {any_of: [metadata]}
+          add_categories: [attention.sparse_sharedkv.metadata]
+          add_roles: [attention_aux]
+        - add_categories: [attention.sparse_sharedkv]
+          add_roles: [attention]
+    - id: attention.lightning_indexer
+      when: {any_of: [lightningindex, lightningindexer, indexercompressepilog]}
+      add_categories: [attention.lightning_indexer]
+      add_roles: [attention_aux]
+    # KV compression (only V4 CSA / HCA, NOT V3.2 DSA).
+    - id: attention.kv_compressor
+      when: {any_of: [compressor, kvcompressepilog]}
+      add_categories: [attention.kv_compressor]
+      add_roles: [attention_aux]
+    # SFA backend custom V up-proj op (sfa_v1.py:841). Used by both DSA and
+    # CSA when the ≤1024-token path is selected.
+    - id: attention.sparse_attn.v_up_proj
+      when: {any_of: [batchmatmultranspose]}
+      add_categories: [attention.sparse_attn.v_up_proj, compute.matmul]
+      add_roles: [attention]
+
+    # --- Attention: MLA (DeepSeek V2 / V3; also reused by DSA in V3.2) ---
+    # CANN canonical op names (per the CANN doc and PR #3226 in
+    # vllm-ascend): ``mla_prolog``, ``mla_prolog_v2``, plus the vllm-ascend
+    # custom kernel ``mla_preprocess``. We accept all spellings — older
+    # traces show "MlaProlog", newer ones "MlaPreprocess".
+    - id: attention.mla.preprocess
+      when: {any_of: [mlapreprocess, mlaprolog, mlaprologv2, mlaprologweightnz, mlapo]}
+      add_categories: [attention.mla.preprocess, attention.mla]
+      add_roles: [attention]
+    - id: attention.mla.kv_norm_rope_cache
+      when: {any_of: [kvrmsnormropecache]}
+      add_categories: [attention.mla.kv_norm_rope_cache, attention.rope]
+      add_roles: [attention_aux]
+    # Triton / Ascend-C MLA preprocessing variants observed in real traces
+    # (DSV2-Lite W8A8 path, GLM4.7). These kernels fuse the qkv split +
+    # rmsnorm + rope into a single custom op and serve the same role as
+    # KvRmsNormRopeCache on the MLA pipeline.
+    #
+    # NOTE: ``fused_qkvzba_split_reshape_cat_kernel`` (folded
+    # ``fusedqkvzbasplitreshape``) is NOT an MLA kernel — the ``zba`` suffix
+    # is GDN's gate (Z), beta (B) and alpha (A) parameters. It is handled by
+    # the linear/mamba rule below.
+    - id: attention.mla.kv_norm_rope_cache.splitqkvrmsnormrope
+      when: {any_of: [splitqkvrmsnormrope]}
+      add_categories: [attention.mla.kv_norm_rope_cache, attention.rope]
+      add_roles: [attention_aux]
+    # MLA V up-proj uses npu_transpose_batchmatmul (mla_v1.py:893).
+    - id: attention.mla.v_up_proj
+      when: {any_of: [transposebatchmatmul, transposequantbatchmatmul]}
+      add_categories: [attention.mla.v_up_proj, compute.matmul]
+      add_roles: [attention]
+
+    # --- Attention: KVComp overlay (Hamming-distance KV pruning) ---------
+    - id: attention.kvcomp.topk
+      when: {any_of: [hammingdisttopk]}
+      add_categories: [attention.kvcomp.topk, attention.kvcomp]
+      add_roles: [attention_aux]
+    - id: attention.kvcomp.signpack
+      when: {any_of: [signbitspack]}
+      add_categories: [attention.kvcomp.signpack]
+      add_roles: [attention_aux]
+    - id: attention.kvcomp.cache_write
+      when: {any_of: [reshapeandcachebnsd]}
+      add_categories: [attention.kvcomp.cache_write]
+      add_roles: [attention_aux]
+
+    # --- Attention: plain paged-KV cache I/O (dense / ATB path; NOT the
+    #     KVComp overlay above). MUST run after the bnsd variant so the
+    #     KVComp cache_write keeps its specific category; only the non-bnsd
+    #     variants land here. ``fold_text`` strips underscores so
+    #     "reshape_and_cache_200000000" reduces to "reshapeandcache..." and
+    #     falls through the same "reshapeandcache" substring rule.
+    - id: attention.kv_cache_io
+      when:
+        any_of: [pagedcacheload, scatterpakvcache, reshapeandcache]
+        unless_category: attention.kvcomp.cache_write
+      add_categories: [attention.kv_cache_io]
+      add_roles: [attention_aux]
+
+    # --- Attention: dense GQA / MHA --------------------------------------
+    # FIA / UnpadFA / ATB PagedAttentionMask all serve the same role — they
+    # are dense flash-style score kernels. Per the CANN docs they support
+    # MHA, GQA, AND MLA via ``num_key_value_heads``, so the kernel category
+    # stays neutral (``attention.flash_score``); the architecture family is
+    # decided by the *combination* of category signatures present in a block
+    # (see attention_families.yaml).
+    - id: attention.flash_score
+      when: {any_of: [fusedinferattentionscore, unpadflashattention, flashattentionscore, flashattention, pagedattentionmask]}
+      add_categories: [attention.flash_score]
+      add_roles: [attention]
+
+    # --- Attention: linear / mamba / GDN ---------------------------------
+    # Tokens cover the full GDN/Mamba/DeltaNet kernel family observed on
+    # Ascend traces, including ``qkvzbasplit`` — Qwen3-Next GDN QKV + Z
+    # (gate) + B (beta) + A (alpha) projection split. The ``zba`` marker is
+    # unique to GDN and must drive the linear family (it was once mis-tagged
+    # as ``attention.mla.kv_norm_rope_cache``).
+    - id: attention.linear_or_mamba
+      when: {any_of: [causalconv, causalconv1d, mamba, deltanet, gdn, recurrentgateddelta, recurrentdelta, qkvzbasplit]}
+      add_categories: [attention.linear_or_mamba]
+      add_roles: [attention]
+
+    # --- Attention: RoPE companions --------------------------------------
+    - id: attention.rope.interleave
+      when: {any_of: [interleaverope]}
+      add_categories: [attention.rope.interleave, attention.rope]
+      add_roles: [attention_aux]
+    # InPlacePartialRotaryMul / RotaryMul -> npu_rotary_mul; SingleRope is
+    # the MLA decode single-token rope (mla_v1.py rope_single) with an
+    # equivalent companion role.
+    - id: attention.rope.partial
+      when: {any_of: [rotarymul, partialrotarymul, singlerope]}
+      add_categories: [attention.rope.partial, attention.rope]
+      add_roles: [attention_aux]
+    - id: attention.rope.indexed
+      when: {any_of: [rotaryembedding], none_of: [interleaverope]}
+      add_categories: [attention.rope.indexed, attention.rope]
+      add_roles: [attention_aux]
+    # ATB / Triton rope fallback: catches RopeKernel, AtbRopeKernel,
+    # RopeWithSinCosCache_*, RotaryPosEmbInfer_*, RotaryPositionEmbedding,
+    # rotary_pos_emb_*, _triton_rope, and similar variants. Runs AFTER the
+    # specific rules above so RotaryMul / InterleaveRope / SingleRope /
+    # NpuRotaryEmbedding keep their refined subtypes; only kernels that
+    # still have NO ``attention.rope`` get the umbrella tag.
+    - id: attention.rope
+      when:
+        any_of: [rope, rotary]
+        unless_category: attention.rope
+        # exclude the MLA preprocessing kernels that already received
+        # attention.mla.kv_norm_rope_cache + attention.rope above
+        none_of: [kvrmsnormropecache, splitqkvrmsnormrope, fusedqkvzbasplitreshape]
+      add_categories: [attention.rope]
+      add_roles: [attention_aux]
+
+    # --- Attention: residual generic catch --- do NOT tag aux/companion
+    #     rope/normalization kernels as attention.generic just because they
+    #     contain "attention" — only tag when we have no specific subtype.
+    - id: attention.generic
+      when: {any_of: [attention], unless_category_prefix: "attention."}
+      add_categories: [attention.generic]
+      add_roles: [attention]
+
+    # --- MoE: gating top-k ------------------------------------------------
+    # NOTE on HC* / MHC prefix: kernels such as ``HCPreSinkhorn``,
+    # ``HCPreInvRMS``, ``HCPost``, ``MhcRmsNorm`` carry an ``hc`` / ``mhc``
+    # prefix that is NOT HCCL. They are structural block-head helpers in
+    # BOTH the attention prologue and the MoE routing prologue and stay
+    # under ``block_head.mhc_prefix`` — putting them in ``moe.gating`` was
+    # an earlier mistake; see the block-head rules below.
+    - id: moe.gating
+      when: {any_of: [moegating, gatingtopk, topkgating, topkrouter]}
+      add_categories: [moe.gating]
+      add_roles: [moe]
+
+    # --- MoE: dispatch / combine / fused MC2 ------------------------------
+    - id: moe.dispatch_expert_compute
+      when: {predicate: fused_mc2_kernel}
+      add_categories: [moe.dispatch_expert_compute]
+      add_roles: [moe]
+    - id: moe.dispatch.moeinitrouting
+      when: {any_of: [moeinitrouting]}
+      add_categories: [moe.dispatch]
+      add_roles: [moe]
+    - id: moe.dispatch
+      when: {any_of: [moedispatch, dispatch], not_predicate: fused_mc2_kernel}
+      add_categories: [moe.dispatch]
+      add_roles: [moe]
+    - id: moe.combine
+      when: {any_of: [combine], not_predicate: fused_mc2_kernel}
+      add_categories: [moe.combine]
+      add_roles: [moe]
+
+    # --- MoE: expert matmul ------------------------------------------------
+    - id: moe.expert_matmul
+      when: {any_of: [groupedmatmul, gmm], not_predicate: fused_mc2_kernel}
+      add_categories: [moe.expert_matmul, compute.matmul]
+      add_roles: [moe, compute]
+    - id: moe.expert_matmul.swigluquant
+      when: {any_of: [groupedmatmulswigluquant]}
+      add_categories: [moe.expert_matmul, compute.matmul]
+      add_roles: [moe, compute]
+
+    # --- Compute: matmul / BMM (non-MoE / non-MLA-V-up-proj) --------------
+    - id: compute.matmul
+      when: {any_of: [batchmatmul, quantbatchmatmul, matmul, gemm]}
+      add_categories: [compute.matmul]
+      add_roles: [compute]
+
+    # --- Quantisation ------------------------------------------------------
+    - id: quant
+      when: {any_of: [dynamicmxquant, dynamicquant]}
+      branches:
+        - when: {any_of: [dynamicmxquant]}
+          add_categories: [quant.mx, compute.aux]
+          add_roles: [quant]
+        - add_categories: [quant.dynamic, compute.aux]
+          add_roles: [quant]
+    - id: quant.matmul
+      when: {any_of: [quantbatchmatmul]}
+      add_categories: [quant.matmul]
+
+    # --- Sampling ----------------------------------------------------------
+    - id: sampling.top_k_top_p
+      when: {any_of: [applytopktopp]}
+      add_categories: [sampling.top_k_top_p, sampling_or_selection]
+      add_roles: [sampling]
+    - id: sampling.argmax
+      when: {any_of: [argmax]}
+      add_categories: [sampling.argmax, sampling_or_selection]
+      add_roles: [selection]
+
+    # --- Normalisation + block_head heuristics (UI-only structure hint) ---
+    # The "hc" / "mhc" prefix marks a structural block-head normalisation
+    # helper that can prefix EITHER an attention block OR an MoE routing
+    # block. We tag it as ``block_head.mhc_prefix`` regardless of which
+    # block follows; downstream consumers must NOT treat the prefix alone
+    # as evidence of MoE-only or attention-only context.
+    - id: block_head.mhc_prefix
+      when:
+        unless_category: communication.collective
+        match_any:
+          - {starts_with_any: [hc]}
+          - {any_of: [mhc]}
+      add_categories: [block_head.mhc_prefix]
+      add_roles: [block_head]
+    - id: normalization
+      when: {any_of: [norm]}
+      add_categories: [normalization]
+      add_roles: [normalization]
+    - id: block_head
+      when:
+        any_of: [norm]
+        match_any:
+          - {any_of: [add]}
+          - {any_of: [mhc]}
+          - {starts_with_any: [hc], unless_category: communication.collective}
+      add_categories: [block_head]
+      add_roles: [block_head]
+
+    # --- AICPU -------------------------------------------------------------
+    # ("ai_cpu" can never survive fold_text — underscores are stripped — but
+    # is kept here to document that both spellings are intended.)
+    - id: aicpu
+      when: {any_of: [aicpu, ai_cpu]}
+      add_categories: [aicpu]
+      add_roles: [aicpu]
 
 # ----------------------------------------------------------------------------
 # Attention kernels
@@ -286,10 +604,11 @@ kernels:
       - "transfer/dsv3bad: PagedCacheLoadNdKernel + ScatterPaKvCache (ATB MLA)"
       - "transfer DSV2-Lite: reshape_and_cache_200000000 (Triton)"
     notes: |
-      The Python rule MUST run *after* the more specific
+      The ``match_rules`` entry MUST run *after* the more specific
       ``reshape_and_cache_bnsd`` rule above so the KVComp variant
       stays under ``attention.kvcomp.cache_write`` and only the
-      plain cache ops fall into ``attention.kv_cache_io``.
+      plain cache ops fall into ``attention.kv_cache_io``
+      (``unless_category: attention.kvcomp.cache_write``).
 
   # ---- Linear / Mamba / GatedDeltaNet
   - profile_name: causalconv1d
@@ -299,7 +618,7 @@ kernels:
     roles: [attention]
     used_by_family: [linear]
     evidence:
-      - "common.py — preserved substring rule"
+      - "kernel_signatures.yaml match_rules — preserved substring rule"
       - "transfer/prof_311: _causal_conv1d_update_kernel_npu_tiled_0 (1728x)"
 
   - profile_name: mamba
@@ -376,10 +695,11 @@ kernels:
   # encoding to Q/K — and the dense / MLA family is decided by the
   # surrounding score / preprocess kernels.
   #
-  # The Python rule mirroring this entry is a *positional fallback*
-  # that fires only when none of the specific RoPE rules above (
+  # The ``match_rules`` entry for this is a *positional fallback* that
+  # fires only when none of the specific RoPE rules above (
   # InterleaveRope / RotaryMul / NpuRotaryEmbedding / SingleRope)
-  # matched. Order matters in common.py.
+  # matched (``unless_category: attention.rope``). Order matters in
+  # ``match_rules.rules``.
   - profile_name: rope_generic
     aliases:
       - ropekernel
@@ -701,6 +1021,6 @@ deprecated_categories:
   # now ``attention.flash_score`` (neutral). The architecture family
   # — the umbrella ``gqa_or_mha`` plus its shape-refined sub-kinds
   # ``mha`` / ``gqa`` / ``mqa`` — lives in the resolver and shape-
-  # refinement helper (see common.resolve_attention_family and
-  # common.refine_dense_attention_from_shapes).
+  # refinement helper (see rules.resolve_attention_family and
+  # rules.refine_dense_attention_from_shapes).
   attention.gqa_or_mha:     attention.flash_score

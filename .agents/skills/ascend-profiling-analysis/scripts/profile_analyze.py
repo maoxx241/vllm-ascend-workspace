@@ -398,14 +398,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         input_info = _resolve_input(args)
     except (FileNotFoundError, RuntimeError) as exc:
-        common.print_json(
-            {
-                "status": "failed",
-                "phase": "manifest_validation",
-                "error": str(exc),
-            }
-        )
-        return 2
+        return common.fail_return("manifest_validation", exc)
 
     remote_profile_root = input_info["remote_profile_root"]
     manifest = input_info["manifest"]
@@ -415,20 +408,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     if manifest is not None and not args.hardware_model:
         args.hardware_model = _manifest_default_hardware_model(manifest)
 
-    try:
-        target = common.resolve_execution_target(
-            session_id=args.session_id,
-            session_file=args.session_file,
-        )
-    except (ValueError, common.SessionStateError) as exc:
-        common.print_json(
-            {
-                "status": "failed",
-                "phase": "resolve",
-                "error": str(exc),
-            }
-        )
-        return 2
+    target, fail = common.resolve_wrapper_target(
+        session_id=args.session_id,
+        session_file=args.session_file,
+    )
+    if fail is not None:
+        return fail
+    assert target is not None
     alias = target["alias"]
     endpoint = target["endpoint"]
     common.progress(
@@ -441,38 +427,22 @@ def main(argv: Sequence[str] | None = None) -> int:
         ssh_port=endpoint.port,
     )
 
-    try:
-        py = common.remote_python_with_module(endpoint, "yaml", required=True)
-    except RuntimeError as exc:
-        common.print_json(
-            {
-                "status": "failed",
-                "phase": "dependency_preflight",
-                "error": str(exc),
-                "machine": alias,
-                "session_id": target["session_id"],
-            }
-        )
-        return 2
+    py, fail = common.require_remote_python(
+        endpoint, alias=alias, session_id=target["session_id"]
+    )
+    if fail is not None:
+        return fail
 
-    try:
-        run_dir = common.ensure_run_dir(
-            args.tag,
-            explicit_dir=args.local_output_dir,
-            overwrite=args.overwrite,
-        )
-    except FileExistsError as exc:
-        common.print_json(
-            {
-                "status": "failed",
-                "phase": "setup",
-                "error": str(exc),
-                "machine": alias,
-                "session_id": target["session_id"],
-            }
-        )
-        return 2
-    common.progress("setup", "local run dir created", path=str(run_dir))
+    run_dir, fail = common.prepare_run_dir(
+        args.tag,
+        explicit_dir=args.local_output_dir,
+        overwrite=args.overwrite,
+        alias=alias,
+        session_id=target["session_id"],
+    )
+    if fail is not None:
+        return fail
+    assert run_dir is not None
 
     if manifest is not None:
         (run_dir / "collection_manifest.json").write_text(
@@ -480,7 +450,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
 
     remote_work_dir = args.remote_work_dir.rstrip("/")
-    remote_framework_dir = f"{remote_work_dir}/{common.FRAMEWORK_REMOTE_SUBPATH}"
     if args.remote_output_dir:
         remote_output_dir = args.remote_output_dir
     else:
@@ -488,16 +457,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     # Phase 1: parity sync (only scripts/ascend_profile/)
     try:
-        common.ssh_exec(
-            endpoint,
-            f"mkdir -p {common.quote_remote(remote_framework_dir)} "
-            f"{common.quote_remote(remote_output_dir)}",
-            check=True,
-            timeout=60,
-        )
-        common.sync_to_remote(
-            endpoint, common.FRAMEWORK_LOCAL_DIR, remote_framework_dir
-        )
+        common.sync_framework(endpoint, remote_work_dir, remote_output_dir)
         remote_model_config = _maybe_upload_local_file(
             endpoint,
             run_dir,
@@ -513,16 +473,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             upload_subdir="input_hardware_profile",
         )
     except (RuntimeError, FileNotFoundError) as exc:
-        common.print_json(
-            {
-                "status": "failed",
-                "phase": "parity_sync",
-                "error": str(exc),
-                "machine": alias,
-                "remote_profile_root": remote_profile_root,
-            }
+        return common.fail_return(
+            "parity_sync", exc, machine=alias, remote_profile_root=remote_profile_root
         )
-        return 3
 
     # Phase 2: remote analyze
     extra_flags: list[str] = []
@@ -560,37 +513,26 @@ def main(argv: Sequence[str] | None = None) -> int:
         remote_profile_root=remote_profile_root,
         remote_output_dir=remote_output_dir,
     )
-    try:
-        rc = common.ssh_stream(
-            endpoint,
-            cmd,
-            forward_prefix="[ascend_profile] ",
-            timeout=args.remote_timeout,
-        )
-    except TimeoutError as exc:
-        common.print_json(
-            {
-                "status": "failed",
-                "phase": "remote_analyze",
-                "error": str(exc),
-                "machine": alias,
-                "remote_profile_root": remote_profile_root,
-                "remote_output_dir": remote_output_dir,
-            }
-        )
-        return 4
+    rc, fail = common.stream_remote_command(
+        endpoint,
+        cmd,
+        forward_prefix="[ascend_profile] ",
+        timeout=args.remote_timeout,
+        fail_phase="remote_analyze",
+        machine=alias,
+        remote_profile_root=remote_profile_root,
+        remote_output_dir=remote_output_dir,
+    )
+    if fail is not None:
+        return fail
     if rc != 0:
-        common.print_json(
-            {
-                "status": "failed",
-                "phase": "remote_analyze",
-                "error": f"remote analyze exited with rc={rc}",
-                "machine": alias,
-                "remote_profile_root": remote_profile_root,
-                "remote_output_dir": remote_output_dir,
-            }
+        return common.fail_return(
+            "remote_analyze",
+            f"remote analyze exited with rc={rc}",
+            machine=alias,
+            remote_profile_root=remote_profile_root,
+            remote_output_dir=remote_output_dir,
         )
-        return 4
 
     # Phase 3: validate artifacts and segmentation health.
     #
@@ -608,41 +550,31 @@ def main(argv: Sequence[str] | None = None) -> int:
         if "segment_manifest.json" in required_artifacts:
             segment_health = _validate_segment_health(endpoint, remote_output_dir)
     except RuntimeError as exc:
-        common.print_json(
-            {
-                "status": "failed",
-                "phase": "artifact_validation",
-                "error": str(exc),
-                "machine": alias,
-                "remote_profile_root": remote_profile_root,
-                "remote_output_dir": remote_output_dir,
-            }
+        return common.fail_return(
+            "artifact_validation",
+            exc,
+            machine=alias,
+            remote_profile_root=remote_profile_root,
+            remote_output_dir=remote_output_dir,
         )
-        return 5
 
     # Phase 4: pull artifacts back
     try:
-        if args.keep_remote_output:
-            common.sync_from_remote(endpoint, remote_output_dir, run_dir)
-        else:
-            common.sync_from_remote(
-                endpoint,
-                remote_output_dir,
-                run_dir,
-                include_paths=common.LIGHTWEIGHT_PULL_PATHS,
-            )
-    except RuntimeError as exc:
-        common.print_json(
-            {
-                "status": "failed",
-                "phase": "artifact_pull",
-                "error": str(exc),
-                "machine": alias,
-                "remote_profile_root": remote_profile_root,
-                "remote_output_dir": remote_output_dir,
-            }
+        common.pull_artifacts(
+            endpoint,
+            remote_output_dir,
+            run_dir,
+            keep_remote_output=args.keep_remote_output,
+            include_paths=common.LIGHTWEIGHT_PULL_PATHS,
         )
-        return 6
+    except RuntimeError as exc:
+        return common.fail_return(
+            "artifact_pull",
+            exc,
+            machine=alias,
+            remote_profile_root=remote_profile_root,
+            remote_output_dir=remote_output_dir,
+        )
 
     elapsed = time.time() - started
     stage_timings = remote_manifest.get("stage_timings", [])

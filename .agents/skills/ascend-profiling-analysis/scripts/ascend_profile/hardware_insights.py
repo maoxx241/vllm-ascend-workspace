@@ -19,42 +19,23 @@ import configparser
 import glob
 import json
 import os
-import re
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-KNOWLEDGE_DIR = Path(__file__).resolve().parent / "knowledge"
+try:
+    from .store import KNOWLEDGE_DIR, norm_text, to_float, to_int
+except ImportError:  # pragma: no cover - script-mode fallback
+    from store import KNOWLEDGE_DIR, norm_text, to_float, to_int  # type: ignore[no-redef]
+
 HARDWARE_MEASUREMENTS_PATH = KNOWLEDGE_DIR / "hardware_peak_measurements.json"
 HARDWARE_THEORETICAL_SNAPSHOT_PATH = KNOWLEDGE_DIR / "hardware_theoretical_peaks_cann9_0_0.json"
-
-
-def _f(value: Any, default: float = 0.0) -> float:
-    try:
-        if value is None or value == "":
-            return default
-        return float(value)
-    except (TypeError, ValueError):
-        return default
-
-
-def _i(value: Any, default: int = 0) -> int:
-    try:
-        if value is None or value == "":
-            return default
-        return int(float(value))
-    except (TypeError, ValueError):
-        return default
-
-
-def _norm(value: Any) -> str:
-    return re.sub(r"[^a-z0-9]+", "", str(value or "").lower())
 
 
 def _split_mkn(value: Any) -> tuple[int, int, int]:
     parts = [part.strip() for part in str(value or "").split(",")]
     if len(parts) != 3:
         return (0, 0, 0)
-    return (_i(parts[0]), _i(parts[1]), _i(parts[2]))
+    return (to_int(parts[0]), to_int(parts[1]), to_int(parts[2]))
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -148,18 +129,18 @@ def parse_cann_platform_config(path: Path) -> dict[str, Any]:
 
     soc_version = version.get("SoC_version") or path.stem
     short_soc = version.get("Short_SoC_version") or soc_version
-    ai_core_cnt = _i(soc.get("ai_core_cnt"))
-    cube_core_cnt = _i(soc.get("cube_core_cnt"), ai_core_cnt)
+    ai_core_cnt = to_int(soc.get("ai_core_cnt"))
+    cube_core_cnt = to_int(soc.get("cube_core_cnt"), ai_core_cnt)
     if cube_core_cnt <= 0:
         cube_core_cnt = ai_core_cnt
-    vector_core_cnt = _i(soc.get("vector_core_cnt"))
-    cube_freq_mhz = _f(spec.get("cube_freq"))
+    vector_core_cnt = to_int(soc.get("vector_core_cnt"))
+    cube_freq_mhz = to_float(spec.get("cube_freq"))
     default_mkn = _split_mkn(dtype_mkn.get("Default"))
     if not all(default_mkn):
         default_mkn = (
-            _i(spec.get("cube_m_size")),
-            _i(spec.get("cube_k_size")),
-            _i(spec.get("cube_n_size")),
+            to_int(spec.get("cube_m_size")),
+            to_int(spec.get("cube_k_size")),
+            to_int(spec.get("cube_n_size")),
         )
     int8_mkn = _split_mkn(dtype_mkn.get("DT_INT8"))
     int4_mkn = _split_mkn(dtype_mkn.get("DT_INT4"))
@@ -177,8 +158,8 @@ def parse_cann_platform_config(path: Path) -> dict[str, Any]:
     bf16_tflops = fp16_tflops if support_bf16 else 0.0
     int8_tops = cube_peak(int8_mkn)
     int4_tops = cube_peak(int4_mkn)
-    memory_size = _i(soc.get("memory_size"))
-    ddr_rate = _f(rates.get("ddr_rate"))
+    memory_size = to_int(soc.get("memory_size"))
+    ddr_rate = to_float(rates.get("ddr_rate"))
     ddr_gbps = cube_core_cnt * cube_freq_mhz * 1e6 * ddr_rate / 1e9 if cube_core_cnt and cube_freq_mhz and ddr_rate else 0.0
 
     return {
@@ -244,14 +225,14 @@ def _load_hardware_profile_file(path: Path | None) -> dict[str, Any] | None:
 def _match_measurement(model: str | None, measurements: Sequence[Mapping[str, Any]]) -> Mapping[str, Any] | None:
     if not model:
         return None
-    want = _norm(model)
+    want = norm_text(model)
     for row in measurements:
         values = [row.get("hardware_model"), *(row.get("aliases") or [])]
-        if any(_norm(value) == want for value in values):
+        if any(norm_text(value) == want for value in values):
             return row
     for row in measurements:
         values = [row.get("hardware_model"), *(row.get("aliases") or [])]
-        if any(want and (want in _norm(value) or _norm(value) in want) for value in values):
+        if any(want and (want in norm_text(value) or norm_text(value) in want) for value in values):
             return row
     return None
 
@@ -259,20 +240,20 @@ def _match_measurement(model: str | None, measurements: Sequence[Mapping[str, An
 def _match_theoretical(model: str | None, theoretical_rows: Sequence[Mapping[str, Any]]) -> Mapping[str, Any] | None:
     if not model:
         return None
-    want = _norm(model)
+    want = norm_text(model)
     for row in theoretical_rows:
         values = [row.get("soc_version"), row.get("short_soc_version")]
-        if any(_norm(value) == want for value in values):
+        if any(norm_text(value) == want for value in values):
             return row
     for row in theoretical_rows:
         values = [row.get("soc_version"), row.get("short_soc_version")]
-        if any(want and (want in _norm(value) or _norm(value) in want) for value in values):
+        if any(want and (want in norm_text(value) or norm_text(value) in want) for value in values):
             return row
     return None
 
 
 def _sustained_value(theoretical: Mapping[str, Any], measurement: Mapping[str, Any] | None, key: str) -> tuple[float | None, float | None]:
-    theory = _f(theoretical.get(key))
+    theory = to_float(theoretical.get(key))
     if not theory:
         return None, None
     factors = measurement.get("sustained_factors") if isinstance(measurement, Mapping) else {}
@@ -281,7 +262,7 @@ def _sustained_value(theoretical: Mapping[str, Any], measurement: Mapping[str, A
         "bf16_tflops": "bf16_matmul",
         "int8_tops": "int8_quant_matmul",
     }.get(key)
-    factor = _f(factors.get(factor_key), 0.0) if isinstance(factors, Mapping) and factor_key else 0.0
+    factor = to_float(factors.get(factor_key), 0.0) if isinstance(factors, Mapping) and factor_key else 0.0
     if factor <= 0:
         return None, None
     return round(theory * factor, 6), factor
@@ -411,7 +392,7 @@ def peak_flops_per_second(
             "bf16_tflops": "bf16_tflops_sustained",
             "int8_tops": "int8_tops_sustained",
         }[key]
-        value = _f(summary.get(sustained_key))
+        value = to_float(summary.get(sustained_key))
         if value:
             return value * 1e12, "sustained_measurement_factor"
         return 0.0, "missing_sustained_factor"
@@ -420,7 +401,7 @@ def peak_flops_per_second(
         "bf16_tflops": "bf16_tflops_theoretical",
         "int8_tops": "int8_tops_theoretical",
     }[key]
-    value = _f(summary.get(theory_key))
+    value = to_float(summary.get(theory_key))
     if value:
         return value * 1e12, "cann_theoretical"
     return 0.0, "missing_theoretical_peak"
@@ -430,7 +411,7 @@ def memory_bandwidth_bytes_per_second(hardware: Mapping[str, Any] | None) -> tup
     if not hardware:
         return 0.0, "missing_hardware"
     summary = hardware.get("summary") if isinstance(hardware.get("summary"), Mapping) else {}
-    gbps = _f(summary.get("cann_ddr_derived_gbps"))
+    gbps = to_float(summary.get("cann_ddr_derived_gbps"))
     if gbps:
         return gbps * 1e9, "cann_ddr_derived"
     return 0.0, "missing_memory_bandwidth"

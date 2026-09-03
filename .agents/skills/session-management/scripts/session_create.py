@@ -99,12 +99,15 @@ def load_machine(identifier: str) -> dict[str, Any]:
 
 
 def parse_host_npu_devices(stdout: str) -> list[int]:
-    devices: set[int] = set()
-    for line in stdout.splitlines():
-        match = re.match(r"\|\s*(\d+)\s+\d*\w+\d+\w*\s+\|", line)
-        if match:
-            devices.add(int(match.group(1)))
-    return sorted(devices)
+    """Visible device ids = chip-level Phy-IDs.
+
+    Delegates to the shared npu-smi parser: on dual-chip A3 cards the card
+    header rows (0-7) undercount the chips vLLM actually sees (0-15), so the
+    old header-row regex made TP16 single-node launches impossible to lease.
+    """
+    from vaws_npu_coordination import parse_npu_smi_info  # noqa: PLC0415
+
+    return parse_npu_smi_info(stdout).get("devices") or []
 
 
 def probe_host_npu_devices(record: dict[str, Any]) -> tuple[list[int] | None, dict[str, Any]]:

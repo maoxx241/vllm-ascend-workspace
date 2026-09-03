@@ -57,6 +57,7 @@ from _common import (
 )
 from vaws_session_state import allocate_service_port, file_lock, release_service_port, session_lock_dir, require_session_npu_lease, SessionStateError
 from vaws_local_state import effective_workspace_alias, load_workspace_identity
+from vaws_remote_toolbox import ascend_env_preamble
 from vaws_validate import parse_device_csv, require_env_name
 
 RUNTIME_DIR_BASE = ".vaws-runtime/serving"
@@ -238,18 +239,10 @@ def build_launch_script(
     lines.append(f"mkdir -p {shlex.quote(runtime_dir)}")
 
     # Ascend environment — source the managed profile that sets PATH,
-    # LD_LIBRARY_PATH, CANN, ATB, and the correct Python.
-    lines.append(
-        "if [ -f /etc/profile.d/vaws-ascend-env.sh ]; then"
-        "  set +u; source /etc/profile.d/vaws-ascend-env.sh; set -u;"
-        " fi"
-    )
-    lines.append(
-        'export LD_LIBRARY_PATH='
-        '"/usr/local/Ascend/driver/lib64/driver'
-        ':/usr/local/Ascend/driver/lib64'
-        '${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"'
-    )
+    # LD_LIBRARY_PATH, CANN, ATB, and the correct Python. Canonical form
+    # lives in vaws_remote_toolbox.ascend_env_preamble ("set -e" is already
+    # the first line of this script).
+    lines.append(ascend_env_preamble(set_e=False, export_driver_lib=True))
 
     # vllm-ascend custom CANN operators (aclnnAddRmsNormBias etc.)
     # Locate set_env.bash dynamically — vendor name may change across versions.

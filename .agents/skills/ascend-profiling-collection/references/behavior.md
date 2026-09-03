@@ -2,10 +2,9 @@
 
 ## Relationship to remote-dev
 
-Use `.remote-dev` tools for ad hoc remote read/edit/bash/search/patch around
-profile setup and output inspection. This skill owns profiler collection
-semantics and keeps the existing scripts as the managed VAWS compatibility
-backend.
+Stated once in SKILL.md ("Remote substrate rule"): `.remote-dev` tools for ad
+hoc remote read/edit/bash/search/patch work; this skill owns the collection
+workflow and keeps its scripts as the managed VAWS compatibility backend.
 
 ## Why profiler control lives here, not in the serving skill
 
@@ -51,15 +50,8 @@ The `sips` image resizer is macOS-only. The collection skill assumes the agent r
 
 ## Workload success gate
 
-`benchmark_results` and `followup_result` are not just diagnostic data — the
-orchestrator computes a `workload_status` over them and the top-level
-`status` is `failed` whenever:
-
-- the follow-up tail request did not return 2xx (`workload_status.status ==
-  "followup_failed"`), or
-- the benchmark wave's success rate fell below
-  `--benchmark-success-threshold` (default 0.8) — `bench_success_rate <
-  bench_threshold` ⇒ `workload_status.status == "benchmark_below_threshold"`.
+The gate rule and threshold are defined in SKILL.md ("Failure policy"); the
+per-status acceptance checklist is in `acceptance.md` §4. The rationale:
 
 A profile window that ran with no real model traffic produces a trace that
 *looks* fine to `analyse()` (kernel_details.csv lands, only it describes
@@ -74,13 +66,13 @@ After `analyse()`, every `*_ascend_pt` directory is expected to contain:
 - `ASCEND_PROFILER_OUTPUT/kernel_details.csv`
 - `ASCEND_PROFILER_OUTPUT/trace_view.json`
 
-`profiling-inventory.md` documents several captures where `analyse()` "succeeded" but produced no `kernel_details.csv` because the profile window was too short or `FRAMEWORK/torch.op_range` never made it to disk. The skill turns that into `analysis_status == missing_kernel_details` and fails the run. Re-collection is the only fix; offline `analyse()` cannot recover the missing device data.
+Anything short of that fails the run per SKILL.md ("Failure policy").
 
-In addition, the orchestrator passes `--expected-ranks = tp * (dp or 1)` to
-`run_remote_analyse.py`. When the actual `*_ascend_pt` count differs from the
-expected number, `analysis_status` becomes `rank_count_mismatch`. Without
-this gate a partial capture (e.g. only rank 0 dumped) can look "clean"
-because every directory that *did* land was complete, masking a topology
+Historical captures show `analyse()` "succeeding" but producing no `kernel_details.csv` because the profile window was too short or `FRAMEWORK/torch.op_range` never made it to disk. The skill turns that into `analysis_status == missing_kernel_details` and fails the run. Re-collection is the only fix; offline `analyse()` cannot recover the missing device data.
+
+The rank-count gate (`--expected-ranks`, rule in SKILL.md "Failure policy")
+exists because a partial capture (e.g. only rank 0 dumped) can look "clean"
+when every directory that *did* land is complete, masking a topology
 failure.
 
 ## Post-stop flush window

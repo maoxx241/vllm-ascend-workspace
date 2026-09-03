@@ -41,9 +41,12 @@ from pathlib import Path
 from typing import Any, Iterable
 
 try:
-    from ascend_profile import common  # type: ignore
+    from ascend_profile import metrics, models, rules, store  # type: ignore
 except ImportError:  # pragma: no cover - allow running from scripts/ directly
-    import common  # type: ignore[no-redef]
+    import metrics  # type: ignore[no-redef]
+    import models  # type: ignore[no-redef]
+    import rules  # type: ignore[no-redef]
+    import store  # type: ignore[no-redef]
 
 csv.field_size_limit(10 * 1024 * 1024)
 
@@ -377,7 +380,7 @@ def assess_companion_run(b) -> dict:
 
 
 def attention_categories_for_events(events: Iterable[Event]) -> set[str]:
-    """Union of ``op_categories`` emitted by ``common.categories_and_roles``
+    """Union of ``op_categories`` emitted by ``rules.categories_and_roles``
     for the given events. Used as the input to ``resolve_attention_family``.
 
     Kept as a module-level helper so unit tests can call it directly with
@@ -386,7 +389,7 @@ def attention_categories_for_events(events: Iterable[Event]) -> set[str]:
     """
     cats: set[str] = set()
     for event in events:
-        cat_tuple, _ = common.categories_and_roles(
+        cat_tuple, _ = rules.categories_and_roles(
             short_op_name(event.name),
             getattr(event, "task_type", "") or "",
             getattr(event, "accel_core", "") or "",
@@ -398,7 +401,7 @@ def attention_categories_for_events(events: Iterable[Event]) -> set[str]:
 def detect_attention_subtype(b, row_start: int, row_end: int, rank_id: str) -> str:
     """Decide the paper-aligned attention family for a block by reusing
     the canonical category-driven resolver in
-    ``common.resolve_attention_family``.
+    ``rules.resolve_attention_family``.
 
     Returns one of: ``csa`` / ``hca`` / ``dsa`` / ``mla`` / ``linear`` /
     ``gqa_or_mha`` / ``attn``. A trailing ``+kvc`` suffix indicates the
@@ -424,7 +427,8 @@ def detect_attention_subtype(b, row_start: int, row_end: int, rank_id: str) -> s
     Routing the decision through ``categories_and_roles`` eliminates
     both divergences.
 
-    Decision order mirrors ``knowledge/attention_families.yaml:cheat_sheet``.
+    Decision order is loaded from
+    ``knowledge/attention_families.yaml:cheat_sheet.resolver``.
 
     Shape-based refinement of ``gqa_or_mha``:
         After the category resolver returns its terminal label, if the
@@ -432,7 +436,7 @@ def detect_attention_subtype(b, row_start: int, row_end: int, rank_id: str) -> s
         upgrade it to ``mha`` / ``gqa`` / ``mqa`` by reading the Q/K
         Input Shapes recorded in ``kernel_details.csv`` for the FIA /
         UnpadFA events in this block (see
-        ``common.refine_dense_attention_from_shapes``). When shapes are
+        ``rules.refine_dense_attention_from_shapes``). When shapes are
         missing or fail sanity checks we keep the umbrella
         ``gqa_or_mha``. The refinement is a heuristic — it depends on
         CANN serialising Input Shapes correctly and on us latching onto
@@ -441,12 +445,12 @@ def detect_attention_subtype(b, row_start: int, row_end: int, rank_id: str) -> s
     """
     events = events_in_row_range(b.events, row_start, row_end, rank_id)
     cats = attention_categories_for_events(events)
-    family = common.resolve_attention_family(cats)
+    family = rules.resolve_attention_family(cats)
     # Best-effort shape refinement; only acts on the dense umbrella
     # label (and its `+kvc` variant) so it never disturbs MLA / CSA /
     # HCA / DSA / linear decisions.
     if family == "gqa_or_mha" or family.startswith("gqa_or_mha+"):
-        refined = common.refine_dense_attention_from_shapes(events)
+        refined = rules.refine_dense_attention_from_shapes(events)
         if refined != "gqa_or_mha":
             family = family.replace("gqa_or_mha", refined, 1)
     return family
@@ -723,21 +727,31 @@ def class_color(family, step_class_id):
 
 
 def load_csv(path: Path):
-    if not path.exists():
-        return []
-    with path.open(encoding="utf-8") as f:
-        return list(csv.DictReader(f))
+    # Data layer lives in ``store`` now; ``utf-8-sig`` there is a strict
+    # superset of the plain ``utf-8`` we used here.
+    return store.csv_rows(path)
 
 
 def load_json(path: Path):
-    if not path.exists():
-        return None
-    with path.open(encoding="utf-8") as f:
-        return json.load(f)
+    return store.read_json(path)
 
 
 @dataclass
 class Event:
+    """Render-side view of one normalized event.
+
+    Loaded via ``metrics.load_events_csv`` (the shared data layer) and
+    adapted through ``from_normalized``. The adapter exists because the
+    renderers use short field names (``name`` / ``accel_core`` /
+    ``pipeline``) and need two mutable render-only fields (``redundant``
+    set by ``dedup_comm_aiv``, ``raw_row`` attached from the source
+    kernel_details.csv); ``NormalizedEvent`` is frozen and pipeline-wide,
+    so subclassing it is not an option. ``op_roles`` / ``op_categories``
+    arrive as parsed tuples (not raw CSV strings) — nothing in this module
+    reads them, they are kept for debugging symmetry with
+    ``NormalizedEvent``.
+    """
+
     event_id: str
     rank_id: str
     source_id: str
@@ -753,10 +767,32 @@ class Event:
     wait_us: float
     pipeline: dict
     shape_signature: str
-    op_roles: str
-    op_categories: str
+    op_roles: tuple = ()
+    op_categories: tuple = ()
     redundant: bool = False  # 通信去重 flag
     raw_row: dict = field(default_factory=dict)  # full kernel_details.csv row (46 fields)
+
+    @classmethod
+    def from_normalized(cls, event: "models.NormalizedEvent") -> "Event":
+        return cls(
+            event_id=event.event_id,
+            rank_id=event.rank_id,
+            source_id=event.source_id,
+            row_idx=event.row_idx,
+            name=event.name_raw,
+            task_type=event.task_type,
+            op_type=event.op_type,
+            accel_core=event.accelerator_core,
+            stream_id=event.stream_id,
+            start_us=event.start_us,
+            end_us=event.end_us,
+            duration_us=event.duration_us,
+            wait_us=event.wait_us,
+            pipeline=dict(event.pipeline_us),
+            shape_signature=event.shape_signature or "",
+            op_roles=event.op_roles,
+            op_categories=event.op_categories,
+        )
 
 
 @dataclass
@@ -799,6 +835,10 @@ class Bundle:
 
 
 def _load_segments(path: Path, key: str) -> list:
+    # Segment payloads stay as plain dicts here: every renderer consumes
+    # them via ``.get(...)``/``[...]``, so materializing the ``metrics``
+    # dataclasses would force attribute-style rewrites across the whole
+    # module for zero behavioural gain.
     data = load_json(path)
     if data is None:
         return []
@@ -810,35 +850,13 @@ def _load_segments(path: Path, key: str) -> list:
 
 
 def _load_events(path: Path) -> list:
+    """Load normalized events through the shared data layer
+    (``metrics.load_events_csv``) and adapt them to the render-side
+    ``Event`` view."""
+
     if not path.exists():
         return []
-    events = []
-    with path.open(encoding="utf-8") as f:
-        for row in csv.DictReader(f):
-            try:
-                pipe = json.loads(row.get("pipeline_us") or "{}")
-            except Exception:
-                pipe = {}
-            events.append(Event(
-                event_id=row["event_id"],
-                rank_id=row["rank_id"],
-                source_id=row.get("source_id", ""),
-                row_idx=int(row.get("row_idx") or 0),
-                name=row.get("name_raw", ""),
-                task_type=row.get("task_type", ""),
-                op_type=row.get("op_type", "unknown"),
-                accel_core=row.get("accelerator_core", ""),
-                stream_id=row.get("stream_id", ""),
-                start_us=safe_float(row.get("start_us")),
-                end_us=safe_float(row.get("end_us")),
-                duration_us=safe_float(row.get("duration_us")),
-                wait_us=safe_float(row.get("wait_us")),
-                pipeline=pipe,
-                shape_signature=row.get("shape_signature", ""),
-                op_roles=row.get("op_roles", ""),
-                op_categories=row.get("op_categories", ""),
-            ))
-    return events
+    return [Event.from_normalized(event) for event in metrics.load_events_csv(path)]
 
 
 def _load_raw_kernel_details(root: Path) -> dict:

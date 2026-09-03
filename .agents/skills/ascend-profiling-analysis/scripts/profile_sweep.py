@@ -190,20 +190,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     started = time.time()
 
-    try:
-        target = common.resolve_execution_target(
-            session_id=args.session_id,
-            session_file=args.session_file,
-        )
-    except (ValueError, common.SessionStateError) as exc:
-        common.print_json(
-            {
-                "status": "failed",
-                "phase": "resolve",
-                "error": str(exc),
-            }
-        )
-        return 2
+    target, fail = common.resolve_wrapper_target(
+        session_id=args.session_id,
+        session_file=args.session_file,
+    )
+    if fail is not None:
+        return fail
+    assert target is not None
     alias = target["alias"]
     endpoint = target["endpoint"]
     common.progress(
@@ -215,62 +208,30 @@ def main(argv: Sequence[str] | None = None) -> int:
         ssh_port=endpoint.port,
     )
 
-    try:
-        py = common.remote_python_with_module(endpoint, "yaml", required=True)
-    except RuntimeError as exc:
-        common.print_json(
-            {
-                "status": "failed",
-                "phase": "dependency_preflight",
-                "error": str(exc),
-                "machine": alias,
-                "session_id": target["session_id"],
-            }
-        )
-        return 2
+    py, fail = common.require_remote_python(
+        endpoint, alias=alias, session_id=target["session_id"]
+    )
+    if fail is not None:
+        return fail
 
-    try:
-        run_dir = common.ensure_run_dir(
-            args.tag,
-            explicit_dir=args.local_output_dir,
-            overwrite=args.overwrite,
-        )
-    except FileExistsError as exc:
-        common.print_json(
-            {
-                "status": "failed",
-                "phase": "setup",
-                "error": str(exc),
-                "machine": alias,
-            }
-        )
-        return 2
-    common.progress("setup", "local run dir created", path=str(run_dir))
+    run_dir, fail = common.prepare_run_dir(
+        args.tag,
+        explicit_dir=args.local_output_dir,
+        overwrite=args.overwrite,
+        alias=alias,
+    )
+    if fail is not None:
+        return fail
+    assert run_dir is not None
 
     remote_work_dir = args.remote_work_dir.rstrip("/")
-    remote_framework_dir = f"{remote_work_dir}/{common.FRAMEWORK_REMOTE_SUBPATH}"
     remote_output_dir = f"{remote_work_dir}/sweeps/{run_dir.name}"
 
     # Phase 1: parity sync
     try:
-        common.ssh_exec(
-            endpoint,
-            f"mkdir -p {common.quote_remote(remote_framework_dir)} "
-            f"{common.quote_remote(remote_output_dir)}",
-            check=True,
-            timeout=60,
-        )
-        common.sync_to_remote(endpoint, common.FRAMEWORK_LOCAL_DIR, remote_framework_dir)
+        common.sync_framework(endpoint, remote_work_dir, remote_output_dir)
     except (RuntimeError, FileNotFoundError) as exc:
-        common.print_json(
-            {
-                "status": "failed",
-                "phase": "parity_sync",
-                "error": str(exc),
-                "machine": alias,
-            }
-        )
-        return 3
+        return common.fail_return("parity_sync", exc, machine=alias)
 
     # Phase 2: remote sweep
     sweep_args_parts: list[str] = [
@@ -300,24 +261,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         remote_output_dir=remote_output_dir,
         search_roots=args.search_root,
     )
-    try:
-        rc = common.ssh_stream(
-            endpoint,
-            cmd,
-            forward_prefix="[ascend_profile.sweep] ",
-            timeout=args.remote_timeout,
-        )
-    except TimeoutError as exc:
-        common.print_json(
-            {
-                "status": "failed",
-                "phase": "remote_sweep",
-                "error": str(exc),
-                "machine": alias,
-                "remote_output_dir": remote_output_dir,
-            }
-        )
-        return 4
+    rc, fail = common.stream_remote_command(
+        endpoint,
+        cmd,
+        forward_prefix="[ascend_profile.sweep] ",
+        timeout=args.remote_timeout,
+        fail_phase="remote_sweep",
+        machine=alias,
+        remote_output_dir=remote_output_dir,
+    )
+    if fail is not None:
+        return fail
     # ``sweep`` returns rc=1 when any root failed; we still want to download
     # the summary so the agent can report which roots failed. Treat rc != 0
     # as ``status="partial"`` rather than blanket failure.
@@ -335,59 +289,49 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         summary = json.loads(cat.stdout)
     except (RuntimeError, json.JSONDecodeError) as exc:
-        common.print_json(
-            {
-                "status": "failed",
-                "phase": "summary_pull",
-                "error": str(exc),
-                "machine": alias,
-                "remote_output_dir": remote_output_dir,
-            }
+        return common.fail_return(
+            "summary_pull", exc, machine=alias, remote_output_dir=remote_output_dir
         )
-        return 5
 
     summary_local_path = run_dir / "sweep_summary.json"
     summary_local_path.write_text(
         json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8"
     )
 
+    includes: list[str] = [
+        "sweep_summary.json",
+        "sweep_class_rollup.csv",
+    ]
+    per_root_extras: tuple[str, ...] = (
+        ("report/report.html",) if args.pull_html else ()
+    )
+    for item in summary.get("results", []):
+        if item.get("status") != "ok":
+            continue
+        # ``output_dir`` in sweep results is an absolute path; we only
+        # need its basename relative to remote_output_dir.
+        out = item.get("output_dir") or ""
+        rel = Path(out).name
+        if not rel:
+            continue
+        for sub in SWEEP_PER_ROOT_INCLUDES + per_root_extras:
+            includes.append(f"{rel}/{sub}")
     try:
-        if args.keep_remote_output:
-            common.sync_from_remote(endpoint, remote_output_dir, run_dir)
-        else:
-            includes: list[str] = [
-                "sweep_summary.json",
-                "sweep_class_rollup.csv",
-            ]
-            per_root_extras: tuple[str, ...] = (
-                ("report/report.html",) if args.pull_html else ()
-            )
-            for item in summary.get("results", []):
-                if item.get("status") != "ok":
-                    continue
-                # ``output_dir`` in sweep results is an absolute path; we only
-                # need its basename relative to remote_output_dir.
-                out = item.get("output_dir") or ""
-                rel = Path(out).name
-                if not rel:
-                    continue
-                for sub in SWEEP_PER_ROOT_INCLUDES + per_root_extras:
-                    includes.append(f"{rel}/{sub}")
-            common.sync_from_remote(
-                endpoint, remote_output_dir, run_dir, include_paths=includes
-            )
-    except RuntimeError as exc:
-        common.print_json(
-            {
-                "status": "failed",
-                "phase": "artifact_pull",
-                "error": str(exc),
-                "machine": alias,
-                "remote_output_dir": remote_output_dir,
-                "summary_path": str(summary_local_path),
-            }
+        common.pull_artifacts(
+            endpoint,
+            remote_output_dir,
+            run_dir,
+            keep_remote_output=args.keep_remote_output,
+            include_paths=includes,
         )
-        return 6
+    except RuntimeError as exc:
+        return common.fail_return(
+            "artifact_pull",
+            exc,
+            machine=alias,
+            remote_output_dir=remote_output_dir,
+            summary_path=str(summary_local_path),
+        )
 
     failed = _failed_roots(summary)
     layer_inv = _layer_inventory(summary)

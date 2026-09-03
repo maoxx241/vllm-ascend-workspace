@@ -44,6 +44,26 @@ def check_alive(ep, pid: int) -> bool:
     return r.stdout.strip() == "alive"
 
 
+def reap_vllm_workers(ep) -> int:
+    """SIGKILL leftover ``VLLM::``-titled EngineCore/Worker processes.
+
+    Returns the number of processes found before reaping. Best-effort: a
+    session container hosts exactly one service, so once the recorded main
+    pid is dead any surviving ``VLLM::`` process is an orphan holding NPUs.
+    """
+    count = ssh_exec(
+        ep, "ps -eo comm= | grep -c '^VLLM::' || true", check=False
+    )
+    try:
+        found = int(count.stdout.strip() or "0")
+    except ValueError:
+        found = 0
+    if found:
+        emit_progress("stop", f"reaping {found} orphaned VLLM:: worker processes")
+        ssh_exec(ep, "pkill -9 -f '^VLLM::' || true", check=False)
+    return found
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     p.add_argument("--session-id", help="VAWS session id; defaults to the bound session of the current worktree")
@@ -96,6 +116,7 @@ def main(argv: list[str] | None = None) -> int:
         alive = check_alive(ep, pid)
         if not alive:
             emit_progress("stop", f"pid={pid} is already gone")
+            reaped = reap_vllm_workers(ep)
             state["status"] = "stopped"
             state["stopped_at"] = now_utc()
             save_serving_state(
@@ -115,6 +136,7 @@ def main(argv: list[str] | None = None) -> int:
                 "mode": target.mode,
                 "session_id": target.session_id,
                 "pid": pid,
+                "reaped_workers": reaped,
                 "message": "process was already stopped",
             })
             return 0
@@ -146,6 +168,15 @@ def main(argv: list[str] | None = None) -> int:
                 return 1
 
         stopped = not check_alive(ep, pid)
+        reaped = 0
+        if stopped:
+            # The recorded pid is only the API server / launch shell. vLLM
+            # renames EngineCore/Worker processes to ``VLLM::...`` titles and
+            # they routinely outlive the main pid (observed: crashed engine
+            # left 16 TP workers holding every leased NPU). The session
+            # container is dedicated to this one service, so pattern-killing
+            # the leftovers cannot hit a sibling session.
+            reaped = reap_vllm_workers(ep)
         state["status"] = "stopped" if stopped else "alive"
         if stopped:
             state["stopped_at"] = now_utc()
@@ -169,6 +200,7 @@ def main(argv: list[str] | None = None) -> int:
             "session_id": target.session_id,
             "pid": pid,
             "stopped": stopped,
+            "reaped_workers": reaped,
         }
         if not stopped:
             output["error"] = "process refused to exit"

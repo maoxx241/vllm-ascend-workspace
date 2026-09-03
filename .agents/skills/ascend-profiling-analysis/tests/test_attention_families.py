@@ -35,6 +35,31 @@ if str(_SCRIPTS) not in sys.path:
 from ascend_profile import common, html_report  # noqa: E402
 
 
+KNOWLEDGE_DIR = _SCRIPTS / "ascend_profile" / "knowledge"
+
+
+def test_family_resolver_yaml_stays_inside_attention_family_enum():
+    """``rules.resolve_attention_family`` is driven by
+    ``attention_families.yaml:cheat_sheet.resolver``; every family label it
+    can emit must be declared in semantic_conventions.yaml's
+    ``attention_family`` enum (and the overlay suffix must be documented)."""
+    yaml = pytest.importorskip("yaml", reason="pyyaml not installed")
+    fam_doc = yaml.safe_load((KNOWLEDGE_DIR / "attention_families.yaml").read_text())
+    sem_doc = yaml.safe_load((KNOWLEDGE_DIR / "semantic_conventions.yaml").read_text())
+    enum = set(sem_doc["attributes"]["attention_family"]["values"])
+    suffixes = set(sem_doc["attributes"]["attention_family"].get("suffix") or {})
+    for step in fam_doc["cheat_sheet"]["resolver"]:
+        assert step["family"] in enum, (
+            f"resolver step emits family {step['family']!r} which is not in "
+            f"semantic_conventions.yaml:attention_family"
+        )
+    overlay = fam_doc["cheat_sheet"]["overlay_rule"]
+    assert overlay["suffix"] in suffixes, (
+        f"overlay suffix {overlay['suffix']!r} not documented under "
+        f"attention_family.suffix in semantic_conventions.yaml"
+    )
+
+
 def _categories_from_kernels(names: Iterable[str]) -> set[str]:
     cats: set[str] = set()
     for n in names:

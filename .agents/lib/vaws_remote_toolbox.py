@@ -190,7 +190,18 @@ def print_json(data: dict[str, Any]) -> None:
     print(json_dumps(data))
 
 
-def emit_progress(phase: str, message: str | None = None, **extra: Any) -> None:
+def emit_progress(
+    phase: str,
+    message: str | None = None,
+    *,
+    sentinel: str | None = None,
+    **extra: Any,
+) -> None:
+    """Emit one progress line on stderr as ``<sentinel><json>``.
+
+    ``sentinel`` defaults to this module's ``PROGRESS_SENTINEL``; skills pass
+    their own sentinel prefix so downstream consumers can attribute lines.
+    """
     payload: dict[str, Any] = {
         "phase": phase,
         "at": utc_now_iso(),
@@ -198,7 +209,7 @@ def emit_progress(phase: str, message: str | None = None, **extra: Any) -> None:
     if message is not None:
         payload["message"] = message
     payload.update({key: value for key, value in extra.items() if value is not None})
-    sys.stderr.write(PROGRESS_SENTINEL + json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")
+    sys.stderr.write((sentinel or PROGRESS_SENTINEL) + json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")
     sys.stderr.flush()
 
 
@@ -289,6 +300,36 @@ def _container_endpoint(record: dict[str, Any]) -> SshEndpoint:
     if not isinstance(port, int):
         raise RemoteToolboxError("machine record is missing container.ssh_port")
     return SshEndpoint(host=str(host["ip"]), port=port, user=str(container.get("user", "root")))
+
+
+def container_endpoint_from_record(record: dict[str, Any]) -> SshEndpoint:
+    """Lenient container-SSH endpoint from a machine/session record dict.
+
+    Unlike the strict ``_container_endpoint`` used by ``resolve_remote_target``,
+    this tolerates legacy record shapes: ``host`` may be a bare IP string, and a
+    missing ``container.ssh_port`` falls back to the host port. When a container
+    ``ssh_port`` is present, ``user`` is ``container.user`` or ``root`` (matching
+    the scaffold-wide container convention in ``container_endpoint``); otherwise
+    it falls back to ``host.user``.
+    """
+    host_info = record.get("host", {})
+    container_info = record.get("container", {})
+    if isinstance(host_info, dict):
+        ip = str(host_info.get("ip", ""))
+        host_port = int(host_info.get("port", 22))
+        host_user = str(host_info.get("user", "root"))
+    else:
+        ip = str(host_info)
+        host_port = 22
+        host_user = "root"
+    if not isinstance(container_info, dict):
+        container_info = {}
+    ssh_port = container_info.get("ssh_port")
+    if ssh_port is not None:
+        return SshEndpoint(
+            host=ip, port=int(ssh_port), user=str(container_info.get("user") or "root")
+        )
+    return SshEndpoint(host=ip, port=host_port, user=host_user)
 
 
 def _host_endpoint(record: dict[str, Any]) -> SshEndpoint:
@@ -399,6 +440,47 @@ def ssh_exec_raw(
     return result
 
 
+def ssh_exec(
+    endpoint: SshEndpoint,
+    script: str,
+    *,
+    check: bool = True,
+    timeout: float | None = 180,
+    connect_timeout: int = 15,
+) -> subprocess.CompletedProcess[str]:
+    """Run a one-shot bash snippet on the remote host.
+
+    Compared to ``ssh_exec_raw`` (kept unchanged for existing toolbox callers):
+    the TCP connect phase is bounded by ``connect_timeout``; a wall-clock
+    ``timeout`` (default 180 s) returns an rc=255 CompletedProcess noting the
+    timeout on stderr instead of raising -- a local timeout is not proof of
+    remote failure, same shape as a lost SSH connection; and ``check=True``
+    raises RuntimeError with the stderr tail.
+    """
+    cmd = [
+        "ssh",
+        *base_ssh_options(connect_timeout=connect_timeout),
+        "-p",
+        str(endpoint.port),
+        endpoint.destination(),
+        "bash",
+        "-c",
+        shlex.quote(script),
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        result = subprocess.CompletedProcess(
+            cmd, 255, "", f"ssh_exec timed out after {exc.timeout}s"
+        )
+    if check and result.returncode != 0:
+        raise RuntimeError(
+            f"remote command failed (rc={result.returncode}):\n"
+            f"stderr: {tail_text(result.stderr, 2000)}"
+        )
+    return result
+
+
 def ssh_exec_bytes(
     endpoint: SshEndpoint,
     remote_command: str,
@@ -423,6 +505,43 @@ def _remote_env_exports(env: dict[str, str]) -> list[str]:
         name = require_env_name(key)
         lines.append(f"export {name}={shlex.quote(str(value))}")
     return lines
+
+
+def ascend_env_preamble(*, set_e: bool = True, export_driver_lib: bool = False) -> str:
+    """Standard Ascend environment preamble for remote bash snippets.
+
+    Sources the workspace-managed ``/etc/profile.d/vaws-ascend-env.sh`` (which
+    sets PATH, LD_LIBRARY_PATH, CANN/ATB, and the correct Python) under
+    ``set +u`` and restores ``set -u`` afterwards. ``export_driver_lib=True``
+    additionally prepends the Ascend driver libs to ``LD_LIBRARY_PATH`` for
+    images where the managed profile is absent.
+
+    Historical copies with ``.`` instead of ``source`` (and, for
+    ``_runtime_env_lines``, no ``set -u`` restore) still exist in this file's
+    ``_runtime_env_lines`` / probe script and in the independently distributed
+    ``.remote-dev/core/`` substrate; those are byte-stable remote surfaces and
+    intentionally stay as-is. New ``.agents`` code should call this helper.
+    """
+    lines: list[str] = []
+    if set_e:
+        lines.append("set -e")
+    lines.extend(
+        [
+            "if [ -f /etc/profile.d/vaws-ascend-env.sh ]; then",
+            "  set +u",
+            "  source /etc/profile.d/vaws-ascend-env.sh",
+            "  set -u",
+            "fi",
+        ]
+    )
+    if export_driver_lib:
+        lines.append(
+            'export LD_LIBRARY_PATH='
+            '"/usr/local/Ascend/driver/lib64/driver'
+            ':/usr/local/Ascend/driver/lib64'
+            '${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"'
+        )
+    return "\n".join(lines)
 
 
 def _runtime_env_lines(enabled: bool) -> list[str]:

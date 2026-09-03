@@ -47,6 +47,79 @@
       "source_note": "Layer count and field hints verified from deepseek-ai/DeepSeek-V4-Flash config.json; quantization/data type variants do not change these structural fields."
     },
     {
+      "model_name": "DeepSeek-V3.1",
+      "aliases": ["deepseek-v3.1", "DeepSeek-V3.1", "deepseek-v3-1", "deepseek_v3"],
+      "hub_ids": ["deepseek-ai/DeepSeek-V3.1"],
+      "family": "deepseek",
+      "expected_layers": 61,
+      "features": ["moe", "mla"],
+      "field_hints": {
+        "hidden_size": [7168],
+        "num_attention_heads": [128],
+        "num_experts": [256],
+        "moe_intermediate_size": [2048],
+        "kv_lora_rank": [512],
+        "q_lora_rank": [1536],
+        "first_k_dense_replace": [3],
+        "vocab_size": [129280]
+      },
+      "source_note": "Layer count and field hints verified from the shared-storage DeepSeek-V3.1-w4a8-mtp-QuaRot config.json (model_type deepseek_v3); quantization variants (w4a8/w8a8/QuaRot) do not change these structural fields."
+    },
+    {
+      "model_name": "Qwen3-8B",
+      "aliases": ["qwen3-8b", "Qwen3-8B"],
+      "hub_ids": ["Qwen/Qwen3-8B"],
+      "family": "qwen",
+      "expected_layers": 36,
+      "features": ["dense_flash_attention", "rope"],
+      "field_hints": {
+        "hidden_size": [4096],
+        "num_attention_heads": [32],
+        "num_key_value_heads": [8],
+        "head_dim": [128],
+        "intermediate_size": [12288],
+        "vocab_size": [151936]
+      },
+      "source_note": "Layer count and field hints verified from the shared-storage Qwen3-8B config.json (model_type qwen3, dense GQA). Qwen3ForCausalLM is shared across Qwen3 dense sizes and is intentionally not an alias."
+    },
+    {
+      "model_name": "Qwen3-VL-30B-A3B-Instruct",
+      "aliases": ["qwen3-vl-30b-a3b-instruct", "Qwen3-VL-30B-A3B-Instruct", "qwen3_vl_moe"],
+      "hub_ids": ["Qwen/Qwen3-VL-30B-A3B-Instruct"],
+      "family": "qwen",
+      "expected_layers": 48,
+      "features": ["moe", "dense_flash_attention", "rope"],
+      "field_hints": {
+        "hidden_size": [2048],
+        "num_attention_heads": [32],
+        "num_key_value_heads": [4],
+        "head_dim": [128],
+        "num_experts": [128],
+        "intermediate_size": [6144],
+        "moe_intermediate_size": [768],
+        "vocab_size": [151936]
+      },
+      "source_note": "Layer count and field hints verified from the shared-storage Qwen3-VL-30B-A3B-Instruct config.json text_config (model_type qwen3_vl_moe_text, 48 decoder layers; vision encoder is not part of the decoder layer count)."
+    },
+    {
+      "model_name": "Qwen3.5-35B-A3B",
+      "aliases": ["qwen3.5-35b-a3b", "Qwen3.5-35B-A3B", "qwen35-35b"],
+      "hub_ids": ["Qwen/Qwen3.5-35B-A3B"],
+      "family": "qwen",
+      "expected_layers": 40,
+      "features": ["moe", "linear_attention_or_mamba", "dense_flash_attention", "rope"],
+      "field_hints": {
+        "hidden_size": [2048],
+        "num_attention_heads": [16],
+        "num_key_value_heads": [2],
+        "head_dim": [256],
+        "num_experts": [256],
+        "moe_intermediate_size": [512],
+        "vocab_size": [248320]
+      },
+      "source_note": "Layer count and field hints verified from the shared-storage Qwen3.5-35B-A3B config.json text_config (model_type qwen3_5_moe_text): 40 decoder layers in a repeating 3x linear_attention + 1x full_attention hybrid pattern."
+    },
+    {
       "model_name": "DeepSeek-V4 family",
       "aliases": ["dsv4", "deepseekv4", "DeepSeekV4ForCausalLM"],
       "family": "deepseek",
@@ -169,6 +242,7 @@
         "Qwen3.5-0.8B",
         "Qwen3.5-4B",
         "Qwen3.5-9B",
+        "Qwen3.5-35B-A3B",
         "Qwen3.5-122B-A10B",
         "Qwen3.5-397B-A17B"
       ],

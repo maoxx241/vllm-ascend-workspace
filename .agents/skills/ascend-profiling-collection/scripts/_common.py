@@ -14,15 +14,11 @@ from __future__ import annotations
 import contextlib
 import importlib.util
 import json
-import os
-import re
 import socket
 import subprocess
 import sys
-import textwrap
 import threading
 import time
-import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -34,7 +30,6 @@ SERVING_SCRIPTS = ROOT / ".agents" / "skills" / "vllm-ascend-serving" / "scripts
 
 PROGRESS_SENTINEL = "__VAWS_PROFILING_COLLECTION_PROGRESS__="
 COLLECTION_STATE_DIR = ROOT / ".vaws-local" / "ascend-profiling-collection" / "runs"
-SAFE_TOKEN_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 
 
 # ---------------------------------------------------------------------------
@@ -63,6 +58,8 @@ def _load_serving_common():
 SERVING = _load_serving_common()
 # Loading serving common put LIB_DIR on sys.path.
 from vaws_ssh import base_ssh_options  # noqa: E402
+from vaws_local_state import allocate_run_dir, safe_run_token  # noqa: E402
+from vaws_remote_toolbox import ascend_env_preamble  # noqa: E402
 
 SshEndpoint = SERVING.SshEndpoint
 ssh_exec = SERVING.ssh_exec
@@ -101,54 +98,27 @@ def ensure_dir(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
 
 
-def safe_run_token(value: str, *, fallback: str = "run", max_len: int = 80) -> str:
-    token = SAFE_TOKEN_RE.sub("-", value.strip()).strip(".-_")
-    if not token:
-        token = fallback
-    if len(token) <= max_len:
-        return token
-    digest = uuid.uuid5(uuid.NAMESPACE_URL, token).hex[:8]
-    keep = max(1, max_len - len(digest) - 1)
-    return f"{token[:keep].rstrip('.-_')}-{digest}"
-
-
 def unique_collection_run_dir(
     *,
     tag: str,
     session_id: str | None = None,
     machine: str | None = None,
 ) -> Path:
+    """Allocate ``<COLLECTION_STATE_DIR>/<utc-ts>_<tag>_<target>`` (collision-safe).
+
+    ``safe_run_token`` / ``allocate_run_dir`` come from ``.agents/lib``; this
+    wrapper only adds the collection-specific tag+target naming.
+    """
     target_token = safe_run_token(session_id or machine or "target", fallback="target")
     tag_token = safe_run_token(tag, fallback="profile")
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    for _ in range(10):
-        name = (
-            f"{ts}_{tag_token}_{target_token}_"
-            f"{os.getpid()}_{uuid.uuid4().hex[:8]}"
-        )
-        run_dir = COLLECTION_STATE_DIR / name
-        try:
-            run_dir.mkdir(parents=True, exist_ok=False)
-            return run_dir
-        except FileExistsError:
-            continue
-    raise RuntimeError("failed to allocate a unique profiling collection run directory")
+    return allocate_run_dir(COLLECTION_STATE_DIR, f"{tag_token}_{target_token}")
 
 
 # ---------------------------------------------------------------------------
-# Ascend env preamble (mirrors the one in benchmark/_common.py)
+# Ascend env preamble (canonical form lives in vaws_remote_toolbox)
 # ---------------------------------------------------------------------------
 
-ASCEND_ENV_PREAMBLE = textwrap.dedent(
-    """\
-    set -e
-    if [ -f /etc/profile.d/vaws-ascend-env.sh ]; then
-      set +u
-      source /etc/profile.d/vaws-ascend-env.sh
-      set -u
-    fi
-    """
-).rstrip("\n")
+ASCEND_ENV_PREAMBLE = ascend_env_preamble()
 
 
 # ---------------------------------------------------------------------------
@@ -173,7 +143,10 @@ def open_local_tunnel(ep, remote_port: int):
     local_port = _find_free_local_port()
     cmd = [
         "ssh",
-        *base_ssh_options(),
+        # mux=False: the tunnel must own a dedicated long-lived connection.
+        # With ControlMaster the `-N -L` client delegates the forward to the
+        # mux master and exits rc=0 immediately, tearing the tunnel down.
+        *base_ssh_options(mux=False),
         "-o", "ExitOnForwardFailure=yes",
         "-N",
         "-L", f"127.0.0.1:{local_port}:127.0.0.1:{remote_port}",

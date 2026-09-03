@@ -20,7 +20,7 @@ forwards ``--profiler-config`` to ``vllm serve``.
 
 Failure policy: if any rank's ``kernel_details.csv`` is missing after analyse
 (the canonical "device data did not land" case from
-``profiling-inventory.md``), the run is reported as failed and exits non-zero
+``references/behavior.md`` "Output verification"), the run is reported as failed and exits non-zero
 even though every previous step succeeded. Downstream analysis must not
 process degenerate roots silently.
 """
@@ -330,6 +330,8 @@ def _build_serve_args(args: argparse.Namespace, profiler_config: dict[str, Any])
     ])
     if args.skip_parity:
         serve_args.append("--skip-parity")
+    if args.health_timeout is not None:
+        serve_args.extend(["--health-timeout", str(args.health_timeout)])
 
     serve_args.append("--")
     serve_args.extend([
@@ -452,6 +454,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--request-timeout", type=int, default=DEFAULT_REQUEST_TIMEOUT,
                    help="per chat-completions request timeout (seconds)")
+    p.add_argument(
+        "--health-timeout", type=int, default=None,
+        help=("passthrough to serve_start --health-timeout; large quantized "
+              "models loading from shared storage routinely exceed the 300s "
+              "default while still making progress"),
+    )
     p.add_argument(
         "--profile-control-timeout", type=int,
         default=DEFAULT_PROFILE_CONTROL_TIMEOUT,
@@ -684,7 +692,7 @@ def main(argv: list[str] | None = None) -> int:
         manifest["error"] = (
             "profiling collection produced an unusable trace ("
             + "; ".join(reasons)
-            + "); re-collect required, see profiling-inventory.md"
+            + "); re-collect required, see SKILL.md Failure policy"
         )
         (run_dir / "manifest.json").write_text(
             json.dumps(manifest, indent=2, ensure_ascii=False) + "\n",

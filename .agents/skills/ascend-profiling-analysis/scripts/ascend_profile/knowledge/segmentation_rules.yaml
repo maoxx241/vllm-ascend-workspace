@@ -11,7 +11,8 @@ version: 1
 # extendable without touching code.
 #
 # Vocabulary note: the category strings below are the neutral op_categories
-# emitted by common.categories_and_roles (mirror of kernel_signatures.yaml).
+# emitted by rules.categories_and_roles (driven by
+# kernel_signatures.yaml:match_rules).
 # Family names (mla / dsa / csa / hca) are only used as documentation labels;
 # the segmenter keys off the category strings.
 #
@@ -56,7 +57,7 @@ companion_prefixes:
 # Documentation-only: which family each companion set belongs to. The
 # segmenter does not read this; it exists so a human reviewer can see why a
 # category is a companion. Family discrimination itself lives in
-# attention_families.yaml (common.resolve_attention_family).
+# attention_families.yaml (rules.resolve_attention_family).
 family_notes:
   mla:
     layer_start: [attention.mla, attention.mla.kv_norm_rope_cache]

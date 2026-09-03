@@ -43,6 +43,7 @@ try:
         write_jsonl,
     )
     from .hardware_insights import build_hardware_insights
+    from .host_trace import attribute_bubbles, trace_view_paths_by_rank
     from .model_insights import model_config_insights, operator_efficiency_rows, profile_inferred_model_insights
 except ImportError:  # pragma: no cover
     import sys
@@ -82,12 +83,30 @@ except ImportError:  # pragma: no cover
         write_jsonl,
     )
     from hardware_insights import build_hardware_insights  # type: ignore[no-redef]
+    from host_trace import attribute_bubbles, trace_view_paths_by_rank  # type: ignore[no-redef]
     from model_insights import model_config_insights, operator_efficiency_rows, profile_inferred_model_insights  # type: ignore[no-redef]
 
 
 UNDERFEED_HEAVY_RATIO = 0.30
 INTERNAL_BUBBLE_MIN_MS = 1.0
 INTERNAL_BUBBLE_WALL_RATIO = 0.10
+# Edge-gap (prelaunch/tail) thresholds inherited from the retired
+# user-level ascend-profiling-anomaly rulebook §10:
+# ``gap_ms >= max(1.0, 0.10 * service_ms)``. Same shape as the
+# INTERNAL_BUBBLE_* thresholds above; kept as separate constants so the
+# provenance stays visible.
+EDGE_GAP_MIN_MS = 1.0
+EDGE_GAP_WALL_RATIO = 0.10
+# Rank-level recurring-bubble rollup (rulebook §10: >= 60% of steps with
+# bubble_count > 0). The min-steps guard is a conservative addition of
+# this port: with fewer than 3 complete steps the ratio is noise.
+RECURRING_BUBBLE_MIN_RATIO = 0.60
+RECURRING_BUBBLE_MIN_STEPS = 3
+# PARTIAL_CAPTURE_BOUNDARY (rulebook §10/§12) only tags an incomplete
+# capture-edge segment when it holds at least half the median
+# complete-step event count on the rank -- tiny warmup/teardown slivers
+# are routine and must not tag.
+PARTIAL_CAPTURE_MIN_STEP_FRACTION = 0.5
 WAIT_ANCHOR_RATIO = 0.80
 FALSE_HOTSPOT_WAIT_RATIO = 0.95
 FALSE_HOTSPOT_DURATION_US = 10.0
@@ -105,7 +124,54 @@ def anomaly_tags(metrics: Mapping[str, Any]) -> list[str]:
         tags.append("DEVICE_IDLE_GAP_HEAVY")
     if float(metrics.get("largest_internal_bubble_ms") or 0.0) >= max(INTERNAL_BUBBLE_MIN_MS, wall * INTERNAL_BUBBLE_WALL_RATIO):
         tags.append("INTERNAL_BUBBLE_HEAVY")
+    # Edge-gap tags (retired anomaly skill rulebook §10). A ``None`` gap
+    # means "no neighbour segment" (capture boundary): the idle there is
+    # unknown rather than zero, so we never tag on it -- truncation at
+    # the capture edge is covered by PARTIAL_CAPTURE_BOUNDARY instead.
+    prelaunch_gap = metrics.get("prelaunch_gap_ms")
+    if prelaunch_gap is not None and float(prelaunch_gap) >= max(EDGE_GAP_MIN_MS, wall * EDGE_GAP_WALL_RATIO):
+        tags.append("PRELAUNCH_GAP_HEAVY")
+    tail_gap = metrics.get("tail_gap_ms")
+    if tail_gap is not None and float(tail_gap) >= max(EDGE_GAP_MIN_MS, wall * EDGE_GAP_WALL_RATIO):
+        tags.append("TAIL_GAP_HEAVY")
     return tags
+
+
+def neighbor_gap_map(segments: Sequence[Any]) -> dict[str, dict[str, Any]]:
+    """Per-segment leading/trailing device-idle gaps on the same rank.
+
+    Project step windows are event-derived (``start_us`` / ``end_us`` are
+    the min/max of member events), so the retired anomaly skill's
+    ``prelaunch_gap_ms`` / ``tail_gap_ms`` -- idle before the first /
+    after the last device interval of a tiling step service window --
+    would be degenerate here. The faithful analogue: segmentation is an
+    exact cover (every event row belongs to exactly one segment), so the
+    idle between the previous segment's last event end and this
+    segment's first event start *is* the pre-launch idle, and
+    symmetrically for the tail. Edge segments get ``None`` (unknown, not
+    zero) so callers cannot confuse "no gap" with "no evidence".
+    """
+
+    by_rank: dict[str, list[Any]] = defaultdict(list)
+    for segment in segments:
+        by_rank[str(segment.rank_id)].append(segment)
+    out: dict[str, dict[str, Any]] = {}
+    for items in by_rank.values():
+        ordered = sorted(items, key=lambda segment: (float(segment.start_us), int(segment.row_start)))
+        for index, segment in enumerate(ordered):
+            prev_segment = ordered[index - 1] if index > 0 else None
+            next_segment = ordered[index + 1] if index + 1 < len(ordered) else None
+            prelaunch_us = (
+                max(0.0, float(segment.start_us) - float(prev_segment.end_us)) if prev_segment is not None else None
+            )
+            tail_us = (
+                max(0.0, float(next_segment.start_us) - float(segment.end_us)) if next_segment is not None else None
+            )
+            out[str(segment.segment_id)] = {
+                "prelaunch_gap_ms": round(prelaunch_us / 1000.0, 6) if prelaunch_us is not None else None,
+                "tail_gap_ms": round(tail_us / 1000.0, 6) if tail_us is not None else None,
+            }
+    return out
 
 
 def event_slice(events: Sequence[NormalizedEvent], row_numbers: Sequence[int], row_start: int, row_end: int) -> list[NormalizedEvent]:
@@ -388,10 +454,14 @@ def rank_summary_rows(events_by_rank: Mapping[str, Sequence[NormalizedEvent]], s
 def step_summary_rows(events_by_rank: Mapping[str, Sequence[NormalizedEvent]], segments: Sequence[Any]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     row_indexes = row_indexes_by_rank(events_by_rank)
+    gap_by_segment = neighbor_gap_map(segments)
     for segment in segments:
         rank_events = events_by_rank.get(segment.rank_id, [])
         events = event_slice(rank_events, row_indexes.get(segment.rank_id, []), segment.row_start, segment.row_end)
         metrics = metrics_for_events(events, top_gap_limit=5)
+        gap = gap_by_segment.get(str(segment.segment_id)) or {}
+        metrics["prelaunch_gap_ms"] = gap.get("prelaunch_gap_ms")
+        metrics["tail_gap_ms"] = gap.get("tail_gap_ms")
         role_counts = Counter(role for event in events for role in event.op_roles)
         category_counts = Counter(category for event in events for category in event.op_categories)
         rows.append(
@@ -421,6 +491,93 @@ def step_summary_rows(events_by_rank: Mapping[str, Sequence[NormalizedEvent]], s
             }
         )
     return rows
+
+
+def apply_partial_capture_boundary_tags(step_rows: Sequence[dict[str, Any]]) -> list[str]:
+    """Tag capture-boundary truncation on incomplete edge segments.
+
+    Salvaged from the retired anomaly skill's ``PARTIAL_CAPTURE_BOUNDARY``
+    (rulebook §10/§12), deliberately conservative. A segment earns the
+    tag only when ALL of these hold:
+
+      * it is incomplete (``complete`` false -- a head / tail / residual
+        window the segmenter could not close), AND
+      * it touches the rank's capture boundary (first or last row), AND
+      * the rank has at least one complete step (otherwise there is no
+      * structural reference to call anything "truncated"), AND
+      * its event count is at least half the median complete-step event
+        count on the rank.
+
+    Mutates each tagged row's ``anomaly_tags`` list and returns the
+    tagged segment ids.
+    """
+
+    by_rank: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in step_rows:
+        by_rank[str(row.get("rank_id") or "")].append(row)
+    tagged: list[str] = []
+    for rows in by_rank.values():
+        complete_counts = sorted(
+            int(row.get("event_count") or 0)
+            for row in rows
+            if row.get("segment_type") == "step" and str(row.get("complete")).lower() == "true"
+        )
+        if not complete_counts:
+            continue
+        median_count = quantile([float(count) for count in complete_counts], 0.5)
+        if median_count <= 0:
+            continue
+        row_min = min(int(row.get("row_start") or 0) for row in rows)
+        row_max = max(int(row.get("row_end") or 0) for row in rows)
+        for row in rows:
+            if str(row.get("complete")).lower() == "true":
+                continue
+            touches_boundary = int(row.get("row_start") or 0) <= row_min or int(row.get("row_end") or 0) >= row_max
+            if not touches_boundary:
+                continue
+            if float(row.get("event_count") or 0) < PARTIAL_CAPTURE_MIN_STEP_FRACTION * median_count:
+                continue
+            tags = row.get("anomaly_tags")
+            tags = list(tags) if isinstance(tags, (list, tuple)) else []
+            if "PARTIAL_CAPTURE_BOUNDARY" not in tags:
+                tags.append("PARTIAL_CAPTURE_BOUNDARY")
+                row["anomaly_tags"] = tags
+                tagged.append(str(row.get("segment_id") or ""))
+    return tagged
+
+
+def recurring_bubble_rollup(step_rows: Sequence[Mapping[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Rank-level recurring-bubble aggregate (rulebook §10 of the retired
+    anomaly skill: >= 60% of steps with ``bubble_count > 0``, plus the
+    dominant idle family by mean gap: prelaunch / tail / internal).
+
+    Only complete steps (``segment_type == "step"``) vote; head/tail
+    residuals are capture artifacts, not recurrence evidence. Keys match
+    the ``rank_summary.csv`` columns the rollup is merged into.
+    """
+
+    by_rank: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
+    for row in step_rows:
+        if row.get("segment_type") == "step":
+            by_rank[str(row.get("rank_id") or "")].append(row)
+    rollup: dict[str, dict[str, Any]] = {}
+    for rank_id, rows in by_rank.items():
+        step_count = len(rows)
+        bubbling = sum(1 for row in rows if float(row.get("bubble_count") or 0.0) > 0)
+        ratio = (bubbling / step_count) if step_count else 0.0
+        dominant_candidates = {
+            "prelaunch": statistics_mean([float(row.get("prelaunch_gap_ms") or 0.0) for row in rows]),
+            "tail": statistics_mean([float(row.get("tail_gap_ms") or 0.0) for row in rows]),
+            "internal_bubble": statistics_mean([float(row.get("internal_bubble_total_ms") or 0.0) for row in rows]),
+        }
+        best_name, best_value = max(dominant_candidates.items(), key=lambda item: item[1])
+        rollup[rank_id] = {
+            "bubble_recurrence_ratio": round(ratio, 6),
+            "bubbling_step_count": bubbling,
+            "dominant_idle_pattern": best_name if best_value > 0 else "none",
+            "recurring_bubble_pattern": bool(step_count >= RECURRING_BUBBLE_MIN_STEPS and ratio >= RECURRING_BUBBLE_MIN_RATIO),
+        }
+    return rollup
 
 
 def layer_summary_rows(events_by_rank: Mapping[str, Sequence[NormalizedEvent]], layers: Sequence[Any]) -> list[dict[str, Any]]:
@@ -1382,6 +1539,20 @@ def summarize_profile(
     step_rows = step_summary_rows(events_by_rank, segments)
     for step in step_rows:
         step["step_class_id"] = step_class_by_id.get(str(step.get("segment_id")))
+    apply_partial_capture_boundary_tags(step_rows)
+    bubble_rollup = recurring_bubble_rollup(step_rows)
+    for row in rank_rows:
+        row.update(
+            bubble_rollup.get(
+                str(row.get("rank_id") or ""),
+                {
+                    "bubble_recurrence_ratio": 0.0,
+                    "bubbling_step_count": 0,
+                    "dominant_idle_pattern": "none",
+                    "recurring_bubble_pattern": False,
+                },
+            )
+        )
     row_indexes = row_indexes_by_rank(events_by_rank)
     anatomy_rows = step_anatomy_rows(step_rows, events_by_rank, layers, row_indexes)
     attach_anatomy_to_step_rows(step_rows, anatomy_rows)
@@ -1415,6 +1586,8 @@ def summarize_profile(
     wait_rows = wait_anchor_rows(operator_rows)
     aicpu = aicpu_rows(events_by_rank)
     bubbles = bubble_evidence_rows(step_rows)
+    source_index = read_json(output_dir / "source_index.json", default={}) or {}
+    bubbles, host_trace_status = attribute_bubbles(bubbles, trace_view_paths_by_rank(source_index))
     evidence = evidence_index_rows(step_rows, layer_rows, bubbles)
     pipeline_event_count = sum(1 for event in events if has_pipeline_signal(event.pipeline_us))
     pipeline_coverage = round(pipeline_event_count / len(events), 6) if events else 0.0
@@ -1583,6 +1756,11 @@ def summarize_profile(
             "summary": hardware_insights.get("summary") or {},
             "limitations": hardware_insights.get("limitations") or [],
         },
+        # Host-side bubble soft-attribution status (trace_view.json
+        # coverage). Not part of ``counts`` so the stage stdout contract
+        # is unchanged; the report reads this for its Limitations
+        # section.
+        "host_trace": host_trace_status,
     }
     write_json(output_dir / "summary_manifest.json", manifest)
     return manifest

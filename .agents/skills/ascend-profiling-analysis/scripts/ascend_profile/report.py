@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 from collections import Counter
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -22,6 +21,7 @@ try:
         write_json,
         write_xlsx,
     )
+    from .store import parse_jsonish, to_float
 except ImportError:  # pragma: no cover
     import sys
 
@@ -39,18 +39,7 @@ except ImportError:  # pragma: no cover
         write_json,
         write_xlsx,
     )
-
-
-def parse_jsonish(value: Any, default: Any) -> Any:
-    if not isinstance(value, str):
-        return value if value is not None else default
-    text = value.strip()
-    if not text:
-        return default
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        return default
+    from store import parse_jsonish, to_float  # type: ignore[no-redef]
 
 
 def finding_rows(output_dir: Path) -> list[dict[str, Any]]:
@@ -69,16 +58,10 @@ def top_findings(findings: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any
     ]
 
 
-def _f(value: Any, default: float = 0.0) -> float:
-    try:
-        if value is None or value == "":
-            return default
-        return float(value)
-    except (TypeError, ValueError):
-        return default
-
-
 def _quantile(values: Sequence[float], q: float) -> float:
+    # NOTE: intentionally NOT ``metrics.quantile`` — that one interpolates
+    # between neighbours; this nearest-rank variant keeps report numbers
+    # stable across refactors. Do not merge the two.
     ordered = sorted(values)
     if not ordered:
         return 0.0
@@ -109,7 +92,7 @@ def macro_timeline_lines(step_rows: Sequence[Mapping[str, Any]], anatomy_rows: S
     ]
     for rank_id in sorted(by_rank):
         items = by_rank[rank_id]
-        wall = [_f(item.get("wall_ms")) for item in items]
+        wall = [to_float(item.get("wall_ms")) for item in items]
         head_ratio: list[float] = []
         main_ratio: list[float] = []
         tail_ratio: list[float] = []
@@ -118,10 +101,10 @@ def macro_timeline_lines(step_rows: Sequence[Mapping[str, Any]], anatomy_rows: S
             anatomy = anatomy_by_segment.get(str(item.get("segment_id")))
             if anatomy is None:
                 continue
-            head_ratio.append(_f(anatomy.get("head_ratio")))
-            main_ratio.append(_f(anatomy.get("main_ratio")))
-            tail_ratio.append(_f(anatomy.get("tail_ratio")))
-            bubble_ratio.append(_f(anatomy.get("bubble_ratio")))
+            head_ratio.append(to_float(anatomy.get("head_ratio")))
+            main_ratio.append(to_float(anatomy.get("main_ratio")))
+            tail_ratio.append(to_float(anatomy.get("tail_ratio")))
+            bubble_ratio.append(to_float(anatomy.get("bubble_ratio")))
 
         def _avg(values: list[float]) -> float:
             return (sum(values) / len(values)) if values else 0.0
@@ -149,7 +132,7 @@ def macro_timeline_lines(step_rows: Sequence[Mapping[str, Any]], anatomy_rows: S
             for row in step_rows
             if row.get("segment_type") == "step"
         ),
-        key=lambda item: _f(item.get("wall_ms")),
+        key=lambda item: to_float(item.get("wall_ms")),
         reverse=True,
     )[:8]
     for row in sorted_steps:
@@ -157,9 +140,9 @@ def macro_timeline_lines(step_rows: Sequence[Mapping[str, Any]], anatomy_rows: S
         lines.append(
             f"| `{row.get('segment_id')}` | `{row.get('rank_id')}` | "
             f"`{row.get('step_family')}` | {row.get('main_layer_count')} | "
-            f"{_f(row.get('wall_ms')):.3f} | {_f(anatomy.get('head_wall_ms')):.3f} | "
-            f"{_f(anatomy.get('main_wall_ms')):.3f} | {_f(anatomy.get('tail_wall_ms')):.3f} | "
-            f"{_f(row.get('underfeed_ms')):.3f} | {_f(anatomy.get('bubble_ratio')) * 100:.2f} |"
+            f"{to_float(row.get('wall_ms')):.3f} | {to_float(anatomy.get('head_wall_ms')):.3f} | "
+            f"{to_float(anatomy.get('main_wall_ms')):.3f} | {to_float(anatomy.get('tail_wall_ms')):.3f} | "
+            f"{to_float(row.get('underfeed_ms')):.3f} | {to_float(anatomy.get('bubble_ratio')) * 100:.2f} |"
         )
     if not sorted_steps:
         lines.append("| — | — | — | — | 0 | 0 | 0 | 0 | 0 | 0 |")
@@ -193,7 +176,7 @@ def step_class_view_lines(
     enriched = []
     for row in step_class_rows:
         member = int(row.get("member_count") or 0)
-        mean = _f(row.get("wall_ms_mean"))
+        mean = to_float(row.get("wall_ms_mean"))
         enriched.append((member * mean, row))
     enriched.sort(key=lambda item: -item[0])
     top_classes = [row for _, row in enriched[:top_n]]
@@ -209,12 +192,12 @@ def step_class_view_lines(
         lines.append(
             f"| `{row.get('step_class_id')}` | `{row.get('step_family')}` | "
             f"{row.get('main_layer_count')} | {row.get('member_count')} | "
-            f"{_f(row.get('wall_ms_mean')):.3f} | {_f(row.get('wall_ms_p50')):.3f} | "
-            f"{_f(row.get('wall_ms_p90')):.3f} | "
-            f"{_f(row.get('head_ratio_mean')) * 100:.2f} | "
-            f"{_f(row.get('main_ratio_mean')) * 100:.2f} | "
-            f"{_f(row.get('tail_ratio_mean')) * 100:.2f} | "
-            f"{_f(row.get('bubble_ratio_mean')) * 100:.2f} | {unknown} |"
+            f"{to_float(row.get('wall_ms_mean')):.3f} | {to_float(row.get('wall_ms_p50')):.3f} | "
+            f"{to_float(row.get('wall_ms_p90')):.3f} | "
+            f"{to_float(row.get('head_ratio_mean')) * 100:.2f} | "
+            f"{to_float(row.get('main_ratio_mean')) * 100:.2f} | "
+            f"{to_float(row.get('tail_ratio_mean')) * 100:.2f} | "
+            f"{to_float(row.get('bubble_ratio_mean')) * 100:.2f} | {unknown} |"
         )
 
     if top_classes:
@@ -234,7 +217,7 @@ def step_class_view_lines(
             kinds = parse_jsonish(lc.get("block_kinds"), [])
             companion = "yes" if str(lc.get("companion_layer", "")).lower() in {"true", "1"} else ""
             lines.append(
-                f"| `{entry.get('layer_class_id')}` | {_f(entry.get('wall_ms_sum')):.3f} | "
+                f"| `{entry.get('layer_class_id')}` | {to_float(entry.get('wall_ms_sum')):.3f} | "
                 f"{entry.get('member_count')} | "
                 f"`{'->'.join(str(item) for item in (kinds or []))}` | {companion} |"
             )
@@ -255,7 +238,7 @@ def step_class_view_lines(
         for op in (top_ops or [])[:8]:
             lines.append(
                 f"| `{op.get('name')}` | `{op.get('task_type')}` | "
-                f"{_f(op.get('duration_sum_us')) / 1000.0:.3f} | {op.get('call_count')} |"
+                f"{to_float(op.get('duration_sum_us')) / 1000.0:.3f} | {op.get('call_count')} |"
             )
         if not top_ops:
             lines.append("| _none_ | — | 0 | 0 |")
@@ -289,7 +272,7 @@ def layer_block_view_lines(
     if layer_class_rows:
         sorted_layers = sorted(
             layer_class_rows,
-            key=lambda row: -(_f(row.get("wall_ms_mean")) * float(row.get("member_count") or 0)),
+            key=lambda row: -(to_float(row.get("wall_ms_mean")) * float(row.get("member_count") or 0)),
         )[:top_layer]
         lines.extend(
             [
@@ -310,7 +293,7 @@ def layer_block_view_lines(
             lines.append(
                 f"| `{row.get('layer_class_id')}` | {row.get('member_count')} | "
                 f"`{'->'.join(str(item) for item in (kinds or []))}` | {companion} | "
-                f"{_f(row.get('wall_ms_mean')):.3f} | {_f(row.get('wall_ms_p50')):.3f} | "
+                f"{to_float(row.get('wall_ms_mean')):.3f} | {to_float(row.get('wall_ms_p50')):.3f} | "
                 f"{shares_text} |"
             )
     else:
@@ -340,16 +323,16 @@ def layer_block_view_lines(
         for kind in ordered_kinds:
             members = by_kind.get(kind) or []
             members.sort(
-                key=lambda row: -(_f(row.get("wall_ms_mean")) * float(row.get("member_count") or 0)),
+                key=lambda row: -(to_float(row.get("wall_ms_mean")) * float(row.get("member_count") or 0)),
             )
             for row in members[:top_block]:
                 companion = "yes" if str(row.get("companion_layer", "")).lower() in {"true", "1"} else ""
                 lines.append(
                     f"| `{kind}` | `{row.get('block_class_id')}` | {companion} | "
-                    f"{row.get('member_count')} | {_f(row.get('wall_ms_mean')):.3f} | "
-                    f"{_f(row.get('wall_ms_p50')):.3f} | "
+                    f"{row.get('member_count')} | {to_float(row.get('wall_ms_mean')):.3f} | "
+                    f"{to_float(row.get('wall_ms_p50')):.3f} | "
                     f"`{row.get('bound_family')}` | `{row.get('dominant_core')}` | "
-                    f"{_f(row.get('comm_share_mean')) * 100:.2f}% |"
+                    f"{to_float(row.get('comm_share_mean')) * 100:.2f}% |"
                 )
     return lines
 
@@ -386,7 +369,7 @@ def operator_view_lines(
         for row in operator_class_rows
         if str(row.get("op_type") or "") not in {"communication", "mix_comm_aiv", "aicpu", "dsa", "unknown"}
     ]
-    compute_rows.sort(key=lambda row: -_f(row.get("duration_sum_us")))
+    compute_rows.sort(key=lambda row: -to_float(row.get("duration_sum_us")))
 
     if compute_rows:
         lines.extend(
@@ -403,12 +386,12 @@ def operator_view_lines(
             lines.append(
                 f"| `{row.get('name')}` | `{row.get('task_type')}` | `{row.get('op_type')}` | "
                 f"{row.get('call_count')} | "
-                f"{_f(row.get('duration_sum_us')) / 1000.0:.3f} | "
-                f"{_f(row.get('aicore_time')) / 1000.0:.3f} | "
-                f"{_f(row.get('aiv_time')) / 1000.0:.3f} | "
-                f"{_f(row.get('aic_mte2_time')) / 1000.0:.3f} | "
-                f"{_f(row.get('aiv_mte2_time')) / 1000.0:.3f} | "
-                f"{_f(row.get('aiv_mte3_time')) / 1000.0:.3f} | "
+                f"{to_float(row.get('duration_sum_us')) / 1000.0:.3f} | "
+                f"{to_float(row.get('aicore_time')) / 1000.0:.3f} | "
+                f"{to_float(row.get('aiv_time')) / 1000.0:.3f} | "
+                f"{to_float(row.get('aic_mte2_time')) / 1000.0:.3f} | "
+                f"{to_float(row.get('aiv_mte2_time')) / 1000.0:.3f} | "
+                f"{to_float(row.get('aiv_mte3_time')) / 1000.0:.3f} | "
                 f"`{row.get('bound_family')}` | `{row.get('dominant_core')}` |"
             )
     else:
@@ -434,18 +417,18 @@ def operator_view_lines(
             lines.append(
                 f"| `{row.get('hccl_op_kind')}` | {fused} | "
                 f"{row.get('rank_count')} | {row.get('call_count')} | "
-                f"{_f(row.get('duration_sum_us')) / 1000.0:.3f} | "
-                f"{_f(row.get('duration_avg_us')):.3f} | "
-                f"{_f(row.get('rank_avg_min_us')):.3f} | "
-                f"{_f(row.get('rank_avg_max_us')):.3f} | "
-                f"{_f(row.get('rank_skew_ratio')) * 100:.2f}% |"
+                f"{to_float(row.get('duration_sum_us')) / 1000.0:.3f} | "
+                f"{to_float(row.get('duration_avg_us')):.3f} | "
+                f"{to_float(row.get('rank_avg_min_us')):.3f} | "
+                f"{to_float(row.get('rank_avg_max_us')):.3f} | "
+                f"{to_float(row.get('rank_skew_ratio')) * 100:.2f}% |"
             )
 
         # Per-rank breakdown of the heaviest HCCL kind so users can spot
         # which rank is slow without opening the CSV.
         heaviest = max(
             hccl_class_rows,
-            key=lambda row: _f(row.get("duration_sum_us")),
+            key=lambda row: to_float(row.get("duration_sum_us")),
         )
         heaviest_kind = str(heaviest.get("hccl_op_kind") or "")
         heaviest_fused = str(heaviest.get("comm_aiv_fused", "")).lower() in {"true", "1"}
@@ -456,7 +439,7 @@ def operator_view_lines(
             and (str(row.get("comm_aiv_fused", "")).lower() in {"true", "1"}) == heaviest_fused
         ]
         if rank_rows:
-            rank_rows.sort(key=lambda row: -_f(row.get("duration_avg_us")))
+            rank_rows.sort(key=lambda row: -to_float(row.get("duration_avg_us")))
             lines.extend(
                 [
                     "",
@@ -471,11 +454,11 @@ def operator_view_lines(
             for row in rank_rows[:8]:
                 lines.append(
                     f"| `{row.get('rank_id')}` | {row.get('call_count')} | "
-                    f"{_f(row.get('duration_sum_us')) / 1000.0:.3f} | "
-                    f"{_f(row.get('duration_avg_us')):.3f} | "
-                    f"{_f(row.get('duration_p50_us')):.3f} | "
-                    f"{_f(row.get('duration_p90_us')):.3f} | "
-                    f"{_f(row.get('duration_max_us')):.3f} |"
+                    f"{to_float(row.get('duration_sum_us')) / 1000.0:.3f} | "
+                    f"{to_float(row.get('duration_avg_us')):.3f} | "
+                    f"{to_float(row.get('duration_p50_us')):.3f} | "
+                    f"{to_float(row.get('duration_p90_us')):.3f} | "
+                    f"{to_float(row.get('duration_max_us')):.3f} |"
                 )
     else:
         lines.extend(
@@ -550,7 +533,7 @@ def model_fingerprint_lines(
         for row in layer_type_rows[:12]:
             lines.append(
                 f"| `{row.get('layer_type')}` | {row.get('observations')} | "
-                f"{_f(row.get('share')) * 100:.2f}% |"
+                f"{to_float(row.get('share')) * 100:.2f}% |"
             )
     else:
         lines.append("| `unknown` | 0 | 0.00% |")
@@ -571,8 +554,8 @@ def model_fingerprint_lines(
                 reasons = [str(reasons)]
             lines.append(
                 f"| `{row.get('model_name')}` | {row.get('confidence')} | "
-                f"{_f(row.get('score')):.1f}/{_f(row.get('max_score')):.1f} | "
-                f"{_f(row.get('match_ratio')) * 100:.1f}% | "
+                f"{to_float(row.get('score')):.1f}/{to_float(row.get('max_score')):.1f} | "
+                f"{to_float(row.get('match_ratio')) * 100:.1f}% | "
                 f"{', '.join(str(item) for item in reasons[:8]).replace('|', '/')} |"
             )
     else:
@@ -599,19 +582,19 @@ def operator_efficiency_lines(
     rows = [
         row
         for row in operator_efficiency_rows
-        if _f(row.get("reclaim_us_sustained")) > 0 or _f(row.get("reclaim_us_theoretical")) > 0 or _f(row.get("estimated_flops")) > 0 or _f(row.get("estimated_bytes")) > 0
+        if to_float(row.get("reclaim_us_sustained")) > 0 or to_float(row.get("reclaim_us_theoretical")) > 0 or to_float(row.get("estimated_flops")) > 0 or to_float(row.get("estimated_bytes")) > 0
     ][:top_n]
     for row in rows:
         lines.append(
             f"| `{row.get('name')}` | `{row.get('work_class')}` | `{row.get('dtype')}` | {row.get('call_count')} | "
-            f"{_f(row.get('duration_sum_us')) / 1000.0:.3f} | "
-            f"{_f(row.get('estimated_flops')) / 1e12:.6f} | "
-            f"{_f(row.get('achieved_tflops')):.3f} | "
-            f"{_f(row.get('theoretical_peak_tflops_or_tops')):.3f} | "
-            f"{_f(row.get('mfu_theoretical')) * 100:.2f}% | "
-            f"{_f(row.get('sustained_peak_tflops_or_tops')):.3f} | "
-            f"{_f(row.get('sustained_efficiency')) * 100:.2f}% | "
-            f"{_f(row.get('reclaim_us_sustained')) / 1000.0:.3f} | "
+            f"{to_float(row.get('duration_sum_us')) / 1000.0:.3f} | "
+            f"{to_float(row.get('estimated_flops')) / 1e12:.6f} | "
+            f"{to_float(row.get('achieved_tflops')):.3f} | "
+            f"{to_float(row.get('theoretical_peak_tflops_or_tops')):.3f} | "
+            f"{to_float(row.get('mfu_theoretical')) * 100:.2f}% | "
+            f"{to_float(row.get('sustained_peak_tflops_or_tops')):.3f} | "
+            f"{to_float(row.get('sustained_efficiency')) * 100:.2f}% | "
+            f"{to_float(row.get('reclaim_us_sustained')) / 1000.0:.3f} | "
             f"{row.get('confidence')} |"
         )
     if not rows:
@@ -669,9 +652,9 @@ def hardware_context_lines(
     )
     for row in theoretical_rows[:16]:
         lines.append(
-            f"| `{row.get('soc_version')}` | {row.get('cube_core_cnt')} | {_f(row.get('cube_freq_mhz')):.0f} | "
-            f"{_f(row.get('fp16_tflops')):.3f} | {_f(row.get('bf16_tflops')):.3f} | "
-            f"{_f(row.get('int8_tops')):.3f} | {_f(row.get('memory_size_gib')):.1f} | "
+            f"| `{row.get('soc_version')}` | {row.get('cube_core_cnt')} | {to_float(row.get('cube_freq_mhz')):.0f} | "
+            f"{to_float(row.get('fp16_tflops')):.3f} | {to_float(row.get('bf16_tflops')):.3f} | "
+            f"{to_float(row.get('int8_tops')):.3f} | {to_float(row.get('memory_size_gib')):.1f} | "
             f"`{Path(str(row.get('source_path') or '')).name}` |"
         )
     if not theoretical_rows:
@@ -703,7 +686,7 @@ def pipeline_coverage_lines(summary_manifest: Mapping[str, Any], operator_rows: 
         (
             f"| events | {coverage.get('events_with_pipeline_signal', 0)} | "
             f"{coverage.get('events_total', 0)} | "
-            f"{_f(coverage.get('events_ratio')) * 100:.2f}% |"
+            f"{to_float(coverage.get('events_ratio')) * 100:.2f}% |"
         ),
         (
             f"| operators | {coverage.get('operators_with_pipeline_signal', 0)} | "
@@ -723,9 +706,9 @@ def pipeline_coverage_lines(summary_manifest: Mapping[str, Any], operator_rows: 
     for row in operator_rows:
         op_type = str(row.get("op_type") or "unknown")
         type_counts[op_type] += 1
-        type_duration[op_type] = type_duration.get(op_type, 0.0) + _f(row.get("duration_sum_us")) / 1000.0
-        type_aic[op_type] = type_aic.get(op_type, 0.0) + _f(row.get("aicore_time")) / 1000.0
-        type_aiv[op_type] = type_aiv.get(op_type, 0.0) + _f(row.get("aiv_time")) / 1000.0
+        type_duration[op_type] = type_duration.get(op_type, 0.0) + to_float(row.get("duration_sum_us")) / 1000.0
+        type_aic[op_type] = type_aic.get(op_type, 0.0) + to_float(row.get("aicore_time")) / 1000.0
+        type_aiv[op_type] = type_aiv.get(op_type, 0.0) + to_float(row.get("aiv_time")) / 1000.0
     op_type_order = ("aic", "aiv", "mix_cv", "mix_comm_aiv", "communication", "aicpu", "dsa", "unknown")
     for op_type in op_type_order:
         if op_type not in type_counts:
@@ -758,7 +741,7 @@ def pipeline_coverage_lines(summary_manifest: Mapping[str, Any], operator_rows: 
             continue
         family = str(row.get("bound_family") or "unknown")
         family_counts[family] += 1
-        family_duration[family] = family_duration.get(family, 0.0) + _f(row.get("duration_sum_us")) / 1000.0
+        family_duration[family] = family_duration.get(family, 0.0) + to_float(row.get("duration_sum_us")) / 1000.0
     for family, count in family_counts.most_common():
         lines.append(f"| `{family}` | {count} | {family_duration.get(family, 0.0):.3f} |")
     if not family_counts:
@@ -792,7 +775,7 @@ def markdown_report(output_dir: Path, report_id: str) -> str:
     findings = finding_rows(output_dir)
     finding_counts = Counter(str(item.get("finding_type") or "unknown") for item in findings)
     coverage = summary_manifest.get("pipeline_coverage") or {}
-    coverage_pct = _f(coverage.get("events_ratio")) * 100
+    coverage_pct = to_float(coverage.get("events_ratio")) * 100
     lines = [
         "# Ascend Profiling Analysis Report",
         "",
@@ -939,8 +922,8 @@ def markdown_report(output_dir: Path, report_id: str) -> str:
         grouped.setdefault(key, []).append(row)
     anatomy_by_segment_for_inv = {str(item.get("segment_id")): item for item in anatomy_rows}
     for (family, layer_count), items in sorted(grouped.items(), key=lambda item: (-len(item[1]), item[0])):
-        wall = [_f(item.get("wall_ms")) for item in items]
-        bubble = [_f(item.get("largest_internal_bubble_ms")) for item in items]
+        wall = [to_float(item.get("wall_ms")) for item in items]
+        bubble = [to_float(item.get("largest_internal_bubble_ms")) for item in items]
         head_ms: list[float] = []
         main_ms: list[float] = []
         tail_ms: list[float] = []
@@ -948,9 +931,9 @@ def markdown_report(output_dir: Path, report_id: str) -> str:
             anatomy = anatomy_by_segment_for_inv.get(str(item.get("segment_id")))
             if anatomy is None:
                 continue
-            head_ms.append(_f(anatomy.get("head_wall_ms")))
-            main_ms.append(_f(anatomy.get("main_wall_ms")))
-            tail_ms.append(_f(anatomy.get("tail_wall_ms")))
+            head_ms.append(to_float(anatomy.get("head_wall_ms")))
+            main_ms.append(to_float(anatomy.get("main_wall_ms")))
+            tail_ms.append(to_float(anatomy.get("tail_wall_ms")))
 
         def _avg_ms(values: list[float]) -> float:
             return (sum(values) / len(values)) if values else 0.0
@@ -1005,6 +988,7 @@ def markdown_report(output_dir: Path, report_id: str) -> str:
             "- `report.xlsx:raw_kernel_index` maps normalized event ids back to original `kernel_details.csv` rows.",
             "- `report.xlsx:cross_rank_alignment` contains cross-rank step/operator alignment evidence.",
             "- `diagnosis_findings.json` is the machine-readable claim source for this Markdown report.",
+            "- `report.xlsx:bubble_windows` rows carry per-bubble host-side soft attribution (`soft_attribution.soft_root_cause_labels`, salvaged from the retired anomaly skill's rulebook §11) when `trace_view.json` was registered for the rank.",
             "",
             "## 15. Limitations",
             "",
@@ -1015,9 +999,16 @@ def markdown_report(output_dir: Path, report_id: str) -> str:
             "- Model fingerprint matching narrows candidates; vocab can be inferred only when lm_head/logits shapes are visible, and tensor parallelism may expose only a shard.",
             "- MFU is only a real capture-hardware metric when the selected hardware comes from profiling provenance, a collection manifest, a hardware profile, or explicit user input.",
             "- Operator FLOPs / bytes / roofline estimates are derived ranking signals, not diagnosis findings.",
-            "",
         ]
     )
+    # Host-trace soft-attribution status from the summarize stage: missing
+    # trace_view.json or truncated retention must be visible here, not
+    # just in summary_manifest.json.
+    host_trace = summary_manifest.get("host_trace") or {}
+    for item in host_trace.get("limitations") or []:
+        if str(item).strip():
+            lines.append(f"- {item}")
+    lines.append("")
     return "\n".join(lines)
 
 

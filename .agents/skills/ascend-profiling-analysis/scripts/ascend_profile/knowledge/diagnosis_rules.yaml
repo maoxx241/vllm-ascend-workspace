@@ -1,0 +1,127 @@
+version: 1
+
+# ----------------------------------------------------------------------------
+# Diagnosis rules — thresholds + per-finding metadata for diagnostics.py
+# ----------------------------------------------------------------------------
+# LOADED AT RUNTIME by ``diagnostics.load_diagnosis_rules``. This file
+# carries the *constants and wording* of each finding; the condition logic
+# (which rows trigger which finding) stays in ``diagnostics.py`` — no rule
+# DSL here.
+#
+# Per-finding fields:
+#   scope / severity / confidence: emitted verbatim on the finding.
+#   escalated_severity:          severity Python switches to when the
+#                                escalation threshold trips (see the finding's
+#                                comment).
+#   summary:                     static summary text (verbatim).
+#   summary_template:            ``str.format`` template; Python supplies the
+#                                named values. Summary text feeds claim_id
+#                                (stable_id), so template edits change claim
+#                                ids — treat as contract changes.
+#   limitations:                 static limitation strings, always attached.
+#   limitations_if_no_evidence:  attached when no per-step evidence id was
+#                                available (recurring_bubble_pattern).
+#   limitation_parts:            assembled by Python (base + optional parts).
+
+thresholds:
+  # Aligned-role duration_ratio (max/min across ranks) trigger.
+  cross_rank_skew_ratio: 2.0
+  # duration_ratio beyond which severity escalates to ``escalated_severity``.
+  high_skew_ratio: 4.0
+  # Absolute duration/start skew trigger, microseconds.
+  cross_rank_skew_us: 1000.0
+  # rank_summary wall_ms max/min trigger for dp_workload_imbalance.
+  dp_wall_skew_ratio: 2.0
+  # Cap on per-step evidence ids attached to one recurring_bubble_pattern
+  # finding (keeps the finding readable).
+  recurring_bubble_evidence_cap: 8
+
+findings:
+
+  # --- diagnose_cross_rank -------------------------------------------------
+  rank_workload_asymmetry:
+    scope: cross_rank
+    severity: medium
+    confidence: medium
+    summary: "Aligned ranks show different step family or layer-count structure in the same time window."
+
+  communication_collective_slow:
+    scope: cross_rank
+    severity: medium
+    escalated_severity: high    # when duration_ratio >= thresholds.high_skew_ratio
+    confidence: medium
+    summary: "Aligned collective communication shows large duration skew across ranks."
+
+  ep_load_imbalance_suspected:
+    scope: cross_rank
+    severity: medium
+    escalated_severity: high    # when duration_ratio >= thresholds.high_skew_ratio
+    confidence: medium
+    summary: "Aligned MoE dispatch/combine work shows large duration skew across ranks."
+
+  slow_rank_suspected:
+    scope: cross_rank
+    severity: medium
+    confidence: medium
+    summary: "Aligned matmul work has similar operator/shape signature but large launch-time skew."
+
+  # --- diagnose_rank_workload ----------------------------------------------
+  reduced_work_or_dummy_rank:
+    scope: cross_rank
+    severity: medium
+    confidence: medium
+    summary: "Some ranks lack attention/body evidence while other ranks contain full attention workload evidence."
+    limitations:
+      - "This is structural evidence only; semantic dummy-run labeling requires workload context."
+
+  dp_workload_imbalance:
+    scope: cross_rank
+    severity: medium
+    confidence: low
+    summary: "Rank-level capture wall time differs significantly; check DP workload and T-axis/shape distribution."
+    limitations:
+      - "Wall-time skew alone is not root cause evidence; shape-level corroboration is required."
+
+  device_idle_bubble:
+    scope: step
+    severity: medium
+    confidence: high
+    summary_template: "Step {segment_id} has heavy device idle bubbles."
+
+  # --- diagnose_recurring_bubbles -------------------------------------------
+  recurring_bubble_pattern:
+    scope: rank
+    severity: medium
+    confidence: medium
+    summary_template: "Rank {rank_id} shows device-idle bubbles in {recurrence_pct:.0f}% of its steps (dominant idle pattern: {dominant_idle_pattern})."
+    limitations_if_no_evidence:
+      - "Aggregate over step_summary.csv rows for this rank; no per-step evidence id was available to reference."
+
+  # --- diagnose_profile (wait-anchor / AICPU loops) --------------------------
+  wait_anchor_false_hotspot:
+    scope: operator
+    severity: low
+    confidence: high
+    summary_template: "Operator {name} has high wait ratio and low execution duration."
+    limitation_parts:
+      # ``wait_anchor_ops.csv`` is itself the per-kernel evidence (with
+      # ``row_ranges`` + ``sample_event_ids`` pointing back to the
+      # normalized event index). The evidence-chain validator only knows
+      # about ``evidence_index.csv`` (``evd_*`` ids), so the wait_anchor
+      # row's own back-references go into an explicit ``limitations``
+      # string instead of faking a cross-ID match.
+      base: "Wait-anchor false-hotspot is derived directly from wait_anchor_ops.csv (per-kernel aggregate); not aligned to an evidence_index.csv span."
+      row_ranges: "Source rows in kernel_details.csv: {row_ranges}."
+      sample_event_ids: "Sample event ids in normalized_event_index.csv: {sample_event_ids}."
+
+  aicpu_exposed:
+    scope: operator
+    severity: medium
+    confidence: medium
+    summary_template: "AICPU operator {name} appears exposed rather than hidden by AI Core work."
+    limitations:
+      # No cross-rank alignment row / evidence row is produced for
+      # AICPU-exposure findings: the heuristic looks at one rank at a time
+      # and uses the aicpu_summary row directly. The explicit limitation
+      # keeps the evidence-chain validator accepting the finding.
+      - "Derived from aicpu_summary.csv per-rank rollup; no cross-rank alignment_id is produced for AICPU-exposed findings. Trace back via the kernel name + rank_id."

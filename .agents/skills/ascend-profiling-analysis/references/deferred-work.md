@@ -6,13 +6,13 @@ the reviewer flagged as P2.
 
 ## 1. `html_report.py` modularization
 
-The file is currently ~2.7 k lines mixing data loading, metrics,
+The file is currently ~3 k lines mixing data loading, metrics,
 view-model construction, CSS, and JS. Recommended split (see review §6.4):
 
 ```
 ascend_profile/html_report/
   __init__.py     # re-exports build_html_report for callers
-  data.py         # Bundle, Event, _load_events, _attach_raw_rows
+  data.py         # Bundle, Event, _attach_raw_rows
   metrics.py     # short_op_name, union_duration_us, kernel_rollup_by_bound
   styles.py       # CSS + JS template strings
   views.py        # render_l1_view / render_l2_views / render_l3_views
@@ -22,26 +22,29 @@ ascend_profile/html_report/
 Risk: CSS is composed via f-string today; moving it requires careful
 brace-escaping. Defer until we touch the views again.
 
-## 2. `common.py` split
+**Partial progress (Phase 3):** the data layer is unified — `_load_events`
+delegates to `metrics.load_events_csv` and adapts into the render-side
+`Event` view (`Event.from_normalized`); `load_csv` / `load_json` delegate to
+`store.csv_rows` / `store.read_json`. What remains is the view/CSS split
+above.
 
-`ascend_profile/common.py` is ~1.4 k lines containing schema dataclasses,
-CSV/JSON IO, rank discovery, shape parsing, taxonomy/role classification,
-pipeline-bound classification, metrics/interval-union, and XLSX writing.
+## 2. `common.py` split — DONE (Phase 3)
 
-Suggested split:
+`common.py` was split by responsibility; it remains as a
+backwards-compatible facade that re-exports the full historic public
+surface (new code should import from the real modules):
 
 ```
 ascend_profile/
-  schema.py     # SCHEMA_VERSION + dataclasses + EvidenceRef
-  io.py         # csv_rows, write_csv, read_json, write_json
-  taxonomy.py   # categories_and_roles, role classification
-  pipeline.py   # pipeline_bound, mte/aic ratios
-  metrics.py    # interval union, percentile helpers
-  xlsx.py       # write_xlsx
+  models.py     # schema dataclasses (SourceRef, NormalizedEvent, segments, …)
+  store.py      # JSON/JSONL/CSV/XLSX IO, id/time, coercion helpers, KNOWLEDGE_DIR
+  sources.py    # rank-dir discovery + kernel_details row extraction
+  pipeline.py   # CANN pipeline-stage metrics, op_type, bound_class
+  work.py       # FLOP/byte estimates from shape fields
+  rules.py      # categories_and_roles (YAML-driven), attention-family resolver
+  metrics.py    # interval union / bubbles, quantile, artifact loaders
+  common.py     # facade re-exporting the above
 ```
-
-Risk: every stage imports from `common`. Needs a deprecation shim or
-a deep refactor commit. Defer until the schema is otherwise stable.
 
 ## 3. `segment.py` split
 
@@ -72,22 +75,33 @@ let us:
 * document the artifact surface in one place
 * power IDE auto-complete for downstream consumers
 
-Already have `schemas/analysis_bundle.schema.json` as a starting point.
+The old `schemas/analysis_bundle.schema.json` draft was deleted (zero
+consumers — nothing loaded or validated it). A future registry would start
+from the per-stage `*_manifest.json` payloads and
+`knowledge/semantic_conventions.yaml`, not from that draft.
 
-## 5. Taxonomy externalization
+## 5. Taxonomy externalization — DONE (Phase 3)
 
-`categories_and_roles()` is currently Python code that pattern-matches
-kernel names. A `taxonomy.yaml` rule file plus a tiny matcher would let
-us add operator families (new attention kernels, new MoE primitives)
-without editing Python. See review §6.5 for the proposed shape.
+`categories_and_roles()` is data-driven: the ordered rule list lives in
+`knowledge/kernel_signatures.yaml:match_rules` and is loaded (and
+schema-validated) at runtime by `rules.py`. The attention-family resolver
+similarly loads `knowledge/attention_families.yaml:cheat_sheet.resolver`.
+Adding operator families (new attention kernels, new MoE primitives) is a
+YAML edit.
 
-**Partial progress:** `scripts/ascend_profile/knowledge/semantic_conventions.yaml`
-now pins the enum catalogue (`op_type`, `op_roles`, `op_categories`,
-`bound_family`, `block_kind`, `finding_type`, `alignment_method`,
-`alignment_confidence`, `html_status`, `report_mode`).
-`tests/test_semantic_conventions.py` keeps Python and YAML in sync. The
-next step is replacing the Python rule body of `categories_and_roles()`
-with a YAML-driven matcher (`operator_taxonomy.yaml`).
+`scripts/ascend_profile/knowledge/semantic_conventions.yaml` pins the enum
+catalogue (`op_type`, `op_roles`, `op_categories`, `bound_family`,
+`block_kind`, `finding_type`, `anomaly_tag`, `dominant_idle_pattern`,
+`soft_root_cause_label`, `alignment_method`, `alignment_confidence`,
+`html_status`, `report_mode`). `tests/test_semantic_conventions.py` plus
+`tests/test_kernel_signatures.py` keep the emitted values and the YAML in
+sync (including the full set of categories/roles the matcher can emit).
+
+Remaining in this area: `moe_families.yaml` is still a document-level
+contract (its cheat-sheet has no production consumer; only
+`tests/test_moe_families.py` mirrors it), and the finding thresholds /
+wording moved to `knowledge/diagnosis_rules.yaml` while the finding
+*conditions* intentionally stay in `diagnostics.py`.
 
 ## 5b. Segmentation strategy externalization
 
@@ -182,9 +196,32 @@ restructuring touch `segment.py` together.
 Acceptance: dsv4 prefill segment stage finishes in < 60 s; existing
 unit tests in `tests/test_segment_validator.py` continue to pass.
 
-## 11. `ascend-profiling-anomaly` overlap
+## 11. `ascend-profiling-anomaly` overlap — RESOLVED (deprecate)
 
 The user-level `ascend-profiling-anomaly` skill (in `.claude/`) still
 operates on raw kernel_details for ad-hoc anomaly hunts. Once this
 skill stabilizes, decide whether to (a) deprecate the anomaly skill,
 or (b) have it call into this skill's framework as a thin orchestrator.
+
+**Resolution (profiling-skills refactor, Phase 2):** option (a). The
+anomaly skill's unique detection capabilities were salvaged into this
+framework with thresholds unchanged (its rulebook §10/§11/§12):
+
+- `PRELAUNCH_GAP_HEAVY` / `TAIL_GAP_HEAVY` step tags and
+  `prelaunch_gap_ms` / `tail_gap_ms` columns (`summarize.neighbor_gap_map`,
+  `summarize.anomaly_tags`);
+- rank-level `RECURRING_BUBBLE_PATTERN` rollup + `dominant_idle_pattern`
+  (`summarize.recurring_bubble_rollup`, `diagnostics.diagnose_recurring_bubbles`);
+- conservative `PARTIAL_CAPTURE_BOUNDARY`
+  (`summarize.apply_partial_capture_boundary_tags`);
+- host-side bubble soft attribution from `trace_view.json`
+  (`host_trace.py`, `evidence/bubble_windows.jsonl:soft_attribution`).
+
+Already covered before the salvage (verified identical thresholds):
+bubble detection (`common.bubble_windows`, `DEVICE_IDLE_GAP_HEAVY` /
+`INTERNAL_BUBBLE_HEAVY`), wait-anchor false hotspots
+(`0.95 / 10 us / top-10`), AICPU exposure (`0.9 / 0.2`). The anomaly
+skill's Mode-1 orchestration (collect + analyze) is owned by
+`ascend-profiling-collection`; its `--machine` entry is deprecated.
+The old skill keeps a DEPRECATED banner pointing here and is no longer
+maintained.

@@ -5,7 +5,7 @@ description: Analyze Ascend NPU torch profiler output (kernel_details.csv / trac
 
 # Ascend Profiling Analysis
 
-> Status: **experimental / beta**. 当前 PR 主要提供：远端 pipeline、evidence-chained report、HTML 三级聚焦视图、stage selector。**主动 knowledge 仍在 Python 内（`common.py:categories_and_roles`、`segment.py` 切分规则、`classify.py` block 拆分等）**，YAML 化 knowledge 已起步（见 [Knowledge map](#knowledge-map-for-agents)）但尚未替换 Python 规则。新模型 / 新算子族碰到问题时，仍可能需要改 Python，请把 counterexample 落到 `knowledge/known_counterexamples.md` 再改代码。
+> Status: **experimental / beta**. 当前 PR 主要提供：远端 pipeline、evidence-chained report、HTML 三级聚焦视图、stage selector。Knowledge 已分层：kernel 分类规则（`kernel_signatures.yaml:match_rules`）、attention 家族判定（`attention_families.yaml:cheat_sheet.resolver`）、diagnosis 阈值与文案（`diagnosis_rules.yaml`）、segment 层锚点先验（`segmentation_rules.yaml`）均为运行时加载的 YAML；仍在 Python 内的是 `segment.py` 切分策略、`classify.py` block 拆分、以及 finding 的触发条件（见 [Knowledge map](#knowledge-map-for-agents)）。新模型 / 新算子族碰到问题时，优先改 knowledge YAML；改 Python 前请把 counterexample 落到 `knowledge/known_counterexamples.md`。
 
 Remote substrate rule: use `.remote-dev` remote tools for ad hoc remote
 read/edit/bash/search/patch work around profiling roots and generated reports.
@@ -168,6 +168,9 @@ python3 .agents/skills/ascend-profiling-analysis/scripts/profile_sweep.py \
 `summarize` 阶段额外产出：
 
 - `step_anatomy.csv`: 每个 step 的 head / main / tail / bubble 拆分（行号 + start_us / end_us + wall/busy/bubble 毫秒），由 `layer_segments.json` 推导。规则见 `scripts/ascend_profile/knowledge/step_anatomy.md`。
+- `step_summary.csv` 增补 `prelaunch_gap_ms` / `tail_gap_ms`（与同 rank 相邻 segment 之间的 device 空窗；capture 边缘为未知记空）与对应 anomaly tag `PRELAUNCH_GAP_HEAVY` / `TAIL_GAP_HEAVY`（阈值 `>= max(1 ms, 10% wall)`），以及保守的截断标记 `PARTIAL_CAPTURE_BOUNDARY`（capture 边界上的不完整 segment 且体量 >= 完整 step 事件中位数的一半才打）。阈值继承自已退役的 user 级 `ascend-profiling-anomaly` rulebook §10。
+- `rank_summary.csv` 增补 rank 级 bubble 复发聚合：`bubble_recurrence_ratio` / `bubbling_step_count` / `dominant_idle_pattern`（prelaunch / tail / internal_bubble / none）/ `recurring_bubble_pattern`；>=60% 完整 step 有 bubble（且 >=3 个完整 step）时由 diagnostics 产 `recurring_bubble_pattern` finding。
+- `evidence/bubble_windows.jsonl` 每行新增 `soft_attribution`：当 rank 在 `source_index.json` 注册了 `trace_view.json` 时，兼容 CANN 顶层事件数组和 Chrome `traceEvents` object wrapper，流式解析 host 侧事件（`cpu_op` / `python_function` / `AscendCL`，限量保留），给每个 bubble 附 `soft_root_cause_labels` 候选根因（`possible_sync_or_h2d` / `possible_comm_wait` / `possible_untraced_host_blocking` / `possible_host_launch_lag` / `possible_python_serialization_or_lock` / `insufficient_evidence`，rulebook §11）；文件缺失或没有解析到完整 host event 时为 `null`，并在 `summary_manifest.json:host_trace.limitations` 与 report.md Limitations 注明，避免把空事件集误判为 `possible_untraced_host_blocking`。标签是候选，不是断言。
 - `operator_summary.csv` 现包含原始 CANN pipeline 字段（`aicore_time / aiv_time / aic_mac_time / aic_fixpipe_time / aic_mte1_time / aic_mte2_time / aic_scalar_time / aiv_vec_time / aiv_mte2_time / aiv_mte3_time / aiv_scalar_time`，单位 us），以及四列分类：
   - `op_type ∈ {aic, aiv, mix_cv, mix_comm_aiv, communication, aicpu, dsa, unknown}` — 来源是 `kernel_details.csv` 的 `Accelerator Core` 列，CV 解耦架构下 FIA / GroupedMatmul 等真正同时跑 Cube + Vector 的算子归 `mix_cv`；`DispatchFFNCombine` 等 comm + AIV 融合算子归 `mix_comm_aiv`。
   - `bound_stage` — 9 个 sub-stage 中累计耗时最大的那个（`aic_mac_time` / `aic_mte2_time` / `aiv_vec_time` …），`mix_comm_aiv` 只在 AIV 4 个 stage 里取最大。
@@ -334,10 +337,10 @@ knowledge can't express it**. Suggested reading order:
 2. `scripts/ascend_profile/knowledge/semantic_conventions.yaml` — enums for
    `op_type` / `block_kind` / `finding_type` / `alignment_method`. New
    values must be added here first so downstream schema tests stay green.
-3. `scripts/ascend_profile/knowledge/operator_taxonomy.md` + Python
-   `common.categories_and_roles()` — kernel name → `(op_categories,
-   op_roles)`. (Rule loader from YAML is on the roadmap; current source of
-   truth is still Python.)
+3. `scripts/ascend_profile/knowledge/index.md` ("Operator taxonomy") +
+   `kernel_signatures.yaml`（`match_rules:` 段即运行时规则）+
+   `rules.categories_and_roles()` — kernel name → `(op_categories,
+   op_roles)`.（规则已由 YAML 驱动：改分类只动 YAML；loader 在 `rules.py`。）
 4. `scripts/ascend_profile/knowledge/communication_taxonomy.md` — HCCL /
    dispatch / combine semantics.
 5. `scripts/ascend_profile/knowledge/segmentation_rules.yaml` — single
@@ -382,9 +385,9 @@ artifacts are reused.
     ascend_profile/            # analysis framework, runs remotely as a package
       analyze.py normalize.py segment.py classify.py summarize.py
       cross_rank.py diagnostics.py report.py html_report.py sweep.py
-      common.py
-      knowledge/               # taxonomy / pipeline / step-anatomy docs
-      schemas/                 # analysis_bundle.schema.json
+      common.py                # facade; real modules: models.py store.py
+                               # sources.py pipeline.py work.py rules.py metrics.py
+      knowledge/               # taxonomy rules / enums / thresholds (YAML) + docs
       README.md                # framework data contract
 ```
 

@@ -1,1 +1,3 @@
 PyYAML>=6.0,<7
+# Tests additionally require pytest (see tests/README.md); it is a local
+# test-only dependency and is intentionally not pinned here.

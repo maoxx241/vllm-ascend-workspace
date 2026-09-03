@@ -2,9 +2,11 @@ version: 1
 
 # Stable enumerations used across CSV / JSON artifacts in this skill.
 #
-# Source of truth for these enums lives in Python today
-# (``common.py:categories_and_roles``, ``classify.py:decompose_layer_into_blocks``,
-# ``cross_rank.py``, ``diagnostics.py``). This YAML is the *contract* layer:
+# Source of truth for these enums lives in the emitting code
+# (``kernel_signatures.yaml:match_rules`` via ``rules.categories_and_roles``,
+# ``classify.py:decompose_layer_into_blocks``,
+# ``cross_rank.py``, ``diagnostics.py``, ``summarize.py:anomaly_tags``,
+# ``host_trace.py``). This YAML is the *contract* layer:
 # adding a new value here is the first step before extending Python so that
 # downstream readers (HTML report, schema tests, agent prompts) all agree.
 #
@@ -173,12 +175,12 @@ attributes:
 
       Two-stage decision:
 
-        Stage A (category-driven, in ``common.resolve_attention_family``):
+        Stage A (category-driven, in ``rules.resolve_attention_family``):
           From kernel categories alone we can't pick between MHA / GQA
           / MQA, so the resolver returns the umbrella ``gqa_or_mha``.
 
         Stage B (shape-driven, best-effort, in
-        ``common.refine_dense_attention_from_shapes``):
+        ``rules.refine_dense_attention_from_shapes``):
           ``kernel_details.csv`` carries an ``Input Shapes`` cell per
           event. For FIA / UnpadFA events we parse the Q/K tensor
           dims (last axis = head_dim, second-to-last = num_heads),
@@ -247,8 +249,58 @@ attributes:
       - reduced_work_or_dummy_rank
       - rank_workload_asymmetry
       - device_idle_bubble
+      - recurring_bubble_pattern   # rank-level: >=60% of steps bubble (rulebook §10, salvaged from ascend-profiling-anomaly)
       - aicpu_exposed
       - wait_anchor_false_hotspot
+
+  anomaly_tag:
+    description: |
+      Tags emitted into ``step_summary.csv:anomaly_tags`` by
+      ``summarize.anomaly_tags`` plus the rank-level recurring-bubble
+      rollup. Thresholds for the gap/bubble tags are inherited from the
+      retired user-level ``ascend-profiling-anomaly`` rulebook §10.
+
+      ``RECURRING_BUBBLE_PATTERN`` is the only rank-scoped value: it is
+      NOT written into per-step ``anomaly_tags`` lists; it surfaces via
+      ``rank_summary.csv:recurring_bubble_pattern`` and the
+      ``recurring_bubble_pattern`` diagnosis finding.
+    type: enum
+    values:
+      - DEVICE_IDLE_GAP_HEAVY      # underfeed_ratio >= 0.30 of step wall
+      - INTERNAL_BUBBLE_HEAVY      # largest internal bubble >= max(1 ms, 10% of step wall)
+      - PRELAUNCH_GAP_HEAVY        # idle before first device event >= max(1 ms, 10% of step wall)
+      - TAIL_GAP_HEAVY             # idle after last device event >= max(1 ms, 10% of step wall)
+      - PARTIAL_CAPTURE_BOUNDARY   # capture start/end ends in a substantial incomplete segment
+      - RECURRING_BUBBLE_PATTERN   # rank-level aggregate, see description above
+
+  dominant_idle_pattern:
+    description: |
+      Rank-level rollup in ``rank_summary.csv:dominant_idle_pattern``:
+      which idle family dominates on average across the rank's complete
+      steps. Same label space as the retired anomaly skill's
+      ``aggregate_group_metrics``.
+    type: enum
+    values:
+      - prelaunch
+      - tail
+      - internal_bubble
+      - none
+
+  soft_root_cause_label:
+    description: |
+      Host-side soft-attribution labels attached to rows of
+      ``evidence/bubble_windows.jsonl`` by ``host_trace.py``. Thresholds
+      (0.2 marker overlap / 0.05 host coverage / 0.1 launch-lag floor)
+      come from the retired anomaly skill's rulebook §11. Labels are
+      candidates, never asserted root causes.
+    type: enum
+    values:
+      - possible_sync_or_h2d
+      - possible_comm_wait
+      - possible_untraced_host_blocking
+      - possible_host_launch_lag
+      - possible_python_serialization_or_lock
+      - insufficient_evidence
 
   alignment_method:
     description: |

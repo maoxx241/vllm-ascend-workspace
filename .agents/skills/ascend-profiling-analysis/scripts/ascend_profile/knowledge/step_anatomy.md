@@ -74,10 +74,52 @@ common case).
 - Use `head_row_*`, `main_row_*`, `tail_row_*` to jump directly to the
   underlying CSV rows for evidence; the time fields are auxiliary.
 
-## 5. Cross-references
+## 5. Edge gaps, recurrence, and capture boundaries
+
+The anatomy windows above are **row-range** decompositions inside a step.
+Three complementary anomaly signals live next to them (thresholds salvaged
+from the retired user-level `ascend-profiling-anomaly` rulebook §10/§11/§12):
+
+- `prelaunch_gap_ms` / `tail_gap_ms` (`step_summary.csv`) — step windows
+  are event-derived (`start_us`/`end_us` = min/max of member events), so
+  the old "idle before the first / after the last device interval of the
+  step service window" is measured against the **neighbouring segments**
+  on the same rank instead: segmentation is an exact cover, so the idle
+  between the previous segment's last event end and this segment's first
+  event start is the pre-launch idle (and symmetrically for the tail).
+  Edge segments get `None` (unknown, not zero). `PRELAUNCH_GAP_HEAVY` /
+  `TAIL_GAP_HEAVY` fire at `gap >= max(1.0 ms, 10% of step wall)`. Unlike
+  `head_bubble_ms` / `tail_bubble_ms` (idle *between* events inside the
+  head/tail row windows), these measure idle *adjacent to* the whole
+  segment, i.e. inter-step host/launch stalls.
+- `RECURRING_BUBBLE_PATTERN` — rank-level aggregate, **not** a per-step
+  tag. `summarize.recurring_bubble_rollup` computes
+  `bubble_recurrence_ratio` (share of complete steps with
+  `bubble_count > 0`) and `dominant_idle_pattern`
+  (`prelaunch` / `tail` / `internal_bubble` / `none`, by mean gap) into
+  `rank_summary.csv`; a rank with >= 60% recurrence over >= 3 complete
+  steps raises the `recurring_bubble_pattern` diagnosis finding.
+- `PARTIAL_CAPTURE_BOUNDARY` — conservative truncation tag on
+  **incomplete** segments (`complete=false`) that touch the rank's
+  capture start/end row boundary AND hold at least half the median
+  complete-step event count on the rank. Ranks without any complete step
+  and tiny warmup/teardown slivers never tag.
+
+Bubble windows in `evidence/bubble_windows.jsonl` additionally carry a
+`soft_attribution` object (rulebook §11 labels such as
+`possible_sync_or_h2d`, `possible_host_launch_lag`) when a
+`trace_view.json` is registered for the rank in `source_index.json`;
+`null` plus a `summary_manifest.json:host_trace.limitations` entry when
+it is not. Labels are candidate root causes, never asserted ones.
+
+## 6. Cross-references
 
 - Step segmentation rules: `ascend_profile/segment.py` (especially
   `StepPlan` / `StepSegment.segment_type`).
 - Layer segmentation rules: `LayerSegment` and the layer assembly logic
   in `segment.py:build_layers` and downstream helpers.
 - Pipeline-stage interpretation per layer: `pipeline_taxonomy.md`.
+- Edge-gap / recurrence / soft-attribution thresholds and their
+  provenance: `semantic_conventions.yaml` (`anomaly_tag`,
+  `dominant_idle_pattern`, `soft_root_cause_label`) and
+  `ascend_profile/host_trace.py`.
