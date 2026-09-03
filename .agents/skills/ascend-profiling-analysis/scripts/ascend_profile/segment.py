@@ -3293,10 +3293,13 @@ def build_segments_for_rank(
                 evidence_id=layer_evidence_id,
                 kind="layer_window",
                 summary=f"Exact layer observation from {', '.join(anchor_signature(anchor) for anchor in layer.anchors)}.",
-                events=layer_events,
+                # Slimmed: no event ids / metrics on per-layer evidence —
+                # the row window is derivable from the owning LayerSegment,
+                # and these per-layer payloads dominated
+                # structure_evidence_graph.json on large captures.
+                events=(),
                 segment_id=segment_id,
                 layer_id=layer_id,
-                metrics=metrics_for_events(layer_events, top_gap_limit=0),
             )
             layer_segments.append(
                 LayerSegment(
@@ -3355,7 +3358,21 @@ def build_segments_for_rank(
             )
         )
 
-        role_counts = Counter(role for event in step_events for role in event.op_roles)
+        # Single pass over step_events: bucket per-role counts and name
+        # samples together (previously two full re-scans per role). Dict
+        # insertion order matches the former Counter build order, so the
+        # observation sequence is unchanged. ``event_ids`` is no longer
+        # carried — it duplicated the step's event range and dominated the
+        # graph size; the per-role count still feeds ``confidence``.
+        role_counts: dict[str, int] = {}
+        role_names: dict[str, set[str]] = {}
+        for event in step_events:
+            for role in event.op_roles:
+                role_counts[role] = role_counts.get(role, 0) + 1
+                names = role_names.get(role)
+                if names is None:
+                    names = role_names[role] = set()
+                names.add(event.name_raw)
         for role, count in role_counts.items():
             obs_id = stable_id("struct", segment_id, role)
             observations.append(
@@ -3366,8 +3383,8 @@ def build_segments_for_rank(
                     segment_id=segment_id,
                     role=role,
                     role_family=role.split(".")[0],
-                    implementation_evidence=tuple(sorted({event.name_raw for event in step_events if role in event.op_roles})[:16]),
-                    event_ids=tuple(event.event_id for event in step_events if role in event.op_roles)[:64],
+                    implementation_evidence=tuple(sorted(role_names[role])[:8]),
+                    event_ids=(),
                     evidence_ids=(evidence_id,),
                     confidence="high" if count > 0 else "low",
                 )
@@ -3492,14 +3509,15 @@ def segment_profile(
         "interior_island_total": interior_island_total,
         "hard_errors": hard_errors,
     }
-    write_json(output_dir / "step_segments.json", {"step_segments": all_segments})
-    write_json(output_dir / "layer_segments.json", {"layer_segments": all_layers})
+    write_json(output_dir / "step_segments.json", {"step_segments": all_segments}, compact=True)
+    write_json(output_dir / "layer_segments.json", {"layer_segments": all_layers}, compact=True)
     write_json(
         output_dir / "structure_evidence_graph.json",
         {
             "structure_observations": all_observations,
             "evidence": all_evidence,
         },
+        compact=True,
     )
     write_json(output_dir / "segment_model_context.json", model_context)
     write_json(output_dir / "segment_manifest.json", manifest)

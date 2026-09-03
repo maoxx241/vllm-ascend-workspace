@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import argparse
 import functools
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -108,6 +108,46 @@ def _meta(finding_type: str) -> Mapping[str, Any]:
     return meta
 
 
+# Whitelist of cross_rank alignment-row keys copied into finding metrics.
+# Report/HTML consumers read only first-class finding fields (severity,
+# summary, evidence_ids, ...), never finding metrics; the list below keeps
+# the human-readable scalars (durations, skews, rank/step context) and
+# drops the giant ``event_ids`` cell, which multiplied finding size on
+# many-rank captures (64 ids x ~5285 findings after the alignment cap).
+_CROSS_RANK_FINDING_METRIC_KEYS = frozenset({
+    "alignment_id",
+    "alignment_type",
+    "alignment_method",
+    "alignment_confidence",
+    "alignment_limitations",
+    "rank_ids",
+    "segment_ids",
+    "evidence_ids",
+    "start_us",
+    "end_us",
+    "member_count",
+    "rank_count",
+    "role",
+    "name_key",
+    "shape_signature",
+    "bucket_us",
+    "start_skew_us",
+    "wall_skew_us",
+    "duration_min_us",
+    "duration_max_us",
+    "duration_skew_us",
+    "duration_ratio",
+    "wait_max_us",
+    "layer_counts",
+    "step_families",
+    "is_structure_mismatch",
+})
+
+
+def _cross_rank_finding_metrics(row: Mapping[str, Any]) -> dict[str, Any]:
+    return {key: row[key] for key in row if key in _CROSS_RANK_FINDING_METRIC_KEYS}
+
+
 def as_float(row: Mapping[str, Any], key: str, default: float = 0.0) -> float:
     try:
         return float(row.get(key) or default)
@@ -174,7 +214,7 @@ def diagnose_cross_rank(alignment_rows: Sequence[Mapping[str, Any]]) -> list[Dia
                     confidence=str(meta["confidence"]),
                     rank_ids=rank_ids,
                     alignment_ids=(alignment_id,),
-                    metrics=dict(row),
+                    metrics=_cross_rank_finding_metrics(row),
                 )
             )
         if role == "communication.collective" and (duration_ratio >= thresholds["cross_rank_skew_ratio"] or duration_skew >= thresholds["cross_rank_skew_us"]):
@@ -188,7 +228,7 @@ def diagnose_cross_rank(alignment_rows: Sequence[Mapping[str, Any]]) -> list[Dia
                     confidence=str(meta["confidence"]),
                     rank_ids=rank_ids,
                     alignment_ids=(alignment_id,),
-                    metrics=dict(row),
+                    metrics=_cross_rank_finding_metrics(row),
                 )
             )
         if role in {"moe.dispatch_expert_compute", "moe.dispatch_or_combine"} and (
@@ -204,7 +244,7 @@ def diagnose_cross_rank(alignment_rows: Sequence[Mapping[str, Any]]) -> list[Dia
                     confidence=str(meta["confidence"]),
                     rank_ids=rank_ids,
                     alignment_ids=(alignment_id,),
-                    metrics=dict(row),
+                    metrics=_cross_rank_finding_metrics(row),
                 )
             )
         if role == "compute.matmul" and start_skew >= thresholds["cross_rank_skew_us"]:
@@ -218,7 +258,7 @@ def diagnose_cross_rank(alignment_rows: Sequence[Mapping[str, Any]]) -> list[Dia
                     confidence=str(meta["confidence"]),
                     rank_ids=rank_ids,
                     alignment_ids=(alignment_id,),
-                    metrics=dict(row),
+                    metrics=_cross_rank_finding_metrics(row),
                 )
             )
     return findings
@@ -393,7 +433,7 @@ def diagnose_profile(output_dir: Path) -> dict[str, Any]:
         "diagnosis_findings": findings,
         "counts": {
             "finding_count": len(findings),
-            "by_type": dict(sorted({item.finding_type: sum(1 for finding_item in findings if finding_item.finding_type == item.finding_type) for item in findings}.items())),
+            "by_type": dict(sorted(Counter(item.finding_type for item in findings).items())),
         },
     }
     write_json(output_dir / "diagnosis_findings.json", payload)

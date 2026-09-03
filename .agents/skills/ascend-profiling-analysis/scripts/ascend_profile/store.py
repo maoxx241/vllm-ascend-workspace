@@ -59,9 +59,23 @@ def to_plain(value: Any) -> Any:
 _PLAIN_PASSTHROUGH = (str, int, float, bool, type(None))
 
 
-def write_json(path: Path, payload: Any) -> None:
+def write_json(path: Path, payload: Any, *, compact: bool = False) -> None:
+    """Write ``payload`` as sorted-key JSON with a trailing newline.
+
+    Default is the historic pretty form (2-space indent) used for manifests
+    and other small human-inspected files. ``compact=True`` drops the
+    indent and uses tight separators — same parsed content, much smaller
+    files for bulk artifacts (alignments, segments, evidence graphs). All
+    read paths go through ``json.loads`` and are unaffected; only manual
+    pretty-print inspection of those bulk files changes.
+    """
+
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(to_plain(payload), ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    if compact:
+        text = json.dumps(to_plain(payload), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    else:
+        text = json.dumps(to_plain(payload), ensure_ascii=False, indent=2, sort_keys=True)
+    path.write_text(text + "\n", encoding="utf-8")
 
 
 def read_json(path: Path, default: Any = None) -> Any:
