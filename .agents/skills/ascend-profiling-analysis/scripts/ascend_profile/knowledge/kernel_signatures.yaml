@@ -104,7 +104,12 @@ match_rules:
     #       - lightning_indexer + sparse_sharedkv, no kv_compressor -> DSA (V3.2)
     #       - kv_compressor + dense FIA, no indexer/sparse_sharedkv -> HCA (V4)
     - id: attention.sparse_sharedkv
-      when: {any_of: [sparseattnsharedkv, sparseattentionsharedkv, sharedkv]}
+      # sparseflashmla / sparseflashattention are the same kernel under
+      # newer CANN / vllm-ascend names (user-confirmed 2026-09: V4 CSA
+      # ships it as SparseFlashMla, V3.2 DSA as SparseFlashAttention).
+      # They MUST stay ahead of attention.flash_score in rule order —
+      # "sparseflashattention" contains the "flashattention" substring.
+      when: {any_of: [sparseattnsharedkv, sparseattentionsharedkv, sharedkv, sparseflashmla, sparseflashattention]}
       branches:
         - when: {any_of: [metadata]}
           add_categories: [attention.sparse_sharedkv.metadata]
@@ -194,7 +199,10 @@ match_rules:
     # decided by the *combination* of category signatures present in a block
     # (see attention_families.yaml).
     - id: attention.flash_score
-      when: {any_of: [fusedinferattentionscore, unpadflashattention, flashattentionscore, flashattention, pagedattentionmask]}
+      # none_of: the sparse-attention kernel (SparseFlashAttention /
+      # SparseFlashMla, tagged attention.sparse_sharedkv above) contains
+      # the "flashattention" substring but is NOT a dense flash-score op.
+      when: {any_of: [fusedinferattentionscore, unpadflashattention, flashattentionscore, flashattention, pagedattentionmask], none_of: [sparseflash]}
       add_categories: [attention.flash_score]
       add_roles: [attention]
 
@@ -482,13 +490,15 @@ kernels:
 
   # ---- Sparse-attention building blocks: shared by DSA (V3.2) and CSA (V4).
   - profile_name: kvquantsparseattnsharedkv
-    aliases: [sparseattnsharedkv, sparseattentionsharedkv, sharedkv]
+    aliases: [sparseattnsharedkv, sparseattentionsharedkv, sharedkv, sparseflashmla, sparseflashattention]
     python_entry: torch.ops._C_ascend.npu_sparse_flash_attention
     categories: [attention.sparse_sharedkv]
     roles: [attention]
     used_by_family: [dsa, csa]
     evidence:
       - "vllm-ascend/vllm_ascend/attention/sfa_v1.py:1064"
+      - "user-confirmed 2026-09: newer CANN names the same kernel
+        SparseFlashMla (V4 CSA) or SparseFlashAttention (V3.2 DSA)"
     notes: |
       Main sparse attention kernel. Used by both DSA (V3.2) and CSA (V4)
       layers — the architecture family is resolved by whether a
