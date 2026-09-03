@@ -167,12 +167,20 @@ profile_analysis/
   evidence/
     bubble_windows.jsonl
   evidence_index.csv
-  raw_kernel_index.csv
+  report/
+    report.md
+    report.xlsx
+    report.html            # html_report_v2 thin shell (or legacy single file)
+    assets/                # v2 lazy-loaded gzipped JSON views
+    analysis_summary.json  # agent-facing compact conclusion
+    manifest.json
 ```
 
 `normalized_event_index.jsonl` is optional for stage-level debugging.  The full
 pipeline always emits `normalized_event_index.csv`, and downstream stages can
-load that CSV directly.
+load that CSV directly.  `raw_kernel_index.csv` is no longer produced by
+default (`--write-raw-index` opts in); row-level drill-down reads
+`normalized_event_index.csv`, a strict column superset.
 
 The CSV/XLSX tables are user-facing and spreadsheet-friendly.  The JSON/JSONL
 files are agent-facing and preserve nested evidence.
