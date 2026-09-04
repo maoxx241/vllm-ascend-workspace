@@ -92,7 +92,7 @@
       "status": "active",
       "source": "workspace profiling validation 2026-09 (collection + analysis skills)",
       "applicable_versions": "vllm-ascend workspace images on Atlas A3; structural fields are quantization-invariant",
-      "updated_at": "2026-09-03",
+      "updated_at": "2026-09-04",
       "first_seen": "2026-09",
       "scope": {
         "applies_to": [
@@ -128,7 +128,8 @@
           "qwen35-35b",
           "qwen/qwen3.5-35b-a3b"
         ],
-        "notes": "model_type qwen3_5_moe_text: 40 decoder layers in a repeating 3x linear_attention + 1x full_attention hybrid pattern; 256 experts, head_dim 256."
+        "notes": "model_type qwen3_5_moe_text: 40 decoder layers in a repeating 3x linear_attention + 1x full_attention hybrid pattern; 256 experts, head_dim 256.",
+        "attention_mode_disambiguation": "Qwen3.5 full attention = FIA in GQA mode (no q_lora_rank/kv_lora_rank; num_key_value_heads < num_attention_heads; no MLA companion kernels). Do not classify as MLA from the FIA kernel name alone — FIA is mode-neutral (user 2026-09-04)."
       }
     },
     {
@@ -370,10 +371,12 @@
           "kimi_linear linear attention hybrid",
           "93 layers hybrid moe"
         ],
-        "avoidance": "Do not assume every 4th layer is the only full attention: layers 92 AND 93 are both full attention. Do not confuse KDA (Kimi Delta Attention) with Qwen GDN — validate kernel aliases on first K3 capture before trusting attention anchors."
+        "avoidance": "Do not assume every 4th layer is the only full attention: layers 92 AND 93 are both full attention. Do not confuse KDA (Kimi Delta Attention) with Qwen GDN — validate kernel aliases on first K3 capture before trusting attention anchors.",
+        "attention_mode_disambiguation": "K3 full attention = FIA in MLA mode (kv_lora_rank=512, q_lora_rank=1536 latent KV; MLA companion kernels mla_preprocess / kv_norm_rope_cache present). Qwen3.5 full attention = the SAME FIA kernel in GQA mode (no lora ranks, num_key_value_heads < num_attention_heads, NO MLA companions). The FIA kernel name is mode-neutral: always disambiguate via latent-rank shape evidence (config or low-rank projection matmul shapes) and/or preceding-operator (companion) evidence.",
+        "upcoming_attention_operator": "A new attention operator for K3 full attention is expected in a future CANN/vllm-ascend version (user 2026-09-04). Intake path when it first appears unclassified: the analysis anchor-degradation diagnostic (segment manifest candidate_attention_kernels) lists unmatched high-frequency kernels in attention-typical positions — promote the new name into kernel_signatures.yaml match_rules, then re-validate MLA anchors."
       },
       "source": "user-confirmed 93 layers + 3-KDA/1-gating-MLA cycle 2026-09; structure verified against shared-storage config.json 2026-09-03",
-      "updated_at": "2026-09-03",
+      "updated_at": "2026-09-04",
       "first_seen": "2026-09"
     }
   ]

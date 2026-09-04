@@ -201,6 +201,19 @@ match_rules:
     # stays neutral (``attention.flash_score``); the architecture family is
     # decided by the *combination* of category signatures present in a block
     # (see attention_families.yaml).
+    #
+    # Mode disambiguation (user 2026-09-04): the same FIA kernel carries
+    # GQA full attention (Qwen3.5: no lora ranks, kv_heads < heads, NO MLA
+    # companion kernels) and MLA full attention (Kimi-K3: kv_lora_rank=512 /
+    # q_lora_rank=1536 latent KV, MLA companions mla_preprocess /
+    # kv_norm_rope_cache present). Never decide GQA vs MLA from the score
+    # kernel alone — use latent-rank shape evidence (config or low-rank
+    # projection matmul shapes) and/or the preceding-operator (companion)
+    # evidence. A NEW K3 full-attention operator is expected in a future
+    # CANN/vllm-ascend version; when it first appears unclassified, the
+    # segment anchor-degradation diagnostic (candidate_attention_kernels in
+    # segment_manifest.json) is the intake path — add the new name to
+    # match_rules below before trusting MLA anchors on new captures.
     - id: attention.flash_score
       # none_of: the sparse-attention kernel (SparseFlashAttention /
       # SparseFlashMla, tagged attention.sparse_sharedkv above) contains
