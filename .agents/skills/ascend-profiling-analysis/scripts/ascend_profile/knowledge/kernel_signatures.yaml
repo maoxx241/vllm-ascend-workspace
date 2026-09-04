@@ -143,7 +143,10 @@ match_rules:
       add_roles: [attention]
     - id: attention.mla.kv_norm_rope_cache
       when: {any_of: [kvrmsnormropecache]}
-      add_categories: [attention.mla.kv_norm_rope_cache, attention.rope]
+      # Emit plain attention.mla too: without it, MLA captures whose only
+      # MLA markers are KV-pipe kernels (w4a8 DSV3.1 has no MlaProlog) show
+      # no mla feature and the candidate scorer misfires on Qwen families.
+      add_categories: [attention.mla.kv_norm_rope_cache, attention.mla, attention.rope]
       add_roles: [attention_aux]
     # Triton / Ascend-C MLA preprocessing variants observed in real traces
     # (DSV2-Lite W8A8 path, GLM4.7). These kernels fuse the qkv split +
@@ -156,12 +159,12 @@ match_rules:
     # the linear/mamba rule below.
     - id: attention.mla.kv_norm_rope_cache.splitqkvrmsnormrope
       when: {any_of: [splitqkvrmsnormrope]}
-      add_categories: [attention.mla.kv_norm_rope_cache, attention.rope]
+      add_categories: [attention.mla.kv_norm_rope_cache, attention.mla, attention.rope]
       add_roles: [attention_aux]
     # MLA V up-proj uses npu_transpose_batchmatmul (mla_v1.py:893).
     - id: attention.mla.v_up_proj
       when: {any_of: [transposebatchmatmul, transposequantbatchmatmul]}
-      add_categories: [attention.mla.v_up_proj, compute.matmul]
+      add_categories: [attention.mla.v_up_proj, attention.mla, compute.matmul]
       add_roles: [attention]
 
     # --- Attention: KVComp overlay (Hamming-distance KV pruning) ---------

@@ -293,12 +293,12 @@ _CASES: list[tuple[str, set[str], set[str]]] = [
     ),
     (
         "KvRmsNormRopeCache",
-        {"attention.mla.kv_norm_rope_cache", "attention.rope"},
+        {"attention.mla.kv_norm_rope_cache", "attention.mla", "attention.rope"},
         {"attention.sparse_sharedkv"},
     ),
     (
         "TransposeQuantBatchMatmul",
-        {"attention.mla.v_up_proj", "compute.matmul"},
+        {"attention.mla.v_up_proj", "attention.mla", "compute.matmul"},
         {"attention.sparse_attn.v_up_proj"},
     ),
     # ---- KVComp overlay
