@@ -564,8 +564,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="num_speculative_tokens; 0 disables --speculative-config",
     )
     p.add_argument(
-        "--speculative-method", default="qwen3_5_mtp",
-        help="speculative method name; only used when --speculative-tokens > 0",
+        "--speculative-method", default="mtp",
+        help="speculative method name; only used when --speculative-tokens > 0. "
+             "Default 'mtp' is vLLM's canonical generic MTP method (model-specific "
+             "aliases like 'qwen3_5_mtp' are deprecated and remapped); the old "
+             "qwen3_5_mtp default built a drafter expecting Qwen3.5-style mtp_block "
+             "bias weights and crashed DeepSeek MTP checkpoints.",
     )
 
     # Optional: vLLM serving knobs
