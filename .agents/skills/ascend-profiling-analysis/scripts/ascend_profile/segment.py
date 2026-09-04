@@ -30,6 +30,7 @@ import math
 import re
 import statistics
 import sys
+import time
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
@@ -443,15 +444,35 @@ def rank_attention_candidate_kernels(
 
 
 def minimal_exact_period(sequence: Sequence[str]) -> tuple[str, ...]:
-    if not sequence:
-        return ()
     values = tuple(sequence)
-    for width in range(1, len(values) + 1):
-        if len(values) % width != 0:
-            continue
-        unit = values[:width]
-        if unit * (len(values) // width) == values:
-            return unit
+    return _minimal_exact_period_cached(values)
+
+
+@functools.lru_cache(maxsize=131_072)
+def _minimal_exact_period_cached(values: tuple) -> tuple:
+    """KMP border array: O(n) instead of the naive O(n^2) divisor scan.
+
+    The split machinery (``split_frame_by_regime`` + the fixed-point loop in
+    ``split_composite_frames``) calls this twice per prefix/suffix of every
+    frame, repeatedly across rounds — on a 25k-layer merged frame the naive
+    scan was the dominant cost of a >20 min segment stage (stack-sampled
+    2026-09-04). Results are memoized because the fixed-point loop re-asks
+    the same prefixes every round.
+    """
+    n = len(values)
+    if n == 0:
+        return ()
+    failure = [0] * n
+    for i in range(1, n):
+        j = failure[i - 1]
+        while j > 0 and values[i] != values[j]:
+            j = failure[j - 1]
+        if values[i] == values[j]:
+            j += 1
+        failure[i] = j
+    period = n - failure[n - 1]
+    if n % period == 0:
+        return values[:period]
     return values
 
 
@@ -775,12 +796,17 @@ def frames_from_selection(layers: Sequence[LayerObservation], selection_rows: Se
 
 
 def sequence_is_exactly_structured(sequence: Sequence[str]) -> bool:
-    if len(sequence) <= 1:
+    return _sequence_is_exactly_structured_cached(tuple(sequence))
+
+
+@functools.lru_cache(maxsize=131_072)
+def _sequence_is_exactly_structured_cached(values: tuple) -> bool:
+    if len(values) <= 1:
         return False
-    period = minimal_exact_period(sequence)
-    if period and len(period) < len(sequence):
+    period = _minimal_exact_period_cached(values)
+    if period and len(period) < len(values):
         return True
-    counts = Counter(sequence)
+    counts = Counter(values)
     return any(count > 1 for count in counts.values())
 
 
@@ -1706,7 +1732,52 @@ def split_no_attention_prefix_by_observed_main_length(
     return None
 
 
+# Time budget for the composite-frame split fixed-point loop. Without a
+# breaker, pathological structures (e.g. a 25k-layer merged frame with a
+# period-4 hybrid pattern) keep the loop grinding for tens of minutes
+# (observed 2026-09-04 on Kimi-K3). On budget exhaustion the loop returns
+# the best frames produced so far and marks the run degraded instead.
+SPLIT_COMPOSITE_BUDGET_S = 300.0
+
+
+def _tag_frames(frames: Sequence[LayerFrame], tag: str) -> list[LayerFrame]:
+    out: list[LayerFrame] = []
+    for frame in frames:
+        out.append(
+            LayerFrame(
+                layers=frame.layers,
+                reason=frame.reason,
+                selection_before=frame.selection_before,
+                selection_after=frame.selection_after,
+                tags=frame_tags(frame, extra=(tag,)),
+            )
+        )
+    return out
+
+
+def _budget_exceeded(deadline: float, pass_name: str, count: int) -> None:
+    print(
+        "[ascend_profile] WARNING split_composite_frames budget "
+        f"({SPLIT_COMPOSITE_BUDGET_S:.0f}s) exceeded in {pass_name}; returning "
+        f"{count} frames with degraded splitting",
+        file=sys.stderr,
+        flush=True,
+    )
+
+
+def _split_frames_with_budget(frames: Sequence[LayerFrame], deadline: float, *, pass_name: str) -> list[LayerFrame]:
+    out: list[LayerFrame] = []
+    for index, frame in enumerate(frames):
+        if time.monotonic() > deadline:
+            out.extend(frames[index:])
+            _budget_exceeded(deadline, pass_name, len(out))
+            return _tag_frames(out, "composite_split_budget_exceeded")
+        out.extend(split_frame_by_regime(frame))
+    return out
+
+
 def split_composite_frames(frames: Sequence[LayerFrame], events: Sequence[NormalizedEvent], row_numbers: Sequence[int]) -> list[LayerFrame]:
+    deadline = time.monotonic() + SPLIT_COMPOSITE_BUDGET_S
     current: list[LayerFrame] = []
     for frame in frames:
         merged = merge_exact_attention_subunits(frame, events, row_numbers)
@@ -1714,11 +1785,23 @@ def split_composite_frames(frames: Sequence[LayerFrame], events: Sequence[Normal
             attention_merged = merge_adjacent_attention_pair_single_moe(split, events, row_numbers)
             moe_merged = merge_exact_moe_subunits(attention_merged, events, row_numbers)
             current.append(merge_moe_phase_groups(moe_merged, events, row_numbers))
-    current = [piece for frame in current for piece in split_frame_by_regime(frame)]
+    current = _split_frames_with_budget(current, deadline, pass_name="regime-pre")
     current = [piece for frame in current for piece in split_attention_prefix_moe_suffix(frame, events, row_numbers)]
     current = merge_adjacent_same_core_frames(current)
     current = merge_dense_prefix_with_moe_suffix(current, events, row_numbers)
     while True:
+        if time.monotonic() > deadline:
+            # Budget exhausted: keep the best frames we have. The result is
+            # still row-range lossless, just coarser; the frames carry an
+            # explicit tag so downstream consumers can mark the run degraded.
+            print(
+                "[ascend_profile] WARNING split_composite_frames budget "
+                f"({SPLIT_COMPOSITE_BUDGET_S:.0f}s) exceeded; returning "
+                f"{len(current)} unsplit frames (segmentation degraded)",
+                file=sys.stderr,
+                flush=True,
+            )
+            return _tag_frames(current, "composite_split_budget_exceeded")
         refined = [piece for frame in current for piece in split_frame_by_regime(frame)]
         refined = [piece for frame in refined for piece in split_frame_by_repeated_body_runs(frame)]
         refined = split_frames_by_exact_templates(refined)
