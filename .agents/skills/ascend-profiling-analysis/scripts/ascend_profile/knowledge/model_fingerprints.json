@@ -378,7 +378,7 @@
       "aliases": ["k3", "kimi-k3", "Kimi-K3", "kimi_k3", "KimiK3ForConditionalGeneration", "kimi_linear"],
       "family": "kimi",
       "expected_layers": 93,
-      "features": ["moe", "linear_attention_or_mamba", "gating_mla", "kda", "multimodal"],
+      "features": ["moe", "linear_attention_or_mamba", "mla", "dense_flash_attention"],
       "operator_match": {
         "required_all": ["attention.linear_or_mamba", "moe.gating"],
         "forbidden": ["attention.kv_compressor", "attention.lightning_indexer", "attention.sparse_sharedkv"],
