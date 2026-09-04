@@ -3557,7 +3557,23 @@ def build_segments_for_rank(
     # priority chain's next anchor candidates before marking the result.
     layer_count_validation = assess_layer_count_validation(plans, model_context, anchor_kind_used)
     if layer_count_validation["status"] == "mismatch":
-        for fallback_kind, fallback_anchors in anchor_candidates[1:]:
+        # Retry budget. A wrong anchor yields grossly wrong layer counts, so
+        # retrying the evidence chain can rescue those. A small delta
+        # (<= max(2, 5%) layers) is a boundary-merge artifact that no anchor
+        # candidate can fix — retrying just multiplies the segment cost by the
+        # candidate count (measured 2026-09-04 on K3: persistent off-by-1 tail
+        # merge, 8 candidates x full resegmentation ~= 2380s vs ~300s single
+        # pass). Retries are additionally capped at 3 candidates.
+        retry_targets = layer_count_validation.get("accepted_targets") or ()
+        median = layer_count_validation.get("observed_per_step_median")
+        small_delta = False
+        if retry_targets and median is not None:
+            nearest = min(retry_targets, key=lambda t: abs(median - t))
+            small_delta = abs(median - nearest) <= max(2, nearest * 0.05)
+        if small_delta:
+            layer_count_validation["retry_skipped"] = "small_delta"
+        candidates = [] if small_delta else anchor_candidates[1:4]
+        for fallback_kind, fallback_anchors in candidates:
             fallback_layers = build_layers(
                 events,
                 row_numbers,

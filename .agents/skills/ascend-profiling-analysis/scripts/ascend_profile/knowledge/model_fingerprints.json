@@ -229,6 +229,7 @@
       "features": ["moe", "linear_attention_or_mamba", "dense_flash_attention", "rope"],
       "operator_match": {
         "required_all": ["moe.gating", "attention.linear_or_mamba"],
+        "forbidden": ["attention.mla", "attention.kv_compressor", "attention.lightning_indexer", "attention.sparse_sharedkv"],
         "optional": ["attention.flash_score", "attention.rope"],
         "weights": {
           "moe.gating": 3,
