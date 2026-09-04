@@ -54,6 +54,26 @@ companion_only_categories:
 companion_prefixes:
   - attention.rope
 
+# Fused add+norm kernels (AddRmsNorm / AddRmsNormBias / GemmaRmsNorm class)
+# that must never serve as the *normalization fallback* layer anchor. They
+# fuse the residual add of the previous block with the rms-norm of the next,
+# so their position inside a layer is irregular across models (K3 / DSV4);
+# anchoring layer frequency on them makes norm-based layer statistics drift.
+# They still participate in layer content as ordinary companion events, and
+# pure (non-fused) RmsNorm kernels remain valid fallback anchors.
+#
+# Why name tokens instead of categories: kernel_signatures.yaml maps both the
+# fused spellings (the rmsnorm profile aliases addrmsnorm / addrmsnormbias /
+# gemmarmsnorm) and pure rmsnorm to the same ``normalization`` category — the
+# fused ones additionally pick up ``block_head`` via the norm+add match rule —
+# so no existing category separates fused from pure norms. Matching is
+# substring-based on the folded kernel name (lowercase, non-alphanumerics
+# stripped — the same folding as store.fold_text / rules.py token matching).
+fused_norm_exclusions:
+  - addrmsnorm
+  - addrmsnormbias
+  - gemmarmsnorm
+
 # Documentation-only: which family each companion set belongs to. The
 # segmenter does not read this; it exists so a human reviewer can see why a
 # category is a companion. Family discrimination itself lives in

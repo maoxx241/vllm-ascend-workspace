@@ -17,7 +17,7 @@ keeps the existing scripts as the managed VAWS compatibility backend.
 4. **Parity sync** (light): tar-over-ssh only `scripts/ascend_profile/` from the local skill dir to `<remote-work-dir>/ascend_profile/`. Excludes `__pycache__` and `*.pyc`. Does **not** touch `.vaws-runtime/` or sync the entire repo.
 5. **Remote analyze**: run `python3 -m ascend_profile.analyze <ROOT> --output <OUT> --verbose` from inside `<remote-work-dir>`. stdout/stderr is streamed back so the agent can see stage timings live.
 6. **Validate artifacts**: every required artifact must exist, and `segment_manifest.json` must have `hard_errors == 0` and `interior_island_total == 0`.
-7. **Pull artifacts**: lightweight by default (`report/`, `*_manifest.json`, `diagnosis_findings.json`, summary CSVs, `step_segments.json`, `layer_segments.json`, `structure_evidence_graph.json`, `evidence_index.csv`, `raw_kernel_index.csv`). Use `--keep-remote-output` to mirror the entire remote output dir locally.
+7. **Pull artifacts**: mode-dependent. `fast` (default): `report/report.md` + `report/analysis_summary.json` + all `*_manifest.json` + class-level summary CSVs + `diagnosis_findings.json` (17 items). `full`: the previous lightweight set (`report/` incl. `assets/`, manifests, findings, summary CSVs, `step_segments.json`, `layer_segments.json`, `structure_evidence_graph.json`, `evidence_index.csv`). Use `--keep-remote-output` to mirror the entire remote output dir locally.
 8. **Emit JSON** on stdout. Progress lines (`__VAWS_PROFILE_ANALYSIS_PROGRESS__=...`) go to stderr.
 
 ## Required artifacts (single-root `analyze`)
@@ -262,7 +262,8 @@ report claim
   → evidence id (evidence_index.csv / structure_evidence_graph.json)
   → event / segment / alignment id
   → source path + row range (raw_kernel_index.csv)
-  → original kernel_details.csv / trace_view.json / op_summary / communication.json
+  → original kernel_details.csv (or the equivalent db-direct event stream from
+    ascend_pytorch_profiler_*.db) / trace_view.json / op_summary / communication.json
 ```
 
 If a claim cannot be backed at row level, the agent must surface it as a `limitation`, not a conclusion.

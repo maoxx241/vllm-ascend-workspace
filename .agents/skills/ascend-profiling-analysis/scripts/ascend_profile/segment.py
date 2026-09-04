@@ -9,6 +9,16 @@ candidate selection.  A step is produced only from exact structural evidence:
 2. selection/sample kernels and exact recurring templates divide layer streams;
 3. full steps are an exact cover over those observations;
 4. unexplained middle content is a hard error, not a silent fallback.
+
+Anchor-selection diagnostics layer on top of those exact mechanics without
+changing them.  When the anchor priority chain degrades below the attention
+family the manifest records the degradation explicitly (with the top unmatched
+kernel names for alias review), and when an expected layer count is available
+each complete step is checked against the decode layer-count invariant (one
+attention anchor group per transformer layer per step).  A failed invariant
+triggers a deterministic retry with the next anchor candidate; if no candidate
+passes, the primary segmentation is kept and the mismatch is recorded as a
+trust marker, never a hard error.
 """
 
 from __future__ import annotations
@@ -18,10 +28,13 @@ import bisect
 import functools
 import math
 import re
+import statistics
+import sys
+import time
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
 try:
     from .common import (
@@ -132,6 +145,16 @@ def load_segmentation_rules() -> dict[str, Any]:
         "layer_start_categories": tuple(data.get("layer_start_categories") or ()),
         "companion_only_categories": frozenset(data.get("companion_only_categories") or ()),
         "companion_prefixes": tuple(data.get("companion_prefixes") or ()),
+        # Folded (lowercase, alnum-only) name tokens for fused add+norm kernels
+        # that must never serve as the normalization fallback anchor.
+        "fused_norm_exclusions": tuple(
+            folded
+            for folded in (
+                re.sub(r"[^a-z0-9]+", "", str(item).lower())
+                for item in (data.get("fused_norm_exclusions") or ())
+            )
+            if folded
+        ),
     }
 
 
@@ -144,6 +167,30 @@ def is_attention_companion_only(category: str) -> bool:
     if category in rules["companion_only_categories"]:
         return True
     return any(category.startswith(prefix) for prefix in rules["companion_prefixes"])
+
+
+def is_fused_norm_excluded(event: NormalizedEvent) -> bool:
+    """Fused add+norm kernels must not serve as normalization fallback anchors.
+
+    AddRmsNorm / AddRmsNormBias / GemmaRmsNorm-class kernels fuse the residual
+    add of the previous block with the rms-norm of the next, so their position
+    inside a layer is irregular across models (K3 / DSV4); anchoring layer
+    frequency on them makes norm-based layer statistics drift.  They still
+    participate in layer content as ordinary companion events.  Pure
+    (non-fused) RmsNorm kernels remain valid fallback anchors.
+
+    The exclusion tokens live in ``knowledge/segmentation_rules.yaml``
+    (``fused_norm_exclusions``), matched as substrings of the folded kernel
+    name (lowercase, alnum-only — the same folding as ``store.fold_text``).
+    Category-based exclusion is not possible: kernel_signatures.yaml maps both
+    fused and pure spellings to the same ``normalization`` category.
+    """
+
+    tokens = load_segmentation_rules()["fused_norm_exclusions"]
+    if not tokens:
+        return False
+    folded = re.sub(r"[^a-z0-9]+", "", event.name_raw.lower())
+    return any(token in folded for token in tokens)
 
 
 def primary_moe_category(event: NormalizedEvent) -> str | None:
@@ -162,7 +209,7 @@ def anchor_kind(event: NormalizedEvent) -> str | None:
         return "compute.matmul"
     if event_role(event, "block_head"):
         return "block_head"
-    if event_role(event, "normalization"):
+    if event_role(event, "normalization") and not is_fused_norm_excluded(event):
         return "normalization"
     return None
 
@@ -255,8 +302,16 @@ def dedup_adjacent_events(events: Sequence[NormalizedEvent]) -> tuple[Normalized
     return tuple(deduped)
 
 
-def layer_anchor_events(events: Sequence[NormalizedEvent]) -> tuple[NormalizedEvent, ...]:
-    """Pick one deterministic layer-anchor family for this rank.
+def layer_anchor_candidates(events: Sequence[NormalizedEvent]) -> list[tuple[str, tuple[NormalizedEvent, ...]]]:
+    """Enumerate layer-anchor families in evidence-priority order.
+
+    Each entry is ``(anchor_kind, anchors)``.  The first entry is the anchor
+    ``layer_anchor_events`` picks; later entries are fallback candidates used
+    only when the primary anchor fails the layer-count invariant (see
+    ``build_segments_for_rank``).  Anchor kind labels are the attention
+    category for layer-start markers, ``attention.non_companion`` /
+    ``attention.any`` for the attention fallbacks, then ``moe``,
+    ``compute.matmul``, ``block_head`` and ``normalization``.
 
     Attention is the best layer-frequency signal when present, but some MLA
     decode paths expose one logical layer as several attention-labelled
@@ -268,6 +323,7 @@ def layer_anchor_events(events: Sequence[NormalizedEvent]) -> tuple[NormalizedEv
     name rule.
     """
 
+    candidates: list[tuple[str, tuple[NormalizedEvent, ...]]] = []
     attention_events = dedup_adjacent_events(
         tuple(
             event
@@ -279,39 +335,144 @@ def layer_anchor_events(events: Sequence[NormalizedEvent]) -> tuple[NormalizedEv
         for category in mla_layer_start_categories():
             anchors = tuple(event for event in attention_events if category in event.op_categories)
             if anchors:
-                return anchors
+                candidates.append((category, anchors))
         anchors = tuple(
             event
             for event in attention_events
             if not is_attention_companion_only(primary_attention_category(event) or "")
         )
         if anchors:
-            return anchors
-        return attention_events
+            candidates.append(("attention.non_companion", anchors))
+        candidates.append(("attention.any", attention_events))
 
-    role_order = (
-        lambda event: event_role(event, "moe"),
-        lambda event: "compute.matmul" in event.op_categories and event_role(event, "compute"),
-        lambda event: event_role(event, "block_head"),
-        lambda event: event_role(event, "normalization"),
+    role_order: tuple[tuple[str, Any], ...] = (
+        ("moe", lambda event: event_role(event, "moe")),
+        ("compute.matmul", lambda event: "compute.matmul" in event.op_categories and event_role(event, "compute")),
+        ("block_head", lambda event: event_role(event, "block_head")),
+        # Fused add+norm kernels (AddRmsNorm etc.) are excluded from the
+        # normalization fallback: their position inside a layer is irregular,
+        # which makes norm-anchored layer statistics drift.
+        ("normalization", lambda event: event_role(event, "normalization") and not is_fused_norm_excluded(event)),
     )
-    for predicate in role_order:
+    for label, predicate in role_order:
         anchors = dedup_adjacent_events(tuple(event for event in events if predicate(event)))
         if anchors:
-            return anchors
-    return ()
+            candidates.append((label, anchors))
+    return candidates
+
+
+def layer_anchor_events(events: Sequence[NormalizedEvent]) -> tuple[NormalizedEvent, ...]:
+    """Pick one deterministic layer-anchor family for this rank.
+
+    This is the first candidate of ``layer_anchor_candidates``; see its
+    docstring for the evidence-priority rules.
+    """
+
+    candidates = layer_anchor_candidates(events)
+    return candidates[0][1] if candidates else ()
+
+
+# Model-context features that prove the profiled model contains attention
+# layers (config features and fingerprint features share this vocabulary; see
+# model_context._config_features / _features_from_operator_profile).
+_ATTENTION_INDICATING_CONTEXT_FEATURES = frozenset(
+    {
+        "mla",
+        "dsa",
+        "csa",
+        "hca",
+        "kv_compressor",
+        "dsa_or_csa_indexer",
+        "sparse_sharedkv",
+        "dense_flash_attention",
+        "linear_attention_or_mamba",
+        "rope",
+    }
+)
+
+
+def rank_expects_attention(events: Sequence[NormalizedEvent], model_context: dict[str, Any] | None) -> bool:
+    """Return True when this rank is expected to contain attention evidence.
+
+    Model context wins when available: an attention-related feature (from the
+    config or a fingerprint family) proves the model has attention layers.
+    Without usable model information the rank's own operator roles are the
+    evidence — any attention/moe/compute role implies a transformer-like
+    workload whose attention kernels should have been visible.  In particular,
+    attention-role events that were excluded from anchoring (e.g. metadata-only
+    attention categories) still count.
+    """
+
+    if model_context and model_context.get("available"):
+        features = {str(item) for item in model_context.get("features") or []}
+        if features & _ATTENTION_INDICATING_CONTEXT_FEATURES:
+            return True
+    roles = {role for event in events for role in event.op_roles}
+    return bool(roles & {"attention", "moe", "compute"})
+
+
+def rank_attention_candidate_kernels(
+    events: Sequence[NormalizedEvent],
+    *,
+    limit: int = 10,
+) -> list[dict[str, Any]]:
+    """Top-frequency kernels in this rank that hit no attention classification.
+
+    Recorded when the anchor chain degrades below the attention family so a
+    human can review them as candidate ``kernel_signatures.yaml`` aliases.
+    """
+
+    counts: Counter[str] = Counter()
+    categories: dict[str, set[str]] = {}
+    roles: dict[str, set[str]] = {}
+    for event in events:
+        if any(category.startswith("attention.") for category in event.op_categories):
+            continue
+        counts[event.name_raw] += 1
+        categories.setdefault(event.name_raw, set()).update(event.op_categories)
+        roles.setdefault(event.name_raw, set()).update(event.op_roles)
+    ranked = sorted(counts, key=lambda name: (-counts[name], name))[:limit]
+    return [
+        {
+            "name": name,
+            "count": counts[name],
+            "op_categories": sorted(categories[name]),
+            "op_roles": sorted(roles[name]),
+        }
+        for name in ranked
+    ]
 
 
 def minimal_exact_period(sequence: Sequence[str]) -> tuple[str, ...]:
-    if not sequence:
-        return ()
     values = tuple(sequence)
-    for width in range(1, len(values) + 1):
-        if len(values) % width != 0:
-            continue
-        unit = values[:width]
-        if unit * (len(values) // width) == values:
-            return unit
+    return _minimal_exact_period_cached(values)
+
+
+@functools.lru_cache(maxsize=131_072)
+def _minimal_exact_period_cached(values: tuple) -> tuple:
+    """KMP border array: O(n) instead of the naive O(n^2) divisor scan.
+
+    The split machinery (``split_frame_by_regime`` + the fixed-point loop in
+    ``split_composite_frames``) calls this twice per prefix/suffix of every
+    frame, repeatedly across rounds — on a 25k-layer merged frame the naive
+    scan was the dominant cost of a >20 min segment stage (stack-sampled
+    2026-09-04). Results are memoized because the fixed-point loop re-asks
+    the same prefixes every round.
+    """
+    n = len(values)
+    if n == 0:
+        return ()
+    failure = [0] * n
+    for i in range(1, n):
+        j = failure[i - 1]
+        while j > 0 and values[i] != values[j]:
+            j = failure[j - 1]
+        if values[i] == values[j]:
+            j += 1
+        failure[i] = j
+    period = n - failure[n - 1]
+    if n % period == 0:
+        return values[:period]
     return values
 
 
@@ -479,8 +640,11 @@ def group_layer_anchors(anchors: Sequence[NormalizedEvent], boundary_rows: Seque
     return groups
 
 
-def build_layers(events: Sequence[NormalizedEvent], row_numbers: Sequence[int], boundary_rows: Sequence[int], anchor_boundary_rows: Sequence[int], selection_rows: Sequence[int]) -> list[LayerObservation]:
-    anchors = layer_anchor_events(events)
+def build_layers(events: Sequence[NormalizedEvent], row_numbers: Sequence[int], boundary_rows: Sequence[int], anchor_boundary_rows: Sequence[int], selection_rows: Sequence[int], anchor_override: Sequence[NormalizedEvent] | None = None) -> list[LayerObservation]:
+    # ``anchor_override`` lets the layer-count-invariant retry resegment with a
+    # fallback anchor family; the default path is unchanged (first candidate of
+    # ``layer_anchor_candidates``).
+    anchors = tuple(anchor_override) if anchor_override is not None else layer_anchor_events(events)
     if not anchors:
         return []
     anchor_groups = group_layer_anchors(anchors, anchor_boundary_rows)
@@ -632,12 +796,17 @@ def frames_from_selection(layers: Sequence[LayerObservation], selection_rows: Se
 
 
 def sequence_is_exactly_structured(sequence: Sequence[str]) -> bool:
-    if len(sequence) <= 1:
+    return _sequence_is_exactly_structured_cached(tuple(sequence))
+
+
+@functools.lru_cache(maxsize=131_072)
+def _sequence_is_exactly_structured_cached(values: tuple) -> bool:
+    if len(values) <= 1:
         return False
-    period = minimal_exact_period(sequence)
-    if period and len(period) < len(sequence):
+    period = _minimal_exact_period_cached(values)
+    if period and len(period) < len(values):
         return True
-    counts = Counter(sequence)
+    counts = Counter(values)
     return any(count > 1 for count in counts.values())
 
 
@@ -1563,7 +1732,52 @@ def split_no_attention_prefix_by_observed_main_length(
     return None
 
 
+# Time budget for the composite-frame split fixed-point loop. Without a
+# breaker, pathological structures (e.g. a 25k-layer merged frame with a
+# period-4 hybrid pattern) keep the loop grinding for tens of minutes
+# (observed 2026-09-04 on Kimi-K3). On budget exhaustion the loop returns
+# the best frames produced so far and marks the run degraded instead.
+SPLIT_COMPOSITE_BUDGET_S = 300.0
+
+
+def _tag_frames(frames: Sequence[LayerFrame], tag: str) -> list[LayerFrame]:
+    out: list[LayerFrame] = []
+    for frame in frames:
+        out.append(
+            LayerFrame(
+                layers=frame.layers,
+                reason=frame.reason,
+                selection_before=frame.selection_before,
+                selection_after=frame.selection_after,
+                tags=frame_tags(frame, extra=(tag,)),
+            )
+        )
+    return out
+
+
+def _budget_exceeded(deadline: float, pass_name: str, count: int) -> None:
+    print(
+        "[ascend_profile] WARNING split_composite_frames budget "
+        f"({SPLIT_COMPOSITE_BUDGET_S:.0f}s) exceeded in {pass_name}; returning "
+        f"{count} frames with degraded splitting",
+        file=sys.stderr,
+        flush=True,
+    )
+
+
+def _split_frames_with_budget(frames: Sequence[LayerFrame], deadline: float, *, pass_name: str) -> list[LayerFrame]:
+    out: list[LayerFrame] = []
+    for index, frame in enumerate(frames):
+        if time.monotonic() > deadline:
+            out.extend(frames[index:])
+            _budget_exceeded(deadline, pass_name, len(out))
+            return _tag_frames(out, "composite_split_budget_exceeded")
+        out.extend(split_frame_by_regime(frame))
+    return out
+
+
 def split_composite_frames(frames: Sequence[LayerFrame], events: Sequence[NormalizedEvent], row_numbers: Sequence[int]) -> list[LayerFrame]:
+    deadline = time.monotonic() + SPLIT_COMPOSITE_BUDGET_S
     current: list[LayerFrame] = []
     for frame in frames:
         merged = merge_exact_attention_subunits(frame, events, row_numbers)
@@ -1571,11 +1785,23 @@ def split_composite_frames(frames: Sequence[LayerFrame], events: Sequence[Normal
             attention_merged = merge_adjacent_attention_pair_single_moe(split, events, row_numbers)
             moe_merged = merge_exact_moe_subunits(attention_merged, events, row_numbers)
             current.append(merge_moe_phase_groups(moe_merged, events, row_numbers))
-    current = [piece for frame in current for piece in split_frame_by_regime(frame)]
+    current = _split_frames_with_budget(current, deadline, pass_name="regime-pre")
     current = [piece for frame in current for piece in split_attention_prefix_moe_suffix(frame, events, row_numbers)]
     current = merge_adjacent_same_core_frames(current)
     current = merge_dense_prefix_with_moe_suffix(current, events, row_numbers)
     while True:
+        if time.monotonic() > deadline:
+            # Budget exhausted: keep the best frames we have. The result is
+            # still row-range lossless, just coarser; the frames carry an
+            # explicit tag so downstream consumers can mark the run degraded.
+            print(
+                "[ascend_profile] WARNING split_composite_frames budget "
+                f"({SPLIT_COMPOSITE_BUDGET_S:.0f}s) exceeded; returning "
+                f"{len(current)} unsplit frames (segmentation degraded)",
+                file=sys.stderr,
+                flush=True,
+            )
+            return _tag_frames(current, "composite_split_budget_exceeded")
         refined = [piece for frame in current for piece in split_frame_by_regime(frame)]
         refined = [piece for frame in refined for piece in split_frame_by_repeated_body_runs(frame)]
         refined = split_frames_by_exact_templates(refined)
@@ -1648,6 +1874,113 @@ def model_context_max_anchor_multiplier(model_context: dict[str, Any] | None) ->
     except (TypeError, ValueError):
         return 1
     return max(1, min(value, 8))
+
+
+# ---------------------------------------------------------------------------
+# Layer-count invariant (decode: one attention anchor group per layer per step)
+# ---------------------------------------------------------------------------
+
+
+def is_attention_anchor_kind(anchor_kind: str | None) -> bool:
+    return bool(anchor_kind) and str(anchor_kind).startswith("attention")
+
+
+def model_context_nextn_predict_layers(model_context: dict[str, Any] | None) -> int:
+    """MTP/draft extra layers, when the config/fingerprint provides them."""
+
+    if not model_context or not model_context.get("available"):
+        return 0
+    for source in (model_context_segment_hints(model_context), model_context):
+        try:
+            value = int(float(source.get("num_nextn_predict_layers") or 0))
+        except (TypeError, ValueError, AttributeError):
+            continue
+        if value > 0:
+            return value
+    return 0
+
+
+def layer_count_targets(model_context: dict[str, Any] | None) -> tuple[int, ...]:
+    """Accepted per-complete-step layer counts for the invariant check.
+
+    ``profile_visible_layer_counts`` is the fingerprint's explicit statement of
+    how many layers are visible in a profile for this model/mode; when present
+    it outranks the raw config layer count (same precedence as
+    ``model_guided_target_layer_count``).  MTP/draft steps are allowed
+    ``expected + num_nextn_predict_layers`` when the config provides it.
+    """
+
+    expected = model_context_expected_layers(model_context)
+    if expected is None:
+        return ()
+    targets = {expected}
+    nextn = model_context_nextn_predict_layers(model_context)
+    if nextn:
+        targets.add(expected + nextn)
+    targets.update(model_context_visible_layer_counts(model_context))
+    return tuple(sorted(targets))
+
+
+def layer_count_check(plans: Sequence[StepPlan], targets: Sequence[int]) -> dict[str, Any]:
+    """Compare per-complete-step main-layer counts against accepted targets.
+
+    Each main layer is one anchor group by construction, so
+    ``len(plan.main_layers)`` is the per-step attention anchor count for
+    attention-anchored segmentations.
+    """
+
+    accepted = set(targets)
+    counts = [len(plan.main_layers) for plan in plans if plan.complete and plan.segment_type == "step"]
+    if not counts:
+        return {"status": "unknown", "reason": "no_complete_steps"}
+    median = statistics.median(counts)
+    mismatching = sorted({count for count in counts if count not in accepted})
+    if mismatching:
+        return {
+            "status": "mismatch",
+            "observed_per_step_median": median,
+            "mismatching_step_counts": mismatching,
+            "complete_step_count": len(counts),
+        }
+    return {
+        "status": "ok",
+        "observed_per_step_median": median,
+        "complete_step_count": len(counts),
+    }
+
+
+def assess_layer_count_validation(
+    plans: Sequence[StepPlan],
+    model_context: dict[str, Any] | None,
+    anchor_kind: str | None,
+    *,
+    anchor_gate: bool = True,
+) -> dict[str, Any]:
+    """Run the decode layer-count invariant against the model context.
+
+    Gated to attention-family and normalization primary anchors (``moe`` /
+    ``compute.matmul`` / ``block_head`` anchors legitimately count non-attention
+    structures, e.g. EP expert ranks); ``anchor_gate=False`` is used when
+    scoring fallback anchor candidates, which must prove the same invariant.
+    This is a trust marker, never a hard error.
+    """
+
+    expected = model_context_expected_layers(model_context)
+    if expected is None:
+        return {"status": "unknown", "reason": "no_expected_layers", "anchor_kind": anchor_kind}
+    if anchor_gate and not (is_attention_anchor_kind(anchor_kind) or anchor_kind == "normalization"):
+        return {
+            "status": "unknown",
+            "reason": "anchor_kind_not_validated",
+            "expected": expected,
+            "anchor_kind": anchor_kind,
+        }
+    targets = layer_count_targets(model_context)
+    result = layer_count_check(plans, targets)
+    result["expected"] = expected
+    result["accepted_targets"] = list(targets)
+    result["anchor_kind"] = anchor_kind
+    return result
 
 
 def model_guided_target_layer_count(
@@ -3110,6 +3443,50 @@ def add_evidence(
     )
 
 
+def select_step_plans(
+    layers_observed: Sequence[LayerObservation],
+    events: Sequence[NormalizedEvent],
+    row_numbers: Sequence[int],
+    selection_rows: Sequence[int],
+    model_context: dict[str, Any] | None,
+) -> tuple[list[StepPlan], dict[str, Any]]:
+    """Compose step plans from layer observations via the strategy chain.
+
+    Extracted from ``build_segments_for_rank`` so the layer-count invariant
+    check can re-run the identical chain with a fallback anchor family.
+    """
+
+    selection_frames = frames_from_selection(layers_observed, selection_rows)
+    model_guided = build_model_guided_step_plans(selection_frames, model_context, events, row_numbers)
+    uniform_guided = None if model_guided is not None else build_uniform_step_plans(selection_frames)
+    if model_guided is not None:
+        return model_guided
+    if uniform_guided is not None:
+        return uniform_guided
+    # Knowledge miss: neither model fingerprint nor a uniform periodic
+    # structure explained this rank. Fall back to the exact-cover search
+    # and label the strategy explicitly so the miss is visible rather than
+    # silent.
+    frames = split_composite_frames(selection_frames, events, row_numbers)
+    plans = merge_explained_windows_to_templates(
+        classify_interior_substructure_plans(
+            classify_edge_no_attention_plans(
+                classify_residual_plans(merge_adjacent_template_fragment_plans(compose_step_plans(frames)))
+            )
+        )
+    )
+    return plans, {
+        "mode": "exact_cover_knowledge_miss",
+        "input_frame_count": len(selection_frames),
+        "post_split_frame_count": len(frames),
+        "reason": (
+            "no model fingerprint and non-uniform selection frames; used exact-cover search"
+            if model_context_expected_layers(model_context) is None
+            else "model-guided path produced no complete plans; used exact-cover search"
+        ),
+    }
+
+
 def build_segments_for_rank(
     rank_id: str,
     events: Sequence[NormalizedEvent],
@@ -3128,7 +3505,15 @@ def build_segments_for_rank(
         lambda event: event_role(event, "block_head"),
     )
     selection_rows = dedup_adjacent_event_rows(events, lambda event: event_role(event, "selection"))
-    layers_observed = build_layers(events, row_numbers, boundary_rows, anchor_boundary_rows, selection_rows)
+    anchor_candidates = layer_anchor_candidates(events)
+    layers_observed = build_layers(
+        events,
+        row_numbers,
+        boundary_rows,
+        anchor_boundary_rows,
+        selection_rows,
+        anchor_override=anchor_candidates[0][1] if anchor_candidates else None,
+    )
     evidence: list[EvidenceRef] = []
     segments: list[StepSegment] = []
     layer_segments: list[LayerSegment] = []
@@ -3162,36 +3547,101 @@ def build_segments_for_rank(
         )
         return segments, layer_segments, observations, evidence, hard_errors, {"mode": "no_structural_layers"}
 
-    selection_frames = frames_from_selection(layers_observed, selection_rows)
-    model_guided = build_model_guided_step_plans(selection_frames, model_context, events, row_numbers)
-    uniform_guided = None if model_guided is not None else build_uniform_step_plans(selection_frames)
-    if model_guided is not None:
-        plans, segmentation_strategy = model_guided
-    elif uniform_guided is not None:
-        plans, segmentation_strategy = uniform_guided
-    else:
-        # Knowledge miss: neither model fingerprint nor a uniform periodic
-        # structure explained this rank. Fall back to the exact-cover search
-        # and label the strategy explicitly so the miss is visible rather than
-        # silent.
-        frames = split_composite_frames(selection_frames, events, row_numbers)
-        plans = merge_explained_windows_to_templates(
-            classify_interior_substructure_plans(
-                classify_edge_no_attention_plans(
-                    classify_residual_plans(merge_adjacent_template_fragment_plans(compose_step_plans(frames)))
-                )
+    primary_anchor_kind = anchor_candidates[0][0]
+    anchor_kind_used = primary_anchor_kind
+    plans, segmentation_strategy = select_step_plans(layers_observed, events, row_numbers, selection_rows, model_context)
+
+    # Layer-count invariant: a decode step issues exactly one attention call
+    # per transformer layer, so a complete step must contain exactly the
+    # expected number of anchor groups.  On mismatch, retry the evidence
+    # priority chain's next anchor candidates before marking the result.
+    layer_count_validation = assess_layer_count_validation(plans, model_context, anchor_kind_used)
+    if layer_count_validation["status"] == "mismatch":
+        # Retry budget. A wrong anchor yields grossly wrong layer counts, so
+        # retrying the evidence chain can rescue those. A small delta
+        # (<= max(2, 5%) layers) is a boundary-merge artifact that no anchor
+        # candidate can fix — retrying just multiplies the segment cost by the
+        # candidate count (measured 2026-09-04 on K3: persistent off-by-1 tail
+        # merge, 8 candidates x full resegmentation ~= 2380s vs ~300s single
+        # pass). Retries are additionally capped at 3 candidates.
+        retry_targets = layer_count_validation.get("accepted_targets") or ()
+        median = layer_count_validation.get("observed_per_step_median")
+        small_delta = False
+        if retry_targets and median is not None:
+            nearest = min(retry_targets, key=lambda t: abs(median - t))
+            small_delta = abs(median - nearest) <= max(2, nearest * 0.05)
+        if small_delta:
+            layer_count_validation["retry_skipped"] = "small_delta"
+        candidates = [] if small_delta else anchor_candidates[1:4]
+        for fallback_kind, fallback_anchors in candidates:
+            fallback_layers = build_layers(
+                events,
+                row_numbers,
+                boundary_rows,
+                anchor_boundary_rows,
+                selection_rows,
+                anchor_override=fallback_anchors,
             )
+            if not fallback_layers:
+                continue
+            fallback_plans, fallback_strategy = select_step_plans(
+                fallback_layers, events, row_numbers, selection_rows, model_context
+            )
+            fallback_validation = assess_layer_count_validation(
+                fallback_plans, model_context, fallback_kind, anchor_gate=False
+            )
+            if fallback_validation["status"] != "ok":
+                continue
+            fallback_validation["note"] = (
+                f"primary anchor {anchor_kind_used!r} failed the layer-count invariant; "
+                f"resegmented with fallback anchor {fallback_kind!r}"
+            )
+            layers_observed = fallback_layers
+            plans = fallback_plans
+            segmentation_strategy = fallback_strategy
+            anchor_kind_used = fallback_kind
+            layer_count_validation = fallback_validation
+            break
+
+    segmentation_strategy = dict(segmentation_strategy)
+    if layer_count_validation["status"] == "mismatch":
+        mismatch_reason = (
+            "layer_count_validation mismatch: expected one of "
+            f"{list(layer_count_validation.get('accepted_targets') or ())} layers per complete step, "
+            f"observed per-step median {layer_count_validation.get('observed_per_step_median')} "
+            f"with anchor {layer_count_validation.get('anchor_kind')}; kept primary-anchor segmentation"
         )
-        segmentation_strategy = {
-            "mode": "exact_cover_knowledge_miss",
-            "input_frame_count": len(selection_frames),
-            "post_split_frame_count": len(frames),
-            "reason": (
-                "no model fingerprint and non-uniform selection frames; used exact-cover search"
-                if model_context_expected_layers(model_context) is None
-                else "model-guided path produced no complete plans; used exact-cover search"
-            ),
-        }
+        existing_reason = str(segmentation_strategy.get("reason") or "")
+        segmentation_strategy["reason"] = f"{existing_reason}; {mismatch_reason}" if existing_reason else mismatch_reason
+    if anchor_kind_used == "normalization" and model_context_expected_layers(model_context) is None:
+        # Normalization fallback anchors are inherently unstable layer-frequency
+        # evidence; without an expected layer count the result is unvalidated.
+        layer_count_validation["unvalidated"] = True
+    segmentation_strategy["layer_count_validation"] = layer_count_validation
+
+    # Anchor-degradation diagnostic: the whole priority chain missed every
+    # attention-family marker and landed on block_head / normalization although
+    # this rank is expected to contain attention.  Not a hard error — the
+    # artifacts are still produced, but confidence drops and the top unmatched
+    # kernels are recorded for kernel_signatures alias review.
+    anchor_degraded = primary_anchor_kind in {"block_head", "normalization"} and rank_expects_attention(
+        events, model_context
+    )
+    if anchor_degraded:
+        segmentation_strategy["mode"] = f"{segmentation_strategy.get('mode')}_anchor_degraded"
+        segmentation_strategy["anchor_degraded"] = True
+        segmentation_strategy["anchor_kind_used"] = primary_anchor_kind
+        segmentation_strategy["candidate_attention_kernels"] = rank_attention_candidate_kernels(events)
+        print(
+            f"segment: rank {rank_id}: layer-anchor evidence degraded to "
+            f"{primary_anchor_kind!r} although the rank is expected to contain attention; "
+            "top unmatched kernels are recorded under candidate_attention_kernels "
+            "in segment_manifest.json for kernel_signatures alias review",
+            file=sys.stderr,
+        )
+    if anchor_degraded or anchor_kind_used == "normalization":
+        segmentation_strategy["confidence"] = "low"
+
     hard_errors.extend(validate_exact_cover(rank_id, events, row_numbers, plans))
 
     first_step_start = plans[0].frames[0].row_start if plans else events[0].row_idx
@@ -3293,10 +3743,13 @@ def build_segments_for_rank(
                 evidence_id=layer_evidence_id,
                 kind="layer_window",
                 summary=f"Exact layer observation from {', '.join(anchor_signature(anchor) for anchor in layer.anchors)}.",
-                events=layer_events,
+                # Slimmed: no event ids / metrics on per-layer evidence —
+                # the row window is derivable from the owning LayerSegment,
+                # and these per-layer payloads dominated
+                # structure_evidence_graph.json on large captures.
+                events=(),
                 segment_id=segment_id,
                 layer_id=layer_id,
-                metrics=metrics_for_events(layer_events, top_gap_limit=0),
             )
             layer_segments.append(
                 LayerSegment(
@@ -3355,7 +3808,21 @@ def build_segments_for_rank(
             )
         )
 
-        role_counts = Counter(role for event in step_events for role in event.op_roles)
+        # Single pass over step_events: bucket per-role counts and name
+        # samples together (previously two full re-scans per role). Dict
+        # insertion order matches the former Counter build order, so the
+        # observation sequence is unchanged. ``event_ids`` is no longer
+        # carried — it duplicated the step's event range and dominated the
+        # graph size; the per-role count still feeds ``confidence``.
+        role_counts: dict[str, int] = {}
+        role_names: dict[str, set[str]] = {}
+        for event in step_events:
+            for role in event.op_roles:
+                role_counts[role] = role_counts.get(role, 0) + 1
+                names = role_names.get(role)
+                if names is None:
+                    names = role_names[role] = set()
+                names.add(event.name_raw)
         for role, count in role_counts.items():
             obs_id = stable_id("struct", segment_id, role)
             observations.append(
@@ -3366,8 +3833,8 @@ def build_segments_for_rank(
                     segment_id=segment_id,
                     role=role,
                     role_family=role.split(".")[0],
-                    implementation_evidence=tuple(sorted({event.name_raw for event in step_events if role in event.op_roles})[:16]),
-                    event_ids=tuple(event.event_id for event in step_events if role in event.op_roles)[:64],
+                    implementation_evidence=tuple(sorted(role_names[role])[:8]),
+                    event_ids=(),
                     evidence_ids=(evidence_id,),
                     confidence="high" if count > 0 else "low",
                 )
@@ -3396,9 +3863,15 @@ def segment_profile(
     *,
     model_id: str | None = None,
     model_config: Path | None = None,
+    events: Sequence[NormalizedEvent] | None = None,
+    events_by_rank: Mapping[str, Sequence[NormalizedEvent]] | None = None,
 ) -> dict[str, Any]:
-    event_path = output_dir / "normalized_event_index.jsonl"
-    events = load_events(event_path)
+    # In-process hand-off: the full-pipeline runner passes the already
+    # normalized events through, skipping a multi-million-row disk re-parse.
+    # Stage-only runs (``--from-stage``) keep loading from disk.
+    if events is None:
+        event_path = output_dir / "normalized_event_index.jsonl"
+        events = load_events(event_path)
     analysis_context = read_json(output_dir / "analysis_context.json", default={}) or {}
     if model_id is None:
         model_id = analysis_context.get("model_id")
@@ -3409,7 +3882,7 @@ def segment_profile(
         model_config=model_config,
         events=events,
     )
-    grouped = group_by_rank(events)
+    grouped = events_by_rank if events_by_rank is not None else group_by_rank(events)
     all_segments: list[StepSegment] = []
     all_layers: list[LayerSegment] = []
     all_observations: list[StructureObservation] = []
@@ -3445,24 +3918,34 @@ def segment_profile(
         all_layers.extend(layers)
         all_observations.extend(observations)
         all_evidence.extend(evidence)
-        rank_summaries.append(
-            {
-                "rank_id": rank_id,
-                "event_count": len(rank_events),
-                "segment_count": len(segments),
-                "step_count": sum(1 for segment in segments if segment.segment_type == "step"),
-                "interior_unclassified_count": len(interior_islands),
-                "layer_count_inventory": sorted(
-                    {
-                        segment.main_layer_count
-                        for segment in segments
-                        if segment.segment_type == "step" and segment.main_layer_count is not None
-                    }
-                ),
-                "segmentation_strategy": segmentation_strategy,
-                "hard_error_count": len(rank_errors),
-            }
-        )
+        rank_summary = {
+            "rank_id": rank_id,
+            "event_count": len(rank_events),
+            "segment_count": len(segments),
+            "step_count": sum(1 for segment in segments if segment.segment_type == "step"),
+            "interior_unclassified_count": len(interior_islands),
+            "layer_count_inventory": sorted(
+                {
+                    segment.main_layer_count
+                    for segment in segments
+                    if segment.segment_type == "step" and segment.main_layer_count is not None
+                }
+            ),
+            "segmentation_strategy": segmentation_strategy,
+            "hard_error_count": len(rank_errors),
+        }
+        # Mirror anchor-stability markers to the rank level so they are visible
+        # without unpacking the nested strategy dict.
+        layer_count_validation = segmentation_strategy.get("layer_count_validation")
+        if isinstance(layer_count_validation, dict):
+            rank_summary["layer_count_validation"] = layer_count_validation
+        if segmentation_strategy.get("anchor_degraded"):
+            rank_summary["anchor_degraded"] = True
+            rank_summary["anchor_kind_used"] = segmentation_strategy.get("anchor_kind_used")
+            rank_summary["candidate_attention_kernels"] = segmentation_strategy.get("candidate_attention_kernels")
+        if segmentation_strategy.get("confidence") == "low":
+            rank_summary["confidence"] = "low"
+        rank_summaries.append(rank_summary)
     interior_island_total = sum(
         int(item.get("interior_unclassified_count") or 0)
         for item in rank_summaries
@@ -3492,14 +3975,15 @@ def segment_profile(
         "interior_island_total": interior_island_total,
         "hard_errors": hard_errors,
     }
-    write_json(output_dir / "step_segments.json", {"step_segments": all_segments})
-    write_json(output_dir / "layer_segments.json", {"layer_segments": all_layers})
+    write_json(output_dir / "step_segments.json", {"step_segments": all_segments}, compact=True)
+    write_json(output_dir / "layer_segments.json", {"layer_segments": all_layers}, compact=True)
     write_json(
         output_dir / "structure_evidence_graph.json",
         {
             "structure_observations": all_observations,
             "evidence": all_evidence,
         },
+        compact=True,
     )
     write_json(output_dir / "segment_model_context.json", model_context)
     write_json(output_dir / "segment_manifest.json", manifest)

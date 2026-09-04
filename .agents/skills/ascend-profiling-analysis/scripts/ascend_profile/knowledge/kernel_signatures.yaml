@@ -104,7 +104,12 @@ match_rules:
     #       - lightning_indexer + sparse_sharedkv, no kv_compressor -> DSA (V3.2)
     #       - kv_compressor + dense FIA, no indexer/sparse_sharedkv -> HCA (V4)
     - id: attention.sparse_sharedkv
-      when: {any_of: [sparseattnsharedkv, sparseattentionsharedkv, sharedkv]}
+      # sparseflashmla / sparseflashattention are the same kernel under
+      # newer CANN / vllm-ascend names (user-confirmed 2026-09: V4 CSA
+      # ships it as SparseFlashMla, V3.2 DSA as SparseFlashAttention).
+      # They MUST stay ahead of attention.flash_score in rule order —
+      # "sparseflashattention" contains the "flashattention" substring.
+      when: {any_of: [sparseattnsharedkv, sparseattentionsharedkv, sharedkv, sparseflashmla, sparseflashattention]}
       branches:
         - when: {any_of: [metadata]}
           add_categories: [attention.sparse_sharedkv.metadata]
@@ -138,7 +143,10 @@ match_rules:
       add_roles: [attention]
     - id: attention.mla.kv_norm_rope_cache
       when: {any_of: [kvrmsnormropecache]}
-      add_categories: [attention.mla.kv_norm_rope_cache, attention.rope]
+      # Emit plain attention.mla too: without it, MLA captures whose only
+      # MLA markers are KV-pipe kernels (w4a8 DSV3.1 has no MlaProlog) show
+      # no mla feature and the candidate scorer misfires on Qwen families.
+      add_categories: [attention.mla.kv_norm_rope_cache, attention.mla, attention.rope]
       add_roles: [attention_aux]
     # Triton / Ascend-C MLA preprocessing variants observed in real traces
     # (DSV2-Lite W8A8 path, GLM4.7). These kernels fuse the qkv split +
@@ -151,12 +159,12 @@ match_rules:
     # the linear/mamba rule below.
     - id: attention.mla.kv_norm_rope_cache.splitqkvrmsnormrope
       when: {any_of: [splitqkvrmsnormrope]}
-      add_categories: [attention.mla.kv_norm_rope_cache, attention.rope]
+      add_categories: [attention.mla.kv_norm_rope_cache, attention.mla, attention.rope]
       add_roles: [attention_aux]
     # MLA V up-proj uses npu_transpose_batchmatmul (mla_v1.py:893).
     - id: attention.mla.v_up_proj
       when: {any_of: [transposebatchmatmul, transposequantbatchmatmul]}
-      add_categories: [attention.mla.v_up_proj, compute.matmul]
+      add_categories: [attention.mla.v_up_proj, attention.mla, compute.matmul]
       add_roles: [attention]
 
     # --- Attention: KVComp overlay (Hamming-distance KV pruning) ---------
@@ -193,8 +201,24 @@ match_rules:
     # stays neutral (``attention.flash_score``); the architecture family is
     # decided by the *combination* of category signatures present in a block
     # (see attention_families.yaml).
+    #
+    # Mode disambiguation (user 2026-09-04): the same FIA kernel carries
+    # GQA full attention (Qwen3.5: no lora ranks, kv_heads < heads, NO MLA
+    # companion kernels) and MLA full attention (Kimi-K3: kv_lora_rank=512 /
+    # q_lora_rank=1536 latent KV, MLA companions mla_preprocess /
+    # kv_norm_rope_cache present). Never decide GQA vs MLA from the score
+    # kernel alone — use latent-rank shape evidence (config or low-rank
+    # projection matmul shapes) and/or the preceding-operator (companion)
+    # evidence. A NEW K3 full-attention operator is expected in a future
+    # CANN/vllm-ascend version; when it first appears unclassified, the
+    # segment anchor-degradation diagnostic (candidate_attention_kernels in
+    # segment_manifest.json) is the intake path — add the new name to
+    # match_rules below before trusting MLA anchors on new captures.
     - id: attention.flash_score
-      when: {any_of: [fusedinferattentionscore, unpadflashattention, flashattentionscore, flashattention, pagedattentionmask]}
+      # none_of: the sparse-attention kernel (SparseFlashAttention /
+      # SparseFlashMla, tagged attention.sparse_sharedkv above) contains
+      # the "flashattention" substring but is NOT a dense flash-score op.
+      when: {any_of: [fusedinferattentionscore, unpadflashattention, flashattentionscore, flashattention, pagedattentionmask], none_of: [sparseflash]}
       add_categories: [attention.flash_score]
       add_roles: [attention]
 
@@ -482,13 +506,15 @@ kernels:
 
   # ---- Sparse-attention building blocks: shared by DSA (V3.2) and CSA (V4).
   - profile_name: kvquantsparseattnsharedkv
-    aliases: [sparseattnsharedkv, sparseattentionsharedkv, sharedkv]
+    aliases: [sparseattnsharedkv, sparseattentionsharedkv, sharedkv, sparseflashmla, sparseflashattention]
     python_entry: torch.ops._C_ascend.npu_sparse_flash_attention
     categories: [attention.sparse_sharedkv]
     roles: [attention]
     used_by_family: [dsa, csa]
     evidence:
       - "vllm-ascend/vllm_ascend/attention/sfa_v1.py:1064"
+      - "user-confirmed 2026-09: newer CANN names the same kernel
+        SparseFlashMla (V4 CSA) or SparseFlashAttention (V3.2 DSA)"
     notes: |
       Main sparse attention kernel. Used by both DSA (V3.2) and CSA (V4)
       layers — the architecture family is resolved by whether a

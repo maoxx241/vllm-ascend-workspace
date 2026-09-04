@@ -574,7 +574,16 @@ def _iter_strings(value: Any) -> Iterable[str]:
 
 
 def _tokens(value: str) -> set[str]:
-    return set(TOKEN_RE.findall(value.lower()))
+    # ``Kimi-K3-16exp`` is a single TOKEN_RE match (hyphens/dots are kept),
+    # which never overlaps space-separated fingerprints like "kimi k3".
+    # Emit sub-parts alongside full tokens so hyphenated model names match
+    # their space-separated fingerprint forms (and vice versa).
+    tokens = set(TOKEN_RE.findall(value.lower()))
+    for token in list(tokens):
+        for part in re.split(r"[.\-_]+", token):
+            if len(part) >= 2:
+                tokens.add(part)
+    return tokens
 
 
 def _entry_score(query: str, entry: Mapping[str, Any]) -> int:
@@ -606,9 +615,12 @@ def query_knowledge(
     kinds: Sequence[str] | None = None,
     limit: int = 3,
     include_deprecated: bool = False,
+    min_score: int = 0,
 ) -> list[dict[str, Any]]:
     if limit < 1:
         raise KnowledgeError("limit must be greater than zero")
+    if min_score < 0:
+        raise KnowledgeError("min_score must be >= 0")
     selected = set(kinds or KNOWLEDGE_KINDS)
     unknown = sorted(selected - KNOWLEDGE_KINDS)
     if unknown:
@@ -625,7 +637,7 @@ def query_knowledge(
             if entry["status"] == "deprecated" and not include_deprecated:
                 continue
             score = _entry_score(query, entry)
-            if score <= 0:
+            if score <= 0 or score < min_score:
                 continue
             rule = entry["rule"]
             summary = str(

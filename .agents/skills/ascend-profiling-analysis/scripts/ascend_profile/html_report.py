@@ -380,15 +380,22 @@ def assess_companion_run(b) -> dict:
 
 
 def attention_categories_for_events(events: Iterable[Event]) -> set[str]:
-    """Union of ``op_categories`` emitted by ``rules.categories_and_roles``
-    for the given events. Used as the input to ``resolve_attention_family``.
+    """Union of ``op_categories`` for the given events, as input to
+    ``resolve_attention_family``.
 
-    Kept as a module-level helper so unit tests can call it directly with
-    a list of fake ``Event``-shaped objects (they only need ``name``,
-    ``task_type``, and ``accel_core``).
+    Real pipeline events already carry the categories assigned at normalize
+    time (``NormalizedEvent.op_categories``), so we union those directly
+    instead of re-running ``rules.categories_and_roles`` per event.
+    Duck-typed stand-ins that lack ``op_categories`` (unit-test fakes with
+    only ``name`` / ``task_type`` / ``accel_core``) still fall back to the
+    legacy per-event classification so the test contract is unchanged.
     """
     cats: set[str] = set()
     for event in events:
+        op_categories = getattr(event, "op_categories", None)
+        if op_categories is not None:
+            cats.update(op_categories)
+            continue
         cat_tuple, _ = rules.categories_and_roles(
             short_op_name(event.name),
             getattr(event, "task_type", "") or "",
@@ -859,10 +866,76 @@ def _load_events(path: Path) -> list:
     return [Event.from_normalized(event) for event in metrics.load_events_csv(path)]
 
 
-def _load_raw_kernel_details(root: Path) -> dict:
-    """Read all original kernel_details.csv files referenced in source_index.json.
+def _l3_rep_seg_ids(b: "Bundle") -> list[str]:
+    """Representative step segment ids that get L3 views.
 
-    Returns: {source_id: [row_dict, ...]} where index = row_idx (zero-based after header).
+    Top-3 step classes by ``wall_ms_sum``; the representative member is the
+    one whose ``wall_ms`` is closest to the class mean. Shared by
+    ``render_l3_views`` (rendering) and ``_raw_rows_needed`` (lazy raw-row
+    loading) so the two never drift apart.
+    """
+    if not b.step_class:
+        return []
+    rep_seg_ids: list[str] = []
+    classes_sorted = sorted(b.step_class, key=lambda r: safe_float(r["wall_ms_sum"]), reverse=True)
+    L3_TOP_N = 3
+    for cls in classes_sorted[:L3_TOP_N]:
+        cls_id = cls["step_class_id"]
+        members = [s for s in b.step_summary if s.get("step_class_id") == cls_id]
+        if not members:
+            continue
+        target = safe_float(cls["wall_ms_mean"])
+        rep = min(members, key=lambda x: abs(safe_float(x["wall_ms"]) - target))
+        rep_seg_ids.append(rep["segment_id"])
+    return rep_seg_ids
+
+
+def _raw_rows_needed(b: "Bundle") -> dict[str, set[int]]:
+    """Compute the ``{source_id: {row_idx, ...}}`` raw-row set the renderers
+    actually read.
+
+    ``raw_row`` has exactly two consumers:
+      1. L3 operator cards — rendered only for events inside the layers of
+         each step-class representative step (see ``render_l3_views`` /
+         ``_render_l3_layer``);
+      2. ``rules.refine_dense_attention_from_shapes`` — reads only events
+         whose name carries a flash-score token (FIA / UnpadFA / ...), via
+         ``detect_attention_subtype``.
+
+    Every other event's ``raw_row`` is never read, so the loader can skip it
+    instead of materialising the full raw kernel_details source per rank.
+    """
+    needed: dict[str, set[int]] = defaultdict(set)
+    step_rank_by_seg = {s.get("segment_id"): s.get("rank_id") for s in b.step_summary}
+    for seg_id in _l3_rep_seg_ids(b):
+        step_meta = b._step_seg_by_id.get(seg_id)
+        rank_id = step_rank_by_seg.get(seg_id)
+        if not step_meta or rank_id is None:
+            continue
+        for ls in layer_segments_in_step(b, rank_id, int(step_meta["row_start"]), int(step_meta["row_end"])):
+            for e in events_in_row_range(b.events, ls.get("row_start", 0), ls.get("row_end", 0), rank_id):
+                needed[e.source_id].add(e.row_idx)
+    # Same selection as ``rules.refine_dense_attention_from_shapes``:
+    # lowercase name contains one of the flash-score tokens.
+    tokens = rules._FLASH_SCORE_NAME_TOKENS
+    for e in b.events:
+        nl = (e.name or "").lower()
+        if any(tok in nl for tok in tokens):
+            needed[e.source_id].add(e.row_idx)
+    return needed
+
+
+def _load_raw_kernel_details(root: Path, needed_rows: dict[str, set[int]] | None = None) -> dict:
+    """Read original kernel_details rows referenced in source_index.json.
+
+    Returns: ``{source_id: {row_idx: row_dict}}`` (row_idx is zero-based
+    after the header, matching ``store.iter_csv_rows``).
+
+    When ``needed_rows`` is given, only rows whose row index is in
+    ``needed_rows[source_id]`` are materialised. The renderers never read
+    rows outside that set (see ``_raw_rows_needed``), and skipping the rest
+    is what keeps the report stage from holding full raw sources
+    (100+ MB each) in memory just for the top-3 representative steps.
     """
     si_path = root / "source_index.json"
     if not si_path.exists():
@@ -873,23 +946,42 @@ def _load_raw_kernel_details(root: Path) -> dict:
     for s in sources:
         if not isinstance(s, dict):
             continue
-        if s.get("kind") != "kernel_details_csv":
+        kind = s.get("kind")
+        if kind not in ("kernel_details_csv", "kernel_details_db"):
             continue
         path = Path(s["path"])
         if not path.exists():
             print(f"  WARN: source path missing: {path}", file=sys.stderr)
             continue
-        rows = []
+        wanted = needed_rows.get(s["source_id"]) if needed_rows is not None else None
+        rows: dict[int, dict] = {}
         try:
-            with path.open(encoding="utf-8") as f:
-                reader = csv.DictReader(f)
-                for r in reader:
-                    rows.append(r)
+            if kind == "kernel_details_db":
+                # db-direct source: rebuild the same row dicts on demand so
+                # operator cards keep their raw-row panel for db runs.
+                try:
+                    from ascend_profile import sources_db  # type: ignore
+                except ImportError:  # pragma: no cover - script-mode fallback
+                    import sources_db  # type: ignore[no-redef]
+
+                for row_idx, row in sources_db.iter_kernel_events_from_db(path):
+                    if wanted is not None and row_idx not in wanted:
+                        continue
+                    rows[row_idx] = row
+            else:
+                with path.open(encoding="utf-8") as f:
+                    reader = csv.reader(f)
+                    fieldnames = next(reader, None) or []
+                    for row_idx, cells in enumerate(reader):
+                        if wanted is not None and row_idx not in wanted:
+                            continue
+                        rows[row_idx] = dict(zip(fieldnames, cells))
         except Exception as exc:
             print(f"  WARN: failed reading {path}: {exc}", file=sys.stderr)
             continue
         by_source[s["source_id"]] = rows
-        print(f"  source {s['source_id'][:12]}… : {len(rows):,} rows ({path.name})", file=sys.stderr)
+        filter_note = " (filtered to render-needed rows)" if wanted is not None else ""
+        print(f"  source {s['source_id'][:12]}… : {len(rows):,} rows{filter_note} ({path.name})", file=sys.stderr)
     return by_source
 
 
@@ -901,11 +993,12 @@ def _attach_raw_rows(events: list, raw_by_source: dict) -> int:
         if not rows:
             miss += 1
             continue
-        if 0 <= e.row_idx < len(rows):
-            e.raw_row = rows[e.row_idx]
-            hits += 1
-        else:
+        row = rows.get(e.row_idx)
+        if row is None:
             miss += 1
+            continue
+        e.raw_row = row
+        hits += 1
     print(f"  attached raw_row to {hits:,} events ({miss:,} miss)", file=sys.stderr)
     return hits
 
@@ -935,8 +1028,21 @@ def dedup_comm_aiv(events: list, iou_threshold: float = 0.9) -> int:
     for e in events:
         if e.op_type == "communication":
             by_rank[e.rank_id].append(e)
+    starts_by_rank: dict[str, list] = {}
+    prefix_max_end_by_rank: dict[str, list] = {}
     for rid in by_rank:
         by_rank[rid].sort(key=lambda x: x.start_us)
+        cands = by_rank[rid]
+        starts_by_rank[rid] = [c.start_us for c in cands]
+        # prefix max of end_us: while scanning backwards we can stop as soon
+        # as every remaining (earlier-started) candidate ends before the
+        # query window -- they can never reach IoU >= threshold.
+        prefix: list[float] = []
+        running = 0.0
+        for c in cands:
+            running = c.end_us if c.end_us > running else running
+            prefix.append(running)
+        prefix_max_end_by_rank[rid] = prefix
     dedup = 0
     for e in events:
         if e.op_type == "mix_comm_aiv":
@@ -950,18 +1056,26 @@ def dedup_comm_aiv(events: list, iou_threshold: float = 0.9) -> int:
         cands = by_rank.get(e.rank_id, [])
         if not cands:
             continue
-        for c in cands:
-            if c.end_us < e.start_us:
-                continue
-            if c.start_us > e.end_us:
-                break
-            inter = max(0, min(c.end_us, e.end_us) - max(c.start_us, e.start_us))
-            union = max(c.end_us, e.end_us) - min(c.start_us, e.start_us)
-            iou = inter / union if union > 0 else 0.0
-            if iou >= iou_threshold:
-                e.redundant = True
-                dedup += 1
-                break
+        # Candidates are sorted by start_us; only the prefix with
+        # ``start_us <= e.end_us`` can overlap (equivalent to the old
+        # ``break`` on the first candidate past e.end_us). Scan that prefix
+        # backwards from the bisected boundary: same candidate set, same IoU
+        # test, but we skip the long tail of candidates that both start and
+        # end before the query window instead of walking them every time.
+        starts = starts_by_rank[e.rank_id]
+        prefix_max_end = prefix_max_end_by_rank[e.rank_id]
+        i = bisect.bisect_right(starts, e.end_us) - 1
+        while i >= 0 and prefix_max_end[i] >= e.start_us:
+            c = cands[i]
+            if c.end_us >= e.start_us:
+                inter = max(0, min(c.end_us, e.end_us) - max(c.start_us, e.start_us))
+                union = max(c.end_us, e.end_us) - min(c.start_us, e.start_us)
+                iou = inter / union if union > 0 else 0.0
+                if iou >= iou_threshold:
+                    e.redundant = True
+                    dedup += 1
+                    break
+            i -= 1
     return dedup
 
 
@@ -1129,7 +1243,7 @@ def events_in_row_range(events_by_row: list, row_start: int, row_end: int, rank_
     return out
 
 
-def load_bundle(root: Path) -> Bundle:
+def load_bundle(root: Path, *, events=None) -> Bundle:
     b = Bundle(root=root)
     b.rank_summary = load_csv(root / "rank_summary.csv")
     b.step_summary = load_csv(root / "step_summary.csv")
@@ -1159,15 +1273,20 @@ def load_bundle(root: Path) -> Bundle:
     b.layer_segments = _load_segments(root / "layer_segments.json", "layer_segments")
     b.block_segments = _load_segments(root / "block_segments.json", "block_segments")
     _build_layer_seg_rank_index(b)
-    print(f"loading events from normalized_event_index.csv ...", file=sys.stderr)
-    b.events = _load_events(root / "normalized_event_index.csv")
+    if events is None:
+        print(f"loading events from normalized_event_index.csv ...", file=sys.stderr)
+        b.events = _load_events(root / "normalized_event_index.csv")
+    else:
+        # In-process hand-off from the full-pipeline runner: adapt the
+        # already-normalized events instead of re-parsing the CSV.
+        b.events = [Event.from_normalized(event) for event in events]
     b.events.sort(key=lambda e: e.row_idx)
     _build_rank_event_index(b.events)
     print(f"  loaded {len(b.events)} events", file=sys.stderr)
     n_dedup = dedup_comm_aiv(b.events)
     print(f"  marked {n_dedup} comm-shadow events as redundant (mix_comm_aiv + AIV ops with comm-name keywords vs HCCL events, IoU >= 0.9)", file=sys.stderr)
     print(f"loading raw kernel_details.csv (per source) ...", file=sys.stderr)
-    raw_by_source = _load_raw_kernel_details(root)
+    raw_by_source = _load_raw_kernel_details(root, _raw_rows_needed(b))
     _attach_raw_rows(b.events, raw_by_source)
     return b
 
@@ -2842,17 +2961,9 @@ def render_l3_views(b: "Bundle") -> str:
         return ""
     # generate L3 views for the top-N step classes by wall_ms_sum. Uncovered classes'
     # layer clicks fall back to the top-1 class's rep step (best-effort same-layer-index).
-    rep_seg_ids: list[str] = []
-    classes_sorted = sorted(b.step_class, key=lambda r: safe_float(r["wall_ms_sum"]), reverse=True)
-    L3_TOP_N = 3
-    for cls in classes_sorted[:L3_TOP_N]:
-        cls_id = cls["step_class_id"]
-        members = [s for s in b.step_summary if s.get("step_class_id") == cls_id]
-        if not members:
-            continue
-        target = safe_float(cls["wall_ms_mean"])
-        rep = min(members, key=lambda x: abs(safe_float(x["wall_ms"]) - target))
-        rep_seg_ids.append(rep["segment_id"])
+    # ``_l3_rep_seg_ids`` is shared with the lazy raw-row loader so the render
+    # set and the loaded row set are computed by the same code path.
+    rep_seg_ids = _l3_rep_seg_ids(b)
 
     step_seg_by_id = {s["segment_id"]: s for s in b.step_segments}
     out = []
@@ -3015,6 +3126,8 @@ def _render_l3_layer(b: "Bundle", view_id: str, parent_seg_id: str,
 def build_html_report(
     analysis_root: Path | str,
     output_path: Path | str,
+    *,
+    events=None,
 ) -> Path:
     """Render the v7 SPA HTML report for the given analysis root.
 
@@ -3027,7 +3140,7 @@ def build_html_report(
     root = Path(analysis_root)
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
-    b = load_bundle(root)
+    b = load_bundle(root, events=events)
     title = f"Ascend Profiling · {os.path.basename(str(root).rstrip('/'))}"
     html_out = "".join([
         render_head(title),

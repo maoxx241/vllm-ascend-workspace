@@ -221,6 +221,30 @@ _CASES: list[tuple[str, set[str], set[str]]] = [
         {"attention.sparse_sharedkv"},
         {"attention.sparse_sharedkv.metadata", "attention.mla", "attention.flash_score"},
     ),
+    # Newer-CANN spellings of the same sparse kernel (user-confirmed
+    # 2026-09): V4 CSA ships SparseFlashMla, V3.2 DSA ships
+    # SparseFlashAttention. The latter contains "flashattention" and must
+    # NOT fall through to the dense flash_score rule.
+    (
+        "SparseFlashMla",
+        {"attention.sparse_sharedkv"},
+        {"attention.sparse_sharedkv.metadata", "attention.flash_score", "attention.mla"},
+    ),
+    (
+        "SparseFlashMlaMetadata",
+        {"attention.sparse_sharedkv.metadata"},
+        {"attention.sparse_sharedkv", "attention.flash_score"},
+    ),
+    (
+        "SparseFlashAttention",
+        {"attention.sparse_sharedkv"},
+        {"attention.sparse_sharedkv.metadata", "attention.flash_score", "attention.mla"},
+    ),
+    (
+        "SparseFlashAttentionMetadata",
+        {"attention.sparse_sharedkv.metadata"},
+        {"attention.sparse_sharedkv", "attention.flash_score"},
+    ),
     (
         "KVQuantSparseAttnSharedKVMetadata",
         {"attention.sparse_sharedkv.metadata"},
@@ -269,12 +293,12 @@ _CASES: list[tuple[str, set[str], set[str]]] = [
     ),
     (
         "KvRmsNormRopeCache",
-        {"attention.mla.kv_norm_rope_cache", "attention.rope"},
+        {"attention.mla.kv_norm_rope_cache", "attention.mla", "attention.rope"},
         {"attention.sparse_sharedkv"},
     ),
     (
         "TransposeQuantBatchMatmul",
-        {"attention.mla.v_up_proj", "compute.matmul"},
+        {"attention.mla.v_up_proj", "attention.mla", "compute.matmul"},
         {"attention.sparse_attn.v_up_proj"},
     ),
     # ---- KVComp overlay

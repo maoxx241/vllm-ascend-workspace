@@ -6,7 +6,7 @@ from __future__ import annotations
 import argparse
 from collections import defaultdict
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
 try:
     from .common import (
@@ -15,7 +15,6 @@ try:
         SCHEMA_VERSION,
         TOOL_VERSION,
         emit_stage_json,
-        group_by_rank,
         load_events,
         load_step_segments,
         metrics_for_events,
@@ -35,7 +34,6 @@ except ImportError:  # pragma: no cover
         SCHEMA_VERSION,
         TOOL_VERSION,
         emit_stage_json,
-        group_by_rank,
         load_events,
         load_step_segments,
         metrics_for_events,
@@ -133,19 +131,34 @@ def event_alignment_key(event: NormalizedEvent) -> tuple[str, str, str]:
 
 def build_step_alignments(segments: Sequence[Any]) -> list[CrossRankAlignment]:
     steps = [segment for segment in segments if segment.segment_type == "step"]
+    # Rank-bucketed scan instead of the former all-pairs O(S^2) loop: each
+    # bucket is sorted by start_us, so the inner scan can stop at the first
+    # candidate starting at/after the step's end (zero overlap from there
+    # on). Matches are re-ordered by their original ``steps`` index so the
+    # resulting members/order stay byte-identical to the all-pairs scan.
+    by_rank: dict[str, list[tuple[int, Any]]] = defaultdict(list)
+    for index, step in enumerate(steps):
+        by_rank[step.rank_id].append((index, step))
+    for bucket in by_rank.values():
+        bucket.sort(key=lambda item: (item[1].start_us, item[0]))
     alignments: list[CrossRankAlignment] = []
     seen: set[tuple[str, ...]] = set()
     for step in steps:
-        members = [step]
-        for other in steps:
-            if other.rank_id == step.rank_id:
+        matches: list[tuple[int, Any]] = []
+        for rank_id, bucket in by_rank.items():
+            if rank_id == step.rank_id:
                 continue
-            overlap = overlap_us(step.start_us, step.end_us, other.start_us, other.end_us)
-            if overlap <= 0:
-                continue
-            denom = max(1.0, min(step.end_us - step.start_us, other.end_us - other.start_us))
-            if overlap / denom >= STEP_TIME_OVERLAP_RATIO:
-                members.append(other)
+            for other_index, other in bucket:
+                if other.start_us >= step.end_us:
+                    break
+                overlap = overlap_us(step.start_us, step.end_us, other.start_us, other.end_us)
+                if overlap <= 0:
+                    continue
+                denom = max(1.0, min(step.end_us - step.start_us, other.end_us - other.start_us))
+                if overlap / denom >= STEP_TIME_OVERLAP_RATIO:
+                    matches.append((other_index, other))
+        matches.sort(key=lambda item: item[0])
+        members = [step] + [other for _, other in matches]
         rank_ids = tuple(sorted({member.rank_id for member in members}))
         segment_ids = tuple(sorted({member.segment_id for member in members}))
         if len(rank_ids) < 2 or segment_ids in seen:
@@ -211,7 +224,10 @@ def build_operator_alignments(events: Sequence[NormalizedEvent], *, bucket_us: f
                 alignment_id=stable_id("align", role, name_key, shape, bucket),
                 alignment_type="operator",
                 rank_ids=rank_ids,
-                event_ids=tuple(event.event_id for event in sorted(items, key=lambda item: (item.rank_id, item.start_us))),
+                # Cap the carried event ids at 64, the same truncation
+                # precedent as ``segment.add_evidence``; the full member
+                # count stays available in ``metrics["member_count"]``.
+                event_ids=tuple(event.event_id for event in sorted(items, key=lambda item: (item.rank_id, item.start_us))[:64]),
                 start_us=min(event.start_us for event in items),
                 end_us=max(event.end_us for event in items),
                 metrics={
@@ -239,15 +255,22 @@ def build_operator_alignments(events: Sequence[NormalizedEvent], *, bucket_us: f
     return alignments
 
 
-def cross_rank_profile(output_dir: Path) -> dict[str, Any]:
-    events = load_events(output_dir / "normalized_event_index.jsonl")
+def cross_rank_profile(
+    output_dir: Path,
+    *,
+    events: Sequence[NormalizedEvent] | None = None,
+) -> dict[str, Any]:
+    # In-process hand-off from the full-pipeline runner; stage-only runs
+    # keep loading from disk.
+    if events is None:
+        events = load_events(output_dir / "normalized_event_index.jsonl")
     segments = load_step_segments(output_dir / "step_segments.json")
     step_alignments = build_step_alignments(segments)
     operator_alignments = build_operator_alignments(events)
     alignments = step_alignments + operator_alignments
     rows = [alignment_row(alignment) for alignment in alignments]
     write_csv(output_dir / "cross_rank_alignment.csv", rows)
-    write_json(output_dir / "cross_rank_alignment.json", {"cross_rank_alignments": alignments})
+    write_json(output_dir / "cross_rank_alignment.json", {"cross_rank_alignments": alignments}, compact=True)
     manifest = {
         "schema_version": SCHEMA_VERSION,
         "tool_version": TOOL_VERSION,
@@ -262,7 +285,10 @@ def cross_rank_profile(output_dir: Path) -> dict[str, Any]:
             "alignment_count": len(alignments),
             "step_alignment_count": len(step_alignments),
             "operator_alignment_count": len(operator_alignments),
-            "rank_count": len(group_by_rank(events)),
+            # Distinct-rank count only; do not regroup millions of events
+            # (``group_by_rank`` also sorts each rank's events) just to
+            # count ranks here.
+            "rank_count": len({event.rank_id for event in events}),
         },
     }
     write_json(output_dir / "cross_rank_manifest.json", manifest)

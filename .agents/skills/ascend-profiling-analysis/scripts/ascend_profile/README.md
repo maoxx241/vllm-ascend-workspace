@@ -70,6 +70,39 @@ python3 -m ascend_profile.report --output OUT_DIR
 The staged commands are intended for agent debugging.  The skill entrypoint
 should call `analyze.py` unless it needs to inspect an intermediate artifact.
 
+## Kernel event sources (normalize)
+
+`normalize` consumes per-rank kernel events from either of two equivalent
+sources (`--source auto|db|csv`, default `auto`):
+
+- `kernel_details.csv` — the classic msprof text export, and
+- `ascend_pytorch_profiler_*.db` — **db-direct**: `sources_db.py` rebuilds
+  the identical 46-column event stream (row union:
+  `COMPUTE_TASK_INFO`⨝`TASK` + `COMMUNICATION_OP` +
+  `COMMUNICATION_SCHEDULE_TASK_INFO`⨝`TASK`, ordered by Start Time)
+  straight from the torch_npu profiler sqlite db, so analysis also runs on
+  captures where kernel_details.csv was never exported.
+
+`auto` prefers the db whenever the rank dir carries one
+(`ASCEND_PROFILER_OUTPUT/ascend_pytorch_profiler_*.db`) and it passes the
+fail-closed `probe_db_schema` check; otherwise it falls back to the CSV and
+records a `source_notes` entry in `normalize_manifest.json`.  Both paths
+feed the identical downstream row loop (same `KernelRowAccessor` pick
+semantics); `source_index.json` records the actual kind
+(`kernel_details_csv` | `kernel_details_db`), and the manifest carries
+`source` (requested mode) / `source_kinds` (per rank) / `source_notes`.
+
+Mapping rules (required schema, STRING_IDS field maps, PMU metric → column
+pivot, comm-row constants, `cube_utilization` formula, Wait Time rule) live
+in `knowledge/db_source_mapping.yaml` — edit the YAML, not `sources_db.py`.
+Fields the closed-source msprof exporter cannot reproduce from the db are
+adopted as db-native semantics and listed under
+`documented_differences` (Wait Time idle-gap, aicpu Block/Mix Block Num
+`N/A`, Start Time trailing tab, exact-start-time tie order).  Equivalence
+is enforced by `scripts/dev/golden_db_vs_csv.py`, which diffs the adapter
+against a db+CSV golden pair from the same capture row-by-row and
+field-by-field (verdict PASS = zero unexplained mismatches).
+
 ## Remote Execution Rule
 
 Do not parse large profiling roots on the local Mac.  Local execution is limited
@@ -134,12 +167,20 @@ profile_analysis/
   evidence/
     bubble_windows.jsonl
   evidence_index.csv
-  raw_kernel_index.csv
+  report/
+    report.md
+    report.xlsx
+    report.html            # html_report_v2 thin shell (or legacy single file)
+    assets/                # v2 lazy-loaded gzipped JSON views
+    analysis_summary.json  # agent-facing compact conclusion
+    manifest.json
 ```
 
 `normalized_event_index.jsonl` is optional for stage-level debugging.  The full
 pipeline always emits `normalized_event_index.csv`, and downstream stages can
-load that CSV directly.
+load that CSV directly.  `raw_kernel_index.csv` is no longer produced by
+default (`--write-raw-index` opts in); row-level drill-down reads
+`normalized_event_index.csv`, a strict column superset.
 
 The CSV/XLSX tables are user-facing and spreadsheet-friendly.  The JSON/JSONL
 files are agent-facing and preserve nested evidence.

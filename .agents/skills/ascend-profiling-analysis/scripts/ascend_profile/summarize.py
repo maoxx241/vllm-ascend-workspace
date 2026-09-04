@@ -44,7 +44,12 @@ try:
     )
     from .hardware_insights import build_hardware_insights
     from .host_trace import attribute_bubbles, trace_view_paths_by_rank
-    from .model_insights import model_config_insights, operator_efficiency_rows, profile_inferred_model_insights
+    from .model_insights import (
+        _EventInsightScan,
+        model_config_insights,
+        operator_efficiency_rows,
+        profile_inferred_model_insights,
+    )
 except ImportError:  # pragma: no cover
     import sys
 
@@ -84,7 +89,12 @@ except ImportError:  # pragma: no cover
     )
     from hardware_insights import build_hardware_insights  # type: ignore[no-redef]
     from host_trace import attribute_bubbles, trace_view_paths_by_rank  # type: ignore[no-redef]
-    from model_insights import model_config_insights, operator_efficiency_rows, profile_inferred_model_insights  # type: ignore[no-redef]
+    from model_insights import (  # type: ignore[no-redef]
+        _EventInsightScan,
+        model_config_insights,
+        operator_efficiency_rows,
+        profile_inferred_model_insights,
+    )
 
 
 UNDERFEED_HEAVY_RATIO = 0.30
@@ -1521,9 +1531,17 @@ def summarize_profile(
     hardware_model: str | None = None,
     hardware_profile: Path | None = None,
     scan_cann_hardware: bool = True,
+    write_raw_index: bool = False,
+    skip_host_trace: bool = False,
+    events: Sequence[NormalizedEvent] | None = None,
+    events_by_rank: Mapping[str, Sequence[NormalizedEvent]] | None = None,
 ) -> dict[str, Any]:
-    events = load_events(output_dir / "normalized_event_index.jsonl")
-    events_by_rank = group_by_rank(events)
+    # In-process hand-off from the full-pipeline runner; stage-only runs
+    # keep loading from disk.
+    if events is None:
+        events = load_events(output_dir / "normalized_event_index.jsonl")
+    if events_by_rank is None:
+        events_by_rank = group_by_rank(events)
     segments = load_step_segments(output_dir / "step_segments.json")
     layers = load_layer_segments(output_dir / "layer_segments.json")
     blocks = load_block_segments(output_dir / "block_segments.json")
@@ -1580,36 +1598,74 @@ def summarize_profile(
     )
     operator_rows = operator_summary_rows(events)
     operator_class_rows = operator_class_summary_rows(operator_rows)
-    operator_efficiency = operator_efficiency_rows(events, hardware=hardware_insights)
+    # One shared scan over all events feeds both the operator-efficiency
+    # table and the model-insight inferences (attention / matmul shapes,
+    # feature histogram, lm-head vocab, weight signatures) -- previously
+    # each of those swept the full event list separately.
+    insight_scan = _EventInsightScan(events)
+    operator_efficiency = operator_efficiency_rows(events, hardware=hardware_insights, scan=insight_scan)
     hccl_rows = hccl_op_summary_rows(operator_rows)
     hccl_class_rows = hccl_class_summary_rows(hccl_rows)
     wait_rows = wait_anchor_rows(operator_rows)
     aicpu = aicpu_rows(events_by_rank)
     bubbles = bubble_evidence_rows(step_rows)
-    source_index = read_json(output_dir / "source_index.json", default={}) or {}
-    bubbles, host_trace_status = attribute_bubbles(bubbles, trace_view_paths_by_rank(source_index))
+    if skip_host_trace:
+        # Fast mode: skip the trace_view.json scan entirely. Bubbles keep
+        # ``soft_attribution = None`` (same shape as the graceful-degradation
+        # path in host_trace.attribute_bubbles) and the status is recorded as
+        # "skipped" so the report Limitations section surfaces it.
+        for row in bubbles:
+            row["soft_attribution"] = None
+        host_trace_status = {
+            "status": "skipped",
+            "bubbles_total": len(bubbles),
+            "bubbles_attributed": 0,
+            "ranks_with_trace": [],
+            "ranks_with_host_events": [],
+            "ranks_without_trace": [],
+            "ranks_without_host_events": [],
+            "trace_objects_scanned": 0,
+            "host_events_seen": 0,
+            "host_events_retained": 0,
+            "truncated": False,
+            "limitations": [
+                "host trace attribution skipped (--skip-host-trace); bubble "
+                "soft_attribution is null and host-side root causes are not asserted."
+            ],
+        }
+    else:
+        source_index = read_json(output_dir / "source_index.json", default={}) or {}
+        bubbles, host_trace_status = attribute_bubbles(bubbles, trace_view_paths_by_rank(source_index))
     evidence = evidence_index_rows(step_rows, layer_rows, bubbles)
     pipeline_event_count = sum(1 for event in events if has_pipeline_signal(event.pipeline_us))
     pipeline_coverage = round(pipeline_event_count / len(events), 6) if events else 0.0
     operator_pipeline_rows = sum(1 for row in operator_rows if row.get("pipeline_signal"))
-    raw_kernel_index = [
-        {
-            "event_id": event.event_id,
-            "rank_id": event.rank_id,
-            "source_id": event.source_id,
-            "row_idx": event.row_idx,
-            "name": event.name_raw,
-            "task_type": event.task_type,
-            "start_us": event.start_us,
-            "duration_us": event.duration_us,
-            "wait_us": event.wait_us,
-            "roles": list(event.op_roles),
-            "categories": list(event.op_categories),
-            "shape_signature": event.shape_signature,
-        }
-        for event in events
-    ]
-    model_insights = profile_inferred_model_insights(events, step_rows, layer_rows)
+    # raw_kernel_index.csv duplicates normalized_event_index.csv content in a
+    # second full-size artifact (hundreds of MB at multi-million event scale,
+    # written here and re-read by the report). It is therefore OFF by
+    # default; the report's raw_kernel_index XLSX sheet streams
+    # normalized_event_index.csv directly. ``write_raw_index=True`` restores
+    # the legacy artifact for consumers that still want the standalone CSV.
+    raw_kernel_index: list[dict[str, Any]] = []
+    if write_raw_index:
+        raw_kernel_index = [
+            {
+                "event_id": event.event_id,
+                "rank_id": event.rank_id,
+                "source_id": event.source_id,
+                "row_idx": event.row_idx,
+                "name": event.name_raw,
+                "task_type": event.task_type,
+                "start_us": event.start_us,
+                "duration_us": event.duration_us,
+                "wait_us": event.wait_us,
+                "roles": list(event.op_roles),
+                "categories": list(event.op_categories),
+                "shape_signature": event.shape_signature,
+            }
+            for event in events
+        ]
+    model_insights = profile_inferred_model_insights(events, step_rows, layer_rows, scan=insight_scan)
     model_config = model_config.expanduser() if model_config else None
     config_insights = model_config_insights(model_config)
     model_context_rows = _context_rows(
@@ -1650,7 +1706,8 @@ def summarize_profile(
     write_csv(output_dir / "aicpu_summary.csv", aicpu)
     write_jsonl(output_dir / "evidence" / "bubble_windows.jsonl", bubbles)
     write_csv(output_dir / "evidence_index.csv", evidence)
-    write_csv(output_dir / "raw_kernel_index.csv", raw_kernel_index)
+    if write_raw_index:
+        write_csv(output_dir / "raw_kernel_index.csv", raw_kernel_index)
     write_csv(output_dir / "model_inferred_config.csv", model_inferred_rows)
     write_csv(output_dir / "model_feature_summary.csv", model_feature_rows)
     write_csv(output_dir / "model_layer_type_summary.csv", model_layer_type_rows)
@@ -1688,7 +1745,7 @@ def summarize_profile(
             "aicpu_summary": "aicpu_summary.csv",
             "bubble_windows": "evidence/bubble_windows.jsonl",
             "evidence_index": "evidence_index.csv",
-            "raw_kernel_index": "raw_kernel_index.csv",
+            "raw_kernel_index": "raw_kernel_index.csv" if write_raw_index else None,
             "model_insights": "model_insights.json",
             "model_inferred_config": "model_inferred_config.csv",
             "model_feature_summary": "model_feature_summary.csv",
@@ -1730,6 +1787,16 @@ def summarize_profile(
             "evidence_rows": len(evidence),
             "raw_kernel_rows": len(raw_kernel_index),
         },
+        "raw_kernel_index_note": (
+            None
+            if write_raw_index
+            else (
+                "raw_kernel_index.csv is not written by default; enable with "
+                "write_raw_index=True (summarize_profile) or --write-raw-index. "
+                "The report's raw_kernel_index XLSX sheet streams "
+                "normalized_event_index.csv (a column superset) instead."
+            )
+        ),
         "pipeline_coverage": {
             "events_with_pipeline_signal": pipeline_event_count,
             "events_total": len(events),
@@ -1774,6 +1841,24 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--hardware-model", help="optional capture hardware model, e.g. Ascend910B4")
     parser.add_argument("--hardware-profile", help="optional hardware_profile.json path available on this analysis host")
     parser.add_argument("--no-cann-hardware-scan", action="store_true", help="disable CANN platform_config scan")
+    parser.add_argument(
+        "--write-raw-index",
+        action="store_true",
+        help=(
+            "also write raw_kernel_index.csv (off by default -- the report "
+            "streams normalized_event_index.csv for its raw_kernel_index "
+            "sheet, so the standalone CSV is pure duplication at scale)"
+        ),
+    )
+    parser.add_argument(
+        "--skip-host-trace",
+        action="store_true",
+        help=(
+            "skip host-side bubble soft attribution (trace_view.json scan). "
+            "Bubbles keep soft_attribution=null and summary_manifest's "
+            "host_trace.status is recorded as 'skipped'."
+        ),
+    )
     return parser
 
 
@@ -1786,6 +1871,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         hardware_model=args.hardware_model,
         hardware_profile=Path(args.hardware_profile) if args.hardware_profile else None,
         scan_cann_hardware=not bool(args.no_cann_hardware_scan),
+        write_raw_index=bool(args.write_raw_index),
+        skip_host_trace=bool(args.skip_host_trace),
     )
     emit_stage_json({"stage": "summarize", "counts": manifest["counts"]})
     return 0

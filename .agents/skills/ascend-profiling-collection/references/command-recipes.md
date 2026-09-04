@@ -91,7 +91,9 @@ python3 .agents/skills/ascend-profiling-collection/scripts/run_remote_analyse.py
 
 Run from inside the session worktree (target auto-resolved), or add `--session-id <id>` / `--session-file <path>` to target a session explicitly.
 
-Exit 0 means every rank produced `kernel_details.csv` and `trace_view.json` AND the directory count matched `--expected-ranks` (typically `tp * (dp or 1)`). Non-zero means re-collection is needed. Always pass `--expected-ranks` against fresh roots — without it a partial capture where some ranks never produced a directory looks "clean".
+All rank dirs are analysed **in parallel** on the container in a single SSH call (`xargs -P`, effective parallelism `min(rank_count, --analyse-parallelism)`, default 8); each rank's stdout/stderr lands in `<dir>/analyse_parallel.log` and per-rank exit codes are aggregated back. `--analyse-timeout` (default 1800s) is the **overall wall-clock bound** for the whole parallel phase — the remote `timeout(1)` wrapper kills stuck ranks — not a per-rank budget.
+
+Exit 0 means every rank produced its expected analyse output — with the default `--analyse-export db`, a non-empty `ASCEND_PROFILER_OUTPUT/ascend_pytorch_profiler_*.db` per rank; with `text`/`both`, `kernel_details.csv` and `trace_view.json` — AND the directory count matched `--expected-ranks` (typically `tp * (dp or 1)`). Non-zero means re-collection is needed. Always pass `--expected-ranks` against fresh roots — without it a partial capture where some ranks never produced a directory looks "clean".
 
 ## Manually flip the profiler window on a service the agent already started
 
