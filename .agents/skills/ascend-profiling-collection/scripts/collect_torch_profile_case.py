@@ -86,6 +86,9 @@ KNOWLEDGE_ADVISORY_KINDS = (
     "known-failure-signatures",
 )
 KNOWLEDGE_QUERY_LIMIT = 3
+# Matches below this score are treated as noise (weak single-token overlaps
+# e.g. an entry id fragment); real matches score >= 12 from fingerprint tokens.
+KNOWLEDGE_MIN_SCORE = 5
 
 VL_DEFAULT_IMAGE = (
     ROOT / "vllm-ascend" / "tests" / "e2e" / "310p" / "data" / "qwen.png"
@@ -143,6 +146,7 @@ def knowledge_preflight_advisories(
                 query=query,
                 kinds=[kind],
                 limit=KNOWLEDGE_QUERY_LIMIT,
+            min_score=KNOWLEDGE_MIN_SCORE,
             ):
                 advisories.append(
                     {
@@ -180,6 +184,7 @@ def knowledge_failure_matches(
             query=signature_text,
             kinds=["known-failure-signatures"],
             limit=KNOWLEDGE_QUERY_LIMIT,
+            min_score=KNOWLEDGE_MIN_SCORE,
         )
         out: list[dict[str, Any]] = []
         for match in matches:

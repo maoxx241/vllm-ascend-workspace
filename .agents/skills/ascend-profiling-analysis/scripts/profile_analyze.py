@@ -305,6 +305,9 @@ KNOWLEDGE_DIR = common.ROOT / ".agents" / "knowledge"
 KNOWLEDGE_FINDING_KINDS = ("known-failure-signatures", "validation-rules")
 KNOWLEDGE_MODEL_KINDS = ("model-capabilities",)
 KNOWLEDGE_QUERY_LIMIT = 3
+# Matches below this score are treated as noise (weak single-token overlaps
+# e.g. an entry id fragment); real matches score >= 12 from fingerprint tokens.
+KNOWLEDGE_MIN_SCORE = 5
 
 
 def _knowledge_api() -> tuple[Any, Any, Any] | None:
@@ -345,6 +348,7 @@ def _knowledge_refs_for_finding(
         query=query,
         kinds=list(KNOWLEDGE_FINDING_KINDS),
         limit=KNOWLEDGE_QUERY_LIMIT,
+        min_score=KNOWLEDGE_MIN_SCORE,
     ):
         resolution = ""
         full = get_knowledge_entry(knowledge_dir=knowledge_dir, entry_id=match["id"])
@@ -399,6 +403,7 @@ def _backfill_layer_validation_from_knowledge(
             query=name,
             kinds=list(KNOWLEDGE_MODEL_KINDS),
             limit=KNOWLEDGE_QUERY_LIMIT,
+            min_score=KNOWLEDGE_MIN_SCORE,
         )
         for match in matches:
             full = get_knowledge_entry(knowledge_dir=knowledge_dir, entry_id=match["id"])
