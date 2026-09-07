@@ -44,6 +44,16 @@ class BlockSeverityTests(unittest.TestCase):
         self.assertIn("user-home-path", rules_for("/home/testuser/vllm-ascend"))
         self.assertIn("email-address", rules_for("owner is dev@corp-mail.invalid"))
 
+    def test_public_url_host_allowlist_does_not_exempt_email(self) -> None:
+        self.assertIn(
+            "email-address",
+            rules_for("synthetic-reviewer@github.com filed the report"),
+        )
+        self.assertEqual(
+            rules_for("See https://github.com/example-org/example-repo/pull/1"),
+            set(),
+        )
+
     def test_secret_shaped_keys_and_values_are_blocked(self) -> None:
         self.assertIn("secret-key-name", rules_for({"api_token": "x"}))
         self.assertIn(

@@ -249,5 +249,27 @@ class MigrateCliTests(unittest.TestCase):
         )
 
 
+class CorrectedSourceHonestyTests(unittest.TestCase):
+    """The #96 source correction must survive regeneration of project v2."""
+
+    OLD_CLAIM = (
+        "fixed in remote-code-parity + vllm-ascend-serving ssh helpers"
+    )
+
+    def test_both_generations_name_profiling_helpers(self) -> None:
+        v1_text = (
+            ROOT / ".agents" / "knowledge" / "known-failure-signatures.yaml"
+        ).read_text(encoding="utf-8")
+        v2_text = (
+            ROOT / ".agents" / "knowledge" / f"known-failure-signatures{v2.V2_SUFFIX}"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn(self.OLD_CLAIM, v1_text)
+        self.assertNotIn(self.OLD_CLAIM, v2_text)
+        self.assertIn("ascend-profiling-analysis", v1_text)
+        self.assertIn("ascend-profiling-collection", v1_text)
+        self.assertIn("ascend-profiling-analysis", v2_text)
+        self.assertIn("ascend-profiling-collection", v2_text)
+
+
 if __name__ == "__main__":
     unittest.main()

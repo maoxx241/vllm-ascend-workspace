@@ -90,12 +90,12 @@
     },
     {
       "confidence": "low",
-      "content_hash": "sha256:c29e66af3fb6a780260b608f3ba1a9a7923b1f11bda14936ed081aee32d35c7d",
+      "content_hash": "sha256:d6e581d3393d72a081ec648e227e675bf7175b95a8f90c023d211aff57d696b0",
       "lifecycle": {
         "first_seen": "2026-09-03",
         "resolved_by": null,
         "superseded_by": null,
-        "updated_at": "2026-09-03"
+        "updated_at": "2026-09-07"
       },
       "provenance": {
         "contributor": "maoxx241",
@@ -104,13 +104,13 @@
         "submitted_at": "2026-09-07"
       },
       "rule": {
-        "avoidance": "Do not retry the same stream command on the mux hoping for a different result; check mux options first. Treat instant 'timeout' from MCP remote_bash as a tool-service fault signature, not a remote command fault.",
+        "avoidance": "Do not retry a long-lived stream/tunnel on the mux hoping for a different result; check whether that command actually passes mux=False. Do not flip serving ssh_exec or parity stdin-upload helpers to mux=False — those are short round-trips and should keep the mux. Treat instant 'timeout' from MCP remote_bash as a tool-service fault signature, not a remote command fault.",
         "fingerprints": [
           "ssh_stream instant timeout controlmaster",
           "remote_bash instant timeout any command",
           "stream closed early mux"
         ],
-        "resolution": "Use base_ssh_options(mux=False) for ssh_stream and for any long-lived tunnel/stream command (fixed in remote-code-parity + vllm-ascend-serving ssh helpers, PR #70). Fall back to direct 'ssh -o BatchMode=yes -p <port> root@<host>' when MCP remote_bash misbehaves.",
+        "resolution": "Use base_ssh_options(mux=False) only for long-lived stream/tunnel commands. The helpers that actually do this are .agents/skills/ascend-profiling-analysis/scripts/_common.py `_ssh_base_cmd` (ssh_stream) and .agents/skills/ascend-profiling-collection/scripts/_common.py `open_local_tunnel` (ssh -N -L), both from PR #70. remote-code-parity and vllm-ascend-serving still call base_ssh_options() with default mux=True for short captured SSH and stdin uploads; they were not switched off the mux. Fall back to direct 'ssh -o BatchMode=yes -p <port> root@<host>' when MCP remote_bash misbehaves.",
         "root_cause": "The shared ControlMaster mux channel does not reliably carry long-lived stream sessions in this environment; stream-type invocations must bypass the mux (dedicated connection) instead of multiplexing over it.",
         "summary": "ssh_stream through the shared ControlMaster mux fails on long-running remote commands; run stream/tunnel off the mux",
         "symptom": "Long-lived SSH streaming commands (service logs, analyse progress, tunnels) die or hang immediately / return early when issued over the shared ControlMaster connection; MCP remote_bash separately reported instant 'timeout' for any command while remote_probe/remote_ls kept working."

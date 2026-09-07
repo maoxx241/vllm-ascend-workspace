@@ -28,19 +28,19 @@ pretending to consult it.
 
 from __future__ import annotations
 
-import json
 import os
 from copy import deepcopy
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 import vaws_knowledge as v1
+import vaws_knowledge_shared as shared
 import vaws_knowledge_v2 as v2
 
 LAYERS: tuple[str, ...] = ("shared", "project", "candidate")
 DEFAULT_LAYERS: tuple[str, ...] = ("shared", "project")
 
-SHARED_CACHE_METADATA = "cache-metadata.json"
+SHARED_CACHE_METADATA = shared.SHARED_CACHE_METADATA
 MCP_ENDPOINT_FILE = "mcp-endpoint.json"
 MCP_ENDPOINT_ENV = "VAWS_KNOWLEDGE_MCP_ENDPOINT"
 
@@ -85,32 +85,20 @@ def _probe_project(knowledge_dir: Path) -> dict[str, Any]:
 
 
 def _probe_shared(shared_dir: Path) -> dict[str, Any]:
-    metadata_path = shared_dir / SHARED_CACHE_METADATA
-    if not shared_dir.is_dir() or not metadata_path.is_file():
-        return {
-            "status": "absent",
-            "path": str(shared_dir),
-            "detail": "no shared cache pulled from vaws-knowledge yet",
-            "remedy": "python3 .agents/scripts/knowledge_shared_cache.py import --from <clone>/corpus/verified",
-        }
-    try:
-        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        return {
-            "status": "degraded",
-            "path": str(shared_dir),
-            "detail": f"shared cache metadata unreadable: {exc}",
-        }
-    _, problems = v2.load_entries(shared_dir, context=v2.PROJECT_LAYER)
-    return {
-        "status": "degraded" if problems else "available",
-        "path": str(shared_dir),
-        "source_repo": metadata.get("source_repo"),
-        "source_ref": metadata.get("source_ref"),
-        "pulled_at": metadata.get("pulled_at"),
-        "documents": [path.name for path, _ in v2.iter_documents(shared_dir)],
-        "problems": problems,
+    inspection = shared.inspect_shared_cache(shared_dir)
+    payload = {
+        "status": inspection["status"],
+        "path": inspection["path"],
+        "detail": inspection.get("detail"),
+        "problems": inspection.get("problems") or [],
+        "documents": inspection.get("documents") or [],
+        "source_repo": inspection.get("source_repo"),
+        "source_ref": inspection.get("source_ref"),
+        "pulled_at": inspection.get("pulled_at"),
     }
+    if inspection["status"] == shared.ABSENT:
+        payload["remedy"] = inspection.get("remedy")
+    return payload
 
 
 def _probe_candidates(candidate_dir: Path) -> dict[str, Any]:
@@ -220,6 +208,8 @@ def _v2_matches(
                 "warning": v2.status_warning(entry),
                 "score": score,
                 "source_file": entry.get("_source_file"),
+                "source_repo": entry.get("_source_repo"),
+                "source_ref": entry.get("_source_ref"),
             }
         )
     return matches
@@ -375,19 +365,27 @@ def query(
 
     if "shared" in layers:
         capability = capabilities["shared"]
-        if capability["status"] == "absent":
+        if capability["status"] != shared.AVAILABLE:
             missing.append(
                 {
                     "layer": "shared",
-                    "status": "absent",
+                    "status": capability.get("status", "absent"),
                     "detail": capability.get("detail", ""),
                     "remedy": capability.get("remedy", ""),
-                    "effect": "degraded to project+candidate; shared facts were not consulted",
+                    "source_repo": capability.get("source_repo"),
+                    "source_ref": capability.get("source_ref"),
+                    "effect": (
+                        "degraded to project+candidate; shared facts were not consulted"
+                    ),
                 }
             )
+            for detail in capability.get("problems") or []:
+                problems.append(detail)
         else:
             answered.append("shared")
-            shared_entries, shared_problems = v2.load_entries(shared_dir)
+            shared_entries, shared_problems, _inspection = shared.load_shared_entries(
+                shared_dir
+            )
             problems.extend(shared_problems)
             matches.extend(
                 _v2_matches(
@@ -483,17 +481,20 @@ def get_entry(
             found.setdefault("layer", "project")
             return found
     if "shared" in layers:
-        entries, _ = v2.load_entries(shared_dir)
-        for entry in entries:
-            if entry_id in {entry.get("slug"), entry.get("uuid")}:
-                record = deepcopy(entry)
-                return {
-                    "layer": "shared",
-                    "kind": record.pop("_kind", None),
-                    "source_file": record.pop("_source_file", None),
-                    "schema_version": v2.SCHEMA_VERSION,
-                    "entry": record,
-                }
+        entries, _problems, inspection = shared.load_shared_entries(shared_dir)
+        if inspection.get("status") == shared.AVAILABLE:
+            for entry in entries:
+                if entry_id in {entry.get("slug"), entry.get("uuid")}:
+                    record = deepcopy(entry)
+                    return {
+                        "layer": "shared",
+                        "kind": record.pop("_kind", None),
+                        "source_file": record.pop("_source_file", None),
+                        "source_repo": record.pop("_source_repo", None),
+                        "source_ref": record.pop("_source_ref", None),
+                        "schema_version": v2.SCHEMA_VERSION,
+                        "entry": record,
+                    }
     if "candidate" in layers and candidate_dir.is_dir():
         path = candidate_dir / f"{entry_id}.json"
         if path.is_file():

@@ -206,9 +206,10 @@ def _scan_text(text: str, path: str) -> list[Finding]:
 
     emails = set(_EMAIL_RE.findall(text))
     for candidate in emails:
-        domain = candidate.rsplit("@", 1)[-1].lower()
-        if domain not in _ALLOWED_HOSTS:
-            add("email-address", candidate)
+        # Public URL/hostname allowlisting does not extend to account
+        # addresses at those hosts. git@github.com remains a user-at-host
+        # question; an e-mail address is always a person.
+        add("email-address", candidate)
     for candidate in _USER_AT_HOST_RE.findall(text):
         if candidate in emails:
             continue

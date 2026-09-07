@@ -64,6 +64,7 @@ compatibility backend for managed sessions, sync, service adapters, and cleanup.
 - `.agents/lib/vaws_knowledge.py` is the shared v1 knowledge validation, capture, and query library, and the dual-read entry point for v2 documents.
 - `.agents/lib/vaws_knowledge_v2.py` is the federated v2 contract library: validation, canonicalization, content hashing, coordinates, and the export shape.
 - `.agents/lib/vaws_knowledge_client.py` is the three-layer query client with capability probing and graceful degradation.
+- `.agents/lib/vaws_knowledge_shared.py` is the shared-cache trust boundary: only declared verified-zone corpus may be mounted as `shared`.
 - `.agents/lib/vaws_knowledge_migrate.py` is the mechanical v1 -> v2 conversion library.
 - `.agents/lib/vaws_redaction.py` is the versioned source-side redaction ruleset shared by every knowledge write and export.
 - `.agents/lib/vaws_session_id.py` and `.agents/lib/vaws_session_state.py` are the shared libraries for session identity, state, locks, and leases.

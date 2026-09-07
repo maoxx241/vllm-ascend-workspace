@@ -4,7 +4,7 @@ This directory is the **project layer** of a three-layer knowledge model:
 
 | Layer | Location | Trust | Written by |
 |-------|----------|-------|------------|
-| `shared` | `.vaws-local/knowledge/shared/` (untracked, read-only cache of `vllm-ascend-workspace/vaws-knowledge`) | reviewed by the commons | upstream only |
+| `shared` | `.vaws-local/knowledge/shared/` (untracked, read-only cache of `corpus/verified/` from a declared `vaws-knowledge` source) | reviewed by the commons | upstream only; local import refuses project/unverified zones |
 | `project` | this directory | reviewed in this repo | `curate-workspace-knowledge` |
 | `candidate` | `.vaws-local/knowledge/candidates/` (untracked) | one unreviewed observation | `knowledge_capture.py` |
 

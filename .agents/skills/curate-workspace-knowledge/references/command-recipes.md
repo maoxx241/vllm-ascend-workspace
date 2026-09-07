@@ -107,7 +107,9 @@ Refresh the read-only shared cache from a local clone of the commons:
 python3 .agents/scripts/knowledge_shared_cache.py status
 
 python3 .agents/scripts/knowledge_shared_cache.py import \
-  --from /path/to/vaws-knowledge/corpus/verified --source-ref <commit-sha>
+  --from /path/to/vaws-knowledge/corpus/verified \
+  --source-repo vllm-ascend-workspace/vaws-knowledge \
+  --source-ref <40-character-commit-sha>
 ```
 
 Convert the remaining v1 documents and report what needs human input:

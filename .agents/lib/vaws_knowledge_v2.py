@@ -92,6 +92,11 @@ RESOLVED_BY_TYPES = frozenset({"pull_request", "commit", "release"})
 DOCUMENT_LAYERS = frozenset({"verified", "unverified", "project"})
 EXPORT_LAYER = "unverified"
 PROJECT_LAYER = "project"
+VERIFIED_LAYER = "verified"
+VERIFIED_CONTEXT = "verified"
+# Reviewed lifecycle states that may exist in corpus/verified/. Unverified
+# observations are the review-zone, not the shared cache.
+SHARED_ENTRY_STATUSES = frozenset({"verified", "stale", "deprecated", "resolved"})
 
 RULE_REQUIRED = ("summary", "symptom", "root_cause", "resolution")
 RULE_OPTIONAL = ("avoidance", "fingerprints")
@@ -253,54 +258,170 @@ def new_document(kind: str, *, layer: str = PROJECT_LAYER, now: str | None = Non
 # canonicalization and content hashing (docs/federation.md)
 # ---------------------------------------------------------------------------
 
+ASCII_WHITESPACE = " \t\n\r\x0b\x0c"
+_ASCII_LOWER = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
+_ASCII_WS_RUN = re.compile(r"[ \t\n\r\x0b\x0c]+")
 
-def _normalize_string(value: str) -> str:
-    return value.replace("\r\n", "\n").replace("\r", "\n").strip()
+
+def _ascii_lower(value: str) -> str:
+    """Step 2: A–Z → a–z only. Non-ASCII letters are left unchanged."""
+
+    return value.translate(_ASCII_LOWER)
+
+
+def _normalize_text(value: str) -> str:
+    """Step 3: LF endings, per-line trailing ASCII whitespace, then outer ASCII strip."""
+
+    text = value.replace("\r\n", "\n").replace("\r", "\n")
+    text = "\n".join(line.rstrip(ASCII_WHITESPACE) for line in text.split("\n"))
+    return text.strip(ASCII_WHITESPACE)
+
+
+def _normalize_fingerprints(items: Any) -> Any:
+    """Step 2. Non-list values are left for the validator to reject."""
+
+    if not isinstance(items, list):
+        return items
+    seen: set[str] = set()
+    for item in items:
+        if not isinstance(item, str):
+            return list(items)
+        norm = _ASCII_WS_RUN.sub(" ", _ascii_lower(item).strip(ASCII_WHITESPACE))
+        if norm:
+            seen.add(norm)
+    return sorted(seen, key=lambda value: value.encode("utf-8"))
 
 
 def normalize_fingerprints(values: Sequence[Any]) -> list[str]:
     """Canonical fingerprint form per docs/federation.md (also used for dedupe)."""
 
-    normalized = {
-        " ".join(str(item).strip().lower().split())
-        for item in values
-        if str(item).strip()
-    }
-    return sorted(normalized)
+    if not isinstance(values, (list, tuple)):
+        raise KnowledgeV2Error(
+            "fingerprints must be a list of strings; canonicalization does not "
+            f"stringify {type(values).__name__}"
+        )
+    for index, item in enumerate(values):
+        if not isinstance(item, str):
+            raise KnowledgeV2Error(
+                f"fingerprints[{index}] must be a string, got {type(item).__name__} "
+                f"{item!r}; canonicalization does not stringify fingerprint items"
+            )
+    return _normalize_fingerprints(list(values))
 
 
+def _payload_type_error(value: Any, path: str, *, in_fingerprints: bool = False) -> str | None:
+    """Step 0: name a type that must not be coerced into a published hash."""
 
-def _canonicalize(value: Any, *, fingerprints: bool = False) -> Any:
     if isinstance(value, Mapping):
-        return {
-            str(key): _canonicalize(child, fingerprints=(str(key) == "fingerprints"))
-            for key, child in value.items()
-        }
-    if isinstance(value, (list, tuple)):
-        if fingerprints:
-            return normalize_fingerprints(value)
-        return [_canonicalize(child) for child in value]
+        for key, child in value.items():
+            if not isinstance(key, str):
+                return (
+                    f"{path}: mapping keys must be strings, got {type(key).__name__} "
+                    f"{key!r}; canonicalization does not stringify keys"
+                )
+            child_path = f"{path}.{key}"
+            if key == "fingerprints" and not isinstance(child, list):
+                return (
+                    f"{child_path} must be a list of strings, got {type(child).__name__}; "
+                    "canonicalization does not stringify fingerprint items"
+                )
+            err = _payload_type_error(
+                child, child_path, in_fingerprints=(key == "fingerprints")
+            )
+            if err:
+                return err
+        return None
+    if isinstance(value, list):
+        if in_fingerprints:
+            for index, item in enumerate(value):
+                if not isinstance(item, str):
+                    return (
+                        f"{path}[{index}]: fingerprint items must be strings, got "
+                        f"{type(item).__name__} {item!r}; canonicalization does not "
+                        "stringify them"
+                    )
+            return None
+        for index, item in enumerate(value):
+            err = _payload_type_error(item, f"{path}[{index}]")
+            if err:
+                return err
+        return None
+    if isinstance(value, bool) or value is None or isinstance(value, str):
+        return None
+    if isinstance(value, (int, float)):
+        return (
+            f"{path}: numeric value {value!r} is a {type(value).__name__} and is not "
+            "canonicalized; quote it as a string (canonicalization does not stringify types)"
+        )
+    return (
+        f"{path}: unsupported type {type(value).__name__}; "
+        "canonicalization does not coerce it"
+    )
+
+
+def _normalize_tree(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        out: dict[str, Any] = {}
+        for key, child in value.items():
+            if not isinstance(key, str):
+                raise KnowledgeV2Error(
+                    "canonical_payload: mapping keys must be strings, got "
+                    f"{type(key).__name__} {key!r}; canonicalization does not stringify keys"
+                )
+            out[key] = _normalize_tree(child)
+        return out
+    if isinstance(value, list):
+        return [_normalize_tree(item) for item in value]
     if isinstance(value, str):
-        return _normalize_string(value)
+        return _normalize_text(value)
     return value
 
 
+def canonical_object(entry: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the canonical ``{"rule": ..., "scope": ...}`` mapping for ``entry``."""
+
+    if not isinstance(entry, Mapping):
+        raise KnowledgeV2Error("canonical_payload: entry must be a mapping")
+    missing = [name for name in ("scope", "rule") if name not in entry]
+    if missing:
+        raise KnowledgeV2Error(
+            "canonical_payload: entry is missing "
+            + ", ".join(repr(name) for name in missing)
+            + "; content_hash is defined over scope + rule only and cannot be "
+            "computed without both"
+        )
+    for key in ("scope", "rule"):
+        if not isinstance(entry[key], Mapping):
+            raise KnowledgeV2Error(
+                f"canonical_payload: {key} must be a mapping, got "
+                f"{type(entry[key]).__name__}"
+            )
+        err = _payload_type_error(entry[key], key)
+        if err:
+            raise KnowledgeV2Error("canonical_payload: " + err)
+    rule = _normalize_tree(entry["rule"])
+    if isinstance(rule, dict) and "fingerprints" in rule:
+        # Step 2 applies to the original fingerprint strings, not to the
+        # already step-3-normalized copies in the walked tree.
+        rule["fingerprints"] = _normalize_fingerprints(entry["rule"].get("fingerprints"))
+    scope = _normalize_tree(entry["scope"])
+    return {"rule": rule, "scope": scope}
+
+
 def canonical_payload(entry: Mapping[str, Any]) -> str:
-    """Canonical serialization of ``scope`` + ``rule``, per docs/federation.md.
+    """Canonical JSON serialization of ``scope`` + ``rule``, per docs/federation.md.
 
     Only what the entry *claims* is hashed: not status, not dates, not
     provenance. Re-verifying or re-reviewing an entry must not change its
-    revision.
+    revision. The return value is the exact UTF-8 JSON string that is hashed.
     """
 
-    for field in ("scope", "rule"):
-        if not isinstance(entry.get(field), Mapping):
-            raise KnowledgeV2Error(f"entry.{field} must be an object to hash")
-    payload = {
-        "rule": _canonicalize(entry["rule"]),
-        "scope": _canonicalize(entry["scope"]),
-    }
-    return json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    return json.dumps(
+        canonical_object(entry),
+        sort_keys=True,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
 
 
 def content_hash(entry: Mapping[str, Any]) -> str:
@@ -649,6 +770,8 @@ def validate_entry(
 
     ``context='project'`` allows unresolved coordinate markers.
     ``context='export'`` refuses them, which is the whole point of the marker.
+    ``context='verified'`` is the shared-cache boundary: unresolved markers
+    and unverified entries are refused.
     """
 
     allow_unresolved = context == PROJECT_LAYER
@@ -669,6 +792,10 @@ def validate_entry(
     status = entry.get("status")
     if status not in ENTRY_STATUSES:
         errors.append(f"{path}.status must be one of: {', '.join(sorted(ENTRY_STATUSES))}")
+    elif context == VERIFIED_CONTEXT and status not in SHARED_ENTRY_STATUSES:
+        errors.append(
+            f"{path}.status {status} cannot enter the shared verified zone"
+        )
     confidence = entry.get("confidence")
     if confidence not in CONFIDENCE_LEVELS:
         errors.append(
@@ -728,7 +855,8 @@ def validate_entry(
     if check_hash and isinstance(entry.get("scope"), Mapping) and isinstance(entry.get("rule"), Mapping):
         try:
             expected = content_hash(entry)
-        except KnowledgeV2Error:
+        except KnowledgeV2Error as exc:
+            errors.append(f"{path}: {exc}")
             expected = None
         if expected is not None and declared_hash != expected:
             errors.append(
@@ -757,6 +885,11 @@ def validate_document(
         errors.append(f"layer must be one of: {', '.join(sorted(DOCUMENT_LAYERS))}")
     if context == "export" and layer != EXPORT_LAYER:
         errors.append(f"exported documents must declare layer {EXPORT_LAYER!r}")
+    if context == VERIFIED_CONTEXT and layer != VERIFIED_LAYER:
+        errors.append(
+            f"shared verified-zone documents must declare layer {VERIFIED_LAYER!r}, "
+            f"not {layer!r}"
+        )
     updated_at = document.get("updated_at")
     if not isinstance(updated_at, str) or not DATE_RE.fullmatch(updated_at):
         errors.append("updated_at must use YYYY-MM-DD")

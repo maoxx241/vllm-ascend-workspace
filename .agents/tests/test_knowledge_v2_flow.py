@@ -526,35 +526,51 @@ class ThreeLayerQueryTest(V2FlowBase):
 
     def test_shared_cache_is_consulted_once_imported(self) -> None:
         self.promote_and_verify()
-        self.run_script(
-            EXPORT,
-            "--knowledge-dir",
-            str(self.knowledge),
-            "--export-dir",
-            str(self.export),
-            "--origin-repo",
-            "owner/fork",
-            "--contributor",
-            "submitter",
-            "--entry",
-            "synthetic-ack-gate",
+        document = v2.load_document(
+            self.knowledge / f"known-failure-signatures{v2.V2_SUFFIX}"
         )
-        bundle_dir = sorted(self.export.glob("*/"))[0]
+        synthetic = next(
+            item for item in document["entries"] if item["slug"] == "synthetic-ack-gate"
+        )
+        verified_zone = {
+            "schema_version": 2,
+            "kind": "known-failure-signatures",
+            "layer": "verified",
+            "updated_at": document["updated_at"],
+            "entries": [synthetic],
+        }
+        source = self.sandbox / "corpus" / "verified"
+        source.mkdir(parents=True)
+        (source / "known-failure-signatures.yaml").write_text(
+            json.dumps(verified_zone, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
         imported = self.run_script(
             CACHE,
             "--shared-dir",
             str(self.shared),
             "import",
             "--from",
-            str(bundle_dir),
+            str(source),
+            "--source-repo",
+            "vllm-ascend-workspace/vaws-knowledge",
+            "--source-ref",
+            "0123456789abcdef0123456789abcdef01234567",
         )
         self.assertEqual(imported["entry_count"], 1)
+        self.assertEqual(
+            imported["source_repo"], "vllm-ascend-workspace/vaws-knowledge"
+        )
         payload = self.query("--query", FINGERPRINT, "--layer", "shared")
         self.assertEqual(
             {match["layer"] for match in payload["matches"]}, {"shared"}
         )
         self.assertEqual(payload["coverage"]["layers_answered"], ["shared"])
         self.assertNotIn("shared", payload["coverage"]["layers_unavailable"])
+        self.assertEqual(
+            payload["matches"][0]["source_ref"],
+            "0123456789abcdef0123456789abcdef01234567",
+        )
 
     def test_candidate_layer_is_available_before_review(self) -> None:
         self.capture(*self.env_arguments())

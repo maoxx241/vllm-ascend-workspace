@@ -131,6 +131,62 @@ class CanonicalizationTests(unittest.TestCase):
         self.assertEqual(set(json.loads(payload)), {"rule", "scope"})
         self.assertEqual(payload, v2.canonical_payload(sample_entry()))
 
+    def test_nbsp_and_ideographic_space_are_preserved(self) -> None:
+        entry = sample_entry()
+        entry["rule"]["summary"] = "\u00a0" + entry["rule"]["summary"] + "\u3000"
+        entry["rule"]["fingerprints"] = ["A\u00a0B"]
+        payload = v2.canonical_object(entry)
+        self.assertTrue(payload["rule"]["summary"].startswith("\u00a0"))
+        self.assertTrue(payload["rule"]["summary"].endswith("\u3000"))
+        self.assertEqual(["a\u00a0b"], payload["rule"]["fingerprints"])
+
+    def test_ascii_lowercase_preserves_non_ascii_letters(self) -> None:
+        entry = sample_entry()
+        entry["rule"]["fingerprints"] = ["ABC İ É Σ"]
+        self.assertEqual(
+            ["abc İ É Σ"], v2.canonical_object(entry)["rule"]["fingerprints"]
+        )
+
+    def test_interior_line_trailing_ascii_whitespace_is_stripped(self) -> None:
+        entry = sample_entry()
+        entry["rule"]["summary"] = "First line  \nSecond line"
+        entry["scope"]["soc"]["values"] = ["Ascend910_93"]
+        payload = v2.canonical_object(entry)
+        self.assertEqual("First line\nSecond line", payload["rule"]["summary"])
+
+    def test_nested_scope_basis_line_trailing_whitespace_is_stripped(self) -> None:
+        entry = sample_entry()
+        entry["scope"]["model"] = {
+            "any": True,
+            "basis": "Synthetic first line\t \nsecond line",
+        }
+        payload = v2.canonical_object(entry)
+        self.assertEqual(
+            "Synthetic first line\nsecond line", payload["scope"]["model"]["basis"]
+        )
+
+    def test_numeric_bound_is_rejected_not_stringified(self) -> None:
+        entry = sample_entry()
+        entry["scope"]["torch"] = {"range": {"min": 2.5, "max": None}}
+        with self.assertRaises(v2.KnowledgeV2Error) as caught:
+            v2.content_hash(entry)
+        self.assertIn("2.5", str(caught.exception))
+        self.assertIn("stringify", str(caught.exception))
+
+    def test_non_string_fingerprint_is_rejected_not_stringified(self) -> None:
+        entry = sample_entry()
+        entry["rule"]["fingerprints"] = [123]
+        with self.assertRaises(v2.KnowledgeV2Error) as caught:
+            v2.content_hash(entry)
+        self.assertIn("123", str(caught.exception))
+
+    def test_non_string_mapping_key_is_rejected_not_stringified(self) -> None:
+        entry = sample_entry()
+        entry["rule"][1] = "nope"
+        with self.assertRaises(v2.KnowledgeV2Error) as caught:
+            v2.content_hash(entry)
+        self.assertIn("stringify", str(caught.exception))
+
     def test_derived_uuid_is_stable_and_v4_shaped(self) -> None:
         first = v2.derived_uuid("owner/fork", "kind", "slug")
         second = v2.derived_uuid("owner/fork", "kind", "slug")
@@ -201,6 +257,20 @@ class StatusGateTests(unittest.TestCase):
         entry["verification"] = verification()
         entry = v2.with_content_hash(entry)
         self.assertEqual(v2.validate_entry(entry, context="export"), [])
+
+    def test_verified_zone_refuses_unverified_status(self) -> None:
+        entry = sample_entry()
+        errors = v2.validate_entry(entry, context=v2.VERIFIED_CONTEXT)
+        self.assertTrue(any("shared verified zone" in error for error in errors))
+
+    def test_verified_zone_refuses_unresolved_scope(self) -> None:
+        entry = sample_entry()
+        entry["scope"]["cann"] = v2.unresolved_constraint(
+            "the CANN version of the verification container"
+        )
+        entry = v2.with_content_hash(entry)
+        errors = v2.validate_entry(entry, context=v2.VERIFIED_CONTEXT)
+        self.assertTrue(any("unresolved" in error for error in errors))
 
     def test_high_confidence_needs_a_confirmed_status(self) -> None:
         entry = sample_entry(confidence="high")
@@ -321,6 +391,36 @@ class ExportTests(unittest.TestCase):
         )
         self.assertEqual(document["layer"], v2.EXPORT_LAYER)
         self.assertNotEqual(document["layer"], v2.PROJECT_LAYER)
+
+    def test_public_host_email_blocks_export_public_url_does_not(self) -> None:
+        entry = sample_entry()
+        entry["status"] = "verified"
+        entry["verification"] = verification()
+        blocked = deepcopy(entry)
+        blocked["rule"]["avoidance"] = (
+            "Keep the precondition documented. Synthetic contact: "
+            "synthetic-reviewer@github.com"
+        )
+        blocked = v2.with_content_hash(blocked)
+        with self.assertRaises(Exception) as caught:
+            v2.export_entry(
+                blocked, contributor="handle", origin_repo="owner/fork"
+            )
+        self.assertIn("email-address", str(caught.exception))
+
+        allowed = deepcopy(entry)
+        allowed["rule"]["avoidance"] = (
+            "Keep the precondition documented. See "
+            "https://github.com/example-org/example-repo/pull/1"
+        )
+        allowed = v2.with_content_hash(allowed)
+        exported = v2.export_entry(
+            allowed, contributor="handle", origin_repo="owner/fork"
+        )
+        self.assertIn(
+            "https://github.com/example-org/example-repo/pull/1",
+            exported["rule"]["avoidance"],
+        )
 
 
 class MatchViewTests(unittest.TestCase):

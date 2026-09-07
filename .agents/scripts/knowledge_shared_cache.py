@@ -7,17 +7,19 @@ read-only cache under untracked ``.vaws-local/knowledge/shared/``, which the
 three-layer query client then mounts as the ``shared`` layer.
 
 ``import`` takes a local directory (typically ``corpus/verified/`` of a clone)
-rather than fetching over the network. The upstream pull tooling is not
-published yet, so doing the transport here would mean inventing a protocol
-that is about to be replaced; a local import keeps the cache contract testable
-without pretending to own the sync.
+rather than fetching over the network. It reads any ``*.yaml`` in that zone,
+takes kind from the validated document, and refuses project/unverified zones,
+unverified entries, unresolved coordinates, and missing source identity. A
+rejected or partial refresh leaves the last valid cache in place. The
+upstream pull tooling is not published yet, so doing the transport here
+would mean inventing a protocol that is about to be replaced; a local import
+keeps the cache contract testable without pretending to own the sync.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-import shutil
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -29,10 +31,11 @@ if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
 import vaws_knowledge_client as client  # noqa: E402
+import vaws_knowledge_shared as shared  # noqa: E402
 import vaws_knowledge_v2 as v2  # noqa: E402
 
 DEFAULT_SHARED_DIR = ROOT / ".vaws-local" / "knowledge" / "shared"
-UPSTREAM_REPO = "vllm-ascend-workspace/vaws-knowledge"
+UPSTREAM_REPO = shared.DEFAULT_SOURCE_REPO
 
 
 def emit_progress(phase: str, message: str) -> None:
@@ -48,81 +51,96 @@ def do_status(shared_dir: Path) -> dict[str, Any]:
         repo_root=ROOT,
         shared_dir=shared_dir,
     )["shared"]
-    entries, problems = v2.load_entries(shared_dir)
+    inspection = shared.inspect_shared_cache(shared_dir)
     return {
         "status": "passed",
         "layer": "shared",
         "cache": capability,
-        "entry_count": len(entries),
-        "problems": problems,
-        "degraded": capability["status"] != "available",
+        "entry_count": len(inspection.get("entries") or []),
+        "problems": inspection.get("problems") or [],
+        "degraded": capability["status"] != shared.AVAILABLE,
         "effect": (
             "queries degrade to project+candidate and say so"
-            if capability["status"] != "available"
+            if capability["status"] != shared.AVAILABLE
             else "shared layer is mounted read-only"
         ),
     }
 
 
 def do_import(
-    shared_dir: Path, source: Path, *, source_repo: str, source_ref: str | None
+    shared_dir: Path,
+    source: Path,
+    *,
+    source_repo: str,
+    source_ref: str,
+    expect_repo: str | None,
+    expect_ref: str | None,
 ) -> dict[str, Any]:
-    if not source.is_dir():
-        return {"status": "failed", "error": f"source directory does not exist: {source}"}
-    documents = v2.iter_documents(source)
-    if not documents:
+    identity_problems = shared.source_identity_problems(
+        source_repo, source_ref, expect_repo=expect_repo, expect_ref=expect_ref
+    )
+    if identity_problems:
         return {
             "status": "failed",
-            "error": f"no *{v2.V2_SUFFIX} documents in {source}",
+            "error": identity_problems[0],
+            "problems": identity_problems,
+            "cache_preserved": True,
         }
-    staged: list[dict[str, Any]] = []
-    problems: list[str] = []
-    total_entries = 0
-    for path, kind in documents:
+    if not source.is_dir():
+        return {
+            "status": "failed",
+            "error": f"source directory does not exist: {source}",
+            "cache_preserved": True,
+        }
+    yaml_files = shared.iter_shared_yaml_files(source)
+    if not yaml_files:
+        return {
+            "status": "failed",
+            "error": f"no *{shared.YAML_SUFFIX} documents in {source}",
+            "cache_preserved": True,
+        }
+    for path in yaml_files:
         emit_progress("validate", path.name)
-        try:
-            document = v2.load_document(path)
-            v2.validate_document(document, path=str(path), expected_kind=kind, context="verified")
-        except v2.KnowledgeV2Error as exc:
-            problems.append(str(exc))
-            continue
-        staged.append({"kind": kind, "path": path, "entries": len(document.get("entries", []))})
-        total_entries += len(document.get("entries", []))
-    if not staged:
-        return {"status": "failed", "error": "no valid documents to import", "problems": problems}
-
-    shared_dir.mkdir(parents=True, exist_ok=True)
-    for existing in shared_dir.glob(f"*{v2.V2_SUFFIX}"):
-        existing.unlink()
-    imported: list[str] = []
-    for item in staged:
-        target = shared_dir / item["path"].name
-        shutil.copyfile(item["path"], target)
-        target.chmod(0o444)
-        imported.append(target.name)
-        emit_progress("import", target.name)
+    staged, problems = shared.load_shared_source_documents(source)
+    if problems or len(staged) != len(yaml_files):
+        return {
+            "status": "failed",
+            "error": "no eligible verified-zone documents to import",
+            "problems": problems,
+            "cache_preserved": True,
+        }
+    total_entries = sum(int(item["entries"]) for item in staged)
     metadata = {
         "schema_version": 1,
         "source_repo": source_repo,
         "source_ref": source_ref,
         "source_path": str(source),
         "pulled_at": utc_now(),
-        "documents": imported,
+        "documents": [item["name"] for item in staged],
         "entry_count": total_entries,
         "read_only": True,
     }
-    (shared_dir / client.SHARED_CACHE_METADATA).write_text(
-        json.dumps(metadata, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
+    try:
+        shared.install_shared_cache(shared_dir, staged, metadata)
+    except OSError as exc:
+        return {
+            "status": "failed",
+            "error": f"failed to install shared cache: {exc}",
+            "cache_preserved": True,
+        }
+    for item in staged:
+        emit_progress("import", item["name"])
+    installed = shared.inspect_shared_cache(shared_dir)
     return {
-        "status": "passed" if not problems else "partial",
+        "status": "passed",
         "layer": "shared",
         "cache_dir": str(shared_dir),
-        "documents": imported,
+        "documents": installed.get("documents") or metadata["documents"],
         "entry_count": total_entries,
-        "problems": problems,
-        "metadata": metadata,
+        "problems": [],
+        "metadata": installed.get("metadata") or metadata,
+        "source_repo": source_repo,
+        "source_ref": source_ref,
     }
 
 
@@ -148,10 +166,28 @@ def main(argv: list[str] | None = None) -> int:
         dest="source",
         type=Path,
         required=True,
-        help="local directory holding verified v2 documents (e.g. <clone>/corpus/verified)",
+        help="local corpus/verified directory of a vaws-knowledge checkout",
     )
-    import_parser.add_argument("--source-repo", default=UPSTREAM_REPO)
-    import_parser.add_argument("--source-ref", default=None)
+    import_parser.add_argument(
+        "--source-repo",
+        required=True,
+        help="declared source identity, e.g. vllm-ascend-workspace/vaws-knowledge",
+    )
+    import_parser.add_argument(
+        "--source-ref",
+        required=True,
+        help="full 40-character commit SHA of the declared source",
+    )
+    import_parser.add_argument(
+        "--expect-source-repo",
+        default=None,
+        help="optional configured source-repo expectation; mismatch is refused",
+    )
+    import_parser.add_argument(
+        "--expect-source-ref",
+        default=None,
+        help="optional configured source-ref expectation; mismatch is refused",
+    )
     subparsers.add_parser("clear")
     args = parser.parse_args(argv)
 
@@ -164,6 +200,8 @@ def main(argv: list[str] | None = None) -> int:
                 args.source,
                 source_repo=args.source_repo,
                 source_ref=args.source_ref,
+                expect_repo=args.expect_source_repo,
+                expect_ref=args.expect_source_ref,
             )
         else:
             payload = do_clear(args.shared_dir)
