@@ -135,13 +135,6 @@ allowlist:
     match: glm450919
     justification: Trace-directory token for a GLM-4.5 capture date, matched by the employee-id shape by coincidence; it names a public model and a date.
 
-  - id: profiling-analysis-shared-storage-owner
-    path_glob: .agents/skills/ascend-profiling-analysis/**
-    categories: [internal-identifier]
-    match: m00663269
-    justification: Pre-existing identity token inside a shared-storage archive path in a skill package owned by a parallel refactor; recorded here rather than edited to avoid a conflict.
-    remediation: Replace the shared-storage owner segment with a neutral placeholder in that skill, then delete this entry. Tracked in docs/leak-remediation.md.
-
   - id: repo-init-github-ssh-user
     path_glob: .agents/skills/repo-init/**
     categories: [email]
