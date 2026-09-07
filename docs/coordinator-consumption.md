@@ -90,9 +90,11 @@ When setup runs with an explicit `VAWS_COORDINATOR_ROOT` or
 `vaws-task` env and into the native hook command (`--coordinator-root`,
 `--agent-sessions-dir`). A later GUI client does not inherit the setup shell.
 Existing user-managed provider env keys and unknown fields still win. Re-running
-setup replaces the one owned VAWS hook for that client and project; it does not
-stack the previous generated command next to the repaired one. Default
-installation leaves `VAWS_COORDINATOR_ROOT` unset so the locator's default
+setup replaces the one hook that execs this checkout's `.agents/hooks/vaws_session.py`
+for that client and project, including the older generated command without
+explicit path flags. A same-basename script in another path or worktree is not
+owned. Mixed groups keep unrelated sibling entries, matchers and group metadata.
+Default installation leaves `VAWS_COORDINATOR_ROOT` unset so the locator's default
 checkout remains in force.
 
 The coordinator's own JSON helper rewrites `command` / `args` / `type` for a

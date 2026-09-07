@@ -188,17 +188,75 @@ def hook_groups(client, project, env=None):
     }
 
 
-def owned_hook_command(command, client, project):
-    """True when `command` is this helper's hook for this client and project.
+OWNED_HOOK_SCRIPT = ROOT / ".agents/hooks/vaws_session.py"
 
-    Matching ignores extra path flags so a previously generated command is
-    replaced instead of accumulating beside the repaired one.
+
+def _is_python_interpreter(program):
+    name = Path(program).name.lower()
+    if name.endswith(".exe"):
+        name = name[:-4]
+    return name == "python" or name.startswith("python3")
+
+
+def executed_hook_script(argv):
+    """Return the script file a command would run, or None.
+
+    A basename `vaws_session.py` anywhere in argv is not proof of ownership.
+    Wrappers that pass our hook path as data are not owned.
+    """
+    index = 0
+    while index < len(argv):
+        item = argv[index]
+        if item.startswith("-"):
+            break
+        if "=" in item:
+            key = item.split("=", 1)[0]
+            if key.isidentifier() and Path(item).suffix != ".py":
+                index += 1
+                continue
+        break
+    if index >= len(argv):
+        return None
+    program = argv[index]
+    if _is_python_interpreter(program):
+        index += 1
+        while index < len(argv):
+            item = argv[index]
+            if item == "--":
+                return argv[index + 1] if index + 1 < len(argv) else None
+            if item in {"-c", "-m"}:
+                return None
+            if item.startswith("-"):
+                if item in {"-W", "-X", "--check-hash-based-pycs"}:
+                    index += 2
+                    continue
+                index += 1
+                continue
+            return item
+        return None
+    return program
+
+
+def owned_hook_script(path):
+    try:
+        return Path(path).expanduser().resolve() == OWNED_HOOK_SCRIPT.resolve()
+    except OSError:
+        return False
+
+
+def owned_hook_command(command, client, project):
+    """True when `command` execs this checkout's hook for this client and project.
+
+    Old generated commands (client/project only) and new ones (explicit
+    root/registry flags) both match. A same-basename script in another path
+    or worktree does not.
     """
     try:
         argv = shlex.split(command)
     except ValueError:
         return False
-    if not any(Path(item).name == "vaws_session.py" for item in argv):
+    script = executed_hook_script(argv)
+    if not script or not owned_hook_script(script):
         return False
     parsed_client = None
     parsed_project = None
@@ -230,6 +288,59 @@ def owned_hook_command(command, client, project):
         return parsed_project == str(project)
 
 
+def _desired_hook_command(groups):
+    if not groups:
+        return ""
+    group = groups[0]
+    if "hooks" in group:
+        entries = group.get("hooks") or []
+        return entries[0].get("command", "") if entries else ""
+    return group.get("command", "")
+
+
+def merge_hook_event(existing, desired, client, project):
+    """Replace one owned hook entry; keep siblings and group metadata."""
+    desired_command = _desired_hook_command(desired)
+    replaced = False
+    result = []
+    for group in existing:
+        if not isinstance(group, dict):
+            result.append(group)
+            continue
+        if "hooks" in group:
+            entries = []
+            for entry in group.get("hooks") or []:
+                if owned_hook_command(entry.get("command", ""), client, project):
+                    if replaced:
+                        continue
+                    updated = dict(entry)
+                    updated["command"] = desired_command
+                    updated.setdefault("type", "command")
+                    updated["timeout"] = HOOK_TIMEOUT_SECONDS
+                    entries.append(updated)
+                    replaced = True
+                else:
+                    entries.append(entry)
+            if entries:
+                updated_group = dict(group)
+                updated_group["hooks"] = entries
+                result.append(updated_group)
+            continue
+        command = group.get("command", "")
+        if owned_hook_command(command, client, project):
+            if replaced:
+                continue
+            updated = dict(group)
+            updated["command"] = desired_command
+            result.append(updated)
+            replaced = True
+        else:
+            result.append(group)
+    if not replaced:
+        result.extend(desired)
+    return result
+
+
 def merge_server_entry(existing, desired):
     """Fill missing keys from `desired`; never overwrite user command/args/type.
 
@@ -257,15 +368,7 @@ def merge_json(path, *, hooks=None, mcp=None, notes=None, client=None, project=N
     if hooks:
         target = value.setdefault("hooks", {})
         for event, groups in hooks.items():
-            existing = target.setdefault(event, [])
-            existing[:] = [
-                group for group in existing
-                if not any(
-                    owned_hook_command(entry.get("command", ""), client, project)
-                    for entry in group.get("hooks", [group])
-                )
-            ]
-            existing.extend(groups)
+            target[event] = merge_hook_event(target.get(event) or [], groups, client, project)
         if path.parent.name == ".cursor":
             value.setdefault("version", 1)
     if mcp:

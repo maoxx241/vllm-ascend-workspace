@@ -392,6 +392,119 @@ class ClientSetupTests(unittest.TestCase):
             second = self.setup.build_plan("claude", self.project)
             self.assertEqual(second["files"][settings], first["files"][settings])
 
+    def test_foreign_same_basename_hook_is_preserved(self) -> None:
+        settings = self.project / ".claude/settings.local.json"
+        settings.parent.mkdir()
+        foreign = shlex.join([
+            sys.executable, "/user/custom/vaws_session.py",
+            "--client", "claude", "--project", str(self.project),
+        ])
+        user = {"type": "command", "command": foreign, "timeout": 37, "user_metadata": "retain"}
+        original = {
+            "user_top_metadata": "retain",
+            "hooks": {"SessionStart": [{
+                "matcher": "*",
+                "user_group_metadata": "retain",
+                "hooks": [user],
+            }]},
+        }
+        settings.write_text(json.dumps(original))
+        plan = self.setup.build_plan("claude", self.project, task_only=True)
+        after = json.loads(plan["files"][settings])
+        self.assertEqual(after["user_top_metadata"], "retain")
+        group = after["hooks"]["SessionStart"][0]
+        self.assertEqual(group["matcher"], "*")
+        self.assertEqual(group["user_group_metadata"], "retain")
+        self.assertIn(user, group["hooks"])
+        owned = [
+            entry for item in after["hooks"]["SessionStart"] for entry in item["hooks"]
+            if self.setup.owned_hook_command(entry.get("command", ""), "claude", self.project)
+        ]
+        self.assertEqual(len(owned), 1)
+        self.assertNotEqual(owned[0]["command"], foreign)
+
+    def test_mixed_group_keeps_user_sibling_and_metadata(self) -> None:
+        settings = self.project / ".claude/settings.local.json"
+        settings.parent.mkdir()
+        old = shlex.join([
+            sys.executable, str(ROOT / ".agents/hooks/vaws_session.py"),
+            "--client", "claude", "--project", str(self.project),
+        ])
+        user = {"type": "command", "command": "my-existing-audit-hook --record", "timeout": 37, "user_metadata": "retain"}
+        settings.write_text(json.dumps({
+            "user_top_metadata": "retain",
+            "hooks": {"SessionStart": [{
+                "matcher": "*",
+                "user_group_metadata": "retain",
+                "hooks": [{"type": "command", "command": old, "timeout": 12}, user],
+            }]},
+        }))
+        with mock.patch.dict(os.environ, {coordinator.COORDINATOR_ROOT_ENV: str(self.project / "coord")}):
+            plan = self.setup.build_plan("claude", self.project, task_only=True)
+            after = json.loads(plan["files"][settings])
+            self.assertEqual(after["user_top_metadata"], "retain")
+            groups = after["hooks"]["SessionStart"]
+            self.assertEqual(len(groups), 1)
+            group = groups[0]
+            self.assertEqual(group["matcher"], "*")
+            self.assertEqual(group["user_group_metadata"], "retain")
+            self.assertIn(user, group["hooks"])
+            owned = [
+                entry for entry in group["hooks"]
+                if self.setup.owned_hook_command(entry.get("command", ""), "claude", self.project)
+            ]
+            self.assertEqual(len(owned), 1)
+            self.assertIn("--coordinator-root", owned[0]["command"])
+            self.assertNotEqual(owned[0]["command"], old)
+            settings.write_text(plan["files"][settings])
+            second = self.setup.build_plan("claude", self.project, task_only=True)
+            self.assertEqual(second["files"][settings], plan["files"][settings])
+
+    def test_wrapper_data_argument_is_not_owned(self) -> None:
+        settings = self.project / ".claude/settings.local.json"
+        settings.parent.mkdir()
+        wrapper = shlex.join([
+            sys.executable, str(self.project / "audit-wrapper.py"),
+            "--hook", str(ROOT / ".agents/hooks/vaws_session.py"),
+            "--client", "claude", "--project", str(self.project),
+        ])
+        user = {"type": "command", "command": wrapper, "timeout": 9, "user_metadata": "retain"}
+        settings.write_text(json.dumps({"hooks": {"SessionStart": [{"matcher": "UserPromptSubmit", "hooks": [user]}]}}))
+        plan = self.setup.build_plan("claude", self.project, task_only=True)
+        after = json.loads(plan["files"][settings])
+        group = after["hooks"]["SessionStart"][0]
+        self.assertEqual(group["matcher"], "UserPromptSubmit")
+        self.assertIn(user, group["hooks"])
+        owned = [
+            entry for item in after["hooks"]["SessionStart"] for entry in item.get("hooks", [item])
+            if self.setup.owned_hook_command(entry.get("command", ""), "claude", self.project)
+        ]
+        self.assertEqual(len(owned), 1)
+
+    def test_cursor_flat_list_replaces_only_owned_command(self) -> None:
+        hooks = self.project / ".cursor/hooks.json"
+        hooks.parent.mkdir()
+        old = shlex.join([
+            sys.executable, str(ROOT / ".agents/hooks/vaws_session.py"),
+            "--client", "cursor", "--project", str(self.project),
+        ])
+        hooks.write_text(json.dumps({
+            "version": 1,
+            "hooks": {"sessionStart": [
+                {"command": old, "user_field": "owned-meta"},
+                {"command": "user-cursor-hook", "user_field": "retain"},
+            ]},
+        }))
+        plan = self.setup.build_plan("cursor", self.project, task_only=True)
+        after = json.loads(plan["files"][hooks])
+        groups = after["hooks"]["sessionStart"]
+        user = [item for item in groups if item.get("command") == "user-cursor-hook"]
+        self.assertEqual(user, [{"command": "user-cursor-hook", "user_field": "retain"}])
+        owned = [item for item in groups if self.setup.owned_hook_command(item.get("command", ""), "cursor", self.project)]
+        self.assertEqual(len(owned), 1)
+        self.assertEqual(owned[0].get("user_field"), "owned-meta")
+        self.assertNotEqual(owned[0]["command"], old)
+
     def test_all_clients_embed_explicit_paths_in_owned_hooks(self) -> None:
         root = str((self.project / "explicit-root").resolve())
         registry = str((self.project / "explicit-registry").resolve())
