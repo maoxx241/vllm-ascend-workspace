@@ -30,7 +30,7 @@
   },
   "repositories": {
     "scaffold": {
-      "repo": "maoxx241/vllm-ascend-workspace",
+      "repo": "vllm-ascend-workspace/vllm-ascend-workspace",
       "visibility": "public",
       "default_branch": "main",
       "checkout": ".",

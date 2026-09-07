@@ -21,7 +21,7 @@ entry points.
 
 | Fact | Value |
 |---|---|
-| Scaffold source (until transfer) | `maoxx241/vllm-ascend-workspace` |
+| Scaffold source | `vllm-ascend-workspace/vllm-ascend-workspace` |
 | Accepted public scaffold main | `84f7e865a4e698d244c1cbe6cab6a2c5cca21067` |
 | That main's tree | `d8d5b42bfb07a97895b46281a664c7bec57e746d` |
 | Original #85 | `b6e8559bc6e76743ffd08a383072c8b041a30e12` |

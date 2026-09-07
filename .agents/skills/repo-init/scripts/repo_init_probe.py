@@ -42,9 +42,18 @@ from _profile_choice_common import (  # noqa: E402
 )
 
 COMMUNITY = {
-    "workspace": "maoxx241/vllm-ascend-workspace",
+    "workspace": "vllm-ascend-workspace/vllm-ascend-workspace",
     "vllm": "vllm-project/vllm",
     "vllm-ascend": "vllm-project/vllm-ascend",
+}
+
+# Organization development forks of the two business repositories. These are
+# candidates only: never community upstream, never auto-selected, and never
+# assumed to be writable for the authenticated user.
+ORGANIZATION = "vllm-ascend-workspace"
+ORGANIZATION_DEV_FORKS = {
+    "vllm": f"{ORGANIZATION}/vllm",
+    "vllm-ascend": f"{ORGANIZATION}/vllm-ascend",
 }
 
 REPO_PATHS = {
@@ -235,6 +244,9 @@ def classify_remote(
         return "missing"
     if full_name == COMMUNITY[repo_role]:
         return "community"
+    org_fork = ORGANIZATION_DEV_FORKS.get(repo_role)
+    if org_fork and full_name == org_fork:
+        return "organization-dev-fork"
     repo_basename = COMMUNITY[repo_role].split("/", 1)[1]
     if user_login and full_name == f"{user_login}/{repo_basename}":
         return "user-fork"
@@ -307,6 +319,80 @@ def gh_login() -> Dict[str, Any]:
     return status
 
 
+def gh_repo_lookup(full_name: str) -> Dict[str, Any]:
+    requested = full_name
+    rc, out, err = run(["gh", "api", f"repos/{requested}"])
+    if rc != 0:
+        return {
+            "exists": False,
+            "requested": requested,
+            "error": err,
+            "redirected": False,
+        }
+    try:
+        payload = json.loads(out)
+    except json.JSONDecodeError:
+        return {
+            "exists": True,
+            "requested": requested,
+            "error": "unable to decode gh api output",
+            "redirected": False,
+        }
+
+    parent = payload.get("parent") or {}
+    resolved = payload.get("full_name")
+    redirected = bool(isinstance(resolved, str) and resolved.lower() != requested.lower())
+    return {
+        "exists": True,
+        "requested": requested,
+        "full_name": resolved,
+        "id": payload.get("id"),
+        "redirected": redirected,
+        "is_fork": bool(payload.get("fork")),
+        "parent_full_name": parent.get("full_name"),
+        "default_branch": payload.get("default_branch"),
+        "ssh_url": payload.get("ssh_url"),
+        "clone_url": payload.get("clone_url"),
+    }
+
+
+def personal_fork_record(
+    repo_role: str,
+    lookup: Dict[str, Any],
+    user_login: str,
+) -> Dict[str, Any]:
+    result = dict(lookup)
+    resolved = lookup.get("full_name") if isinstance(lookup.get("full_name"), str) else None
+    redirected = bool(lookup.get("redirected"))
+    if lookup.get("error") and resolved is None:
+        result["classification"] = "missing"
+        result["personal_fork"] = False
+        result["exists"] = False
+        return result
+
+    identity_kind = classify_remote(repo_role, resolved, user_login)
+    basename = COMMUNITY[repo_role].split("/", 1)[1]
+    expected_personal = f"{user_login}/{basename}"
+    is_personal = (
+        resolved is not None
+        and resolved.lower() == expected_personal.lower()
+        and not redirected
+        and identity_kind not in {"community", "organization-dev-fork"}
+    )
+    if is_personal:
+        result["classification"] = "user-fork"
+        result["personal_fork"] = True
+        result["exists"] = True
+        return result
+
+    if identity_kind == "user-fork":
+        identity_kind = "other"
+    result["classification"] = identity_kind if resolved else "missing"
+    result["personal_fork"] = False
+    result["exists"] = False
+    return result
+
+
 def gh_fork_info(user_login: Optional[str]) -> Dict[str, Any]:
     if not user_login or not which("gh"):
         return {}
@@ -314,27 +400,27 @@ def gh_fork_info(user_login: Optional[str]) -> Dict[str, Any]:
     info: Dict[str, Any] = {}
     for role, community in COMMUNITY.items():
         repo_name = community.split("/", 1)[1]
-        full_name = f"{user_login}/{repo_name}"
-        rc, out, err = run(["gh", "api", f"repos/{full_name}"])
-        if rc != 0:
-            info[role] = {"exists": False, "error": err}
-            continue
-        try:
-            payload = json.loads(out)
-        except json.JSONDecodeError:
-            info[role] = {"exists": True, "error": "unable to decode gh api output"}
-            continue
+        requested = f"{user_login}/{repo_name}"
+        info[role] = personal_fork_record(role, gh_repo_lookup(requested), user_login)
+    return info
 
-        parent = payload.get("parent") or {}
-        info[role] = {
-            "exists": True,
-            "full_name": payload.get("full_name"),
-            "is_fork": bool(payload.get("fork")),
-            "parent_full_name": parent.get("full_name"),
-            "default_branch": payload.get("default_branch"),
-            "ssh_url": payload.get("ssh_url"),
-            "clone_url": payload.get("clone_url"),
-        }
+
+def gh_organization_fork_info() -> Dict[str, Any]:
+    if not which("gh"):
+        return {}
+
+    info: Dict[str, Any] = {}
+    for role, full_name in ORGANIZATION_DEV_FORKS.items():
+        lookup = gh_repo_lookup(full_name)
+        record = dict(lookup)
+        resolved = lookup.get("full_name") if isinstance(lookup.get("full_name"), str) else None
+        if lookup.get("exists") and not lookup.get("error"):
+            record["classification"] = classify_remote(role, resolved, None)
+        else:
+            record["classification"] = "missing"
+        record["selected"] = False
+        record["push_access_assumed"] = False
+        info[role] = record
     return info
 
 
@@ -495,12 +581,24 @@ def compact_submodule_summary(rows: List[Dict[str, str]]) -> Dict[str, Any]:
 def compact_fork_summary(forks: Dict[str, Any]) -> Dict[str, Any]:
     summary: Dict[str, Any] = {}
     for role, info in forks.items():
-        summary[role] = {
+        row: Dict[str, Any] = {
             "exists": info.get("exists"),
             "full_name": info.get("full_name"),
             "parent_full_name": info.get("parent_full_name"),
             "default_branch": info.get("default_branch"),
         }
+        for key in (
+            "requested",
+            "redirected",
+            "classification",
+            "personal_fork",
+            "id",
+            "selected",
+            "push_access_assumed",
+        ):
+            if key in info:
+                row[key] = info[key]
+        summary[role] = row
     return summary
 
 
@@ -545,6 +643,7 @@ def compact_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
             for role, repo in (payload.get("repos") or {}).items()
         },
         "forks": compact_fork_summary(payload.get("forks") or {}),
+        "organization_forks": compact_fork_summary(payload.get("organization_forks") or {}),
         "decision_checkpoint": {
             "required_for_broad_init": True,
             "machine_username": {
@@ -617,8 +716,10 @@ def main() -> None:
 
     if gh_state.get("logged_in") and user_login:
         payload["forks"] = gh_fork_info(user_login)
+        payload["organization_forks"] = gh_organization_fork_info()
     else:
         payload["forks"] = {}
+        payload["organization_forks"] = {}
 
     if args.compact:
         payload = compact_payload(payload)

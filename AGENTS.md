@@ -2,6 +2,12 @@
 
 Local `vllm` + `vllm-ascend` development scaffold. `vllm/` and `vllm-ascend/` are Git submodules.
 
+The canonical scaffold is `vllm-ascend-workspace/vllm-ascend-workspace`
+(public, non-fork). Submodule URLs stay on `vllm-project/vllm` and
+`vllm-project/vllm-ascend`. The organization repositories
+`vllm-ascend-workspace/vllm` and `vllm-ascend-workspace/vllm-ascend` are
+development forks, not replacement community upstreams.
+
 This repository provides a remote development substrate first, then
 vLLM-Ascend skills on top.
 

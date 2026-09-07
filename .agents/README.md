@@ -2,6 +2,10 @@
 
 This directory contains the repository-local skill layer for Codex, Claude Code, and similar agents.
 
+The canonical scaffold repository is `vllm-ascend-workspace/vllm-ascend-workspace`.
+Current clone, fork, and remote-topology guidance lives in the `repo-init`
+skill; organization development forks are candidates, not community upstreams.
+
 Remote development is an external checkout (`vllm-ascend-workspace/remote-dev`),
 located through `VAWS_REMOTE_DEV_ROOT` or `.vaws-local/remote-dev`. Use native
 local tools for local work, and use remote-dev companion tools for remote

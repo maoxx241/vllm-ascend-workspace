@@ -51,6 +51,7 @@ Use `repo_init_probe.py` to collect:
 - submodule status
 - repo remote topology for `workspace`, `vllm`, and `vllm-ascend`
 - whether matching personal forks appear to exist
+- whether the organization development forks exist as distinct candidates (not community upstream, not auto-selected)
 
 The probe may only mutate untracked local state by creating a missing
 `workspace-identity.json` UUID4. It must not silently choose an alias.
@@ -122,7 +123,9 @@ Rules:
 - add `upstream` only when it helps the chosen workflow
 - `vllm` user fork is optional
 - `vllm-ascend` user fork is recommended but not mandatory
+- organization development forks are reported candidates only; do not treat them as community upstream, assume push access, or select them merely because they exist
 - if the user chose "keep current", do not rewrite remotes just because the recommended topology differs
+- `configure` is explicit fresh-setup intent, not a migration of established fetch/push/protocol/pushurl/extra remotes
 - configure workspace remotes first, then submodule remotes (after submodule init)
 
 ### Stage 7: main-branch comparison and tracking
