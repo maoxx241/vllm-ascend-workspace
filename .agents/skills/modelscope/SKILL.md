@@ -78,7 +78,6 @@ Verification ignores `.gitattributes` by default because it is Git metadata, not
 
 ## Output Rules
 
-- Keep responses short.
-- Do not paste large command output or progress bars.
+- Report the compact fields below; one line per model is usually enough. Do not paste large command output or progress bars.
 - Summarize each model as `state`, percent, PID, verification result, and paths.
 - If network or filesystem sandboxing blocks a required command, rerun with approval as needed.

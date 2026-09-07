@@ -107,6 +107,86 @@ for domain workflows.
 - Remote work runs inside a `session-management` session. From inside the session worktree, parity, serving, benchmark, and profiling commands auto-resolve the session from the cwd binding; pass `--session-id` only when running outside the worktree or targeting another session. Domain skill commands (serving, benchmark, profiling) are session-only; `--machine` exists only for machine registration and `session_create.py` base-machine selection. Legacy compatibility surfaces still accept `--machine`: `remote-code-parity/scripts/parity_sync.py`, `session-management/scripts/npu_coordination.py`, and `vllm-ascend-serving/scripts/serve_probe_npus.py`.
 - This repo targets Huawei Ascend NPU. Local machines (Mac/PC) cannot run `torch`/`torch_npu`-dependent code. Do not attempt local test execution — go straight to the remote container.
 
+## Working agreement
+
+These rules apply in every client that reads this file. They adapt the
+[Claude Fable 5.1 prompting guidance](https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/prompting-claude-fable-5-1)
+to this repository; a client whose own system prompt already covers a point
+loses nothing by seeing it again.
+
+### Finish the requested work
+
+- Assume the user is not watching in real time and cannot answer mid-task. For
+  reversible actions that follow from the request, proceed without asking.
+  Offer follow-ups after the work is done; do not ask permission before doing it.
+- Stop for input only at: destructive or irreversible actions (removing
+  machines, sessions, or containers; deleting weights or artifacts; force
+  pushes), genuine scope changes, and the explicit decision gates a skill
+  declares: container image policy in `machine-management`, machine username
+  and unified alias in `repo-init`, first-use sync mode in
+  `remote-code-parity`, repair after a real verification mismatch in
+  `modelscope`. The skill's `SKILL.md` carries the exact gate wording.
+- Exception: when the user is describing a problem, asking a question, or
+  thinking out loud, the deliverable is your assessment. Report findings and
+  stop; apply a fix only when asked.
+- Before ending a turn, check your last paragraph. If it is a plan, a question,
+  a list of next steps, or a promise ("I'll…", "next I would…"), do that work
+  now, including retries after errors and gathering the missing information
+  yourself. End the turn only when the task is complete or blocked on input
+  only the user can give.
+- Before a state-changing command (restarting a service, removing a container,
+  rewriting a config, killing a job), confirm the evidence supports that
+  specific action. A log line that matches a failure signature in
+  `.agents/knowledge/` may have a different cause; the knowledge match is a
+  starting point, not a verdict.
+
+### Scope
+
+- The request, or the plan the user approved, sets the scope. Do not narrow,
+  widen, or swap it. Make routine judgment calls yourself; check in only when
+  different readings would lead to materially different work.
+- If part of the task is blocked, finish every other part and say exactly what
+  was left out and why. Scaling the task down is the user's call.
+- Pre-existing bugs, performance concerns, cleanup, or docs the task did not
+  ask for are follow-ups to report in the summary, not changes to make, unless
+  the requested behavior cannot work without them.
+- Verify however you like, but keep scratch scripts and ad-hoc checks out of
+  the tree (`/tmp` or untracked `.vaws-local/`). Commit tests only where the
+  task asks for them or the touched skill already keeps tests for that kind of
+  change, sized like the neighbouring test files: roughly one focused test per
+  stated behavior.
+
+### Tool use
+
+- Before each tool round, privately list what you need next, then request
+  every item that does not depend on another's result in the same response.
+  Reading a skill's `SKILL.md`, probing an endpoint, and querying knowledge are
+  independent; parity sync, service start, and benchmark are not.
+- Prefer targeted edits over whole-file rewrites unless the file is short or
+  most of it changes. This matters for long `SKILL.md` files, knowledge YAML,
+  and the helper scripts.
+- When you delegate (skill subagents under `agents/`, background remote jobs
+  via `remote_job_*`), keep working on independent steps while they run; wait
+  only when the next step depends on the result.
+- Recognizing a name is not knowing its current state. vLLM flags, Ascend
+  operators, model structures, and image tags change between submodule
+  checkouts and releases; check the checked-out source, `.agents/knowledge/`,
+  or the remote runtime before answering, even when the name is familiar.
+
+### Reporting
+
+- Before a long tool chain, say in a line what you are about to do; give brief
+  updates as phases complete; close with a recap that stands alone: what you
+  found, what you changed, what is next, and any follow-ups you did not do.
+- Most clients collapse tool output. Skill wrappers print `__VAWS_PROGRESS__`
+  lines on `stderr` and one JSON object on `stdout`; the user rarely sees
+  either. Put the fields the user needs (state, paths, ports, metrics, error
+  text) in your reply instead of re-running commands to show them.
+- Say what you mean; skip metaphor and flourish. Use lists or tables when the
+  content is multifaceted; otherwise write plain prose. When you reproduce a
+  log line, error message, knowledge entry, or source comment verbatim, mark
+  it as a quotation or code; paraphrase everything else.
+
 ## Maintenance
 
 When changing a skill, update the whole package together: `SKILL.md`, `scripts/`, `references/`, `agents/`, and other supporting files as applicable. When the change affects shared state, also update `.agents/scripts/workspace_profile.py`, `.agents/lib/vaws_local_state.py`, `.agents/lib/vaws_session_id.py`, `.agents/lib/vaws_session_state.py`, and `.agents/lib/vaws_remote_toolbox.py` as applicable.

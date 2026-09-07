@@ -62,7 +62,7 @@ compatibility backend for managed sessions, sync, service adapters, and cleanup.
 - `.agents/lib/vaws_session_id.py` and `.agents/lib/vaws_session_state.py` are the shared libraries for session identity, state, locks, and leases.
 - `.agents/lib/vaws_remote_toolbox.py` is the shared library for remote target resolution, SSH execution, job observation, artifact streaming, sync adapters, service adapters, and cleanup.
 - `.agents/lib/vaws_validate.py` is the shared validation library for agent-facing ids, environment names, path boundaries, and NPU device lists.
-- `AGENTS.md` carries repository-wide routing rules and mandatory decision gates.
+- `AGENTS.md` carries repository-wide routing rules, mandatory decision gates, and the agent working agreement (autonomy, scope, tool batching, reporting).
 
 ## Script-first convention
 
