@@ -119,12 +119,20 @@ def run_cli(
     process vanished). ``kill_mode="transport"`` kills only the wrapper's
     ``ssh`` children (the connection dropped) and lets the wrapper finish so
     its failure reporting can be judged.
+
+    When ``kill_after_ms`` is set, the copied child environment includes
+    ``REMOTE_DEV_SSH_MUX=0`` so SSH calls inside that one CLI invocation do
+    not create or use the shared ControlMaster. Ordinary calls, including an
+    inherited explicit override, keep the copied parent environment. This
+    does not mutate ``os.environ``.
     """
     if kill_mode not in KILL_MODES:
         raise ValueError(f"kill_mode must be one of {KILL_MODES}")
     start = time.monotonic()
     env = dict(os.environ)
     env.setdefault("PYTHONUNBUFFERED", "1")
+    if kill_after_ms is not None:
+        env["REMOTE_DEV_SSH_MUX"] = "0"
     proc = subprocess.Popen(
         argv,
         stdin=subprocess.PIPE,

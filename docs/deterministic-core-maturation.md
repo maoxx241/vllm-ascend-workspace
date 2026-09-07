@@ -83,6 +83,18 @@ produced. The declared set must cover all of them:
 | `idempotent_rerun` | same call twice with a declared second outcome, then verify | "already applied" contracts |
 | `job_registry` | start, poll to terminal state, tail, status again, stop a long job | registry/state consistency |
 
+The interrupted CLI child (`kill_after_ms` set, either kill mode) is
+started with `REMOTE_DEV_SSH_MUX=0` so that one process does not create
+or reuse the shared ControlMaster. Seed, rerun, cleanup, ordinary CLI,
+and in-process calls keep the copied parent environment, including an
+inherited explicit mux override. This harness does not change OpenSSH
+options itself; `ControlMaster=no`, `ControlPath=none`, and
+`ControlPersist=no` come from the remote-dev provider that honours
+`REMOTE_DEV_SSH_MUX=0`. Root selects and integrates that provider; this
+consumer change alone does not close remote-dev #2. Ordinary
+timeout/cancellation paths are not recertified. The retained pass-1
+hardware outcomes in §2 are unchanged.
+
 ### 1.4 Attribution layers
 
 A boolean hides the difference between an instant failure and a timeout. Every
@@ -326,3 +338,10 @@ way every time and does not poison neighbours.
 - Reproducible failures were prepared as redacted candidates but not
   captured (`--capture-knowledge` was off). Knowledge files were not
   edited.
+- Isolated interruption of a transfer CLI child now opts that one
+  process out of the shared mux (`REMOTE_DEV_SSH_MUX=0` on the copied
+  child environment only). The provider package that turns that variable
+  into `ControlMaster=no` / `ControlPath=none` / `ControlPersist=no` is
+  a pending root-owned integration; local consumer tests do not treat
+  the embedded provider as that candidate. No second hardware pass was
+  run, and ordinary timeout/cancellation paths were not redesigned.
