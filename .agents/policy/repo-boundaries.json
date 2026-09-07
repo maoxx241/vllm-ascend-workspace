@@ -1,0 +1,157 @@
+{
+  "version": 1,
+  "doc": "docs/repo-boundaries.md",
+  "checker": ".agents/scripts/repo_boundary_check.py",
+  "format_note": "JSON, not YAML, so the guard stays stdlib-only and can run in every existing CI job without a pip install step.",
+  "scan": {
+    "include_suffixes": [
+      ".py"
+    ],
+    "scan_scope_note": "Only Python is scanned for violations. Markdown/config mentions are inventoried by hand in docs/repo-boundaries.md; they carry no import-time coupling.",
+    "skip_roots": [
+      "vllm",
+      "vllm-ascend",
+      ".git",
+      ".venv",
+      "venv",
+      ".vaws-local",
+      ".vaws-runtime",
+      ".remote-code-parity",
+      ".worktrees",
+      ".pytest_cache",
+      ".ruff_cache",
+      ".mypy_cache",
+      "__pycache__"
+    ],
+    "skip_reasons": {
+      "vllm": "volatile upstream submodule; not ours to police",
+      "vllm-ascend": "volatile upstream submodule; not ours to police",
+      ".vaws-local": "untracked runtime state",
+      ".vaws-runtime": "untracked runtime state",
+      ".remote-code-parity": "untracked parity state"
+    },
+    "fixture_paths": [
+      ".agents/tests/test_repo_boundary_check.py"
+    ],
+    "fixture_paths_note": "This guard's own tests have to name cross-boundary paths as string fixtures to prove the guard detects them. Nothing else belongs here: a file that genuinely needs an exemption needs a baseline row instead, where it is dated and attributed to an extraction.",
+    "module_search_paths": [
+      ".agents/lib",
+      ".agents/skills/remote-code-parity/scripts"
+    ],
+    "module_search_paths_note": "Directories that some entry point actually places on sys.path. Ownership of a derived module name is resolved from the owning file's path, so moving a file between subsystems moves its module with it. `.remote-dev` and `.agents/coordinator` are absent because both left this tree and are consumed as external checkouts."
+  },
+  "ignored_modules": [
+    {
+      "module": "mcp",
+      "why": "remote-dev ships an unrelated `mcp/` package. The extracted coordinator HTTP manager imports the installed MCP Python SDK, not that package. Treating `mcp` as substrate-owned would report a dependency that does not exist."
+    },
+    {
+      "module": "starlette",
+      "why": "third-party ASGI dependency of the coordinator HTTP server"
+    }
+  ],
+  "subsystems": [
+    {
+      "id": "remote-dev",
+      "repo": "vllm-ascend-workspace/remote-dev",
+      "layer": 10,
+      "summary": "Stateless SSH-backed remote developer substrate. Must know nothing about vLLM-Ascend, sessions, or NPU leases.",
+      "roots": [],
+      "public_paths": [],
+      "private_paths": [],
+      "public_modules": [
+        "core.result",
+        "core.errors"
+      ],
+      "public_modules_note": "The result contract and error taxonomy are schema-pinned (`schemas/result.schema.json` in the substrate) and remain the only import-level surface a consumer should bind to. The substrate additionally publishes the resolver plugin interface (`core.endpoint.register_resolver` / `resolver_setup` / `EndpointError`), which is how consumer selectors such as `machine` / `session_id` reach it. Because no substrate file is in this tree any more, these names are documentation for reviewers rather than something the guard can attribute.",
+      "roots_note": "No roots on `main`: the substrate left this tree with its extraction and is consumed as an external checkout (`.agents/deps/remote-dev.json`, `VAWS_REMOTE_DEV_ROOT`). Only consumers are in this repository: the resolver plugin `.agents/lib/vaws_remote_dev_plugin.py`, the launcher `.agents/scripts/remote_dev.py`, and the client configuration. The boundary is now a repository boundary, which is why this subsystem declares no paths."
+    },
+    {
+      "id": "coordinator",
+      "repo": "vllm-ascend-workspace/vaws-coordinator",
+      "layer": 20,
+      "summary": "Task identity, shared runtime pool, managed job supervision. Consumes remote-dev; must not consume the domain layer.",
+      "roots": [],
+      "roots_note": "No roots on this tree: the coordinator left with its extraction and is consumed as an external checkout (`.agents/deps/coordinator.json`, `VAWS_COORDINATOR_ROOT`). Only consumers remain: `.agents/lib/vaws_coordinator.py`, `.agents/scripts/vaws.py`, `.agents/hooks/vaws_session.py`, and `.agents/scripts/vaws_client_setup.py`.",
+      "public_paths": [],
+      "private_paths": [],
+      "public_modules": [],
+      "public_modules_note": "The task facade, stdio server and HTTP manager live in vaws-coordinator. This repository locates that checkout; it does not import those modules from an in-tree copy."
+    },
+    {
+      "id": "vaws-top",
+      "repo": "vllm-ascend-workspace/vaws-top",
+      "layer": 10,
+      "summary": "Loopback-only NPU fleet dashboard. Today it lives on the in-repo `vaws-top` branch; after extraction it is a separate repository reached by clone, not by `git worktree add <branch>`.",
+      "roots": [],
+      "roots_note": "No roots on `main`: the dashboard source is not in this tree. Only the bootstrap entry (`.agents/skills/npu-fleet-monitor/`) is, and that is a consumer.",
+      "public_paths": [],
+      "private_paths": [],
+      "public_modules": [],
+      "inline_patterns": [
+        ".agents/skills/vaws-top/",
+        "vaws-top"
+      ],
+      "inline_patterns_note": "A literal naming the dashboard as in-repo content — the `vaws-top` branch name handed to `git worktree add`, or a path inside the dashboard's own tree. Each is a place that has to learn a repository URL instead of a branch name."
+    },
+    {
+      "id": "scaffold-domain",
+      "repo": "vllm-ascend-workspace",
+      "layer": 30,
+      "summary": "The domain layer that stays: 24 skills, shared libraries, helper scripts. May depend on every extracted subsystem; none of them may depend on it.",
+      "roots": [
+        ".agents"
+      ],
+      "public_paths": [],
+      "public_paths_note": "Deliberately empty. The scaffold publishes nothing downward: a lower layer that needs scaffold data must receive it through an interface the lower layer owns, not read it.",
+      "private_paths": [
+        ".agents"
+      ],
+      "public_modules": []
+    },
+    {
+      "id": "workspace-root",
+      "repo": "vllm-ascend-workspace",
+      "layer": 40,
+      "summary": "Repository-level files: CI workflows, client config examples, top-level docs and shell helpers. Above every subsystem, so it may reference all of them.",
+      "roots": [
+        "."
+      ],
+      "public_paths": [
+        "."
+      ],
+      "private_paths": [],
+      "public_modules": []
+    }
+  ],
+  "rules": [
+    {
+      "id": "R1-layer-direction",
+      "kind": "layer-direction",
+      "severity": "error",
+      "title": "Dependencies point downward only",
+      "why": "The split exists because the substrate currently reaches backwards into scaffold-private state. A lower layer that imports a higher one cannot be extracted at all: `.remote-dev` would not build without `.agents/lib`, and `.agents/coordinator` would not build without the domain skills. Worse, remote-dev -> vaws_task_client -> coordinator -> core.endpoint closes a cycle across all three repos, so no extraction order exists until the cycle is cut. Every hit under this rule is a reverse dependency that must be inverted, not preserved."
+    },
+    {
+      "id": "R2-published-entry-point",
+      "kind": "published-entry-point",
+      "severity": "error",
+      "title": "Cross-subsystem references target published entry points",
+      "why": "A downward dependency is fine; a downward dependency on someone else's internals is a version-pinning problem the moment the two live in different repositories. `.agents/coordinator/backend.py` reads `.remote-dev/core/managed_jobs.py` as *source text* and execs it on the remote host, which pins the coordinator to a byte-level detail of a file remote-dev is free to rewrite. Consumers must bind to the schema-pinned result contract and the CLI/MCP entry points instead."
+    },
+    {
+      "id": "R3-skill-entry-point",
+      "kind": "skill-entry-point",
+      "severity": "error",
+      "title": "A domain skill uses another skill's published entry points only",
+      "why": "Skills are independently readable units; agents route to one by reading its SKILL.md. Reaching into a sibling's `scripts/` internals makes that routing a lie and couples two skills that a reader has no reason to read together. A referenced script counts as published when the owning skill's SKILL.md names it, which is exactly the contract an agent can discover."
+    },
+    {
+      "id": "R4-extracted-inline-reference",
+      "kind": "extracted-inline-reference",
+      "severity": "error",
+      "title": "An extracted subsystem is not referenced as in-repo content",
+      "why": "`.agents/skills/npu-fleet-monitor/scripts/manage_monitor.py` locates the dashboard with `git worktree add <target> vaws-top` against this repository and then validates `.agents/skills/vaws-top/SKILL.md` inside it. Once the dashboard is its own repository there is no such branch, so the bootstrap silently fails to find anything. These are the call sites that must switch from a branch name to a repository."
+    }
+  ]
+}

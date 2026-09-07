@@ -48,8 +48,15 @@ Select the exact `summary_*.csv` produced by the run:
 python -B .agents/skills/vllm-ascend-correctness-validation/scripts/aisbench_adapter.py normalize \
   --summary-csv /remote/output/summary/summary_20260725_120000.csv \
   --label baseline \
+  --execution '{"served_model":"example","engine_args":{"tensor_parallel_size":2,"enforce_eager":false},"base_url":"http://<host>:<port>"}' \
   --output /remote/output/baseline-normalized.json
 ```
+
+`--execution` is required: AISBench never sees the engine, so the service that
+produced the summary must be declared (`served_model`, the `engine_args` it was
+started with, optionally `base_url`). `correctness_run.py compare` refuses any
+baseline/candidate difference in this block that was not declared at `init`
+with `--allowed-difference`.
 
 Repeat with the candidate summary. Compare both normalized files with the same `aisbench-cases.json`.
 

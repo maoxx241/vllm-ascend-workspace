@@ -48,6 +48,11 @@ python3 .agents/scripts/tracked_leak_scan.py --staged --show-matches
 python3 .agents/scripts/tracked_leak_scan.py --commit-range origin/main..HEAD
 ```
 
+`--repo-root` selects the tree to scan. Unless `--allowlist` or `--no-allowlist`
+is given, the policy is `<repo-root>/.agents/leak-guard/allowlist.yaml`. A
+missing policy is an error; the scanner does not fall back to another
+worktree's file.
+
 Progress goes to `stderr`; a single JSON payload goes to `stdout`. Exit code is
 `0` for a clean scan, `1` for findings, `2` for a policy or git error.
 
@@ -64,8 +69,9 @@ repository do not republish the value they are complaining about. Use
   policy as well as by `.gitignore`, so a stray `git add -f` cannot smuggle
   runtime state past the guard silently — it is reported as skipped, with a
   count in the JSON payload.
-- Binary files and files above `max_file_bytes` (2 MiB default) are skipped and
-  counted, never silently ignored.
+- Each text line is scanned in full. File size is still bounded by
+  `max_file_bytes` (2 MiB default): binary files and files above that size are
+  skipped and counted, never silently ignored.
 
 ## Categories
 

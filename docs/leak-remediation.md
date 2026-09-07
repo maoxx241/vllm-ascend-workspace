@@ -9,6 +9,76 @@ This document deliberately does not restate the leaked values. Where a value is
 needed to act, it is at the file and line given below. The scanner would flag
 this document if it quoted them, which is the intended behaviour.
 
+## Current tree after actual-main integration (2026-09-07)
+
+Ordinary merge of actual published main
+`257dc131c2015d0e01445288efb89bc5ab825b5f` (PR #90, tree
+`dc18fcd13ae02468892d3097a226d92dbd302927`) deleted tracked `.remote-dev/**`.
+The dated bodies in "What is exposed" remain historical evidence of the
+pre-extraction snapshot used by #83; they are not a census of this merged
+tree.
+
+Current-tree status of those historical findings:
+
+- Finding 1 (knowledge RFC 1918 range) is still in
+  `.agents/knowledge/known-failure-signatures.yaml`. The
+  `knowledge-failure-signatures-private-range` allowance stays.
+- Finding 2 (`.remote-dev/DESIGN.md`) is absent from the current tree. The
+  #83 wording change is history-only; extraction removed the file.
+- Finding 3 (profiling command-recipes home path) remains the #83 placeholder
+  in the current tree.
+- Finding 4 (profiling shared-storage owner token) remains in that skill
+  package and is still allowlisted for the later #88 cleanup. This G1
+  integration does not apply that cleanup.
+- Finding 5's `.remote-dev/README.md` occurrence and finding 6's
+  `.remote-dev/tests/` placeholders are absent from the current tree. The
+  skill-recipe example hosts remain.
+- Allowlist entries whose complete owning paths were the extracted tree
+  (`remote-dev-tests-placeholder-host`, `remote-dev-readme-example-host`)
+  were removed. Remaining allowances were not dropped merely because a scan
+  did not visit them.
+
+The 13 current-main scanner findings on this merged tree were resolved
+narrowly on 2026-09-07. Accepted envelope source, the feedback contract,
+and result-envelope tests are unchanged. Shared-root names were not added
+to global `allowed_absolute_path_prefixes`. No whole-file exclusion and no
+real-secret allowance were added.
+
+- The accepted envelope `_SAFE_HOME_PREFIXES` bare shared-root literals
+  other than the already-global weights prefix are allowlisted only in
+  `.agents/lib/vaws_result_envelope.py` and
+  `docs/agent-feedback-contract.md`, each with one owning `path_glob` and
+  an anchored four-name regex. The same names elsewhere, and longer or
+  different home paths in those files, remain findings.
+- Three exact fixtures in `.agents/tests/test_result_envelope.py` are
+  allowlisted by one category and one detector match each (version-date
+  identifier, synthetic example home, quoted synthetic secret-key
+  literal). Changed values, other paths, and other categories at that
+  path remain findings.
+- The property run-manifest local field-label variable was renamed so it
+  is no longer a secret-key assignment. No policy exception was added
+  for it.
+
+Full-tree scan after that G1-on-#90 candidate with its own policy was
+469 scanned, 0 skipped, 0 findings, 116 suppressed, 0 unused allowlist
+ids. The suppression count was two above the 12 converted current-main
+matches because the policy file quotes two of those exact `match`
+literals and `policy-self-reference` records them.
+
+Ordinary merge of actual published coordinator-consumer main
+`f38ea47bfb0e123b306723ac937f0514a0830169` (PR #98) on 2026-09-07
+removed the in-tree `.agents/coordinator/tests/**` package. Combined
+scan before the one remaining cleanup: 464 scanned, 0 skipped, 0
+findings, 115 suppressed, 1 unused allowlist id
+(`coordinator-test-bearer-token`). That stale path-scoped entry was
+removed; the five current-main scoped allowances and the guard runtime
+skip glob were kept. Combined scan after that removal: 464 scanned, 0
+skipped, 0 findings, 115 suppressed, 0 unused allowlist ids.
+
+Finding 4's profiling shared-storage owner token remains allowlisted
+for the later #88 cleanup. This is not leak-proof coverage of skipped
+files or of public history.
+
 ## Method
 
 Counts come from walking every commit on `origin/main` (114 commits at the time

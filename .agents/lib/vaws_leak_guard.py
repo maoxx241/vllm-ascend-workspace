@@ -37,9 +37,17 @@ if str(LIB) not in sys.path:
 from vaws_knowledge import SECRET_KEY_RE, SECRET_VALUE_RES  # noqa: E402
 
 SCHEMA_VERSION = 1
-DEFAULT_POLICY_PATH = ROOT / ".agents" / "leak-guard" / "allowlist.yaml"
 MAX_FILE_BYTES = 2 * 1024 * 1024
 MIN_JUSTIFICATION_CHARS = 20
+
+
+def default_policy_file(repo_root: Path | str) -> Path:
+    """Return the committed-tree policy path for `repo_root`, even if absent."""
+
+    return Path(repo_root) / ".agents" / "leak-guard" / "allowlist.yaml"
+
+
+DEFAULT_POLICY_PATH = default_policy_file(ROOT)
 
 # Ordered by review priority. When two rules overlap on the same span, the
 # earlier category wins so one leak yields one actionable finding.
@@ -623,7 +631,8 @@ def load_policy(path: Path | None) -> Policy:
         where=str(path),
     )
     version = data.get("schema_version")
-    if version != SCHEMA_VERSION:
+    # bool is a subclass of int, so `True == 1` must not pass as schema_version.
+    if isinstance(version, bool) or not isinstance(version, int) or version != SCHEMA_VERSION:
         raise LeakGuardError(
             f"{path}: schema_version must be {SCHEMA_VERSION}, got {version!r}"
         )
@@ -699,7 +708,7 @@ def load_policy(path: Path | None) -> Policy:
         )
     if settings.get("max_file_bytes") is not None:
         raw_max = settings["max_file_bytes"]
-        if not isinstance(raw_max, int) or raw_max <= 0:
+        if isinstance(raw_max, bool) or not isinstance(raw_max, int) or raw_max <= 0:
             raise LeakGuardError(f"{where}: max_file_bytes must be a positive integer")
         policy.max_file_bytes = raw_max
 
@@ -1023,8 +1032,8 @@ def scan_text(text: str, *, path: str, policy: Policy) -> list[Finding]:
     findings: list[Finding] = []
     exclusions = policy.scoped_categories(path)
     for number, line in enumerate(text.splitlines(), start=1):
-        if len(line) > 4096:
-            line = line[:4096]
+        # Scan the complete line. File size is already bounded by max_file_bytes;
+        # truncating here hid matches that staged diffs still reported.
         for start, _end, category, rule, matched in scan_line(line, policy):
             if any(item.excludes(category) for item in exclusions):
                 continue
@@ -1136,34 +1145,134 @@ def scan_files(
     return result
 
 
-DIFF_FILE_RE = re.compile(r"^\+\+\+ b/(?P<path>.+)$")
 DIFF_HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(?P<start>\d+)(?:,\d+)? @@")
+
+_GIT_C_ESCAPES = {
+    "a": "\a",
+    "b": "\b",
+    "t": "\t",
+    "n": "\n",
+    "v": "\v",
+    "f": "\f",
+    "r": "\r",
+    '"': '"',
+    "\\": "\\",
+}
+
+
+def unquote_git_path(text: str) -> str:
+    """Decode a Git C-quoted pathname, or return `text` unchanged if unquoted."""
+
+    if not text.startswith('"'):
+        return text
+    decoded, end = _unquote_git_c_style(text, 0)
+    if end != len(text):
+        raise LeakGuardError("malformed git-quoted path")
+    return decoded
+
+
+def _unquote_git_c_style(text: str, start: int) -> tuple[str, int]:
+    if start >= len(text) or text[start] != '"':
+        raise LeakGuardError("malformed git-quoted path")
+    raw = bytearray()
+    index = start + 1
+    while index < len(text):
+        char = text[index]
+        if char == '"':
+            return raw.decode("utf-8", "surrogateescape"), index + 1
+        if char != "\\":
+            raw.extend(char.encode("utf-8", "surrogateescape"))
+            index += 1
+            continue
+        index += 1
+        if index >= len(text):
+            raise LeakGuardError("unterminated git-quoted path")
+        esc = text[index]
+        mapped = _GIT_C_ESCAPES.get(esc)
+        if mapped is not None:
+            raw.extend(mapped.encode("latin-1"))
+            index += 1
+            continue
+        if esc in "01234567":
+            value = 0
+            digits = 0
+            while digits < 3 and index < len(text) and text[index] in "01234567":
+                value = (value << 3) | (ord(text[index]) - 48)
+                index += 1
+                digits += 1
+            raw.append(value & 0xFF)
+            continue
+        raise LeakGuardError("invalid git-quoted path escape")
+    raise LeakGuardError("unterminated git-quoted path")
+
+
+def _parse_unified_file_header(line: str) -> str:
+    """Return the path from a `---` or `+++` unified-diff header."""
+
+    if line.startswith("+++ "):
+        payload = line[4:]
+        expect_prefix = "b/"
+    elif line.startswith("--- "):
+        payload = line[4:]
+        expect_prefix = "a/"
+    else:
+        raise LeakGuardError("malformed diff file header")
+    if payload.startswith('"'):
+        path, end = _unquote_git_c_style(payload, 0)
+        rest = payload[end:]
+        if rest and not rest.startswith("\t"):
+            raise LeakGuardError("malformed quoted diff path header")
+    else:
+        path = payload.split("\t", 1)[0]
+    if path == "/dev/null":
+        return path
+    if not path.startswith(expect_prefix):
+        raise LeakGuardError("unrecognized diff path header prefix")
+    return path[len(expect_prefix) :]
 
 
 def scan_diff(diff_text: str, policy: Policy) -> ScanResult:
-    """Scan only added lines of a unified diff, keeping post-image line numbers."""
+    """Scan only added lines of a unified diff, keeping post-image line numbers.
+
+    Path headers are decoded only in header state. Added hunk lines are scanned
+    even when they begin with extra '+' characters, so a source line `++ host`
+    is not mistaken for a `+++` path header.
+    """
 
     result = ScanResult()
     path: str | None = None
     line_number = 0
+    in_hunk = False
     files: set[str] = set()
     for line in diff_text.splitlines():
-        file_match = DIFF_FILE_RE.match(line)
-        if file_match:
-            path = file_match.group("path")
+        if line.startswith("diff --git"):
+            in_hunk = False
+            path = None
             continue
-        if line.startswith("--- ") or line.startswith("diff --git"):
+        if not in_hunk:
+            if line.startswith("--- ") or line.startswith("+++ "):
+                parsed = _parse_unified_file_header(line)
+                if line.startswith("+++ "):
+                    path = parsed
+                continue
+            hunk = DIFF_HUNK_RE.match(line)
+            if hunk:
+                if path is None:
+                    raise LeakGuardError("diff hunk without a valid +++ path header")
+                in_hunk = True
+                line_number = int(hunk.group("start"))
             continue
         hunk = DIFF_HUNK_RE.match(line)
         if hunk:
             line_number = int(hunk.group("start"))
             continue
-        if not path or path == "/dev/null":
+        if line.startswith("\\"):
             continue
-        if line.startswith("+") and not line.startswith("+++"):
+        if line.startswith("+"):
+            if path is None or path == "/dev/null":
+                raise LeakGuardError("diff addition without a valid path header")
             if not policy.is_path_excluded(path):
-                if path not in files:
-                    files.add(path)
+                files.add(path)
                 for start, _end, category, rule, matched in scan_line(line[1:], policy):
                     if any(item.excludes(category) for item in policy.scoped_categories(path)):
                         continue

@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "generated_on": "2026-09-07",
+  "note": "Accepted boundary violations as of 2026-09-07, the day before the three extractions land. Every row is a real coupling that the guard would otherwise fail on; each names the extraction expected to remove it. Rules: nothing may be added here to make a new violation pass without a reviewed reason; a row whose violation no longer exists is a hard failure in --mode enforce, so a fix must delete its row in the same commit. Regenerate the mechanical parts with `--write-baseline`, which preserves removed_by and why and leaves new rows as \"unassigned\" (also a hard failure), then attribute them by hand.",
+  "accepted": [
+    {
+      "rule": "R4-extracted-inline-reference",
+      "path": ".agents/skills/npu-fleet-monitor/scripts/manage_monitor.py",
+      "symbol": ".agents/skills/vaws-top/",
+      "kind": "path-literal",
+      "from": "scaffold-domain",
+      "to": "vaws-top",
+      "removed_by": "vaws-top",
+      "accepted_on": "2026-09-07",
+      "why": "The bootstrap locates the dashboard with git worktree add against the in-repo vaws-top branch and then validates .agents/skills/vaws-top/SKILL.md inside that worktree. After extraction there is no such branch, so it must clone or locate the vaws-top repository instead."
+    },
+    {
+      "rule": "R4-extracted-inline-reference",
+      "path": ".agents/skills/npu-fleet-monitor/scripts/manage_monitor.py",
+      "symbol": "vaws-top",
+      "kind": "path-literal",
+      "from": "scaffold-domain",
+      "to": "vaws-top",
+      "removed_by": "vaws-top",
+      "accepted_on": "2026-09-07",
+      "why": "The bootstrap locates the dashboard with git worktree add against the in-repo vaws-top branch and then validates .agents/skills/vaws-top/SKILL.md inside that worktree. After extraction there is no such branch, so it must clone or locate the vaws-top repository instead."
+    },
+    {
+      "rule": "R4-extracted-inline-reference",
+      "path": ".agents/skills/npu-fleet-monitor/tests/test_manage_monitor.py",
+      "symbol": ".agents/skills/vaws-top/",
+      "kind": "path-literal",
+      "from": "scaffold-domain",
+      "to": "vaws-top",
+      "removed_by": "vaws-top",
+      "accepted_on": "2026-09-07",
+      "why": "The bootstrap's tests build a fake vaws-top branch worktree. They follow whatever manage_monitor.py switches to."
+    },
+    {
+      "rule": "R4-extracted-inline-reference",
+      "path": ".agents/skills/npu-fleet-monitor/tests/test_manage_monitor.py",
+      "symbol": "vaws-top",
+      "kind": "path-literal",
+      "from": "scaffold-domain",
+      "to": "vaws-top",
+      "removed_by": "vaws-top",
+      "accepted_on": "2026-09-07",
+      "why": "The bootstrap's tests build a fake vaws-top branch worktree. They follow whatever manage_monitor.py switches to."
+    }
+  ],
+  "accepted_counts_by_extraction": {
+    "vaws-top": 4
+  }
+}

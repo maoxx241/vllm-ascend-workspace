@@ -20,7 +20,11 @@ root cause from one rank's log alone.
    cross-rank phase divergence.
 5. Form one or more falsifiable hypotheses from the report.
 6. Reduce one parallel dimension at a time. Record each reduced case separately.
-7. After a fix, rerun both the smallest reproducer and the original topology.
+7. After a fix, rerun both the smallest reproducer and the original topology
+   with event collection. Each rank must emit `rank_complete` as its last
+   event; `analyze` marks the manifest `passed` only when every rank completed
+   and no finding was raised. Set `parent_run_id` in the case config when the
+   case is evidence for a change-validation plan.
 
 ## Entry point
 
@@ -29,7 +33,9 @@ root cause from one rank's log alone.
 - `init`: validate the topology contract and create the complete evidence layout;
 - `ingest`: validate and append normalized rank events;
 - `analyze`: produce deterministic findings, per-rank last progress, and a Run
-  Manifest-linked report.
+  Manifest-linked report; the manifest becomes `failed` on a confirmed finding,
+  `passed` only when every rank ended with `rank_complete` and nothing was
+  found, and `inconclusive` otherwise.
 
 Read only the reference needed for the current phase:
 

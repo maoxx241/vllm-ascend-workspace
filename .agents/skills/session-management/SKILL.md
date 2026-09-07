@@ -7,12 +7,16 @@ description: Associate native agent sessions with local VAWS development tasks, 
 
 ## Local task identity and native clients
 
-For the task-facing mode, use remote-dev's `vaws_session`, `vaws_run`,
-`vaws_execution` and `vaws_finish` tools. The native adapter supplies
-`context_file`; the user should not have to manage it. Configure once using
+For the task-facing mode, use the `vaws-task` MCP server's `vaws_session`,
+`vaws_run`, `vaws_execution` and `vaws_finish` tools (served by the
+vaws-coordinator checkout through `.agents/scripts/vaws.py task-server`). The
+native adapter supplies `context_file`; the user should not have to manage it.
+Configure once using
 `.agents/scripts/vaws_client_setup.py --client <client> --project <actual-repo>`
 (preview, then `--apply` after reviewing the changes). This does not grant
-client trust or authentication. See [lifecycle and client setup](../../coordinator/README.md#task-and-native-session-lifecycle).
+client trust or authentication, does not rewrite hand-managed providers, and
+must not be applied to a live client configuration from tests. See
+[coordinator consumption](../../../docs/coordinator-consumption.md).
 
 - A new user-created **native session** creates a new VAWS task, even in the same cwd.
 - Native **resume** continues the same native attachment and VAWS task.
@@ -43,7 +47,8 @@ session/container names are never rewritten after an alias change.
 Create and maintain isolated VAWS sessions for parallel agent work.
 
 For cross-workspace development with prepared containers, the opt-in shared
-coordinator in [`.agents/coordinator/README.md`](../../coordinator/README.md)
+coordinator documented in
+[coordinator consumption](../../../docs/coordinator-consumption.md)
 separates logical sessions from runtime bindings and per-run NPU leases.
 It uses existing remote-dev endpoints and the host NPU coordinator; it does
 not require `vaws-top`. Use its `session_open/runtime_checkout/execution_*`
@@ -79,7 +84,7 @@ does not create another container or duplicate member leases.
 - `session_create.py` creates a fresh generated id when no explicit/env id is provided; it does not reuse `.vaws-local/current-session.json` as a creation default.
 - Existing-session lookup commands may use `.vaws-local/current-session.json` as a convenience fallback.
 - Do not reuse the base machine container for new parallel tasks. New tasks should use `session_create.py`.
-- For NPU work, reserve devices during creation with `--devices` or `--npu-count`; session-aware serving uses that lease by default. `--npu-count` requires a successful host NPU probe (no guessing of device ranges); if the probe fails, fix it or pass explicit `--devices`.
+- For NPU work, reserve devices during creation with `--devices` or `--npu-count`; session-aware serving uses that lease by default. Count-based and explicit-device allocation both require a known occupancy result; unknown occupancy and a known empty free set refuse the request. Port-only creation remains valid without NPUs.
 - `--reuse-existing` probes the existing container's SSH endpoint before reporting the session as reusable; a dead container returns `needs_repair` instead of a stale `ready`.
 - Metadata status changes never release remote leases. Confirmed container removal releases its leases even without `--release-leases`; worktree removal or stopping only the recorded service PID does not prove all remote resources are free.
 - Managed serving requires a nonempty live NPU lease matching the session snapshot. Empty or stale snapshots cannot fall through to idle-card selection.

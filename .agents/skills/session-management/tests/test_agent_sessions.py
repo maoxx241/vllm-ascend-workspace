@@ -18,8 +18,10 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(ROOT / ".agents/lib"))
-from vaws_agent_session import AgentSessions, load_context
-from vaws_task_client import TaskClient
+import vaws_coordinator as coordinator  # noqa: E402
+
+CHECKOUT = coordinator.coordinator_root(required=False)
+requires_coordinator = unittest.skipUnless(CHECKOUT, "no vaws-coordinator checkout (set VAWS_COORDINATOR_ROOT)")
 
 
 def module_at(name, path):
@@ -29,10 +31,17 @@ def module_at(name, path):
     return module
 
 
-hooks = module_at("native_session_hooks", ROOT / ".agents/hooks/vaws_session.py")
+if CHECKOUT:
+    coordinator.add_coordinator_to_path(CHECKOUT)
+    from vaws_agent_session import AgentSessions, load_context
+    from vaws_task_client import TaskClient
+    hooks = module_at("native_session_hooks", CHECKOUT / "hooks/vaws_session.py")
+else:
+    AgentSessions = load_context = TaskClient = hooks = None  # type: ignore[misc, assignment]
 setup = module_at("native_session_setup", ROOT / ".agents/scripts/vaws_client_setup.py")
 
 
+@requires_coordinator
 class AgentSessionTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -141,29 +150,16 @@ class AgentSessionTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.store.native_context("cursor", "grok-via-cursor")
 
-    def test_kimi_hook_stays_silent_outside_project_and_on_errors(self):
-        script = ROOT / ".agents/hooks/vaws_session.py"
-        payload = {"hook_event_name": "UserPromptSubmit", "session_id": "kimi-outside",
-                   "cwd": str(self.root), "prompt": "hello"}
-        for args, stdin in (
-            (["--client", "kimi", "--project", str(self.root / "elsewhere")], payload),
-            (["--client", "kimi"], {**payload, "session_id": ""}),
-        ):
-            with self.subTest(args=args):
-                result = subprocess.run([sys.executable, str(script), *args], input=json.dumps(stdin),
-                                        capture_output=True, text=True, check=False)
-                self.assertEqual(result.returncode, 0)
-                self.assertNotIn("{}", result.stdout)
-                self.assertEqual(result.stdout.strip(), "")
-
     def test_pretool_hook_injects_context_and_subagent_detach_does_not_end_root(self):
         parent = self.attach()
         child = {"hook_event_name": "SubagentStart", "session_id": "root-a", "agent_id": "child-1", "cwd": str(self.root)}
         hooks.handle("codex", child, self.store)
         context = self.store.native_context("codex", "root-a", "child-1")
         self.assertEqual(context["session"]["id"], parent["session"]["id"])
-        output = hooks.handle("codex", {**child, "hook_event_name": "PreToolUse", "tool_name": "mcp__remote_dev__vaws_session", "tool_input": {}}, self.store)
+        output = hooks.handle("codex", {**child, "hook_event_name": "PreToolUse", "tool_name": "mcp__vaws-task__vaws_session", "tool_input": {}}, self.store)
         self.assertEqual(output["hookSpecificOutput"]["updatedInput"]["context_file"], context["context_file"])
+        stale = hooks.handle("codex", {**child, "hook_event_name": "PreToolUse", "tool_name": "mcp__remote_dev__vaws_session", "tool_input": {}}, self.store)
+        self.assertEqual(stale["hookSpecificOutput"]["updatedInput"]["context_file"], context["context_file"])
         hooks.handle("codex", {**child, "hook_event_name": "SubagentStop"}, self.store)
         self.assertEqual(self.store.context(parent["attachment"]["id"])["attachment"]["state"], "attached")
 
@@ -202,23 +198,6 @@ class AgentSessionTests(unittest.TestCase):
         self.assertEqual(updated["tool_name"], "remote-dev__vaws_session")
         self.assertEqual(updated["tool_input"]["context_file"], context["context_file"])
         self.assertNotIn("context_file", updated)
-
-    def test_client_setup_preserves_user_policy_and_does_not_grant_trust(self):
-        settings = self.root / ".claude/settings.local.json"
-        settings.parent.mkdir()
-        settings.write_text(json.dumps({"permissions": {"deny": ["Bash(ssh *)"]}, "hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": "my-hook"}]}]}}))
-        files = setup.configuration("claude", self.root)
-        value = json.loads(files[settings])
-        self.assertEqual(value["permissions"], {"deny": ["Bash(ssh *)"]})
-        self.assertEqual(len(value["hooks"]["SessionStart"]), 2)
-        settings.write_text(files[settings])
-        self.assertEqual(setup.configuration("claude", self.root)[settings], files[settings])
-        kimi = self.root / "kimi-private.toml"
-        kimi.write_text('default_model = "existing"\n')
-        import tomllib
-        result = tomllib.loads(setup.configuration("kimi", self.root, kimi_config=kimi)[kimi])
-        self.assertEqual(result["default_model"], "existing")
-        self.assertTrue(all("--project" in item["command"] for item in result["hooks"]))
 
     def test_lost_launch_reply_is_reconciled_without_syncing_running_sources(self):
         context = self.attach()
@@ -318,6 +297,50 @@ class AgentSessionTests(unittest.TestCase):
                                         "cwd": str(self.root)}, self.store)
         hint = output["hookSpecificOutput"]["additionalContext"]
         self.assertIn(context["context_file"], hint.splitlines())
+
+
+class ScaffoldSetupTests(unittest.TestCase):
+    """Hook wrapper and client-setup contracts that stay in this repository."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name).resolve()
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def test_kimi_hook_stays_silent_outside_project_and_on_errors(self):
+        script = ROOT / ".agents/hooks/vaws_session.py"
+        payload = {"hook_event_name": "UserPromptSubmit", "session_id": "kimi-outside",
+                   "cwd": str(self.root), "prompt": "hello"}
+        env = {**os.environ, coordinator.COORDINATOR_ROOT_ENV: str(self.root / "absent")}
+        for args, stdin in (
+            (["--client", "kimi", "--project", str(self.root / "elsewhere")], payload),
+            (["--client", "kimi"], {**payload, "session_id": ""}),
+        ):
+            with self.subTest(args=args):
+                result = subprocess.run([sys.executable, str(script), *args], input=json.dumps(stdin),
+                                        capture_output=True, text=True, env=env, check=False)
+                self.assertEqual(result.returncode, 0)
+                self.assertNotIn("{}", result.stdout)
+                self.assertEqual(result.stdout.strip(), "")
+
+    def test_client_setup_preserves_user_policy_and_does_not_grant_trust(self):
+        settings = self.root / ".claude/settings.local.json"
+        settings.parent.mkdir()
+        settings.write_text(json.dumps({"permissions": {"deny": ["Bash(ssh *)"]}, "hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": "my-hook"}]}]}}))
+        files = setup.configuration("claude", self.root)
+        value = json.loads(files[settings])
+        self.assertEqual(value["permissions"], {"deny": ["Bash(ssh *)"]})
+        self.assertEqual(len(value["hooks"]["SessionStart"]), 2)
+        settings.write_text(files[settings])
+        self.assertEqual(setup.configuration("claude", self.root)[settings], files[settings])
+        kimi = self.root / "kimi-private.toml"
+        kimi.write_text('default_model = "existing"\n')
+        import tomllib
+        result = tomllib.loads(setup.configuration("kimi", self.root, kimi_config=kimi)[kimi])
+        self.assertEqual(result["default_model"], "existing")
+        self.assertTrue(all("--project" in item["command"] for item in result["hooks"]))
 
     def test_hook_timeout_covers_the_hook_git_calls(self):
         groups = setup.hook_groups("claude", self.root)
