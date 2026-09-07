@@ -26,10 +26,10 @@ if str(LIB) not in sys.path:
 
 from vaws_leak_guard import (  # noqa: E402
     CATEGORIES,
-    DEFAULT_POLICY_PATH,
     LeakGuardError,
     Policy,
     ScanResult,
+    default_policy_file,
     load_policy,
     range_diff,
     scan_diff,
@@ -70,8 +70,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--allowlist",
         type=Path,
-        default=DEFAULT_POLICY_PATH,
-        help="policy/allowlist file; use --no-allowlist to scan with built-in defaults only",
+        default=None,
+        help=(
+            "policy/allowlist file; defaults to "
+            "<repo-root>/.agents/leak-guard/allowlist.yaml"
+        ),
     )
     parser.add_argument(
         "--no-allowlist",
@@ -114,7 +117,12 @@ def _filter(result: ScanResult, categories: list[str] | None) -> ScanResult:
 
 def run(args: argparse.Namespace) -> tuple[dict, int]:
     repo_root = args.repo_root.resolve()
-    policy_path = None if args.no_allowlist else args.allowlist
+    if args.no_allowlist:
+        policy_path = None
+    elif args.allowlist is not None:
+        policy_path = args.allowlist
+    else:
+        policy_path = default_policy_file(repo_root)
     policy: Policy = load_policy(policy_path)
     emit_progress(
         "policy: "

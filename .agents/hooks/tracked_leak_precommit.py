@@ -30,6 +30,7 @@ from vaws_leak_guard import (  # noqa: E402
     DEFAULT_POLICY_PATH,
     LeakGuardError,
     ScanResult,
+    default_policy_file,
     format_finding_line,
     load_policy,
     run_git,
@@ -72,16 +73,17 @@ def hooks_dir(repo_root: Path) -> Path:
 
 
 def resolve_policy_path(repo_root: Path, explicit: Path | None) -> Path:
-    """Prefer the policy of the repository being committed to.
+    """Resolve the policy under the repository being committed to.
 
-    The installed shim is shared by every linked worktree, so a hook that hard
-    coded the installing worktree's policy would enforce the wrong allowlist.
+    The path is returned even when the file is missing so the loader can fail
+    closed. An explicit `--allowlist` still wins. The installed shim is shared
+    by linked worktrees; falling back to the installing tree would scan a
+    foreign repository under the wrong policy.
     """
 
     if explicit is not None:
         return explicit
-    candidate = repo_root / ".agents" / "leak-guard" / "allowlist.yaml"
-    return candidate if candidate.is_file() else DEFAULT_POLICY_PATH
+    return default_policy_file(repo_root)
 
 
 def install(repo_root: Path, *, force: bool) -> dict:
