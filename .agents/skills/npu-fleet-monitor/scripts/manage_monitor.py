@@ -33,9 +33,9 @@ if str(LIB_DIR) not in sys.path:
 
 from vaws_local_state import shared_inventory_path, shared_workspace_root  # noqa: E402
 
-DEPENDENCY_FILE = REPO_ROOT / ".agents" / "deps" / "vaws-top.json"
 CANONICAL_HOST = "github.com"
 CANONICAL_REPO = "vllm-ascend-workspace/vaws-top"
+DEPENDENCY_FILE = REPO_ROOT / ".agents" / "deps" / (CANONICAL_REPO.rsplit("/", 1)[-1] + ".json")
 DEFAULT_URL = "http://127.0.0.1:8789/api/health"
 DASHBOARD_URL = "http://127.0.0.1:8788"
 CLONE_ROOT_ENV = "VAWS_TOP_ROOT"
@@ -127,29 +127,26 @@ def load_pin(path: Path | None = None) -> dict[str, Any]:
     pin_path = path or DEPENDENCY_FILE
     if not pin_path.is_file():
         raise MonitorError(
-            f"vaws-top dependency pin is missing at {pin_path}; "
-            "refusing to run an unpinned checkout"
+            f"dependency pin is missing at {pin_path}; refusing to run an unpinned checkout"
         )
     try:
         data = json.loads(pin_path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
-        raise MonitorError(f"vaws-top dependency pin is not valid JSON: {pin_path}") from exc
+        raise MonitorError(f"dependency pin is not valid JSON: {pin_path}") from exc
     if not isinstance(data, dict) or data.get("schema_version") != 1:
-        raise MonitorError(f"unsupported vaws-top dependency pin: {pin_path}")
+        raise MonitorError(f"unsupported dependency pin: {pin_path}")
     commit = str(data.get("commit") or "").strip()
     if not _looks_like_commit(commit):
         raise MonitorError(
-            f"vaws-top dependency pin {pin_path} has no exact commit; "
+            f"dependency pin {pin_path} has no exact commit; "
             "refusing to fall back to an unpinned ref"
         )
     repository = str(data.get("repository") or "").strip()
-    url = str(data.get("url") or "").strip()
-    identity = github_repo_identity(url) if url else ""
-    if repository != CANONICAL_REPO or identity != CANONICAL_REPO:
+    if repository != CANONICAL_REPO:
         raise MonitorError(
-            f"vaws-top dependency pin does not name {CANONICAL_REPO}: "
-            f"repository={repository!r} url={url!r}"
+            f"dependency pin repository identifier is {repository!r}, expected {CANONICAL_REPO}"
         )
+    require_canonical_url(str(data.get("url") or "").strip(), what="dependency pin url")
     return data
 
 
@@ -157,38 +154,53 @@ def _looks_like_commit(value: str) -> bool:
     return len(value) == 40 and all(char in "0123456789abcdef" for char in value.lower())
 
 
-def github_repo_identity(value: str) -> str:
-    text = value.strip()
-    if not text:
-        return ""
-    if text.startswith("git@") and ":" in text.split("@", 1)[-1]:
-        host, _, path = text.partition(":")
-        host = host.rsplit("@", 1)[-1]
-        return _owner_name(host, path)
-    parsed = urllib.parse.urlparse(text)
-    if parsed.scheme in {"http", "https", "ssh", "git", "git+ssh"}:
-        host = parsed.hostname or ""
-        return _owner_name(host, parsed.path)
-    if text.count("/") == 1 and "://" not in text and "@" not in text:
-        return _owner_name(CANONICAL_HOST, text)
-    return ""
+def _ambiguous_url_chars(value: str) -> bool:
+    return any(char.isspace() or ord(char) < 32 for char in value)
 
 
-def _owner_name(host: str, path: str) -> str:
-    if host.lower() != CANONICAL_HOST:
-        return ""
+def _exact_owner_name(path: str) -> str:
     parts = [item for item in path.strip("/").split("/") if item]
-    if len(parts) < 2:
+    if len(parts) != 2:
         return ""
-    return f"{parts[0]}/{parts[1].removesuffix('.git')}"
+    name = parts[1]
+    if name.endswith(".git"):
+        name = name[:-4]
+    if not parts[0] or not name or "/" in name or name.endswith(".git"):
+        return ""
+    return f"{parts[0]}/{name}"
+
+
+def github_repo_identity(value: str) -> str:
+    """Return owner/name only for a clean GitHub HTTPS or SSH repository root."""
+    if not value or _ambiguous_url_chars(value) or "?" in value or "#" in value:
+        return ""
+    if value.startswith("git@"):
+        host, separator, path = value.partition(":")
+        if not separator or "/" in host.split("@", 1)[-1]:
+            return ""
+        if host.rsplit("@", 1)[-1].lower() != CANONICAL_HOST:
+            return ""
+        return _exact_owner_name(path)
+    parsed = urllib.parse.urlparse(value)
+    if parsed.scheme not in {"https", "ssh", "git", "git+ssh"}:
+        return ""
+    if (parsed.hostname or "").lower() != CANONICAL_HOST:
+        return ""
+    if parsed.port is not None:
+        return ""
+    if parsed.scheme == "https" and (parsed.username or parsed.password):
+        return ""
+    if parsed.scheme in {"ssh", "git", "git+ssh"} and parsed.username not in {None, "git"}:
+        return ""
+    return _exact_owner_name(parsed.path)
 
 
 def require_canonical_url(url: str, *, what: str) -> str:
     identity = github_repo_identity(url)
     if identity != CANONICAL_REPO:
         raise MonitorError(
-            f"{what} is not the canonical GitHub repository {CANONICAL_REPO} "
-            f"(host {CANONICAL_HOST}): {url}"
+            f"{what} is not a canonical GitHub repository transport root for "
+            f"{CANONICAL_REPO} (host {CANONICAL_HOST}): {url}"
         )
     return url
 
@@ -324,7 +336,7 @@ def locate_checkout(
     reject_nested_path(dest)
     if is_legacy_scaffold_checkout(dest):
         raise MonitorError(
-            f"{dest} is a legacy scaffold vaws-top worktree sharing this repository's "
+            f"{dest} is a legacy scaffold monitor worktree sharing this repository's "
             "Git directory and may contain private runtime data. Choose a separate "
             f"destination with --clone-dir or {CLONE_ROOT_ENV}. This tool will not "
             "change its origin, reset it, delete it, detach it, move data, or import keys."
@@ -335,12 +347,12 @@ def locate_checkout(
         return dest, False
     if not create:
         raise MonitorError(
-            f"no vaws-top checkout at {dest}; run "
+            f"no monitor checkout at {dest}; run "
             "`python3 .agents/skills/npu-fleet-monitor/scripts/manage_monitor.py ensure` "
             f"or set {CLONE_ROOT_ENV}"
         )
     if dest.exists() and not directory_is_empty(dest):
-        raise MonitorError(f"target exists and is not an empty vaws-top checkout: {dest}")
+        raise MonitorError(f"target exists and is not an empty monitor checkout: {dest}")
     progress(f"Cloning {pin['repository']} at {pin['commit']} into {dest}")
     clone_repository(url, dest, str(pin["commit"]))
     return dest, True
@@ -362,7 +374,7 @@ def validate_existing_checkout(
 ) -> str:
     missing = [name for name in REQUIRED_FILES if not (clone / name).is_file()]
     if missing:
-        raise MonitorError(f"vaws-top checkout is missing required files: {', '.join(missing)}")
+        raise MonitorError(f"monitor checkout is missing required files: {', '.join(missing)}")
     origin = git_origin(clone)
     require_canonical_url(origin, what=f"origin of {clone}")
     commit = git_head(clone)
@@ -370,12 +382,12 @@ def validate_existing_checkout(
     dirty = git_source_dirty(clone)
     if require_clean_for_ensure and dirty:
         raise MonitorError(
-            "vaws-top checkout has source changes; they were preserved and not reset. "
+            "monitor checkout has source changes; they were preserved and not reset. "
             "Commit or move them before ensure"
         )
     if commit != pinned:
         raise MonitorError(
-            f"vaws-top checkout {clone} is at {commit}, pinned commit is {pinned}. "
+            f"monitor checkout {clone} is at {commit}, pinned commit is {pinned}. "
             "Refusing to fetch, checkout, reset, or silently advance a divergent tree"
         )
     return commit
@@ -521,32 +533,40 @@ def parse_env_file(text: str) -> list[tuple[str | None, str | None, str]]:
     return rows
 
 
-def _unescape_escaped(text: str) -> str:
+_DOUBLE_QUOTE_ESCAPES = frozenset({"\\", '"'})
+
+
+def _unescape_double_quoted(inner: str) -> str:
     chars: list[str] = []
-    escaped = False
-    for char in text:
-        if escaped:
+    index = 0
+    while index < len(inner):
+        char = inner[index]
+        if char != "\\":
             chars.append(char)
-            escaped = False
+            index += 1
             continue
-        if char == "\\":
-            escaped = True
-            continue
-        chars.append(char)
-    if escaped:
-        chars.append("\\")
+        if index + 1 >= len(inner):
+            raise MonitorError("clone .env has a dangling backslash in a double-quoted value")
+        nxt = inner[index + 1]
+        if nxt in _DOUBLE_QUOTE_ESCAPES:
+            chars.append(nxt)
+        else:
+            chars.append("\\")
+            chars.append(nxt)
+        index += 2
     return "".join(chars)
 
 
 def _unescape_env_value(raw: str) -> str:
-    value = raw
-    if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
-        quote = value[0]
-        inner = value[1:-1]
-        if quote == "'":
-            return inner
-        return _unescape_escaped(inner)
-    return _unescape_escaped(value)
+    if raw.startswith('"'):
+        if len(raw) < 2 or raw[-1] != '"':
+            raise MonitorError("clone .env has an unclosed double quote")
+        return _unescape_double_quoted(raw[1:-1])
+    if raw.startswith("'"):
+        if len(raw) < 2 or raw[-1] != "'":
+            raise MonitorError("clone .env has an unclosed single quote")
+        return raw[1:-1]
+    return raw
 
 
 def encode_env_value(value: str) -> str:
@@ -594,13 +614,16 @@ def write_consumer_env(path: Path, updates: dict[str, str | None]) -> None:
     rows = parse_env_file(original) if original else []
     seen: set[str] = set()
     lines: list[str] = []
-    for key, _value, raw in rows:
+    for key, value, raw in rows:
         if key in updates:
             if key in seen:
                 continue
             seen.add(key)
             replacement = updates[key]
             if replacement is None or replacement == "":
+                continue
+            if value is not None and replacement == value:
+                lines.append(raw)
                 continue
             lines.append(f"{key}={encode_env_value(replacement)}")
             continue
@@ -816,7 +839,7 @@ def resolve_inputs(args: argparse.Namespace, repo_root: Path | None = None) -> t
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Locate or deploy the local NPU fleet monitor from the standalone vaws-top repository"
+        description="Locate or deploy the local NPU fleet monitor from the standalone published repository"
     )
     parser.add_argument("action", choices=("ensure", "status", "restart", "stop"))
     parser.add_argument("--clone-dir", type=Path)

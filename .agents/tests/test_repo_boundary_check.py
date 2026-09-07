@@ -11,6 +11,7 @@ one still fails, and a docstring mention is not mistaken for a dependency.
 from __future__ import annotations
 
 import contextlib
+import copy
 import importlib.util
 import io
 import json
@@ -317,13 +318,16 @@ class DetectionTests(unittest.TestCase):
         write(
             self.repo.root / ".agents" / "skills" / "skill-a" / "scripts" / "old_route.py",
             "DEFAULT_BRANCH = 'dash-branch'\n"
-            "COMMAND = ['git', 'worktree', 'add', '/tmp/monitor', 'dash-branch']\n",
+            "COMMAND = ['git', 'worktree', 'add', '/tmp/monitor', 'dash-branch']\n"
+            "import subprocess\n"
+            "subprocess.run('git worktree add /tmp/monitor dash-branch', shell=True)\n",
         )
         write(
             self.repo.root / ".agents" / "skills" / "skill-a" / "scripts" / "standalone.py",
             "DEFAULT_REPO_URL = 'https://github.com/org/dashboard.git'\n"
             "AGENT_SKILL = '.agents/skills/dash/SKILL.md'\n"
-            "SSH_URL = 'git@github.com:org/dashboard.git'\n",
+            "SSH_URL = 'git@github.com:org/dashboard.git'\n"
+            "JOINED = clone / '.agents/skills/dash/SKILL.md'\n",
         )
         _code, payload = self.repo.run("--mode", "report")
         self.assertEqual(
@@ -332,6 +336,41 @@ class DetectionTests(unittest.TestCase):
                 (".agents/skills/skill-a/scripts/old_route.py", "dash-branch", "R4"),
             },
         )
+
+    def test_external_reference_does_not_hide_inrepo_route(self) -> None:
+        policy = copy.deepcopy(SYNTHETIC_POLICY)
+        top = policy["subsystems"][1]
+        top["repo"] = "vllm-ascend-workspace/vaws-top"
+        top["inline_patterns"] = ["vaws-top", ".agents/skills/vaws-top/"]
+        top["published_external_references"] = [
+            ".agents/skills/vaws-top/",
+            ".agents/skills/vaws-top/SKILL.md",
+        ]
+        self.repo.set_policy(policy)
+        cases = {
+            "shell_branch": "import subprocess\nsubprocess.run('git worktree add /tmp/monitor vaws-top', shell=True)\n",
+            "local_skill": "from pathlib import Path\nPath('.agents/skills/vaws-top/SKILL.md').read_text()\n",
+            "wrong_host": "ORIGIN = 'https://github.example.invalid/org/vaws-top.git'\n",
+            "file_url": "ORIGIN = 'file:///tmp/vaws-top'\n",
+            "mixed_literal": (
+                "COMMAND = 'https://github.com/vllm-ascend-workspace/vaws-top.git"
+                "\\ngit worktree add /tmp/monitor vaws-top'\n"
+            ),
+        }
+        for name, source in cases.items():
+            with self.subTest(case=name):
+                write(self.repo.root / ".agents" / "skills" / "skill-a" / "scripts" / "edge.py", source)
+                _code, payload = self.repo.run("--mode", "report")
+                hits = [row for row in payload["violations"] if row["rule"] == "R4"]
+                self.assertTrue(hits, (name, payload["violations"]))
+        write(
+            self.repo.root / ".agents" / "skills" / "skill-a" / "scripts" / "edge.py",
+            "DEFAULT_REPO_URL = 'https://github.com/vllm-ascend-workspace/vaws-top.git'\n"
+            "AGENT_SKILL = '.agents/skills/vaws-top/SKILL.md'\n"
+            "JOINED = clone / '.agents/skills/vaws-top/SKILL.md'\n",
+        )
+        _code, payload = self.repo.run("--mode", "report")
+        self.assertEqual([row for row in payload["violations"] if row["rule"] == "R4"], [])
 
     def test_upstream_submodule_content_is_skipped(self) -> None:
         write(self.repo.root / "vllm" / "plugin.py", "import domain_helper\nX = '.agents/lib'\n")

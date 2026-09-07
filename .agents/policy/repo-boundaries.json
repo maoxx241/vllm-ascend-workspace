@@ -109,7 +109,7 @@
         ".agents/skills/vaws-top/",
         "vaws-top"
       ],
-      "inline_patterns_note": "A literal naming the dashboard as in-repo content — the `vaws-top` branch name handed to `git worktree add`, or a path treated as if it still lived in this tree. Canonical GitHub SSH/HTTPS URLs for this repo and the published_external_references below are consumer references, not in-repo content.",
+      "inline_patterns_note": "A literal naming the dashboard as in-repo content — the `vaws-top` branch name handed to `git worktree add`, a direct local Path/open of the extracted skill, or a non-canonical URL. Only an entire exact supported GitHub HTTPS/SSH repository root, the owner/name repository identifier, or an exact published path descriptor is consumer reference, and a Path(...).read_text() of a local relative skill path remains a violation.",
       "published_external_references": [
         ".agents/skills/vaws-top/",
         ".agents/skills/vaws-top/SKILL.md",
@@ -118,7 +118,7 @@
         "scripts/start.sh",
         "scripts/install-user-service.sh"
       ],
-      "published_external_references_note": "Surfaces of the extracted repository. A consumer may name them as paths inside an external clone, or name the canonical GitHub repository. They are not an allowlist for `git worktree add` or a local `vaws-top` branch."
+      "published_external_references_note": "Exact published surfaces of the extracted repository. A consumer may name an entire canonical GitHub URL, join one of these paths onto a located clone, or assign the descriptor. Substring `://`/`git@`, extra URL path, file URLs, mixed command strings, and executable in-repo Path/open of the skill file are not exemptions."
     },
     {
       "id": "scaffold-domain",

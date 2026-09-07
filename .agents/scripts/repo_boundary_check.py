@@ -38,7 +38,6 @@ import datetime as _datetime
 import hashlib
 import json
 import sys
-import urllib.parse
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, Iterator, Sequence
@@ -123,6 +122,7 @@ class Reference:
     source: str  # source subsystem id
     target: str  # target subsystem id
     detail: str
+    direct_local_file: bool = False
 
 
 @dataclass
@@ -417,11 +417,11 @@ def _docstring_constants(tree: ast.Module) -> set[int]:
     return ids
 
 
-def _string_constants(tree: ast.Module) -> Iterator[tuple[int, str]]:
+def _string_constants(tree: ast.Module) -> Iterator[tuple[int, str, ast.Constant]]:
     skip = _docstring_constants(tree)
     for node in ast.walk(tree):
         if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in skip:
-            yield node.lineno, node.value
+            yield node.lineno, node.value, node
 
 
 def _imported_names(tree: ast.Module) -> Iterator[tuple[int, str, str]]:
@@ -471,89 +471,72 @@ def _literal_path_references(literal: str, roots: Sequence[str]) -> list[str]:
     return sorted(tokens, key=len, reverse=True)
 
 
-def _path_segments(literal: str) -> list[str]:
-    normalized = literal.replace("\\", "/")
-    pieces: list[str] = []
-    for part in normalized.split("/"):
-        pieces.extend(part.split(":"))
-    segments: list[str] = []
-    for piece in pieces:
-        item = piece.strip()
-        if item.endswith(".git"):
-            item = item[:-4]
-        if item:
-            segments.append(item)
-    return segments
+def exact_canonical_github_urls(repo: str) -> frozenset[str]:
+    """Entire supported HTTPS/SSH repository roots, with optional .git suffix."""
+    https = f"https://github.com/{repo}"
+    ssh = f"git@github.com:{repo}"
+    ssh_uri = f"ssh://git@github.com/{repo}"
+    return frozenset(
+        {
+            https,
+            f"{https}.git",
+            ssh,
+            f"{ssh}.git",
+            ssh_uri,
+            f"{ssh_uri}.git",
+        }
+    )
 
 
-def github_repo_identity(value: str) -> str:
-    """Return `owner/name` when `value` names a github.com repository."""
-    text = value.strip()
-    if not text:
-        return ""
-    if text.startswith("git@") and ":" in text.split("@", 1)[-1]:
-        host, _, path = text.partition(":")
-        host = host.rsplit("@", 1)[-1]
-        return _github_owner_name(host, path)
-    parsed = urllib.parse.urlparse(text)
-    if parsed.scheme in {"http", "https", "ssh", "git", "git+ssh"}:
-        return _github_owner_name(parsed.hostname or "", parsed.path)
-    if text.count("/") == 1 and "://" not in text and "@" not in text:
-        return _github_owner_name("github.com", text)
-    return ""
+def _parent_map(tree: ast.AST) -> dict[ast.AST, ast.AST]:
+    parents: dict[ast.AST, ast.AST] = {}
+    for node in ast.walk(tree):
+        for child in ast.iter_child_nodes(node):
+            parents[child] = node
+    return parents
 
 
-def _github_owner_name(host: str, path: str) -> str:
-    if host.lower() != "github.com":
-        return ""
-    parts = [item for item in path.strip("/").split("/") if item]
-    if len(parts) < 2:
-        return ""
-    return f"{parts[0]}/{parts[1].removesuffix('.git')}"
+def _call_attr_or_name(call: ast.Call) -> str | None:
+    func = call.func
+    if isinstance(func, ast.Name):
+        return func.id
+    if isinstance(func, ast.Attribute):
+        return func.attr
+    return None
+
+
+def is_direct_local_file_use(node: ast.AST, parents: dict[ast.AST, ast.AST]) -> bool:
+    """True when the literal is Path(...)/open(...) of an in-tree relative path.
+
+    A descriptor assignment or a path joined onto an already located clone is
+    not a direct local file operation.
+    """
+    parent = parents.get(node)
+    if not isinstance(parent, ast.Call) or not parent.args or parent.args[0] is not node:
+        return False
+    name = _call_attr_or_name(parent)
+    return name in {"Path", "PurePath", "PurePosixPath", "PosixPath", "open"}
 
 
 def _inline_hits(literal: str, patterns: Sequence[str]) -> list[str]:
     stripped = literal.strip()
-    hits: list[str] = []
-    segments = _path_segments(stripped)
-    for pattern in patterns:
-        if not pattern:
-            continue
-        if stripped == pattern:
-            hits.append(pattern)
-            continue
-        if "/" in pattern or "\\" in pattern:
-            if pattern in stripped:
-                hits.append(pattern)
-            continue
-        if pattern in segments:
-            hits.append(pattern)
-    return hits
+    return [pattern for pattern in patterns if stripped == pattern or pattern in literal]
 
 
 def is_published_external_reference(literal: str, subsystem: Subsystem) -> bool:
-    """Legitimate consumer references to an extracted repository, not in-repo content.
+    """Exact canonical GitHub URLs, repo identifiers, and published path descriptors.
 
-    Canonical GitHub SSH/HTTPS URLs for `subsystem.repo` and documented external
-    skill/CLI paths are published consumption, matching the remote-dev treatment
-    of an external checkout. Bare branch names and `git worktree` routes remain
-    R4 hits.
+    Substring presence of `://` or `git@` is not enough. Wrong host, file URLs,
+    extra path components, and a URL mixed with another command stay R4 hits.
     """
-    text = literal.strip()
-    if "://" in text or text.startswith("git@"):
+    if literal != literal.strip():
+        return False
+    text = literal
+    if text in exact_canonical_github_urls(subsystem.repo):
         return True
-    if github_repo_identity(text) == subsystem.repo:
+    if text == subsystem.repo:
         return True
-    for item in subsystem.published_external_references:
-        if not item:
-            continue
-        if text == item:
-            return True
-        if item.endswith("/") and item in text:
-            return True
-        if text.endswith(item) or text.endswith("/" + item.lstrip("./")):
-            return True
-    return False
+    return text in subsystem.published_external_references
 
 
 def collect_references(repo_root: Path, policy: Policy, ownership: Ownership) -> tuple[list[Reference], list[str], int]:
@@ -585,6 +568,7 @@ def collect_references(repo_root: Path, policy: Policy, ownership: Ownership) ->
             # reported in the payload rather than crashing the run.
             unparsed += 1
             continue
+        parents = _parent_map(tree)
 
         for line, dotted, symbol in _imported_names(tree):
             target = ownership.subsystem_for_module(dotted)
@@ -602,7 +586,7 @@ def collect_references(repo_root: Path, policy: Policy, ownership: Ownership) ->
                 )
             )
 
-        for line, literal in _string_constants(tree):
+        for line, literal, node in _string_constants(tree):
             for subsystem in inline_subsystems:
                 if subsystem.id == source.id:
                     continue
@@ -616,6 +600,7 @@ def collect_references(repo_root: Path, policy: Policy, ownership: Ownership) ->
                             source=source.id,
                             target=subsystem.id,
                             detail=literal[:200],
+                            direct_local_file=is_direct_local_file_use(node, parents),
                         )
                     )
                     break
@@ -689,7 +674,7 @@ def evaluate(
 
         # R4: an extracted subsystem referenced as in-repo content.
         if reference.symbol in target.inline_patterns:
-            if is_published_external_reference(reference.detail, target):
+            if is_published_external_reference(reference.detail, target) and not reference.direct_local_file:
                 continue
             rule = policy.rule("extracted-inline-reference")
             record(

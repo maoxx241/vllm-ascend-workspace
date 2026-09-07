@@ -115,16 +115,30 @@ class OriginIdentityTests(unittest.TestCase):
                 MODULE.require_canonical_url(url, what="origin")
 
     def test_wrong_host_owner_and_repository_are_rejected(self) -> None:
+        repo = MODULE.CANONICAL_REPO
+        name = repo.rsplit("/", 1)[-1]
         for url in (
-            "https://gitlab.com/vllm-ascend-workspace/vaws-top.git",
-            "https://github.com.evil.example/vllm-ascend-workspace/vaws-top.git",
-            "https://github.com/other/vaws-top.git",
-            "https://github.com/vllm-ascend-workspace/other.git",
-            "git@github.com:vllm-ascend-workspace/vllm-ascend-workspace.git",
+            "https://gitlab.com/" + repo + ".git",
+            "https://github.com.evil.example/" + repo + ".git",
+            "https://github.com/other/" + name + ".git",
+            "https://github.com/" + repo.rsplit("/", 1)[0] + "/other.git",
+            "git@github.com:" + repo.rsplit("/", 1)[0] + "/" + repo.rsplit("/", 1)[0] + ".git",
         ):
             with self.subTest(url=url):
                 with self.assertRaisesRegex(MODULE.MonitorError, "canonical GitHub repository"):
                     MODULE.require_canonical_url(url, what="origin")
+
+    def test_transport_root_rejects_extra_path_bare_name_and_newlines(self) -> None:
+        for value in (
+            CANONICAL_HTTPS.removesuffix(".git") + "/another.git",
+            CANONICAL_SSH.removesuffix(".git") + "/another.git",
+            MODULE.CANONICAL_REPO,
+            CANONICAL_HTTPS + "\nfile:///tmp/another",
+        ):
+            with self.subTest(value=value):
+                with self.assertRaises(MODULE.MonitorError):
+                    MODULE.require_canonical_url(value, what="independent origin")
+                self.assertEqual(MODULE.github_repo_identity(value), "")
 
 
 class LocatorTests(unittest.TestCase):
@@ -136,7 +150,7 @@ class LocatorTests(unittest.TestCase):
     def test_absent_clone_is_an_error_for_status(self) -> None:
         dest = self.root / "missing"
         pin = {"commit": "a" * 40, "repository": MODULE.CANONICAL_REPO, "url": CANONICAL_HTTPS}
-        with self.assertRaisesRegex(MODULE.MonitorError, "no vaws-top checkout"):
+        with self.assertRaisesRegex(MODULE.MonitorError, "no monitor checkout"):
             MODULE.locate_checkout(dest, create=False, pin=pin, url=CANONICAL_HTTPS)
 
     def test_valid_configured_checkout_is_accepted(self) -> None:
@@ -156,7 +170,9 @@ class LocatorTests(unittest.TestCase):
 
     def test_wrong_origin_is_rejected_without_mutating(self) -> None:
         clone = self.root / "wrong"
-        commit = init_canonical_repo(clone, "https://github.com/other/vaws-top.git")
+        commit = init_canonical_repo(
+            clone, "https://github.com/other/" + MODULE.CANONICAL_REPO.rsplit("/", 1)[-1] + ".git"
+        )
         before = git(clone, "rev-parse", "HEAD").stdout.strip()
         origin = git(clone, "remote", "get-url", "origin").stdout.strip()
         pin = {"commit": commit, "repository": MODULE.CANONICAL_REPO, "url": CANONICAL_HTTPS}
@@ -317,6 +333,23 @@ class EnvFileTests(unittest.TestCase):
         with self.assertRaisesRegex(MODULE.MonitorError, "newline"):
             MODULE.encode_env_value("one\ntwo")
 
+    def test_unknown_double_quote_escape_is_preserved_without_override(self) -> None:
+        path = self.clone / ".env"
+        value = "/tmp/owned\\q.json"
+        path.write_text('NFM_INVENTORY_FILES="' + value + '"\nUNRELATED=keep\n', encoding="utf-8")
+        self.assertEqual(MODULE.existing_env_map(path)["NFM_INVENTORY_FILES"], value)
+        MODULE.apply_clone_env(
+            self.clone,
+            inventory_files=[Path("/tmp/default.json")],
+            host_pool_files=[],
+            bootstrap_command="",
+            explicit=set(),
+        )
+        self.assertEqual(MODULE.existing_env_map(path)["NFM_INVENTORY_FILES"], value)
+        text = path.read_text(encoding="utf-8")
+        self.assertIn('NFM_INVENTORY_FILES="' + value + '"', text)
+        self.assertIn("UNRELATED=keep", text)
+
     def test_progress_does_not_log_env_contents(self) -> None:
         messages: list[str] = []
         with mock.patch.object(MODULE, "progress", side_effect=messages.append):
@@ -420,7 +453,7 @@ class ReadOnlyActionTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.clone = self.root / "clone"
         self.commit = init_canonical_repo(self.clone)
-        self.pin_path = self.root / "vaws-top.json"
+        self.pin_path = self.root / (MODULE.CANONICAL_REPO.rsplit("/", 1)[-1] + ".json")
         write_pin(self.pin_path, self.commit)
         self.addCleanup(self.temp.cleanup)
         self.recorded: list[list[str]] = []
