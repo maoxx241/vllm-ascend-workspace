@@ -1082,6 +1082,28 @@ class ImmutableSnapshotTests(GitCheckoutFixture):
         verdicts = {row["id"]: row["verdict"] for row in payload["items"]}
         self.assertEqual(verdicts, {"dot-prefix": "arrived", "spaced": "arrived", "backslash": "arrived"})
 
+    def test_optional_directory_separator_keeps_existing_tree_evidence(self):
+        body = "MOVED_FEATURE_EVIDENCE = True\n\ndef moved_feature():\n    pass\n"
+        self.publish(self.dest, {"lib/moved.py": body, ".agents/lib/moved.py": body})
+        self.assertEqual(reconcile._tree_path("lib"), "lib")
+        self.assertEqual(reconcile._tree_path("lib/"), "lib")
+        self.assertEqual(reconcile._tree_path("./lib/"), "lib")
+        self.assertEqual(reconcile._tree_path(".agents/lib"), ".agents/lib")
+        self.assertEqual(reconcile._tree_path(".agents/lib/"), ".agents/lib")
+        self.assertEqual(reconcile._tree_path("./.agents/lib/"), ".agents/lib")
+        self.assertEqual(reconcile._tree_path(".agents/"), ".agents")
+        ledger = ledger_skeleton()
+        for path in ("lib", "lib/", "./lib/", ".agents/lib", ".agents/lib/", "./.agents/lib/"):
+            ledger["items"].append(item(f"dir-{path}", state="arrived", follow_up=None, evidence=[
+                {"kind": "path", "path": path},
+            ]))
+        code, payload = self.run_ledger(ledger, "--destination", f"dest={self.dest}")
+        self.assertEqual(code, 0, payload["drift"])
+        for row in payload["items"]:
+            with self.subTest(item=row["id"]):
+                self.assertEqual(row["verdict"], "arrived")
+                self.assertEqual(row["observed"]["evidence"][0]["status"], "present")
+
 
 class GitHubIdentityTests(unittest.TestCase):
     def test_https_and_ssh_forms_and_suffix_hosts(self):
