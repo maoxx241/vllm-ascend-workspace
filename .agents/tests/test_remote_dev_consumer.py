@@ -260,8 +260,10 @@ class ClientConfigurationTests(unittest.TestCase):
     def test_tracked_json_clients_use_the_launcher_and_inject_the_environment(self) -> None:
         for relative in (".mcp.json", ".cursor/mcp.json"):
             with self.subTest(file=relative):
-                entry = json.loads((ROOT / relative).read_text(encoding="utf-8"))["mcpServers"]["remote-dev"]
+                servers = json.loads((ROOT / relative).read_text(encoding="utf-8"))["mcpServers"]
+                entry = servers["remote-dev"]
                 self.assertEqual(entry["args"], self.LAUNCHER_ARGS)
+                self.assertEqual(servers["vaws-task"]["args"], [".agents/scripts/vaws.py", "task-server"])
                 for key in self.REQUIRED_ENV:
                     self.assertIn(key, entry["env"])
                 self.assertEqual(entry["env"]["REMOTE_DEV_RUNTIME_ENV_FILE"], remote_dev.ASCEND_RUNTIME_ENV_FILE)
@@ -274,6 +276,8 @@ class ClientConfigurationTests(unittest.TestCase):
                 entry = data["mcp_servers"][server]
                 self.assertTrue(entry["args"][0].endswith("/.agents/scripts/remote_dev.py"), entry["args"])
                 self.assertEqual(entry["args"][1], "server")
+                task = data["mcp_servers"].get("vaws_task") or data["mcp_servers"]["vaws-task"]
+                self.assertEqual(task["args"][1], "task-server")
                 for key in self.REQUIRED_ENV:
                     self.assertIn(key, entry["env"])
                 self.assertTrue(entry["env"]["REMOTE_DEV_RESOLVERS"].endswith("vaws_remote_dev_plugin.py:setup"))
@@ -291,12 +295,16 @@ class ClientConfigurationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             project = Path(tmp).resolve()
             files = setup.configuration("claude", project)
-            mcp = json.loads(files[project / ".mcp.json"])["mcpServers"]["remote-dev"]
+            servers = json.loads(files[project / ".mcp.json"])["mcpServers"]
+            mcp = servers["remote-dev"]
+            self.assertEqual(set(servers), {"remote-dev", "vaws-task"})
             self.assertEqual(mcp["args"], [str(ROOT / ".agents/scripts/remote_dev.py"), "server"])
+            self.assertEqual(servers["vaws-task"]["args"], [str(ROOT / ".agents/scripts/vaws.py"), "task-server"])
             for key in self.REQUIRED_ENV:
                 self.assertIn(key, mcp["env"])
             codex = tomllib.loads(setup.configuration("codex", project)[project / ".codex/config.toml"])
             self.assertEqual(codex["mcp_servers"]["remote_dev"]["args"][1], "server")
+            self.assertEqual(codex["mcp_servers"]["vaws_task"]["args"][1], "task-server")
             self.assertIn("REMOTE_DEV_RESOLVERS", codex["mcp_servers"]["remote_dev"]["env"])
         self.assertFalse(str(setup.BACKUP_DIR).startswith(str(ROOT / ".remote-dev")))
         self.assertTrue(str(setup.BACKUP_DIR).startswith(str(ROOT / ".vaws-local")))
@@ -310,21 +318,125 @@ class ClientConfigurationTests(unittest.TestCase):
             self.assertEqual(mcp["env"]["REMOTE_DEV_RUNTIME_ENV_FILE"], "/etc/profile.d/custom.sh")
 
 
+SPLIT_LEDGER_RELATIVE = ".agents/policy/split-ledger.json"
+OLD_SUBSTRATE_PATH = ".remote-dev/"
+
+
+def _collect_all_strings(node: object, into: list[str]) -> None:
+    """Collect every JSON string, including dictionary keys. Wrong types never skip."""
+    if isinstance(node, str):
+        into.append(node)
+    elif isinstance(node, dict):
+        for key, value in node.items():
+            into.append(key)
+            _collect_all_strings(value, into)
+    elif isinstance(node, list):
+        for value in node:
+            _collect_all_strings(value, into)
+
+
+def _scan_split_ledger_repositories(repos: object, scanned: list[str]) -> None:
+    if not isinstance(repos, dict):
+        _collect_all_strings(repos, scanned)
+        return
+    for repo_id, repo in repos.items():
+        scanned.append(repo_id)
+        if not isinstance(repo, dict):
+            _collect_all_strings(repo, scanned)
+            continue
+        for field, value in repo.items():
+            scanned.append(field)
+            if field == "summary" and isinstance(value, str):
+                continue
+            _collect_all_strings(value, scanned)
+
+
+def _scan_split_ledger_items(items: object, scanned: list[str]) -> None:
+    if not isinstance(items, list):
+        _collect_all_strings(items, scanned)
+        return
+    for item in items:
+        if not isinstance(item, dict):
+            _collect_all_strings(item, scanned)
+            continue
+        for field, value in item.items():
+            scanned.append(field)
+            if field == "notes" and isinstance(value, str):
+                continue
+            if field == "source" and isinstance(value, dict):
+                for source_field, source_value in value.items():
+                    scanned.append(source_field)
+                    if source_field == "scaffold_path" and isinstance(source_value, str):
+                        continue
+                    _collect_all_strings(source_value, scanned)
+                continue
+            if field == "declared_by" and isinstance(value, list):
+                for declaration in value:
+                    if not isinstance(declaration, dict):
+                        _collect_all_strings(declaration, scanned)
+                        continue
+                    for declared_field, declared_value in declaration.items():
+                        scanned.append(declared_field)
+                        if declared_field == "says" and isinstance(declared_value, str):
+                            continue
+                        _collect_all_strings(declared_value, scanned)
+                continue
+            _collect_all_strings(value, scanned)
+
+
+def split_ledger_scanned_strings(payload: object) -> list[str]:
+    """Strings from this exact split-ledger schema that remain executable.
+
+    Dictionary keys are JSON strings and are always collected. Only these
+    complete *value* paths are omitted, and only with these containers:
+    ``repositories.<repo-id>.summary`` (dict/dict/str),
+    ``items[*].source.scaffold_path`` (list/dict/dict/str),
+    ``items[*].declared_by[*].says`` (list/dict/list/dict/str),
+    ``items[*].notes`` (list/dict/str). Same-named keys at any other depth,
+    unknown keys, destination/evidence/consumer fields, and wrong container
+    types stay scanned. The top-level array is ``items``, not ``records``.
+    """
+    scanned: list[str] = []
+    if not isinstance(payload, dict):
+        _collect_all_strings(payload, scanned)
+        return scanned
+    for key, value in payload.items():
+        scanned.append(key)
+        if key == "repositories":
+            _scan_split_ledger_repositories(value, scanned)
+        elif key == "items":
+            _scan_split_ledger_items(value, scanned)
+        else:
+            _collect_all_strings(value, scanned)
+    return scanned
+
+
+def split_ledger_scanned_strings_from_text(text: str) -> list[str]:
+    """Parse ledger text; malformed JSON is scanned as a raw string, never skipped."""
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return [text]
+    return split_ledger_scanned_strings(payload)
+
+
+def split_ledger_old_path_hits(payload: object) -> list[str]:
+    return [value for value in split_ledger_scanned_strings(payload) if OLD_SUBSTRATE_PATH in value]
+
+
 class NoInTreeSubstrateTests(unittest.TestCase):
     """The old vendored copy is gone and nothing executable still reads it."""
+
+    GUARD_RUNTIME_EXCLUSION_FILE = ".agents/lib/vaws_leak_guard.py"
+    RETAINED_RUNTIME_STATE_GLOB = ".remote-dev/state/**"
+    EXCLUDED_GLOBS_NAME = "DEFAULT_EXCLUDED_PATH_GLOBS"
 
     def test_in_tree_copy_is_deleted(self) -> None:
         tracked = subprocess.run(["git", "-C", str(ROOT), "ls-files", "--", ".remote-dev"], capture_output=True, text=True, check=False)
         self.assertEqual(tracked.stdout.strip(), "", "the in-tree .remote-dev copy must not be tracked")
 
     @staticmethod
-    def _python_string_constants(source: str) -> list[str]:
-        """String constants with module/class/function docstrings excluded.
-
-        Comments never reach the AST and docstrings may explain history; only
-        a string a program can act on counts as a reference.
-        """
-        tree = ast.parse(source)
+    def _docstring_constant_ids(tree: ast.AST) -> set[int]:
         docstrings: set[int] = set()
         for node in ast.walk(tree):
             body = getattr(node, "body", None)
@@ -332,8 +444,54 @@ class NoInTreeSubstrateTests(unittest.TestCase):
                 first = body[0]
                 if isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant) and isinstance(first.value.value, str):
                     docstrings.add(id(first.value))
+        return docstrings
+
+    @classmethod
+    def _retained_runtime_state_exclusion_ids(cls, relative: str, tree: ast.AST) -> set[int]:
+        """The one declared runtime-data skip glob is not a vendored-code fallback."""
+
+        if relative != cls.GUARD_RUNTIME_EXCLUSION_FILE:
+            return set()
+        retained: set[int] = set()
+        for stmt in getattr(tree, "body", ()):
+            names: list[str] = []
+            value = None
+            if isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name):
+                names = [stmt.target.id]
+                value = stmt.value
+            elif isinstance(stmt, ast.Assign):
+                names = [target.id for target in stmt.targets if isinstance(target, ast.Name)]
+                value = stmt.value
+            if cls.EXCLUDED_GLOBS_NAME not in names:
+                continue
+            if not isinstance(value, (ast.Tuple, ast.List)):
+                continue
+            for elt in value.elts:
+                if isinstance(elt, ast.Constant) and elt.value == cls.RETAINED_RUNTIME_STATE_GLOB:
+                    retained.add(id(elt))
+        return retained
+
+    @classmethod
+    def _python_string_constants(cls, source: str) -> list[str]:
+        """String constants with module/class/function docstrings excluded.
+
+        Comments never reach the AST and docstrings may explain history; only
+        a string a program can act on counts as a reference.
+        """
+        tree = ast.parse(source)
+        docstrings = cls._docstring_constant_ids(tree)
         return [node.value for node in ast.walk(tree)
                 if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in docstrings]
+
+    @classmethod
+    def _actionable_python_strings(cls, relative: str, source: str) -> list[str]:
+        """Non-docstring literals, minus the one retained guard runtime skip glob."""
+
+        tree = ast.parse(source)
+        skip = cls._docstring_constant_ids(tree)
+        skip |= cls._retained_runtime_state_exclusion_ids(relative, tree)
+        return [node.value for node in ast.walk(tree)
+                if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in skip]
 
     def test_no_tracked_code_or_config_references_the_old_path(self) -> None:
         tracked = subprocess.run(["git", "-C", str(ROOT), "ls-files", "-z"], capture_output=True, text=True, check=False).stdout.split("\0")
@@ -351,15 +509,80 @@ class NoInTreeSubstrateTests(unittest.TestCase):
             if not relative or relative in exempt or not path.is_file():
                 continue
             suffix = path.suffix
-            if suffix == ".py":
-                haystack = "\n".join(self._python_string_constants(path.read_text(encoding="utf-8", errors="replace")))
+            if relative == SPLIT_LEDGER_RELATIVE:
+                haystack = "\n".join(split_ledger_scanned_strings_from_text(path.read_text(encoding="utf-8")))
+            elif suffix == ".py":
+                haystack = "\n".join(self._actionable_python_strings(relative, path.read_text(encoding="utf-8", errors="replace")))
             elif suffix in {".json", ".toml", ".yml", ".yaml"}:
                 haystack = path.read_text(encoding="utf-8", errors="replace")
             else:
                 continue
-            if ".remote-dev/" in haystack:
+            if OLD_SUBSTRATE_PATH in haystack:
                 offenders.append(relative)
         self.assertEqual(offenders, [])
+
+    def test_exact_guard_runtime_state_exclusion_is_accepted(self) -> None:
+        cases = (
+            'DEFAULT_EXCLUDED_PATH_GLOBS: tuple[str, ...] = ("vllm/**", ".remote-dev/state/**")\n',
+            'DEFAULT_EXCLUDED_PATH_GLOBS = ("vllm/**", ".remote-dev/state/**")\n',
+            'DEFAULT_EXCLUDED_PATH_GLOBS = ["vllm/**", ".remote-dev/state/**"]\n',
+        )
+        for source in cases:
+            with self.subTest(source=source):
+                strings = self._actionable_python_strings(self.GUARD_RUNTIME_EXCLUSION_FILE, source)
+                self.assertEqual(strings, ["vllm/**"])
+
+    def test_core_path_in_the_same_globs_declaration_is_rejected(self) -> None:
+        source = (
+            "DEFAULT_EXCLUDED_PATH_GLOBS: tuple[str, ...] = (\n"
+            '    ".remote-dev/state/**",\n'
+            '    ".remote-dev/core/endpoint.py",\n'
+            ")\n"
+        )
+        strings = self._actionable_python_strings(self.GUARD_RUNTIME_EXCLUSION_FILE, source)
+        self.assertIn(".remote-dev/core/endpoint.py", strings)
+        self.assertNotIn(self.RETAINED_RUNTIME_STATE_GLOB, strings)
+
+    def test_same_state_literal_in_another_assignment_or_call_is_rejected(self) -> None:
+        source = (
+            "DEFAULT_EXCLUDED_PATH_GLOBS: tuple[str, ...] = (\n"
+            '    "vllm/**",\n'
+            ")\n"
+            'OTHER = ".remote-dev/state/**"\n'
+            'skip(".remote-dev/state/**")\n'
+        )
+        strings = self._actionable_python_strings(self.GUARD_RUNTIME_EXCLUSION_FILE, source)
+        self.assertEqual(strings.count(self.RETAINED_RUNTIME_STATE_GLOB), 2)
+
+    def test_same_state_literal_in_another_source_path_is_rejected(self) -> None:
+        source = (
+            "DEFAULT_EXCLUDED_PATH_GLOBS: tuple[str, ...] = (\n"
+            '    ".remote-dev/state/**",\n'
+            ")\n"
+        )
+        strings = self._actionable_python_strings(".agents/scripts/tracked_leak_scan.py", source)
+        self.assertIn(self.RETAINED_RUNTIME_STATE_GLOB, strings)
+
+    def test_old_launcher_source_fallback_in_the_guard_file_is_rejected(self) -> None:
+        source = (
+            "DEFAULT_EXCLUDED_PATH_GLOBS: tuple[str, ...] = (\n"
+            '    ".remote-dev/state/**",\n'
+            ")\n"
+            'WORKER = ROOT / ".remote-dev/core/managed_jobs.py"\n'
+        )
+        strings = self._actionable_python_strings(self.GUARD_RUNTIME_EXCLUSION_FILE, source)
+        self.assertIn(".remote-dev/core/managed_jobs.py", strings)
+        self.assertNotIn(self.RETAINED_RUNTIME_STATE_GLOB, strings)
+
+    def test_docstring_old_path_is_still_not_a_reference(self) -> None:
+        source = (
+            '"""Historical in-tree path .remote-dev/core/managed_jobs.py."""\n'
+            "DEFAULT_EXCLUDED_PATH_GLOBS: tuple[str, ...] = (\n"
+            '    ".remote-dev/state/**",\n'
+            ")\n"
+        )
+        self.assertEqual(self._python_string_constants(source), [self.RETAINED_RUNTIME_STATE_GLOB])
+        self.assertEqual(self._actionable_python_strings(self.GUARD_RUNTIME_EXCLUSION_FILE, source), [])
 
     def test_vaws_cli_reports_moved_task_tools_without_traceback(self) -> None:
         env = {key: value for key, value in os.environ.items() if key != "VAWS_COORDINATOR_ROOT"}
@@ -376,6 +599,182 @@ class NoInTreeSubstrateTests(unittest.TestCase):
                 proc = subprocess.run([sys.executable, str(SCRIPTS / "vaws.py"), *args], capture_output=True, text=True, check=False)
                 self.assertEqual(proc.returncode, 0, proc.stderr)
                 self.assertIn("usage:", proc.stdout)
+
+
+class SplitLedgerHistoricalSchemaTests(unittest.TestCase):
+    """Known non-executable split-ledger fields only; never a whole-file skip."""
+
+    def test_known_historical_paths_are_not_scanned(self) -> None:
+        payload = {
+            "repositories": {
+                "remote-dev": {
+                    "repo": "org/remote-dev",
+                    "summary": "extracted from `.remote-dev/`",
+                }
+            },
+            "items": [
+                {
+                    "id": "sample",
+                    "source": {
+                        "repo": "remote-dev",
+                        "path": "core/x.py",
+                        "scaffold_path": ".remote-dev/core/x.py",
+                    },
+                    "declared_by": [{"repo": "remote-dev", "says": "moved from `.remote-dev/core/x.py`"}],
+                    "notes": "historically lived at .remote-dev/core/x.py",
+                    "destination": {"repo": "scaffold", "path": ".agents/x.py"},
+                }
+            ],
+        }
+        self.assertEqual(split_ledger_old_path_hits(payload), [])
+
+    def test_destination_path_is_scanned(self) -> None:
+        payload = {"items": [{"destination": {"path": ".remote-dev/core/x.py"}}]}
+        self.assertEqual(split_ledger_old_path_hits(payload), [".remote-dev/core/x.py"])
+
+    def test_evidence_strings_are_scanned(self) -> None:
+        payload = {
+            "items": [
+                {
+                    "destination": {
+                        "evidence": [
+                            {"kind": "path", "path": ".remote-dev/core/x.py"},
+                            {"kind": "reference", "glob": ".remote-dev/*.py", "pattern": ".remote-dev/"},
+                        ]
+                    }
+                }
+            ]
+        }
+        hits = split_ledger_old_path_hits(payload)
+        self.assertIn(".remote-dev/core/x.py", hits)
+        self.assertIn(".remote-dev/*.py", hits)
+        self.assertIn(".remote-dev/", hits)
+
+    def test_source_path_and_consumer_fields_are_scanned(self) -> None:
+        payload = {
+            "items": [
+                {
+                    "source": {"path": ".remote-dev/core/x.py", "scaffold_path": ".remote-dev/ignored.py"},
+                    "consumer": ".remote-dev/tools/x.py",
+                    "notes": ".remote-dev/notes-ok.py",
+                }
+            ]
+        }
+        hits = split_ledger_old_path_hits(payload)
+        self.assertEqual(sorted(hits), [".remote-dev/core/x.py", ".remote-dev/tools/x.py"])
+
+    def test_unknown_keys_are_scanned(self) -> None:
+        payload = {
+            "items": [
+                {
+                    "source": {
+                        "scaffold_path": ".remote-dev/ok.py",
+                        "extra": ".remote-dev/extra.py",
+                    }
+                }
+            ]
+        }
+        self.assertEqual(split_ledger_old_path_hits(payload), [".remote-dev/extra.py"])
+
+    def test_wrong_depth_same_name_keys_are_scanned(self) -> None:
+        payload = {
+            "notes": ".remote-dev/top-notes.py",
+            "summary": ".remote-dev/top-summary.py",
+            "says": ".remote-dev/top-says.py",
+            "repositories": {
+                "r": {
+                    "notes": ".remote-dev/repo-notes.py",
+                    "says": ".remote-dev/repo-says.py",
+                    "summary": ".remote-dev/ok-summary.py",
+                }
+            },
+            "items": [
+                {
+                    "summary": ".remote-dev/item-summary.py",
+                    "says": ".remote-dev/item-says.py",
+                    "source": {"notes": ".remote-dev/source-notes.py"},
+                    "declared_by": [{"notes": ".remote-dev/decl-notes.py", "says": ".remote-dev/ok-says.py"}],
+                }
+            ],
+            "records": [{"source": {"scaffold_path": ".remote-dev/records.py"}}],
+        }
+        hits = set(split_ledger_old_path_hits(payload))
+        self.assertTrue(
+            {
+                ".remote-dev/top-notes.py",
+                ".remote-dev/top-summary.py",
+                ".remote-dev/top-says.py",
+                ".remote-dev/repo-notes.py",
+                ".remote-dev/repo-says.py",
+                ".remote-dev/item-summary.py",
+                ".remote-dev/item-says.py",
+                ".remote-dev/source-notes.py",
+                ".remote-dev/decl-notes.py",
+                ".remote-dev/records.py",
+            }.issubset(hits)
+        )
+        self.assertNotIn(".remote-dev/ok-summary.py", hits)
+        self.assertNotIn(".remote-dev/ok-says.py", hits)
+
+    def test_wrong_container_types_stay_scanned(self) -> None:
+        cases = [
+            {"items": [{"notes": [".remote-dev/notes-list.py"]}]},
+            {"items": [{"source": {"scaffold_path": {"path": ".remote-dev/scaffold-obj.py"}}}]},
+            {"items": {"source": {"scaffold_path": ".remote-dev/items-dict.py"}}},
+            {"items": [{"declared_by": {"says": ".remote-dev/declared-dict.py"}}]},
+            {"repositories": {"r": {"summary": [".remote-dev/summary-list.py"]}}},
+            {"repositories": [".remote-dev/repos-list.py"]},
+            [".remote-dev/root-list.py"],
+        ]
+        for payload in cases:
+            with self.subTest(payload=payload):
+                self.assertTrue(split_ledger_old_path_hits(payload), payload)
+
+    def test_malformed_json_stays_scanned(self) -> None:
+        text = '{"items": [{"source": {"scaffold_path": ".remote-dev/x.py"}},'
+        hits = split_ledger_scanned_strings_from_text(text)
+        self.assertEqual(hits, [text])
+        self.assertIn(OLD_SUBSTRATE_PATH, hits[0])
+
+    def test_string_injection_in_what_is_scanned(self) -> None:
+        payload = {"items": [{"what": "mentions .remote-dev/what.py", "notes": ".remote-dev/ok.py"}]}
+        self.assertEqual(split_ledger_old_path_hits(payload), ["mentions .remote-dev/what.py"])
+
+    def test_shipped_ledger_only_skips_known_historical_paths(self) -> None:
+        text = (ROOT / SPLIT_LEDGER_RELATIVE).read_text(encoding="utf-8")
+        json.loads(text)
+        self.assertEqual(
+            [value for value in split_ledger_scanned_strings_from_text(text) if OLD_SUBSTRATE_PATH in value],
+            [],
+        )
+
+    def test_top_level_dictionary_key_is_scanned(self) -> None:
+        payload = {".remote-dev/core/new.py": "unknown top-level field"}
+        self.assertIn(".remote-dev/core/new.py", split_ledger_old_path_hits(payload))
+
+    def test_item_dictionary_key_is_scanned(self) -> None:
+        payload = {"items": [{".remote-dev/core/new.py": "unknown item field"}]}
+        self.assertIn(".remote-dev/core/new.py", split_ledger_old_path_hits(payload))
+
+    def test_consumer_dictionary_key_is_scanned(self) -> None:
+        payload = {"items": [{"consumer": {".remote-dev/core/new.py": "enabled"}}]}
+        self.assertIn(".remote-dev/core/new.py", split_ledger_old_path_hits(payload))
+
+    def test_repository_identifier_key_is_scanned(self) -> None:
+        payload = {"repositories": {".remote-dev/core/new.py": {"summary": "unknown repository identifier"}}}
+        self.assertIn(".remote-dev/core/new.py", split_ledger_old_path_hits(payload))
+
+    def test_nested_dictionary_keys_under_schema_objects_are_scanned(self) -> None:
+        payloads = [
+            {"items": [{"source": {".remote-dev/core/new.py": "x"}}]},
+            {"items": [{"declared_by": [{".remote-dev/core/new.py": "x"}]}]},
+            {"items": [{"destination": {".remote-dev/core/new.py": "x"}}]},
+            {"items": [{"destination": {"evidence": [{".remote-dev/core/new.py": "x"}]}}]},
+            {"items": [{"unknown": {".remote-dev/core/new.py": "x"}}]},
+        ]
+        for payload in payloads:
+            with self.subTest(payload=payload):
+                self.assertIn(".remote-dev/core/new.py", split_ledger_old_path_hits(payload))
 
 
 class ClaudeSkillShimTests(unittest.TestCase):

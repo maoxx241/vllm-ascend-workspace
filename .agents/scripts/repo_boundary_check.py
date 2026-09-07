@@ -73,6 +73,7 @@ class Subsystem:
     private_paths: tuple[str, ...]
     public_modules: tuple[str, ...]
     inline_patterns: tuple[str, ...]
+    published_external_references: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -121,6 +122,7 @@ class Reference:
     source: str  # source subsystem id
     target: str  # target subsystem id
     detail: str
+    direct_local_file: bool = False
 
 
 @dataclass
@@ -220,6 +222,7 @@ def load_policy(path: Path, repo_root: Path) -> Policy:
                 private_paths=_tuple(entry, "private_paths"),
                 public_modules=_tuple(entry, "public_modules"),
                 inline_patterns=_tuple(entry, "inline_patterns"),
+                published_external_references=_tuple(entry, "published_external_references"),
             )
         )
     if not subsystems:
@@ -414,11 +417,11 @@ def _docstring_constants(tree: ast.Module) -> set[int]:
     return ids
 
 
-def _string_constants(tree: ast.Module) -> Iterator[tuple[int, str]]:
+def _string_constants(tree: ast.Module) -> Iterator[tuple[int, str, ast.Constant]]:
     skip = _docstring_constants(tree)
     for node in ast.walk(tree):
         if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in skip:
-            yield node.lineno, node.value
+            yield node.lineno, node.value, node
 
 
 def _imported_names(tree: ast.Module) -> Iterator[tuple[int, str, str]]:
@@ -468,13 +471,227 @@ def _literal_path_references(literal: str, roots: Sequence[str]) -> list[str]:
     return sorted(tokens, key=len, reverse=True)
 
 
+def exact_canonical_github_urls(repo: str) -> frozenset[str]:
+    """Entire supported HTTPS/SSH repository roots, with optional .git suffix."""
+    https = f"https://github.com/{repo}"
+    ssh = f"git@github.com:{repo}"
+    ssh_uri = f"ssh://git@github.com/{repo}"
+    return frozenset(
+        {
+            https,
+            f"{https}.git",
+            ssh,
+            f"{ssh}.git",
+            ssh_uri,
+            f"{ssh_uri}.git",
+        }
+    )
+
+
+def _parent_map(tree: ast.AST) -> dict[ast.AST, ast.AST]:
+    parents: dict[ast.AST, ast.AST] = {}
+    for node in ast.walk(tree):
+        for child in ast.iter_child_nodes(node):
+            parents[child] = node
+    return parents
+
+
+def _call_attr_or_name(call: ast.Call) -> str | None:
+    func = call.func
+    if isinstance(func, ast.Name):
+        return func.id
+    if isinstance(func, ast.Attribute):
+        return func.attr
+    return None
+
+
+_PATH_CTORS = frozenset({"Path", "PurePath", "PurePosixPath", "PosixPath"})
+_FILE_ACCESS_ATTRS = frozenset(
+    {
+        "read_text",
+        "read_bytes",
+        "read",
+        "open",
+        "write_text",
+        "write_bytes",
+        "write",
+        "exists",
+        "is_file",
+        "is_dir",
+        "unlink",
+        "mkdir",
+        "touch",
+        "glob",
+        "rglob",
+        "iterdir",
+        "stat",
+    }
+)
+_ROOT_CHAIN_ATTRS = frozenset({"resolve", "expanduser", "absolute", "parent", "parents"})
+
+
+def _is_dunder_file(node: ast.AST) -> bool:
+    return isinstance(node, ast.Name) and node.id == "__file__"
+
+
+def _is_scaffold_root_expr(node: ast.AST, root_names: set[str]) -> bool:
+    """Finite Path(__file__) / parents[N] / same-module ROOT bindings."""
+    if isinstance(node, ast.Name):
+        return node.id in root_names
+    if isinstance(node, ast.Call):
+        name = _call_attr_or_name(node)
+        if name in _PATH_CTORS:
+            return bool(node.args) and _is_dunder_file(node.args[0])
+        if isinstance(node.func, ast.Attribute) and node.func.attr in {"resolve", "expanduser", "absolute"}:
+            return _is_scaffold_root_expr(node.func.value, root_names)
+        return False
+    if isinstance(node, ast.Attribute) and node.attr in _ROOT_CHAIN_ATTRS:
+        return _is_scaffold_root_expr(node.value, root_names)
+    if isinstance(node, ast.Subscript):
+        if isinstance(node.value, ast.Attribute) and node.value.attr == "parents":
+            return _is_scaffold_root_expr(node.value.value, root_names)
+        return False
+    return False
+
+
+def _collect_scaffold_root_names(tree: ast.Module) -> set[str]:
+    names: set[str] = set()
+
+    def visit(body: list[ast.stmt]) -> None:
+        for stmt in body:
+            if isinstance(stmt, ast.Assign):
+                if _is_scaffold_root_expr(stmt.value, names):
+                    for target in stmt.targets:
+                        if isinstance(target, ast.Name):
+                            names.add(target.id)
+            elif (
+                isinstance(stmt, ast.AnnAssign)
+                and isinstance(stmt.target, ast.Name)
+                and stmt.value is not None
+                and _is_scaffold_root_expr(stmt.value, names)
+            ):
+                names.add(stmt.target.id)
+            elif isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.With)):
+                visit(stmt.body)
+            elif isinstance(stmt, (ast.If, ast.For, ast.While)):
+                visit(stmt.body)
+                visit(stmt.orelse)
+
+    visit(tree.body)
+    return names
+
+
+def _join_is_file_access(join_node: ast.AST, parents: dict[ast.AST, ast.AST]) -> bool:
+    """True when a joined path is opened, read, written, or otherwise accessed.
+
+    Unknown surrounding forms report rather than hide a local skill path.
+    """
+    current: ast.AST = join_node
+    seen: set[int] = set()
+    while id(current) not in seen:
+        seen.add(id(current))
+        parent = parents.get(current)
+        if parent is None:
+            return True
+        if isinstance(parent, ast.Attribute) and parent.value is current:
+            if parent.attr in _FILE_ACCESS_ATTRS:
+                return True
+            if parent.attr in {"joinpath", "resolve", "expanduser", "absolute"}:
+                current = parent
+                continue
+            return True
+        if isinstance(parent, ast.Call):
+            name = _call_attr_or_name(parent)
+            if name == "open" or name in _PATH_CTORS:
+                return True
+            if isinstance(parent.func, ast.Attribute) and parent.func is current:
+                current = parent
+                continue
+            return True
+        if isinstance(parent, ast.BinOp) and isinstance(parent.op, ast.Div) and parent.left is current:
+            current = parent
+            continue
+        return True
+    return True
+
+
+def _path_expr_originates_from_scaffold(node: ast.AST, root_names: set[str]) -> bool:
+    """True when a path expression is built from a known scaffold root.
+
+    Origin is retained across /, joinpath, and Path wrapping in the same
+    expression. Later components do not replace that origin.
+    """
+    if _is_scaffold_root_expr(node, root_names):
+        return True
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+        return _path_expr_originates_from_scaffold(node.left, root_names)
+    if isinstance(node, ast.Call):
+        name = _call_attr_or_name(node)
+        if name in _PATH_CTORS:
+            return bool(node.args) and _path_expr_originates_from_scaffold(node.args[0], root_names)
+        if name == "joinpath" and isinstance(node.func, ast.Attribute):
+            return _path_expr_originates_from_scaffold(node.func.value, root_names)
+        if isinstance(node.func, ast.Attribute) and node.func.attr in {"resolve", "expanduser", "absolute"}:
+            return _path_expr_originates_from_scaffold(node.func.value, root_names)
+        return False
+    if isinstance(node, ast.Attribute) and node.attr in _ROOT_CHAIN_ATTRS:
+        return _path_expr_originates_from_scaffold(node.value, root_names)
+    if isinstance(node, ast.Subscript):
+        if isinstance(node.value, ast.Attribute) and node.value.attr == "parents":
+            return _path_expr_originates_from_scaffold(node.value.value, root_names)
+        return False
+    return False
+
+
+def is_direct_local_file_use(
+    node: ast.AST,
+    parents: dict[ast.AST, ast.AST],
+    root_names: set[str] | None = None,
+) -> bool:
+    """True for Path/open of a relative path, or a scaffold-origin construction used as a file.
+
+    Descriptor assignments and joins onto an explicit external locator stay false.
+    """
+    root_names = set() if root_names is None else root_names
+    parent = parents.get(node)
+    if parent is None:
+        return False
+    if isinstance(parent, ast.Call) and parent.args and parent.args[0] is node:
+        name = _call_attr_or_name(parent)
+        if name in _PATH_CTORS or name == "open":
+            return True
+    if isinstance(parent, ast.Call) and node in parent.args:
+        name = _call_attr_or_name(parent)
+        if name in _PATH_CTORS or name == "joinpath":
+            if _path_expr_originates_from_scaffold(parent, root_names):
+                return _join_is_file_access(parent, parents)
+        return False
+    if isinstance(parent, ast.BinOp) and isinstance(parent.op, ast.Div) and parent.right is node:
+        if _path_expr_originates_from_scaffold(parent, root_names):
+            return _join_is_file_access(parent, parents)
+        return False
+    return False
+
+
 def _inline_hits(literal: str, patterns: Sequence[str]) -> list[str]:
     stripped = literal.strip()
-    return [
-        pattern
-        for pattern in patterns
-        if stripped == pattern or pattern in literal
-    ]
+    return [pattern for pattern in patterns if stripped == pattern or pattern in literal]
+
+
+def is_published_external_reference(literal: str, subsystem: Subsystem) -> bool:
+    """Exact canonical GitHub URLs, repo identifiers, and published path descriptors.
+
+    Substring presence of `://` or `git@` is not enough. Wrong host, file URLs,
+    extra path components, and a URL mixed with another command stay R4 hits.
+    """
+    if literal != literal.strip():
+        return False
+    text = literal
+    if text in exact_canonical_github_urls(subsystem.repo):
+        return True
+    if text == subsystem.repo:
+        return True
+    return text in subsystem.published_external_references
 
 
 def collect_references(repo_root: Path, policy: Policy, ownership: Ownership) -> tuple[list[Reference], list[str], int]:
@@ -506,6 +723,8 @@ def collect_references(repo_root: Path, policy: Policy, ownership: Ownership) ->
             # reported in the payload rather than crashing the run.
             unparsed += 1
             continue
+        parents = _parent_map(tree)
+        root_names = _collect_scaffold_root_names(tree)
 
         for line, dotted, symbol in _imported_names(tree):
             target = ownership.subsystem_for_module(dotted)
@@ -523,7 +742,7 @@ def collect_references(repo_root: Path, policy: Policy, ownership: Ownership) ->
                 )
             )
 
-        for line, literal in _string_constants(tree):
+        for line, literal, node in _string_constants(tree):
             for subsystem in inline_subsystems:
                 if subsystem.id == source.id:
                     continue
@@ -537,6 +756,7 @@ def collect_references(repo_root: Path, policy: Policy, ownership: Ownership) ->
                             source=source.id,
                             target=subsystem.id,
                             detail=literal[:200],
+                            direct_local_file=is_direct_local_file_use(node, parents, root_names),
                         )
                     )
                     break
@@ -610,6 +830,8 @@ def evaluate(
 
         # R4: an extracted subsystem referenced as in-repo content.
         if reference.symbol in target.inline_patterns:
+            if is_published_external_reference(reference.detail, target) and not reference.direct_local_file:
+                continue
             rule = policy.rule("extracted-inline-reference")
             record(
                 rule,

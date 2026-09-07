@@ -49,7 +49,7 @@ Repo-local skills live under `.agents/skills/`. Each has its own `SKILL.md` with
 |-------|---------|
 | `repo-init` | Initialize workspace: `gh`, GitHub auth, submodules, fork topology |
 | `machine-management` | Add / verify / repair / remove a remote NPU machine |
-| `npu-fleet-monitor` | Deploy, start, inspect, restart, or stop the loopback-only NPU monitoring dashboard from its standalone worktree |
+| `npu-fleet-monitor` | Deploy, start, inspect, restart, or stop the loopback-only NPU monitoring dashboard from the standalone vaws-top repository |
 | `session-management` | Create / inspect / remove / group isolated agent sessions (local worktree + remote container + leases) |
 | `remote-toolbox` | Compatibility backend for managed VAWS target/probe/exec/job/sync/service/artifact/cleanup tools |
 | `remote-code-parity` | Sync local working tree to remote container before execution |
@@ -73,8 +73,8 @@ Repo-local skills live under `.agents/skills/`. Each has its own `SKILL.md` with
 | `vllm-ascend-pd-serving` | Orchestrate grouped prefill/decode services, connector configuration, rollback, and smoke tests |
 
 None of these are gates for normal local coding, docs work, or unrelated Git tasks.
-For remote endpoint work, prefer `.remote-dev` tools first and use these skills
-for domain workflows.
+For remote endpoint work, prefer remote-dev companion tools first and use these
+skills for domain workflows.
 
 ## Repo-wide rules
 
@@ -86,15 +86,19 @@ for domain workflows.
   work. Bind actual business worktrees and keep local development available
   without the coordinator. Do not pass new task/binding/job ids to legacy
   session commands or create duplicate local NPU leases for pool executions.
-- The optional shared runtime pool is documented in `.agents/coordinator/README.md`.
+- The optional shared runtime pool lives in the external `vaws-coordinator`
+  checkout (pin: `.agents/deps/coordinator.json`). See
+  [docs/coordinator-consumption.md](docs/coordinator-consumption.md).
   Pool bindings use its execution leases and ordinary remote-dev endpoints;
   do not create duplicate legacy local NPU leases or pass a binding id as a
-  legacy session id. All clients of a pool must use the same manager.
-  Stage edits during runs; materialize and refresh native artifacts only
-  after its executions are released. Model services restart for changed code.
+  legacy session id. All clients of a pool must use the same manager and the
+  same explicit `--state-dir`. Stage edits during runs; materialize and
+  refresh native artifacts only after its executions are released. Model
+  services restart for changed code.
 - Never write secrets, passwords, or tokens into tracked files.
-- Keep VAWS runtime state under `.vaws-local/` and remote-dev endpoint/tool
-  state under `.remote-dev/state/`. Both are untracked.
+- Keep VAWS runtime state under `.vaws-local/`, remote-dev state under
+  `.vaws-local/remote-dev-state/`, and the local task registry under
+  `.vaws-local/agent-sessions/`. All are untracked.
 - Keep `.gitmodules` on community upstream URLs.
 - Prefer `.remote-dev` remote companion tools or skill wrapper scripts over raw SSH / shell commands for remote operations.
 - Skill wrappers: progress on `stderr`, final JSON on `stdout`.
@@ -112,4 +116,4 @@ for domain workflows.
 
 ## Maintenance
 
-When changing a skill, update the whole package together: `SKILL.md`, `scripts/`, `references/`, `agents/`, and other supporting files as applicable. When the change affects shared state, also update `.agents/scripts/workspace_profile.py`, `.agents/lib/vaws_local_state.py`, `.agents/lib/vaws_session_id.py`, `.agents/lib/vaws_session_state.py`, and `.agents/lib/vaws_remote_toolbox.py` as applicable.
+When changing a skill, update the whole package together: `SKILL.md`, `scripts/`, `references/`, `agents/`, and other supporting files as applicable. When the change affects shared state, also update `.agents/scripts/workspace_profile.py`, `.agents/lib/vaws_local_state.py`, `.agents/lib/vaws_session_id.py`, `.agents/lib/vaws_session_state.py`, `.agents/lib/vaws_remote_toolbox.py`, and `.agents/lib/vaws_coordinator.py` as applicable.

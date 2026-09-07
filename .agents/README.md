@@ -2,9 +2,10 @@
 
 This directory contains the repository-local skill layer for Codex, Claude Code, and similar agents.
 
-Remote development now has a substrate layer at `.remote-dev/`. Use native local
-tools for local work, and use `.remote-dev` companion tools for remote endpoint
-work:
+Remote development is an external checkout (`vllm-ascend-workspace/remote-dev`),
+located through `VAWS_REMOTE_DEV_ROOT` or `.vaws-local/remote-dev`. Use native
+local tools for local work, and use remote-dev companion tools for remote
+endpoint work:
 
 - `remote.read`
 - `remote.write`
@@ -25,7 +26,7 @@ compatibility backend for managed sessions, sync, service adapters, and cleanup.
 
 - `.agents/skills/repo-init/` is the source-of-truth skill package for repository initialization.
 - `.agents/skills/machine-management/` is the source-of-truth skill package for remote machine attach, verify, repair, and removal workflows.
-- `.agents/skills/npu-fleet-monitor/` is the local deployment and lifecycle package for the standalone NPU fleet monitoring worktree and user service.
+- `.agents/skills/npu-fleet-monitor/` is the local deployment and lifecycle package for the standalone vaws-top repository and its loopback user service.
 - `.agents/skills/session-management/` is the source-of-truth skill package for isolated parallel agent sessions.
 - `.agents/skills/remote-toolbox/` is the compatibility skill package for managed VAWS target/probe/exec/job/sync/service/artifact/cleanup tools.
 - `.agents/skills/remote-code-parity/` is the source-of-truth skill package for remote code parity before remote execution.
@@ -72,6 +73,7 @@ compatibility backend for managed sessions, sync, service adapters, and cleanup.
 - `.agents/lib/vaws_session_id.py` and `.agents/lib/vaws_session_state.py` are the shared libraries for session identity, state, locks, and leases.
 - `.agents/lib/vaws_remote_toolbox.py` is the shared library for remote target resolution, SSH execution, job observation, artifact streaming, sync adapters, service adapters, and cleanup.
 - `.agents/lib/vaws_validate.py` is the shared validation library for agent-facing ids, environment names, path boundaries, and NPU device lists.
+- `.agents/lib/vaws_coordinator.py` locates the external vaws-coordinator checkout (task identity, `vaws_*` tools, runtime pool). Pin: `.agents/deps/coordinator.json`.
 - `AGENTS.md` carries repository-wide routing rules and mandatory decision gates.
 
 ## Script-first convention
@@ -308,6 +310,7 @@ If you change `modelscope`, update these together:
 - `.agents/skills/modelscope/SKILL.md`
 - `.agents/skills/modelscope/scripts/`
 - `.agents/skills/modelscope/agents/`
+- `.trae/skills/modelscope` via `python3 .agents/scripts/sync_claude_skills.py`
 - `AGENTS.md`, `README.md`, and this file when routing or output contract changes
 
 Keep the files under `.agents/skills/` as the canonical supporting files for repo-local skills.

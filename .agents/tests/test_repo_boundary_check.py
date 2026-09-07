@@ -11,6 +11,7 @@ one still fails, and a docstring mention is not mistaken for a dependency.
 from __future__ import annotations
 
 import contextlib
+import copy
 import importlib.util
 import io
 import json
@@ -76,6 +77,10 @@ SYNTHETIC_POLICY = {
             "layer": 10,
             "roots": [],
             "inline_patterns": ["dash-branch"],
+            "published_external_references": [
+                "https://github.com/org/dashboard.git",
+                ".agents/skills/dash/SKILL.md",
+            ],
         },
         {
             "id": "domain",
@@ -148,14 +153,14 @@ class RealTreeTests(unittest.TestCase):
         self.assertEqual(payload["baseline"]["stale_count"], 0)
         self.assertEqual(payload["baseline"]["unattributed_count"], 0)
 
-    def test_report_mode_does_not_pretend_the_tree_is_clean(self) -> None:
+    def test_report_mode_reports_zero_current_violations(self) -> None:
         code, payload = invoke("--repo-root", str(ROOT), "--mode", "report")
         self.assertEqual(code, 0)
         self.assertEqual(payload["status"], "reported")
-        # There are known violations today; a guard that reported zero would be
-        # lying, and a guard that exited non-zero here would get switched off.
-        self.assertGreater(payload["counts"]["violations"], 0)
-        self.assertTrue(all(item["accepted"] for item in payload["violations"]))
+        self.assertEqual(payload["counts"]["violations"], 0)
+        self.assertEqual(payload["counts"]["accepted"], 0)
+        self.assertEqual(payload["counts"]["new"], 0)
+        self.assertEqual(payload["violations"], [])
 
     def test_upstream_submodules_are_never_scanned(self) -> None:
         _code, payload = invoke("--repo-root", str(ROOT), "--mode", "report")
@@ -163,21 +168,27 @@ class RealTreeTests(unittest.TestCase):
             self.assertIn(name, payload["scanned"]["skipped_roots"])
         self.assertFalse([item for item in payload["violations"] if item["path"].startswith(("vllm/", "vllm-ascend/"))])
 
-    def test_every_baseline_row_names_the_extraction_that_removes_it(self) -> None:
-        rows = json.loads(BASELINE.read_text(encoding="utf-8"))["accepted"]
-        self.assertTrue(rows)
-        for row in rows:
-            with self.subTest(row=f"{row['path']}:{row['symbol']}"):
-                self.assertIn(row["removed_by"], KNOWN_EXTRACTIONS)
-                self.assertNotEqual(row["removed_by"], guard.UNATTRIBUTED)
-                self.assertTrue(row["why"].strip(), "an accepted violation without a reason rots")
-                self.assertRegex(row["accepted_on"], r"^\d{4}-\d{2}-\d{2}$")
+    def test_current_baseline_is_empty(self) -> None:
+        payload = json.loads(BASELINE.read_text(encoding="utf-8"))
+        self.assertEqual(payload["accepted"], [])
+        self.assertEqual(payload.get("accepted_counts_by_extraction", {}), {})
+        self.assertEqual(payload["generated_on"], "2026-09-07")
 
     def test_the_only_scan_exemption_is_this_test_file(self) -> None:
         """The exemption exists so the guard can have fixtures; it is not a
         way to hide a real violation, so it must stay this small."""
         policy = guard.load_policy(POLICY, ROOT)
         self.assertEqual(policy.fixture_paths, frozenset({".agents/tests/test_repo_boundary_check.py"}))
+
+    def test_no_extracted_subsystem_findings(self) -> None:
+        rows = json.loads(BASELINE.read_text(encoding="utf-8"))["accepted"]
+        self.assertEqual(rows, [])
+        code, payload = invoke("--repo-root", str(ROOT), "--mode", "report")
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["counts"]["accepted_by_extraction"], {})
+        self.assertFalse(
+            [item for item in payload["violations"] if item.get("to") in KNOWN_EXTRACTIONS]
+        )
 
     def test_policy_and_baseline_carry_no_absolute_user_paths(self) -> None:
         for path in (POLICY, BASELINE):
@@ -299,6 +310,145 @@ class DetectionTests(unittest.TestCase):
             [(item["rule"], item["to"], item["symbol"]) for item in payload["violations"]],
             [("R4", "dashboard", "dash-branch")],
         )
+
+    def test_old_worktree_route_is_detected_and_standalone_refs_are_not(self) -> None:
+        write(
+            self.repo.root / ".agents" / "skills" / "skill-a" / "scripts" / "old_route.py",
+            "DEFAULT_BRANCH = 'dash-branch'\n"
+            "COMMAND = ['git', 'worktree', 'add', '/tmp/monitor', 'dash-branch']\n"
+            "import subprocess\n"
+            "subprocess.run('git worktree add /tmp/monitor dash-branch', shell=True)\n",
+        )
+        write(
+            self.repo.root / ".agents" / "skills" / "skill-a" / "scripts" / "standalone.py",
+            "DEFAULT_REPO_URL = 'https://github.com/org/dashboard.git'\n"
+            "AGENT_SKILL = '.agents/skills/dash/SKILL.md'\n"
+            "SSH_URL = 'git@github.com:org/dashboard.git'\n"
+            "JOINED = clone / '.agents/skills/dash/SKILL.md'\n",
+        )
+        _code, payload = self.repo.run("--mode", "report")
+        self.assertEqual(
+            {(item["path"], item["symbol"], item["rule"]) for item in payload["violations"]},
+            {
+                (".agents/skills/skill-a/scripts/old_route.py", "dash-branch", "R4"),
+            },
+        )
+
+    def test_external_reference_does_not_hide_inrepo_route(self) -> None:
+        policy = copy.deepcopy(SYNTHETIC_POLICY)
+        top = policy["subsystems"][1]
+        top["repo"] = "vllm-ascend-workspace/vaws-top"
+        top["inline_patterns"] = ["vaws-top", ".agents/skills/vaws-top/"]
+        top["published_external_references"] = [
+            ".agents/skills/vaws-top/",
+            ".agents/skills/vaws-top/SKILL.md",
+        ]
+        self.repo.set_policy(policy)
+        cases = {
+            "shell_branch": "import subprocess\nsubprocess.run('git worktree add /tmp/monitor vaws-top', shell=True)\n",
+            "local_skill": "from pathlib import Path\nPath('.agents/skills/vaws-top/SKILL.md').read_text()\n",
+            "wrong_host": "ORIGIN = 'https://github.example.invalid/org/vaws-top.git'\n",
+            "file_url": "ORIGIN = 'file:///tmp/vaws-top'\n",
+            "mixed_literal": (
+                "COMMAND = 'https://github.com/vllm-ascend-workspace/vaws-top.git"
+                "\\ngit worktree add /tmp/monitor vaws-top'\n"
+            ),
+        }
+        for name, source in cases.items():
+            with self.subTest(case=name):
+                write(self.repo.root / ".agents" / "skills" / "skill-a" / "scripts" / "edge.py", source)
+                _code, payload = self.repo.run("--mode", "report")
+                hits = [row for row in payload["violations"] if row["rule"] == "R4"]
+                self.assertTrue(hits, (name, payload["violations"]))
+        write(
+            self.repo.root / ".agents" / "skills" / "skill-a" / "scripts" / "edge.py",
+            "DEFAULT_REPO_URL = 'https://github.com/vllm-ascend-workspace/vaws-top.git'\n"
+            "AGENT_SKILL = '.agents/skills/vaws-top/SKILL.md'\n"
+            "JOINED = clone / '.agents/skills/vaws-top/SKILL.md'\n",
+        )
+        _code, payload = self.repo.run("--mode", "report")
+        self.assertEqual([row for row in payload["violations"] if row["rule"] == "R4"], [])
+
+    def test_scaffold_root_join_is_a_local_read(self) -> None:
+        policy = copy.deepcopy(SYNTHETIC_POLICY)
+        top = policy["subsystems"][1]
+        top["repo"] = "vllm-ascend-workspace/vaws-top"
+        top["inline_patterns"] = ["vaws-top", ".agents/skills/vaws-top/"]
+        top["published_external_references"] = [
+            ".agents/skills/vaws-top/",
+            ".agents/skills/vaws-top/SKILL.md",
+        ]
+        self.repo.set_policy(policy)
+        sources = (
+            "from pathlib import Path\nROOT = Path(__file__).resolve().parents[4]\n"
+            "(ROOT / '.agents/skills/vaws-top/SKILL.md').read_text()\n",
+            "from pathlib import Path\n"
+            "(Path(__file__).resolve().parents[4] / '.agents/skills/vaws-top/SKILL.md').read_text()\n",
+            "from pathlib import Path\nROOT = Path(__file__).resolve().parents[4]\n"
+            "open(ROOT / '.agents/skills/vaws-top/SKILL.md')\n",
+            "from pathlib import Path\nROOT = Path(__file__).resolve().parents[4]\n"
+            "ROOT.joinpath('.agents/skills/vaws-top/SKILL.md').is_file()\n",
+        )
+        for source in sources:
+            with self.subTest(source=source):
+                write(self.repo.root / ".agents" / "skills" / "skill-a" / "scripts" / "edge.py", source)
+                _code, payload = self.repo.run("--mode", "report")
+                hits = [row for row in payload["violations"] if row["rule"] == "R4"]
+                self.assertTrue(hits, payload["violations"])
+
+    def test_scaffold_origin_is_retained_across_path_components(self) -> None:
+        policy = copy.deepcopy(SYNTHETIC_POLICY)
+        top = policy["subsystems"][1]
+        top["repo"] = "vllm-ascend-workspace/vaws-top"
+        top["inline_patterns"] = ["vaws-top", ".agents/skills/vaws-top/"]
+        top["published_external_references"] = [
+            ".agents/skills/vaws-top/",
+            ".agents/skills/vaws-top/SKILL.md",
+        ]
+        self.repo.set_policy(policy)
+        skill = repr(".agents/skills/vaws-top/SKILL.md")
+        roots = ("Path(__file__).resolve().parents[4]", "Path(__file__).absolute().parent")
+        shapes = (
+            "(ROOT / {p}).read_bytes()",
+            "ROOT.joinpath({p}).exists()",
+            "open(ROOT / {p}).read()",
+            "Path(ROOT, {p}).read_text()",
+            'ROOT.joinpath("subdir", {p}).is_file()',
+            '(ROOT / "subdir" / {p}).read_text()',
+            'ROOT.joinpath("subdir").joinpath({p}).stat()',
+        )
+        for root in roots:
+            for shape in shapes:
+                source = "from pathlib import Path\nROOT = " + root + "\n" + shape.format(p=skill) + "\n"
+                with self.subTest(root=root, shape=shape):
+                    write(self.repo.root / ".agents" / "skills" / "skill-a" / "scripts" / "edge.py", source)
+                    _code, payload = self.repo.run("--mode", "report")
+                    hits = [row for row in payload["violations"] if row["rule"] == "R4"]
+                    self.assertTrue(hits, source)
+
+    def test_external_locator_and_metadata_remain_allowed(self) -> None:
+        policy = copy.deepcopy(SYNTHETIC_POLICY)
+        top = policy["subsystems"][1]
+        top["repo"] = "vllm-ascend-workspace/vaws-top"
+        top["inline_patterns"] = ["vaws-top", ".agents/skills/vaws-top/"]
+        top["published_external_references"] = [
+            ".agents/skills/vaws-top/",
+            ".agents/skills/vaws-top/SKILL.md",
+        ]
+        self.repo.set_policy(policy)
+        skill = repr(".agents/skills/vaws-top/SKILL.md")
+        sources = (
+            "DESCRIPTOR = " + skill + "\n",
+            'DESCRIPTOR = {"agent_skill": ' + skill + "}\n",
+            "clone = locate_clone()\n(clone / " + skill + ").read_text()\n",
+            "clone = locate_clone()\nclone.joinpath(" + skill + ").exists()\n",
+        )
+        for source in sources:
+            with self.subTest(source=source):
+                write(self.repo.root / ".agents" / "skills" / "skill-a" / "scripts" / "edge.py", source)
+                _code, payload = self.repo.run("--mode", "report")
+                hits = [row for row in payload["violations"] if row["rule"] == "R4"]
+                self.assertEqual(hits, [])
 
     def test_upstream_submodule_content_is_skipped(self) -> None:
         write(self.repo.root / "vllm" / "plugin.py", "import domain_helper\nX = '.agents/lib'\n")
@@ -432,22 +582,21 @@ class PolicyContractTests(unittest.TestCase):
     def test_module_ownership_follows_the_file_not_the_policy_text(self) -> None:
         policy = guard.load_policy(POLICY, ROOT)
         ownership = guard.Ownership(policy, ROOT)
-        for module, expected in (
-            ("vaws_task_client", "coordinator"),
-            ("vaws_ready_runtime", "coordinator"),
-            ("vaws_ssh", "scaffold-domain"),
-        ):
-            with self.subTest(module=module):
-                owner = ownership.subsystem_for_module(module)
-                self.assertIsNotNone(owner)
-                assert owner is not None
-                self.assertEqual(owner.id, expected)
+        owner = ownership.subsystem_for_module("vaws_ssh")
+        self.assertIsNotNone(owner)
+        assert owner is not None
+        self.assertEqual(owner.id, "scaffold-domain")
         # `core.*` belonged to the in-tree substrate. It left with the
         # remote-dev extraction, so no file in this tree owns the name any
         # more and the guard must not invent an owner for it. The synthetic
         # repository in DetectionTests still covers derived ownership of an
         # in-tree substrate module.
         self.assertIsNone(ownership.subsystem_for_module("core"))
+        # Task-state writers left with vaws-coordinator. Residual adapters
+        # locate that checkout; they do not keep an in-tree owner for the
+        # moved module names.
+        self.assertIsNone(ownership.subsystem_for_module("vaws_task_client"))
+        self.assertIsNone(ownership.subsystem_for_module("vaws_ready_runtime"))
         # The substrate's `mcp/` package shares a name with the installed MCP
         # SDK that the coordinator imports; owning it would invent a dependency.
         self.assertIsNone(ownership.subsystem_for_module("mcp"))
