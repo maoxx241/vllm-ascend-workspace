@@ -65,8 +65,17 @@ Read:
 
 ## Rules
 
+- Every device count is a **logical** device count. On A3 one card presents two
+  dies, so eight cards per node means sixteen logical devices. Sizing from the
+  card count halves the intended width and surfaces as a fused-MoE shape error
+  rather than a topology error, which is why it gets misread as an operator bug.
+  Confirm with `npu-smi info` before sizing.
 - Declaration order of `--node` defines the data-parallel rank offsets. Keep it
   stable across restarts; a reordered node list silently remaps ranks.
+- Dispatch one explicit call per node. Driving per-rank launches from a shell
+  loop over node names or PIDs mangles those values through word splitting, and
+  the resulting multi-rank failure looks like a cluster problem rather than a
+  quoting problem.
 - Exactly one load-balancing mode. Internal LB gives one API server on the
   master and headless engines elsewhere; hybrid LB gives every node an API
   server behind an external balancer. vLLM rejects the combination.

@@ -26,6 +26,16 @@ with a message that points at the wrong node.
 that division is not exact. `--devices-per-node` is optional; when supplied it
 is checked against `tp * dp_local` rather than used to override it.
 
+**Every device count here is a logical device count, not a physical card
+count.** On A3 hardware one card presents two dies, so a node with eight cards
+holds sixteen logical devices and `ASCEND_RT_VISIBLE_DEVICES` runs `0..15`.
+Sizing the topology from the card count halves the width — for example
+`tp=8, dp=2` where `tp=16, dp=4` was intended. That mistake does not surface as
+a topology error: it surfaces as a fused-MoE shape error such as
+`GroupedMatmulWeightNz ... dim num should be 2 ... now is 1`, which is
+repeatedly misread as an operator bug. Confirm the logical device count with
+`npu-smi info` on the host before sizing anything.
+
 `--ep` is advisory. When it differs from `tp * dp` the plan carries a warning
 instead of failing, because expert-parallel width is a model-level decision and
 some layouts legitimately diverge from the device count.

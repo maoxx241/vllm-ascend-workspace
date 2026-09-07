@@ -235,7 +235,10 @@ class KnowledgeFlowE2ETest(unittest.TestCase):
             "--knowledge-dir",
             str(self.formal),
         )
-        self.assertEqual(hidden["matches"], [])
+        # Deprecation hides this entry from ordinary queries. Unrelated entries
+        # in the branch store may still match the query text weakly, so assert
+        # on the deprecated entry rather than on an empty result.
+        self.assertNotIn(entry_id, [item["id"] for item in hidden["matches"]])
         retained = self.run_json(
             QUERY,
             "--query",

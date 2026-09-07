@@ -60,6 +60,62 @@
       }
     },
     {
+      "id": "logical-device-count-mistaken-for-physical-card-count",
+      "status": "active",
+      "source": "Recurring across Kimi-K3 four-node bring-up sessions, where the resulting fused-MoE shape error was investigated as an operator bug before the topology was corrected to TP16xDP4.",
+      "applicable_versions": "Verified on Ascend A3 hardware (two dies per card) running vllm-ascend MoE serving, A3 four-node fleet, 2026-07 through 2026-08.",
+      "updated_at": "2026-09-07",
+      "first_seen": "2026-09-07",
+      "scope": {
+        "component": "topology sizing",
+        "environment": "Ascend A3 multi-node fleet",
+        "subsystem": "parallel configuration"
+      },
+      "rule": {
+        "summary": "Sizing a topology from A3 card count instead of logical device count halves the width and surfaces as a fused-MoE shape error",
+        "symptom": "A fused-MoE operator fails with a rank/shape complaint such as 'GroupedMatmulWeightNz ... dim num should be 2 ... now is 1', on a configuration that looks correct for the number of cards installed.",
+        "root_cause": "An A3 card presents two dies, so a node with eight cards exposes sixteen logical devices. Deriving tensor and data parallel sizes from the card count produces half the intended width, and the mismatched expert shard reaches the fused-MoE kernel as a wrong-rank tensor. The failure appears at the operator, not at configuration time.",
+        "resolution": "Confirm the logical device count with npu-smi info on the host, then size the topology from that count. For eight A3 cards per node across four nodes, the verified layout is TP16 x DP4 x EP64 with ASCEND_RT_VISIBLE_DEVICES=0..15 per node.",
+        "avoidance": "On any fused-MoE shape or rank error, verify the device count and parallel sizes before investigating the operator. A topology error and an operator bug present identically here, and the topology check is far cheaper.",
+        "fingerprints": [
+          "groupedmatmulweightnz dim num should be 2 now is 1",
+          "a3 two dies per card logical device count topology",
+          "moe expert shard wrong rank tensor parallel size"
+        ],
+        "verification": [
+          "Re-sizing from TP8xDP2 to TP16xDP4 on the same eight-card-per-node A3 fleet removed the fused-MoE shape error without any operator change."
+        ]
+      }
+    },
+    {
+      "id": "health-unreachable-during-weight-load-is-not-a-hang",
+      "status": "active",
+      "source": "Recurring across Kimi-K3 and vllm-ascend bring-up sessions, where multi-minute health-poll silence was treated as a hang and the starting service was restarted.",
+      "applicable_versions": "Verified on vllm-ascend multi-rank services loading large MoE weights from network storage, A3 fleet, 2026-07 through 2026-09.",
+      "updated_at": "2026-09-07",
+      "first_seen": "2026-09-07",
+      "scope": {
+        "component": "service startup",
+        "environment": "vllm-ascend multi-rank services with large weights",
+        "subsystem": "readiness polling"
+      },
+      "rule": {
+        "summary": "Minutes of connection-refused during weight load or rank rendezvous is expected startup, not a hang",
+        "symptom": "Health polling returns connection-refused or an empty status code for several minutes after launch. Rank logs may show 'Loading weights' or 'No available shared memory broadcast block found in 60 seconds' without any traceback.",
+        "root_cause": "Large MoE weights load from network storage before the HTTP server binds, and data-parallel ranks block at rendezvous until every rank arrives. Neither stage serves the health endpoint, so an unreachable port during this window carries no information about health.",
+        "resolution": "Distinguish three states before acting: the port has not bound yet, a rank is still loading or waiting at rendezvous, or every rank is idle with no progress. Read per-rank logs for load progress, and only treat it as a hang once progress has genuinely stopped. Raise the readiness timeout rather than restarting.",
+        "avoidance": "Do not restart a service that is still loading or capturing graphs; the restart discards the work and reproduces the same wait. An agent-side or UI wait timeout is not a service failure, and a shared-memory broadcast warning during rendezvous is not a collective failure.",
+        "fingerprints": [
+          "health 000 connection refused minutes after launch",
+          "no available shared memory broadcast block found in 60 seconds",
+          "loading weights no health endpoint yet"
+        ],
+        "verification": [
+          "Services reported as hung reached ready without intervention once the readiness budget was raised to cover weight load and rank rendezvous; per-rank logs showed continuous load progress throughout the unreachable window."
+        ]
+      }
+    },
+    {
       "id": "orphan-engine-processes-hold-hbm-after-api-exit",
       "status": "active",
       "source": "Kimi-K3 / DSpark enablement runbook stop procedure; observed repeatedly on the shared A3 fleet, where it presented as a start-time OOM on devices believed to be free.",

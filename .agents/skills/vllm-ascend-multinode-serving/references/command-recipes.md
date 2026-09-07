@@ -47,19 +47,27 @@ Node `a` takes data-parallel ranks 0 and 1, node `b` takes 2 and 3.
 
 ## Render and run one node
 
-Non-master nodes go up first.
+Render each node's block to its own file, non-master nodes first:
 
 ```bash
 PLAN=.vaws-local/multinode-serving/demo/plan.json
-for alias in n154 n155 n156 n153; do
-  python3 .agents/skills/vllm-ascend-multinode-serving/scripts/multinode_plan.py render \
-    --plan "$PLAN" --node "$alias" --what launch
-done
+OUT=.vaws-local/multinode-serving/demo/blocks
+mkdir -p "$OUT"
+python3 .agents/skills/vllm-ascend-multinode-serving/scripts/multinode_plan.py render \
+  --plan "$PLAN" --node n154 --what launch > "$OUT/n154.sh"
+# ... repeat for n155, n156, then n153 (the master) last
 ```
 
-Execute each block on its own node through `remote_bash` against that node's
-session endpoint, as a background process group whose PGID you keep. You need
-the PGID to stop only what you started.
+Then dispatch **one explicit call per node** through `remote_bash` against that
+node's session endpoint, feeding the block on stdin, as a background process
+group whose PGID you keep. You need the PGID to stop only what you started.
+
+Do not drive the dispatch from a shell loop over node names, hostnames, or
+PIDs. Word splitting in that loop is a recurring failure here: the value
+arrives at the remote command mangled and the launch dies with `hostname
+contains invalid characters` on several ranks at once, which reads like a
+cluster configuration problem rather than a quoting problem. One explicit
+invocation per node costs four lines and removes the whole class.
 
 ## Identity probe across all nodes
 

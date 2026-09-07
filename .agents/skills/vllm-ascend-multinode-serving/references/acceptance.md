@@ -18,6 +18,8 @@ the drift and restart; do not annotate the result as approximate.
 
 ## Topology
 
+- [ ] The device counts were derived from the **logical** device count confirmed
+      by `npu-smi info`, not from the physical card count.
 - [ ] `world_devices` in the plan equals the devices actually held.
 - [ ] Each node's `data_parallel_ranks` matches the ranks it reports at init.
 - [ ] `--node` order is the same as the previous start of this deployment, or
