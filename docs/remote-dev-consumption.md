@@ -111,20 +111,18 @@ Agent-facing behaviour is otherwise unchanged: a skill that worked with
 `--machine` still works with `--machine`, and a zero-argument call inside a
 session worktree still auto-binds to that session.
 
-## 6. What is still blocked on the coordinator extraction
+## 6. Coordinator consumption
 
-The task facade (`vaws.*`) and the managed-job supervisor left remote-dev in the
-same extraction and belong to `vaws-coordinator`, which already holds them
-(`lib/vaws_ops.py`, and its own `lib/vaws_remote_dev.py` adapter). This scaffold
-must not vendor either one back, so both are configuration until the coordinator
-extraction is consumed here:
+The task facade and managed-job supervisor belong to `vaws-coordinator`. This
+scaffold now consumes that repository the same way it consumes remote-dev: a
+tracked pin, an external checkout, and a launcher. See
+[coordinator-consumption.md](coordinator-consumption.md).
 
-| Surface | State in this repository | Configuration |
-|---|---|---|
-| `.agents/scripts/vaws.py session/run/execution/finish` | returns `outcome: blocked`, `status: unavailable` naming the coordinator, instead of importing the deleted `core.vaws_ops` | `VAWS_COORDINATOR_ROOT` pointing at a coordinator checkout |
-| `.agents/coordinator/backend.py::RemoteBackend.job` | raises `RemoteDevUnavailable` naming the coordinator instead of reading the deleted `core/managed_jobs.py` | `VAWS_MANAGED_JOBS_WORKER` pointing at its `managed_jobs.py` |
-| `.agents/hooks/vaws_session.py` | still injects `context_file` for the four `vaws_*` tool names; harmless (no server advertises them here) and it will need the coordinator's server id | — |
-| `.agents/skills/session-management/tests/test_agent_sessions.py` | still asserts `mcp__remote_dev__vaws_session` name rewriting — a scaffold hook contract test, valid whatever serves the tools | — |
+| Surface | State in this repository |
+|---|---|
+| `.agents/scripts/vaws.py` | launcher: `status` / `bootstrap` / `env` / `hook` / `task-server` / `attach` / `session` / `run` / `execution` / `finish` |
+| `.agents/hooks/vaws_session.py` | compatibility adapter that execs the coordinator hook |
+| `.agents/scripts/vaws_client_setup.py` | writes `remote-dev` and `vaws-task`; preserves user-managed servers |
+| `.agents/coordinator/` and the moved task-state libraries | deleted after destination commit/blob evidence |
 
-`.agents/coordinator/**` is itself leaving; the 41 coordinator-attributed
-boundary violations stay in the baseline until it does.
+The #90-owned remote-dev pin is unchanged by that consumption.

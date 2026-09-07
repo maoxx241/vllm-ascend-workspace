@@ -7,12 +7,16 @@ description: Associate native agent sessions with local VAWS development tasks, 
 
 ## Local task identity and native clients
 
-For the task-facing mode, use remote-dev's `vaws_session`, `vaws_run`,
-`vaws_execution` and `vaws_finish` tools. The native adapter supplies
-`context_file`; the user should not have to manage it. Configure once using
+For the task-facing mode, use the `vaws-task` MCP server's `vaws_session`,
+`vaws_run`, `vaws_execution` and `vaws_finish` tools (served by the
+vaws-coordinator checkout through `.agents/scripts/vaws.py task-server`). The
+native adapter supplies `context_file`; the user should not have to manage it.
+Configure once using
 `.agents/scripts/vaws_client_setup.py --client <client> --project <actual-repo>`
 (preview, then `--apply` after reviewing the changes). This does not grant
-client trust or authentication. See [lifecycle and client setup](../../coordinator/README.md#task-and-native-session-lifecycle).
+client trust or authentication, does not rewrite hand-managed providers, and
+must not be applied to a live client configuration from tests. See
+[coordinator consumption](../../../docs/coordinator-consumption.md).
 
 - A new user-created **native session** creates a new VAWS task, even in the same cwd.
 - Native **resume** continues the same native attachment and VAWS task.
@@ -43,7 +47,8 @@ session/container names are never rewritten after an alias change.
 Create and maintain isolated VAWS sessions for parallel agent work.
 
 For cross-workspace development with prepared containers, the opt-in shared
-coordinator in [`.agents/coordinator/README.md`](../../coordinator/README.md)
+coordinator documented in
+[coordinator consumption](../../../docs/coordinator-consumption.md)
 separates logical sessions from runtime bindings and per-run NPU leases.
 It uses existing remote-dev endpoints and the host NPU coordinator; it does
 not require `vaws-top`. Use its `session_open/runtime_checkout/execution_*`

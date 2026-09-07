@@ -34,7 +34,7 @@ layer 40   workspace-root      CI workflows, client config, top-level docs
               |
 layer 30   scaffold-domain     .agents/skills, .agents/lib, .agents/scripts
               |
-layer 20   coordinator         .agents/coordinator  ->  vaws-coordinator
+layer 20   coordinator         (external checkout)  ->  vaws-coordinator
               |
 layer 10   remote-dev          .remote-dev          ->  remote-dev
 layer 10   vaws-top            (not in this tree)   ->  vaws-top
@@ -384,25 +384,14 @@ baseline rows are deleted in the same commits.
 
 ### Phase 2 — `vaws-coordinator` (depends on Phase 1)
 
-1. Move `vaws_ready_runtime.py`, `vaws_managed_execution.py` and
-   `vaws_task_client.py` out of `.agents/lib` (row 24). Rows 17 and 18 resolve
-   with them.
-2. Replace `_load_inventory` with a coordinator-owned machine registry, fed by
-   the scaffold at registration time. The coordinator must not read
-   `.vaws-local/machine-inventory.json` (row 10).
-3. Replace the source-text shipping of `vaws_runtime_profile.py` and
-   `vaws_build_inputs.py` with a versioned artifact the coordinator owns, or a
-   contract the scaffold publishes to it (rows 11, 13, 14), and replace the
-   `core/managed_jobs.py` source-text worker with Phase 1's shipped artifact
-   (row 33).
-4. Decide the ownership of host NPU coordination and move
-   `.agents/lib/vaws_npu_coordination.py` accordingly (rows 12, 16). This is the
-   one genuinely open question — see below.
-5. `server.py` takes its state root as a parameter instead of calling
-   `vaws_local_state.shared_workspace_root` (row 15).
-6. Move the `coordinator` CI job to the coordinator repository (row 28).
+Landed on this branch as an external checkout. Pin, locator, launcher and
+arrival evidence: [coordinator-consumption.md](coordinator-consumption.md).
+Host NPU coordination stays scaffold-owned and is injected through
+`VAWS_HOST_QUEUE_MODULE`. `vaws_build_inputs.py` stays as a byte-pinned
+parity mirror. The HTTP manager has no default `--state-dir`.
 
-Guard effect: the 41 rows attributed to `vaws-coordinator` disappear.
+Guard effect: in-tree coordinator roots and the moved task-state writers are
+gone; residual adapters are locator/launcher/setup only.
 
 ### Phase 3 — `vaws-top` (independent; last because it is cheapest)
 

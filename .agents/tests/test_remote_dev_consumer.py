@@ -260,8 +260,10 @@ class ClientConfigurationTests(unittest.TestCase):
     def test_tracked_json_clients_use_the_launcher_and_inject_the_environment(self) -> None:
         for relative in (".mcp.json", ".cursor/mcp.json"):
             with self.subTest(file=relative):
-                entry = json.loads((ROOT / relative).read_text(encoding="utf-8"))["mcpServers"]["remote-dev"]
+                servers = json.loads((ROOT / relative).read_text(encoding="utf-8"))["mcpServers"]
+                entry = servers["remote-dev"]
                 self.assertEqual(entry["args"], self.LAUNCHER_ARGS)
+                self.assertEqual(servers["vaws-task"]["args"], [".agents/scripts/vaws.py", "task-server"])
                 for key in self.REQUIRED_ENV:
                     self.assertIn(key, entry["env"])
                 self.assertEqual(entry["env"]["REMOTE_DEV_RUNTIME_ENV_FILE"], remote_dev.ASCEND_RUNTIME_ENV_FILE)
@@ -274,6 +276,8 @@ class ClientConfigurationTests(unittest.TestCase):
                 entry = data["mcp_servers"][server]
                 self.assertTrue(entry["args"][0].endswith("/.agents/scripts/remote_dev.py"), entry["args"])
                 self.assertEqual(entry["args"][1], "server")
+                task = data["mcp_servers"].get("vaws_task") or data["mcp_servers"]["vaws-task"]
+                self.assertEqual(task["args"][1], "task-server")
                 for key in self.REQUIRED_ENV:
                     self.assertIn(key, entry["env"])
                 self.assertTrue(entry["env"]["REMOTE_DEV_RESOLVERS"].endswith("vaws_remote_dev_plugin.py:setup"))
@@ -291,12 +295,16 @@ class ClientConfigurationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             project = Path(tmp).resolve()
             files = setup.configuration("claude", project)
-            mcp = json.loads(files[project / ".mcp.json"])["mcpServers"]["remote-dev"]
+            servers = json.loads(files[project / ".mcp.json"])["mcpServers"]
+            mcp = servers["remote-dev"]
+            self.assertEqual(set(servers), {"remote-dev", "vaws-task"})
             self.assertEqual(mcp["args"], [str(ROOT / ".agents/scripts/remote_dev.py"), "server"])
+            self.assertEqual(servers["vaws-task"]["args"], [str(ROOT / ".agents/scripts/vaws.py"), "task-server"])
             for key in self.REQUIRED_ENV:
                 self.assertIn(key, mcp["env"])
             codex = tomllib.loads(setup.configuration("codex", project)[project / ".codex/config.toml"])
             self.assertEqual(codex["mcp_servers"]["remote_dev"]["args"][1], "server")
+            self.assertEqual(codex["mcp_servers"]["vaws_task"]["args"][1], "task-server")
             self.assertIn("REMOTE_DEV_RESOLVERS", codex["mcp_servers"]["remote_dev"]["env"])
         self.assertFalse(str(setup.BACKUP_DIR).startswith(str(ROOT / ".remote-dev")))
         self.assertTrue(str(setup.BACKUP_DIR).startswith(str(ROOT / ".vaws-local")))

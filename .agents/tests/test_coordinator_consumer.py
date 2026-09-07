@@ -1,0 +1,367 @@
+"""Scaffold-side contract with the extracted vaws-coordinator.
+
+Locator, launcher, client-setup preservation and the build-input pin run
+without a coordinator checkout except tests marked ``requires_coordinator``.
+Those use ``VAWS_COORDINATOR_ROOT``. Official MCP SDK coverage lives in
+``test_coordinator_official_stdio.py``.
+"""
+from __future__ import annotations
+
+import hashlib
+import importlib.util
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import tomllib
+import unittest
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+LIB = ROOT / ".agents" / "lib"
+SCRIPTS = ROOT / ".agents" / "scripts"
+if str(LIB) not in sys.path:
+    sys.path.insert(0, str(LIB))
+
+import vaws_coordinator as coordinator  # noqa: E402
+
+CHECKOUT = coordinator.coordinator_root(required=False)
+requires_coordinator = unittest.skipUnless(CHECKOUT, "no vaws-coordinator checkout (set VAWS_COORDINATOR_ROOT)")
+
+
+def load_script(name: str):
+    path = SCRIPTS / f"{name}.py"
+    spec = importlib.util.spec_from_file_location(f"_test_{name}", path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+def write_fake_checkout(root: Path) -> Path:
+    for relative in coordinator.REQUIRED_FILES:
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("", encoding="utf-8")
+    return root
+
+
+class LocatorTests(unittest.TestCase):
+    def test_env_root_must_look_like_a_checkout(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(coordinator.CoordinatorUnavailable) as ctx:
+                coordinator.coordinator_root(env={coordinator.COORDINATOR_ROOT_ENV: tmp})
+            self.assertIn("not a vaws-coordinator checkout", str(ctx.exception))
+            self.assertIsNone(
+                coordinator.coordinator_root(required=False, env={coordinator.COORDINATOR_ROOT_ENV: tmp})
+            )
+
+    def test_fake_checkout_is_accepted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            write_fake_checkout(Path(tmp))
+            self.assertEqual(
+                coordinator.coordinator_root(env={coordinator.COORDINATOR_ROOT_ENV: tmp}),
+                Path(tmp).resolve(),
+            )
+            status = coordinator.checkout_status({coordinator.COORDINATOR_ROOT_ENV: tmp})
+            self.assertEqual(status["state"], "ready")
+            self.assertEqual(status["root_source"], "env")
+            self.assertIsNone(status["manager_state_dir_default"])
+
+    def test_environment_fills_the_single_registry_and_host_queue(self) -> None:
+        env = coordinator.coordinator_environment({})
+        self.assertTrue(env["VAWS_AGENT_SESSIONS_DIR"].endswith("agent-sessions"))
+        self.assertEqual(env["VAWS_HOST_QUEUE_MODULE"], str(LIB / "vaws_npu_coordination.py"))
+        self.assertTrue(env["VAWS_PARITY_SCRIPT"].endswith("remote_code_parity.py"))
+        self.assertNotIn("VAWS_COORDINATOR_STATE_DIR", env)
+
+    def test_environment_keeps_caller_values(self) -> None:
+        env = coordinator.coordinator_environment({
+            "VAWS_AGENT_SESSIONS_DIR": "/tmp/explicit-registry",
+            "VAWS_HOST_QUEUE_MODULE": "/tmp/host.py",
+        })
+        self.assertEqual(env["VAWS_AGENT_SESSIONS_DIR"], "/tmp/explicit-registry")
+        self.assertEqual(env["VAWS_HOST_QUEUE_MODULE"], "/tmp/host.py")
+
+    def test_relative_registry_path_uses_the_shared_workspace(self) -> None:
+        from vaws_local_state import shared_workspace_root
+        env = coordinator.coordinator_environment({"VAWS_AGENT_SESSIONS_DIR": ".vaws-local/agent-sessions"})
+        self.assertEqual(
+            env["VAWS_AGENT_SESSIONS_DIR"],
+            str(shared_workspace_root(ROOT) / ".vaws-local" / "agent-sessions"),
+        )
+
+    def test_dependency_pin_names_the_accepted_main(self) -> None:
+        pin = coordinator.load_dependency()
+        self.assertEqual(pin["repository"], "vllm-ascend-workspace/vaws-coordinator")
+        self.assertEqual(pin["commit"], "2e16e894e31a12d85a11117a2772031f30fdfebe")
+        self.assertEqual(pin["tree"], "fc64eacacf16060446895e2fa0a23a1fe0d17b4e")
+        self.assertEqual(pin["visibility"], "public")
+        self.assertEqual(
+            pin["pinned_mirrors"]["vaws_build_inputs"]["sha256"],
+            "967adeb699e47de2e281581d576a69f6c85075385975e42916ead1ed198a2e09",
+        )
+
+
+class BuildInputPinTests(unittest.TestCase):
+    def test_scaffold_copy_matches_the_recorded_digest(self) -> None:
+        pin = coordinator.load_dependency()["pinned_mirrors"]["vaws_build_inputs"]
+        digest = hashlib.sha256((ROOT / pin["scaffold_path"]).read_bytes()).hexdigest()
+        self.assertEqual(digest, pin["sha256"])
+
+    @requires_coordinator
+    def test_scaffold_copy_matches_the_coordinator_checkout(self) -> None:
+        pin = coordinator.load_dependency()["pinned_mirrors"]["vaws_build_inputs"]
+        left = (ROOT / pin["scaffold_path"]).read_bytes()
+        right = (CHECKOUT / pin["coordinator_path"]).read_bytes()
+        self.assertEqual(left, right)
+
+
+class LauncherTests(unittest.TestCase):
+    def test_status_without_checkout_reports_missing_and_exits_nonzero(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env = {**os.environ, coordinator.COORDINATOR_ROOT_ENV: str(Path(tmp) / "absent")}
+            proc = subprocess.run(
+                [sys.executable, str(SCRIPTS / "vaws.py"), "status"],
+                capture_output=True, text=True, env=env, check=False,
+            )
+        self.assertEqual(proc.returncode, 1, proc.stderr)
+        payload = json.loads(proc.stdout)
+        self.assertEqual(payload["state"], "missing")
+        self.assertEqual(payload["root_source"], "env")
+        self.assertIsNone(payload["manager_state_dir_default"])
+
+    def test_task_server_and_task_ops_without_checkout_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env = {**os.environ, coordinator.COORDINATOR_ROOT_ENV: str(Path(tmp) / "absent")}
+            proc = subprocess.run(
+                [sys.executable, str(SCRIPTS / "vaws.py"), "task-server"],
+                capture_output=True, text=True, env=env, check=False,
+            )
+            self.assertEqual(proc.returncode, 2, proc.stderr)
+            self.assertIn("bootstrap", proc.stderr)
+            for operation in ("attach", "session", "run", "execution", "finish"):
+                argv = [sys.executable, str(SCRIPTS / "vaws.py"), operation]
+                if operation == "attach":
+                    argv += ["--client", "codex", "--native-session-id", "n1"]
+                elif operation == "run":
+                    argv += ["--request-id", "r1", "--command", "true"]
+                elif operation == "execution":
+                    argv += ["--execution-id", "e1"]
+                else:
+                    argv += ["--json", "{}"]
+                child = subprocess.run(argv, capture_output=True, text=True, env=env, check=False)
+                self.assertEqual(child.returncode, 1, (operation, child.stderr))
+                self.assertNotIn("Traceback", child.stderr)
+                payload = json.loads(child.stdout)["result"]
+                self.assertEqual(payload["outcome"], "blocked")
+                self.assertEqual(payload["status"], "unavailable")
+                self.assertIn("vaws-coordinator", payload["summary"] + json.dumps(payload))
+
+    def test_hook_without_checkout_does_not_write_a_registry(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env = {**os.environ, coordinator.COORDINATOR_ROOT_ENV: str(Path(tmp) / "absent")}
+            proc = subprocess.run(
+                [sys.executable, str(ROOT / ".agents/hooks/vaws_session.py"), "--client", "codex"],
+                input='{"hook_event_name":"SessionStart","session_id":"n1"}',
+                capture_output=True, text=True, env=env, check=False,
+            )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(proc.stdout.strip(), "")
+        self.assertIn("unavailable", proc.stderr)
+        self.assertFalse(list(Path(tmp).rglob("sessions.sqlite3")))
+
+    def test_env_json_lists_owned_keys(self) -> None:
+        proc = subprocess.run(
+            [sys.executable, str(SCRIPTS / "vaws.py"), "env", "--json"],
+            capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        payload = json.loads(proc.stdout)
+        self.assertIn("VAWS_AGENT_SESSIONS_DIR", payload)
+        self.assertIn("VAWS_HOST_QUEUE_MODULE", payload)
+        self.assertTrue(all(key.startswith("VAWS_") for key in payload))
+
+    def test_help_matrix(self) -> None:
+        for args in (["--help"], ["status", "--help"], ["bootstrap", "--help"]):
+            with self.subTest(args=args):
+                proc = subprocess.run(
+                    [sys.executable, str(SCRIPTS / "vaws.py"), *args],
+                    capture_output=True, text=True, check=False,
+                )
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                self.assertIn("usage:", proc.stdout)
+
+
+class ClientSetupTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.setup = load_script("vaws_client_setup")
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.project = Path(self.temp.name).resolve() / "project"
+        self.project.mkdir()
+
+    def test_fresh_json_emits_both_launchers(self) -> None:
+        files = self.setup.configuration("claude", self.project)
+        servers = json.loads(files[self.project / ".mcp.json"])["mcpServers"]
+        self.assertEqual(set(servers), {"remote-dev", "vaws-task"})
+        self.assertEqual(servers["remote-dev"]["args"], [str(ROOT / ".agents/scripts/remote_dev.py"), "server"])
+        self.assertEqual(servers["vaws-task"]["args"], [str(ROOT / ".agents/scripts/vaws.py"), "task-server"])
+        self.assertEqual(servers["vaws-task"]["type"], "stdio")
+        self.assertIn("VAWS_AGENT_SESSIONS_DIR", servers["vaws-task"]["env"])
+
+    def test_task_only_skips_remote_dev(self) -> None:
+        servers = json.loads(
+            self.setup.configuration("claude", self.project, task_only=True)[self.project / ".mcp.json"]
+        )["mcpServers"]
+        self.assertEqual(list(servers), ["vaws-task"])
+        grok = tomllib.loads(
+            self.setup.configuration("grok", self.project, task_only=True)[self.project / ".grok/config.toml"]
+        )
+        self.assertEqual(list(grok["mcp_servers"]), ["vaws_task"])
+
+    def test_json_preserves_hand_managed_remote_dev_command_args_type(self) -> None:
+        path = self.project / ".mcp.json"
+        old = {
+            "user_top": "preserve",
+            "mcpServers": {
+                "remote-dev": {
+                    "command": "user-command",
+                    "args": ["user-argument"],
+                    "type": "stdio",
+                    "env": {"USER_SETTING": "fixture-value"},
+                    "user_field": 17,
+                },
+                "other": {"command": "other-command"},
+            },
+        }
+        path.write_text(json.dumps(old))
+        plan = self.setup.build_plan("claude", self.project)
+        data = json.loads(plan["files"][path])
+        entry = data["mcpServers"]["remote-dev"]
+        self.assertEqual(entry["command"], "user-command")
+        self.assertEqual(entry["args"], ["user-argument"])
+        self.assertEqual(entry["type"], "stdio")
+        self.assertEqual(entry["user_field"], 17)
+        self.assertEqual(entry["env"]["USER_SETTING"], "fixture-value")
+        self.assertEqual(data["user_top"], "preserve")
+        self.assertEqual(data["mcpServers"]["other"], {"command": "other-command"})
+        self.assertIn("vaws-task", data["mcpServers"])
+        self.assertTrue(any(note.get("reason") == "existing-named-server" for note in plan["notes"]))
+
+    def test_json_setup_is_idempotent_on_fixtures(self) -> None:
+        first = self.setup.configuration("claude", self.project)
+        path = self.project / ".mcp.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(first[path])
+        settings = self.project / ".claude/settings.local.json"
+        settings.parent.mkdir(parents=True, exist_ok=True)
+        settings.write_text(first[settings])
+        second = self.setup.configuration("claude", self.project)
+        self.assertEqual(second[path], first[path])
+        self.assertEqual(second[settings], first[settings])
+
+    def test_toml_preserves_existing_remote_dev_and_adds_task_server(self) -> None:
+        config = self.project / ".codex/config.toml"
+        config.parent.mkdir()
+        config.write_text(
+            'user_top = "preserve"\n[mcp_servers.remote_dev]\ncommand = "user-command"\n'
+            'args = ["user-argument"]\nuser_field = 17\n[mcp_servers.other]\ncommand = "other-command"\n'
+        )
+        files = self.setup.configuration("codex", self.project)
+        data = tomllib.loads(files[config])
+        self.assertEqual(data["user_top"], "preserve")
+        self.assertEqual(data["mcp_servers"]["remote_dev"]["command"], "user-command")
+        self.assertEqual(data["mcp_servers"]["remote_dev"]["args"], ["user-argument"])
+        self.assertEqual(data["mcp_servers"]["other"], {"command": "other-command"})
+        self.assertEqual(data["mcp_servers"]["vaws_task"]["args"][1], "task-server")
+        config.write_text(files[config])
+        self.assertNotIn(config, self.setup.configuration("codex", self.project))
+
+    def test_stale_tool_prefix_permissions_are_reported_not_rewritten(self) -> None:
+        settings = self.project / ".claude/settings.local.json"
+        settings.parent.mkdir()
+        settings.write_text(json.dumps({
+            "permissions": {"allow": ["mcp__remote-dev__vaws_session", "Bash(python3 *)"]},
+            "hooks": {},
+        }))
+        plan = self.setup.build_plan("claude", self.project)
+        text = plan["files"][settings]
+        self.assertIn("mcp__remote-dev__vaws_session", text)
+        self.assertTrue(any(note.get("reason") == "stale-tool-prefix-permission" for note in plan["notes"]))
+        self.assertIn("mcp__remote-dev__vaws_session", json.loads(text)["permissions"]["allow"])
+
+    def test_preview_does_not_write(self) -> None:
+        proc = subprocess.run(
+            [sys.executable, str(SCRIPTS / "vaws_client_setup.py"), "--client", "claude", "--project", str(self.project)],
+            capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        payload = json.loads(proc.stdout)
+        self.assertEqual(payload["state"], "preview")
+        self.assertFalse(payload["trust_granted"])
+        self.assertFalse((self.project / ".mcp.json").exists())
+
+    def test_apply_stays_inside_the_fixture_project(self) -> None:
+        proc = subprocess.run(
+            [
+                sys.executable, str(SCRIPTS / "vaws_client_setup.py"),
+                "--client", "claude", "--project", str(self.project), "--apply",
+            ],
+            capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        payload = json.loads(proc.stdout)
+        self.assertEqual(payload["state"], "configured")
+        self.assertTrue((self.project / ".mcp.json").is_file())
+        for item in payload["files"]:
+            self.assertTrue(item["path"].startswith(str(self.project)))
+
+
+class NoInTreeTaskWriterTests(unittest.TestCase):
+    MOVED = (
+        ".agents/coordinator",
+        ".agents/lib/vaws_agent_session.py",
+        ".agents/lib/vaws_task_client.py",
+        ".agents/lib/vaws_ready_runtime.py",
+        ".agents/lib/vaws_managed_execution.py",
+        ".agents/lib/vaws_runtime_profile.py",
+    )
+
+    def test_moved_sources_are_not_tracked(self) -> None:
+        tracked = subprocess.run(
+            ["git", "-C", str(ROOT), "ls-files", "--", *self.MOVED],
+            capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(tracked.stdout.strip(), "", tracked.stdout)
+
+    def test_build_inputs_mirror_remains_for_parity(self) -> None:
+        self.assertTrue((ROOT / ".agents/lib/vaws_build_inputs.py").is_file())
+        self.assertTrue((ROOT / ".agents/lib/vaws_npu_coordination.py").is_file())
+        self.assertTrue((ROOT / ".agents/lib/vaws_run_manifest.py").is_file())
+
+
+@requires_coordinator
+class CoordinatorCheckoutTests(unittest.TestCase):
+    def test_pin_matches_the_configured_checkout(self) -> None:
+        status = coordinator.checkout_status()
+        self.assertEqual(status["state"], "ready")
+        pin = coordinator.load_dependency()
+        if status["pin_matches"] is False:
+            self.skipTest(f"checkout {status['commit']} is not the pinned {pin['commit']}")
+        self.assertEqual(status["commit"], pin["commit"])
+
+    def test_arrival_blobs_match_the_pin(self) -> None:
+        pin = coordinator.load_dependency()
+        for relative, blob in pin["arrival_blobs"].items():
+            result = subprocess.run(
+                ["git", "-C", str(CHECKOUT), "rev-parse", f"HEAD:{relative}"],
+                capture_output=True, text=True, check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), blob, relative)
+
+
+if __name__ == "__main__":
+    unittest.main()
