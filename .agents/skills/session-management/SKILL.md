@@ -79,7 +79,7 @@ does not create another container or duplicate member leases.
 - `session_create.py` creates a fresh generated id when no explicit/env id is provided; it does not reuse `.vaws-local/current-session.json` as a creation default.
 - Existing-session lookup commands may use `.vaws-local/current-session.json` as a convenience fallback.
 - Do not reuse the base machine container for new parallel tasks. New tasks should use `session_create.py`.
-- For NPU work, reserve devices during creation with `--devices` or `--npu-count`; session-aware serving uses that lease by default. `--npu-count` requires a successful host NPU probe (no guessing of device ranges); if the probe fails, fix it or pass explicit `--devices`.
+- For NPU work, reserve devices during creation with `--devices` or `--npu-count`; session-aware serving uses that lease by default. Count-based and explicit-device allocation both require a known occupancy result; unknown occupancy and a known empty free set refuse the request. Port-only creation remains valid without NPUs.
 - `--reuse-existing` probes the existing container's SSH endpoint before reporting the session as reusable; a dead container returns `needs_repair` instead of a stale `ready`.
 - Metadata status changes never release remote leases. Confirmed container removal releases its leases even without `--release-leases`; worktree removal or stopping only the recorded service PID does not prove all remote resources are free.
 - Managed serving requires a nonempty live NPU lease matching the session snapshot. Empty or stale snapshots cannot fall through to idle-card selection.
