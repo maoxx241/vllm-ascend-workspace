@@ -35,16 +35,26 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: false
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Fetch the published scaffold default branch
+        # The checker inspects refs/remotes/origin/main, not PR HEAD. It does
+        # not fetch itself and holds no private destination credentials.
+        run: git fetch --no-tags --update-head-ok origin refs/heads/main:refs/remotes/origin/main
       - uses: actions/checkout@v4
         with:
           repository: vllm-ascend-workspace/vaws-coordinator
+          ref: main
           path: .vaws-local/split-refs/vaws-coordinator
           fetch-depth: 0
+          persist-credentials: false
       - uses: actions/checkout@v4
         with:
           repository: vllm-ascend-workspace/vaws-knowledge
+          ref: main
           path: .vaws-local/split-refs/vaws-knowledge
           fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"

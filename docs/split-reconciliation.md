@@ -76,16 +76,18 @@ row flips because a person or agent looked and wrote down what they saw.
 
 | kind | proves |
 |------|--------|
-| `path` | the file or directory exists |
+| `path` | the file or directory exists as a regular blob or tree in the selected commit |
 | `symbols` | one Python file (at `path`, or matching `glob` minus `exclude`) *defines* every listed name, found by AST, so a comment or string does not count |
 | `sha256` | the file is byte-identical to a pinned digest (vendored copies) |
 | `text` | the file contains a literal marker |
-| `commit` | the commit is an ancestor of the destination's `HEAD` (history moves) |
+| `commit` | the commit is an ancestor of the selected destination revision (history moves) |
 | `reference` | some file matching `glob` minus `exclude` matches a regex (a registration or call site exists somewhere) |
 
 Globs are `fnmatch` patterns over checkout-relative paths; `*` crosses `/`.
 `scan.skip_roots` (the two submodules, `node_modules`, untracked state) are
-never searched.
+never searched. Git symlinks and submodule gitlinks are not followed; they are
+`unverified` rather than present. Untracked or dirty working-tree bytes are
+never evidence.
 
 ---
 
@@ -102,30 +104,73 @@ python3 .agents/scripts/split_reconcile.py \
   --destination vaws-top=/path/to/vaws-top
 ```
 
-(or `VAWS_SPLIT_DESTINATIONS="name=path:name=path"`). For each checkout it
-records the `HEAD` commit and refuses a checkout whose `origin` belongs to a
-different repository. A destination with no checkout is `unverified`.
+Optional preview of an already-local branch or PR commit (candidate evidence
+only, never recorded as mainline publication):
+
+```bash
+python3 .agents/scripts/split_reconcile.py \
+  --destination vaws-coordinator=/path/to/vaws-coordinator \
+  --revision vaws-coordinator=abc1234
+```
+
+(or `VAWS_SPLIT_DESTINATIONS="name=path:name=path"`).
+
+For each checkout, including the scaffold (`checkout: "."`), the checker
+resolves the git top-level and a full commit SHA **once** before evaluating
+any row. It refuses, as `unverified` with a reason, a non-git directory, a
+nested subdirectory masquerading as the checkout root, missing git, a
+missing/unusable commit, a missing origin, or an origin that is not the
+declared repository. A destination with no checkout is `unverified`.
+
+Origin identity is an exact GitHub `owner/repo` match on a supported host
+(`github.com`), from HTTPS or SSH forms. A URL that merely ends with the same
+owner/repo suffix on another host is not a match. Origin URLs, including any
+credentials, are never copied into progress or result JSON.
+
+**Publication versus candidate snapshot.** The normal path inspects the
+already-fetched `refs/remotes/origin/<declared default_branch>` commit and
+records that exact SHA. It does not fetch. If that ref is missing, the row is
+`unverified`; a feature-branch `HEAD` is not silently treated as published
+main. `--revision NAME=COMMIT` selects an already-local commit instead and
+reports `revision_scope: candidate`. A candidate may prove presence at its
+own SHA. Ledger mainline arrival updates still require evidence at the
+published default-branch commit.
+
+**Immutable tree.** Every content predicate (`path`, `sha256`, `text`, AST
+`symbols`, regex `reference`, glob/exclude) and any receipt is read from git
+objects at that selected SHA. `commit` evidence is ancestry of that SHA, not
+of mutable `HEAD`. Moving `HEAD` or refs after snapshot selection does not
+change the evidence used in that run.
+
+**Unknown versus absent.** A known valid tree that lacks the declared
+evidence is `missing`. Unknown repository, revision, or blob access is
+`unverified`.
 
 So, in each context:
 
 | Where | Can read | `arrived` rows for private destinations |
 |-------|----------|------------------------------------------|
-| Public CI (`split-reconcile.yml`) | scaffold + the public destinations, checked out without credentials | reported `unverified`; the recorded state and its attribution are shown, not confirmed |
-| A maintainer with org access, locally | everything | confirmed or contradicted at the commit they cloned |
+| Public CI (`split-reconcile.yml`) | scaffold + the public destinations, checked out without credentials at the fetched default branch | reported `unverified`; the recorded state and its attribution are shown, not confirmed |
+| A maintainer with org access, locally | everything | confirmed or contradicted at the selected immutable commit |
 
 **What an `arrived` verdict establishes:** the declared evidence was found in
-a checkout whose `origin` is the declared repository, at the reported commit.
-Somebody or something looked.
+the declared GitHub owner/repository identity at the selected immutable
+commit. Somebody or something looked at that tree.
 
 **What it does not establish:** that the item works, is wired, or is reached
-by any client. `remote-dev.vaws-ops-module` is `arrived` (the code is in
-`lib/vaws_ops.py`) while `remote-dev.vaws-tool-provider` is `missing` (nothing
-serves it). Evidence is chosen per row to make that distinction visible, and a
-row's `notes` say what the evidence does and does not prove.
+by any client, or that the origin string is cryptographic proof of
+publication. A Git origin is local identity metadata. Root records the actual
+API-observed publication SHA during final acceptance. `remote-dev.vaws-ops-module`
+is `arrived` (the code is in `lib/vaws_ops.py`) while
+`remote-dev.vaws-tool-provider` is `missing` (nothing serves it). Evidence is
+chosen per row to make that distinction visible, and a row's `notes` say what
+the evidence does and does not prove.
 
 **What a recorded `arrived` on a private destination establishes in public
 CI:** only that the named observer wrote it down after inspecting the named
-commit. CI cannot re-check it and says so.
+commit. CI cannot re-check it and says so. An enforce run may still succeed
+with explicit `unverified` rows for unavailable private destinations; that
+aggregate success is not verified arrival.
 
 ### Receipts (optional, destination-published)
 
@@ -136,13 +181,15 @@ A destination may publish a tracked receipt at `docs/split-receipt.json`:
                                            "attested_by": "...", "attested_on": "YYYY-MM-DD"}}}
 ```
 
-The receipt is the destination's own signed-off claim. It is read only from an
-inspected checkout, so it changes nothing for a private destination in public
-CI. It never produces `arrived` on its own: when the evidence is present the
-row is marked `attested`; when the receipt attests an item whose evidence is
-absent, that is a `receipt-contradiction` failure, because one of the two
-records is wrong and neither should be trusted until they agree. No
-destination publishes a receipt yet; the scaffold cannot add one for them.
+The receipt is the destination's own signed-off claim. It is loaded only from
+the same committed snapshot as the evidence. An untracked or dirty working-tree
+receipt cannot attest arrival or create a contradiction at that commit. The
+receipt never produces `arrived` on its own: when the evidence is present the
+row is marked `attested`; when the committed receipt attests an item whose
+evidence is absent, that is a `receipt-contradiction` failure, because one of
+the two records is wrong and neither should be trusted until they agree.
+Malformed committed receipts stay explicit errors. No destination publishes a
+receipt yet; the scaffold cannot add one for them.
 
 ---
 

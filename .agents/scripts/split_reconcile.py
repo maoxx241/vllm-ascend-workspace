@@ -14,11 +14,20 @@ observer entered after looking at a specific destination commit. This script
 re-derives the *observed* state from destination checkouts it is given and
 reports, per row, one of three verdicts:
 
-* `arrived`    - every piece of declared evidence was found in the destination;
-* `missing`    - at least one piece was looked for and is not there;
+* `arrived`    - every piece of declared evidence was found in the destination
+                 at the selected immutable commit;
+* `missing`    - the destination identity and commit were established, and at
+                 least one piece of declared evidence is not in that tree;
 * `unverified` - the destination could not be inspected (no checkout supplied,
-                 checkout does not belong to that repository, or the evidence
-                 needs a tool that is unavailable). Never reported as arrived.
+                 not a git top-level, missing git, missing/unusable commit,
+                 missing origin, origin is not the declared GitHub repository,
+                 published ref unavailable, or an object could not be read).
+                 Never reported as arrived.
+
+A successful path/symbol/hash predicate is source-presence at that commit. It
+does not establish runtime behavior, client reachability, tests passing, or
+deployment. A Git origin string is local identity metadata, not cryptographic
+proof of publication.
 
 A recorded state that disagrees with a definite observation is a hard failure
 in `--mode enforce`: when a destination lands a fix, the ledger row must be
@@ -28,11 +37,18 @@ rewrites the ledger from observations.
 
 Destination checkouts are passed with `--destination NAME=PATH` (repeatable)
 or `VAWS_SPLIT_DESTINATIONS="name=path<os.pathsep>name=path"`. The scaffold
-itself is always reachable as the repository containing this script. No
+(`checkout: "."`) is inspected the same way as any other destination. No
 network access is attempted; two destinations are private, and a public CI job
 that cannot read them reports `unverified` for their rows.
 
+The normal path inspects the already-fetched
+`refs/remotes/origin/<default_branch>` commit. `--revision NAME=COMMIT` selects
+an already-local candidate commit instead and reports it as candidate evidence,
+never as mainline publication. Evidence, globs, and receipts are read from that
+commit's git objects, not from the working tree.
+
 Progress goes to stderr; a single machine-readable JSON payload goes to stdout.
+Origin URLs are never copied into progress or result JSON.
 
 Exit codes: 0 clean (or `--mode report`), 1 ledger disagrees with an
 observation, 2 unusable ledger or invocation.
@@ -52,16 +68,26 @@ import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterator
+from urllib.parse import unquote, urlparse
 
 DEFAULT_LEDGER = ".agents/policy/split-ledger.json"
 STATES = ("arrived", "missing", "unverified")
 EVIDENCE_KINDS = ("path", "symbols", "sha256", "text", "commit", "reference")
 VISIBILITIES = ("public", "private")
 PROGRESS_DETAIL_LIMIT = 12
+SUPPORTED_GITHUB_HOSTS = frozenset({"github.com"})
+REVISION_SCOPE_PUBLISHED = "published-default-branch"
+REVISION_SCOPE_CANDIDATE = "candidate"
+REGULAR_BLOB_MODES = frozenset({"100644", "100755"})
+TREE_MODE = "040000"
+SYMLINK_MODE = "120000"
+GITLINK_MODE = "160000"
 _COMMIT_RE = re.compile(r"^[0-9a-f]{7,40}$")
 _SLUG_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 _ALWAYS_SKIP_DIRS = frozenset({".git", "__pycache__"})
+_SCP_LIKE_RE = re.compile(
+    r"^(?:(?P<user>[^@]+)@)?(?P<host>[^:]+):(?P<path>.+)$"
+)
 
 
 class LedgerError(RuntimeError):
@@ -118,7 +144,7 @@ class Evidence:
         if self.kind == "text":
             return f"text {self.contains!r} in {where}"
         if self.kind == "commit":
-            return f"commit {where} reachable from HEAD"
+            return f"commit {where} ancestor of the selected revision"
         if self.kind == "reference":
             return f"pattern {self.pattern!r} in {where}"
         return f"path {where}"
@@ -409,8 +435,50 @@ def load_ledger(path: Path, repo_root: Path) -> Ledger:
 
 
 # ---------------------------------------------------------------------------
-# destination checkouts
+# destination checkouts: identity + one immutable git snapshot
 # ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class TreeEntry:
+    mode: str
+    kind: str
+    oid: str
+    path: str
+
+    @property
+    def is_regular_file(self) -> bool:
+        return self.kind == "blob" and self.mode in REGULAR_BLOB_MODES
+
+    @property
+    def is_tree(self) -> bool:
+        return self.kind == "tree" or self.mode == TREE_MODE
+
+    @property
+    def is_unsupported(self) -> bool:
+        return self.mode in {SYMLINK_MODE, GITLINK_MODE} or self.kind == "commit"
+
+
+@dataclass
+class GitSnapshot:
+    """Tracked objects at one resolved commit. Never a working tree."""
+
+    repo_path: Path
+    commit: str
+    entries: dict[str, TreeEntry]
+    _blobs: dict[str, bytes | None] = field(default_factory=dict)
+
+    def entry(self, relpath: str) -> TreeEntry | None:
+        return self.entries.get(_tree_path(relpath))
+
+    def blob(self, entry: TreeEntry) -> bytes | None:
+        if not entry.is_regular_file:
+            return None
+        if entry.oid in self._blobs:
+            return self._blobs[entry.oid]
+        data = _git_bytes(self.repo_path, "cat-file", "blob", entry.oid)
+        self._blobs[entry.oid] = data
+        return data
 
 
 @dataclass
@@ -420,10 +488,15 @@ class Checkout:
     reachable: bool
     reason: str
     head_commit: str | None = None
-    origin_url: str | None = None
     is_git: bool = False
     receipt: dict | None = None
     receipt_error: str | None = None
+    selected_commit: str | None = None
+    revision_scope: str | None = None
+    published_ref: str | None = None
+    identity_host: str | None = None
+    identity_repo: str | None = None
+    snapshot: GitSnapshot | None = field(default=None, repr=False)
 
     def to_dict(self) -> dict:
         return {
@@ -434,59 +507,232 @@ class Checkout:
             "is_git": self.is_git,
             "receipt_loaded": self.receipt is not None,
             "receipt_error": self.receipt_error,
+            "selected_commit": self.selected_commit,
+            "revision_scope": self.revision_scope,
+            "published_ref": self.published_ref,
+            "identity_host": self.identity_host,
+            "identity_repo": self.identity_repo,
         }
 
 
-def _git(path: Path, *args: str) -> str | None:
+def parse_github_identity(origin_url: str) -> tuple[str, str] | None:
+    """Return (host, owner/repo) for a supported GitHub remote, else None.
+
+    HTTPS and SSH forms are accepted. The host must be exactly a supported
+    GitHub host; a URL that merely ends with the owner/repo suffix is not an
+    identity match. Credentials in the URL are ignored and never returned.
+    """
+    raw = origin_url.strip()
+    if not raw:
+        return None
+    host: str | None = None
+    path: str | None = None
+    if "://" in raw:
+        parsed = urlparse(raw)
+        if parsed.scheme.lower() not in {"https", "ssh"}:
+            return None
+        host = parsed.hostname
+        path = unquote(parsed.path or "")
+    else:
+        match = _SCP_LIKE_RE.match(raw)
+        if match is None:
+            return None
+        host = match.group("host")
+        path = match.group("path")
+    if not host or not path:
+        return None
+    host = host.strip().lower()
+    if host not in SUPPORTED_GITHUB_HOSTS:
+        return None
+    cleaned = path.strip().lstrip("/").rstrip("/")
+    if cleaned.endswith(".git"):
+        cleaned = cleaned[: -len(".git")]
+    cleaned = cleaned.strip("/")
+    if not _SLUG_RE.match(cleaned):
+        return None
+    return host, cleaned
+
+
+def _tree_path(relpath: str) -> str:
+    return relpath.strip().replace("\\", "/").lstrip("./").rstrip("/")
+
+
+def _git_run(path: Path, args: tuple[str, ...] | list[str], *, binary: bool = False) -> subprocess.CompletedProcess | None:
     if shutil.which("git") is None:
         return None
     try:
-        completed = subprocess.run(
+        return subprocess.run(
             ["git", "-C", str(path), *args],
             check=False,
             capture_output=True,
-            text=True,
+            text=not binary,
             timeout=30,
         )
     except (OSError, subprocess.TimeoutExpired):
         return None
-    if completed.returncode != 0:
+
+
+def _git(path: Path, *args: str) -> str | None:
+    completed = _git_run(path, args, binary=False)
+    if completed is None or completed.returncode != 0:
         return None
     return completed.stdout.strip()
 
 
-def _origin_matches(origin_url: str, slug: str) -> bool:
-    normalized = origin_url.strip().rstrip("/")
-    if normalized.endswith(".git"):
-        normalized = normalized[: -len(".git")]
-    return normalized.lower().endswith("/" + slug.lower()) or normalized.lower().endswith(":" + slug.lower())
+def _git_bytes(path: Path, *args: str) -> bytes | None:
+    completed = _git_run(path, args, binary=True)
+    if completed is None or completed.returncode != 0:
+        return None
+    return completed.stdout
 
 
-def _load_receipt(checkout_path: Path, receipt_path: str | None) -> tuple[dict | None, str | None]:
-    """A destination may publish a tracked receipt attesting arrivals.
+def _resolve_commit(path: Path, revision: str) -> str | None:
+    if not revision or revision.startswith("-"):
+        return None
+    # --end-of-options keeps peel syntax (^{commit}) working; a bare "--"
+    # before the revision makes git treat the peel as a pathspec.
+    peeled = _git(path, "rev-parse", "--verify", "--end-of-options", f"{revision}^{{commit}}")
+    if not peeled:
+        return None
+    if re.fullmatch(r"[0-9a-f]{40}", peeled.lower()):
+        return peeled.lower()
+    full = _git(path, "rev-parse", "--verify", "--end-of-options", peeled)
+    if full and re.fullmatch(r"[0-9a-f]{40}", full.lower()):
+        return full.lower()
+    return None
 
-    Its absence is not an error. Its presence never yields `arrived` on its
-    own: it is cross-checked against the evidence, and a receipt for an item
-    whose evidence is absent is reported as a contradiction.
+
+def _load_tree(path: Path, commit: str) -> dict[str, TreeEntry] | None:
+    completed = _git_run(path, ["ls-tree", "-r", "-t", "-z", "--", commit], binary=True)
+    if completed is None or completed.returncode != 0:
+        return None
+    entries: dict[str, TreeEntry] = {}
+    for record in completed.stdout.split(b"\0"):
+        if not record:
+            continue
+        try:
+            meta, raw_path = record.split(b"\t", 1)
+            mode, kind, oid = meta.decode("ascii").split()
+            rel = raw_path.decode("utf-8")
+        except (ValueError, UnicodeDecodeError):
+            continue
+        rel = _tree_path(rel)
+        if not rel:
+            continue
+        entries[rel] = TreeEntry(mode=mode, kind=kind, oid=oid, path=rel)
+    return entries
+
+
+def _load_receipt_from_snapshot(snapshot: GitSnapshot, receipt_path: str | None) -> tuple[dict | None, str | None]:
+    """Load a destination receipt from the selected commit only.
+
+    Working-tree or untracked receipts cannot attest arrival or create a
+    contradiction at that commit. Receipt contents alone never prove arrival.
     """
     if not receipt_path:
         return None, None
-    candidate = checkout_path / receipt_path
-    if not candidate.is_file():
+    if receipt_path.startswith("/") or ".." in Path(receipt_path).parts:
+        return None, f"receipt {receipt_path} is not a checkout-relative path"
+    entry = snapshot.entry(receipt_path)
+    if entry is None:
         return None, None
+    if not entry.is_regular_file:
+        return None, f"receipt {receipt_path} is not a regular committed file at the selected revision"
+    body = snapshot.blob(entry)
+    if body is None:
+        return None, f"receipt {receipt_path} unreadable"
     try:
-        payload = json.loads(candidate.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        payload = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         return None, f"receipt {receipt_path} unreadable: {exc}"
     if not isinstance(payload, dict) or payload.get("version") != 1 or not isinstance(payload.get("items"), dict):
         return None, f"receipt {receipt_path} must be {{\"version\": 1, \"items\": {{<ledger id>: {{...}}}}}}"
     return payload, None
 
 
-def resolve_checkouts(ledger: Ledger, repo_root: Path, supplied: dict[str, Path]) -> dict[str, Checkout]:
+def _inspect_checkout(
+    repo_id: str,
+    repository: Repository,
+    path: Path,
+    explicit_revision: str | None,
+) -> Checkout:
+    checkout = Checkout(repo_id=repo_id, path=path, reachable=False, reason="")
+    if shutil.which("git") is None:
+        checkout.reason = "git is not installed; destination provenance cannot be established"
+        return checkout
+    toplevel = _git(path, "rev-parse", "--show-toplevel")
+    if not toplevel:
+        checkout.reason = "checkout is not a git repository"
+        return checkout
+    checkout.is_git = True
+    try:
+        top = Path(toplevel).resolve()
+        supplied = path.resolve()
+    except OSError:
+        checkout.reason = "checkout path could not be resolved as a git top-level"
+        return checkout
+    if top != supplied:
+        checkout.reason = "checkout path is not the git top-level; refusing a nested directory as this destination"
+        return checkout
+    origin = _git(path, "remote", "get-url", "origin")
+    if not origin:
+        checkout.reason = "checkout has no origin remote"
+        return checkout
+    identity = parse_github_identity(origin)
+    if identity is None:
+        checkout.reason = f"origin is not a supported GitHub identity for {repository.repo}"
+        return checkout
+    host, slug = identity
+    if slug.lower() != repository.repo.lower():
+        checkout.reason = (
+            f"checkout origin does not belong to {repository.repo}; refusing to treat it as that destination"
+        )
+        return checkout
+    checkout.identity_host = host
+    checkout.identity_repo = slug
+    published_ref = f"refs/remotes/origin/{repository.default_branch}"
+    checkout.published_ref = published_ref
+    if explicit_revision:
+        selected = _resolve_commit(path, explicit_revision)
+        if not selected:
+            checkout.reason = "selected candidate revision is missing or unusable"
+            return checkout
+        checkout.revision_scope = REVISION_SCOPE_CANDIDATE
+    else:
+        selected = _resolve_commit(path, published_ref)
+        if not selected:
+            checkout.reason = (
+                f"{published_ref} is not available locally; not treating a feature branch as published main"
+            )
+            return checkout
+        checkout.revision_scope = REVISION_SCOPE_PUBLISHED
+    entries = _load_tree(path, selected)
+    if entries is None:
+        checkout.reason = "selected commit tree is missing or unusable"
+        return checkout
+    snapshot = GitSnapshot(repo_path=path, commit=selected, entries=entries)
+    checkout.snapshot = snapshot
+    checkout.head_commit = selected
+    checkout.selected_commit = selected
+    checkout.reachable = True
+    checkout.reason = f"immutable {checkout.revision_scope} snapshot {selected}"
+    checkout.receipt, checkout.receipt_error = _load_receipt_from_snapshot(snapshot, repository.receipt_path)
+    return checkout
+
+
+def resolve_checkouts(
+    ledger: Ledger,
+    repo_root: Path,
+    supplied: dict[str, Path],
+    revisions: dict[str, str] | None = None,
+) -> dict[str, Checkout]:
     unknown = sorted(set(supplied) - set(ledger.repositories))
     if unknown:
         raise LedgerError(f"--destination names repositories the ledger does not declare: {unknown}")
+    revisions = revisions or {}
+    unknown_revisions = sorted(set(revisions) - set(ledger.repositories))
+    if unknown_revisions:
+        raise LedgerError(f"--revision names repositories the ledger does not declare: {unknown_revisions}")
     checkouts: dict[str, Checkout] = {}
     for repo_id, repository in ledger.repositories.items():
         if repository.checkout == ".":
@@ -494,6 +740,8 @@ def resolve_checkouts(ledger: Ledger, repo_root: Path, supplied: dict[str, Path]
         elif repo_id in supplied:
             path = supplied[repo_id]
         else:
+            if repo_id in revisions:
+                raise LedgerError(f"--revision {repo_id}=... was given but no checkout was supplied for that repository")
             checkouts[repo_id] = Checkout(
                 repo_id=repo_id,
                 path=None,
@@ -502,28 +750,19 @@ def resolve_checkouts(ledger: Ledger, repo_root: Path, supplied: dict[str, Path]
             )
             continue
         if not path.is_dir():
-            checkouts[repo_id] = Checkout(repo_id=repo_id, path=path, reachable=False, reason=f"checkout path does not exist: {path}")
+            checkouts[repo_id] = Checkout(
+                repo_id=repo_id,
+                path=path,
+                reachable=False,
+                reason=f"checkout path does not exist: {path}",
+            )
             continue
-        checkout = Checkout(repo_id=repo_id, path=path, reachable=True, reason="checkout inspected")
-        head = _git(path, "rev-parse", "HEAD")
-        if head:
-            checkout.is_git = True
-            checkout.head_commit = head
-            checkout.origin_url = _git(path, "remote", "get-url", "origin")
-            if repository.checkout != "." and checkout.origin_url and not _origin_matches(checkout.origin_url, repository.repo):
-                # A checkout of the wrong repository must not be allowed to
-                # produce `arrived` for this one.
-                checkout.reachable = False
-                checkout.reason = f"checkout origin does not belong to {repository.repo}; refusing to treat it as that destination"
-                checkouts[repo_id] = checkout
-                continue
-        checkout.receipt, checkout.receipt_error = _load_receipt(path, repository.receipt_path)
-        checkouts[repo_id] = checkout
+        checkouts[repo_id] = _inspect_checkout(repo_id, repository, path, revisions.get(repo_id))
     return checkouts
 
 
 # ---------------------------------------------------------------------------
-# evidence
+# evidence against the selected git tree
 # ---------------------------------------------------------------------------
 
 
@@ -537,39 +776,21 @@ class EvidenceResult:
         return {"evidence": self.evidence, "status": self.status, "detail": self.detail}
 
 
-def _iter_files(root: Path, skip_roots: frozenset[str]) -> Iterator[Path]:
-    for dirpath, dirnames, filenames in os.walk(root):
-        rel_dir = Path(dirpath).relative_to(root)
-        pruned = []
-        for name in sorted(dirnames):
-            rel = (rel_dir / name).as_posix() if rel_dir.parts else name
-            if name in _ALWAYS_SKIP_DIRS or rel in skip_roots or name in skip_roots:
-                continue
-            pruned.append(name)
-        dirnames[:] = pruned
-        for filename in sorted(filenames):
-            yield Path(dirpath) / filename
+def _skipped_path(rel: str, skip_roots: frozenset[str]) -> bool:
+    parts = Path(rel).parts
+    if any(part in _ALWAYS_SKIP_DIRS or part in skip_roots for part in parts):
+        return True
+    for root in skip_roots:
+        prefix = root.rstrip("/")
+        if rel == prefix or rel.startswith(prefix + "/"):
+            return True
+    return False
 
 
-def _matching_files(root: Path, evidence: Evidence, skip_roots: frozenset[str]) -> list[Path]:
-    if evidence.path:
-        candidate = root / evidence.path
-        return [candidate] if candidate.is_file() else []
-    matches: list[Path] = []
-    for file in _iter_files(root, skip_roots):
-        rel = file.relative_to(root).as_posix()
-        if not fnmatch.fnmatchcase(rel, str(evidence.glob)):
-            continue
-        if any(fnmatch.fnmatchcase(rel, pattern) for pattern in evidence.exclude):
-            continue
-        matches.append(file)
-    return matches
-
-
-def _python_names(file: Path) -> set[str] | None:
+def _python_names_from_source(source: str, filename: str) -> set[str] | None:
     try:
-        tree = ast.parse(file.read_text(encoding="utf-8"), filename=str(file))
-    except (OSError, SyntaxError, UnicodeDecodeError):
+        tree = ast.parse(source, filename=filename)
+    except (SyntaxError, ValueError):
         return None
     names: set[str] = set()
     for node in ast.walk(tree):
@@ -584,94 +805,161 @@ def _python_names(file: Path) -> set[str] | None:
     return names
 
 
+def _matching_entries(snapshot: GitSnapshot, evidence: Evidence, skip_roots: frozenset[str]) -> tuple[list[TreeEntry], list[TreeEntry]]:
+    """Return (regular files, unsupported objects) that match path/glob/exclude."""
+    regular: list[TreeEntry] = []
+    unsupported: list[TreeEntry] = []
+    if evidence.path:
+        rel = _tree_path(evidence.path)
+        if not rel or _skipped_path(rel, skip_roots):
+            return [], []
+        entry = snapshot.entry(rel)
+        if entry is None:
+            return [], []
+        if entry.is_unsupported:
+            return [], [entry]
+        if entry.is_regular_file:
+            return [entry], []
+        return [], []
+    assert evidence.glob is not None
+    for rel, entry in snapshot.entries.items():
+        if _skipped_path(rel, skip_roots):
+            continue
+        if not fnmatch.fnmatchcase(rel, evidence.glob):
+            continue
+        if any(fnmatch.fnmatchcase(rel, pattern) for pattern in evidence.exclude):
+            continue
+        if entry.is_unsupported:
+            unsupported.append(entry)
+        elif entry.is_regular_file:
+            regular.append(entry)
+    return regular, unsupported
+
+
 def check_evidence(checkout: Checkout, evidence: Evidence, skip_roots: frozenset[str]) -> EvidenceResult:
-    assert checkout.path is not None
-    root = checkout.path
+    assert checkout.snapshot is not None
+    snapshot = checkout.snapshot
     label = evidence.describe()
 
     if evidence.kind == "path":
-        exists = (root / str(evidence.path)).exists()
-        return EvidenceResult(label, "present" if exists else "absent", "exists" if exists else "not found in checkout")
+        rel = _tree_path(str(evidence.path))
+        if not rel or _skipped_path(rel, skip_roots):
+            return EvidenceResult(label, "absent", "not found in the selected tree")
+        entry = snapshot.entry(rel)
+        if entry is None:
+            return EvidenceResult(label, "absent", "not found in the selected tree")
+        if entry.is_unsupported:
+            return EvidenceResult(label, "unverifiable", "unsupported git object (symlink or submodule); not followed")
+        if entry.is_regular_file or entry.is_tree:
+            return EvidenceResult(label, "present", "exists in the selected tree")
+        return EvidenceResult(label, "unverifiable", "unsupported git object")
 
     if evidence.kind == "sha256":
-        target = root / str(evidence.path)
-        if not target.is_file():
-            return EvidenceResult(label, "absent", "file not found in checkout")
-        digest = hashlib.sha256(target.read_bytes()).hexdigest()
+        rel = _tree_path(str(evidence.path))
+        entry = snapshot.entry(rel) if rel and not _skipped_path(rel, skip_roots) else None
+        if entry is None:
+            return EvidenceResult(label, "absent", "file not found in the selected tree")
+        if not entry.is_regular_file:
+            return EvidenceResult(label, "unverifiable", "unsupported git object (symlink or submodule); not followed")
+        body = snapshot.blob(entry)
+        if body is None:
+            return EvidenceResult(label, "unverifiable", "blob unreadable")
+        digest = hashlib.sha256(body).hexdigest()
         if digest == evidence.sha256:
             return EvidenceResult(label, "present", "digest matches")
         return EvidenceResult(label, "absent", f"digest differs: {digest[:12]}...")
 
     if evidence.kind == "text":
-        target = root / str(evidence.path)
-        if not target.is_file():
-            return EvidenceResult(label, "absent", "file not found in checkout")
+        rel = _tree_path(str(evidence.path))
+        entry = snapshot.entry(rel) if rel and not _skipped_path(rel, skip_roots) else None
+        if entry is None:
+            return EvidenceResult(label, "absent", "file not found in the selected tree")
+        if not entry.is_regular_file:
+            return EvidenceResult(label, "unverifiable", "unsupported git object (symlink or submodule); not followed")
+        body = snapshot.blob(entry)
+        if body is None:
+            return EvidenceResult(label, "unverifiable", "blob unreadable")
         try:
-            body = target.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError) as exc:
+            decoded = body.decode("utf-8")
+        except UnicodeDecodeError as exc:
             return EvidenceResult(label, "unverifiable", f"unreadable: {exc}")
-        found = str(evidence.contains) in body
+        found = str(evidence.contains) in decoded
         return EvidenceResult(label, "present" if found else "absent", "marker found" if found else "marker not found")
 
     if evidence.kind == "commit":
-        if not checkout.is_git:
-            return EvidenceResult(label, "unverifiable", "checkout is not a git repository or git is unavailable")
-        if shutil.which("git") is None:
-            return EvidenceResult(label, "unverifiable", "git is not installed")
-        completed = subprocess.run(
-            ["git", "-C", str(root), "merge-base", "--is-ancestor", str(evidence.commit), "HEAD"],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=30,
+        completed = _git_run(
+            snapshot.repo_path,
+            ["merge-base", "--is-ancestor", str(evidence.commit), snapshot.commit],
+            binary=False,
         )
+        if completed is None:
+            return EvidenceResult(label, "unverifiable", "git is not installed or could not be run")
         if completed.returncode == 0:
-            return EvidenceResult(label, "present", f"ancestor of {checkout.head_commit}")
+            return EvidenceResult(label, "present", f"ancestor of {snapshot.commit}")
         if completed.returncode == 1:
-            return EvidenceResult(label, "absent", f"not an ancestor of {checkout.head_commit}")
+            return EvidenceResult(label, "absent", f"not an ancestor of {snapshot.commit}")
         stderr = completed.stderr.strip().splitlines()
         if any("Not a valid" in line or "bad revision" in line for line in stderr):
             return EvidenceResult(label, "absent", "commit unknown to this checkout")
         return EvidenceResult(label, "unverifiable", f"git exited {completed.returncode}")
 
-    files = _matching_files(root, evidence, skip_roots)
+    files, unsupported = _matching_entries(snapshot, evidence, skip_roots)
     if evidence.kind == "symbols":
         if not files:
-            return EvidenceResult(label, "absent", "no matching file in checkout")
+            if unsupported:
+                return EvidenceResult(label, "unverifiable", "matching path is a symlink or submodule; not followed")
+            return EvidenceResult(label, "absent", "no matching file in the selected tree")
         wanted = set(evidence.names)
         unparsed = 0
         best_missing: set[str] | None = None
-        for file in files:
-            if file.suffix != ".py":
+        for entry in files:
+            if not entry.path.endswith(".py"):
                 continue
-            names = _python_names(file)
+            body = snapshot.blob(entry)
+            if body is None:
+                unparsed += 1
+                continue
+            try:
+                source = body.decode("utf-8")
+            except UnicodeDecodeError:
+                unparsed += 1
+                continue
+            names = _python_names_from_source(source, entry.path)
             if names is None:
                 unparsed += 1
                 continue
             missing = wanted - names
             if not missing:
-                return EvidenceResult(label, "present", f"all names defined in {file.relative_to(root).as_posix()}")
+                return EvidenceResult(label, "present", f"all names defined in {entry.path}")
             if best_missing is None or len(missing) < len(best_missing):
                 best_missing = missing
         if best_missing is None:
             if unparsed:
                 return EvidenceResult(label, "unverifiable", f"{unparsed} matching file(s) could not be parsed as Python")
-            return EvidenceResult(label, "absent", "no matching Python file in checkout")
+            if unsupported and not files:
+                return EvidenceResult(label, "unverifiable", "matching path is a symlink or submodule; not followed")
+            return EvidenceResult(label, "absent", "no matching Python file in the selected tree")
         return EvidenceResult(label, "absent", f"no single file defines all names; closest lacks {sorted(best_missing)}")
 
     if evidence.kind == "reference":
         if not files:
-            return EvidenceResult(label, "absent", "no matching file in checkout")
+            if unsupported:
+                return EvidenceResult(label, "unverifiable", "matching path is a symlink or submodule; not followed")
+            return EvidenceResult(label, "absent", "no matching file in the selected tree")
         regex = re.compile(str(evidence.pattern))
         unreadable = 0
-        for file in files:
-            try:
-                body = file.read_text(encoding="utf-8")
-            except (OSError, UnicodeDecodeError):
+        for entry in files:
+            body = snapshot.blob(entry)
+            if body is None:
                 unreadable += 1
                 continue
-            if regex.search(body):
-                return EvidenceResult(label, "present", f"matched in {file.relative_to(root).as_posix()}")
+            try:
+                decoded = body.decode("utf-8")
+            except UnicodeDecodeError:
+                unreadable += 1
+                continue
+            if regex.search(decoded):
+                return EvidenceResult(label, "present", f"matched in {entry.path}")
         if unreadable == len(files):
             return EvidenceResult(label, "unverifiable", "no matching file could be read")
         return EvidenceResult(label, "absent", f"no match in {len(files)} matching file(s)")
@@ -705,14 +993,14 @@ class Observation:
 
 
 def observe(item: Item, checkout: Checkout, skip_roots: frozenset[str]) -> Observation:
-    if not checkout.reachable:
+    if not checkout.reachable or checkout.snapshot is None:
         return Observation("unverified", checkout.reason, checkout.head_commit)
     results = [check_evidence(checkout, evidence, skip_roots) for evidence in item.evidence]
     statuses = {result.status for result in results}
     if "absent" in statuses:
-        state, reason = "missing", "declared evidence not found in destination"
+        state, reason = "missing", "declared evidence not found in the selected destination tree"
     elif statuses == {"present"}:
-        state, reason = "arrived", "all declared evidence found in destination"
+        state, reason = "arrived", "all declared evidence found in the selected destination tree"
     else:
         state, reason = "unverified", "some evidence could not be checked with the tools available"
     observation = Observation(state, reason, checkout.head_commit, results)
@@ -769,14 +1057,35 @@ def parse_destinations(values: list[str], env_value: str | None) -> dict[str, Pa
     return supplied
 
 
-def run(repo_root: Path, ledger_path: Path, supplied: dict[str, Path], *, mode: str) -> dict:
+def parse_revisions(values: list[str]) -> dict[str, str]:
+    supplied: dict[str, str] = {}
+    for spec in values:
+        if "=" not in spec:
+            raise LedgerError(f"--revision expects NAME=COMMIT, got {spec!r}")
+        name, _, commit = spec.partition("=")
+        if not name or not commit:
+            raise LedgerError(f"--revision expects NAME=COMMIT, got {spec!r}")
+        supplied[name] = commit
+    return supplied
+
+
+def run(
+    repo_root: Path,
+    ledger_path: Path,
+    supplied: dict[str, Path],
+    *,
+    mode: str,
+    revisions: dict[str, str] | None = None,
+) -> dict:
     ledger = load_ledger(ledger_path, repo_root)
     progress(f"ledger {ledger.path} (dated {ledger.generated_on or 'unknown'}): {len(ledger.items)} declared item(s) across {len(ledger.repositories)} repositories")
-    checkouts = resolve_checkouts(ledger, repo_root, supplied)
+    checkouts = resolve_checkouts(ledger, repo_root, supplied, revisions)
     for repo_id, checkout in checkouts.items():
         repository = ledger.repositories[repo_id]
         if checkout.reachable:
-            progress(f"  {repo_id} ({repository.visibility}): inspecting {checkout.head_commit or 'non-git checkout'}")
+            progress(
+                f"  {repo_id} ({repository.visibility}): inspecting {checkout.revision_scope} {checkout.selected_commit}"
+            )
         else:
             progress(f"  {repo_id} ({repository.visibility}): unverified - {checkout.reason}")
         if checkout.receipt_error:
@@ -862,6 +1171,22 @@ def run(repo_root: Path, ledger_path: Path, supplied: dict[str, Path], *, mode: 
         },
         "items": rows,
         "drift": [drift.to_dict() for drift in drifts],
+        "evidence_meaning": {
+            "arrived": (
+                "declared evidence is present in the declared GitHub owner/repository "
+                "identity at the selected immutable commit"
+            ),
+            "does_not_establish": [
+                "runtime behavior",
+                "client reachability",
+                "tests passing",
+                "deployment",
+                "cryptographic proof of publication",
+            ],
+            "identity_limitation": (
+                "a Git origin string is local identity metadata, not cryptographic proof of publication"
+            ),
+        },
         "next": (
             "Update the disagreeing ledger rows in .agents/policy/split-ledger.json so the recorded state, "
             "observed_commit, observed_on and observed_by match what was actually inspected."
@@ -892,6 +1217,14 @@ def build_parser() -> argparse.ArgumentParser:
         "also read from VAWS_SPLIT_DESTINATIONS, os.pathsep-separated). Destinations without a checkout report unverified.",
     )
     parser.add_argument(
+        "--revision",
+        action="append",
+        default=[],
+        metavar="NAME=COMMIT",
+        help="inspect this already-local commit for NAME instead of refs/remotes/origin/<default_branch>. "
+        "Reported as candidate evidence, never as mainline publication. No fetch is performed.",
+    )
+    parser.add_argument(
         "--mode",
         choices=("enforce", "report"),
         default="enforce",
@@ -907,7 +1240,8 @@ def main(argv: list[str] | None = None) -> int:
     ledger_path = args.ledger or repo_root / DEFAULT_LEDGER
     try:
         supplied = parse_destinations(args.destination, os.environ.get("VAWS_SPLIT_DESTINATIONS"))
-        payload = run(repo_root, ledger_path, supplied, mode=args.mode)
+        revisions = parse_revisions(args.revision)
+        payload = run(repo_root, ledger_path, supplied, mode=args.mode, revisions=revisions)
     except LedgerError as exc:
         print(json.dumps({"status": "blocked", "error": str(exc), "repo_root": str(repo_root)}, ensure_ascii=False))
         return 2

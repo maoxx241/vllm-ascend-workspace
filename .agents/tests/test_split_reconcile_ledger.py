@@ -2,22 +2,25 @@
 """Regression tests for the split reconciliation checker and its ledger.
 
 Two halves. The first runs the shipped ledger against this tree, so the rows
-whose destination is the scaffold cannot drift from what the scaffold actually
-contains, and the three known gaps stay recorded as gaps until somebody flips
-them. The second builds throwaway destination checkouts in a temp dir and
-proves the mechanics the design promises: a declared-but-absent item is
-`missing`; an unreachable destination is `unverified` and never `arrived`; a
-row whose item has since arrived fails until the row is updated; a row with no
-attributed destination is rejected outright; and a destination receipt cannot
-manufacture an arrival that the evidence contradicts.
+whose destination is the scaffold cannot drift from what the published
+scaffold snapshot actually contains, and the three known gaps stay recorded as
+gaps until somebody flips them. The second builds throwaway destination
+checkouts in a temp dir and proves the mechanics the design promises: a
+declared-but-absent item is `missing`; an unreachable destination is
+`unverified` and never `arrived`; a row whose item has since arrived fails
+until the row is updated; a row with no attributed destination is rejected
+outright; and a destination receipt cannot manufacture an arrival that the
+evidence contradicts.
 
-Nothing here touches the network or a remote host.
+Evidence is read from an immutable git tree at a resolved commit, never from
+the working tree. Nothing here touches the network or a remote host.
 """
 
 from __future__ import annotations
 
 import contextlib
 import copy
+import hashlib
 import importlib.util
 import io
 import json
@@ -37,6 +40,8 @@ KNOWN_GAPS = {
     "remote-dev.vaws-tool-provider",
     "remote-dev.task-facade-tests",
 }
+DEST_ORIGIN = "https://github.com/org/dest.git"
+DEST_ORIGIN_SSH = "git@github.com:org/dest.git"
 
 
 def load_checker():
@@ -51,8 +56,8 @@ def load_checker():
 reconcile = load_checker()
 
 
-def invoke(*argv: str) -> tuple[int, dict]:
-    """Run the checker's argv entry point and return (exit code, payload)."""
+def invoke_with_stderr(*argv: str) -> tuple[int, dict, str]:
+    """Run the checker's argv entry point and return (exit code, payload, stderr)."""
     out, err = io.StringIO(), io.StringIO()
     env_backup = os.environ.pop("VAWS_SPLIT_DESTINATIONS", None)
     try:
@@ -61,12 +66,49 @@ def invoke(*argv: str) -> tuple[int, dict]:
     finally:
         if env_backup is not None:
             os.environ["VAWS_SPLIT_DESTINATIONS"] = env_backup
-    return code, json.loads(out.getvalue())
+    return code, json.loads(out.getvalue()), err.getvalue()
+
+
+def invoke(*argv: str) -> tuple[int, dict]:
+    code, payload, _err = invoke_with_stderr(*argv)
+    return code, payload
 
 
 def write(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
+
+
+def git_env(home: Path) -> dict[str, str]:
+    env = os.environ.copy()
+    env.update(
+        {
+            "GIT_AUTHOR_NAME": "Synthetic Observer",
+            "GIT_AUTHOR_EMAIL": "observer@example.invalid",
+            "GIT_COMMITTER_NAME": "Synthetic Observer",
+            "GIT_COMMITTER_EMAIL": "observer@example.invalid",
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_CONFIG_GLOBAL": os.devnull,
+            "HOME": str(home),
+            "XDG_CONFIG_HOME": str(home),
+            "GIT_OPTIONAL_LOCKS": "0",
+        }
+    )
+    env.pop("GIT_DIR", None)
+    env.pop("GIT_WORK_TREE", None)
+    env.pop("GIT_COMMON_DIR", None)
+    return env
+
+
+def git(root: Path, *args: str, env: dict[str, str] | None = None) -> str:
+    completed = subprocess.run(
+        ["git", "-C", str(root), *args],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    return completed.stdout.strip()
 
 
 OBSERVER = "test observer, synthetic checkout"
@@ -162,14 +204,18 @@ class ShippedLedgerTests(unittest.TestCase):
         for row in payload["items"]:
             with self.subTest(item=row["id"]):
                 if row["destination"]["repo"] == "scaffold":
-                    # The scaffold is this checkout: its rows are always
-                    # observed, and the shipped ledger must agree with the tree.
+                    # The scaffold is this checkout: its rows are observed at
+                    # the fetched origin/main snapshot, and the shipped ledger
+                    # must agree with that published tree.
                     self.assertEqual(row["verdict"], row["recorded"]["state"])
                 else:
                     self.assertEqual(row["verdict"], "unverified")
         for repo_id, destination in payload["destinations"].items():
             if repo_id != "scaffold":
                 self.assertFalse(destination["reachable"])
+            else:
+                self.assertEqual(destination["revision_scope"], "published-default-branch")
+                self.assertTrue(destination["selected_commit"])
 
     def test_report_mode_never_fails(self):
         code, payload = invoke("--repo-root", str(ROOT), "--mode", "report")
@@ -185,10 +231,15 @@ class ShippedLedgerTests(unittest.TestCase):
         self.assertIn(".agents/policy/split-ledger.json", body)
         for gap in KNOWN_GAPS:
             self.assertIn(gap, body, f"docs must walk through {gap}")
+        self.assertIn("refs/remotes/origin/", body)
+        self.assertIn("local identity metadata", body)
+        self.assertIn("--revision", body)
 
 
-class SyntheticLedgerTests(unittest.TestCase):
+class GitCheckoutFixture(unittest.TestCase):
     """Throwaway hub + destination checkouts in a temp dir."""
+
+    __test__ = False
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -199,11 +250,52 @@ class SyntheticLedgerTests(unittest.TestCase):
         self.hub.mkdir()
         self.dest.mkdir()
         write(self.hub / "README.md", "hub\n")
+        self.env = git_env(self.base)
+
+    def git(self, root: Path, *args: str) -> str:
+        return git(root, *args, env=self.env)
+
+    def publish(self, root: Path, files: dict[str, str] | None = None, *, origin: str = DEST_ORIGIN, message: str = "publish") -> str:
+        if not (root / ".git").exists():
+            self.git(root, "init", "-q")
+            self.git(root, "config", "user.name", "Synthetic Observer")
+            self.git(root, "config", "user.email", "observer@example.invalid")
+            self.git(root, "config", "core.hooksPath", os.devnull)
+            self.git(root, "config", "commit.gpgsign", "false")
+            try:
+                self.git(root, "checkout", "-q", "-b", "main")
+            except subprocess.CalledProcessError:
+                pass
+        if files:
+            for rel, content in files.items():
+                write(root / rel, content)
+        self.git(root, "add", "-A")
+        status = self.git(root, "status", "--porcelain")
+        if status:
+            self.git(root, "commit", "-q", "--allow-empty", "-m", message)
+        else:
+            try:
+                self.git(root, "rev-parse", "HEAD")
+            except subprocess.CalledProcessError:
+                self.git(root, "commit", "-q", "--allow-empty", "-m", message)
+        sha = self.git(root, "rev-parse", "HEAD")
+        remotes = self.git(root, "remote")
+        if "origin" not in remotes.split():
+            self.git(root, "remote", "add", "origin", origin)
+        else:
+            self.git(root, "remote", "set-url", "origin", origin)
+        self.git(root, "update-ref", "refs/remotes/origin/main", sha)
+        return sha
 
     def run_ledger(self, ledger: dict, *argv: str) -> tuple[int, dict]:
         ledger_path = self.hub / ".agents" / "policy" / "split-ledger.json"
         write(ledger_path, json.dumps(ledger, indent=2))
         return invoke("--repo-root", str(self.hub), "--ledger", str(ledger_path), *argv)
+
+    def run_ledger_stderr(self, ledger: dict, *argv: str) -> tuple[int, dict, str]:
+        ledger_path = self.hub / ".agents" / "policy" / "split-ledger.json"
+        write(ledger_path, json.dumps(ledger, indent=2))
+        return invoke_with_stderr("--repo-root", str(self.hub), "--ledger", str(ledger_path), *argv)
 
     def blocked(self, ledger: dict, *argv: str) -> str:
         code, payload = self.run_ledger(ledger, *argv)
@@ -211,9 +303,16 @@ class SyntheticLedgerTests(unittest.TestCase):
         self.assertEqual(payload["status"], "blocked")
         return payload["error"]
 
+
+class SyntheticLedgerTests(GitCheckoutFixture):
+    """Original checker mechanics against published git snapshots."""
+
+    __test__ = True
+
     # -- the three verdicts -------------------------------------------------
 
     def test_declared_but_absent_item_is_missing(self):
+        self.publish(self.dest, {"README.md": "dest\n"})
         ledger = ledger_skeleton()
         ledger["items"].append(item("gone"))
         code, payload = self.run_ledger(ledger, "--destination", f"dest={self.dest}")
@@ -224,14 +323,16 @@ class SyntheticLedgerTests(unittest.TestCase):
         self.assertEqual(payload["counts"]["by_verdict"]["missing"], 1)
 
     def test_present_item_is_arrived_and_records_the_inspected_head(self):
-        write(self.dest / "lib" / "here.py", "X = 1\n")
+        sha = self.publish(self.dest, {"lib/here.py": "X = 1\n"})
         ledger = ledger_skeleton()
         ledger["items"].append(item("here", state="arrived", follow_up=None))
         code, payload = self.run_ledger(ledger, "--destination", f"dest={self.dest}")
         self.assertEqual(code, 0)
         self.assertEqual(payload["items"][0]["verdict"], "arrived")
-        # A non-git checkout is still inspectable; it just has no commit.
-        self.assertIsNone(payload["items"][0]["observed"]["head_commit"])
+        self.assertEqual(payload["items"][0]["observed"]["head_commit"], sha)
+        self.assertEqual(payload["destinations"]["dest"]["selected_commit"], sha)
+        self.assertEqual(payload["destinations"]["dest"]["revision_scope"], "published-default-branch")
+        self.assertEqual(payload["destinations"]["dest"]["published_ref"], "refs/remotes/origin/main")
 
     def test_unreachable_destination_is_unverified_not_arrived_even_when_recorded_arrived(self):
         ledger = ledger_skeleton()
@@ -257,7 +358,7 @@ class SyntheticLedgerTests(unittest.TestCase):
         self.assertEqual(payload["items"][0]["verdict"], "unverified")
 
     def test_partially_checkable_evidence_is_unverified_not_arrived(self):
-        write(self.dest / "lib" / "thing.py", "X = 1\n")
+        self.publish(self.dest, {"lib/thing.py": "X = 1\n", "lib/broken.py": "def not python\n"})
         ledger = ledger_skeleton()
         ledger["items"].append(
             item(
@@ -266,9 +367,7 @@ class SyntheticLedgerTests(unittest.TestCase):
                 follow_up=None,
                 evidence=[
                     {"kind": "path", "path": "lib/thing.py"},
-                    # A commit check needs git metadata; the destination is a
-                    # plain directory, so this piece cannot be established.
-                    {"kind": "commit", "commit": "0123456789abcdef0123456789abcdef01234567"},
+                    {"kind": "symbols", "path": "lib/broken.py", "names": ["thing"]},
                 ],
             )
         )
@@ -282,6 +381,7 @@ class SyntheticLedgerTests(unittest.TestCase):
     # -- ledger must be updated when the world changes ----------------------
 
     def test_recorded_missing_fails_once_the_item_has_arrived_until_the_row_is_updated(self):
+        self.publish(self.dest, {"README.md": "dest\n"})
         ledger = ledger_skeleton()
         ledger["items"].append(item("landed", state="missing"))
         # Before the fix lands: agreement, pass.
@@ -290,7 +390,7 @@ class SyntheticLedgerTests(unittest.TestCase):
         self.assertEqual(payload["items"][0]["verdict"], "missing")
 
         # The destination lands the item; the ledger still says missing.
-        write(self.dest / "lib" / "landed.py", "X = 1\n")
+        self.publish(self.dest, {"lib/landed.py": "X = 1\n"}, message="land the item")
         code, payload = self.run_ledger(ledger, "--destination", f"dest={self.dest}")
         self.assertEqual(code, 1)
         self.assertEqual(payload["status"], "failed")
@@ -317,6 +417,7 @@ class SyntheticLedgerTests(unittest.TestCase):
         self.assertEqual(payload["drift"], [])
 
     def test_recorded_arrived_fails_when_the_item_has_disappeared(self):
+        self.publish(self.dest, {"README.md": "dest\n"})
         ledger = ledger_skeleton()
         ledger["items"].append(item("regressed", state="arrived", follow_up=None))
         code, payload = self.run_ledger(ledger, "--destination", f"dest={self.dest}")
@@ -324,6 +425,7 @@ class SyntheticLedgerTests(unittest.TestCase):
         self.assertEqual(payload["drift"][0]["kind"], "regression")
 
     def test_recorded_unverified_fails_once_the_destination_is_inspected(self):
+        self.publish(self.dest, {"README.md": "dest\n"})
         ledger = ledger_skeleton()
         ledger["items"].append(item("seen-now", state="unverified", commit=None, follow_up=None, why="no access at the time"))
         code, payload = self.run_ledger(ledger)  # still unreachable: fine
@@ -420,8 +522,13 @@ class SyntheticLedgerTests(unittest.TestCase):
     # -- evidence kinds ----------------------------------------------------
 
     def test_symbols_are_found_by_ast_across_matching_files_but_in_one_file(self):
-        write(self.dest / "tests" / "test_a.py", "class T:\n    def test_one(self):\n        pass\n")
-        write(self.dest / "tests" / "test_b.py", "def test_two():\n    pass\nTABLE = {}\n")
+        self.publish(
+            self.dest,
+            {
+                "tests/test_a.py": "class T:\n    def test_one(self):\n        pass\n",
+                "tests/test_b.py": "def test_two():\n    pass\nTABLE = {}\n# def test_three(): pass\nS = 'def test_three'\n",
+            },
+        )
         ledger = ledger_skeleton()
         ledger["items"].append(
             item("suite", state="arrived", follow_up=None, evidence=[
@@ -442,18 +549,23 @@ class SyntheticLedgerTests(unittest.TestCase):
                 {"kind": "symbols", "path": "tests/test_b.py", "names": ["test_three"]},
             ])
         )
-        write(self.dest / "tests" / "test_b.py", "def test_two():\n    pass\nTABLE = {}\n# def test_three(): pass\nS = 'def test_three'\n")
         code, payload = self.run_ledger(ledger, "--destination", f"dest={self.dest}")
         self.assertEqual(code, 0, payload["drift"])
         verdicts = {row["id"]: row["verdict"] for row in payload["items"]}
         self.assertEqual(verdicts, {"suite": "arrived", "split-suite": "missing", "commented-out": "missing"})
 
     def test_sha256_text_and_reference_evidence(self):
-        write(self.dest / "lib" / "vendor.py", "PIN = 1\n")
-        digest = reconcile.hashlib.sha256(b"PIN = 1\n").hexdigest()
-        write(self.dest / "README.md", "## Serving\nthe tools are served here\n")
-        write(self.dest / "server.py", "from vaws_ops import TOOL_SCHEMAS\n")
-        write(self.dest / "lib" / "vaws_ops.py", "TOOL_SCHEMAS = {}\n")
+        vendor = "PIN = 1\n"
+        digest = hashlib.sha256(vendor.encode("utf-8")).hexdigest()
+        self.publish(
+            self.dest,
+            {
+                "lib/vendor.py": vendor,
+                "README.md": "## Serving\nthe tools are served here\n",
+                "server.py": "from vaws_ops import TOOL_SCHEMAS\n",
+                "lib/vaws_ops.py": "TOOL_SCHEMAS = {}\n",
+            },
+        )
         ledger = ledger_skeleton()
         ledger["items"].append(item("pinned", state="arrived", follow_up=None, evidence=[
             {"kind": "sha256", "path": "lib/vendor.py", "sha256": digest},
@@ -474,8 +586,14 @@ class SyntheticLedgerTests(unittest.TestCase):
         self.assertIn("digest differs", drifted["observed"]["evidence"][0]["detail"])
 
     def test_skip_roots_are_never_searched(self):
-        write(self.dest / "node_modules" / "pkg" / "hit.py", "def test_hidden(): pass\n")
-        write(self.dest / "vllm" / "hit.py", "def test_hidden(): pass\n")
+        self.publish(
+            self.dest,
+            {
+                "node_modules/pkg/hit.py": "def test_hidden(): pass\n",
+                "vllm/hit.py": "def test_hidden(): pass\n",
+                "README.md": "dest\n",
+            },
+        )
         ledger = ledger_skeleton()
         ledger["items"].append(item("hidden", state="missing", evidence=[
             {"kind": "symbols", "glob": "*.py", "names": ["test_hidden"]},
@@ -496,19 +614,7 @@ class SyntheticLedgerTests(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which("git"), "git is required for commit evidence")
     def test_commit_evidence_and_origin_check_use_the_destination_git_metadata(self):
-        env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid",
-               "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid"}
-
-        def git(*args: str) -> str:
-            return subprocess.run(["git", "-C", str(self.dest), *args], check=True, capture_output=True, text=True, env=env).stdout.strip()
-
-        git("init", "-q")
-        write(self.dest / "lib" / "x.py", "X = 1\n")
-        git("add", ".")
-        git("commit", "-q", "-m", "first")
-        first = git("rev-parse", "HEAD")
-        git("remote", "add", "origin", "git@example.invalid:org/dest.git")
-
+        first = self.publish(self.dest, {"lib/x.py": "X = 1\n"})
         ledger = ledger_skeleton()
         ledger["items"].append(item("history", state="arrived", follow_up=None, evidence=[{"kind": "commit", "commit": first}]))
         ledger["items"].append(item("foreign-history", state="missing", evidence=[
@@ -522,7 +628,7 @@ class SyntheticLedgerTests(unittest.TestCase):
 
         # A checkout whose origin is some other repository must not be able
         # to produce `arrived` for this destination.
-        git("remote", "set-url", "origin", "git@example.invalid:org/other.git")
+        self.git(self.dest, "remote", "set-url", "origin", "https://github.com/org/other.git")
         code, payload = self.run_ledger(ledger, "--destination", f"dest={self.dest}")
         self.assertEqual(code, 0)
         self.assertTrue(all(row["verdict"] == "unverified" for row in payload["items"]))
@@ -531,14 +637,14 @@ class SyntheticLedgerTests(unittest.TestCase):
     # -- receipts ----------------------------------------------------------
 
     def test_receipt_cannot_manufacture_an_arrival_and_agreement_is_marked_attested(self):
-        write(self.dest / "lib" / "real.py", "X = 1\n")
-        write(self.dest / "docs" / "split-receipt.json", json.dumps({
+        receipt = json.dumps({
             "version": 1,
             "items": {
                 "real": {"arrived_in": "abc1234", "attested_by": "dest maintainer", "attested_on": "2026-09-07"},
                 "claimed": {"arrived_in": "abc1234", "attested_by": "dest maintainer", "attested_on": "2026-09-07"},
             },
-        }))
+        })
+        self.publish(self.dest, {"lib/real.py": "X = 1\n", "docs/split-receipt.json": receipt})
         ledger = ledger_skeleton()
         ledger["items"].append(item("real", state="arrived", follow_up=None))
         ledger["items"].append(item("claimed", state="missing"))
@@ -551,14 +657,375 @@ class SyntheticLedgerTests(unittest.TestCase):
         self.assertEqual(rows["claimed"]["drift"]["kind"], "receipt-contradiction")
 
     def test_malformed_receipt_is_a_warning_not_an_arrival(self):
-        write(self.dest / "lib" / "real.py", "X = 1\n")
-        write(self.dest / "docs" / "split-receipt.json", "{not json")
+        self.publish(self.dest, {"lib/real.py": "X = 1\n", "docs/split-receipt.json": "{not json"})
         ledger = ledger_skeleton()
         ledger["items"].append(item("real", state="arrived", follow_up=None))
         code, payload = self.run_ledger(ledger, "--destination", f"dest={self.dest}")
         self.assertEqual(code, 0)
         self.assertIn("unreadable", payload["destinations"]["dest"]["receipt_error"])
         self.assertIsNone(payload["items"][0]["observed"]["attested"])
+
+
+@unittest.skipUnless(shutil.which("git"), "git is required for immutable snapshot tests")
+class ImmutableSnapshotTests(GitCheckoutFixture):
+    """Working-tree bytes must not be attributed to a selected commit."""
+
+    __test__ = True
+
+    def test_non_git_directory_is_unverified(self):
+        write(self.dest / "lib" / "here.py", "X = 1\n")
+        ledger = ledger_skeleton()
+        ledger["items"].append(item("here", state="arrived", follow_up=None))
+        code, payload = self.run_ledger(ledger, "--destination", f"dest={self.dest}")
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["items"][0]["verdict"], "unverified")
+        self.assertIn("not a git repository", payload["destinations"]["dest"]["reason"])
+        self.assertIsNone(payload["destinations"]["dest"]["head_commit"])
+
+    def test_git_without_origin_is_unverified(self):
+        self.git(self.dest, "init", "-q")
+        self.git(self.dest, "config", "user.name", "Synthetic Observer")
+        self.git(self.dest, "config", "user.email", "observer@example.invalid")
+        write(self.dest / "lib" / "here.py", "X = 1\n")
+        self.git(self.dest, "add", ".")
+        self.git(self.dest, "commit", "-q", "-m", "no origin")
+        ledger = ledger_skeleton()
+        ledger["items"].append(item("here", state="arrived", follow_up=None))
+        code, payload = self.run_ledger(ledger, "--destination", f"dest={self.dest}")
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["items"][0]["verdict"], "unverified")
+        self.assertIn("no origin remote", payload["destinations"]["dest"]["reason"])
+
+    def test_wrong_repo_origin_is_unverified(self):
+        self.publish(self.dest, {"lib/here.py": "X = 1\n"}, origin="https://github.com/org/other.git")
+        ledger = ledger_skeleton()
+        ledger["items"].append(item("here", state="arrived", follow_up=None))
+        code, payload = self.run_ledger(ledger, "--destination", f"dest={self.dest}")
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["items"][0]["verdict"], "unverified")
+        self.assertIn("does not belong", payload["destinations"]["dest"]["reason"])
+
+    def test_wrong_host_with_same_owner_repo_suffix_is_unverified(self):
+        self.publish(self.dest, {"lib/here.py": "X = 1\n"}, origin="https://github.com.evil.invalid/org/dest.git")
+        ledger = ledger_skeleton()
+        ledger["items"].append(item("here", state="arrived", follow_up=None))
+        code, payload = self.run_ledger(ledger, "--destination", f"dest={self.dest}")
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["items"][0]["verdict"], "unverified")
+        self.assertIn("supported GitHub identity", payload["destinations"]["dest"]["reason"])
+        serialized = json.dumps(payload)
+        self.assertNotIn("evil.invalid", serialized)
+
+    def test_nested_directory_is_unverified(self):
+        self.publish(self.dest, {"lib/here.py": "X = 1\n"})
+        nested = self.dest / "lib"
+        ledger = ledger_skeleton()
+        ledger["items"].append(item("here", state="arrived", follow_up=None, evidence=[{"kind": "path", "path": "here.py"}]))
+        code, payload = self.run_ledger(ledger, "--destination", f"dest={nested}")
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["items"][0]["verdict"], "unverified")
+        self.assertIn("not the git top-level", payload["destinations"]["dest"]["reason"])
+
+    def test_missing_published_ref_is_unverified(self):
+        self.git(self.dest, "init", "-q")
+        self.git(self.dest, "config", "user.name", "Synthetic Observer")
+        self.git(self.dest, "config", "user.email", "observer@example.invalid")
+        write(self.dest / "lib" / "here.py", "X = 1\n")
+        self.git(self.dest, "add", ".")
+        self.git(self.dest, "commit", "-q", "-m", "feature only")
+        self.git(self.dest, "remote", "add", "origin", DEST_ORIGIN)
+        ledger = ledger_skeleton()
+        ledger["items"].append(item("here", state="arrived", follow_up=None))
+        code, payload = self.run_ledger(ledger, "--destination", f"dest={self.dest}")
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["items"][0]["verdict"], "unverified")
+        self.assertIn("refs/remotes/origin/main", payload["destinations"]["dest"]["reason"])
+        self.assertIn("not treating a feature branch as published main", payload["destinations"]["dest"]["reason"])
+
+    def test_valid_https_identity_is_accepted(self):
+        sha = self.publish(self.dest, {"lib/here.py": "X = 1\n"}, origin="https://github.com/org/dest.git")
+        ledger = ledger_skeleton()
+        ledger["items"].append(item("here", state="arrived", follow_up=None))
+        code, payload = self.run_ledger(ledger, "--destination", f"dest={self.dest}")
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["items"][0]["verdict"], "arrived")
+        self.assertEqual(payload["destinations"]["dest"]["identity_host"], "github.com")
+        self.assertEqual(payload["destinations"]["dest"]["identity_repo"], "org/dest")
+        self.assertEqual(payload["destinations"]["dest"]["selected_commit"], sha)
+
+    def test_valid_ssh_identity_is_accepted(self):
+        self.publish(self.dest, {"lib/here.py": "X = 1\n"}, origin=DEST_ORIGIN_SSH)
+        ledger = ledger_skeleton()
+        ledger["items"].append(item("here", state="arrived", follow_up=None))
+        code, payload = self.run_ledger(ledger, "--destination", f"dest={self.dest}")
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["items"][0]["verdict"], "arrived")
+        self.assertEqual(payload["destinations"]["dest"]["identity_host"], "github.com")
+        self.assertEqual(payload["destinations"]["dest"]["identity_repo"], "org/dest")
+
+    def test_origin_credentials_are_not_echoed(self):
+        secret = "supersecret-origin-token"
+        self.publish(self.dest, {"lib/here.py": "X = 1\n"}, origin=f"https://user:{secret}@github.com/org/dest.git")
+        ledger = ledger_skeleton()
+        ledger["items"].append(item("here", state="arrived", follow_up=None))
+        code, payload, err = self.run_ledger_stderr(ledger, "--destination", f"dest={self.dest}")
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["items"][0]["verdict"], "arrived")
+        blob = json.dumps(payload) + err
+        self.assertNotIn(secret, blob)
+        self.assertNotIn("user:", blob)
+
+    def test_scaffold_checkout_dot_is_not_exempt_from_provenance(self):
+        write(self.hub / "lib" / "here.py", "X = 1\n")
+        ledger = ledger_skeleton()
+        ledger["items"].append(item("here", destination="hub", state="arrived", follow_up=None))
+        code, payload = self.run_ledger(ledger)
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["items"][0]["verdict"], "unverified")
+        self.assertIn("not a git repository", payload["destinations"]["hub"]["reason"])
+
+    def test_unpublished_feature_branch_is_not_default_branch_arrival(self):
+        self.publish(self.dest, {"README.md": "dest\n"})
+        write(self.dest / "lib" / "here.py", "X = 1\n")
+        self.git(self.dest, "add", ".")
+        self.git(self.dest, "commit", "-q", "-m", "unpublished feature")
+        feature = self.git(self.dest, "rev-parse", "HEAD")
+        ledger = ledger_skeleton()
+        ledger["items"].append(item("here", state="arrived", follow_up=None, commit=feature))
+        code, payload = self.run_ledger(ledger, "--destination", f"dest={self.dest}")
+        self.assertEqual(code, 1)
+        self.assertEqual(payload["items"][0]["verdict"], "missing")
+        self.assertEqual(payload["destinations"]["dest"]["revision_scope"], "published-default-branch")
+        self.assertNotEqual(payload["destinations"]["dest"]["selected_commit"], feature)
+
+    def test_explicit_candidate_revision_names_sha_and_scope(self):
+        self.publish(self.dest, {"README.md": "dest\n"})
+        write(self.dest / "lib" / "here.py", "X = 1\n")
+        self.git(self.dest, "add", ".")
+        self.git(self.dest, "commit", "-q", "-m", "candidate")
+        feature = self.git(self.dest, "rev-parse", "HEAD")
+        ledger = ledger_skeleton()
+        ledger["items"].append(item("here", state="arrived", follow_up=None, commit=feature))
+        code, payload = self.run_ledger(
+            ledger,
+            "--destination",
+            f"dest={self.dest}",
+            "--revision",
+            f"dest={feature}",
+        )
+        self.assertEqual(code, 0, payload.get("drift"))
+        self.assertEqual(payload["items"][0]["verdict"], "arrived")
+        self.assertEqual(payload["destinations"]["dest"]["revision_scope"], "candidate")
+        self.assertEqual(payload["destinations"]["dest"]["selected_commit"], feature)
+        self.assertEqual(payload["destinations"]["dest"]["head_commit"], feature)
+
+    def test_published_mode_reads_fetched_origin_default_branch(self):
+        published = self.publish(self.dest, {"lib/here.py": "X = 1\n"})
+        write(self.dest / "lib" / "here.py", "DIRTY_NOT_COMMITTED\n")
+        write(self.dest / "lib" / "extra.py", "untracked\n")
+        ledger = ledger_skeleton()
+        ledger["items"].append(item("here", state="arrived", follow_up=None, evidence=[
+            {"kind": "text", "path": "lib/here.py", "contains": "X = 1"},
+        ]))
+        code, payload = self.run_ledger(ledger, "--destination", f"dest={self.dest}")
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["items"][0]["verdict"], "arrived")
+        self.assertEqual(payload["destinations"]["dest"]["selected_commit"], published)
+        self.assertEqual(payload["destinations"]["dest"]["revision_scope"], "published-default-branch")
+
+    def test_moving_head_and_refs_after_snapshot_does_not_change_evidence(self):
+        first = self.publish(self.dest, {"lib/here.py": "FIRST\n"})
+        ledger = ledger_skeleton()
+        ledger["items"].append(item("here", state="arrived", follow_up=None, evidence=[
+            {"kind": "text", "path": "lib/here.py", "contains": "FIRST"},
+        ]))
+        ledger_path = self.hub / ".agents" / "policy" / "split-ledger.json"
+        write(ledger_path, json.dumps(ledger, indent=2))
+        loaded = reconcile.load_ledger(ledger_path, self.hub)
+        checkouts = reconcile.resolve_checkouts(loaded, self.hub, {"dest": self.dest})
+        write(self.dest / "lib" / "here.py", "SECOND\n")
+        self.git(self.dest, "add", ".")
+        self.git(self.dest, "commit", "-q", "-m", "move refs")
+        second = self.git(self.dest, "rev-parse", "HEAD")
+        self.git(self.dest, "update-ref", "refs/remotes/origin/main", second)
+        self.assertNotEqual(first, second)
+        observation = reconcile.observe(loaded.items[0], checkouts["dest"], loaded.skip_roots)
+        self.assertEqual(observation.state, "arrived")
+        self.assertEqual(observation.head_commit, first)
+        self.assertEqual(checkouts["dest"].selected_commit, first)
+
+    def test_all_six_kinds_follow_committed_tree_not_untracked_or_dirty(self):
+        good_py = "def moved_feature():\n    return 1\n"
+        digest = hashlib.sha256(good_py.encode("utf-8")).hexdigest()
+        base = self.publish(self.dest, {"README.md": "dest\n", "lib/moved.py": "OLD_UNRELATED\n"})
+        write(self.dest / "lib" / "moved.py", good_py)
+        write(self.dest / "lib" / "untracked.py", good_py)
+        self.git(self.dest, "commit", "-q", "--allow-empty", "-m", "unpublished feature commit")
+        feature = self.git(self.dest, "rev-parse", "HEAD")
+        kinds = [
+            ("path-untracked", {"kind": "path", "path": "lib/untracked.py"}),
+            ("text-dirty", {"kind": "text", "path": "lib/moved.py", "contains": "moved_feature"}),
+            ("sha-dirty", {"kind": "sha256", "path": "lib/moved.py", "sha256": digest}),
+            ("symbols-dirty", {"kind": "symbols", "path": "lib/moved.py", "names": ["moved_feature"]}),
+            ("reference-untracked", {"kind": "reference", "glob": "lib/untracked.py", "pattern": "moved_feature"}),
+            ("commit-feature", {"kind": "commit", "commit": feature}),
+        ]
+        ledger = ledger_skeleton()
+        for item_id, evidence in kinds:
+            ledger["items"].append(item(item_id, state="missing", evidence=[evidence]))
+        code, payload = self.run_ledger(ledger, "--destination", f"dest={self.dest}")
+        self.assertEqual(code, 0, payload["drift"])
+        for row in payload["items"]:
+            with self.subTest(item=row["id"]):
+                self.assertEqual(row["verdict"], "missing")
+                self.assertEqual(row["observed"]["head_commit"], base)
+                self.assertEqual(row["observed"]["evidence"][0]["status"], "absent")
+
+    def test_all_six_kinds_positive_committed_and_missing_tree(self):
+        good_py = "def moved_feature():\n    return 1\n"
+        digest = hashlib.sha256(good_py.encode("utf-8")).hexdigest()
+        sha = self.publish(self.dest, {"lib/moved.py": good_py, "README.md": "dest\n"})
+        ledger = ledger_skeleton()
+        ledger["items"].append(item("path-present", state="arrived", follow_up=None, evidence=[{"kind": "path", "path": "lib/moved.py"}]))
+        ledger["items"].append(item("text-present", state="arrived", follow_up=None, evidence=[{"kind": "text", "path": "lib/moved.py", "contains": "moved_feature"}]))
+        ledger["items"].append(item("sha-present", state="arrived", follow_up=None, evidence=[{"kind": "sha256", "path": "lib/moved.py", "sha256": digest}]))
+        ledger["items"].append(item("symbols-present", state="arrived", follow_up=None, evidence=[{"kind": "symbols", "path": "lib/moved.py", "names": ["moved_feature"]}]))
+        ledger["items"].append(item("reference-present", state="arrived", follow_up=None, evidence=[{"kind": "reference", "glob": "lib/*.py", "pattern": "moved_feature"}]))
+        ledger["items"].append(item("commit-present", state="arrived", follow_up=None, evidence=[{"kind": "commit", "commit": sha}]))
+        ledger["items"].append(item("path-absent", evidence=[{"kind": "path", "path": "lib/missing.py"}]))
+        ledger["items"].append(item("text-absent", evidence=[{"kind": "text", "path": "lib/moved.py", "contains": "NOT_THERE"}]))
+        ledger["items"].append(item("sha-absent", evidence=[{"kind": "sha256", "path": "lib/moved.py", "sha256": "0" * 64}]))
+        ledger["items"].append(item("symbols-absent", evidence=[{"kind": "symbols", "path": "lib/moved.py", "names": ["missing_name"]}]))
+        ledger["items"].append(item("reference-absent", evidence=[{"kind": "reference", "glob": "lib/*.py", "pattern": "NOT_THERE"}]))
+        ledger["items"].append(item("commit-absent", evidence=[{"kind": "commit", "commit": "1111111111111111111111111111111111111111"}]))
+        code, payload = self.run_ledger(ledger, "--destination", f"dest={self.dest}")
+        self.assertEqual(code, 0, payload["drift"])
+        verdicts = {row["id"]: row["verdict"] for row in payload["items"]}
+        for key in (
+            "path-present",
+            "text-present",
+            "sha-present",
+            "symbols-present",
+            "reference-present",
+            "commit-present",
+        ):
+            self.assertEqual(verdicts[key], "arrived", key)
+        for key in (
+            "path-absent",
+            "text-absent",
+            "sha-absent",
+            "symbols-absent",
+            "reference-absent",
+            "commit-absent",
+        ):
+            self.assertEqual(verdicts[key], "missing", key)
+
+    def test_untracked_receipt_does_not_attest_or_contradict(self):
+        self.publish(self.dest, {"README.md": "dest\n"})
+        write(
+            self.dest / "docs" / "split-receipt.json",
+            json.dumps({"version": 1, "items": {"claimed": {"arrived_in": "abc", "attested_by": "x", "attested_on": "2026-09-07"}}}),
+        )
+        ledger = ledger_skeleton()
+        ledger["items"].append(item("claimed", state="missing"))
+        code, payload = self.run_ledger(ledger, "--destination", f"dest={self.dest}")
+        self.assertEqual(code, 0)
+        self.assertFalse(payload["destinations"]["dest"]["receipt_loaded"])
+        self.assertIsNone(payload["destinations"]["dest"]["receipt_error"])
+        self.assertIsNone(payload["items"][0]["observed"]["attested"])
+        self.assertIsNone(payload["items"][0]["drift"])
+
+    def test_dirty_receipt_does_not_attest_or_contradict(self):
+        committed = json.dumps({"version": 1, "items": {}})
+        self.publish(self.dest, {"README.md": "dest\n", "docs/split-receipt.json": committed})
+        write(
+            self.dest / "docs" / "split-receipt.json",
+            json.dumps({"version": 1, "items": {"claimed": {"arrived_in": "abc", "attested_by": "x", "attested_on": "2026-09-07"}}}),
+        )
+        ledger = ledger_skeleton()
+        ledger["items"].append(item("claimed", state="missing"))
+        code, payload = self.run_ledger(ledger, "--destination", f"dest={self.dest}")
+        self.assertEqual(code, 0)
+        self.assertTrue(payload["destinations"]["dest"]["receipt_loaded"])
+        self.assertFalse(payload["items"][0]["observed"]["attested"])
+        self.assertIsNone(payload["items"][0]["drift"])
+
+    def test_symlink_outside_checkout_is_not_followed(self):
+        outside = self.base / "outside-secret.txt"
+        write(outside, "OUTSIDE_SECRET_MARKER_SHOULD_NOT_BE_READ\n")
+        self.publish(self.dest, {"README.md": "dest\n"})
+        link = self.dest / "lib" / "leaky.py"
+        link.parent.mkdir(parents=True, exist_ok=True)
+        os.symlink(outside, link)
+        self.git(self.dest, "add", "-A")
+        self.git(self.dest, "commit", "-q", "-m", "symlink")
+        sha = self.git(self.dest, "rev-parse", "HEAD")
+        self.git(self.dest, "update-ref", "refs/remotes/origin/main", sha)
+        digest = hashlib.sha256(outside.read_bytes()).hexdigest()
+        ledger = ledger_skeleton()
+        ledger["items"].append(item("symlink-path", state="missing", evidence=[{"kind": "path", "path": "lib/leaky.py"}]))
+        ledger["items"].append(item("symlink-text", state="missing", evidence=[
+            {"kind": "text", "path": "lib/leaky.py", "contains": "OUTSIDE_SECRET_MARKER_SHOULD_NOT_BE_READ"},
+        ]))
+        ledger["items"].append(item("symlink-hash", state="missing", evidence=[
+            {"kind": "sha256", "path": "lib/leaky.py", "sha256": digest},
+        ]))
+        code, payload = self.run_ledger(ledger, "--destination", f"dest={self.dest}")
+        self.assertEqual(code, 0, payload["drift"])
+        for row in payload["items"]:
+            with self.subTest(item=row["id"]):
+                self.assertEqual(row["verdict"], "unverified")
+                self.assertEqual(row["observed"]["evidence"][0]["status"], "unverifiable")
+                self.assertIn("not followed", row["observed"]["evidence"][0]["detail"])
+
+    def test_submodule_gitlink_is_not_followed(self):
+        outside = self.base / "outside-repo"
+        outside.mkdir()
+        self.publish(outside, {"secret.py": "def leaked():\n    return 1\n"}, origin="https://github.com/org/outside.git")
+        outside_sha = self.git(outside, "rev-parse", "HEAD")
+        self.publish(self.dest, {"README.md": "dest\n"})
+        self.git(self.dest, "update-index", "--add", "--cacheinfo", f"160000,{outside_sha},vendor/outside")
+        write(self.dest / "vendor" / "outside" / "secret.py", "def leaked():\n    return 1\nUNIQUE_SUBMODULE_BODY\n")
+        self.git(self.dest, "commit", "-q", "-m", "gitlink")
+        sha = self.git(self.dest, "rev-parse", "HEAD")
+        self.git(self.dest, "update-ref", "refs/remotes/origin/main", sha)
+        ledger = ledger_skeleton()
+        ledger["items"].append(item("gitlink-path", state="missing", evidence=[{"kind": "path", "path": "vendor/outside"}]))
+        ledger["items"].append(item("gitlink-inside", state="missing", evidence=[
+            {"kind": "text", "path": "vendor/outside/secret.py", "contains": "UNIQUE_SUBMODULE_BODY"},
+        ]))
+        ledger["items"].append(item("gitlink-symbols", state="missing", evidence=[
+            {"kind": "symbols", "glob": "vendor/outside/*.py", "names": ["leaked"]},
+        ]))
+        code, payload = self.run_ledger(ledger, "--destination", f"dest={self.dest}")
+        self.assertEqual(code, 0, payload["drift"])
+        rows = {row["id"]: row for row in payload["items"]}
+        self.assertEqual(rows["gitlink-path"]["verdict"], "unverified")
+        self.assertEqual(rows["gitlink-path"]["observed"]["evidence"][0]["status"], "unverifiable")
+        self.assertEqual(rows["gitlink-inside"]["verdict"], "missing")
+        self.assertEqual(rows["gitlink-inside"]["observed"]["evidence"][0]["status"], "absent")
+        self.assertEqual(rows["gitlink-symbols"]["verdict"], "missing")
+
+
+class GitHubIdentityTests(unittest.TestCase):
+    def test_https_and_ssh_forms_and_suffix_hosts(self):
+        cases = [
+            ("https://github.com/org/dest.git", ("github.com", "org/dest")),
+            ("https://github.com/org/dest", ("github.com", "org/dest")),
+            ("https://github.com/org/dest/", ("github.com", "org/dest")),
+            ("git@github.com:org/dest.git", ("github.com", "org/dest")),
+            ("ssh://git@github.com/org/dest.git", ("github.com", "org/dest")),
+            ("https://user:token@github.com/org/dest.git", ("github.com", "org/dest")),
+            ("https://github.com.evil.invalid/org/dest.git", None),
+            ("https://example.invalid/org/dest.git", None),
+            ("https://example.invalid/github.com/org/dest.git", None),
+            ("git@example.invalid:org/dest.git", None),
+            ("https://github.com/org/other.git", ("github.com", "org/other")),
+            ("git://github.com/org/dest.git", None),
+        ]
+        for url, expected in cases:
+            with self.subTest(url=url):
+                self.assertEqual(reconcile.parse_github_identity(url), expected)
 
 
 if __name__ == "__main__":
