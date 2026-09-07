@@ -49,10 +49,12 @@ def config() -> dict:
             "npu_devices": [0, 1],
             "model": {"path": "/models/example"},
             "environment": {"cann": "test"},
-            "topology": {"tp": 2},
+            "topology": {"tp": 2, "dp": 1},
             "serve_args": [],
             "bench_args": [],
             "dataset": "test",
+            "max_concurrency": 8,
+            "request_rate": "inf",
         },
         "warmups": 1,
         "runs": 3,
@@ -141,6 +143,65 @@ class PerformanceRegressionTests(unittest.TestCase):
         invalid["candidate"]["session_id"] = invalid["baseline"]["session_id"]
         with self.assertRaisesRegex(performance.PerformanceRegressionError, "different"):
             performance.validate_config(invalid)
+
+    def test_free_form_shared_cannot_produce_parity_certificate(self) -> None:
+        """Regression: `{"note": "same"}` used to pass parity with nothing pinned."""
+        invalid = config()
+        invalid["shared"] = {"note": "same"}
+        with self.assertRaisesRegex(
+            performance.PerformanceRegressionError,
+            r"missing required parity keys: .*max_concurrency.*request_rate",
+        ) as raised:
+            performance.validate_config(invalid)
+        for key in performance.REQUIRED_SHARED_KEYS:
+            self.assertIn(key, str(raised.exception))
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config_path = root / "config.json"
+            config_path.write_text(json.dumps(invalid), encoding="utf-8")
+            with self.assertRaises(performance.PerformanceRegressionError):
+                performance.plan(root / "run", config_path=config_path, created_at=NOW)
+            self.assertFalse((root / "run" / "parity-check.json").exists())
+
+    def test_topology_without_data_parallel_degree_is_rejected(self) -> None:
+        invalid = config()
+        invalid["shared"]["topology"] = {"tp": 2}
+        with self.assertRaisesRegex(
+            performance.PerformanceRegressionError, r"shared\.topology\.dp"
+        ):
+            performance.validate_config(invalid)
+
+    def test_concurrency_must_be_positive_integer(self) -> None:
+        invalid = config()
+        invalid["shared"]["max_concurrency"] = "8"
+        with self.assertRaisesRegex(
+            performance.PerformanceRegressionError, r"shared\.max_concurrency"
+        ):
+            performance.validate_config(invalid)
+
+    def test_parity_check_names_what_it_verified(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config_path = root / "config.json"
+            experiment = config()
+            experiment["parent_run_id"] = "change-validation-1"
+            config_path.write_text(json.dumps(experiment), encoding="utf-8")
+            output = root / "run"
+            performance.plan(output, config_path=config_path, created_at=NOW)
+            parity = json.loads((output / "parity-check.json").read_text(encoding="utf-8"))
+            self.assertEqual(parity["basis"], "declared-configuration")
+            checks = {row["check"]: row for row in parity["checks"]}
+            self.assertEqual(
+                checks["required-shared-keys-present"]["keys"],
+                list(performance.REQUIRED_SHARED_KEYS),
+            )
+            self.assertEqual(
+                checks["topology-parallel-degrees-recorded"]["values"], {"tp": 2, "dp": 1}
+            )
+            self.assertTrue(parity["not_checked"])
+            manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(manifest["parent_run_id"], "change-validation-1")
+            self.assertEqual(manifest["topology"], {"tp": 2, "dp": 1})
 
     def test_regression_is_detected(self) -> None:
         experiment = config()

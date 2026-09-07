@@ -11,8 +11,8 @@ Wrap `vllm-ascend-benchmark` with a controlled two-state experiment.
 
 1. Create independent baseline and candidate worktrees and `session-management` sessions.
 2. Use the same machine allocation policy, NPU count, model and weight hash, environment, topology, Serving arguments, Benchmark arguments, dataset, request rate, and concurrency.
-3. Put all non-code conditions in the experiment `shared` object.
-4. Run `scripts/performance_regression.py plan`.
+3. Put all non-code conditions in the experiment `shared` object. `plan` requires `machine`, `npu_devices`, `model`, `environment`, `topology` (with `tp` and `dp`), `serve_args`, `bench_args`, `dataset`, `max_concurrency`, and `request_rate`; a `shared` object without them cannot produce a parity certificate.
+4. Run `scripts/performance_regression.py plan`; set `parent_run_id` in the config when the experiment is evidence for a change-validation plan.
 5. Follow `schedule.json` exactly. Before each state executes, establish `remote-code-parity`, start or confirm its service, then call `vllm-ascend-benchmark`.
 6. Normalize each raw Benchmark result with `normalize`, then call `record`.
 7. Run `analyze` only after the schedule is complete.
@@ -35,7 +35,7 @@ candidate 3
 
 `scripts/performance_regression.py` provides:
 
-- `plan`: validate experiment parity, generate the alternating schedule, and create Run Manifest v1;
+- `plan`: validate that `shared` declares every parity condition, generate the alternating schedule, write a `parity-check.json` that names what it did and did not verify, and create Run Manifest v1;
 - `normalize`: convert one single-run or aggregated Benchmark result into the measurement contract;
 - `record`: accept the next normalized measurement only when its state, phase, ordinal, and config hash match the schedule;
 - `analyze`: exclude warmups, report mean, sample deviation, coefficient of variation, outliers, relative change, and threshold verdict.
