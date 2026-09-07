@@ -565,18 +565,56 @@ def _unescape_backslash_run(inner: str, *, specials: frozenset[str] | None) -> s
     return "".join(chars)
 
 
+def _parse_double_quoted(text: str) -> tuple[str, str]:
+    chars: list[str] = []
+    index = 1
+    while index < len(text):
+        char = text[index]
+        if char == '"':
+            return "".join(chars), text[index + 1 :]
+        if char != "\\":
+            chars.append(char)
+            index += 1
+            continue
+        if index + 1 >= len(text):
+            _fail_env_syntax("clone .env has a dangling backslash")
+        nxt = text[index + 1]
+        if nxt in "\n\r":
+            _fail_env_syntax("clone .env has an unsupported line continuation")
+        if nxt in _DOUBLE_QUOTE_ESCAPES:
+            chars.append(nxt)
+        else:
+            chars.append("\\")
+            chars.append(nxt)
+        index += 2
+    _fail_env_syntax("clone .env has an unclosed double quote")
+    raise AssertionError("unreachable")
+
+
+def _parse_single_quoted(text: str) -> tuple[str, str]:
+    index = 1
+    while index < len(text):
+        if text[index] == "'":
+            return text[1:index], text[index + 1 :]
+        index += 1
+    _fail_env_syntax("clone .env has an unclosed single quote")
+    raise AssertionError("unreachable")
+
+
 def _unescape_env_value(raw: str) -> str:
     text = raw.strip()
     if not text:
         return ""
-    if text.startswith('"'):
-        if len(text) < 2 or text[-1] != '"':
-            _fail_env_syntax("clone .env has an unclosed double quote")
-        return _unescape_backslash_run(text[1:-1], specials=_DOUBLE_QUOTE_ESCAPES)
-    if text.startswith("'"):
-        if len(text) < 2 or text[-1] != "'":
-            _fail_env_syntax("clone .env has an unclosed single quote")
-        return text[1:-1]
+    if text[0] == '"':
+        value, rest = _parse_double_quoted(text)
+        if rest:
+            _fail_env_syntax("clone .env has extra content after a quoted value")
+        return value
+    if text[0] == "'":
+        value, rest = _parse_single_quoted(text)
+        if rest:
+            _fail_env_syntax("clone .env has extra content after a quoted value")
+        return value
     if '"' in text or "'" in text:
         _fail_env_syntax("clone .env has an unquoted value with an embedded quote")
     return _unescape_backslash_run(text, specials=None)

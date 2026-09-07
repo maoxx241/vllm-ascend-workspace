@@ -399,6 +399,60 @@ class DetectionTests(unittest.TestCase):
                 hits = [row for row in payload["violations"] if row["rule"] == "R4"]
                 self.assertTrue(hits, payload["violations"])
 
+    def test_scaffold_origin_is_retained_across_path_components(self) -> None:
+        policy = copy.deepcopy(SYNTHETIC_POLICY)
+        top = policy["subsystems"][1]
+        top["repo"] = "vllm-ascend-workspace/vaws-top"
+        top["inline_patterns"] = ["vaws-top", ".agents/skills/vaws-top/"]
+        top["published_external_references"] = [
+            ".agents/skills/vaws-top/",
+            ".agents/skills/vaws-top/SKILL.md",
+        ]
+        self.repo.set_policy(policy)
+        skill = repr(".agents/skills/vaws-top/SKILL.md")
+        roots = ("Path(__file__).resolve().parents[4]", "Path(__file__).absolute().parent")
+        shapes = (
+            "(ROOT / {p}).read_bytes()",
+            "ROOT.joinpath({p}).exists()",
+            "open(ROOT / {p}).read()",
+            "Path(ROOT, {p}).read_text()",
+            'ROOT.joinpath("subdir", {p}).is_file()',
+            '(ROOT / "subdir" / {p}).read_text()',
+            'ROOT.joinpath("subdir").joinpath({p}).stat()',
+        )
+        for root in roots:
+            for shape in shapes:
+                source = "from pathlib import Path\nROOT = " + root + "\n" + shape.format(p=skill) + "\n"
+                with self.subTest(root=root, shape=shape):
+                    write(self.repo.root / ".agents" / "skills" / "skill-a" / "scripts" / "edge.py", source)
+                    _code, payload = self.repo.run("--mode", "report")
+                    hits = [row for row in payload["violations"] if row["rule"] == "R4"]
+                    self.assertTrue(hits, source)
+
+    def test_external_locator_and_metadata_remain_allowed(self) -> None:
+        policy = copy.deepcopy(SYNTHETIC_POLICY)
+        top = policy["subsystems"][1]
+        top["repo"] = "vllm-ascend-workspace/vaws-top"
+        top["inline_patterns"] = ["vaws-top", ".agents/skills/vaws-top/"]
+        top["published_external_references"] = [
+            ".agents/skills/vaws-top/",
+            ".agents/skills/vaws-top/SKILL.md",
+        ]
+        self.repo.set_policy(policy)
+        skill = repr(".agents/skills/vaws-top/SKILL.md")
+        sources = (
+            "DESCRIPTOR = " + skill + "\n",
+            'DESCRIPTOR = {"agent_skill": ' + skill + "}\n",
+            "clone = locate_clone()\n(clone / " + skill + ").read_text()\n",
+            "clone = locate_clone()\nclone.joinpath(" + skill + ").exists()\n",
+        )
+        for source in sources:
+            with self.subTest(source=source):
+                write(self.repo.root / ".agents" / "skills" / "skill-a" / "scripts" / "edge.py", source)
+                _code, payload = self.repo.run("--mode", "report")
+                hits = [row for row in payload["violations"] if row["rule"] == "R4"]
+                self.assertEqual(hits, [])
+
     def test_upstream_submodule_content_is_skipped(self) -> None:
         write(self.repo.root / "vllm" / "plugin.py", "import domain_helper\nX = '.agents/lib'\n")
         write(self.repo.root / "vllm-ascend" / "plugin.py", "import domain_helper\n")

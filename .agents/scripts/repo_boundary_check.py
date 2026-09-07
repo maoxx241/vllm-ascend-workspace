@@ -615,27 +615,59 @@ def _join_is_file_access(join_node: ast.AST, parents: dict[ast.AST, ast.AST]) ->
     return True
 
 
+def _path_expr_originates_from_scaffold(node: ast.AST, root_names: set[str]) -> bool:
+    """True when a path expression is built from a known scaffold root.
+
+    Origin is retained across /, joinpath, and Path wrapping in the same
+    expression. Later components do not replace that origin.
+    """
+    if _is_scaffold_root_expr(node, root_names):
+        return True
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+        return _path_expr_originates_from_scaffold(node.left, root_names)
+    if isinstance(node, ast.Call):
+        name = _call_attr_or_name(node)
+        if name in _PATH_CTORS:
+            return bool(node.args) and _path_expr_originates_from_scaffold(node.args[0], root_names)
+        if name == "joinpath" and isinstance(node.func, ast.Attribute):
+            return _path_expr_originates_from_scaffold(node.func.value, root_names)
+        if isinstance(node.func, ast.Attribute) and node.func.attr in {"resolve", "expanduser", "absolute"}:
+            return _path_expr_originates_from_scaffold(node.func.value, root_names)
+        return False
+    if isinstance(node, ast.Attribute) and node.attr in _ROOT_CHAIN_ATTRS:
+        return _path_expr_originates_from_scaffold(node.value, root_names)
+    if isinstance(node, ast.Subscript):
+        if isinstance(node.value, ast.Attribute) and node.value.attr == "parents":
+            return _path_expr_originates_from_scaffold(node.value.value, root_names)
+        return False
+    return False
+
+
 def is_direct_local_file_use(
     node: ast.AST,
     parents: dict[ast.AST, ast.AST],
     root_names: set[str] | None = None,
 ) -> bool:
-    """True for Path/open of a relative path, or a scaffold-root join used as a file.
+    """True for Path/open of a relative path, or a scaffold-origin construction used as a file.
 
     Descriptor assignments and joins onto an explicit external locator stay false.
     """
     root_names = set() if root_names is None else root_names
     parent = parents.get(node)
+    if parent is None:
+        return False
     if isinstance(parent, ast.Call) and parent.args and parent.args[0] is node:
         name = _call_attr_or_name(parent)
         if name in _PATH_CTORS or name == "open":
             return True
-        if name == "joinpath" and isinstance(parent.func, ast.Attribute):
-            if _is_scaffold_root_expr(parent.func.value, root_names):
+    if isinstance(parent, ast.Call) and node in parent.args:
+        name = _call_attr_or_name(parent)
+        if name in _PATH_CTORS or name == "joinpath":
+            if _path_expr_originates_from_scaffold(parent, root_names):
                 return _join_is_file_access(parent, parents)
-            return False
+        return False
     if isinstance(parent, ast.BinOp) and isinstance(parent.op, ast.Div) and parent.right is node:
-        if _is_scaffold_root_expr(parent.left, root_names):
+        if _path_expr_originates_from_scaffold(parent, root_names):
             return _join_is_file_access(parent, parents)
         return False
     return False

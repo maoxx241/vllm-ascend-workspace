@@ -370,6 +370,79 @@ class EnvFileTests(unittest.TestCase):
                 expected = "NFM_INVENTORY_FILES=" + MODULE.encode_env_value(desired) + "\n"
                 self.assertEqual(path.read_text(encoding="utf-8"), expected)
 
+    def test_one_complete_quoted_value_grammar(self) -> None:
+        cases = [
+            ("", ""),
+            ("   ", ""),
+            ('""', ""),
+            ("''", ""),
+            ("  /owned/a  b\tc  ", "/owned/a  b\tc"),
+            (' " /owned/a  " \t', " /owned/a  "),
+            ("  '/owned/\\$literal'  ", "/owned/\\$literal"),
+            (r"/owned/\q\ \$\`\\end", "/owned/q $`\\end"),
+            ('"/owned/\\q\\!"', "/owned/\\q\\!"),
+        ]
+        for raw, expected in cases:
+            with self.subTest(raw=raw):
+                self.assertEqual(MODULE._unescape_env_value(raw), expected)
+        for prefix in ("/var/observations/", "/chosen path/", "literal="):
+            for escaped in ("$", "`", '"', "\\"):
+                with self.subTest(prefix=prefix, escaped=escaped):
+                    raw = '"' + prefix + "\\" + escaped + 'end"'
+                    self.assertEqual(MODULE._unescape_env_value(raw), prefix + escaped + "end")
+
+    def test_encoder_roundtrip_without_expansion(self) -> None:
+        values = (
+            "/chosen/plain",
+            "/chosen/a b",
+            "/chosen/a\tb",
+            "/chosen/#name",
+            "/chosen/\\q",
+            "/chosen/\\$name",
+            "/chosen/$name",
+            "/chosen/`name`",
+            '/chosen/"name"',
+            "/chosen/'name'",
+            "name=value",
+            "",
+            "  spaced  ",
+        )
+        for value in values:
+            with self.subTest(value=value):
+                self.assertEqual(MODULE._unescape_env_value(MODULE.encode_env_value(value)), value)
+
+    def test_nonexplicit_quoted_lines_keep_original_bytes(self) -> None:
+        for raw in ('"/chosen/\\q"', "'/chosen/\\$name'", r"/chosen/a\ b", '  "/chosen/a b"  '):
+            with self.subTest(raw=raw):
+                path = self.clone / ".env"
+                original = "NFM_INVENTORY_FILES=" + raw + "\nUNRELATED=unchanged\n"
+                path.write_text(original, encoding="utf-8")
+                MODULE.apply_clone_env(
+                    self.clone,
+                    inventory_files=[Path("/default/input.json")],
+                    host_pool_files=[],
+                    bootstrap_command="",
+                    explicit=set(),
+                )
+                self.assertEqual(path.read_text(encoding="utf-8"), original)
+
+    def test_ambiguous_quoted_forms_fail_before_replace(self) -> None:
+        for raw in ('"/chosen/a"b"', "'/chosen/a'b'", '"/chosen/a" "b"', "'/chosen/a' 'b'"):
+            with self.subTest(raw=raw):
+                path = self.clone / ".env"
+                original = "NFM_INVENTORY_FILES=" + raw + "\nUNRELATED=unchanged\n"
+                path.write_text(original, encoding="utf-8")
+                with self.assertRaises(MODULE.MonitorError):
+                    MODULE.apply_clone_env(
+                        self.clone,
+                        inventory_files=[Path("/explicit/replacement.json")],
+                        host_pool_files=[],
+                        bootstrap_command="",
+                        explicit={"NFM_INVENTORY_FILES"},
+                    )
+                self.assertEqual(path.read_text(encoding="utf-8"), original)
+                self.assertEqual(list(self.clone.glob(".env.*.tmp")), [])
+
     def test_unsupported_env_syntax_fails_before_replacement(self) -> None:
         path = self.clone / ".env"
         original = 'NFM_INVENTORY_FILES="/tmp/broken.json\nUNRELATED=keep\n'
