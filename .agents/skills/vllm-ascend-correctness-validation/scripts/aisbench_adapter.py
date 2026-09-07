@@ -231,12 +231,37 @@ def prepare(
     }
 
 
+def validate_execution(execution: Any) -> dict[str, Any]:
+    """Require the execution identity the comparator needs to attribute results.
+
+    AISBench never sees the engine, so the operator must declare which service
+    produced the summary: at least `served_model` and the `engine_args` it was
+    started with (an empty object is allowed only when nothing non-default was
+    passed). The comparator diffs this block between baseline and candidate.
+    """
+    if not isinstance(execution, Mapping):
+        raise AisbenchAdapterError("execution must be a JSON object")
+    engine_args = execution.get("engine_args")
+    if not isinstance(engine_args, Mapping):
+        raise AisbenchAdapterError(
+            "execution.engine_args must be an object describing how the "
+            "benchmarked service was started (use {} only if no non-default "
+            "engine arguments were passed)"
+        )
+    served_model = execution.get("served_model")
+    if not isinstance(served_model, str) or not served_model.strip():
+        raise AisbenchAdapterError("execution.served_model must be a non-empty string")
+    return dict(execution)
+
+
 def normalize_summary(
     summary_csv: Path,
     *,
     label: str,
+    execution: Mapping[str, Any],
     model_column: str = MODEL_ABBR,
 ) -> dict[str, Any]:
+    execution_block = validate_execution(execution)
     try:
         stream = summary_csv.open("r", encoding="utf-8-sig", newline="")
     except OSError as exc:
@@ -297,6 +322,7 @@ def normalize_summary(
     return {
         "schema_version": SCHEMA_VERSION,
         "label": label,
+        "execution": execution_block,
         "adapter": {
             "name": "aisbench",
             "summary_csv": str(summary_csv.resolve()),
@@ -330,8 +356,27 @@ def build_parser() -> argparse.ArgumentParser:
     normalize.add_argument("--summary-csv", required=True, type=Path)
     normalize.add_argument("--label", required=True)
     normalize.add_argument("--model-column", default=MODEL_ABBR)
+    normalize.add_argument(
+        "--execution",
+        required=True,
+        help=(
+            "JSON object naming the benchmarked service: served_model, engine_args "
+            "it was started with, and optionally base_url; the comparator refuses "
+            "undeclared baseline/candidate differences in this block"
+        ),
+    )
     normalize.add_argument("--output", required=True, type=Path)
     return parser
+
+
+def _json_object(raw: str, label: str) -> dict[str, Any]:
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise AisbenchAdapterError(f"{label} must be valid JSON: {exc}") from exc
+    if not isinstance(value, dict):
+        raise AisbenchAdapterError(f"{label} must be a JSON object")
+    return value
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -361,6 +406,7 @@ def main(argv: list[str] | None = None) -> int:
             normalized = normalize_summary(
                 args.summary_csv,
                 label=args.label,
+                execution=_json_object(args.execution, "execution"),
                 model_column=args.model_column,
             )
             _atomic_write(

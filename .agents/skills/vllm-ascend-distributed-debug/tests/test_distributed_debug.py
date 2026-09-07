@@ -139,7 +139,7 @@ class DistributedDebugTests(unittest.TestCase):
         self.assertEqual(analysis["status"], "inconclusive")
         self.assertEqual(analysis["evidence_gaps"], ["missing-rank-evidence"])
 
-    def test_full_lifecycle_writes_manifest_and_report(self) -> None:
+    def test_no_mismatch_without_completion_stays_inconclusive(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             config_path = root / "config.json"
@@ -159,11 +159,94 @@ class DistributedDebugTests(unittest.TestCase):
             )
             result = distributed.analyze_case(output, updated_at=NOW)
             self.assertEqual(result["status"], "no-mismatch-detected")
+            self.assertEqual(result["incomplete_ranks"], [0, 1])
             self.assertTrue((output / "report.md").is_file())
             manifest = json.loads(
                 (output / "manifest.json").read_text(encoding="utf-8")
             )
             self.assertEqual(manifest["status"], "inconclusive")
+
+    def test_every_rank_completing_without_mismatch_is_passed(self) -> None:
+        """Regression: the manifest could only ever become failed/inconclusive."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            case = config()
+            case["parent_run_id"] = "change-validation-1"
+            config_path = root / "config.json"
+            config_path.write_text(json.dumps(case), encoding="utf-8")
+            output = root / "case"
+            distributed.init_case(output, config_path=config_path, created_at=NOW)
+            rows = []
+            for kind in ("collective_enter", "collective_exit"):
+                rows.extend([event(0, kind), event(1, kind)])
+            for rank in (0, 1):
+                rows.append(
+                    {
+                        "timestamp": f"2026-07-25T12:00:1{rank}Z",
+                        "rank": rank,
+                        "phase": "shutdown",
+                        "event": distributed.RANK_COMPLETE_EVENT,
+                    }
+                )
+            events_path = root / "events.jsonl"
+            events_path.write_text(
+                "".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8"
+            )
+            distributed.ingest_events(output, events_path=events_path, updated_at=NOW)
+            result = distributed.analyze_case(output, updated_at=NOW)
+            self.assertEqual(result["status"], "completed-without-mismatch")
+            self.assertEqual(result["manifest_status"], "passed")
+            manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(manifest["status"], "passed")
+            self.assertEqual(manifest["parent_run_id"], "change-validation-1")
+            self.assertIn("analysis", {row["name"] for row in manifest["artifacts"]})
+
+    def test_one_rank_missing_completion_is_not_passed(self) -> None:
+        case = config()
+        rows = []
+        for kind in ("collective_enter", "collective_exit"):
+            rows.extend([event(0, kind), event(1, kind)])
+        rows.append(
+            {
+                "timestamp": "2026-07-25T12:00:10Z",
+                "rank": 0,
+                "phase": "model-execute",
+                "event": distributed.RANK_COMPLETE_EVENT,
+            }
+        )
+        analysis = distributed.analyze_evidence(
+            {"ranks": case["ranks"], "groups": case["groups"]},
+            case["network_endpoints"],
+            rows,
+        )
+        self.assertEqual(analysis["status"], "no-mismatch-detected")
+        self.assertEqual(analysis["completed_ranks"], [0])
+        self.assertEqual(analysis["incomplete_ranks"], [1])
+
+    def test_completion_does_not_override_a_confirmed_finding(self) -> None:
+        case = config()
+        rows = [
+            event(0, "collective_enter", operation="all_reduce"),
+            event(1, "collective_enter", operation="all_gather"),
+        ]
+        for rank in (0, 1):
+            rows.append(
+                {
+                    "timestamp": f"2026-07-25T12:00:1{rank}Z",
+                    "rank": rank,
+                    "phase": "model-execute",
+                    "event": distributed.RANK_COMPLETE_EVENT,
+                }
+            )
+        analysis = distributed.analyze_evidence(
+            {"ranks": case["ranks"], "groups": case["groups"]},
+            case["network_endpoints"],
+            rows,
+        )
+        self.assertEqual(analysis["status"], "diagnosed")
+        self.assertEqual(
+            distributed.ANALYSIS_TO_MANIFEST_STATUS[analysis["status"]], "failed"
+        )
 
 
 if __name__ == "__main__":

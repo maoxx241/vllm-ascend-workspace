@@ -80,7 +80,7 @@ python3 /path/to/vaws/.agents/scripts/vaws_client_setup.py --client codex --proj
 
 `--client` accepts `claude`, `grok`, `kimi`, `codex`, `cursor`. The helper merges
 hooks/MCP entries, preserves other hooks and permission settings, and places
-private backups under `.remote-dev/state/client-setup/`. It never authenticates
+private backups under `.vaws-local/client-setup-backups/`. It never authenticates
 a client or grants trust. Complete the client's normal trust/approval prompts
 and resume/start it to load the hooks. Configuration is not acceptance.
 
