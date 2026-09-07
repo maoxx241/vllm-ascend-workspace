@@ -127,6 +127,11 @@ Normalize one Benchmark result at a time:
 }
 ```
 
+Optional `observation` is a non-empty object recorded from the run that actually
+produced the measurement (code digest, environment, model, topology, serve/bench
+args, concurrency, request rate, devices, native digest). `analyze` will not
+emit `passed` without it.
+
 The controller rejects out-of-order state, phase, ordinal, or config hash.
 
 ## Statistics
@@ -141,8 +146,10 @@ The controller rejects out-of-order state, phase, ordinal, or config hash.
 
 ## Status
 
-- `passed`: every required metric has at least two decision values per state, CV is within limit, and no threshold is exceeded;
-- `failed`: measurement quality passes and at least one metric regresses;
+- `passed`: a comparable observational certificate was consumed, every required metric has at least two decision values per state, CV is within limit, and no threshold is exceeded;
+- `failed`: the pair is comparable, measurement quality passes, and at least one metric regresses;
 - `inconclusive`: schedule incomplete, metrics missing or insufficient, or CV exceeds the configured limit.
+
+`analyze` issues the certificate from each state's recorded measurement `observation` plus the declared `shared` config. `shared` stays declared. Missing observations, declared-only must-observe keys, or an undeclared difference abort `analyze` before it can emit `passed`. Default variable under test is `workspace_snapshot.vllm_ascend_commit`; override with config `allowed_differences`. See `docs/comparability-certificate.md`.
 
 Heavy profiler collection is a separate explicit action.

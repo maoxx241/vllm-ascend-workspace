@@ -20,6 +20,15 @@ LIB = ROOT / ".agents" / "lib"
 if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
+from vaws_comparability import (  # noqa: E402
+    PERFORMANCE_MUST_OBSERVE,
+    ComparabilityError,
+    consume_certificate,
+    identity_from_mapping,
+    identity_from_recorded_observation,
+    issue_certificate,
+    merge_identities,
+)
 from vaws_run_manifest import (  # noqa: E402
     RunManifestError,
     add_artifact,
@@ -266,6 +275,12 @@ def validate_config(config: Mapping[str, Any]) -> None:
         not isinstance(parent_run_id, str) or not parent_run_id.strip()
     ):
         errors.append("parent_run_id must be a non-empty string when present")
+    allowed_differences = config.get("allowed_differences")
+    if allowed_differences is not None:
+        if not isinstance(allowed_differences, list) or any(
+            not isinstance(item, str) or not item.strip() for item in allowed_differences
+        ):
+            errors.append("allowed_differences must be an array of non-empty strings")
     runs = config.get("runs")
     if not isinstance(runs, int) or isinstance(runs, bool) or runs < 2:
         errors.append("runs must be an integer of at least 2")
@@ -474,6 +489,11 @@ def validate_measurement(measurement: Mapping[str, Any]) -> None:
                 errors.append(f"metrics.{name} must be numeric")
             elif not math.isfinite(float(value)):
                 errors.append(f"metrics.{name} must be finite")
+    observation = measurement.get("observation")
+    if observation is not None and (
+        not isinstance(observation, Mapping) or not observation
+    ):
+        errors.append("observation must be a non-empty object when present")
     if errors:
         raise PerformanceRegressionError("; ".join(errors))
 
@@ -515,6 +535,8 @@ def record(
         "source": result.get("source"),
         "recorded_at": timestamp,
     }
+    if isinstance(result.get("observation"), Mapping):
+        normalized["observation"] = dict(result["observation"])
     measurements["measurements"].append(normalized)
     pending["status"] = "recorded"
     _write_json(output_dir / "measurements.json", measurements)
@@ -702,7 +724,86 @@ def render_report(comparison: Mapping[str, Any]) -> str:
     lines.extend(["", "## Full statistics", "", "```json"])
     lines.append(json.dumps(comparison["metrics"], ensure_ascii=False, indent=2, sort_keys=True))
     lines.extend(["```", ""])
+    if isinstance(comparison.get("comparability"), Mapping):
+        lines.extend(
+            [
+                "## Comparability certificate",
+                "",
+                f"- Verdict: `{comparison['comparability'].get('verdict')}`",
+                "",
+            ]
+        )
     return "\n".join(lines)
+
+
+def _declared_state_identity(
+    config: Mapping[str, Any], *, state: str, run_id: str
+) -> Any:
+    shared = config["shared"]
+    return identity_from_mapping(
+        run_id,
+        {
+            "workspace_snapshot": {
+                "vllm_ascend_commit": config[state]["code_snapshot"],
+            },
+            "environment": shared["environment"],
+            "model": shared["model"],
+            "topology": shared["topology"],
+            "serve_args": shared["serve_args"],
+            "bench_args": shared["bench_args"],
+            "dataset": shared["dataset"],
+            "max_concurrency": shared["max_concurrency"],
+            "request_rate": shared["request_rate"],
+            "npu_devices": shared["npu_devices"],
+        },
+        origin="declared",
+    )
+
+
+def _state_identity(
+    config: Mapping[str, Any],
+    measurements: Sequence[Mapping[str, Any]],
+    *,
+    state: str,
+    run_id: str,
+) -> Any:
+    declared = _declared_state_identity(config, state=state, run_id=run_id)
+    observations = [
+        row["observation"]
+        for row in measurements
+        if row.get("state") == state
+        and row.get("phase") == "measure"
+        and isinstance(row.get("observation"), Mapping)
+        and row["observation"]
+    ]
+    if not observations:
+        return declared
+    first = observations[0]
+    if any(item != first for item in observations[1:]):
+        raise PerformanceRegressionError(
+            f"{state} measurements record inconsistent observations"
+        )
+    return merge_identities(
+        declared,
+        identity_from_recorded_observation(run_id, first),
+        run_id=run_id,
+    )
+
+
+def build_comparability_certificate(
+    config: Mapping[str, Any], measurements: Mapping[str, Any]
+) -> dict[str, Any]:
+    run_id = str(config["run_id"])
+    rows = list(measurements.get("measurements", []))
+    vary = config.get("allowed_differences") or [
+        "workspace_snapshot.vllm_ascend_commit"
+    ]
+    return issue_certificate(
+        _state_identity(config, rows, state="baseline", run_id=f"{run_id}-baseline"),
+        _state_identity(config, rows, state="candidate", run_id=f"{run_id}-candidate"),
+        vary=vary,
+        must_observe_prefixes=PERFORMANCE_MUST_OBSERVE,
+    )
 
 
 def analyze(output_dir: Path, *, updated_at: str | None = None) -> dict[str, Any]:
@@ -712,7 +813,14 @@ def analyze(output_dir: Path, *, updated_at: str | None = None) -> dict[str, Any
     config = _load_json(output_dir / "experiment-config.json", "experiment config")
     schedule = _load_json(output_dir / "schedule.json", "schedule")
     measurements = _load_json(output_dir / "measurements.json", "measurements")
+    certificate = build_comparability_certificate(config, measurements)
+    _write_json(output_dir / "comparability-certificate.json", certificate)
+    try:
+        consume_certificate(certificate)
+    except ComparabilityError as exc:
+        raise PerformanceRegressionError(str(exc)) from exc
     comparison = analyze_documents(config, schedule, measurements)
+    comparison["comparability"] = certificate
     _write_json(output_dir / "comparison.json", comparison)
     _atomic_write(output_dir / "report.md", render_report(comparison))
     timestamp = updated_at or utc_now()
@@ -721,6 +829,11 @@ def analyze(output_dir: Path, *, updated_at: str | None = None) -> dict[str, Any
     _write_json(output_dir / "run.json", state)
     manifest = load_manifest(output_dir / "manifest.json")
     for name, kind, uri in (
+        (
+            "comparability-certificate",
+            "comparability-certificate",
+            "comparability-certificate.json",
+        ),
         ("comparison", "comparison", "comparison.json"),
         ("report", "report", "report.md"),
     ):

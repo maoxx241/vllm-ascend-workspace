@@ -73,10 +73,31 @@ def config() -> dict:
     }
 
 
-def measurement(
-    entry: dict, fingerprint: str, *, throughput: float, ttft: float
-) -> dict:
+def recorded_observation(*, commit: str = "abc") -> dict:
     return {
+        "workspace_snapshot": {"vllm_ascend_commit": commit},
+        "environment": {"cann": "test"},
+        "model": {"path": "/models/example"},
+        "topology": {"tp": 2, "dp": 1},
+        "serve_args": [],
+        "bench_args": [],
+        "dataset": "test",
+        "max_concurrency": 8,
+        "request_rate": "inf",
+        "npu_devices": [0, 1],
+        "native_digest": "cd" * 32,
+    }
+
+
+def measurement(
+    entry: dict,
+    fingerprint: str,
+    *,
+    throughput: float,
+    ttft: float,
+    observation: dict | None = None,
+) -> dict:
+    payload = {
         "schema_version": 1,
         "state": entry["state"],
         "phase": entry["phase"],
@@ -84,6 +105,9 @@ def measurement(
         "config_hash": fingerprint,
         "metrics": {"throughput": throughput, "ttft": ttft},
     }
+    if observation is not None:
+        payload["observation"] = observation
+    return payload
 
 
 class PerformanceRegressionTests(unittest.TestCase):
@@ -287,6 +311,9 @@ class PerformanceRegressionTests(unittest.TestCase):
                             planned["config_hash"],
                             throughput=100.0,
                             ttft=10.0,
+                            observation=recorded_observation(
+                                commit=config()[entry["state"]]["code_snapshot"]
+                            ),
                         )
                     ),
                     encoding="utf-8",
@@ -295,6 +322,40 @@ class PerformanceRegressionTests(unittest.TestCase):
             result = performance.analyze(output, updated_at=NOW)
             self.assertEqual(result["status"], "passed")
             self.assertTrue((output / "report.md").is_file())
+            certificate = json.loads(
+                (output / "comparability-certificate.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(certificate["verdict"], "comparable")
+
+    def test_analyze_without_observation_cannot_pass(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config_path = root / "config.json"
+            config_path.write_text(json.dumps(config()), encoding="utf-8")
+            output = root / "run"
+            planned = performance.plan(output, config_path=config_path, created_at=NOW)
+            schedule = json.loads((output / "schedule.json").read_text(encoding="utf-8"))
+            for entry in schedule["entries"]:
+                result_path = root / f"{entry['id']}.json"
+                result_path.write_text(
+                    json.dumps(
+                        measurement(
+                            entry,
+                            planned["config_hash"],
+                            throughput=100.0,
+                            ttft=10.0,
+                        )
+                    ),
+                    encoding="utf-8",
+                )
+                performance.record(output, result_path=result_path, recorded_at=NOW)
+            with self.assertRaisesRegex(
+                performance.PerformanceRegressionError, "not-comparable"
+            ):
+                performance.analyze(output, updated_at=NOW)
+            manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(manifest["status"], "running")
+            self.assertFalse((output / "comparison.json").exists())
 
     def test_wrong_config_hash_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
