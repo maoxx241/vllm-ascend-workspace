@@ -8,6 +8,13 @@ document with ``status: verified`` is not shared corpus.
 
 The same checks run at import and again when probing, querying, or fetching a
 cached entry so a pre-existing bad cache cannot bypass the importer.
+
+Source policy lives in ``source-policy.json``, written only by a successful
+import from explicit ``--source-repo`` / ``--source-ref`` (and optional
+``--expect-*``). Cache metadata cannot create or relax it. Query, get, status
+and probe apply the policy. ``clear`` deletes it with the cache. Staging,
+policy write and rename are one snapshot: a failed refresh keeps the previous
+cache and policy; backup is removed only after the new directory is live.
 """
 
 from __future__ import annotations
@@ -22,10 +29,12 @@ from typing import Any, Mapping
 import vaws_knowledge_v2 as v2
 
 SHARED_CACHE_METADATA = "cache-metadata.json"
+SHARED_SOURCE_POLICY = "source-policy.json"
 DEFAULT_SOURCE_REPO = "vllm-ascend-workspace/vaws-knowledge"
 YAML_SUFFIX = ".yaml"
 SOURCE_REPO_RE = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
 SOURCE_REF_RE = re.compile(r"^[0-9a-f]{40}$")
+POLICY_SCHEMA_VERSION = 1
 
 ABSENT = "absent"
 AVAILABLE = "available"
@@ -83,7 +92,7 @@ def iter_shared_yaml_files(root: Path) -> list[Path]:
             continue
         if path.name.startswith("."):
             continue
-        if path.name == SHARED_CACHE_METADATA:
+        if path.name in {SHARED_CACHE_METADATA, SHARED_SOURCE_POLICY}:
             continue
         if path.name.endswith(YAML_SUFFIX):
             found.append(path)
@@ -104,6 +113,39 @@ def _remove_tree(path: Path) -> None:
         else:
             _remove_tree(child)
     path.rmdir()
+
+
+def load_source_policy(shared_dir: Path) -> tuple[dict[str, Any] | None, list[str]]:
+    """Load importer-owned source expectations. Cache metadata cannot create this."""
+
+    path = shared_dir / SHARED_SOURCE_POLICY
+    if not path.is_file():
+        return None, [
+            "required source policy is missing; refusing to trust cache self-declaration"
+        ]
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return None, [f"source policy unreadable: {exc}"]
+    if not isinstance(payload, dict):
+        return None, ["source policy must be an object"]
+    if payload.get("schema_version") != POLICY_SCHEMA_VERSION:
+        return None, ["source policy schema_version is missing or unsupported"]
+    expect_repo = payload.get("expect_source_repo")
+    expect_ref = payload.get("expect_source_ref")
+    identity = source_identity_problems(expect_repo, expect_ref)
+    if identity:
+        return None, ["source policy is invalid: " + identity[0]]
+    return payload, []
+
+
+def build_source_policy(*, expect_repo: str, expect_ref: str) -> dict[str, Any]:
+    return {
+        "schema_version": POLICY_SCHEMA_VERSION,
+        "expect_source_repo": expect_repo,
+        "expect_source_ref": expect_ref,
+        "bound_by": "knowledge_shared_cache.import",
+    }
 
 
 def load_cache_metadata(shared_dir: Path) -> tuple[dict[str, Any] | None, list[str]]:
@@ -187,8 +229,15 @@ def install_shared_cache(
     shared_dir: Path,
     staged: list[dict[str, Any]],
     metadata: Mapping[str, Any],
+    policy: Mapping[str, Any],
 ) -> None:
-    """Replace ``shared_dir`` only after the new snapshot is fully written."""
+    """Replace cache documents, metadata, and source policy as one snapshot.
+
+    The importer owns the policy file. Cached YAML/metadata cannot create or
+    relax it. Staging is discarded on failure. The previous directory is kept
+    as a backup until the new directory is live; backup is removed only after
+    the live cache exists. ``clear`` deletes the policy with the cache.
+    """
 
     parent = shared_dir.parent
     parent.mkdir(parents=True, exist_ok=True)
@@ -210,6 +259,12 @@ def install_shared_cache(
             json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
+        (staging / SHARED_SOURCE_POLICY).write_text(
+            json.dumps(dict(policy), ensure_ascii=False, indent=2, sort_keys=True)
+            + "\n",
+            encoding="utf-8",
+        )
+        (staging / SHARED_SOURCE_POLICY).chmod(0o444)
         if shared_dir.exists():
             shared_dir.rename(backup)
         staging.rename(shared_dir)
@@ -219,7 +274,8 @@ def install_shared_cache(
         raise
     finally:
         _remove_tree(staging)
-        _remove_tree(backup)
+        if shared_dir.exists():
+            _remove_tree(backup)
 
 
 def inspect_shared_cache(
@@ -257,12 +313,22 @@ def inspect_shared_cache(
             "documents": [],
             "source_repo": None,
             "source_ref": None,
+            "expected_source_repo": None,
+            "expected_source_ref": None,
         }
 
+    policy, policy_problems = load_source_policy(shared_dir)
     source_repo = metadata.get("source_repo")
     source_ref = metadata.get("source_ref")
-    identity_problems = source_identity_problems(
-        source_repo, source_ref, expect_repo=expect_repo, expect_ref=expect_ref
+    policy_repo = policy.get("expect_source_repo") if policy else None
+    policy_ref = policy.get("expect_source_ref") if policy else None
+    bound_repo = expect_repo if expect_repo is not None else policy_repo
+    bound_ref = expect_ref if expect_ref is not None else policy_ref
+    identity_problems = list(policy_problems)
+    identity_problems.extend(
+        source_identity_problems(
+            source_repo, source_ref, expect_repo=bound_repo, expect_ref=bound_ref
+        )
     )
     staged, document_problems = load_shared_source_documents(shared_dir)
     yaml_files = [path.name for path in iter_shared_yaml_files(shared_dir)]
@@ -277,8 +343,11 @@ def inspect_shared_cache(
             "documents": yaml_files,
             "source_repo": source_repo if isinstance(source_repo, str) else None,
             "source_ref": source_ref if isinstance(source_ref, str) else None,
+            "expected_source_repo": policy_repo,
+            "expected_source_ref": policy_ref,
             "pulled_at": metadata.get("pulled_at"),
             "metadata": metadata,
+            "policy": policy,
         }
     if document_problems or len(staged) != len(yaml_files):
         detail = (
@@ -295,8 +364,11 @@ def inspect_shared_cache(
             "documents": yaml_files,
             "source_repo": source_repo,
             "source_ref": source_ref,
+            "expected_source_repo": policy_repo,
+            "expected_source_ref": policy_ref,
             "pulled_at": metadata.get("pulled_at"),
             "metadata": metadata,
+            "policy": policy,
         }
 
     entries: list[dict[str, Any]] = []
@@ -307,6 +379,8 @@ def inspect_shared_cache(
             record["_source_file"] = item["name"]
             record["_source_repo"] = source_repo
             record["_source_ref"] = source_ref
+            record["_expected_source_repo"] = policy_repo
+            record["_expected_source_ref"] = policy_ref
             entries.append(record)
     return {
         "status": AVAILABLE,
@@ -317,8 +391,11 @@ def inspect_shared_cache(
         "documents": [item["name"] for item in staged],
         "source_repo": source_repo,
         "source_ref": source_ref,
+        "expected_source_repo": policy_repo,
+        "expected_source_ref": policy_ref,
         "pulled_at": metadata.get("pulled_at"),
         "metadata": metadata,
+        "policy": policy,
         "entry_count": len(entries),
     }
 

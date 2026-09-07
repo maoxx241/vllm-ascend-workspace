@@ -10,10 +10,12 @@ three-layer query client then mounts as the ``shared`` layer.
 rather than fetching over the network. It reads any ``*.yaml`` in that zone,
 takes kind from the validated document, and refuses project/unverified zones,
 unverified entries, unresolved coordinates, and missing source identity. A
-rejected or partial refresh leaves the last valid cache in place. The
-upstream pull tooling is not published yet, so doing the transport here
-would mean inventing a protocol that is about to be replaced; a local import
-keeps the cache contract testable without pretending to own the sync.
+rejected or partial refresh leaves the last valid cache and its importer-owned
+source policy in place. ``clear`` deletes that policy with the cache files;
+the next import must bind again. The upstream pull tooling is not published
+yet, so doing the transport here would mean inventing a protocol that is
+about to be replaced; a local import keeps the cache contract testable
+without pretending to own the sync.
 """
 
 from __future__ import annotations
@@ -110,6 +112,8 @@ def do_import(
             "cache_preserved": True,
         }
     total_entries = sum(int(item["entries"]) for item in staged)
+    bound_repo = expect_repo or source_repo
+    bound_ref = expect_ref or source_ref
     metadata = {
         "schema_version": 1,
         "source_repo": source_repo,
@@ -120,8 +124,11 @@ def do_import(
         "entry_count": total_entries,
         "read_only": True,
     }
+    policy = shared.build_source_policy(
+        expect_repo=bound_repo, expect_ref=bound_ref
+    )
     try:
-        shared.install_shared_cache(shared_dir, staged, metadata)
+        shared.install_shared_cache(shared_dir, staged, metadata, policy)
     except OSError as exc:
         return {
             "status": "failed",
@@ -141,10 +148,14 @@ def do_import(
         "metadata": installed.get("metadata") or metadata,
         "source_repo": source_repo,
         "source_ref": source_ref,
+        "expected_source_repo": bound_repo,
+        "expected_source_ref": bound_ref,
     }
 
 
 def do_clear(shared_dir: Path) -> dict[str, Any]:
+    """Remove cache documents, metadata, and the importer-owned source policy."""
+
     removed: list[str] = []
     if shared_dir.is_dir():
         for path in sorted(shared_dir.iterdir()):
@@ -152,7 +163,12 @@ def do_clear(shared_dir: Path) -> dict[str, Any]:
                 path.chmod(0o644)
                 path.unlink()
                 removed.append(path.name)
-    return {"status": "passed", "layer": "shared", "removed": removed}
+    return {
+        "status": "passed",
+        "layer": "shared",
+        "removed": removed,
+        "policy_removed": shared.SHARED_SOURCE_POLICY in removed,
+    }
 
 
 def main(argv: list[str] | None = None) -> int:

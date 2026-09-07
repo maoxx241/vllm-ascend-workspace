@@ -109,8 +109,14 @@ python3 .agents/scripts/knowledge_shared_cache.py status
 python3 .agents/scripts/knowledge_shared_cache.py import \
   --from /path/to/vaws-knowledge/corpus/verified \
   --source-repo vllm-ascend-workspace/vaws-knowledge \
-  --source-ref <40-character-commit-sha>
+  --source-ref <40-character-commit-sha> \
+  --expect-source-repo vllm-ascend-workspace/vaws-knowledge \
+  --expect-source-ref <40-character-commit-sha>
 ```
+
+The importer writes an owner-side source policy next to the cache. Query and
+get apply that policy; editing `cache-metadata.json` cannot relax it. `clear`
+removes the policy with the cache.
 
 Convert the remaining v1 documents and report what needs human input:
 

@@ -18,6 +18,7 @@ sys.path.insert(0, str(ROOT / ".agents" / "lib"))
 import vaws_knowledge_client as client  # noqa: E402
 import vaws_knowledge_v2 as v2  # noqa: E402
 
+from knowledge_kit import KitUnconfigured, resolve_kit_root  # noqa: E402
 from test_knowledge_v2 import sample_entry, verification  # noqa: E402
 
 CACHE = ROOT / ".agents" / "scripts" / "knowledge_shared_cache.py"
@@ -98,6 +99,22 @@ class SharedCacheTrustTests(unittest.TestCase):
             *extra,
             expect=expect,
         )
+
+    def upstream_validate_exit(self, path: Path) -> int | None:
+        try:
+            kit = resolve_kit_root(repo_root=ROOT)
+        except KitUnconfigured:
+            return None
+        completed = subprocess.run(
+            [sys.executable, str(kit / "tools" / "validate.py"), str(path)],
+            check=False,
+            capture_output=True,
+            text=True,
+            cwd=str(kit),
+        )
+        if completed.returncode == 2:
+            return None
+        return completed.returncode
 
     def query(self, **kwargs: object) -> dict:
         return client.query(
@@ -261,6 +278,202 @@ class SharedCacheTrustTests(unittest.TestCase):
         self.assertEqual(payload["status"], "passed")
         result = self.query()
         self.assertEqual(result["matches"][0]["status"], "stale")
+
+    def test_configured_import_query_get_honor_persisted_policy(self) -> None:
+        self.write_source(
+            "known-failure-signatures.yaml", verified_document(verified_entry())
+        )
+        payload = self.import_from(
+            "--expect-source-repo",
+            SOURCE_REPO,
+            "--expect-source-ref",
+            SOURCE_REF,
+        )
+        self.assertEqual(payload["status"], "passed")
+        self.assertEqual(payload["expected_source_repo"], SOURCE_REPO)
+        self.assertEqual(payload["expected_source_ref"], SOURCE_REF)
+        result = self.query()
+        self.assertEqual(result["matches"][0]["source_repo"], SOURCE_REPO)
+        self.assertEqual(result["matches"][0]["expected_source_repo"], SOURCE_REPO)
+        fetched = client.get_entry(
+            repo_root=self.root,
+            entry_id="sample",
+            layers=("shared",),
+            knowledge_dir=self.project,
+            shared_dir=self.cache,
+            candidate_dir=self.candidates,
+        )
+        self.assertEqual(fetched["expected_source_ref"], SOURCE_REF)
+
+    def test_metadata_repo_tamper_is_not_shared(self) -> None:
+        self.write_source(
+            "known-failure-signatures.yaml", verified_document(verified_entry())
+        )
+        self.import_from("--expect-source-repo", SOURCE_REPO, "--expect-source-ref", SOURCE_REF)
+        metadata_path = self.cache / "cache-metadata.json"
+        metadata_path.chmod(0o644)
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        metadata["source_repo"] = "example-org/untrusted-knowledge"
+        metadata_path.write_text(json.dumps(metadata) + "\n", encoding="utf-8")
+        result = self.query()
+        self.assertEqual(result["matches"], [])
+        self.assertNotIn("shared", result["coverage"]["layers_answered"])
+        shared_cap = result["capabilities"]["shared"]
+        self.assertEqual(shared_cap["status"], "unavailable")
+        self.assertEqual(shared_cap["source_repo"], "example-org/untrusted-knowledge")
+        self.assertEqual(shared_cap["expected_source_repo"], SOURCE_REPO)
+        fetched = client.get_entry(
+            repo_root=self.root,
+            entry_id="sample",
+            layers=("shared",),
+            knowledge_dir=self.project,
+            shared_dir=self.cache,
+            candidate_dir=self.candidates,
+        )
+        self.assertIsNone(fetched)
+
+    def test_metadata_ref_tamper_is_not_shared(self) -> None:
+        self.write_source(
+            "known-failure-signatures.yaml", verified_document(verified_entry())
+        )
+        self.import_from("--expect-source-repo", SOURCE_REPO, "--expect-source-ref", SOURCE_REF)
+        metadata_path = self.cache / "cache-metadata.json"
+        metadata_path.chmod(0o644)
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        metadata["source_ref"] = "f" * 40
+        metadata_path.write_text(json.dumps(metadata) + "\n", encoding="utf-8")
+        result = self.query()
+        self.assertEqual(result["matches"], [])
+        self.assertEqual(result["capabilities"]["shared"]["source_ref"], "f" * 40)
+        self.assertEqual(result["capabilities"]["shared"]["expected_source_ref"], SOURCE_REF)
+
+    def test_custom_source_without_unrelated_expectation(self) -> None:
+        custom_repo = "example-org/custom-knowledge"
+        custom_ref = "abcdef0123456789abcdef0123456789abcdef01"
+        self.write_source(
+            "known-failure-signatures.yaml", verified_document(verified_entry())
+        )
+        payload = self.import_from(source_repo=custom_repo, source_ref=custom_ref)
+        self.assertEqual(payload["status"], "passed")
+        result = self.query()
+        self.assertEqual(result["matches"][0]["source_repo"], custom_repo)
+        self.assertEqual(result["matches"][0]["expected_source_repo"], custom_repo)
+
+    def test_missing_or_invalid_policy_fails_closed(self) -> None:
+        self.write_source(
+            "known-failure-signatures.yaml", verified_document(verified_entry())
+        )
+        self.import_from()
+        policy = self.cache / "source-policy.json"
+        policy.chmod(0o644)
+        policy.unlink()
+        missing = self.query()
+        self.assertEqual(missing["matches"], [])
+        self.assertEqual(missing["capabilities"]["shared"]["status"], "unavailable")
+        policy.write_text("{not-json", encoding="utf-8")
+        invalid = self.query()
+        self.assertEqual(invalid["matches"], [])
+        self.assertEqual(invalid["capabilities"]["shared"]["status"], "unavailable")
+
+    def test_failed_refresh_preserves_cache_and_policy(self) -> None:
+        self.write_source(
+            "known-failure-signatures.yaml", verified_document(verified_entry())
+        )
+        first = self.import_from(
+            "--expect-source-repo",
+            SOURCE_REPO,
+            "--expect-source-ref",
+            SOURCE_REF,
+        )
+        self.assertEqual(first["status"], "passed")
+        self.write_source(
+            "known-failure-signatures.yaml",
+            verified_document(sample_entry(), layer="unverified"),
+        )
+        second = self.import_from(
+            "--expect-source-repo",
+            SOURCE_REPO,
+            "--expect-source-ref",
+            SOURCE_REF,
+            expect=1,
+        )
+        self.assertTrue(second.get("cache_preserved"))
+        policy = json.loads((self.cache / "source-policy.json").read_text(encoding="utf-8"))
+        self.assertEqual(policy["expect_source_ref"], SOURCE_REF)
+        result = self.query()
+        self.assertEqual(result["matches"][0]["status"], "verified")
+        self.assertEqual(result["matches"][0]["expected_source_ref"], SOURCE_REF)
+
+    def test_changed_ref_refresh_replaces_policy(self) -> None:
+        self.write_source(
+            "known-failure-signatures.yaml", verified_document(verified_entry())
+        )
+        self.import_from(source_ref=SOURCE_REF)
+        new_ref = "1234567890abcdef1234567890abcdef12345678"
+        refreshed = self.import_from(source_ref=new_ref)
+        self.assertEqual(refreshed["status"], "passed")
+        self.assertEqual(refreshed["expected_source_ref"], new_ref)
+        result = self.query()
+        self.assertEqual(result["matches"][0]["source_ref"], new_ref)
+        self.assertEqual(result["matches"][0]["expected_source_ref"], new_ref)
+
+    def test_clear_removes_source_policy(self) -> None:
+        self.write_source(
+            "known-failure-signatures.yaml", verified_document(verified_entry())
+        )
+        self.import_from()
+        cleared = self.run_cache("clear")
+        self.assertTrue(cleared["policy_removed"])
+        self.assertFalse((self.cache / "source-policy.json").exists())
+
+    def test_different_reviewer_is_eligible(self) -> None:
+        path = self.write_source(
+            "known-failure-signatures.yaml", verified_document(verified_entry())
+        )
+        payload = self.import_from()
+        self.assertEqual(payload["status"], "passed")
+        upstream = self.upstream_validate_exit(path)
+        if upstream is not None:
+            self.assertEqual(upstream, 0)
+
+    def test_submitter_only_verified_by_is_rejected(self) -> None:
+        entry = verified_entry()
+        entry["provenance"]["contributor"] = "anonymous"
+        entry["verification"]["verified_by"] = ["anonymous"]
+        entry = v2.with_content_hash(entry)
+        path = self.write_source("known-failure-signatures.yaml", verified_document(entry))
+        payload = self.import_from(expect=1)
+        self.assertEqual(payload["status"], "failed")
+        self.assertTrue(any("submitter" in item for item in payload["problems"]))
+        upstream = self.upstream_validate_exit(path)
+        if upstream is not None:
+            self.assertEqual(upstream, 1)
+
+    def test_bot_only_verified_by_is_rejected(self) -> None:
+        entry = verified_entry()
+        entry["verification"]["verified_by"] = ["github-actions[bot]"]
+        entry = v2.with_content_hash(entry)
+        path = self.write_source("known-failure-signatures.yaml", verified_document(entry))
+        payload = self.import_from(expect=1)
+        self.assertEqual(payload["status"], "failed")
+        self.assertTrue(any("bot identity" in item for item in payload["problems"]))
+        upstream = self.upstream_validate_exit(path)
+        if upstream is not None:
+            self.assertEqual(upstream, 1)
+
+    def test_cached_verified_by_mutation_is_excluded(self) -> None:
+        self.write_source(
+            "known-failure-signatures.yaml", verified_document(verified_entry())
+        )
+        self.import_from()
+        cached = self.cache / "known-failure-signatures.yaml"
+        cached.chmod(0o644)
+        document = json.loads(cached.read_text(encoding="utf-8"))
+        document["entries"][0]["verification"]["verified_by"] = ["submitter"]
+        cached.write_text(json.dumps(document) + "\n", encoding="utf-8")
+        result = self.query()
+        self.assertEqual(result["matches"], [])
+        self.assertNotIn("shared", result["coverage"]["layers_answered"])
 
 
 if __name__ == "__main__":

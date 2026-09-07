@@ -4,7 +4,7 @@ This directory is the **project layer** of a three-layer knowledge model:
 
 | Layer | Location | Trust | Written by |
 |-------|----------|-------|------------|
-| `shared` | `.vaws-local/knowledge/shared/` (untracked, read-only cache of `corpus/verified/` from a declared `vaws-knowledge` source) | reviewed by the commons | upstream only; local import refuses project/unverified zones |
+| `shared` | `.vaws-local/knowledge/shared/` (untracked, read-only cache of `corpus/verified/` from a declared `vaws-knowledge` source) | reviewed by the commons | upstream only; local import refuses project/unverified zones and binds an importer-owned source policy that query/get apply |
 | `project` | this directory | reviewed in this repo | `curate-workspace-knowledge` |
 | `candidate` | `.vaws-local/knowledge/candidates/` (untracked) | one unreviewed observation | `knowledge_capture.py` |
 
@@ -53,3 +53,18 @@ python3 .agents/skills/curate-workspace-knowledge/scripts/knowledge_curate.py \
   paths and container instance names are legal here and refused on export
   (`export` severity).
 - Propose upstream only through `.agents/scripts/knowledge_export.py`.
+
+## Shared conformance kit
+
+The client adapter is `.agents/tests/knowledge_client_adapter.py`. The pinned
+kit commit is `.agents/deps/vaws-knowledge.json`. Configure
+`VAWS_KNOWLEDGE_KIT_ROOT` to a checkout of that commit, or write the path to
+untracked `.vaws-local/knowledge-kit-root`, then:
+
+```bash
+python3 .agents/tests/knowledge_kit.py --kit-root <checkout-of-e04d50f7>
+```
+
+Unconfigured local unittest runs skip the kit suite with that exact message.
+A configured missing path or wrong git revision fails. The kit is an external
+test input, not a runtime dependency.

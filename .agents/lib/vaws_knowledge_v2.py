@@ -121,6 +121,11 @@ SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,127}$")
 KIND_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 CONTENT_HASH_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 REDACTION_PROFILE_RE = re.compile(r"^r[0-9]+$")
+# Same bot-identity rule as pinned upstream tools/validate.py.
+BOT_IDENTITY = re.compile(
+    r"(?i)(?:\[bot\]$|(?:^|[^a-z])bot(?:$|[^a-z])|github-actions|dependabot|renovate|copilot|"
+    r"^vaws-?(?:bot|ci|review)|^ci$)"
+)
 MIN_BASIS_LENGTH = 12
 MIN_NEEDS_LENGTH = 12
 
@@ -683,6 +688,57 @@ def _validate_verification(value: Any, path: str, errors: list[str]) -> None:
         errors.append(f"{path} has unknown fields: {', '.join(unknown)}")
 
 
+def verified_by_problems(
+    entry: Mapping[str, Any],
+    path: str = "entry",
+    *,
+    layer: str | None = None,
+) -> list[str]:
+    """Mirror pinned upstream ``tools/validate.py:verified_by_problems``.
+
+    Bot identities are never valid. The submitter alone is not enough once
+    the entry claims to have been established (status verified / stale) or
+    sits in the shared layer (layer verified). This is metadata eligibility,
+    not proof that a review happened.
+    """
+
+    verification = entry.get("verification")
+    if not isinstance(verification, Mapping):
+        return []
+    verified_by = verification.get("verified_by")
+    if not isinstance(verified_by, list) or not all(
+        isinstance(item, str) for item in verified_by
+    ):
+        return []
+    errors: list[str] = []
+    where = f"{path}.verification.verified_by"
+    bots = [item for item in verified_by if BOT_IDENTITY.search(item)]
+    if bots:
+        errors.append(
+            f"{where} contains bot identity {bots}: a review bot cannot confirm a "
+            "technical claim; only human handles are valid here"
+        )
+    status = entry.get("status")
+    if status in ("verified", "stale") or layer == VERIFIED_LAYER:
+        provenance = entry.get("provenance")
+        contributor = (
+            provenance.get("contributor") if isinstance(provenance, Mapping) else None
+        )
+        humans = [item for item in verified_by if item not in bots]
+        others = [item for item in humans if item != contributor]
+        if humans and not others:
+            why = (
+                f"status '{status}'"
+                if status in ("verified", "stale")
+                else "layer 'verified'"
+            )
+            errors.append(
+                f"{where} only the submitter ({contributor!r}) confirmed this entry; "
+                f"{why} requires confirmation from someone other than the submitter"
+            )
+    return errors
+
+
 def _validate_lifecycle(value: Any, path: str, errors: list[str]) -> None:
     if not isinstance(value, Mapping):
         errors.append(f"{path} must be an object")
@@ -812,6 +868,8 @@ def validate_entry(
     _validate_rule(entry.get("rule"), f"{path}.rule", errors)
     if "verification" in entry:
         _validate_verification(entry["verification"], f"{path}.verification", errors)
+    if context == VERIFIED_CONTEXT:
+        errors.extend(verified_by_problems(entry, path, layer=VERIFIED_LAYER))
     if "conflicts" in entry:
         _validate_conflicts(entry["conflicts"], f"{path}.conflicts", errors)
 

@@ -94,6 +94,8 @@ def _probe_shared(shared_dir: Path) -> dict[str, Any]:
         "documents": inspection.get("documents") or [],
         "source_repo": inspection.get("source_repo"),
         "source_ref": inspection.get("source_ref"),
+        "expected_source_repo": inspection.get("expected_source_repo"),
+        "expected_source_ref": inspection.get("expected_source_ref"),
         "pulled_at": inspection.get("pulled_at"),
     }
     if inspection["status"] == shared.ABSENT:
@@ -210,6 +212,8 @@ def _v2_matches(
                 "source_file": entry.get("_source_file"),
                 "source_repo": entry.get("_source_repo"),
                 "source_ref": entry.get("_source_ref"),
+                "expected_source_repo": entry.get("_expected_source_repo"),
+                "expected_source_ref": entry.get("_expected_source_ref"),
             }
         )
     return matches
@@ -374,6 +378,8 @@ def query(
                     "remedy": capability.get("remedy", ""),
                     "source_repo": capability.get("source_repo"),
                     "source_ref": capability.get("source_ref"),
+                    "expected_source_repo": capability.get("expected_source_repo"),
+                    "expected_source_ref": capability.get("expected_source_ref"),
                     "effect": (
                         "degraded to project+candidate; shared facts were not consulted"
                     ),
@@ -492,6 +498,8 @@ def get_entry(
                         "source_file": record.pop("_source_file", None),
                         "source_repo": record.pop("_source_repo", None),
                         "source_ref": record.pop("_source_ref", None),
+                        "expected_source_repo": record.pop("_expected_source_repo", None),
+                        "expected_source_ref": record.pop("_expected_source_ref", None),
                         "schema_version": v2.SCHEMA_VERSION,
                         "entry": record,
                     }

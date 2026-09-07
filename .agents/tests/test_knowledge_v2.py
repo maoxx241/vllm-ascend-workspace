@@ -258,6 +258,38 @@ class StatusGateTests(unittest.TestCase):
         entry = v2.with_content_hash(entry)
         self.assertEqual(v2.validate_entry(entry, context="export"), [])
 
+    def test_verified_zone_refuses_submitter_only_confirmation(self) -> None:
+        entry = sample_entry()
+        entry["status"] = "verified"
+        entry["confidence"] = "high"
+        entry["verification"] = verification()
+        entry["provenance"]["contributor"] = "anonymous"
+        entry["verification"]["verified_by"] = ["anonymous"]
+        entry = v2.with_content_hash(entry)
+        errors = v2.validate_entry(entry, context=v2.VERIFIED_CONTEXT)
+        self.assertTrue(any("submitter" in error for error in errors))
+
+    def test_verified_zone_refuses_bot_confirmation(self) -> None:
+        entry = sample_entry()
+        entry["status"] = "verified"
+        entry["confidence"] = "high"
+        entry["verification"] = verification()
+        entry["verification"]["verified_by"] = ["github-actions[bot]"]
+        entry = v2.with_content_hash(entry)
+        errors = v2.validate_entry(entry, context=v2.VERIFIED_CONTEXT)
+        self.assertTrue(any("bot identity" in error for error in errors))
+
+    def test_project_context_does_not_require_non_submitter(self) -> None:
+        entry = sample_entry()
+        entry["status"] = "verified"
+        entry["confidence"] = "high"
+        entry["verification"] = verification()
+        entry["provenance"]["contributor"] = "submitter"
+        entry["verification"]["verified_by"] = ["submitter"]
+        entry = v2.with_content_hash(entry)
+        errors = v2.validate_entry(entry, context=v2.PROJECT_LAYER)
+        self.assertFalse(any("submitter" in error for error in errors))
+
     def test_verified_zone_refuses_unverified_status(self) -> None:
         entry = sample_entry()
         errors = v2.validate_entry(entry, context=v2.VERIFIED_CONTEXT)
