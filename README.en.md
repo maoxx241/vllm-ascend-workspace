@@ -51,6 +51,7 @@ After deployment, open <http://127.0.0.1:8788>. The dashboard shows NPU/AICore, 
 | **modelscope**       | Download, resume, status-check, and SHA256-verify ModelScope model weights                  | When model weights need to be downloaded into an explicit local directory |
 | **vllm-ascend-serving** | Launch a vLLM Ascend inference service on a remote container, with NPU probing, auto card selection, and incremental restart | When you need an inference service on a remote machine |
 | **vllm-ascend-benchmark** | Run `vllm bench serve` performance benchmarks on a remote container, with multi-run warmup and statistical aggregation | When you need throughput/latency benchmarks or performance regression checks |
+| **optimize-vllm-ascend-prefill** | Use AISBench to search concurrency and Prefill scheduler settings for the highest valid throughput under a TTFT SLO, with complete logs and environment archival | When optimizing long-input Prefill with or without prefix-cache hits |
 | **ascend-memory-profiling** | Profile and attribute HBM memory usage on Ascend NPU, with per-component breakdown and evidence chains | When you need to analyze memory consumption of a vLLM serving workload |
 | **ascend-profiling-collection** | Collect Ascend torch-profiler data: start service, bracket profile window, run workload, remote analyse, and write a manifest | When you need kernel_details/trace_view captures |
 | **ascend-profiling-analysis** | Analyze collected profiler roots/manifests and generate step/layer/operator/cross-rank reports | When you need to analyze profiling output |
@@ -118,6 +119,7 @@ When talking to an Agent:
 │   │   ├── modelscope/            # ModelScope weight download and verification skill
 │   │   ├── vllm-ascend-serving/   # Inference serving skill
 │   │   ├── vllm-ascend-benchmark/ # Performance benchmarking skill
+│   │   ├── optimize-vllm-ascend-prefill/ # AISBench Prefill optimization skill
 │   │   ├── ascend-memory-profiling/ # Memory profiling skill
 │   │   ├── ascend-profiling-collection/ # Torch profiler collection skill
 │   │   ├── ascend-profiling-analysis/ # Profiling analysis/report skill
@@ -175,6 +177,7 @@ This repository supports mainstream AI coding tools:
 - **remote-code-parity** — Code sync: push full local workspace state (including uncommitted changes) to remote containers
 - **vllm-ascend-serving** — Service launch: idle NPU detection, idle port detection, one-click vLLM Ascend inference serving
 - **vllm-ascend-benchmark** — Online performance benchmarking: single-run / multi-run (warm-service) mode, warmup exclusion, statistical aggregation; multi-state regression comparisons orchestrated by the Agent
+- **optimize-vllm-ascend-prefill** — AISBench Prefill optimization with TTFT SLO gating, prefix-cache validation, serving-parameter search, and complete experiment archival
 - **ascend-memory-profiling** — Memory profiling: collect and analyze HBM usage, per-component breakdown (fixed overhead, weights, KV cache, HCCL, activations, runtime), with msprof component-level attribution
 
 ### Planned

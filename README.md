@@ -51,6 +51,7 @@ python3 .agents/skills/npu-fleet-monitor/scripts/manage_monitor.py ensure
 | **modelscope**           | 下载、续传、查看进度并 SHA256 校验 ModelScope 模型权重                  | 需要把模型权重下载到明确目录时 |
 | **vllm-ascend-serving**  | 在远程容器上一键拉起 vLLM Ascend 推理服务，支持 NPU 探测、自动选卡、增量重启 | 需要在远程机器上起推理服务时     |
 | **vllm-ascend-benchmark** | 在远程容器上运行 `vllm bench serve` 性能基准测试，支持多轮预热和统计聚合     | 需要跑吞吐/延迟基准测试或性能回归对比时 |
+| **optimize-vllm-ascend-prefill** | 使用 AISBench 搜索并发和 Prefill 调度参数，在满足 TTFT SLO 的前提下获得最高有效吞吐，并完整归档日志与环境 | 需要优化长输入、Prefix Cache 或无 Cache 的 Prefill 极限性能时 |
 | **ascend-memory-profiling** | 采集并分析昇腾 NPU 的 HBM 显存占用，按组件拆分并溯源 | 需要分析 vLLM 推理服务的显存占用时 |
 | **ascend-profiling-collection** | 采集 Ascend torch profiler：起服务、控制 profile 窗口、运行 workload、远端 analyse 并写 manifest | 需要采集 kernel_details/trace_view 时 |
 | **ascend-profiling-analysis** | 分析已采集的 profiler root/manifest，生成 step/layer/operator/cross-rank 诊断报告 | 需要分析 profiling 结果或生成报告时 |
@@ -119,6 +120,7 @@ python3 .agents/skills/npu-fleet-monitor/scripts/manage_monitor.py ensure
 │   │   ├── modelscope/            # ModelScope 权重下载与校验技能
 │   │   ├── vllm-ascend-serving/   # 服务拉起技能
 │   │   ├── vllm-ascend-benchmark/ # 性能基准测试技能
+│   │   ├── optimize-vllm-ascend-prefill/ # AISBench Prefill 极限性能优化技能
 │   │   ├── ascend-memory-profiling/ # 显存 profiling 技能
 │   │   ├── ascend-profiling-collection/ # torch profiler 采集技能
 │   │   ├── ascend-profiling-analysis/ # profiling 分析报告技能
@@ -178,6 +180,7 @@ python3 .agents/skills/npu-fleet-monitor/scripts/manage_monitor.py ensure
 - [x] **remote-code-parity** — 代码同步：将本地完整工作区状态（含未提交修改）同步到远程容器
 - [x] **vllm-ascend-serving** — 服务拉起：支持空闲 NPU 检测、空闲端口检测，一键拉起 vLLM Ascend 推理服务
 - [x] **vllm-ascend-benchmark** — 在线性能基准测试：支持单轮/多轮（warm-service）模式、预热轮剔除、统计聚合，多状态回归对比由 Agent 编排
+- [x] **optimize-vllm-ascend-prefill** — AISBench Prefill 极限性能搜索：TTFT SLO 门禁、Prefix Cache 校验、服务参数调优和完整实验归档
 - [x] **ascend-memory-profiling** — 显存 profiling：采集并分析 HBM 显存占用，按固定开销、模型权重、KV cache、HCCL、激活、runtime 拆分，支持 msprof 组件级归因
 
 ### 计划中
