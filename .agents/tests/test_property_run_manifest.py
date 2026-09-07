@@ -246,7 +246,6 @@ class InvalidManifestProperties(unittest.TestCase):
 
         run_cases(200, body, label="secret env keys")
 
-    @unittest.expectedFailure
     def test_known_defect_common_secret_spellings_pass_the_filter(self) -> None:
         """KNOWN DEFECT (low): the secret-key filter matches PASS/PASSWORD but
         not ``PASSWD``, and matches API_KEY/ACCESS_KEY but not ``PRIVATE_KEY``
