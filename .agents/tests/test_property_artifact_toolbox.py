@@ -216,7 +216,6 @@ class PullProperties(unittest.TestCase):
 
         run_cases(80, body, label="toolbox pull integrity")
 
-    @unittest.expectedFailure
     def test_known_defect_manifest_relpath_traversal_escapes_the_local_dir(self) -> None:
         """KNOWN DEFECT (medium): ``artifact_pull`` / ``_artifact_pull_single``
         build ``local_dir / relpath`` straight from the remote manifest with no
