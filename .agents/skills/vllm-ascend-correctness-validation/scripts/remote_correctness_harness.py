@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -14,6 +15,36 @@ from typing import Any, Mapping
 
 SCHEMA_VERSION = 1
 SUPPORTED_MODES = frozenset({"offline-generate", "offline-chat", "online-chat"})
+
+
+def cases_sha256(cases: list[Any]) -> str:
+    """Canonical digest of the case array this run actually executed."""
+    encoded = json.dumps(
+        cases, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def execution_identity(config: Mapping[str, Any]) -> dict[str, Any]:
+    """Record what decided this run's behaviour besides the code under test.
+
+    `engine_args` selects eager versus graph execution, tensor-parallel degree,
+    and feature flags; `model`, `base_url`, and `served_model` name the engine
+    or service; `cases_sha256` pins the exact case array. Without this block a
+    comparison cannot tell an intentional eager/graph experiment from a code
+    regression, so it travels with every result file.
+    """
+    engine_args = config.get("engine_args", {})
+    if not isinstance(engine_args, Mapping):
+        raise HarnessError("engine_args must be an object")
+    identity: dict[str, Any] = {
+        "engine_args": dict(engine_args),
+        "cases_sha256": cases_sha256(list(config["cases"])),
+    }
+    for field in ("model", "base_url", "served_model"):
+        value = config.get(field)
+        identity[field] = str(value) if isinstance(value, str) and value else None
+    return identity
 
 
 class HarnessError(ValueError):
@@ -149,6 +180,7 @@ def _build_offline_engine(config: Mapping[str, Any]):
 
 def execute_config(config: Mapping[str, Any]) -> dict[str, Any]:
     label = str(config.get("label", "unnamed"))
+    execution = execution_identity(config)
     offline_cases = [
         case
         for case in config["cases"]
@@ -250,6 +282,7 @@ def execute_config(config: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "schema_version": SCHEMA_VERSION,
         "label": label,
+        "execution": execution,
         "cases": results,
     }
 

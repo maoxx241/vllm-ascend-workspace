@@ -28,7 +28,6 @@ DEFAULT_DENYLIST = (
     '.vaws-local/',
     '.vaws-runtime/',
     '.remote-code-parity/',
-    '.remote-dev/state/',
     '.workspace.local/',
     '.machine-inventory.json',
     '.codex/',

@@ -58,10 +58,15 @@ def parse_device_csv(value: str | None, *, label: str = "devices") -> list[int] 
         token = raw.strip()
         if not token:
             raise ValidationError(f"{label} contains an empty device id")
-        try:
-            device = int(token, 10)
-        except ValueError as exc:
-            raise ValidationError(f"{label} contains a non-integer device id: {token!r}") from exc
+        if token[0] == "-" and token[1:] and all(ch in "0123456789" for ch in token[1:]):
+            raise ValidationError(
+                f"{label} contains a negative device id: {int(token, 10)}"
+            )
+        if not all(ch in "0123456789" for ch in token):
+            raise ValidationError(
+                f"{label} contains a non-integer device id: {token!r}"
+            )
+        device = int(token, 10)
         if device < 0:
             raise ValidationError(f"{label} contains a negative device id: {device}")
         if device in seen:

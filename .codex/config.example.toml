@@ -1,11 +1,17 @@
 # Copy to config.toml and replace the absolute checkout path below.
 # Interactive MCP confirmation must remain available; headless runs need
 # explicit, invocation-scoped approvals for the exact tools they will use.
+#
+# remote-dev is an external checkout (vllm-ascend-workspace/remote-dev). The
+# launcher below finds it through VAWS_REMOTE_DEV_ROOT or the shared
+# .vaws-local/remote-dev and injects the scaffold resolver plugin, the Ascend
+# runtime environment file and the state directory; the env block repeats the
+# values so this file documents the contract on its own.
 approval_policy = "on-request"
 
 [mcp_servers.remote_dev]
 command = "python3"
-args = ["/absolute/path/to/vllm-ascend-workspace/.remote-dev/mcp/server.py"]
+args = ["/absolute/path/to/vllm-ascend-workspace/.agents/scripts/remote_dev.py", "server"]
 cwd = "/absolute/path/to/vllm-ascend-workspace"
 startup_timeout_sec = 20
 tool_timeout_sec = 600
@@ -15,6 +21,11 @@ enabled = true
 REMOTE_DEV_DEFAULT_USER = "root"
 REMOTE_DEV_DEFAULT_ROOT = "/vllm-workspace"
 REMOTE_DEV_DEFAULT_CWD = "/vllm-workspace"
+REMOTE_DEV_RUNTIME_ENV_FILE = "/etc/profile.d/vaws-ascend-env.sh"
+REMOTE_DEV_RESOLVERS = "/absolute/path/to/vllm-ascend-workspace/.agents/lib/vaws_remote_dev_plugin.py:setup"
+REMOTE_DEV_STATE_DIR = "/absolute/path/to/vllm-ascend-workspace/.vaws-local/remote-dev-state"
+REMOTE_DEV_SSH_MUX_DIR = "~/.ssh/vaws-mux"
+# VAWS_REMOTE_DEV_ROOT = "/absolute/path/to/remote-dev"   # when not at the default location
 
 [features]
 hooks = true
@@ -24,7 +35,7 @@ matcher = "^Bash$|^apply_patch$|^mcp__(remote-dev|remote_dev)__.*"
 
 [[hooks.PreToolUse.hooks]]
 type = "command"
-command = 'python3 "$(git rev-parse --show-toplevel)/.remote-dev/hooks/codex_remote_guard.py"'
+command = 'python3 "$(git rev-parse --show-toplevel)/.agents/scripts/remote_dev.py" hook codex'
 timeout = 30
 statusMessage = "Checking remote development policy"
 

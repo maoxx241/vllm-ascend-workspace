@@ -35,6 +35,14 @@ jobs:
         run: python -B .agents/scripts/skill_catalog.py
       - name: Validate shared knowledge
         run: python -B .agents/scripts/knowledge_validate.py
+      - name: Check repository boundaries
+        # Enforce mode fails on a violation the dated baseline does not
+        # already record, and on a baseline row whose violation is gone.
+        # See docs/repo-boundaries.md. Submodules are not checked out here
+        # and the guard skips them regardless.
+        run: |
+          python -B .agents/scripts/repo_boundary_check.py --mode enforce
+          python -B -m unittest discover -s .agents/tests -p "test_repo_boundary_check.py"
       - name: Run catalog tests
         run: python -B -m unittest discover -s .agents/tests -p "test_*catalog.py"
       - name: Run manifest and knowledge tests

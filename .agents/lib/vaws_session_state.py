@@ -4,12 +4,15 @@
 from __future__ import annotations
 
 import contextlib
+import errno
+import fcntl
 import json
 import os
 import re
 import socket
 import sys
 import tempfile
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -70,6 +73,187 @@ def _load_json(path: Path, default: Any | None = None) -> Any:
         raise SessionStateError(f"invalid JSON in {path}: {exc}") from exc
 
 
+class _FlockUnsupported(Exception):
+    """Raised when fcntl.flock is not supported on this filesystem."""
+
+
+_GUARD_THREAD_LOCKS: dict[str, threading.Lock] = {}
+_GUARD_THREAD_LOCKS_MU = threading.Lock()
+_FLOCK_UNSUPPORTED_ERRNOS = {
+    errno.ENOTSUP,
+    errno.ENOSYS,
+    getattr(errno, "EOPNOTSUPP", errno.ENOTSUP),
+}
+_FLOCK_BUSY_ERRNOS = {errno.EAGAIN, errno.EACCES, errno.EWOULDBLOCK}
+
+
+def _guard_path(lock_path: Path) -> Path:
+    return lock_path.with_name(f"{lock_path.name}.guard")
+
+
+def _thread_gate(lock_path: Path) -> threading.Lock:
+    key = os.path.normpath(str(lock_path))
+    with _GUARD_THREAD_LOCKS_MU:
+        gate = _GUARD_THREAD_LOCKS.get(key)
+        if gate is None:
+            gate = threading.Lock()
+            _GUARD_THREAD_LOCKS[key] = gate
+        return gate
+
+
+def _timed_out(path: Path) -> SessionStateError:
+    return SessionStateError(f"timed out waiting for session lock {path}")
+
+
+@contextlib.contextmanager
+def _reclaim_gate(lock_path: Path, *, deadline: float, poll_seconds: float):
+    """Serialize reclaim/release on a never-unlinked sidecar.
+
+    The lease file stays an O_EXCL lock. This gate only covers unlink of
+    that file. A per-path threading.Lock covers same-process waiters if
+    flock is process-scoped; fcntl.flock covers other processes on local
+    POSIX filesystems. NFS and cross-host coherence are out of scope.
+    ENOTSUP fails closed for reclaim.
+    """
+    guard = _guard_path(lock_path)
+    ensure_state_dir(guard.parent)
+    thread_gate = _thread_gate(lock_path)
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise _timed_out(lock_path)
+        if thread_gate.acquire(timeout=min(poll_seconds, remaining)):
+            break
+    fd: int | None = None
+    locked = False
+    try:
+        fd = os.open(str(guard), os.O_CREAT | os.O_RDWR, 0o600)
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                locked = True
+                break
+            except OSError as exc:
+                if exc.errno in _FLOCK_UNSUPPORTED_ERRNOS:
+                    raise _FlockUnsupported() from exc
+                if exc.errno not in _FLOCK_BUSY_ERRNOS:
+                    raise
+                if time.monotonic() >= deadline:
+                    raise _timed_out(lock_path)
+                time.sleep(poll_seconds)
+        try:
+            yield
+        finally:
+            if locked:
+                with contextlib.suppress(OSError):
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        try:
+            if fd is not None:
+                os.close(fd)
+        finally:
+            thread_gate.release()
+
+
+def _lock_identity(path: Path) -> tuple[int, int] | None:
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        return None
+    return (st.st_dev, st.st_ino)
+
+
+def _lock_is_stale(path: Path, stale_after_seconds: float) -> bool:
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        return False
+    return (time.time() - st.st_mtime) >= stale_after_seconds
+
+
+def _reclaim_stale_lock(path: Path, stale_after_seconds: float) -> None:
+    """Unlink a stale lease. Caller must hold ``_reclaim_gate``."""
+    identity = _lock_identity(path)
+    if identity is None or not _lock_is_stale(path, stale_after_seconds):
+        return
+    current = _lock_identity(path)
+    if current != identity or not _lock_is_stale(path, stale_after_seconds):
+        return
+    try:
+        os.unlink(path)
+    except FileNotFoundError:
+        return
+
+
+def _unlink_if_identity(path: Path, identity: tuple[int, int]) -> None:
+    """Unlink ``path`` only if it is still ``identity``. Caller must hold ``_reclaim_gate``."""
+    if _lock_identity(path) != identity:
+        return
+    try:
+        os.unlink(path)
+    except FileNotFoundError:
+        return
+
+
+def _release_acquired_lease(
+    path: Path,
+    fd: int | None,
+    identity: tuple[int, int] | None,
+    *,
+    timeout_seconds: float,
+    poll_seconds: float,
+    pending_exc: BaseException | None,
+) -> None:
+    """Close the lease fd and unlink our inode under the cooperating guard.
+
+    Gate timeout and unsupported flock fail closed: the lease is left in
+    place. Those failures surface only when the critical section itself
+    succeeded, so a body exception is not replaced by a cleanup timeout.
+    Unrelated I/O errors, including lease-fd close failures, are not
+    swallowed even if the body already failed; they chain to the body
+    exception. The lease fd is closed even if gated unlink raises.
+    """
+    if fd is None and identity is None:
+        return
+    if fd is not None and identity is None:
+        try:
+            st = os.fstat(fd)
+            identity = (st.st_dev, st.st_ino)
+        except OSError:
+            identity = None
+    gate_exc: BaseException | None = None
+    close_exc: OSError | None = None
+    try:
+        if identity is not None:
+            release_deadline = time.monotonic() + timeout_seconds
+            try:
+                with _reclaim_gate(
+                    path, deadline=release_deadline, poll_seconds=poll_seconds
+                ):
+                    _unlink_if_identity(path, identity)
+            except _FlockUnsupported as exc:
+                gate_exc = SessionStateError(
+                    f"session lock reclaim is unsupported for {path}"
+                )
+                gate_exc.__cause__ = exc
+            except SessionStateError as exc:
+                gate_exc = exc
+    finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError as exc:
+                close_exc = exc
+    if close_exc is not None:
+        if pending_exc is not None:
+            raise close_exc from pending_exc
+        raise close_exc
+    if pending_exc is not None:
+        return
+    if gate_exc is not None:
+        raise gate_exc
+
+
 @contextlib.contextmanager
 def file_lock(
     path: Path,
@@ -78,6 +262,17 @@ def file_lock(
     poll_seconds: float = DEFAULT_LOCK_POLL_SECONDS,
     stale_after_seconds: float = DEFAULT_STALE_LOCK_SECONDS,
 ):
+    """Acquire an O_EXCL lease file, reclaiming a stale holder safely.
+
+    Reclaim and release are serialized under ``{name}.guard``. A waiter
+    must re-check inode and mtime under that gate before unlink, and a
+    holder unlinks only its own inode. If the gate cannot be obtained,
+    the lease is left in place and the failure is raised; release never
+    falls back to an unguarded unlink. This is atomic on local POSIX
+    filesystems for threads and processes that honor the gate. It does
+    not claim NFS or cross-host lock coherence; if flock is ENOTSUP,
+    reclaim and release fail closed and the lease is left in place.
+    """
     ensure_state_dir(path.parent)
     deadline = time.monotonic() + timeout_seconds
     owner = {
@@ -86,30 +281,53 @@ def file_lock(
         "created_at": utc_now_iso(),
     }
     fd: int | None = None
-    while True:
-        try:
-            fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-            os.write(fd, json.dumps(owner, ensure_ascii=False).encode("utf-8"))
-            break
-        except FileExistsError:
-            try:
-                age = time.time() - path.stat().st_mtime
-            except FileNotFoundError:
-                continue
-            if age >= stale_after_seconds:
-                with contextlib.suppress(FileNotFoundError):
-                    path.unlink()
-                continue
-            if time.monotonic() >= deadline:
-                raise SessionStateError(f"timed out waiting for session lock {path}")
-            time.sleep(poll_seconds)
+    identity: tuple[int, int] | None = None
+    pending_exc: BaseException | None = None
     try:
-        yield path
+        while True:
+            try:
+                fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+                os.write(fd, json.dumps(owner, ensure_ascii=False).encode("utf-8"))
+                st = os.fstat(fd)
+                identity = (st.st_dev, st.st_ino)
+                break
+            except FileExistsError:
+                try:
+                    # path.stat() is the unguarded verdict; reclaim re-checks
+                    # with lstat under the gate so a stale reading cannot
+                    # unlink a newer holder's inode.
+                    age = time.time() - path.stat().st_mtime
+                except FileNotFoundError:
+                    continue
+                if age >= stale_after_seconds:
+                    try:
+                        with _reclaim_gate(
+                            path, deadline=deadline, poll_seconds=poll_seconds
+                        ):
+                            _reclaim_stale_lock(path, stale_after_seconds)
+                    except _FlockUnsupported:
+                        if time.monotonic() >= deadline:
+                            raise _timed_out(path)
+                        time.sleep(poll_seconds)
+                    continue
+                if time.monotonic() >= deadline:
+                    raise _timed_out(path)
+                time.sleep(poll_seconds)
+        try:
+            yield path
+        except BaseException as exc:
+            pending_exc = exc
+            raise
     finally:
-        if fd is not None:
-            os.close(fd)
-        with contextlib.suppress(FileNotFoundError):
-            path.unlink()
+        if fd is not None or identity is not None:
+            _release_acquired_lease(
+                path,
+                fd,
+                identity,
+                timeout_seconds=timeout_seconds,
+                poll_seconds=poll_seconds,
+                pending_exc=pending_exc,
+            )
 
 
 def sessions_root(repo_root: Path = ROOT) -> Path:
@@ -306,29 +524,36 @@ def allocate_session_leases(
     if requested_devices is not None and npu_count is not None:
         raise SessionStateError("use only one of --devices or --npu-count")
     available_set = set(available_devices) if available_devices is not None else None
+    occupancy_unavailable = "cannot allocate NPU devices: host occupancy is unavailable"
     with file_lock(session_lock_dir(repo_root) / "leases.lock"):
         leases = load_leases(repo_root)
         bucket = _machine_lease_bucket(leases, machine_alias)
         allocated_devices: list[int] = []
         if requested_devices is not None:
+            if requested_devices and available_set is None:
+                # Unknown occupancy is not an empty free set. An explicit
+                # device list must not bypass a failed or unreadable probe.
+                raise SessionStateError(occupancy_unavailable)
             if available_set is not None:
                 missing = sorted(set(requested_devices) - available_set)
                 if missing:
+                    # "Not available" covers both absent and busy on purpose:
+                    # the caller passes free devices, not visible ones, so a
+                    # device that exists but is in use lands here too. Saying
+                    # "not visible" would send the reader looking for a
+                    # hardware or driver problem that is not there.
                     raise SessionStateError(
-                        f"requested NPU devices are not visible on host: {missing}; "
-                        f"available={sorted(available_set)}"
+                        f"requested NPU devices are not available on host (absent or in use "
+                        f"by another process): {missing}; available={sorted(available_set)}"
                     )
             allocated_devices = list(requested_devices)
         elif npu_count:
             if available_set is None:
                 # Without a host probe we cannot know how many NPUs exist or
                 # which are busy; guessing a fixed device range would hand out
-                # devices that may not exist. Fail fast instead of masking the
-                # probe failure.
-                raise SessionStateError(
-                    "cannot allocate by --npu-count: host NPU probe data is unavailable; "
-                    "fix the probe or request explicit --devices"
-                )
+                # devices that may not exist. Explicit --devices is not a
+                # bypass: that path fails closed on unknown occupancy too.
+                raise SessionStateError(occupancy_unavailable)
             candidates = sorted(available_set)
             for dev in candidates:
                 if _resource_owner(bucket, "npu_devices", str(dev)) in {None, sid}:
@@ -336,7 +561,12 @@ def allocate_session_leases(
                 if len(allocated_devices) >= npu_count:
                     break
             if len(allocated_devices) < npu_count:
-                raise SessionStateError(f"not enough locally unleased NPU devices for session {sid}")
+                raise SessionStateError(
+                    f"not enough allocatable NPU devices for session {sid}: "
+                    f"{len(allocated_devices)} of {npu_count} after excluding devices busy on "
+                    f"the host and devices leased in this workspace "
+                    f"(host-free={sorted(available_set)})"
+                )
 
         for dev in allocated_devices:
             _reserve(bucket, "npu_devices", dev, sid)

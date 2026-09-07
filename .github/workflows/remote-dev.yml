@@ -1,11 +1,23 @@
-name: Remote-dev contracts
+name: Remote-dev consumer contracts
+
+# The remote-dev substrate is a separate repository
+# (vllm-ascend-workspace/remote-dev; its own ci.yml runs its suite). This job
+# covers the scaffold's side of the contract: the resolver plugin, the
+# launcher and the client configuration that point at the external checkout.
 
 on:
   pull_request:
     paths:
-      - ".remote-dev/**"
-      - ".agents/lib/**"
+      - ".agents/deps/remote-dev.json"
+      - ".agents/lib/vaws_remote_dev.py"
+      - ".agents/lib/vaws_remote_dev_plugin.py"
+      - ".agents/lib/vaws_session_id.py"
+      - ".agents/scripts/remote_dev.py"
+      - ".agents/scripts/sync_claude_skills.py"
       - ".agents/scripts/vaws.py"
+      - ".agents/scripts/vaws_client_setup.py"
+      - ".agents/tests/test_remote_dev_consumer.py"
+      - ".claude/**"
       - ".mcp.json"
       - ".cursor/mcp.json"
       - ".codex/config.example.toml"
@@ -14,9 +26,16 @@ on:
   push:
     branches: [main]
     paths:
-      - ".remote-dev/**"
-      - ".agents/lib/**"
+      - ".agents/deps/remote-dev.json"
+      - ".agents/lib/vaws_remote_dev.py"
+      - ".agents/lib/vaws_remote_dev_plugin.py"
+      - ".agents/lib/vaws_session_id.py"
+      - ".agents/scripts/remote_dev.py"
+      - ".agents/scripts/sync_claude_skills.py"
       - ".agents/scripts/vaws.py"
+      - ".agents/scripts/vaws_client_setup.py"
+      - ".agents/tests/test_remote_dev_consumer.py"
+      - ".claude/**"
       - ".mcp.json"
       - ".cursor/mcp.json"
       - ".codex/config.example.toml"
@@ -27,13 +46,13 @@ permissions:
   contents: read
 
 jobs:
-  contracts:
-    name: MCP and remote safety (Python ${{ matrix.python }})
+  consumer:
+    name: Resolver plugin, launcher and client wiring (Python ${{ matrix.python }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        python: ["3.9", "3.12"]
+        python: ["3.11", "3.12"]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -41,10 +60,30 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
-      - name: Test portable MCP schemas, dispatch, and remote safety
-        # Discovery runs every module in .remote-dev/tests so new tests (CLI
-        # freshness, grep fallback semantics, mux, auto-bind, job lifecycle)
-        # cannot silently lack a CI entry again. Each test module puts the
-        # substrate on sys.path itself. Temporary files and bounded Linux
-        # process checks; no SSH/NPU access; Linux-only modules self-skip.
-        run: python -B -m unittest discover -s .remote-dev/tests
+      - name: Fetch the pinned remote-dev checkout (optional, private repository)
+        # The substrate is private. When a read token is configured the
+        # substrate-dependent tests run for real; otherwise they self-skip and
+        # only the substrate-free contract (plugin mapping, launcher, config
+        # files, shims) is enforced.
+        env:
+          REMOTE_DEV_READ_TOKEN: ${{ secrets.REMOTE_DEV_READ_TOKEN }}
+        run: |
+          if [ -z "$REMOTE_DEV_READ_TOKEN" ]; then
+            echo "REMOTE_DEV_READ_TOKEN not configured; substrate-dependent tests will skip"
+            exit 0
+          fi
+          repo="$(python3 -c 'import json; print(json.load(open(".agents/deps/remote-dev.json"))["repository"])')"
+          commit="$(python3 -c 'import json; print(json.load(open(".agents/deps/remote-dev.json"))["commit"])')"
+          git clone --quiet "https://x-access-token:${REMOTE_DEV_READ_TOKEN}@github.com/${repo}.git" "$RUNNER_TEMP/remote-dev"
+          git -C "$RUNNER_TEMP/remote-dev" checkout --quiet --detach "$commit"
+          echo "VAWS_REMOTE_DEV_ROOT=$RUNNER_TEMP/remote-dev" >> "$GITHUB_ENV"
+      - name: Compile the scaffold
+        run: python -B -m compileall -q .agents
+      - name: Consumer contract tests
+        run: python -B -m unittest discover -s .agents/tests -p "test_remote_dev_consumer.py" -v
+      - name: Launcher status
+        # Exit 1 (no checkout) is expected without the token; the JSON is the
+        # useful artifact either way.
+        run: python -B .agents/scripts/remote_dev.py status || true
+      - name: Claude skill shims are in sync
+        run: python -B .agents/scripts/sync_claude_skills.py --check

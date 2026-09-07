@@ -187,7 +187,7 @@
 
 ## A20. Custom CANN operators
 
-**Given** `vllm-ascend` has been rebuilt with `csrc/build_aclnn.sh`,
+**Given** `vllm-ascend` custom ops have been built through the existing parity editable-install path (`parity_sync.py --force-reinstall` when recovery is needed),
 **When** `serve_start.py` launches a model requiring custom ops (e.g. `aclnnAddRmsNormBias`),
 **Then** the launch script automatically sources the custom ops `set_env.bash` and the model loads without `libopapi.so` errors.
 
