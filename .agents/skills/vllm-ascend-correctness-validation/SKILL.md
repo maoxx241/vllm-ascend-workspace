@@ -14,8 +14,8 @@ Produce traceable correctness evidence instead of treating a successful request 
 3. Before remote execution, use `remote-code-parity` for each state.
 4. For offline cases, run `scripts/remote_correctness_harness.py` inside the remote NPU container. The harness prioritizes the materialized `vllm/` and `vllm-ascend/` source roots and propagates them through `PYTHONPATH`, so launching from `/vllm-workspace` or spawning a `python -m` child cannot resolve the outer repository directory as a false `vllm` namespace package.
 5. For online cases, use `vllm-ascend-serving`, then run the same harness in `online-chat` mode.
-6. Use `scripts/correctness_run.py init` to create the run directory and Run Manifest v1.
-7. Use `scripts/correctness_run.py compare` to normalize the evidence into a classification and report.
+6. Use `scripts/correctness_run.py init` to create the run directory and Run Manifest v1. Pass `--parent-run-id` for PR evidence, and declare any intentional non-code difference between the two states with `--allowed-difference KEY` (for example `engine_args.enforce_eager` for eager versus graph).
+7. Use `scripts/correctness_run.py compare` to normalize the evidence into a classification and report. It first checks that both results carry an `execution` block and differ only in declared keys; an undeclared difference aborts the comparison instead of being reported as a code regression.
 8. Route failures:
    - eager pass and graph fail: `vllm-ascend-graph-debug`;
    - multi-rank hang or inconsistent rank metadata: `vllm-ascend-distributed-debug` when available;
@@ -54,8 +54,8 @@ Do not relabel infrastructure failures as correctness regressions. Do not treat 
 ## Structured entry points
 
 - `scripts/correctness_run.py`: initialize a run, compare normalized baseline and candidate outputs, write `comparison.json`, `report.md`, `reproduction.sh`, and update Run Manifest v1.
-- `scripts/remote_correctness_harness.py`: execute offline generate, offline chat, or online chat cases and write the normalized result contract.
-- `scripts/aisbench_adapter.py`: prepare an AISBench accuracy command/config and normalize task metrics into the correctness result contract.
+- `scripts/remote_correctness_harness.py`: execute offline generate, offline chat, or online chat cases and write the normalized result contract, including the `execution` identity (`engine_args`, model, service, case digest) that decided the run.
+- `scripts/aisbench_adapter.py`: prepare an AISBench accuracy command/config and normalize task metrics into the correctness result contract; `normalize` requires `--execution` to declare the benchmarked service.
 
 Read as needed:
 

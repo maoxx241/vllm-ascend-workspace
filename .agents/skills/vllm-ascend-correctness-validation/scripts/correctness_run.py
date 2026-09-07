@@ -26,12 +26,15 @@ from vaws_run_manifest import (  # noqa: E402
     add_artifact,
     load_manifest,
     new_manifest,
+    sha256_file,
     transition_status,
     write_manifest,
 )
 
 SCHEMA_VERSION = 1
 SAFE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,127}$")
+# Keys of the result `execution` block that are flattened one level (dotted).
+EXECUTION_NESTED_FIELDS = ("engine_args",)
 CASE_MODES = frozenset({"offline-generate", "offline-chat", "online-chat", "aisbench"})
 RESULT_STATUSES = frozenset({"ok", "error", "unsupported"})
 PASS_CLASSES = frozenset({"exact_match", "numerical_difference_within_tolerance"})
@@ -190,10 +193,18 @@ def init_run(
     topology: Mapping[str, Any] | None = None,
     baseline_command: Sequence[str] | None = None,
     candidate_command: Sequence[str] | None = None,
+    allowed_differences: Sequence[str] | None = None,
+    parent_run_id: str | None = None,
     created_at: str | None = None,
 ) -> dict[str, Any]:
     if run_dir.exists() and any(run_dir.iterdir()):
         raise CorrectnessError(f"run directory is not empty: {run_dir}")
+    if baseline_label == candidate_label:
+        raise CorrectnessError("baseline-label and candidate-label must differ")
+    declared = sorted(set(allowed_differences or []))
+    for key in declared:
+        if not key.strip():
+            raise CorrectnessError("allowed-difference keys must be non-empty")
     cases_document = _load_json(cases_path, "cases file")
     validate_cases_document(cases_document)
     timestamp = created_at or utc_now()
@@ -208,6 +219,7 @@ def init_run(
         "candidate_label": candidate_label,
         "baseline_command": list(baseline_command or []),
         "candidate_command": list(candidate_command or []),
+        "allowed_differences": declared,
         "status": "planned",
         "created_at": timestamp,
         "updated_at": timestamp,
@@ -225,6 +237,7 @@ def init_run(
     manifest = new_manifest(
         run_type="correctness",
         run_id=run_id,
+        parent_run_id=parent_run_id,
         workspace_snapshot=workspace_snapshot,
         environment=environment,
         model=model,
@@ -539,6 +552,9 @@ def render_report(
     ]
     for row in comparison["cases"]:
         lines.append(f"| `{row['id']}` | `{row['classification']}` |")
+    if isinstance(comparison.get("execution"), Mapping):
+        lines.append("")
+        lines.extend(render_identity_section(comparison["execution"]))
     lines.extend(["", "## Details", ""])
     for row in comparison["cases"]:
         lines.extend(
@@ -556,6 +572,132 @@ def render_report(
     return "\n".join(lines)
 
 
+def validate_execution_block(document: Mapping[str, Any], *, label: str) -> dict[str, Any]:
+    """Require the `execution` identity a result must carry to be comparable."""
+    execution = document.get("execution")
+    if not isinstance(execution, Mapping):
+        raise CorrectnessError(
+            f"{label} result has no execution block; it does not record which "
+            "engine_args, model, or service produced it, so the comparison "
+            "could not attribute a difference to code. Produce results with "
+            "the current remote_correctness_harness.py or "
+            "aisbench_adapter.py normalize --execution"
+        )
+    engine_args = execution.get("engine_args")
+    if not isinstance(engine_args, Mapping):
+        raise CorrectnessError(f"{label} result execution.engine_args must be an object")
+    return dict(execution)
+
+
+def flatten_execution(execution: Mapping[str, Any]) -> dict[str, Any]:
+    """Flatten nested identity fields into dotted keys for a per-key diff."""
+    flat: dict[str, Any] = {}
+    for key, value in execution.items():
+        if key in EXECUTION_NESTED_FIELDS and isinstance(value, Mapping):
+            for nested_key, nested_value in value.items():
+                flat[f"{key}.{nested_key}"] = nested_value
+        else:
+            flat[key] = value
+    return flat
+
+
+def execution_differences(
+    baseline: Mapping[str, Any], candidate: Mapping[str, Any]
+) -> list[dict[str, Any]]:
+    """Every dotted identity key whose value differs between the two runs."""
+    left = flatten_execution(baseline)
+    right = flatten_execution(candidate)
+    rows: list[dict[str, Any]] = []
+    for key in sorted(set(left) | set(right)):
+        left_value = left.get(key)
+        right_value = right.get(key)
+        if left_value != right_value:
+            rows.append({"key": key, "baseline": left_value, "candidate": right_value})
+    return rows
+
+
+def check_run_identity(
+    run_state: Mapping[str, Any],
+    baseline: Mapping[str, Any],
+    candidate: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Refuse to compare two runs that differ in anything not declared at init.
+
+    The result label must match the side it is passed as, both results must
+    carry an execution block, and every execution difference must be listed in
+    `allowed_differences`. An undeclared difference means the comparison would
+    attribute a divergence to code that may instead come from eager/graph mode,
+    tensor-parallel degree, a different model, or a different case array.
+    """
+    problems: list[str] = []
+    for side, document in (("baseline", baseline), ("candidate", candidate)):
+        expected = run_state[f"{side}_label"]
+        actual = document.get("label")
+        if actual != expected:
+            problems.append(
+                f"{side} result label is {actual!r} but this run's {side} label "
+                f"is {expected!r}"
+            )
+    if problems:
+        raise CorrectnessError("; ".join(problems))
+    baseline_execution = validate_execution_block(baseline, label="baseline")
+    candidate_execution = validate_execution_block(candidate, label="candidate")
+    differences = execution_differences(baseline_execution, candidate_execution)
+    allowed = set(run_state.get("allowed_differences", []))
+    undeclared = [row["key"] for row in differences if row["key"] not in allowed]
+    if undeclared:
+        raise CorrectnessError(
+            "baseline and candidate executions differ in undeclared fields: "
+            + ", ".join(undeclared)
+            + "; a divergence could not be attributed to code. If the difference "
+            "is the variable under test, declare it at init with "
+            "--allowed-difference KEY; otherwise rerun the states identically"
+        )
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "baseline": {"label": baseline["label"], "execution": baseline_execution},
+        "candidate": {"label": candidate["label"], "execution": candidate_execution},
+        "allowed_differences": sorted(allowed),
+        "observed_differences": differences,
+        "identical_execution": not differences,
+    }
+
+
+def render_identity_section(identity: Mapping[str, Any]) -> list[str]:
+    lines = ["## Execution identity", ""]
+    if identity["identical_execution"]:
+        lines.append("- Baseline and candidate executions are identical apart from code.")
+    else:
+        lines.append(
+            "- Declared differences under test: "
+            + ", ".join(f"`{key}`" for key in identity["allowed_differences"])
+        )
+        lines.append("- Observed differences:")
+        for row in identity["observed_differences"]:
+            lines.append(
+                f"  - `{row['key']}`: baseline `{json.dumps(row['baseline'])}` "
+                f"vs candidate `{json.dumps(row['candidate'])}`"
+            )
+        lines.append(
+            "- A regression verdict on this run is attributable to the declared "
+            "variable(s), not necessarily to the code change."
+        )
+    lines.extend(["", "```json"])
+    lines.append(
+        json.dumps(
+            {
+                side: identity[side]["execution"]
+                for side in ("baseline", "candidate")
+            },
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+    )
+    lines.extend(["```", ""])
+    return lines
+
+
 def compare_run(
     run_dir: Path,
     *,
@@ -569,12 +711,16 @@ def compare_run(
     cases = _load_json(run_dir / "cases.json", "cases")
     baseline = _load_json(baseline_path, "baseline result")
     candidate = _load_json(candidate_path, "candidate result")
+    emit_progress("check-identity", baseline=str(baseline_path), candidate=str(candidate_path))
+    identity = check_run_identity(run_state, baseline, candidate)
     emit_progress("compare", cases=len(cases.get("cases", [])))
     comparison = compare_documents(cases, baseline, candidate)
+    comparison["execution"] = identity
     raw_dir = run_dir / "raw_outputs"
     raw_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy2(baseline_path, raw_dir / "baseline.json")
     shutil.copy2(candidate_path, raw_dir / "candidate.json")
+    _atomic_write_json(run_dir / "execution.json", identity)
     _atomic_write_json(run_dir / "comparison.json", comparison)
     _atomic_write_text(
         run_dir / "report.md",
@@ -594,11 +740,17 @@ def compare_run(
     for name, kind, uri in (
         ("baseline-output", "raw-output", "raw_outputs/baseline.json"),
         ("candidate-output", "raw-output", "raw_outputs/candidate.json"),
+        ("execution-identity", "execution-identity", "execution.json"),
         ("comparison", "comparison", "comparison.json"),
         ("report", "report", "report.md"),
     ):
         manifest = add_artifact(
-            manifest, name=name, kind=kind, uri=uri, updated_at=timestamp
+            manifest,
+            name=name,
+            kind=kind,
+            uri=uri,
+            sha256=sha256_file(run_dir / uri),
+            updated_at=timestamp,
         )
     manifest = transition_status(manifest, comparison["status"], updated_at=timestamp)
     write_manifest(run_dir / "manifest.json", manifest)
@@ -630,6 +782,22 @@ def build_parser() -> argparse.ArgumentParser:
     init.add_argument("--topology", default="{}")
     init.add_argument("--baseline-command", action="append", default=[])
     init.add_argument("--candidate-command", action="append", default=[])
+    init.add_argument(
+        "--allowed-difference",
+        action="append",
+        default=[],
+        metavar="KEY",
+        help=(
+            "execution identity key the two states are meant to differ in, e.g. "
+            "engine_args.enforce_eager for an eager-versus-graph comparison; "
+            "compare refuses any undeclared difference"
+        ),
+    )
+    init.add_argument(
+        "--parent-run-id",
+        default=None,
+        help="run_id of the change-validation plan this run is evidence for",
+    )
 
     compare = subparsers.add_parser("compare", help="compare normalized outputs")
     compare.add_argument("--run-dir", required=True, type=Path)
@@ -657,11 +825,14 @@ def main(argv: list[str] | None = None) -> int:
                 topology=_json_object(args.topology, "topology"),
                 baseline_command=args.baseline_command,
                 candidate_command=args.candidate_command,
+                allowed_differences=args.allowed_difference,
+                parent_run_id=args.parent_run_id,
             )
             payload = {
                 "status": "created",
                 "run_id": run_state["run_id"],
                 "run_dir": str(args.run_dir.resolve()),
+                "allowed_differences": run_state["allowed_differences"],
             }
         else:
             comparison = compare_run(
@@ -672,6 +843,9 @@ def main(argv: list[str] | None = None) -> int:
             payload = {
                 "status": comparison["status"],
                 "primary_classification": comparison["primary_classification"],
+                "observed_differences": [
+                    row["key"] for row in comparison["execution"]["observed_differences"]
+                ],
                 "comparison": str((args.run_dir / "comparison.json").resolve()),
                 "report": str((args.run_dir / "report.md").resolve()),
             }
