@@ -222,6 +222,19 @@ match_rules:
       add_categories: [attention.flash_score]
       add_roles: [attention]
 
+    # --- Attention: SWA (sliding-window attention, DeepSeek-V4) -----------
+    # User-confirmed 2026-09-07: DSV4's SWA kernel is ``sas`` — one kernel
+    # with 3 internal template variants.  NOTE: our current DSV4-Pro/Flash
+    # captures (older CANN) route SWA through FIA + swa_mask
+    # (vllm-ascend/attention/attention_v1.py) and expose no sas-named kernel,
+    # so this rule is pre-registered for the newer stack; the 3 template
+    # variants should get sub-categories once their profiled names are
+    # observed (intake via the anchor-degradation candidate list).
+    - id: attention.swa
+      when: {any_of: [sasattention, sas_attention, sasattn]}
+      add_categories: [attention.swa]
+      add_roles: [attention]
+
     # --- Attention: linear / mamba / GDN ---------------------------------
     # Tokens cover the full GDN/Mamba/DeltaNet/KDA kernel family observed on
     # Ascend traces, including ``qkvzbasplit`` — Qwen3-Next GDN QKV + Z
