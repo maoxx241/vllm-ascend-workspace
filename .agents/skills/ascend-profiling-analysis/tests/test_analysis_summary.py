@@ -804,3 +804,34 @@ if __name__ == "__main__":
         test_read_local_analysis_summary(root / "j")
         test_sweep_layer_validation_status_enrichment(root / "k")
     print("ok")
+
+
+def test_wrapper_stdout_splits_analysis_and_target_mode() -> None:
+    """Regression: the stdout contract must not carry a duplicate ``mode`` key —
+    the second assignment used to silently overwrite ``fast``/``full`` with the
+    session target mode."""
+    import ast
+
+    src = (Path(__file__).parent.parent / "scripts" / "profile_analyze.py").read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    found = None
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Assign)
+            and any(isinstance(t, ast.Name) and t.id == "output" for t in node.targets)
+            and isinstance(node.value, ast.Dict)
+        ):
+            found = node.value
+        if (
+            isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Name)
+            and node.target.id == "output"
+            and isinstance(node.value, ast.Dict)
+        ):
+            found = node.value
+    assert found is not None, "output dict literal not found in profile_analyze.py"
+    keys = [k.value for k in found.keys if isinstance(k, ast.Constant)]
+    assert "mode" not in keys, "duplicate-prone 'mode' key is back"
+    assert "analysis_mode" in keys
+    assert "target_mode" in keys
+    assert len(keys) == len(set(keys)), f"duplicate keys in wrapper output: {keys}"

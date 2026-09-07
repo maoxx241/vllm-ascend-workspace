@@ -238,3 +238,21 @@ def test_family_context_tolerates_non_numeric_expected_layers() -> None:
     )
 
     assert resolved["candidate_expected_layers"] == [61]
+
+
+def test_model_fingerprints_json_has_no_duplicate_keys() -> None:
+    """JSON silently drops duplicate keys; catch them at review/test time."""
+    import json as _json
+
+    raw = (Path(__file__).parent.parent / "scripts" / "ascend_profile" / "knowledge" / "model_fingerprints.json").read_text(encoding="utf-8")
+    duplicates: list[str] = []
+
+    def _hook(pairs):
+        keys = [k for k, _ in pairs]
+        for key in set(keys):
+            if keys.count(key) > 1:
+                duplicates.append(key)
+        return dict(pairs)
+
+    _json.loads(raw, object_pairs_hook=_hook)
+    assert not duplicates, f"duplicate keys in model_fingerprints.json: {sorted(set(duplicates))}"

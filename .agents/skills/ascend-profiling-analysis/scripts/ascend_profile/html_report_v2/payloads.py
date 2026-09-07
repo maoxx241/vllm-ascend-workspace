@@ -163,15 +163,32 @@ def compute_layer_validation(root: Path, b: "hr.Bundle", analysis_summary: dict 
         ][:8]
     layers_match: bool | None = None
     if expected_layers is not None and inventories:
-        layers_match = any(expected_layers in vals for vals in inventories.values())
+        # Strict rule (review PR#71): every complete-step count in every rank
+        # must equal the expected layer count; any() used to pass inventories
+        # like [60, 61] with expected 61.
+        layers_match = all(
+            all(count == expected_layers for count in vals)
+            for vals in inventories.values()
+        )
+
+    rank_lv_mismatch = [
+        str(rank.get("rank_id") or "?")
+        for rank in (segment_manifest.get("rank_summaries") or [])
+        if isinstance(rank, dict)
+        and ((rank.get("segmentation_strategy") or {}).get("layer_count_validation") or {}).get("status") == "mismatch"
+    ]
 
     if not inventories and expected_layers is None:
         status = "unknown"
-    elif layers_match is False or per_rank_consistent is False:
+    elif layers_match is False or per_rank_consistent is False or rank_lv_mismatch:
         status = "degraded"
     else:
         status = "ok"
     limitations: list[str] = []
+    if rank_lv_mismatch:
+        limitations.append(
+            "segment layer-count invariant mismatch on ranks: " + ", ".join(sorted(rank_lv_mismatch)[:8])
+        )
     if expected_layers is None:
         limitations.append("expected layer count unknown (no config.json / model-context layer count)")
     if not inventories:

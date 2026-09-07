@@ -90,14 +90,27 @@ def _is_kernel_db_name(name: str) -> bool:
     return name.startswith("ascend_pytorch_profiler_") and name.endswith(".db")
 
 
-def kernel_db_path(rank_dir: Path) -> Path | None:
-    """Locate the torch_npu profiler sqlite db for a rank directory."""
+def kernel_db_candidates(rank_dir: Path) -> list[Path]:
+    """All profiler dbs visible under a rank dir, newest-first (mtime, then name)."""
 
+    found: list[Path] = []
     for base in (rank_dir, rank_dir / "ASCEND_PROFILER_OUTPUT"):
-        matches = sorted(base.glob("ascend_pytorch_profiler_*.db"))
-        if matches:
-            return matches[0]
-    matches = sorted(rank_dir.glob("**/ascend_pytorch_profiler_*.db"))
+        found.extend(base.glob("ascend_pytorch_profiler_*.db"))
+    if not found:
+        found = list(rank_dir.glob("**/ascend_pytorch_profiler_*.db"))
+    return sorted(found, key=lambda p: (-p.stat().st_mtime, p.name))
+
+
+def kernel_db_path(rank_dir: Path) -> Path | None:
+    """Locate the torch_npu profiler sqlite db for a rank directory.
+
+    Multiple exports can coexist in one rank dir (e.g. a re-analyse without
+    cleanup). The collection skill records/validates the newest db by mtime,
+    so analysis picks the same: newest first, filename order as the stable
+    tie-breaker. Name-order-first would silently analyze a stale export.
+    """
+
+    matches = kernel_db_candidates(rank_dir)
     return matches[0] if matches else None
 
 

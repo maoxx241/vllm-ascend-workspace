@@ -30,7 +30,7 @@ try:
         to_plain,
         write_json,
     )
-    from .sources import KernelRowAccessor, shape_signature_from_text
+    from .sources import KernelRowAccessor, kernel_db_candidates, shape_signature_from_text
     from .sources_db import db_row_reader, probe_db_schema
     from .work import estimated_work_from_fields
 except ImportError:  # pragma: no cover - direct script execution
@@ -57,7 +57,7 @@ except ImportError:  # pragma: no cover - direct script execution
         to_plain,
         write_json,
     )
-    from sources import KernelRowAccessor, shape_signature_from_text  # type: ignore[no-redef]
+    from sources import KernelRowAccessor, kernel_db_candidates, shape_signature_from_text  # type: ignore[no-redef]
     from sources_db import db_row_reader, probe_db_schema  # type: ignore[no-redef]
     from work import estimated_work_from_fields  # type: ignore[no-redef]
 
@@ -95,30 +95,38 @@ def _resolve_rank_source(
 
     kernel_csv = kernel_details_path(rank_dir)
     kernel_db = kernel_db_path(rank_dir)
+    # Multiple exports in one rank dir: say so rather than silently picking.
+    multi_db_note = None
+    if kernel_db is not None:
+        n_dbs = len(kernel_db_candidates(rank_dir))
+        if n_dbs > 1:
+            multi_db_note = (
+                f"{n_dbs} profiler dbs in rank dir; using newest by mtime: {kernel_db.name}"
+            )
     if mode == "csv":
         if kernel_csv is None:
             return kernel_csv, kernel_db, None, "no kernel_details.csv found (--source csv)"
-        return kernel_csv, kernel_db, SOURCE_KIND_CSV, None
+        return kernel_csv, kernel_db, SOURCE_KIND_CSV, multi_db_note
     if mode == "db":
         if kernel_db is None:
             return kernel_csv, kernel_db, None, "no ascend_pytorch_profiler_*.db found (--source db)"
         probe = probe_db_schema(kernel_db)
         if not probe["ok"]:
             return kernel_csv, kernel_db, None, f"db schema probe failed: {_probe_summary(probe)}"
-        note = None
+        notes = [n for n in (multi_db_note,) if n]
         optional_missing = probe.get("optional_missing") or {}
         if optional_missing:
-            note = "db lacks optional tables (no comm rows contributed): " + ", ".join(sorted(optional_missing))
-        return kernel_csv, kernel_db, SOURCE_KIND_DB, note
+            notes.append("db lacks optional tables (no comm rows contributed): " + ", ".join(sorted(optional_missing)))
+        return kernel_csv, kernel_db, SOURCE_KIND_DB, "; ".join(notes) if notes else None
     # auto
     if kernel_db is not None:
         probe = probe_db_schema(kernel_db)
         if probe["ok"]:
-            note = None
+            notes = [n for n in (multi_db_note,) if n]
             optional_missing = probe.get("optional_missing") or {}
             if optional_missing:
-                note = "db lacks optional tables (no comm rows contributed): " + ", ".join(sorted(optional_missing))
-            return kernel_csv, kernel_db, SOURCE_KIND_DB, note
+                notes.append("db lacks optional tables (no comm rows contributed): " + ", ".join(sorted(optional_missing)))
+            return kernel_csv, kernel_db, SOURCE_KIND_DB, "; ".join(notes) if notes else None
         note = f"db schema probe failed ({_probe_summary(probe)})"
         if kernel_csv is not None:
             return kernel_csv, kernel_db, SOURCE_KIND_CSV, note + "; fell back to kernel_details.csv"

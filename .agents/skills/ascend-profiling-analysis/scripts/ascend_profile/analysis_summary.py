@@ -189,6 +189,18 @@ def _config_num_layers(overview_rows: Sequence[Mapping[str, Any]]) -> int | None
     return None
 
 
+def _config_num_nextn(overview_rows: Sequence[Mapping[str, Any]]) -> int:
+    """``num_nextn_predict_layers`` (MTP) from a user-supplied config.json.
+
+    Returns 0 when absent. The key is carried in the same key/value
+    projection as ``num_layers`` when the config has it.
+    """
+    for row in overview_rows:
+        if str(row.get("key")) in ("num_nextn_predict_layers", "nextn_predict_layers"):
+            return max(0, to_int(row.get("value"), default=0))
+    return 0
+
+
 def _model_context_source_bucket(source: str) -> str:
     if source.startswith("model_fingerprint_catalog"):
         return "knowledge"
@@ -265,8 +277,48 @@ def _layer_validation(
 
     if expected_layers is None or not inventories:
         layers_match: bool | None = None
+        accepted: set[int] = set()
     else:
-        layers_match = any(expected_layers in values for values in inventories.values())
+        # Strict rule (review PR#71): every complete-step layer count in every
+        # rank must hit an accepted target — ``any()`` used to pass ranks whose
+        # inventory was e.g. [60, 61] with expected 61. Accepted targets come
+        # from the segment stage's own invariant (which knows profile-visible
+        # counts and MTP), falling back to expected (+num_nextn from config).
+        accepted = set()
+        for rank in (segment_manifest.get("rank_summaries") or []):
+            if not isinstance(rank, Mapping):
+                continue
+            lv = ((rank.get("segmentation_strategy") or {}).get("layer_count_validation") or {})
+            for target in (lv.get("accepted_targets") or []):
+                target_int = to_int(target, default=0)
+                if target_int > 0:
+                    accepted.add(target_int)
+        if not accepted:
+            accepted = {expected_layers}
+            mtp_layers = _config_num_nextn(bundle["csvs"]["model_config_overview"])
+            if mtp_layers:
+                accepted.add(expected_layers + mtp_layers)
+        layers_match = all(
+            all(count in accepted for count in values)
+            for values in inventories.values()
+        )
+
+    # Propagate the segment stage's own layer-count invariant verdicts — it
+    # validates against accepted targets per rank and marks boundary merges
+    # the inventory view alone cannot see.
+    rank_lv_mismatch: list[str] = []
+    for rank in (segment_manifest.get("rank_summaries") or []):
+        if not isinstance(rank, Mapping):
+            continue
+        strategy = rank.get("segmentation_strategy") or {}
+        lv = strategy.get("layer_count_validation") or {}
+        if lv.get("status") == "mismatch":
+            rank_lv_mismatch.append(str(rank.get("rank_id") or "?"))
+    if rank_lv_mismatch:
+        lv_limitations.append(
+            "segment layer-count invariant mismatch on ranks: "
+            + ", ".join(sorted(rank_lv_mismatch)[:8])
+        )
 
     modes = {
         _SEGMENTATION_MODE_MAP.get(
@@ -297,6 +349,7 @@ def _layer_validation(
         "exact_cover_knowledge_miss" in modes
         or layers_match is False
         or per_rank_consistent is False
+        or rank_lv_mismatch
     ):
         status = "degraded"
     else:

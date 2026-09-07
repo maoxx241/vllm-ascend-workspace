@@ -951,12 +951,12 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     output: dict[str, Any] = {
         "status": "ok",
-        "mode": args.mode,
+        "analysis_mode": args.mode,
         "segmentation_degraded": bool(degraded_ranks),
         "warnings": warnings,
         "segmentation_strategies": segment_health.get("strategy_modes") or {},
         "machine": alias,
-        "mode": target["mode"],
+        "target_mode": target["mode"],
         "session_id": target["session_id"],
         "session_file": target["session_file"],
         "remote_profile_root": remote_profile_root,

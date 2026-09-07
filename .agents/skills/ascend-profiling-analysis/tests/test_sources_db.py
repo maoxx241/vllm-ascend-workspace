@@ -589,3 +589,23 @@ def test_normalize_db_mode_rejects_broken_db(tmp_path: Path) -> None:
     _events, manifest = normalize_profile(tmp_path, tmp_path / "out", source="db")
     assert manifest["rank_count"] == 0
     assert "db schema probe failed" in manifest["source_notes"][0]
+
+
+def test_kernel_db_path_picks_newest_by_mtime(tmp_path: Path) -> None:
+    """Multiple exports in one rank dir (re-analyse without cleanup): the
+    collection side validates newest-by-mtime, so analysis must select the
+    same one — never first-by-name."""
+    import os
+    from ascend_profile.sources import kernel_db_candidates, kernel_db_path
+
+    out = tmp_path / "rank0_x_ascend_pt" / "ASCEND_PROFILER_OUTPUT"
+    out.mkdir(parents=True)
+    older = out / "ascend_pytorch_profiler_1.db"  # name sorts LAST
+    newer = out / "ascend_pytorch_profiler_0.db"  # name sorts FIRST
+    older.write_bytes(b"old")
+    newer.write_bytes(b"new")
+    now = 1_700_000_000
+    os.utime(newer, (now - 100, now - 100))
+    os.utime(older, (now, now))  # mtime is NEWER on the name-last file
+    assert kernel_db_path(tmp_path / "rank0_x_ascend_pt") == older
+    assert kernel_db_candidates(tmp_path / "rank0_x_ascend_pt")[0] == older
