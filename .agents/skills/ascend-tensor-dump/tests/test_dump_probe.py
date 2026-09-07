@@ -26,8 +26,8 @@ _spec.loader.exec_module(dump_probe)
 class FakeTensor:
     """Minimal stand-in exposing only what the probe actually touches."""
 
-    def __init__(self, rows: int = 4, cols: int = 8, dtype: str = "torch.bfloat16"):
-        self.shape = (rows, cols)
+    def __init__(self, *shape: int, dtype: str = "torch.bfloat16"):
+        self.shape = shape or (4, 8)
         self.dtype = dtype
         self._sliced_to: int | None = None
 
@@ -44,14 +44,17 @@ class FakeTensor:
         return len(self.shape)
 
     def stride(self) -> tuple[int, ...]:
-        return (self.shape[1], 1)
+        strides = [1]
+        for dimension in reversed(self.shape[1:]):
+            strides.append(strides[-1] * dimension)
+        return tuple(reversed(strides))
 
     def is_contiguous(self) -> bool:
         return True
 
     def __getitem__(self, item) -> "FakeTensor":
         stop = item.stop if isinstance(item, slice) else item
-        clone = FakeTensor(int(stop), self.shape[1], self.dtype)
+        clone = FakeTensor(int(stop), *self.shape[1:], dtype=self.dtype)
         clone._sliced_to = int(stop)
         return clone
 
@@ -209,6 +212,15 @@ class CaptureTests(ProbeTestCase):
         _, saved = dump_probe._PROBE.tensors[0]
         self.assertEqual(saved.shape, (4, 8))
 
+    def test_rows_limit_leaves_one_dimensional_tensors_whole(self) -> None:
+        # A 1-D tensor is a weight or per-channel parameter. Slicing its only
+        # dimension corrupts it instead of shrinking the dump.
+        os.environ["DUMP_PROBE_TENSOR"] = "."
+        os.environ["DUMP_PROBE_ROWS"] = "8"
+        dump_probe.capture("gamma", FakeTensor(1024))
+        _, saved = dump_probe._PROBE.tensors[0]
+        self.assertEqual(saved.shape, (1024,))
+
     def test_summary_pattern_limits_which_stages_are_measured(self) -> None:
         os.environ["DUMP_PROBE_SUMMARY"] = "kv$"
         dump_probe.capture("layers.0.attn", FakeTensor())
@@ -249,6 +261,17 @@ class CaptureTests(ProbeTestCase):
         # the manifest keeps the true shape, not the truncated one
         record = dump_probe._PROBE.records[0]
         self.assertEqual(record["inputs"]["hidden"]["shape"], [64, 8])
+
+    def test_capture_inputs_keeps_weights_replayable(self) -> None:
+        # Row-limiting a captured weight makes the input set unreplayable:
+        # the operator rejects gamma[:8] against a [1, 1024] activation.
+        os.environ["DUMP_PROBE_ROWS"] = "8"
+        dump_probe.capture_inputs(
+            "add_rms_norm", x=FakeTensor(1, 1024), gamma=FakeTensor(1024)
+        )
+        _, payload = dump_probe._PROBE.input_sets[0]
+        self.assertEqual(payload["x"].shape, (1, 1024))
+        self.assertEqual(payload["gamma"].shape, (1024,))
 
 
 class GraphTests(ProbeTestCase):

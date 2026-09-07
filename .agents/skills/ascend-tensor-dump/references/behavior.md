@@ -13,7 +13,7 @@
 | `DUMP_PROBE_OCCURRENCE` | `1` | 1-based，该 label 内第几次 `arm()` 调用。 |
 | `DUMP_PROBE_SUMMARY` | 空 | 正则。空表示所有 stage 都算统计量。 |
 | `DUMP_PROBE_TENSOR` | 空 | 正则。**空表示不落任何整张量**，这是代价闸门。 |
-| `DUMP_PROBE_ROWS` | `0` | 整张量沿 dim 0 最多保留的行数，`0` 表示不限。 |
+| `DUMP_PROBE_ROWS` | `0` | 整张量沿 dim 0 最多保留的行数，`0` 表示不限。**只作用于 2 维及以上的张量**——1 维张量的唯一那一维是通道/参数轴而非 token 轴，截断它不是省空间而是把权重改坏（回放时算子会报 shape 不符，或者更糟，广播出错误结果）。 |
 | `DUMP_PROBE_ENABLE_FILE` | 空 | 哨兵路径。设置后文件不存在则保持禁用，可以不重启服务临时武装。 |
 
 非法整数值退回默认值，不抛异常——调试探针不应该因为环境变量拼错而杀掉一次昂贵的启动。
@@ -145,7 +145,15 @@ Python 在调用前就会求值实参，禁用状态也一样。写 `capture("q"
 - `first_divergent`：按左侧顺序最早满足 shape 不匹配、引入非有限、或统计量分叉的记录，带 `reasons` 列表。
 - `only_in_left` / `only_in_right`：单侧独有的 key。**两者非空时先怀疑两轮跑的不是同一条路径**，而不是急着看数值。
 
-`verdict` 为 `ALIGNED` 或 `DIVERGENT`。
+`verdict` 取三值：
+
+| verdict | 含义 |
+|---------|------|
+| `DIVERGENT` | 公共 stage 上出现形状不符、新增非有限值或统计量超差 |
+| `COVERAGE_MISMATCH` | 公共 stage 全部对齐，但存在单侧独有的 stage |
+| `ALIGNED` | 两侧 stage 集合相同且全部对齐 |
+
+单侧独有的 stage **不是**一致性证据，最常见的原因是两轮没跑同一条插桩路径——例如图模式 replay 直接跳过了 Python 打点。所以覆盖不对称单独成一档，不会被折叠进 `ALIGNED`。
 
 ### `tensors`
 
@@ -160,7 +168,7 @@ Python 在调用前就会求值实参，禁用状态也一样。写 `capture("q"
 | 整数或 bool dtype | `exact_equal` + `mismatch_count` |
 | 浮点 | `exact_equal`、`mismatch_count`、`max_abs_diff`、`mean_abs_diff`、`allclose`、`cosine`、`rel_l2` |
 
-`first_mismatch` 是最早失败的条目，`verdict` 为 `PASS` 或 `FAIL`。
+`first_mismatch` 是最早失败的条目。`verdict` 同样是三值：`FAIL`、`COVERAGE_MISMATCH`、`PASS`，判定优先级与 `diff` 一致。
 
 非有限值不参与任何 diff 指标：一侧出现 NaN 时答案已经是"就是这个 stage"，把它平均进去只会藏住结论。
 
@@ -173,7 +181,7 @@ Python 在调用前就会求值实参，禁用状态也一样。写 `capture("q"
 | 码 | 含义 |
 |----|------|
 | 0 | 执行成功。有无分叉看 `verdict` 字段。 |
-| 1 | 仅当传了 `--fail-on-divergence` 且 `verdict` 为 `DIVERGENT` 或 `FAIL`。 |
+| 1 | 仅当传了 `--fail-on-divergence` 且 `verdict` 为 `DIVERGENT`、`FAIL` 或 `COVERAGE_MISMATCH`。 |
 | 2 | 输入不可用：文件缺失、JSON 非法、没有 `records`、`tensors` 子命令缺 torch。 |
 
 发现分叉默认**不**改变退出码——分叉是结论，不是错误。需要 gating 时才加 `--fail-on-divergence`。

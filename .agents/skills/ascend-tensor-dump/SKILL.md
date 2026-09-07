@@ -86,11 +86,15 @@ manifest 每条记录同时带**逻辑信息**（shape / dtype）和**物理信�
 
 如果只能靠让 dump 强制走 eager 才能拿到数据（例如 `skip_compiled`），那这一轮测的就不是图路径，必须在结论里写明这一点。
 
+**图内的 `capture()` 在 replay 时根本不执行。** replay 只重放设备 kernel，不重入 Python，所以 forward 体内的打点只在 capture 那一次生效。实测同一份插桩在 Qwen3-0.6B 同一个 decode step 上：eager 出 114 条记录，aclgraph 只出 2 条——活下来的两条在 model runner 里，本来就在图外；而 28 个 `graph_slot` 缓冲全部带回了数据。所以图模式下**记录数骤降是缺数据，不是"两边一致"**。
+
+另一个推论：`capture_graph()` 不能用 `armed()` 之类的运行时条件去 gate。copy 节点在 capture 时就固化了，运行时的判断根本不参与。
+
 ## 单算子回放
 
-1. 在算子调用点用 `capture_inputs(stage, **named)` 存下完整输入集。非张量参数按原值保留。
-2. `replay_op.py --list` 看抓到了什么。
-3. `replay_op.py --stage X --candidate <算子> --reference <参考实现>` 生成 `candidate.pt` 和 `reference.pt`。
+1. 在算子调用点用 `capture_inputs(stage, **named)` 存下完整输入集。非张量参数按原值保留。**插在分支判断之前**——vllm-ascend 的算子包装常按 `enable_custom_op()` 在 `torch.ops._C_ascend` 融合 kernel 和 `torch_npu` 回退之间二选一，插到没走的那一支上会一无所获，而这种"空"很容易被误诊成选择器问题。不确定就先在容器里求一次 `enable_custom_op()`。
+2. `replay_op.py --list` 看抓到了什么，包括每个 stage 被打了多少次。
+3. `replay_op.py --stage X#N --candidate <算子> --reference <参考实现>` 生成 `candidate.pt` 和 `reference.pt`。同名 stage 通常每层一次，必须用 `#N` 指定是哪一次；只出现一次时可以省略。
 4. `dump_compare.py tensors` 出指标。
 
 参考实现优先选 CPU FP32 或规范公式，不要选"另一条历史兼容路径"——那条路径可能本身就不是 golden。

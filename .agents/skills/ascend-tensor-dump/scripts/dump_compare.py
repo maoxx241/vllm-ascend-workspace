@@ -227,6 +227,26 @@ def _stat_diverged(
     return diverged or None
 
 
+def _verdict(
+    *,
+    diverged: bool,
+    coverage_mismatch: bool,
+    diverged_name: str,
+    clean_name: str,
+) -> str:
+    """Rank the verdict so coverage gaps never read as a clean comparison.
+
+    A stage that exists on only one side is not evidence of agreement: it
+    usually means the two runs did not execute the same instrumented code,
+    for example when graph replay skips the Python capture calls entirely.
+    """
+    if diverged:
+        return diverged_name
+    if coverage_mismatch:
+        return "COVERAGE_MISMATCH"
+    return clean_name
+
+
 def diff_manifests(
     left_path: Path,
     right_path: Path,
@@ -240,6 +260,8 @@ def diff_manifests(
     left_keyed = dict(record_keys(left["records"]))
     right_keyed = dict(record_keys(right["records"]))
     order = [key for key, _ in record_keys(left["records"])]
+    only_in_left = sorted(set(left_keyed) - set(right_keyed))
+    only_in_right = sorted(set(right_keyed) - set(left_keyed))
 
     stages: list[dict[str, Any]] = []
     first_divergent: dict[str, Any] | None = None
@@ -302,11 +324,16 @@ def diff_manifests(
         "atol": atol,
         "rtol": rtol,
         "compared": len(stages),
-        "only_in_left": sorted(set(left_keyed) - set(right_keyed)),
-        "only_in_right": sorted(set(right_keyed) - set(left_keyed)),
+        "only_in_left": only_in_left,
+        "only_in_right": only_in_right,
         "first_divergent": first_divergent,
         "stages": stages,
-        "verdict": "DIVERGENT" if first_divergent else "ALIGNED",
+        "verdict": _verdict(
+            diverged=first_divergent is not None,
+            coverage_mismatch=bool(only_in_left or only_in_right),
+            diverged_name="DIVERGENT",
+            clean_name="ALIGNED",
+        ),
     }
 
 
@@ -419,6 +446,8 @@ def compare_tensor_payloads(
 ) -> dict[str, Any]:
     left_flat = flatten_payload(left_payload, label="left")
     right_flat = flatten_payload(right_payload, label="right")
+    only_in_left = sorted(set(left_flat) - set(right_flat))
+    only_in_right = sorted(set(right_flat) - set(left_flat))
 
     items: list[dict[str, Any]] = []
     first_mismatch: dict[str, Any] | None = None
@@ -477,11 +506,16 @@ def compare_tensor_payloads(
         "atol": atol,
         "rtol": rtol,
         "compared": len(items),
-        "only_in_left": sorted(set(left_flat) - set(right_flat)),
-        "only_in_right": sorted(set(right_flat) - set(left_flat)),
+        "only_in_left": only_in_left,
+        "only_in_right": only_in_right,
         "first_mismatch": first_mismatch,
         "items": items,
-        "verdict": "FAIL" if first_mismatch else "PASS",
+        "verdict": _verdict(
+            diverged=first_mismatch is not None,
+            coverage_mismatch=bool(only_in_left or only_in_right),
+            diverged_name="FAIL",
+            clean_name="PASS",
+        ),
     }
 
 
@@ -564,7 +598,11 @@ def build_parser() -> argparse.ArgumentParser:
         subparser.add_argument(
             "--fail-on-divergence",
             action="store_true",
-            help="exit 1 when the comparison is not aligned, for gating",
+            help=(
+                "exit 1 when the comparison is not clean, for gating; this "
+                "includes COVERAGE_MISMATCH, since a capture point present on "
+                "only one side is not evidence of agreement"
+            ),
         )
     return parser
 
@@ -594,6 +632,7 @@ def main(argv: list[str] | None = None) -> int:
     if getattr(args, "fail_on_divergence", False) and payload.get("verdict") in {
         "DIVERGENT",
         "FAIL",
+        "COVERAGE_MISMATCH",
     }:
         return 1
     return 0

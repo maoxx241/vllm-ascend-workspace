@@ -41,7 +41,9 @@ Environment contract
 ``DUMP_PROBE_TENSOR``      Regex of stages that get a full tensor clone.
                            Empty means none. Default empty -- this is the cost
                            gate, set it only once summaries point somewhere.
-``DUMP_PROBE_ROWS``        Clone at most this many rows along dim 0.
+``DUMP_PROBE_ROWS``        Clone at most this many rows along dim 0. Applies
+                           only to tensors with 2 or more dims; 1-D weights
+                           and per-channel parameters are kept whole.
                            ``0`` means no limit. Default ``0``.
 ``DUMP_PROBE_ENABLE_FILE`` Optional sentinel path. When set, the probe stays
                            disabled until the file exists, so a long-running
@@ -285,8 +287,15 @@ def _device_stats(tensor: Any) -> Any:
 
 
 def _row_limited(tensor: Any) -> Any:
+    """Keep only the leading ``DUMP_PROBE_ROWS`` token rows of a tensor.
+
+    Skips 1-D tensors on purpose. Their single dimension is a channel or
+    parameter axis, not a token axis, so slicing it does not shrink a dump --
+    it silently corrupts a weight into a shape the operator will reject or,
+    worse, broadcast against.
+    """
     rows = _env_int("DUMP_PROBE_ROWS", 0)
-    if rows > 0 and tensor.dim() >= 1 and tensor.shape[0] > rows:
+    if rows > 0 and tensor.dim() >= 2 and tensor.shape[0] > rows:
         return tensor[:rows]
     return tensor
 
@@ -366,7 +375,10 @@ def graph_slot(name: str, shape: tuple[int, ...], dtype: Any, device: Any = None
     import torch
 
     if device is None:
-        device = torch.npu.current_device() if hasattr(torch, "npu") else "cpu"
+        npu = getattr(torch, "npu", None)
+        # current_device() returns an index; a bare int is not a usable device
+        # spec here, so build the explicit "npu:N" string.
+        device = f"npu:{npu.current_device()}" if npu is not None else "cpu"
     buffer = torch.zeros(tuple(shape), dtype=dtype, device=device)
     _PROBE.graph_slots[name] = buffer
     _PROBE.graph_meta[name] = {"shape": list(shape), "dtype": str(dtype)}

@@ -12,15 +12,16 @@ Run it on the machine that has the NPU and the dump, and keep it here as an
 asset rather than a maintained library: an operator reproducer is meant to be
 edited for the call you are chasing.
 
-Inspect what was captured::
+Inspect what was captured, including how many times each stage was hit::
 
     python replay_op.py --dump req-abc-rank0.pt --list
 
-Replay against a reference::
+Replay against a reference. A stage captured once can be named directly; a
+stage captured per layer needs an occurrence, as ``gmm1#3``::
 
     python replay_op.py \\
         --dump req-abc-rank0.pt \\
-        --stage gmm1 \\
+        --stage gmm1#3 \\
         --candidate torch_npu.npu_grouped_matmul \\
         --reference my_refs.grouped_matmul_reference \\
         --out-dir /tmp/replay-gmm1
@@ -65,13 +66,52 @@ def resolve(path: str) -> Any:
 
 
 def load_input_sets(dump: Path) -> dict[str, dict[str, Any]]:
+    """Load every captured input set, keyed ``stage#occurrence``.
+
+    One stage name is usually captured many times in a single forward -- one
+    per layer, for instance. Keying by bare stage name would silently keep
+    only the last one, so the occurrence index is always part of the key.
+    """
     import torch
 
     payload = torch.load(dump, map_location="cpu", weights_only=False)
     sets: dict[str, dict[str, Any]] = {}
+    seen: dict[str, int] = {}
     for stage, inputs in payload.get("inputs") or []:
-        sets[str(stage)] = inputs
+        name = str(stage)
+        index = seen.get(name, 0)
+        seen[name] = index + 1
+        sets[f"{name}#{index}"] = inputs
     return sets
+
+
+def resolve_stage(requested: str, input_sets: dict[str, dict[str, Any]]) -> str:
+    """Accept an exact ``stage#N`` key, or a bare stage name when unambiguous."""
+    if requested in input_sets:
+        return requested
+    candidates = [key for key in input_sets if key.rsplit("#", 1)[0] == requested]
+    if len(candidates) == 1:
+        return candidates[0]
+    if not candidates:
+        raise LookupError(f"stage {requested!r} not in dump")
+    raise LookupError(
+        f"stage {requested!r} was captured {len(candidates)} times; "
+        f"address one with {requested}#0 .. {requested}#{len(candidates) - 1}"
+    )
+
+
+def summarize_stages(input_sets: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    grouped: dict[str, dict[str, Any]] = {}
+    for key, inputs in input_sets.items():
+        name = key.rsplit("#", 1)[0]
+        entry = grouped.setdefault(
+            name, {"occurrences": 0, "inputs": sorted(inputs), "addressable_as": ""}
+        )
+        entry["occurrences"] += 1
+    for name, entry in grouped.items():
+        last = entry["occurrences"] - 1
+        entry["addressable_as"] = f"{name}#0 .. {name}#{last}" if last else f"{name}#0"
+    return grouped
 
 
 def to_device(value: Any, device: str) -> Any:
@@ -122,7 +162,13 @@ def save_payload(path: Path, stage: str, result: Any) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dump", required=True, type=Path)
-    parser.add_argument("--stage")
+    parser.add_argument(
+        "--stage",
+        help=(
+            "captured stage to replay; use stage#N to pick one occurrence when "
+            "the stage was captured more than once"
+        ),
+    )
     parser.add_argument("--candidate")
     parser.add_argument("--reference")
     parser.add_argument("--out-dir", type=Path)
@@ -152,9 +198,7 @@ def main(argv: list[str] | None = None) -> int:
                 {
                     "status": "ok",
                     "dump": str(args.dump),
-                    "stages": {
-                        stage: sorted(inputs) for stage, inputs in input_sets.items()
-                    },
+                    "stages": summarize_stages(input_sets),
                 },
                 ensure_ascii=False,
                 indent=2,
@@ -162,13 +206,15 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 0
 
-    if args.stage not in input_sets:
+    try:
+        stage_key = resolve_stage(args.stage, input_sets)
+    except LookupError as exc:
         print(
             json.dumps(
                 {
                     "status": "failed",
-                    "error": f"stage {args.stage!r} not in dump",
-                    "available": sorted(input_sets),
+                    "error": str(exc),
+                    "available": summarize_stages(input_sets),
                 },
                 ensure_ascii=False,
             )
@@ -189,7 +235,7 @@ def main(argv: list[str] | None = None) -> int:
     dropped = {name.strip() for name in args.drop.split(",") if name.strip()}
     captured = {
         name: to_device(value, args.device)
-        for name, value in input_sets[args.stage].items()
+        for name, value in input_sets[stage_key].items()
         if name not in dropped
     }
 
@@ -209,18 +255,18 @@ def main(argv: list[str] | None = None) -> int:
     for role, dotted in (("candidate", args.candidate), ("reference", args.reference)):
         if not dotted:
             continue
-        emit_progress("replay", role=role, target=dotted, stage=args.stage)
+        emit_progress("replay", role=role, target=dotted, stage=stage_key)
         function = resolve(dotted)
         result = function(*positional, **keywords)
         path = args.out_dir / f"{role}.pt"
-        save_payload(path, args.stage, result)
+        save_payload(path, stage_key, result)
         written[role] = str(path)
 
     print(
         json.dumps(
             {
                 "status": "ok",
-                "stage": args.stage,
+                "stage": stage_key,
                 "inputs": sorted(captured),
                 "written": written,
                 "next": (

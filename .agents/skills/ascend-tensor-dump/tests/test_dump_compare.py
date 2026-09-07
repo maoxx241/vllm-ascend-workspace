@@ -298,6 +298,49 @@ class DiffTests(TempCase):
         self.assertEqual(payload["only_in_right"], ["only-r#0"])
         self.assertEqual(payload["compared"], 1)
 
+    def test_one_sided_coverage_is_not_reported_as_aligned(self) -> None:
+        left = self.write(
+            "l.json", manifest([record("a", 0), record("dropped", 1)])
+        )
+        right = self.write("r.json", manifest([record("a", 0)]))
+        code, payload = self.run_cli(
+            ["diff", "--left", str(left), "--right", str(right)]
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["verdict"], "COVERAGE_MISMATCH")
+        self.assertIsNone(payload["first_divergent"])
+        self.assertEqual(payload["only_in_left"], ["dropped#0"])
+
+    def test_coverage_mismatch_also_trips_the_gate(self) -> None:
+        left = self.write(
+            "l.json", manifest([record("a", 0), record("dropped", 1)])
+        )
+        right = self.write("r.json", manifest([record("a", 0)]))
+        code, payload = self.run_cli(
+            [
+                "diff",
+                "--left",
+                str(left),
+                "--right",
+                str(right),
+                "--fail-on-divergence",
+            ]
+        )
+        self.assertEqual(code, 1)
+        self.assertEqual(payload["verdict"], "COVERAGE_MISMATCH")
+
+    def test_actual_divergence_outranks_a_coverage_gap(self) -> None:
+        left = self.write(
+            "l.json", manifest([record("a", 0), record("dropped", 1)])
+        )
+        right = self.write(
+            "r.json", manifest([record("a", 0, summary=summary(nan_count=4.0))])
+        )
+        _, payload = self.run_cli(
+            ["diff", "--left", str(left), "--right", str(right)]
+        )
+        self.assertEqual(payload["verdict"], "DIVERGENT")
+
     def test_fail_on_divergence_changes_the_exit_code(self) -> None:
         left = self.write("l.json", manifest([record("a", 0)]))
         right = self.write(
@@ -399,6 +442,32 @@ class PayloadTests(unittest.TestCase):
     def test_non_dict_payload_is_rejected(self) -> None:
         with self.assertRaises(dump_compare.DumpCompareError):
             dump_compare.flatten_payload(["not", "a", "dict"], label="left")
+
+
+class VerdictTests(unittest.TestCase):
+    def verdict(self, *, diverged: bool, coverage_mismatch: bool) -> str:
+        return dump_compare._verdict(
+            diverged=diverged,
+            coverage_mismatch=coverage_mismatch,
+            diverged_name="FAIL",
+            clean_name="PASS",
+        )
+
+    def test_clean_comparison(self) -> None:
+        self.assertEqual(
+            self.verdict(diverged=False, coverage_mismatch=False), "PASS"
+        )
+
+    def test_coverage_gap_is_its_own_verdict(self) -> None:
+        self.assertEqual(
+            self.verdict(diverged=False, coverage_mismatch=True),
+            "COVERAGE_MISMATCH",
+        )
+
+    def test_divergence_takes_priority_over_a_coverage_gap(self) -> None:
+        self.assertEqual(
+            self.verdict(diverged=True, coverage_mismatch=True), "FAIL"
+        )
 
 
 if __name__ == "__main__":

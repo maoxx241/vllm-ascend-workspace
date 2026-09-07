@@ -228,6 +228,118 @@
           "The same non-finite values appeared in a passing request at the pre-clear stages, ruling them out as the cause and moving attribution to a later layer (Kimi-K3 state-dump investigation, 2026-08)."
         ]
       }
+    },
+    {
+      "id": "aclgraph-replay-skips-in-forward-python-dump-calls",
+      "status": "active",
+      "source": "measured on 192.168.13.155 single-card Qwen3-0.6B while validating ascend-tensor-dump (2026-09-07)",
+      "applicable_versions": "Measured 2026-09-07 on vllm-ascend 0.19.1rc2.dev1835+gf69831343 with torch 2.10.0 / torch_npu 2.10.0.post4.dev20260715, A3, aclgraph default mode. Applies to any capture point inside a graph-captured region.",
+      "updated_at": "2026-09-07",
+      "first_seen": "2026-09-07",
+      "scope": {
+        "component": "tensor dump instrumentation",
+        "environment": "vllm-ascend serving with ACL Graph enabled",
+        "subsystem": "in-forward capture points"
+      },
+      "rule": {
+        "summary": "Python dump calls placed inside a graph-captured forward stop recording on replay, so a graph-mode dump is silently missing most of its stages",
+        "symptom": "The same instrumentation that produces a full manifest in eager mode produces a nearly empty one under aclgraph. Only capture points outside the captured region survive. Nothing errors, and the manifest still looks structurally valid.",
+        "root_cause": "Graph replay executes the recorded device kernels without re-entering Python, so a capture call in the model's forward body only runs during capture, not during replay. Capture points in the model runner remain outside the graph and keep working, which makes the loss look partial rather than systematic.",
+        "resolution": "For stages inside the graph, pre-allocate a buffer with graph_slot() at module construction time and write it with capture_graph(), which bakes a device-to-device copy into the captured graph. Read the buffers back after replay in finish().",
+        "avoidance": "Never compare an eager dump against a graph dump on stage-count alone, and never gate a graph capture on a runtime armed() check: the copy node is fixed at capture time. Treat a graph-mode manifest whose record count is far below the eager one as missing data, not as agreement.",
+        "fingerprints": [
+          "graph mode dump manifest far fewer records than eager",
+          "aclgraph replay python capture not executed",
+          "per-layer dump stages missing only in graph mode"
+        ],
+        "verification": [
+          "Identical instrumentation on Qwen3-0.6B produced 114 records in eager mode and 2 records under aclgraph for the same decode step, while all 28 graph_slot buffers came back populated; the 2 survivors were the model-runner capture points outside the graph (192.168.13.155, 2026-09-07)."
+        ]
+      }
+    },
+    {
+      "id": "dump-row-limit-corrupts-one-dimensional-weights",
+      "status": "active",
+      "source": "measured on 192.168.13.155 single-card Qwen3-0.6B while validating ascend-tensor-dump operator replay (2026-09-07)",
+      "applicable_versions": "Measured 2026-09-07 on vllm-ascend 0.19.1rc2.dev1835+gf69831343, torch_npu 2.10.0.post4.dev20260715, A3. Applies to any dump tooling that row-limits captured tensors uniformly.",
+      "updated_at": "2026-09-07",
+      "first_seen": "2026-09-07",
+      "scope": {
+        "component": "tensor dump instrumentation",
+        "environment": "single-operator replay from a captured input set",
+        "subsystem": "captured tensor row limiting"
+      },
+      "rule": {
+        "summary": "A row limit meant to bound token count destroys 1-D weights in a captured operator input set, so the replay fails or compares the wrong thing",
+        "symptom": "Standalone replay of a captured operator call fails with a shape complaint against a parameter rather than an activation, for example aclnnAddRmsNorm error 561103 reporting gamma [8] against x1 [1, 1024]. The manifest records the true shapes, so nothing looks wrong until the replay runs.",
+        "root_cause": "Row limiting slices dim 0. For an activation that is the token axis and slicing is harmless; for a 1-D weight or per-channel parameter dim 0 is the only axis, so the limit truncates the parameter itself.",
+        "resolution": "Apply the row limit only to tensors with 2 or more dimensions and keep 1-D tensors whole. Weights are small, so this costs nothing in dump size.",
+        "avoidance": "When a captured input set is meant to be replayable, verify the captured shapes against the manifest's recorded shapes before replaying. A parameter whose captured shape equals the row limit is corrupt, not small.",
+        "fingerprints": [
+          "aclnnAddRmsNorm failed error code 561103 gamma shape",
+          "shape of gamma should be equal to the last 1 dim of x1",
+          "captured weight shape equals dump row limit"
+        ],
+        "verification": [
+          "With DUMP_PROBE_ROWS=8, gamma was captured as [8] and replay of torch_npu.npu_add_rms_norm failed with aclnnAddRmsNorm 561103; exempting 1-D tensors restored gamma to [1024] and the replay matched a float32 reference within bf16 tolerance on all three outputs (192.168.13.155, 2026-09-07)."
+        ]
+      }
+    },
+    {
+      "id": "dump-comparison-reports-aligned-despite-one-sided-coverage",
+      "status": "active",
+      "source": "measured on 192.168.13.155 while validating ascend-tensor-dump eager-vs-graph comparison (2026-09-07)",
+      "applicable_versions": "Measured 2026-09-07 while comparing eager and aclgraph dumps of Qwen3-0.6B on A3. The reasoning error applies to any stage-keyed dump comparison.",
+      "updated_at": "2026-09-07",
+      "first_seen": "2026-09-07",
+      "scope": {
+        "component": "dump comparison",
+        "environment": "two-run dump comparison",
+        "subsystem": "comparison verdict"
+      },
+      "rule": {
+        "summary": "A verdict computed only over stages present on both sides reports agreement when one run captured almost nothing",
+        "symptom": "Comparing an eager dump against a graph dump returns an aligned verdict and exit code 0 while listing over a hundred stages as present on only one side. A tensor comparison with zero comparable pairs likewise reports a pass.",
+        "root_cause": "Divergence is only defined over the intersection of stage keys, so shrinking the intersection makes the verdict look better. Coverage asymmetry is the stronger signal and it was being discarded.",
+        "resolution": "Rank coverage asymmetry as its own verdict between clean and divergent, and make the gating flag fail on it. Reserve a clean verdict for runs whose stage-key sets actually match.",
+        "avoidance": "Read the one-sided stage lists before the metrics. Non-empty lists usually mean the two runs did not execute the same instrumented code, and no numeric conclusion holds until the paths are aligned.",
+        "fingerprints": [
+          "dump diff aligned but only_in_left non-empty",
+          "tensor comparison pass with zero compared items",
+          "eager versus graph dump verdict aligned"
+        ],
+        "verification": [
+          "An eager-vs-graph diff with 2 comparable stages and 112 left-only stages reported ALIGNED with exit 0; after ranking coverage asymmetry it reports COVERAGE_MISMATCH with exit 1, while a dump compared against itself still reports ALIGNED over all 114 stages (192.168.13.155, 2026-09-07)."
+        ]
+      }
+    },
+    {
+      "id": "capture-point-added-to-a-branch-the-build-does-not-take",
+      "status": "active",
+      "source": "measured on 192.168.13.155 while instrumenting vllm_ascend RMSNorm for ascend-tensor-dump operator replay (2026-09-07)",
+      "applicable_versions": "Measured 2026-09-07 on vllm-ascend 0.19.1rc2.dev1835+gf69831343 where enable_custom_op() is true. Applies to any operator wrapper with a custom-op fallback pair.",
+      "updated_at": "2026-09-07",
+      "first_seen": "2026-09-07",
+      "scope": {
+        "component": "tensor dump instrumentation",
+        "environment": "vllm-ascend operator wrappers with custom-op branches",
+        "subsystem": "capture point placement"
+      },
+      "rule": {
+        "summary": "Instrumenting one arm of a custom-op branch captures nothing on a build that takes the other arm, and the empty result looks like a selector problem",
+        "symptom": "The dump manifest is produced with the expected record count from other capture points, but the operator input set is absent and no tensor payload is written. Time is then spent debugging the arming selector rather than the capture point.",
+        "root_cause": "vllm-ascend operator wrappers commonly branch on enable_custom_op() between a torch.ops._C_ascend fused kernel and a torch_npu fallback. Which arm runs depends on the build, not on the model or the request.",
+        "resolution": "Place the input capture above the branch so it runs on either path. Confirm the live arm by evaluating enable_custom_op() in the container before assuming which kernel is under test.",
+        "avoidance": "A py_compile check proves only syntax. Before interpreting an empty capture, confirm the instrumented line is actually reachable in this build; an inline import of the probe inside a dead branch also hides missing module-level imports until runtime.",
+        "fingerprints": [
+          "operator input set missing from dump but manifest present",
+          "enable_custom_op true instrumented fallback branch",
+          "no tensor file written despite capture_inputs call"
+        ],
+        "verification": [
+          "capture_inputs placed in the torch_npu.npu_add_rms_norm fallback arm recorded nothing because enable_custom_op() was true; moving it above the branch captured all 56 calls of the armed forward (192.168.13.155, 2026-09-07)."
+        ]
+      }
     }
   ]
 }

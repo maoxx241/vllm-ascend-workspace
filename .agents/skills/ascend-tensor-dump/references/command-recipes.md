@@ -114,7 +114,7 @@ python .agents/skills/ascend-tensor-dump/scripts/dump_compare.py diff \
   --right /vllm-workspace/dumps/graph/cmpl-abc-rank0.json
 ```
 
-先看 `only_in_left` 和 `only_in_right`。两者非空说明两轮走的不是同一条代码路径，此时任何数值结论都不成立，先把路径对齐。
+先看 verdict。`COVERAGE_MISMATCH` 说明两轮走的不是同一条代码路径（`only_in_left` / `only_in_right` 给出具体 stage），此时任何数值结论都不成立，先把路径对齐。
 
 再看 `first_divergent.reasons`。
 
@@ -135,7 +135,7 @@ export DUMP_PROBE_TENSOR='layers\.23\.self_attn'
 export DUMP_PROBE_ROWS=32
 ```
 
-`DUMP_PROBE_ROWS` 必须设。不设会把整个 prefill 的 token 维度全存下来。
+`DUMP_PROBE_ROWS` 必须设。不设会把整个 prefill 的 token 维度全存下来。它只作用于 2 维及以上的张量——1 维权重整存，否则回放时算子会拿 `gamma[:8]` 去配 `[1, 1024]` 的激活。
 
 比较：
 
@@ -176,27 +176,49 @@ dump_probe.finish()
 
 启动服务保持图模式，不要加 `--enforce-eager`。图 slot 走的就是真实 replay 路径。
 
-对照的 eager 一侧照常用 `capture()`，服务加 `--enforce-eager`。`finish()` 两侧都写同一套 key，`graph:` 前缀的条目只有图那一侧有，用 `diff` 的 `only_in_right` 可以确认。
+对照的 eager 一侧照常用 `capture()`，服务加 `--enforce-eager`。
+
+关于两侧怎么比，有三点实测结论，别搞错：
+
+1. **图 slot 不进 `records`。** 它们落在 manifest 的 `graph_slots` 字典和 `.pt` 的 `graph:` key 空间里，所以 `diff`（只配对 `records`）看不到它们。用 `scan` 看声明了哪些 slot，用 `tensors` 比数值。
+2. **eager 和 graph 的 manifest `diff` 必然是 `COVERAGE_MISMATCH`。** 图内的 `capture()` 在 replay 时不执行，eager 那一侧的逐层记录在图侧根本不存在。实测 114 对 2。这个 verdict 是正确结果，不是工具出错——它恰好在提醒你别拿残缺记录做数值结论。真正跨模式可比的，只有 model runner 那种本来就在图外的 stage。
+3. **`graph:` key 和 `capture()` 的 stage key 不会自动配对**，前缀不同，即使名字取一样也不会。跨模式的整张量对拍需要自己后处理。`tensors` 更适合用在同模式的两轮之间：graph 比 graph（换 build、换配置），eager 比 eager。
 
 ## 9. 单算子回放
 
-算子调用点存输入集：
+算子调用点存输入集。**插在分支判断之前**，不要插进某一支里：
 
 ```python
-dump_probe.capture_inputs(
-    "gmm1",
-    hidden=quantized_hidden_states,
-    weight=w1,
-    group_list=group_list,
-    scale=pertoken_scale,
-    group_list_type=group_list_type,
-)
+if residual is not None:
+    from vllm_ascend import dump_probe
+
+    dump_probe.capture_inputs(
+        "add_rms_norm",
+        x=x,
+        residual=residual,
+        gamma=self.weight,
+        epsilon=self.variance_epsilon,
+    )
+    if enable_custom_op():
+        ...   # torch.ops._C_ascend 融合 kernel
+    else:
+        ...   # torch_npu 回退
 ```
 
-拉到能跑算子的机器上，先看抓到了什么：
+vllm-ascend 的算子包装常按 `enable_custom_op()` 二选一，走哪一支取决于 build 而不是模型或请求。插到没走的那一支上会一无所获，而且 `py_compile` 查不出来——它只验语法。不确定就先求一次：
+
+```bash
+remote.bash command: "python3 -c 'from vllm_ascend.utils import enable_custom_op; print(enable_custom_op())'"
+```
+
+顺带一句：在死分支里写 `from vllm_ascend import dump_probe` 这种内联 import，会把"模块级 import 漏了"的问题一起藏到运行时。
+
+拉到能跑算子的机器上，先看抓到了什么。同名 stage 每层一次是常态，`--list` 会报出次数和寻址范围：
 
 ```bash
 python replay_op.py --dump /vllm-workspace/dumps/gmm/cmpl-abc-rank0.pt --list
+# {"stages": {"gmm1": {"occurrences": 56, "inputs": [...],
+#                      "addressable_as": "gmm1#0 .. gmm1#55"}}}
 ```
 
 对拍参考实现：
@@ -204,7 +226,7 @@ python replay_op.py --dump /vllm-workspace/dumps/gmm/cmpl-abc-rank0.pt --list
 ```bash
 python replay_op.py \
   --dump /vllm-workspace/dumps/gmm/cmpl-abc-rank0.pt \
-  --stage gmm1 \
+  --stage gmm1#10 \
   --candidate torch_npu.npu_grouped_matmul \
   --reference my_refs.grouped_matmul_reference \
   --arg-order hidden,weight,group_list \
