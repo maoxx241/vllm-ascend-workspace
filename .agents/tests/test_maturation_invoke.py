@@ -367,7 +367,7 @@ class ExternalRoutingTests(unittest.TestCase):
         ):
             result = invoker.call_cli(
                 "remote.bash",
-                {"command": "printf hi", "host": "10.0.0.9", "port": 22},
+                {"command": "printf hi", "host": "192.0.2.9", "port": 22},
                 kill_after_ms=40,
                 kill_mode="transport",
                 timeout_s=9.0,
@@ -378,7 +378,7 @@ class ExternalRoutingTests(unittest.TestCase):
             ["/usr/bin/python3", str(LAUNCHER), "tool", "remote_bash", "--input-json", "-"],
         )
         self.assertEqual(captured["payload"]["command"], "printf hi")
-        self.assertEqual(captured["payload"]["host"], "10.0.0.9")
+        self.assertEqual(captured["payload"]["host"], "192.0.2.9")
         self.assertEqual(captured["kwargs"]["kill_after_ms"], 40)
         self.assertEqual(captured["kwargs"]["kill_mode"], "transport")
         self.assertEqual(captured["kwargs"]["timeout_s"], 9.0)
@@ -389,11 +389,11 @@ class ExternalRoutingTests(unittest.TestCase):
             with mock.patch.dict(os.environ, {ROOT_ENV: missing}, clear=False):
                 invoker = RemoteDevInvoker()
                 with self.assertRaises(RemoteDevUnavailable) as ctx:
-                    invoker.call("remote.probe", {"host": "10.0.0.9", "port": 22})
+                    invoker.call("remote.probe", {"host": "192.0.2.9", "port": 22})
                 self.assertIn("bootstrap", str(ctx.exception))
                 self.assertIn(ROOT_ENV, str(ctx.exception))
                 with self.assertRaises(RemoteDevUnavailable):
-                    invoker.call_cli("remote.probe", {"host": "10.0.0.9", "port": 22})
+                    invoker.call_cli("remote.probe", {"host": "192.0.2.9", "port": 22})
 
     def test_import_does_not_require_checkout_or_mutate_environment(self) -> None:
         code = (
@@ -422,7 +422,7 @@ class ExternalRoutingTests(unittest.TestCase):
             "sys.modules['mcp'] = fake\n"
             "from maturation.invoke import RemoteDevInvoker, RemoteDevUnavailable\n"
             "try:\n"
-            "    RemoteDevInvoker().call('remote.probe', {'host': '10.0.0.9', 'port': 22})\n"
+            "    RemoteDevInvoker().call('remote.probe', {'host': '192.0.2.9', 'port': 22})\n"
             "except RemoteDevUnavailable as exc:\n"
             "    print('failed', str(exc))\n"
             "else:\n"
@@ -501,7 +501,7 @@ class ExternalRoutingTests(unittest.TestCase):
             "        return subprocess.CompletedProcess(list(argv), 0, output, '')\n"
             "    return subprocess.CompletedProcess(list(argv), 0, output.encode(), b'')\n"
             "with mock.patch.object(transport.subprocess, 'run', fake_run):\n"
-            "    payload = invoker.call('remote.probe', {'host': '10.0.0.9', 'port': 22222, 'user': 'fixture', 'root': '/tmp', 'cwd': '/tmp', 'runtime_env': False})\n"
+            "    payload = invoker.call('remote.probe', {'host': '192.0.2.9', 'port': 22222, 'user': 'fixture', 'root': '/tmp', 'cwd': '/tmp', 'runtime_env': False})\n"
             "print(mcp.tools.__file__)\n"
             "print(json.dumps({'status': payload['result']['status'], 'fake': payload['result'].get('probe', {}).get('fake_transport'), 'origin': mcp.tools.__file__}))\n"
         )

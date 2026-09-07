@@ -27,6 +27,20 @@ from maturation.scenarios import EndpointContext, evaluate, run_operation  # noq
 IPV4 = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 
 
+def _documentation_ipv4(octets: list[int]) -> bool:
+    if len(octets) != 4 or not all(0 <= value <= 255 for value in octets):
+        return False
+    if octets[0] == 127:
+        return True
+    if octets[:3] == [192, 0, 2]:
+        return True
+    if octets[:3] == [198, 51, 100]:
+        return True
+    if octets[:3] == [203, 0, 113]:
+        return True
+    return False
+
+
 def _result(tool: str, outcome: str, status: str, **extra: Any) -> dict[str, Any]:
     payload = {
         "schema_version": "remote-dev.result.v1",
@@ -202,7 +216,7 @@ class FakeInvoker:
         return CliResult(payload=payload, returncode=0, killed=False, duration_ms=10)
 
 
-def _endpoint(label: str = "host-a", host: str = "10.0.0.1", kind: str = "host") -> EndpointContext:
+def _endpoint(label: str = "host-a", host: str = "192.0.2.1", kind: str = "host") -> EndpointContext:
     return EndpointContext(label=label, kind=kind, host=host, port=22, user="root", scratch=f"/tmp/vaws-maturation/run-x/{label}", run_id="run-x")
 
 
@@ -266,23 +280,23 @@ class SpecTests(unittest.TestCase):
 
 class RedactTests(unittest.TestCase):
     def test_identities_become_labels_and_generic_addresses_are_scrubbed(self) -> None:
-        redactor = redact.Redactor.for_endpoints([{"label": "host-a", "host": "10.1.2.3", "port": 22, "hostname": "node1.example.internal"}])
+        redactor = redact.Redactor.for_endpoints([{"label": "host-a", "host": "198.51.100.3", "port": 22, "hostname": "node1.example.test"}])
         home = "/Users" + "/someone"
-        text = f"RemoteBash on root@10.1.2.3:22 (node1.example.internal) also 10.20.30.40 and {home}/x at 12:34:56 took 100ms"
+        text = f"RemoteBash on root@198.51.100.3:22 (node1.example.test) also 198.51.100.40 and {home}/x at 12:34:56 took 100ms"
         cleaned = redactor.text(text)
         self.assertIn("host-a", cleaned)
-        self.assertNotIn("10.1.2.3", cleaned)
-        self.assertNotIn("10.20.30.40", cleaned)
+        self.assertNotIn("198.51.100.3", cleaned)
+        self.assertNotIn("198.51.100.40", cleaned)
         self.assertNotIn(home, cleaned)
         self.assertIn("12:34:56", cleaned)
         self.assertIn("100ms", cleaned)
         self.assertFalse(redact.contains_address(cleaned))
-        self.assertTrue(redact.contains_address({"a": ["root@10.0.0.1"]}))
+        self.assertTrue(redact.contains_address({"a": ["root@192.0.2.1"]}))
 
     def test_ipv6_but_not_timestamps(self) -> None:
         redactor = redact.Redactor()
         self.assertEqual(redactor.text("at 2026-09-07T09:40:44Z"), "at 2026-09-07T09:40:44Z")
-        self.assertNotIn("fe80", redactor.text("fe80::1 and 2001:db8:0:0:0:0:0:1"))
+        self.assertNotIn("2001:db8", redactor.text("2001:db8::1 and 2001:db8:0:0:0:0:0:1"))
 
 
 class AttributionTests(unittest.TestCase):
@@ -323,11 +337,11 @@ class AttributionTests(unittest.TestCase):
             expectation_error=None,
             duration_ms=180000,
             timeout_ms=180000,
-            exception="TimeoutExpired: Command '['ssh', '-o', 'ControlMaster=auto', 'root@10.0.0.9']'",
+            exception="TimeoutExpired: Command '['ssh', '-o', 'ControlMaster=auto', 'root@192.0.2.9']'",
         )
         self.assertEqual(attr["layer"], "transport")
         self.assertEqual(attr["fingerprint"], "timeout leaked ssh mux")
-        self.assertNotIn("10.0.0.9", attr["reason"])
+        self.assertNotIn("192.0.2.9", attr["reason"])
         self.assertFalse(redact.contains_address(attr))
 
     def test_reason_distinguishes_instant_from_real_timeout(self) -> None:
@@ -459,9 +473,9 @@ class RunnerTests(unittest.TestCase):
         )
         self.endpoints = targets.assign_labels(
             [
-                {"host": "10.9.9.1", "port": 22, "user": "root", "kind": "host"},
-                {"host": "10.9.9.2", "port": 22, "user": "root", "kind": "host"},
-                {"host": "10.9.9.2", "port": 46001, "user": "root", "kind": "container"},
+                {"host": "203.0.113.1", "port": 22, "user": "root", "kind": "host"},
+                {"host": "203.0.113.2", "port": 22, "user": "root", "kind": "host"},
+                {"host": "203.0.113.2", "port": 46001, "user": "root", "kind": "container"},
             ]
         )
 
@@ -469,7 +483,7 @@ class RunnerTests(unittest.TestCase):
         self.temp.cleanup()
 
     def test_run_skips_unhealthy_host_redacts_and_retains_evidence(self) -> None:
-        invoker = FakeInvoker(failing_hosts={"10.9.9.1"}, glob_broken=True)
+        invoker = FakeInvoker(failing_hosts={"203.0.113.1"}, glob_broken=True)
         report = run(operation_set=self.operation_set, endpoints=self.endpoints, invoker=invoker, config=RunConfig(endpoint_parallelism=3), evidence_root=self.evidence_root, run_id="unit-run")
         serialized = json.dumps(report)
         self.assertNotRegex(serialized, IPV4)
@@ -537,7 +551,7 @@ class KnowledgeTests(unittest.TestCase):
                     "duration_ms": 100 + index,
                     "status": "failed",
                     "environment": {"remote_python": "3.9.9"},
-                    "attribution": {"layer": "tool-helper", "reason": "tool helper failed on root@10.0.0.5:22 (remote python failed)", "fingerprint": "tool-helper failed remote python failed", "step": "call"},
+                    "attribution": {"layer": "tool-helper", "reason": "tool helper failed on root@192.0.2.5:22 (remote python failed)", "fingerprint": "tool-helper failed remote python failed", "step": "call"},
                 }
             )
         trials.append({**trials[0], "trial_id": "r-host-b-glob.seed-pass", "passed": True, "attribution": None})
@@ -545,7 +559,7 @@ class KnowledgeTests(unittest.TestCase):
         return trials
 
     def test_candidates_are_redacted_and_require_reproduction(self) -> None:
-        redactor = redact.Redactor.for_endpoints([{"label": "host-b", "host": "10.0.0.5", "port": 22}])
+        redactor = redact.Redactor.for_endpoints([{"label": "host-b", "host": "192.0.2.5", "port": 22}])
         candidates = knowledge.build_candidates(self._failing_trials(), run_id="r", evidence_relative_dir=".vaws-local/maturation/runs/r", redactor=redactor)
         self.assertEqual(len(candidates), 1)  # bash.echo failed once only
         candidate = candidates[0]
@@ -558,7 +572,7 @@ class KnowledgeTests(unittest.TestCase):
         self.assertEqual(candidate["source"], {"run_ids": ["r"]})
 
     def test_candidate_passes_the_real_capture_cli_contract(self) -> None:
-        redactor = redact.Redactor.for_endpoints([{"label": "host-b", "host": "10.0.0.5", "port": 22}])
+        redactor = redact.Redactor.for_endpoints([{"label": "host-b", "host": "192.0.2.5", "port": 22}])
         candidate = knowledge.build_candidates(self._failing_trials(), run_id="r", evidence_relative_dir=".vaws-local/maturation/runs/r", redactor=redactor)[0]
         with tempfile.TemporaryDirectory() as tmp:
             result = knowledge.capture_candidate(candidate, extra_args=["--candidate-dir", str(Path(tmp) / "candidates"), "--knowledge-dir", str(ROOT / ".agents" / "knowledge")])
@@ -571,7 +585,7 @@ class KnowledgeTests(unittest.TestCase):
             self.assertEqual(again.get("action"), "unchanged")
 
     def test_capture_refuses_addresses_and_detects_contract_drift(self) -> None:
-        leaked = {"summary": "x", "symptom": "root@10.0.0.5 died"}
+        leaked = {"summary": "x", "symptom": "root@192.0.2.5 died"}
         self.assertEqual(knowledge.capture_candidate(leaked)["status"], "refused")
         with tempfile.TemporaryDirectory() as tmp:
             fake = Path(tmp) / "capture.py"
@@ -584,15 +598,15 @@ class TargetTests(unittest.TestCase):
     def test_inventory_and_labels(self) -> None:
         inventory = {
             "machines": [
-                {"alias": "m1", "host": {"ip": "10.0.0.2", "port": 22, "user": "root"}, "container": {"ssh_port": 46001}},
-                {"alias": "m0", "host": {"ip": "10.0.0.1", "port": 22}},
+                {"alias": "m1", "host": {"ip": "192.0.2.2", "port": 22, "user": "root"}, "container": {"ssh_port": 46001}},
+                {"alias": "m0", "host": {"ip": "192.0.2.1", "port": 22}},
             ]
         }
         endpoints = targets.assign_labels(targets.endpoints_from_inventory(inventory, include_containers=True))
         self.assertEqual([(e["label"], e["kind"], e["port"]) for e in endpoints], [("host-a", "host", 22), ("host-b", "host", 22), ("host-b-ctr", "container", 46001)])
         only = targets.endpoints_from_inventory(inventory, select=["m0"])
-        self.assertEqual([e["host"] for e in only], ["10.0.0.1"])
-        self.assertEqual(targets.parse_endpoint_arg("10.0.0.3:46002:container")["kind"], "container")
+        self.assertEqual([e["host"] for e in only], ["192.0.2.1"])
+        self.assertEqual(targets.parse_endpoint_arg("192.0.2.3:46002:container")["kind"], "container")
         with self.assertRaises(targets.TargetError):
             targets.parse_endpoint_arg("nonsense")
         with self.assertRaises(targets.TargetError):
@@ -639,7 +653,7 @@ class CliTests(unittest.TestCase):
                 },
                 source="memory.yaml",
             )
-            endpoints = targets.assign_labels([{"host": "10.9.9.8", "port": 22, "user": "root", "kind": "host"}])
+            endpoints = targets.assign_labels([{"host": "203.0.113.8", "port": 22, "user": "root", "kind": "host"}])
             with mock.patch("maturation.runner.emit_progress"):
                 run(
                     operation_set=operation_set,
@@ -665,7 +679,7 @@ class CliTests(unittest.TestCase):
         missing = str(Path(tempfile.mkdtemp()) / "absent-checkout")
         env = {**os.environ, "VAWS_REMOTE_DEV_ROOT": missing}
         proc = subprocess.run(
-            [sys.executable, str(self.RUN), "--endpoint", "10.9.9.8:22", "--repetitions", "1"],
+            [sys.executable, str(self.RUN), "--endpoint", "203.0.113.8:22", "--repetitions", "1"],
             capture_output=True,
             text=True,
             env=env,
@@ -705,7 +719,7 @@ class TrackedFileHygieneTests(unittest.TestCase):
             text = path.read_text(encoding="utf-8")
             for match in IPV4.finditer(text):
                 octets = [int(part) for part in match.group(0).split(".")]
-                self.assertTrue(all(o <= 255 for o in octets) and octets[0] in {10, 127}, f"{path.name}: {match.group(0)} looks like a real address")
+                self.assertTrue(_documentation_ipv4(octets), f"{path.name}: {match.group(0)} looks like a real address")
             self.assertIsNone(home_leak.search(text), f"{path.name}: local user path leaked")
 
 

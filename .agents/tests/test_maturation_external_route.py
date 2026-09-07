@@ -246,7 +246,7 @@ class LauncherJointRouteTests(unittest.TestCase):
     def test_launcher_execve_preserves_mux_and_matches_inprocess_source(self) -> None:
         original_env = dict(os.environ)
         probe_args = {
-            "host": "10.0.0.9",
+            "host": "192.0.2.9",
             "port": 22222,
             "user": "fixture",
             "root": "/tmp",
