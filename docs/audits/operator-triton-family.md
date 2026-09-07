@@ -13,17 +13,29 @@
 结果都必须可诊断（做了什么、确切命令、环境身份、日志位置、失败发生在哪
 一层）。
 
-本审计只产出文档，不改动任何行为。
+本审计只产出文档，不改动任何行为。所有陈述与 `file:line` 引用描述的是
+2026-09-07 的 scaffold 提交
+`161fed1b0fe6b48359be3f0cf33bb7d8befae113`（下文写作 `161fed1`），不是
+其后的仓库状态。本次没有在远端硬件上重新执行、编译、启动、测量或采集。
+文中的建设建议是该快照上的设计意见，不是现已可调用的新命令；此后的代码
+或文档变更需要各自的验收证据，本记录不把后续修复回写为当时已存在的事实。
 
 ## 0. 结论摘要
 
 这个家族与仓库其余部分的失衡方向相反。其余 skill 的风险是"把判断脚本化
 了"；这里的实际问题是**把机制留给了 agent**：5 个包共 2,618 行代码，全部
-是 plan / record / analyze / link / finalize 形态的**账本控制器**，没有一
-行代码执行、编译、启动、测量、比对或采集任何东西。
+是 plan / record / analyze / link / finalize 形态的**账本控制器**。它们不
+执行远端 device 编译或启动、不测量或比对数值输出、也不采集 profiler 或
+运行期 fallback 证据。缺少 SSH/NPU 执行并不能证明本地确定性机制不存在。
 
-- 唯一真正被固化的机制只有一个：`validate_triton_impl.py` 的 AST fallback
-  门禁——而它把类名 `ModelNew` 与方法名 `forward` 写死在实现里
+本地已经存在、且不依赖远端执行的确定性机制包括：
+`triton_validation.py:178`-`:210` 的 AST 静态检查、产物/schema 落地与
+kernel sha256 记录，`analyze` 的 case 覆盖门禁（`:235`-`:251`），以及
+§4.1 列出的哈希、终态、父链接与配置守卫。这些是真实的结构门禁；它们不能
+代替 device 执行、数值比对或 profiler 证据生产者。
+
+- AST fallback 门禁本身仍有缺陷：`validate_triton_impl.py` 把类名
+  `ModelNew` 与方法名 `forward` 写死在实现里
   （`.agents/skills/ascend-triton-kernel-validation/scripts/validate_triton_impl.py:66`、`:70`），
   并且只检查 `ast.Call`（`:80`-`:91`），因此 `x @ w`、`a * b` 这类
   BinOp 形态的 PyTorch 回退**完全不可见**。
