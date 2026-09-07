@@ -106,6 +106,19 @@ An undeclared difference aborts the comparison with the list of differing keys a
 
 The check compares declared launch configuration. It cannot see differences that were never written into the harness config (for example an online service restarted with other flags but the same `base_url`).
 
+## Observational comparability certificate
+
+`compare` then issues an observational certificate from `.agents/lib/vaws_comparability.py` before it classifies anything. Each identity leaf is labelled `observed`, `declared`, or `unknown`:
+
+- the Run Manifest identity written at `init` is **declared**;
+- offline `execution.engine_args` and `execution.model` are **observed** (they were passed to `LLM`); online those two are **declared** (never sent to the service);
+- `base_url`, `served_model`, and `cases_sha256` are **observed**;
+- an optional result `observation` object is **observed** and is required for `workspace_snapshot`, `environment`, `model`, `topology`, and `native_digest`.
+
+`consume_certificate` recomputes the verdict from the identity body, including each side's declaration/observation mismatches. Empty identity groups, and null or whitespace-only identity scalars, are recorded as `unknown` and block `comparable`, so they block `passed`. They are not rejected at `init`. Two `{"text": ""}` outputs are `infrastructure_failure` (`empty-output-is-not-agreement`), not `exact_match`.
+
+See `docs/comparability-certificate.md`. The audit §8.2 hardware matrix is encoded as unit tests and has not been run on NPU.
+
 ## Comparison precedence
 
 Primary classification precedence is:
@@ -117,7 +130,8 @@ Primary classification precedence is:
 5. comparable token IDs, tokens, or text disagree → `token_divergence`;
 6. numeric evidence exceeds tolerance → `numerical_regression`;
 7. numeric evidence differs within tolerance → `numerical_difference_within_tolerance`;
-8. otherwise → `exact_match`.
+8. matching empty text or empty token lists → `infrastructure_failure` (`empty-output-is-not-agreement`);
+9. otherwise → `exact_match`.
 
 Run status:
 
@@ -137,6 +151,7 @@ correctness-run/
 │   ├── baseline.json
 │   └── candidate.json
 ├── execution.json
+├── comparability-certificate.json
 ├── comparison.json
 ├── report.md
 └── reproduction.sh

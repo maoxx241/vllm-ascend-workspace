@@ -13,7 +13,7 @@ description: Diagnose vLLM Ascend cudagraph and ACL Graph compile, capture, repl
 
 1. `init` 创建 `.vaws-local/graph-debug/<case-id>/case.json` 和 Run Manifest v1；作为 PR 证据时传 `--parent-run-id`。
 2. 每轮单变量实验后立即用 `record` 追加假设、预期、观测、结论和下一步。
-3. 需要中间状态对拍时，用 `compare` 对齐 eager/graph JSONL snapshot 并找到首个分叉。
+3. 需要中间状态对拍时，用 `compare` 对齐 eager/graph JSONL snapshot 并找到首个分叉。`compare` 会先消费一份观测式可比性凭证（`{stem}.identity.json`）；对不上的两次 snapshot 不会被当成一对。
 4. 修复后用 `finalize` 同时记录最小复现、原始复现和 instrumentation 清理状态；每个 `pass` 都必须附上对应的重跑输出（`--minimal-evidence` / `--original-evidence`），且至少有一条 `record`。没有证据的 `pass` 会被拒绝，manifest 不会进入 `passed`。
 
 按需读取：

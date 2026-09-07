@@ -21,6 +21,16 @@ LIB = ROOT / ".agents" / "lib"
 if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
+from vaws_comparability import (  # noqa: E402
+    CORRECTNESS_MUST_OBSERVE,
+    ComparabilityError,
+    consume_certificate,
+    identity_from_execution_block,
+    identity_from_manifest_fields,
+    identity_from_recorded_observation,
+    issue_certificate,
+    merge_identities,
+)
 from vaws_run_manifest import (  # noqa: E402
     RunManifestError,
     add_artifact,
@@ -289,6 +299,16 @@ def _output_signature(output: Mapping[str, Any]) -> tuple[str, Any] | None:
     return None
 
 
+def _is_vacuous_signature(signature: tuple[str, Any]) -> bool:
+    """Two empty answers are not agreement; they are missing evidence."""
+    field, value = signature
+    if field == "text":
+        return not str(value).strip()
+    if field in {"token_ids", "tokens"}:
+        return len(value) == 0
+    return False
+
+
 def _is_stable(outputs: list[Any]) -> bool:
     if len(outputs) <= 1:
         return True
@@ -439,6 +459,15 @@ def compare_case(
                 "candidate": right_signature[1],
             },
         }
+    if _is_vacuous_signature(left_signature):
+        return {
+            "id": case_id,
+            "classification": "infrastructure_failure",
+            "details": {
+                "reason": "empty-output-is-not-agreement",
+                "signature_type": left_signature[0],
+            },
+        }
 
     left_numeric = left_output.get("numerics", {})
     right_numeric = right_output.get("numerics", {})
@@ -552,6 +581,9 @@ def render_report(
     ]
     for row in comparison["cases"]:
         lines.append(f"| `{row['id']}` | `{row['classification']}` |")
+    if isinstance(comparison.get("comparability"), Mapping):
+        lines.append("")
+        lines.extend(render_certificate_section(comparison["comparability"]))
     if isinstance(comparison.get("execution"), Mapping):
         lines.append("")
         lines.extend(render_identity_section(comparison["execution"]))
@@ -663,6 +695,79 @@ def check_run_identity(
     }
 
 
+def _side_identity(
+    *,
+    run_id: str,
+    manifest: Mapping[str, Any],
+    document: Mapping[str, Any],
+    execution: Mapping[str, Any],
+) -> Any:
+    online = bool(execution.get("base_url"))
+    parts = [
+        identity_from_manifest_fields(
+            run_id,
+            workspace_snapshot=manifest.get("workspace_snapshot"),
+            environment=manifest.get("environment"),
+            model=manifest.get("model"),
+            topology=manifest.get("topology"),
+        ),
+        identity_from_execution_block(execution, run_id=run_id, online=online),
+    ]
+    observation = document.get("observation")
+    if isinstance(observation, Mapping) and observation:
+        parts.append(identity_from_recorded_observation(run_id, observation))
+    return merge_identities(*parts, run_id=run_id)
+
+
+def build_comparability_certificate(
+    run_state: Mapping[str, Any],
+    manifest: Mapping[str, Any],
+    baseline: Mapping[str, Any],
+    candidate: Mapping[str, Any],
+    baseline_execution: Mapping[str, Any],
+    candidate_execution: Mapping[str, Any],
+) -> dict[str, Any]:
+    run_id = str(run_state["run_id"])
+    return issue_certificate(
+        _side_identity(
+            run_id=f"{run_id}-baseline",
+            manifest=manifest,
+            document=baseline,
+            execution=baseline_execution,
+        ),
+        _side_identity(
+            run_id=f"{run_id}-candidate",
+            manifest=manifest,
+            document=candidate,
+            execution=candidate_execution,
+        ),
+        vary=run_state.get("allowed_differences", []),
+        must_observe_prefixes=CORRECTNESS_MUST_OBSERVE,
+    )
+
+
+def render_certificate_section(certificate: Mapping[str, Any]) -> list[str]:
+    lines = [
+        "## Comparability certificate",
+        "",
+        f"- Verdict: `{certificate.get('verdict')}`",
+    ]
+    for reason in certificate.get("blocking_reasons", []):
+        lines.append(f"- Blocking: {reason}")
+    if certificate.get("confounders"):
+        lines.append("- Confounders:")
+        for row in certificate["confounders"]:
+            lines.append(
+                f"  - `{row['key']}`: baseline `{row['baseline']}` "
+                f"({row['baseline_origin']}) vs candidate `{row['candidate']}` "
+                f"({row['candidate_origin']})"
+            )
+    lines.extend(["", "```json"])
+    lines.append(json.dumps(certificate, ensure_ascii=False, indent=2, sort_keys=True))
+    lines.extend(["```", ""])
+    return lines
+
+
 def render_identity_section(identity: Mapping[str, Any]) -> list[str]:
     lines = ["## Execution identity", ""]
     if identity["identical_execution"]:
@@ -713,9 +818,26 @@ def compare_run(
     candidate = _load_json(candidate_path, "candidate result")
     emit_progress("check-identity", baseline=str(baseline_path), candidate=str(candidate_path))
     identity = check_run_identity(run_state, baseline, candidate)
+    manifest = load_manifest(run_dir / "manifest.json")
+    certificate = build_comparability_certificate(
+        run_state,
+        manifest,
+        baseline,
+        candidate,
+        identity["baseline"]["execution"],
+        identity["candidate"]["execution"],
+    )
+    try:
+        certificate = consume_certificate(certificate)
+    except ComparabilityError as exc:
+        blocked = exc.certificate if exc.certificate is not None else certificate
+        _atomic_write_json(run_dir / "comparability-certificate.json", blocked)
+        raise CorrectnessError(str(exc)) from exc
+    _atomic_write_json(run_dir / "comparability-certificate.json", certificate)
     emit_progress("compare", cases=len(cases.get("cases", [])))
     comparison = compare_documents(cases, baseline, candidate)
     comparison["execution"] = identity
+    comparison["comparability"] = certificate
     raw_dir = run_dir / "raw_outputs"
     raw_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy2(baseline_path, raw_dir / "baseline.json")
@@ -735,12 +857,16 @@ def compare_run(
     run_state["updated_at"] = timestamp
     _atomic_write_json(run_dir / "run.json", run_state)
 
-    manifest = load_manifest(run_dir / "manifest.json")
     manifest = transition_status(manifest, "running", updated_at=timestamp)
     for name, kind, uri in (
         ("baseline-output", "raw-output", "raw_outputs/baseline.json"),
         ("candidate-output", "raw-output", "raw_outputs/candidate.json"),
         ("execution-identity", "execution-identity", "execution.json"),
+        (
+            "comparability-certificate",
+            "comparability-certificate",
+            "comparability-certificate.json",
+        ),
         ("comparison", "comparison", "comparison.json"),
         ("report", "report", "report.md"),
     ):

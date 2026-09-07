@@ -27,7 +27,7 @@ The lifecycle is:
 
 1. `init`: record environment, workspace snapshot, topology, reproduction, eager result, graph result, and the classified failure stage. Pass `--parent-run-id` when the case is evidence for a change-validation plan; `link` refuses cases without it.
 2. `record`: append one single-variable experiment with its hypothesis, expected observation, actual observation, conclusion, and next step.
-3. `compare`: align eager and graph snapshots by `step/layer/rank/tag`, compare statistics and optional samples, then record the first divergence.
+3. `compare`: consume an observational certificate built from each snapshot's `{stem}.identity.json` (or `--eager-identity` / `--graph-identity`) plus the case identity, then align eager and graph snapshots by `step/layer/rank/tag`. The default variable under test is `execution_mode`. A `not-comparable` pair, including a declaration/observation mismatch retained on each certificate side, is refused; numeric alignment is not recorded as if the snapshots were a pair.
 4. `finalize`: record the root cause, fix, minimal-reproduction result, original-reproduction result, and debug-instrumentation cleanup, attaching the rerun output behind every `pass` claim.
 
 A case is resolved only when both reproductions pass and instrumentation is removed or disabled. Other final results are `inconclusive`.
