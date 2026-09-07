@@ -35,16 +35,56 @@ def pinned_commit(repo_root: Path = REPO_ROOT) -> str:
     return commit
 
 
-def _git_head(root: Path) -> str:
-    completed = subprocess.run(
-        ["git", "-C", str(root), "rev-parse", "HEAD"],
+def _git(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", "-C", str(root), *args],
         check=False,
         capture_output=True,
         text=True,
     )
-    if completed.returncode != 0:
-        raise KitInvalid(f"git rev-parse HEAD failed in {root}: {completed.stderr.strip()}")
-    return completed.stdout.strip()
+
+
+def _verify_pinned_git_kit(root: Path, expected: str) -> None:
+    """Require a clean Git checkout or worktree of the pinned kit commit.
+
+    ``.git`` may be a directory or a worktree file. Executed runner, vector
+    and gate-vector bytes must match the pinned commit; a matching filename
+    count is not identity.
+    """
+
+    inside = _git(root, "rev-parse", "--is-inside-work-tree")
+    if inside.returncode != 0 or inside.stdout.strip() != "true":
+        raise KitInvalid(f"kit root {root} is not a Git checkout of {expected}")
+    toplevel = _git(root, "rev-parse", "--show-toplevel")
+    if toplevel.returncode != 0:
+        raise KitInvalid(f"git rev-parse --show-toplevel failed in {root}")
+    if Path(toplevel.stdout.strip()).resolve() != root.resolve():
+        raise KitInvalid(
+            f"kit root {root} is not a Git toplevel of {expected}; "
+            "refusing a nested or borrowed repository"
+        )
+    head = _git(root, "rev-parse", "HEAD")
+    if head.returncode != 0 or head.stdout.strip() != expected:
+        raise KitInvalid(
+            f"kit root {root} is git commit {head.stdout.strip() or 'unknown'}, "
+            f"expected {expected}"
+        )
+    dirty = _git(
+        root,
+        "diff",
+        "--quiet",
+        expected,
+        "--",
+        "conformance/runner.py",
+        "conformance/vectors",
+        "conformance/gate_vectors",
+    )
+    if dirty.returncode == 1:
+        raise KitInvalid(
+            f"kit root {root} executed kit files do not match {expected}"
+        )
+    if dirty.returncode != 0:
+        raise KitInvalid(f"git diff failed in {root}: {dirty.stderr.strip()}")
 
 
 def resolve_kit_root(
@@ -57,8 +97,8 @@ def resolve_kit_root(
 
     Configuration is explicit: ``VAWS_KNOWLEDGE_KIT_ROOT``, or a one-line path
     in ``.vaws-local/knowledge-kit-root``. Unconfigured is not a pass. A
-    configured missing path, incomplete kit, or git checkout of the wrong
-    commit is a failure, not a skip.
+    configured missing path, non-Git tree, wrong revision, or dirty executed
+    runner/vector bytes is a failure, not a skip.
     """
 
     expected = pinned_commit(repo_root)
@@ -85,13 +125,7 @@ def resolve_kit_root(
         raise KitInvalid(
             f"kit root {root} has {vector_count} hash vectors, expected {EXPECTED_VECTOR_COUNT}"
         )
-    git_meta = root / ".git"
-    if git_meta.exists():
-        head = _git_head(root)
-        if head != expected:
-            raise KitInvalid(
-                f"kit root {root} is git commit {head}, expected {expected}"
-            )
+    _verify_pinned_git_kit(root, expected)
     return root.resolve()
 
 

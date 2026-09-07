@@ -13,8 +13,10 @@ Source policy lives in ``source-policy.json``, written only by a successful
 import from explicit ``--source-repo`` / ``--source-ref`` (and optional
 ``--expect-*``). Cache metadata cannot create or relax it. Query, get, status
 and probe apply the policy. ``clear`` deletes it with the cache. Staging,
-policy write and rename are one snapshot: a failed refresh keeps the previous
-cache and policy; backup is removed only after the new directory is live.
+policy write and rename are one snapshot. An interrupted prior install is
+recovered from backup before cleanup. A failed refresh keeps the previous
+cache and policy; backup is removed only after a coherent live generation
+exists.
 """
 
 from __future__ import annotations
@@ -113,6 +115,49 @@ def _remove_tree(path: Path) -> None:
         else:
             _remove_tree(child)
     path.rmdir()
+
+
+def staging_path(shared_dir: Path) -> Path:
+    return shared_dir.parent / f".{shared_dir.name}.staging"
+
+
+def backup_path(shared_dir: Path) -> Path:
+    return shared_dir.parent / f".{shared_dir.name}.backup"
+
+
+def is_coherent_cache(path: Path) -> bool:
+    """True when a directory has both cache metadata and importer-owned policy."""
+
+    return (
+        path.is_dir()
+        and (path / SHARED_CACHE_METADATA).is_file()
+        and (path / SHARED_SOURCE_POLICY).is_file()
+    )
+
+
+def last_generation_preserved(shared_dir: Path) -> bool:
+    """True when the live cache or its backup still holds a coherent snapshot."""
+
+    return is_coherent_cache(shared_dir) or is_coherent_cache(backup_path(shared_dir))
+
+
+def recover_interrupted_cache(shared_dir: Path) -> str | None:
+    """Restore live from backup after a prior install stopped mid-rename.
+
+    Staging leftovers are discarded. The backup is never deleted here; it is
+    the last valid generation until live exists again.
+    """
+
+    _remove_tree(staging_path(shared_dir))
+    if is_coherent_cache(shared_dir):
+        return None
+    backup = backup_path(shared_dir)
+    if not is_coherent_cache(backup):
+        return None
+    if shared_dir.exists():
+        _remove_tree(shared_dir)
+    backup.rename(shared_dir)
+    return "recovered_from_backup"
 
 
 def load_source_policy(shared_dir: Path) -> tuple[dict[str, Any] | None, list[str]]:
@@ -234,17 +279,20 @@ def install_shared_cache(
     """Replace cache documents, metadata, and source policy as one snapshot.
 
     The importer owns the policy file. Cached YAML/metadata cannot create or
-    relax it. Staging is discarded on failure. The previous directory is kept
-    as a backup until the new directory is live; backup is removed only after
-    the live cache exists. ``clear`` deletes the policy with the cache.
+    relax it. Staging and backup live beside the cache directory and belong
+    to this installer. An interrupted prior rename is recovered before any
+    cleanup. Staging leftovers are discarded. Backup is deleted only after a
+    coherent live generation exists. ``clear`` deletes the policy with the
+    cache.
     """
 
     parent = shared_dir.parent
     parent.mkdir(parents=True, exist_ok=True)
-    staging = parent / f".{shared_dir.name}.staging"
-    backup = parent / f".{shared_dir.name}.backup"
-    _remove_tree(staging)
-    _remove_tree(backup)
+    staging = staging_path(shared_dir)
+    backup = backup_path(shared_dir)
+    recover_interrupted_cache(shared_dir)
+    if is_coherent_cache(shared_dir):
+        _remove_tree(backup)
     staging.mkdir(parents=True)
     imported: list[str] = []
     try:
@@ -274,7 +322,7 @@ def install_shared_cache(
         raise
     finally:
         _remove_tree(staging)
-        if shared_dir.exists():
+        if is_coherent_cache(shared_dir):
             _remove_tree(backup)
 
 

@@ -133,7 +133,7 @@ def do_import(
         return {
             "status": "failed",
             "error": f"failed to install shared cache: {exc}",
-            "cache_preserved": True,
+            "cache_preserved": shared.last_generation_preserved(shared_dir),
         }
     for item in staged:
         emit_progress("import", item["name"])

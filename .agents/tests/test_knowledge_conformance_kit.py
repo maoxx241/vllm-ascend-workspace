@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import json
 import shlex
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -51,6 +50,75 @@ class KitConfigurationTests(unittest.TestCase):
             )
         self.assertIn("does not exist", str(caught.exception))
 
+    def test_configured_non_git_stub_is_rejected(self) -> None:
+        temp = tempfile.TemporaryDirectory()
+        root = Path(temp.name)
+        (root / "conformance" / "vectors").mkdir(parents=True)
+        (root / "conformance" / "runner.py").write_text("# synthetic non-kit\n", encoding="utf-8")
+        for index in range(EXPECTED_VECTOR_COUNT):
+            (root / "conformance" / "vectors" / f"stub-{index}.yaml").write_text(
+                "id: synthetic-non-kit\n", encoding="utf-8"
+            )
+        try:
+            with self.assertRaises(KitInvalid) as caught:
+                resolve_kit_root(
+                    repo_root=ROOT,
+                    environ={KIT_ROOT_ENV: str(root)},
+                    read_local_file=False,
+                )
+            self.assertIn("not a Git checkout", str(caught.exception))
+        finally:
+            temp.cleanup()
+
+    def test_worktree_file_and_space_path_check_revision(self) -> None:
+        temp = tempfile.TemporaryDirectory()
+        repo = Path(temp.name) / "repo"
+        repo.mkdir()
+        subprocess.run(["git", "init"], cwd=str(repo), check=True, capture_output=True)
+        subprocess.run(
+            ["git", "config", "user.email", "kit-test@example.invalid"],
+            cwd=str(repo),
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "kit-test"],
+            cwd=str(repo),
+            check=True,
+            capture_output=True,
+        )
+        (repo / "conformance" / "vectors").mkdir(parents=True)
+        (repo / "conformance" / "runner.py").write_text("# stub\n", encoding="utf-8")
+        for index in range(EXPECTED_VECTOR_COUNT):
+            (repo / "conformance" / "vectors" / f"vector-{index:02d}.yaml").write_text(
+                "id: stub\n", encoding="utf-8"
+            )
+        subprocess.run(["git", "add", "."], cwd=str(repo), check=True, capture_output=True)
+        subprocess.run(
+            ["git", "-c", "commit.gpgsign=false", "commit", "-m", "stub"],
+            cwd=str(repo),
+            check=True,
+            capture_output=True,
+        )
+        worktree = Path(temp.name) / "wt with spaces"
+        subprocess.run(
+            ["git", "worktree", "add", "--detach", str(worktree), "HEAD"],
+            cwd=str(repo),
+            check=True,
+            capture_output=True,
+        )
+        try:
+            self.assertTrue((worktree / ".git").is_file())
+            with self.assertRaises(KitInvalid) as caught:
+                resolve_kit_root(
+                    repo_root=ROOT,
+                    environ={KIT_ROOT_ENV: str(worktree)},
+                    read_local_file=False,
+                )
+            self.assertIn(pinned_commit(ROOT), str(caught.exception))
+        finally:
+            temp.cleanup()
+
     def test_configured_wrong_revision_fails(self) -> None:
         temp = tempfile.TemporaryDirectory()
         root = Path(temp.name)
@@ -95,7 +163,7 @@ class KitConfigurationTests(unittest.TestCase):
 class ConfiguredSharedKitTests(unittest.TestCase):
     def setUp(self) -> None:
         try:
-            self.kit = resolve_kit_root(repo_root=ROOT)
+            self.kit = resolve_kit_root(repo_root=ROOT, read_local_file=False)
         except KitUnconfigured as exc:
             self.skipTest(str(exc))
 
@@ -108,13 +176,75 @@ class ConfiguredSharedKitTests(unittest.TestCase):
         self.assertIn("31 passed, 0 failed, 0 skipped, 31 total", completed.stdout)
         self.assertIn("conformance PASSED", completed.stdout)
 
-    def test_portable_copy_at_unrelated_temp_path(self) -> None:
+    def test_portable_git_worktree_with_spaces(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            copied = Path(tmp) / "kit-copy"
-            shutil.copytree(self.kit, copied, ignore=shutil.ignore_patterns(".git"))
-            completed = run_client_kit(copied, repo_root=ROOT)
-            self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
-            self.assertIn("31 passed, 0 failed, 0 skipped, 31 total", completed.stdout)
+            worktree = Path(tmp) / "portable worktree with spaces"
+            added = subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(self.kit),
+                    "worktree",
+                    "add",
+                    "--detach",
+                    str(worktree),
+                    pinned_commit(ROOT),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(added.returncode, 0, added.stdout + added.stderr)
+            try:
+                self.assertTrue((worktree / ".git").is_file())
+                resolved = resolve_kit_root(
+                    repo_root=ROOT,
+                    environ={KIT_ROOT_ENV: str(worktree)},
+                    read_local_file=False,
+                )
+                self.assertEqual(resolved, worktree.resolve())
+                completed = run_client_kit(resolved, repo_root=ROOT)
+                self.assertEqual(
+                    completed.returncode, 0, completed.stdout + completed.stderr
+                )
+                self.assertIn("31 passed, 0 failed, 0 skipped, 31 total", completed.stdout)
+            finally:
+                subprocess.run(
+                    ["git", "-C", str(self.kit), "worktree", "remove", "--force", str(worktree)],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+
+    def test_dirty_executed_runner_is_rejected(self) -> None:
+        runner = self.kit / "conformance" / "runner.py"
+        original = runner.read_bytes()
+        runner.write_bytes(original + b"\n# synthetic dirty-byte probe\n")
+        try:
+            with self.assertRaises(KitInvalid) as caught:
+                resolve_kit_root(
+                    repo_root=ROOT,
+                    environ={KIT_ROOT_ENV: str(self.kit)},
+                    read_local_file=False,
+                )
+            self.assertIn("do not match", str(caught.exception))
+        finally:
+            runner.write_bytes(original)
+
+    def test_dirty_executed_vector_is_rejected(self) -> None:
+        vector = next((self.kit / "conformance" / "vectors").glob("*.yaml"))
+        original = vector.read_bytes()
+        vector.write_bytes(original + b"\n# synthetic dirty-byte probe\n")
+        try:
+            with self.assertRaises(KitInvalid) as caught:
+                resolve_kit_root(
+                    repo_root=ROOT,
+                    environ={KIT_ROOT_ENV: str(self.kit)},
+                    read_local_file=False,
+                )
+            self.assertIn("do not match", str(caught.exception))
+        finally:
+            vector.write_bytes(original)
 
     def test_redaction_email_vector_through_tracked_adapter(self) -> None:
         import yaml  # noqa: PLC0415

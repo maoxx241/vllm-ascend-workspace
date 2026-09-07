@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import importlib.util
 import json
 import subprocess
 import sys
@@ -10,21 +12,41 @@ import tempfile
 import unittest
 from copy import deepcopy
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / ".agents" / "tests"))
 sys.path.insert(0, str(ROOT / ".agents" / "lib"))
 
 import vaws_knowledge_client as client  # noqa: E402
+import vaws_knowledge_shared as shared  # noqa: E402
 import vaws_knowledge_v2 as v2  # noqa: E402
 
-from knowledge_kit import KitUnconfigured, resolve_kit_root  # noqa: E402
+from knowledge_kit import KitInvalid, KitUnconfigured, resolve_kit_root  # noqa: E402
 from test_knowledge_v2 import sample_entry, verification  # noqa: E402
 
 CACHE = ROOT / ".agents" / "scripts" / "knowledge_shared_cache.py"
 SOURCE_REPO = "vllm-ascend-workspace/vaws-knowledge"
 SOURCE_REF = "0123456789abcdef0123456789abcdef01234567"
 QUERY = "bootstrap precondition not satisfied"
+
+
+def load_importer():
+    spec = importlib.util.spec_from_file_location("knowledge_shared_cache_mod", CACHE)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+def digest_tree(path: Path) -> dict[str, str]:
+    if not path.exists():
+        return {}
+    found: dict[str, str] = {}
+    for item in sorted(path.rglob("*")):
+        if item.is_file():
+            found[str(item.relative_to(path))] = hashlib.sha256(item.read_bytes()).hexdigest()
+    return found
 
 
 def verified_document(*entries: dict, layer: str = "verified") -> dict:
@@ -102,8 +124,8 @@ class SharedCacheTrustTests(unittest.TestCase):
 
     def upstream_validate_exit(self, path: Path) -> int | None:
         try:
-            kit = resolve_kit_root(repo_root=ROOT)
-        except KitUnconfigured:
+            kit = resolve_kit_root(repo_root=ROOT, read_local_file=False)
+        except (KitUnconfigured, KitInvalid):
             return None
         completed = subprocess.run(
             [sys.executable, str(kit / "tools" / "validate.py"), str(path)],
@@ -460,6 +482,76 @@ class SharedCacheTrustTests(unittest.TestCase):
         upstream = self.upstream_validate_exit(path)
         if upstream is not None:
             self.assertEqual(upstream, 1)
+
+    def test_interrupted_then_failed_retry_preserves_previous(self) -> None:
+        self.write_source(
+            "known-failure-signatures.yaml", verified_document(verified_entry())
+        )
+        importer = load_importer()
+        first = importer.do_import(
+            self.cache,
+            self.source,
+            source_repo=SOURCE_REPO,
+            source_ref=SOURCE_REF,
+            expect_repo=SOURCE_REPO,
+            expect_ref=SOURCE_REF,
+        )
+        self.assertEqual(first["status"], "passed")
+        before = digest_tree(self.cache)
+        real_rename = Path.rename
+
+        def interrupt_stage(path: Path, target: Path) -> Path:
+            if path.name == f".{self.cache.name}.staging":
+                raise KeyboardInterrupt(
+                    "synthetic interruption after live renamed to backup"
+                )
+            return real_rename(path, target)
+
+        interrupted = False
+        try:
+            with mock.patch.object(Path, "rename", new=interrupt_stage):
+                importer.do_import(
+                    self.cache,
+                    self.source,
+                    source_repo=SOURCE_REPO,
+                    source_ref="d" * 40,
+                    expect_repo=SOURCE_REPO,
+                    expect_ref="d" * 40,
+                )
+        except KeyboardInterrupt:
+            interrupted = True
+        self.assertTrue(interrupted)
+        backup = shared.backup_path(self.cache)
+        self.assertFalse(self.cache.exists())
+        self.assertEqual(digest_tree(backup), before)
+
+        real_write = Path.write_text
+
+        def fail_policy(path: Path, *args: object, **kwargs: object) -> int:
+            if path.name == shared.SHARED_SOURCE_POLICY and ".staging" in str(path.parent):
+                raise OSError("synthetic policy staging write failure")
+            return real_write(path, *args, **kwargs)
+
+        with mock.patch.object(Path, "write_text", new=fail_policy):
+            retry = importer.do_import(
+                self.cache,
+                self.source,
+                source_repo=SOURCE_REPO,
+                source_ref="d" * 40,
+                expect_repo=SOURCE_REPO,
+                expect_ref="d" * 40,
+            )
+        self.assertEqual(retry["status"], "failed")
+        self.assertTrue(retry.get("cache_preserved"))
+        preserved = (
+            digest_tree(self.cache)
+            if shared.is_coherent_cache(self.cache)
+            else digest_tree(backup)
+        )
+        self.assertEqual(preserved, before)
+        result = self.query()
+        self.assertEqual({match["layer"] for match in result["matches"]}, {"shared"})
+        self.assertEqual(result["matches"][0]["source_ref"], SOURCE_REF)
 
     def test_cached_verified_by_mutation_is_excluded(self) -> None:
         self.write_source(

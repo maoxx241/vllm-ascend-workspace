@@ -66,5 +66,7 @@ python3 .agents/tests/knowledge_kit.py --kit-root <checkout-of-e04d50f7>
 ```
 
 Unconfigured local unittest runs skip the kit suite with that exact message.
-A configured missing path or wrong git revision fails. The kit is an external
-test input, not a runtime dependency.
+A configured path must be a clean Git checkout or worktree of that commit
+(``.git`` may be a file). A missing path, non-Git tree, wrong revision, or
+dirty executed runner/vector bytes fails. The kit is an external test input,
+not a runtime dependency.
