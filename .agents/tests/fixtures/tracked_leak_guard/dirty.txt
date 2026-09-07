@@ -1,0 +1,13 @@
+One deliberate match per category. Reserved, non-routable values only.
+ipv4 host in an internal range: 192.168.240.7
+ipv6 unique-local host: fd00:beef::12
+mac address of a fabricated adapter: 02:1a:2b:3c:4d:5e
+macos home directory: /Users/janedoe/Downloads/notes.md
+linux home directory: /home/jsmith/transfer_case
+named path under root: /root/jsmith/weights
+mailbox: jane.smith@corp.example.invalid
+internal hostname in a url: https://npu-a3-07.internal/status
+internal identity token: q12345678
+container named after a host address: vaws-192-168-240-7-prefill
+credential with a secret-shaped key: api_key = "Zt7Qw2Lm9Rk4Xy1B"
+credential in a known format: sk-abcdefghijklmnopqrstuvwxyz012345
