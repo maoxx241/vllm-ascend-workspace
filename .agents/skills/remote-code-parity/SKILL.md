@@ -79,6 +79,9 @@ that execution before starting another code revision.
 - `install_consent.py set`, `batch-set`, and `set-sync-mode` must include `--approved-by-user`.
 - If the user explicitly says to use local `vllm` / `vllm-ascend`, replace image packages, or run current workspace code remotely, record both decisions in one atomic write: `set-sync-mode --sync-mode local --allow-first-install --approved-by-user`. Do not ask a second first-install question for the same container identity.
 - Keep local runtime state only under `.vaws-local/remote-code-parity/`.
+- Parity changes the container's source and installed packages. It does not change a service that is already running, because that process holds the code it loaded at startup. Restart the service through `vllm-ascend-serving` before any measurement is attributed to the synced state.
+- Successful parity is not proof that the new code is importable. When native or dependency inputs changed, confirm the import smoke step passed in the returned manifest; a stale or half-built native extension surfaces later as a missing module or an undefined symbol at service start, which reads as a code bug rather than a build result.
+- On a multi-node deployment, parity establishes one node. Every node must be synced and then verified to agree, because a cross-node result computed on drifted nodes is not a result. `vllm-ascend-multinode-serving` emits the identity probe for that check.
 
 ## Preconditions
 

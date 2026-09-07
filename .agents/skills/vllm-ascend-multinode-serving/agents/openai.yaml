@@ -1,0 +1,4 @@
+interface:
+  display_name: "vLLM Ascend Multi-Node Serving"
+  short_description: "Plan and bring up a data-parallel vLLM Ascend service across NPU nodes"
+  default_prompt: "Use $vllm-ascend-multinode-serving to plan per-node ranks, environment, ports, code-identity checks, and the readiness gate for a multi-node vLLM Ascend deployment."

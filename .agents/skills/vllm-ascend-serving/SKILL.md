@@ -36,6 +36,7 @@ This skill takes structured parameters, handles all SSH escaping and remote exec
 - the task is syncing code to the remote container (use `remote-code-parity`)
 - the task is running benchmarks (a separate skill's responsibility)
 - the task is offline inference
+- the topology spans more than one host (use `vllm-ascend-multinode-serving`)
 - no session exists yet for the target (use `session-management` first)
 
 ## Critical rules
@@ -52,6 +53,12 @@ This skill takes structured parameters, handles all SSH escaping and remote exec
 - Keep local runtime state under `.vaws-local/sessions/<id>/`.
 - Progress on `stderr` as `__VAWS_SERVING_PROGRESS__=<json>`, final result on `stdout` as JSON.
 - With a unified workspace alias, new runtime directories use `.vaws-runtime/serving/<alias>/<timestamp>/` and the service receives `VAWS_AGENT_ID`, `VAWS_AGENT_ALIAS`, and `VAWS_PROJECT_ALIAS`. Without an alias, preserve the legacy layout.
+- A running service executes the code it was started with. Changing the local tree, or running parity, does not change a live service. Any measurement taken from a service that predates the change describes the previous state, so restart through `start` before attributing a result to new code.
+- After `stop`, confirm the devices were actually released. Engine and worker processes outlive the API process, so a quiet port with occupied HBM means orphans are still holding memory; the next launch then fails on allocation rather than on anything informative.
+- Memory-utilization values are topology-bound. A value that works at one `tp x dp x ep` layout can leave a negative KV budget at another because the per-device expert and weight shard changes. Re-derive it for the topology at hand rather than carrying it over from a previous launch or another model.
+- `/health` returning 200 is not readiness and never was: it is reachable before graph capture finishes and before the engine can decode. `serve_start.py` therefore gates on `/health`, `/v1/models`, and one real completion. Do not substitute a bare health check for that gate when probing by hand.
+- Graph capture on large weights can take tens of minutes. A service that has not reached ready inside the default budget may simply need a longer `--health-timeout`; restarting a capturing service discards the whole capture.
+- When a launch produces numbers worth keeping, record the run through `vllm-ascend-experiment-ledger` so a later comparison can prove which code state and topology produced them.
 
 ## Cross-platform launcher rule
 
