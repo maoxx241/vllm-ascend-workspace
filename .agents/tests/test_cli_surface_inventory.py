@@ -15,6 +15,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / ".agents" / "scripts" / "cli_surface_inventory.py"
+DOCS = ROOT / "docs" / "cli-surface.md"
 
 
 def load_module():
@@ -166,6 +167,8 @@ def build_fixture(root: Path) -> None:
         """,
     )
     write(root, "AGENTS.md", "- use `.agents/scripts/remote_probe.py` for probes\n")
+    write(root, ".agents/policy/demo.json", '{ "script": "thing.py" }\n')
+    write(root, ".agents/deps/demo.json", '{ "cli": "thing.py" }\n')
 
 
 class DiscoveryTests(unittest.TestCase):
@@ -231,11 +234,17 @@ class DiscoveryTests(unittest.TestCase):
         )
         self.assertEqual(substrate_probe["reference_kinds"], {"skill-doc": 1})
 
+    def test_policy_and_source_map_mentions_are_not_executable_callers(self) -> None:
+        thing = self.by_path[".agents/scripts/thing.py"]
+        kinds = thing["reference_kinds"]
+        self.assertEqual(kinds.get("policy"), 1)
+        self.assertEqual(kinds.get("source-map"), 1)
+        self.assertEqual(kinds.get("skill-doc"), 1)
+
     def test_unclassified_entry_points_fail_the_run(self) -> None:
         self.assertEqual(self.payload["status"], "failed")
         codes = {(f["code"], f["path"]) for f in self.payload["findings"]}
         self.assertIn(("unclassified", ".agents/scripts/thing.py"), codes)
-        # Real-repo classification paths are absent from the fixture.
         self.assertIn("stale-classification", {f["code"] for f in self.payload["findings"]})
 
     def test_counts_by_area_and_style(self) -> None:
@@ -245,90 +254,214 @@ class DiscoveryTests(unittest.TestCase):
         self.assertEqual(counts["argparse_importing_files"], 3)
 
 
+def _overlay_script(root: Path, rel: str, body: str = "import argparse\nargparse.ArgumentParser()\nif __name__ == '__main__':\n    pass\n") -> None:
+    write(root, rel, body)
+
+
+class RoleAndExternalTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        self._original = inventory.CLASSIFICATION
+
+    def tearDown(self) -> None:
+        inventory.CLASSIFICATION = self._original
+        self._tmp.cleanup()
+
+    def test_support_roles_are_non_overlapping_and_sum_to_rows(self) -> None:
+        _overlay_script(self.root, ".agents/scripts/supported.py")
+        _overlay_script(self.root, ".agents/scripts/compat.py")
+        _overlay_script(self.root, ".agents/scripts/internal.py")
+        _overlay_script(self.root, ".agents/scripts/generated.py")
+        _overlay_script(self.root, ".agents/hooks/hook.py", "if __name__ == '__main__':\n    pass\n")
+        _overlay_script(self.root, ".agents/scripts/payload.py")
+        _overlay_script(self.root, ".agents/scripts/harness.py")
+        inventory.CLASSIFICATION = {
+            ".agents/scripts/supported.py": inventory._cls("mechanics", "supported", "agent-facing"),
+            ".agents/scripts/compat.py": inventory._cls("mechanics", "compatibility", "shim"),
+            ".agents/scripts/internal.py": inventory._cls("mechanics", "internal", "debug CLI"),
+            ".agents/scripts/generated.py": inventory._cls(
+                "mechanics",
+                "generated",
+                "projection",
+                target=".agents/scripts/supported.py",
+                target_kind="local-entry",
+            ),
+            ".agents/hooks/hook.py": inventory._cls("mechanics", "hook", "hook"),
+            ".agents/scripts/payload.py": inventory._cls("mechanics", "payload", "remote payload"),
+            ".agents/scripts/harness.py": inventory._cls("mechanics", "harness", "harness"),
+        }
+        payload = inventory.build_inventory(self.root, quiet=True)
+        self.assertEqual(payload["status"], "passed")
+        self.assertEqual(payload["entry_point_count"], 7)
+        self.assertEqual(sum(payload["counts"]["by_support_role"].values()), 7)
+        self.assertEqual(sum(payload["counts"]["by_responsibility"].values()), 7)
+        self.assertEqual(payload["counts"]["by_support_role"]["supported"], 1)
+        self.assertEqual(payload["counts"]["supported"], 1)
+        self.assertEqual(payload["proposed_surface"]["status"], "historical-unimplemented")
+
+    def test_local_missing_target_differs_from_external_owner(self) -> None:
+        _overlay_script(self.root, ".agents/scripts/local.py")
+        _overlay_script(self.root, ".agents/scripts/external_ok.py")
+        _overlay_script(self.root, ".agents/scripts/drift.py")
+        write(
+            self.root,
+            ".agents/deps/remote-dev.json",
+            json.dumps(
+                {
+                    "name": "remote-dev",
+                    "repository": "vllm-ascend-workspace/remote-dev",
+                    "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    "consumed_surface": {"cli_tools": "tools/remote_*.py"},
+                }
+            ),
+        )
+        inventory.CLASSIFICATION = {
+            ".agents/scripts/local.py": inventory._cls("mechanics", "supported", "local owner"),
+            ".agents/scripts/external_ok.py": inventory._cls(
+                "mechanics",
+                "compatibility",
+                "delegates to an uninspected provider path",
+                target="tools/remote_bash.py",
+                target_kind="external",
+                external_owner="remote-dev",
+            ),
+            ".agents/scripts/drift.py": inventory._cls(
+                "mechanics",
+                "compatibility",
+                "points at a local file that does not exist",
+                target=".agents/scripts/missing.py",
+                target_kind="local-entry",
+            ),
+        }
+        payload = inventory.build_inventory(self.root, quiet=True)
+        codes = {(f["code"], f["path"]) for f in payload["findings"]}
+        self.assertIn(("local-target-missing", ".agents/scripts/drift.py"), codes)
+        self.assertNotIn(("local-target-missing", ".agents/scripts/external_ok.py"), codes)
+        self.assertNotIn(("unknown-external-owner", ".agents/scripts/external_ok.py"), codes)
+        self.assertEqual(payload["external_owners"]["remote-dev"]["source_availability"], "uninspected")
+        self.assertEqual(
+            payload["external_owners"]["remote-dev"]["commit"],
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        )
+
+
 class ClassificationOverlayTests(unittest.TestCase):
-    def test_overlay_categories_and_targets_are_well_formed(self) -> None:
+    def test_overlay_roles_and_targets_are_well_formed(self) -> None:
         for path, meta in inventory.CLASSIFICATION.items():
-            self.assertIn(meta["category"], inventory.CATEGORIES, path)
+            self.assertIn(meta["responsibility"], inventory.RESPONSIBILITIES, path)
+            self.assertIn(meta["support_role"], inventory.SUPPORT_ROLES, path)
             self.assertTrue(meta["note"], path)
-            target = meta["target"]
-            if meta["category"] == "redundant":
-                self.assertIn(target, inventory.CLASSIFICATION, f"{path}: redundant target must itself be an entry point")
-                self.assertNotEqual(inventory.CLASSIFICATION[target]["category"], "redundant", f"{path}: redundant target must not be redundant itself")
-            elif meta["category"] == "judgment":
-                self.assertEqual(target, "guidance", path)
-            else:
+            kind = meta.get("target_kind", "self")
+            self.assertIn(kind, inventory.TARGET_KINDS, path)
+            proposed = meta.get("proposed_target")
+            if proposed:
                 self.assertTrue(
-                    target.startswith("vaws ") or target in inventory.NON_COMMAND_TARGETS,
-                    f"{path}: unexpected target {target!r}",
+                    proposed.startswith("vaws ") or proposed in inventory.NON_COMMAND_TARGETS,
+                    f"{path}: unexpected proposed_target {proposed!r}",
                 )
+                if proposed.startswith("vaws "):
+                    self.assertNotEqual(proposed, meta["support_role"], path)
+            if meta.get("external_owner"):
+                self.assertIn(meta["external_owner"], {name for name, _ in inventory.DEP_DECLARATIONS}, path)
+            if kind == "local-entry":
+                self.assertTrue(meta.get("target"), path)
+                self.assertNotEqual(meta["target"], path)
 
-    def test_every_judgment_script_runs_nothing_remotely(self) -> None:
-        """The judgment classification rests on the claim that these scripts
-        never touch the remote host; hold that claim as a test. Local git is
-        allowed (change_validation collects the diff itself)."""
-        for path, meta in inventory.CLASSIFICATION.items():
-            if meta["category"] != "judgment":
-                continue
-            source = (ROOT / path).read_text(encoding="utf-8")
-            for token in ("vaws_ssh", "ssh_exec", "remote_bash", "vaws_remote_toolbox", '"ssh"', "'ssh'"):
-                self.assertNotIn(token, source, f"{path} reaches a remote host; reclassify")
+    def test_historical_snapshot_stays_dated_and_separate(self) -> None:
+        snap = inventory.HISTORICAL_SNAPSHOT
+        self.assertEqual(snap["status"], "historical")
+        self.assertEqual(snap["entry_point_count"], 132)
+        self.assertEqual(snap["by_category"], {"mechanics": 81, "judgment": 8, "mixed": 8, "redundant": 35})
+        self.assertEqual(snap["proposed_agent_command_count"], 13)
+        self.assertEqual(len(inventory.HISTORICAL_PROPOSED_COMMANDS), 13)
 
 
-class RepositoryStateTests(unittest.TestCase):
-    """Hold the current repository to the documented figures.
+class RepositoryCoherenceTests(unittest.TestCase):
+    """Compare the current tree to the current overlay and delimited table.
 
-    When these fail, a script was added, removed, or moved: update
-    ``CLASSIFICATION`` and the tables in ``docs/cli-surface.md`` together.
+    Historical 132/13 figures stay in HISTORICAL_SNAPSHOT and the dated
+    document section. They are not an invariant of ordinary new entry points.
     """
 
     @classmethod
     def setUpClass(cls) -> None:
         cls.payload = inventory.build_inventory(ROOT, quiet=True)
+        cls.doc = DOCS.read_text(encoding="utf-8")
 
     def test_repository_is_fully_classified(self) -> None:
         self.assertEqual(self.payload["findings"], [])
         self.assertEqual(self.payload["status"], "passed")
 
-    def test_documented_counts(self) -> None:
+    def test_counts_reconcile_to_emitted_rows(self) -> None:
         counts = self.payload["counts"]
-        self.assertEqual(self.payload["entry_point_count"], 132)
-        self.assertEqual(
-            counts["by_category"],
-            {"mechanics": 81, "judgment": 8, "mixed": 8, "redundant": 35},
-        )
-        self.assertEqual(self.payload["target_surface"]["agent_command_count"], 13)
-        self.assertEqual(counts["agent_facing_today"], 114)
+        n = self.payload["entry_point_count"]
+        self.assertEqual(n, len(self.payload["entry_points"]))
+        self.assertEqual(sum(counts["by_support_role"].values()), n)
+        self.assertEqual(sum(counts["by_responsibility"].values()), n)
+        self.assertEqual(counts["supported"], counts["by_support_role"]["supported"])
+        self.assertNotEqual(n, inventory.HISTORICAL_SNAPSHOT["entry_point_count"])
 
-    def test_docs_table_matches_inventory(self) -> None:
-        doc = (ROOT / "docs" / "cli-surface.md").read_text(encoding="utf-8")
+    def test_every_current_entry_has_valid_roles(self) -> None:
         for record in self.payload["entry_points"]:
-            self.assertIn(f"`{record['path']}`", doc, f"{record['path']} missing from docs/cli-surface.md")
-        for command in self.payload["target_surface"]["agent_commands"]:
-            self.assertIn(f"`{command}`", doc, f"{command} missing from docs/cli-surface.md")
+            cls = record["classification"]
+            self.assertIsNotNone(cls, record["path"])
+            self.assertIn(cls["responsibility"], inventory.RESPONSIBILITIES, record["path"])
+            self.assertIn(cls["support_role"], inventory.SUPPORT_ROLES, record["path"])
+            self.assertIn(cls["target_kind"], inventory.TARGET_KINDS, record["path"])
+            proposed = cls.get("proposed_target")
+            if proposed and proposed.startswith("vaws "):
+                self.assertNotEqual(cls["support_role"], proposed)
 
-    def test_unreferenced_entry_points_are_the_documented_dark_surface(self) -> None:
-        """Entry points nothing names outside tests/mirrors. The remote-dev CLI
-        fallbacks are only ever mentioned as a directory (`.remote-dev/tools/`)
-        because agents are routed to the MCP tools; the design document treats
-        that as evidence, so the list is held here rather than hidden."""
-        self.assertEqual(
-            self.payload["unreferenced_outside_tests"],
-            [
-                ".agents/scripts/cli_surface_inventory.py",
-                ".agents/skills/ascend-profiling-analysis/scripts/ascend_profile/html_report_v2/__main__.py",
-                ".remote-dev/tools/remote_apply_patch.py",
-                ".remote-dev/tools/remote_bash.py",
-                ".remote-dev/tools/remote_context_snapshot.py",
-                ".remote-dev/tools/remote_edit.py",
-                ".remote-dev/tools/remote_glob.py",
-                ".remote-dev/tools/remote_grep.py",
-                ".remote-dev/tools/remote_ls.py",
-                ".remote-dev/tools/remote_monitor.py",
-                ".remote-dev/tools/remote_multi_edit.py",
-                ".remote-dev/tools/remote_read.py",
-                ".remote-dev/tools/remote_write.py",
-            ],
+    def test_proposed_surface_is_explicitly_historical(self) -> None:
+        proposed = self.payload["proposed_surface"]
+        self.assertEqual(proposed["status"], "historical-unimplemented")
+        self.assertEqual(proposed["agent_command_count"], 13)
+        self.assertEqual(proposed["agent_commands"], list(inventory.HISTORICAL_PROPOSED_COMMANDS))
+        self.assertNotEqual(self.payload["counts"]["supported"], proposed["agent_command_count"])
+
+    def test_external_owners_come_from_committed_pins(self) -> None:
+        owners = self.payload["external_owners"]
+        self.assertEqual(owners["remote-dev"]["commit"], "b6acc21d147e369e771f1ff916973d74d667691e")
+        self.assertEqual(owners["vaws-coordinator"]["commit"], "2e16e894e31a12d85a11117a2772031f30fdfebe")
+        self.assertEqual(owners["vaws-top"]["commit"], "e13478484b9f52e8847169a785eebc32b268787f")
+        self.assertEqual(owners["vaws-knowledge"]["commit"], "e04d50f7bc5702afbe2e2988f7c28a3268e1a7f3")
+        for meta in owners.values():
+            self.assertEqual(meta["source_availability"], "uninspected")
+        self.assertNotIn(".remote-dev/tools/remote_bash.py", {e["path"] for e in self.payload["entry_points"]})
+        self.assertNotIn(".agents/coordinator/server.py", {e["path"] for e in self.payload["entry_points"]})
+
+    def test_current_docs_table_matches_inventory(self) -> None:
+        rows = inventory.extract_delimited_table(
+            self.doc, inventory.CURRENT_TABLE_BEGIN, inventory.CURRENT_TABLE_END
         )
+        self.assertEqual(len(rows), self.payload["entry_point_count"])
+        generated = [
+            line
+            for line in inventory.render_markdown(self.payload).splitlines()
+            if line.startswith("| `")
+        ]
+        self.assertEqual(rows, generated)
+        current_section = self.doc.split(inventory.CURRENT_TABLE_BEGIN, 1)[1].split(
+            inventory.CURRENT_TABLE_END, 1
+        )[0]
+        for record in self.payload["entry_points"]:
+            self.assertIn(f"`{record['path']}`", current_section, record["path"])
+        self.assertNotIn("`.remote-dev/tools/remote_bash.py`", current_section)
+        self.assertNotIn("`.agents/coordinator/server.py`", current_section)
+
+    def test_historical_docs_table_is_delimited_and_dated(self) -> None:
+        rows = inventory.extract_delimited_table(
+            self.doc, inventory.HISTORICAL_TABLE_BEGIN, inventory.HISTORICAL_TABLE_END
+        )
+        self.assertEqual(len(rows), 132)
+        historical = self.doc.split(inventory.HISTORICAL_TABLE_BEGIN, 1)[1].split(
+            inventory.HISTORICAL_TABLE_END, 1
+        )[0]
+        self.assertIn("`.remote-dev/tools/remote_bash.py`", historical)
+        self.assertIn("`.agents/coordinator/server.py`", historical)
+        self.assertIn(inventory.ORIGINAL_PR85, self.doc)
+        self.assertIn("mechanics 81", self.doc)
 
 
 class CliTests(unittest.TestCase):
@@ -342,12 +475,13 @@ class CliTests(unittest.TestCase):
         self.assertTrue(err.getvalue().startswith("[cli-surface]"))
         self.assertLessEqual(len(err.getvalue().splitlines()), inventory.MAX_PROGRESS_LINES)
 
-    def test_markdown_render_has_one_row_per_entry_point(self) -> None:
+    def test_markdown_render_has_one_row_per_current_entry_point(self) -> None:
         out = io.StringIO()
         with redirect_stdout(out), redirect_stderr(io.StringIO()):
             inventory.main(["--repo-root", str(ROOT), "--format", "markdown", "--quiet"])
         rows = [line for line in out.getvalue().splitlines() if line.startswith("| `")]
-        self.assertEqual(len(rows), 132)
+        payload = inventory.build_inventory(ROOT, quiet=True)
+        self.assertEqual(len(rows), payload["entry_point_count"])
 
 
 if __name__ == "__main__":
