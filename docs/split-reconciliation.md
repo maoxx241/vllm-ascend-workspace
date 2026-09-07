@@ -160,11 +160,12 @@ commit. Somebody or something looked at that tree.
 **What it does not establish:** that the item works, is wired, or is reached
 by any client, or that the origin string is cryptographic proof of
 publication. A Git origin is local identity metadata. Root records the actual
-API-observed publication SHA during final acceptance. `remote-dev.vaws-ops-module`
-is `arrived` (the code is in `lib/vaws_ops.py`) while
-`remote-dev.vaws-tool-provider` is `missing` (nothing serves it). Evidence is
-chosen per row to make that distinction visible, and a row's `notes` say what
-the evidence does and does not prove.
+API-observed publication SHA during final acceptance. Evidence is chosen per
+row to make distinctions visible: `remote-dev.vaws-ops-module` is the
+implementation in `lib/vaws_ops.py`, while `remote-dev.vaws-tool-provider` is
+a non-library `TOOL_SCHEMAS` / `TOOL_DESCRIPTIONS` registration reference. A
+row's `notes` say what the evidence does and does not prove. Source-presence
+at a commit is not runtime, client, test, or deployment evidence.
 
 **What a recorded `arrived` on a private destination establishes in public
 CI:** only that the named observer wrote it down after inspecting the named
@@ -193,59 +194,106 @@ receipt yet; the scaffold cannot add one for them.
 
 ---
 
-## 3. The three gaps, as the ledger records them
+## 3. The original gaps, and the current published-main snapshot
+
+The live ledger records **26 arrived / 0 missing / 0 unverified** at the
+exact published commits below. That count is source-presence in the declared
+GitHub owner/repository identity at those immutable commits. It is not
+runtime validation, client reachability, tests passing, or deployment, and a
+Git origin string is local identity metadata rather than cryptographic proof
+of publication. If published main advances, refresh this snapshot before
+treating it as current.
+
+### Original observation (2026-09-07)
 
 Observed 2026-09-07 against `vaws-coordinator` `f7c0682` and `remote-dev`
-`2ff1162`, both `main`.
+`2ff1162`, both `main`. At that snapshot eight rows were recorded `missing`
+and eighteen were `arrived`. The historical mismatch is kept here; it is not
+the live ledger state.
 
 ### `remote-dev.managed-jobs-supervisor` (and `.managed-jobs-tests`)
 
 remote-dev commit `900ad15`: "The supervisor moves to
 `vllm-ascend-workspace/vaws-coordinator`", and deleted `core/managed_jobs.py`
-with its eight tests. The coordinator's `docs/HANDOFF.md` §3 lists the same
-file as an *external dependency on remote-dev*, and its `main` still reads it
-from the remote-dev checkout (`lib/vaws_remote_dev.py`, `backend.py`). Each
-handoff was internally consistent; together they left the child-subreaper
-supervisor, the coordinator's headline guarantee, with no implementation in
-either repository. Recorded `missing`; follow-up: coordinator pull request #1
-(`fix/rehome-job-supervisor`) adds `workers/managed_jobs.py` and the suite.
-Run against that branch, the checker fails with `arrived-not-recorded` on both
-rows, which is the prompt to flip them once it merges.
+with its eight tests. The coordinator's `docs/HANDOFF.md` §3 listed the same
+file as an *external dependency on remote-dev*, and at `f7c0682` its `main`
+still read it from the remote-dev checkout (`lib/vaws_remote_dev.py`,
+`backend.py`). Each handoff was internally consistent; together they left the
+child-subreaper supervisor, the coordinator's headline guarantee, with no
+implementation in either repository. Recorded `missing` at `f7c0682`;
+follow-up then: coordinator pull request #1 (`fix/rehome-job-supervisor`)
+adds `workers/managed_jobs.py` and the suite. Run against that branch, the
+checker fails with `arrived-not-recorded` on both rows, which is the prompt
+to flip them once it merges.
 
 ### `remote-dev.vaws-tool-provider`
 
 remote-dev commit `f30b992` dropped the four `vaws_*` tools and stated it "will
 not grow a plugin hook for foreign tools". The coordinator owns the
 implementation and schemas (`lib/vaws_ops.py`, row `remote-dev.vaws-ops-module`
-is `arrived`), but its README still says "an MCP host (today the remote-dev
-stdio server) registers them", and its own server registers nothing. A client
-configured per the docs gets a server with none of those tools. Evidence: a
-non-library, non-test module in the coordinator that wires `TOOL_SCHEMAS` or
-`TOOL_DESCRIPTIONS` into a host. Recorded `missing`; follow-up is a design
-decision owned by the coordinator, with no pull request observed.
+was already `arrived` at `f7c0682`), but its README still said "an MCP host
+(today the remote-dev stdio server) registers them", and at `f7c0682` its own
+server registered nothing. A client configured per the docs got a server with
+none of those tools. Evidence: a non-library, non-test module in the
+coordinator that wires `TOOL_SCHEMAS` or `TOOL_DESCRIPTIONS` into a host.
+Recorded `missing` at `f7c0682`; follow-up then was a design decision owned
+by the coordinator, with no pull request observed at that commit.
 
 ### `remote-dev.task-facade-tests`
 
 Six tests declared as moving to the coordinator (`f30b992`, handoff §5): two
 `vaws.finish` outcome tests and four `vaws.py` CLI contract tests. The
-coordinator's handoff lists the source file only for deletion. Present in
-neither repository. Recorded `missing`; the coordinator owns the subjects.
+coordinator's handoff listed the source file only for deletion. Present in
+neither repository at `f7c0682`. Recorded `missing`; the coordinator owns the
+subjects.
 
 ### Found while populating the ledger
 
-Four more declared moves have not arrived, all remote-dev → scaffold: the
-three `FindSessionBindingTests`, `tools/sync_claude_skills.py` with its three
-shim tests, and the managed-endpoint resolver plugin that replaces
-`core/endpoint.py::_endpoint_from_managed`. None is broken *today*, because the
-scaffold still carries the in-tree `.remote-dev/` copy; all four vanish the
-moment that directory is replaced by the extracted repository. They are
-recorded `missing` so the scaffold's own CI, which always inspects the
-scaffold, keeps saying so until they land.
+Four more declared moves had not arrived at scaffold `161fed1`, all
+remote-dev → scaffold: `remote-dev.find-session-binding-tests` (the three
+`FindSessionBindingTests`), `remote-dev.sync-claude-skills`
+(`tools/sync_claude_skills.py`) with `remote-dev.claude-shim-tests`, and
+`remote-dev.managed-endpoint-resolver` (the plugin that replaces
+`core/endpoint.py::_endpoint_from_managed`). None was broken at that
+scaffold snapshot, because the tree still carried the in-tree `.remote-dev/`
+copy; all four would vanish the moment that directory was replaced by the
+extracted repository. They were recorded `missing` so the scaffold's own CI,
+which always inspects the scaffold, would keep saying so until they landed.
+Do not treat a local #90 branch as published main.
 
-Eighteen rows are `arrived`, including the byte-pinned copies
-(`vaws_build_inputs.py`, vendored `vaws_run_manifest.py`) whose digests match
-both sides, and the `vaws-top` history whose head commit is an ancestor of the
-new repository's `main`.
+Eighteen rows were `arrived` at that original observation, including the
+byte-pinned copies (`vaws_build_inputs.py`, vendored `vaws_run_manifest.py`)
+whose digests match both sides, and the `vaws-top` history whose head commit
+is an ancestor of the new repository's `main`.
+
+### Current published-main snapshot (2026-09-07, after #90)
+
+Re-evaluated with the L1 corrected checker against already-fetched
+`refs/remotes/origin/main` at these exact commits, with no fetch, no
+destination edits, and no receipts:
+
+| Destination | Identity | Published `origin/main` |
+|-------------|----------|-------------------------|
+| scaffold | `maoxx241/vllm-ascend-workspace` (transfer has not happened) | `257dc131c2015d0e01445288efb89bc5ab825b5f` |
+| `vaws-coordinator` | `vllm-ascend-workspace/vaws-coordinator` | `2e16e894e31a12d85a11117a2772031f30fdfebe` |
+| `vaws-top` | `vllm-ascend-workspace/vaws-top` | `e13478484b9f52e8847169a785eebc32b268787f` |
+
+All **26** declared rows are recorded `arrived` at those commits. The eight
+rows whose previous `missing` records were stale:
+
+* Coordinator, missing at `f7c0682`, present at `2e16e894e31a12d85a11117a2772031f30fdfebe`:
+  `remote-dev.managed-jobs-supervisor`, `remote-dev.managed-jobs-tests`,
+  `remote-dev.vaws-tool-provider`, `remote-dev.task-facade-tests`.
+* Scaffold, missing at `161fed1`, present at `257dc131c2015d0e01445288efb89bc5ab825b5f`
+  after #90 landed on actual published main:
+  `remote-dev.find-session-binding-tests`, `remote-dev.sync-claude-skills`,
+  `remote-dev.claude-shim-tests`, `remote-dev.managed-endpoint-resolver`.
+
+The independent Git-object observation in the root handoff agrees: 26/26
+arrived, those eight old `missing` entries drift. Helper or test definitions
+on this #91 candidate are not evidence that a moved runtime consumer arrived;
+the scaffold rows cite published main `257dc131c2015d0e01445288efb89bc5ab825b5f`,
+not this merge commit.
 
 ---
 

@@ -344,6 +344,9 @@ class NoInTreeSubstrateTests(unittest.TestCase):
             # existed; that prose is history, not a path anything reads.
             ".agents/policy/repo-boundaries.json",
             ".agents/policy/repo-boundaries-baseline.json",
+            # The split ledger records historical source.scaffold_path values
+            # from the in-tree copy; nothing reads those paths as a checkout.
+            ".agents/policy/split-ledger.json",
         }
         offenders = []
         for relative in tracked:

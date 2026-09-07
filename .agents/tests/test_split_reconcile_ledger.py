@@ -3,8 +3,8 @@
 
 Two halves. The first runs the shipped ledger against this tree, so the rows
 whose destination is the scaffold cannot drift from what the published
-scaffold snapshot actually contains, and the three known gaps stay recorded as
-gaps until somebody flips them. The second builds throwaway destination
+scaffold snapshot actually contains, and the original gap ids stay named after
+their recorded state is refreshed. The second builds throwaway destination
 checkouts in a temp dir and proves the mechanics the design promises: a
 declared-but-absent item is `missing`; an unreachable destination is
 `unverified` and never `arrived`; a row whose item has since arrived fails
@@ -39,6 +39,19 @@ KNOWN_GAPS = {
     "remote-dev.managed-jobs-supervisor",
     "remote-dev.vaws-tool-provider",
     "remote-dev.task-facade-tests",
+}
+COORDINATOR_PUBLISHED_MAIN = "2e16e894e31a12d85a11117a2772031f30fdfebe"
+SCAFFOLD_PUBLISHED_MAIN = "257dc131c2015d0e01445288efb89bc5ab825b5f"
+TOP_PUBLISHED_MAIN = "e13478484b9f52e8847169a785eebc32b268787f"
+POST90_MISSING_TO_ARRIVED = {
+    "remote-dev.managed-jobs-supervisor": ("vaws-coordinator", COORDINATOR_PUBLISHED_MAIN),
+    "remote-dev.managed-jobs-tests": ("vaws-coordinator", COORDINATOR_PUBLISHED_MAIN),
+    "remote-dev.vaws-tool-provider": ("vaws-coordinator", COORDINATOR_PUBLISHED_MAIN),
+    "remote-dev.task-facade-tests": ("vaws-coordinator", COORDINATOR_PUBLISHED_MAIN),
+    "remote-dev.find-session-binding-tests": ("scaffold", SCAFFOLD_PUBLISHED_MAIN),
+    "remote-dev.sync-claude-skills": ("scaffold", SCAFFOLD_PUBLISHED_MAIN),
+    "remote-dev.claude-shim-tests": ("scaffold", SCAFFOLD_PUBLISHED_MAIN),
+    "remote-dev.managed-endpoint-resolver": ("scaffold", SCAFFOLD_PUBLISHED_MAIN),
 }
 DEST_ORIGIN = "https://github.com/org/dest.git"
 DEST_ORIGIN_SSH = "git@github.com:org/dest.git"
@@ -181,12 +194,27 @@ class ShippedLedgerTests(unittest.TestCase):
     def test_the_three_known_gaps_are_recorded_as_missing_with_a_follow_up(self):
         ledger = reconcile.load_ledger(LEDGER, ROOT)
         by_id = {entry.id: entry for entry in ledger.items}
+        self.assertEqual(sum(1 for entry in ledger.items if entry.recorded.state == "arrived"), 26)
+        self.assertEqual(sum(1 for entry in ledger.items if entry.recorded.state == "missing"), 0)
         for gap in KNOWN_GAPS:
             with self.subTest(gap=gap):
                 self.assertIn(gap, by_id)
-                self.assertEqual(by_id[gap].recorded.state, "missing")
-                self.assertTrue(by_id[gap].recorded.follow_up)
+                self.assertEqual(by_id[gap].recorded.state, "arrived")
+                self.assertEqual(by_id[gap].recorded.observed_commit, COORDINATOR_PUBLISHED_MAIN)
+                self.assertFalse(by_id[gap].recorded.follow_up)
                 self.assertEqual(by_id[gap].destination_repo, "vaws-coordinator")
+        for item_id, (destination, commit) in POST90_MISSING_TO_ARRIVED.items():
+            with self.subTest(item=item_id):
+                self.assertIn(item_id, by_id)
+                self.assertEqual(by_id[item_id].recorded.state, "arrived")
+                self.assertEqual(by_id[item_id].destination_repo, destination)
+                self.assertEqual(by_id[item_id].recorded.observed_commit, commit)
+                self.assertIn("source-presence only", by_id[item_id].recorded.observed_by)
+                self.assertIn("not cryptographic proof of publication", by_id[item_id].recorded.observed_by)
+        for entry in ledger.items:
+            if entry.recorded.observed_commit == TOP_PUBLISHED_MAIN:
+                with self.subTest(item=entry.id):
+                    self.assertEqual(entry.recorded.state, "arrived")
 
     def test_every_recorded_arrival_names_the_commit_that_was_inspected(self):
         ledger = reconcile.load_ledger(LEDGER, ROOT)
@@ -199,15 +227,13 @@ class ShippedLedgerTests(unittest.TestCase):
 
     def test_without_destination_checkouts_nothing_is_reported_arrived_for_them(self):
         code, payload = invoke("--repo-root", str(ROOT), "--mode", "enforce")
-        # Scaffold rows are observed at fetched origin/main. Recorded states are
-        # not refreshed in this L1 path-identity fix, so enforce may report
-        # drift when `.agents` evidence is present in that snapshot.
-        self.assertIn(code, (0, 1), payload.get("drift"))
-        self.assertIn(payload["status"], {"passed", "failed"})
+        self.assertEqual(code, 0, payload.get("drift"))
+        self.assertEqual(payload["status"], "passed")
         for row in payload["items"]:
             with self.subTest(item=row["id"]):
                 if row["destination"]["repo"] == "scaffold":
-                    self.assertIn(row["verdict"], {"arrived", "missing"})
+                    self.assertEqual(row["verdict"], "arrived")
+                    self.assertEqual(row["observed"]["head_commit"], SCAFFOLD_PUBLISHED_MAIN)
                 else:
                     self.assertEqual(row["verdict"], "unverified")
                     self.assertNotEqual(row["verdict"], "arrived")
@@ -216,7 +242,8 @@ class ShippedLedgerTests(unittest.TestCase):
                 self.assertFalse(destination["reachable"])
             else:
                 self.assertEqual(destination["revision_scope"], "published-default-branch")
-                self.assertTrue(destination["selected_commit"])
+                self.assertEqual(destination["selected_commit"], SCAFFOLD_PUBLISHED_MAIN)
+                self.assertEqual(destination["identity_repo"], "maoxx241/vllm-ascend-workspace")
 
     def test_report_mode_never_fails(self):
         code, payload = invoke("--repo-root", str(ROOT), "--mode", "report")

@@ -107,13 +107,12 @@
         }
       ],
       "recorded": {
-        "state": "missing",
+        "state": "arrived",
         "observed_on": "2026-09-07",
-        "observed_commit": "f7c0682b6907c60418fa20ca4d9b3d3a46d26773",
-        "observed_by": "feat/split-reconciliation author, read-only clone of the destination default branch",
-        "follow_up": "vllm-ascend-workspace/vaws-coordinator pull request #1 (branch fix/rehome-job-supervisor) adds workers/managed_jobs.py; not on main at the observed commit."
+        "observed_commit": "2e16e894e31a12d85a11117a2772031f30fdfebe",
+        "observed_by": "L2 refresh with the L1 corrected checker against published refs/remotes/origin/main at the exact destination SHA in observed_commit; Git origin is local identity metadata, not cryptographic proof of publication; source-presence only, not runtime, client reachability, tests passing, or deployment evidence"
       },
-      "notes": "Each side declared the other as owner. remote-dev deleted the file (900ad15); the coordinator's main still reads it from the remote-dev checkout (`lib/vaws_remote_dev.py` WORKER_MODULES, `backend.py` worker_source) and therefore cannot start against the extracted remote-dev. Until the fix lands the coordinator's headline guarantee, one supervisor responsible for the whole descendant family until a durable receipt exists, has no implementation in either repository."
+      "notes": "Each side declared the other as owner. remote-dev deleted the file (900ad15); at coordinator f7c0682 the symbols were absent and the coordinator still listed core/managed_jobs.py as a remote-dev dependency. At published coordinator main 2e16e894e31a12d85a11117a2772031f30fdfebe the declared names are defined in workers/managed_jobs.py. That is source-presence at that commit, not runtime, client, test, or deployment evidence."
     },
     {
       "id": "remote-dev.managed-jobs-tests",
@@ -154,13 +153,12 @@
         }
       ],
       "recorded": {
-        "state": "missing",
+        "state": "arrived",
         "observed_on": "2026-09-07",
-        "observed_commit": "f7c0682b6907c60418fa20ca4d9b3d3a46d26773",
-        "observed_by": "feat/split-reconciliation author, read-only clone of the destination default branch",
-        "follow_up": "vllm-ascend-workspace/vaws-coordinator pull request #1 adds tests/test_managed_jobs.py with these eight names; not on main at the observed commit."
+        "observed_commit": "2e16e894e31a12d85a11117a2772031f30fdfebe",
+        "observed_by": "L2 refresh with the L1 corrected checker against published refs/remotes/origin/main at the exact destination SHA in observed_commit; Git origin is local identity metadata, not cryptographic proof of publication; source-presence only, not runtime, client reachability, tests passing, or deployment evidence"
       },
-      "notes": "Moves with remote-dev.managed-jobs-supervisor. The seven process tests import `vaws_npu_coordination.process_guard_busy` from the scaffold, so the coordinator's CI pin on the scaffold (HANDOFF section 5) is what makes them runnable there."
+      "notes": "Moves with remote-dev.managed-jobs-supervisor. Recorded missing at coordinator f7c0682. At 2e16e894e31a12d85a11117a2772031f30fdfebe the eight test names are defined under tests/. Source-presence of those definitions only; the seven process tests import vaws_npu_coordination.process_guard_busy from the scaffold, so runnability still depends on the coordinator's CI pin, which this row does not prove."
     },
     {
       "id": "remote-dev.vaws-ops-module",
@@ -204,7 +202,7 @@
         "observed_commit": "f7c0682b6907c60418fa20ca4d9b3d3a46d26773",
         "observed_by": "feat/split-reconciliation author, read-only clone of the destination default branch"
       },
-      "notes": "The implementation arrived. Serving it did not; see remote-dev.vaws-tool-provider."
+      "notes": "The implementation arrived at f7c0682 (lib/vaws_ops.py). The separate registration row remote-dev.vaws-tool-provider was missing then and is now recorded arrived at 2e16e894e31a12d85a11117a2772031f30fdfebe as source-presence of a TOOL_SCHEMAS|TOOL_DESCRIPTIONS reference outside lib/tests; that does not prove a client reaches it."
     },
     {
       "id": "remote-dev.vaws-tool-provider",
@@ -244,13 +242,12 @@
         }
       ],
       "recorded": {
-        "state": "missing",
+        "state": "arrived",
         "observed_on": "2026-09-07",
-        "observed_commit": "f7c0682b6907c60418fa20ca4d9b3d3a46d26773",
-        "observed_by": "feat/split-reconciliation author, read-only clone of the destination default branch",
-        "follow_up": "Design decision owned by vaws-coordinator: which MCP host serves the four tools now that remote-dev has declined. No pull request observed on either repository at the observed commit."
+        "observed_commit": "2e16e894e31a12d85a11117a2772031f30fdfebe",
+        "observed_by": "L2 refresh with the L1 corrected checker against published refs/remotes/origin/main at the exact destination SHA in observed_commit; Git origin is local identity metadata, not cryptographic proof of publication; source-presence only, not runtime, client reachability, tests passing, or deployment evidence"
       },
-      "notes": "remote-dev main advertises only the 18 remote_* tools and rejects unknown names (f30b992). vaws-coordinator main defines the tool table in lib/vaws_ops.py and its own HTTP server (`server.py`, MCPServer 'vaws-coordinator') registers none of it; only scripts/vaws.py (CLI) and tests import the table. A client configured per the coordinator README therefore gets a server with none of these tools. The evidence pattern asks for a non-library, non-test module in the coordinator that wires TOOL_SCHEMAS or TOOL_DESCRIPTIONS into a host; it proves registration exists, not that any client is configured to reach it."
+      "notes": "remote-dev main advertises only the 18 remote_* tools and rejects unknown names (f30b992). At coordinator f7c0682 no non-library, non-test module referenced TOOL_SCHEMAS or TOOL_DESCRIPTIONS. At 2e16e894e31a12d85a11117a2772031f30fdfebe that reference is present. The evidence proves registration exists in the selected tree, not that any client is configured to reach it, and not runtime or deployment success."
     },
     {
       "id": "remote-dev.task-facade-tests",
@@ -302,13 +299,12 @@
         }
       ],
       "recorded": {
-        "state": "missing",
+        "state": "arrived",
         "observed_on": "2026-09-07",
-        "observed_commit": "f7c0682b6907c60418fa20ca4d9b3d3a46d26773",
-        "observed_by": "feat/split-reconciliation author, read-only clone of the destination default branch",
-        "follow_up": "vaws-coordinator owns the moved subjects (lib/vaws_ops.py, scripts/vaws.py); its tests/test_adapters.py covers the tool table and the unavailable-registry path but none of the six names or their assertions. No pull request observed."
+        "observed_commit": "2e16e894e31a12d85a11117a2772031f30fdfebe",
+        "observed_by": "L2 refresh with the L1 corrected checker against published refs/remotes/origin/main at the exact destination SHA in observed_commit; Git origin is local identity metadata, not cryptographic proof of publication; source-presence only, not runtime, client reachability, tests passing, or deployment evidence"
       },
-      "notes": "Present in neither repository. remote-dev dropped them as scaffold-only (f30b992); the coordinator's handoff only lists the source file for deletion. The two finish-state tests guard the outcome downgrade (`finishing` is blocked, not success) that lib/vaws_ops.py still implements."
+      "notes": "At coordinator f7c0682 the six names were present in neither repository. remote-dev dropped them as scaffold-only (f30b992); the coordinator's handoff only listed the source file for deletion. At 2e16e894e31a12d85a11117a2772031f30fdfebe the six names are defined under tests/. Source-presence of the test definitions, not that the tests ran."
     },
     {
       "id": "remote-dev.task-facade-readme",
@@ -378,13 +374,12 @@
         }
       ],
       "recorded": {
-        "state": "missing",
+        "state": "arrived",
         "observed_on": "2026-09-07",
-        "observed_commit": "161fed1b0fe6b48359be3f0cf33bb7d8befae113",
-        "observed_by": "feat/split-reconciliation author, scaffold origin/main",
-        "follow_up": "Scaffold-side rewiring of remote-dev consumption (sequenced by docs/repo-boundaries.md in pull request #79). No pull request carrying these tests observed."
+        "observed_commit": "257dc131c2015d0e01445288efb89bc5ab825b5f",
+        "observed_by": "L2 refresh with the L1 corrected checker against published refs/remotes/origin/main at the exact destination SHA in observed_commit; Git origin is local identity metadata, not cryptographic proof of publication; source-presence only, not runtime, client reachability, tests passing, or deployment evidence"
       },
-      "notes": "The tests still run today from the in-tree copy at .remote-dev/tests/test_endpoint.py on scaffold main. They stop running the moment .remote-dev/ is replaced by the extracted repository, which is why the destination is checked now rather than then."
+      "notes": "Recorded missing at scaffold 161fed1, when the tests still lived only in the in-tree .remote-dev/tests/test_endpoint.py copy. At published scaffold main 257dc131c2015d0e01445288efb89bc5ab825b5f (PR #90) the three FindSessionBindingTests names are defined under .agents/tests/. Source-presence at that commit, not that the tests ran. Identity remains maoxx241/vllm-ascend-workspace; transfer has not happened."
     },
     {
       "id": "remote-dev.sync-claude-skills",
@@ -412,13 +407,12 @@
         }
       ],
       "recorded": {
-        "state": "missing",
+        "state": "arrived",
         "observed_on": "2026-09-07",
-        "observed_commit": "161fed1b0fe6b48359be3f0cf33bb7d8befae113",
-        "observed_by": "feat/split-reconciliation author, scaffold origin/main",
-        "follow_up": "Scaffold-side rewiring of remote-dev consumption. No pull request observed."
+        "observed_commit": "257dc131c2015d0e01445288efb89bc5ab825b5f",
+        "observed_by": "L2 refresh with the L1 corrected checker against published refs/remotes/origin/main at the exact destination SHA in observed_commit; Git origin is local identity metadata, not cryptographic proof of publication; source-presence only, not runtime, client reachability, tests passing, or deployment evidence"
       },
-      "notes": "Still present at the old in-tree path .remote-dev/tools/sync_claude_skills.py on scaffold main; that copy disappears with .remote-dev/. The generated shims under .claude/skills/ are tracked, so the loss would be silent until the next skill change."
+      "notes": "Recorded missing at scaffold 161fed1, when the generator still lived at .remote-dev/tools/sync_claude_skills.py. At 257dc131c2015d0e01445288efb89bc5ab825b5f the declared path .agents/scripts/sync_claude_skills.py is in the published tree. Source-presence of that path, not that shims were regenerated. Identity remains maoxx241/vllm-ascend-workspace; transfer has not happened."
     },
     {
       "id": "remote-dev.claude-shim-tests",
@@ -454,13 +448,12 @@
         }
       ],
       "recorded": {
-        "state": "missing",
+        "state": "arrived",
         "observed_on": "2026-09-07",
-        "observed_commit": "161fed1b0fe6b48359be3f0cf33bb7d8befae113",
-        "observed_by": "feat/split-reconciliation author, scaffold origin/main",
-        "follow_up": "Moves with remote-dev.sync-claude-skills. No pull request observed."
+        "observed_commit": "257dc131c2015d0e01445288efb89bc5ab825b5f",
+        "observed_by": "L2 refresh with the L1 corrected checker against published refs/remotes/origin/main at the exact destination SHA in observed_commit; Git origin is local identity metadata, not cryptographic proof of publication; source-presence only, not runtime, client reachability, tests passing, or deployment evidence"
       },
-      "notes": ""
+      "notes": "Recorded missing at scaffold 161fed1. At 257dc131c2015d0e01445288efb89bc5ab825b5f the three shim-check names are defined under .agents/tests/. Source-presence of the test definitions, not that the tests ran. Identity remains maoxx241/vllm-ascend-workspace; transfer has not happened."
     },
     {
       "id": "remote-dev.managed-endpoint-resolver",
@@ -492,13 +485,12 @@
         }
       ],
       "recorded": {
-        "state": "missing",
+        "state": "arrived",
         "observed_on": "2026-09-07",
-        "observed_commit": "161fed1b0fe6b48359be3f0cf33bb7d8befae113",
-        "observed_by": "feat/split-reconciliation author, scaffold origin/main",
-        "follow_up": "Scaffold-side rewiring of remote-dev consumption (docs/repo-boundaries.md, pull request #79, sequences it). No pull request carrying a resolver plugin observed."
+        "observed_commit": "257dc131c2015d0e01445288efb89bc5ab825b5f",
+        "observed_by": "L2 refresh with the L1 corrected checker against published refs/remotes/origin/main at the exact destination SHA in observed_commit; Git origin is local identity metadata, not cryptographic proof of publication; source-presence only, not runtime, client reachability, tests passing, or deployment evidence"
       },
-      "notes": "Without this plugin every `session_id` / `machine` selector and every zero-argument call inside a session worktree fails with EndpointError once the scaffold consumes the extracted remote-dev. The evidence looks for any module under .agents/lib that calls register_resolver, because the handoff only suggests the file name."
+      "notes": "Without this plugin every session_id / machine selector and every zero-argument call inside a session worktree would fail with EndpointError once the scaffold consumed extracted remote-dev. Recorded missing at 161fed1. At 257dc131c2015d0e01445288efb89bc5ab825b5f a module under .agents/lib references register_resolver(. That is source-presence of the registration call, not proof that resolution works at runtime. Identity remains maoxx241/vllm-ascend-workspace; transfer has not happened."
     },
     {
       "id": "coordinator.package-root",
