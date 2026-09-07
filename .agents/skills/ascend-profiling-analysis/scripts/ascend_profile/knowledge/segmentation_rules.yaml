@@ -29,10 +29,17 @@ version: 1
 # family whose markers are present in the rank drives layer frequency; the
 # remaining attention kernels in a layer window are companions.
 layer_start_categories:
-  # MLA (DeepSeek-V2 / V3): the MlaProlog / KvRmsNormRopeCache marker starts
-  # the layer; FIA score + V-up-proj are companions inside the same layer.
+  # MLA (DeepSeek-V2 / V3): the plain ``attention.mla`` category anchors the
+  # layer (carried by role=attention kernels: MlaProlog/MlaPreprocess and the
+  # V-up-proj TransposeBatchMatMul). KvRmsNormRopeCache /
+  # SplitQkvRmsNormRope are NOT layer starts — they fuse the MLA
+  # kv_a_layernorm + rope + KV-cache write in the MIDDLE of the attention
+  # prologue (role=attention_aux, so they never enter the anchor set), and
+  # must not carry the normalization role either (kernel_signatures.yaml
+  # normalization rule), otherwise the layer-start boundary search snaps to
+  # them and rotates the q/kv projection segment into the previous layer
+  # (dsv2lite / dsv31, 2026-09-07).
   - attention.mla
-  - attention.mla.kv_norm_rope_cache
   # Linear attention (KDA / GDN / Mamba): the RecurrentKda / ChunkKdaFwd /
   # gated-delta kernel starts the layer. Required for hybrid models like
   # Kimi-K3 (3x KDA + 1x gating-MLA per period) — without it, KDA layers have
@@ -54,6 +61,11 @@ layer_start_categories:
 # other anchor already opened. Covers MLA, DSA and CSA companion kernels.
 companion_only_categories:
   # --- MLA companions ---
+  # KvRmsNormRopeCache is already anchor-ineligible by role (attention_aux);
+  # listed here as defence-in-depth so a future role change cannot turn the
+  # mid-attention kv-norm+rope+cache op into a layer start (the 2026-09-07
+  # dsv2lite projection-rotation bug).
+  - attention.mla.kv_norm_rope_cache
   - attention.mla.v_up_proj
   # --- DSA companions (DeepSeek-V3.2: Lightning Indexer + sparse shared-KV) ---
   - attention.lightning_indexer
@@ -98,21 +110,26 @@ fused_norm_exclusions:
 # attention_families.yaml (rules.resolve_attention_family).
 family_notes:
   mla:
-    layer_start: [attention.mla, attention.mla.kv_norm_rope_cache]
-    companions: [attention.mla.v_up_proj, attention.rope.*]
+    # attention.mla is carried by role=attention kernels (MlaProlog /
+    # V-up-proj). KvRmsNormRopeCache is a mid-attention companion, never a
+    # layer start (see layer_start_categories note above).
+    layer_start: [attention.mla]
+    companions: [attention.mla.kv_norm_rope_cache, attention.mla.v_up_proj, attention.rope.*]
   dsa:
     # DSA reuses the MLA preprocessing markers as layer start; the sparse
     # kernels are companions of that same layer.
-    layer_start: [attention.mla, attention.mla.kv_norm_rope_cache]
+    layer_start: [attention.mla]
     companions:
+      - attention.mla.kv_norm_rope_cache
       - attention.lightning_indexer
       - attention.sparse_attn.v_up_proj
       - attention.sparse_sharedkv.metadata
   csa:
     # CSA (DSV4) also opens on the MLA KV pipe (SFA backend reuses it); the
     # compressor + indexer + sparse-sharedkv kernels are companions.
-    layer_start: [attention.mla, attention.mla.kv_norm_rope_cache]
+    layer_start: [attention.mla]
     companions:
+      - attention.mla.kv_norm_rope_cache
       - attention.kv_compressor
       - attention.lightning_indexer
       - attention.kvcomp.signpack

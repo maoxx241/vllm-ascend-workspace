@@ -340,7 +340,15 @@ _CASES: list[tuple[str, set[str], set[str]]] = [
     (
         "KvRmsNormRopeCache",
         {"attention.mla.kv_norm_rope_cache", "attention.mla", "attention.rope"},
-        {"attention.sparse_sharedkv"},
+        # MLA-internal kv_a_layernorm+rope+cache fusion — NOT a residual
+        # norm; the normalization tag used to rotate MLA layer starts onto
+        # it (dsv2lite, 2026-09-07).
+        {"attention.sparse_sharedkv", "normalization", "block_head"},
+    ),
+    (
+        "SplitQkvRmsNormRopeKernel",
+        {"attention.mla.kv_norm_rope_cache", "attention.mla", "attention.rope"},
+        {"normalization", "block_head"},
     ),
     (
         "TransposeQuantBatchMatmul",

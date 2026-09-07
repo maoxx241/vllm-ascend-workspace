@@ -83,7 +83,16 @@ def _build_test_layers(events: list[NormalizedEvent]) -> list[segm.LayerObservat
         events,
         lambda event: event_role(event, "block_head"),
     )
-    return build_layers(events, row_numbers, boundary_rows, anchor_boundary_rows, ())
+    # Mirror build_segments_for_rank: layer starts prefer block_head rows.
+    start_boundary_rows = anchor_boundary_rows or boundary_rows
+    return build_layers(
+        events,
+        row_numbers,
+        boundary_rows,
+        anchor_boundary_rows,
+        (),
+        start_boundary_rows=start_boundary_rows,
+    )
 
 
 def _selection_event(row_idx: int) -> NormalizedEvent:
@@ -591,3 +600,144 @@ def test_hybrid_kda_layer_blocks_start_at_attention_not_moe() -> None:
         # the block must not open with the MoE section of the previous layer
         assert names[0] != "MoeGatingTopK"
         assert names.index("MoeGatingTopK") > (names.index("aclnnRecurrentKda") if "aclnnRecurrentKda" in names else names.index("MlaPreprocess"))
+
+
+# ---------------------------------------------------------------------------
+# MLA layer-start regression (dsv2lite / dsv31, 2026-09-07)
+# ---------------------------------------------------------------------------
+
+
+def _mla_decode_layer_events(step_count: int, layers_per_step: int = 3) -> list[NormalizedEvent]:
+    """DeepSeek-MLA decode layers, mirroring the dsv2lite / dsv31-W8A8 traces.
+
+    True per-layer structure (kernel names and order taken from the archived
+    dsv2lite TP2xDP2 and dsv31 rank4 captures)::
+
+        AddRmsNormBias            # residual add + input norm -> LAYER OPENING
+        aclnnInplaceZero
+        aclnnQuantMatmul          # q_a_proj
+        RmsNorm                   # q_a_layernorm (pure norm, MID-projection)
+        aclnnQuantMatmul          # q_b_proj
+        InterleaveRope            # q rope (attention_aux)
+        KvRmsNormRopeCache        # kv_a_layernorm + rope + cache (attention_aux)
+        FusedInferAttentionScore  # score
+        TransposeBatchMatMul      # MLA V up-proj (role=attention, anchor)
+        aclnnMatmul               # o_proj
+        AddRmsNormBias            # post-attention norm (MoE opening)
+        MoeGatingTopK, GroupedMatmul
+
+    Two norms sit between the layer opening and the anchor: the q_a_layernorm
+    (pure RmsNorm) and KvRmsNormRopeCache (which carried the normalization
+    role before the kernel_signatures fix). "Latest normalization boundary
+    <= anchor" used to snap the layer start to KvRmsNormRopeCache, rotating
+    the whole projection segment into the previous layer's MoE tail.
+    """
+
+    events: list[NormalizedEvent] = []
+    row = 0
+    for _step in range(step_count):
+        events.append(_selection_event(row))
+        row += 1
+        for _layer in range(layers_per_step):
+            events.append(_event(row, "AddRmsNormBias", categories=("block_head", "normalization"), roles=("block_head", "normalization")))
+            row += 1
+            events.append(_event(row, "aclnnInplaceZero", categories=(), roles=()))
+            row += 1
+            events.append(_event(row, "aclnnQuantMatmul", categories=("compute.matmul",), roles=("compute",)))
+            row += 1
+            events.append(_event(row, "RmsNorm", categories=("normalization",), roles=("normalization",)))
+            row += 1
+            events.append(_event(row, "aclnnQuantMatmul", categories=("compute.matmul",), roles=("compute",)))
+            row += 1
+            events.append(_event(row, "InterleaveRope", categories=("attention.rope", "attention.rope.interleave"), roles=("attention_aux",)))
+            row += 1
+            events.append(_event(row, "KvRmsNormRopeCache", categories=("attention.mla", "attention.mla.kv_norm_rope_cache", "attention.rope"), roles=("attention_aux",)))
+            row += 1
+            events.append(_event(row, "FusedInferAttentionScore", categories=("attention.flash_score",), roles=("attention",)))
+            row += 1
+            events.append(_event(row, "aclnnTransposeBatchMatMul", categories=("attention.mla", "attention.mla.v_up_proj", "compute.matmul"), roles=("attention", "compute")))
+            row += 1
+            events.append(_event(row, "aclnnMatmul", categories=("compute.matmul",), roles=("compute",)))
+            row += 1
+            events.append(_event(row, "AddRmsNormBias", categories=("block_head", "normalization"), roles=("block_head", "normalization")))
+            row += 1
+            events.append(_event(row, "MoeGatingTopK", categories=("moe.gating",), roles=("moe",)))
+            row += 1
+            events.append(_event(row, "GroupedMatmul", categories=("compute.matmul", "moe.expert_matmul"), roles=("moe",)))
+            row += 1
+    return events
+
+
+def test_mla_layer_starts_at_preattention_block_head_not_kv_norm_rope_cache() -> None:
+    events = _mla_decode_layer_events(step_count=2)
+    layers = _build_test_layers(events)
+
+    assert len(layers) == 6
+    by_row = {event.row_idx: event for event in events}
+    for layer in layers:
+        first = by_row[layer.row_start]
+        # The layer opens at the fused residual+norm block_head, NOT at
+        # KvRmsNormRopeCache (mid-attention) and NOT at the q_a_layernorm
+        # RmsNorm (mid-projection).
+        assert first.name_raw == "AddRmsNormBias", (layer.index, first.name_raw)
+        names = [by_row[r].name_raw for r in range(layer.row_start, layer.row_end + 1)]
+        # The full attention prologue belongs to this layer: both projection
+        # matmuls, the q_a_layernorm, rope, the kv-norm+rope+cache op, the
+        # score kernel and the V up-proj.
+        assert names.count("aclnnQuantMatmul") == 2, (layer.index, names)
+        assert names.count("RmsNorm") == 1, (layer.index, names)
+        for expected in ("InterleaveRope", "KvRmsNormRopeCache", "FusedInferAttentionScore", "aclnnTransposeBatchMatMul", "MoeGatingTopK"):
+            assert expected in names, (layer.index, expected, names)
+        # …and the ordering inside the layer matches the true pipeline:
+        # projections precede the kv-norm+rope+cache op.
+        assert names.index("aclnnQuantMatmul") < names.index("KvRmsNormRopeCache")
+        assert names.index("KvRmsNormRopeCache") < names.index("FusedInferAttentionScore")
+        # The MoE section closes the layer; the next layer's projection
+        # segment is not absorbed (quant matmul count above is the real
+        # guard — a step-trailing ArgMax sampler row may still attach to the
+        # last layer's window tail, which is pre-existing behaviour).
+
+
+def test_mla_layer_start_falls_back_to_norm_when_no_block_head() -> None:
+    """Partial first layer: the capture opens mid-layer with a pure RmsNorm
+    before the first anchor (no block_head precedes it), while later layers
+    have fused AddRmsNorm block_heads. The first layer's start search finds
+    no block_head in range and must fall back to the full boundary set."""
+
+    events: list[NormalizedEvent] = []
+    row = 0
+    for layer_i in range(3):
+        if layer_i == 0:
+            events.append(_event(row, "aclnnRmsNorm", categories=("normalization",), roles=("normalization",)))
+        else:
+            events.append(_event(row, "AddRmsNormBias", categories=("block_head", "normalization"), roles=("block_head", "normalization")))
+        row += 1
+        events.append(_event(row, "FusedInferAttentionScore", categories=("attention.flash_score",), roles=("attention",)))
+        row += 1
+        events.append(_event(row, "aclnnMatmul", categories=("compute.matmul",), roles=("compute",)))
+        row += 1
+    layers = _build_test_layers(events)
+    assert len(layers) == 3
+    by_row = {event.row_idx: event for event in events}
+    assert by_row[layers[0].row_start].name_raw == "aclnnRmsNorm"
+    for layer in layers[1:]:
+        assert by_row[layer.row_start].name_raw == "AddRmsNormBias"
+
+
+def test_kv_norm_rope_cache_carries_no_normalization_role() -> None:
+    """Lock the kernel_signatures.yaml contract: the MLA kv-norm+rope+cache
+    fusion is attention-only (no normalization / block_head leakage), while
+    the true residual norm (AddRmsNormBias) keeps both."""
+
+    from ascend_profile import rules
+
+    cats, roles = rules.categories_and_roles("KvRmsNormRopeCache", "KVRMSNORMROPECACHE", "AIV")
+    assert "normalization" not in cats
+    assert "normalization" not in roles
+    assert "block_head" not in roles
+    assert "attention_aux" in roles
+    assert "attention.mla.kv_norm_rope_cache" in cats
+
+    cats, roles = rules.categories_and_roles("AddRmsNormBias", "ADDRMSNORMBIAS", "AIV")
+    assert "normalization" in roles
+    assert "block_head" in roles

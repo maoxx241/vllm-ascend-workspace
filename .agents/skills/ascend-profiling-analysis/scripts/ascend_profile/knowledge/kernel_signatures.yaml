@@ -396,7 +396,17 @@ match_rules:
       add_categories: [block_head.mhc_prefix]
       add_roles: [block_head]
     - id: normalization
-      when: {any_of: [norm]}
+      when:
+        any_of: [norm]
+        # KvRmsNormRopeCache / SplitQkvRmsNormRope contain "rmsnorm" but are
+        # NOT residual-connection norms: they fuse the MLA kv_a_layernorm +
+        # rope + KV-cache write in the MIDDLE of the attention prologue
+        # (after the q/kv projection matmuls, before the score kernel).
+        # Tagging them ``normalization`` puts them in boundary_rows, and the
+        # layer-start search then snaps the layer opening to them — rotating
+        # the whole q/kv projection segment into the previous layer's MoE
+        # tail (observed on dsv2lite 2026-09-07).
+        unless_category: attention.mla.kv_norm_rope_cache
       add_categories: [normalization]
       add_roles: [normalization]
     - id: block_head

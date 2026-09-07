@@ -663,10 +663,25 @@ def group_layer_anchors(anchors: Sequence[NormalizedEvent], boundary_rows: Seque
     return groups
 
 
-def build_layers(events: Sequence[NormalizedEvent], row_numbers: Sequence[int], boundary_rows: Sequence[int], anchor_boundary_rows: Sequence[int], selection_rows: Sequence[int], anchor_override: Sequence[NormalizedEvent] | None = None) -> list[LayerObservation]:
+def build_layers(events: Sequence[NormalizedEvent], row_numbers: Sequence[int], boundary_rows: Sequence[int], anchor_boundary_rows: Sequence[int], selection_rows: Sequence[int], anchor_override: Sequence[NormalizedEvent] | None = None, start_boundary_rows: Sequence[int] | None = None) -> list[LayerObservation]:
     # ``anchor_override`` lets the layer-count-invariant retry resegment with a
     # fallback anchor family; the default path is unchanged (first candidate of
     # ``layer_anchor_candidates``).
+    #
+    # ``start_boundary_rows`` is the preferred row set for the layer-content
+    # start search — block_head rows when the rank exposes any. The full
+    # ``boundary_rows`` set (block_head + any normalization) is only a
+    # per-anchor fallback. Why: in MLA-style attention prologues several
+    # normalization rows sit BETWEEN the true layer opening (the fused
+    # residual+norm block_head) and the attention anchor — q_a_layernorm
+    # (pure RmsNorm) and KvRmsNormRopeCache (which no longer carries the
+    # normalization role, but did). "Latest boundary <= anchor" then snaps
+    # the layer start to the mid-projection norm and rotates the whole q/kv
+    # projection segment into the previous layer (dsv2lite / dsv31,
+    # 2026-09-07). The block_head row is the structurally correct opening:
+    # it fuses the previous block's residual add with this layer's input
+    # norm.
+    start_rows = start_boundary_rows if start_boundary_rows else boundary_rows
     anchors = tuple(anchor_override) if anchor_override is not None else layer_anchor_events(events)
     if not anchors:
         return []
@@ -677,7 +692,11 @@ def build_layers(events: Sequence[NormalizedEvent], row_numbers: Sequence[int], 
         selection_pos = bisect.bisect_left(selection_rows, group[0].row_idx)
         if selection_pos > 0 and selection_rows[selection_pos - 1] >= lower_bound:
             lower_bound = selection_rows[selection_pos - 1] + 1
-        start = latest_row_at_or_before(boundary_rows, group[0].row_idx, lower_bound)
+        start = latest_row_at_or_before(start_rows, group[0].row_idx, lower_bound)
+        if start is None and start_rows is not boundary_rows:
+            # Per-anchor fallback: no block_head evidence in this window at
+            # all (pure-norm trace) — keep the previous behaviour.
+            start = latest_row_at_or_before(boundary_rows, group[0].row_idx, lower_bound)
         starts.append(start if start is not None else group[0].row_idx)
 
     layers: list[LayerObservation] = []
@@ -696,7 +715,7 @@ def build_layers(events: Sequence[NormalizedEvent], row_numbers: Sequence[int], 
                 regime_key=layer_regime_key(signature),
             )
         )
-    return split_coarse_layers_by_moe(layers, events, row_numbers, boundary_rows, selection_rows)
+    return split_coarse_layers_by_moe(layers, events, row_numbers, boundary_rows, selection_rows, start_boundary_rows=start_rows)
 
 
 def split_coarse_layers_by_moe(
@@ -705,6 +724,7 @@ def split_coarse_layers_by_moe(
     row_numbers: Sequence[int],
     boundary_rows: Sequence[int],
     selection_rows: Sequence[int],
+    start_boundary_rows: Sequence[int] | None = None,
 ) -> list[LayerObservation]:
     """Refine coarse attention observations with MoE anchors.
 
@@ -713,6 +733,9 @@ def split_coarse_layers_by_moe(
     that window.  The deterministic repair is to split by those boundary-separated
     MoE anchor groups.  Consecutive MoE anchors within the same MoE block (e.g.
     gating + expert_matmul) stay grouped when no boundary sits between them.
+
+    ``start_boundary_rows`` mirrors ``build_layers``: sub-layer content starts
+    prefer block_head rows and fall back to the full boundary set per anchor.
     """
 
     refined: list[LayerObservation] = []
@@ -741,6 +764,7 @@ def split_coarse_layers_by_moe(
             refined.append(layer)
             continue
         starts: list[int] = []
+        start_rows = start_boundary_rows if start_boundary_rows else boundary_rows
         for index, group in enumerate(moe_groups):
             if index == 0:
                 starts.append(layer.row_start)
@@ -749,7 +773,9 @@ def split_coarse_layers_by_moe(
             selection_pos = bisect.bisect_left(selection_rows, group[0].row_idx)
             if selection_pos > 0 and selection_rows[selection_pos - 1] >= lower_bound:
                 lower_bound = selection_rows[selection_pos - 1] + 1
-            start = latest_row_at_or_before(boundary_rows, group[0].row_idx, lower_bound)
+            start = latest_row_at_or_before(start_rows, group[0].row_idx, lower_bound)
+            if start is None and start_rows is not boundary_rows:
+                start = latest_row_at_or_before(boundary_rows, group[0].row_idx, lower_bound)
             starts.append(start if start is not None else group[0].row_idx)
         for index, group in enumerate(moe_groups):
             row_start = starts[index]
@@ -3528,6 +3554,11 @@ def build_segments_for_rank(
         lambda event: event_role(event, "block_head"),
     )
     selection_rows = dedup_adjacent_event_rows(events, lambda event: event_role(event, "selection"))
+    # Layer-content start search prefers block_head rows (fused residual+norm
+    # opens a transformer layer); the full boundary set (any normalization)
+    # only serves as per-anchor fallback. See build_layers for why — a
+    # mid-projection norm (q_a_layernorm) must not become a layer opening.
+    start_boundary_rows = anchor_boundary_rows or boundary_rows
     anchor_candidates = layer_anchor_candidates(events)
     layers_observed = build_layers(
         events,
@@ -3536,6 +3567,7 @@ def build_segments_for_rank(
         anchor_boundary_rows,
         selection_rows,
         anchor_override=anchor_candidates[0][1] if anchor_candidates else None,
+        start_boundary_rows=start_boundary_rows,
     )
     evidence: list[EvidenceRef] = []
     segments: list[StepSegment] = []
@@ -3604,6 +3636,7 @@ def build_segments_for_rank(
                 anchor_boundary_rows,
                 selection_rows,
                 anchor_override=fallback_anchors,
+                start_boundary_rows=start_boundary_rows,
             )
             if not fallback_layers:
                 continue
