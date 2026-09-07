@@ -260,8 +260,10 @@ class ClientConfigurationTests(unittest.TestCase):
     def test_tracked_json_clients_use_the_launcher_and_inject_the_environment(self) -> None:
         for relative in (".mcp.json", ".cursor/mcp.json"):
             with self.subTest(file=relative):
-                entry = json.loads((ROOT / relative).read_text(encoding="utf-8"))["mcpServers"]["remote-dev"]
+                servers = json.loads((ROOT / relative).read_text(encoding="utf-8"))["mcpServers"]
+                entry = servers["remote-dev"]
                 self.assertEqual(entry["args"], self.LAUNCHER_ARGS)
+                self.assertEqual(servers["vaws-task"]["args"], [".agents/scripts/vaws.py", "task-server"])
                 for key in self.REQUIRED_ENV:
                     self.assertIn(key, entry["env"])
                 self.assertEqual(entry["env"]["REMOTE_DEV_RUNTIME_ENV_FILE"], remote_dev.ASCEND_RUNTIME_ENV_FILE)
@@ -274,6 +276,8 @@ class ClientConfigurationTests(unittest.TestCase):
                 entry = data["mcp_servers"][server]
                 self.assertTrue(entry["args"][0].endswith("/.agents/scripts/remote_dev.py"), entry["args"])
                 self.assertEqual(entry["args"][1], "server")
+                task = data["mcp_servers"].get("vaws_task") or data["mcp_servers"]["vaws-task"]
+                self.assertEqual(task["args"][1], "task-server")
                 for key in self.REQUIRED_ENV:
                     self.assertIn(key, entry["env"])
                 self.assertTrue(entry["env"]["REMOTE_DEV_RESOLVERS"].endswith("vaws_remote_dev_plugin.py:setup"))
@@ -291,12 +295,16 @@ class ClientConfigurationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             project = Path(tmp).resolve()
             files = setup.configuration("claude", project)
-            mcp = json.loads(files[project / ".mcp.json"])["mcpServers"]["remote-dev"]
+            servers = json.loads(files[project / ".mcp.json"])["mcpServers"]
+            mcp = servers["remote-dev"]
+            self.assertEqual(set(servers), {"remote-dev", "vaws-task"})
             self.assertEqual(mcp["args"], [str(ROOT / ".agents/scripts/remote_dev.py"), "server"])
+            self.assertEqual(servers["vaws-task"]["args"], [str(ROOT / ".agents/scripts/vaws.py"), "task-server"])
             for key in self.REQUIRED_ENV:
                 self.assertIn(key, mcp["env"])
             codex = tomllib.loads(setup.configuration("codex", project)[project / ".codex/config.toml"])
             self.assertEqual(codex["mcp_servers"]["remote_dev"]["args"][1], "server")
+            self.assertEqual(codex["mcp_servers"]["vaws_task"]["args"][1], "task-server")
             self.assertIn("REMOTE_DEV_RESOLVERS", codex["mcp_servers"]["remote_dev"]["env"])
         self.assertFalse(str(setup.BACKUP_DIR).startswith(str(ROOT / ".remote-dev")))
         self.assertTrue(str(setup.BACKUP_DIR).startswith(str(ROOT / ".vaws-local")))
@@ -313,18 +321,16 @@ class ClientConfigurationTests(unittest.TestCase):
 class NoInTreeSubstrateTests(unittest.TestCase):
     """The old vendored copy is gone and nothing executable still reads it."""
 
+    GUARD_RUNTIME_EXCLUSION_FILE = ".agents/lib/vaws_leak_guard.py"
+    RETAINED_RUNTIME_STATE_GLOB = ".remote-dev/state/**"
+    EXCLUDED_GLOBS_NAME = "DEFAULT_EXCLUDED_PATH_GLOBS"
+
     def test_in_tree_copy_is_deleted(self) -> None:
         tracked = subprocess.run(["git", "-C", str(ROOT), "ls-files", "--", ".remote-dev"], capture_output=True, text=True, check=False)
         self.assertEqual(tracked.stdout.strip(), "", "the in-tree .remote-dev copy must not be tracked")
 
     @staticmethod
-    def _python_string_constants(source: str) -> list[str]:
-        """String constants with module/class/function docstrings excluded.
-
-        Comments never reach the AST and docstrings may explain history; only
-        a string a program can act on counts as a reference.
-        """
-        tree = ast.parse(source)
+    def _docstring_constant_ids(tree: ast.AST) -> set[int]:
         docstrings: set[int] = set()
         for node in ast.walk(tree):
             body = getattr(node, "body", None)
@@ -332,8 +338,54 @@ class NoInTreeSubstrateTests(unittest.TestCase):
                 first = body[0]
                 if isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant) and isinstance(first.value.value, str):
                     docstrings.add(id(first.value))
+        return docstrings
+
+    @classmethod
+    def _retained_runtime_state_exclusion_ids(cls, relative: str, tree: ast.AST) -> set[int]:
+        """The one declared runtime-data skip glob is not a vendored-code fallback."""
+
+        if relative != cls.GUARD_RUNTIME_EXCLUSION_FILE:
+            return set()
+        retained: set[int] = set()
+        for stmt in getattr(tree, "body", ()):
+            names: list[str] = []
+            value = None
+            if isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name):
+                names = [stmt.target.id]
+                value = stmt.value
+            elif isinstance(stmt, ast.Assign):
+                names = [target.id for target in stmt.targets if isinstance(target, ast.Name)]
+                value = stmt.value
+            if cls.EXCLUDED_GLOBS_NAME not in names:
+                continue
+            if not isinstance(value, (ast.Tuple, ast.List)):
+                continue
+            for elt in value.elts:
+                if isinstance(elt, ast.Constant) and elt.value == cls.RETAINED_RUNTIME_STATE_GLOB:
+                    retained.add(id(elt))
+        return retained
+
+    @classmethod
+    def _python_string_constants(cls, source: str) -> list[str]:
+        """String constants with module/class/function docstrings excluded.
+
+        Comments never reach the AST and docstrings may explain history; only
+        a string a program can act on counts as a reference.
+        """
+        tree = ast.parse(source)
+        docstrings = cls._docstring_constant_ids(tree)
         return [node.value for node in ast.walk(tree)
                 if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in docstrings]
+
+    @classmethod
+    def _actionable_python_strings(cls, relative: str, source: str) -> list[str]:
+        """Non-docstring literals, minus the one retained guard runtime skip glob."""
+
+        tree = ast.parse(source)
+        skip = cls._docstring_constant_ids(tree)
+        skip |= cls._retained_runtime_state_exclusion_ids(relative, tree)
+        return [node.value for node in ast.walk(tree)
+                if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in skip]
 
     def test_no_tracked_code_or_config_references_the_old_path(self) -> None:
         tracked = subprocess.run(["git", "-C", str(ROOT), "ls-files", "-z"], capture_output=True, text=True, check=False).stdout.split("\0")
@@ -352,7 +404,7 @@ class NoInTreeSubstrateTests(unittest.TestCase):
                 continue
             suffix = path.suffix
             if suffix == ".py":
-                haystack = "\n".join(self._python_string_constants(path.read_text(encoding="utf-8", errors="replace")))
+                haystack = "\n".join(self._actionable_python_strings(relative, path.read_text(encoding="utf-8", errors="replace")))
             elif suffix in {".json", ".toml", ".yml", ".yaml"}:
                 haystack = path.read_text(encoding="utf-8", errors="replace")
             else:
@@ -360,6 +412,69 @@ class NoInTreeSubstrateTests(unittest.TestCase):
             if ".remote-dev/" in haystack:
                 offenders.append(relative)
         self.assertEqual(offenders, [])
+
+    def test_exact_guard_runtime_state_exclusion_is_accepted(self) -> None:
+        cases = (
+            'DEFAULT_EXCLUDED_PATH_GLOBS: tuple[str, ...] = ("vllm/**", ".remote-dev/state/**")\n',
+            'DEFAULT_EXCLUDED_PATH_GLOBS = ("vllm/**", ".remote-dev/state/**")\n',
+            'DEFAULT_EXCLUDED_PATH_GLOBS = ["vllm/**", ".remote-dev/state/**"]\n',
+        )
+        for source in cases:
+            with self.subTest(source=source):
+                strings = self._actionable_python_strings(self.GUARD_RUNTIME_EXCLUSION_FILE, source)
+                self.assertEqual(strings, ["vllm/**"])
+
+    def test_core_path_in_the_same_globs_declaration_is_rejected(self) -> None:
+        source = (
+            "DEFAULT_EXCLUDED_PATH_GLOBS: tuple[str, ...] = (\n"
+            '    ".remote-dev/state/**",\n'
+            '    ".remote-dev/core/endpoint.py",\n'
+            ")\n"
+        )
+        strings = self._actionable_python_strings(self.GUARD_RUNTIME_EXCLUSION_FILE, source)
+        self.assertIn(".remote-dev/core/endpoint.py", strings)
+        self.assertNotIn(self.RETAINED_RUNTIME_STATE_GLOB, strings)
+
+    def test_same_state_literal_in_another_assignment_or_call_is_rejected(self) -> None:
+        source = (
+            "DEFAULT_EXCLUDED_PATH_GLOBS: tuple[str, ...] = (\n"
+            '    "vllm/**",\n'
+            ")\n"
+            'OTHER = ".remote-dev/state/**"\n'
+            'skip(".remote-dev/state/**")\n'
+        )
+        strings = self._actionable_python_strings(self.GUARD_RUNTIME_EXCLUSION_FILE, source)
+        self.assertEqual(strings.count(self.RETAINED_RUNTIME_STATE_GLOB), 2)
+
+    def test_same_state_literal_in_another_source_path_is_rejected(self) -> None:
+        source = (
+            "DEFAULT_EXCLUDED_PATH_GLOBS: tuple[str, ...] = (\n"
+            '    ".remote-dev/state/**",\n'
+            ")\n"
+        )
+        strings = self._actionable_python_strings(".agents/scripts/tracked_leak_scan.py", source)
+        self.assertIn(self.RETAINED_RUNTIME_STATE_GLOB, strings)
+
+    def test_old_launcher_source_fallback_in_the_guard_file_is_rejected(self) -> None:
+        source = (
+            "DEFAULT_EXCLUDED_PATH_GLOBS: tuple[str, ...] = (\n"
+            '    ".remote-dev/state/**",\n'
+            ")\n"
+            'WORKER = ROOT / ".remote-dev/core/managed_jobs.py"\n'
+        )
+        strings = self._actionable_python_strings(self.GUARD_RUNTIME_EXCLUSION_FILE, source)
+        self.assertIn(".remote-dev/core/managed_jobs.py", strings)
+        self.assertNotIn(self.RETAINED_RUNTIME_STATE_GLOB, strings)
+
+    def test_docstring_old_path_is_still_not_a_reference(self) -> None:
+        source = (
+            '"""Historical in-tree path .remote-dev/core/managed_jobs.py."""\n'
+            "DEFAULT_EXCLUDED_PATH_GLOBS: tuple[str, ...] = (\n"
+            '    ".remote-dev/state/**",\n'
+            ")\n"
+        )
+        self.assertEqual(self._python_string_constants(source), [self.RETAINED_RUNTIME_STATE_GLOB])
+        self.assertEqual(self._actionable_python_strings(self.GUARD_RUNTIME_EXCLUSION_FILE, source), [])
 
     def test_vaws_cli_reports_moved_task_tools_without_traceback(self) -> None:
         env = {key: value for key, value in os.environ.items() if key != "VAWS_COORDINATOR_ROOT"}

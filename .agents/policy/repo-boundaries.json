@@ -36,15 +36,14 @@
     "fixture_paths_note": "This guard's own tests have to name cross-boundary paths as string fixtures to prove the guard detects them. Nothing else belongs here: a file that genuinely needs an exemption needs a baseline row instead, where it is dated and attributed to an extraction.",
     "module_search_paths": [
       ".agents/lib",
-      ".agents/coordinator",
       ".agents/skills/remote-code-parity/scripts"
     ],
-    "module_search_paths_note": "Directories that some entry point actually places on sys.path. Ownership of a derived module name is resolved from the owning file's path, so moving a file between subsystems moves its module with it. `.remote-dev` is absent because the substrate is a separate repository consumed as an external checkout, so `core.*` resolves to no in-tree file and is not attributed to any subsystem."
+    "module_search_paths_note": "Directories that some entry point actually places on sys.path. Ownership of a derived module name is resolved from the owning file's path, so moving a file between subsystems moves its module with it. `.remote-dev` and `.agents/coordinator` are absent because both left this tree and are consumed as external checkouts."
   },
   "ignored_modules": [
     {
       "module": "mcp",
-      "why": "`.remote-dev/mcp/` collides by name with the installed MCP Python SDK. `.agents/coordinator/server.py` imports the SDK, not the substrate package; `.agents/coordinator/backend.py` appends the substrate to sys.path *after* site-packages precisely to keep that resolution order. Treating `mcp` as substrate-owned would report a dependency that does not exist."
+      "why": "remote-dev ships an unrelated `mcp/` package. The extracted coordinator HTTP manager imports the installed MCP Python SDK, not that package. Treating `mcp` as substrate-owned would report a dependency that does not exist."
     },
     {
       "module": "starlette",
@@ -72,28 +71,12 @@
       "repo": "vllm-ascend-workspace/vaws-coordinator",
       "layer": 20,
       "summary": "Task identity, shared runtime pool, managed job supervision. Consumes remote-dev; must not consume the domain layer.",
-      "roots": [
-        ".agents/coordinator",
-        ".agents/lib/vaws_task_client.py",
-        ".agents/lib/vaws_ready_runtime.py",
-        ".agents/lib/vaws_managed_execution.py"
-      ],
-      "roots_note": "The three `.agents/lib` modules are listed here because nothing in the domain layer consumes them: `vaws_ready_runtime` and `vaws_managed_execution` are imported only by `.agents/coordinator/`, and `vaws_task_client` is the coordinator's RPC client. They sit on the wrong side of the boundary today and move with the coordinator extraction.",
-      "public_paths": [
-        ".agents/coordinator",
-        ".agents/coordinator/server.py",
-        ".agents/coordinator/prepare_runtime.py",
-        ".agents/coordinator/README.md",
-        ".agents/coordinator/requirements.txt"
-      ],
-      "private_paths": [
-        ".agents/coordinator/backend.py",
-        ".agents/coordinator/tests"
-      ],
-      "public_modules": [
-        "vaws_task_client"
-      ],
-      "public_modules_note": "`vaws_task_client.TaskClient` is the client facade a consumer may bind to. `vaws_ready_runtime` / `vaws_managed_execution` / `backend` are pool internals."
+      "roots": [],
+      "roots_note": "No roots on this tree: the coordinator left with its extraction and is consumed as an external checkout (`.agents/deps/coordinator.json`, `VAWS_COORDINATOR_ROOT`). Only consumers remain: `.agents/lib/vaws_coordinator.py`, `.agents/scripts/vaws.py`, `.agents/hooks/vaws_session.py`, and `.agents/scripts/vaws_client_setup.py`.",
+      "public_paths": [],
+      "private_paths": [],
+      "public_modules": [],
+      "public_modules_note": "The task facade, stdio server and HTTP manager live in vaws-coordinator. This repository locates that checkout; it does not import those modules from an in-tree copy."
     },
     {
       "id": "vaws-top",

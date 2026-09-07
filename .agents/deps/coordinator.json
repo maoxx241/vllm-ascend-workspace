@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "name": "vaws-coordinator",
+  "repository": "vllm-ascend-workspace/vaws-coordinator",
+  "url": "https://github.com/vllm-ascend-workspace/vaws-coordinator.git",
+  "visibility": "public",
+  "ref": "main",
+  "commit": "2e16e894e31a12d85a11117a2772031f30fdfebe",
+  "tree": "fc64eacacf16060446895e2fa0a23a1fe0d17b4e",
+  "root_env": "VAWS_COORDINATOR_ROOT",
+  "default_checkout": "<shared workspace root>/.vaws-local/vaws-coordinator",
+  "bootstrap": "python3 .agents/scripts/vaws.py bootstrap",
+  "consumed_surface": {
+    "task_stdio_server": "task_server.py",
+    "task_cli": "scripts/vaws.py",
+    "session_hook": "hooks/vaws_session.py",
+    "http_manager": "server.py",
+    "host_queue_interface": "lib/vaws_host_queue.py (VAWS_HOST_QUEUE_MODULE -> scaffold vaws_npu_coordination.py)",
+    "build_inputs": "lib/vaws_build_inputs.py"
+  },
+  "pinned_mirrors": {
+    "vaws_build_inputs": {
+      "scaffold_path": ".agents/lib/vaws_build_inputs.py",
+      "coordinator_path": "lib/vaws_build_inputs.py",
+      "sha256": "967adeb699e47de2e281581d576a69f6c85075385975e42916ead1ed198a2e09",
+      "why": "Parity build keys must stay byte-identical to the coordinator verifier. Pure schema/helper; not a second task-state writer."
+    }
+  },
+  "arrival_blobs": {
+    "lib/vaws_agent_session.py": "5b442938c5f501dd33478fc38280e54d9f4a0ba4",
+    "lib/vaws_task_client.py": "bf60a9305e72401ac6aa162b8acad54b0c509696",
+    "lib/vaws_ready_runtime.py": "3d2505149e880554556f389390f708aeb42a671d",
+    "lib/vaws_managed_execution.py": "f29b2c3d40e135f24a742680f655a1b01ab04469",
+    "lib/vaws_runtime_profile.py": "14e0e0e9afd7171119f8f3d09472f69488235b51",
+    "lib/vaws_ops.py": "ec175c382edfe0baf0806b0f3572f572c1d35ff6",
+    "lib/vaws_build_inputs.py": "426c97a47de22d110b2e827257fc79eeba544d85",
+    "task_server.py": "bc70840c8c1121a5a07d58b697951adbf37cd0d3",
+    "scripts/vaws.py": "c712c200aeab867f217ea069f6a670a513dc108b",
+    "hooks/vaws_session.py": "8e9b796b3dd98c65666bd465f748eb7cfcce6b58",
+    "workers/managed_jobs.py": "ddb6811c4d28d5add31973e4bf8731909b0a9783",
+    "server.py": "6f4719bbf4419d6455c069d49868d70ce12cb21a"
+  },
+  "client_setup_constraint": "The coordinator JSON helper rewrites command/args/type for same-name providers; TOML preserves them. This scaffold must not apply that helper as a migration that claims to preserve user-managed entries.",
+  "note": "vaws-coordinator is consumed as an external checkout, not a submodule and not a vendored copy. Locate it through VAWS_COORDINATOR_ROOT or the default path above. Bump `commit` deliberately; `vaws.py status` reports drift. This pin is the independently accepted merged main. It does not change the remote-dev pin in remote-dev.json."
+}

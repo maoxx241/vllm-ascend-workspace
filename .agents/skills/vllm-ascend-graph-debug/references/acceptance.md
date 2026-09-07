@@ -23,12 +23,14 @@ Do not mark a graph-debug case resolved until every required item passes.
 - [ ] No CPU read, synchronization, or file I/O occurs inside captured execution.
 - [ ] Tolerances are explicit and justified.
 - [ ] The first divergent key is recorded and used to narrow subsequent instrumentation.
+- [ ] `compare` consumed a comparable observational certificate from recorded snapshot identities; snapshots without identity, or with a declaration/observation mismatch, are refused.
 
 ## Resolution
 
 - [ ] Root cause and fix are recorded.
-- [ ] The minimal reproduction passes after the fix.
-- [ ] The original reproduction passes after the fix.
+- [ ] At least one controlled experiment is recorded in `case.json`.
+- [ ] The minimal reproduction passes after the fix, and its rerun output is attached with `--minimal-evidence`.
+- [ ] The original reproduction passes after the fix, and its rerun output is attached with `--original-evidence`.
 - [ ] Temporary buffers, logging, synchronization, deterministic overrides, and workarounds are removed or intentionally disabled.
-- [ ] `case.json`, comparison artifacts, and Run Manifest v1 validate.
+- [ ] `case.json`, comparison artifacts, `validation/` evidence, and Run Manifest v1 validate, and the manifest links the evidence with SHA256.
 - [ ] Remaining untested combinations are listed as risks rather than implied supported.

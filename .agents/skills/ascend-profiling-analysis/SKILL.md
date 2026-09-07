@@ -88,14 +88,16 @@ Flag notes:
 
 ### 分析共享存储上的归档 root
 
-collection skill 的 `--archive-dir` 会把每个 rank 的 `ASCEND_PROFILER_OUTPUT/` + profiler 元数据归档到 `<archive-dir>/<tag>_<ts>/<rank-dir-basename>/`，归档根本身就是合法的 profiling root。共享存储（如 `/mnt/weight/m00663269/profiling/`，366TB，挂在所有受管机器+容器）上的归档 root 可以在**任意**机器上分析，无需重新采集：
+collection skill 的 `--archive-dir` 会把每个 rank 的 `ASCEND_PROFILER_OUTPUT/` + profiler 元数据归档到 `<archive-dir>/<tag>_<ts>/<rank-dir-basename>/`，归档根本身就是合法的 profiling root。共享存储（如 `/mnt/weight/<user>/profiling/`，366TB，挂在所有受管机器+容器）上的归档 root 可以在**任意**机器上分析，无需重新采集：
 
 ```bash
 python3 .agents/skills/ascend-profiling-analysis/scripts/profile_analyze.py \
-  --remote-profile-root /mnt/weight/m00663269/profiling/archives/<tag>_<ts>/ \
-  --archive-output /mnt/weight/m00663269/profiling/analysis   # 产物也留共享存储
+  --remote-profile-root /mnt/weight/<user>/profiling/archives/<tag>_<ts>/ \
+  --archive-output /mnt/weight/<user>/profiling/analysis   # 产物也留共享存储
   # 或 --no-pull：产物留在远端 output dir，本地零拉回
 ```
+
+`<user>` 是共享挂载上归档目录的所有者账号，按目标机器上的实际目录替换；collection skill 的 `--archive-dir` 与 `profile_analyze.py --archive-output` 的帮助文本使用同一写法。
 
 `--remote-output-dir` 同样可以指到共享存储路径，让远端 analyze 的直接产物一开始就落在共享 FS 上。
 
@@ -170,7 +172,7 @@ python3 .agents/skills/ascend-profiling-analysis/scripts/profile_sweep.py \
   "machine": "173.131.1.2",
   "remote_profile_root": "/tmp/prof_35b_tp4/s1",
   "remote_output_dir": "/tmp/ascend_profile_framework/runs/20260507_xxx",
-  "archived_output_dir": "/mnt/weight/m00663269/profiling/analysis/20260507_xxx",
+  "archived_output_dir": "/mnt/weight/<user>/profiling/analysis/20260507_xxx",
   "local_output_dir": ".vaws-local/profiling-analysis/runs/20260507_xxx",
   "stage_timings": [{"stage": "normalize", "elapsed_s": 12.3}, ...],
   "mode": "fast",

@@ -41,7 +41,7 @@ layer 40   workspace-root      CI workflows, client config, top-level docs
               |
 layer 30   scaffold-domain     .agents/skills, .agents/lib, .agents/scripts
               |
-layer 20   coordinator         .agents/coordinator  ->  vaws-coordinator
+layer 20   coordinator         (external checkout)  ->  vaws-coordinator
               |
 layer 10   remote-dev          .remote-dev          ->  remote-dev
 layer 10   vaws-top            (not in this tree)   ->  vaws-top
@@ -471,21 +471,33 @@ A reader following current migration directions must reach the already
 accepted task-provider, worker, and host-authority ownership, and must
 **never reinstall task dispatch into remote-dev**.
 
-This source tree consumes remote-dev through the #90 external checkout,
+This combined tree consumes remote-dev through the #90 external checkout,
 launcher (`.agents/scripts/remote_dev.py`), and resolver
 (`.agents/lib/vaws_remote_dev_plugin.py`). Tracked `.remote-dev` is gone.
 The pin is `b6acc21d147e369e771f1ff916973d74d667691e`. That is a statement
 about this source, not a claim that this PR has already merged publicly, and
 not a runtime or hardware qualification.
 
-Coordinator consumer wiring remains **pending** here. This tree now contains
-the first-stage scaffold consumer for standalone vaws-top; that is a source
-implementation fact, not a claim that the combination has been publicly
-published or that coordinator consumption has landed. The SHAs below are
-source implementation facts from independent acceptance. Sections 1–3 and the
-original 71-row audit dated `2026-09-07` remain explicitly dated historical
-evidence of `605a7746a34f88c8235b56505060ecd937cb77df`; they are not a census
-of this current tree.
+The coordinator consumer now **exists** in this combined tree: pin, locator,
+launcher, dual-provider client setup, owned-hook preservation, and residual
+compatibility adapters. Arrival evidence and the deleted in-tree writers are
+in [coordinator-consumption.md](coordinator-consumption.md). The pin is
+`2e16e894e31a12d85a11117a2772031f30fdfebe`. Task tools, registry writes, and
+the managed supervisor are not reimplemented here.
+
+The first-stage vaws-top consumer now **exists** in this combined tree:
+`npu-fleet-monitor` locates the published repository instead of a scaffold
+`vaws-top` branch worktree. The pin is
+`e13478484b9f52e8847169a785eebc32b268787f`. vaws-top is published in its
+canonical repository but private; published is not public, and this
+integration does not change visibility. That is pinned source consumption,
+not a runtime, client, or NPU deployment.
+
+The SHAs below are source implementation facts from independent
+acceptance. Sections 1–3 and the original 71-row audit dated `2026-09-07`
+remain explicitly dated historical evidence of
+`605a7746a34f88c8235b56505060ecd937cb77df`; they are not a census of this
+current tree.
 
 ### Source pins (implementation facts, not deployment)
 
@@ -546,24 +558,24 @@ installation's existing `agent-sessions` path) and the manager pool
 across consumer wiring. Pure schema and build-input mirrors may be pinned
 byte-identical. Mutable task, lease, or host-queue writers may not be copied.
 
-### Still pending on this continuation
+### Current source state
 
-- Coordinator consumption by this scaffold (pin, dual-provider client setup,
-  deletion of in-tree task writers once destination arrival is proven) is
-  **not** in this patch. Root will supply the actual accepted public
-  coordinator-consumer main later; do not guess that publication or rewrite
-  refs here.
-- The first-stage vaws-top consumer is in this tree: `npu-fleet-monitor`
-  locates the published repository instead of a scaffold `vaws-top` branch
-  worktree, and the four obsolete `vaws-top` baseline rows are removed. This
-  is offline consumer integration only. It is not public publication, a live
-  dashboard deployment, or permission to drop the remaining coordinator rows.
+- Coordinator consumption by this scaffold **exists** in this combined tree
+  (pin, dual-provider client setup, deletion of in-tree task writers after
+  destination arrival evidence, owned-hook preservation, locator/launcher
+  adapters). See [coordinator-consumption.md](coordinator-consumption.md).
+- The first-stage vaws-top consumer **exists** in this combined tree.
+  `npu-fleet-monitor` locates the published repository instead of a scaffold
+  `vaws-top` branch worktree, and the four obsolete `vaws-top` baseline rows
+  are removed. vaws-top is published in its canonical repository but
+  private; do not equate published with public. This is offline pinned
+  source consumption only, not public publication, a live dashboard
+  deployment, client setup, or NPU allocation.
+- Current boundary counts in `.agents/policy/repo-boundaries-baseline.json`
+  are zero accepted, zero new, and zero stale.
 - The original 71-row audit, 292-file scan, and 26 / 41 / 4 `removed_by`
-  split in §§1–3 remain dated historical evidence. Current remaining accepted
-  baseline rows in `.agents/policy/repo-boundaries-baseline.json` are 41
-  (`vaws-coordinator`). The second stage still has to ordinary-merge root's
-  accepted public coordinator-consumer main and confirm both accepted
-  removals combine to zero remaining rows.
+  split in §§1–3 remain dated historical evidence. Do not rewrite the 71-row
+  historical table to match.
 
 ---
 

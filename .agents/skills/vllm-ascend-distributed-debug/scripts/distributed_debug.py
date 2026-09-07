@@ -41,6 +41,15 @@ REQUIRED_RANK_FIELDS = (
     "dcp_rank",
 )
 COLLECTIVE_EVENTS = {"collective_enter", "collective_exit"}
+# A rank emits this as its final event when the reproduction ran to completion
+# on that rank. It is the only structural evidence that distinguishes "no
+# mismatch was detected" from "every rank finished without a mismatch"; the
+# manifest can only become `passed` when every rank ends with it.
+RANK_COMPLETE_EVENT = "rank_complete"
+ANALYSIS_TO_MANIFEST_STATUS = {
+    "diagnosed": "failed",
+    "completed-without-mismatch": "passed",
+}
 
 
 class DistributedDebugError(ValueError):
@@ -113,6 +122,11 @@ def validate_config(config: Mapping[str, Any]) -> None:
         errors.append(f"schema_version must be {SCHEMA_VERSION}")
     if not isinstance(config.get("run_id"), str) or not config["run_id"]:
         errors.append("run_id must be a non-empty string")
+    parent_run_id = config.get("parent_run_id")
+    if parent_run_id is not None and (
+        not isinstance(parent_run_id, str) or not parent_run_id.strip()
+    ):
+        errors.append("parent_run_id must be a non-empty string when present")
     world_size = config.get("expected_world_size")
     if not isinstance(world_size, int) or isinstance(world_size, bool) or world_size < 1:
         errors.append("expected_world_size must be a positive integer")
@@ -259,6 +273,7 @@ def init_case(
     manifest = new_manifest(
         run_type="debug",
         run_id=config["run_id"],
+        parent_run_id=config.get("parent_run_id"),
         workspace_snapshot=config.get("workspace_snapshot", {}),
         environment=config.get("environment", {}),
         model=config.get("model", {}),
@@ -452,12 +467,22 @@ def analyze_evidence(
         )
     confirmed = [row["code"] for row in findings if row["severity"] == "confirmed"]
     incomplete = [row["code"] for row in findings if row["severity"] == "incomplete"]
+    completed_ranks = sorted(
+        rank
+        for rank, rows in events_by_rank.items()
+        if rows[-1]["event"] == RANK_COMPLETE_EVENT
+    )
+    incomplete_ranks = sorted(ranks - set(completed_ranks))
     if confirmed:
         status = "diagnosed"
     elif incomplete or not events_by_rank:
         status = "inconclusive"
     elif findings:
         status = "hypothesis"
+    elif not incomplete_ranks:
+        # Every rank reported, none violated an invariant, and every rank's
+        # final event is completion: the topology demonstrably ran through.
+        status = "completed-without-mismatch"
     else:
         status = "no-mismatch-detected"
     return {
@@ -469,6 +494,8 @@ def analyze_evidence(
         "findings": findings,
         "confirmed_findings": confirmed,
         "evidence_gaps": incomplete,
+        "completed_ranks": completed_ranks,
+        "incomplete_ranks": incomplete_ranks,
     }
 
 
@@ -485,6 +512,13 @@ def render_report(analysis: Mapping[str, Any]) -> str:
     ]
     if not analysis["findings"]:
         lines.append("No structured rank, group, endpoint, or collective mismatch was detected.")
+        if analysis["incomplete_ranks"]:
+            lines.append(
+                "Ranks without a final `rank_complete` event (the run is not proved "
+                f"to have finished on them): {analysis['incomplete_ranks']}"
+            )
+        else:
+            lines.append("Every rank ended with `rank_complete`.")
     for row in analysis["findings"]:
         lines.extend(
             [
@@ -530,13 +564,15 @@ def analyze_case(
         manifest = add_artifact(
             manifest, name=name, kind=kind, uri=uri, updated_at=timestamp
         )
-    terminal = "failed" if analysis["status"] == "diagnosed" else "inconclusive"
+    terminal = ANALYSIS_TO_MANIFEST_STATUS.get(analysis["status"], "inconclusive")
     manifest = transition_status(manifest, terminal, updated_at=timestamp)
     write_manifest(output_dir / "manifest.json", manifest)
     return {
         "status": analysis["status"],
+        "manifest_status": terminal,
         "confirmed_findings": analysis["confirmed_findings"],
         "evidence_gaps": analysis["evidence_gaps"],
+        "incomplete_ranks": analysis["incomplete_ranks"],
         "analysis": str((output_dir / "analysis.json").resolve()),
         "report": str((output_dir / "report.md").resolve()),
     }

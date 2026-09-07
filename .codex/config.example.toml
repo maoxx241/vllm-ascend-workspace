@@ -27,6 +27,18 @@ REMOTE_DEV_STATE_DIR = "/absolute/path/to/vllm-ascend-workspace/.vaws-local/remo
 REMOTE_DEV_SSH_MUX_DIR = "~/.ssh/vaws-mux"
 # VAWS_REMOTE_DEV_ROOT = "/absolute/path/to/remote-dev"   # when not at the default location
 
+[mcp_servers.vaws_task]
+command = "python3"
+args = ["/absolute/path/to/vllm-ascend-workspace/.agents/scripts/vaws.py", "task-server"]
+cwd = "/absolute/path/to/vllm-ascend-workspace"
+startup_timeout_sec = 20
+tool_timeout_sec = 600
+enabled = true
+
+[mcp_servers.vaws_task.env]
+VAWS_AGENT_SESSIONS_DIR = "/absolute/path/to/vllm-ascend-workspace/.vaws-local/agent-sessions"
+# VAWS_COORDINATOR_ROOT = "/absolute/path/to/vaws-coordinator"   # when not at the default location
+
 [features]
 hooks = true
 

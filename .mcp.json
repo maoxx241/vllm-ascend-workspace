@@ -13,6 +13,14 @@
         "REMOTE_DEV_SSH_MUX_DIR": "~/.ssh/vaws-mux"
       },
       "timeout": 600000
+    },
+    "vaws-task": {
+      "command": "python3",
+      "args": [".agents/scripts/vaws.py", "task-server"],
+      "env": {
+        "VAWS_AGENT_SESSIONS_DIR": ".vaws-local/agent-sessions"
+      },
+      "timeout": 600000
     }
   }
 }

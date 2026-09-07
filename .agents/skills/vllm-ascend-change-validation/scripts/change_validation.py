@@ -431,6 +431,81 @@ def plan_change(
     }
 
 
+PARENT_RUN_ID_HINT = (
+    "create downstream runs for this plan with "
+    "`correctness_run.py init --parent-run-id`, "
+    "`graph_debug_case.py init --parent-run-id`, or the `parent_run_id` key of "
+    "the performance-regression / distributed-debug config"
+)
+CHECK_PREFIX_RUN_TYPES = {
+    "correctness": "correctness",
+    "performance": "performance",
+}
+
+
+def required_run_type_for_check(check: str) -> str | None:
+    prefix, separator, rest = check.partition(":")
+    if not separator or not rest:
+        return None
+    return CHECK_PREFIX_RUN_TYPES.get(prefix)
+
+
+def check_child_evidence(child: Mapping[str, Any], *, parent_run_id: str) -> None:
+    """Reject a child manifest that cannot serve as evidence for this plan.
+
+    The child must have been created for this plan (its `parent_run_id` names
+    this run), and a `passed` child must carry at least one artifact: a passed
+    manifest with nothing attached is a verdict without evidence.
+    """
+    child_parent = child.get("parent_run_id")
+    if child_parent is None:
+        raise ChangeValidationError(
+            f"child run {child['run_id']!r} has no parent_run_id; it was not "
+            f"created as evidence for {parent_run_id!r} and cannot be linked. "
+            + PARENT_RUN_ID_HINT
+        )
+    if child_parent != parent_run_id:
+        raise ChangeValidationError(
+            f"child run {child['run_id']!r} belongs to parent {child_parent!r}, "
+            f"not {parent_run_id!r}"
+        )
+    if child["status"] == "passed" and not child.get("artifacts"):
+        raise ChangeValidationError(
+            f"child run {child['run_id']!r} is passed but links no artifacts; "
+            "a passed manifest without evidence cannot cover a plan item"
+        )
+
+
+def check_cover_run_types(
+    child: Mapping[str, Any],
+    *,
+    covers: Sequence[str],
+    plan_items: Sequence[Mapping[str, Any]],
+) -> None:
+    """Reject a child whose run_type cannot cover the named plan items.
+
+    `correctness:*` items require a `correctness` manifest; `performance:*`
+    items require `performance`. `build:`, `test:`, `compatibility:`, and
+    `operator:` have no run type yet and are not checked. A `debug` manifest
+    covering `correctness:eager` is the hole this closes.
+    """
+    by_id = {item["id"]: item for item in plan_items}
+    for item_id in covers:
+        item = by_id.get(item_id)
+        if item is None:
+            continue
+        expected = required_run_type_for_check(str(item["check"]))
+        if expected is None:
+            continue
+        if child["run_type"] != expected:
+            raise ChangeValidationError(
+                f"child run {child['run_id']!r} has run_type "
+                f"{child['run_type']!r} but plan item {item_id!r} "
+                f"({item['check']}) requires run_type {expected!r}; "
+                "a debug manifest cannot cover a correctness requirement"
+            )
+
+
 def link_run(
     output_dir: Path,
     *,
@@ -447,10 +522,8 @@ def link_run(
         raise ChangeValidationError("at least one --covers item is required")
     child = load_manifest(child_manifest_path)
     parent = load_manifest(output_dir / "manifest.json")
-    if child.get("parent_run_id") not in {None, parent["run_id"]}:
-        raise ChangeValidationError(
-            f"child parent_run_id belongs to another run: {child.get('parent_run_id')}"
-        )
+    check_child_evidence(child, parent_run_id=parent["run_id"])
+    check_cover_run_types(child, covers=covers, plan_items=plan["items"])
     links = _load_json(output_dir / "linked-runs.json", "linked runs")
     if any(link["run_id"] == child["run_id"] for link in links["runs"]):
         raise ChangeValidationError(f"child run is already linked: {child['run_id']}")

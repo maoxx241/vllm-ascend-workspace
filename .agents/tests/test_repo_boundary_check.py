@@ -153,14 +153,14 @@ class RealTreeTests(unittest.TestCase):
         self.assertEqual(payload["baseline"]["stale_count"], 0)
         self.assertEqual(payload["baseline"]["unattributed_count"], 0)
 
-    def test_report_mode_does_not_pretend_the_tree_is_clean(self) -> None:
+    def test_report_mode_reports_zero_current_violations(self) -> None:
         code, payload = invoke("--repo-root", str(ROOT), "--mode", "report")
         self.assertEqual(code, 0)
         self.assertEqual(payload["status"], "reported")
-        # There are known violations today; a guard that reported zero would be
-        # lying, and a guard that exited non-zero here would get switched off.
-        self.assertGreater(payload["counts"]["violations"], 0)
-        self.assertTrue(all(item["accepted"] for item in payload["violations"]))
+        self.assertEqual(payload["counts"]["violations"], 0)
+        self.assertEqual(payload["counts"]["accepted"], 0)
+        self.assertEqual(payload["counts"]["new"], 0)
+        self.assertEqual(payload["violations"], [])
 
     def test_upstream_submodules_are_never_scanned(self) -> None:
         _code, payload = invoke("--repo-root", str(ROOT), "--mode", "report")
@@ -168,15 +168,11 @@ class RealTreeTests(unittest.TestCase):
             self.assertIn(name, payload["scanned"]["skipped_roots"])
         self.assertFalse([item for item in payload["violations"] if item["path"].startswith(("vllm/", "vllm-ascend/"))])
 
-    def test_every_baseline_row_names_the_extraction_that_removes_it(self) -> None:
-        rows = json.loads(BASELINE.read_text(encoding="utf-8"))["accepted"]
-        self.assertTrue(rows)
-        for row in rows:
-            with self.subTest(row=f"{row['path']}:{row['symbol']}"):
-                self.assertIn(row["removed_by"], KNOWN_EXTRACTIONS)
-                self.assertNotEqual(row["removed_by"], guard.UNATTRIBUTED)
-                self.assertTrue(row["why"].strip(), "an accepted violation without a reason rots")
-                self.assertRegex(row["accepted_on"], r"^\d{4}-\d{2}-\d{2}$")
+    def test_current_baseline_is_empty(self) -> None:
+        payload = json.loads(BASELINE.read_text(encoding="utf-8"))
+        self.assertEqual(payload["accepted"], [])
+        self.assertEqual(payload.get("accepted_counts_by_extraction", {}), {})
+        self.assertEqual(payload["generated_on"], "2026-09-07")
 
     def test_the_only_scan_exemption_is_this_test_file(self) -> None:
         """The exemption exists so the guard can have fixtures; it is not a
@@ -184,14 +180,15 @@ class RealTreeTests(unittest.TestCase):
         policy = guard.load_policy(POLICY, ROOT)
         self.assertEqual(policy.fixture_paths, frozenset({".agents/tests/test_repo_boundary_check.py"}))
 
-    def test_remaining_accepted_rows_are_the_coordinator_extraction(self) -> None:
+    def test_no_extracted_subsystem_findings(self) -> None:
         rows = json.loads(BASELINE.read_text(encoding="utf-8"))["accepted"]
-        self.assertEqual(len(rows), 41)
-        self.assertEqual({row["removed_by"] for row in rows}, {"vaws-coordinator"})
+        self.assertEqual(rows, [])
         code, payload = invoke("--repo-root", str(ROOT), "--mode", "report")
         self.assertEqual(code, 0)
-        self.assertEqual(payload["counts"]["accepted_by_extraction"], {"vaws-coordinator": 41})
-        self.assertFalse([item for item in payload["violations"] if item.get("to") == "vaws-top"])
+        self.assertEqual(payload["counts"]["accepted_by_extraction"], {})
+        self.assertFalse(
+            [item for item in payload["violations"] if item.get("to") in KNOWN_EXTRACTIONS]
+        )
 
     def test_policy_and_baseline_carry_no_absolute_user_paths(self) -> None:
         for path in (POLICY, BASELINE):
@@ -585,22 +582,21 @@ class PolicyContractTests(unittest.TestCase):
     def test_module_ownership_follows_the_file_not_the_policy_text(self) -> None:
         policy = guard.load_policy(POLICY, ROOT)
         ownership = guard.Ownership(policy, ROOT)
-        for module, expected in (
-            ("vaws_task_client", "coordinator"),
-            ("vaws_ready_runtime", "coordinator"),
-            ("vaws_ssh", "scaffold-domain"),
-        ):
-            with self.subTest(module=module):
-                owner = ownership.subsystem_for_module(module)
-                self.assertIsNotNone(owner)
-                assert owner is not None
-                self.assertEqual(owner.id, expected)
+        owner = ownership.subsystem_for_module("vaws_ssh")
+        self.assertIsNotNone(owner)
+        assert owner is not None
+        self.assertEqual(owner.id, "scaffold-domain")
         # `core.*` belonged to the in-tree substrate. It left with the
         # remote-dev extraction, so no file in this tree owns the name any
         # more and the guard must not invent an owner for it. The synthetic
         # repository in DetectionTests still covers derived ownership of an
         # in-tree substrate module.
         self.assertIsNone(ownership.subsystem_for_module("core"))
+        # Task-state writers left with vaws-coordinator. Residual adapters
+        # locate that checkout; they do not keep an in-tree owner for the
+        # moved module names.
+        self.assertIsNone(ownership.subsystem_for_module("vaws_task_client"))
+        self.assertIsNone(ownership.subsystem_for_module("vaws_ready_runtime"))
         # The substrate's `mcp/` package shares a name with the installed MCP
         # SDK that the coordinator imports; owning it would invent a dependency.
         self.assertIsNone(ownership.subsystem_for_module("mcp"))
