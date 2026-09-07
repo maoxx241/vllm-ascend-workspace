@@ -291,14 +291,6 @@ _CASES: list[tuple[str, set[str], set[str]]] = [
         {"mhc", "block_head.mhc_prefix"},
         {"attention.flash_score"},
     ),
-    # SWA (DeepSeek-V4 sliding-window attention): user-confirmed the kernel is
-    # "sas" with 3 internal template variants; pre-registered for the newer
-    # stack (current captures route SWA through FIA + swa_mask).
-    (
-        "SasAttention",
-        {"attention.swa"},
-        {"attention.flash_score", "attention.sparse_sharedkv"},
-    ),
     (
         "KVQuantSparseAttnSharedKVMetadata",
         {"attention.sparse_sharedkv.metadata"},

@@ -222,18 +222,6 @@ match_rules:
       add_categories: [attention.flash_score]
       add_roles: [attention]
 
-    # --- Attention: SWA (sliding-window attention, DeepSeek-V4) -----------
-    # User-confirmed 2026-09-07: DSV4's SWA kernel is ``sas`` — one kernel
-    # with 3 internal template variants.  NOTE: our current DSV4-Pro/Flash
-    # captures (older CANN) route SWA through FIA + swa_mask
-    # (vllm-ascend/attention/attention_v1.py) and expose no sas-named kernel,
-    # so this rule is pre-registered for the newer stack; the 3 template
-    # variants should get sub-categories once their profiled names are
-    # observed (intake via the anchor-degradation candidate list).
-    - id: attention.swa
-      when: {any_of: [sasattention, sas_attention, sasattn]}
-      add_categories: [attention.swa]
-      add_roles: [attention]
 
     # --- Attention: linear / mamba / GDN ---------------------------------
     # Tokens cover the full GDN/Mamba/DeltaNet/KDA kernel family observed on
@@ -570,6 +558,17 @@ kernels:
       Main sparse attention kernel. Used by both DSA (V3.2) and CSA (V4)
       layers — the architecture family is resolved by whether a
       Compressor kernel is also present (CSA) or not (DSA).
+
+      User-confirmed 2026-09-07: this kernel family IS DSV4's SWA — "sas" is
+      the shorthand for Sparse Attention SharedKV. The three spellings
+      (SparseAttnSharedkv / KVQuantSparseAttnSharedKV / SparseFlashMla) are
+      template/version variants of the same kernel, all matched by the
+      match_rules aliases above. It is a DIFFERENT kernel from other models'
+      sliding-window attention, which runs dense FIA + swa_mask and stays
+      attention.flash_score — so "SWA" on DSV4 is identified at kernel level
+      (sparse_sharedkv), while SWA elsewhere is only visible via config's
+      sliding_window field. Verified against vllm-ascend
+      attention/sfa_v1.py:1016 (npu_sparse_flash_attention, sparse_mode=3).
 
   - profile_name: kvquantsparseattnsharedkvmetadata
     aliases: [sparseattnsharedkvmetadata]
