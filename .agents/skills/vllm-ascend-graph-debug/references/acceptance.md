@@ -23,6 +23,7 @@ Do not mark a graph-debug case resolved until every required item passes.
 - [ ] No CPU read, synchronization, or file I/O occurs inside captured execution.
 - [ ] Tolerances are explicit and justified.
 - [ ] The first divergent key is recorded and used to narrow subsequent instrumentation.
+- [ ] `compare` consumed a comparable observational certificate from recorded snapshot identities; snapshots without identity are refused.
 
 ## Resolution
 

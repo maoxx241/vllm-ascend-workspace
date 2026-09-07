@@ -277,6 +277,59 @@ class GraphDebugCaseTests(unittest.TestCase):
             )
             self.assertEqual(comparison["status"], "exact-match")
 
+    def test_compare_case_requires_recorded_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            case_dir = Path(tmp) / "case"
+            init_case(case_dir)
+            eager = Path(tmp) / "eager.jsonl"
+            graph = Path(tmp) / "graph.jsonl"
+            write_snapshot(eager, [record(layer=0, sample=[1.0])])
+            write_snapshot(graph, [record(layer=0, sample=[1.0])])
+            with self.assertRaisesRegex(
+                graph_debug.GraphDebugError, "no recorded identity"
+            ):
+                graph_debug.compare_case(
+                    case_dir,
+                    eager_path=eager,
+                    graph_path=graph,
+                    atol=0.0,
+                    rtol=0.0,
+                    updated_at=NOW,
+                )
+
+    def test_compare_case_consumes_comparable_certificate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            case_dir = Path(tmp) / "case"
+            init_case(case_dir)
+            eager = Path(tmp) / "eager.jsonl"
+            graph = Path(tmp) / "graph.jsonl"
+            write_snapshot(eager, [record(layer=0, sample=[1.0])])
+            write_snapshot(graph, [record(layer=0, sample=[1.0])])
+            identity = {
+                "workspace_snapshot": {"vllm_ascend_commit": "aaaa1111"},
+                "environment": {"cann": "test"},
+                "model": {"path": "/models/example"},
+                "topology": {"tp": 2, "dp": 1},
+                "native_digest": "cd" * 32,
+            }
+            (Path(tmp) / "eager.identity.json").write_text(
+                json.dumps(identity), encoding="utf-8"
+            )
+            (Path(tmp) / "graph.identity.json").write_text(
+                json.dumps(identity), encoding="utf-8"
+            )
+            comparison, output = graph_debug.compare_case(
+                case_dir,
+                eager_path=eager,
+                graph_path=graph,
+                atol=0.0,
+                rtol=0.0,
+                updated_at=NOW,
+            )
+            self.assertEqual(comparison["status"], "exact-match")
+            self.assertEqual(comparison["comparability"]["verdict"], "comparable")
+            self.assertTrue(output.is_file())
+
     def test_duplicate_snapshot_key_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "duplicate.jsonl"

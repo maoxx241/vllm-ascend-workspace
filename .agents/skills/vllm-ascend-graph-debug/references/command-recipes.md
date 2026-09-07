@@ -47,6 +47,12 @@ python -B .agents/skills/vllm-ascend-graph-debug/scripts/graph_debug_case.py com
   --rtol 1e-4
 ```
 
+Each snapshot needs a sibling `{stem}.identity.json` (or `--eager-identity` /
+`--graph-identity`) recording the observed workspace, environment, model,
+topology, and native digest. `compare` consumes a comparability certificate
+before writing an alignment; the default allowed difference is
+`execution_mode`.
+
 Inspect `first_divergence` in stdout first. Load the saved comparison artifact only when more detail is needed.
 
 ## Finalize

@@ -13,13 +13,23 @@ import sys
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 ROOT = Path(__file__).resolve().parents[4]
 LIB = ROOT / ".agents" / "lib"
 if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
+from vaws_comparability import (  # noqa: E402
+    GRAPH_MUST_OBSERVE,
+    ComparabilityError,
+    consume_certificate,
+    identity_from_manifest_fields,
+    identity_from_mapping,
+    identity_from_recorded_observation,
+    issue_certificate,
+    merge_identities,
+)
 from vaws_run_manifest import (  # noqa: E402
     RunManifestError,
     add_artifact,
@@ -441,6 +451,55 @@ def compare_snapshots(
     }
 
 
+def _load_json_object(path: Path, label: str) -> dict[str, Any]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise GraphDebugError(f"cannot read {label} {path}: {exc}") from exc
+    if not isinstance(payload, dict) or not payload:
+        raise GraphDebugError(f"{label} must be a non-empty object")
+    return payload
+
+
+def snapshot_identity_path(snapshot_path: Path) -> Path:
+    return snapshot_path.with_name(snapshot_path.stem + ".identity.json")
+
+
+def _load_snapshot_observation(
+    snapshot_path: Path, *, explicit: Path | None, side: str
+) -> dict[str, Any]:
+    path = explicit if explicit is not None else snapshot_identity_path(snapshot_path)
+    if not path.is_file():
+        raise GraphDebugError(
+            f"{side} snapshot has no recorded identity; write "
+            f"{snapshot_identity_path(snapshot_path).name} or pass --{side}-identity"
+        )
+    return _load_json_object(path, f"{side} identity")
+
+
+def _snapshot_run_identity(
+    case: Mapping[str, Any],
+    *,
+    side: str,
+    observation: Mapping[str, Any],
+) -> Any:
+    run_id = f"{case['case_id']}-{side}"
+    return merge_identities(
+        identity_from_manifest_fields(
+            run_id,
+            workspace_snapshot=case.get("workspace_snapshot"),
+            environment=case.get("environment"),
+            model=case.get("model"),
+            topology=case.get("topology"),
+        ),
+        identity_from_recorded_observation(run_id, observation),
+        identity_from_mapping(
+            run_id, {"execution_mode": side}, origin="observed"
+        ),
+        run_id=run_id,
+    )
+
+
 def compare_case(
     case_dir: Path,
     *,
@@ -448,16 +507,47 @@ def compare_case(
     graph_path: Path,
     atol: float,
     rtol: float,
+    allowed_differences: Sequence[str] | None = None,
+    eager_identity: Path | None = None,
+    graph_identity: Path | None = None,
     updated_at: str | None = None,
 ) -> tuple[dict[str, Any], Path]:
     case = load_case(case_dir)
     if case["status"] != "active":
         raise GraphDebugError(f"cannot compare snapshots on {case['status']} case")
     emit_progress("load-snapshots", eager=str(eager_path), graph=str(graph_path))
+    vary = list(allowed_differences) if allowed_differences else ["execution_mode"]
+    certificate = issue_certificate(
+        _snapshot_run_identity(
+            case,
+            side="eager",
+            observation=_load_snapshot_observation(
+                eager_path, explicit=eager_identity, side="eager"
+            ),
+        ),
+        _snapshot_run_identity(
+            case,
+            side="graph",
+            observation=_load_snapshot_observation(
+                graph_path, explicit=graph_identity, side="graph"
+            ),
+        ),
+        vary=vary,
+        must_observe_prefixes=GRAPH_MUST_OBSERVE,
+    )
+    try:
+        consume_certificate(certificate)
+    except ComparabilityError as exc:
+        raise GraphDebugError(str(exc)) from exc
     comparison = compare_snapshots(eager_path, graph_path, atol=atol, rtol=rtol)
+    comparison["comparability"] = certificate
     index = len(case["comparisons"]) + 1
     output = case_dir / "comparisons" / f"comparison-{index:03d}.json"
+    certificate_path = (
+        case_dir / "comparisons" / f"comparability-certificate-{index:03d}.json"
+    )
     _atomic_write_json(output, comparison)
+    _atomic_write_json(certificate_path, certificate)
     timestamp = updated_at or utc_now()
     case["comparisons"].append(
         {
@@ -465,6 +555,7 @@ def compare_case(
             "path": output.relative_to(case_dir).as_posix(),
             "status": comparison["status"],
             "first_divergence": comparison["first_divergence"],
+            "certificate": certificate_path.relative_to(case_dir).as_posix(),
             "recorded_at": timestamp,
         }
     )
@@ -472,13 +563,21 @@ def compare_case(
     _atomic_write_json(_case_path(case_dir), case)
 
     manifest = _ensure_manifest_running(case_dir, updated_at=timestamp)
-    manifest = add_artifact(
-        manifest,
-        name=f"comparison-{index:03d}",
-        kind="graph-eager-comparison",
-        uri=output.relative_to(case_dir).as_posix(),
-        updated_at=timestamp,
-    )
+    for name, kind, artifact_path in (
+        (f"comparison-{index:03d}", "graph-eager-comparison", output),
+        (
+            f"comparability-certificate-{index:03d}",
+            "comparability-certificate",
+            certificate_path,
+        ),
+    ):
+        manifest = add_artifact(
+            manifest,
+            name=name,
+            kind=kind,
+            uri=artifact_path.relative_to(case_dir).as_posix(),
+            updated_at=timestamp,
+        )
     write_manifest(_manifest_path(case_dir), manifest)
     return comparison, output
 
@@ -668,6 +767,15 @@ def build_parser() -> argparse.ArgumentParser:
     compare.add_argument("--graph", required=True, type=Path)
     compare.add_argument("--atol", type=float, default=0.0)
     compare.add_argument("--rtol", type=float, default=0.0)
+    compare.add_argument("--eager-identity", type=Path, default=None)
+    compare.add_argument("--graph-identity", type=Path, default=None)
+    compare.add_argument(
+        "--allowed-difference",
+        action="append",
+        default=[],
+        metavar="KEY",
+        help="identity key the two snapshots may differ in; default execution_mode",
+    )
 
     finalize = subparsers.add_parser("finalize", help="finalize validation and cleanup")
     finalize.add_argument("--case-dir", required=True, type=Path)
@@ -737,6 +845,9 @@ def main(argv: list[str] | None = None) -> int:
                 graph_path=args.graph,
                 atol=args.atol,
                 rtol=args.rtol,
+                allowed_differences=args.allowed_difference or None,
+                eager_identity=args.eager_identity,
+                graph_identity=args.graph_identity,
             )
             payload = {
                 "status": comparison["status"],
