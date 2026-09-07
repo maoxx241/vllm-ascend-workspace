@@ -10,29 +10,36 @@ as a `comparability-certificate` artifact. It does not change the meaning of
 any existing manifest field.
 
 A comparison entry point must call `consume_certificate` before it may emit
-`passed`. Consuming recomputes the verdict from the identity body. A
-handwritten `verdict: comparable` is rejected.
+`passed`. Consuming recomputes the verdict from the identity body, including
+each side's `declaration_mismatches`. A handwritten `verdict: comparable` is
+rejected. Winning leaves alone are not enough to reconstruct a mismatch.
 
 ## Verdict rule
 
 `comparable` only when every blocking list is empty:
 
-1. every required identity group has at least one leaf;
-2. every must-observe prefix has at least one **observed** leaf on each side;
-3. no declaration/observation mismatch;
+1. every required identity group has at least one non-blank leaf;
+2. every must-observe prefix has at least one **observed** non-blank leaf on each side;
+3. no declaration/observation mismatch (a nonempty mismatch is hard
+   not-comparable even when both states share the same mismatch);
 4. no confounder (undeclared difference);
 5. every declared varying key exists on at least one side.
 
-One confounder is enough. The verdict is hard, not a warning.
+One confounder is enough. The verdict is hard, not a warning. Null and
+whitespace-only identity scalars are unknown, not observations; they cannot
+satisfy must-observe or group presence. `false`, `0`, and domain-valid empty
+lists such as no extra `serve_args` / `bench_args` remain evidence.
 
 ## Empty identity
 
 `workspace_snapshot`, `environment`, `model`, and `topology` may still be `{}`
 at run creation. Empty is a recorded `unknown` that blocks `comparable` and
-therefore blocks `passed`. It is not a hard rejection at `init`/`plan`:
-planning before observation is legitimate, and inventing values just to
-satisfy a constructor would be worse. Two empty objects are never treated as
-agreement; that would launder missing evidence into a match.
+therefore blocks `passed`. Null or whitespace-only fields inside those groups
+are the same unknown: diagnostics name the side and the missing field. It is
+not a hard rejection at `init`/`plan`: planning before observation is
+legitimate, and inventing values just to satisfy a constructor would be worse.
+Two empty objects are never treated as agreement; that would launder missing
+evidence into a match.
 
 `failed` and `inconclusive` remain reachable without a comparable certificate
 only on paths that are not two-state comparisons (graph-debug case
@@ -65,7 +72,7 @@ and is only for values a producer obtained from the run.
 | Entry point | What it builds from | Variable under test | On `not-comparable` |
 |---|---|---|---|
 | `correctness_run.py compare` | manifest (declared) + `execution` (labelled by offline/online) + optional result `observation` (observed) | `--allowed-difference` | abort; no `comparison.json`; manifest stays non-terminal |
-| `performance_regression.py analyze` | `shared` (declared) + per-state measurement `observation` (observed) | `allowed_differences` or `workspace_snapshot.vllm_ascend_commit` | abort; no `passed` |
+| `performance_regression.py analyze` | `shared` (declared) + every measure-phase row's `observation` (observed) | `allowed_differences` or `workspace_snapshot.vllm_ascend_commit` | abort; no `passed`; missing rows named by state and `schedule_id` or `phase+ordinal` |
 | `graph_debug_case.py compare` | case identity (declared) + `{stem}.identity.json` sidecar (observed) | `--allowed-difference` (default `execution_mode`) | abort; no comparison artifact |
 
 `change_validation.py link` is not a two-state comparison. It now rejects a

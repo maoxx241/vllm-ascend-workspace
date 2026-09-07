@@ -14,9 +14,16 @@ recomputes the verdict from the identity body; a handwritten
 
 Empty ``workspace_snapshot`` / ``environment`` / ``model`` / ``topology`` are
 recorded as ``unknown`` and block ``comparable`` (and therefore ``passed``).
+Null and whitespace-only identity scalars are the same kind of unknown: they
+do not satisfy must-observe and do not count as group presence. False, ``0``,
+and domain-valid empty lists such as no extra serve/bench args remain evidence.
 They are not rejected at run creation: planning before observation is
 legitimate. Two empty objects comparing equal would be the worst form of
 laundering, so emptiness is never treated as agreement.
+
+Each certificate side retains declaration/observation mismatches so
+``consume_certificate`` can recompute them. Winning leaves alone are not
+enough: the observed value replaced the declared one.
 """
 
 from __future__ import annotations
@@ -104,11 +111,59 @@ def canonical_value(value: Any) -> str:
     return str(value)
 
 
+def _is_unknown_identity_scalar(value: Any) -> bool:
+    """Null and whitespace-only scalars are not observed evidence."""
+    if value is None:
+        return True
+    return isinstance(value, str) and not value.strip()
+
+
+def _has_identity_value(leaf: IdentityLeaf) -> bool:
+    return bool(str(leaf.value).strip())
+
+
+_MISMATCH_REQUIRED = ("key", "observed", "declared")
+_MISMATCH_ALLOWED = frozenset(("key", "observed", "declared", "side"))
+
+
+def _normalize_declaration_mismatches(
+    raw: Any, *, source: str
+) -> tuple[dict[str, str], ...]:
+    if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes)):
+        raise ComparabilityError(f"{source} declaration_mismatches must be an array")
+    normalized: list[dict[str, str]] = []
+    for index, item in enumerate(raw):
+        label = f"{source} declaration_mismatches[{index}]"
+        if not isinstance(item, Mapping):
+            raise ComparabilityError(f"{label} must be an object")
+        extra = set(item) - _MISMATCH_ALLOWED
+        if extra:
+            raise ComparabilityError(
+                f"{label} has unsupported fields: {', '.join(sorted(str(field) for field in extra))}"
+            )
+        missing = [field for field in _MISMATCH_REQUIRED if field not in item]
+        if missing:
+            raise ComparabilityError(f"{label} missing {', '.join(missing)}")
+        key = item["key"]
+        if not isinstance(key, str) or not key.strip():
+            raise ComparabilityError(f"{label}.key must be a non-empty string")
+        normalized.append(
+            {
+                "key": key,
+                "observed": canonical_value(item["observed"]),
+                "declared": canonical_value(item["declared"]),
+            }
+        )
+    return tuple(normalized)
+
+
 def flatten_mapping(prefix: str, value: Any) -> dict[str, str]:
     """Flatten a nested mapping into dotted scalar leaves.
 
     An empty mapping contributes no leaves. That is deliberate: ``{}`` must
     not compare equal to ``{}`` as if both sides observed the same nothing.
+    Null and whitespace-only scalars are omitted for the same reason: they
+    are unknown, not an observed empty string.
     """
     if isinstance(value, Mapping):
         if not value:
@@ -120,6 +175,8 @@ def flatten_mapping(prefix: str, value: Any) -> dict[str, str]:
         return flat
     if prefix == "":
         raise ComparabilityError("cannot flatten a non-mapping at the identity root")
+    if _is_unknown_identity_scalar(value):
+        return {}
     return {prefix: canonical_value(value)}
 
 
@@ -156,7 +213,9 @@ def identity_from_leaves(
     return RunIdentity(
         run_id=run_id,
         leaves=normalized,
-        declaration_mismatches=tuple(dict(item) for item in declaration_mismatches),
+        declaration_mismatches=_normalize_declaration_mismatches(
+            declaration_mismatches, source="identity"
+        ),
     )
 
 
@@ -258,7 +317,7 @@ def identity_from_execution_block(
         if field not in execution:
             continue
         value = execution[field]
-        if value is None or value == "":
+        if _is_unknown_identity_scalar(value):
             continue
         leaves[field] = IdentityLeaf(value=canonical_value(value), origin=origin)
     return RunIdentity(run_id=run_id, leaves=leaves)
@@ -334,12 +393,16 @@ def _group_of(key: str) -> str | None:
 
 
 def _side_payload(identity: RunIdentity) -> dict[str, Any]:
+    mismatches = _normalize_declaration_mismatches(
+        identity.declaration_mismatches, source=f"{identity.run_id} side"
+    )
     return {
         "run_id": identity.run_id,
         "identity": {
             key: {"value": leaf.value, "origin": leaf.origin}
             for key, leaf in sorted(identity.leaves.items())
         },
+        "declaration_mismatches": [dict(item) for item in mismatches],
     }
 
 
@@ -352,7 +415,14 @@ def identity_from_certificate_side(side: Mapping[str, Any]) -> RunIdentity:
     raw_identity = side.get("identity")
     if not isinstance(raw_identity, Mapping):
         raise ComparabilityError("certificate side.identity must be an object")
-    return identity_from_leaves(run_id, raw_identity)
+    raw_mismatches = side.get("declaration_mismatches", ())
+    return identity_from_leaves(
+        run_id,
+        raw_identity,
+        declaration_mismatches=_normalize_declaration_mismatches(
+            raw_mismatches, source="certificate side"
+        ),
+    )
 
 
 def issue_certificate(
@@ -409,14 +479,26 @@ def issue_certificate(
 
     unknowns: list[dict[str, str]] = []
     declared_not_observed: list[dict[str, str]] = []
+    for side_name, identity in (("baseline", baseline), ("candidate", candidate)):
+        for key, leaf in identity.leaves.items():
+            if not _has_identity_value(leaf):
+                unknowns.append(
+                    {
+                        "key": key,
+                        "side": side_name,
+                        "reason": "empty-or-absent",
+                    }
+                )
     for group in required_groups:
         for side_name, identity in (("baseline", baseline), ("candidate", candidate)):
             leaves = [
                 key
-                for key in identity.leaves
-                if _matches_prefix(key, group)
+                for key, leaf in identity.leaves.items()
+                if _matches_prefix(key, group) and _has_identity_value(leaf)
             ]
             if not leaves:
+                if any(item["key"] == group and item["side"] == side_name for item in unknowns):
+                    continue
                 unknowns.append(
                     {
                         "key": group,
@@ -430,7 +512,7 @@ def issue_certificate(
             matching = [
                 (key, leaf)
                 for key, leaf in identity.leaves.items()
-                if _matches_prefix(key, prefix)
+                if _matches_prefix(key, prefix) and _has_identity_value(leaf)
             ]
             if not matching:
                 if any(item["key"] == prefix and item["side"] == side_name for item in unknowns):
@@ -452,9 +534,15 @@ def issue_certificate(
                     }
                 )
 
+    baseline_mismatches = _normalize_declaration_mismatches(
+        baseline.declaration_mismatches, source="baseline"
+    )
+    candidate_mismatches = _normalize_declaration_mismatches(
+        candidate.declaration_mismatches, source="candidate"
+    )
     mismatches = [
-        {"side": "baseline", **item} for item in baseline.declaration_mismatches
-    ] + [{"side": "candidate", **item} for item in candidate.declaration_mismatches]
+        {"side": "baseline", **item} for item in baseline_mismatches
+    ] + [{"side": "candidate", **item} for item in candidate_mismatches]
 
     blocking: list[str] = []
     if unknowns:
@@ -518,7 +606,8 @@ def consume_certificate(certificate: Mapping[str, Any]) -> dict[str, Any]:
     Comparison entry points call this before emitting ``passed``. The
     stored ``verdict`` field is ignored: a certificate that launders a
     handwritten ``comparable`` would be worse than the declarative gate it
-    replaces.
+    replaces. Each side's ``declaration_mismatches`` is part of the identity
+    body and is recomputed into the derived blocking lists.
     """
     if not isinstance(certificate, Mapping):
         raise ComparabilityError("certificate must be an object")

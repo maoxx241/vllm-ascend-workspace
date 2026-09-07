@@ -350,7 +350,8 @@ class PerformanceRegressionTests(unittest.TestCase):
                 )
                 performance.record(output, result_path=result_path, recorded_at=NOW)
             with self.assertRaisesRegex(
-                performance.PerformanceRegressionError, "not-comparable"
+                performance.PerformanceRegressionError,
+                r"missing a nonempty observation",
             ):
                 performance.analyze(output, updated_at=NOW)
             manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
@@ -376,6 +377,190 @@ class PerformanceRegressionTests(unittest.TestCase):
                 performance.PerformanceRegressionError, "config_hash"
             ):
                 performance.record(output, result_path=result_path, recorded_at=NOW)
+
+    def test_partial_measurement_observations_cannot_pass(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config_path = root / "config.json"
+            config_path.write_text(json.dumps(config()), encoding="utf-8")
+            output = root / "run"
+            planned = performance.plan(output, config_path=config_path, created_at=NOW)
+            schedule = json.loads((output / "schedule.json").read_text(encoding="utf-8"))
+            observed_count = 0
+            measure_count = 0
+            for entry in schedule["entries"]:
+                observation = None
+                if entry["phase"] == "measure":
+                    measure_count += 1
+                    if entry["ordinal"] == 1:
+                        observation = recorded_observation(
+                            commit=config()[entry["state"]]["code_snapshot"]
+                        )
+                        observed_count += 1
+                result_path = root / f"{entry['id']}.json"
+                result_path.write_text(
+                    json.dumps(
+                        measurement(
+                            entry,
+                            planned["config_hash"],
+                            throughput=100.0,
+                            ttft=10.0,
+                            observation=observation,
+                        )
+                    ),
+                    encoding="utf-8",
+                )
+                performance.record(output, result_path=result_path, recorded_at=NOW)
+            self.assertEqual(measure_count, 6)
+            self.assertEqual(observed_count, 2)
+            with self.assertRaisesRegex(
+                performance.PerformanceRegressionError,
+                r"baseline-measure-2|measure\+2",
+            ):
+                performance.analyze(output, updated_at=NOW)
+            manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+            self.assertNotEqual(manifest["status"], "passed")
+            self.assertEqual(manifest["status"], "running")
+            self.assertFalse((output / "comparison.json").exists())
+            measurements = json.loads(
+                (output / "measurements.json").read_text(encoding="utf-8")
+            )
+            measured = [
+                row
+                for row in measurements["measurements"]
+                if row["phase"] == "measure"
+            ]
+            self.assertEqual(len(measured), 6)
+
+    def test_inconsistent_measurement_observation_cannot_pass(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config_path = root / "config.json"
+            config_path.write_text(json.dumps(config()), encoding="utf-8")
+            output = root / "run"
+            planned = performance.plan(output, config_path=config_path, created_at=NOW)
+            schedule = json.loads((output / "schedule.json").read_text(encoding="utf-8"))
+            for entry in schedule["entries"]:
+                observation = None
+                if entry["phase"] == "measure":
+                    observation = recorded_observation(
+                        commit=config()[entry["state"]]["code_snapshot"]
+                    )
+                    if entry["state"] == "baseline" and entry["ordinal"] == 2:
+                        observation = dict(observation)
+                        observation["topology"] = {"tp": 8, "dp": 1}
+                result_path = root / f"{entry['id']}.json"
+                result_path.write_text(
+                    json.dumps(
+                        measurement(
+                            entry,
+                            planned["config_hash"],
+                            throughput=100.0,
+                            ttft=10.0,
+                            observation=observation,
+                        )
+                    ),
+                    encoding="utf-8",
+                )
+                performance.record(output, result_path=result_path, recorded_at=NOW)
+            with self.assertRaisesRegex(
+                performance.PerformanceRegressionError, "inconsistent observations"
+            ):
+                performance.analyze(output, updated_at=NOW)
+            manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(manifest["status"], "running")
+            self.assertFalse((output / "comparison.json").exists())
+
+    def test_declaration_mismatch_is_not_consumed_as_comparable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            experiment = config()
+            experiment["shared"]["topology"] = {"tp": 8, "dp": 1}
+            config_path = root / "config.json"
+            config_path.write_text(json.dumps(experiment), encoding="utf-8")
+            output = root / "run"
+            planned = performance.plan(output, config_path=config_path, created_at=NOW)
+            schedule = json.loads((output / "schedule.json").read_text(encoding="utf-8"))
+            for entry in schedule["entries"]:
+                observation = None
+                if entry["phase"] == "measure":
+                    observation = recorded_observation(
+                        commit=experiment[entry["state"]]["code_snapshot"]
+                    )
+                result_path = root / f"{entry['id']}.json"
+                result_path.write_text(
+                    json.dumps(
+                        measurement(
+                            entry,
+                            planned["config_hash"],
+                            throughput=100.0,
+                            ttft=10.0,
+                            observation=observation,
+                        )
+                    ),
+                    encoding="utf-8",
+                )
+                performance.record(output, result_path=result_path, recorded_at=NOW)
+            with self.assertRaisesRegex(
+                performance.PerformanceRegressionError,
+                "declaration/observation mismatch",
+            ):
+                performance.analyze(output, updated_at=NOW)
+            manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(manifest["status"], "running")
+            self.assertFalse((output / "comparison.json").exists())
+            certificate = json.loads(
+                (output / "comparability-certificate.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(certificate["verdict"], "not-comparable")
+            self.assertTrue(certificate["declaration_mismatches"])
+
+    def test_missing_measurement_row_is_identified(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config_path = root / "config.json"
+            config_path.write_text(json.dumps(config()), encoding="utf-8")
+            output = root / "run"
+            planned = performance.plan(output, config_path=config_path, created_at=NOW)
+            schedule = json.loads((output / "schedule.json").read_text(encoding="utf-8"))
+            for entry in schedule["entries"]:
+                observation = None
+                if entry["phase"] == "measure":
+                    observation = recorded_observation(
+                        commit=config()[entry["state"]]["code_snapshot"]
+                    )
+                result_path = root / f"{entry['id']}.json"
+                result_path.write_text(
+                    json.dumps(
+                        measurement(
+                            entry,
+                            planned["config_hash"],
+                            throughput=100.0,
+                            ttft=10.0,
+                            observation=observation,
+                        )
+                    ),
+                    encoding="utf-8",
+                )
+                performance.record(output, result_path=result_path, recorded_at=NOW)
+            measurements = json.loads(
+                (output / "measurements.json").read_text(encoding="utf-8")
+            )
+            measurements["measurements"] = [
+                row
+                for row in measurements["measurements"]
+                if row.get("schedule_id") != "candidate-measure-3"
+            ]
+            (output / "measurements.json").write_text(
+                json.dumps(measurements), encoding="utf-8"
+            )
+            with self.assertRaisesRegex(
+                performance.PerformanceRegressionError, "candidate-measure-3"
+            ):
+                performance.analyze(output, updated_at=NOW)
+            manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(manifest["status"], "running")
+            self.assertFalse((output / "comparison.json").exists())
 
 
 if __name__ == "__main__":

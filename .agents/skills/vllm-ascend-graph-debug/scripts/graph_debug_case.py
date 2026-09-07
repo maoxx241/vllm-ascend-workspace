@@ -536,7 +536,7 @@ def compare_case(
         must_observe_prefixes=GRAPH_MUST_OBSERVE,
     )
     try:
-        consume_certificate(certificate)
+        certificate = consume_certificate(certificate)
     except ComparabilityError as exc:
         raise GraphDebugError(str(exc)) from exc
     comparison = compare_snapshots(eager_path, graph_path, atol=atol, rtol=rtol)

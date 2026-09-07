@@ -317,6 +317,92 @@ class ComparisonTests(unittest.TestCase):
             self.assertEqual(manifest["status"], "planned")
             self.assertFalse((run_dir / "comparison.json").exists())
 
+    def test_declaration_mismatch_cannot_pass_after_consume(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_dir = init_run(root, topology={"tp": 8, "dp": 1})
+            cases = [result("case-1", {"text": "ok"})]
+            baseline = write_json(
+                root / "baseline.json",
+                result_document("base", cases, execution_block=execution()),
+            )
+            candidate = write_json(
+                root / "candidate.json",
+                result_document("candidate", cases, execution_block=execution()),
+            )
+            with self.assertRaisesRegex(
+                correctness.CorrectnessError, "declaration/observation mismatch"
+            ):
+                correctness.compare_run(
+                    run_dir,
+                    baseline_path=baseline,
+                    candidate_path=candidate,
+                    updated_at=NOW,
+                )
+            manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+            self.assertNotEqual(manifest["status"], "passed")
+            self.assertFalse((run_dir / "comparison.json").exists())
+            certificate = json.loads(
+                (run_dir / "comparability-certificate.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(certificate["verdict"], "not-comparable")
+            self.assertTrue(certificate["declaration_mismatches"])
+            for side in ("baseline", "candidate"):
+                self.assertTrue(certificate[side].get("declaration_mismatches"))
+
+    def test_null_observed_identity_cannot_pass(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_dir = init_run(root)
+            cases = [result("case-1", {"text": "ok"})]
+            observation = {
+                "workspace_snapshot": {"vllm_ascend_commit": None},
+                "environment": {"cann": None},
+                "model": {"weight_hash": None},
+                "topology": {"tp": None},
+                "native_digest": None,
+            }
+            baseline = write_json(
+                root / "baseline.json",
+                result_document(
+                    "base",
+                    cases,
+                    execution_block=execution(),
+                    observation=observation,
+                ),
+            )
+            candidate = write_json(
+                root / "candidate.json",
+                result_document(
+                    "candidate",
+                    cases,
+                    execution_block=execution(),
+                    observation=observation,
+                ),
+            )
+            with self.assertRaisesRegex(
+                correctness.CorrectnessError, "not-comparable"
+            ):
+                correctness.compare_run(
+                    run_dir,
+                    baseline_path=baseline,
+                    candidate_path=candidate,
+                    updated_at=NOW,
+                )
+            manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+            self.assertNotEqual(manifest["status"], "passed")
+            self.assertFalse((run_dir / "comparison.json").exists())
+            certificate = json.loads(
+                (run_dir / "comparability-certificate.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(certificate["verdict"], "not-comparable")
+            unknown_fields = {
+                (item["side"], item["key"]) for item in certificate["unknowns"]
+            }
+            self.assertIn(("baseline", "workspace_snapshot"), unknown_fields)
+            self.assertIn(("candidate", "environment"), unknown_fields)
+            self.assertIn(("baseline", "native_digest"), unknown_fields)
+
 
 class ExecutionIdentityTests(unittest.TestCase):
     def test_undeclared_engine_args_difference_is_refused(self) -> None:

@@ -760,29 +760,96 @@ def _declared_state_identity(
     )
 
 
+def _measurement_locator(row: Mapping[str, Any], *, state: str) -> str:
+    schedule_id = row.get("schedule_id")
+    if isinstance(schedule_id, str) and schedule_id.strip():
+        return schedule_id
+    phase = row.get("phase")
+    ordinal = row.get("ordinal")
+    if phase is not None and ordinal is not None:
+        return f"{phase}+{ordinal}"
+    return state
+
+
+def _require_measurement_observation(
+    row: Mapping[str, Any], *, state: str
+) -> Mapping[str, Any]:
+    observation = row.get("observation")
+    if not isinstance(observation, Mapping) or not observation:
+        raise PerformanceRegressionError(
+            f"{state} measurement {_measurement_locator(row, state=state)} "
+            "is missing a nonempty observation"
+        )
+    return observation
+
+
+def _measure_rows_for_state(
+    measurements: Sequence[Any], *, state: str
+) -> list[Mapping[str, Any]]:
+    rows: list[Mapping[str, Any]] = []
+    for index, row in enumerate(measurements):
+        if not isinstance(row, Mapping):
+            raise PerformanceRegressionError(
+                f"{state} measurement row {index} is malformed"
+            )
+        if row.get("phase") == "measure" and row.get("state") == state:
+            rows.append(row)
+    return rows
+
+
 def _state_identity(
     config: Mapping[str, Any],
     measurements: Sequence[Mapping[str, Any]],
     *,
     state: str,
     run_id: str,
+    schedule: Mapping[str, Any] | None = None,
 ) -> Any:
     declared = _declared_state_identity(config, state=state, run_id=run_id)
-    observations = [
-        row["observation"]
-        for row in measurements
-        if row.get("state") == state
-        and row.get("phase") == "measure"
-        and isinstance(row.get("observation"), Mapping)
-        and row["observation"]
-    ]
+    rows = _measure_rows_for_state(measurements, state=state)
+    if schedule is not None:
+        entries = schedule.get("entries")
+        if not isinstance(entries, list):
+            raise PerformanceRegressionError("schedule.entries must be an array")
+        present_ids = {
+            row.get("schedule_id")
+            for row in rows
+            if isinstance(row.get("schedule_id"), str) and row["schedule_id"].strip()
+        }
+        present_keys = {
+            (row.get("state"), row.get("phase"), row.get("ordinal")) for row in rows
+        }
+        for entry in entries:
+            if not isinstance(entry, Mapping):
+                continue
+            if entry.get("phase") != "measure" or entry.get("state") != state:
+                continue
+            schedule_id = entry.get("id")
+            key = (entry.get("state"), entry.get("phase"), entry.get("ordinal"))
+            if (
+                isinstance(schedule_id, str)
+                and schedule_id.strip()
+                and schedule_id in present_ids
+            ) or key in present_keys:
+                continue
+            locator = (
+                schedule_id
+                if isinstance(schedule_id, str) and schedule_id.strip()
+                else f"{entry.get('phase')}+{entry.get('ordinal')}"
+            )
+            raise PerformanceRegressionError(
+                f"{state} measurement {locator} is missing a nonempty observation"
+            )
+    observations = [_require_measurement_observation(row, state=state) for row in rows]
     if not observations:
         return declared
     first = observations[0]
-    if any(item != first for item in observations[1:]):
-        raise PerformanceRegressionError(
-            f"{state} measurements record inconsistent observations"
-        )
+    for index, item in enumerate(observations[1:], start=1):
+        if item != first:
+            raise PerformanceRegressionError(
+                f"{state} measurements record inconsistent observations "
+                f"({_measurement_locator(rows[index], state=state)})"
+            )
     return merge_identities(
         declared,
         identity_from_recorded_observation(run_id, first),
@@ -791,7 +858,9 @@ def _state_identity(
 
 
 def build_comparability_certificate(
-    config: Mapping[str, Any], measurements: Mapping[str, Any]
+    config: Mapping[str, Any],
+    measurements: Mapping[str, Any],
+    schedule: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     run_id = str(config["run_id"])
     rows = list(measurements.get("measurements", []))
@@ -799,8 +868,20 @@ def build_comparability_certificate(
         "workspace_snapshot.vllm_ascend_commit"
     ]
     return issue_certificate(
-        _state_identity(config, rows, state="baseline", run_id=f"{run_id}-baseline"),
-        _state_identity(config, rows, state="candidate", run_id=f"{run_id}-candidate"),
+        _state_identity(
+            config,
+            rows,
+            state="baseline",
+            run_id=f"{run_id}-baseline",
+            schedule=schedule,
+        ),
+        _state_identity(
+            config,
+            rows,
+            state="candidate",
+            run_id=f"{run_id}-candidate",
+            schedule=schedule,
+        ),
         vary=vary,
         must_observe_prefixes=PERFORMANCE_MUST_OBSERVE,
     )
@@ -813,12 +894,14 @@ def analyze(output_dir: Path, *, updated_at: str | None = None) -> dict[str, Any
     config = _load_json(output_dir / "experiment-config.json", "experiment config")
     schedule = _load_json(output_dir / "schedule.json", "schedule")
     measurements = _load_json(output_dir / "measurements.json", "measurements")
-    certificate = build_comparability_certificate(config, measurements)
-    _write_json(output_dir / "comparability-certificate.json", certificate)
+    certificate = build_comparability_certificate(config, measurements, schedule)
     try:
-        consume_certificate(certificate)
+        certificate = consume_certificate(certificate)
     except ComparabilityError as exc:
+        blocked = exc.certificate if exc.certificate is not None else certificate
+        _write_json(output_dir / "comparability-certificate.json", blocked)
         raise PerformanceRegressionError(str(exc)) from exc
+    _write_json(output_dir / "comparability-certificate.json", certificate)
     comparison = analyze_documents(config, schedule, measurements)
     comparison["comparability"] = certificate
     _write_json(output_dir / "comparison.json", comparison)

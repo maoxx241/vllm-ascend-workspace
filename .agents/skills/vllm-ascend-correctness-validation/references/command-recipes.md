@@ -83,5 +83,7 @@ the run, both carry `execution`, every `execution` difference was declared at
 result's `observation` is `comparable`. An undeclared difference or a
 `not-comparable` certificate exits 1 and writes no comparison. Record
 `workspace_snapshot`, `environment`, `model`, `topology`, and `native_digest`
-on each result as `observation`; empty manifest identity is `unknown` and
-blocks `passed`. Read the compact stdout first, then inspect `report.md`.
+on each result as `observation`; empty, null, or whitespace-only identity is
+`unknown` and blocks `passed`. A declaration/observation mismatch remains
+blocking after the certificate is persisted and consumed. Read the compact
+stdout first, then inspect `report.md`.

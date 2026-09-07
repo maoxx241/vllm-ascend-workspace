@@ -20,7 +20,7 @@
 
 - [ ] Every planned case has baseline and candidate evidence.
 - [ ] Both results carry an `execution` block, and every difference between them was declared at `init` with `--allowed-difference`; `compare` refuses undeclared differences.
-- [ ] `compare` consumed a comparable observational certificate (`comparability-certificate.json`); empty identity or declared-only must-observe keys cannot pass.
+- [ ] `compare` consumed a comparable observational certificate (`comparability-certificate.json`); empty, null, or whitespace-only identity, declared-only must-observe keys, or a declaration/observation mismatch cannot pass.
 - [ ] Matching empty answers are not treated as `exact_match`.
 - [ ] A verdict on a run with declared differences is read as attributable to the declared variable, not to the code change.
 - [ ] Token or text comparison is used where exactness is meaningful.

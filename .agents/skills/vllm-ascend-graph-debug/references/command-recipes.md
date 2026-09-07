@@ -51,7 +51,8 @@ Each snapshot needs a sibling `{stem}.identity.json` (or `--eager-identity` /
 `--graph-identity`) recording the observed workspace, environment, model,
 topology, and native digest. `compare` consumes a comparability certificate
 before writing an alignment; the default allowed difference is
-`execution_mode`.
+`execution_mode`. A mismatch between the case declaration and the recorded
+observation stays blocking after consume.
 
 Inspect `first_divergence` in stdout first. Load the saved comparison artifact only when more detail is needed.
 

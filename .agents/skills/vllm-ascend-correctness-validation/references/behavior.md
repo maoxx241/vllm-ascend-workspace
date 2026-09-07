@@ -115,7 +115,7 @@ The check compares declared launch configuration. It cannot see differences that
 - `base_url`, `served_model`, and `cases_sha256` are **observed**;
 - an optional result `observation` object is **observed** and is required for `workspace_snapshot`, `environment`, `model`, `topology`, and `native_digest`.
 
-`consume_certificate` recomputes the verdict. Empty identity groups are recorded as `unknown` and block `comparable`, so they block `passed`. They are not rejected at `init`. Two `{"text": ""}` outputs are `infrastructure_failure` (`empty-output-is-not-agreement`), not `exact_match`.
+`consume_certificate` recomputes the verdict from the identity body, including each side's declaration/observation mismatches. Empty identity groups, and null or whitespace-only identity scalars, are recorded as `unknown` and block `comparable`, so they block `passed`. They are not rejected at `init`. Two `{"text": ""}` outputs are `infrastructure_failure` (`empty-output-is-not-agreement`), not `exact_match`.
 
 See `docs/comparability-certificate.md`. The audit §8.2 hardware matrix is encoded as unit tests and has not been run on NPU.
 

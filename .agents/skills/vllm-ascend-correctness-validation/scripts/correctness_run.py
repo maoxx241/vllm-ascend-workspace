@@ -827,11 +827,13 @@ def compare_run(
         identity["baseline"]["execution"],
         identity["candidate"]["execution"],
     )
-    _atomic_write_json(run_dir / "comparability-certificate.json", certificate)
     try:
-        consume_certificate(certificate)
+        certificate = consume_certificate(certificate)
     except ComparabilityError as exc:
+        blocked = exc.certificate if exc.certificate is not None else certificate
+        _atomic_write_json(run_dir / "comparability-certificate.json", blocked)
         raise CorrectnessError(str(exc)) from exc
+    _atomic_write_json(run_dir / "comparability-certificate.json", certificate)
     emit_progress("compare", cases=len(cases.get("cases", [])))
     comparison = compare_documents(cases, baseline, candidate)
     comparison["execution"] = identity
