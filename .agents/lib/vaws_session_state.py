@@ -314,9 +314,14 @@ def allocate_session_leases(
             if available_set is not None:
                 missing = sorted(set(requested_devices) - available_set)
                 if missing:
+                    # "Not available" covers both absent and busy on purpose:
+                    # the caller passes free devices, not visible ones, so a
+                    # device that exists but is in use lands here too. Saying
+                    # "not visible" would send the reader looking for a
+                    # hardware or driver problem that is not there.
                     raise SessionStateError(
-                        f"requested NPU devices are not visible on host: {missing}; "
-                        f"available={sorted(available_set)}"
+                        f"requested NPU devices are not available on host (absent or in use "
+                        f"by another process): {missing}; available={sorted(available_set)}"
                     )
             allocated_devices = list(requested_devices)
         elif npu_count:
@@ -336,7 +341,12 @@ def allocate_session_leases(
                 if len(allocated_devices) >= npu_count:
                     break
             if len(allocated_devices) < npu_count:
-                raise SessionStateError(f"not enough locally unleased NPU devices for session {sid}")
+                raise SessionStateError(
+                    f"not enough allocatable NPU devices for session {sid}: "
+                    f"{len(allocated_devices)} of {npu_count} after excluding devices busy on "
+                    f"the host and devices leased in this workspace "
+                    f"(host-free={sorted(available_set)})"
+                )
 
         for dev in allocated_devices:
             _reserve(bucket, "npu_devices", dev, sid)

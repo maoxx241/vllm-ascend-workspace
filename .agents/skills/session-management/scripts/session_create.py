@@ -104,10 +104,59 @@ def parse_host_npu_devices(stdout: str) -> list[int]:
     Delegates to the shared npu-smi parser: on dual-chip A3 cards the card
     header rows (0-7) undercount the chips vLLM actually sees (0-15), so the
     old header-row regex made TP16 single-node launches impossible to lease.
+
+    Visibility only. Do **not** use this to decide what may be allocated: a
+    device can be visible and in use by somebody else. Use
+    ``parse_host_npu_availability`` for that.
     """
     from vaws_npu_coordination import parse_npu_smi_info  # noqa: PLC0415
 
     return parse_npu_smi_info(stdout).get("devices") or []
+
+
+def parse_host_npu_availability(stdout: str) -> tuple[list[int] | None, dict[str, Any]]:
+    """Which devices are free, or ``None`` when the host cannot tell us.
+
+    Allocation used to be driven by the visible-device list, which is wrong in
+    two separate ways and produced silent double-allocation:
+
+    * A visible device may be busy. The occupancy the parser reports in
+      ``busy``/``free`` was being discarded, so a card another process was
+      already using looked allocatable.
+    * When the parser cannot read the process table it fails closed and
+      reports ``status: failed`` — but it still returns the full ``devices``
+      list with ``busy: {}``. That reads as "every device is free" to a caller
+      that only looks at ``devices``. ``assign_resources`` already refuses to
+      allocate by count when availability is unknown, with a comment saying so;
+      the guard was simply never reachable, because a failed probe produced a
+      full list rather than ``None``.
+
+    So: unknown availability is ``None`` here, which is what makes that guard
+    fire. A probe that cannot establish occupancy must not be treated as an
+    empty occupancy table.
+    """
+    from vaws_npu_coordination import parse_npu_smi_info  # noqa: PLC0415
+
+    info = parse_npu_smi_info(stdout)
+    status = info.get("status")
+    visible = sorted(info.get("devices") or [])
+    busy_map = info.get("busy") or {}
+    diagnostics: dict[str, Any] = {
+        "probe_status": status,
+        "visible_devices": visible,
+        "busy_devices": sorted(int(d) for d in busy_map),
+        "busy_reasons": {str(d): busy_map[d] for d in busy_map},
+    }
+    if status != "ok":
+        diagnostics["availability"] = "unknown"
+        diagnostics["availability_reason"] = (
+            info.get("error") or f"npu-smi occupancy could not be established (status={status!r})"
+        )
+        return None, diagnostics
+    free = sorted(int(d) for d in (info.get("free") or []))
+    diagnostics["availability"] = "known"
+    diagnostics["free_devices"] = free
+    return free, diagnostics
 
 
 def probe_host_npu_devices(record: dict[str, Any]) -> tuple[list[int] | None, dict[str, Any]]:
@@ -139,9 +188,16 @@ def probe_host_npu_devices(record: dict[str, Any]) -> tuple[list[int] | None, di
     if result.returncode != 0:
         payload["status"] = "unavailable"
         return None, payload
-    devices = parse_host_npu_devices(result.stdout)
-    payload.update({"status": "ok" if devices else "unparsed", "devices": devices})
-    return devices or None, payload
+    free, diagnostics = parse_host_npu_availability(result.stdout)
+    payload.update(diagnostics)
+    payload["devices"] = diagnostics["visible_devices"]
+    if free is None:
+        # Availability unknown, not empty. Returning the visible list here is
+        # what allowed a session to be handed a card another process was using.
+        payload["status"] = "occupancy_unknown"
+        return None, payload
+    payload["status"] = "ok" if diagnostics["visible_devices"] else "unparsed"
+    return free or None, payload
 
 
 def host_port_available(record: dict[str, Any]) -> Any:
