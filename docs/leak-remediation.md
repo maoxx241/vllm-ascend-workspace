@@ -59,14 +59,25 @@ real-secret allowance were added.
   is no longer a secret-key assignment. No policy exception was added
   for it.
 
-Full-tree scan of this candidate with its own policy: 469 scanned, 0
-skipped, 0 findings, 116 suppressed, 0 unused allowlist ids. The
-suppression count is two above the 12 converted current-main matches
-because the policy file now quotes two of those exact `match` literals
-and `policy-self-reference` records them. Finding 4's profiling
-shared-storage owner token remains allowlisted for the later #88
-cleanup. This is not leak-proof coverage of skipped files or of public
-history.
+Full-tree scan after that G1-on-#90 candidate with its own policy was
+469 scanned, 0 skipped, 0 findings, 116 suppressed, 0 unused allowlist
+ids. The suppression count was two above the 12 converted current-main
+matches because the policy file quotes two of those exact `match`
+literals and `policy-self-reference` records them.
+
+Ordinary merge of actual published coordinator-consumer main
+`f38ea47bfb0e123b306723ac937f0514a0830169` (PR #98) on 2026-09-07
+removed the in-tree `.agents/coordinator/tests/**` package. Combined
+scan before the one remaining cleanup: 464 scanned, 0 skipped, 0
+findings, 115 suppressed, 1 unused allowlist id
+(`coordinator-test-bearer-token`). That stale path-scoped entry was
+removed; the five current-main scoped allowances and the guard runtime
+skip glob were kept. Combined scan after that removal: 464 scanned, 0
+skipped, 0 findings, 115 suppressed, 0 unused allowlist ids.
+
+Finding 4's profiling shared-storage owner token remains allowlisted
+for the later #88 cleanup. This is not leak-proof coverage of skipped
+files or of public history.
 
 ## Method
 

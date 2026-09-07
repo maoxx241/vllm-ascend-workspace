@@ -173,12 +173,6 @@ allowlist:
     match: '"do-not-store"'
     justification: Literal used by a test that asserts secret-shaped fields are rejected; the value is the assertion, not a credential.
 
-  - id: coordinator-test-bearer-token
-    path_glob: .agents/coordinator/tests/**
-    categories: [secret-value]
-    match_regex: ^Bearer\s+alice-secret-test$
-    justification: Fabricated bearer token written into a temporary file by an offline HTTP contract test; it authenticates nothing.
-
   - id: knowledge-memory-test-secret-value
     path_glob: .agents/tests/test_knowledge_memory.py
     categories: [secret-value]
