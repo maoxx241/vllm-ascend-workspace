@@ -245,6 +245,52 @@ _CASES: list[tuple[str, set[str], set[str]]] = [
         {"attention.sparse_sharedkv.metadata"},
         {"attention.sparse_sharedkv", "attention.flash_score"},
     ),
+    # ---- Linear-attention sub-families + residual + MHC (user 2026-09-07) ----
+    (
+        "aclnnRecurrentKda_RecurrentKda_RecurrentKda",
+        {"attention.linear_or_mamba", "attention.linear_or_mamba.kda"},
+        {"attention.linear_or_mamba.gdn", "attention.mla"},
+    ),
+    (
+        "aclnnChunkKdaFwd_KdaChunkForward_ChunkKdaFwd",
+        {"attention.linear_or_mamba", "attention.linear_or_mamba.kda"},
+        {"attention.linear_or_mamba.gdn"},
+    ),
+    (
+        "aclnnRecurrentGatedDeltaRule_RecurrentGatedDeltaRule_RecurrentGatedDeltaRule",
+        {"attention.linear_or_mamba", "attention.linear_or_mamba.gdn"},
+        {"attention.linear_or_mamba.kda"},
+    ),
+    (
+        "aclnnChunkGatedDeltaRule_ChunkGatedDeltaRule_ChunkGatedDeltaRule",
+        {"attention.linear_or_mamba", "attention.linear_or_mamba.gdn"},
+        {"attention.linear_or_mamba.kda"},
+    ),
+    (
+        "fused_gdn_gating_kernel",
+        {"attention.linear_or_mamba", "attention.linear_or_mamba.gdn"},
+        {"attention.linear_or_mamba.kda"},
+    ),
+    (
+        "CausalConv1d",
+        {"attention.linear_or_mamba"},
+        {"attention.linear_or_mamba.kda", "attention.linear_or_mamba.gdn"},
+    ),
+    (
+        "_apply_attn_res_kernel",
+        {"attention.residual"},
+        {"attention.mla", "attention.flash_score", "attention.linear_or_mamba"},
+    ),
+    (
+        "HcPre",
+        {"mhc", "block_head.mhc_prefix"},
+        {"attention.flash_score", "communication.collective"},
+    ),
+    (
+        "HcPost",
+        {"mhc", "block_head.mhc_prefix"},
+        {"attention.flash_score"},
+    ),
     (
         "KVQuantSparseAttnSharedKVMetadata",
         {"attention.sparse_sharedkv.metadata"},

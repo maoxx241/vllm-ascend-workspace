@@ -64,6 +64,9 @@ companion_only_categories:
   - attention.kvcomp.signpack
   - attention.kvcomp.cache_write
   - attention.kv_cache_io
+  # --- attention residual apply (K3 MLA/KDA paths): inside a layer, never an
+  #     anchor — it terminates the attention section, it does not start a layer.
+  - attention.residual
 
 # Category prefixes treated as companion-only (matched with str.startswith).
 companion_prefixes:

@@ -223,15 +223,53 @@ match_rules:
       add_roles: [attention]
 
     # --- Attention: linear / mamba / GDN ---------------------------------
-    # Tokens cover the full GDN/Mamba/DeltaNet kernel family observed on
+    # Tokens cover the full GDN/Mamba/DeltaNet/KDA kernel family observed on
     # Ascend traces, including ``qkvzbasplit`` — Qwen3-Next GDN QKV + Z
     # (gate) + B (beta) + A (alpha) projection split. The ``zba`` marker is
     # unique to GDN and must drive the linear family (it was once mis-tagged
     # as ``attention.mla.kv_norm_rope_cache``).
+    #
+    # Sub-family split (user requirement 2026-09-07): KDA (Kimi-K3) and GDN
+    # (Qwen3-Next / Qwen3.5) share the CausalConv1d front-end but their core
+    # recurrent/chunk kernels differ — RecurrentKda / ChunkKdaFwd for KDA,
+    # RecurrentGatedDeltaRule / ChunkGatedDeltaRule / fused_gdn_gating_kernel
+    # for GDN.  Both roll up to attention.linear_or_mamba; the .kda / .gdn
+    # sub-categories let family resolution tell them apart.
     - id: attention.linear_or_mamba
-      when: {any_of: [causalconv, causalconv1d, mamba, deltanet, gdn, recurrentgateddelta, recurrentdelta, qkvzbasplit]}
+      when: {any_of: [causalconv, causalconv1d, mamba, deltanet, gdn]}
       add_categories: [attention.linear_or_mamba]
       add_roles: [attention]
+    # Sub-family rules carry their own tokens and add the base + sub category
+    # (the matcher unions rules, so KDA/GDN kernels get both).
+    - id: attention.linear_or_mamba.kda
+      when: {any_of: [recurrentkda, chunkkda]}
+      add_categories: [attention.linear_or_mamba, attention.linear_or_mamba.kda]
+      add_roles: [attention]
+    - id: attention.linear_or_mamba.gdn
+      when: {any_of: [recurrentgateddelta, chunkgateddelta, recurrentdelta, fusedgdn, qkvzbasplit]}
+      add_categories: [attention.linear_or_mamba, attention.linear_or_mamba.gdn]
+      add_roles: [attention]
+
+    # --- Attention: residuals (per-layer companions, never anchors) -------
+    # ``_apply_attn_res_kernel`` is the attention residual-apply kernel in the
+    # MLA/hybrid paths (K3 etc.). Previously uncategorized, it polluted the
+    # unknown bucket and confused layer-boundary snaps.
+    - id: attention.residual
+      when: {any_of: [applyattnres, attnreskernel]}
+      add_categories: [attention.residual]
+      add_roles: [attention_aux]
+
+    # --- HyperConnection (MHC) residual routing (DeepSeek-V4) --------------
+    # HcPre / HcPost implement the hyper-connection residual fan-out/fan-in
+    # (checkpoint keys hc_attn_fn / hc_ffn_fn / hc_head_fn + hc_*_base/scale).
+    # They ALSO carry the block_head.mhc_prefix tag from the rule below
+    # (structural boundary helper) — here we only ADD the plain ``mhc``
+    # category so MHC work is countable in category rollups; roles are
+    # deliberately untouched (adding a compute role would shift the validated
+    # dsv4 block decomposition).
+    - id: mhc
+      when: {any_of: [hcpre, hcpost]}
+      add_categories: [mhc]
 
     # --- Attention: RoPE companions --------------------------------------
     - id: attention.rope.interleave
