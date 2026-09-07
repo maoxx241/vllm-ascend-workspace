@@ -305,7 +305,6 @@ class SchemaAgreementProperties(unittest.TestCase):
 
         run_cases(50, body, label="schema shape")
 
-    @unittest.expectedFailure
     def test_known_defect_validator_accepts_schema_version_true_and_float(self) -> None:
         """KNOWN DEFECT (low): the schema says ``schema_version: {const: 1}``;
         JSON Schema distinguishes ``1`` from ``true`` and (for const) from
@@ -320,7 +319,6 @@ class SchemaAgreementProperties(unittest.TestCase):
                 with self.assertRaises(RunManifestError):
                     validate_manifest(bad)
 
-    @unittest.expectedFailure
     def test_known_defect_validator_accepts_artifact_shapes_the_schema_forbids(self) -> None:
         """KNOWN DEFECT (low-medium): artifacts are ``additionalProperties:
         false`` with ``sha256: {type: string}`` in the schema, but the Python
@@ -334,19 +332,19 @@ class SchemaAgreementProperties(unittest.TestCase):
                 with self.assertRaises(RunManifestError):
                     validate_manifest(dict(manifest, artifacts=[item]))
 
-    @unittest.expectedFailure
     def test_known_defect_free_form_objects_may_validate_but_not_round_trip(self) -> None:
-        """KNOWN DEFECT (low): ``workspace_snapshot``/``environment``/``model``/
-        ``topology`` are only checked to be mappings, so non-JSON-native content
-        (integer keys, NaN, tuples) validates; ``write_manifest`` then coerces
-        keys to strings and emits non-standard ``NaN``, and ``load_manifest``
-        returns something different from what validated.
-        Evidence: ``{1: 'x'}`` loads back as ``{'1': 'x'}``."""
-        manifest = new_manifest(run_type="debug", environment={1: "x"}, created_at="2026-07-25T12:00:00Z")
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "m.json"
-            write_manifest(path, manifest)
-            self.assertEqual(load_manifest(path), manifest)
+        """Free-form objects must be JSON-native so write/load round-trips.
+
+        The schema is the contract; the validator is a strict subset. Integer
+        keys, NaN and tuples cannot serialize without coercion, so they are
+        rejected. Evidence input: ``environment={1: 'x'}``.
+        """
+        with self.assertRaises(RunManifestError):
+            new_manifest(
+                run_type="debug",
+                environment={1: "x"},
+                created_at="2026-07-25T12:00:00Z",
+            )
 
 
 if __name__ == "__main__":

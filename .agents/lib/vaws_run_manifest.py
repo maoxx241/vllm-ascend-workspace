@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import tempfile
@@ -102,6 +103,31 @@ def _require_mapping(value: Any, path: str, errors: list[str]) -> Mapping[str, A
     return value
 
 
+def _is_json_native(value: Any) -> bool:
+    """True when ``value`` survives JSON dump/load without coercion.
+
+    The published schema is the contract; this check is a strict subset
+    so integer keys, NaN/Inf, tuples and other non-JSON values cannot
+    validate and then round-trip as something else.
+    """
+    if value is None or isinstance(value, str):
+        return True
+    if isinstance(value, bool):
+        return True
+    if isinstance(value, int):
+        return True
+    if isinstance(value, float):
+        return math.isfinite(value)
+    if isinstance(value, list):
+        return all(_is_json_native(item) for item in value)
+    if isinstance(value, dict):
+        return all(
+            isinstance(key, str) and _is_json_native(item)
+            for key, item in value.items()
+        )
+    return False
+
+
 def _validate_safe_id(value: Any, path: str, errors: list[str], *, nullable: bool = False) -> None:
     if value is None and nullable:
         return
@@ -124,16 +150,24 @@ def _validate_artifacts(value: Any, errors: list[str]) -> None:
             if name in names:
                 errors.append(f"artifact name is duplicated: {name!r}")
             names.add(name)
+        unknown = sorted(set(item) - {"name", "kind", "uri", "sha256"})
+        if unknown:
+            errors.append(
+                f"artifacts[{index}] has unknown fields: {', '.join(unknown)}"
+            )
         sha256 = item.get("sha256")
-        if sha256 is not None and (
+        if "sha256" in item and (
             not isinstance(sha256, str) or not SHA256_RE.fullmatch(sha256)
         ):
-            errors.append(f"artifacts[{index}].sha256 must be 64 lowercase hex characters")
+            errors.append(
+                f"artifacts[{index}].sha256 must be 64 lowercase hex characters"
+            )
 
 
 def validate_manifest(manifest: Mapping[str, Any]) -> None:
     errors: list[str] = []
-    if manifest.get("schema_version") != SCHEMA_VERSION:
+    version = manifest.get("schema_version")
+    if type(version) is not int or version != SCHEMA_VERSION:
         errors.append(f"schema_version must be {SCHEMA_VERSION}")
     _validate_safe_id(manifest.get("run_id"), "run_id", errors)
     _validate_safe_id(manifest.get("parent_run_id"), "parent_run_id", errors, nullable=True)
@@ -146,7 +180,13 @@ def validate_manifest(manifest: Mapping[str, Any]) -> None:
         errors.append(f"status must be one of: {', '.join(sorted(RUN_STATUSES))}")
 
     for field in ("workspace_snapshot", "environment", "model", "topology"):
-        _require_mapping(manifest.get(field), field, errors)
+        mapping = _require_mapping(manifest.get(field), field, errors)
+        if mapping and not _is_json_native(
+            mapping if isinstance(mapping, dict) else dict(mapping)
+        ):
+            errors.append(
+                f"{field} must be JSON-native (string keys, no NaN/Inf)"
+            )
 
     command = manifest.get("command")
     if not isinstance(command, list) or any(not isinstance(part, str) for part in command):
@@ -256,7 +296,14 @@ def write_manifest(path: Path, manifest: Mapping[str, Any]) -> None:
     temporary = Path(temporary_name)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as stream:
-            json.dump(manifest, stream, ensure_ascii=False, indent=2, sort_keys=True)
+            json.dump(
+                manifest,
+                stream,
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+                allow_nan=False,
+            )
             stream.write("\n")
             stream.flush()
             os.fsync(stream.fileno())
