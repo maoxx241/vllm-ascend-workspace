@@ -38,7 +38,7 @@ candidate 3
 - `plan`: validate that `shared` declares every parity condition, generate the alternating schedule, write a `parity-check.json` that names what it did and did not verify, and create Run Manifest v1;
 - `normalize`: convert one single-run or aggregated Benchmark result into the measurement contract;
 - `record`: accept the next normalized measurement only when its state, phase, ordinal, and config hash match the schedule;
-- `analyze`: exclude warmups, report mean, sample deviation, coefficient of variation, outliers, relative change, and threshold verdict.
+- `analyze`: consume an observational comparability certificate built from every measure-phase observation, then exclude warmups, report mean, sample deviation, coefficient of variation, outliers, relative change, and threshold verdict. `passed` requires the certificate.
 
 Read:
 
