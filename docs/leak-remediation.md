@@ -9,6 +9,42 @@ This document deliberately does not restate the leaked values. Where a value is
 needed to act, it is at the file and line given below. The scanner would flag
 this document if it quoted them, which is the intended behaviour.
 
+## Current tree after actual-main integration (2026-09-07)
+
+Ordinary merge of actual published main
+`257dc131c2015d0e01445288efb89bc5ab825b5f` (PR #90, tree
+`dc18fcd13ae02468892d3097a226d92dbd302927`) deleted tracked `.remote-dev/**`.
+The dated bodies in "What is exposed" remain historical evidence of the
+pre-extraction snapshot used by #83; they are not a census of this merged
+tree.
+
+Current-tree status of those historical findings:
+
+- Finding 1 (knowledge RFC 1918 range) is still in
+  `.agents/knowledge/known-failure-signatures.yaml`. The
+  `knowledge-failure-signatures-private-range` allowance stays.
+- Finding 2 (`.remote-dev/DESIGN.md`) is absent from the current tree. The
+  #83 wording change is history-only; extraction removed the file.
+- Finding 3 (profiling command-recipes home path) remains the #83 placeholder
+  in the current tree.
+- Finding 4 (profiling shared-storage owner token) remains in that skill
+  package and is still allowlisted for the later #88 cleanup. This G1
+  integration does not apply that cleanup.
+- Finding 5's `.remote-dev/README.md` occurrence and finding 6's
+  `.remote-dev/tests/` placeholders are absent from the current tree. The
+  skill-recipe example hosts remain.
+- Allowlist entries whose complete owning paths were the extracted tree
+  (`remote-dev-tests-placeholder-host`, `remote-dev-readme-example-host`)
+  were removed. Remaining allowances were not dropped merely because a scan
+  did not visit them.
+
+The accepted G1 scanner, applied to this merged tree with this tree's
+policy, also reports 13 findings in main-supplied files outside this
+guard-ownership refresh (result-envelope source and tests, property
+run-manifest tests, agent-feedback contract). Those are recorded for root
+coordination rather than rewritten here. No verified knowledge match exists
+for that signature.
+
 ## Method
 
 Counts come from walking every commit on `origin/main` (114 commits at the time
