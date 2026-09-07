@@ -29,6 +29,7 @@ description: Diagnose vLLM Ascend cudagraph and ACL Graph compile, capture, repl
 3. Eager 模式必须先正常；如果 Eager 本身失败，先修 Eager，不进入图模式排查。
 4. 精度排查优先固定随机性和输入；性能、吞吐、并发压力只在问题需要时引入。
 5. 图内只做设备侧、可 capture 的操作；同步、CPU 读回、文件写入统一放到图外。
+6. 中间张量采集和比较交给 `ascend-tensor-dump`，本 skill 只负责记录、定性和收敛。插桩前先做一次探针开关对照：dump 关掉时症状消失，说明探针在测自己。
 
 ## 记录要求
 
@@ -97,89 +98,18 @@ description: Diagnose vLLM Ascend cudagraph and ACL Graph compile, capture, repl
 4. 打点尽量少：先输入/输出，再在首个分叉窗口内增加更细 tag。
 5. 每次新增 tag 都记录目的，定位后删除。
 
-### 最小模板
+### 用 ascend-tensor-dump，不要手写模板
 
-按代码结构改名即可，不要照搬固定 rank、shape 或 tag；它们应由当前最小复现决定。
+打点实现由 `ascend-tensor-dump` 提供，不要在每次调查里重抄一遍 buffer 和 flush 逻辑：
 
-```python
-DEBUG_ENABLE = True
-DEBUG_MAX_LAYERS = 2
-DEBUG_RANKS = None  # None 表示所有 rank；也可设置为 {0, 1}
-_DEBUG_IMPLS = []
+1. 把 `.agents/skills/ascend-tensor-dump/assets/dump_probe.py` 复制进被测包。
+2. 模块 `__init__` 里 `graph_slot(name, shape, dtype)` 预分配；forward 内 `capture_graph(name, tensor)` 只做图内 `copy_`；图外 `finish()` 读回。
+3. Eager 对照一侧用 `capture(stage, tensor)`，两侧写出同一套 key。
+4. 用 `scripts/dump_compare.py diff` 找首个分叉 stage，用 `tensors` 出逐张量指标。
 
-def flush_debug_buffers() -> None:
-    if not _DEBUG_IMPLS:
-        return
-    if torch.npu.is_current_stream_capturing():
-        return
-    torch.npu.synchronize()
-    lines = []
-    for impl in _DEBUG_IMPLS:
-        impl.flush_debug(lines)
-    if lines:
-        with open(debug_log_path(), "a") as f:
-            f.write("\n".join(lines) + "\n")
-```
+该 skill 的 manifest 同时记录 `stride` / `storage_ptr` / `npu_format`，因此 replay 读到固定地址错位、缓存踩踏这类问题能直接从 `storage_aliases` 看出来，而不是只看到数值偏差。
 
-```python
-class DebuggableImpl:
-    def __init__(self, ...):
-        self.debug_rank = current_rank()
-        self.debug_enabled = (
-            DEBUG_ENABLE
-            and (DEBUG_RANKS is None or self.debug_rank in DEBUG_RANKS)
-        )
-        if self.debug_enabled:
-            self.debug_step = 0
-            self.debug_layer = -1
-            self.debug_shapes = {
-                "IN": (max_rows, max_cols),
-                "OUT": (max_rows, max_cols),
-            }
-            self.debug_buffers = {
-                tag: torch.zeros(shape, dtype=torch.bfloat16, device=current_device())
-                for tag, shape in self.debug_shapes.items()
-            }
-            self.debug_stats = {
-                tag: torch.zeros(4, dtype=torch.float32, device=current_device())
-                for tag in self.debug_shapes
-            }
-            _DEBUG_IMPLS.append(self)
-
-    def snapshot(self, tag: str, tensor: torch.Tensor) -> None:
-        if not self.debug_enabled or tensor.numel() == 0:
-            return
-        buf = self.debug_buffers.get(tag)
-        if buf is None:
-            return
-        sample = select_representative_slice(tensor).to(buf.dtype).contiguous()
-        rows = min(sample.shape[0], buf.shape[0])
-        cols = min(sample.shape[1], buf.shape[1])
-        buf[:rows, :cols].copy_(sample[:rows, :cols], non_blocking=True)
-
-        values = tensor.float()
-        stat = self.debug_stats[tag]
-        stat[0].copy_(values.min(), non_blocking=True)
-        stat[1].copy_(values.max(), non_blocking=True)
-        stat[2].copy_(values.mean(), non_blocking=True)
-        stat[3].copy_(values.var(), non_blocking=True)
-
-    def flush_debug(self, lines: list[str]) -> None:
-        if not self.debug_enabled or not (0 <= self.debug_layer < DEBUG_MAX_LAYERS):
-            return
-        for tag, buf in self.debug_buffers.items():
-            stat = self.debug_stats[tag].cpu().tolist()
-            sample = buf.cpu().tolist()
-            lines.append(format_debug_record(
-                step=self.debug_step,
-                layer=self.debug_layer,
-                rank=self.debug_rank,
-                tag=tag,
-                stat=stat,
-                sample=sample,
-            ))
-        self.debug_step += 1
-```
+本 skill 仍然负责 case 记账：dump 路径作为证据写进 `case.json`，比较结论用 `record` 追加。
 
 在 model runner 或等价调度位置：
 
@@ -189,8 +119,9 @@ def __init__(self, ...):
     ...
 
 def execute_model(self, ...):
+    dump_probe.arm(request_id)      # 图 slot 已在写，arm 只决定这次是否落盘
     output = run_model(...)
-    flush_debug_buffers()
+    dump_probe.finish()             # 图外、replay 之后
     return output
 ```
 

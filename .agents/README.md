@@ -41,6 +41,7 @@ compatibility backend for managed sessions, sync, service adapters, and cleanup.
 - `.agents/skills/vllm-ascend-change-validation/` plans diff-driven validation and aggregates evidence.
 - `.agents/skills/vllm-ascend-performance-regression/` runs controlled alternating performance experiments.
 - `.agents/skills/vllm-ascend-distributed-debug/` records topology and per-rank distributed evidence.
+- `.agents/skills/ascend-tensor-dump/` captures bounded intermediate tensor dumps and locates the first divergent stage.
 - `.agents/skills/ascend-operator-debug/` builds isolated Ascend operator case matrices.
 - `.agents/skills/ascend-triton-operator-development/` develops a first correct Ascend Triton candidate.
 - `.agents/skills/ascend-triton-kernel-validation/` gates fallback and correctness.
@@ -136,6 +137,7 @@ Current primary helpers:
 - `vllm-ascend-change-validation/scripts/change_validation.py`
 - `vllm-ascend-performance-regression/scripts/performance_regression.py`
 - `vllm-ascend-distributed-debug/scripts/distributed_debug.py`
+- `ascend-tensor-dump/scripts/dump_compare.py`
 - `ascend-operator-debug/scripts/operator_debug.py`
 - `ascend-triton-operator-development/scripts/triton_development.py`
 - `ascend-triton-kernel-validation/scripts/triton_validation.py`
