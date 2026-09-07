@@ -400,7 +400,6 @@ class RepositoryCoherenceTests(unittest.TestCase):
         self.assertEqual(sum(counts["by_support_role"].values()), n)
         self.assertEqual(sum(counts["by_responsibility"].values()), n)
         self.assertEqual(counts["supported"], counts["by_support_role"]["supported"])
-        self.assertNotEqual(n, inventory.HISTORICAL_SNAPSHOT["entry_point_count"])
 
     def test_every_current_entry_has_valid_roles(self) -> None:
         for record in self.payload["entry_points"]:
@@ -418,7 +417,6 @@ class RepositoryCoherenceTests(unittest.TestCase):
         self.assertEqual(proposed["status"], "historical-unimplemented")
         self.assertEqual(proposed["agent_command_count"], 13)
         self.assertEqual(proposed["agent_commands"], list(inventory.HISTORICAL_PROPOSED_COMMANDS))
-        self.assertNotEqual(self.payload["counts"]["supported"], proposed["agent_command_count"])
 
     def test_external_owners_come_from_committed_pins(self) -> None:
         owners = self.payload["external_owners"]

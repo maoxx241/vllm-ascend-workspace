@@ -130,7 +130,7 @@ deterministic mechanisms. Case selection, hypotheses, threshold rationale and
 interpretation remain agent/user decisions. Do not replace a closed validator
 with a hand-written `passed` JSON and treat that as measured evidence.
 
-The eight planner/analyze commands stay. They are **mixed** and **supported**:
+These planner/analyze commands stay. They are **mixed** and **supported**:
 
 | Script | Mechanics retained | Judgment retained |
 |---|---|---|
