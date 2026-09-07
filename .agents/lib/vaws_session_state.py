@@ -124,11 +124,14 @@ def _reclaim_gate(lock_path: Path, *, deadline: float, poll_seconds: float):
             raise _timed_out(lock_path)
         if thread_gate.acquire(timeout=min(poll_seconds, remaining)):
             break
-    fd = os.open(str(guard), os.O_CREAT | os.O_RDWR, 0o600)
+    fd: int | None = None
+    locked = False
     try:
+        fd = os.open(str(guard), os.O_CREAT | os.O_RDWR, 0o600)
         while True:
             try:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                locked = True
                 break
             except OSError as exc:
                 if exc.errno in _FLOCK_UNSUPPORTED_ERRNOS:
@@ -141,11 +144,15 @@ def _reclaim_gate(lock_path: Path, *, deadline: float, poll_seconds: float):
         try:
             yield
         finally:
-            with contextlib.suppress(OSError):
-                fcntl.flock(fd, fcntl.LOCK_UN)
+            if locked:
+                with contextlib.suppress(OSError):
+                    fcntl.flock(fd, fcntl.LOCK_UN)
     finally:
-        os.close(fd)
-        thread_gate.release()
+        try:
+            if fd is not None:
+                os.close(fd)
+        finally:
+            thread_gate.release()
 
 
 def _lock_identity(path: Path) -> tuple[int, int] | None:
@@ -165,6 +172,7 @@ def _lock_is_stale(path: Path, stale_after_seconds: float) -> bool:
 
 
 def _reclaim_stale_lock(path: Path, stale_after_seconds: float) -> None:
+    """Unlink a stale lease. Caller must hold ``_reclaim_gate``."""
     identity = _lock_identity(path)
     if identity is None or not _lock_is_stale(path, stale_after_seconds):
         return
@@ -178,12 +186,69 @@ def _reclaim_stale_lock(path: Path, stale_after_seconds: float) -> None:
 
 
 def _unlink_if_identity(path: Path, identity: tuple[int, int]) -> None:
+    """Unlink ``path`` only if it is still ``identity``. Caller must hold ``_reclaim_gate``."""
     if _lock_identity(path) != identity:
         return
     try:
         os.unlink(path)
     except FileNotFoundError:
         return
+
+
+def _release_acquired_lease(
+    path: Path,
+    fd: int | None,
+    identity: tuple[int, int] | None,
+    *,
+    timeout_seconds: float,
+    poll_seconds: float,
+    pending_exc: BaseException | None,
+) -> None:
+    """Close the lease fd and unlink our inode under the cooperating guard.
+
+    Gate timeout and unsupported flock fail closed: the lease is left in
+    place. Those failures surface only when the critical section itself
+    succeeded, so a body exception is not replaced by a cleanup timeout.
+    Unrelated I/O errors are not swallowed. The lease fd is closed even
+    if gated unlink raises.
+    """
+    if fd is None and identity is None:
+        return
+    if fd is not None and identity is None:
+        try:
+            st = os.fstat(fd)
+            identity = (st.st_dev, st.st_ino)
+        except OSError:
+            identity = None
+    gate_exc: BaseException | None = None
+    close_exc: OSError | None = None
+    try:
+        if identity is not None:
+            release_deadline = time.monotonic() + timeout_seconds
+            try:
+                with _reclaim_gate(
+                    path, deadline=release_deadline, poll_seconds=poll_seconds
+                ):
+                    _unlink_if_identity(path, identity)
+            except _FlockUnsupported as exc:
+                gate_exc = SessionStateError(
+                    f"session lock reclaim is unsupported for {path}"
+                )
+                gate_exc.__cause__ = exc
+            except SessionStateError as exc:
+                gate_exc = exc
+    finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError as exc:
+                close_exc = exc
+    if pending_exc is not None:
+        return
+    if close_exc is not None:
+        raise close_exc
+    if gate_exc is not None:
+        raise gate_exc
 
 
 @contextlib.contextmanager
@@ -198,10 +263,12 @@ def file_lock(
 
     Reclaim and release are serialized under ``{name}.guard``. A waiter
     must re-check inode and mtime under that gate before unlink, and a
-    holder unlinks only its own inode. This is atomic on local POSIX
+    holder unlinks only its own inode. If the gate cannot be obtained,
+    the lease is left in place and the failure is raised; release never
+    falls back to an unguarded unlink. This is atomic on local POSIX
     filesystems for threads and processes that honor the gate. It does
     not claim NFS or cross-host lock coherence; if flock is ENOTSUP,
-    reclaim fails closed and the stale lease is left in place.
+    reclaim and release fail closed and the lease is left in place.
     """
     ensure_state_dir(path.parent)
     deadline = time.monotonic() + timeout_seconds
@@ -212,48 +279,52 @@ def file_lock(
     }
     fd: int | None = None
     identity: tuple[int, int] | None = None
-    while True:
-        try:
-            fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-            os.write(fd, json.dumps(owner, ensure_ascii=False).encode("utf-8"))
-            st = os.fstat(fd)
-            identity = (st.st_dev, st.st_ino)
-            break
-        except FileExistsError:
-            try:
-                # path.stat() is the unguarded verdict; reclaim re-checks
-                # with lstat under the gate so a stale reading cannot
-                # unlink a newer holder's inode.
-                age = time.time() - path.stat().st_mtime
-            except FileNotFoundError:
-                continue
-            if age >= stale_after_seconds:
-                try:
-                    with _reclaim_gate(
-                        path, deadline=deadline, poll_seconds=poll_seconds
-                    ):
-                        _reclaim_stale_lock(path, stale_after_seconds)
-                except _FlockUnsupported:
-                    if time.monotonic() >= deadline:
-                        raise _timed_out(path)
-                    time.sleep(poll_seconds)
-                continue
-            if time.monotonic() >= deadline:
-                raise _timed_out(path)
-            time.sleep(poll_seconds)
+    pending_exc: BaseException | None = None
     try:
-        yield path
-    finally:
-        if fd is not None and identity is not None:
-            release_deadline = time.monotonic() + timeout_seconds
+        while True:
             try:
-                with _reclaim_gate(
-                    path, deadline=release_deadline, poll_seconds=poll_seconds
-                ):
-                    _unlink_if_identity(path, identity)
-            except (_FlockUnsupported, SessionStateError):
-                _unlink_if_identity(path, identity)
-            os.close(fd)
+                fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+                os.write(fd, json.dumps(owner, ensure_ascii=False).encode("utf-8"))
+                st = os.fstat(fd)
+                identity = (st.st_dev, st.st_ino)
+                break
+            except FileExistsError:
+                try:
+                    # path.stat() is the unguarded verdict; reclaim re-checks
+                    # with lstat under the gate so a stale reading cannot
+                    # unlink a newer holder's inode.
+                    age = time.time() - path.stat().st_mtime
+                except FileNotFoundError:
+                    continue
+                if age >= stale_after_seconds:
+                    try:
+                        with _reclaim_gate(
+                            path, deadline=deadline, poll_seconds=poll_seconds
+                        ):
+                            _reclaim_stale_lock(path, stale_after_seconds)
+                    except _FlockUnsupported:
+                        if time.monotonic() >= deadline:
+                            raise _timed_out(path)
+                        time.sleep(poll_seconds)
+                    continue
+                if time.monotonic() >= deadline:
+                    raise _timed_out(path)
+                time.sleep(poll_seconds)
+        try:
+            yield path
+        except BaseException as exc:
+            pending_exc = exc
+            raise
+    finally:
+        if fd is not None or identity is not None:
+            _release_acquired_lease(
+                path,
+                fd,
+                identity,
+                timeout_seconds=timeout_seconds,
+                poll_seconds=poll_seconds,
+                pending_exc=pending_exc,
+            )
 
 
 def sessions_root(repo_root: Path = ROOT) -> Path:

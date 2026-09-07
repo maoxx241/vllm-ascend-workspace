@@ -13,15 +13,26 @@ Properties:
 * concurrent allocators (real threads, real file lock) never hand out the
   same device twice;
 * the file lock excludes a live holder, recovers a crashed (stale) holder, and
-  never reads a crashed holder's lock as "available" before the stale window.
+  never reads a crashed holder's lock as "available" before the stale window;
+* two stale waiters never overlap after reclaiming under the sidecar gate;
+* a release-timeout cannot unlink a replacement owner's lease;
+* a sidecar open failure releases the process-local gate and does not leak
+  an fd; flock and critical-section failures release acquired resources
+  without unlinking a foreign lease;
+* unsupported flock and a held gate beyond the deadline fail closed;
+* cooperating processes exclude each other, and a crashed process's stale
+  lease is recovered after the stale window.
 
-The stale-lock recovery race is reproduced deterministically with event
-ordering rather than timing and recorded as a known defect.
+Lock races are reproduced with event ordering rather than timing. NFS and
+cross-host locking are out of scope.
 """
 
 from __future__ import annotations
 
+import errno
+import fcntl
 import os
+import subprocess
 import sys
 import tempfile
 import threading
@@ -259,6 +270,10 @@ class FileLockProperties(unittest.TestCase):
         self.addCleanup(self._tmp.cleanup)
         self.lock = Path(self._tmp.name) / "locks" / "leases.lock"
 
+    def _join(self, thread: threading.Thread, timeout: float = 8) -> None:
+        thread.join(timeout)
+        self.assertFalse(thread.is_alive(), f"{thread.name} did not finish within {timeout}s")
+
     def test_live_holder_excludes_others_until_release(self) -> None:
         with file_lock(self.lock, timeout_seconds=1):
             started = time.monotonic()
@@ -362,9 +377,447 @@ class FileLockProperties(unittest.TestCase):
             for thread in threads:
                 thread.start()
             for thread in threads:
-                thread.join()
+                self._join(thread)
         self.assertEqual(max_in_cs, 1, f"critical section overlapped: {holders}")
         self.assertCountEqual(holders, ["waiter-A", "waiter-B"])
+
+    def test_release_timeout_does_not_unlink_replacement_owner(self) -> None:
+        """A release timeout must not delete a replacement owner's lease.
+
+        Event order uses real threads, a real lease, and a real flock sidecar:
+
+        1. A acquires the lease and finishes its critical-section body.
+        2. B holds the guard; A's lease mtime is made stale.
+        3. A's release waits for the guard and times out.
+        4. If A takes an unguarded identity/unlink fallback, pause after the
+           identity snapshot until B holds a new lease (the old race).
+        5. B reclaims the stale lease under the gate, acquires a new lease,
+           and stays in its critical section.
+        6. A must not unlink B's inode.
+        7. C must not enter while B still holds.
+        """
+        a_in_cs = threading.Event()
+        b_holds_guard = threading.Event()
+        a_releasing = threading.Event()
+        a_release_done = threading.Event()
+        b_in_cs = threading.Event()
+        c_finished = threading.Event()
+        errors: list[str] = []
+        a_release_exc: list[BaseException] = []
+        c_entered = False
+        replacement_after_a = False
+        b_saw_lease_in_cs = False
+        real_lock_identity = state._lock_identity
+
+        def wrapped_lock_identity(path: Path) -> tuple[int, int] | None:
+            ident = real_lock_identity(path)
+            if (
+                threading.current_thread().name == "owner-A"
+                and a_releasing.is_set()
+                and not a_release_done.is_set()
+            ):
+                a_release_done.set()
+                b_in_cs.wait(5)
+            return ident
+
+        def owner_a() -> None:
+            nonlocal replacement_after_a
+            try:
+                with file_lock(
+                    self.lock,
+                    timeout_seconds=0.08,
+                    poll_seconds=0.01,
+                    stale_after_seconds=1,
+                ):
+                    a_in_cs.set()
+                    if not b_holds_guard.wait(5):
+                        errors.append("A: B never took the guard")
+                    a_releasing.set()
+            except SessionStateError as exc:
+                a_release_exc.append(exc)
+            except BaseException as exc:
+                errors.append(f"A: unexpected {exc!r}")
+            finally:
+                replacement_after_a = self.lock.exists()
+                a_release_done.set()
+
+        def waiter_b() -> None:
+            nonlocal b_saw_lease_in_cs
+            try:
+                if not a_in_cs.wait(5):
+                    errors.append("B: A never entered")
+                    return
+                with state._reclaim_gate(
+                    self.lock,
+                    deadline=time.monotonic() + 8,
+                    poll_seconds=0.01,
+                ):
+                    b_holds_guard.set()
+                    past = time.time() - 100
+                    os.utime(self.lock, (past, past))
+                    if not a_release_done.wait(5):
+                        errors.append("B: A never finished release")
+                        return
+                    state._reclaim_stale_lock(self.lock, 1)
+                with file_lock(
+                    self.lock,
+                    timeout_seconds=5,
+                    poll_seconds=0.01,
+                    stale_after_seconds=1,
+                ):
+                    b_in_cs.set()
+                    b_saw_lease_in_cs = self.lock.exists()
+                    if not c_finished.wait(5):
+                        errors.append("B: C never finished")
+            except BaseException as exc:
+                errors.append(f"B: {exc!r}")
+
+        def waiter_c() -> None:
+            nonlocal c_entered
+            try:
+                if not b_in_cs.wait(5):
+                    errors.append("C: B never entered")
+                    return
+                try:
+                    with file_lock(
+                        self.lock,
+                        timeout_seconds=0.3,
+                        poll_seconds=0.02,
+                        stale_after_seconds=1,
+                    ):
+                        c_entered = True
+                except SessionStateError:
+                    pass
+            except BaseException as exc:
+                errors.append(f"C: {exc!r}")
+            finally:
+                c_finished.set()
+
+        with mock.patch.object(state, "_lock_identity", wrapped_lock_identity):
+            threads = [
+                threading.Thread(target=owner_a, name="owner-A"),
+                threading.Thread(target=waiter_b, name="waiter-B"),
+                threading.Thread(target=waiter_c, name="waiter-C"),
+            ]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                self._join(thread)
+
+        self.assertEqual(errors, [])
+        self.assertTrue(a_release_exc, "A must fail closed on release timeout")
+        self.assertIsInstance(a_release_exc[0], SessionStateError)
+        self.assertIn("timed out", str(a_release_exc[0]))
+        self.assertTrue(replacement_after_a or b_saw_lease_in_cs, "replacement exists after A release")
+        self.assertTrue(b_in_cs.is_set())
+        self.assertTrue(b_saw_lease_in_cs, "B must still hold its lease in the critical section")
+        self.assertFalse(c_entered, "C in critical section while B still holds")
+        self.assertFalse(state._thread_gate(self.lock).locked())
+
+    def test_sidecar_open_failure_releases_thread_gate(self) -> None:
+        self.lock.parent.mkdir(parents=True, exist_ok=True)
+        guard = state._guard_path(self.lock)
+        opened_guard_fds: list[int] = []
+        real_open = os.open
+        real_close = os.close
+        failed_once = False
+
+        def wrapped_open(path: str | bytes | os.PathLike[str], flags: int, *args: Any, **kwargs: Any) -> int:
+            nonlocal failed_once
+            if os.path.normpath(str(path)) == os.path.normpath(str(guard)) and not failed_once:
+                failed_once = True
+                raise OSError(errno.EMFILE, "Too many open files")
+            fd = real_open(path, flags, *args, **kwargs)
+            if os.path.normpath(str(path)) == os.path.normpath(str(guard)):
+                opened_guard_fds.append(fd)
+            return fd
+
+        def wrapped_close(fd: int) -> None:
+            if fd in opened_guard_fds:
+                opened_guard_fds.remove(fd)
+            real_close(fd)
+
+        gate = state._thread_gate(self.lock)
+        with mock.patch.object(os, "open", wrapped_open), mock.patch.object(os, "close", wrapped_close):
+            with self.assertRaises(OSError) as raised:
+                with state._reclaim_gate(
+                    self.lock, deadline=time.monotonic() + 1, poll_seconds=0.01
+                ):
+                    pass
+            self.assertEqual(raised.exception.errno, errno.EMFILE)
+            self.assertTrue(failed_once)
+            self.assertFalse(gate.locked(), "thread_gate_still_locked")
+            self.assertEqual(opened_guard_fds, [])
+            with state._reclaim_gate(
+                self.lock, deadline=time.monotonic() + 1, poll_seconds=0.01
+            ):
+                self.assertTrue(gate.locked())
+            self.assertFalse(gate.locked())
+            self.assertEqual(opened_guard_fds, [])
+
+    def test_flock_error_during_release_keeps_lease_and_closes_fd(self) -> None:
+        closed: list[int] = []
+        lease_fd: dict[str, int] = {}
+        real_open = os.open
+        real_close = os.close
+        real_flock = fcntl.flock
+
+        def wrapped_open(path: str | bytes | os.PathLike[str], flags: int, *args: Any, **kwargs: Any) -> int:
+            fd = real_open(path, flags, *args, **kwargs)
+            if os.path.normpath(str(path)) == os.path.normpath(str(self.lock)):
+                lease_fd["fd"] = fd
+            return fd
+
+        def wrapped_close(fd: int) -> None:
+            closed.append(fd)
+            real_close(fd)
+
+        def wrapped_flock(fd: int, flags: int) -> None:
+            if flags & fcntl.LOCK_EX:
+                raise OSError(errno.EIO, "injected flock failure")
+            real_flock(fd, flags)
+
+        with mock.patch.object(os, "open", wrapped_open), mock.patch.object(os, "close", wrapped_close), mock.patch.object(fcntl, "flock", wrapped_flock):
+            with self.assertRaises(OSError) as raised:
+                with file_lock(self.lock, timeout_seconds=1, poll_seconds=0.01):
+                    self.assertTrue(self.lock.exists())
+            self.assertEqual(raised.exception.errno, errno.EIO)
+        self.assertTrue(self.lock.exists(), "foreign or own lease must not be unlinked without the gate")
+        self.assertIn(lease_fd["fd"], closed)
+        self.assertFalse(state._thread_gate(self.lock).locked())
+
+    def test_body_exception_preserved_when_release_gate_times_out(self) -> None:
+        a_in_cs = threading.Event()
+        b_holds_guard = threading.Event()
+        a_done = threading.Event()
+        errors: list[str] = []
+        body_exc: list[BaseException] = []
+
+        def owner_a() -> None:
+            try:
+                with file_lock(self.lock, timeout_seconds=0.08, poll_seconds=0.01):
+                    a_in_cs.set()
+                    if not b_holds_guard.wait(5):
+                        errors.append("A: B never took the guard")
+                    raise RuntimeError("boom")
+            except RuntimeError as exc:
+                body_exc.append(exc)
+            except SessionStateError as exc:
+                errors.append(f"A: body error hidden by {exc!r}")
+            finally:
+                a_done.set()
+
+        def holder_b() -> None:
+            try:
+                if not a_in_cs.wait(5):
+                    errors.append("B: A never entered")
+                    return
+                with state._reclaim_gate(
+                    self.lock,
+                    deadline=time.monotonic() + 8,
+                    poll_seconds=0.01,
+                ):
+                    b_holds_guard.set()
+                    if not a_done.wait(5):
+                        errors.append("B: A never finished")
+            except BaseException as exc:
+                errors.append(f"B: {exc!r}")
+
+        threads = [
+            threading.Thread(target=owner_a, name="owner-A"),
+            threading.Thread(target=holder_b, name="holder-B"),
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            self._join(thread)
+        self.assertEqual(errors, [])
+        self.assertTrue(body_exc)
+        self.assertIsInstance(body_exc[0], RuntimeError)
+        self.assertTrue(self.lock.exists(), "fail-closed release must retain the lease")
+        self.assertFalse(state._thread_gate(self.lock).locked())
+
+    def test_unsupported_flock_fails_closed_on_stale_reclaim(self) -> None:
+        self.lock.parent.mkdir(parents=True, exist_ok=True)
+        self.lock.write_text("{}", encoding="utf-8")
+        past = time.time() - 100
+        os.utime(self.lock, (past, past))
+
+        def unsupported(_fd: int, _flags: int) -> None:
+            raise OSError(errno.ENOTSUP, "Operation not supported")
+
+        with mock.patch.object(fcntl, "flock", unsupported):
+            with self.assertRaisesRegex(SessionStateError, "timed out"):
+                with file_lock(
+                    self.lock,
+                    timeout_seconds=0.2,
+                    poll_seconds=0.02,
+                    stale_after_seconds=1,
+                ):
+                    pass
+        self.assertTrue(self.lock.exists(), "unsupported flock must leave the stale lease in place")
+        self.assertFalse(state._thread_gate(self.lock).locked())
+
+    def test_unsupported_flock_fails_closed_on_release(self) -> None:
+        def unsupported(_fd: int, _flags: int) -> None:
+            raise OSError(errno.ENOTSUP, "Operation not supported")
+
+        with mock.patch.object(fcntl, "flock", unsupported):
+            with self.assertRaisesRegex(SessionStateError, "unsupported"):
+                with file_lock(self.lock, timeout_seconds=1, poll_seconds=0.01):
+                    self.assertTrue(self.lock.exists())
+        self.assertTrue(self.lock.exists(), "release must not unlink without cooperating flock")
+        self.assertFalse(state._thread_gate(self.lock).locked())
+
+    def test_held_gate_beyond_deadline_leaves_stale_lease(self) -> None:
+        self.lock.parent.mkdir(parents=True, exist_ok=True)
+        self.lock.write_text("{}", encoding="utf-8")
+        past = time.time() - 100
+        os.utime(self.lock, (past, past))
+        b_holds_guard = threading.Event()
+        waiter_done = threading.Event()
+        errors: list[str] = []
+        waiter_exc: list[BaseException] = []
+
+        def holder() -> None:
+            try:
+                with state._reclaim_gate(
+                    self.lock,
+                    deadline=time.monotonic() + 8,
+                    poll_seconds=0.01,
+                ):
+                    b_holds_guard.set()
+                    if not waiter_done.wait(5):
+                        errors.append("holder: waiter never finished")
+            except BaseException as exc:
+                errors.append(f"holder: {exc!r}")
+
+        def waiter() -> None:
+            try:
+                if not b_holds_guard.wait(5):
+                    errors.append("waiter: holder never took the gate")
+                    return
+                with file_lock(
+                    self.lock,
+                    timeout_seconds=0.2,
+                    poll_seconds=0.02,
+                    stale_after_seconds=1,
+                ):
+                    errors.append("waiter: acquired under a held gate")
+            except SessionStateError as exc:
+                waiter_exc.append(exc)
+            except BaseException as exc:
+                errors.append(f"waiter: {exc!r}")
+            finally:
+                waiter_done.set()
+
+        threads = [
+            threading.Thread(target=holder, name="gate-holder"),
+            threading.Thread(target=waiter, name="stale-waiter"),
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            self._join(thread)
+        self.assertEqual(errors, [])
+        self.assertTrue(waiter_exc)
+        self.assertIn("timed out", str(waiter_exc[0]))
+        self.assertTrue(self.lock.exists())
+        self.assertFalse(state._thread_gate(self.lock).locked())
+
+    def test_cooperating_processes_exclude_each_other(self) -> None:
+        self.lock.parent.mkdir(parents=True, exist_ok=True)
+        ready = Path(self._tmp.name) / "child.ready"
+        release = Path(self._tmp.name) / "child.release"
+        proc = subprocess.Popen(
+            [
+                sys.executable,
+                str(Path(__file__).resolve()),
+                "--hold-lock",
+                str(self.lock),
+                str(ready),
+                str(release),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                if proc.poll() is not None:
+                    out, err = proc.communicate()
+                    self.fail(f"child exited early rc={proc.returncode} stdout={out!r} stderr={err!r}")
+                if ready.exists() and self.lock.exists():
+                    break
+                time.sleep(0.01)
+            else:
+                self.fail("child did not acquire the lease")
+            with self.assertRaisesRegex(SessionStateError, "timed out"):
+                with file_lock(self.lock, timeout_seconds=0.3, poll_seconds=0.02):
+                    pass
+            self.assertTrue(self.lock.exists())
+            release.write_text("1", encoding="utf-8")
+            self.assertEqual(proc.wait(timeout=5), 0)
+            proc.communicate()
+            with file_lock(self.lock, timeout_seconds=1, poll_seconds=0.01):
+                self.assertTrue(self.lock.exists())
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.communicate(timeout=5)
+
+    def test_crashed_process_fresh_lease_excludes_then_stale_recovers(self) -> None:
+        self.lock.parent.mkdir(parents=True, exist_ok=True)
+        ready = Path(self._tmp.name) / "crash.ready"
+        proc = subprocess.Popen(
+            [
+                sys.executable,
+                str(Path(__file__).resolve()),
+                "--crash-hold-lock",
+                str(self.lock),
+                str(ready),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                if ready.exists() and self.lock.exists():
+                    break
+                if proc.poll() is not None and not ready.exists():
+                    out, err = proc.communicate()
+                    self.fail(f"child exited before ready rc={proc.returncode} stdout={out!r} stderr={err!r}")
+                time.sleep(0.01)
+            else:
+                self.fail("child did not create a lease")
+            self.assertEqual(proc.wait(timeout=5), 0)
+            proc.communicate()
+            with self.assertRaisesRegex(SessionStateError, "timed out"):
+                with file_lock(
+                    self.lock,
+                    timeout_seconds=0.15,
+                    poll_seconds=0.02,
+                    stale_after_seconds=60,
+                ):
+                    pass
+            self.assertTrue(self.lock.exists(), "a fresh crashed holder's lock must not be removed")
+            past = time.time() - 100
+            os.utime(self.lock, (past, past))
+            with file_lock(
+                self.lock,
+                timeout_seconds=1,
+                poll_seconds=0.01,
+                stale_after_seconds=1,
+            ):
+                self.assertTrue(self.lock.exists())
+            self.assertFalse(self.lock.exists())
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.communicate(timeout=5)
 
 
 class TokenProperties(unittest.TestCase):
@@ -399,5 +852,24 @@ class TokenProperties(unittest.TestCase):
         run_cases(300, body, label="container names")
 
 
+def _lock_worker(mode: str, lock: Path, ready: Path, release: Path | None) -> None:
+    if mode == "--crash-hold-lock":
+        with file_lock(lock, timeout_seconds=5, poll_seconds=0.01):
+            ready.write_text("1", encoding="utf-8")
+            os._exit(0)
+    with file_lock(lock, timeout_seconds=5, poll_seconds=0.01):
+        ready.write_text("1", encoding="utf-8")
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            if release is not None and release.exists():
+                return
+            time.sleep(0.01)
+        raise SystemExit("release signal not seen")
+
+
 if __name__ == "__main__":
+    if len(sys.argv) >= 2 and sys.argv[1] in {"--hold-lock", "--crash-hold-lock"}:
+        release_path = Path(sys.argv[4]) if len(sys.argv) > 4 else None
+        _lock_worker(sys.argv[1], Path(sys.argv[2]), Path(sys.argv[3]), release_path)
+        raise SystemExit(0)
     unittest.main()
