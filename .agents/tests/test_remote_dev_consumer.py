@@ -315,11 +315,12 @@ OLD_SUBSTRATE_PATH = ".remote-dev/"
 
 
 def _collect_all_strings(node: object, into: list[str]) -> None:
-    """Collect every JSON string. Wrong types never become historical skips."""
+    """Collect every JSON string, including dictionary keys. Wrong types never skip."""
     if isinstance(node, str):
         into.append(node)
     elif isinstance(node, dict):
-        for value in node.values():
+        for key, value in node.items():
+            into.append(key)
             _collect_all_strings(value, into)
     elif isinstance(node, list):
         for value in node:
@@ -330,11 +331,13 @@ def _scan_split_ledger_repositories(repos: object, scanned: list[str]) -> None:
     if not isinstance(repos, dict):
         _collect_all_strings(repos, scanned)
         return
-    for repo in repos.values():
+    for repo_id, repo in repos.items():
+        scanned.append(repo_id)
         if not isinstance(repo, dict):
             _collect_all_strings(repo, scanned)
             continue
         for field, value in repo.items():
+            scanned.append(field)
             if field == "summary" and isinstance(value, str):
                 continue
             _collect_all_strings(value, scanned)
@@ -349,10 +352,12 @@ def _scan_split_ledger_items(items: object, scanned: list[str]) -> None:
             _collect_all_strings(item, scanned)
             continue
         for field, value in item.items():
+            scanned.append(field)
             if field == "notes" and isinstance(value, str):
                 continue
             if field == "source" and isinstance(value, dict):
                 for source_field, source_value in value.items():
+                    scanned.append(source_field)
                     if source_field == "scaffold_path" and isinstance(source_value, str):
                         continue
                     _collect_all_strings(source_value, scanned)
@@ -363,6 +368,7 @@ def _scan_split_ledger_items(items: object, scanned: list[str]) -> None:
                         _collect_all_strings(declaration, scanned)
                         continue
                     for declared_field, declared_value in declaration.items():
+                        scanned.append(declared_field)
                         if declared_field == "says" and isinstance(declared_value, str):
                             continue
                         _collect_all_strings(declared_value, scanned)
@@ -373,7 +379,8 @@ def _scan_split_ledger_items(items: object, scanned: list[str]) -> None:
 def split_ledger_scanned_strings(payload: object) -> list[str]:
     """Strings from this exact split-ledger schema that remain executable.
 
-    Only these complete paths are omitted, and only with these containers:
+    Dictionary keys are JSON strings and are always collected. Only these
+    complete *value* paths are omitted, and only with these containers:
     ``repositories.<repo-id>.summary`` (dict/dict/str),
     ``items[*].source.scaffold_path`` (list/dict/dict/str),
     ``items[*].declared_by[*].says`` (list/dict/list/dict/str),
@@ -386,6 +393,7 @@ def split_ledger_scanned_strings(payload: object) -> list[str]:
         _collect_all_strings(payload, scanned)
         return scanned
     for key, value in payload.items():
+        scanned.append(key)
         if key == "repositories":
             _scan_split_ledger_repositories(value, scanned)
         elif key == "items":
@@ -624,6 +632,34 @@ class SplitLedgerHistoricalSchemaTests(unittest.TestCase):
             [value for value in split_ledger_scanned_strings_from_text(text) if OLD_SUBSTRATE_PATH in value],
             [],
         )
+
+    def test_top_level_dictionary_key_is_scanned(self) -> None:
+        payload = {".remote-dev/core/new.py": "unknown top-level field"}
+        self.assertIn(".remote-dev/core/new.py", split_ledger_old_path_hits(payload))
+
+    def test_item_dictionary_key_is_scanned(self) -> None:
+        payload = {"items": [{".remote-dev/core/new.py": "unknown item field"}]}
+        self.assertIn(".remote-dev/core/new.py", split_ledger_old_path_hits(payload))
+
+    def test_consumer_dictionary_key_is_scanned(self) -> None:
+        payload = {"items": [{"consumer": {".remote-dev/core/new.py": "enabled"}}]}
+        self.assertIn(".remote-dev/core/new.py", split_ledger_old_path_hits(payload))
+
+    def test_repository_identifier_key_is_scanned(self) -> None:
+        payload = {"repositories": {".remote-dev/core/new.py": {"summary": "unknown repository identifier"}}}
+        self.assertIn(".remote-dev/core/new.py", split_ledger_old_path_hits(payload))
+
+    def test_nested_dictionary_keys_under_schema_objects_are_scanned(self) -> None:
+        payloads = [
+            {"items": [{"source": {".remote-dev/core/new.py": "x"}}]},
+            {"items": [{"declared_by": [{".remote-dev/core/new.py": "x"}]}]},
+            {"items": [{"destination": {".remote-dev/core/new.py": "x"}}]},
+            {"items": [{"destination": {"evidence": [{".remote-dev/core/new.py": "x"}]}}]},
+            {"items": [{"unknown": {".remote-dev/core/new.py": "x"}}]},
+        ]
+        for payload in payloads:
+            with self.subTest(payload=payload):
+                self.assertIn(".remote-dev/core/new.py", split_ledger_old_path_hits(payload))
 
 
 class ClaudeSkillShimTests(unittest.TestCase):
