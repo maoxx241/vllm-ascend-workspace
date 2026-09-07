@@ -1321,5 +1321,153 @@ class SplitLedgerOriginFixtureScopeTests(unittest.TestCase):
         self.assertEqual(self.policy.scoped_categories(self.TARGET), ())
 
 
+class PhaseBKnowledgeFixtureScopeTests(unittest.TestCase):
+    """Nine Phase B fixture/version allowances suppress only their path/category/value."""
+
+    OTHER_SRC = ".agents/lib/vaws_run_manifest.py"
+    UNRELATED_LINE = 'token = "still-a-credential-shaped-value"'
+    CASES = (
+        {
+            "id": "knowledge-recipes-torch-npu-dev-version",
+            "path": ".agents/skills/curate-workspace-knowledge/references/command-recipes.md",
+            "category": "internal-identifier",
+            "regex": r"^dev20250724$",
+            "values": ("dev20250724",),
+            "nearby": ("dev20250725",),
+        },
+        {
+            "id": "knowledge-curate-test-torch-npu-dev-version",
+            "path": ".agents/skills/curate-workspace-knowledge/tests/test_knowledge_curate.py",
+            "category": "internal-identifier",
+            "regex": r"^dev20250724$",
+            "values": ("dev20250724",),
+            "nearby": ("dev20250725",),
+        },
+        {
+            "id": "knowledge-v2-test-torch-npu-dev-version",
+            "path": ".agents/tests/test_knowledge_v2.py",
+            "category": "internal-identifier",
+            "regex": r"^dev20250724$",
+            "values": ("dev20250724",),
+            "nearby": ("dev20250725",),
+        },
+        {
+            "id": "knowledge-flow-test-torch-npu-dev-version",
+            "path": ".agents/tests/test_knowledge_v2_flow.py",
+            "category": "internal-identifier",
+            "regex": r"^dev20250724$",
+            "values": ("dev20250724",),
+            "nearby": ("dev20250725",),
+        },
+        {
+            "id": "knowledge-redaction-test-private-address",
+            "path": ".agents/tests/test_knowledge_redaction.py",
+            "category": "ipv4",
+            "regex": r"^10\.198\.51\.100$",
+            "values": ("10.198.51.100",),
+            "nearby": ("10.198.51.101",),
+        },
+        {
+            "id": "knowledge-v2-test-private-address",
+            "path": ".agents/tests/test_knowledge_v2.py",
+            "category": "ipv4",
+            "regex": r"^10\.198\.51\.100$",
+            "values": ("10.198.51.100",),
+            "nearby": ("10.198.51.101",),
+        },
+        {
+            "id": "knowledge-redaction-test-example-home",
+            "path": ".agents/tests/test_knowledge_redaction.py",
+            "category": "absolute-user-path",
+            "regex": r"^/home/testuser$",
+            "values": ("/home/testuser",),
+            "texts": ("/home/testuser/vllm-ascend", "/home/testuser/notes"),
+            "nearby": ("/home/testuser-extra/notes",),
+        },
+        {
+            "id": "knowledge-redaction-test-example-emails",
+            "path": ".agents/tests/test_knowledge_redaction.py",
+            "category": "email",
+            "regex": r"^(?:dev@corp-mail\.invalid|synthetic-reviewer@github\.com)$",
+            "values": ("dev@corp-mail.invalid", "synthetic-reviewer@github.com"),
+            "nearby": (
+                "other@corp-mail.invalid",
+                "dev@corp-mail.example",
+                "synthetic-reviewer@github.company",
+            ),
+        },
+        {
+            "id": "knowledge-v2-test-github-email",
+            "path": ".agents/tests/test_knowledge_v2.py",
+            "category": "email",
+            "regex": r"^synthetic-reviewer@github\.com$",
+            "values": ("synthetic-reviewer@github.com",),
+            "nearby": ("other-reviewer@github.com", "synthetic-reviewer@github.company"),
+        },
+    )
+
+    def setUp(self) -> None:
+        self.policy = guard.load_policy(POLICY_PATH)
+        self.by_id = {entry.id: entry for entry in self.policy.entries}
+
+    def _scan(self, text: str, path: str) -> list[guard.Finding]:
+        return guard.scan_text(text, path=path, policy=self.policy)
+
+    def _category_findings(self, text: str, path: str, category: str) -> list[guard.Finding]:
+        return [item for item in self._scan(text, path) if item.category == category]
+
+    def test_declarations_are_exact_paths_and_singleton_categories(self) -> None:
+        self.assertEqual(len(self.policy.entries), 29)
+        self.assertNotIn("knowledge-failure-signatures-private-range", self.by_id)
+        for case in self.CASES:
+            with self.subTest(entry=case["id"]):
+                entry = self.by_id[case["id"]]
+                self.assertEqual(entry.path_glob, case["path"])
+                self.assertNotIn("*", entry.path_glob)
+                self.assertNotIn("?", entry.path_glob)
+                self.assertEqual(entry.categories, (case["category"],))
+                self.assertIsNotNone(entry.pattern)
+                self.assertEqual(entry.pattern.pattern, case["regex"])
+                self.assertEqual(self.policy.scoped_categories(case["path"]), ())
+
+    def test_intended_values_are_labeled_only_at_the_declared_path(self) -> None:
+        for case in self.CASES:
+            texts = case.get("texts", case["values"])
+            expected_matches = case["values"]
+            if len(expected_matches) == 1 and len(texts) > 1:
+                pairs = [(text, expected_matches[0]) for text in texts]
+            else:
+                pairs = list(zip(texts, expected_matches, strict=True))
+            for text, value in pairs:
+                with self.subTest(entry=case["id"], value=value, text=text):
+                    intended = self._category_findings(text, case["path"], case["category"])
+                    self.assertEqual(
+                        [(item.match, item.allowlisted_by) for item in intended],
+                        [(value, case["id"])],
+                    )
+                    elsewhere = self._category_findings(text, self.OTHER_SRC, case["category"])
+                    self.assertTrue(elsewhere)
+                    self.assertTrue(all(item.allowlisted_by is None for item in elsewhere))
+                    near_path = self._category_findings(text, case["path"] + "x", case["category"])
+                    self.assertTrue(near_path)
+                    self.assertTrue(all(item.allowlisted_by is None for item in near_path))
+
+    def test_nearby_values_and_unrelated_categories_remain_findings(self) -> None:
+        for case in self.CASES:
+            for nearby in case["nearby"]:
+                with self.subTest(entry=case["id"], nearby=nearby):
+                    findings = self._category_findings(nearby, case["path"], case["category"])
+                    self.assertTrue(findings)
+                    self.assertTrue(all(item.allowlisted_by is None for item in findings))
+            with self.subTest(entry=case["id"], unrelated="secret-key"):
+                unrelated = [
+                    item
+                    for item in self._scan(self.UNRELATED_LINE, case["path"])
+                    if item.category == "secret-key"
+                ]
+                self.assertTrue(unrelated)
+                self.assertTrue(all(item.allowlisted_by is None for item in unrelated))
+
+
 if __name__ == "__main__":
     unittest.main()
