@@ -11,12 +11,14 @@ import hashlib
 import importlib.util
 import json
 import os
+import shlex
 import subprocess
 import sys
 import tempfile
 import tomllib
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 LIB = ROOT / ".agents" / "lib"
@@ -201,6 +203,9 @@ class ClientSetupTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.project = Path(self.temp.name).resolve() / "project"
         self.project.mkdir()
+        patcher = mock.patch.dict(os.environ, {coordinator.COORDINATOR_ROOT_ENV: ""})
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def test_fresh_json_emits_both_launchers(self) -> None:
         files = self.setup.configuration("claude", self.project)
@@ -210,6 +215,10 @@ class ClientSetupTests(unittest.TestCase):
         self.assertEqual(servers["vaws-task"]["args"], [str(ROOT / ".agents/scripts/vaws.py"), "task-server"])
         self.assertEqual(servers["vaws-task"]["type"], "stdio")
         self.assertIn("VAWS_AGENT_SESSIONS_DIR", servers["vaws-task"]["env"])
+        self.assertNotIn(coordinator.COORDINATOR_ROOT_ENV, servers["vaws-task"]["env"])
+        hook = json.loads(files[self.project / ".claude/settings.local.json"])["hooks"]["SessionStart"][0]["hooks"][0]["command"]
+        self.assertIn("--agent-sessions-dir", hook)
+        self.assertNotIn("--coordinator-root", hook)
 
     def test_task_only_skips_remote_dev(self) -> None:
         servers = json.loads(
@@ -317,6 +326,122 @@ class ClientSetupTests(unittest.TestCase):
         self.assertTrue((self.project / ".mcp.json").is_file())
         for item in payload["files"]:
             self.assertTrue(item["path"].startswith(str(self.project)))
+
+    def test_generated_provider_and_hook_keep_explicit_root_and_registry(self) -> None:
+        root = (self.project / "coord root").resolve()
+        registry = (self.project / "reg dir").resolve()
+        with mock.patch.dict(os.environ, {
+            coordinator.COORDINATOR_ROOT_ENV: str(root),
+            "VAWS_AGENT_SESSIONS_DIR": str(registry),
+        }):
+            plan = self.setup.build_plan("claude", self.project, task_only=True)
+        server = json.loads(plan["files"][self.project / ".mcp.json"])["mcpServers"]["vaws-task"]
+        self.assertEqual(server["env"][coordinator.COORDINATOR_ROOT_ENV], str(root))
+        self.assertEqual(server["env"]["VAWS_AGENT_SESSIONS_DIR"], str(registry))
+        hook = json.loads(plan["files"][self.project / ".claude/settings.local.json"])["hooks"]["SessionStart"][0]["hooks"][0]["command"]
+        argv = shlex.split(hook)
+        self.assertEqual(argv[argv.index("--coordinator-root") + 1], str(root))
+        self.assertEqual(argv[argv.index("--agent-sessions-dir") + 1], str(registry))
+
+    def test_existing_user_env_wins_over_setup_root(self) -> None:
+        path = self.project / ".mcp.json"
+        path.write_text(json.dumps({"mcpServers": {"vaws-task": {
+            "command": "user-command",
+            "args": ["user-argument"],
+            "env": {coordinator.COORDINATOR_ROOT_ENV: "/user/managed/root", "VAWS_AGENT_SESSIONS_DIR": "/user/managed/registry"},
+            "user_field": 1,
+        }}}))
+        with mock.patch.dict(os.environ, {
+            coordinator.COORDINATOR_ROOT_ENV: str(self.project / "setup-root"),
+            "VAWS_AGENT_SESSIONS_DIR": str(self.project / "setup-registry"),
+        }):
+            plan = self.setup.build_plan("claude", self.project, task_only=True)
+        server = json.loads(plan["files"][path])["mcpServers"]["vaws-task"]
+        self.assertEqual(server["command"], "user-command")
+        self.assertEqual(server["env"][coordinator.COORDINATOR_ROOT_ENV], "/user/managed/root")
+        self.assertEqual(server["env"]["VAWS_AGENT_SESSIONS_DIR"], "/user/managed/registry")
+        self.assertEqual(server["user_field"], 1)
+        hook = json.loads(plan["files"][self.project / ".claude/settings.local.json"])["hooks"]["SessionStart"][0]["hooks"][0]["command"]
+        argv = shlex.split(hook)
+        self.assertEqual(argv[argv.index("--coordinator-root") + 1], "/user/managed/root")
+        self.assertEqual(argv[argv.index("--agent-sessions-dir") + 1], "/user/managed/registry")
+
+    def test_previously_generated_hook_is_replaced_once(self) -> None:
+        settings = self.project / ".claude/settings.local.json"
+        settings.parent.mkdir()
+        old = shlex.join([
+            sys.executable,
+            str(ROOT / ".agents/hooks/vaws_session.py"),
+            "--client", "claude",
+            "--project", str(self.project),
+        ])
+        settings.write_text(json.dumps({"hooks": {"SessionStart": [
+            {"hooks": [{"type": "command", "command": "my-hook"}]},
+            {"hooks": [{"type": "command", "command": old, "timeout": 12}]},
+        ]}}))
+        with mock.patch.dict(os.environ, {coordinator.COORDINATOR_ROOT_ENV: str(self.project / "coord")}):
+            first = self.setup.build_plan("claude", self.project)
+            groups = json.loads(first["files"][settings])["hooks"]["SessionStart"]
+            commands = [entry.get("command", "") for group in groups for entry in group.get("hooks", [group])]
+            self.assertEqual(commands.count("my-hook"), 1)
+            owned = [item for item in commands if "vaws_session.py" in item]
+            self.assertEqual(len(owned), 1)
+            self.assertIn("--coordinator-root", owned[0])
+            self.assertNotEqual(owned[0], old)
+            settings.write_text(first["files"][settings])
+            second = self.setup.build_plan("claude", self.project)
+            self.assertEqual(second["files"][settings], first["files"][settings])
+
+    def test_all_clients_embed_explicit_paths_in_owned_hooks(self) -> None:
+        root = str((self.project / "explicit-root").resolve())
+        registry = str((self.project / "explicit-registry").resolve())
+        with mock.patch.dict(os.environ, {
+            coordinator.COORDINATOR_ROOT_ENV: root,
+            "VAWS_AGENT_SESSIONS_DIR": registry,
+        }):
+            for client in ("claude", "cursor", "codex", "grok", "kimi"):
+                with self.subTest(client=client):
+                    plan = self.setup.build_plan(client, self.project, kimi_config=self.project / "kimi.toml")
+                    blob = "\n".join(plan["files"].values())
+                    self.assertIn(root, blob)
+                    self.assertIn(registry, blob)
+
+
+class HookAdapterTests(unittest.TestCase):
+    def test_explicit_path_flags_work_without_ambient_vaws_env(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = write_fake_checkout(Path(tmp) / "checkout")
+            registry = Path(tmp) / "registry with spaces"
+            registry.mkdir()
+            (root / "hooks" / "vaws_session.py").write_text(
+                "import json, os, sys\n"
+                "print(json.dumps({"
+                "'root': os.environ.get('VAWS_COORDINATOR_ROOT'), "
+                "'registry': os.environ.get('VAWS_AGENT_SESSIONS_DIR'), "
+                "'argv': sys.argv[1:]}))\n",
+                encoding="utf-8",
+            )
+            env = {key: value for key, value in os.environ.items() if not key.startswith("VAWS_")}
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / ".agents/hooks/vaws_session.py"),
+                    "--client", "claude",
+                    "--project", tmp,
+                    "--coordinator-root", str(root),
+                    "--agent-sessions-dir", str(registry),
+                ],
+                input="{}",
+                capture_output=True,
+                text=True,
+                env=env,
+                check=False,
+            )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        payload = json.loads(proc.stdout)
+        self.assertEqual(payload["root"], str(root))
+        self.assertEqual(payload["registry"], str(registry))
+        self.assertEqual(payload["argv"], ["--client", "claude", "--project", tmp])
 
 
 class NoInTreeTaskWriterTests(unittest.TestCase):

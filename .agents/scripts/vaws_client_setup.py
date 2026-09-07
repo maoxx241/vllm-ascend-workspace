@@ -38,7 +38,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / ".agents/lib"))
-from vaws_coordinator import coordinator_environment
+from vaws_coordinator import COORDINATOR_ROOT_ENV, coordinator_environment
 from vaws_local_state import agent_sessions_root
 from vaws_remote_dev import ASCEND_RUNTIME_ENV_FILE, resolver_spec, state_dir
 
@@ -78,8 +78,18 @@ def remote_dev_env():
     }
 
 
+def _resolved_path(value):
+    return str(Path(value).expanduser().resolve())
+
+
 def task_server_env():
-    """Environment the task server needs so it shares this workspace's registry."""
+    """Environment the task server needs so it shares this workspace's registry.
+
+    An explicit ``VAWS_COORDINATOR_ROOT`` used during setup is copied into the
+    generated provider so a later client process does not have to inherit the
+    setup shell. The default locator is left unset when the setup process did
+    not choose a checkout. Existing user-managed env keys win at merge time.
+    """
     env = coordinator_environment()
     keys = (
         "VAWS_AGENT_SESSIONS_DIR",
@@ -91,7 +101,41 @@ def task_server_env():
     payload = {key: env[key] for key in keys if key in env}
     if env.get("VAWS_REMOTE_DEV_ROOT"):
         payload["VAWS_REMOTE_DEV_ROOT"] = env["VAWS_REMOTE_DEV_ROOT"]
+    configured = env.get(COORDINATOR_ROOT_ENV, "").strip()
+    if configured:
+        payload[COORDINATOR_ROOT_ENV] = _resolved_path(configured)
     return payload
+
+
+def existing_task_env(client, project, *, kimi_config=None):
+    """User-managed vaws-task env already on disk, if any."""
+    if client in {"claude", "cursor", "kimi"}:
+        path = project / {
+            "claude": ".mcp.json",
+            "cursor": ".cursor/mcp.json",
+            "kimi": ".kimi-code/mcp.json",
+        }[client]
+        if path.is_file():
+            try:
+                servers = json.loads(path.read_text()).get("mcpServers") or {}
+            except json.JSONDecodeError:
+                return {}
+            return dict((servers.get(TASK_SERVER_NAME) or {}).get("env") or {})
+    if client in {"codex", "grok"}:
+        path = project / ("." + client) / "config.toml"
+        if path.is_file():
+            try:
+                servers = (tomllib.loads(path.read_text()) or {}).get("mcp_servers") or {}
+            except tomllib.TOMLDecodeError:
+                return {}
+            entry = servers.get("vaws_task") or servers.get("vaws-task") or {}
+            return dict(entry.get("env") or {})
+    return {}
+
+
+def launch_env(client, project, *, kimi_config=None):
+    """Setup defaults with existing provider env taking precedence."""
+    return {**task_server_env(), **existing_task_env(client, project, kimi_config=kimi_config)}
 
 
 def desired_mcp_servers(*, task_only=False):
@@ -115,13 +159,24 @@ def desired_mcp_servers(*, task_only=False):
     return servers
 
 
-def hook_groups(client, project):
-    command = shlex.join([
+def hook_command(client, project, env=None):
+    """Self-contained hook command; a GUI client must not inherit setup's shell."""
+    env = task_server_env() if env is None else env
+    argv = [
         sys.executable,
         str(ROOT / ".agents/hooks/vaws_session.py"),
         "--client", client,
         "--project", str(project),
-    ])
+        "--agent-sessions-dir", env["VAWS_AGENT_SESSIONS_DIR"],
+    ]
+    root = env.get(COORDINATOR_ROOT_ENV, "").strip()
+    if root:
+        argv += ["--coordinator-root", root]
+    return shlex.join(argv)
+
+
+def hook_groups(client, project, env=None):
+    command = hook_command(client, project, env)
     if client == "cursor":
         return {
             event[0].lower() + event[1:]: [{"command": command}]
@@ -131,6 +186,48 @@ def hook_groups(client, project):
         event: [{"hooks": [{"type": "command", "command": command, "timeout": HOOK_TIMEOUT_SECONDS}]}]
         for event in EVENTS
     }
+
+
+def owned_hook_command(command, client, project):
+    """True when `command` is this helper's hook for this client and project.
+
+    Matching ignores extra path flags so a previously generated command is
+    replaced instead of accumulating beside the repaired one.
+    """
+    try:
+        argv = shlex.split(command)
+    except ValueError:
+        return False
+    if not any(Path(item).name == "vaws_session.py" for item in argv):
+        return False
+    parsed_client = None
+    parsed_project = None
+    index = 0
+    while index < len(argv):
+        item = argv[index]
+        if item == "--client" and index + 1 < len(argv):
+            parsed_client = argv[index + 1]
+            index += 2
+            continue
+        if item.startswith("--client="):
+            parsed_client = item.split("=", 1)[1]
+            index += 1
+            continue
+        if item == "--project" and index + 1 < len(argv):
+            parsed_project = argv[index + 1]
+            index += 2
+            continue
+        if item.startswith("--project="):
+            parsed_project = item.split("=", 1)[1]
+            index += 1
+            continue
+        index += 1
+    if parsed_client != client or not parsed_project:
+        return False
+    try:
+        return Path(parsed_project).expanduser().resolve() == Path(project).expanduser().resolve()
+    except OSError:
+        return parsed_project == str(project)
 
 
 def merge_server_entry(existing, desired):
@@ -154,17 +251,19 @@ def stale_prefix_hits(text):
     return [marker for marker in STALE_TOOL_PREFIX_MARKERS if marker in text]
 
 
-def merge_json(path, *, hooks=None, mcp=None, notes=None):
+def merge_json(path, *, hooks=None, mcp=None, notes=None, client=None, project=None):
     value = json.loads(path.read_text()) if path.exists() else {}
     notes = [] if notes is None else notes
     if hooks:
         target = value.setdefault("hooks", {})
         for event, groups in hooks.items():
             existing = target.setdefault(event, [])
-            commands = {entry.get("command", "") for group in groups for entry in group.get("hooks", [group])}
             existing[:] = [
                 group for group in existing
-                if not any(entry.get("command", "") in commands for entry in group.get("hooks", [group]))
+                if not any(
+                    owned_hook_command(entry.get("command", ""), client, project)
+                    for entry in group.get("hooks", [group])
+                )
             ]
             existing.extend(groups)
         if path.parent.name == ".cursor":
@@ -213,7 +312,8 @@ def configuration(client, project, *, kimi_config=None, task_only=False):
 
 def build_plan(client, project, *, kimi_config=None, task_only=False):
     project = project.expanduser().resolve(strict=True)
-    groups = hook_groups(client, project)
+    env = launch_env(client, project, kimi_config=kimi_config)
+    groups = hook_groups(client, project, env)
     servers = desired_mcp_servers(task_only=task_only)
     files = {}
     notes = []
@@ -225,7 +325,7 @@ def build_plan(client, project, *, kimi_config=None, task_only=False):
             "grok": ".grok/hooks/vaws-session.json",
         }[client]
         path = project / relative
-        files[path] = merge_json(path, hooks=groups, notes=notes)
+        files[path] = merge_json(path, hooks=groups, notes=notes, client=client, project=project)
     if client in {"claude", "cursor", "kimi"}:
         path = project / {
             "claude": ".mcp.json",

@@ -85,6 +85,16 @@ and records only a planned local execution.
 `.agents/scripts/vaws_client_setup.py` previews files and writes only with
 `--apply`. Tests use temporary fixtures only.
 
+When setup runs with an explicit `VAWS_COORDINATOR_ROOT` or
+`VAWS_AGENT_SESSIONS_DIR`, those absolute paths are copied into the generated
+`vaws-task` env and into the native hook command (`--coordinator-root`,
+`--agent-sessions-dir`). A later GUI client does not inherit the setup shell.
+Existing user-managed provider env keys and unknown fields still win. Re-running
+setup replaces the one owned VAWS hook for that client and project; it does not
+stack the previous generated command next to the repaired one. Default
+installation leaves `VAWS_COORDINATOR_ROOT` unset so the locator's default
+checkout remains in force.
+
 The coordinator's own JSON helper rewrites `command` / `args` / `type` for a
 same-name provider. **This scaffold does not apply that helper as a
 migration.** JSON merge here keeps those fields when they already exist,
