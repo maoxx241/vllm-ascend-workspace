@@ -1,0 +1,535 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vllm-ascend-workspace.local/schemas/result-envelope-v1.schema.json",
+  "title": "vLLM Ascend Workspace Result Envelope v1",
+  "description": "Uniform result envelope returned on stdout by every workspace entry point, in success and in failure. jsonschema is not guaranteed to be installed on a client machine, so .agents/lib/vaws_result_envelope.py is the authoritative validator and enforces the cross-field rules this document can only partially express.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "envelope_id",
+    "emitted_at",
+    "operation",
+    "outcome",
+    "exit_code",
+    "summary",
+    "attempt",
+    "failure",
+    "environment",
+    "evidence",
+    "next_step",
+    "parts",
+    "attempts",
+    "children",
+    "warnings",
+    "extensions"
+  ],
+  "$defs": {
+    "layer": {
+      "description": "Which layer failed. 'unknown' is a first-class outcome: a confident wrong attribution costs more than an honest unknown.",
+      "enum": [
+        "caller",
+        "tool",
+        "transport",
+        "remote_env",
+        "remote_workload",
+        "device",
+        "unknown"
+      ]
+    },
+    "targetKind": {
+      "enum": [
+        "local",
+        "host",
+        "container",
+        "session",
+        "fleet",
+        "service",
+        "unknown"
+      ]
+    },
+    "version": {
+      "type": ["string", "null"]
+    },
+    "preview": {
+      "description": "Bounded text preview. Field names match .remote-dev/core/preview.py; 'ref' is required whenever 'truncated' is true so the full content is always reachable.",
+      "type": "object",
+      "required": ["bytes", "truncated", "head_chars", "tail_chars", "ref"],
+      "properties": {
+        "text": {"type": "string"},
+        "head": {"type": "string"},
+        "tail": {"type": "string"},
+        "bytes": {"type": "integer", "minimum": 0},
+        "truncated": {"type": "boolean"},
+        "head_chars": {"type": "integer", "minimum": 0},
+        "tail_chars": {"type": "integer", "minimum": 0},
+        "ref": {"type": ["string", "null"]}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"truncated": {"const": true}}},
+          "then": {
+            "required": ["head", "tail", "ref"],
+            "properties": {"ref": {"type": "string", "minLength": 1}}
+          },
+          "else": {"required": ["text"]}
+        }
+      ]
+    },
+    "evidenceRef": {
+      "type": "object",
+      "required": ["name", "kind", "ref"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "kind": {"type": "string", "minLength": 1},
+        "ref": {"type": "string", "minLength": 1},
+        "bytes": {"type": ["integer", "null"], "minimum": 0},
+        "sha256": {
+          "oneOf": [
+            {"type": "null"},
+            {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+          ]
+        },
+        "note": {"type": ["string", "null"]}
+      }
+    },
+    "command": {
+      "type": "object",
+      "required": ["argv", "display", "cwd", "env_keys", "timeout_seconds"],
+      "properties": {
+        "argv": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "string"}
+        },
+        "display": {
+          "description": "Shell-quoted rendering of argv, reproducible by copy-paste.",
+          "type": "string",
+          "minLength": 1
+        },
+        "cwd": {"type": ["string", "null"]},
+        "env_keys": {
+          "description": "Environment variable names only. Values are never carried, so the envelope cannot become the thing that leaks a credential.",
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "timeout_seconds": {"type": ["number", "null"], "minimum": 0}
+      }
+    }
+  },
+  "properties": {
+    "schema_version": {"const": "vaws.result-envelope.v1"},
+    "envelope_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+    },
+    "emitted_at": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"
+    },
+    "operation": {
+      "description": "What was attempted.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["skill", "entry_point", "action", "target"],
+      "properties": {
+        "skill": {"type": ["string", "null"]},
+        "entry_point": {
+          "description": "Repo-relative path of the script that produced this envelope. Absolute paths are rejected: they leak the local user and are not portable between agents.",
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[^/]"
+        },
+        "action": {"type": "string", "minLength": 1},
+        "target": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "id", "ref"],
+          "properties": {
+            "kind": {"$ref": "#/$defs/targetKind"},
+            "id": {"type": ["string", "null"]},
+            "ref": {"type": ["string", "null"]}
+          }
+        }
+      }
+    },
+    "outcome": {
+      "enum": ["success", "partial", "failure", "blocked", "cancelled"]
+    },
+    "exit_code": {"type": ["integer", "null"]},
+    "summary": {"type": "string", "minLength": 1, "maxLength": 400},
+    "attempt": {
+      "description": "The exact command that ran, reproducible by hand.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "command",
+        "remote_command",
+        "reproduce",
+        "started_at",
+        "duration_ms"
+      ],
+      "properties": {
+        "command": {"$ref": "#/$defs/command"},
+        "remote_command": {
+          "oneOf": [
+            {"type": "null"},
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "endpoint",
+                "argv",
+                "script_preview",
+                "script_ref",
+                "cwd",
+                "env_keys",
+                "timeout_seconds"
+              ],
+              "properties": {
+                "endpoint": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["kind", "ref"],
+                  "properties": {
+                    "kind": {"$ref": "#/$defs/targetKind"},
+                    "ref": {"type": ["string", "null"]}
+                  }
+                },
+                "argv": {
+                  "oneOf": [
+                    {"type": "null"},
+                    {"type": "array", "items": {"type": "string"}}
+                  ]
+                },
+                "script_preview": {
+                  "oneOf": [{"type": "null"}, {"$ref": "#/$defs/preview"}]
+                },
+                "script_ref": {"type": ["string", "null"]},
+                "cwd": {"type": ["string", "null"]},
+                "env_keys": {"type": "array", "items": {"type": "string"}},
+                "timeout_seconds": {"type": ["number", "null"], "minimum": 0}
+              },
+              "anyOf": [
+                {"properties": {"argv": {"type": "array"}}, "required": ["argv"]},
+                {
+                  "properties": {"script_preview": {"type": "object"}},
+                  "required": ["script_preview"]
+                }
+              ]
+            }
+          ]
+        },
+        "reproduce": {
+          "description": "One copy-pasteable string that re-runs the failing step by hand.",
+          "type": "string",
+          "minLength": 1
+        },
+        "started_at": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"
+        },
+        "duration_ms": {"type": ["integer", "null"], "minimum": 0}
+      }
+    },
+    "failure": {
+      "description": "Required for outcome partial, failure and blocked; forbidden for success.",
+      "oneOf": [
+        {"type": "null"},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "layer",
+            "confidence",
+            "reason_code",
+            "message",
+            "attribution_basis",
+            "ruled_out",
+            "signals",
+            "exception_type"
+          ],
+          "properties": {
+            "layer": {"$ref": "#/$defs/layer"},
+            "confidence": {"enum": ["high", "medium", "low"]},
+            "reason_code": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]{1,63}$"
+            },
+            "message": {"type": "string", "minLength": 1},
+            "attribution_basis": {
+              "description": "Observations that support the layer claim. Must be non-empty unless layer is 'unknown'.",
+              "type": "array",
+              "items": {"type": "string", "minLength": 1}
+            },
+            "ruled_out": {
+              "description": "Layers explicitly excluded by evidence, so the reader knows where not to look.",
+              "type": "array",
+              "items": {"$ref": "#/$defs/layer"}
+            },
+            "signals": {
+              "type": "array",
+              "items": {"type": "object"}
+            },
+            "exception_type": {"type": ["string", "null"]}
+          },
+          "allOf": [
+            {
+              "if": {
+                "properties": {"layer": {"not": {"const": "unknown"}}}
+              },
+              "then": {
+                "properties": {"attribution_basis": {"minItems": 1}}
+              }
+            },
+            {
+              "if": {"properties": {"layer": {"const": "unknown"}}},
+              "then": {
+                "properties": {"confidence": {"enum": ["medium", "low"]}}
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "environment": {
+      "description": "The concrete environment the operation ran against, at the granularity the knowledge base compares on. Every version field is always present; explicit null means 'not captured'.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "soc",
+        "cann",
+        "driver",
+        "torch",
+        "torch_npu",
+        "vllm",
+        "vllm_ascend",
+        "source",
+        "captured_at",
+        "unknown_fields"
+      ],
+      "properties": {
+        "soc": {"$ref": "#/$defs/version"},
+        "cann": {"$ref": "#/$defs/version"},
+        "driver": {"$ref": "#/$defs/version"},
+        "torch": {"$ref": "#/$defs/version"},
+        "torch_npu": {"$ref": "#/$defs/version"},
+        "vllm": {"$ref": "#/$defs/version"},
+        "vllm_ascend": {"$ref": "#/$defs/version"},
+        "source": {
+          "enum": ["probe", "manifest", "declared", "cache", "unknown"]
+        },
+        "captured_at": {"type": ["string", "null"]},
+        "unknown_fields": {
+          "type": "array",
+          "items": {"type": "string"}
+        }
+      }
+    },
+    "evidence": {
+      "description": "Pointers to logs, artifacts and manifests, plus the Run Manifest correlation id where one exists.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "run_id",
+        "parent_run_id",
+        "manifest_ref",
+        "refs",
+        "previews"
+      ],
+      "properties": {
+        "run_id": {"type": ["string", "null"]},
+        "parent_run_id": {"type": ["string", "null"]},
+        "manifest_ref": {"type": ["string", "null"]},
+        "refs": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/evidenceRef"}
+        },
+        "previews": {
+          "type": "object",
+          "additionalProperties": {"$ref": "#/$defs/preview"}
+        }
+      }
+    },
+    "next_step": {
+      "description": "What to look at next, and explicitly what not to look at when a known signature applies.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["actions", "do_not", "knowledge"],
+      "properties": {
+        "actions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["description", "command", "ref"],
+            "properties": {
+              "description": {"type": "string", "minLength": 1},
+              "command": {"type": ["string", "null"]},
+              "ref": {"type": ["string", "null"]}
+            }
+          }
+        },
+        "do_not": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1}
+        },
+        "knowledge": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["entry_id", "summary"],
+            "properties": {
+              "entry_id": {"type": "string", "minLength": 1},
+              "summary": {"type": "string", "minLength": 1},
+              "avoidance": {"type": ["string", "null"]},
+              "score": {"type": ["integer", "null"]}
+            }
+          }
+        }
+      }
+    },
+    "parts": {
+      "description": "Per-unit results for fan-out operations. Three of four nodes succeeding is not a boolean.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "unit",
+          "unit_kind",
+          "outcome",
+          "layer",
+          "reason_code",
+          "summary",
+          "refs"
+        ],
+        "properties": {
+          "unit": {"type": "string", "minLength": 1},
+          "unit_kind": {"type": "string", "minLength": 1},
+          "outcome": {"enum": ["success", "failure", "blocked", "skipped"]},
+          "layer": {
+            "oneOf": [{"type": "null"}, {"$ref": "#/$defs/layer"}]
+          },
+          "reason_code": {"type": ["string", "null"]},
+          "summary": {"type": ["string", "null"]},
+          "refs": {
+            "type": "array",
+            "items": {"$ref": "#/$defs/evidenceRef"}
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {"outcome": {"enum": ["failure", "blocked"]}}
+            },
+            "then": {"properties": {"layer": {"$ref": "#/$defs/layer"}}}
+          }
+        ]
+      }
+    },
+    "attempts": {
+      "description": "Retry history and whether re-running is safe. retry_safe is derived from class so the two can never disagree.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["count", "records", "idempotency"],
+      "properties": {
+        "count": {"type": "integer", "minimum": 1},
+        "records": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["index", "outcome"],
+            "properties": {
+              "index": {"type": "integer", "minimum": 1},
+              "outcome": {"type": "string", "minLength": 1},
+              "layer": {
+                "oneOf": [{"type": "null"}, {"$ref": "#/$defs/layer"}]
+              },
+              "reason_code": {"type": ["string", "null"]},
+              "duration_ms": {"type": ["integer", "null"], "minimum": 0},
+              "note": {"type": ["string", "null"]}
+            }
+          }
+        },
+        "idempotency": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["class", "retry_safe", "side_effects"],
+          "properties": {
+            "class": {
+              "enum": [
+                "idempotent",
+                "at_most_once",
+                "unsafe_to_retry",
+                "unknown"
+              ]
+            },
+            "retry_safe": {"type": ["boolean", "null"]},
+            "side_effects": {
+              "type": "array",
+              "items": {"type": "string"}
+            }
+          }
+        }
+      }
+    },
+    "children": {
+      "description": "Bounded digests of nested envelopes. A digest never nests another envelope; the full child is reachable through ref.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["envelope_id", "outcome", "depth"],
+        "properties": {
+          "envelope_id": {"type": "string", "minLength": 1},
+          "entry_point": {"type": ["string", "null"]},
+          "action": {"type": ["string", "null"]},
+          "outcome": {
+            "enum": ["success", "partial", "failure", "blocked", "cancelled"]
+          },
+          "layer": {
+            "oneOf": [{"type": "null"}, {"$ref": "#/$defs/layer"}]
+          },
+          "reason_code": {"type": ["string", "null"]},
+          "summary": {"type": ["string", "null"]},
+          "ref": {"type": ["string", "null"]},
+          "depth": {"type": "integer", "minimum": 1}
+        }
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "extensions": {
+      "description": "Additive escape hatch. Producers put experimental data here so that adding a field never needs a version bump, and readers ignore what they do not recognize. A new required field or a new enum value requires v2.",
+      "type": "object"
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"outcome": {"const": "success"}}},
+      "then": {"properties": {"failure": {"type": "null"}}}
+    },
+    {
+      "if": {
+        "properties": {
+          "outcome": {"enum": ["partial", "failure", "blocked"]}
+        }
+      },
+      "then": {
+        "properties": {
+          "failure": {"type": "object"},
+          "next_step": {"properties": {"actions": {"minItems": 1}}}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"outcome": {"const": "partial"}}},
+      "then": {"properties": {"parts": {"minItems": 1}}}
+    }
+  ]
+}
