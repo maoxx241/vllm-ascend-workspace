@@ -26,11 +26,13 @@ entry points.
 | That main's tree | `d8d5b42bfb07a97895b46281a664c7bec57e746d` |
 | Original #85 | `b6e8559bc6e76743ffd08a383072c8b041a30e12` |
 | Ordinary-merge preview tree before these three files | `626e553438e5b24451c8735682b0c0ce6e76d89c` |
-| Measurement | AST `__main__` / `__main__.py` discovery of tracked (and untracked-unignored) Python outside `vllm/` and `vllm-ascend/`; committed `.agents/deps/*.json` pins; no import, fetch, `--help`, NPU or SSH |
+| Measurement | AST `__main__` / `__main__.py` discovery of tracked (and untracked-unignored) Python outside `vllm/` and `vllm-ascend/`; overlay and owner selectors from `.agents/policy/cli-surface-inventory.json`; committed `.agents/deps/*.json` pins; no import, fetch, `--help`, NPU or SSH |
 
-The census is the AST of the inspected files plus those committed pins. Re-run
-the generator after this overlay changes. Do not paste a future commit SHA
-into this file as if it were an input.
+The census is the AST of the inspected files plus those committed pins. The
+117-entry overlay and four owner-selector records live in
+`.agents/policy/cli-surface-inventory.json` (metadata only; not executable).
+Re-run the generator after this overlay changes. Do not paste a future commit
+SHA into this file as if it were an input.
 
 ## 2. Current headline
 
@@ -84,9 +86,13 @@ marked as a collision.
 
 Reference scanning is textual evidence, not proof of runtime dependence or of
 safety to delete. Policy and source-map mentions are kept distinct from
-executable callers. Inventory artifacts (`cli_surface_inventory.py` and this
-document) are excluded from the reference scan so the table does not make
-every path look referenced.
+executable callers. Inventory artifacts (`cli_surface_inventory.py`, the JSON
+catalog, and this document) are excluded from the reference scan so the
+catalog's own rows do not manufacture a mention of every measured entry. That
+is an inventory reference-count distinction, not an exemption from
+`repo_boundary_check.py`. The catalog remains part of the strict tracked leak
+scan. The discovery miniature used by the unit test lives in
+`.agents/tests/fixtures/cli-surface-inventory.json`.
 
 The collector records the first explicit option spelling and a conservative
 local parser structure. It does not interpret dynamic `tool NAME` values or

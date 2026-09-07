@@ -16,6 +16,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / ".agents" / "scripts" / "cli_surface_inventory.py"
 DOCS = ROOT / "docs" / "cli-surface.md"
+DISCOVERY_FIXTURE_PATH = ROOT / ".agents" / "tests" / "fixtures" / "cli-surface-inventory.json"
+DISCOVERY_FIXTURE = json.loads(DISCOVERY_FIXTURE_PATH.read_text(encoding="utf-8"))
 
 
 def load_module():
@@ -38,137 +40,9 @@ def write(root: Path, rel: str, text: str) -> None:
 
 
 def build_fixture(root: Path) -> None:
-    """A miniature scaffold: an inline argparse script with verbs, a delegated
-    wrapper, a ``main(tool)`` dispatcher pair, a test, a library, and docs."""
-    write(
-        root,
-        ".agents/scripts/thing.py",
-        '''
-        """Manage things."""
-        import argparse
-
-        def add_target_args(parser):
-            parser.add_argument("--machine")
-            parser.add_argument("--session-id")
-
-        def build_parser():
-            parser = argparse.ArgumentParser(description=__doc__)
-            add_target_args(parser)
-            sub = parser.add_subparsers(dest="action")
-            sub.add_parser("create")
-            for name in ("status", "remove"):
-                child = sub.add_parser(name)
-                child.add_argument("--force", action="store_true")
-            return parser
-
-        def main():
-            build_parser().parse_args()
-
-        if __name__ == "__main__":
-            raise SystemExit(main())
-        ''',
-    )
-    write(
-        root,
-        ".agents/lib/toolbox.py",
-        '''
-        """Toolbox library."""
-        import argparse
-
-        def add_target_args(parser):
-            parser.add_argument("--machine")
-
-        def cli_probe(argv=None):
-            parser = argparse.ArgumentParser()
-            add_target_args(parser)
-            parser.add_argument("--timeout", type=float)
-            return 0
-        ''',
-    )
-    write(
-        root,
-        ".agents/scripts/remote_probe.py",
-        '''
-        from toolbox import cli_probe
-
-        if __name__ == "__main__":
-            raise SystemExit(cli_probe())
-        ''',
-    )
-    write(
-        root,
-        ".remote-dev/tools/_cli.py",
-        '''
-        import argparse
-
-        def add_endpoint_args(parser):
-            parser.add_argument("--host")
-            parser.add_argument("--port")
-
-        def build_parser(tool):
-            parser = argparse.ArgumentParser()
-            add_endpoint_args(parser)
-            if tool == "bash":
-                parser.add_argument("--command")
-            elif tool == "read":
-                parser.add_argument("--file-path")
-            elif tool in {"job_status", "job_tail"}:
-                parser.add_argument("--job-id")
-            return parser
-
-        def main(tool):
-            build_parser(tool).parse_args()
-        ''',
-    )
-    write(
-        root,
-        ".remote-dev/tools/remote_bash.py",
-        '''
-        from _cli import main
-
-        if __name__ == "__main__":
-            raise SystemExit(main("bash"))
-        ''',
-    )
-    write(
-        root,
-        ".remote-dev/tools/remote_probe.py",
-        '''
-        from _cli import main
-
-        if __name__ == "__main__":
-            raise SystemExit(main("probe"))
-        ''',
-    )
-    write(
-        root,
-        ".agents/skills/demo/scripts/bare.py",
-        '''
-        import sys
-
-        def main():
-            print(sys.argv)
-
-        if __name__ == "__main__":
-            main()
-        ''',
-    )
-    write(root, ".agents/skills/demo/scripts/helper.py", "def helper():\n    return 1\n")
-    write(root, ".agents/tests/test_thing.py", "if __name__ == '__main__':\n    pass\n")
-    write(root, "vllm/setup.py", "if __name__ == '__main__':\n    pass\n")
-    write(
-        root,
-        ".agents/skills/demo/SKILL.md",
-        """
-        ---
-        name: demo
-        ---
-        Run `python3 .agents/scripts/thing.py create` then `.remote-dev/tools/remote_probe.py`.
-        """,
-    )
-    write(root, "AGENTS.md", "- use `.agents/scripts/remote_probe.py` for probes\n")
-    write(root, ".agents/policy/demo.json", '{ "script": "thing.py" }\n')
-    write(root, ".agents/deps/demo.json", '{ "cli": "thing.py" }\n')
+    """Write the miniature discovery scaffold from the committed JSON fixture."""
+    for item in DISCOVERY_FIXTURE["files"]:
+        write(root, item["path"], item["text"])
 
 
 class DiscoveryTests(unittest.TestCase):
@@ -183,59 +57,56 @@ class DiscoveryTests(unittest.TestCase):
         self._tmp.cleanup()
 
     def test_entry_point_definition(self) -> None:
-        self.assertEqual(
-            sorted(self.by_path),
-            [
-                ".agents/scripts/remote_probe.py",
-                ".agents/scripts/thing.py",
-                ".agents/skills/demo/scripts/bare.py",
-                ".remote-dev/tools/remote_bash.py",
-                ".remote-dev/tools/remote_probe.py",
-            ],
-        )
-        self.assertNotIn(".agents/tests/test_thing.py", self.by_path)
-        self.assertNotIn("vllm/setup.py", self.by_path)
-        self.assertNotIn(".agents/lib/toolbox.py", self.by_path)
+        named = DISCOVERY_FIXTURE["named_paths"]
+        self.assertEqual(sorted(self.by_path), DISCOVERY_FIXTURE["expected_entry_points"])
+        for path in DISCOVERY_FIXTURE["excluded_paths"]:
+            self.assertNotIn(path, self.by_path)
+        self.assertEqual(named["thing"], DISCOVERY_FIXTURE["expected_entry_points"][1])
 
     def test_inline_argparse_verbs_and_helper_options(self) -> None:
-        thing = self.by_path[".agents/scripts/thing.py"]
+        thing = self.by_path[DISCOVERY_FIXTURE["named_paths"]["thing"]]
         self.assertEqual(thing["parser_style"], "argparse")
         self.assertEqual(thing["verbs"], ["create", "status", "remove"])
         self.assertEqual(thing["options"], ["--machine", "--session-id", "--force"])
         self.assertEqual(thing["docstring"], "Manage things.")
 
     def test_delegated_wrapper_resolves_library_parser(self) -> None:
-        probe = self.by_path[".agents/scripts/remote_probe.py"]
+        probe = self.by_path[DISCOVERY_FIXTURE["named_paths"]["agents_remote_probe"]]
         self.assertEqual(probe["parser_style"], "delegated")
         self.assertEqual(probe["delegate"], "toolbox.cli_probe")
         self.assertEqual(probe["options"], ["--machine", "--timeout"])
         self.assertEqual(probe["docstring"], "Toolbox library.")
 
     def test_main_tool_dispatcher_filters_branches_by_literal(self) -> None:
-        bash = self.by_path[".remote-dev/tools/remote_bash.py"]
+        bash = self.by_path[DISCOVERY_FIXTURE["named_paths"]["remote_bash"]]
         self.assertEqual(bash["delegate"], "_cli.main('bash')")
         self.assertIn("--command", bash["options"])
+        self.assertEqual(bash["options"].count("--host"), 1)
         self.assertIn("--host", bash["options"])
         self.assertNotIn("--file-path", bash["options"])
         self.assertNotIn("--job-id", bash["options"])
 
     def test_bare_argv_style(self) -> None:
-        self.assertEqual(self.by_path[".agents/skills/demo/scripts/bare.py"]["parser_style"], "bare-argv")
+        self.assertEqual(
+            self.by_path[DISCOVERY_FIXTURE["named_paths"]["bare"]]["parser_style"],
+            "bare-argv",
+        )
 
     def test_references_are_attributed_to_the_right_collision_sibling(self) -> None:
-        agents_probe = self.by_path[".agents/scripts/remote_probe.py"]
-        substrate_probe = self.by_path[".remote-dev/tools/remote_probe.py"]
+        named = DISCOVERY_FIXTURE["named_paths"]
+        agents_probe = self.by_path[named["agents_remote_probe"]]
+        substrate_probe = self.by_path[named["substrate_remote_probe"]]
         self.assertTrue(agents_probe["basename_collision"])
-        self.assertEqual([r["path"] for r in agents_probe["references"]], ["AGENTS.md"])
+        self.assertEqual([r["path"] for r in agents_probe["references"]], [named["agents_md"]])
         self.assertEqual(agents_probe["reference_kinds"], {"routing": 1})
         self.assertEqual(
             [r["path"] for r in substrate_probe["references"]],
-            [".agents/skills/demo/SKILL.md"],
+            [named["skill_md"]],
         )
         self.assertEqual(substrate_probe["reference_kinds"], {"skill-doc": 1})
 
     def test_policy_and_source_map_mentions_are_not_executable_callers(self) -> None:
-        thing = self.by_path[".agents/scripts/thing.py"]
+        thing = self.by_path[DISCOVERY_FIXTURE["named_paths"]["thing"]]
         kinds = thing["reference_kinds"]
         self.assertEqual(kinds.get("policy"), 1)
         self.assertEqual(kinds.get("source-map"), 1)
@@ -244,7 +115,7 @@ class DiscoveryTests(unittest.TestCase):
     def test_unclassified_entry_points_fail_the_run(self) -> None:
         self.assertEqual(self.payload["status"], "failed")
         codes = {(f["code"], f["path"]) for f in self.payload["findings"]}
-        self.assertIn(("unclassified", ".agents/scripts/thing.py"), codes)
+        self.assertIn(("unclassified", DISCOVERY_FIXTURE["named_paths"]["thing"]), codes)
         self.assertIn("stale-classification", {f["code"] for f in self.payload["findings"]})
 
     def test_counts_by_area_and_style(self) -> None:
@@ -420,14 +291,29 @@ class RepositoryCoherenceTests(unittest.TestCase):
 
     def test_external_owners_come_from_committed_pins(self) -> None:
         owners = self.payload["external_owners"]
-        self.assertEqual(owners["remote-dev"]["commit"], "b6acc21d147e369e771f1ff916973d74d667691e")
-        self.assertEqual(owners["vaws-coordinator"]["commit"], "2e16e894e31a12d85a11117a2772031f30fdfebe")
-        self.assertEqual(owners["vaws-top"]["commit"], "e13478484b9f52e8847169a785eebc32b268787f")
-        self.assertEqual(owners["vaws-knowledge"]["commit"], "e04d50f7bc5702afbe2e2988f7c28a3268e1a7f3")
+        by_repository = {meta["repository"]: meta for meta in owners.values()}
+        self.assertEqual(
+            by_repository["vllm-ascend-workspace/remote-dev"]["commit"],
+            "b6acc21d147e369e771f1ff916973d74d667691e",
+        )
+        self.assertEqual(
+            by_repository["vllm-ascend-workspace/vaws-coordinator"]["commit"],
+            "2e16e894e31a12d85a11117a2772031f30fdfebe",
+        )
+        self.assertEqual(
+            by_repository["vllm-ascend-workspace/vaws-top"]["commit"],
+            "e13478484b9f52e8847169a785eebc32b268787f",
+        )
+        self.assertEqual(
+            by_repository["vllm-ascend-workspace/vaws-knowledge"]["commit"],
+            "e04d50f7bc5702afbe2e2988f7c28a3268e1a7f3",
+        )
         for meta in owners.values():
             self.assertEqual(meta["source_availability"], "uninspected")
-        self.assertNotIn(".remote-dev/tools/remote_bash.py", {e["path"] for e in self.payload["entry_points"]})
-        self.assertNotIn(".agents/coordinator/server.py", {e["path"] for e in self.payload["entry_points"]})
+            self.assertTrue(meta["repository"])
+        current_paths = {e["path"] for e in self.payload["entry_points"]}
+        self.assertNotIn(".remote-dev/tools/remote_bash.py", current_paths)
+        self.assertNotIn(".agents/coordinator/server.py", current_paths)
 
     def test_current_docs_table_matches_inventory(self) -> None:
         rows = inventory.extract_delimited_table(

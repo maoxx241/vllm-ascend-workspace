@@ -31,7 +31,8 @@ inspected code are performed):
   tests);
 - the curated overlay: responsibility (mechanics / judgment / mixed),
   current support role, current target, optional historical proposed target,
-  and optional committed external owner.
+  and optional committed external owner, loaded from
+  ``.agents/policy/cli-surface-inventory.json``.
 
 Progress is bounded on ``stderr``; one JSON payload is printed on ``stdout``.
 The exit code is ``0`` when every discovered entry is classified coherently
@@ -69,12 +70,8 @@ SUPPORT_ROLES = (
 )
 TARGET_KINDS = ("self", "local-entry", "external", "non-command")
 NON_COMMAND_TARGETS = frozenset({"guidance", "payload", "hook", "server", "harness"})
-DEP_DECLARATIONS = (
-    ("remote-dev", "remote-dev.json"),
-    ("vaws-coordinator", "coordinator.json"),
-    ("vaws-top", "vaws-top.json"),
-    ("vaws-knowledge", "vaws-knowledge.json"),
-)
+CATALOG_RELATIVE = ".agents/policy/cli-surface-inventory.json"
+CATALOG_PATH = Path(__file__).resolve().parents[1] / "policy" / "cli-surface-inventory.json"
 
 CURRENT_TABLE_BEGIN = "<!-- current-cli-surface-table -->"
 CURRENT_TABLE_END = "<!-- /current-cli-surface-table -->"
@@ -141,621 +138,58 @@ def _cls(
     return rec
 
 
-# ---------------------------------------------------------------------------
-# Curated classification overlay.
-#
-# Keys are repository-relative paths. ``responsibility`` is mechanics /
-# judgment / mixed and is independent of current support. ``support_role`` is
-# the current non-overlapping role. ``target`` is the current owner, never a
-# future ``vaws <noun>`` command. ``proposed_target`` is the unimplemented
-# original #85 option when one was recorded. ``external_owner`` names a
-# committed pin in ``.agents/deps/``; provider source is not fetched.
-# ---------------------------------------------------------------------------
-CLASSIFICATION: dict[str, dict[str, str]] = {
-    ".agents/hooks/knowledge_session_end.py": _cls(
-        "mechanics", "hook",
-        "session-end flush of deferred knowledge candidates; stdin/client hook, not an agent CLI",
-    ),
-    ".agents/hooks/tracked_leak_precommit.py": _cls(
-        "mechanics", "hook",
-        "git pre-commit wrapper around tracked_leak_scan; local identifier guard",
-    ),
-    ".agents/hooks/vaws_session.py": _cls(
-        "mechanics", "hook",
-        "compatibility adapter that execs the coordinator native-session hook when the checkout is present",
-        external_owner="vaws-coordinator",
-    ),
-    ".agents/maturation/run.py": _cls(
-        "mechanics", "harness",
-        "deterministic-core maturation harness; --list/--report stay offline; live runs need a separate hardware contract",
-    ),
-    ".agents/scripts/cli_surface_inventory.py": _cls(
-        "mechanics", "supported",
-        "this tool; AST inventory and overlay coherence check",
-        proposed_target="vaws lint",
-    ),
-    ".agents/scripts/envelope_lint.py": _cls(
-        "mechanics", "supported",
-        "Result Envelope v1 scan/check/run; schema owner remains vaws_result_envelope.py",
-        proposed_target="vaws lint",
-    ),
-    ".agents/scripts/knowledge_capture.py": _cls(
-        "mixed", "supported",
-        "redaction, coordinate capture and atomic write are mechanics; verified/unverified is supplied by the caller",
-        proposed_target="vaws knowledge",
-    ),
-    ".agents/scripts/knowledge_export.py": _cls(
-        "mechanics", "supported",
-        "source-side export gate: unresolved coordinates, redaction, provenance and content_hash; writes a local proposal bundle",
-        proposed_target="vaws knowledge",
-    ),
-    ".agents/scripts/knowledge_migrate_v2.py": _cls(
-        "mechanics", "supported",
-        "v1 to v2 migration that writes explicit unresolved coordinates and reports what remains unknown",
-        proposed_target="vaws knowledge",
-    ),
-    ".agents/scripts/knowledge_query.py": _cls(
-        "mechanics", "supported",
-        "shared/project/candidate query surface with --capabilities and layer coverage; missing shared cache degrades visibly",
-        proposed_target="vaws knowledge",
-    ),
-    ".agents/scripts/knowledge_shared_cache.py": _cls(
-        "mechanics", "supported",
-        "status/import/clear of a local shared cache; import is a local directory, not a network fetch",
-        proposed_target="vaws knowledge",
-    ),
-    ".agents/scripts/knowledge_validate.py": _cls(
-        "mechanics", "supported",
-        "schema validation of knowledge documents",
-        proposed_target="vaws knowledge",
-    ),
-    ".agents/scripts/remote_artifact_manifest.py": _cls(
-        "mechanics", "compatibility",
-        "managed toolbox artifact manifest; distinct store from extracted remote-dev, left for C3",
-        proposed_target="vaws remote",
-    ),
-    ".agents/scripts/remote_artifact_pull.py": _cls(
-        "mechanics", "compatibility",
-        "managed toolbox artifact pull; distinct store from extracted remote-dev, left for C3",
-        proposed_target="vaws remote",
-    ),
-    ".agents/scripts/remote_artifact_push.py": _cls(
-        "mechanics", "compatibility",
-        "managed toolbox artifact push; distinct store from extracted remote-dev, left for C3",
-        proposed_target="vaws remote",
-    ),
-    ".agents/scripts/remote_cleanup.py": _cls(
-        "mechanics", "supported",
-        "dry-run-capable cleanup of jobs/services/leases/known-hosts/temp",
-        proposed_target="vaws session",
-    ),
-    ".agents/scripts/remote_dev.py": _cls(
-        "mechanics", "supported",
-        "scaffold launcher for extracted remote-dev: status/bootstrap/server/hook/tool/env; tool NAME is not expanded into provider verbs",
-        proposed_target="vaws remote",
-        external_owner="remote-dev",
-    ),
-    ".agents/scripts/remote_exec.py": _cls(
-        "mechanics", "compatibility",
-        "managed-session SSH via vaws_remote_toolbox; not the C1 direct remote.bash path; transports are not unified",
-        proposed_target="vaws remote",
-    ),
-    ".agents/scripts/remote_job_collect.py": _cls(
-        "mechanics", "compatibility",
-        "managed toolbox job-directory collect; incompatible with remote-dev job ids (C3)",
-        proposed_target="vaws remote",
-    ),
-    ".agents/scripts/remote_job_start.py": _cls(
-        "mechanics", "compatibility",
-        "managed toolbox job start; incompatible in-flight ids versus extracted remote-dev (C3)",
-        proposed_target="vaws remote",
-    ),
-    ".agents/scripts/remote_job_status.py": _cls(
-        "mechanics", "compatibility",
-        "managed toolbox job status against .vaws-local/remote-toolbox/jobs",
-        proposed_target="vaws remote",
-    ),
-    ".agents/scripts/remote_job_stop.py": _cls(
-        "mechanics", "compatibility",
-        "managed toolbox job stop; store remains distinct from extracted remote-dev",
-        proposed_target="vaws remote",
-    ),
-    ".agents/scripts/remote_job_tail.py": _cls(
-        "mechanics", "compatibility",
-        "managed toolbox job tail; store remains distinct from extracted remote-dev",
-        proposed_target="vaws remote",
-    ),
-    ".agents/scripts/remote_probe.py": _cls(
-        "mechanics", "compatibility",
-        "managed toolbox probe; C1 direct probe is remote_dev.py tool remote_probe",
-        proposed_target="vaws remote",
-    ),
-    ".agents/scripts/remote_service_logs.py": _cls(
-        "mechanics", "supported",
-        "current service log tailer used with serve_start/status/stop",
-        proposed_target="vaws serve",
-    ),
-    ".agents/scripts/remote_service_start.py": _cls(
-        "mechanics", "compatibility",
-        "toolbox adapter that spawns serve_start.py and re-wraps JSON",
-        target=".agents/skills/vllm-ascend-serving/scripts/serve_start.py",
-        target_kind="local-entry",
-        proposed_target="vaws serve",
-    ),
-    ".agents/scripts/remote_service_status.py": _cls(
-        "mechanics", "compatibility",
-        "toolbox adapter that spawns serve_status.py",
-        target=".agents/skills/vllm-ascend-serving/scripts/serve_status.py",
-        target_kind="local-entry",
-        proposed_target="vaws serve",
-    ),
-    ".agents/scripts/remote_service_stop.py": _cls(
-        "mechanics", "compatibility",
-        "toolbox adapter that spawns serve_stop.py",
-        target=".agents/skills/vllm-ascend-serving/scripts/serve_stop.py",
-        target_kind="local-entry",
-        proposed_target="vaws serve",
-    ),
-    ".agents/scripts/remote_sync_apply.py": _cls(
-        "mechanics", "compatibility",
-        "toolbox sync_apply shells out to parity_sync.py; C3 still owns the subprocess chain",
-        target=".agents/skills/remote-code-parity/scripts/parity_sync.py",
-        target_kind="local-entry",
-        proposed_target="vaws sync",
-    ),
-    ".agents/scripts/remote_sync_plan.py": _cls(
-        "mechanics", "compatibility",
-        "toolbox sync_plan shells out to parity_sync.py / remote_code_parity.py plan",
-        target=".agents/skills/remote-code-parity/scripts/parity_sync.py",
-        target_kind="local-entry",
-        proposed_target="vaws sync",
-    ),
-    ".agents/scripts/remote_target_resolve.py": _cls(
-        "mechanics", "compatibility",
-        "managed selector resolve; C1 host+port and machine/session resolution live in remote-dev plus vaws_remote_dev_plugin",
-        proposed_target="vaws remote",
-    ),
-    ".agents/scripts/remote_toolbox_stress.py": _cls(
-        "mechanics", "harness",
-        "maturation stress for the managed toolbox; not agent routing",
-    ),
-    ".agents/scripts/repo_boundary_check.py": _cls(
-        "mechanics", "supported",
-        "AST boundary scan against .agents/policy/repo-boundaries.json and its dated baseline",
-        proposed_target="vaws lint",
-    ),
-    ".agents/scripts/run_manifest.py": _cls(
-        "mechanics", "supported",
-        "Run Manifest v1 init/validate; shared owner with vaws_run_manifest.py lifecycle APIs",
-        proposed_target="vaws manifest",
-    ),
-    ".agents/scripts/skill_catalog.py": _cls(
-        "mechanics", "supported",
-        "repo skill-catalog self-check",
-        proposed_target="vaws lint",
-    ),
-    ".agents/scripts/split_reconcile.py": _cls(
-        "mechanics", "supported",
-        "compares split-ledger declarations to local destination checkouts; missing checkouts are unverified, never fetched",
-        proposed_target="vaws lint",
-    ),
-    ".agents/scripts/sync_claude_skills.py": _cls(
-        "mechanics", "supported",
-        "generates Claude SKILL.md shims and the six-file ModelScope Trae projection; --check detects drift",
-        proposed_target="vaws lint",
-    ),
-    ".agents/scripts/tracked_leak_scan.py": _cls(
-        "mechanics", "supported",
-        "tracked-tree identifier scan with optional --strict-allowlist",
-        proposed_target="vaws lint",
-    ),
-    ".agents/scripts/vaws.py": _cls(
-        "mechanics", "supported",
-        "coordinator launcher (status/bootstrap/env/hook/task-server) plus attach/session/run/execution/finish delegated outside argparse subparsers",
-        proposed_target="vaws task",
-        external_owner="vaws-coordinator",
-    ),
-    ".agents/scripts/vaws_client_setup.py": _cls(
-        "mechanics", "supported",
-        "writes client MCP/hook config files; does not apply the coordinator JSON helper as a preserving migration",
-        proposed_target="vaws workspace",
-    ),
-    ".agents/scripts/workspace_identity.py": _cls(
-        "mechanics", "supported",
-        "local UUID/alias state",
-        proposed_target="vaws workspace",
-    ),
-    ".agents/scripts/workspace_profile.py": _cls(
-        "mechanics", "supported",
-        "local machine-profile state (summary/validate/ensure)",
-        proposed_target="vaws workspace",
-    ),
-    ".agents/skills/ascend-memory-profiling/scripts/mem_analyze.py": _cls(
-        "mixed", "supported",
-        "dump-to-breakdown table is mechanics; attribution narrative remains judgment",
-        proposed_target="vaws profile",
-    ),
-    ".agents/skills/ascend-memory-profiling/scripts/mem_collect.py": _cls(
-        "mechanics", "supported",
-        "npu-smi baseline + wrapped serve + workload + pull",
-        proposed_target="vaws profile",
-    ),
-    ".agents/skills/ascend-memory-profiling/scripts/weight_inspector.py": _cls(
-        "mechanics", "payload",
-        "safetensors header reader spawned on the remote by mem_collect",
-    ),
-    ".agents/skills/ascend-operator-debug/scripts/operator_debug.py": _cls(
-        "mixed", "supported",
-        "plan selects the case matrix (judgment); record/analyze keep schema and status-count mechanics; keep rejection tests",
-        proposed_target="guidance",
-    ),
-    ".agents/skills/ascend-profiling-analysis/scripts/ascend_profile/analyze.py": _cls(
-        "mechanics", "payload",
-        "remote-side pipeline entry executed by profile_analyze",
-    ),
-    ".agents/skills/ascend-profiling-analysis/scripts/ascend_profile/classify.py": _cls(
-        "mechanics", "internal",
-        "pipeline stage imported by analyze; stage CLI is diagnostic",
-        target=".agents/skills/ascend-profiling-analysis/scripts/ascend_profile/analyze.py",
-        target_kind="local-entry",
-    ),
-    ".agents/skills/ascend-profiling-analysis/scripts/ascend_profile/cross_rank.py": _cls(
-        "mechanics", "internal",
-        "pipeline stage imported by analyze; stage CLI is diagnostic",
-        target=".agents/skills/ascend-profiling-analysis/scripts/ascend_profile/analyze.py",
-        target_kind="local-entry",
-    ),
-    ".agents/skills/ascend-profiling-analysis/scripts/ascend_profile/diagnostics.py": _cls(
-        "mixed", "payload",
-        "evidence tables are mechanics; diagnosis_rules.yaml claims are thresholds the agent must weigh",
-    ),
-    ".agents/skills/ascend-profiling-analysis/scripts/ascend_profile/html_report.py": _cls(
-        "mechanics", "internal",
-        "v1 renderer reachable through report.py; standalone argv entry is diagnostic",
-        target=".agents/skills/ascend-profiling-analysis/scripts/ascend_profile/analyze.py",
-        target_kind="local-entry",
-    ),
-    ".agents/skills/ascend-profiling-analysis/scripts/ascend_profile/html_report_v2/__main__.py": _cls(
-        "mechanics", "internal",
-        "v2 renderer reachable through report.py; standalone entry is diagnostic",
-        target=".agents/skills/ascend-profiling-analysis/scripts/ascend_profile/analyze.py",
-        target_kind="local-entry",
-    ),
-    ".agents/skills/ascend-profiling-analysis/scripts/ascend_profile/normalize.py": _cls(
-        "mechanics", "internal",
-        "pipeline stage imported by analyze; stage CLI is diagnostic",
-        target=".agents/skills/ascend-profiling-analysis/scripts/ascend_profile/analyze.py",
-        target_kind="local-entry",
-    ),
-    ".agents/skills/ascend-profiling-analysis/scripts/ascend_profile/report.py": _cls(
-        "mechanics", "internal",
-        "pipeline stage imported by analyze; stage CLI is diagnostic",
-        target=".agents/skills/ascend-profiling-analysis/scripts/ascend_profile/analyze.py",
-        target_kind="local-entry",
-    ),
-    ".agents/skills/ascend-profiling-analysis/scripts/ascend_profile/segment.py": _cls(
-        "mechanics", "internal",
-        "pipeline stage imported by analyze; stage CLI is diagnostic",
-        target=".agents/skills/ascend-profiling-analysis/scripts/ascend_profile/analyze.py",
-        target_kind="local-entry",
-    ),
-    ".agents/skills/ascend-profiling-analysis/scripts/ascend_profile/summarize.py": _cls(
-        "mechanics", "internal",
-        "pipeline stage imported by analyze; stage CLI is diagnostic",
-        target=".agents/skills/ascend-profiling-analysis/scripts/ascend_profile/analyze.py",
-        target_kind="local-entry",
-    ),
-    ".agents/skills/ascend-profiling-analysis/scripts/ascend_profile/sweep.py": _cls(
-        "mechanics", "payload",
-        "remote-side sweep entry executed by profile_sweep",
-    ),
-    ".agents/skills/ascend-profiling-analysis/scripts/dev/golden_db_vs_csv.py": _cls(
-        "mechanics", "harness",
-        "golden db-vs-csv equivalence check; test tooling",
-    ),
-    ".agents/skills/ascend-profiling-analysis/scripts/profile_analyze.py": _cls(
-        "mechanics", "supported",
-        "local driver: session resolve, sync, remote analyze, pull outputs",
-        proposed_target="vaws profile",
-    ),
-    ".agents/skills/ascend-profiling-analysis/scripts/profile_sweep.py": _cls(
-        "mechanics", "supported",
-        "local driver over many profile roots",
-        proposed_target="vaws profile",
-    ),
-    ".agents/skills/ascend-profiling-collection/scripts/collect_torch_profile_case.py": _cls(
-        "mechanics", "supported",
-        "single agent-facing collection orchestrator",
-        proposed_target="vaws profile",
-    ),
-    ".agents/skills/ascend-profiling-collection/scripts/profile_control.py": _cls(
-        "mechanics", "internal",
-        "imported by collect_torch_profile_case; CLI duplicates one orchestrator step",
-        target=".agents/skills/ascend-profiling-collection/scripts/collect_torch_profile_case.py",
-        target_kind="local-entry",
-    ),
-    ".agents/skills/ascend-profiling-collection/scripts/run_remote_analyse.py": _cls(
-        "mechanics", "internal",
-        "imported by collect_torch_profile_case; CLI duplicates one orchestrator step",
-        target=".agents/skills/ascend-profiling-collection/scripts/collect_torch_profile_case.py",
-        target_kind="local-entry",
-    ),
-    ".agents/skills/ascend-triton-kernel-optimization/scripts/triton_optimization.py": _cls(
-        "mixed", "supported",
-        "plan/thresholds are judgment; record/analyze consume measurements, artifacts and Run Manifests; keep rejection tests",
-        proposed_target="guidance",
-    ),
-    ".agents/skills/ascend-triton-kernel-validation/scripts/triton_validation.py": _cls(
-        "mixed", "supported",
-        "plan selects cases; record/analyze keep schema/status mechanics around validate_triton_impl",
-        proposed_target="guidance",
-    ),
-    ".agents/skills/ascend-triton-kernel-validation/scripts/validate_triton_impl.py": _cls(
-        "mechanics", "supported",
-        "static AST check that a Triton file launches a kernel and does not fall back to torch",
-        proposed_target="vaws lint",
-    ),
-    ".agents/skills/ascend-triton-operator-development/scripts/triton_development.py": _cls(
-        "mixed", "supported",
-        "plan is judgment; finalize checks candidate hash/parent/case coverage on shared manifests",
-        proposed_target="guidance",
-    ),
-    ".agents/skills/ascend-triton-workflow/scripts/triton_workflow.py": _cls(
-        "mixed", "supported",
-        "plan is judgment; link/finalize reject unplanned stages, wrong parent/run type and nonterminal children",
-        proposed_target="guidance",
-    ),
-    ".agents/skills/curate-workspace-knowledge/scripts/knowledge_curate.py": _cls(
-        "mixed", "supported",
-        "list/inspect/promote/merge/reject/deprecate/resolve/verify file moves are mechanics; which verb applies is the review",
-        proposed_target="vaws knowledge",
-    ),
-    ".agents/skills/machine-management/scripts/inventory.py": _cls(
-        "mechanics", "internal",
-        "library imported by _workflow_common; CLI (summary/get/put/upsert/remove) is low-level diagnostic",
-        target=".agents/skills/machine-management/scripts/machine_add.py",
-        target_kind="local-entry",
-        proposed_target="vaws machine",
-    ),
-    ".agents/skills/machine-management/scripts/machine_add.py": _cls(
-        "mechanics", "supported",
-        "SSH bootstrap + container + inventory upsert; image track stays an explicit user gate",
-        proposed_target="vaws machine",
-    ),
-    ".agents/skills/machine-management/scripts/machine_remove.py": _cls(
-        "mechanics", "supported",
-        "inventory removal + optional container teardown",
-        proposed_target="vaws machine",
-    ),
-    ".agents/skills/machine-management/scripts/machine_repair.py": _cls(
-        "mechanics", "supported",
-        "idempotent re-run of bootstrap steps",
-        proposed_target="vaws machine",
-    ),
-    ".agents/skills/machine-management/scripts/machine_verify.py": _cls(
-        "mechanics", "supported",
-        "read-only host/container/NPU facts",
-        proposed_target="vaws machine",
-    ),
-    ".agents/skills/machine-management/scripts/manage_machine.py": _cls(
-        "mechanics", "internal",
-        "host/container library imported by _workflow_common; CLI is low-level diagnostic",
-        target=".agents/skills/machine-management/scripts/machine_add.py",
-        target_kind="local-entry",
-        proposed_target="vaws machine",
-    ),
-    ".agents/skills/modelscope/scripts/download_from_modelscope.py": _cls(
-        "mechanics", "payload",
-        "spawned by modelscope_auto; not the agent-facing facade",
-    ),
-    ".agents/skills/modelscope/scripts/modelscope_auto.py": _cls(
-        "mechanics", "supported",
-        "ensure/status/verify/worker facade; canonical ModelScope package source for the Trae projection",
-        proposed_target="vaws model",
-    ),
-    ".agents/skills/modelscope/scripts/modelscope_download_status.py": _cls(
-        "mechanics", "internal",
-        "size-comparison CLI also covered by modelscope_auto status",
-        target=".agents/skills/modelscope/scripts/modelscope_auto.py",
-        target_kind="local-entry",
-    ),
-    ".agents/skills/modelscope/scripts/verify_modelscope_sha256.py": _cls(
-        "mechanics", "payload",
-        "spawned by modelscope_auto; not the agent-facing facade",
-    ),
-    ".agents/skills/npu-fleet-monitor/scripts/manage_monitor.py": _cls(
-        "mechanics", "supported",
-        "ensure/status/restart/stop of the loopback dashboard; locates the vaws-top checkout, does not count provider CLIs",
-        proposed_target="vaws machine",
-        external_owner="vaws-top",
-    ),
-    ".agents/skills/remote-code-parity/scripts/gc_runtime_cache.py": _cls(
-        "mechanics", "supported",
-        "prunes the container cache root",
-        proposed_target="vaws sync",
-    ),
-    ".agents/skills/remote-code-parity/scripts/install_consent.py": _cls(
-        "mechanics", "supported",
-        "records install consent and sync-mode overrides",
-        proposed_target="vaws sync",
-    ),
-    ".agents/skills/remote-code-parity/scripts/parity_sync.py": _cls(
-        "mechanics", "supported",
-        "canonical local-to-container snapshot sync; C3 still owns long-running code identity",
-        proposed_target="vaws sync",
-    ),
-    ".agents/skills/remote-code-parity/scripts/parity_watch.py": _cls(
-        "mechanics", "supported",
-        "watcher that re-publishes snapshots",
-        proposed_target="vaws sync",
-    ),
-    ".agents/skills/remote-code-parity/scripts/remote_code_parity.py": _cls(
-        "mechanics", "payload",
-        "implementation payload spawned by parity_sync, toolbox adapters and the coordinator",
-    ),
-    ".agents/skills/remote-code-parity/scripts/transport_benchmark.py": _cls(
-        "mechanics", "harness",
-        "bundle vs receive-pack transport micro-benchmark",
-    ),
-    ".agents/skills/repo-init/scripts/install_gh_user.py": _cls(
-        "mechanics", "supported",
-        "user-local gh install; bare sys.argv",
-        proposed_target="vaws workspace",
-    ),
-    ".agents/skills/repo-init/scripts/repo_init_probe.py": _cls(
-        "mechanics", "supported",
-        "read-only local facts (gh, auth, submodules, remotes)",
-        proposed_target="vaws workspace",
-    ),
-    ".agents/skills/repo-init/scripts/repo_init_profile.py": _cls(
-        "mechanics", "supported",
-        "plan/apply of workspace_profile ensure; username choice stays a user gate",
-        proposed_target="vaws workspace",
-    ),
-    ".agents/skills/repo-init/scripts/repo_topology.py": _cls(
-        "mechanics", "supported",
-        "fork/remote topology via gh+git",
-        proposed_target="vaws workspace",
-    ),
-    ".agents/skills/repo-init/scripts/resolve_vllm_ci_pin.py": _cls(
-        "mechanics", "supported",
-        "parses the vllm-ascend CI pin",
-        proposed_target="vaws workspace",
-    ),
-    ".agents/skills/session-management/scripts/npu_coordination.py": _cls(
-        "mechanics", "supported",
-        "optional host-shared SQLite NPU queue; observation from vaws-top is not allocation authority",
-        proposed_target="vaws session",
-    ),
-    ".agents/skills/session-management/scripts/session_create.py": _cls(
-        "mechanics", "supported",
-        "worktree + container + lease creation",
-        proposed_target="vaws session",
-    ),
-    ".agents/skills/session-management/scripts/session_diff.py": _cls(
-        "mechanics", "supported",
-        "git diff of worktree + submodules",
-        proposed_target="vaws session",
-    ),
-    ".agents/skills/session-management/scripts/session_gc.py": _cls(
-        "mechanics", "supported",
-        "stale metadata GC with --reap-dead",
-        proposed_target="vaws session",
-    ),
-    ".agents/skills/session-management/scripts/session_group.py": _cls(
-        "mechanics", "supported",
-        "create/status/list/teardown of session groups",
-        proposed_target="vaws session",
-    ),
-    ".agents/skills/session-management/scripts/session_list.py": _cls(
-        "mechanics", "supported",
-        "read local session/lease state",
-        proposed_target="vaws session",
-    ),
-    ".agents/skills/session-management/scripts/session_remove.py": _cls(
-        "mechanics", "supported",
-        "teardown service/container/worktree/leases",
-        proposed_target="vaws session",
-    ),
-    ".agents/skills/session-management/scripts/session_status.py": _cls(
-        "mechanics", "supported",
-        "one session plus live probe",
-        proposed_target="vaws session",
-    ),
-    ".agents/skills/vllm-ascend-benchmark/scripts/bench_compare.py": _cls(
-        "mixed", "supported",
-        "multi-state checkout+serve+bench loop is mechanics; exploratory delta table is not a comparability certificate",
-        proposed_target="vaws bench",
-    ),
-    ".agents/skills/vllm-ascend-benchmark/scripts/bench_run.py": _cls(
-        "mechanics", "supported",
-        "vllm bench serve with warmup/multi-run; writes results",
-        proposed_target="vaws bench",
-    ),
-    ".agents/skills/vllm-ascend-change-validation/scripts/change_validation.py": _cls(
-        "mixed", "supported",
-        "plan maps diffs by regex (judgment); link/finalize enforce child manifests, run-type coverage and artifacts",
-        proposed_target="guidance",
-    ),
-    ".agents/skills/vllm-ascend-correctness-validation/scripts/aisbench_adapter.py": _cls(
-        "mechanics", "supported",
-        "prepare/normalize of AISBench CSV",
-        proposed_target="vaws bench",
-    ),
-    ".agents/skills/vllm-ascend-correctness-validation/scripts/correctness_run.py": _cls(
-        "mixed", "supported",
-        "init/compare plus execution-block identity and shared certificate consume; whether a class is acceptable is judgment",
-        proposed_target="vaws bench",
-    ),
-    ".agents/skills/vllm-ascend-correctness-validation/scripts/remote_correctness_harness.py": _cls(
-        "mechanics", "payload",
-        "remote-side offline/online case runner",
-    ),
-    ".agents/skills/vllm-ascend-distributed-debug/scripts/distributed_debug.py": _cls(
-        "mixed", "supported",
-        "init/ingest/analyze over agent-normalized events; completed-without-mismatch stays distinct from two-state certificates",
-        proposed_target="guidance",
-    ),
-    ".agents/skills/vllm-ascend-graph-debug/scripts/graph_debug_case.py": _cls(
-        "mixed", "supported",
-        "compare is a JSONL numeric diff with snapshot-sidecar identity; init/record/finalize are the hypothesis ledger",
-        proposed_target="guidance",
-    ),
-    ".agents/skills/vllm-ascend-pd-serving/scripts/pd_serving.py": _cls(
-        "mixed", "supported",
-        "start/status/smoke/stop spawn serve_start.py per group member; plan encodes connector-config choices",
-        proposed_target="vaws serve",
-    ),
-    ".agents/skills/vllm-ascend-performance-regression/scripts/performance_regression.py": _cls(
-        "mixed", "supported",
-        "normalize rejects non-finite/order/identity errors; analyze consumes per-measurement observations and shared certificates; thresholds stay judgment",
-        proposed_target="guidance",
-    ),
-    ".agents/skills/vllm-ascend-serving/scripts/serve_probe_npus.py": _cls(
-        "mechanics", "compatibility",
-        "legacy --machine npu-smi probe still named in AGENTS.md; not deleted in this inventory turn",
-        proposed_target="vaws machine",
-    ),
-    ".agents/skills/vllm-ascend-serving/scripts/serve_start.py": _cls(
-        "mechanics", "supported",
-        "canonical vllm serve start; still path-spawns parity_sync (C3)",
-        proposed_target="vaws serve",
-    ),
-    ".agents/skills/vllm-ascend-serving/scripts/serve_status.py": _cls(
-        "mechanics", "supported",
-        "health probe of the tracked service",
-        proposed_target="vaws serve",
-    ),
-    ".agents/skills/vllm-ascend-serving/scripts/serve_stop.py": _cls(
-        "mechanics", "supported",
-        "stop the tracked service (--force)",
-        proposed_target="vaws serve",
-    ),
-    ".trae/skills/modelscope/scripts/download_from_modelscope.py": _cls(
-        "mechanics", "generated",
-        "Trae projection generated from the canonical download script by sync_claude_skills.py",
-        target=".agents/skills/modelscope/scripts/download_from_modelscope.py",
-        target_kind="local-entry",
-    ),
-    ".trae/skills/modelscope/scripts/modelscope_auto.py": _cls(
-        "mechanics", "generated",
-        "Trae projection generated from the canonical modelscope_auto.py facade",
-        target=".agents/skills/modelscope/scripts/modelscope_auto.py",
-        target_kind="local-entry",
-    ),
-    ".trae/skills/modelscope/scripts/modelscope_download_status.py": _cls(
-        "mechanics", "generated",
-        "Trae projection generated from the canonical download-status script",
-        target=".agents/skills/modelscope/scripts/modelscope_download_status.py",
-        target_kind="local-entry",
-    ),
-    ".trae/skills/modelscope/scripts/verify_modelscope_sha256.py": _cls(
-        "mechanics", "generated",
-        "Trae projection generated from the canonical verify script",
-        target=".agents/skills/modelscope/scripts/verify_modelscope_sha256.py",
-        target_kind="local-entry",
-    ),
-}
+class CatalogError(RuntimeError):
+    """Raised when the curated CLI surface catalog cannot be used."""
+
+
+def load_catalog(path: Path | None = None) -> dict:
+    """Load overlay and owner-selector metadata from the plain JSON catalog.
+
+    Missing or malformed data fails closed. The catalog is metadata only: it is
+    not executed, and provider source is not fetched.
+    """
+    catalog_path = CATALOG_PATH if path is None else path
+    try:
+        raw = catalog_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise CatalogError(f"CLI surface catalog is missing: {catalog_path}") from exc
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise CatalogError(f"CLI surface catalog is not valid JSON: {catalog_path}: {exc}") from exc
+    if not isinstance(data, dict):
+        raise CatalogError(f"CLI surface catalog root must be an object: {catalog_path}")
+    classification = data.get("classification")
+    declarations = data.get("dep_declarations")
+    if not isinstance(classification, dict) or not classification:
+        raise CatalogError(f"CLI surface catalog classification is missing or empty: {catalog_path}")
+    if not isinstance(declarations, list) or not declarations:
+        raise CatalogError(f"CLI surface catalog dep_declarations is missing or empty: {catalog_path}")
+    parsed: dict[str, dict[str, str]] = {}
+    for key, meta in classification.items():
+        if not isinstance(key, str) or not key:
+            raise CatalogError(f"CLI surface catalog has a non-string classification path: {catalog_path}")
+        if not isinstance(meta, dict) or not meta:
+            raise CatalogError(f"CLI surface catalog entry {key!r} is missing overlay fields: {catalog_path}")
+        parsed[key] = {str(field): str(value) for field, value in meta.items()}
+    deps: list[tuple[str, str]] = []
+    for item in declarations:
+        if not isinstance(item, dict):
+            raise CatalogError(f"CLI surface catalog dep_declarations entries must be objects: {catalog_path}")
+        ident = item.get("id")
+        filename = item.get("filename")
+        if not isinstance(ident, str) or not ident or not isinstance(filename, str) or not filename:
+            raise CatalogError(f"CLI surface catalog dep_declarations requires id and filename: {catalog_path}")
+        deps.append((ident, filename))
+    loaded = dict(data)
+    loaded["classification"] = parsed
+    loaded["dep_declarations"] = deps
+    return loaded
+
+
+_CATALOG = load_catalog()
+DEP_DECLARATIONS = tuple(_CATALOG["dep_declarations"])
+CLASSIFICATION = dict(_CATALOG["classification"])
 
 
 @dataclass
@@ -1089,7 +523,13 @@ def analyse_entry(repo_root: Path, rel: str) -> tuple[str, str | None, list[str]
     return ("bare-argv" if uses_argv else "bare", None, [], [], [], summary)
 
 
-INVENTORY_ARTIFACTS = frozenset({".agents/scripts/cli_surface_inventory.py", "docs/cli-surface.md"})
+INVENTORY_ARTIFACTS = frozenset(
+    {
+        ".agents/scripts/cli_surface_inventory.py",
+        "docs/cli-surface.md",
+        ".agents/policy/cli-surface-inventory.json",
+    }
+)
 
 ROUTING_DOCS = {
     "AGENTS.md",
