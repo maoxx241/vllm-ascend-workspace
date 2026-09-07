@@ -1,0 +1,179 @@
+{
+  "entries": [
+    {
+      "confidence": "low",
+      "content_hash": "sha256:82a834b64884aab039410361823287f2b64973e827556a83630d74e1573ccc2c",
+      "lifecycle": {
+        "first_seen": "2026-09-03",
+        "resolved_by": null,
+        "superseded_by": null,
+        "updated_at": "2026-09-03"
+      },
+      "provenance": {
+        "contributor": "maoxx241",
+        "origin_repo": "maoxx241/vllm-ascend-workspace",
+        "redaction_profile": "r1",
+        "submitted_at": "2026-09-07"
+      },
+      "rule": {
+        "avoidance": "Do not debug gloo/HCCL env vars (GLOO_SOCKET_IFNAME etc.) before checking /etc/hosts; the hostname mapping is the root cause in this container family.",
+        "fingerprints": [
+          "gloo makedeviceforhostname",
+          "name or service not known hostname",
+          "torch.distributed gloo init failed container"
+        ],
+        "resolution": "Add '127.0.0.1 <hostname>' (hostname from `hostname`) to /etc/hosts inside the container before starting vllm serve. vllm-ascend-serving / session bootstrap should enforce this on every new container before first serve_start.",
+        "root_cause": "Fresh session containers do not map their own hostname in /etc/hosts. PyTorch's gloo store/backend resolves the local hostname at init and fails when it does not resolve to an address.",
+        "summary": "vLLM service on fresh VAWS containers fails gloo/HCCL init because /etc/hosts lacks the container hostname",
+        "symptom": "vllm serve crashes or hangs during distributed init with gloo backend errors mentioning the container hostname (e.g. 'Name or service not known' / gloo::makeDeviceForHostname), even on single-node TP>1."
+      },
+      "scope": {
+        "cann": {
+          "needs": "the CANN version of the container the fix was verified on",
+          "unresolved": true
+        },
+        "component": {
+          "values": [
+            "service-bootstrap",
+            "gloo-distributed-init"
+          ]
+        },
+        "driver": {
+          "needs": "the NPU driver / firmware version of the verification host",
+          "unresolved": true
+        },
+        "execution_mode": {
+          "needs": "the execution mode(s) this claim was established on",
+          "unresolved": true
+        },
+        "model": {
+          "needs": "the model(s) this claim was established on, or an examined independence basis",
+          "unresolved": true
+        },
+        "python_abi": {
+          "needs": "the Python ABI tag of the verification container",
+          "unresolved": true
+        },
+        "soc": {
+          "values": [
+            "A3"
+          ]
+        },
+        "topology": {
+          "values": [
+            "tp2",
+            "tp4",
+            "tp8",
+            "tp16"
+          ]
+        },
+        "torch": {
+          "needs": "the torch version installed at verification time",
+          "unresolved": true
+        },
+        "torch_npu": {
+          "needs": "the torch_npu version installed at verification time",
+          "unresolved": true
+        },
+        "vllm": {
+          "needs": "the vllm version (or commit) used at verification time",
+          "unresolved": true
+        },
+        "vllm_ascend": {
+          "needs": "the vllm-ascend version (or commit) used at verification time",
+          "unresolved": true
+        }
+      },
+      "slug": "gloo-init-container-hostname-missing-from-etc-hosts",
+      "status": "unverified",
+      "uuid": "bb8bb6fd-ee00-4e65-b77d-6492fda48d34"
+    },
+    {
+      "confidence": "low",
+      "content_hash": "sha256:c29e66af3fb6a780260b608f3ba1a9a7923b1f11bda14936ed081aee32d35c7d",
+      "lifecycle": {
+        "first_seen": "2026-09-03",
+        "resolved_by": null,
+        "superseded_by": null,
+        "updated_at": "2026-09-03"
+      },
+      "provenance": {
+        "contributor": "maoxx241",
+        "origin_repo": "maoxx241/vllm-ascend-workspace",
+        "redaction_profile": "r1",
+        "submitted_at": "2026-09-07"
+      },
+      "rule": {
+        "avoidance": "Do not retry the same stream command on the mux hoping for a different result; check mux options first. Treat instant 'timeout' from MCP remote_bash as a tool-service fault signature, not a remote command fault.",
+        "fingerprints": [
+          "ssh_stream instant timeout controlmaster",
+          "remote_bash instant timeout any command",
+          "stream closed early mux"
+        ],
+        "resolution": "Use base_ssh_options(mux=False) for ssh_stream and for any long-lived tunnel/stream command (fixed in remote-code-parity + vllm-ascend-serving ssh helpers, PR #70). Fall back to direct 'ssh -o BatchMode=yes -p <port> root@<host>' when MCP remote_bash misbehaves.",
+        "root_cause": "The shared ControlMaster mux channel does not reliably carry long-lived stream sessions in this environment; stream-type invocations must bypass the mux (dedicated connection) instead of multiplexing over it.",
+        "summary": "ssh_stream through the shared ControlMaster mux fails on long-running remote commands; run stream/tunnel off the mux",
+        "symptom": "Long-lived SSH streaming commands (service logs, analyse progress, tunnels) die or hang immediately / return early when issued over the shared ControlMaster connection; MCP remote_bash separately reported instant 'timeout' for any command while remote_probe/remote_ls kept working."
+      },
+      "scope": {
+        "cann": {
+          "needs": "the CANN version of the container the fix was verified on",
+          "unresolved": true
+        },
+        "component": {
+          "values": [
+            "ssh-transport",
+            "controlmaster-mux"
+          ]
+        },
+        "driver": {
+          "needs": "the NPU driver / firmware version of the verification host",
+          "unresolved": true
+        },
+        "execution_mode": {
+          "needs": "the execution mode(s) this claim was established on",
+          "unresolved": true
+        },
+        "model": {
+          "needs": "the model(s) this claim was established on, or an examined independence basis",
+          "unresolved": true
+        },
+        "python_abi": {
+          "needs": "the Python ABI tag of the verification container",
+          "unresolved": true
+        },
+        "soc": {
+          "needs": "the exact SoC the fix was observed on (e.g. Ascend910_93)",
+          "unresolved": true
+        },
+        "topology": {
+          "needs": "the parallel topologies this claim was established on",
+          "unresolved": true
+        },
+        "torch": {
+          "needs": "the torch version installed at verification time",
+          "unresolved": true
+        },
+        "torch_npu": {
+          "needs": "the torch_npu version installed at verification time",
+          "unresolved": true
+        },
+        "vllm": {
+          "needs": "the vllm version (or commit) used at verification time",
+          "unresolved": true
+        },
+        "vllm_ascend": {
+          "needs": "the vllm-ascend version (or commit) used at verification time",
+          "unresolved": true
+        }
+      },
+      "slug": "ssh-stream-over-shared-controlmaster-mux-dies-early",
+      "status": "unverified",
+      "uuid": "c3d11e97-5bb1-4c32-92dc-59f1f258d06b"
+    }
+  ],
+  "kind": "known-failure-signatures",
+  "layer": "project",
+  "schema_version": 2,
+  "updated_at": "2026-09-07"
+}
