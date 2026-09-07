@@ -1,7 +1,8 @@
 # Remote Developer Substrate Design
 
-This package implements the design from
-`/Users/maoxx241/Downloads/remote_dev_substrate_design_for_codex.md`.
+This document is the authoritative design record for the package. It was
+originally drafted outside the repository; that draft is not tracked here and
+is not needed to read what follows.
 
 ## Architecture
 
