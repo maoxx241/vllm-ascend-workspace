@@ -162,7 +162,6 @@ class DeviceCsvProperties(unittest.TestCase):
 
         run_cases(1200, body, label="parse_device_csv")
 
-    @unittest.expectedFailure
     def test_known_defect_int_parsing_accepts_more_than_decimal_ascii_digits(self) -> None:
         """KNOWN DEFECT (low): tokens are parsed with ``int(token, 10)``, which
         also accepts a leading ``+``, digit-group underscores (``1_0`` -> 10)
