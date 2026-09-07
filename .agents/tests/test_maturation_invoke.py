@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
-"""Local tests for interrupted maturation CLI mux isolation.
+"""Local tests for interrupted maturation CLI mux isolation and routing.
 
 These tests cover the consumer package: ``run_cli`` copies ``os.environ``
 and, when ``kill_after_ms`` is set, adds ``REMOTE_DEV_SSH_MUX=0`` to that
-copy before ``Popen``. They use fake subprocesses or test-owned local
-children only. They do not contact a host, kill a shared SSH process, or
-claim that this package alone fixes remote-dev #2: effective OpenSSH
-``ControlMaster=no`` / ``ControlPath=none`` / ``ControlPersist=no``
-requires the provider candidate, which root integrates separately.
+copy before ``Popen``. CLI calls are launched through
+``.agents/scripts/remote_dev.py tool``. They use fake subprocesses, a fake
+transport under the pinned checkout, or test-owned local children only. They
+do not contact a host, kill a shared SSH process, or claim that this package
+alone fixes remote-dev #2: effective OpenSSH ``ControlMaster=no`` /
+``ControlPath=none`` / ``ControlPersist=no`` requires the provider, which
+root integrates separately.
 """
 
 from __future__ import annotations
@@ -16,11 +18,12 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import threading
 import unittest
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Iterator, Mapping
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -28,7 +31,16 @@ AGENTS = ROOT / ".agents"
 if str(AGENTS) not in sys.path:
     sys.path.insert(0, str(AGENTS))
 
-from maturation.invoke import run_cli  # noqa: E402
+from maturation.invoke import (  # noqa: E402
+    LAUNCHER,
+    CliResult,
+    RemoteDevUnavailable,
+    RemoteDevInvoker,
+    apply_real_execution_environment,
+    cli_tool_name,
+    launcher_argv,
+    run_cli,
+)
 
 MUX_VAR = "REMOTE_DEV_SSH_MUX"
 MUX_OFF = "0"
@@ -316,6 +328,201 @@ class InterruptedCliMuxTests(unittest.TestCase):
             self.assertEqual(os.environ.get(MUX_VAR), "1")
         self.assertEqual(json.loads(inherited.stdout_tail), {"mux": "1"})
         self.assertEqual(json.loads(isolated_over_inherit.stdout_tail), {"mux": MUX_OFF})
+
+    def test_invalid_kill_mode_fails_before_spawn(self) -> None:
+        launched: list[RecordingPopen] = []
+        with mock.patch("maturation.invoke.subprocess.Popen", _popen_factory(launched)):
+            with self.assertRaises(ValueError):
+                run_cli(["should-not-spawn"], {}, kill_after_ms=10, kill_mode="nope")
+        self.assertEqual(launched, [])
+
+
+PINNED_SOURCE = Path("/private/tmp/vaws-remote-dev-final-source")
+PINNED_SHA = "b6acc21d147e369e771f1ff916973d74d667691e"
+ROOT_ENV = "VAWS_REMOTE_DEV_ROOT"
+
+
+class ExternalRoutingTests(unittest.TestCase):
+    """Real-invoker routing against the locator/launcher, with no host connection."""
+
+    def test_canonical_tool_names_and_launcher_argv(self) -> None:
+        self.assertEqual(cli_tool_name("remote.bash"), "remote_bash")
+        self.assertEqual(cli_tool_name("probe"), "remote_probe")
+        self.assertEqual(cli_tool_name("remote_read.py"), "remote_read")
+        argv = launcher_argv("remote.glob", python="/usr/bin/python3")
+        self.assertEqual(argv, ["/usr/bin/python3", str(LAUNCHER), "tool", "remote_glob", "--input-json", "-"])
+
+    def test_call_cli_uses_launcher_argv_and_json_payload(self) -> None:
+        captured: dict[str, Any] = {}
+
+        def fake_run_cli(argv: list[str], payload: Mapping[str, Any], **kwargs: Any) -> CliResult:
+            captured["argv"] = list(argv)
+            captured["payload"] = dict(payload)
+            captured["kwargs"] = kwargs
+            return CliResult(payload={"result": {"status": "ok"}}, returncode=0, killed=False, duration_ms=1)
+
+        invoker = RemoteDevInvoker(python="/usr/bin/python3")
+        with mock.patch("maturation.invoke.remote_dev_root", return_value=PINNED_SOURCE), mock.patch(
+            "maturation.invoke.run_cli", fake_run_cli
+        ):
+            result = invoker.call_cli(
+                "remote.bash",
+                {"command": "printf hi", "host": "10.0.0.9", "port": 22},
+                kill_after_ms=40,
+                kill_mode="transport",
+                timeout_s=9.0,
+            )
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(
+            captured["argv"],
+            ["/usr/bin/python3", str(LAUNCHER), "tool", "remote_bash", "--input-json", "-"],
+        )
+        self.assertEqual(captured["payload"]["command"], "printf hi")
+        self.assertEqual(captured["payload"]["host"], "10.0.0.9")
+        self.assertEqual(captured["kwargs"]["kill_after_ms"], 40)
+        self.assertEqual(captured["kwargs"]["kill_mode"], "transport")
+        self.assertEqual(captured["kwargs"]["timeout_s"], 9.0)
+
+    def test_missing_source_fails_before_remote_work(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            missing = str(Path(tmp) / "absent")
+            with mock.patch.dict(os.environ, {ROOT_ENV: missing}, clear=False):
+                invoker = RemoteDevInvoker()
+                with self.assertRaises(RemoteDevUnavailable) as ctx:
+                    invoker.call("remote.probe", {"host": "10.0.0.9", "port": 22})
+                self.assertIn("bootstrap", str(ctx.exception))
+                self.assertIn(ROOT_ENV, str(ctx.exception))
+                with self.assertRaises(RemoteDevUnavailable):
+                    invoker.call_cli("remote.probe", {"host": "10.0.0.9", "port": 22})
+
+    def test_import_does_not_require_checkout_or_mutate_environment(self) -> None:
+        code = (
+            "import os, sys\n"
+            f"sys.path.insert(0, {str(AGENTS)!r})\n"
+            f"sys.path.insert(0, {str(AGENTS / 'lib')!r})\n"
+            f"os.environ[{ROOT_ENV!r}] = {str(Path('/no/such/remote-dev-checkout'))!r}\n"
+            "before = dict(os.environ)\n"
+            "import maturation.invoke as invoke\n"
+            "assert dict(os.environ) == before\n"
+            "assert invoke.RemoteDevInvoker is not None\n"
+            "print('ok')\n"
+        )
+        proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=False)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(proc.stdout.strip(), "ok")
+
+    def test_incompatible_cached_mcp_fails_without_eviction(self) -> None:
+        if not PINNED_SOURCE.is_dir():
+            self.skipTest("pinned remote-dev source is not present")
+        code = (
+            "import sys, types\n"
+            f"sys.path.insert(0, {str(AGENTS)!r})\n"
+            f"sys.path.insert(0, {str(AGENTS / 'lib')!r})\n"
+            "fake = types.ModuleType('mcp')\n"
+            "fake.__file__ = '/tmp/other-mcp/__init__.py'\n"
+            "sys.modules['mcp'] = fake\n"
+            "from maturation.invoke import RemoteDevInvoker, RemoteDevUnavailable\n"
+            "try:\n"
+            "    RemoteDevInvoker().call('remote.probe', {'host': '10.0.0.9', 'port': 22})\n"
+            "except RemoteDevUnavailable as exc:\n"
+            "    print('failed', str(exc))\n"
+            "else:\n"
+            "    raise SystemExit('expected configuration error')\n"
+            "print('mcp-file', sys.modules['mcp'].__file__)\n"
+        )
+        env = {**os.environ, ROOT_ENV: str(PINNED_SOURCE)}
+        proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env, check=False)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("incompatible mcp already imported", proc.stdout)
+        self.assertIn("/tmp/other-mcp/__init__.py", proc.stdout)
+        self.assertIn("mcp-file /tmp/other-mcp/__init__.py", proc.stdout)
+
+    def test_configured_checkout_provenance_in_fresh_interpreter(self) -> None:
+        if not PINNED_SOURCE.is_dir():
+            self.skipTest("pinned remote-dev source is not present")
+        code = (
+            "import os, sys\n"
+            f"sys.path.insert(0, {str(AGENTS)!r})\n"
+            f"sys.path.insert(0, {str(AGENTS / 'lib')!r})\n"
+            "from maturation.invoke import RemoteDevInvoker, apply_real_execution_environment\n"
+            "checkout = apply_real_execution_environment()\n"
+            "invoker = RemoteDevInvoker()\n"
+            "invoker._dispatcher()\n"
+            "import mcp.tools, core\n"
+            "print(checkout)\n"
+            "print(mcp.tools.__file__)\n"
+            "print(core.__file__)\n"
+        )
+        env = {**os.environ, ROOT_ENV: str(PINNED_SOURCE)}
+        proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env, check=False)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        checkout, tools_file, core_file = proc.stdout.strip().splitlines()
+        pinned = str(PINNED_SOURCE.resolve())
+        self.assertEqual(checkout, pinned)
+        self.assertTrue(tools_file.startswith(pinned), tools_file)
+        self.assertTrue(core_file.startswith(pinned), core_file)
+
+    def test_apply_keeps_caller_overrides_and_fills_state_runtime_resolver(self) -> None:
+        if not PINNED_SOURCE.is_dir():
+            self.skipTest("pinned remote-dev source is not present")
+        with tempfile.TemporaryDirectory() as tmp:
+            state = str(Path(tmp) / "state")
+            resolver = "/abs/plugin.py:setup"
+            overrides = {
+                ROOT_ENV: str(PINNED_SOURCE),
+                "REMOTE_DEV_RUNTIME_ENV_FILE": "/etc/profile.d/custom.sh",
+                "REMOTE_DEV_STATE_DIR": state,
+                "REMOTE_DEV_RESOLVERS": resolver,
+                MUX_VAR: "1",
+            }
+            with mock.patch.dict(os.environ, overrides, clear=False):
+                parent_before = dict(os.environ)
+                checkout = apply_real_execution_environment()
+                self.assertEqual(checkout, PINNED_SOURCE.resolve())
+                self.assertEqual(os.environ.get("REMOTE_DEV_RUNTIME_ENV_FILE"), "/etc/profile.d/custom.sh")
+                self.assertEqual(os.environ.get("REMOTE_DEV_STATE_DIR"), state)
+                self.assertEqual(os.environ.get("REMOTE_DEV_RESOLVERS"), resolver)
+                self.assertEqual(os.environ.get(MUX_VAR), "1")
+                self.assertEqual(os.environ.get(MUX_VAR), parent_before.get(MUX_VAR))
+
+    def test_inprocess_dispatcher_uses_pinned_source_with_fake_transport(self) -> None:
+        if not PINNED_SOURCE.is_dir():
+            self.skipTest("pinned remote-dev source is not present")
+        code = (
+            "import json, os, subprocess, sys\n"
+            "from unittest import mock\n"
+            f"sys.path.insert(0, {str(AGENTS)!r})\n"
+            f"sys.path.insert(0, {str(AGENTS / 'lib')!r})\n"
+            "from maturation.invoke import RemoteDevInvoker, apply_real_execution_environment\n"
+            "apply_real_execution_environment()\n"
+            "invoker = RemoteDevInvoker()\n"
+            "invoker._dispatcher()\n"
+            "import core.ssh_transport as transport\n"
+            "import mcp.tools\n"
+            "def fake_run(argv, **kwargs):\n"
+            "    output = json.dumps({'status': 'ok', 'summary': {'hostname': 'fixture', 'python': '3.9.9'}, 'fake_transport': True})\n"
+            "    if kwargs.get('text'):\n"
+            "        return subprocess.CompletedProcess(list(argv), 0, output, '')\n"
+            "    return subprocess.CompletedProcess(list(argv), 0, output.encode(), b'')\n"
+            "with mock.patch.object(transport.subprocess, 'run', fake_run):\n"
+            "    payload = invoker.call('remote.probe', {'host': '10.0.0.9', 'port': 22222, 'user': 'fixture', 'root': '/tmp', 'cwd': '/tmp', 'runtime_env': False})\n"
+            "print(mcp.tools.__file__)\n"
+            "print(json.dumps({'status': payload['result']['status'], 'fake': payload['result'].get('probe', {}).get('fake_transport'), 'origin': mcp.tools.__file__}))\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            env = {
+                **os.environ,
+                ROOT_ENV: str(PINNED_SOURCE),
+                "REMOTE_DEV_STATE_DIR": str(Path(tmp) / "state"),
+                "REMOTE_DEV_SSH_MUX_DIR": str(Path(tmp) / "mux"),
+            }
+            proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env, check=False)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        tools_file, payload_line = proc.stdout.strip().splitlines()
+        self.assertTrue(tools_file.startswith(str(PINNED_SOURCE.resolve())), tools_file)
+        payload = json.loads(payload_line)
+        self.assertEqual(payload["status"], "ok")
+        self.assertTrue(payload["fake"])
 
 
 if __name__ == "__main__":

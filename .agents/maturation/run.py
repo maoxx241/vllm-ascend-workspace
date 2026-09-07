@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Run the deterministic-core maturation harness against real endpoints.
 
+Real execution applies substrate environment defaults once, then constructs
+the in-process/CLI invoker. ``--list`` and retained-evidence ``--report``
+stay offline and do not require a remote-dev checkout.
+
 Progress goes to stderr as ``__VAWS_MATURATION_PROGRESS__=<json>`` lines; the
 only stdout output is one JSON report. Host identities are replaced by labels
 (``host-a`` …) unless ``--reveal-hosts`` is given; the label map and all raw
@@ -36,7 +40,7 @@ if str(LIB_DIR) not in sys.path:
     sys.path.insert(0, str(LIB_DIR))
 
 from maturation.evidence import DEFAULT_EVIDENCE_ROOT  # noqa: E402
-from maturation.invoke import RemoteDevInvoker  # noqa: E402
+from maturation.invoke import RemoteDevUnavailable, RemoteDevInvoker, apply_real_execution_environment  # noqa: E402
 from maturation.runner import RunConfig, emit_progress, replay, run  # noqa: E402
 from maturation.spec import DEFAULT_OPERATIONS_PATH, SpecError, load_operation_set  # noqa: E402
 from maturation.targets import TargetError, assign_labels, endpoints_from_inventory, parse_endpoint_arg  # noqa: E402
@@ -164,6 +168,11 @@ def main(argv: list[str] | None = None) -> int:
         endpoints = resolve_endpoints(args)
     except TargetError as exc:
         print(json.dumps({"status": "failed", "error": str(exc)}))
+        return 2
+    try:
+        apply_real_execution_environment()
+    except RemoteDevUnavailable as exc:
+        print(json.dumps({"status": "failed", "error": f"{type(exc).__name__}: {exc}"}))
         return 2
     emit_progress("start", f"{len(endpoints)} endpoint(s), operations from {args.operations.name}")
     try:

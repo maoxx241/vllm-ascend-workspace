@@ -2,8 +2,12 @@
 
 Runs the declared deterministic remote operations (`operations.yaml`)
 repeatedly, across several endpoints, in adversarial shapes, and reports pass
-**rates** with per-failure layer attribution. It exercises the existing
-`.remote-dev` tooling and never changes its behaviour.
+**rates** with per-failure layer attribution. It locates the external
+remote-dev checkout through `.agents/lib/vaws_remote_dev.py`
+(`VAWS_REMOTE_DEV_ROOT`, else the shared default) and never changes the
+substrate. In-process calls import `mcp.tools.call_tool` from that checkout.
+CLI calls go through `.agents/scripts/remote_dev.py tool remote_<name>
+--input-json -`, which execve-replaces itself with the checkout wrapper.
 
 What "mature" means, the thresholds per operation class, and the first-pass
 results live in `docs/deterministic-core-maturation.md`.
@@ -75,7 +79,7 @@ reports the script's verdict; a non-JSON or status-less reply is reported as
 | `scenarios.py` | adversarial shapes and trial records |
 | `attribution.py` | failure → layer attribution |
 | `stats.py` | rates, Wilson bounds, flake/failure verdicts, ranking |
-| `invoke.py` | in-process MCP dispatcher and killable CLI invocations |
+| `invoke.py` | in-process MCP dispatcher from the external checkout, and killable CLI invocations through the scaffold launcher |
 | `targets.py` | inventory → endpoints → anonymous labels |
 | `runner.py` | endpoint lifecycle, evidence, report, replay |
 | `knowledge.py` | candidate builder and capture-CLI adapter |
@@ -83,4 +87,4 @@ reports the script's verdict; a non-JSON or status-less reply is reported as
 | `evidence.py` | untracked evidence store |
 | `run.py` | CLI entrypoint |
 
-Tests: `.agents/tests/test_maturation_harness.py` (no hardware needed).
+Tests: `.agents/tests/test_maturation_harness.py`, `test_maturation_invoke.py`, and `test_maturation_external_route.py` (no hardware needed).

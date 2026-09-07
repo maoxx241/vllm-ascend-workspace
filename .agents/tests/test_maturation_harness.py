@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -611,6 +612,71 @@ class CliTests(unittest.TestCase):
         self.assertIn("no endpoints", json.loads(proc.stdout)["error"])
         proc = subprocess.run([sys.executable, str(self.RUN), "--report", "does-not-exist", "--evidence-root", tempfile.gettempdir()], capture_output=True, text=True, check=False)
         self.assertEqual(proc.returncode, 2)
+
+    def test_list_and_synthetic_report_without_checkout(self) -> None:
+        missing = str(Path(tempfile.mkdtemp()) / "absent-checkout")
+        env = {**os.environ, "VAWS_REMOTE_DEV_ROOT": missing}
+        listed = subprocess.run([sys.executable, str(self.RUN), "--list"], capture_output=True, text=True, env=env, check=False)
+        self.assertEqual(listed.returncode, 0, listed.stderr)
+        self.assertEqual(json.loads(listed.stdout)["status"], "ok")
+        with tempfile.TemporaryDirectory() as tmp:
+            evidence_root = Path(tmp) / "runs"
+            operation_set = spec.parse_operation_set(
+                {
+                    "schema_version": 1,
+                    "kind": "maturation-operations",
+                    "classes": {"transport": {"min_repetitions": 1, "pass_rate_threshold": 0.99}},
+                    "operations": [
+                        {
+                            "id": "bash.echo",
+                            "class": "transport",
+                            "tool": "remote.bash",
+                            "repetitions": 1,
+                            "args": {"command": "printf maturation-{trial}"},
+                            "expect": {"outcome": "success", "status": "ok"},
+                        }
+                    ],
+                },
+                source="memory.yaml",
+            )
+            endpoints = targets.assign_labels([{"host": "10.9.9.8", "port": 22, "user": "root", "kind": "host"}])
+            with mock.patch("maturation.runner.emit_progress"):
+                run(
+                    operation_set=operation_set,
+                    endpoints=endpoints,
+                    invoker=FakeInvoker(),
+                    config=RunConfig(),
+                    evidence_root=evidence_root,
+                    run_id="offline-report",
+                )
+            reported = subprocess.run(
+                [sys.executable, str(self.RUN), "--report", "offline-report", "--evidence-root", str(evidence_root)],
+                capture_output=True,
+                text=True,
+                env=env,
+                check=False,
+            )
+        self.assertEqual(reported.returncode, 0, reported.stderr)
+        payload = json.loads(reported.stdout)
+        self.assertEqual(payload["run_id"], "offline-report")
+        self.assertNotIn("Traceback", reported.stderr)
+
+    def test_real_execution_missing_source_fails_without_traceback(self) -> None:
+        missing = str(Path(tempfile.mkdtemp()) / "absent-checkout")
+        env = {**os.environ, "VAWS_REMOTE_DEV_ROOT": missing}
+        proc = subprocess.run(
+            [sys.executable, str(self.RUN), "--endpoint", "10.9.9.8:22", "--repetitions", "1"],
+            capture_output=True,
+            text=True,
+            env=env,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 2)
+        self.assertNotIn("Traceback", proc.stderr)
+        payload = json.loads(proc.stdout)
+        self.assertEqual(payload["status"], "failed")
+        self.assertIn("RemoteDevUnavailable", payload["error"])
+        self.assertIn("bootstrap", payload["error"])
 
 
 class InvokeTests(unittest.TestCase):
