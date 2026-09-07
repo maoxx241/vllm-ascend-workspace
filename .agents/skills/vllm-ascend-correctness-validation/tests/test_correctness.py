@@ -58,6 +58,45 @@ def result(case_id: str, output: dict, *, metrics: dict | None = None) -> dict:
     }
 
 
+def execution(**engine_args) -> dict:
+    return {
+        "model": "/models/example",
+        "engine_args": {"tensor_parallel_size": 2, **engine_args},
+        "base_url": None,
+        "served_model": None,
+        "cases_sha256": "a" * 64,
+    }
+
+
+def result_document(label: str, cases: list[dict], *, execution_block: dict | None = None) -> dict:
+    document = {"schema_version": 1, "label": label, "cases": cases}
+    if execution_block is not None:
+        document["execution"] = execution_block
+    return document
+
+
+def write_json(path: Path, payload: dict) -> Path:
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+def init_run(root: Path, **overrides) -> Path:
+    cases_path = write_json(
+        root / "source-cases.json", {"schema_version": 1, "cases": [case()]}
+    )
+    run_dir = root / "run"
+    arguments = {
+        "run_id": "correctness-case-1",
+        "cases_path": cases_path,
+        "baseline_label": "base",
+        "candidate_label": "candidate",
+        "created_at": NOW,
+    }
+    arguments.update(overrides)
+    correctness.init_run(run_dir, **arguments)
+    return run_dir
+
+
 class ComparisonTests(unittest.TestCase):
     def test_exact_token_match_passes(self) -> None:
         config = {"schema_version": 1, "cases": [case()]}
@@ -141,28 +180,16 @@ class ComparisonTests(unittest.TestCase):
     def test_full_run_writes_required_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            cases_path = root / "source-cases.json"
-            cases_path.write_text(
-                json.dumps({"schema_version": 1, "cases": [case()]}),
-                encoding="utf-8",
+            run_dir = init_run(root, parent_run_id="change-validation-1")
+            cases = [result("case-1", {"text": "ok"})]
+            baseline = write_json(
+                root / "baseline.json",
+                result_document("base", cases, execution_block=execution()),
             )
-            run_dir = root / "run"
-            correctness.init_run(
-                run_dir,
-                run_id="correctness-case-1",
-                cases_path=cases_path,
-                baseline_label="base",
-                candidate_label="candidate",
-                created_at=NOW,
+            candidate = write_json(
+                root / "candidate.json",
+                result_document("candidate", cases, execution_block=execution()),
             )
-            normalized = {
-                "schema_version": 1,
-                "cases": [result("case-1", {"text": "ok"})],
-            }
-            baseline = root / "baseline.json"
-            candidate = root / "candidate.json"
-            baseline.write_text(json.dumps(normalized), encoding="utf-8")
-            candidate.write_text(json.dumps(normalized), encoding="utf-8")
             comparison = correctness.compare_run(
                 run_dir,
                 baseline_path=baseline,
@@ -170,16 +197,157 @@ class ComparisonTests(unittest.TestCase):
                 updated_at=NOW,
             )
             self.assertEqual(comparison["status"], "passed")
+            self.assertTrue(comparison["execution"]["identical_execution"])
             for relative in (
                 "manifest.json",
                 "cases.json",
                 "comparison.json",
+                "execution.json",
                 "report.md",
                 "reproduction.sh",
                 "raw_outputs/baseline.json",
                 "raw_outputs/candidate.json",
             ):
                 self.assertTrue((run_dir / relative).is_file(), relative)
+            manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(manifest["parent_run_id"], "change-validation-1")
+            artifacts = {row["name"]: row for row in manifest["artifacts"]}
+            self.assertIn("execution-identity", artifacts)
+            for name in ("baseline-output", "candidate-output", "execution-identity"):
+                self.assertRegex(artifacts[name]["sha256"], r"^[0-9a-f]{64}$")
+
+
+class ExecutionIdentityTests(unittest.TestCase):
+    def test_undeclared_engine_args_difference_is_refused(self) -> None:
+        """Regression: eager-vs-graph used to be reported as a code regression."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_dir = init_run(root)
+            baseline = write_json(
+                root / "baseline.json",
+                result_document(
+                    "base",
+                    [result("case-1", {"token_ids": [1, 2]})],
+                    execution_block=execution(enforce_eager=True),
+                ),
+            )
+            candidate = write_json(
+                root / "candidate.json",
+                result_document(
+                    "candidate",
+                    [result("case-1", {"token_ids": [1, 3]})],
+                    execution_block=execution(enforce_eager=False),
+                ),
+            )
+            with self.assertRaisesRegex(
+                correctness.CorrectnessError,
+                r"undeclared fields: engine_args\.enforce_eager.*--allowed-difference",
+            ):
+                correctness.compare_run(
+                    run_dir, baseline_path=baseline, candidate_path=candidate, updated_at=NOW
+                )
+            manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(manifest["status"], "planned")
+            self.assertFalse((run_dir / "comparison.json").exists())
+
+    def test_declared_difference_is_recorded_with_the_verdict(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_dir = init_run(root, allowed_differences=["engine_args.enforce_eager"])
+            baseline = write_json(
+                root / "baseline.json",
+                result_document(
+                    "base",
+                    [result("case-1", {"token_ids": [1, 2]})],
+                    execution_block=execution(enforce_eager=True),
+                ),
+            )
+            candidate = write_json(
+                root / "candidate.json",
+                result_document(
+                    "candidate",
+                    [result("case-1", {"token_ids": [1, 3]})],
+                    execution_block=execution(enforce_eager=False),
+                ),
+            )
+            comparison = correctness.compare_run(
+                run_dir, baseline_path=baseline, candidate_path=candidate, updated_at=NOW
+            )
+            self.assertEqual(comparison["status"], "failed")
+            self.assertEqual(comparison["primary_classification"], "token_divergence")
+            identity = comparison["execution"]
+            self.assertEqual(identity["allowed_differences"], ["engine_args.enforce_eager"])
+            self.assertEqual(
+                [row["key"] for row in identity["observed_differences"]],
+                ["engine_args.enforce_eager"],
+            )
+            recorded = json.loads((run_dir / "execution.json").read_text(encoding="utf-8"))
+            self.assertEqual(recorded["baseline"]["execution"]["engine_args"]["enforce_eager"], True)
+            self.assertEqual(recorded["candidate"]["execution"]["engine_args"]["enforce_eager"], False)
+            report = (run_dir / "report.md").read_text(encoding="utf-8")
+            self.assertIn("## Execution identity", report)
+            self.assertIn("engine_args.enforce_eager", report)
+
+    def test_result_without_execution_block_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_dir = init_run(root)
+            cases = [result("case-1", {"text": "ok"})]
+            baseline = write_json(root / "baseline.json", result_document("base", cases))
+            candidate = write_json(
+                root / "candidate.json",
+                result_document("candidate", cases, execution_block=execution()),
+            )
+            with self.assertRaisesRegex(
+                correctness.CorrectnessError, "baseline result has no execution block"
+            ):
+                correctness.compare_run(
+                    run_dir, baseline_path=baseline, candidate_path=candidate, updated_at=NOW
+                )
+
+    def test_same_file_passed_twice_is_refused_by_label(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_dir = init_run(root)
+            same = write_json(
+                root / "same.json",
+                result_document(
+                    "base", [result("case-1", {"text": "ok"})], execution_block=execution()
+                ),
+            )
+            with self.assertRaisesRegex(
+                correctness.CorrectnessError, "candidate result label is 'base'"
+            ):
+                correctness.compare_run(
+                    run_dir, baseline_path=same, candidate_path=same, updated_at=NOW
+                )
+
+    def test_different_case_arrays_are_an_undeclared_difference(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_dir = init_run(root)
+            cases = [result("case-1", {"text": "ok"})]
+            left = execution()
+            right = execution()
+            right["cases_sha256"] = "b" * 64
+            baseline = write_json(
+                root / "baseline.json", result_document("base", cases, execution_block=left)
+            )
+            candidate = write_json(
+                root / "candidate.json",
+                result_document("candidate", cases, execution_block=right),
+            )
+            with self.assertRaisesRegex(
+                correctness.CorrectnessError, "undeclared fields: cases_sha256"
+            ):
+                correctness.compare_run(
+                    run_dir, baseline_path=baseline, candidate_path=candidate, updated_at=NOW
+                )
+
+    def test_identical_labels_are_rejected_at_init(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(correctness.CorrectnessError, "must differ"):
+                init_run(Path(tmp), baseline_label="same", candidate_label="same")
 
 
 class HarnessTests(unittest.TestCase):
@@ -230,14 +398,47 @@ class HarnessTests(unittest.TestCase):
         self.assertEqual(normalized["numerics"]["logprobs"], [-0.1, -0.2])
 
     def test_unknown_mode_is_normalized_as_unsupported(self) -> None:
-        result_document = harness.execute_config(
+        document = harness.execute_config(
             {
                 "schema_version": 1,
                 "label": "test",
                 "cases": [{"id": "unsupported-1", "mode": "future-mode"}],
             }
         )
-        self.assertEqual(result_document["cases"][0]["status"], "unsupported")
+        self.assertEqual(document["cases"][0]["status"], "unsupported")
+
+    def test_result_records_engine_args_and_case_digest(self) -> None:
+        """Regression: engine_args used to reach neither result nor manifest."""
+        cases = [{"id": "unsupported-1", "mode": "future-mode"}]
+        config = {
+            "schema_version": 1,
+            "label": "candidate",
+            "model": "/models/example",
+            "engine_args": {"enforce_eager": False, "tensor_parallel_size": 2},
+            "base_url": "http://service.invalid:8000",
+            "served_model": "example",
+            "cases": cases,
+        }
+        document = harness.execute_config(config)
+        self.assertEqual(
+            document["execution"]["engine_args"],
+            {"enforce_eager": False, "tensor_parallel_size": 2},
+        )
+        self.assertEqual(document["execution"]["model"], "/models/example")
+        self.assertEqual(document["execution"]["served_model"], "example")
+        self.assertEqual(document["execution"]["cases_sha256"], harness.cases_sha256(cases))
+        correctness.validate_execution_block(document, label="candidate")
+
+    def test_non_object_engine_args_are_rejected_before_execution(self) -> None:
+        with self.assertRaisesRegex(harness.HarnessError, "engine_args"):
+            harness.execute_config(
+                {
+                    "schema_version": 1,
+                    "label": "x",
+                    "engine_args": ["--enforce-eager"],
+                    "cases": [{"id": "c", "mode": "future-mode"}],
+                }
+            )
 
 
 class AisbenchAdapterTests(unittest.TestCase):
@@ -282,9 +483,36 @@ class AisbenchAdapterTests(unittest.TestCase):
                 "gsm8k,abc123,accuracy,gen,56.7\n",
                 encoding="utf-8",
             )
-            normalized = aisbench.normalize_summary(summary, label="baseline")
+            normalized = aisbench.normalize_summary(
+                summary,
+                label="baseline",
+                execution={"served_model": "example", "engine_args": {"enforce_eager": True}},
+            )
             self.assertEqual(normalized["cases"][0]["status"], "ok")
             self.assertEqual(normalized["cases"][0]["metrics"]["accuracy"], 56.7)
+            self.assertEqual(normalized["execution"]["engine_args"], {"enforce_eager": True})
+            correctness.validate_execution_block(normalized, label="baseline")
+
+    def test_normalize_requires_execution_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            summary = Path(tmp) / "summary.csv"
+            summary.write_text(
+                "dataset,version,metric,mode,vaws-correctness\n"
+                "gsm8k,abc123,accuracy,gen,56.7\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                aisbench.AisbenchAdapterError, "execution.engine_args must be an object"
+            ):
+                aisbench.normalize_summary(
+                    summary, label="baseline", execution={"served_model": "example"}
+                )
+            with self.assertRaisesRegex(
+                aisbench.AisbenchAdapterError, "execution.served_model"
+            ):
+                aisbench.normalize_summary(
+                    summary, label="baseline", execution={"engine_args": {}}
+                )
 
 
 if __name__ == "__main__":

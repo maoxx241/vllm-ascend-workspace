@@ -58,6 +58,16 @@ Each state writes:
 {
   "schema_version": 1,
   "label": "baseline",
+  "execution": {
+    "model": "/models/example",
+    "engine_args": {
+      "tensor_parallel_size": 2,
+      "enforce_eager": true
+    },
+    "base_url": null,
+    "served_model": null,
+    "cases_sha256": "<64 lowercase hex>"
+  },
   "cases": [
     {
       "id": "chat-smoke",
@@ -81,6 +91,20 @@ Each state writes:
 ```
 
 `status` is `ok`, `error`, or `unsupported`. An executor may provide text, token IDs, token strings, numeric evidence, task metrics, or a relevant subset.
+
+`execution` records what decided the run's behaviour besides the code under test. The harness fills it from its config (`engine_args`, `model`, `base_url`, `served_model`) and adds `cases_sha256`, the digest of the case array it actually executed. The AISBench adapter requires it via `normalize --execution`. It is a declaration of the launch configuration, not an observation of the running service.
+
+## Execution identity check
+
+`compare` refuses to classify anything until the two results are shown to be a comparable pair:
+
+- each result's `label` must equal the `baseline_label` / `candidate_label` recorded at `init` (passing one file twice is rejected);
+- both results must carry an `execution` block with an `engine_args` object;
+- every key where the two `execution` blocks differ (`engine_args.*` flattened, plus `model`, `base_url`, `served_model`, `cases_sha256`) must have been declared at `init` with `--allowed-difference KEY`.
+
+An undeclared difference aborts the comparison with the list of differing keys and leaves the manifest non-terminal. This is what stops a deliberate eager-versus-graph comparison from being reported as a code regression: with `--allowed-difference engine_args.enforce_eager` the comparison runs, and the report and `execution.json` state that the divergence is attributable to that declared variable. Without the declaration the comparison is not a code comparison and is not performed.
+
+The check compares declared launch configuration. It cannot see differences that were never written into the harness config (for example an online service restarted with other flags but the same `base_url`).
 
 ## Comparison precedence
 
@@ -112,12 +136,13 @@ correctness-run/
 ├── raw_outputs/
 │   ├── baseline.json
 │   └── candidate.json
+├── execution.json
 ├── comparison.json
 ├── report.md
 └── reproduction.sh
 ```
 
-The normalized files are the comparison source. Mixed service or vLLM stdout is supporting evidence, not a parser contract.
+The normalized files are the comparison source. Mixed service or vLLM stdout is supporting evidence, not a parser contract. `execution.json` holds both sides' execution identity, the declared allowed differences, and the observed differences; the manifest links it and the raw outputs with SHA256, and `comparison.json` embeds the same block under `execution`.
 
 ## Routing
 

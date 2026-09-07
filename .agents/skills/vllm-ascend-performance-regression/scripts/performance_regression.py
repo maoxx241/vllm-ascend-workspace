@@ -39,6 +39,23 @@ DEFAULT_BENCHMARK_METRICS = {
     "itl": "mean_itl_ms",
     "acceptance_rate": "acceptance_rate",
 }
+# Every non-code condition the parity certificate claims to hold constant. The
+# `config_hash` is only meaningful if these are actually written down: hashing a
+# free-form `shared` object proves nothing about concurrency or parallelism.
+REQUIRED_SHARED_KEYS = (
+    "machine",
+    "npu_devices",
+    "model",
+    "environment",
+    "topology",
+    "serve_args",
+    "bench_args",
+    "dataset",
+    "max_concurrency",
+    "request_rate",
+)
+REQUIRED_TOPOLOGY_KEYS = ("tp", "dp")
+PARITY_ALLOWED_DIFFERENCES = ("code_snapshot", "session_id", "label")
 
 
 class PerformanceRegressionError(ValueError):
@@ -151,6 +168,77 @@ def normalize_benchmark_result(
     return measurement
 
 
+def _is_positive_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
+def _is_string_list(value: Any) -> bool:
+    return isinstance(value, list) and all(isinstance(item, str) for item in value)
+
+
+def validate_shared(shared: Mapping[str, Any]) -> list[str]:
+    """Return every reason `shared` does not pin the identity parity claims.
+
+    The parity certificate promises baseline and candidate differ only in code.
+    That promise is empty unless machine, devices, model, environment, parallel
+    topology (including the data-parallel degree), Serving and Benchmark
+    arguments, dataset, concurrency, and request rate are explicitly recorded.
+    """
+    errors: list[str] = []
+    missing = [key for key in REQUIRED_SHARED_KEYS if key not in shared]
+    if missing:
+        errors.append(
+            "shared is missing required parity keys: " + ", ".join(missing)
+        )
+    checks: dict[str, tuple[Any, str]] = {
+        "machine": (
+            lambda value: isinstance(value, str) and bool(value.strip()),
+            "must be a non-empty string",
+        ),
+        "npu_devices": (
+            lambda value: isinstance(value, list)
+            and bool(value)
+            and all(isinstance(item, int) and not isinstance(item, bool) and item >= 0 for item in value),
+            "must be a non-empty array of non-negative device indices",
+        ),
+        "model": (
+            lambda value: isinstance(value, Mapping) and bool(value),
+            "must be a non-empty object",
+        ),
+        "environment": (
+            lambda value: isinstance(value, Mapping) and bool(value),
+            "must be a non-empty object",
+        ),
+        "serve_args": (_is_string_list, "must be an array of strings"),
+        "bench_args": (_is_string_list, "must be an array of strings"),
+        "dataset": (
+            lambda value: isinstance(value, str) and bool(value.strip()),
+            "must be a non-empty string",
+        ),
+        "max_concurrency": (_is_positive_int, "must be a positive integer"),
+        "request_rate": (
+            lambda value: value == "inf"
+            or (isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0),
+            'must be a positive number or "inf"',
+        ),
+    }
+    for key, (predicate, message) in checks.items():
+        if key in shared and not predicate(shared[key]):
+            errors.append(f"shared.{key} {message}")
+    topology = shared.get("topology")
+    if "topology" in shared:
+        if not isinstance(topology, Mapping) or not topology:
+            errors.append("shared.topology must be a non-empty object")
+        else:
+            for key in REQUIRED_TOPOLOGY_KEYS:
+                if not _is_positive_int(topology.get(key)):
+                    errors.append(
+                        f"shared.topology.{key} must be a positive integer "
+                        "(record the parallel degree explicitly, even when it is 1)"
+                    )
+    return errors
+
+
 def validate_config(config: Mapping[str, Any]) -> None:
     errors: list[str] = []
     if config.get("schema_version") != SCHEMA_VERSION:
@@ -171,6 +259,13 @@ def validate_config(config: Mapping[str, Any]) -> None:
     shared = config.get("shared")
     if not isinstance(shared, Mapping) or not shared:
         errors.append("shared must be a non-empty object")
+    else:
+        errors.extend(validate_shared(shared))
+    parent_run_id = config.get("parent_run_id")
+    if parent_run_id is not None and (
+        not isinstance(parent_run_id, str) or not parent_run_id.strip()
+    ):
+        errors.append("parent_run_id must be a non-empty string when present")
     runs = config.get("runs")
     if not isinstance(runs, int) or isinstance(runs, bool) or runs < 2:
         errors.append("runs must be an integer of at least 2")
@@ -229,6 +324,55 @@ def build_schedule(*, warmups: int, runs: int) -> list[dict[str, Any]]:
     return schedule
 
 
+def build_parity_check(config: Mapping[str, Any]) -> dict[str, Any]:
+    """Describe exactly what the parity certificate did and did not verify.
+
+    The certificate is declarative: it proves the operator wrote down every
+    required non-code condition once and that both states are pinned to that
+    same declaration by `config_hash`. It does not observe what the services
+    actually ran with; `basis` and `not_checked` say so in the artifact itself.
+    """
+    shared = config["shared"]
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "status": "passed",
+        "basis": "declared-configuration",
+        "config_hash": config_hash(shared),
+        "shared": shared,
+        "allowed_difference": list(PARITY_ALLOWED_DIFFERENCES),
+        "checks": [
+            {
+                "check": "required-shared-keys-present",
+                "keys": list(REQUIRED_SHARED_KEYS),
+                "result": "passed",
+            },
+            {
+                "check": "topology-parallel-degrees-recorded",
+                "keys": [f"topology.{key}" for key in REQUIRED_TOPOLOGY_KEYS],
+                "values": {key: shared["topology"][key] for key in REQUIRED_TOPOLOGY_KEYS},
+                "result": "passed",
+            },
+            {
+                "check": "distinct-sessions",
+                "baseline": config["baseline"]["session_id"],
+                "candidate": config["candidate"]["session_id"],
+                "result": "passed",
+            },
+            {
+                "check": "code-snapshots-recorded",
+                "baseline": config["baseline"]["code_snapshot"],
+                "candidate": config["candidate"]["code_snapshot"],
+                "result": "passed",
+            },
+        ],
+        "not_checked": [
+            "observed runtime configuration of either service",
+            "raw Benchmark artifact contents or hashes",
+            "that measurements labelled baseline/candidate came from that state",
+        ],
+    }
+
+
 def plan(
     output_dir: Path,
     *,
@@ -264,13 +408,7 @@ def plan(
     }
     output_dir.mkdir(parents=True, exist_ok=True)
     _write_json(output_dir / "experiment-config.json", config)
-    _write_json(output_dir / "parity-check.json", {
-        "schema_version": SCHEMA_VERSION,
-        "status": "passed",
-        "config_hash": fingerprint,
-        "shared": config["shared"],
-        "allowed_difference": ["code_snapshot", "session_id", "label"],
-    })
+    _write_json(output_dir / "parity-check.json", build_parity_check(config))
     _write_json(output_dir / "schedule.json", schedule)
     _write_json(output_dir / "measurements.json", measurements)
     _write_json(output_dir / "run.json", state)
@@ -284,13 +422,14 @@ def plan(
     manifest = new_manifest(
         run_type="performance",
         run_id=run_id,
+        parent_run_id=config.get("parent_run_id"),
         workspace_snapshot={
             "baseline": config["baseline"]["code_snapshot"],
             "candidate": config["candidate"]["code_snapshot"],
         },
-        environment=config["shared"].get("environment", {}),
-        model=config["shared"].get("model", {}),
-        topology=config["shared"].get("topology", {}),
+        environment=config["shared"]["environment"],
+        model=config["shared"]["model"],
+        topology=config["shared"]["topology"],
         created_at=timestamp,
     )
     for name, kind, uri in (

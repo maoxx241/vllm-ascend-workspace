@@ -17,7 +17,12 @@ LIB = ROOT / ".agents" / "lib"
 if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
-from vaws_run_manifest import new_manifest, transition_status, write_manifest  # noqa: E402
+from vaws_run_manifest import (  # noqa: E402
+    add_artifact,
+    new_manifest,
+    transition_status,
+    write_manifest,
+)
 
 
 def load_module():
@@ -106,38 +111,52 @@ class PlanningTests(unittest.TestCase):
         self.assertTrue(plan["manual_review_required"])
 
 
+def plan_graph_change(output: Path, run_id: str = "change-validation-1") -> list[str]:
+    change_validation.plan_change(
+        output,
+        run_id=run_id,
+        baseline="base",
+        candidate="candidate",
+        goal="graph fix",
+        target_repositories=["vllm-ascend"],
+        diff_text=unified_diff("graph_mode.py"),
+        knowledge_path=KNOWLEDGE,
+        created_at=NOW,
+    )
+    plan = json.loads((output / "validation-plan.json").read_text(encoding="utf-8"))
+    return [item["id"] for item in plan["items"] if item["priority"] == "required"]
+
+
+def passed_child(
+    path: Path,
+    *,
+    parent_run_id: str | None,
+    with_artifact: bool = True,
+    run_type: str = "correctness",
+) -> None:
+    child = new_manifest(
+        run_type=run_type,
+        run_id="child-1",
+        parent_run_id=parent_run_id,
+        created_at=NOW,
+    )
+    child = transition_status(child, "running", updated_at=NOW)
+    if with_artifact:
+        child = add_artifact(
+            child, name="comparison", kind="comparison", uri="comparison.json", updated_at=NOW
+        )
+    child = transition_status(child, "passed", updated_at=NOW)
+    write_manifest(path, child)
+
+
 class AggregationTests(unittest.TestCase):
     def test_passed_child_can_complete_required_plan(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             output = root / "change"
-            change_validation.plan_change(
-                output,
-                run_id="change-validation-1",
-                baseline="base",
-                candidate="candidate",
-                goal="graph fix",
-                target_repositories=["vllm-ascend"],
-                diff_text=unified_diff("graph_mode.py"),
-                knowledge_path=KNOWLEDGE,
-                created_at=NOW,
-            )
-            plan = json.loads(
-                (output / "validation-plan.json").read_text(encoding="utf-8")
-            )
-            required_ids = [
-                item["id"] for item in plan["items"] if item["priority"] == "required"
-            ]
+            required_ids = plan_graph_change(output)
             child_path = root / "child-manifest.json"
-            child = new_manifest(
-                run_type="correctness",
-                run_id="correctness-child-1",
-                parent_run_id="change-validation-1",
-                created_at=NOW,
-            )
-            child = transition_status(child, "running", updated_at=NOW)
-            child = transition_status(child, "passed", updated_at=NOW)
-            write_manifest(child_path, child)
+            passed_child(child_path, parent_run_id="change-validation-1")
             change_validation.link_run(
                 output,
                 child_manifest_path=child_path,
@@ -147,7 +166,66 @@ class AggregationTests(unittest.TestCase):
             result = change_validation.finalize(output, updated_at=NOW)
             self.assertEqual(result["status"], "passed")
             report = (output / "pr-validation-report.md").read_text(encoding="utf-8")
-            self.assertIn("correctness-child-1", report)
+            self.assertIn("child-1", report)
+
+    def test_child_without_parent_run_id_is_rejected(self) -> None:
+        """Regression: a null parent_run_id used to satisfy the parent check."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output = root / "change"
+            required_ids = plan_graph_change(output)
+            child_path = root / "orphan.json"
+            passed_child(child_path, parent_run_id=None)
+            with self.assertRaisesRegex(
+                change_validation.ChangeValidationError,
+                "has no parent_run_id.*--parent-run-id",
+            ):
+                change_validation.link_run(
+                    output,
+                    child_manifest_path=child_path,
+                    covers=required_ids,
+                    updated_at=NOW,
+                )
+            links = json.loads((output / "linked-runs.json").read_text(encoding="utf-8"))
+            self.assertEqual(links["runs"], [])
+            result = change_validation.finalize(output, updated_at=NOW)
+            self.assertEqual(result["status"], "inconclusive")
+
+    def test_child_of_another_parent_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output = root / "change"
+            required_ids = plan_graph_change(output)
+            child_path = root / "foreign.json"
+            passed_child(child_path, parent_run_id="change-validation-other")
+            with self.assertRaisesRegex(
+                change_validation.ChangeValidationError, "belongs to parent"
+            ):
+                change_validation.link_run(
+                    output,
+                    child_manifest_path=child_path,
+                    covers=required_ids,
+                    updated_at=NOW,
+                )
+
+    def test_passed_child_without_artifacts_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output = root / "change"
+            required_ids = plan_graph_change(output)
+            child_path = root / "bare.json"
+            passed_child(
+                child_path, parent_run_id="change-validation-1", with_artifact=False
+            )
+            with self.assertRaisesRegex(
+                change_validation.ChangeValidationError, "links no artifacts"
+            ):
+                change_validation.link_run(
+                    output,
+                    child_manifest_path=child_path,
+                    covers=required_ids,
+                    updated_at=NOW,
+                )
 
     def test_missing_required_evidence_is_inconclusive(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

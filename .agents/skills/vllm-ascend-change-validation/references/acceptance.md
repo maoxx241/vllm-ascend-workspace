@@ -18,6 +18,8 @@
 ## Evidence
 
 - [ ] Each linked run has a valid Run Manifest.
+- [ ] Each linked run was created with this plan's `run_id` as its `parent_run_id`.
+- [ ] Each passed linked run carries artifacts that a reviewer can open.
 - [ ] Each link names the plan item IDs it covers.
 - [ ] Failed, inconclusive, cancelled, running, and planned children are not treated as passing.
 - [ ] Correctness, performance, graph, distributed, operator, and profiling evidence use their owning workflows.

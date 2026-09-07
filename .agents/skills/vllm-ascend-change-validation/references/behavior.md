@@ -60,7 +60,13 @@ Link the downstream `manifest.json` and one or more plan IDs. The parent records
 - absolute manifest location;
 - covered plan items.
 
-A child with another non-null parent ID cannot be linked. Duplicate child run IDs are rejected.
+`link` fails closed on three conditions, each with an error naming the child run and what is missing:
+
+- the child's `parent_run_id` is `null`: the run was not created as evidence for this plan. Downstream runs must be created with this plan's `run_id` (`correctness_run.py init --parent-run-id`, `graph_debug_case.py init --parent-run-id`, or the `parent_run_id` key of the performance-regression and distributed-debug configs). A manifest created before the plan existed cannot be linked retroactively;
+- the child's `parent_run_id` names a different run;
+- the child is `passed` but links no artifacts: a passed manifest without evidence cannot cover a plan item.
+
+Duplicate child run IDs are rejected. The parent-child check is now a real constraint: before this change a `null` parent satisfied it, so it could never fail.
 
 ## Final status
 
