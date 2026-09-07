@@ -790,6 +790,10 @@ def failure_from_parts(parts: Sequence[Mapping[str, Any]]) -> dict[str, Any] | N
     A single shared layer across every failing unit is reported with that
     layer; a mix is reported as ``unknown``, because "some nodes hit the
     transport and some hit the workload" is genuinely not one diagnosis.
+
+    Shared ``unknown`` stays low-confidence: counting more unattributed
+    failures never creates an attribution. The validator still rejects
+    ``unknown`` with ``confidence: "high"``.
     """
     failing = [
         part
@@ -803,16 +807,22 @@ def failure_from_parts(parts: Sequence[Mapping[str, Any]]) -> dict[str, Any] | N
     units = ", ".join(str(part.get("unit")) for part in failing[:8])
     basis = [f"{len(failing)} of {total} units failed: {units}"]
     if len(layers) == 1 and None not in layers:
-        layer = next(iter(layers))
+        layer = str(next(iter(layers)))
         codes = {
             part.get("reason_code") for part in failing if part.get("reason_code")
         }
+        if layer == "unknown":
+            confidence = "low"
+        elif len(failing) < total:
+            confidence = "medium"
+        else:
+            confidence = "high"
         return make_failure(
-            layer=str(layer),
+            layer=layer,
             reason_code=str(next(iter(codes))) if len(codes) == 1 else "unattributed",
             message=f"{len(failing)}/{total} units failed in layer {layer}",
             attribution_basis=basis + [f"all failing units attributed to {layer}"],
-            confidence="medium" if len(failing) < total else "high",
+            confidence=confidence,
         )
     return unknown_failure(
         message=(
@@ -863,6 +873,37 @@ def escalate_child_layer(child_layer: str) -> str:
     return "tool" if child_layer == "caller" else child_layer
 
 
+def propagate_child_ruled_out(
+    child_ruled_out: Sequence[Any] | None,
+    *,
+    child_layer: str,
+    parent_layer: str,
+) -> list[str]:
+    """Translate child-frame exclusions into the parent frame.
+
+    ``ruled_out`` is relative to the wrapper that recorded it. Nested
+    ``caller`` becomes the parent's ``tool``, so a child exclusion of
+    ``tool`` is an exclusion of the *child's* wrapper, not the parent's.
+    Drop any exclusion that matches the parent's attributed layer; keep
+    the rest in order so downstream exclusions survive. The child record
+    itself is left unchanged.
+    """
+    attributed = (
+        parent_layer
+        if parent_layer in LAYER_SET
+        else escalate_child_layer(str(child_layer))
+    )
+    excluded: list[str] = []
+    seen: set[str] = set()
+    for item in child_ruled_out or ():
+        layer = str(item)
+        if layer == attributed or layer in seen:
+            continue
+        seen.add(layer)
+        excluded.append(layer)
+    return excluded
+
+
 def compose_child(
     parent: MutableMapping[str, Any],
     child: Mapping[str, Any],
@@ -877,6 +918,12 @@ def compose_child(
     through :func:`escalate_child_layer` when it has no failure of its own,
     and inherits the child's ``do_not`` guidance so a known signature is not
     lost one frame up the stack.
+
+    Child exclusions are remapped through :func:`propagate_child_ruled_out`
+    so a child-frame ``tool`` exclusion is not treated as an exclusion of
+    the parent's wrapper after a ``caller`` → ``tool`` escalation. The
+    supplied child is not mutated; its original fields remain reachable
+    through the digest ``ref``.
     """
     composed = deepcopy(dict(parent))
     depth = 1 + max(
@@ -909,7 +956,11 @@ def compose_child(
             confidence=str(child_failure.get("confidence") or "low")
             if layer != "unknown"
             else "low",
-            ruled_out=child_failure.get("ruled_out") or (),
+            ruled_out=propagate_child_ruled_out(
+                child_failure.get("ruled_out") or (),
+                child_layer=child_layer,
+                parent_layer=layer,
+            ),
             signals=child_failure.get("signals") or (),
         )
         child_outcome = str(child.get("outcome") or "failure")

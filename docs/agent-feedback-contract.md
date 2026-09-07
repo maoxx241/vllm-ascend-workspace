@@ -292,8 +292,11 @@ eventually disagree with itself.
 `failure_from_parts()` summarizes: one shared layer across every failing unit
 is reported as that layer; a mix is reported as `unknown`, because "some nodes
 hit the transport and some hit the workload" genuinely is not one diagnosis.
-A failing part must carry a layer — `unknown` if that is the truth — so a
-per-node result is never less diagnosable than a whole-operation result.
+Shared `unknown` is still unknown: the helper keeps `confidence: "low"` even
+when every unit failed or was blocked. Counting more unattributed failures
+does not create an attribution, and the validator still rejects `unknown` +
+`high`. A failing part must carry a layer — `unknown` if that is the truth —
+so a per-node result is never less diagnosable than a whole-operation result.
 
 ## 5. Retries and idempotency
 
@@ -329,8 +332,16 @@ Most entry points are wrappers: `bench_run` calls `serve_start`, which calls
    propagates.
 4. **`do_not` guidance is inherited.** A known signature detected three frames
    down must not be lost on the way up.
+5. **Exclusions are frame-aware.** Child `ruled_out` values describe the
+   child's wrapper. After a nested `caller` fault becomes the parent's
+   `tool` fault, a child exclusion of `tool` is dropped: it is not an
+   exclusion of the parent's wrapper. Other child exclusions propagate.
+   The child's original fields stay on the child record/`ref`; composition
+   must not put the parent's attributed layer in the parent's `ruled_out`.
 
-`compose_child(parent, child, ref=…)` implements all four.
+`compose_child(parent, child, ref=…)` implements these rules, with
+`escalate_child_layer` and `propagate_child_ruled_out` as the layer and
+exclusion mappings.
 
 ## 7. Redaction and publishability
 

@@ -57,6 +57,7 @@ from vaws_result_envelope import (  # noqa: E402
     new_envelope,
     outcome_from_parts,
     progress,
+    propagate_child_ruled_out,
     read_envelope,
     redact,
     text_preview,
@@ -408,6 +409,165 @@ class PartialSuccessTests(unittest.TestCase):
         ]
         self.assertEqual(outcome_from_parts(parts), "blocked")
 
+    def test_one_unknown_failure_stays_unknown_with_low_confidence(self) -> None:
+        parts = [
+            make_part(
+                unit="node-0",
+                outcome="failure",
+                layer="unknown",
+                reason_code="fixture",
+            )
+        ]
+        failure = failure_from_parts(parts)
+        self.assertEqual(failure["layer"], "unknown")
+        self.assertEqual(failure["confidence"], "low")
+        self.assertIn("node-0", failure["attribution_basis"][0])
+        envelope = base_envelope(
+            outcome="failure",
+            failure=failure,
+            parts=parts,
+            next_step=make_next_step(actions=["inspect fixture log"]),
+        )
+        validate_envelope(envelope)
+        self.assertEqual(envelope["outcome"], "failure")
+
+    def test_several_unknown_failures_do_not_raise_confidence(self) -> None:
+        parts = [
+            make_part(
+                unit="node-0",
+                outcome="failure",
+                layer="unknown",
+                reason_code="fixture",
+            ),
+            make_part(
+                unit="node-1",
+                outcome="failure",
+                layer="unknown",
+                reason_code="fixture",
+            ),
+            make_part(
+                unit="node-2",
+                outcome="failure",
+                layer="unknown",
+                reason_code="fixture",
+            ),
+        ]
+        failure = failure_from_parts(parts)
+        self.assertEqual(failure["layer"], "unknown")
+        self.assertEqual(failure["confidence"], "low")
+        self.assertIn("node-0", failure["attribution_basis"][0])
+        self.assertIn("node-2", failure["attribution_basis"][0])
+        envelope = base_envelope(
+            outcome="failure",
+            failure=failure,
+            parts=parts,
+            next_step=make_next_step(actions=["collect a layer signal"]),
+        )
+        validate_envelope(envelope)
+        self.assertEqual(envelope["outcome"], "failure")
+
+    def test_all_unknown_blocked_parts_stay_blocked_and_low_confidence(self) -> None:
+        parts = [
+            make_part(
+                unit="node-0",
+                outcome="blocked",
+                layer="unknown",
+                reason_code="fixture",
+            ),
+            make_part(
+                unit="node-1",
+                outcome="blocked",
+                layer="unknown",
+                reason_code="fixture",
+            ),
+        ]
+        self.assertEqual(outcome_from_parts(parts), "blocked")
+        failure = failure_from_parts(parts)
+        self.assertEqual(failure["layer"], "unknown")
+        self.assertEqual(failure["confidence"], "low")
+        envelope = base_envelope(
+            outcome="blocked",
+            failure=failure,
+            parts=parts,
+            next_step=make_next_step(actions=["collect a layer signal"]),
+        )
+        validate_envelope(envelope)
+        self.assertEqual(envelope["outcome"], "blocked")
+
+    def test_known_same_layer_failures_keep_high_confidence(self) -> None:
+        parts = [
+            make_part(
+                unit="node-0",
+                outcome="failure",
+                layer="tool",
+                reason_code="fixture",
+            )
+        ]
+        failure = failure_from_parts(parts)
+        self.assertEqual(failure["layer"], "tool")
+        self.assertEqual(failure["confidence"], "high")
+        envelope = base_envelope(
+            outcome="failure",
+            failure=failure,
+            parts=parts,
+            next_step=make_next_step(actions=["inspect fixture log"]),
+        )
+        validate_envelope(envelope)
+        self.assertEqual(envelope["outcome"], "failure")
+
+    def test_mixed_attributed_and_unknown_parts_stay_unknown_and_low(self) -> None:
+        parts = [
+            make_part(
+                unit="node-0",
+                outcome="failure",
+                layer="device",
+                reason_code="npu_busy",
+            ),
+            make_part(
+                unit="node-1",
+                outcome="failure",
+                layer="unknown",
+                reason_code="fixture",
+            ),
+        ]
+        self.assertEqual(outcome_from_parts(parts), "failure")
+        failure = failure_from_parts(parts)
+        self.assertEqual(failure["layer"], "unknown")
+        self.assertEqual(failure["confidence"], "low")
+        envelope = base_envelope(
+            outcome="failure",
+            failure=failure,
+            parts=parts,
+            next_step=make_next_step(
+                actions=["separate the attributed unit from the rest"]
+            ),
+        )
+        validate_envelope(envelope)
+        self.assertEqual(envelope["outcome"], "failure")
+
+    def test_partial_unknown_failures_stay_partial_and_low_confidence(self) -> None:
+        parts = [
+            make_part(unit="node-0", outcome="success"),
+            make_part(
+                unit="node-1",
+                outcome="failure",
+                layer="unknown",
+                reason_code="fixture",
+            ),
+        ]
+        self.assertEqual(outcome_from_parts(parts), "partial")
+        failure = failure_from_parts(parts)
+        self.assertEqual(failure["layer"], "unknown")
+        self.assertEqual(failure["confidence"], "low")
+        envelope = base_envelope(
+            outcome="partial",
+            failure=failure,
+            parts=parts,
+            next_step=make_next_step(actions=["inspect node-1"]),
+        )
+        validate_envelope(envelope)
+        self.assertEqual(envelope["outcome"], "partial")
+
 
 class RetryTests(unittest.TestCase):
     def test_retry_safe_is_derived_from_the_idempotency_class(self) -> None:
@@ -468,7 +628,14 @@ class RetryTests(unittest.TestCase):
 
 
 class CompositionTests(unittest.TestCase):
-    def _child(self, layer: str, reason_code: str) -> dict:
+    def _child(
+        self,
+        layer: str,
+        reason_code: str,
+        *,
+        ruled_out: list[str] | None = None,
+        outcome: str = "failure",
+    ) -> dict:
         command = make_command(
             argv=["python3", ".agents/scripts/remote_exec.py", "--session-id", "demo-1"]
         )
@@ -479,7 +646,7 @@ class CompositionTests(unittest.TestCase):
                 target_kind="container",
                 target_id="demo-1",
             ),
-            outcome="failure",
+            outcome=outcome,
             summary=f"remote_exec failed in layer {layer}",
             attempt=make_attempt(
                 command=command, reproduce=command["display"], started_at=NOW
@@ -489,6 +656,7 @@ class CompositionTests(unittest.TestCase):
                 reason_code=reason_code,
                 message="nested failure",
                 attribution_basis=["nested observation"],
+                ruled_out=ruled_out,
             ),
             next_step=make_next_step(
                 actions=["read the nested log"],
@@ -503,6 +671,28 @@ class CompositionTests(unittest.TestCase):
         self.assertNotIn("children", digest)
         self.assertNotIn("attempt", digest)
         self.assertEqual(digest["layer"], "transport")
+
+    def test_propagate_child_ruled_out_is_frame_aware(self) -> None:
+        self.assertEqual(
+            propagate_child_ruled_out(
+                ["tool", "device"],
+                child_layer="caller",
+                parent_layer="tool",
+            ),
+            ["device"],
+        )
+        self.assertEqual(
+            propagate_child_ruled_out(
+                ["tool", "device"],
+                child_layer="transport",
+                parent_layer="transport",
+            ),
+            ["tool", "device"],
+        )
+        self.assertEqual(
+            escalate_child_layer("caller"),
+            "tool",
+        )
 
     def test_nested_layer_propagates_unchanged(self) -> None:
         parent = base_envelope()
@@ -554,6 +744,97 @@ class CompositionTests(unittest.TestCase):
         parent["children"] = [self._child("transport", "ssh_connect_failed")]
         with self.assertRaisesRegex(EnvelopeError, "must be a digest"):
             validate_envelope(parent)
+
+    def test_nested_caller_without_child_tool_exclusion_composes(self) -> None:
+        parent = base_envelope()
+        child = self._child("caller", "bad_arguments", outcome="blocked")
+        child_snapshot = json.loads(json.dumps(child))
+        validate_envelope(parent)
+        validate_envelope(child)
+        composed = compose_child(parent, child, ref="fixture-child.json")
+        validate_envelope(composed)
+        self.assertEqual(composed["outcome"], "blocked")
+        self.assertEqual(composed["failure"]["layer"], "tool")
+        self.assertEqual(composed["failure"]["ruled_out"], [])
+        self.assertEqual(child, child_snapshot)
+        self.assertEqual(composed["children"][0]["envelope_id"], child["envelope_id"])
+        self.assertEqual(composed["children"][0]["ref"], "fixture-child.json")
+        self.assertEqual(composed["children"][0]["layer"], "caller")
+        self.assertEqual(
+            composed["next_step"]["actions"][0]["description"],
+            "read the nested log",
+        )
+        self.assertIn(
+            "do not retry on the shared mux", composed["next_step"]["do_not"]
+        )
+
+    def test_nested_caller_with_child_tool_exclusion_drops_parent_tool(self) -> None:
+        parent = base_envelope()
+        child = self._child(
+            "caller",
+            "bad_arguments",
+            ruled_out=["tool"],
+            outcome="blocked",
+        )
+        child_snapshot = json.loads(json.dumps(child))
+        validate_envelope(parent)
+        validate_envelope(child)
+        composed = compose_child(parent, child, ref="fixture-child.json")
+        validate_envelope(composed)
+        self.assertEqual(composed["outcome"], "blocked")
+        self.assertEqual(composed["failure"]["layer"], "tool")
+        self.assertNotIn("tool", composed["failure"]["ruled_out"])
+        self.assertEqual(child, child_snapshot)
+        self.assertEqual(child["failure"]["layer"], "caller")
+        self.assertEqual(child["failure"]["ruled_out"], ["tool"])
+        self.assertEqual(composed["children"][0]["envelope_id"], child["envelope_id"])
+        self.assertEqual(composed["children"][0]["ref"], "fixture-child.json")
+        self.assertEqual(composed["children"][0]["layer"], "caller")
+        self.assertEqual(
+            composed["next_step"]["actions"][0]["description"],
+            "read the nested log",
+        )
+        self.assertIn(
+            "do not retry on the shared mux", composed["next_step"]["do_not"]
+        )
+
+    def test_nested_caller_keeps_downstream_exclusions(self) -> None:
+        parent = base_envelope()
+        child = self._child(
+            "caller",
+            "bad_arguments",
+            ruled_out=["tool", "transport", "device"],
+        )
+        child_snapshot = json.loads(json.dumps(child))
+        composed = compose_child(parent, child, ref="fixture-child.json")
+        validate_envelope(composed)
+        self.assertEqual(composed["failure"]["layer"], "tool")
+        self.assertEqual(composed["failure"]["ruled_out"], ["transport", "device"])
+        self.assertEqual(
+            child["failure"]["ruled_out"], ["tool", "transport", "device"]
+        )
+        self.assertEqual(child, child_snapshot)
+        self.assertEqual(composed["children"][0]["layer"], "caller")
+        self.assertEqual(composed["children"][0]["ref"], "fixture-child.json")
+
+    def test_unchanged_layer_keeps_child_exclusions(self) -> None:
+        parent = base_envelope()
+        child = self._child(
+            "transport",
+            "ssh_mux_stream_died",
+            ruled_out=["caller", "tool"],
+        )
+        child_snapshot = json.loads(json.dumps(child))
+        composed = compose_child(parent, child, ref="fixture-child.json")
+        validate_envelope(composed)
+        self.assertEqual(composed["failure"]["layer"], "transport")
+        self.assertEqual(composed["failure"]["ruled_out"], ["caller", "tool"])
+        self.assertEqual(child, child_snapshot)
+        self.assertEqual(composed["children"][0]["layer"], "transport")
+        self.assertEqual(composed["children"][0]["ref"], "fixture-child.json")
+        self.assertIn(
+            "do not retry on the shared mux", composed["next_step"]["do_not"]
+        )
 
 
 class BoundedOutputTests(unittest.TestCase):
