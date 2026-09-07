@@ -1,6 +1,6 @@
 ---
 name: vllm-ascend-serving
-description: Start, check, or stop a single-node vLLM Ascend online service on a workspace-managed ready remote container. Use for requests like "拉服务", "在远端起个服务", "重启服务", "看服务状态", "停掉服务". Do not use for machine attach, environment bootstrap, code sync, benchmark orchestration, or offline inference.
+description: Start, inspect, restart, or stop a single-node vLLM Ascend online service in a managed session. Use for 拉服务 or 服务状态; not benchmarks.
 ---
 
 # vLLM Ascend Serving
@@ -223,13 +223,13 @@ The script polls `/health` and `/v1/models` while tracking startup phases from
 runtime-log markers, then requires one deterministic real request before
 reporting ready. A timeout reports the last observed phase.
 
-### 6a. Diagnose launch failure before any code change
+### 6a. Diagnose launch failure
 
 If the service fails during engine initialization or health check timeout:
 
 - Read **both** `stdout.log` and `stderr.log` from the remote runtime directory — vllm often logs the actual Python exception to stdout, not stderr.
 - Identify the actual exception type and message before hypothesizing a cause.
-- Do not modify source code to work around a launch failure until the root cause is confirmed from logs.
+- Preserve logs and the baseline. If logs do not establish the cause, use bounded instrumentation or an isolated candidate to test one hypothesis; record the revision and outcome. Restart only the owned service before running changed code. A candidate patch is not a verified fix until validated.
 - If the root cause is unclear, try the simplest launch configuration first (e.g. tp-only, no speculative decoding, no graph mode) and incrementally add features to isolate the failing component.
 
 ### 7. Return structured JSON

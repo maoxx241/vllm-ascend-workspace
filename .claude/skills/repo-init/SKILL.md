@@ -1,8 +1,9 @@
-<!-- Generated Claude Code shim from .agents/skills/repo-init/SKILL.md. Do not edit. -->
 ---
 name: repo-init
-description: Initialize this workspace after clone. Use for requests like “初始化仓库”, “配置 gh / GitHub 登录”, “初始化子模块”, or “把 vllm / vllm-ascend remotes 改成我的 fork”. Do not use for ordinary coding, serving, benchmarking, or unrelated Git tasks.
+description: Initialize workspace tooling, GitHub auth, submodules, or fork topology. Use for 初始化仓库; not ordinary coding or remote NPU machine setup.
 ---
+
+<!-- Generated Claude Code shim from .agents/skills/repo-init/SKILL.md. Do not edit. -->
 
 # Repo Init
 

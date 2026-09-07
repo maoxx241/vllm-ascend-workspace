@@ -46,7 +46,7 @@ The `source-only` and `materialize` modes must not update runtime install state 
 
 Before invoking parity for a container, the agent checks the persisted `sync_mode` in `install-consents.json`:
 
-- `unset`: first use — agent must ask the user whether to sync local code (`local`) or use image-provided packages (`image`), then record via `install_consent.py set-sync-mode`.
+- `unset`: first use — record an explicit existing choice for this target via `install_consent.py set-sync-mode`. If the choice is unresolved, ask whether to use local code (`local`) or image-provided packages (`image`).
 - `local`: proceed with the full parity flow.
 - `image`: `parity_sync.py` returns `status: skipped` immediately; the agent proceeds with remote execution using image-provided packages without syncing or installing.
 

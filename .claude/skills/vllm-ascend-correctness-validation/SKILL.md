@@ -1,8 +1,9 @@
-<!-- Generated Claude Code shim from .agents/skills/vllm-ascend-correctness-validation/SKILL.md. Do not edit. -->
 ---
 name: vllm-ascend-correctness-validation
-description: Plan, execute, normalize, and compare vLLM Ascend inference correctness across baseline and candidate code states, eager and graph modes, offline generate or chat, online chat completions, and AISBench task metrics. Use for accuracy validation, token-output comparison, graph-versus-eager checks, deterministic regression testing, or failure classification. Do not use to root-cause an already reproduced graph-only or isolated-operator failure, or for throughput benchmarking, HBM attribution, or profiling-only analysis.
+description: Compare Ascend inference correctness across baseline/candidate, eager/graph, offline/online, and task metrics. Use for accuracy validation.
 ---
+
+<!-- Generated Claude Code shim from .agents/skills/vllm-ascend-correctness-validation/SKILL.md. Do not edit. -->
 
 # vLLM Ascend Correctness Validation
 

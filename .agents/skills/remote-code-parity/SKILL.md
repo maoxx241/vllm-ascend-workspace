@@ -1,6 +1,6 @@
 ---
 name: remote-code-parity
-description: Ensure a ready remote runtime runs the exact current local workspace state before any remote smoke, service launch, or benchmark. Use automatically immediately before remote execution when direct local-to-container SSH already works and local uncommitted changes must be reflected remotely. Do not use for initial machine attach, generic Git topology work, or unrelated local-only coding.
+description: Synchronize intended local code to a ready remote runtime before executing it. Use for dirty worktree parity, not read-only remote inspection.
 ---
 
 # Remote Code Parity
@@ -72,8 +72,8 @@ that execution before starting another code revision.
 - Runtime dependency installs use the single A3-tested HuaweiCloud pip index. Do not configure default extra indexes, mirror fallback, or caller-provided pip index overrides in parity.
 - Runtime editable installs use `--no-deps`; dependency ownership stays in `vllm-ascend` requirements. Cache / compile env such as `PIP_CACHE_DIR`, `FETCHCONTENT_BASE_DIR`, `VAWS_BUILD_JOBS`, `MAX_JOBS`, and `CMAKE_BUILD_PARALLEL_LEVEL` may be explicitly passed into the remote install shell, and the effective remote install env is recorded in the manifest/runtime state with URL userinfo redacted.
 - If editable install or dependency verification fails, fail closed with the captured log instead of trying alternate package sources, installing `uv`, refreshing the packaging stack, or changing install modes.
-- Before invoking parity, confirm the local working tree represents the **intended deployment state**. If any submodule source files have uncommitted changes made for temporary debugging or hypothesis testing, revert them before syncing — do not sync exploratory patches to the remote.
-- If a previous parity sync in this session led to a failed remote execution and the agent subsequently modified local code, do not re-sync until the root cause of the failure is confirmed from remote logs (not from hypothesis).
+- Before parity, identify the **intended deployment state**, including any deliberate diagnostic patch. Preserve user edits and unrelated changes; use an isolated worktree for experiments rather than reverting them automatically.
+- After a failed execution, preserve logs and the baseline before syncing a new candidate. A bounded diagnostic experiment may test an unconfirmed hypothesis; record its purpose and revision, and stop the owned execution before materializing changed code. Do not present the candidate as a verified fix until the evidence supports it.
 - Fail closed if parity cannot be proven.
 - First replacement of image-provided `vllm` / `vllm-ascend` requires explicit user consent for that logical container identity.
 - `install_consent.py set`, `batch-set`, and `set-sync-mode` must include `--approved-by-user`.
@@ -167,7 +167,7 @@ Reference files:
 
 Before running parity for a container, check the persisted `sync_mode`:
 
-- `unset` (first use): the agent must proactively ask the user whether to sync local code (`local`) or use the container's image-provided vllm + vllm-ascend (`image`). If the user chooses local replacement, record it via `install_consent.py set-sync-mode --sync-mode local --allow-first-install --approved-by-user`; if the user chooses image packages, record `--sync-mode image --approved-by-user`.
+- `unset` (first use): reuse an explicit choice already supplied for this target. Ask whether to use local code (`local`) or image-provided packages (`image`) only when the request leaves that choice unresolved. If the user chooses local replacement, record it via `install_consent.py set-sync-mode --sync-mode local --allow-first-install --approved-by-user`; if the user chooses image packages, record `--sync-mode image --approved-by-user`.
 - `local`: proceed with the full parity flow below.
 - `image`: `parity_sync.py` returns `status: skipped` immediately. The agent skips parity and proceeds with remote execution using image-provided packages.
 

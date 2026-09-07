@@ -5,7 +5,7 @@ This file defines the durable behavior of `repo-init`.
 ## Core contract
 
 - Probe first.
-- Ask before each mutation category.
+- Apply existing authorization and ask only for unresolved choices in scope.
 - Preserve user choices and extra remotes.
 - Keep user-specific topology and machine profile state local, not tracked.
 - Prefer helper scripts to raw shell.
@@ -25,7 +25,7 @@ Rules:
 
 - keep the directory untracked
 - during broad init, silently and idempotently create one UUID4 agent identity before the decision checkpoint
-- ask once whether to use the machine username, a custom alias, or no unified alias; persist `declined` so the question is not repeated
+- use the supplied alias choice or ask once if missing; persist `declined` when no alias is chosen so the question is not repeated
 - unified aliases follow the same lowercase letters/digits-only 3-32 character rule needed by container namespaces
 - create the machine profile during broad workspace init, not for every narrow Git-only task
 - machine usernames must be letters and digits only
@@ -55,19 +55,19 @@ Use `repo_init_probe.py` to collect:
 The probe may only mutate untracked local state by creating a missing
 `workspace-identity.json` UUID4. It must not silently choose an alias.
 
-### Stage 2: mandatory decision checkpoint
+### Stage 2: resolve missing choices
 
-Before mutating a broad init or any topology-changing task, stop once and ask a grouped question.
-
-That question must cover:
+Reuse explicit choices from the request, conversation, and saved state. Ask one
+grouped question for unresolved items relevant to the task; already authorized
+choices can proceed after the probe. The possible items are:
 
 - unified workspace alias choice when its decision is pending
 - machine username choice when the profile is missing
 - repo topology mode: keep current, recommended fork mode, or community-only
 - whether to initialize submodules now
-- vllm submodule version alignment (CI-pinned / upstream main / keep current) — always include this when the probe shows submodules are uninitialized, because all questions are asked in one batch and you cannot wait for the submodule-init answer first; ignore the answer if the user later declines submodule init
+- vllm submodule version alignment (CI-pinned / upstream main / keep current), when initialization or alignment is in scope and the version choice is missing
 
-For the machine username branch, use the fixed three-option model from `repo_init_profile.py plan`:
+For a missing machine username choice, use the three-option model from `repo_init_profile.py plan`:
 
 - `git-username`
 - `random`
@@ -78,7 +78,7 @@ Rules:
 - do not silently generate a username when the user only asked for generic init
 - do not silently rewire remotes when the user only asked for generic init
 - do not treat `custom` as permission to reuse the detected Git username
-- if the user selects `custom`, stop again and ask for the literal username before any mutation
+- if the user selects `custom` without a literal username, ask for that missing value before profile creation
 
 ### Stage 3: ensure local machine profile when relevant
 
@@ -87,7 +87,7 @@ During broad workspace init:
 - inspect the profile first with `repo_init_profile.py plan`
 - if missing and the user chose `git-username`, call `repo_init_profile.py apply --choice git-username`
 - if missing and the user explicitly accepted the default/random option, call `repo_init_profile.py apply --choice random`
-- if missing and the user chose `custom`, first ask for the literal username, then call `repo_init_profile.py apply --choice custom --custom-username ...`
+- if missing and the user chose `custom`, use the supplied literal username (ask only if absent), then call `repo_init_profile.py apply --choice custom --custom-username ...`
 - do not change an existing profile unless the user explicitly asked to change it
 
 For narrow Git-only tasks, skip this stage.
@@ -135,7 +135,7 @@ Rules:
 
 - do not use `git fetch --prune` only to inspect divergence
 - fetch only the branch that matters
-- if the worktree is dirty, ask before switching branches or pulling
+- preserve dirty worktrees; use an isolated worktree for required branch work rather than switching or pulling over user edits
 - do not hard reset without explicit approval
 
 ### Stage 8: optional fork sync

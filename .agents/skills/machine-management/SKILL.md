@@ -1,6 +1,6 @@
 ---
 name: machine-management
-description: Add, verify, repair, or remove a managed remote NPU host for this workspace. Use for requests like “配置服务器”, “加一台机器”, “检查 ready”, “修容器 SSH”, or “移除机器”. Do not use for code sync, rebuilds, serving, or benchmarking.
+description: Add, verify, repair, or remove a managed remote NPU host. Use for 配置服务器, 检查 ready, or container SSH repair; not code sync or serving.
 ---
 
 # Machine Management

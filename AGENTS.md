@@ -7,39 +7,21 @@ vLLM-Ascend skills on top.
 
 ## Remote development model
 
-Use native client tools for local files and local shell work.
+Use native client tools for local files and shell work. Use `.remote-dev`
+companion tools for ordinary remote read/edit/bash/search/patch/job/artifact
+work; endpoint defaults and tool mappings live in `.remote-dev/README.md`.
 
-Use remote companion tools for remote endpoints. The remote tools mirror native
-tool semantics and only add endpoint fields:
+Choose the runtime interface that matches the task:
 
-| Local tool | Remote tool |
-|------------|-------------|
-| Read | `remote.read` |
-| Edit | `remote.edit` |
-| Write | `remote.write` |
-| Bash | `remote.bash` |
-| Glob | `remote.glob` |
-| Grep | `remote.grep` |
-| LS | `remote.ls` |
-| Monitor | `remote.monitor` |
-| apply_patch | `remote.apply_patch` |
-
-Default endpoint fields:
-
-- `host`
-- `port`
-- `user`, default `root`
-- `root`, default `/`
-- `cwd`, default `/vllm-workspace`
-
-Prefer `host + port` direct endpoints for ordinary remote development.
-`session_id`, `session_file`, and `machine` remain advanced compatibility
-paths for managed VAWS sessions and legacy single-tenant flows.
-
-Prefer remote companion tools for ordinary remote development. Hooks are
-permissive by default, and direct endpoints default to full remote-path
-permission (`root=/`). Pass a narrower `root` explicitly when a task requires
-path isolation.
+- Ordinary remote endpoint work uses `host + port`; it does not require a VAWS
+  session. Direct endpoints default to `root=/`; narrow it when isolation is
+  required.
+- Legacy domain wrappers for serving, benchmark, and profiling require a
+  `session-management` session. Inside its worktree they resolve the cwd
+  binding; outside it pass `--session-id` or `--session-file`.
+- Pool work uses `vaws_session/vaws_run/vaws_execution/vaws_finish` and the
+  [coordinator contract](.agents/coordinator/README.md). Task, binding, and
+  execution ids are not legacy session ids; do not create duplicate NPU leases.
 
 ## Skills
 
@@ -49,7 +31,7 @@ Repo-local skills live under `.agents/skills/`. Each has its own `SKILL.md` with
 |-------|---------|
 | `repo-init` | Initialize workspace: `gh`, GitHub auth, submodules, fork topology |
 | `machine-management` | Add / verify / repair / remove a remote NPU machine |
-| `npu-fleet-monitor` | Deploy, start, inspect, restart, or stop the loopback-only NPU monitoring dashboard from its standalone worktree |
+| `npu-fleet-monitor` | Locate or bootstrap the standalone vaws-top worktree and query fleet status |
 | `session-management` | Create / inspect / remove / group isolated agent sessions (local worktree + remote container + leases) |
 | `remote-toolbox` | Compatibility backend for managed VAWS target/probe/exec/job/sync/service/artifact/cleanup tools |
 | `remote-code-parity` | Sync local working tree to remote container before execution |
@@ -82,30 +64,61 @@ for domain workflows.
   attachments. New native sessions create new tasks; resume keeps the original
   task. Only explicit parent/user association joins another task; never infer
   task identity from cwd or recent chat history.
-- Prefer `vaws_session/vaws_run/vaws_execution/vaws_finish` for task-facing pool
-  work. Bind actual business worktrees and keep local development available
-  without the coordinator. Do not pass new task/binding/job ids to legacy
-  session commands or create duplicate local NPU leases for pool executions.
 - The optional shared runtime pool is documented in `.agents/coordinator/README.md`.
-  Pool bindings use its execution leases and ordinary remote-dev endpoints;
-  do not create duplicate legacy local NPU leases or pass a binding id as a
-  legacy session id. All clients of a pool must use the same manager.
+  Bind actual business worktrees. All clients of a pool must use the same manager.
   Stage edits during runs; materialize and refresh native artifacts only
   after its executions are released. Model services restart for changed code.
 - Never write secrets, passwords, or tokens into tracked files.
 - Keep VAWS runtime state under `.vaws-local/` and remote-dev endpoint/tool
   state under `.remote-dev/state/`. Both are untracked.
 - Keep `.gitmodules` on community upstream URLs.
-- Prefer `.remote-dev` remote companion tools or skill wrapper scripts over raw SSH / shell commands for remote operations.
 - Skill wrappers: progress on `stderr`, final JSON on `stdout`.
 - Execution skills must use Run Manifest v1 from `.agents/lib/vaws_run_manifest.py` for new cross-workflow runs and keep manifests under untracked `.vaws-local/`.
 - Read fast-changing compatibility, capability, validation, and failure-signature facts from `.agents/knowledge/`; treat missing facts as unknown rather than supported.
 - On a concrete practical failure, query compact formal matches with `.agents/scripts/knowledge_query.py` before repeating diagnosis. After a novel fix has a confirmed cause and verification evidence, capture a candidate with `.agents/scripts/knowledge_capture.py`.
 - Invoke `curate-workspace-knowledge` only for explicit knowledge review or promotion; normal workflows use the shared capture and query scripts directly.
-- Before reporting a blocking problem or asking the user to intervene, query `.agents/knowledge/` with `.agents/scripts/knowledge_query.py` using the observed failure signature. State explicitly when no verified match exists.
-- Use the remote-dev substrate for agent-facing remote read/edit/bash/search/patch/job/artifact work. Use the remote toolbox entrypoints as the managed VAWS compatibility backend before falling back to bare SSH.
-- Remote work runs inside a `session-management` session. From inside the session worktree, parity, serving, benchmark, and profiling commands auto-resolve the session from the cwd binding; pass `--session-id` only when running outside the worktree or targeting another session. Domain skill commands (serving, benchmark, profiling) are session-only; `--machine` exists only for machine registration and `session_create.py` base-machine selection. Legacy compatibility surfaces still accept `--machine`: `remote-code-parity/scripts/parity_sync.py`, `session-management/scripts/npu_coordination.py`, and `vllm-ascend-serving/scripts/serve_probe_npus.py`.
-- This repo targets Huawei Ascend NPU. Local machines (Mac/PC) cannot run `torch`/`torch_npu`-dependent code. Do not attempt local test execution — go straight to the remote container.
+- Before reporting a blocker caused by a concrete runtime failure, query `.agents/knowledge/` with `.agents/scripts/knowledge_query.py` using its observed signature. State when no verified match exists. Missing user preferences are not failure signatures.
+- Machine registration and `session_create.py` base-machine selection use
+  `--machine`. Legacy compatibility exceptions are `parity_sync.py`,
+  `npu_coordination.py`, and `serve_probe_npus.py`; check each command's help.
+- Run Ascend execution, model inference, and `torch`/`torch_npu`-dependent tests
+  in a ready remote container. Portable scaffold checks (catalog, CLI, state,
+  and mocked control-plane tests) can run locally without NPU dependencies.
+
+## Working agreement
+
+Follow the user's requested outcome and existing authorization throughout the
+workflow. A question or audit asks for an assessment; a request to fix or
+implement asks for the work itself. Finish the authorized work and applicable
+checks. If one part is blocked, continue independent parts and report what is
+missing; do not silently reduce scope.
+
+- Reuse choices already supplied in the request, conversation, or persisted
+  state. Ask only for missing decisions that materially affect the work or for
+  actions beyond the authorized scope. A skill's decision step does not require
+  asking again for the same authorized target and operation.
+- Preserve dirty or conflicted checkouts; use an isolated worktree when needed.
+  Before cleanup or restart, establish the exact process/container/session
+  ownership. Permission to inspect or monitor does not authorize termination.
+- Read the selected skill before invoking it; load supporting references for
+  the active phase. Local docs and Git work do not require remote setup or a
+  read-through of every skill. Read submodule instructions when working there.
+- Preserve logs and the baseline before changing a failed runtime. Use bounded
+  instrumentation or an isolated candidate to test a hypothesis; distinguish a
+  hypothesis from a verified cause and fix. Do not revert the user's edits.
+- Batch tool calls only when their inputs and authorization are already known
+  and independent. Skill routing precedes its dependent operations; parity,
+  service start, and benchmark remain ordered. Prefer targeted edits.
+- Run checks proportionate to changed behavior. Add a regression test when it
+  protects meaningful behavior; prose-only changes need link/catalog review,
+  not invented runtime tests. Keep disposable probes in `/tmp` or untracked
+  `.vaws-local/`. Avoid unrelated fixes and repeated suites without new evidence.
+- Check the checked-out source and runtime for changing flags, model structures,
+  operators, and image tags. Treat knowledge matches as leads to verify.
+- Give concise progress updates during long work. Report the outcome, relevant
+  paths/metrics, verification performed, and unresolved limits in the final
+  response; tool JSON alone is not a user-facing result. Service readiness,
+  correctness, performance, and acceptance are separate evidence levels.
 
 ## Maintenance
 

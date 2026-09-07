@@ -1,6 +1,6 @@
 ---
 name: repo-init
-description: Initialize the workspace after clone. Use for requests like "init repo", "configure gh / GitHub login", "init submodules", or "set up forks / remotes".
+description: Initialize workspace tooling, GitHub auth, submodules, or fork topology. Use for 初始化仓库; not ordinary coding or remote NPU machine setup.
 ---
 
 # repo-init

@@ -1,8 +1,9 @@
-<!-- Generated Claude Code shim from .agents/skills/ascend-memory-profiling/SKILL.md. Do not edit. -->
 ---
 name: ascend-memory-profiling
-description: Profile and attribute HBM memory usage on Ascend NPU for vLLM serving scenarios. Breaks down memory into fixed overhead, model weights, KV cache, HCCL buffers, activations, and runtime, with traceable evidence chains. Use for requests like "分析显存占用", "显存 profiling", "HBM 用了多少", "内存各部分拆分". Do not use for performance profiling (kernel timing, throughput), offline inference, or non-Ascend hardware.
+description: Profile Ascend vLLM serving HBM usage and attribute weights, KV cache, communication, and activations. Use for 显存分析, not kernel timing.
 ---
+
+<!-- Generated Claude Code shim from .agents/skills/ascend-memory-profiling/SKILL.md. Do not edit. -->
 
 # Ascend Memory Profiling
 

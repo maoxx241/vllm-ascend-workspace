@@ -1,6 +1,6 @@
 ---
 name: remote-code-parity
-description: Ensure the remote runtime runs the exact current local workspace state before any remote smoke test, service launch, or benchmark. Triggered automatically before remote execution when direct local-to-container SSH works. Do not use for initial machine attach, generic Git topology work, or unrelated local tasks.
+description: Synchronize intended local code to a ready remote runtime before executing it. Use for dirty worktree parity, not read-only remote inspection.
 ---
 
 # remote-code-parity

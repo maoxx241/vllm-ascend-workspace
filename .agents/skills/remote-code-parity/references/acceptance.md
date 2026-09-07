@@ -91,7 +91,7 @@ These should not trigger `remote-code-parity` unless remote code parity is the o
 
 ### Sync mode gate
 
-- when `sync_mode` is `unset`, the agent proactively asks the user before running parity
+- when `sync_mode` is `unset`, the agent records an explicit existing choice for this target; it asks only if local versus image code is unresolved
 - when `sync_mode` is still `unset`, `parity_sync.py` returns `status == blocked` before remote mutation
 - when `sync_mode` is `image`, `parity_sync.py` returns `status: skipped` without any remote operations
 - when `sync_mode` is `local`, the full parity flow proceeds normally

@@ -114,7 +114,7 @@ python3 .agents/skills/vllm-ascend-benchmark/scripts/bench_compare.py \
 
 ## Multi-state comparison: agent-orchestrated (fallback)
 
-The preferred path is a single `bench_compare.py` call (see the preset examples
+For exploratory measurements, the preferred path is a single `bench_compare.py` call (see the preset examples
 above) — it aligns each git ref in-container, gates on native-input digests,
 and persists every completed state. Only when `bench_compare.py` cannot express
 the setup (e.g. each state needs a *different* local worktree synced through

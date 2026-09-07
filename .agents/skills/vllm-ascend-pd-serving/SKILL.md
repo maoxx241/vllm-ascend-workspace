@@ -1,6 +1,6 @@
 ---
 name: vllm-ascend-pd-serving
-description: Plan, start, inspect, smoke-test, and stop a multi-session vLLM Ascend prefill/decode deployment with explicit connector configuration, role ordering, proxy endpoint health, rollback, and KV-transfer request evidence. Use for PD disaggregation with NIXL, Mooncake, or another KV connector. Do not use for one colocated service, generic Ray clusters, correctness matrices, performance regression decisions, or distributed root-cause diagnosis.
+description: Operate grouped Ascend prefill/decode services with explicit KV connector configuration, an existing proxy, rollback, and transfer evidence.
 ---
 
 # vLLM Ascend PD Serving
@@ -21,6 +21,11 @@ role configuration, ordering, proxy health, rollback, and end-to-end smoke.
 
 ## Workflow
 
+Choose the requested action. For start, use steps 1–6 and leave the healthy
+deployment running. Status and smoke can inspect an existing deployment. Stop
+only when requested, when teardown is part of the agreed experiment, or during
+rollback of this attempt's newly started roles.
+
 1. Run `scripts/pd_serving.py plan` with a PD config and Session Group file.
 2. Review generated commands. Connector options must already be present in each
    role's vLLM arguments; the controller never invents connector metadata.
@@ -30,8 +35,9 @@ role configuration, ordering, proxy health, rollback, and end-to-end smoke.
    order and returns a failed state.
 5. Run `status` to inspect every member and the proxy health endpoint.
 6. Run `smoke` to send the configured request through the proxy and preserve the
-   response as KV-transfer path evidence.
-7. Run `stop`; roles stop in reverse startup order.
+   response as proxy-routing evidence. Confirm KV transfer separately with
+   connector logs or transfer metrics tied to that request.
+7. For a stop request or planned teardown, run `stop`; roles stop in reverse startup order.
 
 ## Entry point
 
@@ -57,6 +63,7 @@ Read only the reference needed for the active phase:
 - Never mix code snapshots inside one deployment.
 - Never start a role outside the declared order.
 - Always rollback already-started roles after a partial failure.
-- Do not report KV transfer as proven from health checks alone; require a proxy
-  request response and retain raw service logs for deeper confirmation.
+- Health and a proxy response prove readiness and routing. Report KV transfer
+  as proven only with connector logs or transfer metrics for the smoke request;
+  otherwise label transfer unverified and retain the raw evidence.
 - Keep state under `.vaws-local/pd-serving/`.

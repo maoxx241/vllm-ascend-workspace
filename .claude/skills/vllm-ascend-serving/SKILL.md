@@ -1,8 +1,9 @@
-<!-- Generated Claude Code shim from .agents/skills/vllm-ascend-serving/SKILL.md. Do not edit. -->
 ---
 name: vllm-ascend-serving
-description: Start, check, or stop a single-node vLLM Ascend online service on a workspace-managed ready remote container. Use for requests like "拉服务", "在远端起个服务", "重启服务", "看服务状态", "停掉服务". Do not use for machine attach, environment bootstrap, code sync, benchmark orchestration, or offline inference.
+description: Start, inspect, restart, or stop a single-node vLLM Ascend online service in a managed session. Use for 拉服务 or 服务状态; not benchmarks.
 ---
+
+<!-- Generated Claude Code shim from .agents/skills/vllm-ascend-serving/SKILL.md. Do not edit. -->
 
 # vLLM Ascend Serving
 

@@ -1,8 +1,9 @@
-<!-- Generated Claude Code shim from .agents/skills/vllm-ascend-pd-serving/SKILL.md. Do not edit. -->
 ---
 name: vllm-ascend-pd-serving
-description: Plan, start, inspect, smoke-test, and stop a multi-session vLLM Ascend prefill/decode deployment with explicit connector configuration, role ordering, proxy endpoint health, rollback, and KV-transfer request evidence. Use for PD disaggregation with NIXL, Mooncake, or another KV connector. Do not use for one colocated service, generic Ray clusters, correctness matrices, performance regression decisions, or distributed root-cause diagnosis.
+description: Operate grouped Ascend prefill/decode services with explicit KV connector configuration, an existing proxy, rollback, and transfer evidence.
 ---
+
+<!-- Generated Claude Code shim from .agents/skills/vllm-ascend-pd-serving/SKILL.md. Do not edit. -->
 
 # vLLM Ascend PD Serving
 

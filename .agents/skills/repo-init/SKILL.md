@@ -1,6 +1,6 @@
 ---
 name: repo-init
-description: Initialize this workspace after clone. Use for requests like “初始化仓库”, “配置 gh / GitHub 登录”, “初始化子模块”, or “把 vllm / vllm-ascend remotes 改成我的 fork”. Do not use for ordinary coding, serving, benchmarking, or unrelated Git tasks.
+description: Initialize workspace tooling, GitHub auth, submodules, or fork topology. Use for 初始化仓库; not ordinary coding or remote NPU machine setup.
 ---
 
 # Repo Init
@@ -27,18 +27,18 @@ This skill is optional. Do not treat it as a prerequisite for unrelated work.
 ## Critical rules
 
 - Probe first.
-- Ask before every mutation category.
+- Reuse explicit user choices and authorization; ask only for unresolved choices in the requested scope.
 - Preserve extra remotes such as `upstream2`.
 - Never write secrets or user-specific remotes into tracked files.
 - Keep local runtime state only under `.vaws-local/`.
-- Silently create `.vaws-local/workspace-identity.json` with one persistent UUID4 during broad-init probing. This idempotent local bootstrap is the only allowed pre-checkpoint mutation.
+- Silently create `.vaws-local/workspace-identity.json` with one persistent UUID4 during broad-init probing. This idempotent local bootstrap does not choose an alias or authorize other changes.
 - Prefer helper scripts in `scripts/` and `.agents/scripts/` over ad-hoc shell pipelines.
 - During broad init, do not call `workspace_profile.py ensure` directly for a missing profile. Use `repo_init_profile.py`.
-- The machine-username checkpoint must use exactly three options when the profile is missing:
+- When the profile is missing and the user has not supplied a username choice, offer:
   - current Git username
   - random `agent#####`
   - custom username
-- If the user selects custom, stop again and ask for the literal username before any mutation.
+- If the user selects custom without a literal username, ask for that missing value before profile creation.
 - Never infer a custom username from `gh` login, Git remotes, or the local OS account.
 
 ## Cross-platform launcher rule
@@ -86,41 +86,29 @@ Reference files:
 - `.agents/skills/repo-init/references/command-recipes.md`
 - `.agents/skills/repo-init/references/acceptance.md`
 
-## Mandatory decision checkpoint
+## Resolve missing choices
 
-After the probe and before any mutation, stop once and ask a grouped question whenever the task is broad init or remote topology changes are in scope.
+After the probe, reuse explicit choices in the request, conversation, and saved
+state. For broad init, ask one grouped question for only the unresolved items
+that affect the requested work:
 
-That checkpoint must cover:
+- Unified alias, if pending: machine username, custom alias, or no alias.
+- Machine username, if missing: `git-username`, `random` (`agent#####`), or
+  `custom`. The wrapper's plan payload provides these options. Custom names
+  require a literal value; ask a follow-up only if it was not already supplied.
+  Normalize to lowercase letters and digits; reject spaces and symbols.
+- Repo topology: keep current remotes, fork mode, or community-only mode.
+- Submodule initialization and, when initialization/alignment is requested,
+  vLLM alignment: CI-pinned, upstream main, or keep current. Resolve CI-pinned
+  from `resolve_vllm_ci_pin.py`; do not silently switch an existing checkout.
 
-1. unified workspace alias choice when the identity decision is still pending
-   - use the selected/existing machine username (recommended)
-   - custom alias
-   - no alias
-   - custom mode requires one follow-up question for the literal alias
-2. machine username choice when `.vaws-local/machine-profile.json` is missing
-   - ask exactly these three options: `git-username`, `random`, `custom`
-   - allowed usernames are English letters and digits only
-   - normalize usernames to lowercase
-   - reject spaces and symbols
-   - random mode means `agent#####`
-   - custom mode is not complete until the user provides the literal username in a second question
-3. repo topology choice
-   - keep current remotes
-   - recommended fork mode
-   - community-only mode
-4. whether to initialize submodules now
-5. vllm submodule version alignment — **always include this question in the grouped checkpoint when the probe shows submodules are not yet initialized**. Since all questions are asked in a single batch, you cannot wait for the answer to question 4 before deciding whether to include question 5. If the user later chooses not to initialize submodules, simply ignore their version-alignment answer. Options:
-   - **CI-pinned** (default): check out `vllm/` at the commit CI actually tests against — resolve it with `resolve_vllm_ci_pin.py`, which prefers `vllm-ascend/.github/vllm-main-verified.commit` and falls back to older workflow/docs sources
-   - **upstream main**: both submodules track their respective upstream `main` HEAD
-   - **keep current**: leave `vllm/` at whatever commit it is already on
-
-Skip question 4 only when the probe shows submodules are already initialized (nothing to align).
-
-If the user only asked for a narrow GitHub auth / `gh` task, skip the machine-profile and version-alignment questions.
+Generic “initialize the repo” does not select a username, alias, or fork.
+A narrow GitHub auth / `gh` request does not require those decisions. Already
+specified choices can proceed after the probe without another approval round.
 
 ## Recommended topology
 
-Treat this as the target only after the user approves it.
+Use this topology when selected by the user, including in the initial request.
 
 | Repository | Recommended `origin` | Recommended `upstream` | Notes |
 | --- | --- | --- | --- |
@@ -147,10 +135,10 @@ Run the compact probe and summarize only the facts that matter:
 If the request is broad init and the profile is missing:
 
 - run `repo_init_profile.py plan`
-- use its fixed three-option payload for the username part of the grouped checkpoint
+- use its three-option payload only if the username choice remains unresolved
 - if the user chose `git-username`, run `repo_init_profile.py apply --choice git-username`
 - if the user chose `random`, run `repo_init_profile.py apply --choice random`
-- if the user chose `custom`, ask one extra free-text question and only then run `repo_init_profile.py apply --choice custom --custom-username ...`
+- if the user chose `custom`, use the supplied literal username with `repo_init_profile.py apply --choice custom --custom-username ...`; ask only if the value is missing
 
 Do not silently fall back from `custom` to the detected Git username.
 
@@ -158,9 +146,10 @@ The probe silently ensures the UUID. If the alias decision is pending, use the
 `alias_question` payload and persist the approved choice with `apply-alias`.
 Choosing `none` is a durable decision and must not be asked again on each init.
 
-### 3. Stop for the decision checkpoint
+### 3. Resolve outstanding decisions
 
-Do not mutate in the same step as the first probe summary for broad init.
+Apply already authorized choices after the probe. Ask for unresolved choices
+before their dependent mutations; continue independent authorized work.
 
 If the request was just “初始化仓库” or similarly broad, do not silently assume a generated username or the recommended remotes.
 

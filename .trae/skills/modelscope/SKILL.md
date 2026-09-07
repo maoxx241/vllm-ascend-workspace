@@ -1,6 +1,6 @@
 ---
 name: modelscope
-description: "Download, resume, status-check, and SHA256-verify ModelScope model weights. Use for $modelscope download/status/verify/check, Chinese requests to 下载/续传/补全/查看进度/校验 ModelScope 权重, and tasks that need durable background ModelScope downloads under explicit local directories."
+description: Download, resume, inspect, or SHA256-verify ModelScope weights in explicit local directories. Use for 下载, 续传, 补全, 查看进度, or 校验权重.
 ---
 
 # ModelScope
@@ -26,7 +26,7 @@ Represent every model as `MODEL_ID=LOCAL_DIR`.
 
 ## Download / Resume / Auto Complete
 
-For `$modelscope download`, resume, repair-after-approval, or “check and continue if incomplete”, run:
+For `$modelscope download`, resume, or “check and continue if incomplete”, run:
 
 ```bash
 python3 "$SKILL_DIR/scripts/modelscope_auto.py" ensure \
@@ -39,7 +39,8 @@ python3 "$SKILL_DIR/scripts/modelscope_auto.py" ensure \
 - If a task is active, leave it running and report compact status.
 - If official files are incomplete and no task is active, start a detached background worker in the same `LOCAL_DIR`.
 - If files are complete but verification is missing or stale, start detached SHA256 verification.
-- If verification reports real missing, size mismatch, or SHA256 mismatch, report it and ask before repair.
+- If verification reports missing files, size mismatch, or SHA256 mismatch, inspect the per-file report. A verify/status request alone does not authorize repair; an explicit repair request already does. `ensure` resumes incomplete downloads but only re-verifies files whose total size appears complete, so do not claim it repaired a same-size hash mismatch. Resolve the affected files through the downloader; ask only if the needed overwrite or removal is outside existing authorization.
+- Preserve unrelated files and partial data. Verify the affected files again before reporting repair complete.
 - It preserves partial files and never deletes weights.
 
 The manager writes `download.pid`, `download.launch.log`, `download.log`, `verify.log`, `modelscope_sha256.report.json`, `modelscope_sha256.tsv`, and `SHA256SUMS` in `LOCAL_DIR`.
@@ -78,7 +79,6 @@ Verification ignores `.gitattributes` by default because it is Git metadata, not
 
 ## Output Rules
 
-- Keep responses short.
-- Do not paste large command output or progress bars.
+- Report the compact fields below; one line per model is usually enough. Do not paste large command output or progress bars.
 - Summarize each model as `state`, percent, PID, verification result, and paths.
 - If network or filesystem sandboxing blocks a required command, rerun with approval as needed.

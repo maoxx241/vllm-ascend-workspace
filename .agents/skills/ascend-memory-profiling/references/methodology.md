@@ -47,7 +47,7 @@ backend.
 
 **Tool:** `npu-smi info` + inference request  
 **When:** During active inference  
-**What it measures:** Peak HBM including activations  
+**What it measures:** Sampled HBM during inference; sampling can miss the true peak
 **Delta from Phase 2:** Activation memory estimate
 
 ### Phase 4-5: Stop and Export
@@ -92,7 +92,8 @@ CANN runtime's internal memory management overhead.
 ```
 activations = npu_smi_phase3.HBM_Used - npu_smi_phase2.HBM_Used
 ```
-Transient memory for intermediate computations during inference.
+A sampled delta attributed to inference; it can include other concurrent
+allocations and does not prove the true activation peak.
 
 ### Unattributed
 ```

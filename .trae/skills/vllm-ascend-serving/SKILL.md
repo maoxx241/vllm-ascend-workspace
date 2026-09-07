@@ -1,6 +1,6 @@
 ---
 name: vllm-ascend-serving
-description: Start, check, or stop a single-node vLLM Ascend online service on a workspace-managed ready remote container. Triggered when users ask to launch, restart, check status, or stop a vLLM Ascend service. Do not use for machine attach, environment bootstrap, code sync, benchmark orchestration, or offline inference.
+description: Start, inspect, restart, or stop a single-node vLLM Ascend online service in a managed session. Use for 拉服务 or 服务状态; not benchmarks.
 ---
 
 # vllm-ascend-serving
@@ -10,17 +10,18 @@ Thin routing stub — the full skill definition lives at `.agents/skills/vllm-as
 Quick entry points:
 
 ```bash
+# Run inside the session worktree, or pass an explicit session id as below.
 # Start a service
 python3 .agents/skills/vllm-ascend-serving/scripts/serve_start.py \
-  --machine <alias-or-ip> --model <path> --tp <N>
+  --session-id <id> --model <path> --tp <N>
 
 # Check status
 python3 .agents/skills/vllm-ascend-serving/scripts/serve_status.py \
-  --machine <alias-or-ip>
+  --session-id <id>
 
 # Stop a service
 python3 .agents/skills/vllm-ascend-serving/scripts/serve_stop.py \
-  --machine <alias-or-ip>
+  --session-id <id>
 
 # Probe NPU availability
 python3 .agents/skills/vllm-ascend-serving/scripts/serve_probe_npus.py \

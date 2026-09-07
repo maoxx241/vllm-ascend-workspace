@@ -79,6 +79,14 @@ class CliHelpTests(unittest.TestCase):
             with self.subTest(skill=source.parent.name):
                 self.assertTrue(target.exists())
                 body = target.read_text(encoding="utf-8")
+                # Claude only recognizes YAML when the file starts with its
+                # opening delimiter; equality with the generator is insufficient.
+                lines = body.splitlines()
+                self.assertEqual(lines[0], "---")
+                end = lines.index("---", 1)
+                metadata = dict(line.split(":", 1) for line in lines[1:end])
+                self.assertEqual(metadata["name"].strip(), source.parent.name)
+                self.assertTrue(metadata["description"].strip())
                 self.assertIn(f"`.agents/skills/{source.parent.name}/SKILL.md`", body)
                 self.assertLessEqual(len(body.splitlines()), 60)
                 self.assertNotEqual(body, source.read_text(encoding="utf-8"))
