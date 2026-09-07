@@ -1262,5 +1262,64 @@ class CurrentMainFindingScopeTests(unittest.TestCase):
                 )
 
 
+class SplitLedgerOriginFixtureScopeTests(unittest.TestCase):
+    """GitHub transport/userinfo emails are allowed only in the split-ledger tests."""
+
+    TARGET = ".agents/tests/test_split_reconcile_ledger.py"
+    OTHER_TEST = ".agents/tests/unrelated.py"
+    OTHER_SRC = ".agents/lib/vaws_run_manifest.py"
+    ALLOWED = ("git@github.com", "token@github.com")
+    OTHER_LOCAL_OR_DOMAIN = (
+        "other@github.com",
+        "git@github.company",
+        "git@github.com.evil",
+        "othergit@github.com",
+    )
+    ENTRY_ID = "split-ledger-github-origin-userinfo"
+
+    def setUp(self) -> None:
+        self.policy = guard.load_policy(POLICY_PATH)
+
+    def _scan(self, text: str, path: str) -> list[guard.Finding]:
+        return guard.scan_text(text, path=path, policy=self.policy)
+
+    def test_exact_transport_and_userinfo_emails_are_suppressed_at_the_fixture_path(self) -> None:
+        for value in self.ALLOWED:
+            with self.subTest(value=value):
+                findings = [item for item in self._scan(repr(value), self.TARGET) if item.category == "email"]
+                self.assertEqual(
+                    [(item.match, item.allowlisted_by) for item in findings],
+                    [(value, self.ENTRY_ID)],
+                )
+
+    def test_same_emails_in_another_source_or_test_path_remain_findings(self) -> None:
+        for path in (self.OTHER_TEST, self.OTHER_SRC):
+            for value in self.ALLOWED:
+                with self.subTest(path=path, value=value):
+                    findings = [item for item in self._scan(repr(value), path) if item.category == "email"]
+                    self.assertTrue(findings)
+                    self.assertTrue(all(item.allowlisted_by is None for item in findings))
+
+    def test_other_local_part_or_domain_at_the_fixture_path_remain_findings(self) -> None:
+        for value in self.OTHER_LOCAL_OR_DOMAIN:
+            with self.subTest(value=value):
+                findings = [item for item in self._scan(repr(value), self.TARGET) if item.category == "email"]
+                self.assertTrue(findings)
+                self.assertTrue(all(item.allowlisted_by is None for item in findings))
+
+    def test_unrelated_categories_at_the_fixture_path_remain_findings(self) -> None:
+        cases = (
+            ("host = '10.22.33.44'", "ipv4"),
+            ('secret = "still-a-credential-shaped-value"', "secret-key"),
+            ('"/home/fixture-personal/path"', "absolute-user-path"),
+        )
+        for line, category in cases:
+            with self.subTest(category=category):
+                findings = [item for item in self._scan(line, self.TARGET) if item.category == category]
+                self.assertTrue(findings)
+                self.assertTrue(all(item.allowlisted_by is None for item in findings))
+        self.assertEqual(self.policy.scoped_categories(self.TARGET), ())
+
+
 if __name__ == "__main__":
     unittest.main()

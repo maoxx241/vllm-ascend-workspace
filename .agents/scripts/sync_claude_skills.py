@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Generate the lightweight `.claude/skills/<name>/SKILL.md` shims from `.agents/skills`.
+"""Generate Claude Code skill shims and the ModelScope Trae projection.
 
-Moved here from the remote-dev substrate's `tools/` directory when that
-substrate became its own repository: the shims are scaffold work (they read
-`.agents/skills` and write `.claude/skills`), not remote development.
+`.claude/skills/<name>/SKILL.md` shims come from `.agents/skills`. The six
+`.trae/skills/modelscope` files are copied byte-for-byte from
+`.agents/skills/modelscope`. Edit ModelScope only in that canonical package;
+this command regenerates the Trae projection.
 
     python3 .agents/scripts/sync_claude_skills.py          # regenerate
     python3 .agents/scripts/sync_claude_skills.py --check  # verify, exit 1 on drift
@@ -18,7 +19,17 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 AGENTS_SKILLS = ROOT / ".agents" / "skills"
 CLAUDE_SKILLS = ROOT / ".claude" / "skills"
+TRAE_SKILLS = ROOT / ".trae" / "skills"
 MAX_SHIM_LINES = 60
+MODELSCOPE_SKILL = "modelscope"
+MODELSCOPE_TRAE_PATHS = (
+    "SKILL.md",
+    "agents/openai.yaml",
+    "scripts/download_from_modelscope.py",
+    "scripts/modelscope_auto.py",
+    "scripts/modelscope_download_status.py",
+    "scripts/verify_modelscope_sha256.py",
+)
 
 
 def parse_frontmatter(source: Path) -> dict[str, str]:
@@ -74,6 +85,37 @@ def source_skill_dirs() -> list[Path]:
     return sorted(path for path in AGENTS_SKILLS.iterdir() if path.is_dir() and (path / "SKILL.md").exists())
 
 
+def modelscope_source_dir() -> Path:
+    return AGENTS_SKILLS / MODELSCOPE_SKILL
+
+
+def modelscope_trae_dir() -> Path:
+    return TRAE_SKILLS / MODELSCOPE_SKILL
+
+
+def _exec_bits(path: Path) -> int:
+    return path.stat().st_mode & 0o111
+
+
+def _copy_projected_file(source: Path, target: Path) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(source.read_bytes())
+    updated_mode = (target.stat().st_mode & ~0o111) | _exec_bits(source)
+    if updated_mode != target.stat().st_mode:
+        target.chmod(updated_mode)
+
+
+def _projected_file_relpaths(root: Path) -> list[str]:
+    if not root.is_dir():
+        return []
+    relative: list[str] = []
+    for path in sorted(root.rglob("*")):
+        if not path.is_file() or "__pycache__" in path.parts:
+            continue
+        relative.append(path.relative_to(root).as_posix())
+    return relative
+
+
 def check_shims() -> list[str]:
     errors: list[str] = []
     expected_names = {path.name for path in source_skill_dirs()}
@@ -99,6 +141,32 @@ def check_shims() -> list[str]:
     return errors
 
 
+def check_modelscope_trae() -> list[str]:
+    errors: list[str] = []
+    source_root = modelscope_source_dir()
+    target_root = modelscope_trae_dir()
+    owned = set(MODELSCOPE_TRAE_PATHS)
+    for relative in MODELSCOPE_TRAE_PATHS:
+        source = source_root / relative
+        target = target_root / relative
+        if not source.is_file():
+            errors.append(f"missing canonical modelscope source: {relative}")
+            continue
+        if not target.is_file():
+            errors.append(f"missing Trae modelscope projection: {relative}")
+            continue
+        if source.read_bytes() != target.read_bytes() or _exec_bits(source) != _exec_bits(target):
+            errors.append(f"stale Trae modelscope projection: {relative}")
+    for relative in _projected_file_relpaths(target_root):
+        if relative not in owned:
+            errors.append(f"unexpected file in Trae modelscope projection: {relative}")
+    return errors
+
+
+def check_generated() -> list[str]:
+    return check_shims() + check_modelscope_trae()
+
+
 def sync_shims() -> None:
     CLAUDE_SKILLS.mkdir(parents=True, exist_ok=True)
     for skill_dir in source_skill_dirs():
@@ -111,16 +179,43 @@ def sync_shims() -> None:
             shutil.rmtree(existing)
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description="Sync generated Claude Code skill shims from .agents/skills.")
-    parser.add_argument("--check", action="store_true", help="Only verify that .claude/skills is synchronized.")
-    args = parser.parse_args()
+def sync_modelscope_trae() -> None:
+    source_root = modelscope_source_dir()
+    target_root = modelscope_trae_dir()
+    for relative in MODELSCOPE_TRAE_PATHS:
+        source = source_root / relative
+        if not source.is_file():
+            raise FileNotFoundError(f"missing canonical modelscope source: {relative}")
+        _copy_projected_file(source, target_root / relative)
+
+
+def sync_generated() -> None:
+    sync_shims()
+    sync_modelscope_trae()
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Sync generated Claude Code skill shims and the ModelScope Trae "
+            "projection from .agents/skills."
+        )
+    )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help=(
+            "Only verify that .claude/skills shims and the "
+            ".trae/skills/modelscope projection are synchronized."
+        ),
+    )
+    args = parser.parse_args(argv)
     if args.check:
-        errors = check_shims()
+        errors = check_generated()
         for error in errors:
             print(error)
         return 1 if errors else 0
-    sync_shims()
+    sync_generated()
     return 0
 
 

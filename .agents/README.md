@@ -294,6 +294,7 @@ If you change `modelscope`, update these together:
 - `.agents/skills/modelscope/SKILL.md`
 - `.agents/skills/modelscope/scripts/`
 - `.agents/skills/modelscope/agents/`
+- `.trae/skills/modelscope` via `python3 .agents/scripts/sync_claude_skills.py`
 - `AGENTS.md`, `README.md`, and this file when routing or output contract changes
 
 Keep the files under `.agents/skills/` as the canonical supporting files for repo-local skills.

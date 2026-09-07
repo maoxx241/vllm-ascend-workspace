@@ -7,6 +7,7 @@ on:
       - "AGENTS.md"
       - "README.md"
       - "README.en.md"
+      - ".trae/skills/modelscope/**"
       - ".github/workflows/skill-catalog.yml"
   push:
     branches:
@@ -16,6 +17,7 @@ on:
       - "AGENTS.md"
       - "README.md"
       - "README.en.md"
+      - ".trae/skills/modelscope/**"
       - ".github/workflows/skill-catalog.yml"
 
 permissions:
@@ -45,6 +47,10 @@ jobs:
           python -B -m unittest discover -s .agents/tests -p "test_repo_boundary_check.py"
       - name: Run catalog tests
         run: python -B -m unittest discover -s .agents/tests -p "test_*catalog.py"
+      - name: Run generated skill projection tests
+        run: python -B -m unittest discover -s .agents/tests -p "test_sync_claude_skills.py"
+      - name: Check generated Claude shims and ModelScope Trae projection
+        run: python -B .agents/scripts/sync_claude_skills.py --check
       - name: Run manifest and knowledge tests
         run: python -B -m unittest discover -s .agents/tests -p "test_run_manifest.py"
       - name: Run knowledge evidence-chain tests
