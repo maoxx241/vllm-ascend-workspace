@@ -20,6 +20,15 @@ LIB = ROOT / ".agents" / "lib"
 if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
+from vaws_comparability import (  # noqa: E402
+    PERFORMANCE_MUST_OBSERVE,
+    ComparabilityError,
+    consume_certificate,
+    identity_from_mapping,
+    identity_from_recorded_observation,
+    issue_certificate,
+    merge_identities,
+)
 from vaws_run_manifest import (  # noqa: E402
     RunManifestError,
     add_artifact,
@@ -39,6 +48,23 @@ DEFAULT_BENCHMARK_METRICS = {
     "itl": "mean_itl_ms",
     "acceptance_rate": "acceptance_rate",
 }
+# Every non-code condition the parity certificate claims to hold constant. The
+# `config_hash` is only meaningful if these are actually written down: hashing a
+# free-form `shared` object proves nothing about concurrency or parallelism.
+REQUIRED_SHARED_KEYS = (
+    "machine",
+    "npu_devices",
+    "model",
+    "environment",
+    "topology",
+    "serve_args",
+    "bench_args",
+    "dataset",
+    "max_concurrency",
+    "request_rate",
+)
+REQUIRED_TOPOLOGY_KEYS = ("tp", "dp")
+PARITY_ALLOWED_DIFFERENCES = ("code_snapshot", "session_id", "label")
 
 
 class PerformanceRegressionError(ValueError):
@@ -151,6 +177,77 @@ def normalize_benchmark_result(
     return measurement
 
 
+def _is_positive_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
+def _is_string_list(value: Any) -> bool:
+    return isinstance(value, list) and all(isinstance(item, str) for item in value)
+
+
+def validate_shared(shared: Mapping[str, Any]) -> list[str]:
+    """Return every reason `shared` does not pin the identity parity claims.
+
+    The parity certificate promises baseline and candidate differ only in code.
+    That promise is empty unless machine, devices, model, environment, parallel
+    topology (including the data-parallel degree), Serving and Benchmark
+    arguments, dataset, concurrency, and request rate are explicitly recorded.
+    """
+    errors: list[str] = []
+    missing = [key for key in REQUIRED_SHARED_KEYS if key not in shared]
+    if missing:
+        errors.append(
+            "shared is missing required parity keys: " + ", ".join(missing)
+        )
+    checks: dict[str, tuple[Any, str]] = {
+        "machine": (
+            lambda value: isinstance(value, str) and bool(value.strip()),
+            "must be a non-empty string",
+        ),
+        "npu_devices": (
+            lambda value: isinstance(value, list)
+            and bool(value)
+            and all(isinstance(item, int) and not isinstance(item, bool) and item >= 0 for item in value),
+            "must be a non-empty array of non-negative device indices",
+        ),
+        "model": (
+            lambda value: isinstance(value, Mapping) and bool(value),
+            "must be a non-empty object",
+        ),
+        "environment": (
+            lambda value: isinstance(value, Mapping) and bool(value),
+            "must be a non-empty object",
+        ),
+        "serve_args": (_is_string_list, "must be an array of strings"),
+        "bench_args": (_is_string_list, "must be an array of strings"),
+        "dataset": (
+            lambda value: isinstance(value, str) and bool(value.strip()),
+            "must be a non-empty string",
+        ),
+        "max_concurrency": (_is_positive_int, "must be a positive integer"),
+        "request_rate": (
+            lambda value: value == "inf"
+            or (isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0),
+            'must be a positive number or "inf"',
+        ),
+    }
+    for key, (predicate, message) in checks.items():
+        if key in shared and not predicate(shared[key]):
+            errors.append(f"shared.{key} {message}")
+    topology = shared.get("topology")
+    if "topology" in shared:
+        if not isinstance(topology, Mapping) or not topology:
+            errors.append("shared.topology must be a non-empty object")
+        else:
+            for key in REQUIRED_TOPOLOGY_KEYS:
+                if not _is_positive_int(topology.get(key)):
+                    errors.append(
+                        f"shared.topology.{key} must be a positive integer "
+                        "(record the parallel degree explicitly, even when it is 1)"
+                    )
+    return errors
+
+
 def validate_config(config: Mapping[str, Any]) -> None:
     errors: list[str] = []
     if config.get("schema_version") != SCHEMA_VERSION:
@@ -171,6 +268,19 @@ def validate_config(config: Mapping[str, Any]) -> None:
     shared = config.get("shared")
     if not isinstance(shared, Mapping) or not shared:
         errors.append("shared must be a non-empty object")
+    else:
+        errors.extend(validate_shared(shared))
+    parent_run_id = config.get("parent_run_id")
+    if parent_run_id is not None and (
+        not isinstance(parent_run_id, str) or not parent_run_id.strip()
+    ):
+        errors.append("parent_run_id must be a non-empty string when present")
+    allowed_differences = config.get("allowed_differences")
+    if allowed_differences is not None:
+        if not isinstance(allowed_differences, list) or any(
+            not isinstance(item, str) or not item.strip() for item in allowed_differences
+        ):
+            errors.append("allowed_differences must be an array of non-empty strings")
     runs = config.get("runs")
     if not isinstance(runs, int) or isinstance(runs, bool) or runs < 2:
         errors.append("runs must be an integer of at least 2")
@@ -229,6 +339,55 @@ def build_schedule(*, warmups: int, runs: int) -> list[dict[str, Any]]:
     return schedule
 
 
+def build_parity_check(config: Mapping[str, Any]) -> dict[str, Any]:
+    """Describe exactly what the parity certificate did and did not verify.
+
+    The certificate is declarative: it proves the operator wrote down every
+    required non-code condition once and that both states are pinned to that
+    same declaration by `config_hash`. It does not observe what the services
+    actually ran with; `basis` and `not_checked` say so in the artifact itself.
+    """
+    shared = config["shared"]
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "status": "passed",
+        "basis": "declared-configuration",
+        "config_hash": config_hash(shared),
+        "shared": shared,
+        "allowed_difference": list(PARITY_ALLOWED_DIFFERENCES),
+        "checks": [
+            {
+                "check": "required-shared-keys-present",
+                "keys": list(REQUIRED_SHARED_KEYS),
+                "result": "passed",
+            },
+            {
+                "check": "topology-parallel-degrees-recorded",
+                "keys": [f"topology.{key}" for key in REQUIRED_TOPOLOGY_KEYS],
+                "values": {key: shared["topology"][key] for key in REQUIRED_TOPOLOGY_KEYS},
+                "result": "passed",
+            },
+            {
+                "check": "distinct-sessions",
+                "baseline": config["baseline"]["session_id"],
+                "candidate": config["candidate"]["session_id"],
+                "result": "passed",
+            },
+            {
+                "check": "code-snapshots-recorded",
+                "baseline": config["baseline"]["code_snapshot"],
+                "candidate": config["candidate"]["code_snapshot"],
+                "result": "passed",
+            },
+        ],
+        "not_checked": [
+            "observed runtime configuration of either service",
+            "raw Benchmark artifact contents or hashes",
+            "that measurements labelled baseline/candidate came from that state",
+        ],
+    }
+
+
 def plan(
     output_dir: Path,
     *,
@@ -264,13 +423,7 @@ def plan(
     }
     output_dir.mkdir(parents=True, exist_ok=True)
     _write_json(output_dir / "experiment-config.json", config)
-    _write_json(output_dir / "parity-check.json", {
-        "schema_version": SCHEMA_VERSION,
-        "status": "passed",
-        "config_hash": fingerprint,
-        "shared": config["shared"],
-        "allowed_difference": ["code_snapshot", "session_id", "label"],
-    })
+    _write_json(output_dir / "parity-check.json", build_parity_check(config))
     _write_json(output_dir / "schedule.json", schedule)
     _write_json(output_dir / "measurements.json", measurements)
     _write_json(output_dir / "run.json", state)
@@ -284,13 +437,14 @@ def plan(
     manifest = new_manifest(
         run_type="performance",
         run_id=run_id,
+        parent_run_id=config.get("parent_run_id"),
         workspace_snapshot={
             "baseline": config["baseline"]["code_snapshot"],
             "candidate": config["candidate"]["code_snapshot"],
         },
-        environment=config["shared"].get("environment", {}),
-        model=config["shared"].get("model", {}),
-        topology=config["shared"].get("topology", {}),
+        environment=config["shared"]["environment"],
+        model=config["shared"]["model"],
+        topology=config["shared"]["topology"],
         created_at=timestamp,
     )
     for name, kind, uri in (
@@ -335,6 +489,11 @@ def validate_measurement(measurement: Mapping[str, Any]) -> None:
                 errors.append(f"metrics.{name} must be numeric")
             elif not math.isfinite(float(value)):
                 errors.append(f"metrics.{name} must be finite")
+    observation = measurement.get("observation")
+    if observation is not None and (
+        not isinstance(observation, Mapping) or not observation
+    ):
+        errors.append("observation must be a non-empty object when present")
     if errors:
         raise PerformanceRegressionError("; ".join(errors))
 
@@ -376,6 +535,8 @@ def record(
         "source": result.get("source"),
         "recorded_at": timestamp,
     }
+    if isinstance(result.get("observation"), Mapping):
+        normalized["observation"] = dict(result["observation"])
     measurements["measurements"].append(normalized)
     pending["status"] = "recorded"
     _write_json(output_dir / "measurements.json", measurements)
@@ -563,7 +724,167 @@ def render_report(comparison: Mapping[str, Any]) -> str:
     lines.extend(["", "## Full statistics", "", "```json"])
     lines.append(json.dumps(comparison["metrics"], ensure_ascii=False, indent=2, sort_keys=True))
     lines.extend(["```", ""])
+    if isinstance(comparison.get("comparability"), Mapping):
+        lines.extend(
+            [
+                "## Comparability certificate",
+                "",
+                f"- Verdict: `{comparison['comparability'].get('verdict')}`",
+                "",
+            ]
+        )
     return "\n".join(lines)
+
+
+def _declared_state_identity(
+    config: Mapping[str, Any], *, state: str, run_id: str
+) -> Any:
+    shared = config["shared"]
+    return identity_from_mapping(
+        run_id,
+        {
+            "workspace_snapshot": {
+                "vllm_ascend_commit": config[state]["code_snapshot"],
+            },
+            "environment": shared["environment"],
+            "model": shared["model"],
+            "topology": shared["topology"],
+            "serve_args": shared["serve_args"],
+            "bench_args": shared["bench_args"],
+            "dataset": shared["dataset"],
+            "max_concurrency": shared["max_concurrency"],
+            "request_rate": shared["request_rate"],
+            "npu_devices": shared["npu_devices"],
+        },
+        origin="declared",
+    )
+
+
+def _measurement_locator(row: Mapping[str, Any], *, state: str) -> str:
+    schedule_id = row.get("schedule_id")
+    if isinstance(schedule_id, str) and schedule_id.strip():
+        return schedule_id
+    phase = row.get("phase")
+    ordinal = row.get("ordinal")
+    if phase is not None and ordinal is not None:
+        return f"{phase}+{ordinal}"
+    return state
+
+
+def _require_measurement_observation(
+    row: Mapping[str, Any], *, state: str
+) -> Mapping[str, Any]:
+    observation = row.get("observation")
+    if not isinstance(observation, Mapping) or not observation:
+        raise PerformanceRegressionError(
+            f"{state} measurement {_measurement_locator(row, state=state)} "
+            "is missing a nonempty observation"
+        )
+    return observation
+
+
+def _measure_rows_for_state(
+    measurements: Sequence[Any], *, state: str
+) -> list[Mapping[str, Any]]:
+    rows: list[Mapping[str, Any]] = []
+    for index, row in enumerate(measurements):
+        if not isinstance(row, Mapping):
+            raise PerformanceRegressionError(
+                f"{state} measurement row {index} is malformed"
+            )
+        if row.get("phase") == "measure" and row.get("state") == state:
+            rows.append(row)
+    return rows
+
+
+def _state_identity(
+    config: Mapping[str, Any],
+    measurements: Sequence[Mapping[str, Any]],
+    *,
+    state: str,
+    run_id: str,
+    schedule: Mapping[str, Any] | None = None,
+) -> Any:
+    declared = _declared_state_identity(config, state=state, run_id=run_id)
+    rows = _measure_rows_for_state(measurements, state=state)
+    if schedule is not None:
+        entries = schedule.get("entries")
+        if not isinstance(entries, list):
+            raise PerformanceRegressionError("schedule.entries must be an array")
+        present_ids = {
+            row.get("schedule_id")
+            for row in rows
+            if isinstance(row.get("schedule_id"), str) and row["schedule_id"].strip()
+        }
+        present_keys = {
+            (row.get("state"), row.get("phase"), row.get("ordinal")) for row in rows
+        }
+        for entry in entries:
+            if not isinstance(entry, Mapping):
+                continue
+            if entry.get("phase") != "measure" or entry.get("state") != state:
+                continue
+            schedule_id = entry.get("id")
+            key = (entry.get("state"), entry.get("phase"), entry.get("ordinal"))
+            if (
+                isinstance(schedule_id, str)
+                and schedule_id.strip()
+                and schedule_id in present_ids
+            ) or key in present_keys:
+                continue
+            locator = (
+                schedule_id
+                if isinstance(schedule_id, str) and schedule_id.strip()
+                else f"{entry.get('phase')}+{entry.get('ordinal')}"
+            )
+            raise PerformanceRegressionError(
+                f"{state} measurement {locator} is missing a nonempty observation"
+            )
+    observations = [_require_measurement_observation(row, state=state) for row in rows]
+    if not observations:
+        return declared
+    first = observations[0]
+    for index, item in enumerate(observations[1:], start=1):
+        if item != first:
+            raise PerformanceRegressionError(
+                f"{state} measurements record inconsistent observations "
+                f"({_measurement_locator(rows[index], state=state)})"
+            )
+    return merge_identities(
+        declared,
+        identity_from_recorded_observation(run_id, first),
+        run_id=run_id,
+    )
+
+
+def build_comparability_certificate(
+    config: Mapping[str, Any],
+    measurements: Mapping[str, Any],
+    schedule: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    run_id = str(config["run_id"])
+    rows = list(measurements.get("measurements", []))
+    vary = config.get("allowed_differences") or [
+        "workspace_snapshot.vllm_ascend_commit"
+    ]
+    return issue_certificate(
+        _state_identity(
+            config,
+            rows,
+            state="baseline",
+            run_id=f"{run_id}-baseline",
+            schedule=schedule,
+        ),
+        _state_identity(
+            config,
+            rows,
+            state="candidate",
+            run_id=f"{run_id}-candidate",
+            schedule=schedule,
+        ),
+        vary=vary,
+        must_observe_prefixes=PERFORMANCE_MUST_OBSERVE,
+    )
 
 
 def analyze(output_dir: Path, *, updated_at: str | None = None) -> dict[str, Any]:
@@ -573,7 +894,16 @@ def analyze(output_dir: Path, *, updated_at: str | None = None) -> dict[str, Any
     config = _load_json(output_dir / "experiment-config.json", "experiment config")
     schedule = _load_json(output_dir / "schedule.json", "schedule")
     measurements = _load_json(output_dir / "measurements.json", "measurements")
+    certificate = build_comparability_certificate(config, measurements, schedule)
+    try:
+        certificate = consume_certificate(certificate)
+    except ComparabilityError as exc:
+        blocked = exc.certificate if exc.certificate is not None else certificate
+        _write_json(output_dir / "comparability-certificate.json", blocked)
+        raise PerformanceRegressionError(str(exc)) from exc
+    _write_json(output_dir / "comparability-certificate.json", certificate)
     comparison = analyze_documents(config, schedule, measurements)
+    comparison["comparability"] = certificate
     _write_json(output_dir / "comparison.json", comparison)
     _atomic_write(output_dir / "report.md", render_report(comparison))
     timestamp = updated_at or utc_now()
@@ -582,6 +912,11 @@ def analyze(output_dir: Path, *, updated_at: str | None = None) -> dict[str, Any
     _write_json(output_dir / "run.json", state)
     manifest = load_manifest(output_dir / "manifest.json")
     for name, kind, uri in (
+        (
+            "comparability-certificate",
+            "comparability-certificate",
+            "comparability-certificate.json",
+        ),
         ("comparison", "comparison", "comparison.json"),
         ("report", "report", "report.md"),
     ):
