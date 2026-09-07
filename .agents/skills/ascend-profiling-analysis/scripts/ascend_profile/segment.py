@@ -332,10 +332,33 @@ def layer_anchor_candidates(events: Sequence[NormalizedEvent]) -> list[tuple[str
         )
     )
     if attention_events:
+        family_anchors: list[tuple[str, tuple[NormalizedEvent, ...]]] = []
         for category in mla_layer_start_categories():
             anchors = tuple(event for event in attention_events if category in event.op_categories)
             if anchors:
-                candidates.append((category, anchors))
+                family_anchors.append((category, anchors))
+        # Hybrid models (e.g. Kimi-K3: 3x KDA + 1x gating-MLA per period) carry
+        # several layer-start families at once. Anchoring on the first family
+        # alone leaves the other layers anchorless — interpolated boundaries
+        # then snap to post-attention norms and rotate blocks into
+        # [MoE(N) + attention(N+1)] (K3 counterexample, 2026-09-07). The union
+        # gives exactly one anchor per layer. FIA (attention.flash_score) joins
+        # the union only when no MLA marker exists in the rank: it is the
+        # full-attention marker of linear+full hybrids (Qwen3.5) but a
+        # companion inside MLA layers.
+        if len(family_anchors) >= 2:
+            union_cats = frozenset(category for category, _ in family_anchors)
+            has_mla = any(category.startswith("attention.mla") for category in union_cats)
+            union_events = tuple(
+                event
+                for event in attention_events
+                if any(category in event.op_categories for category in union_cats)
+                or (not has_mla and "attention.flash_score" in event.op_categories)
+            )
+            union_dedup = dedup_adjacent_events(union_events)
+            if union_dedup:
+                candidates.append(("attention.hybrid_layer_start", union_dedup))
+        candidates.extend(family_anchors)
         anchors = tuple(
             event
             for event in attention_events

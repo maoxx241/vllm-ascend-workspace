@@ -33,6 +33,21 @@ layer_start_categories:
   # the layer; FIA score + V-up-proj are companions inside the same layer.
   - attention.mla
   - attention.mla.kv_norm_rope_cache
+  # Linear attention (KDA / GDN / Mamba): the RecurrentKda / ChunkKdaFwd /
+  # gated-delta kernel starts the layer. Required for hybrid models like
+  # Kimi-K3 (3x KDA + 1x gating-MLA per period) — without it, KDA layers have
+  # no anchor and the interpolated boundary snaps to the *post-attention* norm,
+  # rotating every KDA layer block into [MoE(N) + attention(N+1)] (observed
+  # 2026-09-07, see known_counterexamples.md Kimi-K3).
+  - attention.linear_or_mamba
+
+# Hybrid models carry several layer-start families at once (K3: mla on full
+# layers + linear on KDA layers). When >=2 families are present in a rank the
+# segmenter anchors on their UNION (one attention marker per layer) instead of
+# the first family alone; FIA (attention.flash_score) joins the union only
+# when no MLA marker exists in the rank (it is the full-attention marker of
+# linear+full hybrids like Qwen3.5, but a companion inside MLA layers).
+# The union candidate is emitted as ``attention.hybrid_layer_start``.
 
 # Attention-labelled kernels that must never open a new layer. They are
 # evidence of attention work but are structurally *inside* a layer that some

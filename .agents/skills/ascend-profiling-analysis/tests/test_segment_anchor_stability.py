@@ -522,3 +522,72 @@ if __name__ == "__main__":
     import pytest
 
     raise SystemExit(pytest.main([__file__, "-v"]))
+
+
+def _k3_hybrid_events(step_count: int) -> list[NormalizedEvent]:
+    """K3-style period-4 hybrid: per step, 2x [KDA, KDA, KDA, gating-MLA].
+
+    KDA layer rows: block_head norm -> QKV matmul -> RecurrentKda (linear
+    attention marker) -> MoE gating/experts.  MLA layer rows: block_head norm
+    -> MlaPreprocess (MLA marker) -> FIA score (companion in MLA layers)
+    -> MoE gating/experts.  Regression for the 2026-09-07 K3 finding: with
+    MLA-only anchors the KDA layers had no anchor and interpolated boundaries
+    snapped to post-attention norms, rotating blocks into [MoE(N) +
+    attention(N+1)].
+    """
+
+    events: list[NormalizedEvent] = []
+    row = 0
+    for _step in range(step_count):
+        events.append(_selection_event(row))
+        row += 1
+        for period in range(2):
+            for _kda in range(3):
+                events.append(_event(row, "RmsNorm", categories=("normalization",), roles=("block_head",)))
+                row += 1
+                events.append(_event(row, "aclnnQuantMatmul", categories=("compute.matmul",), roles=("compute",)))
+                row += 1
+                events.append(_event(row, "aclnnRecurrentKda", categories=("attention.linear_or_mamba",), roles=("attention",)))
+                row += 1
+                events.append(_event(row, "MoeGatingTopK", categories=("moe.gating",), roles=("moe",)))
+                row += 1
+                events.append(_event(row, "GroupedMatmul", categories=("compute.matmul", "moe.expert_matmul"), roles=("moe",)))
+                row += 1
+            events.append(_event(row, "RmsNorm", categories=("normalization",), roles=("block_head",)))
+            row += 1
+            events.append(_event(row, "MlaPreprocess", categories=("attention.mla.preprocess", "attention.mla"), roles=("attention",)))
+            row += 1
+            events.append(_event(row, "FusedInferAttentionScore", categories=("attention.flash_score",), roles=("attention",)))
+            row += 1
+            events.append(_event(row, "MoeGatingTopK", categories=("moe.gating",), roles=("moe",)))
+            row += 1
+            events.append(_event(row, "GroupedMatmul", categories=("compute.matmul", "moe.expert_matmul"), roles=("moe",)))
+            row += 1
+    return events
+
+
+def test_hybrid_linear_mla_union_anchor_gives_one_anchor_per_layer() -> None:
+    events = _k3_hybrid_events(step_count=3)
+    candidates = layer_anchor_candidates(events)
+    assert candidates[0][0] == "attention.hybrid_layer_start"
+    # 3 steps x 8 layers; every anchor lands on a layer-start marker (linear
+    # or mla), never on the FIA companion.
+    assert len(candidates[0][1]) == 24
+
+
+def test_hybrid_kda_layer_blocks_start_at_attention_not_moe() -> None:
+    events = _k3_hybrid_events(step_count=1)
+    layers = _build_test_layers(events)
+    assert len(layers) == 8
+    by_row = {event.row_idx: event for event in events}
+    for li, layer in enumerate(layers[:8]):
+        first = by_row[layer.row_start]
+        assert first.name_raw == "RmsNorm", (li, first.name_raw)
+        names = [by_row[r].name_raw for r in range(layer.row_start, layer.row_end + 1)]
+        if li % 4 == 3:  # gating-MLA layer
+            assert "MlaPreprocess" in names
+        else:  # KDA layer
+            assert "aclnnRecurrentKda" in names
+        # the block must not open with the MoE section of the previous layer
+        assert names[0] != "MoeGatingTopK"
+        assert names.index("MoeGatingTopK") > (names.index("aclnnRecurrentKda") if "aclnnRecurrentKda" in names else names.index("MlaPreprocess"))
