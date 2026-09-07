@@ -165,6 +165,22 @@ def remote_port_available(ep: SshEndpoint, port: int) -> bool:
     return ssh_exec(ep, script, check=False).returncode == 0
 
 
+def ensure_container_hostname_resolvable(ep: SshEndpoint) -> None:
+    """Guarantee ``127.0.0.1 <hostname>`` exists in the container's /etc/hosts.
+
+    Fresh VAWS containers do not map their own hostname, and PyTorch's gloo
+    backend resolves the local hostname at init — multi-worker (TP>1) vLLM
+    services then crash in EngineCoreClient setup before becoming ready
+    (workspace knowledge: gloo-init-container-hostname-missing-from-etc-hosts).
+    Idempotent and one ssh round-trip.
+    """
+    script = (
+        'h=$(hostname); '
+        'getent hosts "$h" >/dev/null 2>&1 || echo "127.0.0.1 $h" >> /etc/hosts'
+    )
+    ssh_exec(ep, script, check=False)
+
+
 def _parse_listening_ports(stdout: str) -> set[int]:
     ports: set[int] = set()
     for line in stdout.splitlines():
@@ -1174,6 +1190,10 @@ def main(argv: list[str] | None = None) -> int:
             emit_progress("parity-sync", "parity confirmed")
         else:
             parity = {"status": "skipped"}
+
+        # ---- container hosts guard: fresh VAWS containers lack their own
+        # hostname in /etc/hosts and TP>1 services then crash gloo init ----
+        ensure_container_hostname_resolvable(ep)
 
         # ---- probe NPUs on the HOST for cross-container visibility ----
         h_ep = target.host_endpoint

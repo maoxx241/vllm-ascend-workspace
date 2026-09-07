@@ -20,6 +20,7 @@ and only events overlapping the bubble windows are retained.
 from __future__ import annotations
 
 import json
+import re
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -34,6 +35,12 @@ HOST_CATEGORIES = ("cpu_op", "python_function", "ascendcl")
 # Substring prefilter so ``json.loads`` only runs on objects that can be
 # host events at all (the file is dominated by device kernel events).
 _HOST_CAT_TOKENS = tuple(f'"{cat}"' for cat in HOST_CATEGORIES) + ('"AscendCL"',)
+
+# Fast-path scanner for token-free chunks: one JSON string (escape-aware)
+# or one structural brace per match. Strings are skipped; braces drive the
+# depth state machine. A trailing ``""`` sentinel is appended to the
+# scanned text so a string dangling at the chunk boundary still matches.
+_SCAN_RE = re.compile(r'"[^"\\]*(?:\\.[^"\\]*)*"|[{}]')
 
 # Marker matchers for rulebook §11 families. Conservative on purpose:
 # ``aten::to`` is matched exactly because the substring would also match
@@ -93,6 +100,21 @@ def _iter_trace_objects(path: Path, *, chunk_size: int = 1 << 20) -> Iterator[st
     confuse it) and yield every outermost event candidate below the
     root. Memory stays bounded by the largest single event object,
     independent of file size.
+
+    Chunk-level prefilter: the file is dominated by device kernel events,
+    so a whole 1 MiB chunk that contains no host-category token is
+    scanned with a regex state machine (whole-string / brace matches
+    only, never per-char Python) that never builds object text. A
+    complete object inside such a chunk provably cannot be a host event
+    (its category token would be in the chunk); it is reported as an
+    empty string so callers still count one scanned object per event
+    object. An object *carried* across the boundary (opened in an earlier
+    chunk) keeps appending: its buffered prefix may hold a token, so when
+    it closes the full text is yielded as usual. An object that opens
+    inside a filtered chunk and stays open at the boundary is carried as
+    a raw slice, so an event whose token lands in a later chunk —
+    including one split exactly across the boundary — is still yielded
+    intact.
     """
 
     depth = 0
@@ -106,6 +128,110 @@ def _iter_trace_objects(path: Path, *, chunk_size: int = 1 << 20) -> Iterator[st
             chunk = handle.read(chunk_size)
             if not chunk:
                 break
+            if not any(token in chunk for token in _HOST_CAT_TOKENS):
+                # Fast path for token-free chunks. No object fully inside
+                # this chunk can be a host event (its category token would
+                # be in the chunk), so complete objects are reported as ""
+                # — one placeholder per object, keeping ``objects_scanned``
+                # counting exact without building any object text.
+                #
+                # ``appending`` marks a carried object (opened in an earlier
+                # chunk; its prefix lives in ``buf`` and may hold a token,
+                # so it is finished in full and yielded verbatim when it
+                # closes). An object that opens here and stays open at the
+                # boundary is carried as a raw slice (``obj_start``), so an
+                # event whose token lands in a later chunk — including one
+                # split exactly across the boundary — is reassembled intact.
+                if root_token is None:
+                    for probe in chunk:
+                        if not (probe.isspace() or probe == "\ufeff"):
+                            root_token = probe
+                            break
+                event_depth = 1 if root_token == "[" else 2
+                appending = obj_depth is not None
+                obj_start = -1
+                i = 0
+                n = len(chunk)
+                if in_string:
+                    # String continuation from the previous chunk (a carried
+                    # object sliced mid-string lands here).
+                    j = 1 if escape else 0
+                    while True:
+                        k = chunk.find('"', j)
+                        if k < 0:
+                            if appending:
+                                buf.append(chunk)
+                            backslashes = 0
+                            p = n - 1
+                            while p >= j and chunk[p] == "\\":
+                                backslashes += 1
+                                p -= 1
+                            escape = backslashes % 2 == 1
+                            i = n
+                            break
+                        backslashes = 0
+                        p = k - 1
+                        while p >= j and chunk[p] == "\\":
+                            backslashes += 1
+                            p -= 1
+                        if backslashes % 2 == 1:
+                            j = k + 1
+                            continue
+                        if appending:
+                            buf.append(chunk[: k + 1])
+                        in_string = False
+                        escape = False
+                        i = k + 1
+                        break
+                # Regex scan: whole strings (escape-aware) or single
+                # braces, so Python only touches matches, never raw chars.
+                # The trailing ``""`` sentinel terminates a dangling string
+                # so braces inside it are not mistaken for structure; a
+                # match starting inside the sentinel (``s >= n``) is an
+                # artifact and ends the scan. ``cursor`` tracks the
+                # appended prefix of a carried object.
+                cursor = i
+                for match in _SCAN_RE.finditer(chunk + '""', i):
+                    s, e = match.span()
+                    if s >= n:
+                        break
+                    ch = chunk[s]
+                    if ch == '"':
+                        if e <= n:
+                            continue  # complete string inside the chunk
+                        # Dangling string running to the chunk end; the
+                        # sentinel supplied its closing quote.
+                        in_string = True
+                        backslashes = 0
+                        p = n - 1
+                        while p > s and chunk[p] == "\\":
+                            backslashes += 1
+                            p -= 1
+                        escape = backslashes % 2 == 1
+                        break
+                    if ch == "{":
+                        depth += 1
+                        if depth >= event_depth and obj_depth is None:
+                            obj_depth = depth
+                            obj_start = s
+                        continue
+                    # ch == "}"
+                    if obj_depth is not None and depth == obj_depth:
+                        if appending:
+                            buf.append(chunk[cursor : s + 1])
+                            yield "".join(buf)
+                        else:
+                            yield ""
+                        obj_depth = None
+                        buf = []
+                        appending = False
+                        obj_start = -1
+                    depth = max(0, depth - 1)
+                if appending:
+                    buf.append(chunk[cursor:])
+                if obj_depth is not None and not appending:
+                    buf.append(chunk[obj_start:])
+                continue
             for ch in chunk:
                 if root_token is None and not (ch.isspace() or ch == "\ufeff"):
                     root_token = ch
@@ -198,12 +324,15 @@ def collect_host_events(
     windows: Sequence[tuple[float, float]],
     *,
     max_events: int = MAX_HOST_EVENTS,
+    chunk_size: int = 1 << 20,
 ) -> tuple[list[HostEvent], dict[str, Any]]:
     """Stream ``trace_view.json`` and retain host events overlapping the
     bounding span of ``windows`` ((start_us, end_us) bubble pairs).
 
     Returns ``(events, stats)``; ``stats["truncated"]`` is True when the
     retention cap fired, in which case coverage ratios may undercount.
+    ``chunk_size`` is the streaming read size; it exists so tests can
+    exercise cross-chunk boundary behaviour without gigabyte fixtures.
     """
 
     stats: dict[str, Any] = {
@@ -217,7 +346,7 @@ def collect_host_events(
     lower = min(start for start, _ in windows)
     upper = max(end for _, end in windows)
     retained: list[HostEvent] = []
-    for raw in _iter_trace_objects(path):
+    for raw in _iter_trace_objects(path, chunk_size=chunk_size):
         stats["objects_scanned"] += 1
         event = _host_event_from_object(raw)
         if event is None:

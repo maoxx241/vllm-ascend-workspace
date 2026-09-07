@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import math
-from collections import Counter
+from collections import Counter, OrderedDict
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
@@ -114,10 +114,23 @@ def evidence_event(event: NormalizedEvent | None) -> dict[str, Any] | None:
     }
 
 
-def bubble_windows(events: Sequence[NormalizedEvent], *, limit: int | None = None) -> list[dict[str, Any]]:
+def bubble_windows(
+    events: Sequence[NormalizedEvent],
+    *,
+    limit: int | None = None,
+    segments: Sequence[BusySegment] | None = None,
+) -> list[dict[str, Any]]:
+    """Gaps between consecutive merged busy segments, largest first.
+
+    ``segments`` lets a caller that already ran ``merge_event_segments`` over
+    the same events (e.g. ``metrics_for_events``) pass the result in instead
+    of paying for a second O(n log n) merge; the output is identical either
+    way because the merge is deterministic for a given event list.
+    """
     if limit is not None and limit <= 0:
         return []
-    segments = merge_event_segments(events)
+    if segments is None:
+        segments = merge_event_segments(events)
     if len(segments) < 2:
         return []
     rows: list[dict[str, Any]] = []
@@ -137,6 +150,28 @@ def bubble_windows(events: Sequence[NormalizedEvent], *, limit: int | None = Non
         )
     rows.sort(key=lambda item: float(item["duration_us"]), reverse=True)
     return rows if limit is None else rows[:limit]
+
+
+# Small LRU for ``metrics_for_events``: (id(events), len(events)) ->
+# (events, merged_segments, base_metrics_without_top_bubbles).
+#
+# The pipeline computes metrics for the same event window several times with
+# different ``top_gap_limit`` values (segment.py emits the same step window at
+# limit=3 and limit=5; summarize re-derives rank/step/layer/block windows).
+# The O(n log n) interval merge dominates each call, while ``top_bubbles``
+# derives cheaply from the merged segments -- so we cache the merge + the
+# base aggregates and re-derive only the (limit-dependent) bubble list.
+#
+# Correctness notes:
+#   * the events list itself is stored in the value, pinning its id against
+#     reuse while the entry lives, so an id collision cannot produce a stale
+#     hit; ``len`` in the key additionally catches in-place appends;
+#   * callers receive a fresh top-level dict every call (several summarize
+#     rows mutate the returned mapping, e.g. inject prelaunch_gap_ms), the
+#     three small count dicts are copied along with it, and ``top_bubbles``
+#     is rebuilt per call -- nothing mutable is shared with the cache.
+_METRICS_CACHE_LIMIT = 16
+_metrics_cache: "OrderedDict[tuple[int, int], tuple[Sequence[NormalizedEvent], list[BusySegment], dict[str, Any]]]" = OrderedDict()
 
 
 def metrics_for_events(events: Sequence[NormalizedEvent], *, top_gap_limit: int = 5) -> dict[str, Any]:
@@ -166,37 +201,56 @@ def metrics_for_events(events: Sequence[NormalizedEvent], *, top_gap_limit: int 
     start = min(event.start_us for event in events)
     end = max(event.end_us for event in events)
     wall_us = max(0.0, end - start)
-    segments = merge_event_segments(events)
-    busy_us = sum(segment.duration_us for segment in segments)
-    gaps = [
-        right.start_us - left.end_us
-        for left, right in zip(segments[:-1], segments[1:])
-        if right.start_us > left.end_us
-    ]
-    kernel_sum_us = sum(event.duration_us for event in events)
-    wait_sum_us = sum(event.wait_us for event in events)
-    return {
-        "event_count": len(events),
-        "row_start": min(event.row_idx for event in events),
-        "row_end": max(event.row_idx for event in events),
-        "start_us": round(start, 3),
-        "end_us": round(end, 3),
-        "wall_ms": round(wall_us / 1000.0, 6),
-        "busy_union_ms": round(busy_us / 1000.0, 6),
-        "kernel_sum_ms": round(kernel_sum_us / 1000.0, 6),
-        "total_cost_ms": round((kernel_sum_us + wait_sum_us) / 1000.0, 6),
-        "wait_sum_ms": round(wait_sum_us / 1000.0, 6),
-        "underfeed_ms": round(max(0.0, wall_us - busy_us) / 1000.0, 6),
-        "underfeed_ratio": round((max(0.0, wall_us - busy_us) / wall_us) if wall_us > 0 else 0.0, 6),
-        "internal_bubble_total_ms": round(sum(gaps) / 1000.0, 6),
-        "largest_internal_bubble_ms": round((max(gaps) if gaps else 0.0) / 1000.0, 6),
-        "bubble_count": len(gaps),
-        "stream_count": len({event.stream_id for event in events}),
-        "task_type_counts": dict(sorted(Counter(event.task_type for event in events).items())),
-        "role_counts": dict(sorted(Counter(role for event in events for role in event.op_roles).items())),
-        "category_counts": dict(sorted(Counter(cat for event in events for cat in event.op_categories).items())),
-        "top_bubbles": bubble_windows(events, limit=top_gap_limit) if top_gap_limit > 0 else [],
-    }
+    cache_key = (id(events), len(events))
+    cached = _metrics_cache.get(cache_key)
+    if cached is not None and cached[0] is events:
+        _metrics_cache.move_to_end(cache_key)
+        segments = cached[1]
+        base = cached[2]
+    else:
+        segments = merge_event_segments(events)
+        busy_us = sum(segment.duration_us for segment in segments)
+        gaps = [
+            right.start_us - left.end_us
+            for left, right in zip(segments[:-1], segments[1:])
+            if right.start_us > left.end_us
+        ]
+        kernel_sum_us = sum(event.duration_us for event in events)
+        wait_sum_us = sum(event.wait_us for event in events)
+        base = {
+            "event_count": len(events),
+            "row_start": min(event.row_idx for event in events),
+            "row_end": max(event.row_idx for event in events),
+            "start_us": round(start, 3),
+            "end_us": round(end, 3),
+            "wall_ms": round(wall_us / 1000.0, 6),
+            "busy_union_ms": round(busy_us / 1000.0, 6),
+            "kernel_sum_ms": round(kernel_sum_us / 1000.0, 6),
+            "total_cost_ms": round((kernel_sum_us + wait_sum_us) / 1000.0, 6),
+            "wait_sum_ms": round(wait_sum_us / 1000.0, 6),
+            "underfeed_ms": round(max(0.0, wall_us - busy_us) / 1000.0, 6),
+            "underfeed_ratio": round((max(0.0, wall_us - busy_us) / wall_us) if wall_us > 0 else 0.0, 6),
+            "internal_bubble_total_ms": round(sum(gaps) / 1000.0, 6),
+            "largest_internal_bubble_ms": round((max(gaps) if gaps else 0.0) / 1000.0, 6),
+            "bubble_count": len(gaps),
+            "stream_count": len({event.stream_id for event in events}),
+            "task_type_counts": dict(sorted(Counter(event.task_type for event in events).items())),
+            "role_counts": dict(sorted(Counter(role for event in events for role in event.op_roles).items())),
+            "category_counts": dict(sorted(Counter(cat for event in events for cat in event.op_categories).items())),
+        }
+        _metrics_cache[cache_key] = (events, segments, base)
+        if len(_metrics_cache) > _METRICS_CACHE_LIMIT:
+            _metrics_cache.popitem(last=False)
+    result = dict(base)
+    # Copy the small nested count dicts as well: callers receive a fully
+    # independent mapping and can never pollute the cached base.
+    result["task_type_counts"] = dict(base["task_type_counts"])
+    result["role_counts"] = dict(base["role_counts"])
+    result["category_counts"] = dict(base["category_counts"])
+    result["top_bubbles"] = (
+        bubble_windows(events, limit=top_gap_limit, segments=segments) if top_gap_limit > 0 else []
+    )
+    return result
 
 
 def select_events(events: Sequence[NormalizedEvent], row_start: int, row_end: int) -> list[NormalizedEvent]:

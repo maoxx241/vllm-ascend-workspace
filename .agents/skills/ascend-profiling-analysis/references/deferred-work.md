@@ -4,7 +4,16 @@ Tracked here so we don't lose them after PR #49 lands. None of these
 block correctness; they are all "structural / maintainability" items
 the reviewer flagged as P2.
 
-## 1. `html_report.py` modularization
+> 2026-09-03 v2 refactor round update: §1 superseded by `html_report_v2/`
+> (thin shell + gzipped lazy assets; legacy renderer kept behind
+> `--html-renderer legacy`). New follow-ups recorded in §11-§14.
+
+## 1. `html_report.py` modularization — SUPERSEDED
+
+Superseded by the `html_report_v2/` package (shell.py / payloads.py /
+assets.py + app.css/app.js): data/view separation is achieved there by
+construction. The legacy monolith stays frozen behind
+`--html-renderer legacy` and will not be modularized.
 
 The file is currently ~3 k lines mixing data loading, metrics,
 view-model construction, CSS, and JS. Recommended split (see review §6.4):
@@ -225,3 +234,48 @@ skill's Mode-1 orchestration (collect + analyze) is owned by
 `ascend-profiling-collection`; its `--machine` entry is deprecated.
 The old skill keeps a DEPRECATED banner pointing here and is no longer
 maintained.
+
+## 11. db-direct follow-ups (v2 round)
+
+- `Wait Time(us)` is not exactly reconstructible from
+  `ascend_pytorch_profiler_*.db` (the exporter's raw-tick queue model is
+  not persisted). The adapter's adopted semantics (same-stream /
+  device-level gap; p50 deviation 0.06us) is documented in
+  `knowledge/db_source_mapping.yaml:documented_differences`. If CANN
+  ever persists raw ticks, revisit.
+- `cube_utilization(%)` uses the platform constant `total_cores=20`
+  (Ascend910B/A3) in the mapping YAML; other chips need the constant
+  updated (golden diff will expose it).
+- `verify_outputs` remote/local are parallel implementations (shell vs
+  pathlib) kept in sync by selftest; consider converging.
+
+## 12. Knowledge scorer noise
+
+`vaws_knowledge._entry_score` is pure token overlap; finding-type queries
+can pull in low-score off-topic entries (e.g. gloo vs ssh-mux at
+score ~15-67). knowledge_refs are score-sorted and capped at 3, but a
+threshold or field-weighted scoring would cut noise. Deferred because
+`.agents/lib/` changes need their own review cycle.
+
+## 13. Wrapper convergence leftovers
+
+- `resolve_execution_target` exists in three near-copies
+  (analysis `_common.py`, serving `_common.py` delegates to lib,
+  memory-profiling `_common.py`). Converge analysis + memory-profiling
+  onto `.agents/lib/vaws_remote_toolbox.resolve_remote_target`.
+- tar-over-ssh sync primitives + `ssh_stream` + `remote_python_with_module`
+  in analysis `_common.py` are generic; move to lib when a second
+  consumer appears.
+- Wrapper still tar-syncs the framework on every run; a `.version`
+  marker check could skip no-change syncs.
+
+## 14. Not-worth-it list (checked, deliberately untouched)
+
+- segment.py regime/repeated-body O(n^3) and exact-cover brute force
+  (deferred §10/§5b): correctness-critical; needs golden fixtures across
+  real model captures before any algorithmic rewrite. The A4 anchoring
+  hardening (degradation diagnostic + layer-count invariant) is the
+  safety net until then.
+- `normalized_name_key` in model_context.py diverges from
+  segment/classify (deletes vs folds non-alnum): confirm intent before
+  merging; segment/classify versions are already aligned.

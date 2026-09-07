@@ -96,6 +96,11 @@ attributes:
       - attention.kvcomp.cache_write
       # --- attention: linear / mamba / GDN
       - attention.linear_or_mamba
+      # --- linear sub-families (KDA = Kimi-K3, GDN = Qwen3-Next/3.5)
+      - attention.linear_or_mamba.kda
+      - attention.linear_or_mamba.gdn
+      # --- attention residual companion (never an anchor)
+      - attention.residual
       # --- attention: RoPE companions
       - attention.rope
       - attention.rope.interleave
@@ -133,6 +138,7 @@ attributes:
       # --- system / heuristic
       - block_head
       - block_head.mhc_prefix
+      - mhc
       - sampling_or_selection
       - sampling.argmax
       - sampling.top_k_top_p

@@ -41,6 +41,7 @@ def test_analyze_wrapper_has_required_args() -> None:
         "--overwrite",
         "--keep-remote-output",
         "--remote-timeout",
+        "--mode",
         "--skip-html",
         "--report-mode",
         "--from-stage",

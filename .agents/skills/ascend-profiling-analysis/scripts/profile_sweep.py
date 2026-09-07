@@ -53,6 +53,7 @@ SWEEP_PER_ROOT_INCLUDES = (
     "report/manifest.json",
     "report/report.md",
     "report/report.xlsx",
+    "report/analysis_summary.json",
 )
 
 

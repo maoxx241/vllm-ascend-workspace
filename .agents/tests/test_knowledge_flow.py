@@ -27,18 +27,24 @@ CURATE = (
 
 
 def synthetic_candidate(session_id: str) -> dict:
-    """Return realistic evidence without encoding project knowledge."""
+    """Return realistic evidence without encoding project knowledge.
+
+    Vocabulary is deliberately nonce-based (``zqxjk``/``flovmar``/…): the
+    inspect step asserts ``possible_matches == []``, and any real-store entry
+    sharing common ops words (e.g. "timeout", "transfer") would otherwise
+    score as a spurious token-overlap match as the store grows.
+    """
 
     return {
         "kind": "known-failure-signatures",
-        "summary": "Framed test transport requires acknowledgements",
+        "summary": "Zqxjk flovmar blorpt requires acknowledgements",
         "owner_skill": "remote-code-parity",
         "scope": {"component": ["synthetic-transport"]},
-        "fingerprints": ["synthetic framed transfer acknowledgement timeout"],
-        "symptom": "The synthetic transfer stalls after its first frame.",
+        "fingerprints": ["zqxjk flovmar blorpt acknowledgement nonce"],
+        "symptom": "The zqxjk flovmar stalls after its first blorpt.",
         "root_cause": "The test sender does not wait for the receiver acknowledgement.",
-        "resolution": "Wait for one acknowledgement before sending the next test frame.",
-        "avoidance": "Keep the synthetic transport acknowledgement-gated.",
+        "resolution": "Wait for one acknowledgement before sending the next zqxjk frame.",
+        "avoidance": "Keep the zqxjk flovmar acknowledgement-gated.",
         "applicable_versions": "test fixture only",
         "verification": {
             "status": "passed",
@@ -225,7 +231,7 @@ class KnowledgeFlowE2ETest(unittest.TestCase):
         hidden = self.run_json(
             QUERY,
             "--query",
-            "synthetic framed transfer acknowledgement timeout",
+            "zqxjk flovmar blorpt acknowledgement nonce",
             "--knowledge-dir",
             str(self.formal),
         )
@@ -233,7 +239,7 @@ class KnowledgeFlowE2ETest(unittest.TestCase):
         retained = self.run_json(
             QUERY,
             "--query",
-            "synthetic framed transfer acknowledgement timeout",
+            "zqxjk flovmar blorpt acknowledgement nonce",
             "--include-deprecated",
             "--knowledge-dir",
             str(self.formal),

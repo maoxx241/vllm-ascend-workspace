@@ -228,6 +228,20 @@ def cross_root_rollup_rows(results: Sequence[Mapping[str, Any]]) -> list[dict[st
     return rollup_rows
 
 
+def _layer_validation_status(root_out: Path) -> str | None:
+    """``layer_validation.status`` from a root's report/analysis_summary.json.
+
+    Optional enrichment: older roots (or interrupted runs) have no summary
+    file, in which case None is reported rather than failing the sweep.
+    """
+    try:
+        payload = read_json(root_out / "report" / "analysis_summary.json", default={}) or {}
+    except Exception:  # noqa: BLE001 - malformed summary must not fail the sweep
+        return None
+    status = (payload.get("layer_validation") or {}).get("status")
+    return str(status) if status is not None else None
+
+
 def _analyze_one(
     idx: int,
     total: int,
@@ -237,6 +251,8 @@ def _analyze_one(
     verbose: bool,
     skip_html: bool,
     report_mode: str,
+    skip_xlsx: bool,
+    skip_host_trace: bool,
     reuse_existing: bool,
 ) -> dict[str, Any]:
     root_out = output_dir / safe_slug(root)
@@ -265,6 +281,7 @@ def _analyze_one(
                 "segment_count": manifest.get("stage_results", {}).get("segment", {}).get("segment_count"),
                 "layer_count": manifest.get("stage_results", {}).get("segment", {}).get("layer_count"),
                 "diagnosis_counts": manifest.get("stage_results", {}).get("diagnostics", {}).get("counts"),
+                "layer_validation_status": _layer_validation_status(root_out),
                 **step_inventory(root_out),
             })
             return item
@@ -279,6 +296,8 @@ def _analyze_one(
             verbose=verbose,
             skip_html=skip_html,
             report_mode=report_mode,
+            skip_xlsx=skip_xlsx,
+            skip_host_trace=skip_host_trace,
         )
         item.update(
             {
@@ -290,6 +309,7 @@ def _analyze_one(
                 "segment_count": manifest.get("stage_results", {}).get("segment", {}).get("segment_count"),
                 "layer_count": manifest.get("stage_results", {}).get("segment", {}).get("layer_count"),
                 "diagnosis_counts": manifest.get("stage_results", {}).get("diagnostics", {}).get("counts"),
+                "layer_validation_status": _layer_validation_status(root_out),
                 **step_inventory(root_out),
             }
         )
@@ -307,6 +327,8 @@ def sweep_roots(
     jobs: int = 1,
     skip_html: bool = True,
     report_mode: str = "summary",
+    skip_xlsx: bool = True,
+    skip_host_trace: bool = True,
     reuse_existing: bool = False,
 ) -> dict[str, Any]:
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -323,7 +345,8 @@ def sweep_roots(
                 _analyze_one(
                     idx, total, root, output_dir,
                     verbose=verbose, skip_html=skip_html,
-                    report_mode=report_mode, reuse_existing=reuse_existing,
+                    report_mode=report_mode, skip_xlsx=skip_xlsx,
+                    skip_host_trace=skip_host_trace, reuse_existing=reuse_existing,
                 )
             )
     else:
@@ -342,7 +365,8 @@ def sweep_roots(
                     _analyze_one,
                     idx, total, root, output_dir,
                     verbose=verbose, skip_html=skip_html,
-                    report_mode=report_mode, reuse_existing=reuse_existing,
+                    report_mode=report_mode, skip_xlsx=skip_xlsx,
+                    skip_host_trace=skip_host_trace, reuse_existing=reuse_existing,
                 ): idx
                 for idx, root in enumerate(roots, 1)
             }
@@ -368,6 +392,8 @@ def sweep_roots(
             "jobs": int(jobs),
             "skip_html": bool(skip_html),
             "report_mode": report_mode,
+            "skip_xlsx": bool(skip_xlsx),
+            "skip_host_trace": bool(skip_host_trace),
             "reuse_existing": bool(reuse_existing),
         },
         "files": {
@@ -413,6 +439,37 @@ def build_parser() -> argparse.ArgumentParser:
         help="render HTML for each root (opposite of --skip-html)",
     )
     parser.add_argument(
+        "--skip-xlsx",
+        action="store_true",
+        default=True,
+        help=(
+            "skip per-root report.xlsx (fast mode). ON by default for sweeps "
+            "because the workbook duplicates the summary CSVs and "
+            "analysis_summary.json; turn off with --no-skip-xlsx."
+        ),
+    )
+    parser.add_argument(
+        "--no-skip-xlsx",
+        dest="skip_xlsx",
+        action="store_false",
+        help="render report.xlsx for each root (opposite of --skip-xlsx)",
+    )
+    parser.add_argument(
+        "--skip-host-trace",
+        action="store_true",
+        default=True,
+        help=(
+            "skip per-root host-trace bubble attribution (fast mode). ON by "
+            "default for sweeps; turn off with --no-skip-host-trace."
+        ),
+    )
+    parser.add_argument(
+        "--no-skip-host-trace",
+        dest="skip_host_trace",
+        action="store_false",
+        help="run host-trace attribution for each root (opposite of --skip-host-trace)",
+    )
+    parser.add_argument(
         "--report-mode",
         choices=("summary", "full-raw"),
         default="summary",
@@ -444,6 +501,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         jobs=int(args.jobs),
         skip_html=bool(args.skip_html),
         report_mode=args.report_mode,
+        skip_xlsx=bool(args.skip_xlsx),
+        skip_host_trace=bool(args.skip_host_trace),
         reuse_existing=bool(args.reuse_existing),
     )
     emit_stage_json(

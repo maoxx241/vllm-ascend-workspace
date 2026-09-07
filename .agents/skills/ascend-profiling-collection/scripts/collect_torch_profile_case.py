@@ -12,15 +12,19 @@ already provide:
     5. stop the service via vllm-ascend-serving
     6. analyse every ``*_ascend_pt`` directory and verify outputs
        (run_remote_analyse.py)
-    7. write a manifest the analysis skill can consume
+    7. optionally archive each rank's outputs to shared storage
+       (``--archive-dir``)
+    8. write a manifest the analysis skill can consume
 
 The skill never modifies code in serving / parity / benchmark; it only
 orchestrates them. The serving skill stays profiling-agnostic -- it only
 forwards ``--profiler-config`` to ``vllm serve``.
 
-Failure policy: if any rank's ``kernel_details.csv`` is missing after analyse
-(the canonical "device data did not land" case from
-``references/behavior.md`` "Output verification"), the run is reported as failed and exits non-zero
+Failure policy: if any rank's expected analyse output is missing after
+analyse (the per-rank ``ascend_pytorch_profiler_*.db`` in the default db
+export mode; ``kernel_details.csv`` in text/both mode -- the canonical
+"device data did not land" case from ``references/behavior.md`` "Output
+verification"), the run is reported as failed and exits non-zero
 even though every previous step succeeded. Downstream analysis must not
 process degenerate roots silently.
 """
@@ -30,6 +34,7 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -57,10 +62,12 @@ from _common import (
     open_local_tunnel,
     print_json,
     resolve_execution_target,
+    safe_run_token,
+    ssh_exec,
     unique_collection_run_dir,
 )
 from profile_control import post_remote_action
-from run_remote_analyse import analyse_profile_root
+from run_remote_analyse import ANALYSE_EXPORT_MODES, analyse_profile_root
 
 
 DEFAULT_TORCH_PROFILER_DIRNAME = "vllm_profile"
@@ -68,9 +75,151 @@ DEFAULT_PROFILE_CONTROL_TIMEOUT = 600
 DEFAULT_REQUEST_TIMEOUT = 900
 POST_STOP_FLUSH_SECONDS = 5
 
+# Workspace knowledge hooks (local, best-effort):
+#   * before collection starts, ``knowledge_preflight_advisories`` queries the
+#     workspace knowledge store with "<model> tp<N> <mode>" and records hits in
+#     the manifest's ``knowledge_advisories`` field (advisory only);
+#   * when a hard-fail gate trips, ``knowledge_failure_matches`` queries
+#     known-failure-signatures with the observed error text and attaches the
+#     matches (with resolution) to ``manifest.error.knowledge_matches``.
+# A missing/invalid knowledge dir degrades both hooks to explicit empty
+# arrays with a progress note; collection itself is never blocked.
+KNOWLEDGE_DIR = ROOT / ".agents" / "knowledge"
+KNOWLEDGE_ADVISORY_KINDS = (
+    "model-capabilities",
+    "parallelism-compatibility",
+    "known-failure-signatures",
+)
+KNOWLEDGE_QUERY_LIMIT = 3
+# Matches below this score are treated as noise (weak single-token overlaps
+# e.g. an entry id fragment); real matches score >= 12 from fingerprint tokens.
+KNOWLEDGE_MIN_SCORE = 5
+
 VL_DEFAULT_IMAGE = (
     ROOT / "vllm-ascend" / "tests" / "e2e" / "310p" / "data" / "qwen.png"
 )
+
+
+# ---------------------------------------------------------------------------
+# Workspace knowledge hooks (advisory only, never blocking)
+# ---------------------------------------------------------------------------
+
+def _knowledge_api() -> tuple[Any, Any, Any] | None:
+    """Lazily import the workspace knowledge API; None when unavailable.
+
+    Importing this skill's ``_common`` already put ``.agents/lib`` on
+    sys.path (via the serving skill's common). The import stays lazy so a
+    broken/missing lib can never block collection.
+    """
+    try:
+        from vaws_knowledge import (  # type: ignore[import-not-found]
+            KnowledgeError,
+            get_knowledge_entry,
+            query_knowledge,
+        )
+    except ImportError:
+        return None
+    return KnowledgeError, query_knowledge, get_knowledge_entry
+
+
+def knowledge_preflight_advisories(
+    model_name: str,
+    tp: int,
+    mode: str,
+    *,
+    knowledge_dir: Path | None = None,
+) -> list[dict[str, Any]]:
+    """Query the knowledge store with "<model> tp<N> <mode>" before collecting.
+
+    Returns one advisory per hit (entry_id/kind/summary/score) across
+    model-capabilities, parallelism-compatibility and known-failure-signatures
+    (limit 3 per kind). Empty array on no hits, empty store, or any
+    knowledge-side failure.
+    """
+    knowledge_dir = knowledge_dir or KNOWLEDGE_DIR
+    api = _knowledge_api()
+    if api is None:
+        emit_progress("knowledge", "vaws_knowledge not importable; preflight advisory skipped")
+        return []
+    KnowledgeError, query_knowledge, _ = api
+    query = f"{model_name} tp{tp} {mode}"
+    advisories: list[dict[str, Any]] = []
+    try:
+        for kind in KNOWLEDGE_ADVISORY_KINDS:
+            for match in query_knowledge(
+                knowledge_dir=knowledge_dir,
+                query=query,
+                kinds=[kind],
+                limit=KNOWLEDGE_QUERY_LIMIT,
+            min_score=KNOWLEDGE_MIN_SCORE,
+            ):
+                advisories.append(
+                    {
+                        "entry_id": match["id"],
+                        "kind": match["kind"],
+                        "summary": match["summary"],
+                        "score": match["score"],
+                    }
+                )
+    except Exception as exc:  # noqa: BLE001 - advisories must never block collection
+        emit_progress("knowledge", f"preflight advisory skipped: {exc}")
+        return []
+    return advisories
+
+
+def knowledge_failure_matches(
+    signature_text: str,
+    *,
+    knowledge_dir: Path | None = None,
+) -> list[dict[str, Any]]:
+    """Match an observed failure signature against known-failure-signatures.
+
+    Returns the top-3 matches (entry_id/kind/summary/resolution/score);
+    explicit empty array when nothing matches or the store is unusable.
+    """
+    knowledge_dir = knowledge_dir or KNOWLEDGE_DIR
+    api = _knowledge_api()
+    if api is None:
+        emit_progress("knowledge", "vaws_knowledge not importable; failure-signature lookup skipped")
+        return []
+    KnowledgeError, query_knowledge, get_knowledge_entry = api
+    try:
+        matches = query_knowledge(
+            knowledge_dir=knowledge_dir,
+            query=signature_text,
+            kinds=["known-failure-signatures"],
+            limit=KNOWLEDGE_QUERY_LIMIT,
+            min_score=KNOWLEDGE_MIN_SCORE,
+        )
+        out: list[dict[str, Any]] = []
+        for match in matches:
+            resolution = ""
+            full = get_knowledge_entry(knowledge_dir=knowledge_dir, entry_id=match["id"])
+            if full:
+                rule = full.get("entry", {}).get("rule", {})
+                if isinstance(rule, dict):
+                    resolution = str(rule.get("resolution") or "")
+            out.append(
+                {
+                    "entry_id": match["id"],
+                    "kind": match["kind"],
+                    "summary": match["summary"],
+                    "resolution": resolution,
+                    "score": match["score"],
+                }
+            )
+    except Exception as exc:  # noqa: BLE001 - failure reporting must not recurse
+        emit_progress("knowledge", f"failure-signature lookup skipped: {exc}")
+        return []
+    return out
+
+
+def _failure_payload(message: str) -> dict[str, Any]:
+    """Manifest ``error`` object: message + knowledge matches for the text."""
+    return {
+        "message": message,
+        "knowledge_matches": knowledge_failure_matches(message),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -380,6 +529,128 @@ def _build_serve_args(args: argparse.Namespace, profiler_config: dict[str, Any])
 
 
 # ---------------------------------------------------------------------------
+# Archive to shared storage (optional --archive-dir)
+#
+# Profiling outputs are far too large to pull back to the local Mac (a single
+# dsv3.1 analysis dragged back 2.2GB once). When --archive-dir points at the
+# shared-storage filesystem mounted on every managed host/container (e.g.
+# /mnt/weight/<user>/profiling/archives), each rank's analyse outputs are
+# copied *on the container* (cp -r over the existing ssh channel, ranks
+# serially) into:
+#
+#     <archive-dir>/<tag>_<compact started_at>/<rank-dir-basename>/
+#         ASCEND_PROFILER_OUTPUT/     (db + csv exports, self-contained)
+#         profiler_info_*.json
+#         profiler_metadata.json
+#
+# The rank-dir basename is kept as the subdirectory name, so the archive root
+# itself is a valid profiling root full of ``*_ascend_pt`` directories and
+# can be fed straight to the analysis skill's ``--remote-profile-root`` from
+# any machine that mounts the same shared storage.
+#
+# Failure semantics: archiving runs only after analyse+verify passed with all
+# ranks ok, and a copy failure never flips an already-ok collection to
+# failed -- it is recorded in ``manifest.archive_error`` (with the affected
+# rank's ``outputs.archived_path`` left null) plus a stderr warning.
+# ---------------------------------------------------------------------------
+
+# torch-profiler metadata files written next to ASCEND_PROFILER_OUTPUT/ in
+# each rank dir; copied best-effort (a missing one does not fail the rank).
+ARCHIVE_METADATA_NAMES = ("profiler_info_*.json", "profiler_metadata.json")
+ARCHIVE_COPY_TIMEOUT_S = 1800
+
+
+def compact_utc_timestamp(utc_iso: str) -> str:
+    """"2026-09-07T03:36:45Z" -> "20260907T033645Z" (dir-name safe)."""
+    return utc_iso.replace("-", "").replace(":", "")
+
+
+def archive_run_dir_name(tag: str, started_at: str) -> str:
+    """``<safe-tag>_<compact started_at>`` archive root directory name."""
+    return f"{safe_run_token(tag, fallback='profile')}_{compact_utc_timestamp(started_at)}"
+
+
+def build_rank_archive_script(rank_dir: str, dest_dir: str) -> str:
+    """Remote bash: copy one rank's analyse outputs into ``dest_dir``.
+
+    ``ASCEND_PROFILER_OUTPUT/`` is copied whole (in db mode it carries the
+    per-rank db; there is no csv to cherry-pick) and must exist -- verify has
+    already guaranteed that, so a copy failure here is a real archive error.
+    The metadata files are best-effort so a missing ``profiler_metadata.json``
+    does not fail the rank.
+    """
+    src = rank_dir.rstrip("/")
+    # Quote the directory part only: quoting the whole path would turn
+    # ``profiler_info_*.json`` into a literal string and kill glob expansion.
+    meta = " ".join(f"{shlex.quote(src)}/{name}" for name in ARCHIVE_METADATA_NAMES)
+    quoted_dest = shlex.quote(dest_dir)
+    return (
+        "set -e; "
+        f"mkdir -p {quoted_dest}; "
+        f"cp -r {shlex.quote(src + '/ASCEND_PROFILER_OUTPUT')} {quoted_dest}/; "
+        f"for f in {meta}; do "
+        f"if [ -e \"$f\" ]; then cp \"$f\" {quoted_dest}/; fi; "
+        "done"
+    )
+
+
+def archive_rank_outputs(
+    ep,
+    rank_dirs: list[str],
+    archive_dir: str,
+    *,
+    tag: str,
+    started_at: str,
+    copy_timeout: float = ARCHIVE_COPY_TIMEOUT_S,
+) -> dict[str, Any]:
+    """Archive every rank's outputs under ``<archive_dir>/<tag>_<ts>/``.
+
+    Serial across ranks and never raises: per-rank copy failures are captured
+    in ``archive_error`` so an archive problem cannot overturn an already-ok
+    collection. Returns::
+
+        {
+          "archive_dir": "<archive_dir>/<tag>_<ts>",
+          "archived": bool,            # True only when every rank copied
+          "archive_error": str | None,
+          "ranks": [{"path": rank_dir, "archived_path": str | None}, ...],
+        }
+    """
+    root = f"{archive_dir.rstrip('/')}/{archive_run_dir_name(tag, started_at)}"
+    result: dict[str, Any] = {
+        "archive_dir": root,
+        "archived": False,
+        "archive_error": None,
+        "ranks": [],
+    }
+    errors: list[str] = []
+    for rank_dir in rank_dirs:
+        basename = rank_dir.rstrip("/").rsplit("/", 1)[-1]
+        dest = f"{root}/{basename}"
+        entry: dict[str, Any] = {"path": rank_dir, "archived_path": None}
+        try:
+            proc = ssh_exec(
+                ep,
+                build_rank_archive_script(rank_dir, dest),
+                check=False,
+                timeout=copy_timeout,
+            )
+            if proc.returncode == 0:
+                entry["archived_path"] = dest
+            else:
+                errors.append(
+                    f"{rank_dir}: rc={proc.returncode} {proc.stderr[-300:]}"
+                )
+        except Exception as exc:  # noqa: BLE001 - archive must not fail collection
+            errors.append(f"{rank_dir}: {exc}")
+        result["ranks"].append(entry)
+    result["archived"] = not errors
+    if errors:
+        result["archive_error"] = "; ".join(errors)
+    return result
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -420,8 +691,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="num_speculative_tokens; 0 disables --speculative-config",
     )
     p.add_argument(
-        "--speculative-method", default="qwen3_5_mtp",
-        help="speculative method name; only used when --speculative-tokens > 0",
+        "--speculative-method", default="mtp",
+        help="speculative method name; only used when --speculative-tokens > 0. "
+             "Default 'mtp' is vLLM's canonical generic MTP method (model-specific "
+             "aliases like 'qwen3_5_mtp' are deprecated and remapped); the old "
+             "qwen3_5_mtp default built a drafter expecting Qwen3.5-style mtp_block "
+             "bias weights and crashed DeepSeek MTP checkpoints.",
     )
 
     # Optional: vLLM serving knobs
@@ -472,6 +747,39 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--torch-profiler-dir", default=DEFAULT_TORCH_PROFILER_DIRNAME,
                    help="relative dir under runtime_dir where vLLM writes traces")
     p.add_argument("--torch-profiler-with-stack", action="store_true")
+
+    # Optional: analyse() export shape
+    p.add_argument(
+        "--analyse-export",
+        choices=ANALYSE_EXPORT_MODES,
+        default="db",
+        help=(
+            "export_type passed to torch_npu analyse(): 'db' (default) writes "
+            "only ascend_pytorch_profiler_*.db per rank (the analysis skill "
+            "rebuilds the kernel event stream from it); 'text' writes the "
+            "historical kernel_details.csv + trace_view.json; 'both' writes "
+            "everything"
+        ),
+    )
+
+    # Optional: archive to shared storage
+    p.add_argument(
+        "--archive-dir",
+        default=None,
+        metavar="<remote-path>",
+        help=(
+            "remote shared-storage directory (e.g. "
+            "/mnt/weight/<user>/profiling/archives) to archive each rank's "
+            "analyse outputs into after analyse+verify passes: every rank's "
+            "ASCEND_PROFILER_OUTPUT/ + profiler metadata is copied (on the "
+            "container, ranks serially) to "
+            "<archive-dir>/<tag>_<started_at>/<rank-dir-basename>/. The "
+            "archive root is itself a valid profiling root for the analysis "
+            "skill's --remote-profile-root on any machine mounting the same "
+            "storage. Archive copy failures never fail an already-ok "
+            "collection; they are recorded as manifest.archive_error"
+        ),
+    )
 
     # Optional: VL workload
     p.add_argument(
@@ -561,6 +869,7 @@ def main(argv: list[str] | None = None) -> int:
         "api_server_count": args.api_server_count,
         "torch_profiler_with_stack": bool(args.torch_profiler_with_stack),
         "torch_profiler_dir": args.torch_profiler_dir,
+        "analyse_export": args.analyse_export,
         "prompt_tokens": args.prompt_tokens,
         "benchmark_output_tokens": args.benchmark_output_tokens,
         "followup_output_tokens": args.followup_output_tokens,
@@ -569,6 +878,8 @@ def main(argv: list[str] | None = None) -> int:
         "benchmark_success_threshold": args.benchmark_success_threshold,
         "expected_ranks": args.tp * (args.dp if args.dp else 1),
         "profile_control_timeout": args.profile_control_timeout,
+        "archive_dir": None,
+        "archived": False,
         "run_dir": str(run_dir),
         "serve_args": serve_args,
         "image_meta": image_meta,
@@ -577,6 +888,19 @@ def main(argv: list[str] | None = None) -> int:
     service_result: dict[str, Any] | None = None
     stop_result: dict[str, Any] | None = None
     try:
+        # Preflight knowledge advisory: known capabilities/compatibility/
+        # failure signatures for this exact "<model> tp<N> <mode>" shape.
+        # Advisory only -- recorded in the manifest, never blocks collection.
+        advisories = knowledge_preflight_advisories(
+            args.served_model_name, args.tp, args.mode
+        )
+        manifest["knowledge_advisories"] = advisories
+        emit_progress(
+            "knowledge",
+            f"preflight advisories: {len(advisories)} knowledge entrie(s) matched",
+            advisories=[item["entry_id"] for item in advisories] or None,
+        )
+
         emit_progress("serve_start", f"starting service on session {args.session_id}")
         service_result = call_serve_start(serve_args)
         manifest["service_result"] = service_result
@@ -658,15 +982,24 @@ def main(argv: list[str] | None = None) -> int:
         expected_ranks = manifest["expected_ranks"]
         emit_progress(
             "analyse",
-            f"analysing {profile_root} (expected_ranks={expected_ranks})",
+            f"analysing {profile_root} (expected_ranks={expected_ranks}, "
+            f"export={args.analyse_export})",
         )
         analyse_bundle = analyse_profile_root(
             ep, profile_root, expected_ranks=expected_ranks,
+            analyse_export=args.analyse_export,
         )
         manifest["remote_profile_root"] = profile_root
         manifest["remote_profile_dirs"] = analyse_bundle["dirs"]
+        # Schema stability: every rank's outputs carries archived_path (null
+        # until/unless --archive-dir archiving fills it in).
+        for item in manifest["remote_profile_dirs"]:
+            item["outputs"]["archived_path"] = None
         manifest["rank_count"] = analyse_bundle.get("rank_count")
         manifest["analysis_status"] = analyse_bundle["analysis_status"]
+        manifest["expected_output_kind"] = analyse_bundle.get("expected_output_kind")
+        manifest["analyse_wall_s"] = analyse_bundle.get("analyse_wall_s")
+        manifest["analyse_parallelism"] = analyse_bundle.get("analyse_parallelism")
         manifest["completed_at"] = now_utc()
 
         # Hard gate: degenerate roots OR a workload that did not actually
@@ -676,6 +1009,37 @@ def main(argv: list[str] | None = None) -> int:
         workload_worst = manifest["workload_status"]["status"]
         if analysis_worst == "ok" and workload_worst == "ok":
             manifest["status"] = "ok"
+            # Optional archive to shared storage: runs only after every rank
+            # verified ok, and a copy failure never overturns this ok status
+            # (it lands in archive_error + a stderr warning instead).
+            if args.archive_dir:
+                emit_progress(
+                    "archive",
+                    f"archiving rank outputs under {args.archive_dir}",
+                )
+                archive_result = archive_rank_outputs(
+                    ep,
+                    [d["path"] for d in analyse_bundle["dirs"]],
+                    args.archive_dir,
+                    tag=args.tag,
+                    started_at=manifest["started_at"],
+                )
+                manifest["archive_dir"] = archive_result["archive_dir"]
+                manifest["archived"] = archive_result["archived"]
+                if archive_result["archive_error"]:
+                    manifest["archive_error"] = archive_result["archive_error"]
+                    emit_progress(
+                        "archive",
+                        "archive copy failed (collection stays ok): "
+                        + archive_result["archive_error"],
+                    )
+                archived_by_rank = {
+                    r["path"]: r["archived_path"] for r in archive_result["ranks"]
+                }
+                for item in manifest["remote_profile_dirs"]:
+                    item["outputs"]["archived_path"] = archived_by_rank.get(
+                        item["path"]
+                    )
             (run_dir / "manifest.json").write_text(
                 json.dumps(manifest, indent=2, ensure_ascii=False) + "\n",
                 encoding="utf-8",
@@ -689,7 +1053,7 @@ def main(argv: list[str] | None = None) -> int:
         if workload_worst != "ok":
             reasons.append(f"workload_status={workload_worst}")
         manifest["status"] = "failed"
-        manifest["error"] = (
+        manifest["error"] = _failure_payload(
             "profiling collection produced an unusable trace ("
             + "; ".join(reasons)
             + "); re-collect required, see SKILL.md Failure policy"
@@ -703,7 +1067,7 @@ def main(argv: list[str] | None = None) -> int:
 
     except Exception as exc:  # noqa: BLE001
         manifest["status"] = "failed"
-        manifest["error"] = str(exc)
+        manifest["error"] = _failure_payload(str(exc))
         manifest["failed_at"] = now_utc()
         if stop_result is None:
             try:

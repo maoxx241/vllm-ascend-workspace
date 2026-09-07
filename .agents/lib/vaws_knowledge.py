@@ -573,8 +573,35 @@ def _iter_strings(value: Any) -> Iterable[str]:
             yield from _iter_strings(child)
 
 
+# Common English stopwords carry no matching signal but accumulate junk score
+# through the general-text overlap term (a knowledge entry rich in prose
+# matched a nonce-vocabulary test candidate purely on "the"/"and" overlaps,
+# breaking test_knowledge_flow).  Technical tokens (incl. short ones like
+# "db", "os", "io", "ssh", "kv") are intentionally NOT filtered.
+_STOPWORDS = frozenset(
+    """
+    a an and are as at be been being but by can could did do does doing done
+    for from had has have having he her hers him his how i if in into is it
+    its itself just may might must my no nor not now of off on once only or
+    other our ours out over own same she should so some such than that the
+    their theirs them then there these they this those through to too under
+    until up very was we were what when where which while who whom why will
+    with would you your yours yourself
+    """.split()
+)
+
+
 def _tokens(value: str) -> set[str]:
-    return set(TOKEN_RE.findall(value.lower()))
+    # ``Kimi-K3-16exp`` is a single TOKEN_RE match (hyphens/dots are kept),
+    # which never overlaps space-separated fingerprints like "kimi k3".
+    # Emit sub-parts alongside full tokens so hyphenated model names match
+    # their space-separated fingerprint forms (and vice versa).
+    tokens = set(TOKEN_RE.findall(value.lower())) - _STOPWORDS
+    for token in list(tokens):
+        for part in re.split(r"[.\-_]+", token):
+            if len(part) >= 2 and part not in _STOPWORDS:
+                tokens.add(part)
+    return tokens
 
 
 def _entry_score(query: str, entry: Mapping[str, Any]) -> int:
@@ -606,9 +633,12 @@ def query_knowledge(
     kinds: Sequence[str] | None = None,
     limit: int = 3,
     include_deprecated: bool = False,
+    min_score: int = 0,
 ) -> list[dict[str, Any]]:
     if limit < 1:
         raise KnowledgeError("limit must be greater than zero")
+    if min_score < 0:
+        raise KnowledgeError("min_score must be >= 0")
     selected = set(kinds or KNOWLEDGE_KINDS)
     unknown = sorted(selected - KNOWLEDGE_KINDS)
     if unknown:
@@ -625,7 +655,7 @@ def query_knowledge(
             if entry["status"] == "deprecated" and not include_deprecated:
                 continue
             score = _entry_score(query, entry)
-            if score <= 0:
+            if score <= 0 or score < min_score:
                 continue
             rule = entry["rule"]
             summary = str(

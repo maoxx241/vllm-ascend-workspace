@@ -104,7 +104,7 @@ After analysis, the agent should consult the local run dir in this order:
 3. `segment_manifest.json` — sanity check `hard_errors`, `interior_island_total` (must be 0; the skill already enforces this, but reading the structure helps when investigating soft anomalies).
 4. `cross_rank_alignment.csv` / `cross_rank_alignment.json` — for slow-rank, EP imbalance, or workload asymmetry investigations.
 5. `step_summary.csv` / `layer_summary.csv` / `operator_summary.csv` — for raw timing / count breakdowns.
-6. `evidence_index.csv` / `raw_kernel_index.csv` — to resolve an `evidence_id` back to source rows.
+6. `evidence_index.csv` / `normalized_event_index.csv` — to resolve an `evidence_id` back to source rows (both stay on the remote by default; pull with `--keep-remote-output` when needed).
 
 For Excel users, `report/report.xlsx` contains the same tables in a single
 sortable workbook.

@@ -221,6 +221,76 @@ _CASES: list[tuple[str, set[str], set[str]]] = [
         {"attention.sparse_sharedkv"},
         {"attention.sparse_sharedkv.metadata", "attention.mla", "attention.flash_score"},
     ),
+    # Newer-CANN spellings of the same sparse kernel (user-confirmed
+    # 2026-09): V4 CSA ships SparseFlashMla, V3.2 DSA ships
+    # SparseFlashAttention. The latter contains "flashattention" and must
+    # NOT fall through to the dense flash_score rule.
+    (
+        "SparseFlashMla",
+        {"attention.sparse_sharedkv"},
+        {"attention.sparse_sharedkv.metadata", "attention.flash_score", "attention.mla"},
+    ),
+    (
+        "SparseFlashMlaMetadata",
+        {"attention.sparse_sharedkv.metadata"},
+        {"attention.sparse_sharedkv", "attention.flash_score"},
+    ),
+    (
+        "SparseFlashAttention",
+        {"attention.sparse_sharedkv"},
+        {"attention.sparse_sharedkv.metadata", "attention.flash_score", "attention.mla"},
+    ),
+    (
+        "SparseFlashAttentionMetadata",
+        {"attention.sparse_sharedkv.metadata"},
+        {"attention.sparse_sharedkv", "attention.flash_score"},
+    ),
+    # ---- Linear-attention sub-families + residual + MHC (user 2026-09-07) ----
+    (
+        "aclnnRecurrentKda_RecurrentKda_RecurrentKda",
+        {"attention.linear_or_mamba", "attention.linear_or_mamba.kda"},
+        {"attention.linear_or_mamba.gdn", "attention.mla"},
+    ),
+    (
+        "aclnnChunkKdaFwd_KdaChunkForward_ChunkKdaFwd",
+        {"attention.linear_or_mamba", "attention.linear_or_mamba.kda"},
+        {"attention.linear_or_mamba.gdn"},
+    ),
+    (
+        "aclnnRecurrentGatedDeltaRule_RecurrentGatedDeltaRule_RecurrentGatedDeltaRule",
+        {"attention.linear_or_mamba", "attention.linear_or_mamba.gdn"},
+        {"attention.linear_or_mamba.kda"},
+    ),
+    (
+        "aclnnChunkGatedDeltaRule_ChunkGatedDeltaRule_ChunkGatedDeltaRule",
+        {"attention.linear_or_mamba", "attention.linear_or_mamba.gdn"},
+        {"attention.linear_or_mamba.kda"},
+    ),
+    (
+        "fused_gdn_gating_kernel",
+        {"attention.linear_or_mamba", "attention.linear_or_mamba.gdn"},
+        {"attention.linear_or_mamba.kda"},
+    ),
+    (
+        "CausalConv1d",
+        {"attention.linear_or_mamba"},
+        {"attention.linear_or_mamba.kda", "attention.linear_or_mamba.gdn"},
+    ),
+    (
+        "_apply_attn_res_kernel",
+        {"attention.residual"},
+        {"attention.mla", "attention.flash_score", "attention.linear_or_mamba"},
+    ),
+    (
+        "HcPre",
+        {"mhc", "block_head.mhc_prefix"},
+        {"attention.flash_score", "communication.collective"},
+    ),
+    (
+        "HcPost",
+        {"mhc", "block_head.mhc_prefix"},
+        {"attention.flash_score"},
+    ),
     (
         "KVQuantSparseAttnSharedKVMetadata",
         {"attention.sparse_sharedkv.metadata"},
@@ -269,12 +339,12 @@ _CASES: list[tuple[str, set[str], set[str]]] = [
     ),
     (
         "KvRmsNormRopeCache",
-        {"attention.mla.kv_norm_rope_cache", "attention.rope"},
+        {"attention.mla.kv_norm_rope_cache", "attention.mla", "attention.rope"},
         {"attention.sparse_sharedkv"},
     ),
     (
         "TransposeQuantBatchMatmul",
-        {"attention.mla.v_up_proj", "compute.matmul"},
+        {"attention.mla.v_up_proj", "attention.mla", "compute.matmul"},
         {"attention.sparse_attn.v_up_proj"},
     ),
     # ---- KVComp overlay

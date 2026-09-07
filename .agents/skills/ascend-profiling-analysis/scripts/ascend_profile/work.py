@@ -20,6 +20,14 @@ except ImportError:  # pragma: no cover - script-mode fallback
 
 _NULLISH_TEXT = {"", "N/A", "NA", "NAN", "NONE", "NULL"}
 
+# Candidate column aliases for the shape / dtype cells consumed by
+# ``estimated_work_from_row`` (single source of truth; the normalize hot
+# path resolves them once per file via ``sources.KernelRowAccessor``).
+INPUT_SHAPE_CANDIDATES = ("Input Shapes", "Input Shape", "Input")
+OUTPUT_SHAPE_CANDIDATES = ("Output Shapes", "Output Shape", "Output")
+INPUT_DTYPE_CANDIDATES = ("Input Data Types", "Input Data Type", "Input Dtypes")
+OUTPUT_DTYPE_CANDIDATES = ("Output Data Types", "Output Data Type", "Output Dtypes")
+
 
 _DTYPE_BYTES: dict[str, float] = {
     "BOOL": 1.0,
@@ -269,19 +277,28 @@ def estimate_vector_flops(task_type: str, name: str, shapes: Sequence[Sequence[i
     return float(elems * factor) if elems > 0 else None
 
 
-def estimated_work_from_row(row: Mapping[str, Any], *, name: str, task_type: str, op_type: str) -> dict[str, Any]:
-    """Estimate per-event bytes/FLOPs from raw CANN shape and dtype fields.
+def estimated_work_from_fields(
+    *,
+    name: str,
+    task_type: str,
+    op_type: str,
+    input_shapes_raw: str,
+    output_shapes_raw: str,
+    input_dtypes_raw: str,
+    output_dtypes_raw: str,
+) -> dict[str, Any]:
+    """``estimated_work_from_row`` over already-picked raw cell strings.
 
-    This adapts the useful part of LLMInsight's operator calculation
-    model into the profiling pipeline.  It is deliberately conservative:
-    unknown kernels keep byte counts when shapes exist, but FLOPs stay
-    unset unless a known matmul/attention/vector pattern matches.
+    The estimate depends only on these raw strings plus ``name`` /
+    ``task_type`` / ``op_type``, so hot loops can memoize on the raw
+    (unparsed) values and skip shape/dtype parsing for repeated
+    combinations.
     """
 
-    input_shapes = parse_tensor_shapes(pick(row, ("Input Shapes", "Input Shape", "Input"), ""))
-    output_shapes = parse_tensor_shapes(pick(row, ("Output Shapes", "Output Shape", "Output"), ""))
-    input_dtypes = parse_tensor_dtypes(pick(row, ("Input Data Types", "Input Data Type", "Input Dtypes"), ""))
-    output_dtypes = parse_tensor_dtypes(pick(row, ("Output Data Types", "Output Data Type", "Output Dtypes"), ""))
+    input_shapes = parse_tensor_shapes(input_shapes_raw)
+    output_shapes = parse_tensor_shapes(output_shapes_raw)
+    input_dtypes = parse_tensor_dtypes(input_dtypes_raw)
+    output_dtypes = parse_tensor_dtypes(output_dtypes_raw)
     bytes_est = tensor_list_bytes(input_shapes, input_dtypes) + tensor_list_bytes(output_shapes, output_dtypes)
     text = f"{task_type} {name}".upper()
     all_shapes = [*input_shapes, *output_shapes]
@@ -318,3 +335,23 @@ def estimated_work_from_row(row: Mapping[str, Any], *, name: str, task_type: str
         out["output_shape_count"] = len(output_shapes)
         out["output_shape_sample"] = output_shapes[:3]
     return out
+
+
+def estimated_work_from_row(row: Mapping[str, Any], *, name: str, task_type: str, op_type: str) -> dict[str, Any]:
+    """Estimate per-event bytes/FLOPs from raw CANN shape and dtype fields.
+
+    This adapts the useful part of LLMInsight's operator calculation
+    model into the profiling pipeline.  It is deliberately conservative:
+    unknown kernels keep byte counts when shapes exist, but FLOPs stay
+    unset unless a known matmul/attention/vector pattern matches.
+    """
+
+    return estimated_work_from_fields(
+        name=name,
+        task_type=task_type,
+        op_type=op_type,
+        input_shapes_raw=pick(row, INPUT_SHAPE_CANDIDATES, ""),
+        output_shapes_raw=pick(row, OUTPUT_SHAPE_CANDIDATES, ""),
+        input_dtypes_raw=pick(row, INPUT_DTYPE_CANDIDATES, ""),
+        output_dtypes_raw=pick(row, OUTPUT_DTYPE_CANDIDATES, ""),
+    )

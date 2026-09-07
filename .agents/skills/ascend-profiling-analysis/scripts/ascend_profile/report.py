@@ -4,11 +4,13 @@
 from __future__ import annotations
 
 import argparse
+import csv
 from collections import Counter
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 try:
+    from .analysis_summary import build_analysis_summary
     from .common import (
         SCHEMA_VERSION,
         TOOL_VERSION,
@@ -21,11 +23,12 @@ try:
         write_json,
         write_xlsx,
     )
-    from .store import parse_jsonish, to_float
+    from .store import iter_csv_rows, parse_jsonish, to_float
 except ImportError:  # pragma: no cover
     import sys
 
     sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from analysis_summary import build_analysis_summary  # type: ignore[no-redef]
     from common import (
         # type: ignore[no-redef]
         SCHEMA_VERSION,
@@ -39,7 +42,7 @@ except ImportError:  # pragma: no cover
         write_json,
         write_xlsx,
     )
-    from store import parse_jsonish, to_float  # type: ignore[no-redef]
+    from store import iter_csv_rows, parse_jsonish, to_float  # type: ignore[no-redef]
 
 
 def finding_rows(output_dir: Path) -> list[dict[str, Any]]:
@@ -749,30 +752,165 @@ def pipeline_coverage_lines(summary_manifest: Mapping[str, Any], operator_rows: 
     return lines
 
 
-def markdown_report(output_dir: Path, report_id: str) -> str:
-    normalize_manifest = read_json(output_dir / "normalize_manifest.json", default={})
-    segment_manifest = read_json(output_dir / "segment_manifest.json", default={})
-    summary_manifest = read_json(output_dir / "summary_manifest.json", default={})
-    cross_manifest = read_json(output_dir / "cross_rank_manifest.json", default={})
-    diagnosis_payload = read_json(output_dir / "diagnosis_findings.json", default={})
-    rank_rows = csv_rows(output_dir / "rank_summary.csv")
-    step_rows = csv_rows(output_dir / "step_summary.csv")
-    anatomy_rows = csv_rows(output_dir / "step_anatomy.csv")
-    operator_rows = csv_rows(output_dir / "operator_summary.csv")
-    operator_class_rows = csv_rows(output_dir / "operator_class_summary.csv")
-    operator_eff_rows = csv_rows(output_dir / "operator_efficiency_summary.csv")
-    hccl_op_rows = csv_rows(output_dir / "hccl_op_summary.csv")
-    hccl_class_rows = csv_rows(output_dir / "hccl_class_summary.csv")
-    model_inferred_rows = csv_rows(output_dir / "model_inferred_config.csv")
-    model_feature_rows = csv_rows(output_dir / "model_feature_summary.csv")
-    model_layer_type_rows = csv_rows(output_dir / "model_layer_type_summary.csv")
-    model_candidate_rows = csv_rows(output_dir / "model_candidate_summary.csv")
-    hardware_rows = csv_rows(output_dir / "hardware_summary.csv")
-    hardware_theoretical_rows = csv_rows(output_dir / "hardware_theoretical_peaks.csv")
-    step_class_rows = csv_rows(output_dir / "step_class_summary.csv")
-    layer_class_rows = csv_rows(output_dir / "layer_class_summary.csv")
-    block_class_rows = csv_rows(output_dir / "block_class_summary.csv")
-    findings = finding_rows(output_dir)
+RAW_KERNEL_SHEET_ROW_LIMIT = 200_000
+
+# Columns projected into the xlsx raw_kernel sheet. The normalized event
+# index also carries profile_id (constant per run) and the fat JSON blobs
+# shape_features / pipeline_us (~400 chars/row) -- keeping them would
+# double the sheet XML for no drill-down value, so the stream projects
+# only the columns below.
+RAW_KERNEL_SHEET_COLUMNS = (
+    "event_id",
+    "rank_id",
+    "source_id",
+    "row_idx",
+    "name_raw",
+    "task_type",
+    "accelerator_core",
+    "stream_id",
+    "start_us",
+    "end_us",
+    "duration_us",
+    "wait_us",
+    "op_categories",
+    "op_roles",
+    "shape_signature",
+    "op_type",
+)
+
+# CSV artifacts loaded once per report render and shared by
+# ``markdown_report`` / ``sheet_rows`` / ``validate_evidence_chain`` (each
+# used to re-read the same files -- and ``sheet_rows`` alone read
+# ``normalize_manifest.json`` three times).
+_BUNDLE_CSV_NAMES = (
+    "rank_summary",
+    "step_summary",
+    "step_anatomy",
+    "operator_summary",
+    "operator_class_summary",
+    "operator_efficiency_summary",
+    "hccl_op_summary",
+    "hccl_class_summary",
+    "model_inferred_config",
+    "model_feature_summary",
+    "model_layer_type_summary",
+    "model_candidate_summary",
+    "model_context_summary",
+    "model_config_overview",
+    "model_parameter_estimate",
+    "model_kv_cache_estimate",
+    "model_config_feature_summary",
+    "hardware_summary",
+    "hardware_theoretical_peaks",
+    "step_class_summary",
+    "layer_summary",
+    "layer_class_summary",
+    "block_summary",
+    "block_class_summary",
+    "wait_anchor_ops",
+    "aicpu_summary",
+    "cross_rank_alignment",
+    "evidence_index",
+)
+
+
+def raw_kernel_sheet_rows(
+    output_dir: Path,
+    *,
+    limit: int = RAW_KERNEL_SHEET_ROW_LIMIT,
+) -> list[Mapping[str, Any]]:
+    """Rows for the xlsx ``raw_kernel_index`` sheet.
+
+    Source is ``normalized_event_index.csv`` -- a column superset of the
+    retired raw_kernel_index.csv -- streamed via ``store.iter_csv_rows`` so
+    a multi-million-row event index is never materialised just to take the
+    first ``limit`` rows. Reading stops as soon as the limit is reached;
+    one extra row is probed to detect truncation.
+    """
+    path = output_dir / "normalized_event_index.csv"
+    rows: list[Mapping[str, Any]] = []
+    truncated = False
+    if path.is_file():
+        for row_idx, row in iter_csv_rows(path):
+            if row_idx >= limit:
+                truncated = True
+                break
+            rows.append({key: row.get(key, "") for key in RAW_KERNEL_SHEET_COLUMNS})
+    if truncated:
+        marker = {key: "" for key in RAW_KERNEL_SHEET_COLUMNS}
+        marker["event_id"] = "__truncated__"
+        marker["name_raw"] = (
+            f"XLSX raw_kernel_index truncated at {limit} rows; use normalized_event_index.csv for complete data."
+        )
+        rows.append(marker)
+    return rows
+
+
+def _load_report_bundle(output_dir: Path) -> dict[str, Any]:
+    """Load every artifact the report stage needs, exactly once."""
+    return {
+        "manifests": {
+            "normalize": read_json(output_dir / "normalize_manifest.json", default={}),
+            "segment": read_json(output_dir / "segment_manifest.json", default={}),
+            "summary": read_json(output_dir / "summary_manifest.json", default={}),
+            "cross_rank": read_json(output_dir / "cross_rank_manifest.json", default={}),
+        },
+        "findings": finding_rows(output_dir),
+        "csvs": {name: csv_rows(output_dir / f"{name}.csv") for name in _BUNDLE_CSV_NAMES},
+        "bubble_windows": list(read_jsonl(output_dir / "evidence" / "bubble_windows.jsonl")),
+        "raw_kernel_sheet": raw_kernel_sheet_rows(output_dir),
+    }
+
+
+def _id_set_from_csv(path: Path, column: str) -> set[str]:
+    """Read a single column of a CSV into a set of non-empty strings.
+
+    Used for id-membership checks where materialising full row dicts (the
+    ``csv_rows`` path) would be wasted work on wide tables.
+    """
+    ids: set[str] = set()
+    if not path.is_file():
+        return ids
+    with path.open("r", encoding="utf-8-sig", newline="") as handle:
+        reader = csv.reader(handle)
+        header = next(reader, None)
+        if not header or column not in header:
+            return ids
+        idx = header.index(column)
+        for row in reader:
+            if idx < len(row):
+                value = row[idx].strip()
+                if value:
+                    ids.add(value)
+    return ids
+
+
+def markdown_report(output_dir: Path, report_id: str, *, bundle: Mapping[str, Any] | None = None) -> str:
+    if bundle is None:
+        bundle = _load_report_bundle(output_dir)
+    manifests = bundle["manifests"]
+    csvs = bundle["csvs"]
+    normalize_manifest = manifests["normalize"]
+    segment_manifest = manifests["segment"]
+    summary_manifest = manifests["summary"]
+    rank_rows = csvs["rank_summary"]
+    step_rows = csvs["step_summary"]
+    anatomy_rows = csvs["step_anatomy"]
+    operator_rows = csvs["operator_summary"]
+    operator_class_rows = csvs["operator_class_summary"]
+    operator_eff_rows = csvs["operator_efficiency_summary"]
+    hccl_op_rows = csvs["hccl_op_summary"]
+    hccl_class_rows = csvs["hccl_class_summary"]
+    model_inferred_rows = csvs["model_inferred_config"]
+    model_feature_rows = csvs["model_feature_summary"]
+    model_layer_type_rows = csvs["model_layer_type_summary"]
+    model_candidate_rows = csvs["model_candidate_summary"]
+    hardware_rows = csvs["hardware_summary"]
+    hardware_theoretical_rows = csvs["hardware_theoretical_peaks"]
+    step_class_rows = csvs["step_class_summary"]
+    layer_class_rows = csvs["layer_class_summary"]
+    block_class_rows = csvs["block_class_summary"]
+    findings = bundle["findings"]
     finding_counts = Counter(str(item.get("finding_type") or "unknown") for item in findings)
     coverage = summary_manifest.get("pipeline_coverage") or {}
     coverage_pct = to_float(coverage.get("events_ratio")) * 100
@@ -985,7 +1123,7 @@ def markdown_report(output_dir: Path, report_id: str) -> str:
             "- `report.xlsx:model_inferred_config`, `model_feature_summary`, and `model_candidate_summary` are profiling-derived model-fingerprint tables.",
             "- `report.xlsx:hardware_summary` and `hardware_theoretical_peaks` document the selected hardware denominator and CANN-derived theoretical peaks.",
             "- `report.xlsx:operator_efficiency_summary` is the shape-derived FLOPs / bytes / theoretical-MFU / sustained-roofline ranking table.",
-            "- `report.xlsx:raw_kernel_index` maps normalized event ids back to original `kernel_details.csv` rows.",
+            "- `report.xlsx:raw_kernel_index` maps normalized event ids back to original `kernel_details.csv` rows (first 200k rows streamed from `normalized_event_index.csv`, a column superset of the retired standalone raw_kernel_index.csv).",
             "- `report.xlsx:cross_rank_alignment` contains cross-rank step/operator alignment evidence.",
             "- `diagnosis_findings.json` is the machine-readable claim source for this Markdown report.",
             "- `report.xlsx:bubble_windows` rows carry per-bubble host-side soft attribution (`soft_attribution.soft_root_cause_labels`, salvaged from the retired anomaly skill's rulebook §11) when `trace_view.json` was registered for the rank.",
@@ -1012,30 +1150,35 @@ def markdown_report(output_dir: Path, report_id: str) -> str:
     return "\n".join(lines)
 
 
-def sheet_rows(output_dir: Path) -> dict[str, list[Mapping[str, Any]]]:
-    findings = finding_rows(output_dir)
+def sheet_rows(output_dir: Path, *, bundle: Mapping[str, Any] | None = None) -> dict[str, list[Mapping[str, Any]]]:
+    if bundle is None:
+        bundle = _load_report_bundle(output_dir)
+    manifests = bundle["manifests"]
+    csvs = bundle["csvs"]
+    findings = bundle["findings"]
+    normalize_manifest = manifests["normalize"]
     case_summary = [
         {
-            "profile_root": read_json(output_dir / "normalize_manifest.json", default={}).get("profile_root"),
-            "rank_count": read_json(output_dir / "normalize_manifest.json", default={}).get("rank_count"),
-            "event_count": read_json(output_dir / "normalize_manifest.json", default={}).get("event_count"),
+            "profile_root": normalize_manifest.get("profile_root"),
+            "rank_count": normalize_manifest.get("rank_count"),
+            "event_count": normalize_manifest.get("event_count"),
             "finding_count": len(findings),
             "finding_types": dict(Counter(str(item.get("finding_type") or "unknown") for item in findings)),
         }
     ]
-    raw_kernel_index = csv_rows(output_dir / "raw_kernel_index.csv")
-    raw_kernel_sheet = raw_kernel_index[:200000]
-    if len(raw_kernel_index) > len(raw_kernel_sheet):
-        raw_kernel_sheet.append(
-            {
-                "event_id": "__truncated__",
-                "rank_id": "",
-                "source_id": "",
-                "row_idx": "",
-                "name": f"XLSX raw_kernel_index truncated at {len(raw_kernel_sheet)} rows; use raw_kernel_index.csv for complete data.",
-            }
+
+    def _capped(name: str, rows: list[Mapping[str, Any]], limit: int) -> list[Mapping[str, Any]]:
+        """Cap per-instance sheets; a 131k-row block table makes the xlsx
+        100MB+ and unusable in Excel anyway. Class-level sheets stay full."""
+        if len(rows) <= limit:
+            return rows
+        marker = {key: "" for key in (rows[0].keys() if rows else [])}
+        marker[next(iter(marker), "note")] = (
+            f"__truncated__ {name}: showing first {limit} of {len(rows)} rows; "
+            f"full data in {name}.csv on the analysis host."
         )
-    bubble_windows = list(read_jsonl(output_dir / "evidence" / "bubble_windows.jsonl"))
+        return list(rows[:limit]) + [marker]
+
     return {
         "README": [
             {
@@ -1048,41 +1191,41 @@ def sheet_rows(output_dir: Path) -> dict[str, list[Mapping[str, Any]]]:
             },
         ],
         "case_summary": case_summary,
-        "rank_summary": csv_rows(output_dir / "rank_summary.csv"),
-        "step_summary": csv_rows(output_dir / "step_summary.csv"),
-        "step_anatomy": csv_rows(output_dir / "step_anatomy.csv"),
-        "step_class_summary": csv_rows(output_dir / "step_class_summary.csv"),
-        "layer_summary": csv_rows(output_dir / "layer_summary.csv"),
-        "layer_class_summary": csv_rows(output_dir / "layer_class_summary.csv"),
-        "block_summary": csv_rows(output_dir / "block_summary.csv"),
-        "block_class_summary": csv_rows(output_dir / "block_class_summary.csv"),
-        "operator_summary": csv_rows(output_dir / "operator_summary.csv"),
-        "operator_class_summary": csv_rows(output_dir / "operator_class_summary.csv"),
-        "operator_efficiency_summary": csv_rows(output_dir / "operator_efficiency_summary.csv"),
-        "model_inferred_config": csv_rows(output_dir / "model_inferred_config.csv"),
-        "model_feature_summary": csv_rows(output_dir / "model_feature_summary.csv"),
-        "model_layer_type_summary": csv_rows(output_dir / "model_layer_type_summary.csv"),
-        "model_candidate_summary": csv_rows(output_dir / "model_candidate_summary.csv"),
-        "model_context_summary": csv_rows(output_dir / "model_context_summary.csv"),
-        "model_config_overview": csv_rows(output_dir / "model_config_overview.csv"),
-        "model_parameter_estimate": csv_rows(output_dir / "model_parameter_estimate.csv"),
-        "model_kv_cache_estimate": csv_rows(output_dir / "model_kv_cache_estimate.csv"),
-        "model_config_feature_summary": csv_rows(output_dir / "model_config_feature_summary.csv"),
-        "hardware_summary": csv_rows(output_dir / "hardware_summary.csv"),
-        "hardware_theoretical_peaks": csv_rows(output_dir / "hardware_theoretical_peaks.csv"),
-        "hccl_op_summary": csv_rows(output_dir / "hccl_op_summary.csv"),
-        "hccl_class_summary": csv_rows(output_dir / "hccl_class_summary.csv"),
-        "bubble_windows": bubble_windows,
-        "wait_anchor_ops": csv_rows(output_dir / "wait_anchor_ops.csv"),
-        "aicpu_summary": csv_rows(output_dir / "aicpu_summary.csv"),
-        "cross_rank_alignment": csv_rows(output_dir / "cross_rank_alignment.csv"),
+        "rank_summary": csvs["rank_summary"],
+        "step_summary": _capped("step_summary", csvs["step_summary"], 50_000),
+        "step_anatomy": _capped("step_anatomy", csvs["step_anatomy"], 50_000),
+        "step_class_summary": csvs["step_class_summary"],
+        "layer_summary": _capped("layer_summary", csvs["layer_summary"], 20_000),
+        "layer_class_summary": csvs["layer_class_summary"],
+        "block_summary": _capped("block_summary", csvs["block_summary"], 5_000),
+        "block_class_summary": csvs["block_class_summary"],
+        "operator_summary": _capped("operator_summary", csvs["operator_summary"], 20_000),
+        "operator_class_summary": csvs["operator_class_summary"],
+        "operator_efficiency_summary": csvs["operator_efficiency_summary"],
+        "model_inferred_config": csvs["model_inferred_config"],
+        "model_feature_summary": csvs["model_feature_summary"],
+        "model_layer_type_summary": csvs["model_layer_type_summary"],
+        "model_candidate_summary": csvs["model_candidate_summary"],
+        "model_context_summary": csvs["model_context_summary"],
+        "model_config_overview": csvs["model_config_overview"],
+        "model_parameter_estimate": csvs["model_parameter_estimate"],
+        "model_kv_cache_estimate": csvs["model_kv_cache_estimate"],
+        "model_config_feature_summary": csvs["model_config_feature_summary"],
+        "hardware_summary": csvs["hardware_summary"],
+        "hardware_theoretical_peaks": csvs["hardware_theoretical_peaks"],
+        "hccl_op_summary": csvs["hccl_op_summary"],
+        "hccl_class_summary": csvs["hccl_class_summary"],
+        "bubble_windows": bundle["bubble_windows"],
+        "wait_anchor_ops": csvs["wait_anchor_ops"],
+        "aicpu_summary": csvs["aicpu_summary"],
+        "cross_rank_alignment": csvs["cross_rank_alignment"],
         "diagnosis_findings": findings,
-        "evidence_index": csv_rows(output_dir / "evidence_index.csv"),
-        "raw_kernel_index": raw_kernel_sheet,
+        "evidence_index": csvs["evidence_index"],
+        "raw_kernel_index": bundle["raw_kernel_sheet"],
     }
 
 
-def validate_evidence_chain(output_dir: Path) -> dict[str, Any]:
+def validate_evidence_chain(output_dir: Path, *, bundle: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """Verify every finding can be traced to evidence rows or to an explicit
     limitation. Designed to be cheap (just file-scoped joins) so it can run
     before every report render.
@@ -1095,23 +1238,24 @@ def validate_evidence_chain(output_dir: Path) -> dict[str, Any]:
 
     Findings that fail all four checks are returned as ``hard_errors``.
     """
-    findings = finding_rows(output_dir)
+    findings = bundle["findings"] if bundle is not None else finding_rows(output_dir)
 
-    evidence_path = output_dir / "evidence_index.csv"
-    evidence_ids: set[str] = set()
-    if evidence_path.is_file():
-        for row in csv_rows(evidence_path):
+    if bundle is not None:
+        evidence_ids: set[str] = set()
+        for row in bundle["csvs"]["evidence_index"]:
             ev_id = (row.get("evidence_id") or "").strip()
             if ev_id:
                 evidence_ids.add(ev_id)
-
-    alignment_path = output_dir / "cross_rank_alignment.csv"
-    alignment_ids: set[str] = set()
-    if alignment_path.is_file():
-        for row in csv_rows(alignment_path):
+        alignment_ids: set[str] = set()
+        for row in bundle["csvs"]["cross_rank_alignment"]:
             al_id = (row.get("alignment_id") or "").strip()
             if al_id:
                 alignment_ids.add(al_id)
+    else:
+        # Standalone path: only the id columns are needed, so stream those
+        # instead of materialising full row dicts.
+        evidence_ids = _id_set_from_csv(output_dir / "evidence_index.csv", "evidence_id")
+        alignment_ids = _id_set_from_csv(output_dir / "cross_rank_alignment.csv", "alignment_id")
 
     hard_errors: list[dict[str, Any]] = []
     soft_warnings: list[dict[str, Any]] = []
@@ -1164,12 +1308,18 @@ def render_report(
     *,
     skip_html: bool = False,
     report_mode: str = "full-raw",
+    skip_xlsx: bool = False,
+    stage_timings: Sequence[Mapping[str, Any]] | None = None,
+    html_renderer: str = "v2",
+    html_single_file: bool = False,
+    events=None,
 ) -> dict[str, Any]:
     report_dir = output_dir / "report"
     report_dir.mkdir(parents=True, exist_ok=True)
-    report_id = stable_id("report", output_dir, read_json(output_dir / "normalize_manifest.json", default={}).get("profile_root"))
+    bundle = _load_report_bundle(output_dir)
+    report_id = stable_id("report", output_dir, bundle["manifests"]["normalize"].get("profile_root"))
 
-    chain = validate_evidence_chain(output_dir)
+    chain = validate_evidence_chain(output_dir, bundle=bundle)
     if chain["hard_errors"]:
         first = chain["hard_errors"][0]
         raise RuntimeError(
@@ -1180,19 +1330,33 @@ def render_report(
             "non-empty `limitations` field, or fix the evidence reference."
         )
 
-    markdown = markdown_report(output_dir, report_id)
+    markdown = markdown_report(output_dir, report_id, bundle=bundle)
     (report_dir / "report.md").write_text(markdown, encoding="utf-8")
-    sheets = sheet_rows(output_dir)
-    write_xlsx(report_dir / "report.xlsx", sheets)
+    # The XLSX workbook is the heaviest report artifact (every summary CSV
+    # re-encoded as sheets). ``skip_xlsx`` (fast mode) drops it entirely; the
+    # manifest then reports ``xlsx_status="skipped"`` and a null sheet_map,
+    # and analysis_summary.json plus the CSVs carry the same numbers.
+    sheets: dict[str, list[Mapping[str, Any]]] | None = None
+    if not skip_xlsx:
+        sheets = sheet_rows(output_dir, bundle=bundle)
+        write_xlsx(report_dir / "report.xlsx", sheets)
 
-    # HTML report (rich, single-file, zero-dependency). Three modes:
+    # HTML report (rich, zero-dependency). Three modes:
     #   * summary  — skip entirely; stub file explains. Used for
     #                first-stage pipeline debugging where md+xlsx is
     #                enough and HTML render time would just slow the
     #                feedback loop.
-    #   * full-raw — render the complete L1/L2/L3 SPA with raw kernel
+    #   * full-raw — render the complete L1/L2/L3 report with raw kernel
     #                rows attached to operator cards (default).
     # ``skip_html=True`` forces summary regardless of mode.
+    # Renderer choice (orthogonal to mode):
+    #   * v2     — thin shell + gzipped assets/ + on-demand browser rendering
+    #              (default; scales to multi-million-event captures);
+    #   * legacy — the pre-v2 single-file SPA (kept as a fallback; produces
+    #              very large HTML on big captures).
+    # ``html_single_file`` asks v2 to embed all assets (base64+gzip) into one
+    # HTML file; v2 refuses with a clear error when the estimate exceeds the
+    # single-file threshold.
     html_path = report_dir / "report.html"
     html_status = "ok"
     html_error: str | None = None
@@ -1211,13 +1375,27 @@ def render_report(
         )
     else:
         try:
-            try:
-                from .html_report import build_html_report
-            except ImportError:  # pragma: no cover
-                import sys as _sys
-                _sys.path.insert(0, str(Path(__file__).resolve().parent))
-                from html_report import build_html_report  # type: ignore[no-redef]
-            build_html_report(output_dir, html_path)
+            if html_renderer == "legacy":
+                try:
+                    from .html_report import build_html_report
+                except ImportError:  # pragma: no cover
+                    import sys as _sys
+                    _sys.path.insert(0, str(Path(__file__).resolve().parent))
+                    from html_report import build_html_report  # type: ignore[no-redef]
+                build_html_report(output_dir, html_path, events=events)
+            else:
+                try:
+                    from .html_report_v2 import build_html_report_v2
+                except ImportError:  # pragma: no cover
+                    import sys as _sys
+                    _sys.path.insert(0, str(Path(__file__).resolve().parent))
+                    from html_report_v2 import build_html_report_v2  # type: ignore[no-redef]
+                build_html_report_v2(
+                    output_dir,
+                    html_path,
+                    events=events,
+                    single_file=html_single_file,
+                )
         except Exception as exc:  # noqa: BLE001
             html_status = "error"
             html_error = f"{type(exc).__name__}: {exc}"
@@ -1230,6 +1408,20 @@ def render_report(
                 encoding="utf-8",
             )
 
+    # Agent-first compact summary (analysis_summary.json). Built after the
+    # HTML block so ``html_status`` is final; numbers all come from the same
+    # bundle as the human reports.
+    analysis_summary = build_analysis_summary(
+        output_dir,
+        bundle=bundle,
+        html_status=html_status,
+        report_mode=effective_mode,
+        skip_xlsx=skip_xlsx,
+        stage_timings=stage_timings,
+    )
+    write_json(report_dir / "analysis_summary.json", analysis_summary)
+
+    host_trace_status = (bundle["manifests"]["summary"].get("host_trace") or {}).get("status")
     manifest = {
         "schema_version": SCHEMA_VERSION,
         "tool_version": TOOL_VERSION,
@@ -1239,14 +1431,20 @@ def render_report(
         "output_dir": str(report_dir),
         "files": {
             "markdown": "report.md",
-            "xlsx": "report.xlsx",
+            "xlsx": None if skip_xlsx else "report.xlsx",
             "html": "report.html",
+            "analysis_summary": "analysis_summary.json",
             "manifest": "manifest.json",
         },
         "html_status": html_status,
         "report_mode": effective_mode,
-        "sheet_map": {name: name for name in sheets},
-        "claim_ids": [item.get("claim_id") for item in finding_rows(output_dir)],
+        "html_renderer": html_renderer,
+        "html_single_file": bool(html_single_file) if html_renderer == "v2" else False,
+        "xlsx_status": "skipped" if skip_xlsx else "ok",
+        "skip_xlsx": bool(skip_xlsx),
+        "host_trace_status": host_trace_status,
+        "sheet_map": ({name: name for name in sheets} if sheets is not None else None),
+        "claim_ids": [item.get("claim_id") for item in bundle["findings"]],
         "evidence_chain": {
             "findings_checked": chain["findings_checked"],
             "evidence_rows": chain["evidence_rows"],
@@ -1265,6 +1463,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", required=True)
     parser.add_argument("--skip-html", action="store_true")
     parser.add_argument(
+        "--skip-xlsx",
+        action="store_true",
+        help=(
+            "skip report.xlsx entirely (fast mode): the workbook is the "
+            "heaviest report artifact and every number in it is also in the "
+            "summary CSVs / analysis_summary.json. The manifest records "
+            "xlsx_status=skipped and a null sheet_map."
+        ),
+    )
+    parser.add_argument(
         "--report-mode",
         choices=("summary", "full-raw"),
         default="full-raw",
@@ -1273,6 +1481,26 @@ def build_parser() -> argparse.ArgumentParser:
             "pipeline debugging when md+xlsx is enough. "
             "full-raw: render the complete L1/L2/L3 HTML with operator "
             "cards backed by raw kernel_details rows."
+        ),
+    )
+    parser.add_argument(
+        "--html-renderer",
+        choices=("v2", "legacy"),
+        default="v2",
+        help=(
+            "v2 (default): thin-shell report.html + gzipped assets/ loaded "
+            "on demand — scales to multi-million-event captures. "
+            "legacy: the pre-v2 single-file SPA (fallback; very large HTML "
+            "on big captures)."
+        ),
+    )
+    parser.add_argument(
+        "--html-single-file",
+        action="store_true",
+        help=(
+            "v2 only: embed all assets (base64+gzip) into report.html so it "
+            "works over file://; refused with a clear error when the "
+            "estimated size exceeds the 20 MB single-file threshold."
         ),
     )
     return parser
@@ -1284,11 +1512,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         Path(args.output),
         skip_html=bool(args.skip_html),
         report_mode=args.report_mode,
+        skip_xlsx=bool(args.skip_xlsx),
+        html_renderer=args.html_renderer,
+        html_single_file=bool(args.html_single_file),
     )
     emit_stage_json({
         "stage": "report",
         "output_dir": manifest["output_dir"],
         "html_status": manifest.get("html_status"),
+        "html_renderer": manifest.get("html_renderer"),
+        "xlsx_status": manifest.get("xlsx_status"),
     })
     return 0
 

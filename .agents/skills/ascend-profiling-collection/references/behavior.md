@@ -54,21 +54,28 @@ The gate rule and threshold are defined in SKILL.md ("Failure policy"); the
 per-status acceptance checklist is in `acceptance.md` §4. The rationale:
 
 A profile window that ran with no real model traffic produces a trace that
-*looks* fine to `analyse()` (kernel_details.csv lands, only it describes
+*looks* fine to `analyse()` (the analyse outputs land, only they describe
 nothing useful). The gate prevents that root from leaking into downstream
 analysis. Lower the threshold only when you explicitly expect flakiness in
 the wave.
 
 ## Output verification
 
-After `analyse()`, every `*_ascend_pt` directory is expected to contain:
+`analyse()` is invoked per rank as `analyse(dir, export_type=...)`; `--analyse-export` (default `db`) selects the export and the matching verification contract:
 
-- `ASCEND_PROFILER_OUTPUT/kernel_details.csv`
-- `ASCEND_PROFILER_OUTPUT/trace_view.json`
+| `--analyse-export` | analyse() call | Produced per rank | Verified per rank |
+| --- | --- | --- | --- |
+| `db` (default) | `analyse(dir, export_type=Constant.Db)` | `ASCEND_PROFILER_OUTPUT/ascend_pytorch_profiler_*.db` only — every text export (`trace_view.json` + all CSVs) is skipped | newest db exists and is non-empty |
+| `text` | `analyse(dir, export_type=Constant.Text)` | `kernel_details.csv`, `trace_view.json`, ... (historical exports) | `kernel_details.csv` + `trace_view.json` exist |
+| `both` | `analyse(dir, export_type=[Constant.Text, Constant.Db])` | everything | same as `text` |
 
-Anything short of that fails the run per SKILL.md ("Failure policy").
+`db` is the default because the analysis skill rebuilds the kernel_details event stream directly from the db (`normalize --source db`, golden-verified equivalent to kernel_details.csv), and db-only export avoids writing ~2.5 GB/rank of `trace_view.json` plus ~122 MB/rank of `kernel_details.csv` that nobody reads.
 
-Historical captures show `analyse()` "succeeding" but producing no `kernel_details.csv` because the profile window was too short or `FRAMEWORK/torch.op_range` never made it to disk. The skill turns that into `analysis_status == missing_kernel_details` and fails the run. Re-collection is the only fix; offline `analyse()` cannot recover the missing device data.
+The `Constant` import path is `torch_npu.profiler.analysis.prof_common_func._constant` — verified against the container's torch_npu, whose own `profiler.py` imports it as `from .analysis.prof_common_func._constant import Constant` (`Constant.Db == "db"`, `Constant.Text == "text"`). The import runs inside the generated per-rank payload so it always resolves against the container's torch_npu. On old CANN without db export support, analyse() raises (`is_support_export_db()`); that surfaces as a rank failure with the torch_npu error in `analyse_parallel.log` — use `--analyse-export text` on such hosts.
+
+Anything short of the verified contract fails the run per SKILL.md ("Failure policy").
+
+Historical captures show `analyse()` "succeeding" but producing no usable output because the profile window was too short or `FRAMEWORK/torch.op_range` never made it to disk. The skill turns that into `analysis_status == missing_kernel_details` and fails the run. In db mode the enum means "the rank's db was not produced (or is empty)"; in text/both mode it means `kernel_details.csv` is missing. The enum set is deliberately unchanged — the analysis skill gates on these names — and the manifest's `expected_output_kind` field (`db` / `csv`) records which artifact the enum refers to. Re-collection is the only fix; offline `analyse()` cannot recover the missing device data.
 
 The rank-count gate (`--expected-ranks`, rule in SKILL.md "Failure policy")
 exists because a partial capture (e.g. only rank 0 dumped) can look "clean"

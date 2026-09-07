@@ -68,6 +68,19 @@ REQUIRED_SINGLE_ARTIFACTS = (
     "report/report.html",
 )
 
+# Fast mode (profile_analyze --mode fast) runs the remote analyze with
+# --skip-xlsx --skip-host-trace --report-mode summary: report.xlsx is never
+# written (the HTML stub still is), and analysis_summary.json becomes the
+# primary machine-readable output, so it is required instead.
+REQUIRED_SINGLE_ARTIFACTS_FAST = (
+    "manifest.json",
+    "segment_manifest.json",
+    "diagnosis_findings.json",
+    "report/report.md",
+    "report/analysis_summary.json",
+    "report/report.html",
+)
+
 # Stage-aware artifact validation: the minimum set of files that must exist
 # in the remote output dir once a given stage has finished. Used by the
 # wrapper so that ``--only-stage normalize`` doesn't get rejected for not
@@ -128,17 +141,12 @@ LIGHTWEIGHT_PULL_PATHS = (
     "summary_manifest.json",
     "cross_rank_manifest.json",
     "diagnosis_findings.json",
-    "evidence_index.csv",
-    "raw_kernel_index.csv",
     "rank_summary.csv",
     "step_summary.csv",
     "step_anatomy.csv",
     "step_class_summary.csv",
-    "layer_summary.csv",
     "layer_class_summary.csv",
-    "block_summary.csv",
     "block_class_summary.csv",
-    "operator_summary.csv",
     "operator_class_summary.csv",
     "operator_efficiency_summary.csv",
     "model_insights.json",
@@ -158,17 +166,44 @@ LIGHTWEIGHT_PULL_PATHS = (
     "hccl_class_summary.csv",
     "wait_anchor_ops.csv",
     "aicpu_summary.csv",
-    "cross_rank_alignment.csv",
-    "cross_rank_alignment.json",
-    "step_segments.json",
-    "layer_segments.json",
-    "block_segments.json",
-    "class_signatures.json",
-    "structure_evidence_graph.json",
     "report/manifest.json",
     "report/report.md",
     "report/report.xlsx",
     "report/report.html",
+    "report/analysis_summary.json",
+    # html_report_v2's lazy-loaded data; without it the pulled report.html
+    # is a dead shell outside the remote host.
+    "report/assets",
+    # Per-row giants (block_summary.csv, layer_summary.csv, operator_summary.csv,
+    # evidence_index.csv, cross_rank_alignment.*, *_segments.json,
+    # class_signatures.json, structure_evidence_graph.json, raw_kernel_index.csv)
+    # stay on the remote; use --keep-remote-output to mirror everything.
+)
+
+# Fast-mode pull list (profile_analyze --mode fast): only the agent-facing
+# compact artifacts come back -- report.md + analysis_summary.json, every
+# *_manifest.json, diagnosis_findings.json, and the class-level summary CSVs.
+# The bulky per-row tables (evidence_index.csv, cross_rank_alignment.*,
+# operator_summary.csv, step_anatomy.csv, layer/block_summary.csv, ...) stay
+# on the remote; agents that need them should ssh in and grep.
+FAST_PULL_PATHS = (
+    "manifest.json",
+    "normalize_manifest.json",
+    "segment_manifest.json",
+    "classify_manifest.json",
+    "summary_manifest.json",
+    "cross_rank_manifest.json",
+    "diagnosis_findings.json",
+    "rank_summary.csv",
+    "step_summary.csv",
+    "step_class_summary.csv",
+    "layer_class_summary.csv",
+    "block_class_summary.csv",
+    "operator_class_summary.csv",
+    "hccl_class_summary.csv",
+    "report/manifest.json",
+    "report/report.md",
+    "report/analysis_summary.json",
 )
 
 

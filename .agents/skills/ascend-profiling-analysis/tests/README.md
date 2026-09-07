@@ -3,6 +3,17 @@
 Lightweight unit/integration tests for the skill. Designed to run locally
 without any Ascend NPU hardware, GPU, or remote SSH:
 
+- `test_analysis_summary.py` — pins the agent-first output contract:
+  `report/analysis_summary.json` schema (top-level keys, layer_validation
+  expected/detected layer mapping, KPI derivations, null tolerance), the
+  findings rollup (grouping key, occurrences, severity×occurrences ordering,
+  the 50-group cap + `rollup_overflow`, `knowledge_refs` placeholder), the
+  fast-mode skips (`render_report --skip-xlsx` drops the workbook and records
+  `xlsx_status=skipped`; `summarize --skip-host-trace` marks
+  `host_trace.status=skipped` with bubble `soft_attribution=null`), and the
+  wrapper plumbing (`--mode fast|full`, `FAST_PULL_PATHS`,
+  `REQUIRED_SINGLE_ARTIFACTS_FAST`, mode-dependent remote flags, local
+  analysis_summary read-back).
 - `test_attention_families.py` — pins the attention family resolver
   (`rules.resolve_attention_family`) against kernel bags from real traces,
   and verifies the HTML report (`html_report.detect_attention_subtype`) uses
@@ -18,6 +29,13 @@ without any Ascend NPU hardware, GPU, or remote SSH:
   `peak_flops_per_second`) and the derived operator-efficiency rows.
 - `test_html_diagnosis_key.py` — regression for the HTML report reading
   the `diagnosis_findings` key (not `findings`).
+- `test_knowledge_enrichment.py` — pins the wrapper-side workspace knowledge
+  hooks (`profile_analyze._enrich_analysis_summary_with_knowledge`): findings
+  rollup groups get `knowledge_refs` from a temporary synthetic knowledge dir
+  (hit / miss / empty store / missing dir / invalid document), and
+  `layer_validation.expected_layers` backfill fires only when the pipeline
+  left it null (source marked `knowledge:<entry_id>`, `layers_match`
+  recomputed, ok→degraded on mismatch, config-driven entries skipped).
 - `test_kernel_signatures.py` — pins the contract between Python's
   `categories_and_roles` rule list and `knowledge/kernel_signatures.yaml`:
   the YAML parses, its categories are valid per
