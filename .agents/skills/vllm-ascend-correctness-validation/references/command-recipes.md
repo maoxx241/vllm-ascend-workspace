@@ -78,7 +78,10 @@ python -B .agents/skills/vllm-ascend-correctness-validation/scripts/correctness_
 ```
 
 `compare` first checks that the two results are a comparable pair: labels match
-the run, both carry `execution`, and every `execution` difference was declared
-at `init`. An undeclared difference exits 1 naming the keys and writes no
-comparison. Read the compact stdout first (it lists `observed_differences`),
-then inspect `report.md` and only the relevant raw evidence.
+the run, both carry `execution`, every `execution` difference was declared at
+`init`, and an observational certificate built from those blocks plus each
+result's `observation` is `comparable`. An undeclared difference or a
+`not-comparable` certificate exits 1 and writes no comparison. Record
+`workspace_snapshot`, `environment`, `model`, `topology`, and `native_digest`
+on each result as `observation`; empty manifest identity is `unknown` and
+blocks `passed`. Read the compact stdout first, then inspect `report.md`.
