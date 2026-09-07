@@ -15,10 +15,13 @@ python -B .agents/skills/vllm-ascend-graph-debug/scripts/graph_debug_case.py ini
   --workspace-snapshot '{"workspace":"<commit-or-snapshot>","dirty":false}' \
   --environment '{"machine":"<alias>","cann":"<version>","torch_npu":"<version>"}' \
   --model '{"path":"<remote-model-path>"}' \
-  --topology '{"tp":2,"devices":[0,1]}'
+  --topology '{"tp":2,"devices":[0,1]}' \
+  --parent-run-id change-validation-001
 ```
 
-Never place secrets in JSON arguments.
+Never place secrets in JSON arguments. `--parent-run-id` is the change-validation
+run this case will be linked to; omit it only for cases that will never be PR
+evidence, because `change_validation.py link` rejects manifests without it.
 
 ## Record one controlled experiment
 
@@ -55,5 +58,13 @@ python -B .agents/skills/vllm-ascend-graph-debug/scripts/graph_debug_case.py fin
   --fix "copy slot mapping into the fixed graph input buffer before replay" \
   --minimal-result pass \
   --original-result pass \
-  --cleanup-status removed
+  --cleanup-status removed \
+  --minimal-evidence /path/to/minimal-rerun-output.log \
+  --original-evidence /path/to/original-rerun-output.log
 ```
+
+Every `pass` result must be backed by the corresponding `--*-evidence` file (the
+rerun output after the fix); the files are copied into `validation/` and hashed
+into the manifest. Finalize also requires at least one prior `record`. When
+something is missing the command exits 1 and lists every missing item, leaving
+the case `active` and the manifest non-terminal.

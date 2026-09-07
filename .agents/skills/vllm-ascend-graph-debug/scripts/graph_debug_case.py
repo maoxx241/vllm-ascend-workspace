@@ -8,6 +8,7 @@ import json
 import math
 import os
 import re
+import shutil
 import sys
 import tempfile
 from datetime import datetime, timezone
@@ -24,6 +25,7 @@ from vaws_run_manifest import (  # noqa: E402
     add_artifact,
     load_manifest,
     new_manifest,
+    sha256_file,
     transition_status,
     write_manifest,
 )
@@ -33,6 +35,11 @@ SAFE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,127}$")
 STAGES = ("compile", "capture", "replay", "accuracy", "unknown")
 BASELINE_RESULTS = ("pass", "fail", "not-run")
 SNAPSHOT_KEY_FIELDS = ("step", "layer", "rank", "tag")
+VALIDATION_DIR = "validation"
+VALIDATION_EVIDENCE = {
+    "minimal": ("minimal-reproduction", "--minimal-evidence"),
+    "original": ("original-reproduction", "--original-evidence"),
+}
 
 
 class GraphDebugError(ValueError):
@@ -139,6 +146,7 @@ def init_case(
     workspace_snapshot: Mapping[str, Any] | None = None,
     model: Mapping[str, Any] | None = None,
     topology: Mapping[str, Any] | None = None,
+    parent_run_id: str | None = None,
     created_at: str | None = None,
 ) -> dict[str, Any]:
     if case_dir.exists() and any(case_dir.iterdir()):
@@ -168,6 +176,7 @@ def init_case(
     manifest = new_manifest(
         run_type="debug",
         run_id=case_id,
+        parent_run_id=parent_run_id,
         workspace_snapshot=workspace_snapshot,
         environment=environment,
         model=model,
@@ -474,6 +483,53 @@ def compare_case(
     return comparison, output
 
 
+def _check_evidence_file(path: Path, *, flag: str) -> str | None:
+    if not path.is_file():
+        return f"{flag} is not a file: {path}"
+    if path.stat().st_size == 0:
+        return f"{flag} is empty: {path}"
+    return None
+
+
+def missing_resolution_evidence(
+    case: Mapping[str, Any],
+    *,
+    minimal_result: str,
+    original_result: str,
+    minimal_evidence: Path | None,
+    original_evidence: Path | None,
+) -> list[str]:
+    """List every reason a pass claim cannot be accepted as recorded evidence.
+
+    A `pass` result for either reproduction must be backed by the rerun output
+    it rests on, and a case cannot be resolved without at least one recorded
+    controlled experiment. Every missing item is named so the operator can fix
+    them all in one round instead of discovering them one failure at a time.
+    """
+    missing: list[str] = []
+    for kind, result, evidence in (
+        ("minimal", minimal_result, minimal_evidence),
+        ("original", original_result, original_evidence),
+    ):
+        artifact_name, flag = VALIDATION_EVIDENCE[kind]
+        if result == "pass" and evidence is None:
+            missing.append(
+                f"{kind}-result pass requires {flag} pointing at the "
+                f"{artifact_name} rerun output"
+            )
+        elif evidence is not None:
+            problem = _check_evidence_file(evidence, flag=flag)
+            if problem:
+                missing.append(problem)
+    claims_resolution = minimal_result == "pass" and original_result == "pass"
+    if claims_resolution and not case["experiments"]:
+        missing.append(
+            "no controlled experiment recorded (run `record` at least once "
+            "before claiming resolution)"
+        )
+    return missing
+
+
 def finalize_case(
     case_dir: Path,
     *,
@@ -482,6 +538,8 @@ def finalize_case(
     minimal_result: str,
     original_result: str,
     cleanup_status: str,
+    minimal_evidence: Path | None = None,
+    original_evidence: Path | None = None,
     updated_at: str | None = None,
 ) -> dict[str, Any]:
     case = load_case(case_dir)
@@ -493,18 +551,55 @@ def finalize_case(
         raise GraphDebugError("cleanup-status must be removed, disabled, or pending")
     if not root_cause.strip() or not fix.strip():
         raise GraphDebugError("root-cause and fix must be non-empty")
+
+    missing = missing_resolution_evidence(
+        case,
+        minimal_result=minimal_result,
+        original_result=original_result,
+        minimal_evidence=minimal_evidence,
+        original_evidence=original_evidence,
+    )
+    if missing:
+        raise GraphDebugError(
+            "cannot finalize without evidence: " + "; ".join(missing)
+        )
+    evidence_sources = {
+        kind: evidence
+        for kind, evidence in (
+            ("minimal", minimal_evidence),
+            ("original", original_evidence),
+        )
+        if evidence is not None
+    }
     resolved = (
         minimal_result == "pass"
         and original_result == "pass"
         and cleanup_status in {"removed", "disabled"}
     )
+
     timestamp = updated_at or utc_now()
+    validation_records: dict[str, dict[str, Any]] = {}
+    for kind, source in evidence_sources.items():
+        artifact_name, _flag = VALIDATION_EVIDENCE[kind]
+        suffix = source.suffix if source.suffix else ".log"
+        destination = case_dir / VALIDATION_DIR / f"{artifact_name}{suffix}"
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+        validation_records[kind] = {
+            "path": destination.relative_to(case_dir).as_posix(),
+            "source": str(source.resolve()),
+            "sha256": sha256_file(destination),
+        }
+
     case["resolution"] = {
         "root_cause": root_cause,
         "fix": fix,
         "minimal_reproduction": minimal_result,
         "original_reproduction": original_result,
         "debug_instrumentation": cleanup_status,
+        "validation_evidence": validation_records,
+        "experiment_count": len(case["experiments"]),
+        "comparison_count": len(case["comparisons"]),
         "resolved_at": timestamp,
     }
     case["status"] = "resolved" if resolved else "inconclusive"
@@ -513,6 +608,16 @@ def finalize_case(
     _atomic_write_json(_case_path(case_dir), case)
 
     manifest = _ensure_manifest_running(case_dir, updated_at=timestamp)
+    for kind, record_row in sorted(validation_records.items()):
+        artifact_name, _flag = VALIDATION_EVIDENCE[kind]
+        manifest = add_artifact(
+            manifest,
+            name=f"validation-{artifact_name}",
+            kind="reproduction-rerun-output",
+            uri=record_row["path"],
+            sha256=record_row["sha256"],
+            updated_at=timestamp,
+        )
     manifest = add_artifact(
         manifest,
         name="graph-debug-case",
@@ -542,6 +647,11 @@ def build_parser() -> argparse.ArgumentParser:
     init.add_argument("--workspace-snapshot", default="{}")
     init.add_argument("--model", default="{}")
     init.add_argument("--topology", default="{}")
+    init.add_argument(
+        "--parent-run-id",
+        default=None,
+        help="run_id of the change-validation plan this case is evidence for",
+    )
 
     record = subparsers.add_parser("record", help="append one controlled experiment")
     record.add_argument("--case-dir", required=True, type=Path)
@@ -568,6 +678,18 @@ def build_parser() -> argparse.ArgumentParser:
     finalize.add_argument(
         "--cleanup-status", required=True, choices=("removed", "disabled", "pending")
     )
+    finalize.add_argument(
+        "--minimal-evidence",
+        type=Path,
+        default=None,
+        help="rerun output of the minimal reproduction; required when its result is pass",
+    )
+    finalize.add_argument(
+        "--original-evidence",
+        type=Path,
+        default=None,
+        help="rerun output of the original reproduction; required when its result is pass",
+    )
     return parser
 
 
@@ -589,6 +711,7 @@ def main(argv: list[str] | None = None) -> int:
                 ),
                 model=_json_object(args.model, "model"),
                 topology=_json_object(args.topology, "topology"),
+                parent_run_id=args.parent_run_id,
             )
             payload = {
                 "status": "created",
@@ -629,11 +752,14 @@ def main(argv: list[str] | None = None) -> int:
                 minimal_result=args.minimal_result,
                 original_result=args.original_result,
                 cleanup_status=args.cleanup_status,
+                minimal_evidence=args.minimal_evidence,
+                original_evidence=args.original_evidence,
             )
             payload = {
                 "status": case["status"],
                 "case_id": case["case_id"],
                 "case": str(_case_path(args.case_dir).resolve()),
+                "validation_evidence": case["resolution"]["validation_evidence"],
             }
     except (GraphDebugError, RunManifestError) as exc:
         print(json.dumps({"status": "failed", "error": str(exc)}, ensure_ascii=False))
