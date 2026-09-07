@@ -1,0 +1,410 @@
+# Deterministic operations under maturation test.
+#
+# This file is data: the harness (.agents/maturation/) reads it, renders the
+# {scratch}/{trial}/{worker}/{label}/{run_id} templates, and runs each
+# operation `repetitions` times per endpoint in the declared adversarial shape.
+# Nothing here loads a model, touches an NPU, or leaves the per-run scratch
+# directory. Never put a host address, hostname, or local user path here.
+#
+# Shapes (see docs/deterministic-core-maturation.md):
+#   baseline             one tool call per repetition
+#   long_stream          baseline whose command streams for many seconds
+#   stream_under_load    a long stream plus short commands on the same endpoint
+#   concurrent           N in-process calls at once against one endpoint
+#   multi_session        N separate CLI processes at once against one endpoint
+#   large_transfer       push -> manifest -> pull -> hash verification
+#   interrupted_transfer transfer killed mid-way, then re-run and verified
+#   idempotent_rerun     same call twice with a declared second outcome
+#   job_registry         background job start -> poll -> tail -> (stop)
+
+schema_version: 1
+kind: maturation-operations
+
+classes:
+  transport:
+    description: SSH command execution through the shared mux.
+    min_repetitions: 20
+    pass_rate_threshold: 0.995
+    p95_ms: 3000
+  stream:
+    description: Long-lived output streams over one channel.
+    min_repetitions: 3
+    pass_rate_threshold: 0.98
+  concurrency:
+    description: Parallel calls from one process or from separate processes.
+    min_repetitions: 5
+    pass_rate_threshold: 0.99
+    p95_ms: 10000
+  file_ops:
+    description: Read, list, write, edit with ledger and policy checks.
+    min_repetitions: 10
+    pass_rate_threshold: 0.995
+    p95_ms: 4000
+  patch:
+    description: Atomic apply_patch with rollback.
+    min_repetitions: 10
+    pass_rate_threshold: 0.995
+    p95_ms: 5000
+  search:
+    description: Remote glob and grep.
+    min_repetitions: 20
+    pass_rate_threshold: 0.995
+    p95_ms: 5000
+  transfer:
+    description: Artifact push/pull with sha256 manifests.
+    min_repetitions: 5
+    pass_rate_threshold: 0.99
+  recovery:
+    description: Interrupted transfer must leave no partial state and re-run cleanly.
+    min_repetitions: 4
+    pass_rate_threshold: 0.95
+  jobs:
+    description: Background job registry (start, status, tail, stop).
+    min_repetitions: 5
+    pass_rate_threshold: 0.98
+    p95_ms: 20000
+  environment:
+    description: Endpoint facts the other classes silently depend on.
+    min_repetitions: 5
+    pass_rate_threshold: 1.0
+    p95_ms: 8000
+
+operations:
+  # ------------------------------------------------------------------ transport
+  - id: bash.echo
+    class: transport
+    shape: baseline
+    tool: remote.bash
+    repetitions: 30
+    timeout_ms: 30000
+    args: {command: "printf maturation-{trial}"}
+    expect: {outcome: success, status: ok, stdout_contains: "maturation-{trial}"}
+
+  - id: bash.echo_cli
+    class: transport
+    shape: baseline
+    via: cli
+    tool: remote.bash
+    repetitions: 10
+    timeout_ms: 30000
+    args: {command: "printf maturation-cli-{trial}"}
+    expect: {outcome: success, status: ok, stdout_contains: "maturation-cli-{trial}"}
+    notes: Fresh wrapper process per call; exercises the CLI fallback path.
+
+  - id: bash.nonzero_exit_contract
+    class: transport
+    shape: baseline
+    tool: remote.bash
+    repetitions: 10
+    timeout_ms: 30000
+    args: {command: "echo failing-{trial} >&2; exit 7"}
+    expect: {outcome: failed, status: nonzero_exit, exit_code: 7}
+    notes: A remote failure must be reported as exactly that, every time.
+
+  - id: bash.timeout_contract
+    class: transport
+    shape: baseline
+    tool: remote.bash
+    repetitions: 5
+    timeout_ms: 1000
+    args: {command: "sleep 4", timeout_ms: 1000}
+    expect: {outcome: timeout, status: timeout, min_duration_ms: 900}
+    notes: A real timeout must take the full budget; an instant timeout is a tool-service fault.
+
+  - id: bash.large_output
+    class: transport
+    shape: baseline
+    tool: remote.bash
+    repetitions: 5
+    timeout_ms: 60000
+    args: {command: "python3 -c \"print('x' * 200000)\""}
+    expect: {outcome: success, status: ok}
+
+  # --------------------------------------------------------------------- stream
+  - id: bash.long_stream_cli
+    class: stream
+    shape: long_stream
+    via: cli
+    tool: remote.bash
+    repetitions: 3
+    timeout_ms: 90000
+    args: {command: "for i in $(seq 1 30); do echo line-$i; sleep 0.5; done"}
+    expect: {outcome: success, status: ok, stdout_contains: "line-30", min_duration_ms: 14000}
+    notes: The recorded failure signature is a long stream dying early over the shared mux.
+
+  - id: bash.long_stream_inprocess
+    class: stream
+    shape: long_stream
+    tool: remote.bash
+    repetitions: 3
+    timeout_ms: 90000
+    args: {command: "for i in $(seq 1 30); do echo line-$i; sleep 0.5; done"}
+    expect: {outcome: success, status: ok, stdout_contains: "line-30", min_duration_ms: 14000}
+
+  - id: stream.under_load
+    class: stream
+    shape: stream_under_load
+    repetitions: 3
+    timeout_ms: 90000
+    params:
+      stream_command: "for i in $(seq 1 24); do echo line-$i; sleep 0.5; done"
+      stream_expect: {outcome: success, status: ok, stdout_contains: "line-24", min_duration_ms: 11000}
+      stream_via: cli
+      side_command: "printf side-{worker}-{trial}"
+      side_expect: {outcome: success, status: ok, stdout_contains: "side-{worker}-{trial}"}
+      side_count: 8
+      side_concurrency: 4
+
+  # ---------------------------------------------------------------- concurrency
+  - id: bash.concurrent
+    class: concurrency
+    shape: concurrent
+    tool: remote.bash
+    repetitions: 5
+    timeout_ms: 30000
+    params: {concurrency: 6}
+    args: {command: "printf w-{worker}-{trial}"}
+    expect: {outcome: success, status: ok, stdout_contains: "w-{worker}-{trial}"}
+
+  - id: multi_session.bash
+    class: concurrency
+    shape: multi_session
+    tool: remote.bash
+    repetitions: 5
+    timeout_ms: 30000
+    params: {concurrency: 4}
+    args: {command: "printf 'w{worker}' > {scratch}/ms-{trial}-{worker}.txt && cat {scratch}/ms-{trial}-{worker}.txt"}
+    expect: {outcome: success, status: ok, stdout_contains: "w{worker}"}
+    notes: Separate processes share the ControlMaster socket, the shape in the mux signature.
+
+  - id: multi_session.read
+    class: concurrency
+    shape: multi_session
+    tool: remote.read
+    repetitions: 5
+    timeout_ms: 30000
+    params: {concurrency: 4}
+    args: {file_path: "{scratch}/seed/seed-1.txt"}
+    expect: {outcome: success, status: ok, stdout_contains: "alpha-1"}
+
+  # ------------------------------------------------------------------- file_ops
+  - id: read.seed
+    class: file_ops
+    shape: baseline
+    tool: remote.read
+    repetitions: 20
+    timeout_ms: 30000
+    args: {file_path: "{scratch}/seed/seed-1.txt"}
+    expect: {outcome: success, status: ok, stdout_contains: "alpha-1"}
+
+  - id: ls.seed
+    class: file_ops
+    shape: baseline
+    tool: remote.ls
+    repetitions: 20
+    timeout_ms: 30000
+    args: {path: "{scratch}/seed"}
+    expect: {outcome: success, status: ok, stdout_contains: "seed-8.txt"}
+
+  - id: write.overwrite_idempotent
+    class: file_ops
+    shape: idempotent_rerun
+    tool: remote.write
+    repetitions: 10
+    timeout_ms: 30000
+    args: {file_path: "{scratch}/w-{trial}.txt", content: "payload-{trial}\n", overwrite: true, create_dirs: true}
+    expect: {outcome: success, status: written}
+    params:
+      second_expect: {outcome: success, status: written}
+      verify:
+        tool: remote.bash
+        args: {command: "cat {scratch}/w-{trial}.txt"}
+        expect: {outcome: success, status: ok, stdout_contains: "payload-{trial}"}
+
+  - id: write.no_overwrite_contract
+    class: file_ops
+    shape: idempotent_rerun
+    tool: remote.write
+    repetitions: 10
+    timeout_ms: 30000
+    args: {file_path: "{scratch}/wn-{trial}.txt", content: "once-{trial}\n", create_dirs: true}
+    expect: {outcome: success, status: written}
+    params:
+      second_expect: {outcome: blocked, status: file_exists}
+
+  - id: edit.rerun_contract
+    class: file_ops
+    shape: idempotent_rerun
+    tool: remote.edit
+    repetitions: 10
+    timeout_ms: 30000
+    args: {file_path: "{scratch}/e-{trial}.txt", old_string: "beta", new_string: "gamma-{trial}"}
+    expect: {outcome: success, status: edited}
+    params:
+      setup:
+        tool: remote.bash
+        args: {command: "printf 'alpha\\nbeta\\n' > {scratch}/e-{trial}.txt"}
+        expect: {outcome: success, status: ok}
+      second_expect: {outcome: failed, status: old_string_not_found}
+      verify:
+        tool: remote.read
+        args: {file_path: "{scratch}/e-{trial}.txt"}
+        expect: {outcome: success, status: ok, stdout_contains: "gamma-{trial}"}
+
+  # ---------------------------------------------------------------------- patch
+  - id: patch.add_then_rerun
+    class: patch
+    shape: idempotent_rerun
+    tool: remote.apply_patch
+    repetitions: 10
+    timeout_ms: 30000
+    args:
+      patch: |
+        *** Begin Patch
+        *** Add File: {scratch}/p-{trial}.txt
+        +hello-{trial}
+        *** End Patch
+    expect: {outcome: success, status: applied}
+    params:
+      second_expect: {outcome: [failed, blocked], status: file_exists}
+      verify:
+        tool: remote.read
+        args: {file_path: "{scratch}/p-{trial}.txt"}
+        expect: {outcome: success, status: ok, stdout_contains: "hello-{trial}"}
+
+  - id: patch.update_move
+    class: patch
+    shape: baseline
+    tool: remote.apply_patch
+    repetitions: 10
+    timeout_ms: 30000
+    args:
+      patch: |
+        *** Begin Patch
+        *** Add File: {scratch}/pm-{trial}-old.txt
+        +old
+        *** Update File: {scratch}/pm-{trial}-old.txt
+        *** Move to: {scratch}/pm-{trial}-new.txt
+        @@
+        -old
+        +new-{trial}
+        *** End of File
+        *** End Patch
+    expect: {outcome: success, status: applied}
+
+  # --------------------------------------------------------------------- search
+  - id: glob.seed
+    class: search
+    shape: baseline
+    tool: remote.glob
+    repetitions: 20
+    timeout_ms: 30000
+    args: {pattern: "*.txt", path: "{scratch}/seed"}
+    expect: {outcome: success, status: ok, stdout_contains: "seed-8.txt"}
+
+  - id: grep.seed
+    class: search
+    shape: baseline
+    tool: remote.grep
+    repetitions: 20
+    timeout_ms: 30000
+    args: {pattern: "needle-token", path: "{scratch}/seed", output_mode: files_with_matches}
+    expect: {outcome: success, status: ok, stdout_contains: "seed-1.txt"}
+
+  # ------------------------------------------------------------------- transfer
+  - id: artifact.roundtrip_small
+    class: transfer
+    shape: large_transfer
+    repetitions: 10
+    timeout_ms: 120000
+    params: {files: 4, bytes_per_file: 65536}
+
+  - id: artifact.roundtrip_8mib
+    class: transfer
+    shape: large_transfer
+    repetitions: 5
+    timeout_ms: 300000
+    params: {files: 8, bytes_per_file: 1048576}
+
+  # ------------------------------------------------------------------- recovery
+  - id: artifact.interrupted_pull_wrapper
+    class: recovery
+    shape: interrupted_transfer
+    repetitions: 4
+    timeout_ms: 180000
+    params: {direction: pull, files: 32, bytes_per_file: 65536, interrupt_after_ms: 1500, kill_mode: wrapper}
+    notes: The agent-side process vanishes mid-pull; the re-run must skip verified files and finish.
+
+  - id: artifact.interrupted_pull_transport
+    class: recovery
+    shape: interrupted_transfer
+    repetitions: 4
+    timeout_ms: 180000
+    params: {direction: pull, files: 32, bytes_per_file: 65536, interrupt_after_ms: 1500, kill_mode: transport}
+    notes: The SSH connection drops mid-pull; the wrapper must report a clean failure.
+
+  - id: artifact.interrupted_push_wrapper
+    class: recovery
+    shape: interrupted_transfer
+    repetitions: 4
+    timeout_ms: 180000
+    params: {direction: push, files: 32, bytes_per_file: 65536, interrupt_after_ms: 1500, kill_mode: wrapper}
+
+  - id: artifact.interrupted_push_transport
+    class: recovery
+    shape: interrupted_transfer
+    repetitions: 4
+    timeout_ms: 180000
+    params: {direction: push, files: 32, bytes_per_file: 65536, interrupt_after_ms: 1500, kill_mode: transport}
+
+  # ----------------------------------------------------------------------- jobs
+  - id: job.lifecycle
+    class: jobs
+    shape: job_registry
+    repetitions: 8
+    timeout_ms: 60000
+    params:
+      command: "sleep 2; printf 'job-done-{trial}\\n'"
+      tail_contains: "job-done-{trial}"
+      poll_interval_ms: 500
+      poll_timeout_ms: 30000
+
+  - id: job.stop
+    class: jobs
+    shape: job_registry
+    repetitions: 4
+    timeout_ms: 60000
+    params:
+      command: "printf 'job-quick-{trial}\\n'"
+      tail_contains: "job-quick-{trial}"
+      stop: true
+      long_command: "sleep 120"
+
+  # ---------------------------------------------------------------- environment
+  - id: env.probe
+    class: environment
+    shape: baseline
+    tool: remote.probe
+    repetitions: 10
+    timeout_ms: 30000
+    args: {}
+    expect: {outcome: success, status: ok}
+
+  - id: env.context_snapshot
+    class: environment
+    shape: baseline
+    tool: remote.context_snapshot
+    repetitions: 5
+    timeout_ms: 30000
+    args: {}
+    expect: {outcome: success, status: ok}
+
+  - id: env.hostname_mapping
+    class: environment
+    shape: baseline
+    tool: remote.bash
+    repetitions: 5
+    timeout_ms: 30000
+    args: {command: "if getent hosts \"$(hostname)\" >/dev/null 2>&1; then echo mapped; else echo UNMAPPED \"$(hostname)\"; exit 3; fi"}
+    expect: {outcome: success, status: ok, stdout_contains: mapped}
+    notes: Recorded signature — fresh containers lack their own hostname in /etc/hosts and gloo init fails.
