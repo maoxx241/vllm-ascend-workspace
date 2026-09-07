@@ -41,6 +41,7 @@ from maturation.invoke import (  # noqa: E402
     launcher_argv,
     run_cli,
 )
+from maturation_provider import require_pinned_provider  # noqa: E402
 
 MUX_VAR = "REMOTE_DEV_SSH_MUX"
 MUX_OFF = "0"
@@ -337,9 +338,8 @@ class InterruptedCliMuxTests(unittest.TestCase):
         self.assertEqual(launched, [])
 
 
-PINNED_SOURCE = Path("/private/tmp/vaws-remote-dev-final-source")
-PINNED_SHA = "b6acc21d147e369e771f1ff916973d74d667691e"
 ROOT_ENV = "VAWS_REMOTE_DEV_ROOT"
+CONFIGURED_CHECKOUT = Path("/configured/remote-dev-checkout")
 
 
 class ExternalRoutingTests(unittest.TestCase):
@@ -362,7 +362,7 @@ class ExternalRoutingTests(unittest.TestCase):
             return CliResult(payload={"result": {"status": "ok"}}, returncode=0, killed=False, duration_ms=1)
 
         invoker = RemoteDevInvoker(python="/usr/bin/python3")
-        with mock.patch("maturation.invoke.remote_dev_root", return_value=PINNED_SOURCE), mock.patch(
+        with mock.patch("maturation.invoke.remote_dev_root", return_value=CONFIGURED_CHECKOUT), mock.patch(
             "maturation.invoke.run_cli", fake_run_cli
         ):
             result = invoker.call_cli(
@@ -412,8 +412,7 @@ class ExternalRoutingTests(unittest.TestCase):
         self.assertEqual(proc.stdout.strip(), "ok")
 
     def test_incompatible_cached_mcp_fails_without_eviction(self) -> None:
-        if not PINNED_SOURCE.is_dir():
-            self.skipTest("pinned remote-dev source is not present")
+        provider = require_pinned_provider()
         code = (
             "import sys, types\n"
             f"sys.path.insert(0, {str(AGENTS)!r})\n"
@@ -430,7 +429,7 @@ class ExternalRoutingTests(unittest.TestCase):
             "    raise SystemExit('expected configuration error')\n"
             "print('mcp-file', sys.modules['mcp'].__file__)\n"
         )
-        env = {**os.environ, ROOT_ENV: str(PINNED_SOURCE)}
+        env = {**os.environ, ROOT_ENV: str(provider)}
         proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env, check=False)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn("incompatible mcp already imported", proc.stdout)
@@ -438,8 +437,7 @@ class ExternalRoutingTests(unittest.TestCase):
         self.assertIn("mcp-file /tmp/other-mcp/__init__.py", proc.stdout)
 
     def test_configured_checkout_provenance_in_fresh_interpreter(self) -> None:
-        if not PINNED_SOURCE.is_dir():
-            self.skipTest("pinned remote-dev source is not present")
+        provider = require_pinned_provider()
         code = (
             "import os, sys\n"
             f"sys.path.insert(0, {str(AGENTS)!r})\n"
@@ -453,23 +451,22 @@ class ExternalRoutingTests(unittest.TestCase):
             "print(mcp.tools.__file__)\n"
             "print(core.__file__)\n"
         )
-        env = {**os.environ, ROOT_ENV: str(PINNED_SOURCE)}
+        env = {**os.environ, ROOT_ENV: str(provider)}
         proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env, check=False)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         checkout, tools_file, core_file = proc.stdout.strip().splitlines()
-        pinned = str(PINNED_SOURCE.resolve())
+        pinned = str(provider.resolve())
         self.assertEqual(checkout, pinned)
         self.assertTrue(tools_file.startswith(pinned), tools_file)
         self.assertTrue(core_file.startswith(pinned), core_file)
 
     def test_apply_keeps_caller_overrides_and_fills_state_runtime_resolver(self) -> None:
-        if not PINNED_SOURCE.is_dir():
-            self.skipTest("pinned remote-dev source is not present")
+        provider = require_pinned_provider()
         with tempfile.TemporaryDirectory() as tmp:
             state = str(Path(tmp) / "state")
             resolver = "/abs/plugin.py:setup"
             overrides = {
-                ROOT_ENV: str(PINNED_SOURCE),
+                ROOT_ENV: str(provider),
                 "REMOTE_DEV_RUNTIME_ENV_FILE": "/etc/profile.d/custom.sh",
                 "REMOTE_DEV_STATE_DIR": state,
                 "REMOTE_DEV_RESOLVERS": resolver,
@@ -478,7 +475,7 @@ class ExternalRoutingTests(unittest.TestCase):
             with mock.patch.dict(os.environ, overrides, clear=False):
                 parent_before = dict(os.environ)
                 checkout = apply_real_execution_environment()
-                self.assertEqual(checkout, PINNED_SOURCE.resolve())
+                self.assertEqual(checkout, provider.resolve())
                 self.assertEqual(os.environ.get("REMOTE_DEV_RUNTIME_ENV_FILE"), "/etc/profile.d/custom.sh")
                 self.assertEqual(os.environ.get("REMOTE_DEV_STATE_DIR"), state)
                 self.assertEqual(os.environ.get("REMOTE_DEV_RESOLVERS"), resolver)
@@ -486,8 +483,7 @@ class ExternalRoutingTests(unittest.TestCase):
                 self.assertEqual(os.environ.get(MUX_VAR), parent_before.get(MUX_VAR))
 
     def test_inprocess_dispatcher_uses_pinned_source_with_fake_transport(self) -> None:
-        if not PINNED_SOURCE.is_dir():
-            self.skipTest("pinned remote-dev source is not present")
+        provider = require_pinned_provider()
         code = (
             "import json, os, subprocess, sys\n"
             "from unittest import mock\n"
@@ -512,14 +508,14 @@ class ExternalRoutingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             env = {
                 **os.environ,
-                ROOT_ENV: str(PINNED_SOURCE),
+                ROOT_ENV: str(provider),
                 "REMOTE_DEV_STATE_DIR": str(Path(tmp) / "state"),
                 "REMOTE_DEV_SSH_MUX_DIR": str(Path(tmp) / "mux"),
             }
             proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env, check=False)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         tools_file, payload_line = proc.stdout.strip().splitlines()
-        self.assertTrue(tools_file.startswith(str(PINNED_SOURCE.resolve())), tools_file)
+        self.assertTrue(tools_file.startswith(str(provider.resolve())), tools_file)
         payload = json.loads(payload_line)
         self.assertEqual(payload["status"], "ok")
         self.assertTrue(payload["fake"])
