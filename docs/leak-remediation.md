@@ -38,12 +38,35 @@ Current-tree status of those historical findings:
   were removed. Remaining allowances were not dropped merely because a scan
   did not visit them.
 
-The accepted G1 scanner, applied to this merged tree with this tree's
-policy, also reports 13 findings in main-supplied files outside this
-guard-ownership refresh (result-envelope source and tests, property
-run-manifest tests, agent-feedback contract). Those are recorded for root
-coordination rather than rewritten here. No verified knowledge match exists
-for that signature.
+The 13 current-main scanner findings on this merged tree were resolved
+narrowly on 2026-09-07. Accepted envelope source, the feedback contract,
+and result-envelope tests are unchanged. Shared-root names were not added
+to global `allowed_absolute_path_prefixes`. No whole-file exclusion and no
+real-secret allowance were added.
+
+- The accepted envelope `_SAFE_HOME_PREFIXES` bare shared-root literals
+  other than the already-global weights prefix are allowlisted only in
+  `.agents/lib/vaws_result_envelope.py` and
+  `docs/agent-feedback-contract.md`, each with one owning `path_glob` and
+  an anchored four-name regex. The same names elsewhere, and longer or
+  different home paths in those files, remain findings.
+- Three exact fixtures in `.agents/tests/test_result_envelope.py` are
+  allowlisted by one category and one detector match each (version-date
+  identifier, synthetic example home, quoted synthetic secret-key
+  literal). Changed values, other paths, and other categories at that
+  path remain findings.
+- The property run-manifest local field-label variable was renamed so it
+  is no longer a secret-key assignment. No policy exception was added
+  for it.
+
+Full-tree scan of this candidate with its own policy: 469 scanned, 0
+skipped, 0 findings, 116 suppressed, 0 unused allowlist ids. The
+suppression count is two above the 12 converted current-main matches
+because the policy file now quotes two of those exact `match` literals
+and `policy-self-reference` records them. Finding 4's profiling
+shared-storage owner token remains allowlisted for the later #88
+cleanup. This is not leak-proof coverage of skipped files or of public
+history.
 
 ## Method
 

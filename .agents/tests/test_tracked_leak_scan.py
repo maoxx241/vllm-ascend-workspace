@@ -1074,5 +1074,153 @@ class G1BoundaryTests(unittest.TestCase):
             self.assertEqual(scan_payload["status"], "error")
 
 
+class CurrentMainFindingScopeTests(unittest.TestCase):
+    """The five current-main allowances suppress only their path/category/value."""
+
+    SHARED_ROOTS = "/home/models\n/home/data\n/home/cache\n/home/shared\n"
+    ENVELOPE_SRC = ".agents/lib/vaws_result_envelope.py"
+    FEEDBACK_DOC = "docs/agent-feedback-contract.md"
+    ENVELOPE_TEST = ".agents/tests/test_result_envelope.py"
+    OTHER_SRC = ".agents/lib/vaws_run_manifest.py"
+    VERSION_LINE = 'torch_npu="2.7.1.dev20260801"'
+    HOME_LINE = "/home/example-user/work/run.py"
+    TOKEN_LINE = 'extensions={"env": {"HF_TOKEN": "hf_realsecretvaluegoeshere"}}'
+    OTHER_IPV4 = "host " + SYNTHETIC_IPV4
+
+    def setUp(self) -> None:
+        self.policy = guard.load_policy(POLICY_PATH)
+
+    def _scan(self, text: str, path: str) -> list[guard.Finding]:
+        return guard.scan_text(text, path=path, policy=self.policy)
+
+    def _unallowlisted(self, findings: list[guard.Finding]) -> list[str]:
+        return [
+            f"{item.category}:{item.match}"
+            for item in findings
+            if item.allowlisted_by is None
+        ]
+
+    def test_global_prefixes_and_scoped_exclusions_are_unchanged(self) -> None:
+        self.assertEqual(
+            self.policy.allowed_path_prefixes,
+            (
+                "/home/weights",
+                "/home/vaws",
+                "/root/namespace",
+                "/root/cwd",
+                "/Users/Shared",
+            ),
+        )
+        self.assertEqual(
+            [(item.id, item.path_glob, item.categories) for item in self.policy.scoped_exclusions],
+            [
+                ("leak-guard-test-module", ".agents/tests/test_tracked_leak_scan.py", ("*",)),
+                (
+                    "leak-guard-test-fixtures",
+                    ".agents/tests/fixtures/tracked_leak_guard/**",
+                    ("*",),
+                ),
+            ],
+        )
+        self.assertNotIn("/home/models", self.policy.allowed_path_prefixes)
+        self.assertNotIn("/home/data", self.policy.allowed_path_prefixes)
+        self.assertNotIn("/home/cache", self.policy.allowed_path_prefixes)
+        self.assertNotIn("/home/shared", self.policy.allowed_path_prefixes)
+
+    def test_shared_root_literals_are_allowed_only_in_the_two_owning_files(self) -> None:
+        envelope = self._scan(self.SHARED_ROOTS, self.ENVELOPE_SRC)
+        feedback = self._scan(self.SHARED_ROOTS, self.FEEDBACK_DOC)
+        elsewhere = self._scan(self.SHARED_ROOTS, self.OTHER_SRC)
+        self.assertEqual(
+            [item.allowlisted_by for item in envelope],
+            ["result-envelope-safe-home-prefixes"] * 4,
+        )
+        self.assertEqual(
+            [item.allowlisted_by for item in feedback],
+            ["agent-feedback-safe-home-prefixes"] * 4,
+        )
+        self.assertEqual(
+            [(item.category, item.match, item.allowlisted_by) for item in elsewhere],
+            [
+                ("absolute-user-path", "/home/models", None),
+                ("absolute-user-path", "/home/data", None),
+                ("absolute-user-path", "/home/cache", None),
+                ("absolute-user-path", "/home/shared", None),
+            ],
+        )
+
+    def test_different_or_longer_homes_remain_findings_in_allowed_source_and_doc(self) -> None:
+        longer = "/home/models-extra /home/shared-extra /home/q12345678\n"
+        for path in (self.ENVELOPE_SRC, self.FEEDBACK_DOC):
+            with self.subTest(path=path):
+                findings = self._scan(longer, path)
+                self.assertEqual(
+                    self._unallowlisted(findings),
+                    [
+                        "absolute-user-path:/home/models-extra",
+                        "absolute-user-path:/home/shared-extra",
+                        "absolute-user-path:/home/q12345678",
+                    ],
+                )
+
+    def test_envelope_test_fixtures_are_allowed_only_for_exact_path_category_value(self) -> None:
+        version = self._scan(self.VERSION_LINE, self.ENVELOPE_TEST)
+        home = self._scan(self.HOME_LINE, self.ENVELOPE_TEST)
+        token = self._scan(self.TOKEN_LINE, self.ENVELOPE_TEST)
+        self.assertEqual(
+            [(item.category, item.match, item.allowlisted_by) for item in version],
+            [("internal-identifier", "dev20260801", "result-envelope-test-torch-npu-dev-date")],
+        )
+        self.assertEqual(
+            [(item.category, item.match, item.allowlisted_by) for item in home],
+            [("absolute-user-path", "/home/example-user", "result-envelope-test-example-home")],
+        )
+        self.assertEqual(
+            [(item.category, item.match, item.allowlisted_by) for item in token],
+            [
+                (
+                    "secret-key",
+                    '"hf_realsecretvaluegoeshere"',
+                    "result-envelope-test-hf-token-literal",
+                )
+            ],
+        )
+
+        self.assertEqual(
+            self._unallowlisted(self._scan(self.VERSION_LINE, self.OTHER_SRC)),
+            ["internal-identifier:dev20260801"],
+        )
+        self.assertEqual(
+            self._unallowlisted(self._scan(self.HOME_LINE, self.OTHER_SRC)),
+            ["absolute-user-path:/home/example-user"],
+        )
+        self.assertEqual(
+            self._unallowlisted(self._scan(self.TOKEN_LINE, self.OTHER_SRC)),
+            ['secret-key:"hf_realsecretvaluegoeshere"'],
+        )
+
+        self.assertEqual(
+            self._unallowlisted(self._scan('torch_npu="2.7.1.dev20260802"', self.ENVELOPE_TEST)),
+            ["internal-identifier:dev20260802"],
+        )
+        self.assertEqual(
+            self._unallowlisted(self._scan("/home/example-user-extra/work/run.py", self.ENVELOPE_TEST)),
+            ["absolute-user-path:/home/example-user-extra"],
+        )
+        self.assertEqual(
+            self._unallowlisted(
+                self._scan(
+                    'extensions={"env": {"HF_TOKEN": "hf_othersecretvaluegoeshere"}}',
+                    self.ENVELOPE_TEST,
+                )
+            ),
+            ['secret-key:"hf_othersecretvaluegoeshere"'],
+        )
+        self.assertEqual(
+            self._unallowlisted(self._scan(self.OTHER_IPV4, self.ENVELOPE_TEST)),
+            ["ipv4:" + SYNTHETIC_IPV4],
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

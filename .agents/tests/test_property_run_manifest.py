@@ -202,8 +202,8 @@ class InvalidManifestProperties(unittest.TestCase):
             with self.assertRaises(RunManifestError) as ctx:
                 validate_manifest(corrupted)
             message = str(ctx.exception)
-            token = "artifact" if field == "artifacts" else field
-            self.assertIn(token, message, f"error for {field} must name the field: {message}")
+            expected_field = "artifact" if field == "artifacts" else field
+            self.assertIn(expected_field, message, f"error for {field} must name the field: {message}")
             # A rejected manifest is never written.
             with tempfile.TemporaryDirectory() as tmp:
                 with self.assertRaises(RunManifestError):
