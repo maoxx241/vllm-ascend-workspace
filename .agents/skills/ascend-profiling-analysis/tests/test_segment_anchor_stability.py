@@ -83,8 +83,13 @@ def _build_test_layers(events: list[NormalizedEvent]) -> list[segm.LayerObservat
         events,
         lambda event: event_role(event, "block_head"),
     )
-    # Mirror build_segments_for_rank: layer starts prefer block_head rows.
-    start_boundary_rows = anchor_boundary_rows or boundary_rows
+    # Mirror build_segments_for_rank: tier-1 start rows are the FUSED
+    # residual+norm kernels (block_head AND normalization), never bare
+    # block_head helpers.
+    start_boundary_rows = segm.dedup_adjacent_event_rows(
+        events,
+        lambda event: event_role(event, "block_head") and event_role(event, "normalization"),
+    )
     return build_layers(
         events,
         row_numbers,
@@ -741,3 +746,87 @@ def test_kv_norm_rope_cache_carries_no_normalization_role() -> None:
     cats, roles = rules.categories_and_roles("AddRmsNormBias", "ADDRMSNORMBIAS", "AIV")
     assert "normalization" in roles
     assert "block_head" in roles
+
+
+def test_pure_norm_openings_survive_blockhead_only_helpers() -> None:
+    """DSV4-CSA shape (dsv4pro 2026-09-07): layers open with a PURE RmsNorm
+    while the rank carries a few block_head-only helpers (HcPre / HcPost).
+    The layer start must stay on the RmsNorm — a bare block_head helper is
+    never a preferred opening."""
+
+    events: list[NormalizedEvent] = []
+    row = 0
+    for layer_i in range(3):
+        if layer_i == 1:
+            # Regional MHC helpers, as observed inside one dsv4pro window.
+            events.append(_event(row, "HcPre", categories=("block_head.mhc_prefix",), roles=("block_head",)))
+            row += 1
+        events.append(_event(row, "RmsNorm", categories=("normalization",), roles=("normalization",)))
+        row += 1
+        events.append(_event(row, "Compressor", categories=("attention.kv_compressor",), roles=("attention_aux",)))
+        row += 1
+        events.append(_event(row, "FusedInferAttentionScore", categories=("attention.flash_score",), roles=("attention",)))
+        row += 1
+        events.append(_event(row, "aclnnMatmul", categories=("compute.matmul",), roles=("compute",)))
+        row += 1
+        if layer_i == 1:
+            events.append(_event(row, "HcPost", categories=("block_head.mhc_prefix",), roles=("block_head",)))
+            row += 1
+    layers = _build_test_layers(events)
+    assert len(layers) == 3
+    by_row = {event.row_idx: event for event in events}
+    for layer in layers:
+        assert by_row[layer.row_start].name_raw == "RmsNorm", (layer.index, by_row[layer.row_start].name_raw)
+
+
+def test_hybrid_partial_fused_norm_coverage_no_stale_hijack() -> None:
+    """Hybrid rank where only the MLA layer fuses residual+norm; the
+    following KDA-style layer opens with a pure RmsNorm and its window
+    contains no fused norm of its own. The MLA layer's post-attention
+    AddRmsNormBias is a STALE fused row for the KDA anchor — the MoE guard
+    must exclude it, otherwise the KDA layer opens inside the MLA layer's
+    MoE head."""
+
+    events: list[NormalizedEvent] = []
+    row = 0
+    events.append(_selection_event(row))
+    row += 1
+    # MLA layer: fused opening norm + attention + fused post norm + MoE.
+    events.append(_event(row, "AddRmsNormBias", categories=("block_head", "normalization"), roles=("block_head", "normalization")))
+    row += 1
+    events.append(_event(row, "aclnnQuantMatmul", categories=("compute.matmul",), roles=("compute",)))
+    row += 1
+    events.append(_event(row, "KvRmsNormRopeCache", categories=("attention.mla", "attention.mla.kv_norm_rope_cache", "attention.rope"), roles=("attention_aux",)))
+    row += 1
+    events.append(_event(row, "aclnnTransposeBatchMatMul", categories=("attention.mla", "attention.mla.v_up_proj", "compute.matmul"), roles=("attention", "compute")))
+    row += 1
+    events.append(_event(row, "AddRmsNormBias", categories=("block_head", "normalization"), roles=("block_head", "normalization")))
+    row += 1
+    events.append(_event(row, "MoeGatingTopK", categories=("moe.gating",), roles=("moe",)))
+    row += 1
+    events.append(_event(row, "GroupedMatmul", categories=("compute.matmul", "moe.expert_matmul"), roles=("moe",)))
+    row += 1
+    # KDA-style layer: pure-norm opening, linear-attention anchor.
+    events.append(_event(row, "RmsNorm", categories=("normalization",), roles=("normalization",)))
+    row += 1
+    events.append(_event(row, "aclnnQuantMatmul", categories=("compute.matmul",), roles=("compute",)))
+    row += 1
+    events.append(_event(row, "aclnnRecurrentKda", categories=("attention.linear_or_mamba",), roles=("attention",)))
+    row += 1
+    events.append(_event(row, "MoeGatingTopK", categories=("moe.gating",), roles=("moe",)))
+    row += 1
+    events.append(_event(row, "GroupedMatmul", categories=("compute.matmul", "moe.expert_matmul"), roles=("moe",)))
+    row += 1
+
+    layers = _build_test_layers(events)
+    assert len(layers) == 2
+    by_row = {event.row_idx: event for event in events}
+    mla, kda = layers
+    assert by_row[mla.row_start].name_raw == "AddRmsNormBias"
+    assert by_row[kda.row_start].name_raw == "RmsNorm", by_row[kda.row_start].name_raw
+    kda_names = [by_row[r].name_raw for r in range(kda.row_start, kda.row_end + 1)]
+    # The MLA layer's MoE section must not bleed into the KDA layer.
+    assert kda_names.count("MoeGatingTopK") == 1
+    assert "GroupedMatmul" in kda_names
+    mla_names = [by_row[r].name_raw for r in range(mla.row_start, mla.row_end + 1)]
+    assert mla_names[-1] == "GroupedMatmul"

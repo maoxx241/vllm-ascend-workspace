@@ -668,20 +668,29 @@ def build_layers(events: Sequence[NormalizedEvent], row_numbers: Sequence[int], 
     # fallback anchor family; the default path is unchanged (first candidate of
     # ``layer_anchor_candidates``).
     #
-    # ``start_boundary_rows`` is the preferred row set for the layer-content
-    # start search — block_head rows when the rank exposes any. The full
-    # ``boundary_rows`` set (block_head + any normalization) is only a
-    # per-anchor fallback. Why: in MLA-style attention prologues several
-    # normalization rows sit BETWEEN the true layer opening (the fused
-    # residual+norm block_head) and the attention anchor — q_a_layernorm
-    # (pure RmsNorm) and KvRmsNormRopeCache (which no longer carries the
-    # normalization role, but did). "Latest boundary <= anchor" then snaps
-    # the layer start to the mid-projection norm and rotates the whole q/kv
-    # projection segment into the previous layer (dsv2lite / dsv31,
-    # 2026-09-07). The block_head row is the structurally correct opening:
-    # it fuses the previous block's residual add with this layer's input
-    # norm.
-    start_rows = start_boundary_rows if start_boundary_rows else boundary_rows
+    # ``start_boundary_rows`` is the tier-1 row set for the layer-content start
+    # search: the FUSED residual+norm rows (role block_head AND normalization —
+    # AddRmsNorm / AddRmsNormBias class). Only a fused residual norm is accepted
+    # as a preferred opening, never a bare block_head helper:
+    #
+    #   * MLA prologues (dsv2lite / dsv31) carry several pure norms BETWEEN the
+    #     true opening and the attention anchor — q_a_layernorm (pure RmsNorm),
+    #     KvRmsNormRopeCache (pre-fix also normalization). "Latest boundary <=
+    #     anchor" then snaps the start mid-projection and rotates the q/kv
+    #     projection segment into the previous layer (2026-09-07). The fused
+    #     residual+norm is the structurally correct opening there.
+    #   * Ranks whose layers open with a PURE norm must keep doing so: K3 has
+    #     no fused norm at all, and DSV4 CSA layers open with a pure RmsNorm
+    #     while the rank carries a few block_head-only helpers (HcPre/HcPost).
+    #     Preferring bare block_head rows would hijack those openings — so the
+    #     full ``boundary_rows`` set remains the tier-2 fallback per anchor.
+    #
+    # The moe_rows guard below additionally bounds the search below the last
+    # MoE event before the anchor: a fused norm from an EARLIER layer (e.g. a
+    # hybrid rank where only some layer types fuse residual+norm) must not
+    # open this layer across the previous layer's MoE section.
+    start_rows = tuple(start_boundary_rows) if start_boundary_rows else ()
+    moe_rows = tuple(event.row_idx for event in events if event_role(event, "moe"))
     anchors = tuple(anchor_override) if anchor_override is not None else layer_anchor_events(events)
     if not anchors:
         return []
@@ -692,10 +701,13 @@ def build_layers(events: Sequence[NormalizedEvent], row_numbers: Sequence[int], 
         selection_pos = bisect.bisect_left(selection_rows, group[0].row_idx)
         if selection_pos > 0 and selection_rows[selection_pos - 1] >= lower_bound:
             lower_bound = selection_rows[selection_pos - 1] + 1
+        moe_pos = bisect.bisect_left(moe_rows, group[0].row_idx)
+        if moe_pos > 0 and moe_rows[moe_pos - 1] >= lower_bound:
+            lower_bound = moe_rows[moe_pos - 1] + 1
         start = latest_row_at_or_before(start_rows, group[0].row_idx, lower_bound)
-        if start is None and start_rows is not boundary_rows:
-            # Per-anchor fallback: no block_head evidence in this window at
-            # all (pure-norm trace) — keep the previous behaviour.
+        if start is None:
+            # Tier-2: no fused residual norm in this window (pure-norm trace,
+            # or a layer type without one) — keep the previous behaviour.
             start = latest_row_at_or_before(boundary_rows, group[0].row_idx, lower_bound)
         starts.append(start if start is not None else group[0].row_idx)
 
@@ -735,7 +747,8 @@ def split_coarse_layers_by_moe(
     gating + expert_matmul) stay grouped when no boundary sits between them.
 
     ``start_boundary_rows`` mirrors ``build_layers``: sub-layer content starts
-    prefer block_head rows and fall back to the full boundary set per anchor.
+    prefer fused residual+norm rows and fall back to the full boundary set per
+    anchor.
     """
 
     refined: list[LayerObservation] = []
@@ -3554,11 +3567,14 @@ def build_segments_for_rank(
         lambda event: event_role(event, "block_head"),
     )
     selection_rows = dedup_adjacent_event_rows(events, lambda event: event_role(event, "selection"))
-    # Layer-content start search prefers block_head rows (fused residual+norm
-    # opens a transformer layer); the full boundary set (any normalization)
-    # only serves as per-anchor fallback. See build_layers for why — a
-    # mid-projection norm (q_a_layernorm) must not become a layer opening.
-    start_boundary_rows = anchor_boundary_rows or boundary_rows
+    # Tier-1 rows for the layer-content start search: FUSED residual+norm
+    # kernels (block_head AND normalization — AddRmsNorm class). Bare
+    # block_head helpers (DSV4's HcPre/HcPost) and pure norms (K3 / DSV4
+    # openings) must not be preferred — see build_layers.
+    start_boundary_rows = dedup_adjacent_event_rows(
+        events,
+        lambda event: event_role(event, "block_head") and event_role(event, "normalization"),
+    )
     anchor_candidates = layer_anchor_candidates(events)
     layers_observed = build_layers(
         events,
