@@ -85,5 +85,5 @@ jobs:
         # Exit 1 (no checkout) is expected without the token; the JSON is the
         # useful artifact either way.
         run: python -B .agents/scripts/remote_dev.py status || true
-      - name: Claude skill shims are in sync
+      - name: Generated Claude shims and ModelScope Trae projection are in sync
         run: python -B .agents/scripts/sync_claude_skills.py --check
