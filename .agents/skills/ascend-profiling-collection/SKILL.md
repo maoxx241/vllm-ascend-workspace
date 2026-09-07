@@ -75,6 +75,7 @@ python3 .agents/skills/ascend-profiling-collection/scripts/collect_torch_profile
   [--request-timeout <s>] [--profile-control-timeout <s>] [--health-timeout <s>] \
   [--torch-profiler-dir <relpath>] [--torch-profiler-with-stack] \
   [--analyse-export {db|text|both}] \
+  [--archive-dir <remote-path>] \
   [--image-path <local-path>] [--image-height <px>] \
   [--skip-parity]
 ```
@@ -137,6 +138,23 @@ The `Constant` import (`from torch_npu.profiler.analysis.prof_common_func._const
 
 Always pass `--expected-ranks` (typically `tp * (dp or 1)`) when running this against a fresh capture: without it a partial collection where some ranks never produced a directory looks "clean" because every directory that *did* land was complete. The orchestrator passes this automatically.
 
+## Archiving to shared storage (`--archive-dir`)
+
+Profiling outputs are far too large to pull back to the local Mac (a single dsv3.1 analysis once dragged back 2.2GB). When `--archive-dir <remote-path>` points at the shared-storage filesystem mounted on every managed host/container (e.g. `/mnt/weight/<user>/profiling/archives`), the orchestrator archives each rank's analyse outputs **on the container** (cp -r over the existing ssh channel, ranks serially) right after analyse+verify passes with all ranks ok:
+
+```
+<archive-dir>/<tag>_<started_at-compact-ts>/<rank-dir-basename>/
+    ASCEND_PROFILER_OUTPUT/      # copied whole (db mode: carries the per-rank db; no csv to cherry-pick)
+    profiler_info_*.json         # best-effort
+    profiler_metadata.json       # best-effort
+```
+
+Because the rank-dir basename is kept as the subdirectory name, the archive root `<archive-dir>/<tag>_<ts>/` is itself a valid profiling root full of `*_ascend_pt` directories — feed it straight to the analysis skill's `--remote-profile-root` from **any** machine that mounts the same shared storage, no re-collection needed.
+
+**Failure semantics**: archiving never overturns an already-ok collection. A copy failure records `archive_error` in the manifest (with the affected rank's `outputs.archived_path` left null and `archived: false`) plus a stderr warning; the run still exits 0 with `status: ok`.
+
+Manifest additions (see the schema table below): top-level `archive_dir` (the actual archive root, null when not requested), `archived` (true only when every rank copied), `archive_error` (present only on failure), and per-rank `remote_profile_dirs[].outputs.archived_path`.
+
 ## Workflow
 
 1. **Resolve session** from the worktree binding (or `--session-id` / `--session-file`); the session container endpoint comes from the session's remote state, which `machine-management` bootstrapped.
@@ -149,7 +167,8 @@ Always pass `--expected-ranks` (typically `tp * (dp or 1)`) when running this ag
 8. **Stop service** by shelling out to `serve_stop.py`.
 9. **Discover and analyse** every `*_ascend_pt` under `<runtime_dir>/<torch_profiler_dir>` via `run_remote_analyse.py` (parallel across ranks, see above).
 10. **Verify outputs** per rank (db mode: non-empty per-rank db; text/both: `kernel_details.csv` + `trace_view.json`); classify each as `ok | partial | missing_kernel_details`.
-11. **Write manifest** to `.vaws-local/ascend-profiling-collection/runs/<timestamp>_<tag>/manifest.json`.
+11. **Archive (optional)** — with `--archive-dir`, copy each rank's `ASCEND_PROFILER_OUTPUT/` + profiler metadata to shared storage (see "Archiving to shared storage"); runs only when every rank verified ok, failures degrade to `archive_error` without flipping the run status.
+12. **Write manifest** to `.vaws-local/ascend-profiling-collection/runs/<timestamp>_<tag>/manifest.json`.
 
 ## Failure policy
 
@@ -208,7 +227,10 @@ The manifest is the input contract for the analysis skill. Important fields:
 | `benchmark_results`, `followup_result` | Per-request status / latency / response body |
 | `workload_status` | `{status, bench_total, bench_ok, bench_success_rate, bench_threshold, followup_ok}` — workload hard gate |
 | `remote_profile_root` | Path the analysis skill passes to its `analyze.py` |
-| `remote_profile_dirs` | Per-rank `{path, outputs, analysis_status}`; `outputs` carries `export_type` plus `db_path` (db mode; csv fields are null) or `kernel_details_csv` / `trace_view_json` (text/both mode) |
+| `remote_profile_dirs` | Per-rank `{path, outputs, analysis_status}`; `outputs` carries `export_type` plus `db_path` (db mode; csv fields are null) or `kernel_details_csv` / `trace_view_json` (text/both mode), plus `archived_path` (archive-side path of this rank's outputs, null when `--archive-dir` was not given or this rank's copy failed) |
+| `archive_dir` | Actual archive root `<archive-dir>/<tag>_<compact-started_at>` when `--archive-dir` was given, else null |
+| `archived` | `true` only when `--archive-dir` was given and every rank's copy succeeded |
+| `archive_error` | Present only when an archive copy failed: per-rank error summary. Never flips an already-ok collection to failed |
 | `rank_count` | Number of `*_ascend_pt` directories actually found |
 | `analysis_status` | `ok` / `partial` / `rank_count_mismatch` / `missing_kernel_details` — analysis hard gate |
 | `expected_output_kind` | `db` / `csv` — which artifact `missing_kernel_details` refers to under this run's `analyse_export` |

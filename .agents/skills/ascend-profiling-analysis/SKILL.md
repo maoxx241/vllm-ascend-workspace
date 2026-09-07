@@ -62,6 +62,7 @@ python3 .agents/skills/ascend-profiling-analysis/scripts/profile_analyze.py \
   [--remote-output-dir <absolute-remote-output-dir>] \
   [--remote-timeout 3600] \
   [--keep-remote-output] \
+  [--no-pull | --archive-output <remote-path>] \
   [--mode fast|full] \        # fast 为默认：跳 xlsx/host-trace/全量 HTML，精益拉回
   [--skip-html] [--report-mode summary|full-raw] \
   [--html-renderer v2|legacy] [--html-single-file] \
@@ -82,6 +83,21 @@ Flag notes:
 - `--model-id` / `--model-config`: optional model context. If `--model-config` points to a local file, the wrapper uploads it into the remote run dir before analysis; otherwise it is treated as a remote path. The report still performs profiling-first inference when config is absent.
 - `--hardware-model` / `--hardware-profile`: optional capture-hardware context. Use this when the profiling root is historical and the current remote host is not proven to be the capture host. CANN theoretical peaks are scanned from the analysis host by default; `--no-cann-hardware-scan` disables that scan.
 - `--from-stage` / `--to-stage` / `--only-stage`: resume / partial re-runs; require the prior stages' manifest files already exist in the remote output dir. The wrapper validates only the artifacts the chosen stage *should* produce, so `--only-stage normalize` no longer demands `report/report.md`.
+- `--no-pull`（与 `--archive-output` 互斥）：完全跳过本地拉回（fast 清单也不拉）。本地 run dir 只写 `skill_run.json`;`analysis_summary` 改为远端 `cat report/analysis_summary.json` 读回后照常嵌入 stdout JSON;stdout 里 `report_md` / `report_xlsx` / `report_html` 指向**远端**路径，`local_output_dir` 仍指本地 run dir（里面只有 skill_run.json)。大 root 留在服务器/共享存储时用这个，本地 Mac 不再拉回几个 GB。
+- `--archive-output <remote-path>`（与 `--no-pull` 互斥）：远端 analyze 完成后把整个 remote output dir 在容器内 `cp -r` 到 `<remote-path>/<run-dir-name>/`。归档与拉回独立——给了它仍按 mode 的拉回清单正常拉回。stdout JSON 增加 `archived_output_dir`（未请求或复制失败为 null；失败只 stderr 警告，不推翻已成功的分析）。
+
+### 分析共享存储上的归档 root
+
+collection skill 的 `--archive-dir` 会把每个 rank 的 `ASCEND_PROFILER_OUTPUT/` + profiler 元数据归档到 `<archive-dir>/<tag>_<ts>/<rank-dir-basename>/`，归档根本身就是合法的 profiling root。共享存储（如 `/mnt/weight/m00663269/profiling/`，366TB，挂在所有受管机器+容器）上的归档 root 可以在**任意**机器上分析，无需重新采集：
+
+```bash
+python3 .agents/skills/ascend-profiling-analysis/scripts/profile_analyze.py \
+  --remote-profile-root /mnt/weight/m00663269/profiling/archives/<tag>_<ts>/ \
+  --archive-output /mnt/weight/m00663269/profiling/analysis   # 产物也留共享存储
+  # 或 --no-pull：产物留在远端 output dir，本地零拉回
+```
+
+`--remote-output-dir` 同样可以指到共享存储路径，让远端 analyze 的直接产物一开始就落在共享 FS 上。
 
 行为：
 
@@ -92,8 +108,9 @@ Flag notes:
 3. 通过 tar-over-ssh 把当前 `scripts/ascend_profile/` 同步到远端 `<remote-work-dir>/ascend_profile/`（仅这一个子目录，去掉 `__pycache__`/`*.pyc`）。
 4. 远端跑 `python3 -m ascend_profile.analyze <REMOTE_ROOT> --output <REMOTE_OUT> --verbose`。
 5. 校验远端产物：fast 模式必备 `manifest.json`、`segment_manifest.json`、`diagnosis_findings.json`、`report/report.md`、`report/analysis_summary.json`;full 模式另加 `report/report.xlsx`、`report/report.html`（HTML 生成失败时仍会留下带错误说明的占位 html，`report/manifest.json` 中的 `html_status` 字段会标 `error`)。
-6. 拉回轻量产物：fast 模式为 17 项精益清单；full 模式拉回 `report/`（含 assets/)、所有 `*_manifest.json`、`diagnosis_findings.json`、CSV 摘要等。两种模式都不拉 `normalized_event_index.csv` / `evidence/bubble_windows.jsonl` 这种大文件，除非给了 `--keep-remote-output` 才整目录拉回。
-7. 知识库富化（见下文 Workspace knowledge hooks)+ 把摘要、diagnosis 计数、stage timing、`analysis_summary` 全文整理成 stdout JSON。
+6. 可选归档：`--archive-output` 把整个 remote output dir 容器内复制到共享存储（与拉回独立，失败只警告）。
+7. 拉回轻量产物：fast 模式为 17 项精益清单；full 模式拉回 `report/`（含 assets/)、所有 `*_manifest.json`、`diagnosis_findings.json`、CSV 摘要等。两种模式都不拉 `normalized_event_index.csv` / `evidence/bubble_windows.jsonl` 这种大文件，除非给了 `--keep-remote-output` 才整目录拉回。`--no-pull` 时本步整体跳过，`analysis_summary` 改从远端读回。
+8. 知识库富化（见下文 Workspace knowledge hooks)+ 把摘要、diagnosis 计数、stage timing、`analysis_summary` 全文整理成 stdout JSON。
 
 ### Multi-root sweep
 
@@ -153,6 +170,7 @@ python3 .agents/skills/ascend-profiling-analysis/scripts/profile_sweep.py \
   "machine": "173.131.1.2",
   "remote_profile_root": "/tmp/prof_35b_tp4/s1",
   "remote_output_dir": "/tmp/ascend_profile_framework/runs/20260507_xxx",
+  "archived_output_dir": "/mnt/weight/m00663269/profiling/analysis/20260507_xxx",
   "local_output_dir": ".vaws-local/profiling-analysis/runs/20260507_xxx",
   "stage_timings": [{"stage": "normalize", "elapsed_s": 12.3}, ...],
   "mode": "fast",
@@ -169,6 +187,8 @@ python3 .agents/skills/ascend-profiling-analysis/scripts/profile_sweep.py \
 ```
 
 `analysis_summary` 是 agent 的主要消费对象（完整 schema 见 `references/behavior.md` 与本文件「Workspace knowledge hooks」一节）：层数校验（expected vs detected + per-rank 离群）、KPI（step wall 分位数/bubble/comm 占比/bound_family/top 类）、rollup 后的 findings（含 knowledge_refs）、产物地图、limitations。fast 模式下 `report_xlsx` 为 null。
+
+`archived_output_dir` 仅 `--archive-output` 归档成功时非 null（指向 `<archive-output>/<run-dir-name>/`)。`--no-pull` 时 `local_output_dir` 指向只含 `skill_run.json` 的本地 run dir,`report_md` / `report_xlsx` / `report_html` 为 `<remote_output_dir>/report/...` 远端路径，`analysis_summary` / `diagnosis_counts` / `html_status` 全部从远端产物读回，内容与拉回模式一致。
 
 ### Per-step / per-operator pipeline artifacts
 

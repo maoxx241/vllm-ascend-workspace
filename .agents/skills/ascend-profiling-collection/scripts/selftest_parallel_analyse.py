@@ -19,7 +19,14 @@ remote container would run can be executed locally against fake
    per-rank rc; any non-zero rank makes the driver exit non-zero;
 6. timeout behaviour (only when a real GNU timeout(1) is available) -- a
    rank stuck past ``timeout_s`` yields rc 124 and no result line for that
-   rank while the other ranks still complete.
+   rank while the other ranks still complete;
+7. archive branch (--archive-dir) -- ``build_rank_archive_script`` output is
+   executed locally against fake rank dirs (the ssh_exec channel is replaced
+   with a local bash runner), verifying the archived layout
+   ``<archive-dir>/<tag>_<ts>/<rank-basename>/ASCEND_PROFILER_OUTPUT`` plus
+   best-effort metadata copies, and ``archive_rank_outputs`` error capture
+   (a failing rank flips ``archived`` to False and lands in
+   ``archive_error`` without raising).
 
 The real ``ASCEND_ENV_PREAMBLE`` is used unmodified; its
 ``[ -f /etc/profile.d/vaws-ascend-env.sh ]`` guard is a no-op off-container.
@@ -42,6 +49,12 @@ _SCRIPT_DIR = Path(__file__).resolve().parent
 if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 
+from collect_torch_profile_case import (  # noqa: E402
+    archive_rank_outputs,
+    build_rank_archive_script,
+    compact_utc_timestamp,
+)
+import collect_torch_profile_case as collect_case  # noqa: E402
 from run_remote_analyse import (  # noqa: E402
     ANALYSE_EXPORT_MODES,
     ANALYSE_PY,
@@ -382,6 +395,112 @@ def main() -> int:
     check("classify legacy shape -> partial", classify_status(legacy) == "partial")
     legacy["trace_view_json"]["exists"] = True
     check("classify legacy shape -> ok", classify_status(legacy) == "ok")
+
+    # -- Case 6: archive branch (--archive-dir), local fake-container run ----
+    # The ssh_exec channel is replaced with a local bash runner so the exact
+    # script the container would execute is exercised against fake rank dirs.
+    check(
+        "archive: compact_utc_timestamp strips - and :",
+        compact_utc_timestamp("2026-09-07T03:36:45Z") == "20260907T033645Z",
+    )
+
+    aroot = tmp / "case_archive"
+    arch_base = aroot / "shared" / "archives"
+
+    def make_archive_rank(name: str, *, metadata: bool = True) -> str:
+        rank = aroot / "src" / name
+        out = rank / ASCEND_OUTPUT_DIRNAME
+        out.mkdir(parents=True)
+        (out / "ascend_pytorch_profiler_0_1.db").write_bytes(b"db-bytes")
+        if metadata:
+            (rank / "profiler_info_rank0.json").write_text("{}\n", encoding="utf-8")
+            (rank / "profiler_metadata.json").write_text("{}\n", encoding="utf-8")
+        return str(rank)
+
+    rank_a = make_archive_rank("r0_20260907_033645_rank0_ascend_pt")
+    rank_b = make_archive_rank("r0_20260907_033646_rank1_ascend_pt")
+    rank_nometa = make_archive_rank(
+        "r0_20260907_033647_rank2_ascend_pt", metadata=False,
+    )
+
+    script_a = build_rank_archive_script(rank_a, f"{arch_base}/dest_a")
+    check(
+        "archive: script mkdirs dest and cp -r ASCEND_PROFILER_OUTPUT",
+        "mkdir -p" in script_a
+        and f"cp -r {shlex.quote(rank_a + '/ASCEND_PROFILER_OUTPUT')}" in script_a
+        and "profiler_info_*.json" in script_a
+        and "profiler_metadata.json" in script_a,
+    )
+    syntax = subprocess.run(
+        ["bash", "-n", "-c", script_a], capture_output=True, text=True,
+    )
+    check("archive: generated script passes bash -n", syntax.returncode == 0,
+          syntax.stderr)
+
+    def local_ssh_exec(ep, script, *, check=True, timeout=None):  # noqa: A002
+        return subprocess.run(
+            ["bash", "-c", script],
+            capture_output=True, text=True, timeout=timeout,
+        )
+
+    orig_ssh_exec = collect_case.ssh_exec
+    collect_case.ssh_exec = local_ssh_exec
+    try:
+        started_at = "2026-09-07T03:36:45Z"
+        res = archive_rank_outputs(
+            None, [rank_a, rank_b, rank_nometa], str(arch_base),
+            tag="demo-tag", started_at=started_at,
+        )
+    finally:
+        collect_case.ssh_exec = orig_ssh_exec
+
+    expected_root = f"{arch_base}/demo-tag_20260907T033645Z"
+    check("archive: archive_dir is <archive-dir>/<tag>_<compact ts>",
+          res["archive_dir"] == expected_root, f"got {res['archive_dir']}")
+    check("archive: all ranks archived -> archived True, no error",
+          res["archived"] is True and res["archive_error"] is None,
+          f"got {res}")
+    per_rank = {r["path"]: r["archived_path"] for r in res["ranks"]}
+    layout_ok = True
+    for rank in (rank_a, rank_b, rank_nometa):
+        basename = Path(rank).name
+        dest = Path(expected_root) / basename
+        layout_ok = layout_ok and (
+            per_rank[rank] == str(dest)
+            and (dest / ASCEND_OUTPUT_DIRNAME / "ascend_pytorch_profiler_0_1.db").read_bytes() == b"db-bytes"
+        )
+    check("archive: per-rank archived_path + ASCEND_PROFILER_OUTPUT layout",
+          layout_ok, f"got {per_rank}")
+    check(
+        "archive: metadata files copied when present",
+        (Path(expected_root) / Path(rank_a).name / "profiler_info_rank0.json").is_file()
+        and (Path(expected_root) / Path(rank_a).name / "profiler_metadata.json").is_file(),
+    )
+    check(
+        "archive: missing metadata does not fail the rank",
+        per_rank[rank_nometa] is not None,
+    )
+
+    # One rank dir that does not exist -> cp fails, error captured, no raise.
+    missing_rank = str(aroot / "src" / "ghost_ascend_pt")
+    collect_case.ssh_exec = local_ssh_exec
+    try:
+        res_fail = archive_rank_outputs(
+            None, [rank_a, missing_rank], str(arch_base),
+            tag="demo-fail", started_at=started_at,
+        )
+    finally:
+        collect_case.ssh_exec = orig_ssh_exec
+    fail_per_rank = {r["path"]: r["archived_path"] for r in res_fail["ranks"]}
+    check(
+        "archive: failing rank -> archived False + archive_error, other rank kept",
+        res_fail["archived"] is False
+        and res_fail["archive_error"] is not None
+        and missing_rank in (res_fail["archive_error"] or "")
+        and fail_per_rank[missing_rank] is None
+        and fail_per_rank[rank_a] is not None,
+        f"got {res_fail}",
+    )
 
     print()
     if _FAILURES:

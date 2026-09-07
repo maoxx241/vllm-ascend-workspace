@@ -12,7 +12,9 @@ already provide:
     5. stop the service via vllm-ascend-serving
     6. analyse every ``*_ascend_pt`` directory and verify outputs
        (run_remote_analyse.py)
-    7. write a manifest the analysis skill can consume
+    7. optionally archive each rank's outputs to shared storage
+       (``--archive-dir``)
+    8. write a manifest the analysis skill can consume
 
 The skill never modifies code in serving / parity / benchmark; it only
 orchestrates them. The serving skill stays profiling-agnostic -- it only
@@ -32,6 +34,7 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -59,6 +62,8 @@ from _common import (
     open_local_tunnel,
     print_json,
     resolve_execution_target,
+    safe_run_token,
+    ssh_exec,
     unique_collection_run_dir,
 )
 from profile_control import post_remote_action
@@ -524,6 +529,128 @@ def _build_serve_args(args: argparse.Namespace, profiler_config: dict[str, Any])
 
 
 # ---------------------------------------------------------------------------
+# Archive to shared storage (optional --archive-dir)
+#
+# Profiling outputs are far too large to pull back to the local Mac (a single
+# dsv3.1 analysis dragged back 2.2GB once). When --archive-dir points at the
+# shared-storage filesystem mounted on every managed host/container (e.g.
+# /mnt/weight/<user>/profiling/archives), each rank's analyse outputs are
+# copied *on the container* (cp -r over the existing ssh channel, ranks
+# serially) into:
+#
+#     <archive-dir>/<tag>_<compact started_at>/<rank-dir-basename>/
+#         ASCEND_PROFILER_OUTPUT/     (db + csv exports, self-contained)
+#         profiler_info_*.json
+#         profiler_metadata.json
+#
+# The rank-dir basename is kept as the subdirectory name, so the archive root
+# itself is a valid profiling root full of ``*_ascend_pt`` directories and
+# can be fed straight to the analysis skill's ``--remote-profile-root`` from
+# any machine that mounts the same shared storage.
+#
+# Failure semantics: archiving runs only after analyse+verify passed with all
+# ranks ok, and a copy failure never flips an already-ok collection to
+# failed -- it is recorded in ``manifest.archive_error`` (with the affected
+# rank's ``outputs.archived_path`` left null) plus a stderr warning.
+# ---------------------------------------------------------------------------
+
+# torch-profiler metadata files written next to ASCEND_PROFILER_OUTPUT/ in
+# each rank dir; copied best-effort (a missing one does not fail the rank).
+ARCHIVE_METADATA_NAMES = ("profiler_info_*.json", "profiler_metadata.json")
+ARCHIVE_COPY_TIMEOUT_S = 1800
+
+
+def compact_utc_timestamp(utc_iso: str) -> str:
+    """"2026-09-07T03:36:45Z" -> "20260907T033645Z" (dir-name safe)."""
+    return utc_iso.replace("-", "").replace(":", "")
+
+
+def archive_run_dir_name(tag: str, started_at: str) -> str:
+    """``<safe-tag>_<compact started_at>`` archive root directory name."""
+    return f"{safe_run_token(tag, fallback='profile')}_{compact_utc_timestamp(started_at)}"
+
+
+def build_rank_archive_script(rank_dir: str, dest_dir: str) -> str:
+    """Remote bash: copy one rank's analyse outputs into ``dest_dir``.
+
+    ``ASCEND_PROFILER_OUTPUT/`` is copied whole (in db mode it carries the
+    per-rank db; there is no csv to cherry-pick) and must exist -- verify has
+    already guaranteed that, so a copy failure here is a real archive error.
+    The metadata files are best-effort so a missing ``profiler_metadata.json``
+    does not fail the rank.
+    """
+    src = rank_dir.rstrip("/")
+    # Quote the directory part only: quoting the whole path would turn
+    # ``profiler_info_*.json`` into a literal string and kill glob expansion.
+    meta = " ".join(f"{shlex.quote(src)}/{name}" for name in ARCHIVE_METADATA_NAMES)
+    quoted_dest = shlex.quote(dest_dir)
+    return (
+        "set -e; "
+        f"mkdir -p {quoted_dest}; "
+        f"cp -r {shlex.quote(src + '/ASCEND_PROFILER_OUTPUT')} {quoted_dest}/; "
+        f"for f in {meta}; do "
+        f"if [ -e \"$f\" ]; then cp \"$f\" {quoted_dest}/; fi; "
+        "done"
+    )
+
+
+def archive_rank_outputs(
+    ep,
+    rank_dirs: list[str],
+    archive_dir: str,
+    *,
+    tag: str,
+    started_at: str,
+    copy_timeout: float = ARCHIVE_COPY_TIMEOUT_S,
+) -> dict[str, Any]:
+    """Archive every rank's outputs under ``<archive_dir>/<tag>_<ts>/``.
+
+    Serial across ranks and never raises: per-rank copy failures are captured
+    in ``archive_error`` so an archive problem cannot overturn an already-ok
+    collection. Returns::
+
+        {
+          "archive_dir": "<archive_dir>/<tag>_<ts>",
+          "archived": bool,            # True only when every rank copied
+          "archive_error": str | None,
+          "ranks": [{"path": rank_dir, "archived_path": str | None}, ...],
+        }
+    """
+    root = f"{archive_dir.rstrip('/')}/{archive_run_dir_name(tag, started_at)}"
+    result: dict[str, Any] = {
+        "archive_dir": root,
+        "archived": False,
+        "archive_error": None,
+        "ranks": [],
+    }
+    errors: list[str] = []
+    for rank_dir in rank_dirs:
+        basename = rank_dir.rstrip("/").rsplit("/", 1)[-1]
+        dest = f"{root}/{basename}"
+        entry: dict[str, Any] = {"path": rank_dir, "archived_path": None}
+        try:
+            proc = ssh_exec(
+                ep,
+                build_rank_archive_script(rank_dir, dest),
+                check=False,
+                timeout=copy_timeout,
+            )
+            if proc.returncode == 0:
+                entry["archived_path"] = dest
+            else:
+                errors.append(
+                    f"{rank_dir}: rc={proc.returncode} {proc.stderr[-300:]}"
+                )
+        except Exception as exc:  # noqa: BLE001 - archive must not fail collection
+            errors.append(f"{rank_dir}: {exc}")
+        result["ranks"].append(entry)
+    result["archived"] = not errors
+    if errors:
+        result["archive_error"] = "; ".join(errors)
+    return result
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -635,6 +762,25 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    # Optional: archive to shared storage
+    p.add_argument(
+        "--archive-dir",
+        default=None,
+        metavar="<remote-path>",
+        help=(
+            "remote shared-storage directory (e.g. "
+            "/mnt/weight/<user>/profiling/archives) to archive each rank's "
+            "analyse outputs into after analyse+verify passes: every rank's "
+            "ASCEND_PROFILER_OUTPUT/ + profiler metadata is copied (on the "
+            "container, ranks serially) to "
+            "<archive-dir>/<tag>_<started_at>/<rank-dir-basename>/. The "
+            "archive root is itself a valid profiling root for the analysis "
+            "skill's --remote-profile-root on any machine mounting the same "
+            "storage. Archive copy failures never fail an already-ok "
+            "collection; they are recorded as manifest.archive_error"
+        ),
+    )
+
     # Optional: VL workload
     p.add_argument(
         "--image-path", default=None,
@@ -732,6 +878,8 @@ def main(argv: list[str] | None = None) -> int:
         "benchmark_success_threshold": args.benchmark_success_threshold,
         "expected_ranks": args.tp * (args.dp if args.dp else 1),
         "profile_control_timeout": args.profile_control_timeout,
+        "archive_dir": None,
+        "archived": False,
         "run_dir": str(run_dir),
         "serve_args": serve_args,
         "image_meta": image_meta,
@@ -843,6 +991,10 @@ def main(argv: list[str] | None = None) -> int:
         )
         manifest["remote_profile_root"] = profile_root
         manifest["remote_profile_dirs"] = analyse_bundle["dirs"]
+        # Schema stability: every rank's outputs carries archived_path (null
+        # until/unless --archive-dir archiving fills it in).
+        for item in manifest["remote_profile_dirs"]:
+            item["outputs"]["archived_path"] = None
         manifest["rank_count"] = analyse_bundle.get("rank_count")
         manifest["analysis_status"] = analyse_bundle["analysis_status"]
         manifest["expected_output_kind"] = analyse_bundle.get("expected_output_kind")
@@ -857,6 +1009,37 @@ def main(argv: list[str] | None = None) -> int:
         workload_worst = manifest["workload_status"]["status"]
         if analysis_worst == "ok" and workload_worst == "ok":
             manifest["status"] = "ok"
+            # Optional archive to shared storage: runs only after every rank
+            # verified ok, and a copy failure never overturns this ok status
+            # (it lands in archive_error + a stderr warning instead).
+            if args.archive_dir:
+                emit_progress(
+                    "archive",
+                    f"archiving rank outputs under {args.archive_dir}",
+                )
+                archive_result = archive_rank_outputs(
+                    ep,
+                    [d["path"] for d in analyse_bundle["dirs"]],
+                    args.archive_dir,
+                    tag=args.tag,
+                    started_at=manifest["started_at"],
+                )
+                manifest["archive_dir"] = archive_result["archive_dir"]
+                manifest["archived"] = archive_result["archived"]
+                if archive_result["archive_error"]:
+                    manifest["archive_error"] = archive_result["archive_error"]
+                    emit_progress(
+                        "archive",
+                        "archive copy failed (collection stays ok): "
+                        + archive_result["archive_error"],
+                    )
+                archived_by_rank = {
+                    r["path"]: r["archived_path"] for r in archive_result["ranks"]
+                }
+                for item in manifest["remote_profile_dirs"]:
+                    item["outputs"]["archived_path"] = archived_by_rank.get(
+                        item["path"]
+                    )
             (run_dir / "manifest.json").write_text(
                 json.dumps(manifest, indent=2, ensure_ascii=False) + "\n",
                 encoding="utf-8",

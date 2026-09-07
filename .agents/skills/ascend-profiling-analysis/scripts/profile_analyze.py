@@ -11,8 +11,13 @@ Behavior:
   2. Tar-sync ``scripts/ascend_profile/`` to ``<remote-work-dir>/ascend_profile/``.
   3. Remote: ``python3 -m ascend_profile.analyze <ROOT> --output <OUT> --verbose``.
   4. Validate required artifacts exist on the remote.
-  5. Pull lightweight artifacts (and report/) back to the local run dir.
-  6. Emit a single JSON object on stdout.
+  5. Optionally archive the whole remote output dir to shared storage
+     (``--archive-output``; container-side cp -r, independent of the pull).
+  6. Pull lightweight artifacts (and report/) back to the local run dir --
+     skipped entirely with ``--no-pull`` (only ``skill_run.json`` is written
+     locally; ``analysis_summary`` is read back from the remote output and
+     the ``report_*`` stdout paths point at the remote).
+  7. Emit a single JSON object on stdout.
 """
 
 from __future__ import annotations
@@ -77,6 +82,33 @@ def _build_parser() -> argparse.ArgumentParser:
         "--keep-remote-output",
         action="store_true",
         help="pull every file in the remote output dir back to the local run dir",
+    )
+    dest = parser.add_mutually_exclusive_group()
+    dest.add_argument(
+        "--no-pull",
+        action="store_true",
+        help=(
+            "skip the local pull entirely (the fast-mode pull list too): the "
+            "local run dir only gets skill_run.json, analysis_summary is read "
+            "back from the remote output dir, and the report_* paths in the "
+            "stdout JSON point at remote locations. For large roots whose "
+            "artifacts should stay on the server / shared storage."
+        ),
+    )
+    dest.add_argument(
+        "--archive-output",
+        default=None,
+        metavar="<remote-path>",
+        help=(
+            "remote shared-storage directory (e.g. "
+            "/mnt/weight/<user>/profiling/analysis): after the remote analyze "
+            "finishes, copy the whole remote output dir (container-side "
+            "cp -r) to <remote-path>/<run-dir-name>/. Independent of the "
+            "local pull -- the mode's pull list still applies. The stdout "
+            "JSON gains an archived_output_dir field (null when archiving "
+            "was not requested or the copy failed; a copy failure only "
+            "produces a stderr warning, it never fails the analysis)."
+        ),
     )
     parser.add_argument(
         "--remote-timeout",
@@ -278,6 +310,99 @@ def _read_local_analysis_summary(run_dir: Path) -> dict[str, Any] | None:
     except (json.JSONDecodeError, OSError):
         return None
     return data if isinstance(data, dict) else None
+
+
+# ---------------------------------------------------------------------------
+# Remote-side output destinations (--no-pull reads, --archive-output copies)
+# ---------------------------------------------------------------------------
+
+def _read_remote_json(
+    endpoint: common.SshEndpoint,
+    remote_path: str,
+    *,
+    timeout: float = 60,
+) -> dict[str, Any] | None:
+    """Best-effort remote ``cat`` + JSON parse; None on any failure.
+
+    Used by --no-pull to read artifacts (analysis_summary, report manifest,
+    diagnosis findings) straight off the remote output dir without pulling
+    anything back. Never hard-fails: a missing/malformed file is a legal
+    state (older roots, partial stage windows).
+    """
+    try:
+        cat = _ssh_exec_with_retry(
+            endpoint, f"cat {common.quote_remote(remote_path)}", timeout=timeout,
+        )
+    except Exception:  # noqa: BLE001 - best-effort read
+        return None
+    try:
+        data = json.loads(cat.stdout)
+    except json.JSONDecodeError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _read_remote_analysis_summary(
+    endpoint: common.SshEndpoint,
+    remote_output_dir: str,
+) -> dict[str, Any] | None:
+    """--no-pull twin of ``_read_local_analysis_summary`` (remote read-back)."""
+    return _read_remote_json(
+        endpoint, f"{remote_output_dir.rstrip('/')}/report/analysis_summary.json",
+    )
+
+
+def _build_output_archive_script(
+    remote_output_dir: str,
+    archive_root: str,
+    run_dir_name: str,
+) -> str:
+    """Container-side bash: copy the whole output dir into the archive root.
+
+    ``cp -r <src>/. <dst>`` (contents-of-src form) keeps the semantics
+    identical whether or not ``<dst>`` already exists: files land directly
+    under ``<archive_root>/<run_dir_name>/`` instead of nesting an extra
+    directory level the way a plain ``cp -r <src> <parent>`` would.
+    """
+    dst = f"{archive_root.rstrip('/')}/{run_dir_name}"
+    return (
+        "set -e; "
+        f"mkdir -p {common.quote_remote(dst)}; "
+        f"cp -r {common.quote_remote(remote_output_dir.rstrip('/') + '/.')} "
+        f"{common.quote_remote(dst)}"
+    )
+
+
+def _archive_remote_output(
+    endpoint: common.SshEndpoint,
+    remote_output_dir: str,
+    archive_root: str,
+    run_dir_name: str,
+    *,
+    timeout: float = 1800,
+) -> str | None:
+    """Archive the remote output dir to ``<archive_root>/<run_dir_name>/``.
+
+    Best-effort, mirroring the collection skill's archive semantics: a copy
+    failure only produces a stderr warning and a null return -- the analysis
+    itself already succeeded and its output stays at ``remote_output_dir``.
+    """
+    dst = f"{archive_root.rstrip('/')}/{run_dir_name}"
+    try:
+        _ssh_exec_with_retry(
+            endpoint,
+            _build_output_archive_script(remote_output_dir, archive_root, run_dir_name),
+            timeout=timeout,
+        )
+    except Exception as exc:  # noqa: BLE001 - archive must not fail analysis
+        common.progress(
+            "archive",
+            f"output archive failed: {exc}; remote output stays at {remote_output_dir}",
+            archive_root=archive_root,
+        )
+        return None
+    common.progress("archive", "remote output archived", archived_output_dir=dst)
+    return dst
 
 
 # ---------------------------------------------------------------------------
@@ -640,21 +765,14 @@ def _validate_segment_health(endpoint: common.SshEndpoint, remote_output_dir: st
     }
 
 
-def _diagnosis_counts(local_run_dir: Path) -> dict[str, int]:
-    """Aggregate findings by confidence level.
+def _diagnosis_counts_from_data(data: Mapping[str, Any]) -> dict[str, int]:
+    """Aggregate a diagnosis_findings payload by confidence level.
 
     The diagnosis stage emits findings under the ``diagnosis_findings`` key
     (schema: scripts/ascend_profile/diagnostics.py). Older drafts used
     ``findings`` / ``claims``; we keep those as fallbacks so the skill
     survives a schema rename.
     """
-    findings_path = local_run_dir / "diagnosis_findings.json"
-    if not findings_path.is_file():
-        return {}
-    try:
-        data = json.loads(findings_path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return {}
     findings = (
         data.get("diagnosis_findings")
         or data.get("findings")
@@ -666,6 +784,18 @@ def _diagnosis_counts(local_run_dir: Path) -> dict[str, int]:
         confidence = str(finding.get("confidence", "unknown"))
         counts[confidence] = counts.get(confidence, 0) + 1
     return counts
+
+
+def _diagnosis_counts(local_run_dir: Path) -> dict[str, int]:
+    """Aggregate the pulled diagnosis_findings.json by confidence level."""
+    findings_path = local_run_dir / "diagnosis_findings.json"
+    if not findings_path.is_file():
+        return {}
+    try:
+        data = json.loads(findings_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
+    return _diagnosis_counts_from_data(data)
 
 
 def _write_local_run_meta(
@@ -749,7 +879,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return fail
     assert run_dir is not None
 
-    if manifest is not None:
+    if manifest is not None and not args.no_pull:
         (run_dir / "collection_manifest.json").write_text(
             json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
         )
@@ -863,32 +993,54 @@ def main(argv: Sequence[str] | None = None) -> int:
             remote_output_dir=remote_output_dir,
         )
 
-    # Phase 4: pull artifacts back
-    try:
-        common.pull_artifacts(
-            endpoint,
-            remote_output_dir,
-            run_dir,
-            keep_remote_output=args.keep_remote_output,
-            include_paths=_pull_paths_for_mode(args.mode),
+    # Phase 3.5: archive the whole remote output dir to shared storage
+    # (optional; independent of the local pull below -- the mode's pull list
+    # still applies). A copy failure only warns; it never fails the run.
+    archived_output_dir: str | None = None
+    if args.archive_output:
+        archived_output_dir = _archive_remote_output(
+            endpoint, remote_output_dir, args.archive_output, run_dir.name,
         )
-    except RuntimeError as exc:
-        return common.fail_return(
+
+    # Phase 4: pull artifacts back (skipped with --no-pull: artifacts stay on
+    # the remote and the local run dir only gets skill_run.json).
+    if not args.no_pull:
+        try:
+            common.pull_artifacts(
+                endpoint,
+                remote_output_dir,
+                run_dir,
+                keep_remote_output=args.keep_remote_output,
+                include_paths=_pull_paths_for_mode(args.mode),
+            )
+        except RuntimeError as exc:
+            return common.fail_return(
+                "artifact_pull",
+                exc,
+                machine=alias,
+                remote_profile_root=remote_profile_root,
+                remote_output_dir=remote_output_dir,
+            )
+    else:
+        common.progress(
             "artifact_pull",
-            exc,
-            machine=alias,
-            remote_profile_root=remote_profile_root,
+            "--no-pull: local pull skipped; artifacts stay on the remote",
             remote_output_dir=remote_output_dir,
         )
 
     # Embed the agent-first summary in the stdout JSON. Missing on roots
     # analyzed before analysis_summary.json existed -- keep it null and say
-    # so in the progress stream rather than failing the run.
-    analysis_summary = _read_local_analysis_summary(run_dir)
+    # so in the progress stream rather than failing the run. With --no-pull
+    # the summary is read back from the remote output dir instead of the
+    # (nonexistent) local copy.
+    if args.no_pull:
+        analysis_summary = _read_remote_analysis_summary(endpoint, remote_output_dir)
+    else:
+        analysis_summary = _read_local_analysis_summary(run_dir)
     if analysis_summary is None:
         common.progress(
             "analysis_summary",
-            "report/analysis_summary.json not pulled (older root or partial stage window); embedding null",
+            "report/analysis_summary.json unavailable (older root or partial stage window); embedding null",
             local_output_dir=str(run_dir),
         )
     else:
@@ -896,20 +1048,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         # (findings knowledge_refs + layer backfill). The remote artifacts
         # and manifest stay untouched; the enriched summary is written back
         # over the local pulled copy so the file on disk and the stdout
-        # embedding agree.
+        # embedding agree. With --no-pull there is no local copy to update.
         analysis_summary = _enrich_analysis_summary_with_knowledge(
             analysis_summary, model_id=args.model_id
         )
-        try:
-            (run_dir / "report" / "analysis_summary.json").write_text(
-                json.dumps(analysis_summary, ensure_ascii=False, indent=2) + "\n",
-                encoding="utf-8",
-            )
-        except OSError as exc:
-            common.progress(
-                "analysis_summary",
-                f"failed to write enriched analysis_summary.json back: {exc}; stdout keeps the enriched copy",
-            )
+        if not args.no_pull:
+            try:
+                (run_dir / "report" / "analysis_summary.json").write_text(
+                    json.dumps(analysis_summary, ensure_ascii=False, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+            except OSError as exc:
+                common.progress(
+                    "analysis_summary",
+                    f"failed to write enriched analysis_summary.json back: {exc}; stdout keeps the enriched copy",
+                )
 
     elapsed = time.time() - started
     stage_timings = remote_manifest.get("stage_timings", [])
@@ -929,13 +1082,35 @@ def main(argv: Sequence[str] | None = None) -> int:
     normalize_info = stage_results.get("normalize", {}) or {}
     segment_info = stage_results.get("segment", {}) or {}
 
-    report_manifest_path = run_dir / "report" / "manifest.json"
-    html_status = "unknown"
-    if report_manifest_path.is_file():
-        try:
-            html_status = json.loads(report_manifest_path.read_text(encoding="utf-8")).get("html_status", "unknown")
-        except (json.JSONDecodeError, OSError):
-            html_status = "unknown"
+    if args.no_pull:
+        diagnosis_counts = _diagnosis_counts_from_data(
+            _read_remote_json(
+                endpoint, f"{remote_output_dir.rstrip('/')}/diagnosis_findings.json",
+            )
+            or {}
+        )
+        remote_report_manifest = (
+            _read_remote_json(
+                endpoint, f"{remote_output_dir.rstrip('/')}/report/manifest.json",
+            )
+            or {}
+        )
+        html_status = str(remote_report_manifest.get("html_status", "unknown"))
+        report_md = f"{remote_output_dir.rstrip('/')}/report/report.md"
+        report_xlsx = f"{remote_output_dir.rstrip('/')}/report/report.xlsx"
+        report_html = f"{remote_output_dir.rstrip('/')}/report/report.html"
+    else:
+        diagnosis_counts = _diagnosis_counts(run_dir)
+        report_manifest_path = run_dir / "report" / "manifest.json"
+        html_status = "unknown"
+        if report_manifest_path.is_file():
+            try:
+                html_status = json.loads(report_manifest_path.read_text(encoding="utf-8")).get("html_status", "unknown")
+            except (json.JSONDecodeError, OSError):
+                html_status = "unknown"
+        report_md = str(run_dir / "report" / "report.md")
+        report_xlsx = str(run_dir / "report" / "report.xlsx")
+        report_html = str(run_dir / "report" / "report.html")
 
     # A knowledge-base miss falls back to exact-cover search; results are still
     # produced but structure attribution is weaker, so surface it prominently
@@ -961,17 +1136,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         "session_file": target["session_file"],
         "remote_profile_root": remote_profile_root,
         "remote_output_dir": remote_output_dir,
+        "archived_output_dir": archived_output_dir,
         "local_output_dir": str(run_dir),
         "stage_timings": stage_timings,
         "rank_count": normalize_info.get("rank_count"),
         "event_count": normalize_info.get("event_count"),
         "segment_count": segment_info.get("segment_count"),
         "layer_count": segment_info.get("layer_count"),
-        "diagnosis_counts": _diagnosis_counts(run_dir),
+        "diagnosis_counts": diagnosis_counts,
         "analysis_summary": analysis_summary,
-        "report_md": str(run_dir / "report" / "report.md"),
-        "report_xlsx": str(run_dir / "report" / "report.xlsx"),
-        "report_html": str(run_dir / "report" / "report.html"),
+        "report_md": report_md,
+        "report_xlsx": report_xlsx,
+        "report_html": report_html,
         "html_status": html_status,
         "analysis_context": analysis_context,
         "elapsed_s": round(elapsed, 6),
