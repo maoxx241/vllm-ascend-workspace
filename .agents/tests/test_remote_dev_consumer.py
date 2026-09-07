@@ -318,6 +318,112 @@ class ClientConfigurationTests(unittest.TestCase):
             self.assertEqual(mcp["env"]["REMOTE_DEV_RUNTIME_ENV_FILE"], "/etc/profile.d/custom.sh")
 
 
+SPLIT_LEDGER_RELATIVE = ".agents/policy/split-ledger.json"
+OLD_SUBSTRATE_PATH = ".remote-dev/"
+
+
+def _collect_all_strings(node: object, into: list[str]) -> None:
+    """Collect every JSON string, including dictionary keys. Wrong types never skip."""
+    if isinstance(node, str):
+        into.append(node)
+    elif isinstance(node, dict):
+        for key, value in node.items():
+            into.append(key)
+            _collect_all_strings(value, into)
+    elif isinstance(node, list):
+        for value in node:
+            _collect_all_strings(value, into)
+
+
+def _scan_split_ledger_repositories(repos: object, scanned: list[str]) -> None:
+    if not isinstance(repos, dict):
+        _collect_all_strings(repos, scanned)
+        return
+    for repo_id, repo in repos.items():
+        scanned.append(repo_id)
+        if not isinstance(repo, dict):
+            _collect_all_strings(repo, scanned)
+            continue
+        for field, value in repo.items():
+            scanned.append(field)
+            if field == "summary" and isinstance(value, str):
+                continue
+            _collect_all_strings(value, scanned)
+
+
+def _scan_split_ledger_items(items: object, scanned: list[str]) -> None:
+    if not isinstance(items, list):
+        _collect_all_strings(items, scanned)
+        return
+    for item in items:
+        if not isinstance(item, dict):
+            _collect_all_strings(item, scanned)
+            continue
+        for field, value in item.items():
+            scanned.append(field)
+            if field == "notes" and isinstance(value, str):
+                continue
+            if field == "source" and isinstance(value, dict):
+                for source_field, source_value in value.items():
+                    scanned.append(source_field)
+                    if source_field == "scaffold_path" and isinstance(source_value, str):
+                        continue
+                    _collect_all_strings(source_value, scanned)
+                continue
+            if field == "declared_by" and isinstance(value, list):
+                for declaration in value:
+                    if not isinstance(declaration, dict):
+                        _collect_all_strings(declaration, scanned)
+                        continue
+                    for declared_field, declared_value in declaration.items():
+                        scanned.append(declared_field)
+                        if declared_field == "says" and isinstance(declared_value, str):
+                            continue
+                        _collect_all_strings(declared_value, scanned)
+                continue
+            _collect_all_strings(value, scanned)
+
+
+def split_ledger_scanned_strings(payload: object) -> list[str]:
+    """Strings from this exact split-ledger schema that remain executable.
+
+    Dictionary keys are JSON strings and are always collected. Only these
+    complete *value* paths are omitted, and only with these containers:
+    ``repositories.<repo-id>.summary`` (dict/dict/str),
+    ``items[*].source.scaffold_path`` (list/dict/dict/str),
+    ``items[*].declared_by[*].says`` (list/dict/list/dict/str),
+    ``items[*].notes`` (list/dict/str). Same-named keys at any other depth,
+    unknown keys, destination/evidence/consumer fields, and wrong container
+    types stay scanned. The top-level array is ``items``, not ``records``.
+    """
+    scanned: list[str] = []
+    if not isinstance(payload, dict):
+        _collect_all_strings(payload, scanned)
+        return scanned
+    for key, value in payload.items():
+        scanned.append(key)
+        if key == "repositories":
+            _scan_split_ledger_repositories(value, scanned)
+        elif key == "items":
+            _scan_split_ledger_items(value, scanned)
+        else:
+            _collect_all_strings(value, scanned)
+    return scanned
+
+
+def split_ledger_scanned_strings_from_text(text: str) -> list[str]:
+    """Parse ledger text; malformed JSON is scanned as a raw string, never skipped."""
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return [text]
+    return split_ledger_scanned_strings(payload)
+
+
+def split_ledger_old_path_hits(payload: object) -> list[str]:
+    return [value for value in split_ledger_scanned_strings(payload) if OLD_SUBSTRATE_PATH in value]
+
+
 class NoInTreeSubstrateTests(unittest.TestCase):
     """The old vendored copy is gone and nothing executable still reads it."""
 
@@ -403,13 +509,15 @@ class NoInTreeSubstrateTests(unittest.TestCase):
             if not relative or relative in exempt or not path.is_file():
                 continue
             suffix = path.suffix
-            if suffix == ".py":
+            if relative == SPLIT_LEDGER_RELATIVE:
+                haystack = "\n".join(split_ledger_scanned_strings_from_text(path.read_text(encoding="utf-8")))
+            elif suffix == ".py":
                 haystack = "\n".join(self._actionable_python_strings(relative, path.read_text(encoding="utf-8", errors="replace")))
             elif suffix in {".json", ".toml", ".yml", ".yaml"}:
                 haystack = path.read_text(encoding="utf-8", errors="replace")
             else:
                 continue
-            if ".remote-dev/" in haystack:
+            if OLD_SUBSTRATE_PATH in haystack:
                 offenders.append(relative)
         self.assertEqual(offenders, [])
 
@@ -491,6 +599,182 @@ class NoInTreeSubstrateTests(unittest.TestCase):
                 proc = subprocess.run([sys.executable, str(SCRIPTS / "vaws.py"), *args], capture_output=True, text=True, check=False)
                 self.assertEqual(proc.returncode, 0, proc.stderr)
                 self.assertIn("usage:", proc.stdout)
+
+
+class SplitLedgerHistoricalSchemaTests(unittest.TestCase):
+    """Known non-executable split-ledger fields only; never a whole-file skip."""
+
+    def test_known_historical_paths_are_not_scanned(self) -> None:
+        payload = {
+            "repositories": {
+                "remote-dev": {
+                    "repo": "org/remote-dev",
+                    "summary": "extracted from `.remote-dev/`",
+                }
+            },
+            "items": [
+                {
+                    "id": "sample",
+                    "source": {
+                        "repo": "remote-dev",
+                        "path": "core/x.py",
+                        "scaffold_path": ".remote-dev/core/x.py",
+                    },
+                    "declared_by": [{"repo": "remote-dev", "says": "moved from `.remote-dev/core/x.py`"}],
+                    "notes": "historically lived at .remote-dev/core/x.py",
+                    "destination": {"repo": "scaffold", "path": ".agents/x.py"},
+                }
+            ],
+        }
+        self.assertEqual(split_ledger_old_path_hits(payload), [])
+
+    def test_destination_path_is_scanned(self) -> None:
+        payload = {"items": [{"destination": {"path": ".remote-dev/core/x.py"}}]}
+        self.assertEqual(split_ledger_old_path_hits(payload), [".remote-dev/core/x.py"])
+
+    def test_evidence_strings_are_scanned(self) -> None:
+        payload = {
+            "items": [
+                {
+                    "destination": {
+                        "evidence": [
+                            {"kind": "path", "path": ".remote-dev/core/x.py"},
+                            {"kind": "reference", "glob": ".remote-dev/*.py", "pattern": ".remote-dev/"},
+                        ]
+                    }
+                }
+            ]
+        }
+        hits = split_ledger_old_path_hits(payload)
+        self.assertIn(".remote-dev/core/x.py", hits)
+        self.assertIn(".remote-dev/*.py", hits)
+        self.assertIn(".remote-dev/", hits)
+
+    def test_source_path_and_consumer_fields_are_scanned(self) -> None:
+        payload = {
+            "items": [
+                {
+                    "source": {"path": ".remote-dev/core/x.py", "scaffold_path": ".remote-dev/ignored.py"},
+                    "consumer": ".remote-dev/tools/x.py",
+                    "notes": ".remote-dev/notes-ok.py",
+                }
+            ]
+        }
+        hits = split_ledger_old_path_hits(payload)
+        self.assertEqual(sorted(hits), [".remote-dev/core/x.py", ".remote-dev/tools/x.py"])
+
+    def test_unknown_keys_are_scanned(self) -> None:
+        payload = {
+            "items": [
+                {
+                    "source": {
+                        "scaffold_path": ".remote-dev/ok.py",
+                        "extra": ".remote-dev/extra.py",
+                    }
+                }
+            ]
+        }
+        self.assertEqual(split_ledger_old_path_hits(payload), [".remote-dev/extra.py"])
+
+    def test_wrong_depth_same_name_keys_are_scanned(self) -> None:
+        payload = {
+            "notes": ".remote-dev/top-notes.py",
+            "summary": ".remote-dev/top-summary.py",
+            "says": ".remote-dev/top-says.py",
+            "repositories": {
+                "r": {
+                    "notes": ".remote-dev/repo-notes.py",
+                    "says": ".remote-dev/repo-says.py",
+                    "summary": ".remote-dev/ok-summary.py",
+                }
+            },
+            "items": [
+                {
+                    "summary": ".remote-dev/item-summary.py",
+                    "says": ".remote-dev/item-says.py",
+                    "source": {"notes": ".remote-dev/source-notes.py"},
+                    "declared_by": [{"notes": ".remote-dev/decl-notes.py", "says": ".remote-dev/ok-says.py"}],
+                }
+            ],
+            "records": [{"source": {"scaffold_path": ".remote-dev/records.py"}}],
+        }
+        hits = set(split_ledger_old_path_hits(payload))
+        self.assertTrue(
+            {
+                ".remote-dev/top-notes.py",
+                ".remote-dev/top-summary.py",
+                ".remote-dev/top-says.py",
+                ".remote-dev/repo-notes.py",
+                ".remote-dev/repo-says.py",
+                ".remote-dev/item-summary.py",
+                ".remote-dev/item-says.py",
+                ".remote-dev/source-notes.py",
+                ".remote-dev/decl-notes.py",
+                ".remote-dev/records.py",
+            }.issubset(hits)
+        )
+        self.assertNotIn(".remote-dev/ok-summary.py", hits)
+        self.assertNotIn(".remote-dev/ok-says.py", hits)
+
+    def test_wrong_container_types_stay_scanned(self) -> None:
+        cases = [
+            {"items": [{"notes": [".remote-dev/notes-list.py"]}]},
+            {"items": [{"source": {"scaffold_path": {"path": ".remote-dev/scaffold-obj.py"}}}]},
+            {"items": {"source": {"scaffold_path": ".remote-dev/items-dict.py"}}},
+            {"items": [{"declared_by": {"says": ".remote-dev/declared-dict.py"}}]},
+            {"repositories": {"r": {"summary": [".remote-dev/summary-list.py"]}}},
+            {"repositories": [".remote-dev/repos-list.py"]},
+            [".remote-dev/root-list.py"],
+        ]
+        for payload in cases:
+            with self.subTest(payload=payload):
+                self.assertTrue(split_ledger_old_path_hits(payload), payload)
+
+    def test_malformed_json_stays_scanned(self) -> None:
+        text = '{"items": [{"source": {"scaffold_path": ".remote-dev/x.py"}},'
+        hits = split_ledger_scanned_strings_from_text(text)
+        self.assertEqual(hits, [text])
+        self.assertIn(OLD_SUBSTRATE_PATH, hits[0])
+
+    def test_string_injection_in_what_is_scanned(self) -> None:
+        payload = {"items": [{"what": "mentions .remote-dev/what.py", "notes": ".remote-dev/ok.py"}]}
+        self.assertEqual(split_ledger_old_path_hits(payload), ["mentions .remote-dev/what.py"])
+
+    def test_shipped_ledger_only_skips_known_historical_paths(self) -> None:
+        text = (ROOT / SPLIT_LEDGER_RELATIVE).read_text(encoding="utf-8")
+        json.loads(text)
+        self.assertEqual(
+            [value for value in split_ledger_scanned_strings_from_text(text) if OLD_SUBSTRATE_PATH in value],
+            [],
+        )
+
+    def test_top_level_dictionary_key_is_scanned(self) -> None:
+        payload = {".remote-dev/core/new.py": "unknown top-level field"}
+        self.assertIn(".remote-dev/core/new.py", split_ledger_old_path_hits(payload))
+
+    def test_item_dictionary_key_is_scanned(self) -> None:
+        payload = {"items": [{".remote-dev/core/new.py": "unknown item field"}]}
+        self.assertIn(".remote-dev/core/new.py", split_ledger_old_path_hits(payload))
+
+    def test_consumer_dictionary_key_is_scanned(self) -> None:
+        payload = {"items": [{"consumer": {".remote-dev/core/new.py": "enabled"}}]}
+        self.assertIn(".remote-dev/core/new.py", split_ledger_old_path_hits(payload))
+
+    def test_repository_identifier_key_is_scanned(self) -> None:
+        payload = {"repositories": {".remote-dev/core/new.py": {"summary": "unknown repository identifier"}}}
+        self.assertIn(".remote-dev/core/new.py", split_ledger_old_path_hits(payload))
+
+    def test_nested_dictionary_keys_under_schema_objects_are_scanned(self) -> None:
+        payloads = [
+            {"items": [{"source": {".remote-dev/core/new.py": "x"}}]},
+            {"items": [{"declared_by": [{".remote-dev/core/new.py": "x"}]}]},
+            {"items": [{"destination": {".remote-dev/core/new.py": "x"}}]},
+            {"items": [{"destination": {"evidence": [{".remote-dev/core/new.py": "x"}]}}]},
+            {"items": [{"unknown": {".remote-dev/core/new.py": "x"}}]},
+        ]
+        for payload in payloads:
+            with self.subTest(payload=payload):
+                self.assertIn(".remote-dev/core/new.py", split_ledger_old_path_hits(payload))
 
 
 class ClaudeSkillShimTests(unittest.TestCase):
