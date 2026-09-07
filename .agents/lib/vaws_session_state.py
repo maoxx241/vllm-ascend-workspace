@@ -4,12 +4,15 @@
 from __future__ import annotations
 
 import contextlib
+import errno
+import fcntl
 import json
 import os
 import re
 import socket
 import sys
 import tempfile
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -70,6 +73,119 @@ def _load_json(path: Path, default: Any | None = None) -> Any:
         raise SessionStateError(f"invalid JSON in {path}: {exc}") from exc
 
 
+class _FlockUnsupported(Exception):
+    """Raised when fcntl.flock is not supported on this filesystem."""
+
+
+_GUARD_THREAD_LOCKS: dict[str, threading.Lock] = {}
+_GUARD_THREAD_LOCKS_MU = threading.Lock()
+_FLOCK_UNSUPPORTED_ERRNOS = {
+    errno.ENOTSUP,
+    errno.ENOSYS,
+    getattr(errno, "EOPNOTSUPP", errno.ENOTSUP),
+}
+_FLOCK_BUSY_ERRNOS = {errno.EAGAIN, errno.EACCES, errno.EWOULDBLOCK}
+
+
+def _guard_path(lock_path: Path) -> Path:
+    return lock_path.with_name(f"{lock_path.name}.guard")
+
+
+def _thread_gate(lock_path: Path) -> threading.Lock:
+    key = os.path.normpath(str(lock_path))
+    with _GUARD_THREAD_LOCKS_MU:
+        gate = _GUARD_THREAD_LOCKS.get(key)
+        if gate is None:
+            gate = threading.Lock()
+            _GUARD_THREAD_LOCKS[key] = gate
+        return gate
+
+
+def _timed_out(path: Path) -> SessionStateError:
+    return SessionStateError(f"timed out waiting for session lock {path}")
+
+
+@contextlib.contextmanager
+def _reclaim_gate(lock_path: Path, *, deadline: float, poll_seconds: float):
+    """Serialize reclaim/release on a never-unlinked sidecar.
+
+    The lease file stays an O_EXCL lock. This gate only covers unlink of
+    that file. A per-path threading.Lock covers same-process waiters if
+    flock is process-scoped; fcntl.flock covers other processes on local
+    POSIX filesystems. NFS and cross-host coherence are out of scope.
+    ENOTSUP fails closed for reclaim.
+    """
+    guard = _guard_path(lock_path)
+    ensure_state_dir(guard.parent)
+    thread_gate = _thread_gate(lock_path)
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise _timed_out(lock_path)
+        if thread_gate.acquire(timeout=min(poll_seconds, remaining)):
+            break
+    fd = os.open(str(guard), os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError as exc:
+                if exc.errno in _FLOCK_UNSUPPORTED_ERRNOS:
+                    raise _FlockUnsupported() from exc
+                if exc.errno not in _FLOCK_BUSY_ERRNOS:
+                    raise
+                if time.monotonic() >= deadline:
+                    raise _timed_out(lock_path)
+                time.sleep(poll_seconds)
+        try:
+            yield
+        finally:
+            with contextlib.suppress(OSError):
+                fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
+        thread_gate.release()
+
+
+def _lock_identity(path: Path) -> tuple[int, int] | None:
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        return None
+    return (st.st_dev, st.st_ino)
+
+
+def _lock_is_stale(path: Path, stale_after_seconds: float) -> bool:
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        return False
+    return (time.time() - st.st_mtime) >= stale_after_seconds
+
+
+def _reclaim_stale_lock(path: Path, stale_after_seconds: float) -> None:
+    identity = _lock_identity(path)
+    if identity is None or not _lock_is_stale(path, stale_after_seconds):
+        return
+    current = _lock_identity(path)
+    if current != identity or not _lock_is_stale(path, stale_after_seconds):
+        return
+    try:
+        os.unlink(path)
+    except FileNotFoundError:
+        return
+
+
+def _unlink_if_identity(path: Path, identity: tuple[int, int]) -> None:
+    if _lock_identity(path) != identity:
+        return
+    try:
+        os.unlink(path)
+    except FileNotFoundError:
+        return
+
+
 @contextlib.contextmanager
 def file_lock(
     path: Path,
@@ -78,6 +194,15 @@ def file_lock(
     poll_seconds: float = DEFAULT_LOCK_POLL_SECONDS,
     stale_after_seconds: float = DEFAULT_STALE_LOCK_SECONDS,
 ):
+    """Acquire an O_EXCL lease file, reclaiming a stale holder safely.
+
+    Reclaim and release are serialized under ``{name}.guard``. A waiter
+    must re-check inode and mtime under that gate before unlink, and a
+    holder unlinks only its own inode. This is atomic on local POSIX
+    filesystems for threads and processes that honor the gate. It does
+    not claim NFS or cross-host lock coherence; if flock is ENOTSUP,
+    reclaim fails closed and the stale lease is left in place.
+    """
     ensure_state_dir(path.parent)
     deadline = time.monotonic() + timeout_seconds
     owner = {
@@ -86,30 +211,49 @@ def file_lock(
         "created_at": utc_now_iso(),
     }
     fd: int | None = None
+    identity: tuple[int, int] | None = None
     while True:
         try:
             fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
             os.write(fd, json.dumps(owner, ensure_ascii=False).encode("utf-8"))
+            st = os.fstat(fd)
+            identity = (st.st_dev, st.st_ino)
             break
         except FileExistsError:
             try:
+                # path.stat() is the unguarded verdict; reclaim re-checks
+                # with lstat under the gate so a stale reading cannot
+                # unlink a newer holder's inode.
                 age = time.time() - path.stat().st_mtime
             except FileNotFoundError:
                 continue
             if age >= stale_after_seconds:
-                with contextlib.suppress(FileNotFoundError):
-                    path.unlink()
+                try:
+                    with _reclaim_gate(
+                        path, deadline=deadline, poll_seconds=poll_seconds
+                    ):
+                        _reclaim_stale_lock(path, stale_after_seconds)
+                except _FlockUnsupported:
+                    if time.monotonic() >= deadline:
+                        raise _timed_out(path)
+                    time.sleep(poll_seconds)
                 continue
             if time.monotonic() >= deadline:
-                raise SessionStateError(f"timed out waiting for session lock {path}")
+                raise _timed_out(path)
             time.sleep(poll_seconds)
     try:
         yield path
     finally:
-        if fd is not None:
+        if fd is not None and identity is not None:
+            release_deadline = time.monotonic() + timeout_seconds
+            try:
+                with _reclaim_gate(
+                    path, deadline=release_deadline, poll_seconds=poll_seconds
+                ):
+                    _unlink_if_identity(path, identity)
+            except (_FlockUnsupported, SessionStateError):
+                _unlink_if_identity(path, identity)
             os.close(fd)
-        with contextlib.suppress(FileNotFoundError):
-            path.unlink()
 
 
 def sessions_root(repo_root: Path = ROOT) -> Path:

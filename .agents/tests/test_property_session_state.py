@@ -298,57 +298,73 @@ class FileLockProperties(unittest.TestCase):
                 raise RuntimeError("boom")
         self.assertFalse(self.lock.exists())
 
-    @unittest.expectedFailure
     def test_known_defect_two_waiters_can_both_acquire_after_removing_a_stale_lock(self) -> None:
-        """KNOWN DEFECT (medium): stale-lock recovery is check-then-unlink
-        without atomicity. Interleaving: A and B both stat the stale lock; A
-        unlinks it and creates a fresh lock; B (still acting on its stale
-        verdict) unlinks *A's* fresh lock and creates its own. Both are now
-        inside ``file_lock`` at once, so two ``allocate_session_leases`` calls
-        can hand the same NPU device to two sessions. Requires a crashed
-        holder (>= 6h by default) plus concurrent recovery; consequence is a
-        double lease. Reproduced with event ordering, not timing.
-        Evidence: ``holders == ['A', 'B']`` before either release."""
+        """Two waiters that both judge a lease stale must not overlap.
+
+        The unguarded ``Path.stat`` verdict is still racy; reclaim re-checks
+        inode and mtime under the sidecar gate, so a waiter that saw stale
+        cannot unlink a newer holder's file. Hook ``Path.stat`` (not unlink)
+        so B records a stale reading and waits until A holds; under the old
+        check-then-unlink code both entered the section. NFS / cross-host
+        locking is out of scope.
+        """
         self.lock.parent.mkdir(parents=True, exist_ok=True)
         self.lock.write_text("{}", encoding="utf-8")
         old = time.time() - 7 * 3600
         os.utime(self.lock, (old, old))
-        b_at_unlink = threading.Event()
+        b_judged_stale = threading.Event()
         a_holds = threading.Event()
+        in_cs = 0
+        max_in_cs = 0
+        cs_lock = threading.Lock()
         holders: list[str] = []
-        overlap: list[bool] = []
-        real_unlink = Path.unlink
+        real_stat = Path.stat
+        b_stat_count = 0
+        count_lock = threading.Lock()
 
-        # Patch the pathlib method (not os.unlink) so the hook works on every
-        # Python version; before 3.11 pathlib bound os.unlink at import time.
-        def patched_unlink(path: Path, *args: Any, **kwargs: Any) -> None:
-            if str(path) == str(self.lock):
-                name = threading.current_thread().name
-                if name == "waiter-B":
-                    b_at_unlink.set()
+        def patched_stat(path: Path, *args: Any, **kwargs: Any) -> os.stat_result:
+            nonlocal b_stat_count
+            result = real_stat(path, *args, **kwargs)
+            if str(path) != str(self.lock):
+                return result
+            name = threading.current_thread().name
+            if name == "waiter-B":
+                with count_lock:
+                    b_stat_count += 1
+                    first = b_stat_count == 1
+                if first:
+                    b_judged_stale.set()
                     a_holds.wait(5)
-                elif name == "waiter-A":
-                    b_at_unlink.wait(5)
-            return real_unlink(path, *args, **kwargs)
+            elif name == "waiter-A":
+                b_judged_stale.wait(5)
+            return result
 
         def worker(name: str) -> None:
+            nonlocal in_cs, max_in_cs
             with file_lock(self.lock, timeout_seconds=5, poll_seconds=0.01):
-                holders.append(name)
+                with cs_lock:
+                    in_cs += 1
+                    max_in_cs = max(max_in_cs, in_cs)
+                    holders.append(name)
                 if name == "waiter-A":
                     a_holds.set()
-                    time.sleep(0.3)
-                    overlap.append("waiter-B" in holders)
+                    time.sleep(0.2)
                 else:
-                    time.sleep(0.1)
+                    time.sleep(0.05)
+                with cs_lock:
+                    in_cs -= 1
 
-        with mock.patch.object(Path, "unlink", patched_unlink):
-            threads = [threading.Thread(target=worker, args=(n,), name=n) for n in ("waiter-A", "waiter-B")]
+        with mock.patch.object(Path, "stat", patched_stat):
+            threads = [
+                threading.Thread(target=worker, args=(n,), name=n)
+                for n in ("waiter-A", "waiter-B")
+            ]
             for thread in threads:
                 thread.start()
             for thread in threads:
                 thread.join()
-        self.assertEqual(holders, ["waiter-A", "waiter-B"])
-        self.assertEqual(overlap, [False], "B entered the critical section while A still held the lock")
+        self.assertEqual(max_in_cs, 1, f"critical section overlapped: {holders}")
+        self.assertCountEqual(holders, ["waiter-A", "waiter-B"])
 
 
 class TokenProperties(unittest.TestCase):
