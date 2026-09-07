@@ -333,6 +333,57 @@ class EnvFileTests(unittest.TestCase):
         with self.assertRaisesRegex(MODULE.MonitorError, "newline"):
             MODULE.encode_env_value("one\ntwo")
 
+    def test_documented_double_quote_and_unquoted_escapes(self) -> None:
+        for special in ("$", "`", '"', "\\"):
+            with self.subTest(special=special):
+                raw = '"/tmp/name\\' + special + 'suffix"'
+                self.assertEqual(MODULE._unescape_env_value(raw), "/tmp/name" + special + "suffix")
+        self.assertEqual(MODULE._unescape_env_value('"/tmp/name\\qsuffix"'), "/tmp/name\\qsuffix")
+        self.assertEqual(MODULE._unescape_env_value(r"/tmp/with\ space/file.json"), "/tmp/with space/file.json")
+        self.assertEqual(MODULE._unescape_env_value(r"/tmp/back\\slash/file.json"), r"/tmp/back\slash/file.json")
+        self.assertEqual(MODULE._unescape_env_value(r"/tmp/name\qsuffix"), "/tmp/nameqsuffix")
+        self.assertEqual(MODULE._unescape_env_value(r"'/tmp/name\qsuffix'"), r"/tmp/name\qsuffix")
+        self.assertEqual(MODULE._unescape_env_value('  "/tmp/foo.json"  '), "/tmp/foo.json")
+        self.assertEqual(MODULE._unescape_env_value("  /tmp/foo.json  "), "/tmp/foo.json")
+        self.assertEqual(MODULE._unescape_env_value(""), "")
+        self.assertEqual(MODULE._unescape_env_value('""'), "")
+        with self.assertRaisesRegex(MODULE.MonitorError, "unclosed double quote"):
+            MODULE._unescape_env_value('"/tmp/foo.json')
+        with self.assertRaisesRegex(MODULE.MonitorError, "dangling backslash"):
+            MODULE._unescape_env_value("/tmp/foo.json\\")
+
+    def test_explicit_literal_backslash_override_uses_semantic_value(self) -> None:
+        for raw, desired in (
+            ('"/tmp/owned\\$data.json"', "/tmp/owned\\$data.json"),
+            (r"/tmp/with\ space/file.json", "/tmp/with\\ space/file.json"),
+        ):
+            with self.subTest(raw=raw):
+                path = self.clone / ".env"
+                path.write_text("NFM_INVENTORY_FILES=" + raw + "\n", encoding="utf-8")
+                MODULE.apply_clone_env(
+                    self.clone,
+                    inventory_files=[Path(desired)],
+                    host_pool_files=[],
+                    bootstrap_command="",
+                    explicit={"NFM_INVENTORY_FILES"},
+                )
+                expected = "NFM_INVENTORY_FILES=" + MODULE.encode_env_value(desired) + "\n"
+                self.assertEqual(path.read_text(encoding="utf-8"), expected)
+
+    def test_unsupported_env_syntax_fails_before_replacement(self) -> None:
+        path = self.clone / ".env"
+        original = 'NFM_INVENTORY_FILES="/tmp/broken.json\nUNRELATED=keep\n'
+        path.write_text(original, encoding="utf-8")
+        with self.assertRaisesRegex(MODULE.MonitorError, "unclosed double quote"):
+            MODULE.apply_clone_env(
+                self.clone,
+                inventory_files=[Path("/tmp/default.json")],
+                host_pool_files=[],
+                bootstrap_command="",
+                explicit=set(),
+            )
+        self.assertEqual(path.read_text(encoding="utf-8"), original)
+
     def test_unknown_double_quote_escape_is_preserved_without_override(self) -> None:
         path = self.clone / ".env"
         value = "/tmp/owned\\q.json"

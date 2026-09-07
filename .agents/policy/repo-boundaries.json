@@ -118,7 +118,7 @@
         "scripts/start.sh",
         "scripts/install-user-service.sh"
       ],
-      "published_external_references_note": "Exact published surfaces of the extracted repository. A consumer may name an entire canonical GitHub URL, join one of these paths onto a located clone, or assign the descriptor. Substring `://`/`git@`, extra URL path, file URLs, mixed command strings, and executable in-repo Path/open of the skill file are not exemptions."
+      "published_external_references_note": "Exact published surfaces of the extracted repository. A consumer may name an entire canonical GitHub URL, join one of these paths onto a located clone, or assign the descriptor. Substring `://`/`git@`, extra URL path, file URLs, mixed command strings, Path/open of the skill file, and Path(__file__)/ROOT joins that read that file are not exemptions."
     },
     {
       "id": "scaffold-domain",

@@ -372,6 +372,33 @@ class DetectionTests(unittest.TestCase):
         _code, payload = self.repo.run("--mode", "report")
         self.assertEqual([row for row in payload["violations"] if row["rule"] == "R4"], [])
 
+    def test_scaffold_root_join_is_a_local_read(self) -> None:
+        policy = copy.deepcopy(SYNTHETIC_POLICY)
+        top = policy["subsystems"][1]
+        top["repo"] = "vllm-ascend-workspace/vaws-top"
+        top["inline_patterns"] = ["vaws-top", ".agents/skills/vaws-top/"]
+        top["published_external_references"] = [
+            ".agents/skills/vaws-top/",
+            ".agents/skills/vaws-top/SKILL.md",
+        ]
+        self.repo.set_policy(policy)
+        sources = (
+            "from pathlib import Path\nROOT = Path(__file__).resolve().parents[4]\n"
+            "(ROOT / '.agents/skills/vaws-top/SKILL.md').read_text()\n",
+            "from pathlib import Path\n"
+            "(Path(__file__).resolve().parents[4] / '.agents/skills/vaws-top/SKILL.md').read_text()\n",
+            "from pathlib import Path\nROOT = Path(__file__).resolve().parents[4]\n"
+            "open(ROOT / '.agents/skills/vaws-top/SKILL.md')\n",
+            "from pathlib import Path\nROOT = Path(__file__).resolve().parents[4]\n"
+            "ROOT.joinpath('.agents/skills/vaws-top/SKILL.md').is_file()\n",
+        )
+        for source in sources:
+            with self.subTest(source=source):
+                write(self.repo.root / ".agents" / "skills" / "skill-a" / "scripts" / "edge.py", source)
+                _code, payload = self.repo.run("--mode", "report")
+                hits = [row for row in payload["violations"] if row["rule"] == "R4"]
+                self.assertTrue(hits, payload["violations"])
+
     def test_upstream_submodule_content_is_skipped(self) -> None:
         write(self.repo.root / "vllm" / "plugin.py", "import domain_helper\nX = '.agents/lib'\n")
         write(self.repo.root / "vllm-ascend" / "plugin.py", "import domain_helper\n")

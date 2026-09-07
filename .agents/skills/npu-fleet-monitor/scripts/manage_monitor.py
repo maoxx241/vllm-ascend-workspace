@@ -533,10 +533,14 @@ def parse_env_file(text: str) -> list[tuple[str | None, str | None, str]]:
     return rows
 
 
-_DOUBLE_QUOTE_ESCAPES = frozenset({"\\", '"'})
+_DOUBLE_QUOTE_ESCAPES = frozenset({"\\", '"', "$", "`"})
 
 
-def _unescape_double_quoted(inner: str) -> str:
+def _fail_env_syntax(message: str) -> None:
+    raise MonitorError(message)
+
+
+def _unescape_backslash_run(inner: str, *, specials: frozenset[str] | None) -> str:
     chars: list[str] = []
     index = 0
     while index < len(inner):
@@ -546,9 +550,13 @@ def _unescape_double_quoted(inner: str) -> str:
             index += 1
             continue
         if index + 1 >= len(inner):
-            raise MonitorError("clone .env has a dangling backslash in a double-quoted value")
+            _fail_env_syntax("clone .env has a dangling backslash")
         nxt = inner[index + 1]
-        if nxt in _DOUBLE_QUOTE_ESCAPES:
+        if nxt in "\n\r":
+            _fail_env_syntax("clone .env has an unsupported line continuation")
+        if specials is None:
+            chars.append(nxt)
+        elif nxt in specials:
             chars.append(nxt)
         else:
             chars.append("\\")
@@ -558,21 +566,26 @@ def _unescape_double_quoted(inner: str) -> str:
 
 
 def _unescape_env_value(raw: str) -> str:
-    if raw.startswith('"'):
-        if len(raw) < 2 or raw[-1] != '"':
-            raise MonitorError("clone .env has an unclosed double quote")
-        return _unescape_double_quoted(raw[1:-1])
-    if raw.startswith("'"):
-        if len(raw) < 2 or raw[-1] != "'":
-            raise MonitorError("clone .env has an unclosed single quote")
-        return raw[1:-1]
-    return raw
+    text = raw.strip()
+    if not text:
+        return ""
+    if text.startswith('"'):
+        if len(text) < 2 or text[-1] != '"':
+            _fail_env_syntax("clone .env has an unclosed double quote")
+        return _unescape_backslash_run(text[1:-1], specials=_DOUBLE_QUOTE_ESCAPES)
+    if text.startswith("'"):
+        if len(text) < 2 or text[-1] != "'":
+            _fail_env_syntax("clone .env has an unclosed single quote")
+        return text[1:-1]
+    if '"' in text or "'" in text:
+        _fail_env_syntax("clone .env has an unquoted value with an embedded quote")
+    return _unescape_backslash_run(text, specials=None)
 
 
 def encode_env_value(value: str) -> str:
     if "\n" in value or "\r" in value:
         raise MonitorError("refusing to write an NFM value containing a newline")
-    if value and all(char not in value for char in ' \t#"\'\\$') and "=" not in value:
+    if value and all(char not in value for char in ' \t#"\'\\$`') and "=" not in value:
         return value
     escaped = value.replace("\\", "\\\\").replace('"', '\\"')
     return f'"{escaped}"'

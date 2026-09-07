@@ -505,17 +505,140 @@ def _call_attr_or_name(call: ast.Call) -> str | None:
     return None
 
 
-def is_direct_local_file_use(node: ast.AST, parents: dict[ast.AST, ast.AST]) -> bool:
-    """True when the literal is Path(...)/open(...) of an in-tree relative path.
+_PATH_CTORS = frozenset({"Path", "PurePath", "PurePosixPath", "PosixPath"})
+_FILE_ACCESS_ATTRS = frozenset(
+    {
+        "read_text",
+        "read_bytes",
+        "read",
+        "open",
+        "write_text",
+        "write_bytes",
+        "write",
+        "exists",
+        "is_file",
+        "is_dir",
+        "unlink",
+        "mkdir",
+        "touch",
+        "glob",
+        "rglob",
+        "iterdir",
+        "stat",
+    }
+)
+_ROOT_CHAIN_ATTRS = frozenset({"resolve", "expanduser", "absolute", "parent", "parents"})
 
-    A descriptor assignment or a path joined onto an already located clone is
-    not a direct local file operation.
-    """
-    parent = parents.get(node)
-    if not isinstance(parent, ast.Call) or not parent.args or parent.args[0] is not node:
+
+def _is_dunder_file(node: ast.AST) -> bool:
+    return isinstance(node, ast.Name) and node.id == "__file__"
+
+
+def _is_scaffold_root_expr(node: ast.AST, root_names: set[str]) -> bool:
+    """Finite Path(__file__) / parents[N] / same-module ROOT bindings."""
+    if isinstance(node, ast.Name):
+        return node.id in root_names
+    if isinstance(node, ast.Call):
+        name = _call_attr_or_name(node)
+        if name in _PATH_CTORS:
+            return bool(node.args) and _is_dunder_file(node.args[0])
+        if isinstance(node.func, ast.Attribute) and node.func.attr in {"resolve", "expanduser", "absolute"}:
+            return _is_scaffold_root_expr(node.func.value, root_names)
         return False
-    name = _call_attr_or_name(parent)
-    return name in {"Path", "PurePath", "PurePosixPath", "PosixPath", "open"}
+    if isinstance(node, ast.Attribute) and node.attr in _ROOT_CHAIN_ATTRS:
+        return _is_scaffold_root_expr(node.value, root_names)
+    if isinstance(node, ast.Subscript):
+        if isinstance(node.value, ast.Attribute) and node.value.attr == "parents":
+            return _is_scaffold_root_expr(node.value.value, root_names)
+        return False
+    return False
+
+
+def _collect_scaffold_root_names(tree: ast.Module) -> set[str]:
+    names: set[str] = set()
+
+    def visit(body: list[ast.stmt]) -> None:
+        for stmt in body:
+            if isinstance(stmt, ast.Assign):
+                if _is_scaffold_root_expr(stmt.value, names):
+                    for target in stmt.targets:
+                        if isinstance(target, ast.Name):
+                            names.add(target.id)
+            elif (
+                isinstance(stmt, ast.AnnAssign)
+                and isinstance(stmt.target, ast.Name)
+                and stmt.value is not None
+                and _is_scaffold_root_expr(stmt.value, names)
+            ):
+                names.add(stmt.target.id)
+            elif isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.With)):
+                visit(stmt.body)
+            elif isinstance(stmt, (ast.If, ast.For, ast.While)):
+                visit(stmt.body)
+                visit(stmt.orelse)
+
+    visit(tree.body)
+    return names
+
+
+def _join_is_file_access(join_node: ast.AST, parents: dict[ast.AST, ast.AST]) -> bool:
+    """True when a joined path is opened, read, written, or otherwise accessed.
+
+    Unknown surrounding forms report rather than hide a local skill path.
+    """
+    current: ast.AST = join_node
+    seen: set[int] = set()
+    while id(current) not in seen:
+        seen.add(id(current))
+        parent = parents.get(current)
+        if parent is None:
+            return True
+        if isinstance(parent, ast.Attribute) and parent.value is current:
+            if parent.attr in _FILE_ACCESS_ATTRS:
+                return True
+            if parent.attr in {"joinpath", "resolve", "expanduser", "absolute"}:
+                current = parent
+                continue
+            return True
+        if isinstance(parent, ast.Call):
+            name = _call_attr_or_name(parent)
+            if name == "open" or name in _PATH_CTORS:
+                return True
+            if isinstance(parent.func, ast.Attribute) and parent.func is current:
+                current = parent
+                continue
+            return True
+        if isinstance(parent, ast.BinOp) and isinstance(parent.op, ast.Div) and parent.left is current:
+            current = parent
+            continue
+        return True
+    return True
+
+
+def is_direct_local_file_use(
+    node: ast.AST,
+    parents: dict[ast.AST, ast.AST],
+    root_names: set[str] | None = None,
+) -> bool:
+    """True for Path/open of a relative path, or a scaffold-root join used as a file.
+
+    Descriptor assignments and joins onto an explicit external locator stay false.
+    """
+    root_names = set() if root_names is None else root_names
+    parent = parents.get(node)
+    if isinstance(parent, ast.Call) and parent.args and parent.args[0] is node:
+        name = _call_attr_or_name(parent)
+        if name in _PATH_CTORS or name == "open":
+            return True
+        if name == "joinpath" and isinstance(parent.func, ast.Attribute):
+            if _is_scaffold_root_expr(parent.func.value, root_names):
+                return _join_is_file_access(parent, parents)
+            return False
+    if isinstance(parent, ast.BinOp) and isinstance(parent.op, ast.Div) and parent.right is node:
+        if _is_scaffold_root_expr(parent.left, root_names):
+            return _join_is_file_access(parent, parents)
+        return False
+    return False
 
 
 def _inline_hits(literal: str, patterns: Sequence[str]) -> list[str]:
@@ -569,6 +692,7 @@ def collect_references(repo_root: Path, policy: Policy, ownership: Ownership) ->
             unparsed += 1
             continue
         parents = _parent_map(tree)
+        root_names = _collect_scaffold_root_names(tree)
 
         for line, dotted, symbol in _imported_names(tree):
             target = ownership.subsystem_for_module(dotted)
@@ -600,7 +724,7 @@ def collect_references(repo_root: Path, policy: Policy, ownership: Ownership) ->
                             source=source.id,
                             target=subsystem.id,
                             detail=literal[:200],
-                            direct_local_file=is_direct_local_file_use(node, parents),
+                            direct_local_file=is_direct_local_file_use(node, parents, root_names),
                         )
                     )
                     break

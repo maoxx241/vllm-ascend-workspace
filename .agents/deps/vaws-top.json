@@ -3,7 +3,7 @@
   "name": "vaws-top",
   "repository": "vllm-ascend-workspace/vaws-top",
   "url": "https://github.com/vllm-ascend-workspace/vaws-top.git",
-  "visibility": "public",
+  "visibility": "private",
   "ref": "main",
   "commit": "e13478484b9f52e8847169a785eebc32b268787f",
   "root_env": "VAWS_TOP_ROOT",
