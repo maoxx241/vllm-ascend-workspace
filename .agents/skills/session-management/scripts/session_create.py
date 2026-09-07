@@ -197,7 +197,9 @@ def probe_host_npu_devices(record: dict[str, Any]) -> tuple[list[int] | None, di
         payload["status"] = "occupancy_unknown"
         return None, payload
     payload["status"] = "ok" if diagnostics["visible_devices"] else "unparsed"
-    return free or None, payload
+    # A successful parse of an empty free set is `[]`, not unknown occupancy.
+    # `free or None` collapsed that case and skipped the allocator's guard.
+    return free, payload
 
 
 def host_port_available(record: dict[str, Any]) -> Any:
@@ -596,8 +598,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.npu_count is not None and args.npu_count < 1:
             raise SessionStateError("--npu-count must be >= 1")
         available_devices, npu_probe = probe_host_npu_devices(base_record)
+        npu_requested = bool(requested_devices) or args.npu_count is not None
         if available_devices is None:
-            emit_progress("probe-npus", "host NPU device probe unavailable; validating syntax only", **npu_probe)
+            if npu_requested:
+                emit_progress(
+                    "probe-npus",
+                    "host NPU occupancy is unavailable; refusing NPU allocation",
+                    **npu_probe,
+                )
+            else:
+                emit_progress(
+                    "probe-npus",
+                    "host NPU occupancy is unavailable; continuing without NPU leases",
+                    **npu_probe,
+                )
         else:
             emit_progress("probe-npus", "host NPU device probe succeeded", devices=available_devices)
 

@@ -306,11 +306,16 @@ def allocate_session_leases(
     if requested_devices is not None and npu_count is not None:
         raise SessionStateError("use only one of --devices or --npu-count")
     available_set = set(available_devices) if available_devices is not None else None
+    occupancy_unavailable = "cannot allocate NPU devices: host occupancy is unavailable"
     with file_lock(session_lock_dir(repo_root) / "leases.lock"):
         leases = load_leases(repo_root)
         bucket = _machine_lease_bucket(leases, machine_alias)
         allocated_devices: list[int] = []
         if requested_devices is not None:
+            if requested_devices and available_set is None:
+                # Unknown occupancy is not an empty free set. An explicit
+                # device list must not bypass a failed or unreadable probe.
+                raise SessionStateError(occupancy_unavailable)
             if available_set is not None:
                 missing = sorted(set(requested_devices) - available_set)
                 if missing:
@@ -328,12 +333,9 @@ def allocate_session_leases(
             if available_set is None:
                 # Without a host probe we cannot know how many NPUs exist or
                 # which are busy; guessing a fixed device range would hand out
-                # devices that may not exist. Fail fast instead of masking the
-                # probe failure.
-                raise SessionStateError(
-                    "cannot allocate by --npu-count: host NPU probe data is unavailable; "
-                    "fix the probe or request explicit --devices"
-                )
+                # devices that may not exist. Explicit --devices is not a
+                # bypass: that path fails closed on unknown occupancy too.
+                raise SessionStateError(occupancy_unavailable)
             candidates = sorted(available_set)
             for dev in candidates:
                 if _resource_owner(bucket, "npu_devices", str(dev)) in {None, sid}:
