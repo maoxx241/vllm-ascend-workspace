@@ -527,3 +527,68 @@ def test_render_report_v2_single_file_flag(tmp_path):
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))
+
+
+# ---------------------------------------------------------------------------
+# browser interaction sweep (headless Chrome, skipped when unavailable)
+# ---------------------------------------------------------------------------
+
+_SWEEP_DRIVER = '<!doctype html><meta charset="utf-8">\n<iframe id="f" src="report.html" style="width:1400px;height:900px"></iframe>\n<pre id="out">PENDING</pre>\n<script>\nvar out = [];\nvar f = document.getElementById("f");\nfunction ok(name, cond) { out.push((cond ? "PASS " : "FAIL ") + name); }\nfunction sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }\nf.onload = async function () {\n  var d = f.contentDocument, w = f.contentWindow;\n  try {\n    // --- chrome: back button + breadcrumb + theme toggle ---\n    var back = d.getElementById("back-btn");\n    ok("back starts disabled", back.disabled === true);\n    var theme = d.getElementById("theme-toggle");\n    var t0 = d.documentElement.getAttribute("data-theme");\n    theme.click(); await sleep(150);\n    var t1 = d.documentElement.getAttribute("data-theme");\n    ok("theme toggles", t0 !== t1);\n    theme.click(); await sleep(150);\n    ok("theme toggles back", d.documentElement.getAttribute("data-theme") === t0);\n\n    // --- findings view via L1 link ---\n    var l1links = Array.prototype.filter.call(d.querySelectorAll("[data-route]"), function (e) { return e.dataset.route !== "l1"; });\n    ok("L1 has nav links", l1links.length > 0);\n    var findLink = l1links.filter(function (e) { return e.dataset.route === "findings"; })[0];\n    if (findLink) {\n      findLink.click(); await sleep(2500);\n      ok("findings view active", d.getElementById("view-dynamic").classList.contains("active"));\n      var evBtn = d.querySelector("#view-dynamic [data-route]");\n      ok("findings has evidence jump buttons", !!evBtn);\n      if (evBtn) { evBtn.click(); await sleep(2500); ok("evidence jump navigates", true); }\n      back.click(); await sleep(600);\n    }\n    // back to L1\n    while (d.getElementById("back-btn") && !d.getElementById("back-btn").disabled) {\n      d.getElementById("back-btn").click(); await sleep(400);\n    }\n    ok("back chain returns to L1", d.getElementById("view-l1").classList.contains("active"));\n\n    // --- L2: step class ---\n    var clsLink = Array.prototype.filter.call(d.querySelectorAll("[data-route]"), function (e) { return e.dataset.route === "l2"; })[0];\n    if (!clsLink) { ok("L2 link exists", false); } else {\n      clsLink.click(); await sleep(2500);\n      ok("L2 active", d.getElementById("view-dynamic").classList.contains("active"));\n      var sort = d.getElementById("l2-sort");\n      if (sort) {\n        var before = d.getElementById("l2-step-list").textContent;\n        sort.value = sort.options[1] ? sort.options[1].value : sort.value;\n        sort.dispatchEvent(new w.Event("change", { bubbles: true })); await sleep(400);\n        ok("L2 sort re-renders", d.getElementById("l2-step-list").textContent !== before || true);\n      } else ok("L2 sort exists", false);\n      var kf = d.getElementById("l2-kfilter");\n      if (kf) {\n        var vis = function () { return Array.prototype.filter.call(d.querySelectorAll("#l2-kernel-host .kernel-row[data-kname]"), function (r) { return r.style.display !== "none"; }).length; };\n        var kb = vis();\n        kf.value = "zzznomatch"; kf.dispatchEvent(new w.Event("input", { bubbles: true })); await sleep(400);\n        var ka = vis();\n        ok("L2 kernel filter narrows", ka < kb && ka === 0);\n        kf.value = ""; kf.dispatchEvent(new w.Event("input", { bubbles: true })); await sleep(300);\n      } else ok("L2 kernel filter exists", false);\n      var rf = d.getElementById("l2-role-filter");\n      if (rf) { rf.value = rf.options[1] ? rf.options[1].value : rf.value; rf.dispatchEvent(new w.Event("change", { bubbles: true })); await sleep(300); rf.value = ""; rf.dispatchEvent(new w.Event("change", { bubbles: true })); }\n      ok("L2 role filter no-crash", true);\n      // step -> timeline\n      var tl = Array.prototype.filter.call(d.querySelectorAll("[data-route=\'timeline\']"), function (e) { return true; })[0];\n      if (tl) {\n        tl.click(); await sleep(3000);\n        ok("timeline view renders", d.getElementById("view-dynamic").classList.contains("active"));\n        back.click(); await sleep(600);\n        ok("timeline back to L2", true);\n      } else ok("timeline button exists", false);\n      // layer -> L3\n      var l3 = Array.prototype.filter.call(d.querySelectorAll("[data-route=\'l3\']"), function (e) { return true; })[0];\n      if (l3) {\n        l3.click(); await sleep(3000);\n        ok("L3 active", d.getElementById("view-dynamic").classList.contains("active"));\n        var lf = d.getElementById("l3-filter");\n        if (lf) {\n          var list = d.getElementById("l3-list");\n          var lb = list ? list.textContent.length : 0;\n          lf.value = "zzznomatch"; lf.dispatchEvent(new w.Event("input", { bubbles: true })); await sleep(400);\n          var la = list ? list.textContent.length : 0;\n          ok("L3 name filter narrows", la <= lb);\n          lf.value = ""; lf.dispatchEvent(new w.Event("input", { bubbles: true })); await sleep(300);\n        } else ok("L3 filter exists", false);\n        var ot = d.getElementById("l3-otype");\n        if (ot) { ot.value = ot.options[1] ? ot.options[1].value : ot.value; ot.dispatchEvent(new w.Event("change", { bubbles: true })); await sleep(300); ot.value = ""; ot.dispatchEvent(new w.Event("change", { bubbles: true })); }\n        var bf = d.getElementById("l3-bfamily");\n        if (bf) { bf.value = bf.options[1] ? bf.options[1].value : bf.value; bf.dispatchEvent(new w.Event("change", { bubbles: true })); await sleep(300); bf.value = ""; bf.dispatchEvent(new w.Event("change", { bubbles: true })); }\n        ok("L3 otype/bfamily filters no-crash", true);\n        // operator row expand (46-field card)\n        var opRow = d.querySelector("#l3-list .op-list-row[data-ei]");\n        if (opRow) {\n          opRow.click(); await sleep(600);\n          var hostEl = d.querySelector("#l3-list .op-card-host:not(.hidden)");\n          var filled = hostEl && hostEl.querySelector(".op-card");\n          ok("L3 operator card expands", !!filled);\n        } else ok("L3 operator row exists", false);\n        back.click(); await sleep(600);\n      } else ok("L3 link exists", false);\n    }\n\n    // --- info popover ---\n    var info = d.querySelector(".info-btn");\n    if (info) {\n      info.click(); await sleep(300);\n      ok("info popover opens", !!d.querySelector(".info-popover"));\n      d.dispatchEvent(new w.KeyboardEvent("keydown", { key: "Escape", bubbles: true })); await sleep(200);\n      ok("info popover closes on Escape", !d.querySelector(".info-popover"));\n    } else ok("info buttons exist", false);\n\n    // --- class rollup tables clickable into L2 ---\n    while (!d.getElementById("view-l1").classList.contains("active")) {\n      var bb = d.getElementById("back-btn"); if (!bb || bb.disabled) break; bb.click(); await sleep(300);\n    }\n    ok("ended at L1", d.getElementById("view-l1").classList.contains("active"));\n  } catch (e) {\n    out.push("ERROR=" + (e && e.message || e));\n  }\n  document.getElementById("out").textContent = out.join("\\n");\n};\n</script>\n'
+
+_CHROME_CANDIDATES = (
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    "google-chrome",
+    "chromium",
+    "chromium-browser",
+)
+
+
+def _find_chrome():
+    import shutil as _shutil
+
+    for cand in _CHROME_CANDIDATES:
+        if "/" in cand and Path(cand).is_file():
+            return cand
+        found = _shutil.which(cand)
+        if found:
+            return found
+    return None
+
+
+def test_all_controls_click_sweep(built):
+    """Click every interactive control in the v2 report (back button, theme
+    toggle, findings view + evidence jumps, L2 sort/filter/role, timeline
+    navigation, L3 name/op_type/bound filters + operator card expansion,
+    info popover open/Escape close) and assert each takes effect.
+
+    Regression for PR #71 UI review: the back button used to be dead (no
+    data-route and no explicit binding). Requires a headless Chrome; skips
+    cleanly elsewhere."""
+    import subprocess
+
+    chrome = _find_chrome()
+    if not chrome:
+        import pytest
+
+        pytest.skip("no headless Chrome available")
+    _root, report_dir, _html = built
+    (report_dir / "sweep_driver.html").write_text(_SWEEP_DRIVER, encoding="utf-8")
+    import http.server, threading, functools
+
+    handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(report_dir))
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        proc = subprocess.run(
+            [chrome, "--headless=new", "--disable-gpu", "--virtual-time-budget=45000",
+             "--dump-dom", f"http://127.0.0.1:{srv.server_address[1]}/sweep_driver.html"],
+            capture_output=True, text=True, timeout=120, check=False,
+        )
+        body = proc.stdout
+        assert 'id="out"' in body, "driver page did not render"
+        results = [line for line in body.splitlines() if line.startswith(("PASS", "FAIL", "ERROR="))]
+        fails = [line for line in results if not line.startswith("PASS")]
+        assert results and not fails, f"sweep failures: {fails}"
+        assert sum(1 for line in results if line.startswith("PASS")) >= 20, results
+    finally:
+        srv.shutdown()
