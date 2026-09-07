@@ -414,6 +414,21 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def child_command(raw: Sequence[str] | None) -> list[str]:
+    """Build the child argv, consuming only one optional leading ``--``.
+
+    ``envelope_lint.py run -- cmd ...`` uses a single leading separator to
+    end lint options. That token is not part of the child. Every remaining
+    token is left unchanged, in order, including a later ``--`` that the
+    child itself uses as an option delimiter. The returned list is the
+    exact argv used for both execution and the report.
+    """
+    command = list(raw or ())
+    if command and command[0] == "--":
+        return command[1:]
+    return command
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     raw_argv = list(argv) if argv is not None else sys.argv[1:]
     args = build_parser().parse_args(raw_argv)
@@ -492,7 +507,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         )
 
-    command = [part for part in (args.command or []) if part != "--"]
+    command = child_command(args.command)
     if not command:
         report = {"findings": ["no command given"], "valid": False}
         progress("run", "no command given")

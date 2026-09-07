@@ -1239,6 +1239,65 @@ class LintTests(unittest.TestCase):
         self.assertTrue(report["valid"], report["findings"])
         self.assertEqual(report["exit_code"], 0)
 
+    def test_lint_run_preserves_child_argv_separator(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            recorded = directory / "actual-argv.json"
+            envelope_path = directory / "child-envelope.json"
+            child = directory / "child.py"
+            envelope_path.write_text(
+                json.dumps(base_envelope()) + "\n", encoding="utf-8"
+            )
+            child.write_text(
+                "import json\n"
+                "import pathlib\n"
+                "import sys\n"
+                f"pathlib.Path({str(recorded)!r}).write_text("
+                "json.dumps(sys.argv[1:]), encoding='utf-8')\n"
+                f"sys.stdout.write(pathlib.Path({str(envelope_path)!r})"
+                ".read_text(encoding='utf-8'))\n"
+                "raise SystemExit("
+                "0 if sys.argv[1:] == ['--', '--literal'] else 67)\n",
+                encoding="utf-8",
+            )
+            child_argv = [sys.executable, str(child), "--", "--literal"]
+            direct = subprocess.run(
+                child_argv,
+                capture_output=True,
+                text=True,
+                check=False,
+                cwd=str(ROOT),
+            )
+            self.assertEqual(direct.returncode, 0, direct.stderr[-2000:])
+            self.assertEqual(
+                json.loads(recorded.read_text(encoding="utf-8")),
+                ["--", "--literal"],
+            )
+            wrapped = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPTS / "envelope_lint.py"),
+                    "run",
+                    "--",
+                    *child_argv,
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+                cwd=str(ROOT),
+            )
+            self.assertEqual(
+                json.loads(recorded.read_text(encoding="utf-8")),
+                ["--", "--literal"],
+            )
+            payload = json.loads(wrapped.stdout)
+            validate_envelope(payload)
+            self.assertEqual(wrapped.returncode, 0, wrapped.stderr[-2000:])
+            report = payload["extensions"]["report"]
+            self.assertTrue(report["valid"], report["findings"])
+            self.assertEqual(report["command"], child_argv)
+            self.assertEqual(report["exit_code"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()
