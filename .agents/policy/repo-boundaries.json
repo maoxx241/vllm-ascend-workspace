@@ -99,7 +99,7 @@
       "id": "vaws-top",
       "repo": "vllm-ascend-workspace/vaws-top",
       "layer": 10,
-      "summary": "Loopback-only NPU fleet dashboard. Today it lives on the in-repo `vaws-top` branch; after extraction it is a separate repository reached by clone, not by `git worktree add <branch>`.",
+      "summary": "Loopback-only NPU fleet dashboard. Consumed as an external checkout of vllm-ascend-workspace/vaws-top; the scaffold consumer is `.agents/skills/npu-fleet-monitor/`.",
       "roots": [],
       "roots_note": "No roots on `main`: the dashboard source is not in this tree. Only the bootstrap entry (`.agents/skills/npu-fleet-monitor/`) is, and that is a consumer.",
       "public_paths": [],
@@ -109,7 +109,16 @@
         ".agents/skills/vaws-top/",
         "vaws-top"
       ],
-      "inline_patterns_note": "A literal naming the dashboard as in-repo content — the `vaws-top` branch name handed to `git worktree add`, or a path inside the dashboard's own tree. Each is a place that has to learn a repository URL instead of a branch name."
+      "inline_patterns_note": "A literal naming the dashboard as in-repo content — the `vaws-top` branch name handed to `git worktree add`, or a path treated as if it still lived in this tree. Canonical GitHub SSH/HTTPS URLs for this repo and the published_external_references below are consumer references, not in-repo content.",
+      "published_external_references": [
+        ".agents/skills/vaws-top/",
+        ".agents/skills/vaws-top/SKILL.md",
+        "scripts/vaws-top.py",
+        "scripts/vaws-top-mcp.py",
+        "scripts/start.sh",
+        "scripts/install-user-service.sh"
+      ],
+      "published_external_references_note": "Surfaces of the extracted repository. A consumer may name them as paths inside an external clone, or name the canonical GitHub repository. They are not an allowlist for `git worktree add` or a local `vaws-top` branch."
     },
     {
       "id": "scaffold-domain",
@@ -168,7 +177,7 @@
       "kind": "extracted-inline-reference",
       "severity": "error",
       "title": "An extracted subsystem is not referenced as in-repo content",
-      "why": "`.agents/skills/npu-fleet-monitor/scripts/manage_monitor.py` locates the dashboard with `git worktree add <target> vaws-top` against this repository and then validates `.agents/skills/vaws-top/SKILL.md` inside it. Once the dashboard is its own repository there is no such branch, so the bootstrap silently fails to find anything. These are the call sites that must switch from a branch name to a repository."
+      "why": "`.agents/skills/npu-fleet-monitor/scripts/manage_monitor.py` used to locate the dashboard with `git worktree add <target> vaws-top` against this repository. After extraction the consumer must clone or locate the published vaws-top repository. Canonical GitHub URLs and the extracted skill/CLI paths are published consumer references, not in-repo content. Do not suppress remaining old branch/worktree routes through fixture exclusions or a blanket allowlist."
     }
   ]
 }

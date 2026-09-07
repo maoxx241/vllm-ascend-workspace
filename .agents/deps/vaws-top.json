@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "name": "vaws-top",
+  "repository": "vllm-ascend-workspace/vaws-top",
+  "url": "https://github.com/vllm-ascend-workspace/vaws-top.git",
+  "visibility": "public",
+  "ref": "main",
+  "commit": "e13478484b9f52e8847169a785eebc32b268787f",
+  "root_env": "VAWS_TOP_ROOT",
+  "default_checkout": "~/vaws-worktrees/<scaffold repo name>/npu-fleet-monitor",
+  "bootstrap": "python3 .agents/skills/npu-fleet-monitor/scripts/manage_monitor.py ensure",
+  "consumed_surface": {
+    "agent_skill": ".agents/skills/vaws-top/SKILL.md",
+    "cli": "scripts/vaws-top.py",
+    "mcp": "scripts/vaws-top-mcp.py",
+    "start": "scripts/start.sh",
+    "install_user_service": "scripts/install-user-service.sh"
+  },
+  "note": "vaws-top is consumed as an external checkout, not a submodule and not a vendored copy. The scaffold locates the checkout through VAWS_TOP_ROOT, --clone-dir, or the documented default path above. Bump `commit` deliberately after root refreshes the published main; missing pins fail closed instead of running unpinned. The extracted monitor owns its runtime and advanced skill; this consumer only locates/bootstraps the local loopback service and hands off to that skill. Observation records are not NPU allocation authority."
+}

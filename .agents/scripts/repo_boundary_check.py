@@ -38,6 +38,7 @@ import datetime as _datetime
 import hashlib
 import json
 import sys
+import urllib.parse
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, Iterator, Sequence
@@ -73,6 +74,7 @@ class Subsystem:
     private_paths: tuple[str, ...]
     public_modules: tuple[str, ...]
     inline_patterns: tuple[str, ...]
+    published_external_references: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -220,6 +222,7 @@ def load_policy(path: Path, repo_root: Path) -> Policy:
                 private_paths=_tuple(entry, "private_paths"),
                 public_modules=_tuple(entry, "public_modules"),
                 inline_patterns=_tuple(entry, "inline_patterns"),
+                published_external_references=_tuple(entry, "published_external_references"),
             )
         )
     if not subsystems:
@@ -468,13 +471,89 @@ def _literal_path_references(literal: str, roots: Sequence[str]) -> list[str]:
     return sorted(tokens, key=len, reverse=True)
 
 
+def _path_segments(literal: str) -> list[str]:
+    normalized = literal.replace("\\", "/")
+    pieces: list[str] = []
+    for part in normalized.split("/"):
+        pieces.extend(part.split(":"))
+    segments: list[str] = []
+    for piece in pieces:
+        item = piece.strip()
+        if item.endswith(".git"):
+            item = item[:-4]
+        if item:
+            segments.append(item)
+    return segments
+
+
+def github_repo_identity(value: str) -> str:
+    """Return `owner/name` when `value` names a github.com repository."""
+    text = value.strip()
+    if not text:
+        return ""
+    if text.startswith("git@") and ":" in text.split("@", 1)[-1]:
+        host, _, path = text.partition(":")
+        host = host.rsplit("@", 1)[-1]
+        return _github_owner_name(host, path)
+    parsed = urllib.parse.urlparse(text)
+    if parsed.scheme in {"http", "https", "ssh", "git", "git+ssh"}:
+        return _github_owner_name(parsed.hostname or "", parsed.path)
+    if text.count("/") == 1 and "://" not in text and "@" not in text:
+        return _github_owner_name("github.com", text)
+    return ""
+
+
+def _github_owner_name(host: str, path: str) -> str:
+    if host.lower() != "github.com":
+        return ""
+    parts = [item for item in path.strip("/").split("/") if item]
+    if len(parts) < 2:
+        return ""
+    return f"{parts[0]}/{parts[1].removesuffix('.git')}"
+
+
 def _inline_hits(literal: str, patterns: Sequence[str]) -> list[str]:
     stripped = literal.strip()
-    return [
-        pattern
-        for pattern in patterns
-        if stripped == pattern or pattern in literal
-    ]
+    hits: list[str] = []
+    segments = _path_segments(stripped)
+    for pattern in patterns:
+        if not pattern:
+            continue
+        if stripped == pattern:
+            hits.append(pattern)
+            continue
+        if "/" in pattern or "\\" in pattern:
+            if pattern in stripped:
+                hits.append(pattern)
+            continue
+        if pattern in segments:
+            hits.append(pattern)
+    return hits
+
+
+def is_published_external_reference(literal: str, subsystem: Subsystem) -> bool:
+    """Legitimate consumer references to an extracted repository, not in-repo content.
+
+    Canonical GitHub SSH/HTTPS URLs for `subsystem.repo` and documented external
+    skill/CLI paths are published consumption, matching the remote-dev treatment
+    of an external checkout. Bare branch names and `git worktree` routes remain
+    R4 hits.
+    """
+    text = literal.strip()
+    if "://" in text or text.startswith("git@"):
+        return True
+    if github_repo_identity(text) == subsystem.repo:
+        return True
+    for item in subsystem.published_external_references:
+        if not item:
+            continue
+        if text == item:
+            return True
+        if item.endswith("/") and item in text:
+            return True
+        if text.endswith(item) or text.endswith("/" + item.lstrip("./")):
+            return True
+    return False
 
 
 def collect_references(repo_root: Path, policy: Policy, ownership: Ownership) -> tuple[list[Reference], list[str], int]:
@@ -610,6 +689,8 @@ def evaluate(
 
         # R4: an extracted subsystem referenced as in-repo content.
         if reference.symbol in target.inline_patterns:
+            if is_published_external_reference(reference.detail, target):
+                continue
             rule = policy.rule("extracted-inline-reference")
             record(
                 rule,

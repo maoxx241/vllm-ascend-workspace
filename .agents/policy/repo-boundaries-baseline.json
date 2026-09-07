@@ -453,54 +453,9 @@
       "removed_by": "vaws-coordinator",
       "accepted_on": "2026-09-07",
       "why": "The coordinator's RPC client facade sitting in .agents/lib. It imports the scaffold's agent-session store, build-input keys and workspace root, and shells out to the remote-code-parity skill's script. As the published coordinator client it must take these as parameters instead."
-    },
-    {
-      "rule": "R4-extracted-inline-reference",
-      "path": ".agents/skills/npu-fleet-monitor/scripts/manage_monitor.py",
-      "symbol": ".agents/skills/vaws-top/",
-      "kind": "path-literal",
-      "from": "scaffold-domain",
-      "to": "vaws-top",
-      "removed_by": "vaws-top",
-      "accepted_on": "2026-09-07",
-      "why": "The bootstrap locates the dashboard with git worktree add against the in-repo vaws-top branch and then validates .agents/skills/vaws-top/SKILL.md inside that worktree. After extraction there is no such branch, so it must clone or locate the vaws-top repository instead."
-    },
-    {
-      "rule": "R4-extracted-inline-reference",
-      "path": ".agents/skills/npu-fleet-monitor/scripts/manage_monitor.py",
-      "symbol": "vaws-top",
-      "kind": "path-literal",
-      "from": "scaffold-domain",
-      "to": "vaws-top",
-      "removed_by": "vaws-top",
-      "accepted_on": "2026-09-07",
-      "why": "The bootstrap locates the dashboard with git worktree add against the in-repo vaws-top branch and then validates .agents/skills/vaws-top/SKILL.md inside that worktree. After extraction there is no such branch, so it must clone or locate the vaws-top repository instead."
-    },
-    {
-      "rule": "R4-extracted-inline-reference",
-      "path": ".agents/skills/npu-fleet-monitor/tests/test_manage_monitor.py",
-      "symbol": ".agents/skills/vaws-top/",
-      "kind": "path-literal",
-      "from": "scaffold-domain",
-      "to": "vaws-top",
-      "removed_by": "vaws-top",
-      "accepted_on": "2026-09-07",
-      "why": "The bootstrap's tests build a fake vaws-top branch worktree. They follow whatever manage_monitor.py switches to."
-    },
-    {
-      "rule": "R4-extracted-inline-reference",
-      "path": ".agents/skills/npu-fleet-monitor/tests/test_manage_monitor.py",
-      "symbol": "vaws-top",
-      "kind": "path-literal",
-      "from": "scaffold-domain",
-      "to": "vaws-top",
-      "removed_by": "vaws-top",
-      "accepted_on": "2026-09-07",
-      "why": "The bootstrap's tests build a fake vaws-top branch worktree. They follow whatever manage_monitor.py switches to."
     }
   ],
   "accepted_counts_by_extraction": {
-    "vaws-coordinator": 41,
-    "vaws-top": 4
+    "vaws-coordinator": 41
   }
 }

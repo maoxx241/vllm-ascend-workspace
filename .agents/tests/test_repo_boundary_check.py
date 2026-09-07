@@ -76,6 +76,10 @@ SYNTHETIC_POLICY = {
             "layer": 10,
             "roots": [],
             "inline_patterns": ["dash-branch"],
+            "published_external_references": [
+                "https://github.com/org/dashboard.git",
+                ".agents/skills/dash/SKILL.md",
+            ],
         },
         {
             "id": "domain",
@@ -178,6 +182,15 @@ class RealTreeTests(unittest.TestCase):
         way to hide a real violation, so it must stay this small."""
         policy = guard.load_policy(POLICY, ROOT)
         self.assertEqual(policy.fixture_paths, frozenset({".agents/tests/test_repo_boundary_check.py"}))
+
+    def test_remaining_accepted_rows_are_the_coordinator_extraction(self) -> None:
+        rows = json.loads(BASELINE.read_text(encoding="utf-8"))["accepted"]
+        self.assertEqual(len(rows), 41)
+        self.assertEqual({row["removed_by"] for row in rows}, {"vaws-coordinator"})
+        code, payload = invoke("--repo-root", str(ROOT), "--mode", "report")
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["counts"]["accepted_by_extraction"], {"vaws-coordinator": 41})
+        self.assertFalse([item for item in payload["violations"] if item.get("to") == "vaws-top"])
 
     def test_policy_and_baseline_carry_no_absolute_user_paths(self) -> None:
         for path in (POLICY, BASELINE):
@@ -298,6 +311,26 @@ class DetectionTests(unittest.TestCase):
         self.assertEqual(
             [(item["rule"], item["to"], item["symbol"]) for item in payload["violations"]],
             [("R4", "dashboard", "dash-branch")],
+        )
+
+    def test_old_worktree_route_is_detected_and_standalone_refs_are_not(self) -> None:
+        write(
+            self.repo.root / ".agents" / "skills" / "skill-a" / "scripts" / "old_route.py",
+            "DEFAULT_BRANCH = 'dash-branch'\n"
+            "COMMAND = ['git', 'worktree', 'add', '/tmp/monitor', 'dash-branch']\n",
+        )
+        write(
+            self.repo.root / ".agents" / "skills" / "skill-a" / "scripts" / "standalone.py",
+            "DEFAULT_REPO_URL = 'https://github.com/org/dashboard.git'\n"
+            "AGENT_SKILL = '.agents/skills/dash/SKILL.md'\n"
+            "SSH_URL = 'git@github.com:org/dashboard.git'\n",
+        )
+        _code, payload = self.repo.run("--mode", "report")
+        self.assertEqual(
+            {(item["path"], item["symbol"], item["rule"]) for item in payload["violations"]},
+            {
+                (".agents/skills/skill-a/scripts/old_route.py", "dash-branch", "R4"),
+            },
         )
 
     def test_upstream_submodule_content_is_skipped(self) -> None:

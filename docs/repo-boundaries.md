@@ -478,12 +478,14 @@ The pin is `b6acc21d147e369e771f1ff916973d74d667691e`. That is a statement
 about this source, not a claim that this PR has already merged publicly, and
 not a runtime or hardware qualification.
 
-Coordinator consumer wiring and vaws-top consumer work remain **pending**
-here. The SHAs below are source implementation facts from independent
-acceptance. Sections 1–3 and the original 71-row audit dated `2026-09-07`
-remain explicitly dated historical evidence of
-`605a7746a34f88c8235b56505060ecd937cb77df`; they are not a census of this
-current tree.
+Coordinator consumer wiring remains **pending** here. This tree now contains
+the first-stage scaffold consumer for standalone vaws-top; that is a source
+implementation fact, not a claim that the combination has been publicly
+published or that coordinator consumption has landed. The SHAs below are
+source implementation facts from independent acceptance. Sections 1–3 and the
+original 71-row audit dated `2026-09-07` remain explicitly dated historical
+evidence of `605a7746a34f88c8235b56505060ecd937cb77df`; they are not a census
+of this current tree.
 
 ### Source pins (implementation facts, not deployment)
 
@@ -491,6 +493,7 @@ current tree.
 |---|---|---|
 | `vaws-coordinator` | accepted actual main after independent #1/#2 | `2e16e894e31a12d85a11117a2772031f30fdfebe` |
 | `remote-dev` | ledger + glob + mux accepted actual provider main | `b6acc21d147e369e771f1ff916973d74d667691e` |
+| `vaws-top` | independently inspected standalone main consumed by this first-stage locator | `e13478484b9f52e8847169a785eebc32b268787f` |
 
 Independent coordinator #1 (`84cb6bdd01a2eb5afedd3e7216ace4cc7acc1285`) and
 #2 (`91b8bf52d2ba92a7586d34e2536f167f9f8d583b`) are the reviewed blobs that
@@ -547,13 +550,20 @@ byte-identical. Mutable task, lease, or host-queue writers may not be copied.
 
 - Coordinator consumption by this scaffold (pin, dual-provider client setup,
   deletion of in-tree task writers once destination arrival is proven) is
-  **not** in this patch.
-- vaws-top consumer work by this scaffold is **not** in this patch.
+  **not** in this patch. Root will supply the actual accepted public
+  coordinator-consumer main later; do not guess that publication or rewrite
+  refs here.
+- The first-stage vaws-top consumer is in this tree: `npu-fleet-monitor`
+  locates the published repository instead of a scaffold `vaws-top` branch
+  worktree, and the four obsolete `vaws-top` baseline rows are removed. This
+  is offline consumer integration only. It is not public publication, a live
+  dashboard deployment, or permission to drop the remaining coordinator rows.
 - The original 71-row audit, 292-file scan, and 26 / 41 / 4 `removed_by`
   split in §§1–3 remain dated historical evidence. Current remaining accepted
-  baseline rows in `.agents/policy/repo-boundaries-baseline.json` are 45
-  (41 `vaws-coordinator`, 4 `vaws-top`). Do not refresh the baseline in this
-  docs-only correction.
+  baseline rows in `.agents/policy/repo-boundaries-baseline.json` are 41
+  (`vaws-coordinator`). The second stage still has to ordinary-merge root's
+  accepted public coordinator-consumer main and confirm both accepted
+  removals combine to zero remaining rows.
 
 ---
 

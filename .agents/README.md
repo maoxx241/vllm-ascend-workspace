@@ -25,7 +25,7 @@ compatibility backend for managed sessions, sync, service adapters, and cleanup.
 
 - `.agents/skills/repo-init/` is the source-of-truth skill package for repository initialization.
 - `.agents/skills/machine-management/` is the source-of-truth skill package for remote machine attach, verify, repair, and removal workflows.
-- `.agents/skills/npu-fleet-monitor/` is the local deployment and lifecycle package for the standalone NPU fleet monitoring worktree and user service.
+- `.agents/skills/npu-fleet-monitor/` is the local deployment and lifecycle package for the standalone vaws-top repository and its loopback user service.
 - `.agents/skills/session-management/` is the source-of-truth skill package for isolated parallel agent sessions.
 - `.agents/skills/remote-toolbox/` is the compatibility skill package for managed VAWS target/probe/exec/job/sync/service/artifact/cleanup tools.
 - `.agents/skills/remote-code-parity/` is the source-of-truth skill package for remote code parity before remote execution.
