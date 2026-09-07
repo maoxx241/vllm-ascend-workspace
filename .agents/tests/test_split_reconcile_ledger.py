@@ -226,6 +226,8 @@ class ShippedLedgerTests(unittest.TestCase):
                 self.assertTrue(entry.declared_by)
 
     def test_without_destination_checkouts_nothing_is_reported_arrived_for_them(self):
+        published = git(ROOT, "rev-parse", "refs/remotes/origin/main")
+        self.assertRegex(published, r"^[0-9a-f]{40}$")
         code, payload = invoke("--repo-root", str(ROOT), "--mode", "enforce")
         self.assertEqual(code, 0, payload.get("drift"))
         self.assertEqual(payload["status"], "passed")
@@ -233,7 +235,7 @@ class ShippedLedgerTests(unittest.TestCase):
             with self.subTest(item=row["id"]):
                 if row["destination"]["repo"] == "scaffold":
                     self.assertEqual(row["verdict"], "arrived")
-                    self.assertEqual(row["observed"]["head_commit"], SCAFFOLD_PUBLISHED_MAIN)
+                    self.assertEqual(row["observed"]["head_commit"], published)
                 else:
                     self.assertEqual(row["verdict"], "unverified")
                     self.assertNotEqual(row["verdict"], "arrived")
@@ -242,7 +244,8 @@ class ShippedLedgerTests(unittest.TestCase):
                 self.assertFalse(destination["reachable"])
             else:
                 self.assertEqual(destination["revision_scope"], "published-default-branch")
-                self.assertEqual(destination["selected_commit"], SCAFFOLD_PUBLISHED_MAIN)
+                self.assertEqual(destination["published_ref"], "refs/remotes/origin/main")
+                self.assertEqual(destination["selected_commit"], published)
                 self.assertEqual(destination["identity_repo"], "maoxx241/vllm-ascend-workspace")
 
     def test_report_mode_never_fails(self):
@@ -825,6 +828,30 @@ class ImmutableSnapshotTests(GitCheckoutFixture):
         self.assertEqual(payload["items"][0]["verdict"], "missing")
         self.assertEqual(payload["destinations"]["dest"]["revision_scope"], "published-default-branch")
         self.assertNotEqual(payload["destinations"]["dest"]["selected_commit"], feature)
+
+    def test_live_published_ref_is_not_the_dated_recorded_commit(self):
+        published = self.publish(self.dest, {"lib/here.py": "X = 1\n"})
+        self.assertNotEqual(published, SCAFFOLD_PUBLISHED_MAIN)
+        self.git(self.dest, "commit", "-q", "--allow-empty", "-m", "later head stays unpublished")
+        head = self.git(self.dest, "rev-parse", "HEAD")
+        frozen = self.git(self.dest, "rev-parse", "refs/remotes/origin/main")
+        self.assertEqual(frozen, published)
+        self.assertNotEqual(head, frozen)
+        ledger = ledger_skeleton()
+        ledger["items"].append(
+            item("here", state="arrived", follow_up=None, commit=SCAFFOLD_PUBLISHED_MAIN)
+        )
+        code, payload = self.run_ledger(ledger, "--destination", f"dest={self.dest}")
+        self.assertEqual(code, 0, payload.get("drift"))
+        destination = payload["destinations"]["dest"]
+        self.assertEqual(destination["revision_scope"], "published-default-branch")
+        self.assertEqual(destination["published_ref"], "refs/remotes/origin/main")
+        self.assertEqual(destination["selected_commit"], frozen)
+        self.assertNotEqual(destination["selected_commit"], head)
+        self.assertNotEqual(destination["selected_commit"], SCAFFOLD_PUBLISHED_MAIN)
+        self.assertEqual(payload["items"][0]["recorded"]["observed_commit"], SCAFFOLD_PUBLISHED_MAIN)
+        self.assertEqual(payload["items"][0]["observed"]["head_commit"], frozen)
+        self.assertEqual(payload["items"][0]["verdict"], "arrived")
 
     def test_explicit_candidate_revision_names_sha_and_scope(self):
         self.publish(self.dest, {"README.md": "dest\n"})

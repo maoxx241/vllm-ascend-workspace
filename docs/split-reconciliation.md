@@ -295,6 +295,10 @@ on this #91 candidate are not evidence that a moved runtime consumer arrived;
 the scaffold rows cite published main `257dc131c2015d0e01445288efb89bc5ab825b5f`,
 not this merge commit.
 
+Those eight recorded `observed_commit` values stay at that dated snapshot. A
+later enforce run selects the checkout's current `refs/remotes/origin/main`;
+that live `selected_commit` may advance and is not the recorded observation.
+
 ---
 
 ## 4. Registering a future extraction
