@@ -485,8 +485,13 @@ in [coordinator-consumption.md](coordinator-consumption.md). The pin is
 `2e16e894e31a12d85a11117a2772031f30fdfebe`. Task tools, registry writes, and
 the managed supervisor are not reimplemented here.
 
-vaws-top consumer work remains **pending**. The four top-owned baseline rows
-remain. Do not claim that extraction is complete.
+The first-stage vaws-top consumer now **exists** in this combined tree:
+`npu-fleet-monitor` locates the published repository instead of a scaffold
+`vaws-top` branch worktree. The pin is
+`e13478484b9f52e8847169a785eebc32b268787f`. vaws-top is published in its
+canonical repository but private; published is not public, and this
+integration does not change visibility. That is pinned source consumption,
+not a runtime, client, or NPU deployment.
 
 The SHAs below are source implementation facts from independent
 acceptance. Sections 1–3 and the original 71-row audit dated `2026-09-07`
@@ -500,6 +505,7 @@ current tree.
 |---|---|---|
 | `vaws-coordinator` | accepted actual main after independent #1/#2 | `2e16e894e31a12d85a11117a2772031f30fdfebe` |
 | `remote-dev` | ledger + glob + mux accepted actual provider main | `b6acc21d147e369e771f1ff916973d74d667691e` |
+| `vaws-top` | independently inspected standalone main consumed by this first-stage locator | `e13478484b9f52e8847169a785eebc32b268787f` |
 
 Independent coordinator #1 (`84cb6bdd01a2eb5afedd3e7216ace4cc7acc1285`) and
 #2 (`91b8bf52d2ba92a7586d34e2536f167f9f8d583b`) are the reviewed blobs that
@@ -558,12 +564,18 @@ byte-identical. Mutable task, lease, or host-queue writers may not be copied.
   (pin, dual-provider client setup, deletion of in-tree task writers after
   destination arrival evidence, owned-hook preservation, locator/launcher
   adapters). See [coordinator-consumption.md](coordinator-consumption.md).
-- vaws-top consumer work by this scaffold is **not** in this tree. The four
-  top-owned rows remain pending. Do not treat those rows as removed.
+- The first-stage vaws-top consumer **exists** in this combined tree.
+  `npu-fleet-monitor` locates the published repository instead of a scaffold
+  `vaws-top` branch worktree, and the four obsolete `vaws-top` baseline rows
+  are removed. vaws-top is published in its canonical repository but
+  private; do not equate published with public. This is offline pinned
+  source consumption only, not public publication, a live dashboard
+  deployment, client setup, or NPU allocation.
+- Current boundary counts in `.agents/policy/repo-boundaries-baseline.json`
+  are zero accepted, zero new, and zero stale.
 - The original 71-row audit, 292-file scan, and 26 / 41 / 4 `removed_by`
-  split in §§1–3 remain dated historical evidence. Current remaining accepted
-  baseline rows in `.agents/policy/repo-boundaries-baseline.json` are 4
-  (all `vaws-top`). Do not rewrite the 71-row historical table to match.
+  split in §§1–3 remain dated historical evidence. Do not rewrite the 71-row
+  historical table to match.
 
 ---
 

@@ -1,4 +1,4 @@
 interface:
   display_name: "NPU Fleet Monitor"
-  short_description: "Locate or deploy the standalone vaws-top service"
-  default_prompt: "Use $npu-fleet-monitor to locate or deploy vaws-top, then hand off to its project-local Agent Skill."
+  short_description: "Locate or deploy the standalone vaws-top repository"
+  default_prompt: "Use $npu-fleet-monitor to clone or locate the standalone vaws-top repository, then hand off to its project-local Agent Skill. Do not treat monitor inventory as NPU allocation authority."

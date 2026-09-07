@@ -140,6 +140,24 @@ allowlist:
     match: git@github.com
     justification: The fixed SSH user of github.com in clone URLs; it is a service account name shared by every GitHub user, not a personal address.
 
+  - id: repo-boundary-check-github-ssh-transport
+    path_glob: .agents/scripts/repo_boundary_check.py
+    categories: [email]
+    match_regex: ^git@github\.com$
+    justification: Fixed GitHub SSH transport syntax shared by every GitHub user; not a personal address.
+
+  - id: npu-fleet-monitor-tests-github-ssh-transport
+    path_glob: .agents/skills/npu-fleet-monitor/tests/test_manage_monitor.py
+    categories: [email]
+    match_regex: ^git@github\.com$
+    justification: Fixed GitHub SSH transport syntax shared by every GitHub user; not a personal address.
+
+  - id: repo-boundary-tests-github-ssh-transport
+    path_glob: .agents/tests/test_repo_boundary_check.py
+    categories: [email]
+    match_regex: ^git@github\.com$
+    justification: Fixed GitHub SSH transport syntax shared by every GitHub user; not a personal address.
+
   # ------------------------------------------ result-envelope test fixtures
   - id: result-envelope-test-torch-npu-dev-date
     path_glob: .agents/tests/test_result_envelope.py

@@ -1221,6 +1221,46 @@ class CurrentMainFindingScopeTests(unittest.TestCase):
             ["ipv4:" + SYNTHETIC_IPV4],
         )
 
+    def test_github_ssh_transport_is_allowed_only_on_the_three_exact_files(self) -> None:
+        value = "git@github.com"
+        cases = (
+            (
+                ".agents/scripts/repo_boundary_check.py",
+                "repo-boundary-check-github-ssh-transport",
+            ),
+            (
+                ".agents/skills/npu-fleet-monitor/tests/test_manage_monitor.py",
+                "npu-fleet-monitor-tests-github-ssh-transport",
+            ),
+            (
+                ".agents/tests/test_repo_boundary_check.py",
+                "repo-boundary-tests-github-ssh-transport",
+            ),
+        )
+        for path, entry_id in cases:
+            with self.subTest(path=path):
+                findings = self._scan(value, path)
+                self.assertEqual(
+                    [(item.category, item.match, item.allowlisted_by) for item in findings],
+                    [("email", value, entry_id)],
+                )
+                self.assertEqual(
+                    self._unallowlisted(self._scan(value, self.OTHER_SRC)),
+                    ["email:" + value],
+                )
+                self.assertEqual(
+                    self._unallowlisted(self._scan("user@github.com", path)),
+                    ["email:user@github.com"],
+                )
+                self.assertEqual(
+                    self._unallowlisted(self._scan("git@gitlab.com", path)),
+                    ["email:git@gitlab.com"],
+                )
+                self.assertEqual(
+                    self._unallowlisted(self._scan(self.OTHER_IPV4, path)),
+                    ["ipv4:" + SYNTHETIC_IPV4],
+                )
+
 
 class SplitLedgerOriginFixtureScopeTests(unittest.TestCase):
     """GitHub transport/userinfo emails are allowed only in the split-ledger tests."""
