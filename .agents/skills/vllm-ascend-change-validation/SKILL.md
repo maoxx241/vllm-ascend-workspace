@@ -12,13 +12,13 @@ Use this Skill as the validation planner and evidence aggregator for a code chan
 1. Obtain the exact baseline and candidate diff, including relevant untracked files.
 2. Run `scripts/change_validation.py plan`.
 3. Review `impact-analysis.json` and `validation-plan.json`; correct false-positive or missing mappings before consuming NPU resources.
-4. Execute required items with the owning Skill:
+4. Execute required items with the owning Skill, creating every downstream run with this plan's run ID as its `parent_run_id` (`--parent-run-id` on `init`, or the `parent_run_id` config key). `link` refuses runs that were not created for this plan:
    - correctness evidence: `vllm-ascend-correctness-validation`;
    - eager-pass/graph-fail diagnosis: `vllm-ascend-graph-debug`;
    - service lifecycle: `vllm-ascend-serving`;
    - benchmark and profiling evidence: their dedicated Skills;
    - distributed, operator, or performance workflows when those Skills are available.
-5. Link each downstream Run Manifest with the plan item IDs it covers.
+5. Link each downstream Run Manifest with the plan item IDs it covers. `link` rejects a `debug` (or otherwise mismatched) `run_type` covering a `correctness:*` or `performance:*` requirement.
 6. Run `finalize`.
 7. Deliver `pr-validation-report.md` with explicit missing and recommended coverage.
 
@@ -48,6 +48,7 @@ Read:
 - Distinguish `required` and `recommended`; resource constraints do not silently downgrade required evidence.
 - Treat child `failed` as failed, child non-terminal/inconclusive or missing required coverage as inconclusive.
 - A passed parent requires every required item to be covered by at least one passed child run.
+- Only link runs whose `parent_run_id` is this plan and whose `passed` state carries artifacts; never edit a child manifest to make it linkable.
 - Record unsupported, unknown, and intentionally omitted combinations under known limitations.
 - Do not duplicate Serving, correctness, Benchmark, Profiling, graph-debug, distributed-debug, or operator-debug implementation.
 - Keep run state under `.vaws-local/change-validation/`.

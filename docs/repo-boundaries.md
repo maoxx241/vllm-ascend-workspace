@@ -22,6 +22,13 @@ request against that handoff, not as a decision already taken.
 This branch changes no behaviour. It adds the inventory below, a machine
 checkable guard, and a dated baseline of the violations that exist today.
 
+Sections 1–3 and the 71-row baseline dated `2026-09-07` are a **source
+snapshot of this tree** at `605a7746a34f88c8235b56505060ecd937cb77df` (original
+#79). They are not a claim that extracted destination mains have been consumed
+here, and they do not authorize deleting those baseline rows. **Current
+migration directions are in §5 and take precedence over the historical plan
+in §4.**
+
 ---
 
 ## 1. Dependency direction
@@ -338,7 +345,18 @@ whose limits are written down:
 
 ---
 
-## 4. Sequenced rewiring plan
+## 4. Historical sequenced plan (dated 2026-09-07; superseded by §5)
+
+This section is the original #79 plan. It is retained as dated planning
+evidence. **Do not follow it as current direction.** Current ownership and
+migration rules are in §5 and take precedence.
+
+In particular, do not implement: an MCP task-registration hook on remote-dev;
+a remote-dev-published managed-job worker; coordinator consumption of such a
+worker; or a move of host NPU allocation out of the scaffold. Those items were
+open or wrongly assigned here; they are settled in §5. The 26 / 41 / 4
+baseline-row forecasts remain forecasts against the dated snapshot, not a
+report that those rows have been deleted from this tree.
 
 Sequencing is forced, not chosen: the coordinator imports `core.endpoint` and
 `core.shell_ops` out of remote-dev and needs a published resolver interface
@@ -360,15 +378,17 @@ one now would collide with an extraction already in flight.
    and keeps worktree auto-binding on its own side, where session bindings
    belong.
 2. **Cut the cycle.** Move `core/vaws_ops.py` and the four `vaws.*` MCP tool
-   descriptors and schemas out of the substrate (rows 3, 20, 21). The MCP
-   server gains a registration hook so a host can add tools instead of the
-   substrate hard-coding a task facade it does not own.
+   descriptors and schemas out of the substrate (rows 3, 20, 21). *Historical
+   proposal, do not implement:* the MCP server gaining a registration hook so
+   a host can add tools. Final ownership is the coordinator's own four-tool
+   stdio provider; see §5.
 3. **Publish what consumers actually use.** Beyond `core.result`: the resolver
-   protocol, a `remote_bash` entry point, the managed-job worker as a shipped
-   artifact rather than source text (row 13's remote-dev half), and the list of
-   state paths a host must exclude from sync — which is what
-   `remote-code-parity`'s hard-coded `.remote-dev/state/` denylist entry should
-   read instead (rows 33, 36).
+   protocol, a `remote_bash` entry point, and the list of state paths a host
+   must exclude from sync — which is what `remote-code-parity`'s hard-coded
+   `.remote-dev/state/` denylist entry should read instead (rows 33, 36).
+   *Historical proposal, do not implement:* shipping the managed-job worker as
+   a remote-dev artifact (row 13's remote-dev half). Final ownership is the
+   coordinator's own `workers/managed_jobs.py`; see §5.
 4. **Move scaffold work out of the substrate.** `tools/sync_claude_skills.py`
    returns to the scaffold; `tools/validate_remote_dev_scaffold.py` splits so
    the substrate validates only itself; `.github/workflows/remote-dev.yml` moves
@@ -384,14 +404,25 @@ baseline rows are deleted in the same commits.
 
 ### Phase 2 — `vaws-coordinator` (depends on Phase 1)
 
-Landed on this branch as an external checkout. Pin, locator, launcher and
-arrival evidence: [coordinator-consumption.md](coordinator-consumption.md).
-Host NPU coordination stays scaffold-owned and is injected through
-`VAWS_HOST_QUEUE_MODULE`. `vaws_build_inputs.py` stays as a byte-pinned
-parity mirror. The HTTP manager has no default `--state-dir`.
+1. Move `vaws_ready_runtime.py`, `vaws_managed_execution.py` and
+   `vaws_task_client.py` out of `.agents/lib` (row 24). Rows 17 and 18 resolve
+   with them.
+2. Replace `_load_inventory` with a coordinator-owned machine registry, fed by
+   the scaffold at registration time. The coordinator must not read
+   `.vaws-local/machine-inventory.json` (row 10).
+3. Replace the source-text shipping of `vaws_runtime_profile.py` and
+   `vaws_build_inputs.py` with a versioned artifact the coordinator owns, or a
+   contract the scaffold publishes to it (rows 11, 13, 14). *Historical
+   proposal, do not implement:* replacing `core/managed_jobs.py` with Phase 1's
+   remote-dev shipped artifact (row 33). The coordinator owns
+   `workers/managed_jobs.py` itself; see §5.
+4. Host NPU coordination stays scaffold-owned and is injected, not moved
+   (rows 12, 16). The original open question below is closed by §5.
+5. `server.py` takes its state root as a parameter instead of calling
+   `vaws_local_state.shared_workspace_root` (row 15).
+6. Move the `coordinator` CI job to the coordinator repository (row 28).
 
-Guard effect: in-tree coordinator roots and the moved task-state writers are
-gone; residual adapters are locator/launcher/setup only.
+Guard effect: the 41 rows attributed to `vaws-coordinator` disappear.
 
 ### Phase 3 — `vaws-top` (independent; last because it is cheapest)
 
@@ -410,12 +441,14 @@ With the baseline at zero, `--mode enforce` becomes a plain invariant and the
 baseline file is an empty, dated record. `scaffold-domain.public_paths` stays
 empty; that is the invariant worth keeping.
 
-### The open question: who owns host NPU coordination
+### Historical open question: who owns host NPU coordination
+
+Closed by §5; retained as the 2026-09-07 reasoning.
 
 `.agents/lib/vaws_npu_coordination.py` is the host's advisory NPU lease
 authority. It is used by the `session-management` skill (a domain consumer) and
 by `.agents/coordinator/backend.py`, which exec-loads the skill's wrapper script
-to reach it. Both readings are defensible, and both failure modes are bad:
+to reach it. Both readings were defensible, and both failure modes are bad:
 
 - leave it in the scaffold, and the coordinator imports a domain skill forever;
 - move it to the coordinator, and `session-management` gains a hard dependency
@@ -423,14 +456,118 @@ to reach it. Both readings are defensible, and both failure modes are bad:
 
 Splitting it wrongly is worse than either: two allocators against one host
 SQLite lease database means double-booked NPUs, and that failure is silent
-hardware contention rather than an `ImportError`. The policy therefore keeps it
-scaffold-owned for now — the conservative choice, which reports the coordinator
-coupling rather than blessing it — and `vaws-coordinator`'s `docs/HANDOFF.md`
-should settle it.
+hardware contention rather than an `ImportError`. The policy therefore kept it
+scaffold-owned — the conservative choice, which reports the coordinator
+coupling rather than blessing it. The extracted coordinator settled the
+interface without moving the authority: one scaffold-owned implementation,
+injected through `VAWS_HOST_QUEUE_MODULE` / `--host-queue-module`. Do not
+re-open a move of this module, and do not restore skill-script imports.
 
 ---
 
-## 5. Routing documentation
+## 5. Current contract (takes precedence over §4)
+
+A reader following current migration directions must reach the already
+accepted task-provider, worker, and host-authority ownership, and must
+**never reinstall task dispatch into remote-dev**.
+
+This combined tree consumes remote-dev through the #90 external checkout,
+launcher (`.agents/scripts/remote_dev.py`), and resolver
+(`.agents/lib/vaws_remote_dev_plugin.py`). Tracked `.remote-dev` is gone.
+The pin is `b6acc21d147e369e771f1ff916973d74d667691e`. That is a statement
+about this source, not a claim that this PR has already merged publicly, and
+not a runtime or hardware qualification.
+
+The coordinator consumer now **exists** in this combined tree: pin, locator,
+launcher, dual-provider client setup, owned-hook preservation, and residual
+compatibility adapters. Arrival evidence and the deleted in-tree writers are
+in [coordinator-consumption.md](coordinator-consumption.md). The pin is
+`2e16e894e31a12d85a11117a2772031f30fdfebe`. Task tools, registry writes, and
+the managed supervisor are not reimplemented here.
+
+vaws-top consumer work remains **pending**. The four top-owned baseline rows
+remain. Do not claim that extraction is complete.
+
+The SHAs below are source implementation facts from independent
+acceptance. Sections 1–3 and the original 71-row audit dated `2026-09-07`
+remain explicitly dated historical evidence of
+`605a7746a34f88c8235b56505060ecd937cb77df`; they are not a census of this
+current tree.
+
+### Source pins (implementation facts, not deployment)
+
+| Repository | Role | Exact SHA |
+|---|---|---|
+| `vaws-coordinator` | accepted actual main after independent #1/#2 | `2e16e894e31a12d85a11117a2772031f30fdfebe` |
+| `remote-dev` | ledger + glob + mux accepted actual provider main | `b6acc21d147e369e771f1ff916973d74d667691e` |
+
+Independent coordinator #1 (`84cb6bdd01a2eb5afedd3e7216ace4cc7acc1285`) and
+#2 (`91b8bf52d2ba92a7586d34e2536f167f9f8d583b`) are the reviewed blobs that
+landed on that coordinator main. Their control-plane evidence is source,
+protocol, and Linux process-supervision evidence only.
+
+### Ownership that current work must preserve
+
+**Task tools and the managed-job worker belong to the coordinator.** The
+four-tool stdio provider is `task_server.py`, serving exactly `vaws_session`,
+`vaws_run`, `vaws_execution`, and `vaws_finish` (official MCP SDK 2.1.1
+tools/list; experimental `service_api_version=1`). The supervisor is
+coordinator-owned `workers/managed_jobs.py`, recovered byte-identical from
+historical remote-dev `900ad15^:core/managed_jobs.py` at SHA256
+`f2960c7de21867205b02cb9faf11acfc2e78626b8e942eac4e3d759e355ec6f4`. Backend
+`worker_source()` reads that coordinator-owned source text; the workers
+directory is not inserted into manager import paths. remote-dev does not
+supply the supervisor. Pool/task state and the supervisor remain
+coordinator-owned.
+
+**remote-dev is transport only.** It provides explicit endpoint operations
+(`direct_endpoint` or `resolve_endpoint` from an explicit
+`host`/`port`/`user`/`root`/`cwd` mapping, plus `remote_bash`) and the
+consumer resolver extension. It does not own task tools, a managed-job
+worker, or host allocation. A transport registration hook for foreign tools
+is a dated historical proposal from §4 and must not be implemented.
+
+**Host NPU authority is one scaffold-owned implementation.**
+`.agents/lib/vaws_npu_coordination.py` stays in the scaffold. The coordinator
+consumes it through the published host-module contract:
+`VAWS_HOST_QUEUE_MODULE` / `--host-queue-module`, speaking `handle_request`
+and `CoordinationError`. There is one authoritative host state and no second
+allocator. vaws-top observes fleet inventory and must not grant leases. The
+injected host-protocol source is a published contract, not permission to
+restore `session-management/scripts/npu_coordination.py` skill-script
+imports. Independent #1 tests used the workflow pin
+`161fed1b0fe6b48359be3f0cf33bb7d8befae113` and extracted authority digest
+`d9e03cc0ef8a65f2ebc5081468dc3cc2fe079fad711349d51e8d6052b334fbff`.
+
+**Dependency direction is coordinator → remote-dev.** A lower layer must not
+import scaffold or coordinator task state. Cutting the §1 cycle means moving
+the task facade *out* of remote-dev, not teaching remote-dev to register it.
+The coordinator reaches remote-dev only through explicit endpoints; it does
+not ask the substrate to resolve an alias, session, or machine.
+
+**State and dependency roots keep their installed identities.** The local
+task registry location (`VAWS_AGENT_SESSIONS_DIR`; default remains this
+installation's existing `agent-sessions` path) and the manager pool
+(`--state-dir`, one database, no heuristic second manager) must be preserved
+across consumer wiring. Pure schema and build-input mirrors may be pinned
+byte-identical. Mutable task, lease, or host-queue writers may not be copied.
+
+### Current source state
+
+- Coordinator consumption by this scaffold **exists** in this combined tree
+  (pin, dual-provider client setup, deletion of in-tree task writers after
+  destination arrival evidence, owned-hook preservation, locator/launcher
+  adapters). See [coordinator-consumption.md](coordinator-consumption.md).
+- vaws-top consumer work by this scaffold is **not** in this tree. The four
+  top-owned rows remain pending. Do not treat those rows as removed.
+- The original 71-row audit, 292-file scan, and 26 / 41 / 4 `removed_by`
+  split in §§1–3 remain dated historical evidence. Current remaining accepted
+  baseline rows in `.agents/policy/repo-boundaries-baseline.json` are 4
+  (all `vaws-top`). Do not rewrite the 71-row historical table to match.
+
+---
+
+## 6. Routing documentation
 
 The repo's maintenance rule requires `AGENTS.md` and `.agents/README.md` to be
 updated alongside a change like this. Both files are owned by sibling agents

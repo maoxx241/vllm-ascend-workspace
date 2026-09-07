@@ -125,4 +125,5 @@ tracked pin, an external checkout, and a launcher. See
 | `.agents/scripts/vaws_client_setup.py` | writes `remote-dev` and `vaws-task`; preserves user-managed servers |
 | `.agents/coordinator/` and the moved task-state libraries | deleted after destination commit/blob evidence |
 
-The #90-owned remote-dev pin is unchanged by that consumption.
+The remote-dev pin stays the accepted provider main in
+`.agents/deps/remote-dev.json`; coordinator consumption does not overwrite it.

@@ -231,6 +231,7 @@ If the service fails during engine initialization or health check timeout:
 - Identify the actual exception type and message before hypothesizing a cause.
 - Do not modify source code to work around a launch failure until the root cause is confirmed from logs.
 - If the root cause is unclear, try the simplest launch configuration first (e.g. tp-only, no speculative decoding, no graph mode) and incrementally add features to isolate the failing component.
+- If logs show a broken or incomplete editable `vllm` / `vllm-ascend` install (missing custom-op artifacts, import or shared-object failures), use the session-aware `parity_sync.py --force-reinstall` recovery in [command recipes](references/command-recipes.md). Do not hand-run `csrc/build_aclnn.sh` or `pip install` inside the container.
 
 ### 7. Return structured JSON
 

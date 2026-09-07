@@ -41,5 +41,5 @@
     "server.py": "6f4719bbf4419d6455c069d49868d70ce12cb21a"
   },
   "client_setup_constraint": "The coordinator JSON helper rewrites command/args/type for same-name providers; TOML preserves them. This scaffold must not apply that helper as a migration that claims to preserve user-managed entries.",
-  "note": "vaws-coordinator is consumed as an external checkout, not a submodule and not a vendored copy. Locate it through VAWS_COORDINATOR_ROOT or the default path above. Bump `commit` deliberately; `vaws.py status` reports drift. This pin is the independently accepted merged main. It does not change the #90-owned remote-dev pin."
+  "note": "vaws-coordinator is consumed as an external checkout, not a submodule and not a vendored copy. Locate it through VAWS_COORDINATOR_ROOT or the default path above. Bump `commit` deliberately; `vaws.py status` reports drift. This pin is the independently accepted merged main. It does not change the remote-dev pin in remote-dev.json."
 }

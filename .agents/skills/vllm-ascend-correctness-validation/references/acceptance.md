@@ -19,6 +19,10 @@
 ## Comparison
 
 - [ ] Every planned case has baseline and candidate evidence.
+- [ ] Both results carry an `execution` block, and every difference between them was declared at `init` with `--allowed-difference`; `compare` refuses undeclared differences.
+- [ ] `compare` consumed a comparable observational certificate (`comparability-certificate.json`); empty, null, or whitespace-only identity, declared-only must-observe keys, or a declaration/observation mismatch cannot pass.
+- [ ] Matching empty answers are not treated as `exact_match`.
+- [ ] A verdict on a run with declared differences is read as attributable to the declared variable, not to the code change.
 - [ ] Token or text comparison is used where exactness is meaningful.
 - [ ] Numeric tolerances are explicit and justified.
 - [ ] Task metric direction and regression thresholds are explicit.
@@ -26,7 +30,7 @@
 
 ## Delivery
 
-- [ ] `manifest.json`, `cases.json`, `comparison.json`, `report.md`, raw outputs, and `reproduction.sh` exist.
+- [ ] `manifest.json`, `cases.json`, `execution.json`, `comparison.json`, `report.md`, raw outputs, and `reproduction.sh` exist.
 - [ ] Run Manifest v1 validates and links every delivered artifact.
 - [ ] The report lists unsupported and untested combinations.
 - [ ] A passed run contains only exact or within-tolerance cases.

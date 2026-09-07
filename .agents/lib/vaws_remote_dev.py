@@ -17,10 +17,11 @@ else. This module is the scaffold's side of that contract:
   can report drift instead of silently running an unknown revision.
 
 The substrate is consumed as an external checkout rather than a submodule or a
-vendored copy. It is a private repository whose history is scheduled for a
-rewrite before publication; a gitlink pinned today would dangle and a private
-``.gitmodules`` entry would break ``git submodule update --init --recursive``
-for every public cloner of this scaffold. Import direction is scaffold ->
+vendored copy. It is a private repository; a private ``.gitmodules`` entry
+would break ``git submodule update --init --recursive`` for every public
+cloner of this scaffold. The tracked pin in ``.agents/deps/remote-dev.json``
+names the intended revision; bump ``commit`` deliberately, and
+``remote_dev.py status`` reports drift. Import direction is scaffold ->
 substrate only; nothing here is imported by the substrate.
 """
 from __future__ import annotations

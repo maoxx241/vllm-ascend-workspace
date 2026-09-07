@@ -9,10 +9,10 @@ at accepted main `2e16e894e31a12d85a11117a2772031f30fdfebe` (tree
 checkout as an **external checkout**, matching the remote-dev pin/install
 pattern from #90.
 
-This document is the consumer-side contract. It does **not** claim that
-scaffold #90 is merged or that the remote-dev pin in
-`.agents/deps/remote-dev.json` is the final post-glob/mux pin. That pin stays
-#90-owned.
+This document is the consumer-side contract. The remote-dev pin in
+`.agents/deps/remote-dev.json` is the accepted provider main
+`b6acc21d147e369e771f1ff916973d74d667691e`. This scaffold does not add an
+exact-pin execution gate; an explicit developer checkout remains supported.
 
 ## 1. Why an external checkout
 
@@ -140,16 +140,13 @@ Kept as scaffold authorities: `vaws_npu_coordination.py`,
 | `.agents/scripts/vaws_client_setup.py` | Dual-provider setup with the stronger JSON preservation the coordinator helper does not provide. |
 | `.agents/lib/vaws_build_inputs.py` | Byte-pinned parity mirror. |
 
-## 7. Remaining integration gate
+## 7. Combined-tree sources
 
-Root's #90 owner still supplies the final accepted scaffold main and the
-remote-dev pin after glob/mux integration. This package stacks on #90 exact
-`5ad2d9bd67f5f208f1b02a55494d056e7c80abfc` and does not overwrite
-`.agents/deps/remote-dev.json`. Provisional local integration may set
-`VAWS_REMOTE_DEV_ROOT` at accepted remote-dev main
-`2c8e2503359a311721328d70d3f3a16aa65174ae` without changing that pin.
+This tree is the ordinary merge of the accepted coordinator consumer
+`f39f284acbfe4a5cf8cfb06b15a41fba0d64361e` with public scaffold main
+`257dc131c2015d0e01445288efb89bc5ab825b5f`. The remote-dev pin is the
+accepted provider main `b6acc21d147e369e771f1ff916973d74d667691e`.
 
-#91's reconciliation ledger is not in this #90 tree. Arrival evidence is in
-`.agents/deps/coordinator.json` and this document; the #91 owner can copy
-those destination commit/blob rows. Linux subreaper tests remain Linux CI
-evidence of the coordinator repository; macOS skips them.
+#91's reconciliation ledger may copy destination commit/blob rows from
+`.agents/deps/coordinator.json` and this document. Linux subreaper tests
+remain Linux CI evidence of the coordinator repository; macOS skips them.

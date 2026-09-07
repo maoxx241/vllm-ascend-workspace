@@ -41,7 +41,9 @@ python -B .agents/skills/vllm-ascend-change-validation/scripts/change_validation
 
 ## Link evidence
 
-Read `validation-plan.json`, then link the exact plan IDs:
+Create every downstream run with this plan's run ID as its parent, for example
+`correctness_run.py init --parent-run-id change-validation-001`, then read
+`validation-plan.json` and link the exact plan IDs:
 
 ```bash
 python -B .agents/skills/vllm-ascend-change-validation/scripts/change_validation.py link \
@@ -50,6 +52,10 @@ python -B .agents/skills/vllm-ascend-change-validation/scripts/change_validation
   --covers correctness-multi-rank-metadata-consistency \
   --covers correctness-eager
 ```
+
+`link` exits 1 when the child manifest has no `parent_run_id`, names another
+parent, or is `passed` with no artifacts. The error says which; fix the
+downstream run rather than editing its manifest.
 
 ## Finalize
 

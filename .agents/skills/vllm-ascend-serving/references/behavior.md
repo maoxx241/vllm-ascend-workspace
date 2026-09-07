@@ -94,13 +94,15 @@ The launch script sources `/etc/profile.d/vaws-ascend-env.sh` if it exists and p
 2. Searching `_cann_ops_custom/` for `*/bin/set_env.bash` (vendor name is not hardcoded)
 3. Sourcing the found script, which sets `ASCEND_CUSTOM_OPP_PATH` and adds `libcust_opapi.so` to `LD_LIBRARY_PATH`
 
-After `remote-code-parity` sync, these build artifacts may be missing because they are untracked. Rebuild with:
-
-```bash
-cd /vllm-workspace/vllm-ascend && bash csrc/build_aclnn.sh /vllm-workspace/vllm-ascend ascend910b
-```
-
-Installation note: parity installs with the HuaweiCloud pip index and handles `numpy<2.0.0` (CANN hard dependency) automatically. Do not skip it or manually override numpy to >=2.0.
+After `remote-code-parity` sync, those untracked build artifacts can be missing.
+Do not rebuild with a hardcoded `csrc/build_aclnn.sh … ascend910b` invocation or
+an in-container `pip install`. Recover with the session-aware
+`parity_sync.py --force-reinstall` command that `serve_start.py` already emits
+(`parity_sync.py` parser `--force-reinstall`). That existing path resolves the
+runtime/environment, reconciles declared dependencies, and performs the editable
+custom-op build. If parity cannot establish a compatible build, fail closed and
+inspect its captured logs. Do not bypass prior session/user authorization or
+invent a SoC or runtime path.
 
 ## Extra args escaping
 
