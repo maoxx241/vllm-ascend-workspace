@@ -103,7 +103,7 @@ python3 .agents/skills/repo-init/scripts/repo_topology.py compare-main --repo vl
 
 ## Remote configuration
 
-Use `configure` only for **explicit fresh setup** after the user selected a topology. Do not use it to migrate established remotes: it unifies fetch and push URLs and would flatten an explicit `pushurl`, protocol split, or extra remote such as `upstream2`. For an already-configured clone, choose keep-current and leave fetch/push/protocol/pushurl/extra remotes intact.
+Use `configure` only for **explicit fresh setup** after the user selected a topology. Do not use it to migrate established remotes: it unifies fetch and push URLs for the specified `origin` and `upstream`, flattening an explicit `pushurl` or protocol split. Other remotes such as `upstream2` are preserved. For an already-configured clone, choose keep-current and leave fetch/push/protocol/pushurl/extra remotes intact.
 
 Fresh workspace setup example:
 
