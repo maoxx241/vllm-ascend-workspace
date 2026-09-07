@@ -79,6 +79,10 @@ function initTheme() {
   if (btn) btn.addEventListener("click", function () {
     applyTheme(document.documentElement.getAttribute("data-theme") === "dark" ? "light" : "dark");
   });
+  // The back button carries no data-route (it is not a navigation target);
+  // wire it explicitly — the delegated [data-route] click handler ignores it.
+  var back = el("back-btn");
+  if (back) back.addEventListener("click", function () { goBack(); });
 }
 
 // ---------------------------------------------------------------------------
