@@ -317,9 +317,11 @@ class FileLockProperties(unittest.TestCase):
         a_holds = threading.Event()
         holders: list[str] = []
         overlap: list[bool] = []
-        real_unlink = os.unlink
+        real_unlink = Path.unlink
 
-        def patched_unlink(path: Any, *args: Any, **kwargs: Any) -> None:
+        # Patch the pathlib method (not os.unlink) so the hook works on every
+        # Python version; before 3.11 pathlib bound os.unlink at import time.
+        def patched_unlink(path: Path, *args: Any, **kwargs: Any) -> None:
             if str(path) == str(self.lock):
                 name = threading.current_thread().name
                 if name == "waiter-B":
@@ -339,7 +341,7 @@ class FileLockProperties(unittest.TestCase):
                 else:
                     time.sleep(0.1)
 
-        with mock.patch("os.unlink", patched_unlink):
+        with mock.patch.object(Path, "unlink", patched_unlink):
             threads = [threading.Thread(target=worker, args=(n,), name=n) for n in ("waiter-A", "waiter-B")]
             for thread in threads:
                 thread.start()
