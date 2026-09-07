@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -120,8 +121,9 @@ class BackendTests(unittest.TestCase):
             stderr.write_text("padding line\n" * 100 + "final: device probe permission denied")
             result = {"outcome": "failed", "status": "nonzero_exit", "exit_code": 17,
                       "refs": {"stdout": str(stdout), "stderr": str(stderr)}}
-            with mock.patch("backend.resolve_endpoint", side_effect=lambda value: value), \
-                    mock.patch("backend.remote_bash", return_value={"result": result}):
+            # remote-dev is an external checkout resolved lazily, so the
+            # adapter is patched instead of module-level imports.
+            with mock.patch("backend._remote_dev_api", return_value=(lambda value: value, lambda endpoint, **kwargs: {"result": result})):
                 with self.assertRaises(RuntimeError) as caught:
                     backend.bash(target, "echo SECRET-TOKEN-VALUE")
             message = str(caught.exception)
@@ -131,10 +133,21 @@ class BackendTests(unittest.TestCase):
             self.assertNotIn("SECRET-TOKEN-VALUE", message)
             self.assertLessEqual(len(message), 400)  # bounded tail only
             blocked = {"outcome": "blocked", "status": "cwd_outside_root"}
-            with mock.patch("backend.resolve_endpoint", side_effect=lambda value: value), \
-                    mock.patch("backend.remote_bash", return_value={"result": blocked}):
+            with mock.patch("backend._remote_dev_api", return_value=(lambda value: value, lambda endpoint, **kwargs: {"result": blocked})):
                 with self.assertRaisesRegex(RuntimeError, "blocked/cwd_outside_root"):
                     backend.bash(target, "true")
+
+    def test_missing_remote_dev_checkout_and_supervisor_fail_closed(self):
+        import backend as backend_module
+
+        with tempfile.TemporaryDirectory() as tmp:
+            absent = str(Path(tmp) / "absent")
+            with mock.patch.dict(os.environ, {backend_module.REMOTE_DEV_ROOT_ENV: absent,
+                                              backend_module.MANAGED_JOBS_WORKER_ENV: ""}, clear=False):
+                with self.assertRaisesRegex(backend_module.RemoteDevUnavailable, "not a remote-dev checkout"):
+                    backend_module.remote_dev_root()
+                with self.assertRaisesRegex(backend_module.RemoteDevUnavailable, "vaws-coordinator"):
+                    backend_module.managed_jobs_source()
 
 
 class PoolTests(unittest.TestCase):
