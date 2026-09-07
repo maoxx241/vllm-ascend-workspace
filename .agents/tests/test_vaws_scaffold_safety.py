@@ -25,6 +25,7 @@ from vaws_session_state import (  # noqa: E402
     allocate_service_port,
     allocate_session_leases,
     release_service_port,
+    session_leases_path,
     session_live_leases,
     require_session_npu_lease,
     release_all_session_leases,
@@ -260,6 +261,65 @@ class LeaseValidationTests(unittest.TestCase):
                 )["service_ports"],
                 [],
             )
+
+    def test_unknown_occupancy_refuses_npu_requests_but_allows_port_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with self.assertRaisesRegex(SessionStateError, "occupancy is unavailable") as explicit:
+                allocate_session_leases(
+                    repo_root=root,
+                    machine_alias="host",
+                    session_id="sess-explicit",
+                    requested_devices=[0],
+                    port_available=lambda _port: True,
+                )
+            self.assertNotIn("--devices", str(explicit.exception))
+            with self.assertRaisesRegex(SessionStateError, "occupancy is unavailable") as counted:
+                allocate_session_leases(
+                    repo_root=root,
+                    machine_alias="host",
+                    session_id="sess-count",
+                    npu_count=1,
+                    port_available=lambda _port: True,
+                )
+            self.assertNotIn("--devices", str(counted.exception))
+            self.assertFalse(session_leases_path(root).exists())
+            leases = allocate_session_leases(
+                repo_root=root,
+                machine_alias="host",
+                session_id="sess-port",
+                container_ssh_port=46009,
+                port_available=lambda _port: True,
+            )
+            self.assertEqual(leases["npu_devices"], [])
+            self.assertEqual(leases["container_ssh_port"], 46009)
+            self.assertEqual(
+                session_live_leases(repo_root=root, machine_alias="host", session_id="sess-port"),
+                {"npu_devices": [], "container_ssh_ports": [46009], "service_ports": []},
+            )
+
+    def test_known_empty_free_set_refuses_explicit_and_count_requests(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with self.assertRaises(SessionStateError):
+                allocate_session_leases(
+                    repo_root=root,
+                    machine_alias="host",
+                    session_id="sess-explicit",
+                    requested_devices=[0],
+                    available_devices=[],
+                    port_available=lambda _port: True,
+                )
+            with self.assertRaises(SessionStateError):
+                allocate_session_leases(
+                    repo_root=root,
+                    machine_alias="host",
+                    session_id="sess-count",
+                    npu_count=1,
+                    available_devices=[],
+                    port_available=lambda _port: True,
+                )
+            self.assertFalse(session_leases_path(root).exists())
 
 
 class WorktreeCreateTests(unittest.TestCase):
