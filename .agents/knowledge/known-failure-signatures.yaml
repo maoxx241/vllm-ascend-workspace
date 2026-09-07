@@ -7,7 +7,7 @@
       "id": "gloo-init-container-hostname-missing-from-etc-hosts",
       "status": "active",
       "source": "promoted from local candidate vllm-ascend-serving-vllm-service-on-fresh-vaws-containers-fails-gloo-28e3bdbe5d (verified 2026-09-02)",
-      "applicable_versions": "Verified 2026-09-02 on workspace A3 containers (vllm-ascend images), TP2/TP4/TP8/TP16 services on 192.168.13.153-156.",
+      "applicable_versions": "Verified 2026-09-02 on workspace A3 containers (vllm-ascend images), TP2/TP4/TP8/TP16 services on <redacted: internal addresses>.",
       "updated_at": "2026-09-03",
       "first_seen": "2026-09-03",
       "scope": {

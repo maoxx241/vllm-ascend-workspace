@@ -1,7 +1,7 @@
 interface:
   display_name: "Curate Workspace Knowledge"
-  short_description: "Review and promote verified workspace knowledge"
-  default_prompt: "Use $curate-workspace-knowledge to review, deduplicate, and promote verified knowledge candidates."
+  short_description: "Review, promote, resolve and upstream workspace knowledge"
+  default_prompt: "Use $curate-workspace-knowledge to review, deduplicate, and promote verified knowledge candidates, resolve unresolved v2 coordinate dimensions, and gate export to the federated commons."
 
 policy:
   allow_implicit_invocation: false

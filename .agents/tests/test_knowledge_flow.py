@@ -120,6 +120,13 @@ class KnowledgeFlowE2ETest(unittest.TestCase):
         )
 
     def test_deferred_candidate_to_deprecated_formal_entry(self) -> None:
+        """The legacy v1 lifecycle stays reachable behind ``--schema 1``.
+
+        New promotions default to the federated v2 document (covered by
+        ``test_knowledge_v2_flow``); this test pins the v1 envelope that
+        existing consumers still read.
+        """
+
         session_id = "synthetic-knowledge-flow-session"
         input_path = self.sandbox / "candidate-input.json"
         input_path.write_text(
@@ -177,6 +184,8 @@ class KnowledgeFlowE2ETest(unittest.TestCase):
         entry_id = "synthetic-framed-transfer"
         promoted = self.curate_json(
             "promote",
+            "--schema",
+            "1",
             "--candidate-id",
             candidate_id,
             "--entry-id",
@@ -221,6 +230,8 @@ class KnowledgeFlowE2ETest(unittest.TestCase):
 
         deprecated = self.curate_json(
             "deprecate",
+            "--schema",
+            "1",
             "--entry-id",
             entry_id,
             "--reason",
