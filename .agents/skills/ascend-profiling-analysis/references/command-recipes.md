@@ -71,10 +71,13 @@ To re-run the published 61-root regression baseline on a single machine:
 python3 .agents/skills/ascend-profiling-analysis/scripts/profile_sweep.py \
   --search-root /vllm-workspace/.vaws-runtime/serving \
   --search-root /tmp \
-  --search-root /home/m00663269/transfer_dsv4 \
+  --search-root /home/<remote-user>/transfer_dsv4 \
   --tag full_regression \
   --verbose
 ```
+
+Replace `<remote-user>` with the account that owns the transfer directory on the
+target host; the sweep takes any number of `--search-root` values.
 
 The skill writes:
 

@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
   "kind": "known-failure-signatures",
-  "updated_at": "2026-09-03",
+  "updated_at": "2026-09-07",
   "entries": [
     {
       "id": "gloo-init-container-hostname-missing-from-etc-hosts",
       "status": "active",
       "source": "promoted from local candidate vllm-ascend-serving-vllm-service-on-fresh-vaws-containers-fails-gloo-28e3bdbe5d (verified 2026-09-02)",
-      "applicable_versions": "Verified 2026-09-02 on workspace A3 containers (vllm-ascend images), TP2/TP4/TP8/TP16 services on 192.168.13.153-156.",
+      "applicable_versions": "Verified 2026-09-02 on workspace A3 containers (vllm-ascend images), TP2/TP4/TP8/TP16 services on <redacted: internal addresses>.",
       "updated_at": "2026-09-03",
       "first_seen": "2026-09-03",
       "scope": {
@@ -37,7 +37,7 @@
       "status": "active",
       "source": "promoted from local candidate remote-toolbox-ssh-stream-through-the-shared-controlmaster-mux--fbff8c67cb (PR #70)",
       "applicable_versions": "Verified 2026-09-02 on macOS client + VAWS containers, OpenSSH ControlMaster shared connections.",
-      "updated_at": "2026-09-03",
+      "updated_at": "2026-09-07",
       "first_seen": "2026-09-03",
       "scope": {
         "component": "ssh transport",
@@ -48,8 +48,8 @@
         "summary": "ssh_stream through the shared ControlMaster mux fails on long-running remote commands; run stream/tunnel off the mux",
         "symptom": "Long-lived SSH streaming commands (service logs, analyse progress, tunnels) die or hang immediately / return early when issued over the shared ControlMaster connection; MCP remote_bash separately reported instant 'timeout' for any command while remote_probe/remote_ls kept working.",
         "root_cause": "The shared ControlMaster mux channel does not reliably carry long-lived stream sessions in this environment; stream-type invocations must bypass the mux (dedicated connection) instead of multiplexing over it.",
-        "resolution": "Use base_ssh_options(mux=False) for ssh_stream and for any long-lived tunnel/stream command (fixed in remote-code-parity + vllm-ascend-serving ssh helpers, PR #70). Fall back to direct 'ssh -o BatchMode=yes -p <port> root@<host>' when MCP remote_bash misbehaves.",
-        "avoidance": "Do not retry the same stream command on the mux hoping for a different result; check mux options first. Treat instant 'timeout' from MCP remote_bash as a tool-service fault signature, not a remote command fault.",
+        "resolution": "Use base_ssh_options(mux=False) only for long-lived stream/tunnel commands. The helpers that actually do this are .agents/skills/ascend-profiling-analysis/scripts/_common.py `_ssh_base_cmd` (ssh_stream) and .agents/skills/ascend-profiling-collection/scripts/_common.py `open_local_tunnel` (ssh -N -L), both from PR #70. remote-code-parity and vllm-ascend-serving still call base_ssh_options() with default mux=True for short captured SSH and stdin uploads; they were not switched off the mux. Fall back to direct 'ssh -o BatchMode=yes -p <port> root@<host>' when MCP remote_bash misbehaves.",
+        "avoidance": "Do not retry a long-lived stream/tunnel on the mux hoping for a different result; check whether that command actually passes mux=False. Do not flip serving ssh_exec or parity stdin-upload helpers to mux=False — those are short round-trips and should keep the mux. Treat instant 'timeout' from MCP remote_bash as a tool-service fault signature, not a remote command fault.",
         "fingerprints": [
           "ssh_stream instant timeout controlmaster",
           "remote_bash instant timeout any command",
@@ -57,7 +57,7 @@
         ],
         "candidate_id": "remote-toolbox-ssh-stream-through-the-shared-controlmaster-mux--fbff8c67cb",
         "verification": [
-          "serve_start log streaming and long analyse runs completed after switching stream commands to base_ssh_options(mux=False) (2026-09-02, PR #70 head commits)."
+          "Long analyse runs and collection -N -L tunnels completed after those two profiling helpers switched to base_ssh_options(mux=False) (2026-09-02, PR #70). Evidence is profiling-only; serving and parity SSH were not changed and were not re-proven."
         ]
       }
     }

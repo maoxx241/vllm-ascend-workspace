@@ -12,7 +12,7 @@ External business worktrees can be selected with repeatable
 `parity_sync.py` or the low-level helper. Snapshots come from those exact
 worktrees without resetting them or maintaining copied branches.
 
-The opt-in [ready-runtime coordinator](../../coordinator/README.md) uses
+The opt-in [ready-runtime coordinator](../../../docs/coordinator-consumption.md) uses
 `--apply-mode materialize` for a compatible warm runtime, not a legacy first
 install. Its execution gate verifies source/build identity and complete native
 artifacts before allocating cards. `parity_watch.py` continuously publishes

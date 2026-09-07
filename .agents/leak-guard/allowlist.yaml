@@ -1,0 +1,258 @@
+# Tracked-file leak guard policy
+#
+# Consumed by `.agents/scripts/tracked_leak_scan.py`, the `pre-commit` hook in
+# `.agents/hooks/tracked_leak_precommit.py`, and the `tracked-leak-guard` CI
+# workflow. See `docs/tracked-leak-guard.md` for the full contract.
+#
+# Two rules govern this file:
+#   1. Every allowance carries a `justification`. There is no inline pragma
+#      escape hatch, so all suppression is visible in one reviewable diff.
+#   2. Anything unclear fails closed. Unknown keys, unknown categories, and
+#      short justifications are hard errors, not warnings.
+#
+# Decision on legitimate remote paths (asked often, so recorded here):
+#   * `/vllm-workspace` and other shared container roots are NOT leaks. They are
+#     the same on every managed Ascend container, are documented in AGENTS.md as
+#     the default remote `cwd`, and name no person, host, or organization.
+#     They are therefore not scanned at all: `scanned_absolute_path_roots`
+#     below lists the roots the home-path rule walks, and a maintainer who wants
+#     container paths flagged adds `vllm-workspace` there.
+#   * `/home/weights/<model>` and `/root/<model>` are NOT leaks either: they are
+#     shared weight mounts named after public model releases. They stay in scope
+#     for the rule (a person's home directory looks identical) and are allowed by
+#     explicit prefix below, so `/home/<person>` still fails closed.
+#   * `/mnt/...` is not scanned as a home root, but an identity token inside such
+#     a path is still caught by the `internal-identity-token` rule.
+
+schema_version: 1
+
+settings:
+  # Absolute roots the home-directory rule walks. Everything under a listed root
+  # is a finding unless an explicit prefix or segment pattern allows it.
+  scanned_absolute_path_roots:
+    - Users
+    - home
+    - root
+
+  allowed_absolute_path_prefixes:
+    - prefix: /home/weights
+      justification: Shared read-only model weight mount present on every managed Ascend host; names a public model release, not a person.
+    - prefix: /home/vaws
+      justification: Container-side scaffold home created by session-management; the name is the tool's own, not a user identity.
+    - prefix: /root/namespace
+      justification: Container mount-namespace helper path used by remote probes; identical on every host and reveals no identity.
+    - prefix: /root/cwd
+      justification: Generic container working-directory placeholder in remote-dev docs; reveals no identity.
+    - prefix: /Users/Shared
+      justification: macOS shared directory, not a personal home directory.
+
+  allowed_absolute_path_segment_patterns:
+    - pattern: ^\.[A-Za-z0-9._-]+$
+      justification: Dot-directories under a scanned root (/root/.ssh, /root/.cache) are tool state paths, identical on every host.
+    - pattern: ^(?:Qwen|DeepSeek|GLM|Llama|Mixtral|Kimi|MiniCPM|Ernie|Pangu)[0-9A-Za-z._-]*$
+      justification: Weight directory named after a public model release; a model name identifies no person, host, or organization.
+
+  # RFC 5737 / RFC 3849 documentation ranges plus loopback are allowed globally.
+  # Everything else - including RFC 1918 - is reported, because internal
+  # topology is exactly what leaked from this repository before.
+  allowed_email_domains:
+    - example.test
+    - noreply.github.com
+
+allowlist:
+  # ---------------------------------------------------------------- addresses
+  - id: skill-docs-private-example-host
+    path_glob: .agents/skills/**
+    categories: [ipv4]
+    match_regex: ^10\.0\.0\.\d{1,3}$
+    justification: RFC 1918 example host in skill recipes and offline tests; not routable and not an address of this project's fleet.
+    remediation: Migrate to RFC 5737 192.0.2.x so example addresses are reserved documentation values.
+
+  - id: machine-management-docs-example-host
+    path_glob: .agents/skills/machine-management/**
+    categories: [ipv4]
+    match_regex: ^(173\.125\.1\.\d{1,3}|125\.173\.1\.\d{1,3})$
+    justification: Pre-existing example host address in machine attach/verify recipes and acceptance notes; carried over from the audit baseline rather than introduced here.
+    remediation: These are globally routable addresses used as documentation examples. Replace with RFC 5737 192.0.2.10 - see docs/leak-remediation.md.
+
+  - id: remote-toolbox-docs-example-host
+    path_glob: .agents/skills/remote-toolbox/**
+    categories: [ipv4]
+    match_regex: ^173\.(125|131)\.1\.\d{1,3}$
+    justification: Pre-existing example host address in remote-toolbox command recipes and stress-validation notes; audit baseline, not introduced here.
+    remediation: Replace with RFC 5737 192.0.2.10 - see docs/leak-remediation.md.
+
+  - id: profiling-analysis-docs-example-host
+    path_glob: .agents/skills/ascend-profiling-analysis/**
+    categories: [ipv4]
+    match_regex: ^173\.131\.1\.\d{1,3}$
+    justification: Pre-existing example host address in the profiling-analysis skill document, which a parallel refactor currently owns.
+    remediation: Replace with RFC 5737 192.0.2.10 when that refactor lands - see docs/leak-remediation.md.
+
+  # --------------------------------- envelope shared-root literals
+  - id: result-envelope-safe-home-prefixes
+    path_glob: .agents/lib/vaws_result_envelope.py
+    categories: [absolute-user-path]
+    match_regex: ^/home/(?:models|data|cache|shared)$
+    justification: Bare shared-root literals from the accepted envelope _SAFE_HOME_PREFIXES definition; they name data roots, not a person. Longer or different home paths, and the same names in other files, stay detected.
+
+  - id: agent-feedback-safe-home-prefixes
+    path_glob: docs/agent-feedback-contract.md
+    categories: [absolute-user-path]
+    match_regex: ^/home/(?:models|data|cache|shared)$
+    justification: The same four bare shared-root literals in the accepted feedback-contract description of _SAFE_HOME_PREFIXES. This is documentation of that list, not a global home-path exemption.
+
+  # ------------------------------------------------------------------- names
+  - id: schema-example-workspace-hostname
+    path_glob: .agents/schemas/*.json
+    categories: [internal-hostname]
+    match: vllm-ascend-workspace.local
+    justification: Schema `$id` built from this repository's own public name plus a .local suffix; it resolves to nothing and identifies no host.
+
+  - id: profiling-tests-example-internal-domain
+    path_glob: .agents/skills/ascend-profiling-analysis/tests/**
+    categories: [internal-hostname]
+    match: example.internal
+    justification: Reserved example domain used by offline tests to assert remote-path handling; no such host exists.
+
+  - id: machine-management-tests-example-registry
+    path_glob: .agents/skills/machine-management/tests/**
+    categories: [internal-hostname]
+    match: registry.local
+    justification: Fabricated registry name in offline image-selection tests; asserts string handling and contacts no registry.
+
+  - id: profiling-kernel-signature-model-token
+    path_glob: .agents/skills/ascend-profiling-analysis/scripts/ascend_profile/knowledge/kernel_signatures.yaml
+    categories: [internal-identifier]
+    match: glm450919
+    justification: Trace-directory token for a GLM-4.5 capture date, matched by the employee-id shape by coincidence; it names a public model and a date.
+
+  - id: repo-init-github-ssh-user
+    path_glob: .agents/skills/repo-init/**
+    categories: [email]
+    match: git@github.com
+    justification: The fixed SSH user of github.com in clone URLs; it is a service account name shared by every GitHub user, not a personal address.
+
+  - id: repo-boundary-check-github-ssh-transport
+    path_glob: .agents/scripts/repo_boundary_check.py
+    categories: [email]
+    match_regex: ^git@github\.com$
+    justification: Fixed GitHub SSH transport syntax shared by every GitHub user; not a personal address.
+
+  - id: npu-fleet-monitor-tests-github-ssh-transport
+    path_glob: .agents/skills/npu-fleet-monitor/tests/test_manage_monitor.py
+    categories: [email]
+    match_regex: ^git@github\.com$
+    justification: Fixed GitHub SSH transport syntax shared by every GitHub user; not a personal address.
+
+  - id: repo-boundary-tests-github-ssh-transport
+    path_glob: .agents/tests/test_repo_boundary_check.py
+    categories: [email]
+    match_regex: ^git@github\.com$
+    justification: Fixed GitHub SSH transport syntax shared by every GitHub user; not a personal address.
+
+  # ------------------------------------------ result-envelope test fixtures
+  - id: result-envelope-test-torch-npu-dev-date
+    path_glob: .agents/tests/test_result_envelope.py
+    categories: [internal-identifier]
+    match: dev20260801
+    justification: Deterministic torch_npu development-version date suffix in the accepted envelope test fixture; it is a date, not a person's identifier.
+
+  - id: result-envelope-test-example-home
+    path_glob: .agents/tests/test_result_envelope.py
+    categories: [absolute-user-path]
+    match: /home/example-user
+    justification: Synthetic username in the accepted envelope redaction input and the assertion that the home was removed; both occurrences are required test evidence.
+
+  - id: result-envelope-test-hf-token-literal
+    path_glob: .agents/tests/test_result_envelope.py
+    categories: [secret-key]
+    match: '"hf_realsecretvaluegoeshere"'
+    justification: Fixed natural-language synthetic token under HF_TOKEN in the accepted envelope redaction test; it authenticates nothing and exists to prove secret-key replacement.
+
+  # ------------------------------------------------------------- credentials
+  - id: run-manifest-test-redaction-value
+    path_glob: .agents/tests/test_run_manifest.py
+    categories: [secret-key]
+    match: '"do-not-store"'
+    justification: Literal used by a test that asserts secret-shaped fields are rejected; the value is the assertion, not a credential.
+
+  - id: knowledge-memory-test-secret-value
+    path_glob: .agents/tests/test_knowledge_memory.py
+    categories: [secret-value]
+    match_regex: ^sk-[a-z0-9]+$
+    justification: Fabricated OpenAI-shaped key used to assert that secret-shaped values are rejected by knowledge capture.
+
+  - id: split-ledger-github-origin-userinfo
+    path_glob: .agents/tests/test_split_reconcile_ledger.py
+    categories: [email]
+    match_regex: '^(?:git|token)@github\.com$'
+    justification: Both values are fixed GitHub transport/userinfo test syntax used by split-ledger origin identity fixtures; they name the GitHub SSH user and a synthetic HTTPS userinfo local-part, not a personal mailbox.
+
+  # --------------------------------- knowledge Phase B fixture/version
+  - id: knowledge-recipes-torch-npu-dev-version
+    path_glob: .agents/skills/curate-workspace-knowledge/references/command-recipes.md
+    categories: [internal-identifier]
+    match_regex: ^dev20250724$
+    justification: Legitimate torch_npu development version in a fixed recipe coordinate; it is a date suffix, not a person's identifier.
+
+  - id: knowledge-curate-test-torch-npu-dev-version
+    path_glob: .agents/skills/curate-workspace-knowledge/tests/test_knowledge_curate.py
+    categories: [internal-identifier]
+    match_regex: ^dev20250724$
+    justification: Legitimate torch_npu development version used as a fixed synthetic test coordinate; it is a date suffix, not a person's identifier.
+
+  - id: knowledge-v2-test-torch-npu-dev-version
+    path_glob: .agents/tests/test_knowledge_v2.py
+    categories: [internal-identifier]
+    match_regex: ^dev20250724$
+    justification: Legitimate torch_npu development version used as a fixed synthetic test coordinate; it is a date suffix, not a person's identifier.
+
+  - id: knowledge-flow-test-torch-npu-dev-version
+    path_glob: .agents/tests/test_knowledge_v2_flow.py
+    categories: [internal-identifier]
+    match_regex: ^dev20250724$
+    justification: Legitimate torch_npu development version used as a fixed synthetic test coordinate; it is a date suffix, not a person's identifier.
+
+  - id: knowledge-redaction-test-private-address
+    path_glob: .agents/tests/test_knowledge_redaction.py
+    categories: [ipv4]
+    match_regex: ^10\.198\.51\.100$
+    justification: Fixed synthetic private IPv4 used as a knowledge-redaction negative-test input; not a project fleet address.
+
+  - id: knowledge-v2-test-private-address
+    path_glob: .agents/tests/test_knowledge_v2.py
+    categories: [ipv4]
+    match_regex: ^10\.198\.51\.100$
+    justification: Fixed synthetic private IPv4 used as a knowledge v2 negative-test input; not a project fleet address.
+
+  - id: knowledge-redaction-test-example-home
+    path_glob: .agents/tests/test_knowledge_redaction.py
+    categories: [absolute-user-path]
+    match_regex: ^/home/testuser$
+    justification: Fixed synthetic home-root used as a knowledge-redaction negative-test input; the allowance is the exact /home/testuser root in that test module, not a longer path.
+
+  - id: knowledge-redaction-test-example-emails
+    path_glob: .agents/tests/test_knowledge_redaction.py
+    categories: [email]
+    match_regex: '^(?:dev@corp-mail\.invalid|synthetic-reviewer@github\.com)$'
+    justification: Fixed synthetic negative-test mailbox addresses used to prove knowledge redaction; they authenticate nothing and name no real person.
+
+  - id: knowledge-v2-test-github-email
+    path_glob: .agents/tests/test_knowledge_v2.py
+    categories: [email]
+    match_regex: '^synthetic-reviewer@github\.com$'
+    justification: Fixed synthetic GitHub-shaped reviewer address used as a knowledge v2 negative-test input; it authenticates nothing.
+
+scoped_exclusions:
+  # Whole-file exclusions. Use these only for the guard's own test corpus:
+  # everywhere else, prefer a narrow allowlist entry above.
+  - id: leak-guard-test-module
+    path_glob: .agents/tests/test_tracked_leak_scan.py
+    categories: ["*"]
+    justification: The guard's own test module asserts on deliberately bad values. They are reserved by RFC 1918, RFC 4193, RFC 7042, and .invalid, and every one of them is an assertion about detection behaviour.
+
+  - id: leak-guard-test-fixtures
+    path_glob: .agents/tests/fixtures/tracked_leak_guard/**
+    categories: ["*"]
+    justification: Deliberately dirty fixtures for the scanner's own tests. Values are reserved by RFC 1918, RFC 4193, RFC 7042, and .invalid, so the fixtures exercise every rule without naming a real host, person, or credential.

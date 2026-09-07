@@ -518,9 +518,11 @@ def ascend_env_preamble(*, set_e: bool = True, export_driver_lib: bool = False) 
 
     Historical copies with ``.`` instead of ``source`` (and, for
     ``_runtime_env_lines``, no ``set -u`` restore) still exist in this file's
-    ``_runtime_env_lines`` / probe script and in the independently distributed
-    ``.remote-dev/core/`` substrate; those are byte-stable remote surfaces and
-    intentionally stay as-is. New ``.agents`` code should call this helper.
+    ``_runtime_env_lines`` / probe script; those are byte-stable remote surfaces
+    and intentionally stay as-is. The external remote-dev substrate sources the
+    same file through ``Endpoint.runtime_env_file`` (see
+    ``vaws_remote_dev.ASCEND_RUNTIME_ENV_FILE``). New ``.agents`` code should
+    call this helper.
     """
     lines: list[str] = []
     if set_e:
@@ -1210,6 +1212,43 @@ def _remote_join(root: str, relpath: str) -> str:
     return str(PurePosixPath(root) / PurePosixPath(relpath))
 
 
+def _safe_local_artifact_path(local_dir: Path, relpath: object) -> Path:
+    """Resolve ``relpath`` under ``local_dir`` or raise.
+
+    Duplicates the lexical + resolve-and-contain guard in
+    ``.remote-dev/core/artifact_ops.py``. The two copies drifted; this
+    path previously joined the manifest relpath with no ``..`` check.
+    Reject before any mkdir so a hostile entry cannot escape.
+    """
+    if not isinstance(relpath, str) or relpath == "":
+        raise RemoteToolboxError(f"invalid artifact relpath: {relpath!r}")
+    if "\x00" in relpath:
+        raise RemoteToolboxError(f"invalid artifact relpath: {relpath!r}")
+    effective = "artifact" if relpath == "." else relpath
+    rel = PurePosixPath(effective)
+    if rel.is_absolute() or any(part in {"..", ""} for part in rel.parts):
+        raise RemoteToolboxError(f"unsafe artifact relpath: {relpath}")
+    root = local_dir.resolve()
+    candidate = root.joinpath(*rel.parts)
+    resolved = candidate.resolve()
+    if resolved != root and root not in resolved.parents:
+        raise RemoteToolboxError(f"artifact relpath escapes local dir: {relpath}")
+    return candidate
+
+
+def _manifest_local_paths(
+    local_dir: Path, files: Iterable[dict[str, Any]]
+) -> list[Path] | str:
+    """Validate every manifest relpath. Return paths or an error string."""
+    resolved: list[Path] = []
+    for file_info in files:
+        try:
+            resolved.append(_safe_local_artifact_path(local_dir, file_info.get("relpath")))
+        except RemoteToolboxError as exc:
+            return str(exc)
+    return resolved
+
+
 def artifact_pull(
     target: RemoteTarget,
     *,
@@ -1231,13 +1270,24 @@ def artifact_pull(
             "artifacts": {"manifest": manifest},
             "logs": {},
         }
+    files = list(manifest.get("files") or [])
+    validated = _manifest_local_paths(local_dir, files)
+    if isinstance(validated, str):
+        return {
+            "status": "failed",
+            "target": target.to_dict(),
+            "started_at": started_at,
+            "duration_ms": duration_ms(start),
+            "error": validated,
+            "artifacts": {"manifest": manifest},
+            "logs": {},
+        }
     ensure_state_dir(local_dir)
     pulled: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
     pending: list[dict[str, Any]] = []
-    for file_info in manifest.get("files", []):
+    for file_info, local_path in zip(files, validated):
         relpath = file_info["relpath"]
-        local_path = local_dir / ("artifact" if relpath == "." else relpath)
         ensure_state_dir(local_path.parent)
         if local_path.exists() and _sha256_file(local_path) == file_info["sha256"]:
             skipped.append({"relpath": relpath, "local_path": str(local_path), "reason": "hash-match"})
@@ -1305,7 +1355,10 @@ def _artifact_pull_single(
     timeout: float | None,
 ) -> dict[str, Any]:
     relpath = file_info["relpath"]
-    local_path = local_dir / ("artifact" if relpath == "." else relpath)
+    try:
+        local_path = _safe_local_artifact_path(local_dir, relpath)
+    except RemoteToolboxError as exc:
+        return {"status": "failed", "error": str(exc)}
     ensure_state_dir(local_path.parent)
     remote_file = _remote_join(remote_path, relpath)
     tmp = local_path.with_suffix(local_path.suffix + ".tmp")
@@ -1391,7 +1444,15 @@ def _artifact_pull_tar_batch(
                 extracted = tf.extractfile(member)
                 if extracted is None:
                     continue
-                local_path = local_dir / relpath
+                try:
+                    local_path = _safe_local_artifact_path(local_dir, relpath)
+                except RemoteToolboxError as exc:
+                    return {
+                        "status": "failed",
+                        "error": str(exc),
+                        "artifacts": {"pulled": pulled},
+                        "logs": {},
+                    }
                 ensure_state_dir(local_path.parent)
                 tmp = local_path.with_suffix(local_path.suffix + ".tmp")
                 with tmp.open("wb") as fh:

@@ -2,9 +2,10 @@
 
 This directory contains the repository-local skill layer for Codex, Claude Code, and similar agents.
 
-Remote development now has a substrate layer at `.remote-dev/`. Use native local
-tools for local work, and use `.remote-dev` companion tools for remote endpoint
-work:
+Remote development is an external checkout (`vllm-ascend-workspace/remote-dev`),
+located through `VAWS_REMOTE_DEV_ROOT` or `.vaws-local/remote-dev`. Use native
+local tools for local work, and use remote-dev companion tools for remote
+endpoint work:
 
 - `remote.read`
 - `remote.write`
@@ -25,7 +26,7 @@ compatibility backend for managed sessions, sync, service adapters, and cleanup.
 
 - `.agents/skills/repo-init/` is the source-of-truth skill package for repository initialization.
 - `.agents/skills/machine-management/` is the source-of-truth skill package for remote machine attach, verify, repair, and removal workflows.
-- `.agents/skills/npu-fleet-monitor/` is the local deployment and lifecycle package for the standalone NPU fleet monitoring worktree and user service.
+- `.agents/skills/npu-fleet-monitor/` is the local deployment and lifecycle package for the standalone vaws-top repository and its loopback user service.
 - `.agents/skills/session-management/` is the source-of-truth skill package for isolated parallel agent sessions.
 - `.agents/skills/remote-toolbox/` is the compatibility skill package for managed VAWS target/probe/exec/job/sync/service/artifact/cleanup tools.
 - `.agents/skills/remote-code-parity/` is the source-of-truth skill package for remote code parity before remote execution.
@@ -35,7 +36,7 @@ compatibility backend for managed sessions, sync, service adapters, and cleanup.
 - `.agents/skills/ascend-memory-profiling/` is the source-of-truth skill package for profiling and attributing HBM memory usage on Ascend NPU for vLLM serving scenarios.
 - `.agents/skills/ascend-profiling-collection/` is the source-of-truth skill package for collecting Ascend torch-profiler traces and verified manifests.
 - `.agents/skills/ascend-profiling-analysis/` is the source-of-truth skill package for analyzing collected profiler roots/manifests and generating reports.
-- `.agents/skills/curate-workspace-knowledge/` is the explicit-only package for reviewing and promoting verified candidates into formal knowledge files.
+- `.agents/skills/curate-workspace-knowledge/` is the explicit-only package for reviewing and promoting verified candidates into formal knowledge files, resolving unresolved v2 coordinate dimensions, and gating upstream export.
 - `.agents/skills/vllm-ascend-graph-debug/` diagnoses graph compile, capture, replay, and graph/eager divergence.
 - `.agents/skills/vllm-ascend-correctness-validation/` compares normalized baseline/candidate and eager/graph correctness.
 - `.agents/skills/vllm-ascend-change-validation/` plans diff-driven validation and aggregates evidence.
@@ -50,18 +51,29 @@ compatibility backend for managed sessions, sync, service adapters, and cleanup.
 - `.agents/scripts/workspace_profile.py` is the shared low-level helper for the local workspace machine profile.
 - `.agents/scripts/workspace_identity.py` manages the persistent local UUID4 and optional unified project/agent/resource alias.
 - `.agents/scripts/run_manifest.py` creates and validates shared Run Manifest v1 files.
-- `.agents/scripts/knowledge_validate.py` validates the versioned shared knowledge documents.
-- `.agents/scripts/knowledge_query.py` retrieves compact matching knowledge summaries and expands one entry only by id.
-- `.agents/scripts/knowledge_capture.py` records or merges one verified, redacted candidate without loading a Skill.
+- `.agents/scripts/knowledge_validate.py` validates both knowledge generations (v1 and federated v2) and reports the redaction posture of the project layer.
+- `.agents/scripts/knowledge_query.py` is the three-layer query client: it retrieves compact matching summaries across `shared`, `project` and `candidate`, expands one entry by id or slug, probes layer availability with `--capabilities`, and reports every layer it could not consult.
+- `.agents/scripts/knowledge_capture.py` records or merges one verified, redacted candidate without loading a Skill, reading the environment coordinate from a Run Manifest, `--env` pairs, or the candidate scope.
+- `.agents/scripts/knowledge_migrate_v2.py` converts v1 documents to `<kind>.v2.yaml` and reports, per entry, which coordinate dimensions still need a human.
+- `.agents/scripts/knowledge_export.py` is the source-side export gate for proposing project knowledge to `vllm-ascend-workspace/vaws-knowledge`.
+- `.agents/scripts/knowledge_shared_cache.py` manages the read-only local cache of the shared layer.
 - `.agents/hooks/knowledge_session_end.py` flushes only candidates explicitly deferred for the ending Codex session; it never reads the transcript.
-- `.agents/knowledge/` stores the empty formal document skeleton and any subsequently reviewed project knowledge.
-- `.agents/schemas/` stores the machine-readable Run Manifest and knowledge contracts.
+- `.agents/knowledge/` is the project layer: v1 `<kind>.yaml` documents, federated v2 `<kind>.v2.yaml` documents, and the `MIGRATION-v2.md` report.
+- `.agents/schemas/` stores the machine-readable Run Manifest and knowledge contracts, including the project-layer v2 and candidate v2 schemas.
 - `.agents/lib/vaws_local_state.py` is the shared library for untracked local runtime state.
 - `.agents/lib/vaws_run_manifest.py` is the shared Run Manifest v1 library for workflow correlation and artifact links.
-- `.agents/lib/vaws_knowledge.py` is the shared knowledge validation, capture, and query library.
+- `.agents/lib/vaws_knowledge.py` is the shared v1 knowledge validation, capture, and query library, and the dual-read entry point for v2 documents.
+- `.agents/lib/vaws_knowledge_v2.py` is the federated v2 contract library: validation, canonicalization, content hashing, coordinates, and the export shape.
+- `.agents/lib/vaws_knowledge_client.py` is the three-layer query client with capability probing and graceful degradation.
+- `.agents/lib/vaws_knowledge_shared.py` is the shared-cache trust boundary: only declared verified-zone corpus may be mounted as `shared`, and query/get apply the importer-owned source policy.
+- `.agents/tests/knowledge_client_adapter.py` is the tracked protocol adapter for the pinned vaws-knowledge conformance kit.
+- `.agents/deps/vaws-knowledge.json` pins the exact external kit commit. Set `VAWS_KNOWLEDGE_KIT_ROOT` to a checkout of that commit; unconfigured local runs skip the kit suite with that message.
+- `.agents/lib/vaws_knowledge_migrate.py` is the mechanical v1 -> v2 conversion library.
+- `.agents/lib/vaws_redaction.py` is the versioned source-side redaction ruleset shared by every knowledge write and export.
 - `.agents/lib/vaws_session_id.py` and `.agents/lib/vaws_session_state.py` are the shared libraries for session identity, state, locks, and leases.
 - `.agents/lib/vaws_remote_toolbox.py` is the shared library for remote target resolution, SSH execution, job observation, artifact streaming, sync adapters, service adapters, and cleanup.
 - `.agents/lib/vaws_validate.py` is the shared validation library for agent-facing ids, environment names, path boundaries, and NPU device lists.
+- `.agents/lib/vaws_coordinator.py` locates the external vaws-coordinator checkout (task identity, `vaws_*` tools, runtime pool). Pin: `.agents/deps/coordinator.json`.
 - `AGENTS.md` carries repository-wide routing rules and mandatory decision gates.
 
 ## Script-first convention
@@ -146,6 +158,9 @@ Current primary helpers:
 - `scripts/knowledge_validate.py`
 - `scripts/knowledge_query.py`
 - `scripts/knowledge_capture.py`
+- `scripts/knowledge_migrate_v2.py`
+- `scripts/knowledge_export.py`
+- `scripts/knowledge_shared_cache.py`
 - `scripts/workspace_profile.py`
 - `.agents/tests/test_vaws_scaffold_safety.py`
 
@@ -179,6 +194,9 @@ Untracked workspace-local state lives under `.vaws-local/`:
 - `.vaws-local/knowledge/candidates/`
 - `.vaws-local/knowledge/pending/<session-key>/`
 - `.vaws-local/knowledge/session-end/`
+- `.vaws-local/knowledge/reviewed/`
+- `.vaws-local/knowledge/shared/` (read-only cache of the federated commons)
+- `.vaws-local/knowledge/export/` (upstream proposal bundles and export ledger)
 
 Parallel remote work should use `session-management` first. A session owns a local worktree, a dedicated remote container, session-scoped serving/benchmark/profiling state, and resource leases. Existing `--machine` commands remain legacy-compatible for single-tenant workflows.
 
@@ -292,6 +310,7 @@ If you change `modelscope`, update these together:
 - `.agents/skills/modelscope/SKILL.md`
 - `.agents/skills/modelscope/scripts/`
 - `.agents/skills/modelscope/agents/`
+- `.trae/skills/modelscope` via `python3 .agents/scripts/sync_claude_skills.py`
 - `AGENTS.md`, `README.md`, and this file when routing or output contract changes
 
 Keep the files under `.agents/skills/` as the canonical supporting files for repo-local skills.

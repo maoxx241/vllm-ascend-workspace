@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "name": "vaws-knowledge",
+  "repository": "vllm-ascend-workspace/vaws-knowledge",
+  "url": "https://github.com/vllm-ascend-workspace/vaws-knowledge.git",
+  "commit": "e04d50f7bc5702afbe2e2988f7c28a3268e1a7f3",
+  "root_env": "VAWS_KNOWLEDGE_KIT_ROOT",
+  "note": "External conformance kit used by knowledge client tests. Not a runtime dependency and not vendored. CI checks out this exact commit with persist-credentials: false."
+}

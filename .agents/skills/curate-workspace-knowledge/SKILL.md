@@ -1,13 +1,20 @@
 ---
 name: curate-workspace-knowledge
-description: Review, deduplicate, promote, merge, reject, or deprecate verified vLLM Ascend workspace knowledge candidates. Use only when the user explicitly asks to curate, persist, review, merge, promote, or deprecate project knowledge (沉淀、整理、复盘、合并、提升、废弃), or explicitly invokes this Skill to review `.vaws-local/knowledge/candidates`. Do not use during normal diagnosis, serving, benchmarking, profiling, remote execution, code review, or candidate capture/query; those workflows call the shared scripts directly without loading this Skill.
+description: Review, deduplicate, promote, merge, reject, or deprecate verified vLLM Ascend workspace knowledge candidates, resolve unresolved v2 coordinate dimensions, and gate export to the federated commons. Use only when the user explicitly asks to curate, persist, review, merge, promote, deprecate, or upstream project knowledge (沉淀、整理、复盘、合并、提升、废弃、上游), or explicitly invokes this Skill to review `.vaws-local/knowledge/candidates`. Do not use during normal diagnosis, serving, benchmarking, profiling, remote execution, code review, or candidate capture/query; those workflows call the shared scripts directly without loading this Skill.
 ---
 
 # Curate Workspace Knowledge
 
-Keep `.agents/knowledge/` as the only formal project knowledge source. Treat
-`.vaws-local/knowledge/candidates/` as an untracked review queue, never as a
-second authoritative store.
+Keep `.agents/knowledge/` as the project layer: the only formal, tracked
+knowledge this repo owns. Treat `.vaws-local/knowledge/candidates/` as an
+untracked review queue, never as a second authoritative store, and
+`.vaws-local/knowledge/shared/` as a read-only cache of the federated commons
+(`vllm-ascend-workspace/vaws-knowledge`) that is never edited here.
+
+New promotions write the federated **v2** contract to
+`.agents/knowledge/<kind>.v2.yaml`. The v1 `<kind>.yaml` documents stay in
+place and stay readable (`--schema 1` still writes them) so existing consumers
+keep working.
 
 ## Workflow
 
@@ -20,8 +27,16 @@ second authoritative store.
    - `merge` it into an existing entry with the same cause and scope;
    - `reject` an unsupported, transient, secret-bearing, or duplicate candidate;
    - `deprecate` a stale formal entry.
-5. Run `.agents/scripts/knowledge_validate.py` and the owning Skill's tests.
-6. Commit the formal knowledge change together with any regression protection.
+5. For a v2 promotion, close the coordinate before claiming anything:
+   - `list-unresolved` reports every dimension still waiting on a human;
+   - `resolve` fills one dimension from a real run (`--values`), a stated
+     independence basis (`--any-basis`), or a bound (`--min` / `--max`);
+   - `verify` attaches followable evidence plus a non-submitter confirmation
+     and moves the entry to `status: verified`.
+6. Only then, if the fact belongs upstream, run
+   `.agents/scripts/knowledge_export.py` and open the PR it points at.
+7. Run `.agents/scripts/knowledge_validate.py` and the owning Skill's tests.
+8. Commit the formal knowledge change together with any regression protection.
 
 ## Entry point
 
@@ -29,10 +44,23 @@ second authoritative store.
 
 - `list`: return compact candidate summaries;
 - `inspect`: return one full candidate plus possible formal matches;
-- `promote`: create one `experimental` or `active` formal entry;
-- `merge`: merge evidence and occurrences into an existing formal entry;
+- `promote`: create one v2 entry (default) or a legacy v1 entry
+  (`--schema 1`);
+- `merge`: merge evidence and occurrences into an existing v1 entry;
 - `reject`: archive a candidate locally without changing formal knowledge;
-- `deprecate`: retain a formal entry while marking it obsolete.
+- `deprecate`: retain a formal entry while marking it obsolete;
+- `resolve`: fill one unresolved v2 coordinate dimension;
+- `verify`: record independent confirmation for a v2 entry;
+- `list-unresolved`: report v2 entries blocked on a human coordinate.
+
+Related shared scripts, outside this Skill:
+
+- `.agents/scripts/knowledge_migrate_v2.py`: convert v1 documents to v2;
+- `.agents/scripts/knowledge_export.py`: the source-side export gate;
+- `.agents/scripts/knowledge_shared_cache.py`: manage the read-only shared
+  cache;
+- `.agents/scripts/knowledge_validate.py`: validate both generations and
+  report redaction posture.
 
 Read only the reference needed for the active operation:
 
@@ -45,7 +73,19 @@ Read only the reference needed for the active operation:
 - Never parse or persist a full transcript.
 - Never promote `inconclusive` verification.
 - Never promote knowledge supported only by untracked or unstable evidence.
-- Require a regression test or two verified occurrences before `active`.
+- Require a regression test or two verified occurrences before `active`
+  (v1) or before promoting with the `active` evidence gate (v2).
+- Never invent a coordinate. A dimension nobody established stays an
+  unresolved marker; `any` is a positive claim of independence and needs a
+  basis describing what was actually examined.
+- A v2 entry reaches `verified` only with a complete coordinate, followable
+  evidence, and a confirming handle that is not the submitter.
+- Never publish upstream from a raw document. Export only through
+  `.agents/scripts/knowledge_export.py`, which strips internal addresses,
+  user paths, hostnames, container names and mounts, and refuses unresolved
+  coordinates.
+- Never write into `.vaws-local/knowledge/shared/`; the shared layer flows one
+  way, downward.
 - Prefer `merge` over a new entry when cause and applicability match.
 - Use `--force-new` only after reviewing an identical fingerprint with a
   different confirmed cause.

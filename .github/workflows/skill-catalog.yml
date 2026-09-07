@@ -7,6 +7,7 @@ on:
       - "AGENTS.md"
       - "README.md"
       - "README.en.md"
+      - ".trae/skills/modelscope/**"
       - ".github/workflows/skill-catalog.yml"
   push:
     branches:
@@ -16,6 +17,7 @@ on:
       - "AGENTS.md"
       - "README.md"
       - "README.en.md"
+      - ".trae/skills/modelscope/**"
       - ".github/workflows/skill-catalog.yml"
 
 permissions:
@@ -35,11 +37,34 @@ jobs:
         run: python -B .agents/scripts/skill_catalog.py
       - name: Validate shared knowledge
         run: python -B .agents/scripts/knowledge_validate.py
+      - name: Check repository boundaries
+        # Enforce mode fails on a violation the dated baseline does not
+        # already record, and on a baseline row whose violation is gone.
+        # See docs/repo-boundaries.md. Submodules are not checked out here
+        # and the guard skips them regardless.
+        run: |
+          python -B .agents/scripts/repo_boundary_check.py --mode enforce
+          python -B -m unittest discover -s .agents/tests -p "test_repo_boundary_check.py"
       - name: Run catalog tests
         run: python -B -m unittest discover -s .agents/tests -p "test_*catalog.py"
+      - name: Run generated skill projection tests
+        run: python -B -m unittest discover -s .agents/tests -p "test_sync_claude_skills.py"
+      - name: Check generated Claude shims and ModelScope Trae projection
+        run: python -B .agents/scripts/sync_claude_skills.py --check
       - name: Run manifest and knowledge tests
         run: python -B -m unittest discover -s .agents/tests -p "test_run_manifest.py"
+      - name: Check out pinned knowledge conformance kit
+        uses: actions/checkout@v4
+        with:
+          repository: vllm-ascend-workspace/vaws-knowledge
+          ref: e04d50f7bc5702afbe2e2988f7c28a3268e1a7f3
+          path: .vaws-local/vaws-knowledge-e04d50f7
+          persist-credentials: false
+      - name: Install knowledge kit test tools
+        run: python -m pip install pyyaml
       - name: Run knowledge evidence-chain tests
+        env:
+          VAWS_KNOWLEDGE_KIT_ROOT: ${{ github.workspace }}/.vaws-local/vaws-knowledge-e04d50f7
         run: python -B -m unittest discover -s .agents/tests -p "test_knowledge*.py"
       - name: Run knowledge curation tests
         run: python -B -m unittest discover -s .agents/skills/curate-workspace-knowledge/tests
@@ -99,13 +124,6 @@ jobs:
           python -m pip install pytest -r .agents/skills/ascend-profiling-analysis/requirements.txt
           python -B -m pytest .agents/skills/ascend-profiling-analysis/tests -q
 
-  coordinator:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - run: python -m pip install -r .agents/coordinator/requirements.txt
-      - name: Runtime pool, artifacts and real HTTP MCP contracts
-        run: python -B -m unittest discover -s .agents/coordinator/tests -v
+  # In-tree `.agents/coordinator/` is gone. Scaffold-side consumer contracts
+  # live in coordinator.yml. Linux subreaper and HTTP manager tests live in
+  # the vaws-coordinator repository.

@@ -1,5 +1,20 @@
 #!/usr/bin/env python3
-"""Validate, capture, and query workspace knowledge without loading a Skill."""
+"""Validate, capture, and query workspace knowledge without loading a Skill.
+
+Dual-read, single-write-forward. Formal ``.agents/knowledge/`` documents exist
+in two generations and both are readable here:
+
+- ``<kind>.yaml`` — v1 documents with free-text ``applicable_versions``. Kept
+  readable because existing consumers (profiling collection/analysis, change
+  validation, an ``AGENTS.md`` routing rule) depend on this module's v1 API.
+- ``<kind>.v2.yaml`` — federated v2 documents with a structured twelve
+  dimension ``scope``. All new formal writes go here, via
+  ``.agents/lib/vaws_knowledge_v2.py``.
+
+Local candidates are also dual-read: schema 1 candidates load unchanged, and
+new captures are written as schema 2, which additionally records the concrete
+environment coordinate the fix was observed on.
+"""
 
 from __future__ import annotations
 
@@ -13,8 +28,39 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping, MutableMapping, Sequence
 
+import vaws_redaction as _redaction
+
 SCHEMA_VERSION = 1
-CANDIDATE_SCHEMA_VERSION = 1
+CANDIDATE_SCHEMA_VERSION = 2
+SUPPORTED_CANDIDATE_SCHEMA_VERSIONS = (1, 2)
+COORDINATE_UNKNOWN = "unknown"
+# The twelve applicability dimensions of the federated v2 contract, plus the
+# provenance of the reading. Kept as a literal here so candidate capture does
+# not need to import the v2 module.
+COORDINATE_DIMENSIONS = (
+    "soc",
+    "cann",
+    "driver",
+    "python_abi",
+    "torch",
+    "torch_npu",
+    "vllm",
+    "vllm_ascend",
+    "model",
+    "topology",
+    "execution_mode",
+    "component",
+)
+COORDINATE_SOURCES = frozenset(
+    {
+        "run-manifest",
+        "runtime-probe",
+        "explicit",
+        # Dimensions the capturing agent stated in the candidate's own scope.
+        "candidate-scope",
+        "unavailable",
+    }
+)
 KNOWLEDGE_FILES = {
     "version-compatibility.yaml": "version-compatibility",
     "model-capabilities.yaml": "model-capabilities",
@@ -99,23 +145,41 @@ def _require_string_array(
     return [item.strip() for item in value]
 
 
-def _scan_sensitive(value: Any, path: str, errors: list[str]) -> None:
+def _scan_non_string_keys(value: Any, path: str, errors: list[str]) -> None:
     if isinstance(value, Mapping):
         for key, child in value.items():
             if not isinstance(key, str):
                 errors.append(f"{path} contains a non-string key")
                 continue
-            if SECRET_KEY_RE.search(key):
-                errors.append(f"{path}.{key} uses a secret-like key")
-            _scan_sensitive(child, f"{path}.{key}", errors)
+            _scan_non_string_keys(child, f"{path}.{key}", errors)
     elif isinstance(value, list):
         for index, child in enumerate(value):
-            _scan_sensitive(child, f"{path}[{index}]", errors)
-    elif isinstance(value, str):
-        for pattern in SECRET_VALUE_RES:
-            if pattern.search(value):
-                errors.append(f"{path} contains a secret-like value")
-                break
+            _scan_non_string_keys(child, f"{path}[{index}]", errors)
+
+
+def _scan_sensitive(value: Any, path: str, errors: list[str]) -> None:
+    """Screen a payload with the versioned source-side redaction ruleset.
+
+    Until now this only looked for credential-shaped keys and values, which is
+    why an internal address range reached a tracked knowledge file. The
+    ``block`` severity of ``vaws_redaction`` covers addresses, hostnames, user
+    paths and mail addresses as well, and applies to every tracked write.
+    ``export`` severity findings (internal mount paths, container names) stay
+    legal in the project layer — some facts are genuinely not publishable —
+    and are refused later, on the export path.
+    """
+
+    _scan_non_string_keys(value, path, errors)
+    for finding in _redaction.blocking_findings(_redaction.scan(value, path=path)):
+        if finding.rule == "secret-key-name":
+            errors.append(f"{finding.path} uses a secret-like key")
+        elif finding.rule == "secret-value":
+            errors.append(f"{finding.path} contains a secret-like value")
+        else:
+            errors.append(
+                f"{finding.path} contains a redacted-class value "
+                f"({finding.rule}: {finding.masked})"
+            )
 
 
 def _validate_evidence_uri(uri: str, path: str, errors: list[str]) -> None:
@@ -169,8 +233,20 @@ def load_knowledge_file(path: Path) -> dict[str, Any]:
 
 
 def validate_knowledge_document(
-    payload: Mapping[str, Any], *, expected_kind: str, path: str
+    payload: Mapping[str, Any],
+    *,
+    expected_kind: str,
+    path: str,
+    screen_sensitive: bool = True,
 ) -> None:
+    """Validate a v1 document.
+
+    ``screen_sensitive=False`` keeps the structural checks but skips the
+    redaction screen. The migration reader needs that: the corpus it has to
+    convert is precisely the corpus that already contains a leaked address
+    range, and a tool that refuses to read it cannot strip it.
+    """
+
     errors: list[str] = []
     if payload.get("schema_version") != SCHEMA_VERSION:
         errors.append(f"schema_version must be {SCHEMA_VERSION}")
@@ -214,11 +290,27 @@ def validate_knowledge_document(
     unknown = sorted(set(payload) - allowed)
     if unknown:
         errors.append(f"unknown top-level fields: {', '.join(unknown)}")
+    # Reading is also a checkpoint: a block-severity leak that already sits in
+    # a tracked document has to surface on validation, not only on the next
+    # write. This is how the internal address range in this corpus stayed
+    # invisible for as long as it did.
+    if screen_sensitive:
+        _scan_sensitive(payload, path, errors)
     if errors:
         raise KnowledgeError(f"{path}: " + "; ".join(errors))
 
 
+def _v2_module():
+    """Import the v2 contract module lazily to keep the dependency one-way."""
+
+    import vaws_knowledge_v2
+
+    return vaws_knowledge_v2
+
+
 def validate_knowledge_dir(root: Path) -> list[str]:
+    """Validate every v1 and v2 document in a formal knowledge directory."""
+
     validated: list[str] = []
     errors: list[str] = []
     for filename, kind in KNOWLEDGE_FILES.items():
@@ -233,8 +325,26 @@ def validate_knowledge_dir(root: Path) -> list[str]:
             errors.append(str(exc))
         else:
             validated.append(filename)
+
+    v2 = _v2_module()
+    for path, kind in v2.iter_documents(root):
+        if kind not in KNOWLEDGE_KINDS:
+            errors.append(f"unknown v2 document kind: {path.name}")
+            continue
+        try:
+            document = v2.load_document(path)
+            v2.validate_document(
+                document, path=str(path), expected_kind=kind, context=v2.PROJECT_LAYER
+            )
+        except v2.KnowledgeV2Error as exc:
+            errors.append(str(exc))
+        else:
+            validated.append(path.name)
+
     unknown = sorted(
-        path.name for path in root.glob("*.yaml") if path.name not in KNOWLEDGE_FILES
+        path.name
+        for path in root.glob("*.yaml")
+        if path.name not in KNOWLEDGE_FILES and not path.name.endswith(v2.V2_SUFFIX)
     )
     if unknown:
         errors.append(f"unknown knowledge files: {', '.join(unknown)}")
@@ -266,6 +376,56 @@ def generate_candidate_id(payload: Mapping[str, Any]) -> str:
     return f"{owner[:32]}-{slug}-{digest}"[:128].rstrip("-")
 
 
+def empty_coordinate(*, source: str = "unavailable") -> dict[str, str]:
+    """A coordinate with every dimension explicitly unknown.
+
+    ``unknown`` is a real, reportable state. It is never a placeholder for a
+    plausible value: a fabricated CANN or driver version is exactly the
+    confident-but-wrong knowledge the federated contract exists to prevent.
+    """
+
+    if source not in COORDINATE_SOURCES:
+        raise KnowledgeError(
+            "coordinate source must be one of: " + ", ".join(sorted(COORDINATE_SOURCES))
+        )
+    coordinate = {name: COORDINATE_UNKNOWN for name in COORDINATE_DIMENSIONS}
+    coordinate["source"] = source
+    return coordinate
+
+
+def normalize_coordinate(
+    value: Mapping[str, Any] | None, *, source: str | None = None
+) -> dict[str, str]:
+    """Fill missing dimensions with ``unknown`` without inventing values."""
+
+    coordinate = empty_coordinate(source=source or "explicit")
+    if value:
+        for name in COORDINATE_DIMENSIONS:
+            raw = value.get(name)
+            if isinstance(raw, str) and raw.strip():
+                coordinate[name] = raw.strip()
+        raw_source = value.get("source")
+        if source is None and isinstance(raw_source, str) and raw_source in COORDINATE_SOURCES:
+            coordinate["source"] = raw_source
+    return coordinate
+
+
+def unknown_coordinate_dimensions(coordinate: Mapping[str, Any]) -> list[str]:
+    return [
+        name
+        for name in COORDINATE_DIMENSIONS
+        if str(coordinate.get(name, COORDINATE_UNKNOWN)) == COORDINATE_UNKNOWN
+    ]
+
+
+def render_coordinate(coordinate: Mapping[str, Any]) -> str:
+    """Render a coordinate for the v1 ``applicable_versions`` compatibility field."""
+
+    return "; ".join(
+        f"{name}={coordinate.get(name, COORDINATE_UNKNOWN)}" for name in COORDINATE_DIMENSIONS
+    )
+
+
 def normalize_candidate(
     payload: Mapping[str, Any], *, now: str | None = None
 ) -> dict[str, Any]:
@@ -280,6 +440,15 @@ def normalize_candidate(
             )
         )
     normalized.setdefault("schema_version", CANDIDATE_SCHEMA_VERSION)
+    if normalized["schema_version"] == CANDIDATE_SCHEMA_VERSION:
+        normalized["environment"] = normalize_coordinate(
+            normalized.get("environment"),
+            source=None if normalized.get("environment") else "unavailable",
+        )
+        if not normalized.get("applicable_versions"):
+            # v1 consumers still read this field; render the coordinate rather
+            # than asking an agent to prose it into a string.
+            normalized["applicable_versions"] = render_coordinate(normalized["environment"])
     normalized.setdefault("candidate_id", generate_candidate_id(normalized))
     normalized.setdefault("avoidance", "")
     normalized.setdefault("status", "candidate")
@@ -303,8 +472,34 @@ def validate_candidate(payload: Mapping[str, Any], *, path: str = "candidate") -
         serialized_size = MAX_CANDIDATE_BYTES + 1
     if serialized_size > MAX_CANDIDATE_BYTES:
         errors.append(f"candidate must not exceed {MAX_CANDIDATE_BYTES} bytes")
-    if payload.get("schema_version") != CANDIDATE_SCHEMA_VERSION:
-        errors.append(f"schema_version must be {CANDIDATE_SCHEMA_VERSION}")
+    schema_version = payload.get("schema_version")
+    if schema_version not in SUPPORTED_CANDIDATE_SCHEMA_VERSIONS:
+        errors.append(
+            "schema_version must be one of: "
+            + ", ".join(str(item) for item in SUPPORTED_CANDIDATE_SCHEMA_VERSIONS)
+        )
+    if schema_version == 2:
+        environment = payload.get("environment")
+        if not isinstance(environment, Mapping):
+            errors.append("environment must be an object for schema_version 2")
+        else:
+            for name in COORDINATE_DIMENSIONS:
+                value = environment.get(name)
+                if not isinstance(value, str) or not value.strip():
+                    errors.append(
+                        f"environment.{name} must be the observed value or "
+                        f"{COORDINATE_UNKNOWN!r}"
+                    )
+            if environment.get("source") not in COORDINATE_SOURCES:
+                errors.append(
+                    "environment.source must be one of: "
+                    + ", ".join(sorted(COORDINATE_SOURCES))
+                )
+            unknown_keys = sorted(set(environment) - set(COORDINATE_DIMENSIONS) - {"source"})
+            if unknown_keys:
+                errors.append(f"environment has unknown fields: {', '.join(unknown_keys)}")
+    elif "environment" in payload:
+        errors.append("environment requires schema_version 2")
     candidate_id = payload.get("candidate_id")
     if not isinstance(candidate_id, str) or not SAFE_ENTRY_ID_RE.fullmatch(candidate_id):
         errors.append("candidate_id must be a lowercase safe identifier")
@@ -430,6 +625,8 @@ def validate_candidate(payload: Mapping[str, Any], *, path: str = "candidate") -
         "created_at",
         "updated_at",
     }
+    if schema_version == 2:
+        allowed = allowed | {"environment"}
     unknown = sorted(set(payload) - allowed)
     if unknown:
         errors.append(f"unknown top-level fields: {', '.join(unknown)}")
@@ -477,6 +674,14 @@ def _formal_candidate_ids(knowledge_dir: Path) -> set[str]:
                 candidate_ids.update(
                     value for value in rule["candidate_ids"] if isinstance(value, str)
                 )
+    # v2 entries have no field for a local candidate id (the egress whitelist
+    # does not declare one), so promotion carries the candidate id in ``slug``.
+    v2 = _v2_module()
+    v2_entries, _problems = v2.load_entries(knowledge_dir)
+    for entry in v2_entries:
+        slug = entry.get("slug")
+        if isinstance(slug, str):
+            candidate_ids.add(slug)
     return candidate_ids
 
 
@@ -516,6 +721,15 @@ def capture_candidate(
             if existing[field] != candidate[field]:
                 semantic_changed = True
             merged[field] = deepcopy(candidate[field])
+        # Single-write-forward: a merged candidate is rewritten in the current
+        # generation, so a schema 1 candidate on disk gains the coordinate.
+        if candidate.get("schema_version") == CANDIDATE_SCHEMA_VERSION:
+            if existing.get("schema_version") != CANDIDATE_SCHEMA_VERSION:
+                semantic_changed = True
+            if existing.get("environment") != candidate.get("environment"):
+                semantic_changed = True
+            merged["schema_version"] = CANDIDATE_SCHEMA_VERSION
+            merged["environment"] = deepcopy(candidate["environment"])
         merged_fingerprints = _merge_unique(
             existing["fingerprints"], candidate["fingerprints"]
         )
@@ -553,13 +767,29 @@ def capture_candidate(
         action = "updated" if semantic_changed else "unchanged"
     validate_candidate(candidate)
     _write_json_atomic(path, candidate)
-    return {
+    result = {
         "status": "passed",
         "action": action,
         "candidate_id": candidate_id,
         "path": str(path),
         "occurrence_count": candidate["occurrence_count"],
+        "schema_version": candidate["schema_version"],
     }
+    environment = candidate.get("environment")
+    if isinstance(environment, Mapping):
+        unknown = unknown_coordinate_dimensions(environment)
+        result["coordinate"] = {
+            "source": environment.get("source"),
+            "unknown_dimensions": unknown,
+            "complete": not unknown,
+            "note": (
+                "unknown dimensions block promotion to a verified v2 entry; supply "
+                "them from the run context instead of guessing"
+            )
+            if unknown
+            else "",
+        }
+    return result
 
 
 def _iter_strings(value: Any) -> Iterable[str]:
@@ -626,6 +856,16 @@ def _entry_score(query: str, entry: Mapping[str, Any]) -> int:
     return score
 
 
+def score_entry(query: str, entry: Mapping[str, Any]) -> int:
+    """Public scoring hook.
+
+    The three-layer client scores v2 entries and local candidates with the
+    same function, so ranking stays comparable across layers.
+    """
+
+    return _entry_score(query, entry)
+
+
 def query_knowledge(
     *,
     knowledge_dir: Path,
@@ -634,7 +874,16 @@ def query_knowledge(
     limit: int = 3,
     include_deprecated: bool = False,
     min_score: int = 0,
+    include_unverified: bool = False,
 ) -> list[dict[str, Any]]:
+    """Query the formal project layer across both document generations.
+
+    The returned dictionaries keep every v1 key, so existing callers keep
+    working; v2 matches add ``layer``, ``uuid``, ``schema_version`` and
+    ``unresolved_dimensions``, and render their structured coordinate into
+    ``applicable_versions``.
+    """
+
     if limit < 1:
         raise KnowledgeError("limit must be greater than zero")
     if min_score < 0:
@@ -672,15 +921,53 @@ def query_knowledge(
                     "applicable_versions": entry["applicable_versions"],
                     "score": score,
                     "source_file": filename,
+                    "layer": "project",
+                    "schema_version": SCHEMA_VERSION,
                 }
             )
-    matches.sort(key=lambda item: (-item["score"], item["kind"], item["id"]))
+
+    v2 = _v2_module()
+    v2_entries, _problems = v2.load_entries(knowledge_dir)
+    for entry in v2_entries:
+        kind = entry.get("_kind")
+        if kind not in selected:
+            continue
+        status = entry.get("status")
+        if status == "deprecated" and not include_deprecated:
+            continue
+        if status == "unverified" and not include_unverified:
+            continue
+        view = v2.match_view(entry)
+        score = _entry_score(query, view)
+        if score <= 0 or score < min_score:
+            continue
+        rule = entry.get("rule", {})
+        matches.append(
+            {
+                "id": entry.get("slug"),
+                "uuid": entry.get("uuid"),
+                "kind": kind,
+                "status": status,
+                "summary": str(rule.get("summary") or rule.get("symptom") or entry.get("slug")),
+                "applicable_versions": view["applicable_versions"],
+                "score": score,
+                "source_file": entry.get("_source_file"),
+                "layer": "project",
+                "schema_version": v2.SCHEMA_VERSION,
+                "unresolved_dimensions": v2.unresolved_dimensions(entry),
+                "warning": v2.status_warning(entry),
+            }
+        )
+
+    matches.sort(key=lambda item: (-item["score"], str(item["kind"]), str(item["id"])))
     return matches[:limit]
 
 
 def get_knowledge_entry(
     *, knowledge_dir: Path, entry_id: str
 ) -> dict[str, Any] | None:
+    """Fetch one formal entry by v1 id, or by v2 slug or uuid."""
+
     for filename, kind in KNOWLEDGE_FILES.items():
         document = load_knowledge_file(knowledge_dir / filename)
         validate_knowledge_document(
@@ -688,7 +975,26 @@ def get_knowledge_entry(
         )
         for entry in document["entries"]:
             if entry["id"] == entry_id:
-                return {"kind": kind, "source_file": filename, "entry": entry}
+                return {
+                    "kind": kind,
+                    "source_file": filename,
+                    "entry": entry,
+                    "layer": "project",
+                    "schema_version": SCHEMA_VERSION,
+                }
+
+    v2 = _v2_module()
+    v2_entries, _problems = v2.load_entries(knowledge_dir)
+    for entry in v2_entries:
+        if entry_id in {entry.get("slug"), entry.get("uuid")}:
+            record = deepcopy(entry)
+            return {
+                "kind": record.pop("_kind", None),
+                "source_file": record.pop("_source_file", None),
+                "entry": record,
+                "layer": "project",
+                "schema_version": v2.SCHEMA_VERSION,
+            }
     return None
 
 
