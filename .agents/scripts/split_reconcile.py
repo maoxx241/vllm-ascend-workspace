@@ -554,7 +554,14 @@ def parse_github_identity(origin_url: str) -> tuple[str, str] | None:
 
 
 def _tree_path(relpath: str) -> str:
-    return relpath.strip().replace("\\", "/").lstrip("./").rstrip("/")
+    """Preserve git-tree path identity.
+
+    The only input folding is an explicit ``./`` prefix. Do not use character-set
+    stripping: ``.agents`` is not ``agents``, and spaces or backslashes stay.
+    """
+    while relpath.startswith("./"):
+        relpath = relpath[2:]
+    return relpath
 
 
 def _git_run(path: Path, args: tuple[str, ...] | list[str], *, binary: bool = False) -> subprocess.CompletedProcess | None:
