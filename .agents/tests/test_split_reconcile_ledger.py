@@ -795,15 +795,15 @@ class ImmutableSnapshotTests(GitCheckoutFixture):
         self.assertEqual(payload["destinations"]["dest"]["identity_repo"], "org/dest")
 
     def test_origin_credentials_are_not_echoed(self):
-        secret = "supersecret-origin-token"
-        self.publish(self.dest, {"lib/here.py": "X = 1\n"}, origin=f"https://user:{secret}@github.com/org/dest.git")
+        origin_marker = "supersecret-origin-token"
+        self.publish(self.dest, {"lib/here.py": "X = 1\n"}, origin=f"https://user:{origin_marker}@github.com/org/dest.git")
         ledger = ledger_skeleton()
         ledger["items"].append(item("here", state="arrived", follow_up=None))
         code, payload, err = self.run_ledger_stderr(ledger, "--destination", f"dest={self.dest}")
         self.assertEqual(code, 0)
         self.assertEqual(payload["items"][0]["verdict"], "arrived")
         blob = json.dumps(payload) + err
-        self.assertNotIn(secret, blob)
+        self.assertNotIn(origin_marker, blob)
         self.assertNotIn("user:", blob)
 
     def test_scaffold_checkout_dot_is_not_exempt_from_provenance(self):
