@@ -18,7 +18,7 @@ Use this Skill as the validation planner and evidence aggregator for a code chan
    - service lifecycle: `vllm-ascend-serving`;
    - benchmark and profiling evidence: their dedicated Skills;
    - distributed, operator, or performance workflows when those Skills are available.
-5. Link each downstream Run Manifest with the plan item IDs it covers.
+5. Link each downstream Run Manifest with the plan item IDs it covers. `link` rejects a `debug` (or otherwise mismatched) `run_type` covering a `correctness:*` or `performance:*` requirement.
 6. Run `finalize`.
 7. Deliver `pr-validation-report.md` with explicit missing and recommended coverage.
 

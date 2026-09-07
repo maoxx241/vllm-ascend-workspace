@@ -227,6 +227,30 @@ class AggregationTests(unittest.TestCase):
                     updated_at=NOW,
                 )
 
+    def test_debug_manifest_cannot_cover_correctness_requirement(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output = root / "change"
+            required_ids = plan_graph_change(output)
+            child_path = root / "debug-child.json"
+            passed_child(
+                child_path,
+                parent_run_id="change-validation-1",
+                run_type="debug",
+            )
+            with self.assertRaisesRegex(
+                change_validation.ChangeValidationError,
+                r"run_type 'debug'.*requires run_type 'correctness'",
+            ):
+                change_validation.link_run(
+                    output,
+                    child_manifest_path=child_path,
+                    covers=required_ids,
+                    updated_at=NOW,
+                )
+            links = json.loads((output / "linked-runs.json").read_text(encoding="utf-8"))
+            self.assertEqual(links["runs"], [])
+
     def test_missing_required_evidence_is_inconclusive(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             output = Path(tmp) / "change"
