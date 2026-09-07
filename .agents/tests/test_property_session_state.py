@@ -18,7 +18,8 @@ Properties:
 * a release-timeout cannot unlink a replacement owner's lease;
 * a sidecar open failure releases the process-local gate and does not leak
   an fd; flock and critical-section failures release acquired resources
-  without unlinking a foreign lease;
+  without unlinking a foreign lease; a body exception does not hide an
+  unrelated lease-close I/O error;
 * unsupported flock and a held gate beyond the deadline fail closed;
 * cooperating processes exclude each other, and a crashed process's stale
   lease is recovered after the stale window.
@@ -635,6 +636,47 @@ class FileLockProperties(unittest.TestCase):
         self.assertTrue(body_exc)
         self.assertIsInstance(body_exc[0], RuntimeError)
         self.assertTrue(self.lock.exists(), "fail-closed release must retain the lease")
+        self.assertFalse(state._thread_gate(self.lock).locked())
+
+    def test_body_exception_does_not_suppress_lease_close_error(self) -> None:
+        real_open = os.open
+        real_close = os.close
+        lease_fds: list[int] = []
+
+        def wrapped_open(path: str | bytes | os.PathLike[str], flags: int, *args: Any, **kwargs: Any) -> int:
+            fd = real_open(path, flags, *args, **kwargs)
+            if os.path.normpath(str(path)) == os.path.normpath(str(self.lock)):
+                lease_fds.append(fd)
+            return fd
+
+        def wrapped_close(fd: int) -> None:
+            real_close(fd)
+            if fd in lease_fds:
+                raise OSError(errno.EIO, "injected-lease-close-error")
+
+        with mock.patch.object(os, "open", wrapped_open), mock.patch.object(os, "close", wrapped_close):
+            with self.assertRaises(BaseException) as raised:
+                with file_lock(self.lock, timeout_seconds=0.05, poll_seconds=0.002):
+                    raise ValueError("body-failure")
+
+        chain: list[BaseException] = []
+        current: BaseException | None = raised.exception
+        seen: set[int] = set()
+        while current is not None and id(current) not in seen:
+            seen.add(id(current))
+            chain.append(current)
+            current = current.__cause__ or current.__context__
+        messages = [str(item) for item in chain]
+        notes = [note for item in chain for note in getattr(item, "__notes__", [])]
+        self.assertTrue(
+            any("injected-lease-close-error" in message for message in messages)
+            or any("injected-lease-close-error" in note for note in notes),
+            f"close error missing from {chain!r}",
+        )
+        self.assertTrue(
+            any(isinstance(item, ValueError) and "body-failure" in str(item) for item in chain),
+            f"body error missing from {chain!r}",
+        )
         self.assertFalse(state._thread_gate(self.lock).locked())
 
     def test_unsupported_flock_fails_closed_on_stale_reclaim(self) -> None:

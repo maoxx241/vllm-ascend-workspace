@@ -209,8 +209,9 @@ def _release_acquired_lease(
     Gate timeout and unsupported flock fail closed: the lease is left in
     place. Those failures surface only when the critical section itself
     succeeded, so a body exception is not replaced by a cleanup timeout.
-    Unrelated I/O errors are not swallowed. The lease fd is closed even
-    if gated unlink raises.
+    Unrelated I/O errors, including lease-fd close failures, are not
+    swallowed even if the body already failed; they chain to the body
+    exception. The lease fd is closed even if gated unlink raises.
     """
     if fd is None and identity is None:
         return
@@ -243,10 +244,12 @@ def _release_acquired_lease(
                 os.close(fd)
             except OSError as exc:
                 close_exc = exc
+    if close_exc is not None:
+        if pending_exc is not None:
+            raise close_exc from pending_exc
+        raise close_exc
     if pending_exc is not None:
         return
-    if close_exc is not None:
-        raise close_exc
     if gate_exc is not None:
         raise gate_exc
 
