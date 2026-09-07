@@ -11,7 +11,10 @@
 - Replying to a yield request does not change allocation state. Uncertain
   release and changed host epochs retain ownership for reconciliation.
 - Hardware dual-service and K3 exact-topology acceptance remain separate from
-  mocked occupancy/containers in Linux CI; see the coordinator README.
+  mocked occupancy/containers in Linux CI; see coordinator consumption.
+- Current native MCP tool ids use the `mcp__vaws-task__vaws_*` prefix. Historical
+  `mcp__remote-dev__vaws_*` permission rules are stale and must be reported, not
+  silently rewritten.
 
 - New session records include `agent_identity.agent_id` and `agent_identity.alias` when available.
 - Unified aliases participate in new session container naming through the persisted machine namespace.

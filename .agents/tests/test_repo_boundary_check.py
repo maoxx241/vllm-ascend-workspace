@@ -432,22 +432,21 @@ class PolicyContractTests(unittest.TestCase):
     def test_module_ownership_follows_the_file_not_the_policy_text(self) -> None:
         policy = guard.load_policy(POLICY, ROOT)
         ownership = guard.Ownership(policy, ROOT)
-        for module, expected in (
-            ("vaws_task_client", "coordinator"),
-            ("vaws_ready_runtime", "coordinator"),
-            ("vaws_ssh", "scaffold-domain"),
-        ):
-            with self.subTest(module=module):
-                owner = ownership.subsystem_for_module(module)
-                self.assertIsNotNone(owner)
-                assert owner is not None
-                self.assertEqual(owner.id, expected)
+        owner = ownership.subsystem_for_module("vaws_ssh")
+        self.assertIsNotNone(owner)
+        assert owner is not None
+        self.assertEqual(owner.id, "scaffold-domain")
         # `core.*` belonged to the in-tree substrate. It left with the
         # remote-dev extraction, so no file in this tree owns the name any
         # more and the guard must not invent an owner for it. The synthetic
         # repository in DetectionTests still covers derived ownership of an
         # in-tree substrate module.
         self.assertIsNone(ownership.subsystem_for_module("core"))
+        # Task-state writers left with vaws-coordinator. Residual adapters
+        # locate that checkout; they do not keep an in-tree owner for the
+        # moved module names.
+        self.assertIsNone(ownership.subsystem_for_module("vaws_task_client"))
+        self.assertIsNone(ownership.subsystem_for_module("vaws_ready_runtime"))
         # The substrate's `mcp/` package shares a name with the installed MCP
         # SDK that the coordinator imports; owning it would invent a dependency.
         self.assertIsNone(ownership.subsystem_for_module("mcp"))
