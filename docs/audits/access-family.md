@@ -10,9 +10,18 @@ Read for cross-checking, not audited: `.remote-dev/` (target resolution and
 result contract), `.agents/coordinator/` (host authority and pool bindings),
 `.agents/knowledge/known-failure-signatures.yaml`.
 
-This document changes no behaviour. Every claim carries `file:line` evidence.
+This is a dated snapshot of scaffold commit
+`161fed1b0fe6b48359be3f0cf33bb7d8befae113` on 2026-09-07. Every statement
+and `file:line` reference describes that tree. The audit is documentation
+only: no behaviour is changed, and no fresh hardware execution is claimed.
 No host addresses, container names, credentials or absolute user paths are
 reproduced here.
+
+Proposed entry points, CLI consolidations, and endpoint or device-authority
+recommendations remain historical design opinions from that snapshot. They
+are not newly available commands and are not current authority. Later code
+or documentation changes require their own acceptance evidence; they do not
+rewrite the findings below.
 
 ## 0. Headline numbers
 
