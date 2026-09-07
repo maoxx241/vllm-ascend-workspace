@@ -63,14 +63,14 @@ def test_no_pull_and_archive_output_parse_individually() -> None:
 def test_build_output_archive_script_shape() -> None:
     script = profile_analyze._build_output_archive_script(
         "/tmp/ascend_profile_framework/runs/20260907_demo",
-        "/mnt/weight/m00663269/profiling/analysis",
+        "/mnt/weight/profiling-shared/analysis",
         "20260907_demo",
     )
     assert script.startswith("set -e; mkdir -p ")
     # Contents-of-src copy form keeps layout flat under <root>/<run-dir-name>
     # (shlex.quote leaves clean paths unquoted).
     assert "cp -r /tmp/ascend_profile_framework/runs/20260907_demo/. " in script
-    assert "/mnt/weight/m00663269/profiling/analysis/20260907_demo" in script
+    assert "/mnt/weight/profiling-shared/analysis/20260907_demo" in script
 
 
 def test_build_output_archive_script_strips_trailing_slashes() -> None:
