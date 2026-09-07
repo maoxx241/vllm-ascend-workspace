@@ -1,6 +1,6 @@
 ---
 name: npu-fleet-monitor
-description: Bootstrap or locate the standalone vaws-top worktree and provide its basic CLI/MCP query entrypoints. Use when vaws-top is not yet available, for basic fleet discovery and server inspection, or to deploy, inspect, restart, or stop its local service. Detailed fleet-query guidance lives on the vaws-top branch.
+description: Locate or bootstrap the standalone vaws-top worktree and query fleet status. Dashboard lifecycle operations belong to that worktree.
 ---
 
 # vaws-top entry

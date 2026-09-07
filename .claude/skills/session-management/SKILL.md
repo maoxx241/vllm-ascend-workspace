@@ -1,8 +1,9 @@
-<!-- Generated Claude Code shim from .agents/skills/session-management/SKILL.md. Do not edit. -->
 ---
 name: session-management
-description: Associate native agent sessions with local VAWS development tasks, bind actual business worktrees, and coordinate prepared remote runtimes and NPU leases. Also create, inspect, remove, and group legacy container-bound sessions. Use for parallel task isolation and session ownership, not model correctness or distributed failure diagnosis.
+description: Bind native agent tasks to business worktrees and coordinate prepared runtimes and NPU leases; manage legacy isolated sessions and groups.
 ---
+
+<!-- Generated Claude Code shim from .agents/skills/session-management/SKILL.md. Do not edit. -->
 
 # Session Management
 

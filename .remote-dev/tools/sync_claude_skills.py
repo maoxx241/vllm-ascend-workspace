@@ -40,11 +40,12 @@ def expected_skill_body(skill_dir: Path) -> str:
     name = frontmatter.get("name") or skill_dir.name
     description = frontmatter.get("description") or first_markdown_heading(source, skill_dir.name)
     title = first_markdown_heading(source, name)
-    return f"""<!-- Generated Claude Code shim from .agents/skills/{skill_dir.name}/SKILL.md. Do not edit. -->
----
+    return f"""---
 name: {name}
 description: {description}
 ---
+
+<!-- Generated Claude Code shim from .agents/skills/{skill_dir.name}/SKILL.md. Do not edit. -->
 
 # {title}
 

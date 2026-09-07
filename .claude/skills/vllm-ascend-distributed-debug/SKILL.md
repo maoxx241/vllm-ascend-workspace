@@ -1,8 +1,9 @@
-<!-- Generated Claude Code shim from .agents/skills/vllm-ascend-distributed-debug/SKILL.md. Do not edit. -->
 ---
 name: vllm-ascend-distributed-debug
-description: Diagnose vLLM Ascend multi-rank and multi-node startup, rank mapping, process-group, collective, HCCL, Ray, scheduler, connector, and distributed hang failures from structured topology and per-rank evidence. Use when a failure depends on rank count, parallel topology, nodes, collectives, or distributed endpoints. Do not use for graph-only divergence, isolated operator failures, performance benchmarking, or profiler analysis.
+description: Diagnose Ascend multi-rank or multi-node startup, rank mapping, collectives, HCCL, Ray, connectors, and distributed hangs.
 ---
+
+<!-- Generated Claude Code shim from .agents/skills/vllm-ascend-distributed-debug/SKILL.md. Do not edit. -->
 
 # vLLM Ascend Distributed Debug
 

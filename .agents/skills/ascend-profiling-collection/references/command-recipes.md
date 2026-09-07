@@ -91,7 +91,7 @@ python3 .agents/skills/ascend-profiling-collection/scripts/run_remote_analyse.py
 
 Run from inside the session worktree (target auto-resolved), or add `--session-id <id>` / `--session-file <path>` to target a session explicitly.
 
-Exit 0 means every rank produced `kernel_details.csv` and `trace_view.json` AND the directory count matched `--expected-ranks` (typically `tp * (dp or 1)`). Non-zero means re-collection is needed. Always pass `--expected-ranks` against fresh roots — without it a partial capture where some ranks never produced a directory looks "clean".
+Exit 0 means every rank produced `kernel_details.csv` and `trace_view.json` AND the directory count matched `--expected-ranks` (typically `tp * (dp or 1)`). Non-zero requires checking export logs and raw rank data. Retry analysis for a recoverable export failure; re-collect only when capture evidence is missing or invalid. Always pass `--expected-ranks` against fresh roots — without it a partial capture where some ranks never produced a directory looks "clean".
 
 ## Manually flip the profiler window on a service the agent already started
 

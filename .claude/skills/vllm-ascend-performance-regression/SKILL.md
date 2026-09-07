@@ -1,8 +1,9 @@
-<!-- Generated Claude Code shim from .agents/skills/vllm-ascend-performance-regression/SKILL.md. Do not edit. -->
 ---
 name: vllm-ascend-performance-regression
-description: Plan, record, and analyze controlled baseline-versus-candidate vLLM Ascend serving performance experiments with isolated sessions, identical non-code configuration, alternating A/B order, warmup exclusion, variance and outlier reporting, and metric-specific regression thresholds. Use for throughput, TTFT, TPOT, ITL, acceptance-rate, startup-time, or HBM regression checks. Do not use for correctness, single-state measurement, HBM component attribution, or profiling root-cause analysis.
+description: Assess Ascend serving performance regressions with controlled baseline/candidate sessions, alternating runs, and matched configurations.
 ---
+
+<!-- Generated Claude Code shim from .agents/skills/vllm-ascend-performance-regression/SKILL.md. Do not edit. -->
 
 # vLLM Ascend Performance Regression
 

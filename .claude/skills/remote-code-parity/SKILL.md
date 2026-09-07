@@ -1,8 +1,9 @@
-<!-- Generated Claude Code shim from .agents/skills/remote-code-parity/SKILL.md. Do not edit. -->
 ---
 name: remote-code-parity
-description: Ensure a ready remote runtime runs the exact current local workspace state before any remote smoke, service launch, or benchmark. Use automatically immediately before remote execution when direct local-to-container SSH already works and local uncommitted changes must be reflected remotely. Do not use for initial machine attach, generic Git topology work, or unrelated local-only coding.
+description: Synchronize intended local code to a ready remote runtime before executing it. Use for dirty worktree parity, not read-only remote inspection.
 ---
+
+<!-- Generated Claude Code shim from .agents/skills/remote-code-parity/SKILL.md. Do not edit. -->
 
 # Remote Code Parity
 

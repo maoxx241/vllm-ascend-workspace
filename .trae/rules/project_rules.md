@@ -1,11 +1,12 @@
 # Project Rules
 
-The authoritative agent instructions and skill packages for this workspace are defined in the following locations — always consult them:
+Use `AGENTS.md` at the repository root for routing, authorization boundaries,
+and maintenance rules. Canonical skills live in `.agents/skills/`; read the
+selected `SKILL.md` before invoking it and supporting references as needed.
+`.agents/README.md` documents the layout and script conventions.
 
-1. **`AGENTS.md`** (repo root) — repo-wide routing rules, mandatory decision gates, and maintenance constraints.
-2. **`.agents/skills/`** — skill packages (repo-init, machine-management, session-management, remote-toolbox, remote-code-parity, modelscope, vllm-ascend-serving, vllm-ascend-benchmark, ascend-memory-profiling, ascend-profiling-collection, ascend-profiling-analysis), each with SKILL.md and any supporting scripts/, references/, or agents/ files.
-3. **`.agents/README.md`** — skill layout and script-first conventions.
-4. Each submodule's own `AGENTS.md` (e.g. `vllm-ascend/AGENTS.md`) — version-specific coding conventions; always defer to the submodule's own file.
+Read a submodule's own `AGENTS.md` when working in that submodule. Ordinary
+local edits do not require loading all skill packages or remote setup.
 
 ## Submodule awareness
 

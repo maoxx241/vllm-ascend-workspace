@@ -1,6 +1,6 @@
 ---
 name: vllm-ascend-benchmark
-description: Run vLLM online-serving benchmarks on a workspace-managed remote container. Use for requests like "跑个 benchmark", "对比性能", "压测一下", "测下吞吐", or "看下有没有性能回退". Do not use for accuracy tests, nightly CI matrix runs, offline inference, or service-only lifecycle.
+description: Measure vLLM online-serving throughput and latency in a managed session. Use for 压测 or benchmark runs; route regression decisions to performance-regression.
 ---
 
 # vLLM Ascend Benchmark
@@ -15,11 +15,12 @@ compatibility backend for managed VAWS sessions.
 ## Use this skill when
 
 - the user asks to run a performance benchmark / throughput test in a managed session
-- the user asks to compare performance before and after a code change
-- the user asks to verify there is no performance regression for a PR or commit
+- the user asks for exploratory measurements across configurations or code states
+- `vllm-ascend-performance-regression` needs an individual measurement run
 
 ## Do not use this skill when
 
+- the requested outcome is a baseline/candidate regression decision for a PR or commit; use `vllm-ascend-performance-regression` to control the experiment and consume benchmark measurements
 - the task is accuracy testing (aisbench domain)
 - the task is running a full nightly CI matrix
 - the task is offline / batch inference
@@ -28,6 +29,7 @@ compatibility backend for managed VAWS sessions.
 
 ## Critical rules
 
+- `bench_compare.py` groups repetitions by state. Its deltas alone do not establish a controlled regression; use `vllm-ascend-performance-regression` for alternating baseline/candidate runs and a decision against an explicit threshold.
 - Benchmark parameters are assembled by the agent based on user intent and executed through the scripts below. The agent must not construct raw `vllm bench serve` commands and run them directly on the remote.
 - **User intent takes priority** over nightly configs. Nightly YAML files under `vllm-ascend/tests/e2e/nightly/single_node/models/configs/` are a **reference source** for discovering how to configure a given model or feature (MTP, graph mode, TP count, etc.), not an execution template to run verbatim.
 - Nightly configs are used as a **fallback** only when the user specifies a model but provides no other parameters.
@@ -36,7 +38,7 @@ compatibility backend for managed VAWS sessions.
 - If service startup returns a non-ready result after launching a PID, benchmark cleanup still calls `serve_stop.py --force` for the same session.
 - Progress goes to `stderr` as `__VAWS_BENCHMARK_PROGRESS__=<json>`. Final result goes to `stdout` as JSON.
 - Keep local benchmark state under `.vaws-local/sessions/<session-id>/benchmark/`; results are written to `.vaws-local/sessions/<session-id>/benchmark/runs/`.
-- **Multi-state comparisons** (baseline vs PR vs modified) are a first-class workflow: use `bench_compare.py`, which checks out each git ref *in the container*, benchmarks every state with identical serve/bench args, and reports TPOT/throughput deltas. Do not hand-write a bespoke comparison script — put reusable model/service configurations into a named preset under `presets/` instead (see below). The old bespoke `.agents/scripts/dsv4_flash_benchmark.py` was deleted; `presets/dsv4-flash.json` carries its DSV4 Flash configuration, with the two loader args adapted (`enable_multithread_load` as a JSON boolean; the old `--safetensors-load-strategy prefetch` was dropped in favor of multithreaded loading — the flag still exists at the pinned vllm ref 967c5c3b, so this is a deliberate replacement, not an upstream removal — verified on real A3 hardware). Note `bench_compare.py` runs back-to-back iterations with no inter-run sleep (the old script slept 15s between rounds), so absolute numbers are not directly comparable to historical bespoke-script results.
+- **Exploratory multi-state comparisons** (baseline vs PR vs modified) use `bench_compare.py`, which checks out each git ref *in the container*, benchmarks every state with identical serve/bench args, and reports TPOT/throughput deltas. Do not hand-write a bespoke comparison script — put reusable model/service configurations into a named preset under `presets/` instead (see below). The old bespoke `.agents/scripts/dsv4_flash_benchmark.py` was deleted; `presets/dsv4-flash.json` carries its DSV4 Flash configuration, with the two loader args adapted (`enable_multithread_load` as a JSON boolean; the old `--safetensors-load-strategy prefetch` was dropped in favor of multithreaded loading — the flag still exists at the pinned vllm ref 967c5c3b, so this is a deliberate replacement, not an upstream removal — verified on real A3 hardware). Note `bench_compare.py` runs back-to-back iterations with no inter-run sleep (the old script slept 15s between rounds), so absolute numbers are not directly comparable to historical bespoke-script results.
 - **Native-input gate.** `bench_compare.py` aligns source only and never rebuilds compiled custom ops. After each state's checkout and optional `--remote-patch-file` application, it fingerprints the effective in-container `csrc`/`cmake`/requirements inputs and compares the digest against the first state's. A mismatch fails the run with an explanation. An unavailable digest also fails closed. Pass `--allow-stale-native` only to explicitly downgrade either condition to a loud warning plus `native_input_changed: true` or `native_input_unverified: true`.
 - **Partial results are never lost.** Each completed state is persisted under the session's `benchmark/runs/` dir as it finishes; on any failure the error JSON still carries `partial_states` (completed labels) and `result_paths`.
 - **Never hand-roll stale-process cleanup.** A past bespoke cleanup SIGTERM'd a session's dedicated sshd (`Exiting on signal 15`), dropped the container SSH port, and forced a rebuild. Use `--stale-cleanup` (backed by `safe_stale_cleanup`), which only reaps vLLM `EngineCore`/`Worker` children by name, skips PID 1, excludes anything matching `sshd`/`vaws`, and kills explicit pids only (never a process group).

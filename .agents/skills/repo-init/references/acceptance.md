@@ -27,7 +27,7 @@ A successful run should satisfy all applicable items below.
 ### Universal
 
 - probes first before mutating
-- asks before each mutation category
+- reuses explicit authorization and asks only for unresolved choices
 - allows partial completion
 - never writes personal remotes, secrets, or machine profile state into tracked files
 - preserves extra remotes
@@ -35,21 +35,22 @@ A successful run should satisfy all applicable items below.
 
 ### Decision checkpoint
 
-- for broad init, the skill stops after the first probe summary and asks for:
+- after probing, supplied choices proceed without another approval round
+- for broad init, the skill groups only unresolved, relevant choices:
   - unified alias choice if the identity decision is pending
   - machine username choice if the profile is missing
   - repo topology choice
   - submodule-init choice
-  - vllm version alignment choice (when the probe shows submodules are uninitialized)
-- the machine-username branch uses exactly three options:
+  - vllm version alignment choice (when initialization or alignment is in scope)
+- the missing machine-username choice offers three options:
   - `git-username`
   - `random`
   - `custom`
 - the skill does not silently assume a generated username for broad init
 - the skill does not silently apply the recommended topology when the user only asked for generic init
-- if the user picks `custom`, the skill asks one follow-up text question for the literal username before mutating
+- if the user picks `custom` and already supplied its literal value, the skill applies it; otherwise it asks for that missing value before profile creation
 - the skill does not silently replace `custom` with the detected Git username
-- alias choices are `machine-username`, `custom`, and `none`; `custom` requires literal follow-up text
+- alias choices are `machine-username`, `custom`, and `none`; `custom` requires a literal value, with a follow-up only if missing
 - choosing `none` persists `alias_decision=declined` and prevents repeated prompts
 
 ### Local machine profile
@@ -68,7 +69,7 @@ A successful run should satisfy all applicable items below.
 - chooses the correct platform install path for `gh`
 - offers a no-admin fallback when needed
 - verifies GitHub auth after login
-- asks before generating or uploading SSH keys
+- generates or uploads SSH keys only with authorization for that action; reuses an explicit request instead of asking twice
 
 ### Submodules and topology
 

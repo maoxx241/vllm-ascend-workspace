@@ -1,8 +1,9 @@
-<!-- Generated Claude Code shim from .agents/skills/vllm-ascend-benchmark/SKILL.md. Do not edit. -->
 ---
 name: vllm-ascend-benchmark
-description: Run vLLM online-serving benchmarks on a workspace-managed remote container. Use for requests like "跑个 benchmark", "对比性能", "压测一下", "测下吞吐", or "看下有没有性能回退". Do not use for accuracy tests, nightly CI matrix runs, offline inference, or service-only lifecycle.
+description: Measure vLLM online-serving throughput and latency in a managed session. Use for 压测 or benchmark runs; route regression decisions to performance-regression.
 ---
+
+<!-- Generated Claude Code shim from .agents/skills/vllm-ascend-benchmark/SKILL.md. Do not edit. -->
 
 # vLLM Ascend Benchmark
 

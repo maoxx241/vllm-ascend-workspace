@@ -1,6 +1,6 @@
 ---
 name: curate-workspace-knowledge
-description: Review, deduplicate, promote, merge, reject, or deprecate verified vLLM Ascend workspace knowledge candidates. Use only when the user explicitly asks to curate, persist, review, merge, promote, or deprecate project knowledge (沉淀、整理、复盘、合并、提升、废弃), or explicitly invokes this Skill to review `.vaws-local/knowledge/candidates`. Do not use during normal diagnosis, serving, benchmarking, profiling, remote execution, code review, or candidate capture/query; those workflows call the shared scripts directly without loading this Skill.
+description: Review, deduplicate, promote, or deprecate workspace knowledge only when explicitly requested. Normal workflows use query and capture scripts.
 ---
 
 # Curate Workspace Knowledge

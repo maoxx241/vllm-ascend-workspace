@@ -1,6 +1,6 @@
 ---
 name: ascend-profiling-collection
-description: Collect one Ascend torch-profiler case end-to-end on a workspace-managed remote NPU container. Starts a profiled vLLM service, brackets a workload with /start_profile and /stop_profile, runs analyse(), verifies kernel_details.csv landed, and writes a manifest the analysis skill can consume. Use for requests like "采集 profiling", "torch profiler 跑一个 case", "采一份 profile 出来", "采 profiling 给我分析". Do not use for pure performance benchmarking, HBM/memory profiling, or for analysing already-collected profiling data (that is the analysis skill's job).
+description: Collect Ascend torch-profiler traces around a real vLLM workload in a managed session, export them, and verify every expected rank.
 ---
 
 # Ascend Profiling Collection
@@ -156,9 +156,11 @@ Accuracy beats coverage. The script exits non-zero (status `failed`) when **any*
 - any rank's `kernel_details.csv` is missing after `analyse()` →
   `analysis_status == "missing_kernel_details"`
 
-The last condition is the canonical "device-side data did not land" failure
-documented in `references/behavior.md` ("Output verification"). Treat all of the above as
-**re-collect required**, not as something the analysis skill can recover from.
+A missing exported CSV does not by itself prove capture failed. Inspect the
+raw rank data and export logs first. If the capture is complete but `analyse()`
+failed or was skipped, retry `run_remote_analyse.py` on the same root. Re-collect
+when raw rank data or real workload is absent, or capture boundaries were
+invalid. Downstream report generation cannot manufacture missing evidence.
 
 If the orchestrator fails after `serve_start`, it always tries to stop the service (graceful, then `--force`) so no orphan vLLM process is left behind.
 

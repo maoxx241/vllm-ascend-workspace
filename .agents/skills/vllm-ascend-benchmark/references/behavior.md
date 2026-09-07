@@ -58,7 +58,7 @@ The output JSON includes:
 
 ## Multi-State Comparison
 
-Comparing multiple code states (baseline, PR, modified) is handled by `bench_compare.py` in a single call:
+Exploratory comparison of multiple code states (baseline, PR, modified) is handled by `bench_compare.py` in a single call:
 
 1. Each `--state LABEL=REF` is checked out in the container for vllm-ascend (and vllm when `--vllm-ref`/preset `vllm_ref` is set). Alignment is source-only — it never rebuilds custom ops.
 2. After alignment and any optional `git apply` from `--remote-patch-file`, the effective state's native-input digest (`csrc`/`cmake`/requirements) is compared against the first state's. A mismatch fails the run because stale compiled artifacts would silently contaminate the comparison. An unavailable digest also fails closed. `--allow-stale-native` explicitly downgrades either condition to a `warnings` entry plus `native_input_changed: true` or `native_input_unverified: true`.
@@ -73,9 +73,14 @@ runs) and comparing the returned JSON itself.
 
 For performance regression comparisons, all runs must use identical core benchmark parameters (`--serve-args`, `--bench-args`, `--extra-env`, `--tp`). Only the code state should change between runs. If any configuration parameter differs, the agent must explicitly record the difference in its output and treat the result as a **configuration comparison**, not a pure regression comparison.
 
-### Regression判定
+### Regression decisions
 
-Given baseline throughput `T_b` and patched throughput `T_p`, compute the ratio `r = T_p / T_b`. If `r < 0.97`, the patched version is considered a throughput regression. The same threshold applies to `spec_decode_acceptance_rate` when speculative decoding is enabled. TTFT and TPOT regressions use inverted comparison (`r = T_b / T_p`) since lower is better for latency metrics.
+Report measurement deltas with their configuration and repetition counts.
+`bench_compare.py` runs states sequentially, so its ratios alone do not control
+for drift or noise. Route regression decisions to
+`vllm-ascend-performance-regression`, which defines alternating baseline/candidate
+runs, comparability, and the selected threshold. Do not apply an unconditional
+3% rule to throughput, latency, or speculative acceptance here.
 
 ## Remote Execution
 

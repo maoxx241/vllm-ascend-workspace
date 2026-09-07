@@ -94,8 +94,8 @@ If `stop_result.status` is `failed`, an orphan vLLM process may still be holding
 
 The following symptoms cannot be fixed offline:
 
-- `analysis_status == "missing_kernel_details"` on any rank
-- `analysis_status == "rank_count_mismatch"` (a rank failed to dump anything)
+- `analysis_status == "missing_kernel_details"` with confirmed missing raw device data on that rank
+- `analysis_status == "rank_count_mismatch"` after confirming a rank dumped no data, including checking alternate output locations
 - `workload_status.status != "ok"` (no real model traffic during the window)
 - `*_ascend_pt/PROF_*/device_*/data` is suspiciously small (kilobytes vs. expected MB)
 - `FRAMEWORK/torch.op_range` missing
@@ -105,7 +105,7 @@ These all originate at capture time. `run_remote_analyse.py` cannot recover them
 
 ## When re-analyse is enough
 
-- The capture finished cleanly but `analyse()` was never run (rare; the orchestrator always runs it).
+- The capture finished cleanly but `analyse()` was skipped or failed during export. Preserve the raw data and retry export before re-collecting.
 - An old root collected by the now-removed prototype script (under `.vaws-local/service-torch-profiler/`) needs to be re-verified under the new output contract.
 
 In those cases, point `run_remote_analyse.py --profile-root` at the root and let it run. Verification will tell you whether the data was salvageable.

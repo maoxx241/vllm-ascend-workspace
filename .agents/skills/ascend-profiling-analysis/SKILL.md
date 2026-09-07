@@ -1,6 +1,6 @@
 ---
 name: ascend-profiling-analysis
-description: Analyze Ascend NPU torch profiler output (kernel_details.csv / trace_view.json / op_summary / communication.json) for one or many profiling roots and produce a traceable report (rank/step/layer/operator summary, cross-rank alignment, diagnosis findings, report.md / report.xlsx / report.html with single-step inspectors, bubble tracing axes, and zoomable Chrome-tracing-style timelines). Use for requests like "分析 profiling", "解析这份 kernel_details", "看 step/layer 切分", "跨 rank 对齐", "通信慢/EP 不均/快慢卡", "生成 profiling 报告". Do not use for HBM/显存归因 (use ascend-memory-profiling), service lifecycle (use vllm-ascend-serving), benchmarks (use vllm-ascend-benchmark), or采集 profiling 数据 (use ascend-profiling-collection).
+description: Analyze collected Ascend profiler roots or manifests for operator timing, layers, communication, and cross-rank evidence; generate reports.
 ---
 
 # Ascend Profiling Analysis
@@ -302,6 +302,11 @@ XLSX 包新增 sheet：`step_anatomy`、`step_class_summary`、`layer_class_summ
 ```
 
 ## Failure policy
+
+用户要求 HTML 时，文件存在不代表交付完成。检查 `report/manifest.json`
+中的 `html_status` 并实际打开报告确认可用；错误占位页、summary stub 或
+`--skip-html` 产物不能满足完整 HTML 报告请求。保留现有中间产物，优先
+重跑 report 阶段；仍失败时明确报告未完成的 HTML，其他分析结果单独说明。
 
 必须报错（hard fail，`status != "ok"`）的情况：
 

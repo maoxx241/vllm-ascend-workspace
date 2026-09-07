@@ -1,6 +1,6 @@
 ---
 name: ascend-memory-profiling
-description: Profile and attribute HBM memory usage on Ascend NPU for vLLM serving scenarios. Breaks down memory into fixed overhead, model weights, KV cache, HCCL buffers, activations, and runtime, with traceable evidence chains. Use for requests like "分析显存占用", "显存 profiling", "HBM 用了多少", "内存各部分拆分". Do not use for performance profiling (kernel timing, throughput), offline inference, or non-Ascend hardware.
+description: Profile Ascend vLLM serving HBM usage and attribute weights, KV cache, communication, and activations. Use for 显存分析, not kernel timing.
 ---
 
 # Ascend Memory Profiling
@@ -52,7 +52,9 @@ the compatibility backend for managed VAWS sessions.
 
 ### Residual handling
 
-All memory attribution is based on measured data — **no estimation or guessing** is performed.
+Label each value as measured, application-reported, inferred, or unknown.
+Safetensors bytes are exact for stored tensors; per-device sharding and config
+fallbacks are estimates until reconciled with runtime evidence.
 
 - **With msprof**: HCCL, RUNTIME, SLOG are precise msprof measurements. Any remaining residual after all components is small (typically < 200 MB) and reported as "未归因残差".
 - **Without msprof**: The residual is reported as "未归因 (缺少 msprof 数据)" with an explicit note that msprof collection is needed for a complete breakdown. No attempt is made to split the residual into sub-components.
@@ -74,7 +76,7 @@ python3 -c "
 import sys; sys.path.insert(0, '.agents/skills/ascend-memory-profiling/scripts')
 from _common import check_msprof_available, resolve_execution_target
 # session_id=None auto-resolves from the current session worktree binding
-target = resolve_execution_target(session_id='<session-id-or-none>')
+target = resolve_execution_target(session_id=None)  # or an explicit session id
 ep = target['endpoint']
 print(check_msprof_available(ep))
 "
@@ -87,19 +89,19 @@ If this fails, stop and fix the remote environment before proceeding.
 Upload the msprof wrapper, then start the service with `--wrap-script`:
 
 ```bash
-# Upload msprof wrapper to remote
-python3 -c "
+# Upload msprof wrapper and retain its actual unique remote path
+VAWS_MEM_WRAP_SCRIPT=$(python3 -c "
 import sys; sys.path.insert(0, '.agents/skills/ascend-memory-profiling/scripts')
 from _common import resolve_execution_target, upload_msprof_wrapper
-target = resolve_execution_target(session_id='<session-id-or-none>')
+target = resolve_execution_target(session_id=None)  # or an explicit session id
 ep = target['endpoint']
 print(upload_msprof_wrapper(ep, mem_freq=50))
-"
+")
 # Start service with msprof wrapping (inside a session worktree the session is
 # auto-resolved; otherwise add --session-id <id>)
 python3 .agents/skills/vllm-ascend-serving/scripts/serve_start.py \
   [--session-id <id>] --model <path> --tp <N> \
-  --wrap-script /tmp/_vaws_msprof_wrap.sh \
+  --wrap-script "$VAWS_MEM_WRAP_SCRIPT" \
   [-- --speculative-config '...' --compilation-config '...' ...]
 ```
 
@@ -167,7 +169,7 @@ Default `--format json` outputs machine-readable JSON to stdout (matching the re
 |-----------|-------------------|
 | Fresh profiling | Collect `npu-smi info` before `serve_start`, save to file, use `--baseline-from <file>` |
 | Repeat profiling on same machine | Reuse baseline from a previous run via `--baseline-from <old-run-dir>` |
-| Quick analysis (no baseline needed) | Omit `--baseline-from` — report shows "固定开销" as 0 with note |
+| Analysis without a baseline | Omit `--baseline-from`; fixed overhead is unknown. The current report may display 0 with a note; do not interpret that placeholder as measured zero. |
 
 `--baseline-from` accepts either a previous run directory (containing `baseline_npu_smi.txt` or `manifest.json`) or a raw `npu-smi info` output text file.
 
@@ -211,7 +213,7 @@ KV Cache 预留                  |    14080.0 |     13.750 |  50.2% | vLLM 日�
 ACL Graph 编译缓冲               |      501.8 |      0.490 |   1.8% | vLLM 日志
 HCCL 缓冲                      |      597.7 |      0.584 |   2.1% | msprof npu_module_mem
 CANN Runtime                   |      125.3 |      0.122 |   0.4% | msprof npu_module_mem
-激活峰值                         |       72.0 |      0.070 |   0.3% | npu-smi delta
+激活采样增量                     |       72.0 |      0.070 |   0.3% | npu-smi delta
   └ 未归因残差                    |       74.7 |      0.073 |   0.3% | 残差
 
 [交叉验证]
@@ -278,8 +280,8 @@ If the safetensors-based analysis shows unexpected results, the agent should:
 
 ## Limitations
 
-- Activation measurement relies on npu-smi delta between idle and inference states. This captures peak but not fine-grained activation lifetime.
-- `torch_npu.profiler` via vLLM's `/start_profile`/`/stop_profile` endpoints currently does not produce device-side data (device_0/data is empty). Use msprof wrapping instead.
+- Activation attribution uses sampled npu-smi deltas between idle and inference states. Sampling can miss the true peak and includes other concurrent allocations; report it as a sampled estimate, not an exact activation peak.
+- Use msprof wrapping for the component coverage described above. If torch-profiler device data is absent, inspect the exact torch_npu/CANN versions and capture configuration; do not generalize a failed capture to all profiler versions or serving endpoints.
 - msprof wrapping profiles the main process only. TP worker processes are separate -- each gets its own PROF directory with per-device data.
 - msprof export for 8-card runs may take several minutes. The timeout is set to 1800s.
 
