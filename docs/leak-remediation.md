@@ -85,10 +85,14 @@ same blobs.
   reason the guard has an identity-token category.
 - **Actual risk:** same class as finding 3, plus it names a shared 366 TB store
   mounted on every managed machine and container.
-- **Not fixed here:** that skill package is being refactored in parallel. A
-  baseline entry (`profiling-analysis-shared-storage-owner`) records it with a
-  `remediation` note. The fix is mechanical: replace the owner segment with a
-  neutral directory, e.g. `/mnt/weight/profiling-shared/…`.
+- **Fixed in the working tree** by the follow-up that landed after the
+  parallel refactor of that skill package: the recipes and the example output
+  in `SKILL.md` now use `/mnt/weight/<user>/profiling/…`, the placeholder the
+  collection skill and `profile_analyze.py --archive-output` already used for
+  this mount, with one sentence saying what to substitute; the unit test uses
+  the neutral directory `/mnt/weight/profiling-shared/…`. The baseline entry
+  (`profiling-analysis-shared-storage-owner`) was removed in the same commit.
+  History exposure is unchanged and is covered by the options below.
 
 ### 5. Routable addresses used as documentation examples
 
@@ -126,9 +130,10 @@ RFC 1918. No exposure of this project's infrastructure. Baselined with a
 
 ## Options for the history problem
 
-Findings 1–4 are already in published history. Fixing the working tree — which
-this change does for 2 and 3 — stops the bleeding but does not remove anything
-from history. The options, with their real costs:
+Findings 1–4 are already in published history. Fixing the working tree — done
+for 2 and 3 by the guard change and for 4 by its follow-up — stops the
+bleeding but does not remove anything from history. The options, with their
+real costs:
 
 ### Option A — do nothing about history (recommended for findings 2, 3, 5, 6)
 
@@ -192,7 +197,8 @@ and leaves this repository's history as the only place the values remain.
    that is irreversible if skipped.
 2. Let the knowledge migration remove finding 1 from the tree; drop the baseline
    entry with it.
-3. Fix findings 4, 5, 6 in one mechanical follow-up commit per owning skill.
+3. Fix findings 5 and 6 in one mechanical follow-up commit per owning skill
+   (finding 4 is done).
 4. Do not rewrite history for any of findings 1–6. Revisit only if an actual
    credential is ever found in history.
 5. If the org split proceeds, seed the new public repos from a scanned snapshot
