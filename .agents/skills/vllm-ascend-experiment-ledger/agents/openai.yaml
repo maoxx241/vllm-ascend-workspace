@@ -1,0 +1,4 @@
+interface:
+  display_name: "vLLM Ascend Experiment Ledger"
+  short_description: "Index runs, trace results to code state, and gate A/B comparability"
+  default_prompt: "Use $vllm-ascend-experiment-ledger to index Run Manifest runs, trace a result back to the code state that produced it, or check whether two runs differ only in the variable under test."

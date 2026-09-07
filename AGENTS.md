@@ -71,6 +71,8 @@ Repo-local skills live under `.agents/skills/`. Each has its own `SKILL.md` with
 | `ascend-triton-kernel-optimization` | Run profiler-driven, correctness-gated Ascend Triton optimization experiments |
 | `ascend-triton-workflow` | Orchestrate Ascend Triton development, validation, optimization, and evidence linking |
 | `vllm-ascend-pd-serving` | Orchestrate grouped prefill/decode services, connector configuration, rollback, and smoke tests |
+| `vllm-ascend-multinode-serving` | Plan and bring up one data-parallel service across several NPU nodes: rank offsets, headless roles, socket/HCCL environment, ports, cross-node code identity, staged readiness |
+| `vllm-ascend-experiment-ledger` | Index Run Manifest runs, trace a result to its code state, and decide whether two runs differ only in the variable under test |
 
 None of these are gates for normal local coding, docs work, or unrelated Git tasks.
 For remote endpoint work, prefer `.remote-dev` tools first and use these skills

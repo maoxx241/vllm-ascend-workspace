@@ -66,6 +66,8 @@ After deployment, open <http://127.0.0.1:8788>. The dashboard shows NPU/AICore, 
 | **ascend-triton-kernel-optimization** | Run profiler-driven optimization after correctness gates pass | When tuning a correct Ascend Triton kernel |
 | **ascend-triton-workflow** | Orchestrate development, validation, optimization, and Run Manifest evidence | When delivering an end-to-end Triton operator workflow |
 | **vllm-ascend-pd-serving** | Orchestrate grouped prefill/decode roles, connectors, rollback, and KV smoke | When deploying disaggregated PD serving |
+| **vllm-ascend-multinode-serving** | Derive cross-node rank offsets, headless roles, socket and HCCL environment, port allocation, code-identity checks, and a staged readiness gate | When a topology spans hosts or a multi-node service hangs during init |
+| **vllm-ascend-experiment-ledger** | Index Run Manifest runs, trace a result to the code state that produced it, and decide whether two runs are comparable | When runs have accumulated, a number cannot be traced, or an A/B pair needs gating |
 
 
 All skills are **optional**. Use any subset, or none at all.

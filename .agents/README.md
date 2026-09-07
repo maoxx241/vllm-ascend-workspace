@@ -47,6 +47,8 @@ compatibility backend for managed sessions, sync, service adapters, and cleanup.
 - `.agents/skills/ascend-triton-kernel-optimization/` records profiler-driven tuning decisions.
 - `.agents/skills/ascend-triton-workflow/` links the Triton lifecycle through Run Manifest evidence.
 - `.agents/skills/vllm-ascend-pd-serving/` orchestrates grouped prefill/decode serving.
+- `.agents/skills/vllm-ascend-multinode-serving/` derives the cross-node bring-up contract for one data-parallel service.
+- `.agents/skills/vllm-ascend-experiment-ledger/` indexes Run Manifest runs and gates cross-run comparability.
 - `.agents/scripts/workspace_profile.py` is the shared low-level helper for the local workspace machine profile.
 - `.agents/scripts/workspace_identity.py` manages the persistent local UUID4 and optional unified project/agent/resource alias.
 - `.agents/scripts/run_manifest.py` creates and validates shared Run Manifest v1 files.
@@ -142,6 +144,8 @@ Current primary helpers:
 - `ascend-triton-kernel-optimization/scripts/triton_optimization.py`
 - `ascend-triton-workflow/scripts/triton_workflow.py`
 - `vllm-ascend-pd-serving/scripts/pd_serving.py`
+- `vllm-ascend-multinode-serving/scripts/multinode_plan.py`
+- `vllm-ascend-experiment-ledger/scripts/experiment_ledger.py`
 - `scripts/run_manifest.py`
 - `scripts/knowledge_validate.py`
 - `scripts/knowledge_query.py`

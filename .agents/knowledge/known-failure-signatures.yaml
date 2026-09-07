@@ -1,6 +1,147 @@
 {
   "schema_version": 1,
   "kind": "known-failure-signatures",
-  "updated_at": "2026-08-11",
-  "entries": []
+  "updated_at": "2026-09-07",
+  "entries": [
+    {
+      "id": "overwritten-pythonpath-hides-cann-acl-module",
+      "status": "active",
+      "source": "Kimi-K3 / DSpark enablement runbook error-signature table; recurred across the four-node A3 launch scripts in that workspace before being written down as a standing rule.",
+      "applicable_versions": "Verified on vllm-ascend container images with the CANN toolkit installed under /usr/local/Ascend, A3 four-node fleet, 2026-07 through 2026-08.",
+      "updated_at": "2026-09-07",
+      "first_seen": "2026-09-07",
+      "scope": {
+        "component": "service bootstrap",
+        "environment": "vllm-ascend containers with CANN toolkit",
+        "subsystem": "python module resolution"
+      },
+      "rule": {
+        "summary": "A missing acl module means PYTHONPATH was overwritten instead of appended; it is not a model or plugin bug",
+        "symptom": "Service start fails with ModuleNotFoundError for 'acl', or for an Ascend runtime import that depends on it, on a container where the CANN toolkit is present and npu-smi works.",
+        "root_cause": "Sourcing the CANN environment puts the Ascend Python bindings on PYTHONPATH. A launch script that assigns PYTHONPATH rather than appending to it drops those entries, so 'acl' becomes unimportable while the toolkit itself is intact.",
+        "resolution": "Source the CANN environment first, then append to PYTHONPATH (PYTHONPATH=\"$EXTRA:$PYTHONPATH\") rather than assigning over it. Confirm with a bare `python3 -c 'import acl'` in the same shell before starting the service.",
+        "avoidance": "On any missing-module failure at service start, check the effective PYTHONPATH in the launch shell before reading model code. Environment breakage and genuine model bugs produce the same class of import error, and the environment is much cheaper to rule out.",
+        "fingerprints": [
+          "modulenotfounderror no module named acl",
+          "pythonpath overwritten cann import",
+          "ascend acl import fails toolkit present"
+        ],
+        "verification": [
+          "Appending rather than assigning PYTHONPATH restored `import acl` and let the service start on the A3 four-node fleet; subsequently kept as a standing launch-script rule in that workspace."
+        ]
+      }
+    },
+    {
+      "id": "incomplete-vllm-plugins-list-breaks-model-registration",
+      "status": "active",
+      "source": "Kimi-K3 / DSpark enablement runbook; the misleading attribute error was diagnosed from the traceback several times before the cause was traced to the plugin list.",
+      "applicable_versions": "Verified on vllm-ascend with multiple plugin entry points (ascend plus KV-connector plugins), releases/v0.26.0rc era, 2026-07 through 2026-08.",
+      "updated_at": "2026-09-07",
+      "first_seen": "2026-09-07",
+      "scope": {
+        "component": "model registration",
+        "environment": "vllm-ascend with multiple plugin entry points",
+        "subsystem": "VLLM_PLUGINS"
+      },
+      "rule": {
+        "summary": "A truncated VLLM_PLUGINS list drops model registration and surfaces as an unrelated attribute error inside model init",
+        "symptom": "Model initialization fails with a missing-attribute or missing-key error for an internal module member such as 'rotary_emb', on a model the checked-out code is known to support.",
+        "root_cause": "Setting VLLM_PLUGINS to a subset, commonly just 'ascend', suppresses the other plugin entry points. Model registration performed by a suppressed plugin never runs, so vLLM falls back to a generic path whose attribute expectations do not match, and the failure appears deep inside model init rather than at plugin load.",
+        "resolution": "Set the complete plugin list the deployment needs, including every KV-connector and model-registration plugin, or leave VLLM_PLUGINS unset so all entry points load. Confirm the intended model class was registered before interpreting an init-time attribute error.",
+        "avoidance": "Do not debug an attribute error inside model init before confirming plugin load. The error location is unrelated to the cause, which is what makes this one expensive to chase from the traceback.",
+        "fingerprints": [
+          "keyerror rotary_emb mla init",
+          "vllm_plugins incomplete model not registered",
+          "attributeerror model init supported model"
+        ],
+        "verification": [
+          "Restoring the full VLLM_PLUGINS list removed the init-time attribute error and let the model load; subsequently kept as a standing launch-script rule in that workspace."
+        ]
+      }
+    },
+    {
+      "id": "orphan-engine-processes-hold-hbm-after-api-exit",
+      "status": "active",
+      "source": "Kimi-K3 / DSpark enablement runbook stop procedure; observed repeatedly on the shared A3 fleet, where it presented as a start-time OOM on devices believed to be free.",
+      "applicable_versions": "Verified on vllm-ascend V1 engine services (EngineCore / Worker / DPCoordinator process trees), A3 fleet, 2026-07 through 2026-09.",
+      "updated_at": "2026-09-07",
+      "first_seen": "2026-09-07",
+      "scope": {
+        "component": "service lifecycle",
+        "environment": "vllm-ascend V1 engine services",
+        "subsystem": "process teardown"
+      },
+      "rule": {
+        "summary": "Killing the API process leaves engine and worker children holding HBM, and the next launch fails on allocation",
+        "symptom": "The API port is free and no server appears to be running, but npu-smi shows occupied HBM on the same devices, and the next service start fails with an out-of-memory error during weight load or KV allocation.",
+        "root_cause": "The V1 engine runs the API server, engine core, and workers as separate processes. Signalling only the API process, especially during weight load, leaves the engine and worker processes alive and still holding device memory.",
+        "resolution": "Stop the whole process group that was launched, then confirm with npu-smi that the devices were released before starting anything else. Reap any surviving vLLM children by name.",
+        "avoidance": "Never treat a free port as evidence that devices are free, and never use an unscoped pkill to clean up: on a shared host that reaps co-tenant services. Scope teardown to the process group you started, on the node you started it on.",
+        "fingerprints": [
+          "npu out of memory after service stopped",
+          "port free but hbm occupied orphan enginecore",
+          "vllm worker process survived api exit"
+        ],
+        "verification": [
+          "Group-scoped teardown followed by an npu-smi residency check eliminated the recurring start-time OOM on the shared A3 fleet; subsequently kept as a standing stop-procedure rule in that workspace."
+        ]
+      }
+    },
+    {
+      "id": "single-engine-metrics-read-reports-false-zero-under-dp",
+      "status": "active",
+      "source": "Kimi-K3 / DSpark enablement runbook speculative-metrics procedure; caused repeated false-negative reports that a feature was inactive.",
+      "applicable_versions": "Verified on vllm-ascend online serving with data_parallel_size > 1 and per-engine Prometheus labels, 2026-07 through 2026-09.",
+      "updated_at": "2026-09-07",
+      "first_seen": "2026-09-07",
+      "scope": {
+        "component": "measurement",
+        "environment": "vllm online serving with data parallelism",
+        "subsystem": "prometheus metrics"
+      },
+      "rule": {
+        "summary": "Reading one engine label under data parallelism reports zero for a feature that is working",
+        "symptom": "Speculative-decoding acceptance, prefix-cache hits, or request counts read as zero from /metrics while the feature is demonstrably active, on a service with data_parallel_size > 1.",
+        "root_cause": "vLLM exposes one label series per engine. Requests are balanced across data-parallel ranks, so a series read for a single engine reports nothing whenever the measured requests landed on a different rank.",
+        "resolution": "Sum the metric across every engine label, drive measurement traffic concurrently across all data-parallel ranks, and difference before/after snapshots taken around a settled window.",
+        "avoidance": "Treat a zero from a single-engine read as an unmeasured result, not an inactive feature. Do not use *_created timestamp gauges, or absolute counters from an unrelated window, as measurements.",
+        "fingerprints": [
+          "spec decode acceptance rate zero dp",
+          "prefix cache hit zero metrics engine label",
+          "prometheus single engine series false zero"
+        ],
+        "verification": [
+          "Summing across all engine labels with concurrent per-rank measurement traffic produced non-zero acceptance and cache-hit rates for configurations previously reported as inactive; subsequently kept as a standing measurement rule in that workspace."
+        ]
+      }
+    },
+    {
+      "id": "memory-utilization-value-not-portable-across-topologies",
+      "status": "active",
+      "source": "Kimi-K3 / DSpark enablement runbook never-list; hit when a value verified at DP2 was reused at DP4 for the same weights.",
+      "applicable_versions": "Verified on vllm-ascend MoE serving across TP16xDP2xEP32 and TP16xDP4xEP64 on the A3 fleet, 2026-07 through 2026-08.",
+      "updated_at": "2026-09-07",
+      "first_seen": "2026-09-07",
+      "scope": {
+        "component": "capacity planning",
+        "environment": "vllm-ascend MoE serving",
+        "subsystem": "kv cache budget"
+      },
+      "rule": {
+        "summary": "A gpu-memory-utilization value verified at one parallel layout can produce a negative KV budget at another",
+        "symptom": "Service start fails reporting negative or implausibly small available KV cache memory, using a memory-utilization value that worked on a previously verified deployment of the same model.",
+        "root_cause": "The value bounds total device memory, while the weight and expert shard held per device depends on the tensor, data, and expert parallel sizes. Changing the layout changes the fixed footprint, so the same fraction leaves a different, possibly negative, remainder for KV cache.",
+        "resolution": "Re-derive the memory-utilization value for the actual topology. Treat a verified value as belonging to the layout it was verified at, and record the layout alongside it.",
+        "avoidance": "Do not copy memory-utilization values between topologies, between models, or from a benchmark preset onto a different device count, even for identical weights.",
+        "fingerprints": [
+          "negative available kv cache memory",
+          "gpu memory utilization topology change oom",
+          "kv cache budget negative moe expert shard"
+        ],
+        "verification": [
+          "A value verified at TP16xDP2xEP32 produced a negative KV budget at TP16xDP4xEP64 for the same weights; re-deriving per topology resolved it. Subsequently kept as a standing capacity-planning rule in that workspace."
+        ]
+      }
+    }
+  ]
 }

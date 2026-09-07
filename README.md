@@ -66,6 +66,8 @@ python3 .agents/skills/npu-fleet-monitor/scripts/manage_monitor.py ensure
 | **ascend-triton-kernel-optimization** | 在正确性门禁后执行 profiler 驱动的优化实验 | 优化已正确的 Triton kernel 时 |
 | **ascend-triton-workflow** | 编排开发、验证、优化和 Run Manifest 证据 | 交付完整 Triton 算子生命周期时 |
 | **vllm-ascend-pd-serving** | 编排 Session Group 上的 prefill/decode、connector、回滚和 KV smoke | 部署 PD 分离服务时 |
+| **vllm-ascend-multinode-serving** | 推导跨节点 rank 划分、headless 角色、网卡与 HCCL 环境、端口分配、跨节点代码一致性和分级就绪门禁 | 拓扑跨多台机器或多机服务卡在初始化时 |
+| **vllm-ascend-experiment-ledger** | 索引全仓 Run Manifest，追溯结果对应的代码状态，判定两次实验是否可比 | 实验攒多了、结果无法溯源或要做 A/B 对比时 |
 
 
 所有技能都是**可选的**。你可以只用其中的一部分，也可以完全不用。

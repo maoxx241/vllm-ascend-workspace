@@ -91,6 +91,12 @@ jobs:
       - name: Run PD-serving tests
         run: python -B -m unittest discover -s .agents/skills/vllm-ascend-pd-serving/tests
 
+      - name: Run multinode-serving tests
+        run: python -B -m unittest discover -s .agents/skills/vllm-ascend-multinode-serving/tests
+
+      - name: Run experiment-ledger tests
+        run: python -B -m unittest discover -s .agents/skills/vllm-ascend-experiment-ledger/tests
+
       - name: Run memory-profiling tests
         run: python -B -m unittest discover -s .agents/skills/ascend-memory-profiling/tests
 

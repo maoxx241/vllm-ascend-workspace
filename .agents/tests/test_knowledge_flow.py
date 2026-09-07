@@ -164,11 +164,17 @@ class KnowledgeFlowE2ETest(unittest.TestCase):
         self.assertEqual(
             [item["candidate_id"] for item in listed["candidates"]], [candidate_id]
         )
+        entry_id = "synthetic-framed-transfer"
+
         inspected = self.curate_json("inspect", "--candidate-id", candidate_id)
         self.assertEqual(inspected["candidate"]["candidate_id"], candidate_id)
-        self.assertEqual(inspected["possible_matches"], [])
-
-        entry_id = "synthetic-framed-transfer"
+        # possible_matches are fuzzy hits against whatever the branch knowledge
+        # store holds, which grows as reviewed entries land. The invariant this
+        # step checks is that the candidate is genuinely new, not that the store
+        # is empty.
+        self.assertNotIn(
+            entry_id, [item["id"] for item in inspected["possible_matches"]]
+        )
         promoted = self.curate_json(
             "promote",
             "--candidate-id",
