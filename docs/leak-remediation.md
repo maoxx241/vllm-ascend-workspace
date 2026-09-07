@@ -27,9 +27,10 @@ Current-tree status of those historical findings:
   #83 wording change is history-only; extraction removed the file.
 - Finding 3 (profiling command-recipes home path) remains the #83 placeholder
   in the current tree.
-- Finding 4 (profiling shared-storage owner token) remains in that skill
-  package and is still allowlisted for the later #88 cleanup. This G1
-  integration does not apply that cleanup.
+- Finding 4 (profiling shared-storage owner token) is absent from the
+  current tree. `SKILL.md` uses `/mnt/weight/<user>/profiling/…`; the
+  unit test uses `/mnt/weight/profiling-shared/…`. The
+  `profiling-analysis-shared-storage-owner` allowance was removed.
 - Finding 5's `.remote-dev/README.md` occurrence and finding 6's
   `.remote-dev/tests/` placeholders are absent from the current tree. The
   skill-recipe example hosts remain.
@@ -75,9 +76,13 @@ removed; the five current-main scoped allowances and the guard runtime
 skip glob were kept. Combined scan after that removal: 464 scanned, 0
 skipped, 0 findings, 115 suppressed, 0 unused allowlist ids.
 
-Finding 4's profiling shared-storage owner token remains allowlisted
-for the later #88 cleanup. This is not leak-proof coverage of skipped
-files or of public history.
+Ordinary merge of accepted published main
+`149b26f3d3f1ac701dee44024a069e91f385645c` (tree
+`48a725cd747b425abbec1ef72bc02834963b2eb3`) on 2026-09-07 applied the
+original #88 cleanup on that guard/main. Combined scan after that
+merge: 464 scanned, 0 skipped, 0 findings, 108 suppressed, 0 unused
+allowlist ids. This is not leak-proof coverage of skipped files or of
+public history.
 
 ## Method
 
