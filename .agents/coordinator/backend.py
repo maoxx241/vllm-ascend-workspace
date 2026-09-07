@@ -3,16 +3,74 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import shlex
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-# Keep the installed MCP SDK ahead of remote-dev's unrelated `mcp/` package.
-sys.path.append(str(ROOT / ".remote-dev"))
+
+# remote-dev is a separate repository now. Where its checkout lives and which
+# supervisor source to ship are coordinator-owned configuration, resolved here
+# from the environment rather than imported from the scaffold: this adapter
+# leaves with the coordinator extraction and must not gain a new dependency on
+# `.agents/lib` on the way out. The scaffold's own launcher
+# (`.agents/scripts/remote_dev.py`) sets the same variables for agent-facing use.
+REMOTE_DEV_ROOT_ENV = "VAWS_REMOTE_DEV_ROOT"
+MANAGED_JOBS_WORKER_ENV = "VAWS_MANAGED_JOBS_WORKER"
+DEFAULT_REMOTE_DEV_DIRNAME = "remote-dev"
+
+
+class RemoteDevUnavailable(RuntimeError):
+    """No usable remote-dev checkout or supervisor source is configured."""
+
+
+def remote_dev_root():
+    configured = os.environ.get(REMOTE_DEV_ROOT_ENV, "").strip()
+    candidate = Path(configured).expanduser() if configured else ROOT / ".vaws-local" / DEFAULT_REMOTE_DEV_DIRNAME
+    if not (candidate / "core" / "shell_ops.py").is_file():
+        raise RemoteDevUnavailable(
+            f"{candidate} is not a remote-dev checkout; set {REMOTE_DEV_ROOT_ENV} or run "
+            "the scaffold's remote-dev bootstrap"
+        )
+    return candidate.resolve()
+
+
+def _remote_dev_api():
+    """Import the substrate lazily so a missing checkout is a clear error.
+
+    Appended to `sys.path`, never prepended: the installed MCP SDK must stay
+    ahead of remote-dev's unrelated `mcp/` package, which `server.py` would
+    otherwise shadow.
+    """
+    root = str(remote_dev_root())
+    if root not in sys.path:
+        sys.path.append(root)
+    endpoints = importlib.import_module("core.endpoint")
+    shell = importlib.import_module("core.shell_ops")
+    return endpoints.resolve_endpoint, shell.remote_bash
+
+
+def managed_jobs_source():
+    """Source text of the managed-job supervisor.
+
+    It left remote-dev with the extraction and belongs to
+    `vllm-ascend-workspace/vaws-coordinator`; remote-dev no longer ships it and
+    this scaffold must not vendor it back.
+    """
+    configured = os.environ.get(MANAGED_JOBS_WORKER_ENV, "").strip()
+    if not configured:
+        raise RemoteDevUnavailable(
+            "the managed-job supervisor moved out of remote-dev to vaws-coordinator; "
+            f"set {MANAGED_JOBS_WORKER_ENV} to its managed_jobs.py until the coordinator extraction lands"
+        )
+    path = Path(configured).expanduser()
+    if not path.is_file():
+        raise RemoteDevUnavailable(f"{MANAGED_JOBS_WORKER_ENV}={path} does not exist")
+    return path.read_text()
+
+
 sys.path.insert(0, str(ROOT / ".agents/lib"))
-from core.endpoint import resolve_endpoint
-from core.shell_ops import remote_bash
 from vaws_remote_toolbox import _load_inventory
 from vaws_runtime_profile import launch_preamble
 
@@ -23,7 +81,7 @@ spec.loader.exec_module(coord)
 
 class RemoteBackend:
     def job(self, runtime, job_id, action, **parameters):
-        source = (ROOT / ".remote-dev/core/managed_jobs.py").read_text()
+        source = managed_jobs_source()
         request = {"root": runtime["endpoint"]["root"], "job_id": job_id, "action": action, **parameters}
         command = ("python3 - " + shlex.quote(json.dumps(request)) + " <<'VAWS_MANAGED_JOB'\n"
                    + "WORKER_SOURCE = " + repr(source)
@@ -95,6 +153,7 @@ print(json.dumps({'pid':matches[0]}))
 
     @staticmethod
     def bash(target, command):
+        resolve_endpoint, remote_bash = _remote_dev_api()
         result = remote_bash(resolve_endpoint(target), command=command, timeout_ms=45000,
                              runtime_env=False)["result"]
         if result["outcome"] != "success":

@@ -247,18 +247,31 @@ python3 .agents/skills/vllm-ascend-serving/scripts/serve_start.py \
   -- --enforce-eager --enable-prefix-caching
 ```
 
-## Rebuild custom CANN operators after parity sync
+## Recover missing custom CANN operators
 
-After `remote-code-parity` syncs tracked files, custom op build artifacts are missing. Rebuild them before launch:
+After `remote-code-parity` syncs tracked files, untracked custom-op build
+artifacts can be missing. Do not hand-run `csrc/build_aclnn.sh`, invent a SoC
+token such as `ascend910b`, or `pip install` packages inside the container.
+
+Use the session-aware `parity_sync.py --force-reinstall` recovery that
+`serve_start.py` already emits (`parity_sync.py` parser `--force-reinstall`).
+That existing path owns resolved runtime/environment, declared dependency
+reconciliation, and the editable custom-op build:
 
 ```bash
-python3 .agents/scripts/remote_job_start.py \
-  --session-id <session-id> \
-  --kind build \
-  --cwd /vllm-workspace/vllm-ascend \
-  --command 'bash csrc/build_aclnn.sh /vllm-workspace/vllm-ascend ascend910b'
-python3 .agents/scripts/remote_job_status.py --job-id <job-id>
-python3 .agents/scripts/remote_job_tail.py --job-id <job-id> --lines 120
+# Inside a session worktree (session auto-resolved)
+python3 .agents/skills/remote-code-parity/scripts/parity_sync.py \
+  --force-reinstall
+
+# Explicit session target (the form serve_start.py emits)
+python3 .agents/skills/remote-code-parity/scripts/parity_sync.py \
+  --session-id pr123 \
+  --force-reinstall
 ```
 
-Note: if `numpy>=2.0` is installed, first downgrade through parity or use the same HuaweiCloud pip index: `pip3 install "numpy<2.0.0" -i https://repo.huaweicloud.com/repository/pypi/simple`
+`--force-reinstall` is recovery for a broken or incomplete editable install, not
+the default start path. It does not replace prior session/user authorization
+(`install_consent.py --approved-by-user`, sync mode). If parity returns
+`blocked` or `failed`, fail closed: inspect its captured logs and any
+`serve_start.py` `stderr_tail`. Do not retry with a manual SoC or runtime path
+or an ad hoc NumPy pip command.

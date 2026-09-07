@@ -20,5 +20,6 @@
 
 - [ ] A regression test covers the proved invariant when practical.
 - [ ] The smallest reproducer passes after the fix.
-- [ ] The original topology passes after the fix.
+- [ ] The original topology passes after the fix, and its case analyzes to `completed-without-mismatch` (every rank ends with `rank_complete`, no findings).
+- [ ] A `passed` manifest rests on that analysis, not on an assertion.
 - [ ] Temporary debug instrumentation is removed or explicitly retained.

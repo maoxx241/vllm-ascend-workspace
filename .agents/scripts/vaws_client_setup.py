@@ -3,6 +3,13 @@
 
 This configures files only. It does not grant client trust, change approval
 policies, authenticate clients, run hooks, or contact a remote machine.
+
+The MCP entry runs `.agents/scripts/remote_dev.py server`, which locates the
+external remote-dev checkout (`VAWS_REMOTE_DEV_ROOT` or the shared
+`.vaws-local/remote-dev`) and injects the scaffold resolver, the Ascend runtime
+environment file and the state directory. The entry's `env` block repeats the
+values that matter to a reader so the generated configuration documents the
+substrate contract on its own.
 """
 from __future__ import annotations
 
@@ -19,8 +26,27 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / ".agents/lib"))
 from vaws_agent_session import CLIENTS
+from vaws_remote_dev import ASCEND_RUNTIME_ENV_FILE, resolver_spec, state_dir
 
 EVENTS = ("SessionStart", "SessionEnd", "SubagentStart", "SubagentStop", "PreToolUse", "UserPromptSubmit")
+REMOTE_DEV_LAUNCHER = ROOT / ".agents/scripts/remote_dev.py"
+BACKUP_DIR = ROOT / ".vaws-local/client-setup-backups"
+
+
+def remote_dev_server_args():
+    return [str(REMOTE_DEV_LAUNCHER), "server"]
+
+
+def remote_dev_env():
+    """Environment the remote-dev MCP server needs; the launcher fills the same defaults."""
+    return {
+        "REMOTE_DEV_DEFAULT_USER": "root",
+        "REMOTE_DEV_DEFAULT_ROOT": "/vllm-workspace",
+        "REMOTE_DEV_DEFAULT_CWD": "/vllm-workspace",
+        "REMOTE_DEV_RUNTIME_ENV_FILE": ASCEND_RUNTIME_ENV_FILE,
+        "REMOTE_DEV_RESOLVERS": resolver_spec(),
+        "REMOTE_DEV_STATE_DIR": str(state_dir()),
+    }
 
 # The hook performs up to two `git rev-parse` calls with a 5s timeout each
 # (vaws_agent_session.worktree_reference); a 3s budget would kill a healthy hook.
@@ -53,7 +79,9 @@ def merge_json(path, *, hooks=None, mcp=False):
             value.setdefault("version", 1)
     if mcp:
         entry = value.setdefault("mcpServers", {}).setdefault("remote-dev", {})
-        entry.update(command=sys.executable, args=[str(ROOT / ".remote-dev/mcp/server.py")], type="stdio")
+        entry.update(command=sys.executable, args=remote_dev_server_args(), type="stdio")
+        # Fill what the substrate needs; values the user already set stay.
+        entry["env"] = {**remote_dev_env(), **entry.get("env", {})}
         entry.setdefault("timeout", 600000)
     return json.dumps(value, indent=2, ensure_ascii=False) + "\n"
 
@@ -90,7 +118,9 @@ def configuration(client, project, *, kimi_config=None):
         # shared server gains the task tools after its normal client restart.
         if not any(name in servers for name in ("remote_dev", "remote-dev")):
             body = "[mcp_servers.remote_dev]\ncommand = " + json.dumps(sys.executable) + "\n"
-            body += "args = " + json.dumps([str(ROOT / ".remote-dev/mcp/server.py")]) + "\n"
+            body += "args = " + json.dumps(remote_dev_server_args()) + "\n"
+            body += "\n[mcp_servers.remote_dev.env]\n"
+            body += "".join(key + " = " + json.dumps(value) + "\n" for key, value in remote_dev_env().items())
             files[path] = managed_toml(path, "remote-dev", body)
     if client == "kimi":
         path = kimi_config or Path(os.environ.get("KIMI_CODE_HOME", str(Path.home() / ".kimi-code"))) / "config.toml"
@@ -118,7 +148,9 @@ def main():
         if args.apply:
             path.parent.mkdir(parents=True, exist_ok=True)
             if path.exists():
-                directory = ROOT / ".remote-dev/state/client-setup"
+                # Pre-write backups live under the scaffold's own ignored
+                # state root, not inside the (now external) substrate.
+                directory = BACKUP_DIR
                 directory.mkdir(parents=True, exist_ok=True, mode=0o700)
                 backup = directory / (hashlib.sha256(str(path).encode()).hexdigest()[:16] + "-" + str(time.time_ns()))
                 backup.write_bytes(path.read_bytes())
