@@ -1,4 +1,13 @@
 #!/usr/bin/env python3
+"""Generate the lightweight `.claude/skills/<name>/SKILL.md` shims from `.agents/skills`.
+
+Moved here from the remote-dev substrate's `tools/` directory when that
+substrate became its own repository: the shims are scaffold work (they read
+`.agents/skills` and write `.claude/skills`), not remote development.
+
+    python3 .agents/scripts/sync_claude_skills.py          # regenerate
+    python3 .agents/scripts/sync_claude_skills.py --check  # verify, exit 1 on drift
+"""
 from __future__ import annotations
 
 import argparse
@@ -56,7 +65,7 @@ Before using this skill:
 
 1. Read the canonical skill file above.
 2. Follow its routing rules, entrypoints, guardrails, and acceptance criteria.
-3. Use `.remote-dev` companion tools for ordinary remote endpoint read/edit/bash/search/patch work.
+3. Use the remote-dev companion tools (`remote_*` MCP tools; CLI fallback `python3 .agents/scripts/remote_dev.py tool <name> ...`) for ordinary remote endpoint read/edit/bash/search/patch work.
 4. Use this Claude project skill only for the domain workflow described by the canonical source.
 """
 

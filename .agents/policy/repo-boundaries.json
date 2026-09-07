@@ -4,7 +4,9 @@
   "checker": ".agents/scripts/repo_boundary_check.py",
   "format_note": "JSON, not YAML, so the guard stays stdlib-only and can run in every existing CI job without a pip install step.",
   "scan": {
-    "include_suffixes": [".py"],
+    "include_suffixes": [
+      ".py"
+    ],
     "scan_scope_note": "Only Python is scanned for violations. Markdown/config mentions are inventoried by hand in docs/repo-boundaries.md; they carry no import-time coupling.",
     "skip_roots": [
       "vllm",
@@ -35,10 +37,9 @@
     "module_search_paths": [
       ".agents/lib",
       ".agents/coordinator",
-      ".remote-dev",
       ".agents/skills/remote-code-parity/scripts"
     ],
-    "module_search_paths_note": "Directories that some entry point actually places on sys.path. Ownership of a derived module name is resolved from the owning file's path, so moving a file between subsystems moves its module with it."
+    "module_search_paths_note": "Directories that some entry point actually places on sys.path. Ownership of a derived module name is resolved from the owning file's path, so moving a file between subsystems moves its module with it. `.remote-dev` is absent because the substrate is a separate repository consumed as an external checkout, so `core.*` resolves to no in-tree file and is not attributed to any subsystem."
   },
   "ignored_modules": [
     {
@@ -56,26 +57,15 @@
       "repo": "vllm-ascend-workspace/remote-dev",
       "layer": 10,
       "summary": "Stateless SSH-backed remote developer substrate. Must know nothing about vLLM-Ascend, sessions, or NPU leases.",
-      "roots": [".remote-dev"],
-      "public_paths": [
-        ".remote-dev",
-        ".remote-dev/mcp/server.py",
-        ".remote-dev/tools",
-        ".remote-dev/schemas",
-        ".remote-dev/endpoints.json",
-        ".remote-dev/README.md",
-        ".remote-dev/CLIENT_COMPATIBILITY.md",
-        ".remote-dev/VALIDATION.md",
-        ".remote-dev/DESIGN.md"
+      "roots": [],
+      "public_paths": [],
+      "private_paths": [],
+      "public_modules": [
+        "core.result",
+        "core.errors"
       ],
-      "private_paths": [
-        ".remote-dev/core",
-        ".remote-dev/hooks",
-        ".remote-dev/tests",
-        ".remote-dev/state"
-      ],
-      "public_modules": ["core.result", "core.errors"],
-      "public_modules_note": "The result contract and error taxonomy are schema-pinned (.remote-dev/schemas/result.schema.json) and are the only import-level surface a consumer should bind to. Everything else under `core.` is substrate internals."
+      "public_modules_note": "The result contract and error taxonomy are schema-pinned (`schemas/result.schema.json` in the substrate) and remain the only import-level surface a consumer should bind to. The substrate additionally publishes the resolver plugin interface (`core.endpoint.register_resolver` / `resolver_setup` / `EndpointError`), which is how consumer selectors such as `machine` / `session_id` reach it. Because no substrate file is in this tree any more, these names are documentation for reviewers rather than something the guard can attribute.",
+      "roots_note": "No roots on `main`: the substrate left this tree with its extraction and is consumed as an external checkout (`.agents/deps/remote-dev.json`, `VAWS_REMOTE_DEV_ROOT`). Only consumers are in this repository: the resolver plugin `.agents/lib/vaws_remote_dev_plugin.py`, the launcher `.agents/scripts/remote_dev.py`, and the client configuration. The boundary is now a repository boundary, which is why this subsystem declares no paths."
     },
     {
       "id": "coordinator",
@@ -100,7 +90,9 @@
         ".agents/coordinator/backend.py",
         ".agents/coordinator/tests"
       ],
-      "public_modules": ["vaws_task_client"],
+      "public_modules": [
+        "vaws_task_client"
+      ],
       "public_modules_note": "`vaws_task_client.TaskClient` is the client facade a consumer may bind to. `vaws_ready_runtime` / `vaws_managed_execution` / `backend` are pool internals."
     },
     {
@@ -124,10 +116,14 @@
       "repo": "vllm-ascend-workspace",
       "layer": 30,
       "summary": "The domain layer that stays: 24 skills, shared libraries, helper scripts. May depend on every extracted subsystem; none of them may depend on it.",
-      "roots": [".agents"],
+      "roots": [
+        ".agents"
+      ],
       "public_paths": [],
       "public_paths_note": "Deliberately empty. The scaffold publishes nothing downward: a lower layer that needs scaffold data must receive it through an interface the lower layer owns, not read it.",
-      "private_paths": [".agents"],
+      "private_paths": [
+        ".agents"
+      ],
       "public_modules": []
     },
     {
@@ -135,8 +131,12 @@
       "repo": "vllm-ascend-workspace",
       "layer": 40,
       "summary": "Repository-level files: CI workflows, client config examples, top-level docs and shell helpers. Above every subsystem, so it may reference all of them.",
-      "roots": ["."],
-      "public_paths": ["."],
+      "roots": [
+        "."
+      ],
+      "public_paths": [
+        "."
+      ],
       "private_paths": [],
       "public_modules": []
     }

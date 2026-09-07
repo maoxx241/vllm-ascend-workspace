@@ -52,7 +52,7 @@
       "type": ["string", "null"]
     },
     "preview": {
-      "description": "Bounded text preview. Field names match .remote-dev/core/preview.py; 'ref' is required whenever 'truncated' is true so the full content is always reachable.",
+      "description": "Bounded text preview. Field names match the remote-dev preview helper; 'ref' is required whenever 'truncated' is true so the full content is always reachable.",
       "type": "object",
       "required": ["bytes", "truncated", "head_chars", "tail_chars", "ref"],
       "properties": {

@@ -471,18 +471,26 @@ A reader following current migration directions must reach the already
 accepted task-provider, worker, and host-authority ownership, and must
 **never reinstall task dispatch into remote-dev**.
 
-This continuation of original #79 does not merge scaffold #90. Consumer #90
-and coordinator wiring into this tree remain **pending**. The SHAs below are
-source implementation facts from independent acceptance; they are not a claim
-that this checkout has consumed those repositories or that the 71 accepted
-baseline rows have been fixed.
+This source tree consumes remote-dev through the #90 external checkout,
+launcher (`.agents/scripts/remote_dev.py`), and resolver
+(`.agents/lib/vaws_remote_dev_plugin.py`). Tracked `.remote-dev` is gone.
+The pin is `b6acc21d147e369e771f1ff916973d74d667691e`. That is a statement
+about this source, not a claim that this PR has already merged publicly, and
+not a runtime or hardware qualification.
+
+Coordinator consumer wiring and vaws-top consumer work remain **pending**
+here. The SHAs below are source implementation facts from independent
+acceptance. Sections 1–3 and the original 71-row audit dated `2026-09-07`
+remain explicitly dated historical evidence of
+`605a7746a34f88c8235b56505060ecd937cb77df`; they are not a census of this
+current tree.
 
 ### Source pins (implementation facts, not deployment)
 
 | Repository | Role | Exact SHA |
 |---|---|---|
 | `vaws-coordinator` | accepted actual main after independent #1/#2 | `2e16e894e31a12d85a11117a2772031f30fdfebe` |
-| `remote-dev` | ledger + glob current actual main | `797985168b6bbfe4b5d972b5192d412c0bdfc6d4` |
+| `remote-dev` | ledger + glob + mux accepted actual provider main | `b6acc21d147e369e771f1ff916973d74d667691e` |
 
 Independent coordinator #1 (`84cb6bdd01a2eb5afedd3e7216ace4cc7acc1285`) and
 #2 (`91b8bf52d2ba92a7586d34e2536f167f9f8d583b`) are the reviewed blobs that
@@ -537,14 +545,15 @@ byte-identical. Mutable task, lease, or host-queue writers may not be copied.
 
 ### Still pending on this continuation
 
-- Scaffold consumer #90 (external remote-dev checkout, resolver injection,
-  in-tree `.remote-dev/` removal) is **not** in this patch.
 - Coordinator consumption by this scaffold (pin, dual-provider client setup,
   deletion of in-tree task writers once destination arrival is proven) is
   **not** in this patch.
-- The 71 accepted baseline rows, 292-file scan, and 26 / 41 / 4
-  `removed_by` split in §§1–3 remain the dated census of **this tree**. Do
-  not report them as fixed, and do not refresh the baseline here.
+- vaws-top consumer work by this scaffold is **not** in this patch.
+- The original 71-row audit, 292-file scan, and 26 / 41 / 4 `removed_by`
+  split in §§1–3 remain dated historical evidence. Current remaining accepted
+  baseline rows in `.agents/policy/repo-boundaries-baseline.json` are 45
+  (41 `vaws-coordinator`, 4 `vaws-top`). Do not refresh the baseline in this
+  docs-only correction.
 
 ---
 

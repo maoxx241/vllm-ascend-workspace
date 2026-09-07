@@ -518,9 +518,11 @@ def ascend_env_preamble(*, set_e: bool = True, export_driver_lib: bool = False) 
 
     Historical copies with ``.`` instead of ``source`` (and, for
     ``_runtime_env_lines``, no ``set -u`` restore) still exist in this file's
-    ``_runtime_env_lines`` / probe script and in the independently distributed
-    ``.remote-dev/core/`` substrate; those are byte-stable remote surfaces and
-    intentionally stay as-is. New ``.agents`` code should call this helper.
+    ``_runtime_env_lines`` / probe script; those are byte-stable remote surfaces
+    and intentionally stay as-is. The external remote-dev substrate sources the
+    same file through ``Endpoint.runtime_env_file`` (see
+    ``vaws_remote_dev.ASCEND_RUNTIME_ENV_FILE``). New ``.agents`` code should
+    call this helper.
     """
     lines: list[str] = []
     if set_e:

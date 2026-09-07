@@ -40,7 +40,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 .remote-dev/hooks/claude_remote_guard.py",
+            "command": "python3 .agents/scripts/remote_dev.py hook claude",
             "timeout": 30
           }
         ]
@@ -50,7 +50,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 .remote-dev/hooks/claude_remote_guard.py",
+            "command": "python3 .agents/scripts/remote_dev.py hook claude",
             "timeout": 30
           }
         ]

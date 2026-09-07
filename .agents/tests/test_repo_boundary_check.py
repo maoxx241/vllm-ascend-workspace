@@ -436,13 +436,18 @@ class PolicyContractTests(unittest.TestCase):
             ("vaws_task_client", "coordinator"),
             ("vaws_ready_runtime", "coordinator"),
             ("vaws_ssh", "scaffold-domain"),
-            ("core", "remote-dev"),
         ):
             with self.subTest(module=module):
                 owner = ownership.subsystem_for_module(module)
                 self.assertIsNotNone(owner)
                 assert owner is not None
                 self.assertEqual(owner.id, expected)
+        # `core.*` belonged to the in-tree substrate. It left with the
+        # remote-dev extraction, so no file in this tree owns the name any
+        # more and the guard must not invent an owner for it. The synthetic
+        # repository in DetectionTests still covers derived ownership of an
+        # in-tree substrate module.
+        self.assertIsNone(ownership.subsystem_for_module("core"))
         # The substrate's `mcp/` package shares a name with the installed MCP
         # SDK that the coordinator imports; owning it would invent a dependency.
         self.assertIsNone(ownership.subsystem_for_module("mcp"))
