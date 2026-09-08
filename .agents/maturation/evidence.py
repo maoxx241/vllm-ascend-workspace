@@ -72,6 +72,19 @@ class EvidenceStore:
         atomic_write_json(path, candidate)
         return path
 
+    def prune_candidates(self, keep_ids: set[str]) -> list[str]:
+        """Drop candidate files not produced by the latest finalize.
+
+        A replay re-derives candidates from the trials; files left over from an
+        earlier attribution pass would otherwise misrepresent the run.
+        """
+        removed: list[str] = []
+        for path in (self.run_dir / "candidates").glob("*.json"):
+            if path.stem not in keep_ids:
+                path.unlink()
+                removed.append(path.stem)
+        return removed
+
     def write_run(self, report: Mapping[str, Any]) -> Path:
         path = self.run_dir / "run.json"
         atomic_write_json(path, report)

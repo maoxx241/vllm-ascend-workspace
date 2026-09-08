@@ -200,6 +200,7 @@ class Step:
             "passed": self.passed,
             "expectation_error": self.expectation_error,
             "exception": self.exception,
+            "timeout_ms": self.timeout_ms,
             "raw": _raw_from_result(self.payload, self.result),
         }
         if self.extra:

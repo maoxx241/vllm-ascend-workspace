@@ -17,6 +17,7 @@ LAYERS = (
     "tool-service",  # the tool returned instantly/without a parsable result
     "tool-helper",  # the tool's own remote helper or wrapper code failed
     "timeout",  # a genuine deadline expiry
+    "transport-stall",  # consecutive full-budget timeouts on one endpoint (dead shared channel)
     "remote-command",  # the remote command ran and exited non-zero
     "path-policy",  # blocked by root/cwd/symlink policy
     "integrity",  # hash mismatch, partial or leftover state
@@ -185,6 +186,121 @@ def _leaked_timeout(exception: str) -> dict[str, Any] | None:
         "reason": "TimeoutExpired leaked from the tool instead of a result payload",
         "fingerprint": "timeout leaked from tool",
     }
+
+
+def refresh_exception_attribution(trials: list[dict[str, Any]]) -> int:
+    """Re-run exception attribution for trials stored at the ``harness`` layer.
+
+    The exception text is retained verbatim in the evidence, so a replay can
+    apply the current exception rules (for example the leaked-ssh-timeout
+    rule) to runs recorded before those rules existed. Result-based
+    attribution is *not* recomputed here because the retained ``raw`` record
+    is a reduced view of the tool result. Returns the number of trials changed.
+    """
+    changed = 0
+    for trial in trials:
+        attribution = trial.get("attribution") or {}
+        if trial.get("passed") or attribution.get("layer") != "harness":
+            continue
+        step = next((s for s in trial.get("steps") or [] if not s.get("passed")), None)
+        if not step or not step.get("exception"):
+            continue
+        fresh = attribute(
+            None,
+            expectation_error=step.get("expectation_error"),
+            duration_ms=step.get("duration_ms"),
+            timeout_ms=step.get("timeout_ms"),
+            exception=str(step["exception"]),
+            op_class=str(trial.get("op_class") or ""),
+        )
+        if fresh["layer"] == "harness":
+            continue
+        fresh["step"] = attribution.get("step") or step.get("name")
+        fresh["original_layer"] = "harness"
+        trial["attribution"] = fresh
+        changed += 1
+    return changed
+
+
+STALL_MIN_CONSECUTIVE = 3
+STALL_BUDGET_RATIO = 0.95
+
+
+def reclassify_endpoint_stalls(
+    trials: list[dict[str, Any]],
+    *,
+    min_consecutive: int = STALL_MIN_CONSECUTIVE,
+) -> list[dict[str, Any]]:
+    """Relabel runs of full-budget timeouts on one endpoint as a transport stall.
+
+    A single timeout is a per-command fault. Every command on one endpoint
+    timing out at its full budget, back to back, across several different
+    operations, is not: it is the shared SSH channel for that endpoint being
+    dead while its socket still exists (the recorded ControlMaster signature).
+    Reporting those as per-operation timeouts makes healthy operations look
+    flaky and hides the real fault, so they are attributed to the endpoint.
+
+    Returns the list of stall episodes; the trials are annotated in place.
+    """
+    by_endpoint: dict[str, list[dict[str, Any]]] = {}
+    for trial in trials:
+        by_endpoint.setdefault(str(trial.get("endpoint_label")), []).append(trial)
+    episodes: list[dict[str, Any]] = []
+    for label, items in by_endpoint.items():
+        items.sort(key=lambda t: (str(t.get("started_at")), int(t.get("attempt") or 0)))
+        run: list[dict[str, Any]] = []
+        for trial in [*items, None]:
+            if trial is not None and _is_full_budget_timeout(trial):
+                run.append(trial)
+                continue
+            if len(run) >= min_consecutive:
+                episodes.append(_mark_stall(label, run))
+            run = []
+    return episodes
+
+
+def _is_full_budget_timeout(trial: Mapping[str, Any]) -> bool:
+    attribution = trial.get("attribution") or {}
+    if trial.get("passed") or attribution.get("layer") != "timeout":
+        return False
+    for step in trial.get("steps") or []:
+        if step.get("passed"):
+            continue
+        raw = step.get("raw") or {}
+        budget = step.get("timeout_ms") or raw.get("timeout_ms")
+        duration = step.get("duration_ms")
+        if isinstance(budget, (int, float)) and isinstance(duration, (int, float)):
+            return duration >= budget * STALL_BUDGET_RATIO
+    return True
+
+
+def _mark_stall(label: str, run: list[dict[str, Any]]) -> dict[str, Any]:
+    operations = sorted({str(t.get("operation_id")) for t in run})
+    episode = {
+        "endpoint_label": label,
+        "trials": len(run),
+        "operations": operations,
+        "started_at": str(run[0].get("started_at")),
+        "ended_at": str(run[-1].get("started_at")),
+        "duration_ms": sum(int(t.get("duration_ms") or 0) for t in run),
+        "trial_ids": [str(t.get("trial_id")) for t in run],
+    }
+    reason = (
+        f"endpoint-wide stall: {len(run)} consecutive full-budget timeouts on {label} "
+        f"spanning {len(operations)} operation(s) between {episode['started_at']} and "
+        f"{episode['ended_at']}. Every command timing out at its full budget, across "
+        "different operations, is the shared SSH channel being dead while its socket "
+        "still exists — not a fault of the operations involved."
+    )
+    for trial in run:
+        attribution = dict(trial.get("attribution") or {})
+        attribution["original_layer"] = attribution.get("layer")
+        attribution["layer"] = "transport-stall"
+        attribution["reason"] = reason
+        attribution["fingerprint"] = "endpoint-wide consecutive full-budget timeouts stale ssh mux"
+        attribution["stall_episode"] = f"{label}@{episode['started_at']}"
+        trial["attribution"] = attribution
+    return episode
 
 
 _HEX_RE = re.compile(r"\b[0-9a-f]{12,}\b", re.IGNORECASE)
