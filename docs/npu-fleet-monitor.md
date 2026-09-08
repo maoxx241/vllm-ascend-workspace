@@ -14,7 +14,7 @@ python3 .agents/skills/npu-fleet-monitor/scripts/manage_monitor.py ensure
 
 该命令会：
 
-1. 按显式路径或文档化默认目录定位独立仓库 checkout：`--clone-dir`、`VAWS_TOP_ROOT`，否则 `~/vaws-worktrees/<仓库名>/npu-fleet-monitor`。首次在空目录克隆 `https://github.com/vllm-ascend-workspace/vaws-top`，并检出 `.agents/deps/vaws-top.json` 中的精确 commit。SSH 与 HTTPS 源视为同一仓库。
+1. 按显式路径或文档化默认目录定位独立仓库 checkout：`--clone-dir`、`VAWS_TOP_ROOT`，否则 `~/vaws-worktrees/<仓库名>/npu-fleet-monitor`。首次在空目录克隆 `https://github.com/vllm-ascend-workspace/vaws-top`。SSH 与 HTTPS 源视为同一仓库。`uvx vaws-top` 是目标消费方式；本仓库的部署入口仍在并行改动中。
 2. 若默认目录仍是脚手架遗留的 `vaws-top` worktree（与当前仓库共用 Git 目录，且可能含私有运行时数据），则失败并要求另选目录；不会改 origin、reset、删除、detach、搬移数据或导入密钥。
 3. 确认 checkout 没有未提交的源码修改；被项目忽略的 `data/` 和 `.env` 不受影响。脏树、分叉 checkout 或缺失 pin 都会失败，而不是静默前进。
 4. 提交变化时执行 `npm ci`、后端测试和生产构建；相同提交和完整构建会直接复用。只有 `ensure` 会做这些事。

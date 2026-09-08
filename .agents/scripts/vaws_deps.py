@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Inspect, bootstrap, and report the four external VAWS dependency checkouts.
+"""Inspect, sync, and report the workspace package dependencies.
 
 Subcommands:
 
-    status [name...]    JSON inspect payload; exit 1 on identity drift unless allowed
-    bootstrap <name|all> [--dest] [--reset] [--dry-run]
+    status [name...]    JSON inspect payload; exit 1 unless every name is ready
     doctor              Result Envelope v1 capability report
+    sync                wrap ``uv sync`` (progress on stderr, JSON on stdout)
 
 Progress goes to stderr. Each command prints one JSON object on stdout.
 """
@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -21,14 +22,17 @@ LIB = ROOT / ".agents" / "lib"
 if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
+from vaws_venv import ensure_workspace_interpreter  # noqa: E402
+
+ensure_workspace_interpreter(repo_root=ROOT)
+
 from vaws_capability import build_doctor_envelope, dumps_doctor  # noqa: E402
 from vaws_dependency import (  # noqa: E402
-    DependencyPinError,
-    all_pins,
-    bootstrap,
-    bootstrap_all_exit_code,
+    DependencyError,
+    KNOWN_NAMES,
+    REMEDY,
+    all_packages,
     inspect,
-    load_pin,
     status_exit_code,
 )
 
@@ -42,12 +46,12 @@ def _print(payload: object) -> None:
 
 
 def _names(requested: list[str] | None) -> list[str]:
-    known = list(all_pins())
+    known = list(KNOWN_NAMES)
     if not requested:
         return known
     unknown = [name for name in requested if name not in known]
     if unknown:
-        raise DependencyPinError(
+        raise DependencyError(
             f"unknown dependency {unknown[0]!r}; known: {known}",
             field="$.name",
         )
@@ -57,7 +61,7 @@ def _names(requested: list[str] | None) -> list[str]:
 def cmd_status(args: argparse.Namespace) -> int:
     try:
         names = _names(list(args.names or []))
-    except DependencyPinError as exc:
+    except DependencyError as exc:
         progress(str(exc))
         _print({"error": str(exc), "field": exc.field})
         return 2
@@ -68,50 +72,13 @@ def cmd_status(args: argparse.Namespace) -> int:
     return status_exit_code({name: deps[name]["state"] for name in names})
 
 
-def cmd_bootstrap(args: argparse.Namespace) -> int:
-    try:
-        if args.name == "all":
-            names = list(all_pins())
-        else:
-            load_pin(args.name)
-            names = [args.name]
-    except DependencyPinError as exc:
-        progress(str(exc))
-        _print({"error": str(exc), "field": exc.field})
-        return 2
-    dest = Path(args.dest).expanduser() if args.dest else None
-    if dest is not None and args.name == "all":
-        progress("--dest cannot be combined with bootstrap all")
-        _print({"error": "--dest cannot be combined with bootstrap all"})
-        return 2
-    results: dict[str, object] = {}
-    for name in names:
-        if args.dry_run:
-            progress(f"planning {name}")
-        else:
-            progress(f"bootstrapping {name}")
-        payload = bootstrap(name, dest=dest, reset=args.reset, dry_run=args.dry_run)
-        results[name] = payload
-    _print(results if args.name == "all" else results[names[0]])
-    if args.dry_run:
-        return 0
-    if args.name == "all":
-        return bootstrap_all_exit_code(results, reset=args.reset)
-    payload = results[names[0]]
-    if payload.get("state") not in {"ready", "off_pin"}:
-        return 1
-    if payload.get("state") == "off_pin" and not args.reset:
-        return 1
-    return 0
-
-
 def cmd_doctor(args: argparse.Namespace) -> int:
     argv = ["python3", ".agents/scripts/vaws_deps.py", "doctor", *list(args.passthrough or [])]
     progress("collecting workspace capability report")
     try:
         envelope = build_doctor_envelope(argv=argv)
-    except DependencyPinError as exc:
-        progress(f"invalid pin: {exc}")
+    except DependencyError as exc:
+        progress(f"invalid spec: {exc}")
         envelope = build_doctor_envelope(argv=argv, pin_error=exc)
     sys.stdout.write(dumps_doctor(envelope) + "\n")
     sys.stdout.flush()
@@ -119,32 +86,51 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     return code if isinstance(code, int) else 1
 
 
+def cmd_sync(args: argparse.Namespace) -> int:
+    extra = list(args.passthrough or [])
+    command = ["uv", "sync", *extra]
+    progress(f"running {' '.join(command)}")
+    try:
+        proc = subprocess.run(
+            command,
+            cwd=str(ROOT),
+            check=False,
+        )
+    except FileNotFoundError:
+        payload = {
+            "ok": False,
+            "command": command,
+            "error": "uv is not on PATH",
+            "remedy": REMEDY,
+        }
+        _print(payload)
+        return 1
+    payload = {
+        "ok": proc.returncode == 0,
+        "command": command,
+        "returncode": proc.returncode,
+        "packages": all_packages() if proc.returncode == 0 else None,
+        "remedy": None if proc.returncode == 0 else REMEDY,
+    }
+    _print(payload)
+    return 0 if proc.returncode == 0 else 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
 
-    status = sub.add_parser("status", help="inspect one or more pinned checkouts")
-    status.add_argument("names", nargs="*", help="dependency names (default: all)")
+    status = sub.add_parser("status", help="inspect one or more installed packages")
+    status.add_argument("names", nargs="*", help="package names (default: all)")
     status.set_defaults(func=cmd_status)
-
-    boot = sub.add_parser("bootstrap", help="clone or optionally reset a pinned checkout")
-    boot.add_argument("name", help="dependency name, or 'all'")
-    boot.add_argument("--dest", help="override the default checkout directory")
-    boot.add_argument(
-        "--reset",
-        action="store_true",
-        help="fetch and checkout the pin when the working tree is clean",
-    )
-    boot.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="print planned destinations without cloning or touching the network",
-    )
-    boot.set_defaults(func=cmd_bootstrap)
 
     doctor = sub.add_parser("doctor", help="emit a Result Envelope v1 capability report")
     doctor.add_argument("passthrough", nargs=argparse.REMAINDER, help=argparse.SUPPRESS)
     doctor.set_defaults(func=cmd_doctor)
+
+    sync = sub.add_parser("sync", help="wrap uv sync; progress on stderr, JSON on stdout")
+    sync.add_argument("passthrough", nargs=argparse.REMAINDER, help=argparse.SUPPRESS)
+    sync.set_defaults(func=cmd_sync)
     return parser
 
 

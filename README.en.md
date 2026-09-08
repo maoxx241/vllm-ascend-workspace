@@ -20,12 +20,13 @@ cd vllm-ascend-workspace
 # Initialize submodules
 git submodule update --init --recursive
 
-# Optional: fetch the four external dependencies (not submodules; remote-dev and vaws-top are private)
-python3 .agents/scripts/vaws_deps.py bootstrap all
+# Required: install the three in-process packages (`uv.lock` is the only pin)
+uv sync
 python3 .agents/scripts/vaws_deps.py doctor
 ```
 
-Pins, visibility, and what works without organization access are in [dependency-plane.md](docs/dependency-plane.md).
+Package dependencies, `uv.lock`, and capability boundaries are in [dependency-plane.md](docs/dependency-plane.md).
+`uv run python3 .agents/scripts/vaws_deps.py doctor` syncs the environment first and is equivalent.
 
 If you use an Agent-capable IDE (Cursor, Windsurf, etc.) or terminal tool (Claude Code, Codex CLI, etc.), you can complete the rest of the setup in natural language:
 
@@ -48,7 +49,7 @@ After deployment, open <http://127.0.0.1:8788>. The dashboard shows NPU/AICore, 
 
 | Skill                  | Purpose                                                                                      | When to use                                                |
 | ---------------------- | -------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
-| **repo-init**          | Install GitHub CLI, authenticate, initialize submodules, optionally fetch the four external dependencies, configure forks and remote topology | After first clone                                          |
+| **repo-init**          | Install GitHub CLI, authenticate, initialize submodules, run `uv sync`, configure forks and remote topology | After first clone                                          |
 | **machine-management** | Add, verify, repair, or remove a remote Ascend NPU server and its managed container          | When setting up a remote NPU dev machine                   |
 | **npu-fleet-monitor**  | Build, start, inspect, or stop the local NPU dashboard from the standalone vaws-top repository | When continuously monitoring fleet resources and history  |
 | **session-management** | Create, inspect, group, and clean isolated sessions: local worktree, remote container, state namespace, and resource leases | For parallel remote work, multiple agents, or PD deployments |

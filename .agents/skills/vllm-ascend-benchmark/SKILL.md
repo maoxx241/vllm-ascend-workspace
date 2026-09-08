@@ -8,7 +8,7 @@ description: Run vLLM online-serving benchmarks on a workspace-managed remote co
 Run `vllm bench serve` on a **ready** session-managed remote container and produce structured performance results. Supports single-run and multi-run (warm-service) modes.
 
 Remote substrate rule: use remote-dev companion tools (`remote_*` MCP tools,
-launched via `python3 .agents/scripts/remote_dev.py`) for ad hoc remote
+launched via `uv run remote-dev` or MCP) for ad hoc remote
 read/edit/bash/search/patch work around benchmark setup or result inspection.
 Use this skill for the domain benchmark workflow and keep its scripts as the
 compatibility backend for managed VAWS sessions.

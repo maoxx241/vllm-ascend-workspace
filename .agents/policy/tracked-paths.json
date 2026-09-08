@@ -36,10 +36,6 @@
         "why": "Historical CLI overlay fixture that intentionally names deleted \u002eremote-dev tools as substrate targets."
       },
       {
-        "path": ".agents/deps/vaws-top.json",
-        "why": "Pin file that lists published path descriptors of the external vaws-top repository, not files in this tree."
-      },
-      {
         "path": ".agents/policy/tracked-paths.json",
         "why": "This policy names scan roots and allow prefixes; those strings are not claims the prefixes exist as files."
       },
@@ -95,6 +91,18 @@
     {
       "prefix": ".agents/skills/vaws-top/",
       "why": "Published path descriptor of the external vaws-top repository, not an in-tree skill."
+    },
+    {
+      "prefix": ".agents/scripts/remote_dev.py",
+      "why": "Deleted launcher. Dated audits and historical CLI census still name it."
+    },
+    {
+      "prefix": ".agents/lib/vaws_coordinator.py",
+      "why": "Renamed to vaws_coordinator_launch.py. Dated audits still name the old path."
+    },
+    {
+      "prefix": ".agents/lib/vaws_knowledge.py",
+      "why": "Renamed to vaws_knowledge_v1.py. Dated audits still name the old path."
     }
   ],
   "allow_prefixes_why": "\u002eremote-dev/state/ is deliberately absent: that path is post-migration drift and must fail. Placeholders and untracked state roots are the only silent exceptions.",

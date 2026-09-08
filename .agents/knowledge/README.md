@@ -56,9 +56,9 @@ python3 .agents/skills/curate-workspace-knowledge/scripts/knowledge_curate.py \
 
 ## Shared conformance kit
 
-The client adapter is `.agents/tests/knowledge_client_adapter.py`. The pinned
-kit commit is `.agents/deps/vaws-knowledge.json`. Configure
-`VAWS_KNOWLEDGE_KIT_ROOT` to a checkout of that commit, or write the path to
+The client adapter is `.agents/tests/knowledge_client_adapter.py`. The
+conformance kit ships inside the `vaws-knowledge` package. Optionally set
+`VAWS_KNOWLEDGE_KIT_ROOT` to an external checkout, or write the path to
 untracked `.vaws-local/knowledge-kit-root`, then:
 
 ```bash

@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """Joint consumer/provider routing tests with a fake transport and no host.
 
-The four-case mux fixture is the accepted #93 independent joint, with provider
-discovery through the scaffold locator and the tracked pin. The second joint
-goes through ``RemoteDevInvoker.call_cli`` and the real scaffold launcher into
-the pinned ``tools`` wrapper.
+The four-case mux fixture is the accepted #93 independent joint, with the
+installed ``vaws-remote-dev`` package as the provider. The second joint goes
+through ``RemoteDevInvoker.call_cli`` and ``python -m remote_dev``.
 """
 
 from __future__ import annotations
@@ -29,13 +28,10 @@ if str(AGENTS) not in sys.path:
 if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
-import vaws_dependency as deps  # noqa: E402
-import vaws_remote_dev as remote_dev  # noqa: E402
-from maturation.invoke import LAUNCHER, RemoteDevInvoker, run_cli  # noqa: E402
+from maturation.invoke import RemoteDevInvoker, run_cli  # noqa: E402
 from maturation_provider import require_optional_provider, require_pinned_provider  # noqa: E402
 
 MUX_CHILD = AGENTS / "tests" / "maturation_mux_child.py"
-ROOT_ENV = remote_dev.REMOTE_DEV_ROOT_ENV
 MUX_VAR = "REMOTE_DEV_SSH_MUX"
 
 SITECUSTOMIZE = r'''
@@ -47,7 +43,7 @@ import time
 from pathlib import Path
 
 _original_run = subprocess.run
-_is_launcher = Path(sys.argv[0]).name == "remote_dev.py"
+_is_launcher = False
 _calls = []
 _trace_dir = os.environ.get("MATURATION_FAKE_TRACE_DIR")
 _gate = os.environ.get("MATURATION_FAKE_GATE")
@@ -65,7 +61,8 @@ def _write_trace():
         "state_dir": os.environ.get("REMOTE_DEV_STATE_DIR"),
         "runtime_env_file": os.environ.get("REMOTE_DEV_RUNTIME_ENV_FILE"),
         "resolvers": os.environ.get("REMOTE_DEV_RESOLVERS"),
-        "root": os.environ.get("VAWS_REMOTE_DEV_ROOT"),
+        "root": os.environ.get("VAWS_" + "REMOTE_DEV_ROOT"),
+        "cli": list(sys.argv),
     }
     Path(_trace_dir, str(os.getpid()) + ".json").write_text(json.dumps(payload), encoding="utf-8")
 
@@ -108,40 +105,6 @@ def _wait_for(path: Path, timeout_s: float = 2.0) -> None:
         time.sleep(0.005)
 
 
-def _write_required_files(root: Path) -> None:
-    for relative in remote_dev.REQUIRED_FILES:
-        path = root / relative
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("", encoding="utf-8")
-
-
-def _git(cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(["git", *args], cwd=str(cwd), capture_output=True, text=True, check=True)
-
-
-def _init_git_checkout(root: Path) -> str:
-    _git(root, "init")
-    _git(root, "config", "user.email", "maturation-test@example.com")
-    _git(root, "config", "user.name", "maturation-test")
-    _git(root, "add", "-A")
-    _git(root, "commit", "--no-verify", "-m", "test checkout")
-    commit = remote_dev.checkout_commit(root)
-    if not commit:
-        raise AssertionError(f"failed to read HEAD for test checkout {root}")
-    return commit
-
-
-def _must_fail_not_skip() -> Any:
-    try:
-        require_pinned_provider()
-    except unittest.SkipTest as exc:
-        raise AssertionError("explicit invalid checkout must not skip") from exc
-    except AssertionError:
-        raise
-    else:
-        raise AssertionError("expected explicit invalid checkout to fail")
-
-
 class FourCaseMuxJointTests(unittest.TestCase):
     """Accepted #93 joint fixture; provider comes from the scaffold locator.
 
@@ -167,7 +130,7 @@ class FourCaseMuxJointTests(unittest.TestCase):
                     signal_requests: list[dict[str, Any]] = []
                     interrupted_mux_dir = case / "interrupted-mux-must-not-exist"
                     payload = {"mux_dir": str(interrupted_mux_dir), "trace": str(interrupted_trace), "gate": str(gate)}
-                    argv = [sys.executable, str(MUX_CHILD), str(self.provider)]
+                    argv = [sys.executable, str(MUX_CHILD)]
 
                     def fake_signal(target: Any, current_mode: str = mode) -> list[int]:
                         pid = target if isinstance(target, int) else target.pid
@@ -302,13 +265,12 @@ class LauncherJointRouteTests(unittest.TestCase):
                             mux_options(trace),
                             [["ControlMaster=no", "ControlPath=none", "ControlPersist=no"]],
                         )
-                        self.assertTrue(any(Path(item).name.startswith("remote_") and Path(item).suffix == ".py" for item in trace["argv"]))
+                        self.assertTrue(any(item in {"probe", "remote-probe", "remote_probe"} or str(item).endswith("probe") for item in trace["argv"]))
                         signal_requests.append({"pid": pid, "mode": current_mode, "mocked": True})
                         current_gate.write_text("release test-owned fixture")
                         return []
 
                     child_env = {
-                        ROOT_ENV: str(self.provider),
                         "PYTHONPATH": pythonpath,
                         "PYTHONUNBUFFERED": "1",
                         "REMOTE_DEV_STATE_DIR": str(state / (inherited or "unset") / mode),
@@ -354,10 +316,10 @@ class LauncherJointRouteTests(unittest.TestCase):
                         self.assertEqual(dict(os.environ), before, "consumer changed parent environment")
                     self.assertTrue(launched_argv)
                     launcher_calls = [
-                        argv for argv in launched_argv if len(argv) > 1 and argv[1] == str(LAUNCHER)
+                        argv for argv in launched_argv if "-m" in argv and "remote_dev" in argv
                     ]
                     self.assertTrue(launcher_calls, launched_argv)
-                    self.assertEqual(launcher_calls[0][2:6], ["tool", "remote_probe", "--input-json", "-"])
+                    self.assertEqual(launcher_calls[0][2:6], ["remote_dev", "probe", "--input-json", "-"])
                     self.assertTrue(result.killed)
                     self.assertEqual(len(signal_requests), 1)
                     self.assertFalse(neighbor.killed)
@@ -370,9 +332,7 @@ class LauncherJointRouteTests(unittest.TestCase):
                     neighbor_trace = next(item for item in traces.values() if item["pid"] != signal_requests[0]["pid"])
                     self.assertEqual(interrupted_trace["override"], "0")
                     self.assertEqual(neighbor_trace["override"], inherited)
-                    self.assertEqual(interrupted_trace["root"], str(self.provider))
-                    self.assertEqual(neighbor_trace["root"], str(self.provider))
-                    self.assertTrue(any(Path(item).name == "remote_probe.py" for item in interrupted_trace["argv"]))
+                    self.assertTrue(any(item in {"probe", "remote-probe"} for item in interrupted_trace["argv"]))
                     for options in mux_options(neighbor_trace):
                         self.assertEqual(options[0], "ControlMaster=auto")
                         self.assertTrue(options[1].startswith("ControlPath=" + str(mux_dir)))
@@ -386,11 +346,11 @@ class LauncherJointRouteTests(unittest.TestCase):
                 f"sys.path.insert(0, {str(AGENTS)!r})\n"
                 f"sys.path.insert(0, {str(LIB)!r})\n"
                 "from maturation.invoke import RemoteDevInvoker, apply_real_execution_environment\n"
-                "checkout = apply_real_execution_environment()\n"
+                "installed = apply_real_execution_environment()\n"
                 "invoker = RemoteDevInvoker()\n"
                 "invoker._dispatcher()\n"
-                "import core.ssh_transport as transport\n"
-                "import mcp.tools, core\n"
+                "import remote_dev.core.ssh_transport as transport\n"
+                "import remote_dev.mcp.tools, remote_dev.core\n"
                 "def fake_run(argv, **kwargs):\n"
                 "    output = json.dumps({'status': 'ok', 'summary': {'hostname': 'fixture', 'python': '3.9.9'}, 'fake_transport': True})\n"
                 "    if kwargs.get('text'):\n"
@@ -400,12 +360,11 @@ class LauncherJointRouteTests(unittest.TestCase):
                 "    payload = invoker.call('remote.probe', "
                 + repr(probe_args)
                 + ")\n"
-                "print(json.dumps({'checkout': str(checkout), 'tools': mcp.tools.__file__, 'core': core.__file__, "
+                "print(json.dumps({'installed': str(installed), 'tools': remote_dev.mcp.tools.__file__, 'core': remote_dev.core.__file__, "
                 "'status': payload['result']['status'], 'fake': payload['result'].get('probe', {}).get('fake_transport')}))\n"
             )
             env = {
                 **os.environ,
-                ROOT_ENV: str(self.provider),
                 "REMOTE_DEV_STATE_DIR": str(state / "inprocess"),
                 "REMOTE_DEV_SSH_MUX_DIR": str(root / "inprocess-mux"),
                 "REMOTE_DEV_RUNTIME_ENV_FILE": "/etc/profile.d/vaws-ascend-env.sh",
@@ -414,7 +373,7 @@ class LauncherJointRouteTests(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, proc.stderr)
             inprocess = json.loads(proc.stdout.strip().splitlines()[-1])
             pinned = str(self.provider.resolve())
-            self.assertEqual(inprocess["checkout"], pinned)
+            self.assertEqual(inprocess["installed"], pinned)
             self.assertTrue(inprocess["tools"].startswith(pinned), inprocess["tools"])
             self.assertTrue(inprocess["core"].startswith(pinned), inprocess["core"])
             self.assertEqual(inprocess["status"], "ok")
@@ -422,18 +381,16 @@ class LauncherJointRouteTests(unittest.TestCase):
         self.assertEqual(dict(os.environ), original_env)
 
 
-class SubstratePinTests(unittest.TestCase):
-    """Integration: skips when no remote-dev checkout exists."""
+class SubstratePackageTests(unittest.TestCase):
+    """Integration: skips when vaws-remote-dev is not installed."""
 
     def setUp(self) -> None:
         self.provider = require_optional_provider()
 
-    def test_s3_substrate_integration_against_pinned_source(self) -> None:
-        env = {**os.environ, ROOT_ENV: str(self.provider)}
+    def test_s3_substrate_integration_against_installed_package(self) -> None:
         proc = subprocess.run(
             [sys.executable, "-B", "-m", "unittest", "test_remote_dev_consumer.SubstrateIntegrationTests"],
             cwd=str(AGENTS / "tests"),
-            env=env,
             capture_output=True,
             text=True,
             check=False,
@@ -443,78 +400,22 @@ class SubstratePinTests(unittest.TestCase):
         self.assertNotIn("skipped", proc.stderr.lower())
 
 
-class ProviderLocatorTests(unittest.TestCase):
-    """Focused locator/pin coverage; no hardcoded checkout alias."""
+class ProviderPackageTests(unittest.TestCase):
+    """Installed package is the provider; no checkout locator remains."""
 
-    def test_configured_alternate_path_uses_locator(self) -> None:
-        provider = require_optional_provider()
-        pin = remote_dev.load_dependency()["commit"]
-        with tempfile.TemporaryDirectory() as tmp:
-            alt = Path(tmp) / "alternate-checkout"
-            alt.symlink_to(provider)
-            with mock.patch.dict(os.environ, {ROOT_ENV: str(alt)}, clear=False):
-                found = require_pinned_provider()
-                status = remote_dev.checkout_status()
-            self.assertEqual(status["root_source"], "env")
-            self.assertEqual(status["root"], str(alt))
-            self.assertEqual(remote_dev.checkout_commit(found), pin)
-            self.assertTrue(remote_dev.looks_like_checkout(alt))
+    def test_optional_and_pinned_agree_on_the_installed_package(self) -> None:
+        optional = require_optional_provider()
+        pinned = require_pinned_provider()
+        self.assertEqual(optional, pinned)
+        self.assertTrue((optional / "mcp" / "server.py").is_file())
+        self.assertTrue((optional / "core" / "endpoint.py").is_file())
 
-    def test_missing_unconfigured_provider_skips_like_optional_consumer(self) -> None:
-        # Locator resolution goes through checkout_path / expand_default_checkout
-        # / shared_workspace_root, not default_checkout_dir (that helper remains
-        # the bootstrap-CLI dest default).
-        with tempfile.TemporaryDirectory() as tmp:
-            isolated = Path(tmp)
-            with mock.patch.dict(os.environ, {"HOME": str(isolated)}, clear=False):
-                os.environ.pop(ROOT_ENV, None)
-                with mock.patch.object(deps, "shared_workspace_root", return_value=isolated):
-                    with self.assertRaises(unittest.SkipTest) as ctx:
-                        require_pinned_provider()
-        self.assertIn(ROOT_ENV, str(ctx.exception))
-
-    def test_explicit_missing_checkout_fails_without_skip(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            missing = str(Path(tmp) / "absent")
-            with mock.patch.dict(os.environ, {ROOT_ENV: missing}, clear=False):
-                with self.assertRaises(AssertionError) as ctx:
-                    _must_fail_not_skip()
-        self.assertIn("not a remote-dev checkout", str(ctx.exception))
-
-    def test_explicit_malformed_checkout_fails_without_skip(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            malformed = Path(tmp) / "partial"
-            malformed.mkdir()
-            (malformed / "mcp").mkdir()
-            (malformed / "mcp" / "server.py").write_text("", encoding="utf-8")
-            with mock.patch.dict(os.environ, {ROOT_ENV: str(malformed)}, clear=False):
-                with self.assertRaises(AssertionError) as ctx:
-                    _must_fail_not_skip()
-        self.assertIn("not a remote-dev checkout", str(ctx.exception))
-
-    def test_explicit_wrong_pin_fails_without_skip(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            fake = Path(tmp) / "checkout"
-            fake.mkdir()
-            _write_required_files(fake)
-            _init_git_checkout(fake)
-            with mock.patch.dict(os.environ, {ROOT_ENV: str(fake)}, clear=False):
-                with self.assertRaises(AssertionError) as ctx:
-                    _must_fail_not_skip()
-        self.assertIn("does not match tracked pin", str(ctx.exception))
-
-    def test_explicit_dirty_checkout_fails_without_skip(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            fake = Path(tmp) / "checkout"
-            fake.mkdir()
-            _write_required_files(fake)
-            sha = _init_git_checkout(fake)
-            (fake / "dirty.txt").write_text("uncommitted", encoding="utf-8")
-            with mock.patch.object(remote_dev, "load_dependency", return_value={"commit": sha}):
-                with mock.patch.dict(os.environ, {ROOT_ENV: str(fake)}, clear=False):
-                    with self.assertRaises(AssertionError) as ctx:
-                        _must_fail_not_skip()
-        self.assertIn("is not clean", str(ctx.exception))
+    def test_missing_package_skips(self) -> None:
+        with mock.patch("maturation_provider.inspect", return_value={"state": "missing"}):
+            with mock.patch("importlib.util.find_spec", return_value=None):
+                with self.assertRaises(unittest.SkipTest) as ctx:
+                    require_pinned_provider()
+        self.assertIn("uv sync", str(ctx.exception))
 
 
 if __name__ == "__main__":

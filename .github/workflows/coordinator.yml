@@ -1,16 +1,19 @@
 name: Coordinator consumer contracts
 
-# vaws-coordinator is a separate public repository (its own ci.yml runs its
+# vaws-coordinator is a separate public package (its own ci.yml runs its
 # suite, including Linux subreaper tests). This job covers the scaffold's
-# side of the contract: pin, locator, launcher, dual-provider setup and the
+# side of the contract: lock, launcher, dual-provider setup and the
 # official MCP SDK local-only session.
 
 on:
   pull_request:
     paths:
-      - ".agents/deps/coordinator.json"
-      - ".agents/lib/vaws_coordinator.py"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".agents/lib/vaws_coordinator_launch.py"
       - ".agents/lib/vaws_build_inputs.py"
+      - ".agents/lib/vaws_dependency.py"
+      - ".agents/lib/vaws_venv.py"
       - ".agents/scripts/vaws.py"
       - ".agents/scripts/vaws_client_setup.py"
       - ".agents/hooks/vaws_session.py"
@@ -26,9 +29,12 @@ on:
   push:
     branches: [main]
     paths:
-      - ".agents/deps/coordinator.json"
-      - ".agents/lib/vaws_coordinator.py"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".agents/lib/vaws_coordinator_launch.py"
       - ".agents/lib/vaws_build_inputs.py"
+      - ".agents/lib/vaws_dependency.py"
+      - ".agents/lib/vaws_venv.py"
       - ".agents/scripts/vaws.py"
       - ".agents/scripts/vaws_client_setup.py"
       - ".agents/hooks/vaws_session.py"
@@ -47,7 +53,7 @@ permissions:
 
 jobs:
   consumer:
-    name: Locator, launcher, setup fixtures and official stdio (Python ${{ matrix.python }})
+    name: Package, launcher, setup fixtures and official stdio (Python ${{ matrix.python }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -57,30 +63,22 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: false
-      - uses: actions/setup-python@v5
+      - uses: astral-sh/setup-uv@v5
         with:
           python-version: ${{ matrix.python }}
-      - name: Install the official MCP SDK used by local-only stdio acceptance
-        run: python -m pip install --disable-pip-version-check mcp==2.1.1
-      - name: Bootstrap the pinned coordinator checkout
-        run: python -B .agents/scripts/vaws.py bootstrap --dest ${{ runner.temp }}/vaws-coordinator
+      - name: Install locked workspace packages
+        run: uv sync --locked --group dev
+      - name: Lockfile matches pyproject
+        run: uv lock --check
       - name: Compile the scaffold
-        run: python -B -m compileall -q .agents
+        run: uv run python -B -m compileall -q .agents
       - name: Consumer contract tests
-        env:
-          VAWS_COORDINATOR_ROOT: ${{ runner.temp }}/vaws-coordinator
-        run: python -B -m unittest discover -s .agents/tests -p "test_coordinator_consumer.py" -v
+        run: uv run python -B -m unittest discover -s .agents/tests -p "test_coordinator_consumer.py" -v
       - name: Official SDK stdio session
-        env:
-          VAWS_COORDINATOR_ROOT: ${{ runner.temp }}/vaws-coordinator
-        run: python -B -m unittest discover -s .agents/tests -p "test_coordinator_official_stdio.py" -v
+        run: uv run python -B -m unittest discover -s .agents/tests -p "test_coordinator_official_stdio.py" -v
       - name: Session hook and setup tests
-        env:
-          VAWS_COORDINATOR_ROOT: ${{ runner.temp }}/vaws-coordinator
-        run: python -B -m unittest discover -s .agents/skills/session-management/tests -p "test_agent_sessions.py" -v
+        run: uv run python -B -m unittest discover -s .agents/skills/session-management/tests -p "test_agent_sessions.py" -v
       - name: Launcher status
-        env:
-          VAWS_COORDINATOR_ROOT: ${{ runner.temp }}/vaws-coordinator
-        run: python -B .agents/scripts/vaws.py status
+        run: uv run python -B .agents/scripts/vaws.py status
       - name: Generated Claude shims and ModelScope Trae projection are in sync
-        run: python -B .agents/scripts/sync_claude_skills.py --check
+        run: uv run python -B .agents/scripts/sync_claude_skills.py --check

@@ -1,0 +1,30 @@
+[project]
+name = "vaws-workspace"
+version = "0"
+requires-python = ">=3.11"
+dependencies = [
+  "vaws-remote-dev==0.1.0",
+  "vaws-coordinator==0.1.0",
+  "vaws-knowledge==0.1.0",
+]
+
+[dependency-groups]
+dev = [
+  "pytest",
+  "pyyaml",
+  "jsonschema",
+  "mcp==2.1.1",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+vaws-remote-dev = { git = "https://github.com/vllm-ascend-workspace/remote-dev", tag = "v0.1.0" }
+vaws-coordinator = { git = "https://github.com/vllm-ascend-workspace/vaws-coordinator", tag = "v0.1.0" }
+vaws-knowledge = { git = "https://github.com/vllm-ascend-workspace/vaws-knowledge", tag = "v0.1.0" }
+
+[tool.pytest.ini_options]
+pythonpath = [".agents/lib"]
+testpaths = [".agents/tests"]
+python_files = ["test_*.py"]

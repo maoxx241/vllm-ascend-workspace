@@ -41,7 +41,7 @@ A successful run should satisfy all applicable items below.
   - machine username choice if the profile is missing
   - repo topology choice
   - submodule-init choice
-  - optional external-dependency bootstrap choice (skippable; private denial is non-fatal)
+  - required `uv sync` choice (skipping leaves package capabilities unavailable)
   - vllm version alignment choice (when the probe shows submodules are uninitialized)
 - the machine-username branch uses exactly three options:
   - `git-username`
@@ -89,10 +89,10 @@ A successful run should satisfy all applicable items below.
 
 ### External dependencies
 
-- offers `python3 .agents/scripts/vaws_deps.py bootstrap all` and does not treat it as a gate
-- a user without organization access completes `repo-init` successfully
-- private pins (`remote-dev`, `vaws-top`) may be `access-denied`; that is non-fatal
-- after bootstrap or skip, runs `python3 .agents/scripts/vaws_deps.py doctor`
+- offers `uv sync` (or `python3 .agents/scripts/vaws_deps.py sync`) as a required step for package-dependent work
+- skipping `uv sync` still completes `repo-init` for local documentation and Git work
+- the three in-process packages are public git+https installs; `uv.lock` is the only pin
+- after install or skip, runs `python3 .agents/scripts/vaws_deps.py doctor`
 - the finish summary names available and unavailable capabilities from `doctor`'s report, without re-deriving them
 
 ## Manual regression checklist

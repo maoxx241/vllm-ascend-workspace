@@ -1,18 +1,20 @@
 name: Remote-dev consumer contracts
 
-# The remote-dev substrate is a separate repository
+# The remote-dev substrate is the installed vaws-remote-dev package
 # (vllm-ascend-workspace/remote-dev; its own ci.yml runs its suite). This job
-# covers the scaffold's side of the contract: the resolver plugin, the
-# launcher and the client configuration that point at the external checkout.
+# covers the scaffold's side of the contract: the resolver plugin, client
+# configuration, and package import.
 
 on:
   pull_request:
     paths:
-      - ".agents/deps/remote-dev.json"
+      - "pyproject.toml"
+      - "uv.lock"
       - ".agents/lib/vaws_remote_dev.py"
       - ".agents/lib/vaws_remote_dev_plugin.py"
       - ".agents/lib/vaws_session_id.py"
-      - ".agents/scripts/remote_dev.py"
+      - ".agents/lib/vaws_dependency.py"
+      - ".agents/lib/vaws_venv.py"
       - ".agents/scripts/sync_claude_skills.py"
       - ".agents/scripts/vaws.py"
       - ".agents/scripts/vaws_client_setup.py"
@@ -26,11 +28,13 @@ on:
   push:
     branches: [main]
     paths:
-      - ".agents/deps/remote-dev.json"
+      - "pyproject.toml"
+      - "uv.lock"
       - ".agents/lib/vaws_remote_dev.py"
       - ".agents/lib/vaws_remote_dev_plugin.py"
       - ".agents/lib/vaws_session_id.py"
-      - ".agents/scripts/remote_dev.py"
+      - ".agents/lib/vaws_dependency.py"
+      - ".agents/lib/vaws_venv.py"
       - ".agents/scripts/sync_claude_skills.py"
       - ".agents/scripts/vaws.py"
       - ".agents/scripts/vaws_client_setup.py"
@@ -47,7 +51,7 @@ permissions:
 
 jobs:
   consumer:
-    name: Resolver plugin, launcher and client wiring (Python ${{ matrix.python }})
+    name: Resolver plugin, package and client wiring (Python ${{ matrix.python }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -57,39 +61,19 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: false
-      - uses: actions/setup-python@v5
+      - uses: astral-sh/setup-uv@v5
         with:
           python-version: ${{ matrix.python }}
-      - name: Fetch the pinned remote-dev checkout (optional, private repository)
-        id: fetch-remote-dev
-        # The substrate is private. When a read token is configured the
-        # substrate-dependent tests run for real; otherwise they self-skip and
-        # only the substrate-free contract (plugin mapping, launcher, config
-        # files, shims) is enforced. The skip is recorded on the step output
-        # so later status is skipped, not run-and-ignored.
-        env:
-          REMOTE_DEV_READ_TOKEN: ${{ secrets.REMOTE_DEV_READ_TOKEN }}
-        run: |
-          if [ -z "$REMOTE_DEV_READ_TOKEN" ]; then
-            echo "REMOTE_DEV_READ_TOKEN not configured; skipping private remote-dev checkout"
-            echo "fetched=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          repo="$(python3 -c 'import json; print(json.load(open(".agents/deps/remote-dev.json"))["repository"])')"
-          commit="$(python3 -c 'import json; print(json.load(open(".agents/deps/remote-dev.json"))["commit"])')"
-          git clone --quiet "https://x-access-token:${REMOTE_DEV_READ_TOKEN}@github.com/${repo}.git" "$RUNNER_TEMP/remote-dev"
-          git -C "$RUNNER_TEMP/remote-dev" checkout --quiet --detach "$commit"
-          echo "VAWS_REMOTE_DEV_ROOT=$RUNNER_TEMP/remote-dev" >> "$GITHUB_ENV"
-          echo "fetched=true" >> "$GITHUB_OUTPUT"
+      - name: Install locked workspace packages
+        run: uv sync --locked --group dev
+      - name: Lockfile matches pyproject
+        run: uv lock --check
       - name: Compile the scaffold
-        run: python -B -m compileall -q .agents
+        run: uv run python -B -m compileall -q .agents
       - name: Consumer contract tests
-        run: python -B -m unittest discover -s .agents/tests -p "test_remote_dev_consumer.py" -v
-      - name: Launcher status
-        if: steps.fetch-remote-dev.outputs.fetched == 'true'
-        run: python -B .agents/scripts/remote_dev.py status
-      - name: Note skipped launcher status
-        if: steps.fetch-remote-dev.outputs.fetched != 'true'
-        run: echo "Skipped remote_dev.py status: private checkout was not fetched (REMOTE_DEV_READ_TOKEN unset)."
+        run: uv run python -B -m unittest discover -s .agents/tests -p "test_remote_dev_consumer.py" -v
+      - name: Package import
+        run: |
+          uv run python -c "import remote_dev.result, remote_dev.core.endpoint; print('ok')"
       - name: Generated Claude shims and ModelScope Trae projection are in sync
-        run: python -B .agents/scripts/sync_claude_skills.py --check
+        run: uv run python -B .agents/scripts/sync_claude_skills.py --check

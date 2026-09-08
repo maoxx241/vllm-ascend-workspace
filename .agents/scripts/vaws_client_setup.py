@@ -9,11 +9,10 @@ client configuration from tests.
 Two logical providers are written when needed, because two repositories serve
 two different things and neither proxies the other:
 
-* `vaws-task` -> `.agents/scripts/vaws.py task-server`, which locates the
-  coordinator checkout and serves `vaws_session` / `vaws_run` /
-  `vaws_execution` / `vaws_finish`. Local attach/finish need no manager.
-* `remote-dev` -> `.agents/scripts/remote_dev.py server`, which locates the
-  remote-dev checkout and serves `remote_*`.
+* `vaws-task` -> `python -m vaws_coordinator task-server`, which serves
+  `vaws_session` / `vaws_run` / `vaws_execution` / `vaws_finish`. Local
+  attach/finish need no manager.
+* `remote-dev` -> `python -m remote_dev.mcp.server`, which serves `remote_*`.
 
 `--task-only` skips the remote-dev entry.
 
@@ -38,14 +37,16 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / ".agents/lib"))
-from vaws_coordinator import COORDINATOR_ROOT_ENV, coordinator_environment
+from vaws_venv import ensure_workspace_interpreter
+
+ensure_workspace_interpreter(repo_root=ROOT)
+
+from vaws_coordinator_launch import coordinator_environment
 from vaws_local_state import agent_sessions_root
 from vaws_remote_dev import ASCEND_RUNTIME_ENV_FILE, resolver_spec, state_dir
 
 CLIENTS = {"claude", "grok", "kimi", "codex", "cursor"}
 EVENTS = ("SessionStart", "SessionEnd", "SubagentStart", "SubagentStop", "PreToolUse", "UserPromptSubmit")
-REMOTE_DEV_LAUNCHER = ROOT / ".agents/scripts/remote_dev.py"
-TASK_LAUNCHER = ROOT / ".agents/scripts/vaws.py"
 BACKUP_DIR = ROOT / ".vaws-local/client-setup-backups"
 TASK_SERVER_NAME = "vaws-task"
 REMOTE_DEV_SERVER_NAME = "remote-dev"
@@ -59,11 +60,11 @@ STALE_TOOL_PREFIX_MARKERS = (
 
 
 def remote_dev_server_args():
-    return [str(REMOTE_DEV_LAUNCHER), "server"]
+    return ["-m", "remote_dev.mcp.server"]
 
 
 def task_server_args():
-    return [str(TASK_LAUNCHER), "task-server"]
+    return ["-m", "vaws_coordinator", "task-server"]
 
 
 def remote_dev_env():
@@ -83,13 +84,7 @@ def _resolved_path(value):
 
 
 def task_server_env():
-    """Environment the task server needs so it shares this workspace's registry.
-
-    An explicit ``VAWS_COORDINATOR_ROOT`` used during setup is copied into the
-    generated provider so a later client process does not have to inherit the
-    setup shell. The default locator is left unset when the setup process did
-    not choose a checkout. Existing user-managed env keys win at merge time.
-    """
+    """Environment the task server needs so it shares this workspace's registry."""
     env = coordinator_environment()
     keys = (
         "VAWS_AGENT_SESSIONS_DIR",
@@ -97,13 +92,7 @@ def task_server_env():
         "VAWS_PARITY_WORKSPACE_ROOT",
         "VAWS_MACHINE_INVENTORY",
     )
-    payload = {key: env[key] for key in keys if key in env}
-    if env.get("VAWS_REMOTE_DEV_ROOT"):
-        payload["VAWS_REMOTE_DEV_ROOT"] = env["VAWS_REMOTE_DEV_ROOT"]
-    configured = env.get(COORDINATOR_ROOT_ENV, "").strip()
-    if configured:
-        payload[COORDINATOR_ROOT_ENV] = _resolved_path(configured)
-    return payload
+    return {key: env[key] for key in keys if key in env}
 
 
 def existing_task_env(client, project, *, kimi_config=None):
@@ -168,9 +157,6 @@ def hook_command(client, project, env=None):
         "--project", str(project),
         "--agent-sessions-dir", env["VAWS_AGENT_SESSIONS_DIR"],
     ]
-    root = env.get(COORDINATOR_ROOT_ENV, "").strip()
-    if root:
-        argv += ["--coordinator-root", root]
     return shlex.join(argv)
 
 

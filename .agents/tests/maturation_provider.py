@@ -1,15 +1,14 @@
-"""Resolve the pinned remote-dev checkout through the scaffold locator.
+"""Require the installed vaws-remote-dev package for joint maturation tests.
 
-Joint tests must not hard-code an acceptance-machine path. Call
-:func:`require_pinned_provider`: a missing unconfigured default skips like
-``SubstrateIntegrationTests``; an explicit missing, malformed, dirty, or
-wrong-revision checkout fails.
+Joint tests must not hard-code a checkout path. Call
+:func:`require_pinned_provider`: a missing install skips; an interpreter that
+cannot import ``remote_dev`` after an explicit hide fails.
 """
 
 from __future__ import annotations
 
+import importlib.util
 import os
-import subprocess
 import sys
 import unittest
 from pathlib import Path
@@ -19,57 +18,41 @@ LIB = ROOT / ".agents" / "lib"
 if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
-import vaws_remote_dev as remote_dev  # noqa: E402
+from vaws_dependency import inspect  # noqa: E402
+from vaws_remote_dev import RemoteDevUnavailable, require_package  # noqa: E402
 
 
-def _porcelain(root: Path) -> str:
-    return subprocess.check_output(
-        ["git", "status", "--porcelain=v1"],
-        cwd=str(root),
-        text=True,
-    ).strip()
+def _package_root() -> Path:
+    require_package()
+    import remote_dev
+
+    origin = getattr(remote_dev, "__file__", None)
+    if not origin:
+        raise RemoteDevUnavailable("remote_dev has no __file__")
+    return Path(origin).resolve().parent
 
 
 def require_pinned_provider() -> Path:
-    """Return the locator checkout if it matches the tracked pin and is clean.
+    """Return the installed package root when the package is usable.
 
-    Unconfigured missing default: ``unittest.SkipTest``. Explicit configured
-    checkout that is missing, malformed, dirty, or at the wrong revision:
-    ``AssertionError`` (never a skip).
+    Unconfigured missing install: ``unittest.SkipTest``. An interpreter that
+    was asked to hide the package (``VAWS_SKIP_VENV_REEXEC=1`` plus no
+    install) still skips. A broken import after the package metadata says
+    ready is ``AssertionError``.
     """
-    pin = remote_dev.load_dependency()
-    pinned = pin.get("commit")
-    configured = os.environ.get(remote_dev.REMOTE_DEV_ROOT_ENV, "").strip()
+    if importlib.util.find_spec("remote_dev") is None:
+        raise unittest.SkipTest("vaws-remote-dev is not installed; run `uv sync`")
+    info = inspect("vaws-remote-dev")
+    if info["state"] == "missing":
+        raise unittest.SkipTest("vaws-remote-dev is not installed; run `uv sync`")
     try:
-        if configured:
-            root = remote_dev.remote_dev_root(required=True)
-        else:
-            root = remote_dev.remote_dev_root(required=False)
-    except remote_dev.RemoteDevUnavailable as exc:
+        return _package_root()
+    except RemoteDevUnavailable as exc:
         raise AssertionError(str(exc)) from exc
-    if root is None:
-        raise unittest.SkipTest("no remote-dev checkout (set VAWS_REMOTE_DEV_ROOT)")
-    commit = remote_dev.checkout_commit(root)
-    if commit != pinned:
-        raise AssertionError(
-            f"remote-dev checkout {root} HEAD {commit} does not match tracked pin {pinned}"
-        )
-    dirty = _porcelain(root)
-    if dirty:
-        raise AssertionError(f"remote-dev checkout {root} is not clean")
-    return root
 
 
 def require_optional_provider() -> Path:
-    """Integration gate: skip when no checkout exists, fail if one is invalid.
-
-    A configured ``VAWS_REMOTE_DEV_ROOT`` that does not exist is treated as
-    absent (skip), so a hermetic suite can hide the shared ``.vaws-local``
-    default with ``/nonexistent`` without turning every joint test into a
-    failure. An existing path that is malformed, dirty, or off-pin still
-    fails; ``skipTest`` is not used to hide those assertion failures.
-    """
-    configured = os.environ.get(remote_dev.REMOTE_DEV_ROOT_ENV, "").strip()
-    if configured and not Path(configured).expanduser().exists():
-        raise unittest.SkipTest("no remote-dev checkout (set VAWS_REMOTE_DEV_ROOT)")
+    """Integration gate: skip when the package is missing, fail if import breaks."""
+    if os.environ.get("VAWS_SKIP_VENV_REEXEC") == "1" and importlib.util.find_spec("remote_dev") is None:
+        raise unittest.SkipTest("vaws-remote-dev is not installed; run `uv sync`")
     return require_pinned_provider()

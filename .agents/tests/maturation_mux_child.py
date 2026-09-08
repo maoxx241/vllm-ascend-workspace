@@ -1,4 +1,4 @@
-"""A real local CLI child using the exact provider through a fake transport."""
+"""A real local CLI child using the installed package through a fake transport."""
 import json
 import os
 from pathlib import Path
@@ -9,9 +9,8 @@ from unittest import mock
 
 payload = json.loads(sys.stdin.read())
 os.environ["REMOTE_DEV_SSH_MUX_DIR"] = payload["mux_dir"]
-sys.path.insert(0, sys.argv[1])
-from core.endpoint import Endpoint
-import core.ssh_transport as transport
+from remote_dev.core.endpoint import Endpoint
+import remote_dev.core.ssh_transport as transport
 
 calls = []
 

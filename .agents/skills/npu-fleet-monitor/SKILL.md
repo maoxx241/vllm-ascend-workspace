@@ -7,7 +7,7 @@ description: Clone or locate the standalone vaws-top repository and provide its 
 
 Keep the application, its runtime, and its complete Agent instructions in the standalone `vllm-ascend-workspace/vaws-top` repository. This scaffold Skill only locates or bootstraps that checkout and hands off to its published entrypoints.
 
-The intended revision is the exact pin in `.agents/deps/vaws-top.json`. Missing or unavailable pins fail closed; do not run unpinned. Custom checkout paths and configuration overrides must be explicit (`--clone-dir`, `VAWS_TOP_ROOT`, `--inventory-files`, `--host-pool-files`, `--bootstrap-command`).
+The intended consumption is `uvx vaws-top`. Custom checkout paths and configuration overrides must be explicit (`--clone-dir`, `VAWS_TOP_ROOT`, `--inventory-files`, `--host-pool-files`, `--bootstrap-command`). The deploy script in this skill is landing on the package plane in a parallel change.
 
 Run the helper on the host execution plane. Deploy or reconcile:
 

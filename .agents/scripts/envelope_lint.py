@@ -33,6 +33,11 @@ LIB_DIR = ROOT / ".agents" / "lib"
 if str(LIB_DIR) not in sys.path:
     sys.path.insert(0, str(LIB_DIR))
 
+from vaws_venv import ensure_workspace_interpreter  # noqa: E402
+
+ensure_workspace_interpreter(repo_root=ROOT)
+
+
 from vaws_result_envelope import (  # noqa: E402
     EnvelopeError,
     emit,

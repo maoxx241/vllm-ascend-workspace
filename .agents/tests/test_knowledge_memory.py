@@ -17,7 +17,7 @@ QUERY_SCRIPT = ROOT / ".agents" / "scripts" / "knowledge_query.py"
 if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
-from vaws_knowledge import (  # noqa: E402
+from vaws_knowledge_v1 import (  # noqa: E402
     KNOWLEDGE_FILES,
     KnowledgeError,
     capture_candidate,

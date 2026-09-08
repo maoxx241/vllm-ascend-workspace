@@ -2,12 +2,10 @@
 
 Runs the declared deterministic remote operations (`operations.yaml`)
 repeatedly, across several endpoints, in adversarial shapes, and reports pass
-**rates** with per-failure layer attribution. It locates the external
-remote-dev checkout through `.agents/lib/vaws_remote_dev.py`
-(`VAWS_REMOTE_DEV_ROOT`, else the shared default) and never changes the
-substrate. In-process calls import `mcp.tools.call_tool` from that checkout.
-CLI calls go through `.agents/scripts/remote_dev.py tool remote_<name>
---input-json -`, which execve-replaces itself with the checkout wrapper.
+**rates** with per-failure layer attribution. It uses the installed
+`vaws-remote-dev` package (`uv.lock`) and never changes the substrate.
+In-process calls import `remote_dev.mcp.tools.call_tool`. CLI calls go
+through `python -m remote_dev <tool> --input-json -`.
 
 What "mature" means, the thresholds per operation class, and the first-pass
 results live in `docs/deterministic-core-maturation.md`.

@@ -177,10 +177,10 @@ def load_catalog(path: Path | None = None) -> dict:
         if not isinstance(item, dict):
             raise CatalogError(f"CLI surface catalog dep_declarations entries must be objects: {catalog_path}")
         ident = item.get("id")
-        filename = item.get("filename")
-        if not isinstance(ident, str) or not ident or not isinstance(filename, str) or not filename:
-            raise CatalogError(f"CLI surface catalog dep_declarations requires id and filename: {catalog_path}")
-        deps.append((ident, filename))
+        package = item.get("package")
+        if not isinstance(ident, str) or not ident or not isinstance(package, str) or not package:
+            raise CatalogError(f"CLI surface catalog dep_declarations requires id and package: {catalog_path}")
+        deps.append((ident, package))
     loaded = dict(data)
     loaded["classification"] = parsed
     loaded["dep_declarations"] = deps
@@ -545,7 +545,7 @@ ROUTING_DOCS = {
 def reference_kind(rel: str) -> str:
     if rel in ROUTING_DOCS or rel.startswith((".cursor/rules/", ".trae/rules/")):
         return "routing"
-    if rel.startswith(".agents/deps/"):
+    if rel in {"pyproject.toml", "uv.lock"}:
         return "source-map"
     if rel.startswith((".agents/policy/", ".agents/leak-guard/")):
         return "policy"
@@ -622,27 +622,38 @@ def collect_references(
 
 
 def load_external_owners(repo_root: Path) -> dict[str, dict]:
-    """Read committed provider pins. Never fetch, import or execute providers."""
+    """Read committed package owners from pyproject.toml + uv.lock. Never fetch."""
     owners: dict[str, dict] = {}
-    for name, filename in DEP_DECLARATIONS:
-        path = repo_root / ".agents" / "deps" / filename
-        if not path.is_file():
-            continue
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-        if not isinstance(data, dict):
-            continue
-        surface = data.get("consumed_surface")
-        owners[name] = {
-            "declaration": f".agents/deps/{filename}",
-            "name": data.get("name", name),
-            "repository": data.get("repository"),
-            "commit": data.get("commit"),
-            "root_env": data.get("root_env"),
-            "consumed_surface": surface if isinstance(surface, dict) else None,
-            "note": data.get("note"),
+    pyproject = repo_root / "pyproject.toml"
+    lock = repo_root / "uv.lock"
+    if not pyproject.is_file():
+        return owners
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
+        import vaws_dependency as deps
+    except Exception:
+        return owners
+    try:
+        locked = deps.locked_packages(repo_root)
+    except Exception:
+        locked = {}
+    repos = {
+        "vaws-remote-dev": "vllm-ascend-workspace/remote-dev",
+        "remote-dev": "vllm-ascend-workspace/remote-dev",
+        "vaws-coordinator": "vllm-ascend-workspace/vaws-coordinator",
+        "vaws-knowledge": "vllm-ascend-workspace/vaws-knowledge",
+        "vaws-top": "vllm-ascend-workspace/vaws-top",
+    }
+    for ident, package in DEP_DECLARATIONS:
+        row = locked.get(package) or locked.get(ident) or {}
+        owners[ident] = {
+            "declaration": "pyproject.toml",
+            "name": package,
+            "repository": repos.get(ident) or repos.get(package),
+            "commit": row.get("commit"),
+            "root_env": None,
+            "consumed_surface": None,
+            "note": "uv.lock is the only pin" if lock.is_file() else "uv.lock is missing",
             "source_availability": "uninspected",
         }
     return owners
@@ -660,7 +671,7 @@ def inspect_context(repo_root: Path) -> dict:
             "with a __main__ guard or __main__.py"
         ),
         "note": (
-            "Census is AST of inspected files plus committed .agents/deps pins. "
+            "Census is AST of inspected files plus pyproject.toml / uv.lock. "
             "The commit SHA that lands this overlay is an output, not an input."
         ),
     }

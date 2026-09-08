@@ -55,8 +55,8 @@
       "text": "{ \"script\": \"thing.py\" }\n"
     },
     {
-      "path": ".agents/deps/demo.json",
-      "text": "{ \"cli\": \"thing.py\" }\n"
+      "path": "pyproject.toml",
+      "text": "name = \"thing\"\n# thing.py\n"
     }
   ],
   "expected_entry_points": [

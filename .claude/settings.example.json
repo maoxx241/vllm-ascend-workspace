@@ -44,7 +44,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 .agents/scripts/remote_dev.py hook claude",
+            "command": ".venv/bin/python -m remote_dev.hooks.claude_remote_guard",
             "timeout": 30
           }
         ]
@@ -54,7 +54,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 .agents/scripts/remote_dev.py hook claude",
+            "command": ".venv/bin/python -m remote_dev.hooks.claude_remote_guard",
             "timeout": 30
           }
         ]

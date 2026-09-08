@@ -3,7 +3,7 @@
 ## Relationship to remote-dev
 
 Remote-dev companion tools (`remote_*` MCP tools, launched via
-`python3 .agents/scripts/remote_dev.py`) are the default local-tool-like
+`uv run remote-dev` / MCP) are the default local-tool-like
 remote endpoint substrate. The remote toolbox remains the managed VAWS
 backend for target resolution, session containers, parity/sync, service
 adapters, artifact compatibility, and cleanup.

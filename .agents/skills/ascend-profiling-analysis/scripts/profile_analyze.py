@@ -442,7 +442,7 @@ def _knowledge_api() -> tuple[Any, Any, Any] | None:
     lazy so a broken/missing lib can never break the analysis wrapper.
     """
     try:
-        from vaws_knowledge import (  # type: ignore[import-not-found]
+        from vaws_knowledge_v1 import (  # type: ignore[import-not-found]
             KnowledgeError,
             get_knowledge_entry,
             query_knowledge,

@@ -95,18 +95,17 @@ workflow `vllm_version` or docs `main_vllm_commit` value.
 
 ## External dependency plane
 
-The four extracted repositories are not submodules. Inspect capability, then
-optionally install. Name capabilities from `doctor`; do not re-derive them.
+The three in-process packages are not submodules. Install them with `uv sync`.
+Name capabilities from `doctor`; do not re-derive them.
 
 ```bash
+uv sync
 python3 .agents/scripts/vaws_deps.py doctor
-python3 .agents/scripts/vaws_deps.py bootstrap all --dry-run
-python3 .agents/scripts/vaws_deps.py bootstrap all
+python3 .agents/scripts/vaws_deps.py sync
 ```
 
-`bootstrap all` continues past private `access-denied` and exits 0 when every
-public pin succeeded. `remote-dev` and `vaws-top` need organization access;
-`vaws-coordinator` and `vaws-knowledge` do not. See
+`uv.lock` is the only pin. The packages are public git+https. `uvx vaws-top`
+is a separate service. See
 [docs/dependency-plane.md](../../../../docs/dependency-plane.md).
 
 ## Quiet main comparison

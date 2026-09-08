@@ -1,13 +1,11 @@
-# Copy to .grok/config.toml and replace the absolute checkout path below.
+# Copy to .grok/config.toml and replace the absolute workspace path below.
 # Native Grok config also works when Claude-compatible MCP import is disabled.
 #
-# remote-dev is an external checkout (vllm-ascend-workspace/remote-dev). The
-# launcher below finds it through VAWS_REMOTE_DEV_ROOT or the shared
-# .vaws-local/remote-dev and injects the scaffold resolver plugin, the Ascend
-# runtime environment file and the state directory.
+# remote-dev and vaws-coordinator are installed workspace packages
+# (`uv sync`). The MCP servers run as `python -m ...` under `.venv`.
 [mcp_servers.remote-dev]
-command = "python3"
-args = ["/absolute/path/to/vllm-ascend-workspace/.agents/scripts/remote_dev.py", "server"]
+command = "/absolute/path/to/vllm-ascend-workspace/.venv/bin/python"
+args = ["-m", "remote_dev.mcp.server"]
 enabled = true
 startup_timeout_sec = 20
 tool_timeout_sec = 600
@@ -20,15 +18,13 @@ REMOTE_DEV_RUNTIME_ENV_FILE = "/etc/profile.d/vaws-ascend-env.sh"
 REMOTE_DEV_RESOLVERS = "/absolute/path/to/vllm-ascend-workspace/.agents/lib/vaws_remote_dev_plugin.py:setup"
 REMOTE_DEV_STATE_DIR = "/absolute/path/to/vllm-ascend-workspace/.vaws-local/remote-dev-state"
 REMOTE_DEV_SSH_MUX_DIR = "~/.ssh/vaws-mux"
-# VAWS_REMOTE_DEV_ROOT = "/absolute/path/to/remote-dev"   # when not at the default location
 
 [mcp_servers.vaws-task]
-command = "python3"
-args = ["/absolute/path/to/vllm-ascend-workspace/.agents/scripts/vaws.py", "task-server"]
+command = "/absolute/path/to/vllm-ascend-workspace/.venv/bin/python"
+args = ["-m", "vaws_coordinator", "task-server"]
 enabled = true
 startup_timeout_sec = 20
 tool_timeout_sec = 600
 
 [mcp_servers.vaws-task.env]
 VAWS_AGENT_SESSIONS_DIR = "/absolute/path/to/vllm-ascend-workspace/.vaws-local/agent-sessions"
-# VAWS_COORDINATOR_ROOT = "/absolute/path/to/vaws-coordinator"   # when not at the default location

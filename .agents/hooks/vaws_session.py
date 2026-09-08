@@ -2,12 +2,12 @@
 """Compatibility adapter: exec the coordinator's native session hook.
 
 The hook that writes the local task registry lives in the vaws-coordinator
-checkout. This file remains at the historical path so already-installed client
+package. This file remains at the historical path so already-installed client
 hook commands keep working. It never writes the registry itself.
 
-Generated setup commands may pass ``--coordinator-root`` and
-``--agent-sessions-dir`` so a GUI client does not need the setup shell's
-environment. Those flags are stripped before exec'ing the coordinator hook.
+Generated setup commands may pass ``--agent-sessions-dir`` so a GUI client
+does not need the setup shell's environment. ``--coordinator-root`` is
+accepted and ignored (the package does not read that variable).
 """
 from __future__ import annotations
 
@@ -18,8 +18,12 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / ".agents" / "lib"))
-from vaws_coordinator import COORDINATOR_ROOT_ENV, coordinator_environment
-from vaws_dependency import USABLE_STATES, hook_skip_message, inspect, record_hook_degradation
+from vaws_venv import ensure_workspace_interpreter  # noqa: E402
+
+ensure_workspace_interpreter(repo_root=ROOT)
+
+from vaws_coordinator_launch import CoordinatorUnavailable, exec_module  # noqa: E402
+from vaws_dependency import REMEDY  # noqa: E402
 
 
 def main() -> int:
@@ -29,31 +33,21 @@ def main() -> int:
     parser.add_argument("--coordinator-root", default="")
     parser.add_argument("--agent-sessions-dir", default="")
     args = parser.parse_args()
-    if args.coordinator_root.strip():
-        os.environ[COORDINATOR_ROOT_ENV] = str(Path(args.coordinator_root).expanduser())
     if args.agent_sessions_dir.strip():
         os.environ["VAWS_AGENT_SESSIONS_DIR"] = str(Path(args.agent_sessions_dir).expanduser())
-    info = inspect("vaws-coordinator")
-    if info["state"] not in USABLE_STATES:
+    forwarded = ["--client", args.client]
+    if args.project is not None:
+        forwarded += ["--project", str(args.project)]
+    try:
+        return exec_module("vaws_coordinator.hooks.vaws_session", forwarded)
+    except CoordinatorUnavailable as exc:
         sys.stdin.read()
-        print(hook_skip_message("vaws-coordinator", info), file=sys.stderr)
-        record_hook_degradation(hook="vaws_session", dep="vaws-coordinator", state=info["state"])
-        print("")
-        return 0
-    checkout = Path(info["path"]).expanduser()
-    script = checkout / "hooks" / "vaws_session.py"
-    if not script.is_file():
         print(
-            f"VAWS local association unavailable: {script} is missing. Local tools remain usable.",
+            f"VAWS local association unavailable: {exc}. Run `{REMEDY}`. Local tools remain usable.",
             file=sys.stderr,
         )
         print("")
         return 0
-    forwarded = ["--client", args.client]
-    if args.project is not None:
-        forwarded += ["--project", str(args.project)]
-    os.execve(sys.executable, [sys.executable, str(script), *forwarded], coordinator_environment())
-    return 0  # pragma: no cover - execve does not return
 
 
 if __name__ == "__main__":

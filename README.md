@@ -20,12 +20,13 @@ cd vllm-ascend-workspace
 # 初始化子模块
 git submodule update --init --recursive
 
-# 可选：拉取四个外部依赖（它们不是子模块；remote-dev 与 vaws-top 为私有仓库）
-python3 .agents/scripts/vaws_deps.py bootstrap all
+# 必做：安装三个进程内外部包（uv.lock 是唯一 pin）
+uv sync
 python3 .agents/scripts/vaws_deps.py doctor
 ```
 
-四个外部仓库的 pin、可见性和无组织权限时的能力边界见 [dependency-plane.md](docs/dependency-plane.md)。
+包依赖、`uv.lock` 和能力边界见 [dependency-plane.md](docs/dependency-plane.md)。
+`uv run python3 .agents/scripts/vaws_deps.py doctor` 会先同步环境，与上面等价。
 
 如果你使用支持 Agent 的 IDE（Cursor、Windsurf 等）或终端工具（Claude Code、Codex CLI 等），可以直接用自然语言完成后续配置：
 
@@ -35,7 +36,7 @@ Agent 会自动检测你的环境、安装所需工具、配置 Git 远程仓库
 
 ## 本地 NPU 集群监控
 
-仓库提供 `npu-fleet-monitor` Skill，用于部署持续运行的 NPU 集群监控服务。监控应用维护在独立仓库 `vllm-ascend-workspace/vaws-top`；部署入口会按 pin 克隆或定位该仓库、构建前端、安装并启用 systemd 用户服务：
+仓库提供 `npu-fleet-monitor` Skill，用于部署持续运行的 NPU 集群监控服务。监控应用维护在独立仓库 `vllm-ascend-workspace/vaws-top`，以 `uvx vaws-top` 运行：
 
 ```bash
 python3 .agents/skills/npu-fleet-monitor/scripts/manage_monitor.py ensure
@@ -48,7 +49,7 @@ python3 .agents/skills/npu-fleet-monitor/scripts/manage_monitor.py ensure
 
 | 技能                       | 用途                                             | 何时使用               |
 | ------------------------ | ---------------------------------------------- | ------------------ |
-| **repo-init**            | 安装 GitHub CLI、登录 GitHub、初始化子模块、可选拉取四个外部依赖、配置 Fork 和远程仓库拓扑 | 首次 clone 后初始化工作区   |
+| **repo-init**            | 安装 GitHub CLI、登录 GitHub、初始化子模块、运行 `uv sync`、配置 Fork 和远程仓库拓扑 | 首次 clone 后初始化工作区   |
 | **machine-management**   | 添加、验证、修复或移除远程昇腾 NPU 服务器及其托管容器                  | 需要配置远程 NPU 开发机时    |
 | **npu-fleet-monitor**    | 从独立 vaws-top 仓库构建、拉起、检查或停止本地 NPU 监控页面            | 需要持续查看设备、主机和历史资源状态时 |
 | **session-management**   | 创建、检查、分组和清理隔离 session：本地 worktree、远端容器、状态目录和资源 lease | 多 agent、多任务或 PD 场景并行远端执行时 |

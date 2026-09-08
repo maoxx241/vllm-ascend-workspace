@@ -37,17 +37,18 @@ remote-dev source root. They live in `.agents/tests/test_remote_dev_consumer.py`
 once that extraction lands. From this scaffold root:
 
 ```bash
-VAWS_REMOTE_DEV_ROOT=/absolute/path/to/remote-dev python3 -m unittest discover -s .agents/tests -p test_remote_dev_consumer.py
+uv sync
+python3 -m unittest discover -s .agents/tests -p test_remote_dev_consumer.py
 ```
 
-That file's substrate-backed cases are:
+That file's substrate-backed cases import the installed `remote_dev` package:
 
 - `SubstrateIntegrationTests.test_resolvers_env_registers_the_scaffold_selector_fields`
 - `SubstrateIntegrationTests.test_machine_selector_resolves_from_a_fake_inventory_with_runtime_env_file`
 - `SubstrateIntegrationTests.test_empty_payload_without_binding_yields_the_substrate_error`
 
-Without `VAWS_REMOTE_DEV_ROOT` (or the shared checkout location) those three
-skip. They are not a substitute for the remote-dev property suites.
+Without `uv sync` those three skip. They are not a substitute for the
+remote-dev property suites.
 
 `hypothesis` is not a dependency. Each repository's `test_property_support.py`
 provides a seeded generator (`Gen`) and a case runner (`run_cases`). Every

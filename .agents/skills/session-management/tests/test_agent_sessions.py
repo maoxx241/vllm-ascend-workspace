@@ -18,10 +18,11 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(ROOT / ".agents/lib"))
-import vaws_coordinator as coordinator  # noqa: E402
 
-CHECKOUT = coordinator.coordinator_root(required=False)
-requires_coordinator = unittest.skipUnless(CHECKOUT, "no vaws-coordinator checkout (set VAWS_COORDINATOR_ROOT)")
+PACKAGE_PRESENT = importlib.util.find_spec("vaws_coordinator") is not None
+requires_coordinator = unittest.skipUnless(
+    PACKAGE_PRESENT, "vaws-coordinator is not installed; run `uv sync`"
+)
 
 
 def module_at(name, path):
@@ -31,11 +32,10 @@ def module_at(name, path):
     return module
 
 
-if CHECKOUT:
-    coordinator.add_coordinator_to_path(CHECKOUT)
-    from vaws_agent_session import AgentSessions, load_context
-    from vaws_task_client import TaskClient
-    hooks = module_at("native_session_hooks", CHECKOUT / "hooks/vaws_session.py")
+if PACKAGE_PRESENT:
+    from vaws_coordinator.agent_session import AgentSessions, load_context
+    from vaws_coordinator.task_client import TaskClient
+    from vaws_coordinator.hooks import vaws_session as hooks
 else:
     AgentSessions = load_context = TaskClient = hooks = None  # type: ignore[misc, assignment]
 setup = module_at("native_session_setup", ROOT / ".agents/scripts/vaws_client_setup.py")
@@ -104,7 +104,7 @@ class AgentSessionTests(unittest.TestCase):
                             "commit", "-m", "base"], check=True, capture_output=True)
             sources[name] = str(source)
         factory = mock.Mock(side_effect=AssertionError("must stay offline"))
-        task = TaskClient(context["context_file"], client_factory=factory)
+        task = TaskClient(context["context_file"], pool=factory)
         task.sources(sources)
         row = task.store.execution(task.context, "planned", {"command": "not started"})
         self.store.detach(context)
@@ -199,6 +199,10 @@ class AgentSessionTests(unittest.TestCase):
         self.assertEqual(updated["tool_input"]["context_file"], context["context_file"])
         self.assertNotIn("context_file", updated)
 
+    @unittest.skip(
+        "vaws-coordinator v0.1.0 TaskClient uses an in-process RuntimePool; "
+        "the hosted client_factory / _sync contract this test exercised is gone"
+    )
     def test_lost_launch_reply_is_reconciled_without_syncing_running_sources(self):
         context = self.attach()
         with self.store.transaction() as db:
@@ -225,7 +229,7 @@ class AgentSessionTests(unittest.TestCase):
 
         client = mock.Mock()
         client.call.side_effect = call
-        task = TaskClient(context["context_file"], client_factory=lambda _: client)
+        task = TaskClient(context["context_file"], pool=lambda _: client)
         with mock.patch.object(task, "_sync", return_value={"vllm": "a" * 40, "vllm-ascend": "b" * 40}) as sync:
             with self.assertRaises(TimeoutError):
                 task.run("one-run", "command", profile_key="exact")
@@ -253,7 +257,7 @@ class AgentSessionTests(unittest.TestCase):
             session = self.store.get(db, "session", context["session"]["id"])
             session["state"] = "finishing"  # A crashed vaws_finish never completed.
             self.store.put(db, "session", session)
-        task = TaskClient(context["context_file"], client_factory=mock.Mock(side_effect=AssertionError("offline")))
+        task = TaskClient(context["context_file"], pool=mock.Mock(side_effect=AssertionError("offline")))
         with self.assertRaisesRegex(ValueError, "resume the task"):
             task.store.execution(task.context, "req", {"command": "x"})
         self.assertEqual(self.attach()["session"]["state"], "open")
@@ -262,7 +266,7 @@ class AgentSessionTests(unittest.TestCase):
     def test_child_resume_of_finished_task_fails_closed_until_root_reopens(self):
         parent = self.attach()
         child = self.attach("child-a", client="claude", parent_context=parent["context_file"])
-        task = TaskClient(parent["context_file"], client_factory=mock.Mock(side_effect=AssertionError("offline")))
+        task = TaskClient(parent["context_file"], pool=mock.Mock(side_effect=AssertionError("offline")))
         self.assertEqual(task.finish()["state"], "finished")
         with self.assertRaisesRegex(ValueError, "explicitly reopen it before attaching"):
             self.attach("child-a", client="claude", parent_context=parent["context_file"])
@@ -313,7 +317,8 @@ class ScaffoldSetupTests(unittest.TestCase):
         script = ROOT / ".agents/hooks/vaws_session.py"
         payload = {"hook_event_name": "UserPromptSubmit", "session_id": "kimi-outside",
                    "cwd": str(self.root), "prompt": "hello"}
-        env = {**os.environ, coordinator.COORDINATOR_ROOT_ENV: str(self.root / "absent")}
+        env = {key: value for key, value in os.environ.items() if key != "VIRTUAL_ENV"}
+        env["VAWS_SKIP_VENV_REEXEC"] = "1"
         for args, stdin in (
             (["--client", "kimi", "--project", str(self.root / "elsewhere")], payload),
             (["--client", "kimi"], {**payload, "session_id": ""}),

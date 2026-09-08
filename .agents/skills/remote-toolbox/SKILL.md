@@ -13,7 +13,7 @@ binding, or job ids as legacy `--session-id` values. Direct remote companion
 tools still use explicit endpoints and do not enforce a pool lease themselves.
 
 Compatibility note: remote-dev companion tools (`remote_*` MCP tools, launched
-via `python3 .agents/scripts/remote_dev.py`) are now the preferred
+via `uv run remote-dev` / MCP) are now the preferred
 local-tool-like surface for ordinary remote endpoint development. Use this
 skill when the task needs managed VAWS target resolution, session containers,
 parity/sync, service adapters, artifact compatibility, or cleanup internals.
