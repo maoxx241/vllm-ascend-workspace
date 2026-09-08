@@ -118,6 +118,12 @@ def _dep_degradation(
     layer: str = "dependency",
     effect: str,
 ) -> dict[str, Any]:
+    api_state = (info.get("service_api") or {}).get("state")
+    if _usable(str(info.get("state") or "")) and api_state in {"compatible", "undeclared"}:
+        effect = (
+            f"runs an unpinned build of {info.get('name')} "
+            f"(service API {api_state}); behaviour may differ from the accepted pin"
+        )
     return {
         "layer": layer,
         "detail": (
