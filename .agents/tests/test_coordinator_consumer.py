@@ -85,7 +85,7 @@ class LocatorTests(unittest.TestCase):
     def test_environment_fills_the_single_registry_and_host_queue(self) -> None:
         env = coordinator.coordinator_environment({})
         self.assertTrue(env["VAWS_AGENT_SESSIONS_DIR"].endswith("agent-sessions"))
-        self.assertEqual(env["VAWS_HOST_QUEUE_MODULE"], str(LIB / "vaws_npu_coordination.py"))
+        self.assertNotIn("VAWS_HOST_QUEUE_MODULE", env)
         self.assertTrue(env["VAWS_PARITY_SCRIPT"].endswith("remote_code_parity.py"))
         self.assertNotIn("VAWS_COORDINATOR_STATE_DIR", env)
 
@@ -108,8 +108,8 @@ class LocatorTests(unittest.TestCase):
     def test_dependency_pin_names_the_accepted_main(self) -> None:
         pin = coordinator.load_dependency()
         self.assertEqual(pin["repository"], "vllm-ascend-workspace/vaws-coordinator")
-        self.assertEqual(pin["commit"], "2e16e894e31a12d85a11117a2772031f30fdfebe")
-        self.assertEqual(pin["tree"], "fc64eacacf16060446895e2fa0a23a1fe0d17b4e")
+        self.assertEqual(pin["commit"], "d3c4e82a3c0e3f0be31727abf17b7863bcedba77")
+        self.assertEqual(pin["tree"], "d3f91bc6375a876fc01d46b1835feabd61db2729")
         self.assertEqual(pin["visibility"], "public")
         self.assertEqual(
             pin["pinned_mirrors"]["vaws_build_inputs"]["sha256"],
@@ -193,7 +193,7 @@ class LauncherTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         payload = json.loads(proc.stdout)
         self.assertIn("VAWS_AGENT_SESSIONS_DIR", payload)
-        self.assertIn("VAWS_HOST_QUEUE_MODULE", payload)
+        self.assertNotIn("VAWS_HOST_QUEUE_MODULE", payload)
         self.assertTrue(all(key.startswith("VAWS_") for key in payload))
 
     def test_help_matrix(self) -> None:
@@ -226,6 +226,7 @@ class ClientSetupTests(unittest.TestCase):
         self.assertEqual(servers["vaws-task"]["args"], [str(ROOT / ".agents/scripts/vaws.py"), "task-server"])
         self.assertEqual(servers["vaws-task"]["type"], "stdio")
         self.assertIn("VAWS_AGENT_SESSIONS_DIR", servers["vaws-task"]["env"])
+        self.assertNotIn("VAWS_HOST_QUEUE_MODULE", servers["vaws-task"]["env"])
         self.assertNotIn(coordinator.COORDINATOR_ROOT_ENV, servers["vaws-task"]["env"])
         hook = json.loads(files[self.project / ".claude/settings.local.json"])["hooks"]["SessionStart"][0]["hooks"][0]["command"]
         self.assertIn("--agent-sessions-dir", hook)
@@ -588,7 +589,7 @@ class NoInTreeTaskWriterTests(unittest.TestCase):
 
     def test_build_inputs_mirror_remains_for_parity(self) -> None:
         self.assertTrue((ROOT / ".agents/lib/vaws_build_inputs.py").is_file())
-        self.assertTrue((ROOT / ".agents/lib/vaws_npu_coordination.py").is_file())
+        self.assertTrue((ROOT / ".agents/lib/vaws_host_queue_module.py").is_file())
         self.assertTrue((ROOT / ".agents/lib/vaws_run_manifest.py").is_file())
 
 

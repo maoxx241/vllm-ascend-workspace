@@ -109,6 +109,7 @@ Capabilities:
 | `remote_endpoints` | remote-dev in a usable state (`ready`, `off_pin`, or `wrong_origin`) |
 | `resolver_registration` | remote-dev, the tracked plugin file, and `REMOTE_DEV_RESOLVERS` in tracked MCP config |
 | `task_pool` | vaws-coordinator |
+| `host_npu_authority` | vaws-coordinator checkout usable and `host/vaws_npu_coordination.py` present |
 | `fleet_observation` | vaws-top |
 | `shared_knowledge` | the shared knowledge cache (same inspector as the knowledge client) |
 | `conformance_kit` | vaws-knowledge checkout |
@@ -201,3 +202,40 @@ and `fleet_observation` stay degraded until the private checkouts exist.
 kit checkout; import it separately if you need the shared layer.
 
 Name capabilities from `doctor`'s report. Do not re-derive them.
+
+## Service API compatibility
+
+Each provider checkout may declare the APIs it speaks in `service-api.json`
+at the checkout root:
+
+```json
+{"schema_version": 1, "name": "vaws-coordinator", "service_api_version": 1, "supports": [1]}
+```
+
+Each pin may accept a closed integer range via optional `service_api`:
+`{"min": 1, "max": 1}`. `inspect()` reads the file offline (no process
+spawn) and attaches a `service_api` sub-result. That fact is orthogonal to
+the identity state machine (`ready` / `off_pin` / `wrong_origin` /
+`incomplete` / …).
+
+| `service_api.state` | Meaning | Policy |
+|---|---|---|
+| `compatible` | any value in `supports` intersects `[min, max]` | no extra effect; `off_pin` + `compatible` stays the existing warn-only drift |
+| `incompatible` | `supports` misses the accepted range | every capability that depends on that pin is degraded/unavailable with remedy `bump the pin or update the checkout to a build whose supports includes {min}..{max}`; `resolve()` still returns the path |
+| `undeclared` | file missing, malformed JSON, or no usable `supports` | warning only; capability stays available if the checkout is otherwise usable |
+
+Example `vaws_deps.py status` excerpt (flat name → inspect map):
+
+```json
+{
+  "vaws-coordinator": {
+    "state": "ready",
+    "service_api": {
+      "declared": 1,
+      "supports": [1],
+      "accepted": {"min": 1, "max": 1},
+      "state": "compatible"
+    }
+  }
+}
+```

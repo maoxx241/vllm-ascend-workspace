@@ -109,9 +109,9 @@ def parse_host_npu_devices(stdout: str) -> list[int]:
     device can be visible and in use by somebody else. Use
     ``parse_host_npu_availability`` for that.
     """
-    from vaws_npu_coordination import parse_npu_smi_info  # noqa: PLC0415
+    from vaws_host_queue_module import load_host_protocol  # noqa: PLC0415
 
-    return parse_npu_smi_info(stdout).get("devices") or []
+    return load_host_protocol().parse_npu_smi_info(stdout).get("devices") or []
 
 
 def parse_host_npu_availability(stdout: str) -> tuple[list[int] | None, dict[str, Any]]:
@@ -135,9 +135,9 @@ def parse_host_npu_availability(stdout: str) -> tuple[list[int] | None, dict[str
     fire. A probe that cannot establish occupancy must not be treated as an
     empty occupancy table.
     """
-    from vaws_npu_coordination import parse_npu_smi_info  # noqa: PLC0415
+    from vaws_host_queue_module import load_host_protocol  # noqa: PLC0415
 
-    info = parse_npu_smi_info(stdout)
+    info = load_host_protocol().parse_npu_smi_info(stdout)
     status = info.get("status")
     visible = sorted(info.get("devices") or [])
     busy_map = info.get("busy") or {}

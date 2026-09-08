@@ -267,13 +267,6 @@
       "note": "repo skill-catalog self-check",
       "proposed_target": "vaws lint"
     },
-    ".agents/scripts/split_reconcile.py": {
-      "responsibility": "mechanics",
-      "support_role": "supported",
-      "target_kind": "self",
-      "note": "compares split-ledger declarations to local destination checkouts; missing checkouts are unverified, never fetched",
-      "proposed_target": "vaws lint"
-    },
     ".agents/scripts/sync_claude_skills.py": {
       "responsibility": "mechanics",
       "support_role": "supported",

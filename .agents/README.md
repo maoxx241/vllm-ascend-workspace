@@ -205,10 +205,11 @@ Untracked workspace-local state lives under `.vaws-local/`:
 Parallel remote work should use `session-management` first. A session owns a local worktree, a dedicated remote container, session-scoped serving/benchmark/profiling state, and resource leases. Existing `--machine` commands remain legacy-compatible for single-tenant workflows.
 
 Independent agents with separate workspace-local lease files may optionally use
-`session-management/scripts/npu_coordination.py`. It keeps an ephemeral,
-host-shared SQLite queue under `/tmp/vaws-npu-coordinator/v1/`, defers to actual
-host NPU occupancy and manual holds, and never becomes a mandatory execution
-gate.
+`session-management/scripts/npu_coordination.py`. The protocol module it ships
+is the coordinator-owned `host/vaws_npu_coordination.py` from the pinned
+checkout. It keeps an ephemeral, host-shared SQLite queue under
+`/tmp/vaws-npu-coordinator/v1/`, defers to actual host NPU occupancy and
+manual holds, and never becomes a mandatory execution gate.
 
 The remote-dev substrate is the preferred agent-facing surface once an endpoint
 exists. It resolves host/port direct endpoints by default, mirrors native

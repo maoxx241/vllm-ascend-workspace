@@ -24,8 +24,8 @@
     "fixture_paths_why": "This guard's own tests must name dead paths as fixtures to prove detection. Nothing else belongs here: a file that genuinely needs an exemption needs a baseline row or a skip_paths entry with a why.",
     "skip_paths": [
       {
-        "path": ".agents/policy/split-ledger.json",
-        "why": "The ledger's job is to record historical source locations that left this tree. Those scaffold_path values must stay as written so split_reconcile.py can match destination evidence."
+        "path": "docs/audits/split-ledger-2026-09-07.json",
+        "why": "The retired ledger records historical source locations that left this tree. Those scaffold_path values stay as written as the extraction record."
       },
       {
         "path": ".agents/policy/repo-boundaries.json",

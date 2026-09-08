@@ -1,6 +1,9 @@
 # Split reconciliation
 
-Status: current
+Status: dated
+
+The ledger reached 26/26 arrived at the recorded commits and was retired from
+CI. This file is kept as the record of the extraction.
 
 `vllm-ascend-workspace` is being split into several repositories under the
 `vllm-ascend-workspace` organization. Each extraction wrote a careful
@@ -21,10 +24,10 @@ is leaving?". The ledger answers "did the thing that left arrive anywhere?".
 
 | Piece | Path |
 |-------|------|
-| Ledger | [`.agents/policy/split-ledger.json`](../.agents/policy/split-ledger.json) |
-| Checker | [`.agents/scripts/split_reconcile.py`](../.agents/scripts/split_reconcile.py) |
-| Tests | `.agents/tests/test_split_reconcile_ledger.py` |
-| CI | `.github/workflows/split-reconcile.yml` |
+| Ledger | [split-ledger-2026-09-07.json](split-ledger-2026-09-07.json) |
+| Checker | retired from CI with this record |
+| Tests | retired with the checker |
+| CI | retired with the checker |
 
 ---
 
@@ -100,18 +103,15 @@ scaffold is public, so its CI cannot read them and must not hold credentials
 that could. The checker therefore never touches the network. It inspects
 **local checkouts** handed to it:
 
-```bash
-python3 .agents/scripts/split_reconcile.py \
-  --destination vaws-coordinator=/path/to/vaws-coordinator \
-  --destination vaws-top=/path/to/vaws-top
+```text
+(retired) split_reconcile --destination vaws-coordinator=/path/to/vaws-coordinator
 ```
 
 Optional preview of an already-local branch or PR commit (candidate evidence
 only, never recorded as mainline publication):
 
-```bash
-python3 .agents/scripts/split_reconcile.py \
-  --destination vaws-coordinator=/path/to/vaws-coordinator \
+```text
+(retired) split_reconcile --destination vaws-coordinator=/path/to/vaws-coordinator
   --revision vaws-coordinator=abc1234
 ```
 
@@ -152,7 +152,7 @@ So, in each context:
 
 | Where | Can read | `arrived` rows for private destinations |
 |-------|----------|------------------------------------------|
-| Public CI (`split-reconcile.yml`) | scaffold + the public destinations, checked out without credentials at the fetched default branch | reported `unverified`; the recorded state and its attribution are shown, not confirmed |
+| Public CI (retired with this record) | scaffold + the public destinations, checked out without credentials at the fetched default branch | reported `unverified`; the recorded state and its attribution are shown, not confirmed |
 | A maintainer with org access, locally | everything | confirmed or contradicted at the selected immutable commit |
 
 **What an `arrived` verdict establishes:** the declared evidence was found in
@@ -314,7 +314,8 @@ that live `selected_commit` may advance and is not the recorded observation.
 
 Do this in the same pull request that deletes or moves the item, not after.
 
-1. **One row per thing that leaves**, in `.agents/policy/split-ledger.json`.
+1. **One row per thing that leaves**, in the ledger now kept at
+   `docs/audits/split-ledger-2026-09-07.json`.
    If the destination repository is new, add it under `repositories` first
    (slug, visibility, and `receipt_path` if it will publish one).
 2. **Quote the declaration.** `declared_by` names the commit or handoff
@@ -329,8 +330,7 @@ Do this in the same pull request that deletes or moves the item, not after.
    the checker with `--destination`, and write the verdict into `recorded`
    with the commit you inspected. If you could not look, write `unverified`
    and say why. If it is `missing`, name the `follow_up`.
-5. Run `python3 -m unittest discover -s .agents/tests -p
-   "test_split_reconcile_ledger.py"`.
+5. The ledger unittest was retired with the checker.
 
 When the destination later lands the item, the scaffold's CI (for public
 destinations) or a maintainer's local run (for private ones) fails with
@@ -339,4 +339,4 @@ That red run is the mechanism working: nothing arrives unrecorded.
 
 What the ledger does **not** track: scaffold-side call sites that must be
 rewired to consume an extracted repository. Those are the boundary guard's R1
-and R4 findings in the dated [2026-09-07 boundary snapshot](audits/repo-boundaries-2026-09-07.md).
+and R4 findings in the dated [2026-09-07 boundary snapshot](repo-boundaries-2026-09-07.md).

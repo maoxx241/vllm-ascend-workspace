@@ -43,6 +43,7 @@ CAPABILITY_ORDER = (
     "remote_endpoints",
     "resolver_registration",
     "task_pool",
+    "host_npu_authority",
     "fleet_observation",
     "shared_knowledge",
     "conformance_kit",
@@ -51,6 +52,7 @@ CAPABILITY_DEPS = {
     "remote_endpoints": ("remote-dev",),
     "resolver_registration": ("remote-dev",),
     "task_pool": ("vaws-coordinator",),
+    "host_npu_authority": ("vaws-coordinator",),
     "fleet_observation": (VAWS_TOP_NAME,),
     "shared_knowledge": (),
     "conformance_kit": ("vaws-knowledge",),
@@ -61,6 +63,54 @@ def _usable(state: str) -> bool:
     return state in USABLE_STATES
 
 
+def _service_api_incompatible(info: Mapping[str, Any]) -> dict[str, Any] | None:
+    api = info.get("service_api") or {}
+    if api.get("state") != "incompatible":
+        return None
+    accepted = api.get("accepted") or {}
+    lo, hi = accepted.get("min"), accepted.get("max")
+    return {
+        "layer": "dependency",
+        "detail": (
+            f"{info.get('name')} service API is incompatible: "
+            f"supports {api.get('supports')} vs accepted {lo}..{hi}"
+        ),
+        "effect": "dependent capabilities are degraded/unavailable; execution is not blocked",
+        "remedy": (
+            f"bump the pin or update the checkout to a build whose `supports` includes {lo}..{hi}"
+        ),
+        "expected_source_repo": None,
+        "expected_source_ref": None,
+    }
+
+
+def _apply_service_api(
+    capabilities: dict[str, Any],
+    pins: Mapping[str, Mapping[str, Any]],
+    deps: Mapping[str, Mapping[str, Any]],
+) -> list[str]:
+    warnings: list[str] = []
+    for dep_name, info in deps.items():
+        api = info.get("service_api") or {}
+        pin = pins.get(dep_name) or {}
+        if api.get("state") == "undeclared":
+            detail = api.get("detail") or "service-api.json is missing or predates the contract"
+            warnings.append(f"{dep_name} service API is undeclared: {detail}")
+        incompatible = _service_api_incompatible(info)
+        if incompatible is None:
+            continue
+        incompatible["expected_source_repo"] = pin.get("repository")
+        incompatible["expected_source_ref"] = pin.get("commit") or pin.get("ref")
+        for cap_name, depends in CAPABILITY_DEPS.items():
+            if dep_name not in depends:
+                continue
+            cap = capabilities[cap_name]
+            cap["available"] = False
+            cap["degraded"] = True
+            cap["degradation"].append(incompatible)
+    return warnings
+
+
 def _dep_degradation(
     pin: Mapping[str, Any],
     info: Mapping[str, Any],
@@ -68,6 +118,12 @@ def _dep_degradation(
     layer: str = "dependency",
     effect: str,
 ) -> dict[str, Any]:
+    api_state = (info.get("service_api") or {}).get("state")
+    if _usable(str(info.get("state") or "")) and api_state in {"compatible", "undeclared"}:
+        effect = (
+            f"runs an unpinned build of {info.get('name')} "
+            f"(service API {api_state}); behaviour may differ from the accepted pin"
+        )
     return {
         "layer": layer,
         "detail": (
@@ -239,6 +295,32 @@ def evaluate_capabilities(
         degradation=coord_deg,
     )
 
+    host_module = Path(coord["path"]) / "host/vaws_npu_coordination.py" if coord.get("path") else None
+    host_ok = coord_ok and bool(host_module and host_module.is_file())
+    host_deg: list[dict[str, Any]] = []
+    if not host_ok:
+        host_deg.append(
+            _dep_degradation(
+                coord_pin,
+                coord,
+                effect="host NPU queue protocol cannot be loaded from the coordinator checkout",
+            )
+        )
+    elif coord["state"] != "ready":
+        host_deg.append(
+            _dep_degradation(
+                coord_pin,
+                coord,
+                effect="host NPU queue protocol cannot be loaded from the coordinator checkout",
+            )
+        )
+    capabilities["host_npu_authority"] = _capability(
+        available=host_ok,
+        degraded=bool(host_deg),
+        depends_on=CAPABILITY_DEPS["host_npu_authority"],
+        degradation=host_deg,
+    )
+
     top = deps[VAWS_TOP_NAME]
     top_pin = pins[VAWS_TOP_NAME]
     top_ok = _usable(top["state"])
@@ -285,6 +367,7 @@ def evaluate_capabilities(
         degradation=kit_deg,
     )
 
+    warnings = _apply_service_api(capabilities, pins, deps)
     flat: list[dict[str, Any]] = []
     for name in CAPABILITY_ORDER:
         flat.extend(capabilities[name]["degradation"])
@@ -294,6 +377,7 @@ def evaluate_capabilities(
         "capabilities": capabilities,
         "degraded": any(capabilities[name]["degraded"] for name in CAPABILITY_ORDER),
         "degradation": flat,
+        "warnings": warnings,
         "acknowledged_drift": drift,
         "recent_hook_degradations": read_hook_degradations(repo_root=repo_root),
     }

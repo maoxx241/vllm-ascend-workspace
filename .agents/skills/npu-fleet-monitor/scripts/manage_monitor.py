@@ -51,6 +51,7 @@ REQUIRED_FILES = (
     "scripts/vaws-top-mcp.py",
     "deploy/npu-fleet-monitor.service",
     ".agents/skills/vaws-top/SKILL.md",
+    "service-api.json",
 )
 AGENT_SKILL = ".agents/skills/vaws-top/SKILL.md"
 CLI_ENTRY = "scripts/vaws-top.py"

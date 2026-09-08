@@ -7,9 +7,11 @@ that contract:
 
 * it finds the coordinator checkout (``VAWS_COORDINATOR_ROOT``, else the shared
   workspace's ``.vaws-local/vaws-coordinator``), never a path inside this tree;
-* it injects the scaffold-owned host queue, machine inventory, parity script
-  and the single local task-registry directory so the checkout cannot create a
-  second writer or a parallel manager by guesswork;
+* it injects the machine inventory, parity script and the single local
+  task-registry directory so the checkout cannot create a second writer or a
+  parallel manager by guesswork. Host NPU authority is consumed from the
+  pinned checkout (``host/vaws_npu_coordination.py``); this module does not
+  set ``VAWS_HOST_QUEUE_MODULE``;
 * it exposes the dependency pin (``.agents/deps/coordinator.json``) so callers
   can report drift instead of silently running an unknown revision.
 
@@ -36,6 +38,11 @@ from vaws_dependency import (  # noqa: E402
     load_pin,
     load_pin_file,
 )
+from vaws_host_queue_module import (  # noqa: E402
+    HOST_QUEUE_RELATIVE,
+    HostQueueUnavailable,
+    host_queue_module_path,
+)
 from vaws_local_state import (  # noqa: E402
     agent_sessions_root,
     shared_inventory_path,
@@ -49,8 +56,6 @@ LOCAL_STATE_DIRNAME = ".vaws-local"
 PARITY_SCRIPT = (
     ROOT / ".agents" / "skills" / "remote-code-parity" / "scripts" / "remote_code_parity.py"
 )
-HOST_QUEUE_MODULE = LIB / "vaws_npu_coordination.py"
-
 REQUIRED_FILES = (
     "task_server.py",
     "scripts/vaws.py",
@@ -60,13 +65,14 @@ REQUIRED_FILES = (
     "lib/vaws_task_client.py",
     "workers/managed_jobs.py",
     "server.py",
+    "host/vaws_npu_coordination.py",
+    "service-api.json",
 )
 
 # Environment keys this module owns defaults for. Caller/client values win.
 # There is deliberately no default manager --state-dir: guessing one would fork
 # the runtime-pool database. Operators pass --state-dir to server.py.
 DEFAULT_ENV = {
-    "VAWS_HOST_QUEUE_MODULE": str(HOST_QUEUE_MODULE),
     "VAWS_PARITY_SCRIPT": str(PARITY_SCRIPT),
     "VAWS_PARITY_WORKSPACE_ROOT": str(ROOT),
 }
@@ -172,8 +178,10 @@ def coordinator_environment(base: Mapping[str, str] | None = None, *, repo_root:
     """Environment for a coordinator process (task server, CLI, hook).
 
     Starts from ``base`` (default: the current process environment) and fills
-    the keys the checkout needs to share this scaffold's host queue, inventory,
-    parity script and one task registry. Values already present are kept.
+    the keys the checkout needs to share this scaffold's inventory, parity
+    script and one task registry. Values already present are kept. The
+    scaffold does not set ``VAWS_HOST_QUEUE_MODULE``; the coordinator defaults
+    to its bundled host queue. A caller override, if already present, is kept.
     Remote-dev is optional: local attach/finish must work without it.
     """
     env = dict(os.environ if base is None else base)
@@ -186,7 +194,8 @@ def coordinator_environment(base: Mapping[str, str] | None = None, *, repo_root:
     env["VAWS_AGENT_SESSIONS_DIR"] = str(sessions)
     env.setdefault("VAWS_MACHINE_INVENTORY", str(shared_inventory_path(repo_root)))
     env["VAWS_MACHINE_INVENTORY"] = _absolute_path(env["VAWS_MACHINE_INVENTORY"], repo_root)
-    env["VAWS_HOST_QUEUE_MODULE"] = _absolute_path(env["VAWS_HOST_QUEUE_MODULE"], repo_root)
+    if "VAWS_HOST_QUEUE_MODULE" in env:
+        env["VAWS_HOST_QUEUE_MODULE"] = _absolute_path(env["VAWS_HOST_QUEUE_MODULE"], repo_root)
     env["VAWS_PARITY_SCRIPT"] = _absolute_path(env["VAWS_PARITY_SCRIPT"], repo_root)
     env["VAWS_PARITY_WORKSPACE_ROOT"] = _absolute_path(env["VAWS_PARITY_WORKSPACE_ROOT"], repo_root)
     try:
@@ -213,6 +222,13 @@ def checkout_commit(root: Path) -> str | None:
     return result.stdout.strip() or None
 
 
+def _status_host_queue_module(env: Mapping[str, str] | None = None) -> str:
+    try:
+        return str(host_queue_module_path(env))
+    except HostQueueUnavailable:
+        return HOST_QUEUE_RELATIVE
+
+
 def checkout_status(env: Mapping[str, str] | None = None, *, repo_root: Path = ROOT) -> dict[str, Any]:
     """Describe the configured checkout without importing it."""
     env = os.environ if env is None else env
@@ -226,7 +242,7 @@ def checkout_status(env: Mapping[str, str] | None = None, *, repo_root: Path = R
         "pinned_ref": pin.get("ref"),
         "pinned_commit": pin.get("commit"),
         "task_registry": str(agent_sessions_root(repo_root)),
-        "host_queue_module": str(HOST_QUEUE_MODULE),
+        "host_queue_module": _status_host_queue_module(env),
         "historical_manager_state_dir": str(historical_manager_state_dir(repo_root)),
         "manager_state_dir_default": None,
     }

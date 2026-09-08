@@ -104,6 +104,19 @@
         }
       }
     },
+    "service_api": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["min", "max"],
+      "properties": {
+        "min": {
+          "type": "integer"
+        },
+        "max": {
+          "type": "integer"
+        }
+      }
+    },
     "note": {
       "type": "string"
     },

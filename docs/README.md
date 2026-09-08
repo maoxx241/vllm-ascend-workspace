@@ -17,7 +17,6 @@ contract. `Status: dated` is evidence and is never a direction.
 - [property-testing.md](property-testing.md) — property-based tests for the deterministic cores.
 - [remote-dev-consumption.md](remote-dev-consumption.md) — how this scaffold consumes the external remote-dev checkout.
 - [repo-boundaries.md](repo-boundaries.md) — current consumer-side boundary contract and guard summary.
-- [split-reconciliation.md](split-reconciliation.md) — split ledger and the checker that proves declared moves arrived.
 - [tracked-leak-guard.md](tracked-leak-guard.md) — tracked-file leak scanner, hook, and CI.
 - [tracked-path-guard.md](tracked-path-guard.md) — anti-rot guard against dead in-tree paths in tracked docs.
 
@@ -27,6 +26,7 @@ contract. `Status: dated` is evidence and is never a direction.
 - [audits/measurement-family.md](audits/measurement-family.md) — 2026-09-07 measurement and analysis family audit.
 - [audits/operator-triton-family.md](audits/operator-triton-family.md) — 2026-09-07 operator and Triton family audit.
 - [audits/repo-boundaries-2026-09-07.md](audits/repo-boundaries-2026-09-07.md) — 2026-09-07 boundary snapshot, 71-row inventory, and historical plan.
+- [audits/split-reconciliation-2026-09-07.md](audits/split-reconciliation-2026-09-07.md) — retired split-ledger record; 26/26 arrived.
 - [audits/run-deliver-family.md](audits/run-deliver-family.md) — 2026-09-07 run-and-deliver family audit.
 - [audits/verdict-debug-family.md](audits/verdict-debug-family.md) — 2026-09-07 validation/debug family audit.
 - [deterministic-core-maturation.md](deterministic-core-maturation.md) — first hardware pass of the maturation harness.

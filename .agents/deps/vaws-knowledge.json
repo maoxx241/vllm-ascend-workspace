@@ -5,7 +5,7 @@
   "url": "https://github.com/vllm-ascend-workspace/vaws-knowledge.git",
   "visibility": "public",
   "ref": "main",
-  "commit": "e04d50f7bc5702afbe2e2988f7c28a3268e1a7f3",
+  "commit": "4208de3ca88f5146472353f23c5f5d216767bf47",
   "root_env": "VAWS_KNOWLEDGE_KIT_ROOT",
   "default_checkout": "{shared_workspace_root}/.vaws-local/vaws-knowledge",
   "bootstrap": "python3 .agents/scripts/vaws_deps.py bootstrap vaws-knowledge",
@@ -15,9 +15,14 @@
   },
   "identity": {
     "required_files": [
-      "conformance/runner.py"
+      "conformance/runner.py",
+      "service-api.json"
     ],
     "canonical_origin": true
+  },
+  "service_api": {
+    "min": 1,
+    "max": 1
   },
   "note": "External conformance kit used by knowledge client tests. Not a runtime dependency and not vendored. CI checks out this exact commit with persist-credentials: false. identity.canonical_origin is true so a fork is reported as wrong_origin (usable, always warned). false would drop origin from identity and never emit wrong_origin."
 }

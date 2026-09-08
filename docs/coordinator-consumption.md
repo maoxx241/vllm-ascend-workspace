@@ -6,14 +6,14 @@ The shared runtime pool, local task registry and four `vaws_*` tools used to
 live in this repository under `.agents/coordinator/` and a handful of
 `.agents/lib` modules. They now live in
 [`vllm-ascend-workspace/vaws-coordinator`](https://github.com/vllm-ascend-workspace/vaws-coordinator)
-at accepted main `2e16e894e31a12d85a11117a2772031f30fdfebe` (tree
-`fc64eacacf16060446895e2fa0a23a1fe0d17b4e`). This scaffold consumes that
+at accepted main `d3c4e82a3c0e3f0be31727abf17b7863bcedba77` (tree
+`d3f91bc6375a876fc01d46b1835feabd61db2729`). This scaffold consumes that
 checkout as an **external checkout**, matching the remote-dev pin/install
 pattern from #90.
 
 This document is the consumer-side contract. The remote-dev pin in
 `.agents/deps/remote-dev.json` is the accepted provider main
-`b6acc21d147e369e771f1ff916973d74d667691e`. This scaffold does not add an
+`62045af1f76c803ca392ae413b56bcfe290e6450`. This scaffold does not add an
 exact-pin execution gate; an explicit developer checkout remains supported.
 
 ## 1. Why an external checkout
@@ -57,7 +57,7 @@ The pin lives in [`.agents/deps/coordinator.json`](../.agents/deps/coordinator.j
 | Variable | Value | Why |
 |---|---|---|
 | `VAWS_AGENT_SESSIONS_DIR` | `<shared workspace>/.vaws-local/agent-sessions` | One local task registry. Linked worktrees already share this path through `vaws_local_state.agent_sessions_root()`. |
-| `VAWS_HOST_QUEUE_MODULE` | `.agents/lib/vaws_npu_coordination.py` | Host NPU authority stays in the scaffold. The coordinator ships the module to the host and speaks `handle_request` / `CoordinationError`. |
+| `VAWS_HOST_QUEUE_MODULE` | unset by this scaffold | Host NPU authority is the coordinator's bundled `host/vaws_npu_coordination.py`. The env var is an override the scaffold no longer sets. |
 | `VAWS_MACHINE_INVENTORY` | the shared inventory JSON | Optional alias registration for the HTTP manager. |
 | `VAWS_PARITY_SCRIPT` | `remote_code_parity.py` | Parity owns materialization. The coordinator only consumes `sync --apply-mode materialize`. |
 | `VAWS_REMOTE_DEV_ROOT` | the remote-dev checkout, when present | Optional. Local attach/finish/session do not need it. |
@@ -109,8 +109,8 @@ are not rewritten. `--task-only` writes only `vaws-task`.
 
 ## 5. What was deleted after arrival evidence
 
-Destination commit `2e16e894e31a12d85a11117a2772031f30fdfebe`, tree
-`fc64eacacf16060446895e2fa0a23a1fe0d17b4e`. Blobs are recorded in
+Destination commit `d3c4e82a3c0e3f0be31727abf17b7863bcedba77`, tree
+`d3f91bc6375a876fc01d46b1835feabd61db2729`. Blobs are recorded in
 `.agents/deps/coordinator.json` `arrival_blobs`.
 
 | Deleted from this tree | Destination path |
@@ -128,9 +128,11 @@ Kept as a **byte-pinned mirror** (sha256
 the coordinator verifier. This is a pure helper, not a second task-state
 writer.
 
-Kept as scaffold authorities: `vaws_npu_coordination.py`,
-`vaws_run_manifest.py`, `vaws_local_state.py` (including
-`agent_sessions_root()`).
+Kept as scaffold authorities: `vaws_run_manifest.py`,
+`vaws_local_state.py` (including `agent_sessions_root()`). Host NPU
+authority is consumed from the pinned checkout
+(`host/vaws_npu_coordination.py`); the scaffold locator is
+`.agents/lib/vaws_host_queue_module.py`.
 
 ## 6. Residual compatibility adapters
 
@@ -147,7 +149,7 @@ Kept as scaffold authorities: `vaws_npu_coordination.py`,
 This tree is the ordinary merge of the accepted coordinator consumer
 `f39f284acbfe4a5cf8cfb06b15a41fba0d64361e` with public scaffold main
 `257dc131c2015d0e01445288efb89bc5ab825b5f`. The remote-dev pin is the
-accepted provider main `b6acc21d147e369e771f1ff916973d74d667691e`.
+accepted provider main `62045af1f76c803ca392ae413b56bcfe290e6450`.
 
 #91's reconciliation ledger may copy destination commit/blob rows from
 `.agents/deps/coordinator.json` and this document. Linux subreaper tests

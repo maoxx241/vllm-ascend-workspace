@@ -294,19 +294,19 @@ class RepositoryCoherenceTests(unittest.TestCase):
         by_repository = {meta["repository"]: meta for meta in owners.values()}
         self.assertEqual(
             by_repository["vllm-ascend-workspace/remote-dev"]["commit"],
-            "b6acc21d147e369e771f1ff916973d74d667691e",
+            "62045af1f76c803ca392ae413b56bcfe290e6450",
         )
         self.assertEqual(
             by_repository["vllm-ascend-workspace/vaws-coordinator"]["commit"],
-            "2e16e894e31a12d85a11117a2772031f30fdfebe",
+            "d3c4e82a3c0e3f0be31727abf17b7863bcedba77",
         )
         self.assertEqual(
             by_repository["vllm-ascend-workspace/vaws-top"]["commit"],
-            "e13478484b9f52e8847169a785eebc32b268787f",
+            "e7af28e629e7fd79c47e9b096f1dc1fd94f665ab",
         )
         self.assertEqual(
             by_repository["vllm-ascend-workspace/vaws-knowledge"]["commit"],
-            "e04d50f7bc5702afbe2e2988f7c28a3268e1a7f3",
+            "4208de3ca88f5146472353f23c5f5d216767bf47",
         )
         for meta in owners.values():
             self.assertEqual(meta["source_availability"], "uninspected")

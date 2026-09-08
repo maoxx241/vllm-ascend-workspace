@@ -41,7 +41,7 @@ accepted task-provider, worker, and host-authority ownership, and must
 This combined tree consumes remote-dev through the #90 external checkout,
 launcher (`.agents/scripts/remote_dev.py`), and resolver
 (`.agents/lib/vaws_remote_dev_plugin.py`). Tracked `.remote-dev` is gone.
-The pin is `b6acc21d147e369e771f1ff916973d74d667691e`. That is a statement
+The pin is `62045af1f76c803ca392ae413b56bcfe290e6450`. That is a statement
 about this source, not a claim that this PR has already merged publicly, and
 not a runtime or hardware qualification.
 
@@ -49,13 +49,13 @@ The coordinator consumer now **exists** in this combined tree: pin, locator,
 launcher, dual-provider client setup, owned-hook preservation, and residual
 compatibility adapters. Arrival evidence and the deleted in-tree writers are
 in [coordinator-consumption.md](coordinator-consumption.md). The pin is
-`2e16e894e31a12d85a11117a2772031f30fdfebe`. Task tools, registry writes, and
+`d3c4e82a3c0e3f0be31727abf17b7863bcedba77`. Task tools, registry writes, and
 the managed supervisor are not reimplemented here.
 
 The first-stage vaws-top consumer now **exists** in this combined tree:
 `npu-fleet-monitor` locates the published repository instead of a scaffold
 `vaws-top` branch worktree. The pin is
-`e13478484b9f52e8847169a785eebc32b268787f`. vaws-top is published in its
+`e7af28e629e7fd79c47e9b096f1dc1fd94f665ab`. vaws-top is published in its
 canonical repository but private; published is not public, and this
 integration does not change visibility. That is pinned source consumption,
 not a runtime, client, or NPU deployment.
@@ -70,9 +70,9 @@ current tree.
 
 | Repository | Role | Exact SHA |
 |---|---|---|
-| `vaws-coordinator` | accepted actual main after independent #1/#2 | `2e16e894e31a12d85a11117a2772031f30fdfebe` |
-| `remote-dev` | ledger + glob + mux accepted actual provider main | `b6acc21d147e369e771f1ff916973d74d667691e` |
-| `vaws-top` | independently inspected standalone main consumed by this first-stage locator | `e13478484b9f52e8847169a785eebc32b268787f` |
+| `vaws-coordinator` | accepted actual main after independent #1/#2 | `d3c4e82a3c0e3f0be31727abf17b7863bcedba77` |
+| `remote-dev` | ledger + glob + mux accepted actual provider main | `62045af1f76c803ca392ae413b56bcfe290e6450` |
+| `vaws-top` | independently inspected standalone main consumed by this first-stage locator | `e7af28e629e7fd79c47e9b096f1dc1fd94f665ab` |
 
 Independent coordinator #1 (`84cb6bdd01a2eb5afedd3e7216ace4cc7acc1285`) and
 #2 (`91b8bf52d2ba92a7586d34e2536f167f9f8d583b`) are the reviewed blobs that
@@ -97,10 +97,10 @@ metadata; current visibility comes from the organization inventory.
 | Organization repository | Id | Visibility | Observed default-branch SHA | Responsibility |
 |---|---:|---|---|---|
 | `vllm-ascend-workspace/vllm-ascend-workspace` | 1196723340 | public, non-fork | `7af4ac3106649d2dbbed712c780a14db8bf25113` | canonical scaffold |
-| `vllm-ascend-workspace/remote-dev` | 1360023179 | private | `b6acc21d147e369e771f1ff916973d74d667691e` | transport and explicit endpoints |
-| `vllm-ascend-workspace/vaws-coordinator` | 1360026044 | public | `2e16e894e31a12d85a11117a2772031f30fdfebe` | task/provider/pool protocol and managed worker |
+| `vllm-ascend-workspace/remote-dev` | 1360023179 | private | `62045af1f76c803ca392ae413b56bcfe290e6450` | transport and explicit endpoints |
+| `vllm-ascend-workspace/vaws-coordinator` | 1360026044 | public | `d3c4e82a3c0e3f0be31727abf17b7863bcedba77` | task/provider/pool protocol and managed worker |
 | `vllm-ascend-workspace/vaws-knowledge` | 1359978527 | public | `1eac65cf2f8ff4f1451c788f0964005ea0dfdee2` | formal knowledge corpus and source identity |
-| `vllm-ascend-workspace/vaws-top` | 1360023247 | private | `e13478484b9f52e8847169a785eebc32b268787f` | fleet monitoring; observation only |
+| `vllm-ascend-workspace/vaws-top` | 1360023247 | private | `e7af28e629e7fd79c47e9b096f1dc1fd94f665ab` | fleet monitoring; observation only |
 | `vllm-ascend-workspace/.github` | 1360014025 | public | `fc6a1929fc13b2844f47012a1dec296daff09936` | organization landing metadata, not a runtime provider |
 
 | Personal source-plane fork | Id | Visibility | Observed default-branch SHA | Parent / source |
@@ -117,10 +117,9 @@ every failure from killing an SSH ControlMaster, promise universal
 cancellation isolation, or constitute a hardware replay.
 
 `vaws-knowledge` Stage 2 #9 is on the accepted source main above. The
-scaffold pin `.agents/deps/vaws-knowledge.json` remains
-`e04d50f7bc5702afbe2e2988f7c28a3268e1a7f3`, an external conformance **test
-kit** selected through `VAWS_KNOWLEDGE_KIT_ROOT`, not a runtime dependency,
-and is not bumped to that source main. Two scaffold v2 entries remain
+scaffold pin `.agents/deps/vaws-knowledge.json` is
+`4208de3ca88f5146472353f23c5f5d216767bf47`, an external conformance **test
+kit** selected through `VAWS_KNOWLEDGE_KIT_ROOT`, not a runtime dependency. Two scaffold v2 entries remain
 unverified and export-blocked; nine model facts remain v1. Shared-cache
 import is an explicit local
 `.agents/scripts/knowledge_shared_cache.py import` and is not a periodic
@@ -156,15 +155,17 @@ consumer resolver extension. It does not own task tools, a managed-job
 worker, or host allocation. A transport registration hook for foreign tools
 is a dated historical proposal from the [2026-09-07 snapshot](audits/repo-boundaries-2026-09-07.md) and must not be implemented.
 
-**Host NPU authority is one scaffold-owned implementation.**
-`.agents/lib/vaws_npu_coordination.py` stays in the scaffold. The coordinator
-consumes it through the published host-module contract:
-`VAWS_HOST_QUEUE_MODULE` / `--host-queue-module`, speaking `handle_request`
-and `CoordinationError`. There is one authoritative host state and no second
+**Host NPU authority is one coordinator-owned implementation.**
+`host/vaws_npu_coordination.py` lives in the pinned vaws-coordinator checkout.
+The scaffold consumes that file through the same locator as every other
+coordinator surface and does not keep a second copy. `VAWS_HOST_QUEUE_MODULE`
+is an override the scaffold no longer sets; the coordinator defaults to its
+bundled module. The published contract is still `handle_request` and
+`CoordinationError`. There is one authoritative host state and no second
 allocator. vaws-top observes fleet inventory and must not grant leases. The
-injected host-protocol source is a published contract, not permission to
-restore `session-management/scripts/npu_coordination.py` skill-script
-imports. Independent #1 tests used the workflow pin
+host-protocol source is a published contract, not permission to restore
+`session-management/scripts/npu_coordination.py` skill-script imports.
+Independent #1 tests used the workflow pin
 `161fed1b0fe6b48359be3f0cf33bb7d8befae113` and extracted authority digest
 `d9e03cc0ef8a65f2ebc5081468dc3cc2fe079fad711349d51e8d6052b334fbff`.
 
