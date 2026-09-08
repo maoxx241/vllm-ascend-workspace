@@ -2,7 +2,7 @@
 
 ## Optional prepared-runtime path
 
-See [the shared coordinator](../../../coordinator/README.md) for pool bindings.
+See [the shared coordinator](../../../../docs/coordinator-consumption.md) for pool bindings.
 Legacy session wrappers remain separate. A pool launch uses an exact snapshot,
 the host coordinator's active fence and declared free TCP ports, then records
 the newly launched PID and heartbeats without waiting for model loading to
@@ -12,9 +12,11 @@ process to claim that new source has been tested.
 
 ## Relationship to remote-dev
 
-Use `.remote-dev` tools for ad hoc remote read/edit/bash/search/patch around a
-service. This skill owns service lifecycle semantics and keeps the existing
-scripts as the managed VAWS compatibility backend.
+Use remote-dev companion tools (`remote_*` MCP tools, launched via
+`python3 .agents/scripts/remote_dev.py`) for ad hoc remote
+read/edit/bash/search/patch around a service. This skill owns service
+lifecycle semantics and keeps the existing scripts as the managed VAWS
+compatibility backend.
 
 ## Escaping safety
 

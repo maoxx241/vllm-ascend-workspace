@@ -213,7 +213,7 @@ gate.
 The remote-dev substrate is the preferred agent-facing surface once an endpoint
 exists. It resolves host/port direct endpoints by default, mirrors native
 read/edit/bash/search/patch semantics, records local refs under
-`.remote-dev/state/`, and exposes an MCP server plus CLI fallbacks.
+`.vaws-local/remote-dev-state/`, and exposes an MCP server plus CLI fallbacks.
 
 The remote toolbox remains the managed VAWS backend. It resolves host and
 container endpoints, probes actual runtime facts, runs bounded remote shell

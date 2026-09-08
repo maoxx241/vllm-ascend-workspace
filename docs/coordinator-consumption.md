@@ -1,5 +1,7 @@
 # Consuming vaws-coordinator
 
+Status: current
+
 The shared runtime pool, local task registry and four `vaws_*` tools used to
 live in this repository under `.agents/coordinator/` and a handful of
 `.agents/lib` modules. They now live in
@@ -114,11 +116,11 @@ Destination commit `2e16e894e31a12d85a11117a2772031f30fdfebe`, tree
 | Deleted from this tree | Destination path |
 |---|---|
 | `.agents/coordinator/` | repository root of vaws-coordinator |
-| `.agents/lib/vaws_agent_session.py` | `lib/vaws_agent_session.py` |
-| `.agents/lib/vaws_task_client.py` | `lib/vaws_task_client.py` |
-| `.agents/lib/vaws_ready_runtime.py` | `lib/vaws_ready_runtime.py` |
-| `.agents/lib/vaws_managed_execution.py` | `lib/vaws_managed_execution.py` |
-| `.agents/lib/vaws_runtime_profile.py` | `lib/vaws_runtime_profile.py` |
+| former scaffold lib `vaws_agent_session.py` | `lib/vaws_agent_session.py` |
+| former scaffold lib `vaws_task_client.py` | `lib/vaws_task_client.py` |
+| former scaffold lib `vaws_ready_runtime.py` | `lib/vaws_ready_runtime.py` |
+| former scaffold lib `vaws_managed_execution.py` | `lib/vaws_managed_execution.py` |
+| former scaffold lib `vaws_runtime_profile.py` | `lib/vaws_runtime_profile.py` |
 
 Kept as a **byte-pinned mirror** (sha256
 `967adeb699e47de2e281581d576a69f6c85075385975e42916ead1ed198a2e09`):

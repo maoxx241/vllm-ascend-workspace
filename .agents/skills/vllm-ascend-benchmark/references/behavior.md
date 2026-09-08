@@ -2,9 +2,11 @@
 
 ## Relationship to remote-dev
 
-Use `.remote-dev` tools for ad hoc remote read/edit/bash/search/patch around
-benchmark setup and result inspection. This skill owns benchmark lifecycle and
-keeps the existing scripts as the managed VAWS compatibility backend.
+Use remote-dev companion tools (`remote_*` MCP tools, launched via
+`python3 .agents/scripts/remote_dev.py`) for ad hoc remote
+read/edit/bash/search/patch around benchmark setup and result inspection.
+This skill owns benchmark lifecycle and keeps the existing scripts as the
+managed VAWS compatibility backend.
 
 ## Lifecycle
 
@@ -78,7 +80,7 @@ For performance regression comparisons, all runs must use identical core benchma
 This skill measures and reports deltas. Formal `passed` / `failed` /
 `inconclusive` verdicts belong to `vllm-ascend-performance-regression`:
 predeclare per-metric `direction` (`higher` or `lower`) and
-`max_relative_regression`, then let `scripts/performance_regression.py analyze`
+`max_relative_regression`, then let `.agents/skills/vllm-ascend-performance-regression/scripts/performance_regression.py analyze`
 apply those criteria together with measurement-quality and comparability gates
 (`config_hash` identity, warmup exclusion, at least two decision values per
 state, `max_cv`, optional outlier policy). Scripts may apply declared criteria

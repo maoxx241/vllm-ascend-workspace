@@ -1,7 +1,15 @@
 # v1 -> v2 knowledge migration report
 
 - migration date: 2026-09-07
-- origin repo: `maoxx241/vllm-ascend-workspace`
+- origin repo: `vllm-ascend-workspace/vllm-ascend-workspace`
+
+The two migrated v2 entries in `known-failure-signatures.v2.yaml` keep
+`provenance.origin_repo: maoxx241/vllm-ascend-workspace`. That field is an
+identity coordinate: `derived_uuid(origin_repo, kind, slug)` in
+`.agents/lib/vaws_knowledge_v2.py` hashes it into the entry UUID. Changing
+it would mint a new identity for the same claim. The historical origin is
+therefore preserved on those rows; new captures should use the organization
+repository.
 - redaction profile: `r1`
 - migrated entries: 2
 - blocked entries: 9

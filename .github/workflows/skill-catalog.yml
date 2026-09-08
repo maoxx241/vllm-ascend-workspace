@@ -45,6 +45,10 @@ jobs:
         run: |
           python -B .agents/scripts/repo_boundary_check.py --mode enforce
           python -B -m unittest discover -s .agents/tests -p "test_repo_boundary_check.py"
+      - name: Check tracked in-tree paths
+        run: |
+          python -B .agents/scripts/tracked_path_check.py --mode enforce
+          python -B -m unittest discover -s .agents/tests -p "test_tracked_path_check.py"
       - name: Run catalog tests
         run: python -B -m unittest discover -s .agents/tests -p "test_*catalog.py"
       - name: Run generated skill projection tests

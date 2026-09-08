@@ -90,7 +90,7 @@ python3 .agents/skills/repo-init/scripts/resolve_vllm_ci_pin.py --vllm-ascend-di
 ```
 
 Then check out `vllm/` at the returned `vllm_ref`. The resolver prefers
-`.github/vllm-main-verified.commit`; older checkouts may fall back to a
+`vllm-ascend/.github/vllm-main-verified.commit`; older checkouts may fall back to a
 workflow `vllm_version` or docs `main_vllm_commit` value.
 
 ## Quiet main comparison

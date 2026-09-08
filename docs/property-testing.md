@@ -1,5 +1,7 @@
 # Property-based tests for the deterministic cores
 
+Status: current
+
 The scaffold's target state collapses deterministic mechanics into a small CLI
 surface that is matured through heavy testing. Property suites state a
 property, generate inputs against it, and keep regressions as ordinary passing
@@ -24,7 +26,7 @@ From this scaffold:
 python3 -m unittest discover -s .agents/tests
 ```
 
-From a standalone `remote-dev` checkout (not `.remote-dev/tests` in this tree):
+From a standalone `remote-dev` checkout (not the former in-tree remote-dev tests directory):
 
 ```bash
 python3 -m unittest discover -s tests

@@ -106,7 +106,7 @@ skills for domain workflows.
   `.vaws-local/remote-dev-state/`, and the local task registry under
   `.vaws-local/agent-sessions/`. All are untracked.
 - Keep `.gitmodules` on community upstream URLs.
-- Prefer `.remote-dev` remote companion tools or skill wrapper scripts over raw SSH / shell commands for remote operations.
+- Prefer remote-dev companion tools (`remote_*` MCP tools, launched via `python3 .agents/scripts/remote_dev.py`) or skill wrapper scripts over raw SSH / shell commands for remote operations.
 - Skill wrappers: progress on `stderr`, final JSON on `stdout`.
 - Execution skills must use Run Manifest v1 from `.agents/lib/vaws_run_manifest.py` for new cross-workflow runs and keep manifests under untracked `.vaws-local/`.
 - Read fast-changing compatibility, capability, validation, and failure-signature facts from `.agents/knowledge/`; treat missing facts as unknown rather than supported.
@@ -118,6 +118,8 @@ skills for domain workflows.
 - Before reporting a blocking problem or asking the user to intervene, query `.agents/knowledge/` with `.agents/scripts/knowledge_query.py` using the observed failure signature. State explicitly when no verified match exists.
 - Use the remote-dev substrate for agent-facing remote read/edit/bash/search/patch/job/artifact work. Use the remote toolbox entrypoints as the managed VAWS compatibility backend before falling back to bare SSH.
 - Remote work runs inside a `session-management` session. From inside the session worktree, parity, serving, benchmark, and profiling commands auto-resolve the session from the cwd binding; pass `--session-id` only when running outside the worktree or targeting another session. Domain skill commands (serving, benchmark, profiling) are session-only; `--machine` exists only for machine registration and `session_create.py` base-machine selection. Legacy compatibility surfaces still accept `--machine`: `remote-code-parity/scripts/parity_sync.py`, `session-management/scripts/npu_coordination.py`, and `vllm-ascend-serving/scripts/serve_probe_npus.py`.
+- The four external repositories (remote-dev, vaws-coordinator, vaws-top, vaws-knowledge) are consumed through one pin schema under `.agents/deps/` and one locator. Check workspace capability with `python3 .agents/scripts/vaws_deps.py doctor` before assuming remote endpoints, the task pool, fleet observation, or shared knowledge are available; a `partial` outcome names what is missing and the bootstrap command. See [docs/dependency-plane.md](docs/dependency-plane.md).
+- Documentation under `docs/` carries a `Status:` line. `Status: current` is a contract; `Status: dated` is evidence and is never a direction. See [docs/README.md](docs/README.md).
 - This repo targets Huawei Ascend NPU. Local machines (Mac/PC) cannot run `torch`/`torch_npu`-dependent code. Do not attempt local test execution — go straight to the remote container.
 
 ## Maintenance

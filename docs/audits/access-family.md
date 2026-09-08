@@ -1,5 +1,7 @@
 # Access and infrastructure family audit
 
+Status: dated 2026-09-07 at 161fed1 — historical evidence
+
 Scope: `.agents/skills/repo-init/`, `.agents/skills/machine-management/`,
 `.agents/skills/session-management/`, `.agents/skills/remote-toolbox/`,
 `.agents/skills/npu-fleet-monitor/`, plus the shared code they own or are
