@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Mapping
 
+from .attribution import reclassify_endpoint_stalls, refresh_exception_attribution
 from .evidence import EvidenceStore
 from .invoke import Invoker
 from .knowledge import build_candidates, capture_candidate
@@ -332,6 +333,7 @@ def finalize(
     run_id: str,
     started_at: str,
     duration_ms: int,
+    finished_at: str | None = None,
 ) -> dict[str, Any]:
     """Aggregate trials, prepare/capture knowledge candidates, write the report.
 
@@ -340,7 +342,22 @@ def finalize(
     """
     redactor = Redactor.for_endpoints(endpoints)
     trials = store.load_trials()
+    # Retained exceptions are re-attributed with the current rules so replays
+    # of older runs benefit from attribution fixes.
+    refreshed = refresh_exception_attribution(trials)
+    if refreshed:
+        emit_progress("attribution", f"{refreshed} harness-layer trial(s) re-attributed from their retained exception")
+    # Cross-trial attribution: a run of full-budget timeouts on one endpoint is
+    # the endpoint's channel, not the operations that happened to be scheduled.
+    stalls = reclassify_endpoint_stalls(trials)
+    for episode in stalls:
+        emit_progress(
+            "attribution",
+            f"{episode['endpoint_label']}: {episode['trials']} consecutive full-budget timeouts "
+            f"reattributed to transport-stall ({', '.join(episode['operations'])})",
+        )
     summary = aggregate(trials, operation_set.classes)
+    summary["stall_episodes"] = stalls
     failures = [
         {
             "trial_id": t["trial_id"],
@@ -367,6 +384,7 @@ def finalize(
         min_reproductions=config.min_reproductions,
     )
     knowledge: dict[str, Any] = {"candidates_prepared": [], "captured": [], "capture_requested": config.capture_knowledge}
+    written_ids: set[str] = set()
     for candidate in candidates:
         # Give the candidate a stable id for the evidence file name; the capture
         # path recomputes/validates its own id from the semantic fields.
@@ -374,16 +392,21 @@ def finalize(
             (candidate["summary"] + "|" + "|".join(candidate["fingerprints"])).encode("utf-8")
         ).hexdigest()[:12]
         store.write_candidate({**candidate, "candidate_id": f"maturation-{preview_id}"})
+        written_ids.add(f"maturation-{preview_id}")
         knowledge["candidates_prepared"].append({"summary": candidate["summary"], "fingerprints": candidate["fingerprints"], "confidence": candidate["confidence"]})
         if config.capture_knowledge:
             emit_progress("knowledge", f"capturing candidate: {candidate['summary']}")
             knowledge["captured"].append({"summary": candidate["summary"], **capture_candidate(candidate, extra_args=config.capture_extra_args)})
+    pruned = store.prune_candidates(written_ids)
+    if pruned:
+        emit_progress("knowledge", f"pruned {len(pruned)} stale candidate file(s) from an earlier attribution pass")
 
     report = {
         "schema_version": "vaws.maturation-report.v1",
         "run_id": run_id,
         "started_at": started_at,
-        "finished_at": utc_now_iso(),
+        "finished_at": finished_at or utc_now_iso(),
+        "reported_at": utc_now_iso(),
         "duration_ms": duration_ms,
         "operations_source": _relative(operation_set.source),
         "config": {
@@ -435,6 +458,7 @@ def replay(
         run_id=run_id,
         started_at=str(previous.get("started_at") or ""),
         duration_ms=int(previous.get("duration_ms") or 0),
+        finished_at=str(previous.get("finished_at") or "") or None,
     )
 
 
@@ -483,6 +507,16 @@ def render_markdown(report: Mapping[str, Any]) -> str:
     lines += ["", "## Least mature first", ""]
     for index, item in enumerate(summary.get("ranking", [])[:15], start=1):
         lines.append(f"{index}. `{item['operation_id']}` — {item['verdict']} ({_pct(item.get('pass_rate'))}, n={item.get('n')}) {item.get('failure_layers') or ''}")
+    stalls = summary.get("stall_episodes") or []
+    if stalls:
+        lines += ["", f"## Endpoint stalls ({len(stalls)})", ""]
+        for episode in stalls:
+            lines.append(
+                f"- `{episode['endpoint_label']}`: {episode['trials']} consecutive full-budget timeouts, "
+                f"{episode['started_at']} → {episode['ended_at']} ({episode['duration_ms'] // 1000}s), "
+                f"operations affected: {', '.join(f'`{op}`' for op in episode['operations'])}. "
+                "Reattributed to `transport-stall`; the operations themselves are not implicated."
+            )
     failures = report.get("failures", [])
     lines += ["", f"## Failures ({len(failures)})", ""]
     for item in failures[:60]:

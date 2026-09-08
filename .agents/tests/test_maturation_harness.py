@@ -349,6 +349,88 @@ class AttributionTests(unittest.TestCase):
         self.assertIn("instant timeout", instant["reason"])
         self.assertEqual(instant["fingerprint"], "instant timeout any command")
 
+    @staticmethod
+    def _timeout_trial(label: str, op: str, started: str, attempt: int = 0, *, passed: bool = False, duration: int = 30004) -> dict[str, Any]:
+        layer = "timeout" if not passed else None
+        return {
+            "trial_id": f"{label}-{op}-{attempt}",
+            "endpoint_label": label,
+            "operation_id": op,
+            "attempt": attempt,
+            "started_at": started,
+            "duration_ms": duration,
+            "passed": passed,
+            "attribution": None if passed else {"layer": layer, "reason": "timed out", "fingerprint": "timeout timeout"},
+            "steps": [{"name": "call", "passed": passed, "duration_ms": duration, "timeout_ms": 30000, "raw": {}}],
+        }
+
+    def test_consecutive_full_budget_timeouts_become_transport_stall(self) -> None:
+        t = self._timeout_trial
+        trials = [
+            t("host-d", "multi_session.bash", "2026-09-07T10:07:31Z", 3),
+            t("host-d", "multi_session.read", "2026-09-07T10:08:31Z", 0),
+            t("host-d", "read.seed", "2026-09-07T10:09:01Z", 0),
+            t("host-d", "read.seed", "2026-09-07T10:09:31Z", 1),
+            t("host-d", "glob.seed", "2026-09-07T10:10:01Z", 0, passed=True, duration=120),
+            # An isolated timeout elsewhere must stay a per-command timeout.
+            t("host-b", "read.seed", "2026-09-07T10:09:01Z", 4),
+            t("host-b", "read.seed", "2026-09-07T10:09:31Z", 5, passed=True, duration=200),
+            # Two in a row is below the threshold.
+            t("host-c", "ls.seed", "2026-09-07T10:09:01Z", 0),
+            t("host-c", "ls.seed", "2026-09-07T10:09:31Z", 1),
+        ]
+        episodes = attribution.reclassify_endpoint_stalls(trials)
+        self.assertEqual(len(episodes), 1)
+        episode = episodes[0]
+        self.assertEqual(episode["endpoint_label"], "host-d")
+        self.assertEqual(episode["trials"], 4)
+        self.assertEqual(episode["operations"], ["multi_session.bash", "multi_session.read", "read.seed"])
+        stalled = [x for x in trials if x["endpoint_label"] == "host-d" and not x["passed"]]
+        for trial in stalled:
+            self.assertEqual(trial["attribution"]["layer"], "transport-stall")
+            self.assertEqual(trial["attribution"]["original_layer"], "timeout")
+            self.assertEqual(trial["attribution"]["fingerprint"], "endpoint-wide consecutive full-budget timeouts stale ssh mux")
+        for trial in trials:
+            if trial["endpoint_label"] in {"host-b", "host-c"} and not trial["passed"]:
+                self.assertEqual(trial["attribution"]["layer"], "timeout")
+
+    def test_refresh_reattributes_retained_leaked_ssh_timeout(self) -> None:
+        exc = "TimeoutExpired: Command '['ssh', '-o', 'ControlMaster=auto', 'root@192.0.2.9', 'bash']' timed out after 210 seconds"
+        trial = {
+            "passed": False,
+            "op_class": "recovery",
+            "attribution": {"layer": "harness", "reason": exc, "fingerprint": "x", "step": "rerun-pull"},
+            "steps": [{"name": "rerun-pull", "passed": False, "exception": exc, "duration_ms": 214000, "timeout_ms": None}],
+        }
+        untouched = {"passed": False, "attribution": {"layer": "harness", "reason": "RuntimeError: boom"}, "steps": [{"name": "call", "passed": False, "exception": "RuntimeError: boom"}]}
+        self.assertEqual(attribution.refresh_exception_attribution([trial, untouched]), 1)
+        self.assertEqual(trial["attribution"]["layer"], "transport")
+        self.assertEqual(trial["attribution"]["original_layer"], "harness")
+        self.assertEqual(trial["attribution"]["step"], "rerun-pull")
+        self.assertNotIn("192.0.2.9", trial["attribution"]["reason"])
+        self.assertEqual(untouched["attribution"]["layer"], "harness")
+
+    def test_short_timeouts_do_not_form_a_stall(self) -> None:
+        t = self._timeout_trial
+        trials = [t("host-a", "read.seed", f"2026-09-07T10:0{i}:00Z", i, duration=5000) for i in range(5)]
+        self.assertEqual(attribution.reclassify_endpoint_stalls(trials), [])
+        self.assertTrue(all(x["attribution"]["layer"] == "timeout" for x in trials))
+
+    def test_stall_trials_group_into_one_candidate(self) -> None:
+        t = self._timeout_trial
+        trials = [t("host-d", op, f"2026-09-07T10:0{i}:00Z", i) for i, op in enumerate(["read.seed", "ls.seed", "multi_session.read"])]
+        trials += [t("host-d", "glob.seed", "2026-09-07T10:09:00Z", 0, passed=True, duration=100)]
+        attribution.reclassify_endpoint_stalls(trials)
+        redactor = redact.Redactor.for_endpoints([])
+        candidates = knowledge.build_candidates(trials, run_id="r", evidence_relative_dir=".vaws-local/x", redactor=redactor)
+        self.assertEqual(len(candidates), 1)
+        candidate = candidates[0]
+        self.assertEqual(candidate["scope"]["component"], "ssh-transport")
+        self.assertEqual(candidate["scope"]["subsystem"], "transport-stall")
+        self.assertIn("ls.seed", candidate["symptom"])
+        self.assertIn("ControlMaster", candidate["root_cause"])
+        self.assertEqual(candidate["confidence"], "medium")
+
 
 class StatsTests(unittest.TestCase):
     def test_wilson_bound(self) -> None:
@@ -570,6 +652,17 @@ class KnowledgeTests(unittest.TestCase):
         self.assertEqual(candidate["confidence"], "low")
         self.assertEqual(candidate["verification"]["status"], "inconclusive")
         self.assertEqual(candidate["source"], {"run_ids": ["r"]})
+
+    def test_candidate_recognises_per_environment_determinism(self) -> None:
+        trials = [t for t in self._failing_trials() if t["operation_id"] == "glob.seed" and not t["passed"]]
+        # Same operation, all green on a second endpoint with a newer python.
+        for index in range(4):
+            trials.append({**trials[0], "trial_id": f"r-host-c-glob.seed-{index:03d}", "endpoint_label": "host-c", "passed": True, "attribution": None, "environment": {"remote_python": "3.12.3"}})
+        redactor = redact.Redactor.for_endpoints([{"label": "host-b", "host": "192.0.2.5", "port": 22}])
+        candidate = knowledge.build_candidates(trials, run_id="r", evidence_relative_dir=".vaws-local/x", redactor=redactor)[0]
+        self.assertEqual(candidate["confidence"], "medium")
+        self.assertIn("Deterministic per environment", candidate["root_cause"])
+        self.assertIn("4 of 8 repetitions", candidate["symptom"])
 
     def test_candidate_passes_the_real_capture_cli_contract(self) -> None:
         redactor = redact.Redactor.for_endpoints([{"label": "host-b", "host": "192.0.2.5", "port": 22}])

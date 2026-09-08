@@ -61,13 +61,36 @@ stack when a run looks stalled.
   summary.md          anonymised summary, safe to paste into a PR
 ```
 
+## Report-time attribution
+
+Per-trial attribution is computed at run time from the full tool result and
+stored in `trials.jsonl` as-is. Two cross-trial passes run when the report is
+built — on a live run and on every `--report <run-id>` replay — so retained
+evidence benefits from attribution fixes without a new hardware pass:
+
+- `harness`-layer trials whose retained exception matches a current rule are
+  re-attributed (a leaked `TimeoutExpired` naming `ssh`/`ControlMaster`
+  becomes `transport`).
+- ≥ 3 consecutive trials on one endpoint that all time out at ≥ 95 % of
+  their budget, across any operations, become `transport-stall`: the
+  endpoint's shared channel is dead, the operations are not implicated. The
+  episodes are listed under `summary.stall_episodes`.
+
+Relabelled rows keep `original_layer`. A replay also prunes candidate files
+that the latest pass did not produce.
+
 ## Knowledge feedback
 
 A failure that reproduces at least `--min-reproductions` times (default 2)
 with the same (operation, layer, fingerprint) becomes a redacted
-`known-failure-signatures` candidate. With `--capture-knowledge` the harness
-hands it to `.agents/scripts/knowledge_capture.py` as a CLI contract and
-reports the script's verdict; a non-JSON or status-less reply is reported as
+`known-failure-signatures` candidate; `transport-stall` trials are grouped
+into one candidate per fingerprint regardless of operation. A group whose
+every repetition failed on each affected endpoint and nowhere else is marked
+"deterministic per environment" with `medium` confidence, because the
+aggregate pass rate is then an environment mix, not flakiness. With
+`--capture-knowledge` the harness hands each candidate to
+`.agents/scripts/knowledge_capture.py` as a CLI contract and reports the
+script's verdict; a non-JSON or status-less reply is reported as
 `contract-drift`, never patched around.
 
 ## Layout
