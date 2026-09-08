@@ -324,7 +324,7 @@ class ClientConfigurationTests(unittest.TestCase):
             self.assertEqual(mcp["env"]["REMOTE_DEV_RUNTIME_ENV_FILE"], "/etc/profile.d/custom.sh")
 
 
-SPLIT_LEDGER_RELATIVE = ".agents/policy/split-ledger.json"
+SPLIT_LEDGER_RELATIVE = "docs/audits/split-ledger-2026-09-07.json"
 OLD_SUBSTRATE_PATH = ".remote-dev/"
 
 

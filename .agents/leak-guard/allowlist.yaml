@@ -189,12 +189,6 @@ allowlist:
     match_regex: ^sk-[a-z0-9]+$
     justification: Fabricated OpenAI-shaped key used to assert that secret-shaped values are rejected by knowledge capture.
 
-  - id: split-ledger-github-origin-userinfo
-    path_glob: .agents/tests/test_split_reconcile_ledger.py
-    categories: [email]
-    match_regex: '^(?:git|token)@github\.com$'
-    justification: Both values are fixed GitHub transport/userinfo test syntax used by split-ledger origin identity fixtures; they name the GitHub SSH user and a synthetic HTTPS userinfo local-part, not a personal mailbox.
-
   # --------------------------------- knowledge Phase B fixture/version
   - id: knowledge-recipes-torch-npu-dev-version
     path_glob: .agents/skills/curate-workspace-knowledge/references/command-recipes.md
