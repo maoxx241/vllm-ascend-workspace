@@ -820,8 +820,8 @@ name = "uvicorn"
 version = "0.52.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "click" },
-    { name = "h11" },
+    { name = "click", marker = "python_full_version < '3.12' or python_full_version >= '3.14' or sys_platform != 'emscripten'" },
+    { name = "h11", marker = "python_full_version < '3.12' or python_full_version >= '3.14' or sys_platform != 'emscripten'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/f2/0f/3f86e61397dd33bf2ccf28188c40db6a740658aeebbbf6e7dbc101a1f487/uvicorn-0.52.4.tar.gz", hash = "sha256:73acfee47a0b133c5de13d219492d62d8a31e935f4fe6e41a232451a15379f86", size = 100627, upload-time = "2026-08-19T06:27:41.821Z" }
 wheels = [
@@ -838,8 +838,8 @@ dependencies = [
 
 [[package]]
 name = "vaws-knowledge"
-version = "0.1.0"
-source = { git = "https://github.com/vllm-ascend-workspace/vaws-knowledge?tag=v0.1.0#afe396071540ff28623a53c3edd22fca6de011af" }
+version = "0.1.1"
+source = { git = "https://github.com/vllm-ascend-workspace/vaws-knowledge?rev=93be969f04a5f681fee1686bfd1f2bf319a90f12#93be969f04a5f681fee1686bfd1f2bf319a90f12" }
 dependencies = [
     { name = "jsonschema" },
     { name = "packaging" },
@@ -872,7 +872,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "vaws-coordinator", git = "https://github.com/vllm-ascend-workspace/vaws-coordinator?tag=v0.1.0" },
-    { name = "vaws-knowledge", git = "https://github.com/vllm-ascend-workspace/vaws-knowledge?tag=v0.1.0" },
+    { name = "vaws-knowledge", git = "https://github.com/vllm-ascend-workspace/vaws-knowledge?rev=93be969f04a5f681fee1686bfd1f2bf319a90f12" },
     { name = "vaws-remote-dev", git = "https://github.com/vllm-ascend-workspace/remote-dev?tag=v0.1.0" },
 ]
 

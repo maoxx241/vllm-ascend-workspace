@@ -12,7 +12,8 @@
     },
     {
       "id": "vaws-top",
-      "package": "vaws-top"
+      "package": "vaws-top",
+      "declaration": "npu-fleet-monitor uvx release wheel"
     },
     {
       "id": "vaws-knowledge",
