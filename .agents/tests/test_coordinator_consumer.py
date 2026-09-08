@@ -28,6 +28,9 @@ if str(LIB) not in sys.path:
 
 import vaws_coordinator as coordinator  # noqa: E402
 
+# Integration marker: skip checkout-backed cases when no coordinator exists
+# (including a hermetic VAWS_COORDINATOR_ROOT=/nonexistent hide). Must pass
+# when the shared .vaws-local checkout is present and usable.
 CHECKOUT = coordinator.coordinator_root(required=False)
 requires_coordinator = unittest.skipUnless(CHECKOUT, "no vaws-coordinator checkout (set VAWS_COORDINATOR_ROOT)")
 

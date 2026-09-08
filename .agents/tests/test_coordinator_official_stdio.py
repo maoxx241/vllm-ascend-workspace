@@ -24,6 +24,9 @@ if str(LIB) not in sys.path:
 
 import vaws_coordinator as coordinator  # noqa: E402
 
+# Integration marker: skip when no coordinator exists (including a hermetic
+# VAWS_COORDINATOR_ROOT=/nonexistent hide). Must pass when the checkout is
+# present, the official SDK is installed, and the pin matches.
 CHECKOUT = coordinator.coordinator_root(required=False)
 try:
     import importlib.metadata

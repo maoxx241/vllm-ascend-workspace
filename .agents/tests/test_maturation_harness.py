@@ -27,6 +27,13 @@ from maturation.scenarios import EndpointContext, evaluate, run_operation  # noq
 IPV4 = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 
 
+def _require_pyyaml() -> None:
+    try:
+        import yaml  # noqa: F401
+    except ImportError as exc:
+        raise unittest.SkipTest(f"PyYAML is not installed ({exc})") from exc
+
+
 def _documentation_ipv4(octets: list[int]) -> bool:
     if len(octets) != 4 or not all(0 <= value <= 255 for value in octets):
         return False
@@ -244,6 +251,7 @@ CLASSES = {
 
 class SpecTests(unittest.TestCase):
     def test_default_operations_document_is_valid(self) -> None:
+        _require_pyyaml()
         operation_set = spec.load_operation_set()
         self.assertGreaterEqual(len(operation_set.enabled()), 25)
         ids = [op.id for op in operation_set.operations]
@@ -617,6 +625,7 @@ class CliTests(unittest.TestCase):
     RUN = AGENTS / "maturation" / "run.py"
 
     def test_list_and_argument_errors(self) -> None:
+        _require_pyyaml()
         proc = subprocess.run([sys.executable, str(self.RUN), "--list"], capture_output=True, text=True, check=False)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         listing = json.loads(proc.stdout)
@@ -628,6 +637,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 2)
 
     def test_list_and_synthetic_report_without_checkout(self) -> None:
+        _require_pyyaml()
         missing = str(Path(tempfile.mkdtemp()) / "absent-checkout")
         env = {**os.environ, "VAWS_REMOTE_DEV_ROOT": missing}
         listed = subprocess.run([sys.executable, str(self.RUN), "--list"], capture_output=True, text=True, env=env, check=False)
@@ -676,6 +686,7 @@ class CliTests(unittest.TestCase):
         self.assertNotIn("Traceback", reported.stderr)
 
     def test_real_execution_missing_source_fails_without_traceback(self) -> None:
+        _require_pyyaml()
         missing = str(Path(tempfile.mkdtemp()) / "absent-checkout")
         env = {**os.environ, "VAWS_REMOTE_DEV_ROOT": missing}
         proc = subprocess.run(

@@ -1095,8 +1095,8 @@ class VersioningTests(unittest.TestCase):
     def test_schema_document_validates_with_jsonschema_when_available(self) -> None:
         try:
             import jsonschema  # noqa: PLC0415
-        except ImportError:
-            self.skipTest("jsonschema is not installed; library validation is authoritative")
+        except (ImportError, TypeError) as exc:
+            self.skipTest(f"jsonschema is not usable ({exc}); library validation is authoritative")
         schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
         jsonschema.validate(base_envelope(), schema)
 
