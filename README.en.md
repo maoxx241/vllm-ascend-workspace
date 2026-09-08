@@ -137,7 +137,7 @@ When talking to an Agent:
 - **Local state stays untracked** — User-specific remotes, auth, and machine config live only in the untracked `.vaws-local/` directory.
 - **Parallel tasks stay isolated** — Remote parallel work should use sessions: each task gets its own local worktree, remote container, state namespace, and resource leases.
 - **Remote operations are structured** — Agents should prefer the remote toolbox for JSON results, observable logs, resumable artifact manifests, and cleanup-capable state.
-- **Submodules point to community** — `.gitmodules` always targets `vllm-project` official repos. Organization development forks (`vllm-ascend-workspace/vllm`, `vllm-ascend-workspace/vllm-ascend`) and personal forks are local remote candidates, not submodule URLs, and are not selected merely because they exist.
+- **Submodules point to community** — `.gitmodules` always targets `vllm-project` official repos. Personal forks are local remote candidates, not submodule URLs, and are not selected merely because they exist.
 - **Agent-driven, not Agent-dependent** — Everything can be done manually. Agent skills just make it more convenient.
 
 ## Recommended remote topology
@@ -151,7 +151,7 @@ Skills recommend the following topology, but never enforce it:
 | `vllm`        | Your fork (optional) | `vllm-project/vllm`              |
 | `vllm-ascend` | Your fork            | `vllm-project/vllm-ascend`       |
 
-The canonical scaffold is `vllm-ascend-workspace/vllm-ascend-workspace` (public, non-fork). `vllm-ascend-workspace/vllm` and `vllm-ascend-workspace/vllm-ascend` are development forks of the community upstreams, not replacement upstreams. Established fetch/push/protocol/`pushurl`/extra remotes stay as configured; `configure` is for explicit fresh setup only.
+The canonical scaffold is `vllm-ascend-workspace/vllm-ascend-workspace` (public, non-fork). The current personal development forks are `maoxx241/vllm` and `maoxx241/vllm-ascend`, outside the organization and not replacement upstreams. Established fetch/push/protocol/`pushurl`/extra remotes stay as configured; `configure` is for explicit fresh setup only.
 
 
 ## Multi-tool support

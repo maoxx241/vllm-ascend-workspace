@@ -111,7 +111,7 @@ Fresh workspace setup example:
 python3 .agents/skills/repo-init/scripts/repo_topology.py configure   --repo .   --origin-url git@github.com:USER/vllm-ascend-workspace.git   --upstream-url git@github.com:vllm-ascend-workspace/vllm-ascend-workspace.git
 ```
 
-Fresh `vllm-ascend` setup example (community upstream; do not point `upstream` at the organization development fork):
+Fresh `vllm-ascend` setup example (community upstream; personal fork is `origin` when the user selected one):
 
 ```bash
 python3 .agents/skills/repo-init/scripts/repo_topology.py configure   --repo vllm-ascend   --origin-url git@github.com:USER/vllm-ascend.git   --upstream-url git@github.com:vllm-project/vllm-ascend.git

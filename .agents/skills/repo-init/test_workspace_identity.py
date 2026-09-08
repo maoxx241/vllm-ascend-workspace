@@ -156,17 +156,11 @@ class CanonicalTopologyTests(unittest.TestCase):
         )
         self.assertEqual(probe.COMMUNITY["vllm"], "vllm-project/vllm")
         self.assertEqual(probe.COMMUNITY["vllm-ascend"], "vllm-project/vllm-ascend")
-        self.assertEqual(
-            probe.ORGANIZATION_DEV_FORKS["vllm"],
-            "vllm-ascend-workspace/vllm",
-        )
-        self.assertEqual(
-            probe.ORGANIZATION_DEV_FORKS["vllm-ascend"],
-            "vllm-ascend-workspace/vllm-ascend",
-        )
-        self.assertNotIn("workspace", probe.ORGANIZATION_DEV_FORKS)
+        self.assertFalse(hasattr(probe, "ORGANIZATION"))
+        self.assertFalse(hasattr(probe, "ORGANIZATION_DEV_FORKS"))
+        self.assertFalse(hasattr(probe, "gh_organization_fork_info"))
 
-    def test_classify_remote_keeps_community_org_fork_and_personal_distinct(self) -> None:
+    def test_classify_remote_keeps_community_personal_and_other_distinct(self) -> None:
         self.assertEqual(
             probe.classify_remote(
                 "workspace",
@@ -181,7 +175,7 @@ class CanonicalTopologyTests(unittest.TestCase):
         )
         self.assertEqual(
             probe.classify_remote("vllm", "vllm-ascend-workspace/vllm", "alice"),
-            "organization-dev-fork",
+            "other",
         )
         self.assertEqual(
             probe.classify_remote(
@@ -189,7 +183,7 @@ class CanonicalTopologyTests(unittest.TestCase):
                 "vllm-ascend-workspace/vllm-ascend",
                 "alice",
             ),
-            "organization-dev-fork",
+            "other",
         )
         self.assertEqual(
             probe.classify_remote("vllm", "alice/vllm", "alice"),
@@ -233,60 +227,62 @@ class MockedGitHubForkTests(unittest.TestCase):
         probe.run = self._original_run  # type: ignore[method-assign]
         probe.which = self._original_which  # type: ignore[method-assign]
 
-    def test_organization_dev_fork_is_a_candidate_not_selected(self) -> None:
+    def test_gh_fork_info_queries_only_authenticated_user_repos(self) -> None:
         self.api_payloads["alice/vllm"] = github_payload(
             "alice/vllm",
             repo_id=11,
             is_fork=True,
             parent="vllm-project/vllm",
         )
-        self.missing.add("alice/vllm-ascend")
-        self.missing.add("alice/vllm-ascend-workspace")
-        self.api_payloads["vllm-ascend-workspace/vllm"] = github_payload(
-            "vllm-ascend-workspace/vllm",
-            repo_id=1009465986,
-            is_fork=True,
-            parent="vllm-project/vllm",
-        )
-        self.api_payloads["vllm-ascend-workspace/vllm-ascend"] = github_payload(
-            "vllm-ascend-workspace/vllm-ascend",
-            repo_id=924147541,
+        self.api_payloads["alice/vllm-ascend"] = github_payload(
+            "alice/vllm-ascend",
+            repo_id=12,
             is_fork=True,
             parent="vllm-project/vllm-ascend",
         )
+        self.api_payloads["alice/vllm-ascend-workspace"] = github_payload(
+            "alice/vllm-ascend-workspace",
+            repo_id=13,
+            is_fork=True,
+            parent="vllm-ascend-workspace/vllm-ascend-workspace",
+        )
+        self.api_payloads["vllm-ascend-workspace/vllm"] = github_payload(
+            "vllm-ascend-workspace/vllm",
+            repo_id=99,
+            is_fork=True,
+            parent="vllm-project/vllm",
+        )
 
         personal = probe.gh_fork_info("alice")
-        organization = probe.gh_organization_fork_info()
-
+        requested = [
+            cmd[2][len("repos/") :]
+            for cmd in self.commands
+            if len(cmd) >= 3 and cmd[:2] == ["gh", "api"] and cmd[2].startswith("repos/")
+        ]
+        self.assertEqual(
+            requested,
+            [
+                "alice/vllm-ascend-workspace",
+                "alice/vllm",
+                "alice/vllm-ascend",
+            ],
+        )
         self.assertTrue(personal["vllm"]["exists"])
         self.assertEqual(personal["vllm"]["full_name"], "alice/vllm")
+        self.assertEqual(personal["vllm"]["id"], 11)
+        self.assertEqual(
+            personal["vllm"]["ssh_url"],
+            "git@github.com:alice/vllm.git",
+        )
+        self.assertEqual(
+            personal["vllm"]["clone_url"],
+            "https://github.com/alice/vllm.git",
+        )
         self.assertEqual(personal["vllm"]["classification"], "user-fork")
         self.assertTrue(personal["vllm"]["personal_fork"])
-        self.assertFalse(personal["vllm-ascend"]["exists"])
-        self.assertFalse(personal["workspace"]["exists"])
-
-        org_vllm = organization["vllm"]
-        self.assertTrue(org_vllm["exists"])
-        self.assertEqual(org_vllm["full_name"], "vllm-ascend-workspace/vllm")
-        self.assertEqual(org_vllm["id"], 1009465986)
-        self.assertEqual(org_vllm["parent_full_name"], "vllm-project/vllm")
-        self.assertEqual(
-            org_vllm["ssh_url"],
-            "git@github.com:vllm-ascend-workspace/vllm.git",
-        )
-        self.assertEqual(
-            org_vllm["clone_url"],
-            "https://github.com/vllm-ascend-workspace/vllm.git",
-        )
-        self.assertEqual(org_vllm["classification"], "organization-dev-fork")
-        self.assertFalse(org_vllm["selected"])
-        self.assertFalse(org_vllm["push_access_assumed"])
-        self.assertEqual(
-            organization["vllm-ascend"]["full_name"],
-            "vllm-ascend-workspace/vllm-ascend",
-        )
-        self.assertFalse(organization["vllm-ascend"]["selected"])
-        self.assertNotIn("workspace", organization)
+        self.assertTrue(personal["vllm-ascend"]["exists"])
+        self.assertTrue(personal["workspace"]["exists"])
+        self.assertFalse(hasattr(probe, "gh_organization_fork_info"))
 
     def test_generic_personal_fork_output_semantics_are_preserved(self) -> None:
         self.api_payloads["alice/vllm"] = github_payload(
@@ -325,6 +321,32 @@ class MockedGitHubForkTests(unittest.TestCase):
         )
         self.assertEqual(personal["workspace"]["classification"], "user-fork")
 
+    def test_restored_personal_login_follows_ordinary_user_fork_path(self) -> None:
+        self.api_payloads["maoxx241/vllm"] = github_payload(
+            "maoxx241/vllm",
+            repo_id=1009465986,
+            is_fork=True,
+            parent="vllm-project/vllm",
+        )
+        self.api_payloads["maoxx241/vllm-ascend"] = github_payload(
+            "maoxx241/vllm-ascend",
+            repo_id=924147541,
+            is_fork=True,
+            parent="vllm-project/vllm-ascend",
+        )
+        self.missing.add("maoxx241/vllm-ascend-workspace")
+        personal = probe.gh_fork_info("maoxx241")
+        self.assertTrue(personal["vllm"]["exists"])
+        self.assertTrue(personal["vllm"]["personal_fork"])
+        self.assertEqual(personal["vllm"]["classification"], "user-fork")
+        self.assertEqual(personal["vllm"]["full_name"], "maoxx241/vllm")
+        self.assertEqual(personal["vllm"]["id"], 1009465986)
+        self.assertTrue(personal["vllm-ascend"]["exists"])
+        self.assertTrue(personal["vllm-ascend"]["personal_fork"])
+        self.assertEqual(personal["vllm-ascend"]["classification"], "user-fork")
+        self.assertFalse(personal["workspace"]["exists"])
+        self.assertFalse(personal["workspace"]["personal_fork"])
+
     def test_legacy_personal_redirect_reports_resolved_identity(self) -> None:
         self.api_payloads["former-user/vllm-ascend-workspace"] = github_payload(
             "vllm-ascend-workspace/vllm-ascend-workspace",
@@ -332,14 +354,14 @@ class MockedGitHubForkTests(unittest.TestCase):
             is_fork=False,
         )
         self.api_payloads["former-user/vllm"] = github_payload(
-            "vllm-ascend-workspace/vllm",
-            repo_id=1009465986,
+            "new-user/vllm",
+            repo_id=55,
             is_fork=True,
             parent="vllm-project/vllm",
         )
         self.api_payloads["former-user/vllm-ascend"] = github_payload(
-            "vllm-ascend-workspace/vllm-ascend",
-            repo_id=924147541,
+            "new-user/vllm-ascend",
+            repo_id=56,
             is_fork=True,
             parent="vllm-project/vllm-ascend",
         )
@@ -360,8 +382,14 @@ class MockedGitHubForkTests(unittest.TestCase):
         self.assertTrue(vllm["redirected"])
         self.assertFalse(vllm["exists"])
         self.assertFalse(vllm["personal_fork"])
-        self.assertEqual(vllm["full_name"], "vllm-ascend-workspace/vllm")
-        self.assertEqual(vllm["classification"], "organization-dev-fork")
+        self.assertEqual(vllm["full_name"], "new-user/vllm")
+        self.assertEqual(vllm["id"], 55)
+        self.assertEqual(
+            vllm["ssh_url"],
+            "git@github.com:new-user/vllm.git",
+        )
+        self.assertEqual(vllm["classification"], "other")
+        self.assertNotEqual(vllm["classification"], "user-fork")
 
     def test_keep_current_and_community_only_remain_topology_options(self) -> None:
         original_detect = probe.detect_git_username_candidate
@@ -396,7 +424,6 @@ class MockedGitHubForkTests(unittest.TestCase):
                     "submodules": [],
                     "repos": {},
                     "forks": {},
-                    "organization_forks": {},
                 }
             )
         finally:
@@ -406,6 +433,7 @@ class MockedGitHubForkTests(unittest.TestCase):
             compact["decision_checkpoint"]["repo_topology"]["options"],
             ["keep-current", "recommended-fork-mode", "community-only"],
         )
+        self.assertNotIn("organization_forks", compact)
 
 
 class EstablishedRemotePreservationTests(unittest.TestCase):
@@ -478,7 +506,7 @@ class EstablishedRemotePreservationTests(unittest.TestCase):
             self.assertEqual(inspected["origin_kind"], "user-fork")
             self.assertEqual(inspected["upstream_kind"], "community")
 
-    def test_organization_dev_fork_origin_is_not_community(self) -> None:
+    def test_unrelated_organization_origin_is_other(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             workspace = root / "workspace"
@@ -500,9 +528,10 @@ class EstablishedRemotePreservationTests(unittest.TestCase):
                 "https://github.com/vllm-project/vllm.git",
             )
             inspected = probe.inspect_repo(workspace, "vllm", "alice")
-            self.assertEqual(inspected["origin_kind"], "organization-dev-fork")
+            self.assertEqual(inspected["origin_kind"], "other")
             self.assertEqual(inspected["upstream_kind"], "community")
             self.assertNotEqual(inspected["origin_kind"], "community")
+            self.assertNotEqual(inspected["origin_kind"], "user-fork")
 
 
 if __name__ == "__main__":

@@ -519,22 +519,27 @@ client, runtime, or hardware evidence.
 ### Current source repositories
 
 Canonical clone/upstream for the scaffold is the organization repository.
-The two business repositories under the same organization are development
-forks of community upstreams, not replacement upstreams and not extraction
-destinations. `.gitmodules` still points at `vllm-project/vllm` and
-`vllm-project/vllm-ascend`; default-branch SHAs below are identity facts,
-not submodule gitlink updates.
+The organization inventory is six repositories. The two business forks are
+personal public repositories outside that inventory: source-plane inputs,
+not extraction destinations and not deployment units. `.gitmodules` still
+points at `vllm-project/vllm` and `vllm-project/vllm-ascend`; default-branch
+SHAs below are identity facts, not submodule gitlink updates. remote-dev and
+vaws-top numeric ids are retained from the dated 2026-09-07T13:13:24Z
+metadata; current visibility comes from the organization inventory.
 
-| Repository | Id | Visibility | Observed default-branch SHA | Responsibility |
+| Organization repository | Id | Visibility | Observed default-branch SHA | Responsibility |
 |---|---:|---|---|---|
 | `vllm-ascend-workspace/vllm-ascend-workspace` | 1196723340 | public, non-fork | `7af4ac3106649d2dbbed712c780a14db8bf25113` | canonical scaffold |
-| `vllm-ascend-workspace/vllm` | 1009465986 | public fork of `vllm-project/vllm` (599547518) | `a435e3108d82eb96d9b3954c1935afbbf4c5f69b` | organization development fork |
-| `vllm-ascend-workspace/vllm-ascend` | 924147541 | public fork of `vllm-project/vllm-ascend` (924058625) | `d52c1b8de956507e6ace7ba351a998ed5cee6ce5` | organization development fork |
 | `vllm-ascend-workspace/remote-dev` | 1360023179 | private | `b6acc21d147e369e771f1ff916973d74d667691e` | transport and explicit endpoints |
 | `vllm-ascend-workspace/vaws-coordinator` | 1360026044 | public | `2e16e894e31a12d85a11117a2772031f30fdfebe` | task/provider/pool protocol and managed worker |
 | `vllm-ascend-workspace/vaws-knowledge` | 1359978527 | public | `1eac65cf2f8ff4f1451c788f0964005ea0dfdee2` | formal knowledge corpus and source identity |
 | `vllm-ascend-workspace/vaws-top` | 1360023247 | private | `e13478484b9f52e8847169a785eebc32b268787f` | fleet monitoring; observation only |
 | `vllm-ascend-workspace/.github` | 1360014025 | public | `fc6a1929fc13b2844f47012a1dec296daff09936` | organization landing metadata, not a runtime provider |
+
+| Personal source-plane fork | Id | Visibility | Observed default-branch SHA | Parent / source |
+|---|---:|---|---|---|
+| `maoxx241/vllm` | 1009465986 | public fork | `a435e3108d82eb96d9b3954c1935afbbf4c5f69b` | `vllm-project/vllm` (599547518) |
+| `maoxx241/vllm-ascend` | 924147541 | public fork | `d52c1b8de956507e6ace7ba351a998ed5cee6ce5` | `vllm-project/vllm-ascend` (924058625) |
 
 Source main SHA, scaffold dependency pin, accepted consumer wiring, installed
 runtime, and hardware qualification remain distinct facts. A later default

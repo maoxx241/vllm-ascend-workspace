@@ -47,15 +47,6 @@ COMMUNITY = {
     "vllm-ascend": "vllm-project/vllm-ascend",
 }
 
-# Organization development forks of the two business repositories. These are
-# candidates only: never community upstream, never auto-selected, and never
-# assumed to be writable for the authenticated user.
-ORGANIZATION = "vllm-ascend-workspace"
-ORGANIZATION_DEV_FORKS = {
-    "vllm": f"{ORGANIZATION}/vllm",
-    "vllm-ascend": f"{ORGANIZATION}/vllm-ascend",
-}
-
 REPO_PATHS = {
     "workspace": ".",
     "vllm": "vllm",
@@ -244,9 +235,6 @@ def classify_remote(
         return "missing"
     if full_name == COMMUNITY[repo_role]:
         return "community"
-    org_fork = ORGANIZATION_DEV_FORKS.get(repo_role)
-    if org_fork and full_name == org_fork:
-        return "organization-dev-fork"
     repo_basename = COMMUNITY[repo_role].split("/", 1)[1]
     if user_login and full_name == f"{user_login}/{repo_basename}":
         return "user-fork"
@@ -377,7 +365,7 @@ def personal_fork_record(
         resolved is not None
         and resolved.lower() == expected_personal.lower()
         and not redirected
-        and identity_kind not in {"community", "organization-dev-fork"}
+        and identity_kind != "community"
     )
     if is_personal:
         result["classification"] = "user-fork"
@@ -402,25 +390,6 @@ def gh_fork_info(user_login: Optional[str]) -> Dict[str, Any]:
         repo_name = community.split("/", 1)[1]
         requested = f"{user_login}/{repo_name}"
         info[role] = personal_fork_record(role, gh_repo_lookup(requested), user_login)
-    return info
-
-
-def gh_organization_fork_info() -> Dict[str, Any]:
-    if not which("gh"):
-        return {}
-
-    info: Dict[str, Any] = {}
-    for role, full_name in ORGANIZATION_DEV_FORKS.items():
-        lookup = gh_repo_lookup(full_name)
-        record = dict(lookup)
-        resolved = lookup.get("full_name") if isinstance(lookup.get("full_name"), str) else None
-        if lookup.get("exists") and not lookup.get("error"):
-            record["classification"] = classify_remote(role, resolved, None)
-        else:
-            record["classification"] = "missing"
-        record["selected"] = False
-        record["push_access_assumed"] = False
-        info[role] = record
     return info
 
 
@@ -593,8 +562,6 @@ def compact_fork_summary(forks: Dict[str, Any]) -> Dict[str, Any]:
             "classification",
             "personal_fork",
             "id",
-            "selected",
-            "push_access_assumed",
         ):
             if key in info:
                 row[key] = info[key]
@@ -643,7 +610,6 @@ def compact_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
             for role, repo in (payload.get("repos") or {}).items()
         },
         "forks": compact_fork_summary(payload.get("forks") or {}),
-        "organization_forks": compact_fork_summary(payload.get("organization_forks") or {}),
         "decision_checkpoint": {
             "required_for_broad_init": True,
             "machine_username": {
@@ -716,10 +682,8 @@ def main() -> None:
 
     if gh_state.get("logged_in") and user_login:
         payload["forks"] = gh_fork_info(user_login)
-        payload["organization_forks"] = gh_organization_fork_info()
     else:
         payload["forks"] = {}
-        payload["organization_forks"] = {}
 
     if args.compact:
         payload = compact_payload(payload)

@@ -125,8 +125,8 @@ Treat this as the target only after the user approves it.
 | Repository | Recommended `origin` | Recommended `upstream` | Notes |
 | --- | --- | --- | --- |
 | workspace | user fork, if the user wants one | `vllm-ascend-workspace/vllm-ascend-workspace` | Canonical scaffold is the organization repository (public, non-fork). If already on a user fork, offer to add `upstream`. |
-| `vllm` | user fork, if one exists and the user wants it | `vllm-project/vllm` | Community-only mode is valid. The organization development fork `vllm-ascend-workspace/vllm` is a reported candidate only: not community upstream, not assumed writable, and not selected merely because it exists. |
-| `vllm-ascend` | user fork | `vllm-project/vllm-ascend` | Fork-based PR work is recommended. Same candidate rule for `vllm-ascend-workspace/vllm-ascend`. |
+| `vllm` | user fork, if one exists and the user wants it | `vllm-project/vllm` | Community-only mode is valid. A matching personal fork is reported, not assumed writable, and not selected merely because it exists. |
+| `vllm-ascend` | user fork | `vllm-project/vllm-ascend` | Fork-based PR work is recommended. Same personal-fork rule: report the matching fork, keep community upstream, and do not infer write permission. |
 
 Keep-current and community-only remain valid topology modes. Do not rewrite established remotes to flatten fetch/push/protocol/pushurl/extra-remote values. `repo_topology.py configure` is for explicit fresh setup, not a transfer migration of already-configured remotes. If a legacy personal URL redirects, report the resolved repository identity; do not invent a personal fork from the redirect.
 

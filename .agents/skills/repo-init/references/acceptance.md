@@ -78,9 +78,9 @@ A successful run should satisfy all applicable items below.
 - `repo_topology.py configure --repo <submodule>` errors out when the submodule is not initialized (git root mismatch)
 - preserves nonstandard remotes
 - keeps tracked files on community URLs
-- classifies `vllm-ascend-workspace/vllm` and `vllm-ascend-workspace/vllm-ascend` as organization development-fork candidates, distinct from `vllm-project/*` community upstream and from a generic personal fork
+- classifies matching `{login}/vllm` and `{login}/vllm-ascend` as personal forks, distinct from `vllm-project/*` community upstream
 - reports the resolved repository identity when a legacy personal GitHub URL redirects, instead of fabricating a new personal fork
-- does not assume push access or silently select an organization development fork because it exists
+- does not assume push access or silently select a personal fork because it exists
 - uses `repo_topology.py configure` only for explicit fresh setup, not as an automatic transfer migration of established remotes
 - uses quiet remote comparison instead of broad prune-heavy fetches
 - moves local branches only with approval when worktrees are clean enough

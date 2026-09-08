@@ -140,7 +140,7 @@ python3 .agents/skills/npu-fleet-monitor/scripts/manage_monitor.py ensure
 - **并行任务隔离** — 远端并行执行优先使用 session：每个任务有独立本地 worktree、远端容器、状态目录和资源 lease。
 - **可选资源协调** — 独立 Agent 可通过宿主机 `/tmp` 中的共享 SQLite 队列发布 NPU 意向、排队和人工占用窗口；该协议只做君子协作，不强制拦截既有任务流程。
 - **远端操作结构化** — Agent 面向远端容器优先使用 remote toolbox，产出 JSON、可观测日志、可恢复 artifact manifest 和可清理状态。
-- **子模块指向社区** — `.gitmodules` 始终指向 `vllm-project` 的官方仓库。组织开发 fork（`vllm-ascend-workspace/vllm`、`vllm-ascend-workspace/vllm-ascend`）和个人 Fork 都是本地远程候选，不是子模块 URL，也不会仅因存在就被选中。
+- **子模块指向社区** — `.gitmodules` 始终指向 `vllm-project` 的官方仓库。个人 Fork 是本地远程候选，不是子模块 URL，也不会仅因存在就被选中。
 - **Agent 驱动，但不依赖 Agent** — 所有操作都可以手动完成，Agent 只是让流程更方便。
 
 ## 推荐的远程仓库拓扑
@@ -154,7 +154,7 @@ python3 .agents/skills/npu-fleet-monitor/scripts/manage_monitor.py ensure
 | `vllm`        | 你的 Fork（可选） | `vllm-project/vllm`              |
 | `vllm-ascend` | 你的 Fork     | `vllm-project/vllm-ascend`       |
 
-规范脚手架仓库是组织下的 `vllm-ascend-workspace/vllm-ascend-workspace`（公开、非 fork）。`vllm-ascend-workspace/vllm` 与 `vllm-ascend-workspace/vllm-ascend` 是社区上游的开发 fork，不是替换上游。已有远程的 fetch/push/协议/`pushurl`/额外 remote 保持原样；`configure` 只用于明确的全新配置。
+规范脚手架仓库是组织下的 `vllm-ascend-workspace/vllm-ascend-workspace`（公开、非 fork）。当前个人开发 fork 是组织外的 `maoxx241/vllm` 与 `maoxx241/vllm-ascend`，不是替换上游。已有远程的 fetch/push/协议/`pushurl`/额外 remote 保持原样；`configure` 只用于明确的全新配置。
 
 
 ## 多工具支持

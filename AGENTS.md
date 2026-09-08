@@ -4,9 +4,9 @@ Local `vllm` + `vllm-ascend` development scaffold. `vllm/` and `vllm-ascend/` ar
 
 The canonical scaffold is `vllm-ascend-workspace/vllm-ascend-workspace`
 (public, non-fork). Submodule URLs stay on `vllm-project/vllm` and
-`vllm-project/vllm-ascend`. The organization repositories
-`vllm-ascend-workspace/vllm` and `vllm-ascend-workspace/vllm-ascend` are
-development forks, not replacement community upstreams.
+`vllm-project/vllm-ascend`. Personal development forks such as
+`maoxx241/vllm` and `maoxx241/vllm-ascend` sit outside the organization
+and are not replacement community upstreams.
 
 This repository provides a remote development substrate first, then
 vLLM-Ascend skills on top.
