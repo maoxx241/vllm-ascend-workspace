@@ -20,6 +20,7 @@ from knowledge_kit import (  # noqa: E402
     KIT_ROOT_ENV,
     KitInvalid,
     KitUnconfigured,
+    build_client_kit_argv,
     pinned_commit,
     resolve_kit_root,
     run_client_kit,
@@ -40,6 +41,34 @@ class KitConfigurationTests(unittest.TestCase):
             ["/opt/Python 3.12/python", "/tmp/dir with spaces/adapter.py", "hash"]
         )
         self.assertEqual(len(shlex.split(command)), 3)
+
+    def test_conflicts_cmd_omitted_when_pinned_runner_lacks_flag(self) -> None:
+        temp = tempfile.TemporaryDirectory()
+        try:
+            kit = Path(temp.name)
+            (kit / "conformance").mkdir()
+            (kit / "conformance" / "runner.py").write_text(
+                "# pre-v0.1.0 runner has no conflicts gate\n",
+                encoding="utf-8",
+            )
+            argv = build_client_kit_argv(kit, repo_root=ROOT)
+            self.assertNotIn("--conflicts-cmd", argv)
+        finally:
+            temp.cleanup()
+
+    def test_conflicts_cmd_passed_when_runner_declares_flag(self) -> None:
+        temp = tempfile.TemporaryDirectory()
+        try:
+            kit = Path(temp.name)
+            (kit / "conformance").mkdir()
+            (kit / "conformance" / "runner.py").write_text(
+                'parser.add_argument("--conflicts-cmd")\n',
+                encoding="utf-8",
+            )
+            argv = build_client_kit_argv(kit, repo_root=ROOT)
+            self.assertIn("--conflicts-cmd", argv)
+        finally:
+            temp.cleanup()
 
     def test_configured_missing_path_fails(self) -> None:
         missing = Path(tempfile.mkdtemp()) / "missing-kit"

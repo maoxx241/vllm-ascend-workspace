@@ -26,12 +26,13 @@ Two deliberate differences from the upstream contract, both local-only:
    Export rewrites it to ``unverified`` (a proposal lands in
    ``corpus/unverified/``).
 
-Everything else — the twelve dimensions, the status/confidence rules, the
-canonicalization, the ``additionalProperties: false`` egress whitelist — is
-enforced exactly as documented, using the standard library only. ``jsonschema``
-is not available in this environment, so validation is hand-written; it is
-checked against the upstream ``examples/valid-entry.yaml`` shape in
-``.agents/tests/test_knowledge_v2.py``.
+Everything else — the twelve dimensions, the two body variants (``rule`` /
+``measurement``), the status/confidence rules, the canonicalization, the
+``additionalProperties: false`` egress whitelist — is enforced exactly as
+documented, using the standard library only. ``jsonschema`` is not available
+in this environment, so validation is hand-written; it is checked against
+the upstream ``examples/valid-entry.yaml`` shape and the shared conformance
+kit in ``.agents/tests/test_knowledge_v2.py``.
 """
 
 from __future__ import annotations
@@ -98,9 +99,35 @@ VERIFIED_CONTEXT = "verified"
 # observations are the review-zone, not the shared cache.
 SHARED_ENTRY_STATUSES = frozenset({"verified", "stale", "deprecated", "resolved"})
 
+# The two entry body variants. An entry has exactly one; content_hash is
+# defined over scope + that body, keyed by the body's own name
+# (docs/federation.md step 1; vaws_knowledge.canonical.BODY_KEYS).
+BODY_KEYS = ("rule", "measurement")
 RULE_REQUIRED = ("summary", "symptom", "root_cause", "resolution")
 RULE_OPTIONAL = ("avoidance", "fingerprints")
-ENTRY_REQUIRED = (
+MEASUREMENT_REQUIRED = ("summary", "subject", "method", "quantities")
+MEASUREMENT_OPTIONAL = ("notes",)
+MEASUREMENT_FIELDS = frozenset(MEASUREMENT_REQUIRED + MEASUREMENT_OPTIONAL)
+MEASUREMENT_BASES = frozenset({"declared", "theoretical", "measured", "sustained"})
+MEASUREMENT_METHOD_TYPES = frozenset({"vendor_platform_config", "microbenchmark"})
+MEASUREMENT_SOURCE_KINDS = frozenset(
+    {"vendor_file", "run_manifest", "pull_request", "issue", "commit", "ci_run"}
+)
+MEASUREMENT_SUBJECT_REQUIRED = ("id",)
+MEASUREMENT_SUBJECT_OPTIONAL = (
+    "aliases",
+    "family",
+    "architecture",
+    "core_version",
+    "compiler_target",
+)
+MEASUREMENT_METHOD_REQUIRED = ("type", "description", "source")
+MEASUREMENT_METHOD_OPTIONAL = ("parameters",)
+MEASUREMENT_SOURCE_REQUIRED = ("kind", "ref")
+MEASUREMENT_SOURCE_OPTIONAL = ("note",)
+MEASUREMENT_QUANTITY_REQUIRED = ("name", "basis", "value", "unit")
+MEASUREMENT_QUANTITY_OPTIONAL = ("qualifier",)
+ENTRY_ENVELOPE_REQUIRED = (
     "uuid",
     "slug",
     "content_hash",
@@ -109,9 +136,17 @@ ENTRY_REQUIRED = (
     "scope",
     "provenance",
     "lifecycle",
-    "rule",
 )
+# Historical alias: the envelope, not the body. Callers that still treat
+# ``rule`` as required must go through ``body_key`` / ``BODY_KEYS``.
+ENTRY_REQUIRED = ENTRY_ENVELOPE_REQUIRED
 ENTRY_OPTIONAL = ("verification", "conflicts")
+QUANTITY_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_]{0,63}$")
+QUANTITY_VALUE_RE = re.compile(r"^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$")
+UNIT_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
+PARAM_NAME_RE = QUANTITY_NAME_RE
+SOURCE_REF_RE = re.compile(r"^\S+$")
+METHOD_DESCRIPTION_MIN = 12
 
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 UUID_RE = re.compile(
@@ -382,20 +417,50 @@ def _normalize_tree(value: Any) -> Any:
     return value
 
 
+def body_key(entry: Mapping[str, Any]) -> str | None:
+    """Name of the entry's single body key, or ``None`` if it has not got one.
+
+    Exactly one of ``rule`` / ``measurement`` is expected. Two bodies is
+    ambiguous rather than richer, so it is refused here as well as by the
+    schema: hashing both under one revision would let a change to either look
+    like a change to the entry as a whole.
+    """
+
+    if not isinstance(entry, Mapping):
+        return None
+    present = [key for key in BODY_KEYS if key in entry]
+    return present[0] if len(present) == 1 else None
+
+
 def canonical_object(entry: Mapping[str, Any]) -> dict[str, Any]:
-    """Return the canonical ``{"rule": ..., "scope": ...}`` mapping for ``entry``."""
+    """Return the canonical ``{<body>: ..., "scope": ...}`` mapping for ``entry``.
+
+    The body key is ``rule`` or ``measurement``. A missing ``scope``, a missing
+    body or two bodies raise rather than hashing a partial payload, matching
+    ``vaws_knowledge.canonical.canonical_payload``.
+    """
 
     if not isinstance(entry, Mapping):
         raise KnowledgeV2Error("canonical_payload: entry must be a mapping")
-    missing = [name for name in ("scope", "rule") if name not in entry]
-    if missing:
+    body = body_key(entry)
+    if body is None:
+        present = [key for key in BODY_KEYS if key in entry]
+        if len(present) > 1:
+            raise KnowledgeV2Error(
+                "canonical_payload: entry declares both "
+                + " and ".join(f"'{name}'" for name in present)
+                + "; an entry has exactly one body and content_hash cannot cover two"
+            )
         raise KnowledgeV2Error(
-            "canonical_payload: entry is missing "
-            + ", ".join(repr(name) for name in missing)
-            + "; content_hash is defined over scope + rule only and cannot be "
-            "computed without both"
+            "canonical_payload: entry has no body; content_hash is defined over "
+            "scope + one of " + ", ".join(f"'{key}'" for key in BODY_KEYS)
         )
-    for key in ("scope", "rule"):
+    if "scope" not in entry:
+        raise KnowledgeV2Error(
+            "canonical_payload: entry is missing 'scope'; content_hash is defined "
+            f"over scope + {body} and cannot be computed without both"
+        )
+    for key in ("scope", body):
         if not isinstance(entry[key], Mapping):
             raise KnowledgeV2Error(
                 f"canonical_payload: {key} must be a mapping, got "
@@ -404,21 +469,23 @@ def canonical_object(entry: Mapping[str, Any]) -> dict[str, Any]:
         err = _payload_type_error(entry[key], key)
         if err:
             raise KnowledgeV2Error("canonical_payload: " + err)
-    rule = _normalize_tree(entry["rule"])
-    if isinstance(rule, dict) and "fingerprints" in rule:
+    body_tree = _normalize_tree(entry[body])
+    if isinstance(body_tree, dict) and "fingerprints" in body_tree:
         # Step 2 applies to the original fingerprint strings, not to the
         # already step-3-normalized copies in the walked tree.
-        rule["fingerprints"] = _normalize_fingerprints(entry["rule"].get("fingerprints"))
+        body_tree["fingerprints"] = _normalize_fingerprints(entry[body].get("fingerprints"))
     scope = _normalize_tree(entry["scope"])
-    return {"rule": rule, "scope": scope}
+    return {body: body_tree, "scope": scope}
 
 
 def canonical_payload(entry: Mapping[str, Any]) -> str:
-    """Canonical JSON serialization of ``scope`` + ``rule``, per docs/federation.md.
+    """Canonical JSON serialization of ``scope`` + body, per docs/federation.md.
 
     Only what the entry *claims* is hashed: not status, not dates, not
     provenance. Re-verifying or re-reviewing an entry must not change its
     revision. The return value is the exact UTF-8 JSON string that is hashed.
+    The payload key is the body's own name, so a rule entry hashes
+    byte-for-byte as it always did.
     """
 
     return json.dumps(
@@ -601,6 +668,178 @@ def _validate_rule(value: Any, path: str, errors: list[str]) -> None:
         ):
             errors.append(f"{path}.fingerprints must be an array of non-empty strings")
     unknown = sorted(set(value) - set(RULE_REQUIRED) - set(RULE_OPTIONAL))
+    if unknown:
+        errors.append(
+            f"{path} has fields the contract does not declare: {', '.join(unknown)}"
+        )
+
+
+def _validate_measurement_source(value: Any, path: str, errors: list[str]) -> None:
+    if not isinstance(value, Mapping):
+        errors.append(f"{path} must be an object")
+        return
+    kind = value.get("kind")
+    if kind not in MEASUREMENT_SOURCE_KINDS:
+        errors.append(
+            f"{path}.kind must be one of: {', '.join(sorted(MEASUREMENT_SOURCE_KINDS))}"
+        )
+    ref = value.get("ref")
+    if not isinstance(ref, str) or not SOURCE_REF_RE.fullmatch(ref):
+        errors.append(
+            f"{path}.ref must be a followable reference with no whitespace; "
+            "prose is not a reference"
+        )
+    note = value.get("note")
+    if note is not None and not isinstance(note, str):
+        errors.append(f"{path}.note must be a string")
+    unknown = sorted(
+        set(value) - set(MEASUREMENT_SOURCE_REQUIRED) - set(MEASUREMENT_SOURCE_OPTIONAL)
+    )
+    if unknown:
+        errors.append(f"{path} has fields the contract does not declare: {', '.join(unknown)}")
+
+
+def _validate_measurement_subject(value: Any, path: str, errors: list[str]) -> None:
+    if not isinstance(value, Mapping):
+        errors.append(f"{path} must be an object")
+        return
+    subject_id = value.get("id")
+    if not isinstance(subject_id, str) or not subject_id.strip():
+        errors.append(f"{path}.id is required and names the hardware the claim is about")
+    aliases = value.get("aliases")
+    if aliases is not None:
+        if not isinstance(aliases, list) or any(
+            not isinstance(item, str) or not item.strip() for item in aliases
+        ):
+            errors.append(f"{path}.aliases must be an array of non-empty strings")
+    for field in ("family", "architecture", "core_version", "compiler_target"):
+        if field in value and not isinstance(value[field], str):
+            errors.append(f"{path}.{field} must be a string")
+        elif field in value and isinstance(value[field], str) and not value[field].strip():
+            errors.append(f"{path}.{field} must be a non-empty string")
+    unknown = sorted(
+        set(value) - set(MEASUREMENT_SUBJECT_REQUIRED) - set(MEASUREMENT_SUBJECT_OPTIONAL)
+    )
+    if unknown:
+        errors.append(f"{path} has fields the contract does not declare: {', '.join(unknown)}")
+
+
+def _validate_measurement_method(value: Any, path: str, errors: list[str]) -> None:
+    if not isinstance(value, Mapping):
+        errors.append(f"{path} must be an object")
+        return
+    if value.get("type") not in MEASUREMENT_METHOD_TYPES:
+        errors.append(
+            f"{path}.type must be one of: {', '.join(sorted(MEASUREMENT_METHOD_TYPES))}"
+        )
+    description = value.get("description")
+    if not isinstance(description, str) or len(description.strip()) < METHOD_DESCRIPTION_MIN:
+        errors.append(
+            f"{path}.description must state what was done in enough detail to repeat it"
+        )
+    _validate_measurement_source(value.get("source"), f"{path}.source", errors)
+    parameters = value.get("parameters")
+    if parameters is not None:
+        if not isinstance(parameters, list):
+            errors.append(f"{path}.parameters must be an array")
+        else:
+            for index, item in enumerate(parameters):
+                item_path = f"{path}.parameters[{index}]"
+                if not isinstance(item, Mapping):
+                    errors.append(f"{item_path} must be an object")
+                    continue
+                name = item.get("name")
+                if not isinstance(name, str) or not PARAM_NAME_RE.fullmatch(name):
+                    errors.append(
+                        f"{item_path}.name must match ^[a-z0-9][a-z0-9_]{{0,63}}$"
+                    )
+                param_value = item.get("value")
+                if not isinstance(param_value, str) or not param_value.strip():
+                    errors.append(f"{item_path}.value must be a non-empty string")
+                unknown = sorted(set(item) - {"name", "value"})
+                if unknown:
+                    errors.append(
+                        f"{item_path} has fields the contract does not declare: "
+                        + ", ".join(unknown)
+                    )
+    unknown = sorted(
+        set(value) - set(MEASUREMENT_METHOD_REQUIRED) - set(MEASUREMENT_METHOD_OPTIONAL)
+    )
+    if unknown:
+        errors.append(f"{path} has fields the contract does not declare: {', '.join(unknown)}")
+
+
+def _validate_measurement_quantity(value: Any, path: str, errors: list[str]) -> None:
+    if not isinstance(value, Mapping):
+        errors.append(f"{path} must be an object")
+        return
+    name = value.get("name")
+    if not isinstance(name, str) or not QUANTITY_NAME_RE.fullmatch(name):
+        errors.append(f"{path}.name must match ^[a-z0-9][a-z0-9_]{{0,63}}$")
+    if value.get("basis") not in MEASUREMENT_BASES:
+        errors.append(
+            f"{path}.basis must be one of: {', '.join(sorted(MEASUREMENT_BASES))}"
+        )
+    quantity_value = value.get("value")
+    if isinstance(quantity_value, bool) or isinstance(quantity_value, (int, float)):
+        errors.append(
+            f"{path}.value must be a decimal string, not a number: a float "
+            "renders differently in different languages and content_hash is "
+            "a byte-level agreement"
+        )
+    elif not isinstance(quantity_value, str) or not QUANTITY_VALUE_RE.fullmatch(quantity_value):
+        errors.append(
+            f"{path}.value must be a decimal string matching "
+            "^-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$"
+        )
+    unit = value.get("unit")
+    if not isinstance(unit, str) or not UNIT_RE.fullmatch(unit):
+        errors.append(f"{path}.unit must be a lowercase unit token")
+    qualifier = value.get("qualifier")
+    if qualifier is not None and (not isinstance(qualifier, str) or not qualifier.strip()):
+        errors.append(f"{path}.qualifier must be a non-empty string")
+    unknown = sorted(
+        set(value) - set(MEASUREMENT_QUANTITY_REQUIRED) - set(MEASUREMENT_QUANTITY_OPTIONAL)
+    )
+    if unknown:
+        errors.append(f"{path} has fields the contract does not declare: {', '.join(unknown)}")
+
+
+def _validate_measurement(value: Any, path: str, errors: list[str]) -> None:
+    if not isinstance(value, Mapping):
+        errors.append(f"{path} must be an object")
+        return
+    summary = value.get("summary")
+    if not isinstance(summary, str) or not summary.strip():
+        errors.append(f"{path}.summary must be a non-empty string")
+    _validate_measurement_subject(value.get("subject"), f"{path}.subject", errors)
+    _validate_measurement_method(value.get("method"), f"{path}.method", errors)
+    quantities = value.get("quantities")
+    if not isinstance(quantities, list) or not quantities:
+        errors.append(f"{path}.quantities must be a non-empty array")
+    else:
+        seen: set[tuple[str, str]] = set()
+        for index, item in enumerate(quantities):
+            item_path = f"{path}.quantities[{index}]"
+            _validate_measurement_quantity(item, item_path, errors)
+            if isinstance(item, Mapping):
+                name = item.get("name")
+                basis = item.get("basis")
+                if isinstance(name, str) and isinstance(basis, str):
+                    key = (name, basis)
+                    if key in seen:
+                        errors.append(
+                            f"{item_path}: quantity {name}/{basis} is claimed twice "
+                            "in one entry; an entry may not contradict itself"
+                        )
+                    seen.add(key)
+    notes = value.get("notes")
+    if notes is not None:
+        if not isinstance(notes, list) or any(
+            not isinstance(item, str) or not item.strip() for item in notes
+        ):
+            errors.append(f"{path}.notes must be an array of non-empty strings")
+    unknown = sorted(set(value) - MEASUREMENT_FIELDS)
     if unknown:
         errors.append(
             f"{path} has fields the contract does not declare: {', '.join(unknown)}"
@@ -865,7 +1104,18 @@ def validate_entry(
     _validate_scope(entry.get("scope"), f"{path}.scope", errors, allow_unresolved=allow_unresolved)
     _validate_provenance(entry.get("provenance"), f"{path}.provenance", errors)
     _validate_lifecycle(entry.get("lifecycle"), f"{path}.lifecycle", errors)
-    _validate_rule(entry.get("rule"), f"{path}.rule", errors)
+    body = body_key(entry)
+    present_bodies = [key for key in BODY_KEYS if key in entry]
+    if body is None:
+        errors.append(
+            f"{path} has exactly one body: 'rule' for a failure rule or "
+            "'measurement' for a measured or vendor-declared quantity; this one "
+            + ("declares both" if present_bodies else "declares neither")
+        )
+    elif body == "rule":
+        _validate_rule(entry.get("rule"), f"{path}.rule", errors)
+    else:
+        _validate_measurement(entry.get("measurement"), f"{path}.measurement", errors)
     if "verification" in entry:
         _validate_verification(entry["verification"], f"{path}.verification", errors)
     if context == VERIFIED_CONTEXT:
@@ -901,16 +1151,22 @@ def validate_entry(
             f"status {status} requires a complete coordinate"
         )
 
-    unknown = sorted(set(entry) - set(ENTRY_REQUIRED) - set(ENTRY_OPTIONAL))
+    allowed = set(ENTRY_ENVELOPE_REQUIRED) | set(ENTRY_OPTIONAL) | set(BODY_KEYS)
+    unknown = sorted(set(entry) - allowed)
     if unknown:
         errors.append(
             f"{path} has fields the egress whitelist does not declare: {', '.join(unknown)}"
         )
-    missing = sorted(set(ENTRY_REQUIRED) - set(entry))
+    missing = sorted(set(ENTRY_ENVELOPE_REQUIRED) - set(entry))
     if missing:
         errors.append(f"{path} is missing required fields: {', '.join(missing)}")
 
-    if check_hash and isinstance(entry.get("scope"), Mapping) and isinstance(entry.get("rule"), Mapping):
+    if (
+        check_hash
+        and isinstance(entry.get("scope"), Mapping)
+        and body is not None
+        and isinstance(entry.get(body), Mapping)
+    ):
         try:
             expected = content_hash(entry)
         except KnowledgeV2Error as exc:
@@ -918,7 +1174,7 @@ def validate_entry(
             expected = None
         if expected is not None and declared_hash != expected:
             errors.append(
-                f"{path}.content_hash does not match the canonicalized scope+rule payload"
+                f"{path}.content_hash does not match the canonicalized scope+{body} payload"
             )
     return errors
 
@@ -1034,13 +1290,88 @@ def load_entries(
     return entries, problems
 
 
-def match_view(entry: Mapping[str, Any]) -> dict[str, Any]:
-    """Adapt a v2 entry to the shape the v1 scorer understands."""
+def entry_summary(entry: Mapping[str, Any]) -> str:
+    """One-line claim text both body variants share."""
 
+    body = body_key(entry)
+    if body == "measurement":
+        measurement = entry.get("measurement")
+        if isinstance(measurement, Mapping):
+            summary = measurement.get("summary")
+            if isinstance(summary, str) and summary.strip():
+                return summary
+    rule = entry.get("rule")
+    if isinstance(rule, Mapping):
+        for field in ("summary", "symptom"):
+            text = rule.get(field)
+            if isinstance(text, str) and text.strip():
+                return text
+    return str(entry.get("slug") or entry.get("uuid") or "")
+
+
+def searchable_view(entry: Mapping[str, Any]) -> dict[str, Any]:
+    """A rule-shaped view of whichever body the entry carries.
+
+    Mirrors ``vaws_knowledge.server.query.searchable_view``: a measurement
+    has no symptom, so subject id, aliases and quantity names play the
+    fingerprint role; summary and method description play the prose role.
+    """
+
+    if body_key(entry) != "measurement":
+        rule = entry.get("rule")
+        return dict(rule) if isinstance(rule, Mapping) else {}
+    measurement = entry.get("measurement")
+    if not isinstance(measurement, Mapping):
+        return {}
+    subject = measurement.get("subject") if isinstance(measurement.get("subject"), Mapping) else {}
+    method = measurement.get("method") if isinstance(measurement.get("method"), Mapping) else {}
+    quantities = measurement.get("quantities") if isinstance(measurement.get("quantities"), list) else []
+    tokens: list[str] = []
+    if subject.get("id"):
+        tokens.append(str(subject["id"]))
+    tokens.extend(str(alias) for alias in (subject.get("aliases") or []) if isinstance(alias, str))
+    for quantity in quantities:
+        if not isinstance(quantity, Mapping):
+            continue
+        if quantity.get("name"):
+            tokens.append(str(quantity["name"]))
+        if quantity.get("name") and quantity.get("basis"):
+            tokens.append(f"{quantity['name']} {quantity['basis']}")
+    return {
+        "summary": measurement.get("summary"),
+        "resolution": method.get("description"),
+        "fingerprints": tokens,
+    }
+
+
+def match_view(entry: Mapping[str, Any]) -> dict[str, Any]:
+    """Adapt a v2 entry to the shape the v1 scorer understands.
+
+    Rule-only fields are ``None`` rather than absent on a measurement, which
+    is the v1-visible signal that this result is not a failure rule. ``body``
+    is the v2 discriminator.
+    """
+
+    body = body_key(entry) or "rule"
+    view = searchable_view(entry)
+    rule = entry.get("rule") if isinstance(entry.get("rule"), Mapping) else {}
+    measurement = (
+        entry.get("measurement") if isinstance(entry.get("measurement"), Mapping) else {}
+    )
     return {
         "id": entry.get("slug", entry.get("uuid", "")),
         "status": entry.get("status"),
-        "rule": entry.get("rule", {}),
+        "body": body,
+        "rule": {
+            "summary": view.get("summary") if body == "measurement" else rule.get("summary"),
+            "symptom": None if body == "measurement" else rule.get("symptom"),
+            "root_cause": None if body == "measurement" else rule.get("root_cause"),
+            "resolution": view.get("resolution") if body == "measurement" else rule.get("resolution"),
+            "fingerprints": view.get("fingerprints")
+            if body == "measurement"
+            else rule.get("fingerprints", []),
+        },
+        "measurement": measurement if body == "measurement" else None,
         "applicable_versions": scope_summary(entry.get("scope", {})),
     }
 
@@ -1069,6 +1400,153 @@ def status_warning(entry: Mapping[str, Any]) -> str | None:
     if pending:
         return "unresolved coordinate: " + ", ".join(pending)
     return None
+
+
+# ---------------------------------------------------------------------------
+# measurement conflicts (docs/review-pipeline.md; bot/conflicts.py)
+# ---------------------------------------------------------------------------
+
+
+def _constraint_kind(constraint: Any) -> str:
+    if not isinstance(constraint, Mapping):
+        return "invalid"
+    keys = set(constraint)
+    if keys == {"any", "basis"}:
+        return "any"
+    if keys == {"values"}:
+        return "values"
+    if keys == {"range"}:
+        return "range"
+    if "unresolved" in keys:
+        return "unresolved"
+    return "invalid"
+
+
+def _normalized_values(constraint: Mapping[str, Any]) -> set[str]:
+    items = constraint.get("values")
+    if not isinstance(items, list):
+        return set()
+    return {str(item).strip() for item in items if str(item).strip()}
+
+
+def _dimension_disjoint(left: Any, right: Any) -> bool:
+    """True only when both sides are bounded and their value sets do not meet.
+
+    ``any``, unresolved markers, ranges that cannot be compared, and malformed
+    constraints are treated as overlapping: that is the conservative reading
+    ``vaws_knowledge.bot.conflicts.relate_dimension`` uses for ``any`` and
+    unknown, and it is enough for the shared kit's measurement vectors.
+    """
+
+    kind_a, kind_b = _constraint_kind(left), _constraint_kind(right)
+    if kind_a == "values" and kind_b == "values":
+        return not (_normalized_values(left) & _normalized_values(right))
+    return False
+
+
+def scopes_overlap(left: Mapping[str, Any], right: Mapping[str, Any]) -> bool:
+    """Coordinates overlap when no dimension is disjoint on both sides."""
+
+    if not isinstance(left, Mapping) or not isinstance(right, Mapping):
+        return False
+    for name in SCOPE_DIMENSIONS:
+        if _dimension_disjoint(left.get(name), right.get(name)):
+            return False
+    return True
+
+
+def measurement_quantities(
+    entry: Mapping[str, Any],
+) -> dict[tuple[str, str], tuple[str, str]]:
+    """``{(name, basis): (value, unit)}``. ``basis`` is part of identity."""
+
+    measurement = entry.get("measurement")
+    if not isinstance(measurement, Mapping):
+        return {}
+    raw = measurement.get("quantities")
+    if not isinstance(raw, list):
+        return {}
+    out: dict[tuple[str, str], tuple[str, str]] = {}
+    for item in raw:
+        if not isinstance(item, Mapping):
+            continue
+        name = str(item.get("name") or "").strip()
+        basis = str(item.get("basis") or "").strip()
+        if not name:
+            continue
+        out[(name, basis)] = (
+            str(item.get("value") or "").strip(),
+            str(item.get("unit") or "").strip(),
+        )
+    return out
+
+
+def measurement_subject_id(entry: Mapping[str, Any]) -> str:
+    measurement = entry.get("measurement")
+    if not isinstance(measurement, Mapping):
+        return ""
+    subject = measurement.get("subject")
+    if not isinstance(subject, Mapping):
+        return ""
+    return str(subject.get("id") or "").strip()
+
+
+def measurement_contradictions(
+    left: Mapping[str, Any], right: Mapping[str, Any]
+) -> list[dict[str, Any]]:
+    """Quantities the two entries claim differently, or empty if none do.
+
+    Same rule as ``vaws_knowledge.bot.conflicts.measurement_contradiction``:
+    both sides must be measurements about the same subject; ``(name, basis)``
+    is the quantity identity; a differing ``value`` or ``unit`` is a
+    contradiction.
+    """
+
+    if body_key(left) != "measurement" or body_key(right) != "measurement":
+        return []
+    subject_a = measurement_subject_id(left)
+    subject_b = measurement_subject_id(right)
+    if not subject_a or subject_a.lower() != subject_b.lower():
+        return []
+    if not scopes_overlap(left.get("scope", {}), right.get("scope", {})):
+        return []
+    quantities_a = measurement_quantities(left)
+    quantities_b = measurement_quantities(right)
+    differing: list[dict[str, Any]] = []
+    for key in sorted(set(quantities_a) & set(quantities_b)):
+        if quantities_a[key] != quantities_b[key]:
+            name, basis = key
+            differing.append(
+                {
+                    "quantity": name,
+                    "basis": basis,
+                    "a": {"value": quantities_a[key][0], "unit": quantities_a[key][1]},
+                    "b": {"value": quantities_b[key][0], "unit": quantities_b[key][1]},
+                }
+            )
+    return differing
+
+
+def document_has_measurement_conflict(document: Mapping[str, Any]) -> bool:
+    """True when two live measurement entries contradict each other.
+
+    A measurement contradiction blocks on arrival, not at promotion
+    (``measurements.contradiction_blocks_before_promotion``).
+    """
+
+    entries = document.get("entries")
+    if not isinstance(entries, list):
+        return False
+    live = [
+        entry
+        for entry in entries
+        if isinstance(entry, Mapping) and entry.get("status") in {"verified", "unverified", "stale"}
+    ]
+    for index, left in enumerate(live):
+        for right in live[index + 1 :]:
+            if measurement_contradictions(left, right):
+                return True
+    return False
 
 
 # ---------------------------------------------------------------------------

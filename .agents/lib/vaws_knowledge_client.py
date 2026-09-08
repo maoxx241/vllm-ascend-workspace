@@ -169,6 +169,13 @@ def probe_capabilities(
 # ---------------------------------------------------------------------------
 
 
+def _wanted_bodies(bodies: Sequence[str] | None) -> set[str] | None:
+    if not bodies:
+        return None
+    wanted = {item for item in bodies if item in v2.BODY_KEYS}
+    return wanted or None
+
+
 def _v2_matches(
     entries: Sequence[Mapping[str, Any]],
     *,
@@ -178,8 +185,10 @@ def _v2_matches(
     include_unverified: bool,
     include_deprecated: bool,
     min_score: int,
+    bodies: Sequence[str] | None = None,
 ) -> list[dict[str, Any]]:
     selected = set(kinds) if kinds else None
+    wanted_bodies = _wanted_bodies(bodies)
     matches: list[dict[str, Any]] = []
     for entry in entries:
         kind = entry.get("_kind")
@@ -190,11 +199,13 @@ def _v2_matches(
             continue
         if status == "unverified" and not include_unverified:
             continue
+        body = v2.body_key(entry) or "rule"
+        if wanted_bodies is not None and body not in wanted_bodies:
+            continue
         view = v2.match_view(entry)
         score = v1.score_entry(query, view)
         if score <= 0 or score < min_score:
             continue
-        rule = entry.get("rule", {})
         matches.append(
             {
                 "id": entry.get("slug"),
@@ -203,7 +214,8 @@ def _v2_matches(
                 "layer": layer,
                 "schema_version": v2.SCHEMA_VERSION,
                 "status": status,
-                "summary": str(rule.get("summary") or rule.get("symptom") or entry.get("slug")),
+                "body": body,
+                "summary": v2.entry_summary(entry),
                 "applicable_versions": view["applicable_versions"],
                 "scope_summary": view["applicable_versions"],
                 "unresolved_dimensions": v2.unresolved_dimensions(entry),
@@ -266,6 +278,7 @@ def _candidate_matches(
                 "layer": "candidate",
                 "schema_version": candidate.get("schema_version"),
                 "status": "candidate",
+                "body": "rule",
                 "summary": candidate["summary"],
                 "applicable_versions": candidate.get("applicable_versions", ""),
                 "scope_summary": candidate.get("applicable_versions", ""),
@@ -284,6 +297,7 @@ def query(
     query: str,
     layers: Sequence[str] = DEFAULT_LAYERS,
     kinds: Sequence[str] | None = None,
+    bodies: Sequence[str] | None = None,
     limit: int = 3,
     include_unverified: bool = False,
     include_deprecated: bool = False,
@@ -349,6 +363,7 @@ def query(
                     knowledge_dir=knowledge_dir,
                     query=query,
                     kinds=kinds,
+                    bodies=bodies,
                     limit=limit * 4,
                     include_deprecated=include_deprecated,
                     include_unverified=include_unverified,
@@ -402,6 +417,7 @@ def query(
                     include_unverified=include_unverified,
                     include_deprecated=include_deprecated,
                     min_score=min_score,
+                    bodies=bodies,
                 )
             )
 
@@ -421,6 +437,13 @@ def query(
             candidate_matches, candidate_problems = _candidate_matches(
                 candidate_dir, query=query, kinds=kinds, min_score=min_score
             )
+            wanted = _wanted_bodies(bodies)
+            if wanted is not None:
+                candidate_matches = [
+                    match
+                    for match in candidate_matches
+                    if match.get("body", "rule") in wanted
+                ]
             problems.extend(candidate_problems)
             matches.extend(candidate_matches)
 

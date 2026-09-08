@@ -51,14 +51,19 @@ confirming that an identical fingerprint has a different cause.
 ```text
 uuid            derived from origin repo + kind + slug (stable across reruns)
 slug            the entry id
-content_hash    sha256 over the canonicalized scope+rule payload
+content_hash    sha256 over the canonicalized scope+body payload
+                (body is `rule` or `measurement`, keyed by its own name)
 status          always 'unverified' on promotion
 confidence      candidate confidence; 'high' downgraded to 'medium'
 scope           12 dimensions, each bounded or explicitly unresolved
 provenance      contributor, origin repo, submitted_at, redaction profile
 lifecycle       first_seen, updated_at, superseded_by, resolved_by
-rule            summary, symptom, root_cause, resolution, avoidance,
-                fingerprints
+rule            failure-signature body: summary, symptom, root_cause,
+                resolution, avoidance, fingerprints
+measurement     quantity body: summary, subject, method, quantities,
+                notes. A number has no symptom. Candidate `promote`
+                still writes a `rule`; measurement entries arrive
+                from the shared corpus or an explicit body.
 verification    only when evidence is followable *and* the captured
                 environment covers every concrete dimension
 ```

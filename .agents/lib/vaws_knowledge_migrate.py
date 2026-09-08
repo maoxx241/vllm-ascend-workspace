@@ -289,9 +289,10 @@ def migrate_entry(
         return report
     if kind not in _NARRATIVE_KINDS:
         report["blocked"].append(
-            "v2 rule accepts only summary/symptom/root_cause/resolution/avoidance/"
+            "v2 rule body accepts only summary/symptom/root_cause/resolution/avoidance/"
             "fingerprints; this document family carries structured payloads that would "
-            "have to be flattened into prose"
+            "have to be flattened into prose. A measurement body is a different claim "
+            "shape and is not produced by v1 migration"
         )
 
     rule, rule_problems = _rule_from_v1(entry)

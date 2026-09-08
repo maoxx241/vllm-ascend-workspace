@@ -396,6 +396,7 @@ committed external contract). "Proposed" is the unimplemented original #85
 option.
 
 <!-- current-cli-surface-table -->
+
 | Entry point | Style | Verbs | Options | Refs | Responsibility | Support role | Current target | Proposed |
 |---|---|---|---|---|---|---|---|---|
 | `.agents/hooks/knowledge_session_end.py` | bare | - | 0 | client-config:1, routing:1, test:2 | mechanics | hook | .agents/hooks/knowledge_session_end.py | - |
@@ -407,7 +408,7 @@ option.
 | `.agents/scripts/knowledge_capture.py` | argparse | - | 9 | docs:2, other:2, routing:2, script:2, skill-doc:4, test:3 | mixed | supported | .agents/scripts/knowledge_capture.py | vaws knowledge |
 | `.agents/scripts/knowledge_export.py` | argparse | - | 7 | other:2, routing:2, script:1, skill-doc:3, test:1 | mechanics | supported | .agents/scripts/knowledge_export.py | vaws knowledge |
 | `.agents/scripts/knowledge_migrate_v2.py` | argparse | - | 7 | routing:1, skill-doc:2, test:1 | mechanics | supported | .agents/scripts/knowledge_migrate_v2.py | vaws knowledge |
-| `.agents/scripts/knowledge_query.py` | argparse | - | 12 | docs:1, routing:2, test:3 | mechanics | supported | .agents/scripts/knowledge_query.py | vaws knowledge |
+| `.agents/scripts/knowledge_query.py` | argparse | - | 13 | docs:1, routing:2, test:3 | mechanics | supported | .agents/scripts/knowledge_query.py | vaws knowledge |
 | `.agents/scripts/knowledge_shared_cache.py` | argparse | status, import, clear | 6 | docs:1, routing:1, script:2, skill-doc:2, test:2 | mechanics | supported | .agents/scripts/knowledge_shared_cache.py | vaws knowledge |
 | `.agents/scripts/knowledge_validate.py` | argparse | - | 1 | other:3, routing:1, script:1, skill-doc:1, test:2 | mechanics | supported | .agents/scripts/knowledge_validate.py | vaws knowledge |
 | `.agents/scripts/remote_artifact_manifest.py` | delegated | - | 4 | docs:1, policy:1, routing:1, skill-doc:3 | mechanics | compatibility | .agents/scripts/remote_artifact_manifest.py | vaws remote |
@@ -518,6 +519,7 @@ option.
 | `.trae/skills/modelscope/scripts/modelscope_auto.py` | argparse | ensure, status, verify, worker | 11 | docs:1, mirror:1, routing:1, script:1, skill-doc:1, test:1 | mechanics | generated | .agents/skills/modelscope/scripts/modelscope_auto.py | - |
 | `.trae/skills/modelscope/scripts/modelscope_download_status.py` | argparse | - | 3 | docs:1, mirror:1, routing:1, script:1, skill-doc:1, test:1 | mechanics | generated | .agents/skills/modelscope/scripts/modelscope_download_status.py | - |
 | `.trae/skills/modelscope/scripts/verify_modelscope_sha256.py` | argparse | - | 8 | docs:1, mirror:2, routing:1, script:2, skill-doc:1, test:1 | mechanics | generated | .agents/skills/modelscope/scripts/verify_modelscope_sha256.py | - |
+
 <!-- /current-cli-surface-table -->
 
 ## 11. Measurement limitations
