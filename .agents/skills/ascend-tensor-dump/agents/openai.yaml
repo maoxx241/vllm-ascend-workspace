@@ -1,0 +1,4 @@
+interface:
+  display_name: "Ascend Tensor Dump"
+  short_description: "Capture bounded tensor dumps and find the first divergent stage"
+  default_prompt: "Use $ascend-tensor-dump to capture a bounded dump and locate the first stage where the numbers diverge."

@@ -466,6 +466,19 @@
       "note": "imported by collect_torch_profile_case; CLI duplicates one orchestrator step",
       "target": ".agents/skills/ascend-profiling-collection/scripts/collect_torch_profile_case.py"
     },
+    ".agents/skills/ascend-tensor-dump/assets/replay_op.py": {
+      "responsibility": "mechanics",
+      "support_role": "payload",
+      "target_kind": "self",
+      "note": "container-side operator reproducer copied to the machine that holds the dump; needs torch/torch_npu and is not run locally"
+    },
+    ".agents/skills/ascend-tensor-dump/scripts/dump_compare.py": {
+      "responsibility": "mechanics",
+      "support_role": "supported",
+      "target_kind": "self",
+      "note": "scan/diff/tensors over dump manifests and payloads; stdlib-only for scan and diff, torch only to load .pt in tensors",
+      "proposed_target": "guidance"
+    },
     ".agents/skills/ascend-triton-kernel-optimization/scripts/triton_optimization.py": {
       "responsibility": "mixed",
       "support_role": "supported",

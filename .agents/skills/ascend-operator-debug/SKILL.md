@@ -13,6 +13,10 @@ reproduces it.
 
 1. Capture the failing call's operator name, arguments, input metadata, execution
    mode, environment, and source stack without copying full tensors by default.
+   When the arguments have to come out of a running service, use
+   `ascend-tensor-dump`: `capture_inputs(stage, **named)` saves the complete
+   input set including scalar and boolean options, and `assets/replay_op.py`
+   feeds it to the candidate and the reference outside the service.
 2. Define a trusted reference implementation and tolerances before comparing.
 3. Create an explicit case matrix with `scripts/operator_debug.py plan`.
 4. Run the generated cases on a remote Ascend environment. Change one dimension
@@ -53,5 +57,11 @@ Read only the reference needed for the current phase:
 - Do not run `torch_npu` locally; execute operator cases on a managed remote NPU.
 - Preserve exact input shape, stride, dtype, layout, device, and scalar options.
 - Never silently cast inputs or relax tolerances to make a case pass.
+- Pick the reference implementation deliberately: a CPU FP32 computation or the
+  canonical formula. An older compatibility code path is not a golden reference;
+  it can be the wrong side of the comparison.
+- A service-level dump does not become a standalone reproducer on its own. The
+  captured input set is the handover point between the two, and the operator
+  conclusion is not complete until it explains the model-level symptom.
 - Record unsupported combinations separately from product failures.
 - Keep cases under `.vaws-local/operator-debug/`.

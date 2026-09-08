@@ -179,9 +179,14 @@ class KnowledgeFlowE2ETest(unittest.TestCase):
         )
         inspected = self.curate_json("inspect", "--candidate-id", candidate_id)
         self.assertEqual(inspected["candidate"]["candidate_id"], candidate_id)
-        self.assertEqual(inspected["possible_matches"], [])
 
         entry_id = "synthetic-framed-transfer"
+        # The real knowledge base is the fixture here, so unrelated entries may
+        # score above zero on shared vocabulary. What matters is that this
+        # candidate is not already represented as the entry it will become.
+        self.assertNotIn(
+            entry_id, [match["id"] for match in inspected["possible_matches"]]
+        )
         promoted = self.curate_json(
             "promote",
             "--schema",
@@ -246,7 +251,7 @@ class KnowledgeFlowE2ETest(unittest.TestCase):
             "--knowledge-dir",
             str(self.formal),
         )
-        self.assertEqual(hidden["matches"], [])
+        self.assertNotIn(entry_id, [match["id"] for match in hidden["matches"]])
         retained = self.run_json(
             QUERY,
             "--query",

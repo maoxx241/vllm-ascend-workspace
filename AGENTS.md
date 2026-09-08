@@ -71,6 +71,7 @@ Repo-local skills live under `.agents/skills/`. Each has its own `SKILL.md` with
 | `vllm-ascend-change-validation` | Map code diffs to required validation evidence and aggregate downstream runs into PR reports |
 | `vllm-ascend-performance-regression` | Control alternating baseline/candidate experiments and assess performance regressions |
 | `vllm-ascend-distributed-debug` | Diagnose rank topology, process-group, endpoint, collective, and distributed hang failures |
+| `ascend-tensor-dump` | Capture bounded intermediate tensor dumps and locate the first stage where numbers diverge, in eager or graph mode |
 | `ascend-operator-debug` | Reduce a model symptom to one Ascend operator call and validate an explicit input/mode matrix |
 | `ascend-triton-operator-development` | Convert a PyTorch or GPU Triton contract into a first correct Ascend Triton candidate |
 | `ascend-triton-kernel-validation` | Detect fallback and validate an Ascend Triton kernel over an explicit correctness matrix |

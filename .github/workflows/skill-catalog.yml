@@ -134,6 +134,13 @@ jobs:
       - name: Run operator-debug tests
         run: python -B -m unittest discover -s .agents/skills/ascend-operator-debug/tests
 
+      - name: Run tensor-dump tests
+        run: |
+          python -B -m unittest discover -s .agents/skills/ascend-tensor-dump/tests
+          python -B -m py_compile \
+            .agents/skills/ascend-tensor-dump/assets/dump_probe.py \
+            .agents/skills/ascend-tensor-dump/assets/replay_op.py
+
       - name: Run Triton development tests
         run: python -B -m unittest discover -s .agents/skills/ascend-triton-operator-development/tests
 
