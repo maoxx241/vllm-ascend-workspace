@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shlex
 import subprocess
 import sys
@@ -161,7 +162,17 @@ class KitConfigurationTests(unittest.TestCase):
 
 
 class ConfiguredSharedKitTests(unittest.TestCase):
+    """Integration: skips when no kit exists; must pass when one is pinned.
+
+    ``VAWS_KNOWLEDGE_KIT_ROOT=/nonexistent`` is a hermetic hide of the shared
+    default, not an assertion failure. An existing path that is not a valid
+    kit still fails (see KitConfigurationTests).
+    """
+
     def setUp(self) -> None:
+        raw = os.environ.get(KIT_ROOT_ENV, "").strip()
+        if raw and not Path(raw).expanduser().is_dir():
+            self.skipTest(f"{KIT_ROOT_ENV} is {raw!r} but that path does not exist")
         try:
             self.kit = resolve_kit_root(repo_root=ROOT, read_local_file=False)
         except KitUnconfigured as exc:

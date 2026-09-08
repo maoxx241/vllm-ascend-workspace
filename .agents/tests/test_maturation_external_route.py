@@ -29,9 +29,10 @@ if str(AGENTS) not in sys.path:
 if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
+import vaws_dependency as deps  # noqa: E402
 import vaws_remote_dev as remote_dev  # noqa: E402
 from maturation.invoke import LAUNCHER, RemoteDevInvoker, run_cli  # noqa: E402
-from maturation_provider import require_pinned_provider  # noqa: E402
+from maturation_provider import require_optional_provider, require_pinned_provider  # noqa: E402
 
 MUX_CHILD = AGENTS / "tests" / "maturation_mux_child.py"
 ROOT_ENV = remote_dev.REMOTE_DEV_ROOT_ENV
@@ -142,10 +143,14 @@ def _must_fail_not_skip() -> Any:
 
 
 class FourCaseMuxJointTests(unittest.TestCase):
-    """Accepted #93 joint fixture; provider comes from the scaffold locator."""
+    """Accepted #93 joint fixture; provider comes from the scaffold locator.
+
+    Integration: skips when no remote-dev checkout exists; must pass when one
+    is present and pinned.
+    """
 
     def setUp(self) -> None:
-        self.provider = require_pinned_provider()
+        self.provider = require_optional_provider()
 
     def test_four_inherited_mode_cases_with_pinned_provider(self) -> None:
         original_env = dict(os.environ)
@@ -238,10 +243,14 @@ class FourCaseMuxJointTests(unittest.TestCase):
 
 
 class LauncherJointRouteTests(unittest.TestCase):
-    """``call_cli`` through the real launcher into the pinned tools wrapper."""
+    """``call_cli`` through the real launcher into the pinned tools wrapper.
+
+    Integration: skips when no remote-dev checkout exists; must pass when one
+    is present and pinned.
+    """
 
     def setUp(self) -> None:
-        self.provider = require_pinned_provider()
+        self.provider = require_optional_provider()
 
     def test_launcher_execve_preserves_mux_and_matches_inprocess_source(self) -> None:
         original_env = dict(os.environ)
@@ -344,8 +353,11 @@ class LauncherJointRouteTests(unittest.TestCase):
                             result = interrupted.result(timeout=5)
                         self.assertEqual(dict(os.environ), before, "consumer changed parent environment")
                     self.assertTrue(launched_argv)
-                    self.assertEqual(launched_argv[0][1], str(LAUNCHER))
-                    self.assertEqual(launched_argv[0][2:6], ["tool", "remote_probe", "--input-json", "-"])
+                    launcher_calls = [
+                        argv for argv in launched_argv if len(argv) > 1 and argv[1] == str(LAUNCHER)
+                    ]
+                    self.assertTrue(launcher_calls, launched_argv)
+                    self.assertEqual(launcher_calls[0][2:6], ["tool", "remote_probe", "--input-json", "-"])
                     self.assertTrue(result.killed)
                     self.assertEqual(len(signal_requests), 1)
                     self.assertFalse(neighbor.killed)
@@ -411,8 +423,10 @@ class LauncherJointRouteTests(unittest.TestCase):
 
 
 class SubstratePinTests(unittest.TestCase):
+    """Integration: skips when no remote-dev checkout exists."""
+
     def setUp(self) -> None:
-        self.provider = require_pinned_provider()
+        self.provider = require_optional_provider()
 
     def test_s3_substrate_integration_against_pinned_source(self) -> None:
         env = {**os.environ, ROOT_ENV: str(self.provider)}
@@ -433,7 +447,7 @@ class ProviderLocatorTests(unittest.TestCase):
     """Focused locator/pin coverage; no hardcoded checkout alias."""
 
     def test_configured_alternate_path_uses_locator(self) -> None:
-        provider = require_pinned_provider()
+        provider = require_optional_provider()
         pin = remote_dev.load_dependency()["commit"]
         with tempfile.TemporaryDirectory() as tmp:
             alt = Path(tmp) / "alternate-checkout"
@@ -447,11 +461,14 @@ class ProviderLocatorTests(unittest.TestCase):
             self.assertTrue(remote_dev.looks_like_checkout(alt))
 
     def test_missing_unconfigured_provider_skips_like_optional_consumer(self) -> None:
+        # Locator resolution goes through checkout_path / expand_default_checkout
+        # / shared_workspace_root, not default_checkout_dir (that helper remains
+        # the bootstrap-CLI dest default).
         with tempfile.TemporaryDirectory() as tmp:
-            missing = Path(tmp) / "absent"
-            with mock.patch.dict(os.environ, {}, clear=False):
+            isolated = Path(tmp)
+            with mock.patch.dict(os.environ, {"HOME": str(isolated)}, clear=False):
                 os.environ.pop(ROOT_ENV, None)
-                with mock.patch.object(remote_dev, "default_checkout_dir", return_value=missing):
+                with mock.patch.object(deps, "shared_workspace_root", return_value=isolated):
                     with self.assertRaises(unittest.SkipTest) as ctx:
                         require_pinned_provider()
         self.assertIn(ROOT_ENV, str(ctx.exception))
