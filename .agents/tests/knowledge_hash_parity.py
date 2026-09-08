@@ -111,10 +111,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if commons_hash is None:
         print(
-            "cannot import vaws_knowledge.canonical; install the published package "
-            "in this interpreter, e.g.\n"
-            "  uv pip install --python <this-python> "
-            '"vaws-knowledge@git+https://github.com/vllm-ascend-workspace/vaws-knowledge@v0.1.0"',
+            "cannot import vaws_knowledge.canonical; install the published "
+            "vaws-knowledge package in this interpreter (uv sync)",
             file=sys.stderr,
         )
         return 2

@@ -10,9 +10,8 @@ import.
 ## Packages
 
 `pyproject.toml` declares the three in-process packages. `[tool.uv.sources]`
-must name git+https sources because `vaws-coordinator` depends on
-`vaws-remote-dev`, which is not on PyPI. `vaws-knowledge` is pinned to a
-commit until tag `v0.1.2` lands.
+must name git+https tag sources because `vaws-coordinator` depends on
+`vaws-remote-dev`, which is not on PyPI.
 
 | Package | Module | Source tag | Role |
 |---|---|---|---|
