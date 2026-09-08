@@ -871,6 +871,7 @@ def query_knowledge(
     knowledge_dir: Path,
     query: str,
     kinds: Sequence[str] | None = None,
+    bodies: Sequence[str] | None = None,
     limit: int = 3,
     include_deprecated: bool = False,
     min_score: int = 0,
@@ -892,6 +893,7 @@ def query_knowledge(
     unknown = sorted(selected - KNOWLEDGE_KINDS)
     if unknown:
         raise KnowledgeError(f"unknown knowledge kinds: {', '.join(unknown)}")
+    wanted_bodies = {item for item in (bodies or ()) if item in {"rule", "measurement"}}
     matches: list[dict[str, Any]] = []
     for filename, kind in KNOWLEDGE_FILES.items():
         if kind not in selected:
@@ -906,6 +908,8 @@ def query_knowledge(
             score = _entry_score(query, entry)
             if score <= 0 or score < min_score:
                 continue
+            if wanted_bodies and "rule" not in wanted_bodies:
+                continue
             rule = entry["rule"]
             summary = str(
                 rule.get("summary")
@@ -917,6 +921,7 @@ def query_knowledge(
                     "id": entry["id"],
                     "kind": kind,
                     "status": entry["status"],
+                    "body": "rule",
                     "summary": summary,
                     "applicable_versions": entry["applicable_versions"],
                     "score": score,
@@ -941,14 +946,17 @@ def query_knowledge(
         score = _entry_score(query, view)
         if score <= 0 or score < min_score:
             continue
-        rule = entry.get("rule", {})
+        body = view.get("body") or v2.body_key(entry) or "rule"
+        if wanted_bodies and body not in wanted_bodies:
+            continue
         matches.append(
             {
                 "id": entry.get("slug"),
                 "uuid": entry.get("uuid"),
                 "kind": kind,
                 "status": status,
-                "summary": str(rule.get("summary") or rule.get("symptom") or entry.get("slug")),
+                "body": body,
+                "summary": v2.entry_summary(entry),
                 "applicable_versions": view["applicable_versions"],
                 "score": score,
                 "source_file": entry.get("_source_file"),

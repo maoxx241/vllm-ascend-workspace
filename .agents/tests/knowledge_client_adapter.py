@@ -23,7 +23,10 @@ import vaws_redaction as redaction  # noqa: E402
 
 def main(argv: list[str]) -> int:
     if len(argv) != 1:
-        print("usage: knowledge_client_adapter.py hash|payload|schema|redaction|export", file=sys.stderr)
+        print(
+            "usage: knowledge_client_adapter.py hash|payload|schema|redaction|export|conflicts",
+            file=sys.stderr,
+        )
         return 2
     operation = argv[0]
     payload = json.load(sys.stdin)
@@ -54,6 +57,9 @@ def main(argv: list[str]) -> int:
             submitted_at="2026-09-07",
         )
         sys.stdout.write(v2.serialize_document(exported))
+        return 0
+    if operation == "conflicts":
+        print("reject" if v2.document_has_measurement_conflict(payload) else "accept")
         return 0
     print(f"unknown operation: {operation}", file=sys.stderr)
     return 2

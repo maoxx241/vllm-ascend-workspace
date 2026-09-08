@@ -166,6 +166,8 @@ def run_client_kit(
             command("redaction"),
             "--export-cmd",
             command("export"),
+            "--conflicts-cmd",
+            command("conflicts"),
             "--input-format",
             "entry-json",
             "--gate-format",

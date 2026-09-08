@@ -17,7 +17,11 @@ This directory is the **project layer** of a three-layer knowledge model:
   `scope` with twelve dimensions, each either bounded (`values` / `range`) or
   an explicit `any` plus a stated basis. Free text cannot be matched against a
   consumer's actual checkout, which is how a result obtained on one SoC ends
-  up applied to a different one.
+  up applied to a different one. An entry has exactly one body: `rule` (a
+  failure signature with symptom / root cause / resolution) or `measurement`
+  (a quantity about a subject, with a stated method). `content_hash` is
+  defined over `scope` plus that body, keyed by the body's own name, and must
+  match `vaws_knowledge.canonical.content_hash()` byte for byte.
 
 New writes go to v2 (`knowledge_curate.py promote`); `--schema 1` still writes
 the v1 envelope when an entry has to stay readable to a v1-only consumer.
