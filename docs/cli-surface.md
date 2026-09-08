@@ -31,7 +31,7 @@ entry points.
 | Measurement | AST `__main__` / `__main__.py` discovery of tracked (and untracked-unignored) Python outside `vllm/` and `vllm-ascend/`; overlay and owner selectors from `.agents/policy/cli-surface-inventory.json`; committed `.agents/deps/*.json` pins; no import, fetch, `--help`, NPU or SSH |
 
 The census is the AST of the inspected files plus those committed pins. The
-118-entry overlay and four owner-selector records live in
+120-entry overlay and four owner-selector records live in
 `.agents/policy/cli-surface-inventory.json` (metadata only; not executable).
 Re-run the generator after this overlay changes. Do not paste a future commit
 SHA into this file as if it were an input.
@@ -44,23 +44,23 @@ are **not** the original 132-entry snapshot and **not** the unimplemented
 
 | Measure | Value |
 |---|---|
-| Entry points (definition in §3) | **118** |
-| Supported agent-facing launchers | 69 |
+| Entry points (definition in §3) | **120** |
+| Supported agent-facing launchers | 70 |
 | Compatibility wrappers | 17 |
 | Internal / diagnostic CLIs | 13 |
 | Generated projections | 4 |
 | Hooks | 3 |
-| Remote payloads | 8 |
+| Remote payloads | 9 |
 | Test / maturation harnesses | 4 |
-| Responsibility | mechanics 102 · mixed 16 · judgment 0 |
-| Files importing `argparse` (non-test) | 98 |
-| Skills that ship at least one entry point | 23 |
-| Parser styles | argparse 96 · delegated 18 · bare 3 · bare-argv 1 |
+| Responsibility | mechanics 104 · mixed 16 · judgment 0 |
+| Files importing `argparse` (non-test) | 100 |
+| Skills that ship at least one entry point | 24 |
+| Parser styles | argparse 98 · delegated 18 · bare 3 · bare-argv 1 |
 | Historical snapshot (original #85) | 132 entries; mechanics 81 · judgment 8 · mixed 8 · redundant 35 |
 | Historical proposed surface | **13 nouns**, 75 verbs (unimplemented) |
 
-The 118 roles are non-overlapping: every discovered entry has exactly one
-support role, and the seven role counts sum to 118. Support role is not
+The 120 roles are non-overlapping: every discovered entry has exactly one
+support role, and the seven role counts sum to 120. Support role is not
 inferred from a future `vaws <noun>` label, from a `__main__` guard alone, or
 from the absence of a basename mention.
 
@@ -112,12 +112,12 @@ launchers:
 
 | Role | Meaning | Current count |
 |---|---|---|
-| `supported` | agent-facing launcher or domain command that currently owns the mechanic | 68 |
+| `supported` | agent-facing launcher or domain command that currently owns the mechanic | 70 |
 | `compatibility` | still-present managed toolbox or legacy `--machine` wrapper whose semantics differ from the extracted provider | 17 |
 | `internal` | library or pipeline stage that grew a diagnostic `__main__` | 13 |
 | `generated` | Trae ModelScope projection produced from the canonical package | 4 |
 | `hook` | client or git lifecycle adapter | 3 |
-| `payload` | executable spawned on the container or by another command | 8 |
+| `payload` | executable spawned on the container or by another command | 9 |
 | `harness` | maturation / golden / stress tooling | 4 |
 
 Responsibility (`mechanics` / `judgment` / `mixed`) is independent of support
@@ -405,7 +405,7 @@ option.
 | `.agents/maturation/run.py` | argparse | - | 23 | docs:4, other:1, routing:1, script:3, skill-doc:11, test:5 | mechanics | harness | .agents/maturation/run.py | - |
 | `.agents/scripts/cli_surface_inventory.py` | argparse | - | 3 | policy:1, test:2 | mechanics | supported | .agents/scripts/cli_surface_inventory.py | vaws lint |
 | `.agents/scripts/envelope_lint.py` | argparse | scan, check, run | 5 | docs:1, test:2 | mechanics | supported | .agents/scripts/envelope_lint.py | vaws lint |
-| `.agents/scripts/knowledge_capture.py` | argparse | - | 9 | docs:2, other:2, routing:2, script:2, skill-doc:2, test:3 | mixed | supported | .agents/scripts/knowledge_capture.py | vaws knowledge |
+| `.agents/scripts/knowledge_capture.py` | argparse | - | 9 | docs:2, other:2, routing:2, script:2, skill-doc:4, test:3 | mixed | supported | .agents/scripts/knowledge_capture.py | vaws knowledge |
 | `.agents/scripts/knowledge_export.py` | argparse | - | 7 | other:2, routing:2, script:1, skill-doc:3, test:1 | mechanics | supported | .agents/scripts/knowledge_export.py | vaws knowledge |
 | `.agents/scripts/knowledge_migrate_v2.py` | argparse | - | 7 | routing:1, skill-doc:2, test:1 | mechanics | supported | .agents/scripts/knowledge_migrate_v2.py | vaws knowledge |
 | `.agents/scripts/knowledge_query.py` | argparse | - | 12 | docs:1, routing:2, test:3 | mechanics | supported | .agents/scripts/knowledge_query.py | vaws knowledge |
@@ -415,7 +415,7 @@ option.
 | `.agents/scripts/remote_artifact_pull.py` | delegated | - | 5 | docs:1, policy:1, routing:1, skill-doc:4 | mechanics | compatibility | .agents/scripts/remote_artifact_pull.py | vaws remote |
 | `.agents/scripts/remote_artifact_push.py` | delegated | - | 5 | docs:1, policy:1, routing:1, skill-doc:1 | mechanics | compatibility | .agents/scripts/remote_artifact_push.py | vaws remote |
 | `.agents/scripts/remote_cleanup.py` | delegated | - | 13 | docs:1, routing:1, skill-doc:3 | mechanics | supported | .agents/scripts/remote_cleanup.py | vaws session |
-| `.agents/scripts/remote_dev.py` | argparse | status, bootstrap, server, hook, tool, env | 6 | client-config:3, docs:5, mirror:24, other:4, policy:1, routing:1, script:6, skill-doc:13, source-map:1, test:4 | mechanics | supported | .agents/scripts/remote_dev.py | vaws remote |
+| `.agents/scripts/remote_dev.py` | argparse | status, bootstrap, server, hook, tool, env | 6 | client-config:3, docs:5, mirror:25, other:4, policy:1, routing:1, script:6, skill-doc:13, source-map:1, test:4 | mechanics | supported | .agents/scripts/remote_dev.py | vaws remote |
 | `.agents/scripts/remote_exec.py` | delegated | - | 8 | docs:1, routing:1, skill-doc:2, test:1 | mechanics | compatibility | .agents/scripts/remote_exec.py | vaws remote |
 | `.agents/scripts/remote_job_collect.py` | delegated | - | 5 | docs:1, routing:1, skill-doc:1 | mechanics | compatibility | .agents/scripts/remote_job_collect.py | vaws remote |
 | `.agents/scripts/remote_job_start.py` | delegated | - | 10 | docs:2, routing:1, skill-doc:2 | mechanics | compatibility | .agents/scripts/remote_job_start.py | vaws remote |
@@ -463,6 +463,8 @@ option.
 | `.agents/skills/ascend-profiling-collection/scripts/collect_torch_profile_case.py` | argparse | - | 33 | docs:2, policy:1, routing:1, skill-doc:3, test:1 | mechanics | supported | .agents/skills/ascend-profiling-collection/scripts/collect_torch_profile_case.py | vaws profile |
 | `.agents/skills/ascend-profiling-collection/scripts/profile_control.py` | argparse | - | 4 | docs:2, policy:1, routing:1, script:1, skill-doc:3 | mechanics | internal | .agents/skills/ascend-profiling-collection/scripts/collect_torch_profile_case.py | - |
 | `.agents/skills/ascend-profiling-collection/scripts/run_remote_analyse.py` | argparse | - | 7 | docs:2, policy:1, routing:1, script:1, skill-doc:3 | mechanics | internal | .agents/skills/ascend-profiling-collection/scripts/collect_torch_profile_case.py | - |
+| `.agents/skills/ascend-tensor-dump/assets/replay_op.py` | argparse | - | 9 | other:1, script:1, skill-doc:4, test:1 | mechanics | payload | .agents/skills/ascend-tensor-dump/assets/replay_op.py | - |
+| `.agents/skills/ascend-tensor-dump/scripts/dump_compare.py` | argparse | scan, diff, tensors | 8 | routing:1, script:1, skill-doc:3, test:1 | mechanics | supported | .agents/skills/ascend-tensor-dump/scripts/dump_compare.py | guidance |
 | `.agents/skills/ascend-triton-kernel-optimization/scripts/triton_optimization.py` | argparse | plan, record, analyze | 3 | docs:1, routing:1, skill-doc:2, test:1 | mixed | supported | .agents/skills/ascend-triton-kernel-optimization/scripts/triton_optimization.py | guidance |
 | `.agents/skills/ascend-triton-kernel-validation/scripts/triton_validation.py` | argparse | plan, record, analyze | 4 | docs:1, routing:1, skill-doc:2, test:1 | mixed | supported | .agents/skills/ascend-triton-kernel-validation/scripts/triton_validation.py | guidance |
 | `.agents/skills/ascend-triton-kernel-validation/scripts/validate_triton_impl.py` | argparse | - | 1 | docs:1, skill-doc:1, test:1 | mechanics | supported | .agents/skills/ascend-triton-kernel-validation/scripts/validate_triton_impl.py | vaws lint |
