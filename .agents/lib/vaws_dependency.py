@@ -320,6 +320,54 @@ def origins_match(actual: str, expected: str) -> bool:
     return _normalize_origin(actual) == _normalize_origin(expected)
 
 
+def _accepted_range(pin: Mapping[str, Any]) -> dict[str, int] | None:
+    accepted = pin.get("service_api")
+    if not isinstance(accepted, dict):
+        return None
+    lo, hi = accepted.get("min"), accepted.get("max")
+    if not isinstance(lo, int) or isinstance(lo, bool):
+        return None
+    if not isinstance(hi, int) or isinstance(hi, bool):
+        return None
+    return {"min": lo, "max": hi}
+
+
+def read_service_api(path: Path, pin: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Offline service-api.json status. Orthogonal to the identity state machine."""
+    accepted = _accepted_range(pin)
+    if accepted is None:
+        return None
+    result: dict[str, Any] = {
+        "declared": None,
+        "supports": [],
+        "accepted": accepted,
+        "state": "undeclared",
+    }
+    api_path = path / "service-api.json"
+    if not api_path.is_file():
+        return result
+    try:
+        data = json.loads(api_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        result["detail"] = f"malformed service-api.json: {exc}"
+        return result
+    if not isinstance(data, dict):
+        result["detail"] = "service-api.json root is not an object"
+        return result
+    declared = data.get("service_api_version")
+    if isinstance(declared, int) and not isinstance(declared, bool):
+        result["declared"] = declared
+    supports = data.get("supports")
+    if not isinstance(supports, list):
+        result["detail"] = "service-api.json missing or invalid supports"
+        return result
+    versions = [item for item in supports if isinstance(item, int) and not isinstance(item, bool)]
+    result["supports"] = versions
+    lo, hi = accepted["min"], accepted["max"]
+    result["state"] = "compatible" if any(lo <= value <= hi for value in versions) else "incompatible"
+    return result
+
+
 def _inspect_payload(
     *,
     name: str,
@@ -331,8 +379,10 @@ def _inspect_payload(
     pin_matches: bool | None,
     origin_matches: bool | None,
     problems: list[str],
+    service_api: dict[str, Any] | None = None,
+    warnings: list[str] | None = None,
 ) -> dict[str, Any]:
-    return {
+    payload = {
         "name": name,
         "path": str(path),
         "source": source,
@@ -343,6 +393,20 @@ def _inspect_payload(
         "origin_matches": origin_matches,
         "problems": problems,
     }
+    if service_api is not None:
+        payload["service_api"] = service_api
+        if service_api.get("state") == "undeclared":
+            detail = service_api.get("detail") or "service-api.json is missing or predates the contract"
+            payload["warnings"] = [f"{name} service API is undeclared: {detail}"]
+        elif service_api.get("state") == "incompatible":
+            accepted = service_api.get("accepted") or {}
+            payload["warnings"] = [
+                f"{name} service API is incompatible: supports {service_api.get('supports')} "
+                f"vs accepted {accepted.get('min')}..{accepted.get('max')}"
+            ]
+    if warnings:
+        payload["warnings"] = list(payload.get("warnings") or []) + list(warnings)
+    return payload
 
 
 def inspect(
@@ -417,6 +481,7 @@ def inspect(
             pin_matches=(commit == pin_commit) if pin_commit else None,
             origin_matches=False,
             problems=problems,
+            service_api=read_service_api(path, pin),
         )
     if missing:
         return _inspect_payload(
@@ -429,6 +494,7 @@ def inspect(
             pin_matches=(commit == pin_commit) if pin_commit else None,
             origin_matches=origin_ok if origin else None,
             problems=problems,
+            service_api=read_service_api(path, pin),
         )
     pin_matches = commit == pin_commit if pin_commit else None
     state = "ready" if pin_matches else "off_pin"
@@ -444,6 +510,7 @@ def inspect(
         pin_matches=pin_matches,
         origin_matches=origin_ok if origin else None,
         problems=problems,
+        service_api=read_service_api(path, pin),
     )
 
 

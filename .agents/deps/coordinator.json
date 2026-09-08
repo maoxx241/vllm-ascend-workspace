@@ -33,6 +33,10 @@
     ],
     "canonical_origin": true
   },
+  "service_api": {
+    "min": 1,
+    "max": 1
+  },
   "note": "vaws-coordinator is consumed as an external checkout, not a submodule and not a vendored copy. Locate it through VAWS_COORDINATOR_ROOT or the default path above. Bump `commit` deliberately; `vaws.py status` reports drift. This pin is the independently accepted merged main. It does not change the remote-dev pin in remote-dev.json. identity.canonical_origin is true so a fork is reported as wrong_origin (usable, always warned). false would drop origin from identity and never emit wrong_origin.",
   "extensions": {
     "tree": "d3f91bc6375a876fc01d46b1835feabd61db2729",

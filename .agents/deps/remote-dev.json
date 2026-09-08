@@ -26,5 +26,9 @@
     ],
     "canonical_origin": true
   },
+  "service_api": {
+    "min": 1,
+    "max": 1
+  },
   "note": "remote-dev is consumed as an external checkout, not a submodule and not a vendored copy. The repository is private; a private third .gitmodules entry would break `git submodule update --init --recursive` for every public cloner. The scaffold locates the checkout through VAWS_REMOTE_DEV_ROOT or the default path above, registers .agents/lib/vaws_remote_dev_plugin.py as the endpoint resolver, and points the substrate at the Ascend runtime environment file. Bump `commit` deliberately; `remote_dev.py status` reports drift. identity.canonical_origin is true so a fork is reported as wrong_origin (usable, always warned). false would drop origin from identity and never emit wrong_origin."
 }

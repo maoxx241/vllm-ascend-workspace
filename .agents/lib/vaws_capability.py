@@ -63,6 +63,54 @@ def _usable(state: str) -> bool:
     return state in USABLE_STATES
 
 
+def _service_api_incompatible(info: Mapping[str, Any]) -> dict[str, Any] | None:
+    api = info.get("service_api") or {}
+    if api.get("state") != "incompatible":
+        return None
+    accepted = api.get("accepted") or {}
+    lo, hi = accepted.get("min"), accepted.get("max")
+    return {
+        "layer": "dependency",
+        "detail": (
+            f"{info.get('name')} service API is incompatible: "
+            f"supports {api.get('supports')} vs accepted {lo}..{hi}"
+        ),
+        "effect": "dependent capabilities are degraded/unavailable; execution is not blocked",
+        "remedy": (
+            f"bump the pin or update the checkout to a build whose `supports` includes {lo}..{hi}"
+        ),
+        "expected_source_repo": None,
+        "expected_source_ref": None,
+    }
+
+
+def _apply_service_api(
+    capabilities: dict[str, Any],
+    pins: Mapping[str, Mapping[str, Any]],
+    deps: Mapping[str, Mapping[str, Any]],
+) -> list[str]:
+    warnings: list[str] = []
+    for dep_name, info in deps.items():
+        api = info.get("service_api") or {}
+        pin = pins.get(dep_name) or {}
+        if api.get("state") == "undeclared":
+            detail = api.get("detail") or "service-api.json is missing or predates the contract"
+            warnings.append(f"{dep_name} service API is undeclared: {detail}")
+        incompatible = _service_api_incompatible(info)
+        if incompatible is None:
+            continue
+        incompatible["expected_source_repo"] = pin.get("repository")
+        incompatible["expected_source_ref"] = pin.get("commit") or pin.get("ref")
+        for cap_name, depends in CAPABILITY_DEPS.items():
+            if dep_name not in depends:
+                continue
+            cap = capabilities[cap_name]
+            cap["available"] = False
+            cap["degraded"] = True
+            cap["degradation"].append(incompatible)
+    return warnings
+
+
 def _dep_degradation(
     pin: Mapping[str, Any],
     info: Mapping[str, Any],
@@ -313,6 +361,7 @@ def evaluate_capabilities(
         degradation=kit_deg,
     )
 
+    warnings = _apply_service_api(capabilities, pins, deps)
     flat: list[dict[str, Any]] = []
     for name in CAPABILITY_ORDER:
         flat.extend(capabilities[name]["degradation"])
@@ -322,6 +371,7 @@ def evaluate_capabilities(
         "capabilities": capabilities,
         "degraded": any(capabilities[name]["degraded"] for name in CAPABILITY_ORDER),
         "degradation": flat,
+        "warnings": warnings,
         "acknowledged_drift": drift,
         "recent_hook_degradations": read_hook_degradations(repo_root=repo_root),
     }

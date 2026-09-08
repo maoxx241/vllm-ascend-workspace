@@ -63,7 +63,7 @@ def cmd_status(args: argparse.Namespace) -> int:
         return 2
     progress(f"inspecting {', '.join(names)}")
     deps = {name: inspect(name) for name in names}
-    payload = {"deps": deps} if len(names) != 1 else deps[names[0]]
+    payload = deps if len(names) != 1 else deps[names[0]]
     _print(payload)
     return status_exit_code({name: deps[name]["state"] for name in names})
 

@@ -297,6 +297,129 @@ class InspectResolveTests(unittest.TestCase):
             self.assertEqual(payload["state"], "wrong_origin")
 
 
+def _write_service_api(root: Path, payload: object) -> None:
+    dest = root / "service-api.json"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if isinstance(payload, str):
+        dest.write_text(payload, encoding="utf-8")
+        return
+    dest.write_text(json.dumps(payload), encoding="utf-8")
+
+
+class ServiceApiTests(unittest.TestCase):
+    def _usable_coordinator(self, tmp: str, service_api: object | None) -> tuple[Path, dict[str, str]]:
+        pin = deps.load_pin("vaws-coordinator")
+        root = Path(tmp) / "coord"
+        root.mkdir()
+        _write_required(root, pin)
+        if service_api is None:
+            (root / "service-api.json").unlink(missing_ok=True)
+        else:
+            _write_service_api(root, service_api)
+        _git_init(root, pin["url"], "service-api")
+        return root, {"VAWS_COORDINATOR_ROOT": str(root)}
+
+    def test_compatible_when_supports_overlaps_accepted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            _root, env = self._usable_coordinator(
+                tmp, {"schema_version": 1, "name": "vaws-coordinator", "service_api_version": 1, "supports": [1]}
+            )
+            info = deps.inspect("vaws-coordinator", env)
+            self.assertIn(info["state"], {"off_pin", "wrong_origin"})
+            self.assertEqual(info["service_api"]["state"], "compatible")
+            self.assertEqual(info["service_api"]["declared"], 1)
+            self.assertEqual(info["service_api"]["supports"], [1])
+
+    def test_incompatible_when_supports_misses_accepted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            _root, env = self._usable_coordinator(
+                tmp, {"schema_version": 1, "name": "vaws-coordinator", "service_api_version": 2, "supports": [2]}
+            )
+            info = deps.inspect("vaws-coordinator", env)
+            self.assertEqual(info["service_api"]["state"], "incompatible")
+            self.assertEqual(info["state"], "off_pin")
+            resolved = deps.resolve("vaws-coordinator", required=True, env=env)
+            self.assertEqual(Path(resolved).resolve(), _root.resolve())
+
+    def test_undeclared_when_file_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            _root, env = self._usable_coordinator(tmp, None)
+            info = deps.inspect("vaws-coordinator", env)
+            self.assertEqual(info["state"], "incomplete")
+            self.assertEqual(info["service_api"]["state"], "undeclared")
+            self.assertIsNone(info["service_api"]["declared"])
+
+    def test_undeclared_when_json_is_malformed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            _root, env = self._usable_coordinator(tmp, "not-json{")
+            info = deps.inspect("vaws-coordinator", env)
+            self.assertIn(info["state"], {"off_pin", "wrong_origin"})
+            self.assertEqual(info["service_api"]["state"], "undeclared")
+            self.assertIn("malformed", info["service_api"]["detail"])
+
+    def test_partial_supports_overlap_is_compatible(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            _root, env = self._usable_coordinator(
+                tmp, {"schema_version": 1, "name": "vaws-coordinator", "service_api_version": 2, "supports": [0, 1, 2]}
+            )
+            info = deps.inspect("vaws-coordinator", env)
+            self.assertEqual(info["service_api"]["state"], "compatible")
+            self.assertEqual(info["service_api"]["supports"], [0, 1, 2])
+
+    def test_doctor_incompatible_degrades_dependent_capabilities(self) -> None:
+        from vaws_capability import build_doctor_envelope
+
+        with tempfile.TemporaryDirectory() as tmp:
+            _root, env = self._usable_coordinator(
+                tmp, {"schema_version": 1, "name": "vaws-coordinator", "service_api_version": 2, "supports": [2]}
+            )
+            env.update(
+                {
+                    "VAWS_REMOTE_DEV_ROOT": "/nonexistent-remote-dev",
+                    "VAWS_TOP_ROOT": "/nonexistent-fleet-dashboard",
+                    "VAWS_KNOWLEDGE_KIT_ROOT": "/nonexistent-vaws-knowledge",
+                }
+            )
+            envelope = build_doctor_envelope(
+                argv=["python3", ".agents/scripts/vaws_deps.py", "doctor"],
+                env=env,
+            )
+            report = envelope["extensions"]["capability_report"]
+            for name in ("task_pool", "host_npu_authority"):
+                cap = report["capabilities"][name]
+                self.assertTrue(cap["degraded"], name)
+                self.assertFalse(cap["available"], name)
+                self.assertTrue(
+                    any(
+                        "bump the pin or update the checkout to a build whose `supports` includes 1..1"
+                        in (item.get("remedy") or "")
+                        for item in cap["degradation"]
+                    ),
+                    name,
+                )
+
+    def test_doctor_undeclared_warns_and_keeps_capability(self) -> None:
+        from vaws_capability import build_doctor_envelope
+
+        with tempfile.TemporaryDirectory() as tmp:
+            _root, env = self._usable_coordinator(tmp, "not-json{")
+            env.update(
+                {
+                    "VAWS_REMOTE_DEV_ROOT": "/nonexistent-remote-dev",
+                    "VAWS_TOP_ROOT": "/nonexistent-fleet-dashboard",
+                    "VAWS_KNOWLEDGE_KIT_ROOT": "/nonexistent-vaws-knowledge",
+                }
+            )
+            envelope = build_doctor_envelope(
+                argv=["python3", ".agents/scripts/vaws_deps.py", "doctor"],
+                env=env,
+            )
+            report = envelope["extensions"]["capability_report"]
+            task = report["capabilities"]["task_pool"]
+            self.assertTrue(task["available"])
+            self.assertTrue(any("undeclared" in item for item in report["warnings"]))
+
+
 class BootstrapPlanAndAllTests(unittest.TestCase):
     def test_dry_run_names_all_four_destinations_without_git(self) -> None:
         env = {
