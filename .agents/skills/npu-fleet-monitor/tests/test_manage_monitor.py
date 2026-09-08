@@ -25,6 +25,7 @@ def namespace(**overrides: object) -> argparse.Namespace:
     values: dict[str, object] = {
         "port": MODULE.DEFAULT_PORT,
         "wait_seconds": 0.5,
+        "spec": None,
         "inventory_files": None,
         "host_pool_files": None,
         "bootstrap_command": None,
@@ -43,20 +44,42 @@ class FakeProcess:
 
 
 class ConstantsTests(unittest.TestCase):
-    def test_spec_is_the_pinned_git_https_tag(self) -> None:
-        self.assertEqual(MODULE.VAWS_TOP_REPO, "vllm-ascend-workspace/vaws-top")
-        self.assertEqual(MODULE.VAWS_TOP_SPEC, "git+https://github.com/" + MODULE.VAWS_TOP_REPO + "@" + MODULE.VAWS_TOP_REF)
-        self.assertTrue(MODULE.VAWS_TOP_REF.startswith("v"))
-        self.assertEqual(MODULE.VAWS_TOP_COMMAND, MODULE.VAWS_TOP_REPO.rsplit("/", 1)[-1])
-        self.assertEqual(MODULE.UVX_PREFIX, ["uvx", "--from", MODULE.VAWS_TOP_SPEC, MODULE.VAWS_TOP_COMMAND])
+    def test_default_spec_is_the_release_wheel_derived_from_one_tag(self) -> None:
+        repo = MODULE.VAWS_TOP_REPO
+        ref = MODULE.VAWS_TOP_REF
+        self.assertEqual(repo, "vllm-ascend-workspace/vaws-top")
+        self.assertTrue(ref.startswith("v"))
+        self.assertEqual(MODULE.VAWS_TOP_VERSION, ref[1:])
+        self.assertEqual(MODULE.VAWS_TOP_COMMAND, repo.rsplit("/", 1)[-1])
+        self.assertEqual(MODULE.VAWS_TOP_PACKAGE, MODULE.VAWS_TOP_COMMAND.replace("-", "_"))
+        self.assertEqual(MODULE.VAWS_TOP_WHEEL, f"{MODULE.VAWS_TOP_PACKAGE}-{ref[1:]}-py3-none-any.whl")
+        self.assertEqual(
+            MODULE.DEFAULT_VAWS_TOP_SPEC,
+            f"https://github.com/{repo}/releases/download/{ref}/{MODULE.VAWS_TOP_WHEEL}",
+        )
+        # The frontend build only exists in the release wheel; a git+ default would
+        # silently install a frontend-less package on hosts without Node.js.
+        self.assertFalse(MODULE.DEFAULT_VAWS_TOP_SPEC.startswith("git+"))
+        self.assertEqual(MODULE.uvx_prefix("SPEC"), ["uvx", "--from", "SPEC", MODULE.VAWS_TOP_COMMAND])
+
+    def test_spec_override_is_flag_then_env_then_wheel(self) -> None:
+        self.assertEqual(MODULE.resolve_spec(None, {}), MODULE.DEFAULT_VAWS_TOP_SPEC)
+        self.assertEqual(MODULE.resolve_spec(None, {MODULE.SPEC_ENV: "/tmp/local.whl"}), "/tmp/local.whl")
+        self.assertEqual(MODULE.resolve_spec("git+https://example.invalid/x@v1", {MODULE.SPEC_ENV: "/tmp/local.whl"}), "git+https://example.invalid/x@v1")
+        self.assertEqual(MODULE.resolve_spec("  /tmp/tree  ", {}), "/tmp/tree")
+        self.assertEqual(MODULE.SPEC_ENV, "VAWS_TOP_FROM")
+        for bad in ("", "   ", "a b", "x\ny"):
+            with self.subTest(bad=bad), self.assertRaisesRegex(MODULE.MonitorError, "invalid monitor install spec"):
+                MODULE.resolve_spec(bad, {})
 
     def test_listener_is_loopback_only(self) -> None:
         self.assertEqual(MODULE.BIND, "127.0.0.1")
         self.assertEqual(MODULE.DEFAULT_PORT, 8788)
         self.assertEqual(MODULE.health_url(8788), "http://127.0.0.1:8788/api/health")
-        command = MODULE.serve_command(9001)
-        self.assertEqual(command[: len(MODULE.UVX_PREFIX)], MODULE.UVX_PREFIX)
-        self.assertEqual(command[len(MODULE.UVX_PREFIX):], ["serve", "--bind", "127.0.0.1", "--port", "9001"])
+        prefix = MODULE.uvx_prefix(MODULE.DEFAULT_VAWS_TOP_SPEC)
+        command = MODULE.serve_command(MODULE.DEFAULT_VAWS_TOP_SPEC, 9001)
+        self.assertEqual(command[: len(prefix)], prefix)
+        self.assertEqual(command[len(prefix):], ["serve", "--bind", "127.0.0.1", "--port", "9001"])
 
     def test_source_has_no_checkout_pin_or_service_manager_paths(self) -> None:
         # Substring prefixes of the retired dependency-plane module, pin directory,
@@ -137,6 +160,45 @@ class PidfileTests(unittest.TestCase):
         self.assertFalse(MODULE.pid_alive(-1))
 
 
+class DeployTests(unittest.TestCase):
+    def _completed(self, code: int, out: str = "", err: str = "") -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(["uvx"], code, out, err)
+
+    def test_deploy_probes_the_packaged_frontend_inside_the_tool_env(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            index = Path(root) / "static" / "index.html"
+            index.parent.mkdir()
+            index.write_text("<!doctype html>", encoding="utf-8")
+            with mock.patch.object(MODULE, "require_uvx", return_value="/usr/bin/uvx"), mock.patch.object(
+                MODULE, "run_uvx", return_value=self._completed(0, f"0.1.0\n{index}\n")
+            ) as run_uvx:
+                result = MODULE.deploy("SPEC")
+        self.assertEqual(run_uvx.call_args.args[0], "SPEC")
+        self.assertEqual(run_uvx.call_args.args[1:3], ("python", "-c"))
+        self.assertIn("require_static", run_uvx.call_args.args[3])
+        self.assertEqual(result["version"], "0.1.0")
+        self.assertEqual(result["static_index"], str(index))
+
+    def test_deploy_fails_when_the_wheel_has_no_frontend(self) -> None:
+        # This is exactly what a git+https install produces on a host without Node.js.
+        message = "未找到打包的前端静态资源（vaws_top/static/index.html）"
+        with mock.patch.object(MODULE, "require_uvx", return_value="/usr/bin/uvx"), mock.patch.object(
+            MODULE, "run_uvx", return_value=self._completed(1, "", "Built pkg\n" + message)
+        ):
+            with self.assertRaisesRegex(MODULE.MonitorError, "is not servable") as ctx:
+                MODULE.deploy("git+https://example.invalid/x@v1")
+        self.assertIn(message, str(ctx.exception))
+        self.assertIn("Release wheel", str(ctx.exception))
+        self.assertIn("Node.js", str(ctx.exception))
+
+    def test_deploy_fails_when_the_reported_index_is_missing(self) -> None:
+        with mock.patch.object(MODULE, "require_uvx", return_value="/usr/bin/uvx"), mock.patch.object(
+            MODULE, "run_uvx", return_value=self._completed(0, "0.1.0\n/nonexistent/static/index.html\n")
+        ):
+            with self.assertRaisesRegex(MODULE.MonitorError, "without the packaged frontend"):
+                MODULE.deploy("SPEC")
+
+
 class StartTests(unittest.TestCase):
     def test_start_writes_pidfile_and_waits_for_health(self) -> None:
         with tempfile.TemporaryDirectory() as root:
@@ -147,10 +209,10 @@ class StartTests(unittest.TestCase):
             ) as start_process, mock.patch.object(
                 MODULE, "health", return_value=(True, {"status": "ok"}, None)
             ) as health:
-                result = MODULE.do_start(namespace(port=8790), base)
+                result = MODULE.do_start(namespace(port=8790), base, "SPEC")
             command = start_process.call_args.args[0]
             env = start_process.call_args.kwargs["env"]
-            self.assertEqual(command, MODULE.serve_command(8790))
+            self.assertEqual(command, MODULE.serve_command("SPEC", 8790))
             self.assertEqual(env["NFM_BIND"], "127.0.0.1")
             self.assertEqual(env["NFM_PORT"], "8790")
             self.assertEqual(env["NFM_STATE_DIR"], str(base / "data"))
@@ -161,19 +223,22 @@ class StartTests(unittest.TestCase):
             record = json.loads((base / MODULE.PIDFILE_NAME).read_text(encoding="utf-8"))
             self.assertEqual(record["pid"], 4242)
             self.assertEqual(record["port"], 8790)
-            self.assertEqual(record["spec"], MODULE.VAWS_TOP_SPEC)
+            self.assertEqual(record["spec"], "SPEC")
 
     def test_start_is_idempotent_when_pid_is_alive(self) -> None:
         with tempfile.TemporaryDirectory() as root:
             base = Path(root)
-            (base / MODULE.PIDFILE_NAME).write_text(json.dumps({"pid": os.getpid(), "port": 8791}), encoding="utf-8")
+            (base / MODULE.PIDFILE_NAME).write_text(
+                json.dumps({"pid": os.getpid(), "port": 8791, "spec": "RUNNING"}), encoding="utf-8"
+            )
             with mock.patch.object(MODULE, "start_process") as start_process, mock.patch.object(
                 MODULE, "health", return_value=(True, {"status": "ok"}, None)
             ):
-                result = MODULE.do_start(namespace(port=8788), base)
+                result = MODULE.do_start(namespace(port=8788), base, "SPEC")
             start_process.assert_not_called()
             self.assertTrue(result["already_running"])
             self.assertEqual(result["port"], 8791)
+            self.assertEqual(result["spec"], "RUNNING")
             self.assertEqual(result["pid"], os.getpid())
 
     def test_start_reports_early_exit_and_clears_pidfile(self) -> None:
@@ -185,7 +250,7 @@ class StartTests(unittest.TestCase):
             with mock.patch.object(MODULE, "require_uvx", return_value="/usr/bin/uvx"), mock.patch.object(
                 MODULE, "start_process", return_value=fake
             ), mock.patch.object(MODULE, "health", return_value=(False, None, "refused")):
-                result = MODULE.do_start(namespace(), base)
+                result = MODULE.do_start(namespace(), base, "SPEC")
             self.assertFalse(result["ok"])
             self.assertEqual(result["exit_code"], 1)
             self.assertEqual(result["log_tail"], "build failed")
@@ -194,7 +259,7 @@ class StartTests(unittest.TestCase):
     def test_start_requires_uvx(self) -> None:
         with tempfile.TemporaryDirectory() as root, mock.patch.object(MODULE.shutil, "which", return_value=None):
             with self.assertRaisesRegex(MODULE.MonitorError, "uvx is not on PATH"):
-                MODULE.do_start(namespace(), Path(root))
+                MODULE.do_start(namespace(), Path(root), "SPEC")
 
 
 class StopAndStatusTests(unittest.TestCase):
@@ -257,14 +322,40 @@ class StopAndStatusTests(unittest.TestCase):
 
 class PayloadAndMainTests(unittest.TestCase):
     def test_payload_declares_loopback_and_no_allocation_authority(self) -> None:
-        payload = MODULE.payload_for("status", Path("/tmp/x"), 8788, {"ok": True})
+        spec = MODULE.DEFAULT_VAWS_TOP_SPEC
+        payload = MODULE.payload_for("status", Path("/tmp/x"), 8788, spec, {"ok": True})
         self.assertFalse(payload["allocation_authority"])
         self.assertEqual(payload["url"], "http://127.0.0.1:8788")
         self.assertEqual(payload["bind"], "127.0.0.1")
         self.assertEqual(payload["ref"], MODULE.VAWS_TOP_REF)
-        self.assertEqual(payload["cli_prefix"], MODULE.UVX_PREFIX)
-        self.assertEqual(payload["mcp_command"], [*MODULE.UVX_PREFIX, "mcp"])
+        self.assertEqual(payload["spec"], spec)
+        self.assertEqual(payload["default_spec"], spec)
+        self.assertEqual(payload["cli_prefix"], MODULE.uvx_prefix(spec))
+        self.assertEqual(payload["mcp_command"], [*MODULE.uvx_prefix(spec), "mcp"])
         self.assertEqual(payload["state_dir"], "/tmp/x/data")
+        # A running instance's recorded spec wins over the resolved one.
+        payload = MODULE.payload_for("status", Path("/tmp/x"), 8788, spec, {"ok": True, "spec": "RUNNING"})
+        self.assertEqual(payload["spec"], "RUNNING")
+        self.assertEqual(payload["cli_prefix"][2], "RUNNING")
+
+    def test_main_passes_the_override_spec_to_deploy_and_start(self) -> None:
+        out = io.StringIO()
+        with tempfile.TemporaryDirectory() as root, mock.patch.object(
+            MODULE, "runtime_dir", return_value=Path(root)
+        ), mock.patch.object(MODULE, "deploy", return_value={"version": "0.1.0"}) as deploy, redirect_stdout(out):
+            code = MODULE.main(["deploy", "--from", "/tmp/dev.whl"])
+        self.assertEqual(code, 0)
+        deploy.assert_called_once_with("/tmp/dev.whl")
+        self.assertEqual(json.loads(out.getvalue())["spec"], "/tmp/dev.whl")
+        out = io.StringIO()
+        with tempfile.TemporaryDirectory() as root, mock.patch.object(
+            MODULE, "runtime_dir", return_value=Path(root)
+        ), mock.patch.dict(os.environ, {MODULE.SPEC_ENV: "/tmp/env.whl"}), mock.patch.object(
+            MODULE, "do_start", return_value={"ok": True, "port": 8788}
+        ) as do_start, redirect_stdout(out):
+            code = MODULE.main(["start"])
+        self.assertEqual(code, 0)
+        self.assertEqual(do_start.call_args.args[2], "/tmp/env.whl")
 
     def test_main_reports_missing_uvx_as_json_error(self) -> None:
         out = io.StringIO()
@@ -307,7 +398,7 @@ class PayloadAndMainTests(unittest.TestCase):
         ), mock.patch.object(
             MODULE, "do_stop", side_effect=lambda base, **_: calls.append("stop") or {"ok": True, "stopped": True}
         ), mock.patch.object(
-            MODULE, "do_start", side_effect=lambda args, base: calls.append("start") or {"ok": True, "port": 8788}
+            MODULE, "do_start", side_effect=lambda args, base, spec: calls.append("start") or {"ok": True, "port": 8788}
         ), redirect_stdout(out):
             code = MODULE.main(["restart"])
         self.assertEqual(code, 0)

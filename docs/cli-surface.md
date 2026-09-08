@@ -173,7 +173,6 @@ later main.
 |---|---|---|---|
 | `vllm-ascend-workspace/remote-dev` | `b6acc21d147e369e771f1ff916973d74d667691e` | `.agents/scripts/remote_dev.py` | `mcp/server.py`, `tools/remote_*.py`, client hooks, resolver/result contract |
 | `vllm-ascend-workspace/vaws-coordinator` | `2e16e894e31a12d85a11117a2772031f30fdfebe` | `.agents/scripts/vaws.py` | `task_server.py`, `scripts/vaws.py`, `hooks/vaws_session.py`, `server.py` |
-| `vllm-ascend-workspace/vaws-top` | `e13478484b9f52e8847169a785eebc32b268787f` | `.agents/skills/npu-fleet-monitor/scripts/manage_monitor.py` | `vaws-top.py`, `vaws-top-mcp.py` (external clone scripts, not a scaffold subdirectory) |
 | `vllm-ascend-workspace/vaws-knowledge` | `e04d50f7bc5702afbe2e2988f7c28a3268e1a7f3` | none (test-only kit) | `VAWS_KNOWLEDGE_KIT_ROOT`; not a runtime dependency and not vendored |
 
 `knowledge_shared_cache.py import` copies from a **local** corpus/verified
@@ -481,7 +480,7 @@ option.
 | `.agents/skills/modelscope/scripts/modelscope_auto.py` | argparse | ensure, status, verify, worker | 11 | docs:1, mirror:1, routing:1, script:1, skill-doc:1, test:1 | mechanics | supported | .agents/skills/modelscope/scripts/modelscope_auto.py | vaws model |
 | `.agents/skills/modelscope/scripts/modelscope_download_status.py` | argparse | - | 3 | docs:1, mirror:1, routing:1, script:1, skill-doc:1, test:1 | mechanics | internal | .agents/skills/modelscope/scripts/modelscope_auto.py | - |
 | `.agents/skills/modelscope/scripts/verify_modelscope_sha256.py` | argparse | - | 8 | docs:1, mirror:2, routing:1, script:2, skill-doc:1, test:1 | mechanics | payload | .agents/skills/modelscope/scripts/verify_modelscope_sha256.py | - |
-| `.agents/skills/npu-fleet-monitor/scripts/manage_monitor.py` | argparse | deploy, start, status, restart, stop | 5 | docs:4, policy:2, routing:3, skill-doc:1, source-map:1, test:2 | mechanics | supported | .agents/skills/npu-fleet-monitor/scripts/manage_monitor.py | vaws machine |
+| `.agents/skills/npu-fleet-monitor/scripts/manage_monitor.py` | argparse | deploy, start, status, restart, stop | 6 | docs:4, policy:2, routing:3, skill-doc:1, source-map:1, test:2 | mechanics | supported | .agents/skills/npu-fleet-monitor/scripts/manage_monitor.py | vaws machine |
 | `.agents/skills/remote-code-parity/scripts/gc_runtime_cache.py` | argparse | - | 7 | docs:1, routing:1, skill-doc:3 | mechanics | supported | .agents/skills/remote-code-parity/scripts/gc_runtime_cache.py | vaws sync |
 | `.agents/skills/remote-code-parity/scripts/install_consent.py` | argparse | resolve, set, batch-set, resolve-sync-mode, set-sync-mode | 7 | docs:1, routing:1, script:1, skill-doc:5 | mechanics | supported | .agents/skills/remote-code-parity/scripts/install_consent.py | vaws sync |
 | `.agents/skills/remote-code-parity/scripts/parity_sync.py` | argparse | - | 17 | docs:5, mirror:1, routing:2, script:3, skill-doc:10, test:2 | mechanics | supported | .agents/skills/remote-code-parity/scripts/parity_sync.py | vaws sync |

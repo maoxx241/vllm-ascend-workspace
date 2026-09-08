@@ -2,9 +2,10 @@
 """Run the local loopback-only NPU fleet monitor through `uvx`.
 
 vaws-top is a published Python package. `uvx` fetches and caches the pinned
-release; this wrapper only launches `vaws-top serve` as a local background
-process, keeps a pidfile, and probes `/api/health`. There is no checkout, no
-pin file, no git, and no service manager.
+GitHub Release wheel (the only artifact that contains the built frontend);
+this wrapper only launches `vaws-top serve` as a local background process,
+keeps a pidfile, and probes `/api/health`. There is no checkout, no pin file,
+no git, and no service manager.
 
 The listener is always `127.0.0.1`. vaws-top observations are not allocation
 authority. Coordinator execution leases remain authoritative.
@@ -33,12 +34,23 @@ if str(LIB_DIR) not in sys.path:
 from vaws_local_state import STATE_DIRNAME, shared_inventory_path, shared_workspace_root  # noqa: E402
 
 VAWS_TOP_REPO = "vllm-ascend-workspace/vaws-top"
+# Single version constant: the release tag. The wheel filename below is derived
+# from it so the tag and the wheel version cannot drift apart.
 VAWS_TOP_REF = "v0.1.0"
-VAWS_TOP_SPEC = f"git+https://github.com/{VAWS_TOP_REPO}@{VAWS_TOP_REF}"
-# The console script is named after the repository; derive it so the only
-# literal naming the extracted project is the canonical repository identifier.
+VAWS_TOP_VERSION = VAWS_TOP_REF.removeprefix("v")
+# The console script is named after the repository and the import package uses
+# underscores; derive both so the only literal naming the extracted project is
+# the canonical repository identifier.
 VAWS_TOP_COMMAND = VAWS_TOP_REPO.rsplit("/", 1)[-1]
-UVX_PREFIX = ["uvx", "--from", VAWS_TOP_SPEC, VAWS_TOP_COMMAND]
+VAWS_TOP_PACKAGE = VAWS_TOP_COMMAND.replace("-", "_")
+VAWS_TOP_WHEEL = f"{VAWS_TOP_PACKAGE}-{VAWS_TOP_VERSION}-py3-none-any.whl"
+# Default install source is the GitHub Release wheel, not `git+https://...@tag`.
+# vaws-top ships a JS frontend whose build output exists only in the released
+# wheel. Installing from git runs a hatch hook that needs Node.js; without Node
+# it silently produces a wheel with no frontend and `serve` fails on startup.
+# This is specific to vaws-top; pure-Python sibling packages keep git+tag.
+DEFAULT_VAWS_TOP_SPEC = f"https://github.com/{VAWS_TOP_REPO}/releases/download/{VAWS_TOP_REF}/{VAWS_TOP_WHEEL}"
+SPEC_ENV = "VAWS_TOP_FROM"
 BIND = "127.0.0.1"
 DEFAULT_PORT = 8788
 RUNTIME_DIRNAME = "npu-fleet-monitor"
@@ -131,8 +143,26 @@ def serve_env(args: argparse.Namespace, port: int, state_dir: Path) -> dict[str,
     return env
 
 
-def serve_command(port: int) -> list[str]:
-    return [*UVX_PREFIX, "serve", "--bind", BIND, "--port", str(port)]
+def resolve_spec(explicit: str | None = None, inherited: dict[str, str] | None = None) -> str:
+    """`--from` flag, then VAWS_TOP_FROM, then the release wheel. Developers can
+    point at a local wheel, a source tree, or `git+https://...` (needs Node.js)."""
+    inherited = dict(os.environ) if inherited is None else inherited
+    for candidate in (explicit, inherited.get(SPEC_ENV)):
+        if candidate is None:
+            continue
+        candidate = candidate.strip()
+        if not candidate or any(char.isspace() for char in candidate):
+            raise MonitorError(f"invalid monitor install spec: {candidate!r}")
+        return candidate
+    return DEFAULT_VAWS_TOP_SPEC
+
+
+def uvx_prefix(spec: str) -> list[str]:
+    return ["uvx", "--from", spec, VAWS_TOP_COMMAND]
+
+
+def serve_command(spec: str, port: int) -> list[str]:
+    return [*uvx_prefix(spec), "serve", "--bind", BIND, "--port", str(port)]
 
 
 def require_uvx() -> str:
@@ -205,42 +235,73 @@ def start_process(command: list[str], *, env: dict[str, str], cwd: Path, log_pat
         )
 
 
-def deploy() -> dict[str, Any]:
-    """Resolve, build if needed, and cache the pinned package; no service is started."""
-    uvx = require_uvx()
-    progress(f"Resolving {VAWS_TOP_SPEC} through uvx (first run may build the frontend and needs Node.js)")
-    result = subprocess.run(
-        [*UVX_PREFIX, "--version"],
+# Runs inside the installed package environment. `require_static()` is the same
+# check `serve` performs at startup, so a wheel built without the frontend fails
+# here instead of at the first `start`.
+STATIC_PROBE = (
+    f"import importlib.metadata as m; from {VAWS_TOP_PACKAGE}.static_files import require_static; "
+    f"print(m.version({VAWS_TOP_COMMAND!r})); print(require_static() / 'index.html')"
+)
+
+
+def run_uvx(spec: str, *argv: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["uvx", "--from", spec, *argv],
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
         check=False,
     )
+
+
+def deploy(spec: str) -> dict[str, Any]:
+    """Install/cache the package and prove the packaged frontend exists; no service is started."""
+    uvx = require_uvx()
+    progress(f"Resolving {spec} through uvx")
+    result = run_uvx(spec, "python", "-c", STATIC_PROBE)
     if result.returncode != 0:
         detail = (result.stderr or result.stdout or "uvx failed").strip()[-4000:]
-        raise MonitorError(f"uvx could not provide {VAWS_TOP_SPEC}: {detail}")
-    return {"version": result.stdout.strip(), "uvx": uvx}
+        raise MonitorError(
+            f"{spec} is not servable: {detail}\n"
+            "The monitor needs the GitHub Release wheel (frontend built in). "
+            "Installing from a source tree or git+https requires Node.js and otherwise "
+            "yields a wheel without the frontend."
+        )
+    lines = result.stdout.strip().splitlines()
+    version = lines[0] if lines else ""
+    index_html = lines[1] if len(lines) > 1 else ""
+    if not index_html or not Path(index_html).is_file():
+        raise MonitorError(f"{spec} installed without the packaged frontend (missing {index_html or 'index.html'})")
+    return {"version": version, "static_index": index_html, "uvx": uvx}
 
 
-def do_start(args: argparse.Namespace, base: Path) -> dict[str, Any]:
+def do_start(args: argparse.Namespace, base: Path, spec: str) -> dict[str, Any]:
     pidfile = base / PIDFILE_NAME
     log_path = base / LOG_NAME
     existing = read_pidfile(pidfile)
     if existing and pid_alive(existing["pid"]):
         port = int(existing.get("port", args.port))
         ok, payload, error = health(port)
-        return {"ok": ok, "pid": existing["pid"], "port": port, "health": payload, "health_error": error, "already_running": True}
+        return {
+            "ok": ok,
+            "pid": existing["pid"],
+            "port": port,
+            "spec": existing.get("spec", spec),
+            "health": payload,
+            "health_error": error,
+            "already_running": True,
+        }
     require_uvx()
     base.mkdir(parents=True, exist_ok=True)
     state_dir = base / "data"
-    command = serve_command(args.port)
+    command = serve_command(spec, args.port)
     progress(f"Starting {' '.join(shlex.quote(item) for item in command)}")
     process = start_process(command, env=serve_env(args, args.port, state_dir), cwd=base, log_path=log_path)
     record = {
         "pid": process.pid,
         "port": args.port,
-        "spec": VAWS_TOP_SPEC,
+        "spec": spec,
         "started_at": time.time(),
         "log": str(log_path),
     }
@@ -296,17 +357,23 @@ def do_status(base: Path, port: int) -> dict[str, Any]:
         port = int(existing.get("port", port))
     running = bool(pid) and pid_alive(pid)
     ok, payload, error = health(port)
-    return {"ok": ok, "pid": pid if running else None, "running": running, "port": port, "health": payload, "health_error": error}
+    result = {"ok": ok, "pid": pid if running else None, "running": running, "port": port, "health": payload, "health_error": error}
+    if running and existing and existing.get("spec"):
+        result["spec"] = existing["spec"]
+    return result
 
 
-def payload_for(action: str, base: Path, port: int, extra: dict[str, Any]) -> dict[str, Any]:
+def payload_for(action: str, base: Path, port: int, spec: str, extra: dict[str, Any]) -> dict[str, Any]:
+    spec = str(extra.get("spec") or spec)
+    prefix = uvx_prefix(spec)
     payload = {
         "ok": False,
         "action": action,
         "allocation_authority": False,
         "repository": VAWS_TOP_REPO,
         "ref": VAWS_TOP_REF,
-        "spec": VAWS_TOP_SPEC,
+        "spec": spec,
+        "default_spec": DEFAULT_VAWS_TOP_SPEC,
         "bind": BIND,
         "port": port,
         "url": f"http://{BIND}:{port}",
@@ -314,8 +381,8 @@ def payload_for(action: str, base: Path, port: int, extra: dict[str, Any]) -> di
         "runtime_dir": str(base),
         "state_dir": str(base / "data"),
         "log": str(base / LOG_NAME),
-        "cli_prefix": UVX_PREFIX,
-        "mcp_command": [*UVX_PREFIX, "mcp"],
+        "cli_prefix": prefix,
+        "mcp_command": [*prefix, "mcp"],
     }
     payload.update(extra)
     return payload
@@ -328,6 +395,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("action", choices=("deploy", "start", "status", "restart", "stop"))
     parser.add_argument("--port", type=int, default=DEFAULT_PORT, help=f"loopback port (default {DEFAULT_PORT})")
     parser.add_argument("--wait-seconds", type=float, default=90, help="how long start waits for /api/health")
+    parser.add_argument(
+        "--from",
+        dest="spec",
+        help=f"uvx install source override (also {SPEC_ENV}); default is the release wheel",
+    )
     parser.add_argument("--inventory-files", help="os.pathsep-separated inventory JSON files (NFM_INVENTORY_FILES)")
     parser.add_argument("--host-pool-files", help="os.pathsep-separated host pool files (NFM_HOST_POOL_FILES)")
     parser.add_argument("--bootstrap-command", help="one-time password key bootstrap template (NFM_BOOTSTRAP_COMMAND)")
@@ -340,20 +412,21 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.port <= 0 or args.port > 65535:
             raise MonitorError(f"invalid port: {args.port}")
+        spec = resolve_spec(args.spec)
         if args.action == "deploy":
-            extra = deploy()
+            extra = deploy(spec)
             extra["ok"] = True
         elif args.action == "start":
-            extra = do_start(args, base)
+            extra = do_start(args, base, spec)
         elif args.action == "restart":
             stopped = do_stop(base)
-            extra = do_start(args, base)
+            extra = do_start(args, base, spec)
             extra["stopped_previous"] = stopped
         elif args.action == "stop":
             extra = do_stop(base)
         else:
             extra = do_status(base, args.port)
-        result = payload_for(args.action, base, int(extra.get("port", args.port)), extra)
+        result = payload_for(args.action, base, int(extra.get("port", args.port)), spec, extra)
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0 if result["ok"] else 1
     except (MonitorError, OSError) as exc:
