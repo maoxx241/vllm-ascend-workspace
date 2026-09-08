@@ -288,6 +288,13 @@
       "note": "tracked-tree identifier scan with optional --strict-allowlist",
       "proposed_target": "vaws lint"
     },
+    ".agents/scripts/tracked_path_check.py": {
+      "responsibility": "mechanics",
+      "support_role": "supported",
+      "target_kind": "self",
+      "note": "tracked Markdown/YAML/JSON/TOML scan against .agents/policy/tracked-paths.json and its dated baseline",
+      "proposed_target": "vaws lint"
+    },
     ".agents/scripts/vaws.py": {
       "responsibility": "mechanics",
       "support_role": "supported",
@@ -301,6 +308,13 @@
       "support_role": "supported",
       "target_kind": "self",
       "note": "writes client MCP/hook config files; does not apply the coordinator JSON helper as a preserving migration",
+      "proposed_target": "vaws workspace"
+    },
+    ".agents/scripts/vaws_deps.py": {
+      "responsibility": "mechanics",
+      "support_role": "supported",
+      "target_kind": "self",
+      "note": "unified dependency plane: status/bootstrap/doctor; doctor emits Result Envelope v1 capability report",
       "proposed_target": "vaws workspace"
     },
     ".agents/scripts/workspace_identity.py": {

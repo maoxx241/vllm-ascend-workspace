@@ -7,6 +7,7 @@ These should trigger `repo-init`:
 - “Initialize this workspace.”
 - “Set up GitHub CLI and sign me in.”
 - “Initialize submodules and point `vllm-ascend` to my fork.”
+- “Bootstrap the four external dependencies.”
 - “Configure my remotes for PR work.”
 - “初始化这个仓库，顺便把后面远端机器要用的用户名也配好。”
 
@@ -40,6 +41,7 @@ A successful run should satisfy all applicable items below.
   - machine username choice if the profile is missing
   - repo topology choice
   - submodule-init choice
+  - optional external-dependency bootstrap choice (skippable; private denial is non-fatal)
   - vllm version alignment choice (when the probe shows submodules are uninitialized)
 - the machine-username branch uses exactly three options:
   - `git-username`
@@ -73,7 +75,7 @@ A successful run should satisfy all applicable items below.
 ### Submodules and topology
 
 - initializes submodules recursively when the user approved it
-- resolves CI-pinned vLLM alignment with `resolve_vllm_ci_pin.py`, preferring `.github/vllm-main-verified.commit` over older workflow/docs fallbacks
+- resolves CI-pinned vLLM alignment with `resolve_vllm_ci_pin.py`, preferring `vllm-ascend/.github/vllm-main-verified.commit` over older workflow/docs fallbacks
 - completes submodule init before configuring submodule remotes
 - `repo_topology.py configure --repo <submodule>` errors out when the submodule is not initialized (git root mismatch)
 - preserves nonstandard remotes
@@ -84,6 +86,14 @@ A successful run should satisfy all applicable items below.
 - uses `repo_topology.py configure` only for explicit fresh setup, not as an automatic transfer migration of established remotes
 - uses quiet remote comparison instead of broad prune-heavy fetches
 - moves local branches only with approval when worktrees are clean enough
+
+### External dependencies
+
+- offers `python3 .agents/scripts/vaws_deps.py bootstrap all` and does not treat it as a gate
+- a user without organization access completes `repo-init` successfully
+- private pins (`remote-dev`, `vaws-top`) may be `access-denied`; that is non-fatal
+- after bootstrap or skip, runs `python3 .agents/scripts/vaws_deps.py doctor`
+- the finish summary names available and unavailable capabilities from `doctor`'s report, without re-deriving them
 
 ## Manual regression checklist
 
@@ -98,5 +108,6 @@ Review these files together after every substantial skill edit:
 - `.agents/skills/repo-init/scripts/repo_init_probe.py`
 - `.agents/skills/repo-init/scripts/repo_topology.py`
 - `.agents/skills/repo-init/scripts/resolve_vllm_ci_pin.py`
+- `.agents/scripts/vaws_deps.py`
 - `.agents/scripts/workspace_profile.py`
 - `.agents/lib/vaws_local_state.py`

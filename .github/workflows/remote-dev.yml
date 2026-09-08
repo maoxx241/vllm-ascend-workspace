@@ -61,15 +61,18 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - name: Fetch the pinned remote-dev checkout (optional, private repository)
+        id: fetch-remote-dev
         # The substrate is private. When a read token is configured the
         # substrate-dependent tests run for real; otherwise they self-skip and
         # only the substrate-free contract (plugin mapping, launcher, config
-        # files, shims) is enforced.
+        # files, shims) is enforced. The skip is recorded on the step output
+        # so later status is skipped, not run-and-ignored.
         env:
           REMOTE_DEV_READ_TOKEN: ${{ secrets.REMOTE_DEV_READ_TOKEN }}
         run: |
           if [ -z "$REMOTE_DEV_READ_TOKEN" ]; then
-            echo "REMOTE_DEV_READ_TOKEN not configured; substrate-dependent tests will skip"
+            echo "REMOTE_DEV_READ_TOKEN not configured; skipping private remote-dev checkout"
+            echo "fetched=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           repo="$(python3 -c 'import json; print(json.load(open(".agents/deps/remote-dev.json"))["repository"])')"
@@ -77,13 +80,16 @@ jobs:
           git clone --quiet "https://x-access-token:${REMOTE_DEV_READ_TOKEN}@github.com/${repo}.git" "$RUNNER_TEMP/remote-dev"
           git -C "$RUNNER_TEMP/remote-dev" checkout --quiet --detach "$commit"
           echo "VAWS_REMOTE_DEV_ROOT=$RUNNER_TEMP/remote-dev" >> "$GITHUB_ENV"
+          echo "fetched=true" >> "$GITHUB_OUTPUT"
       - name: Compile the scaffold
         run: python -B -m compileall -q .agents
       - name: Consumer contract tests
         run: python -B -m unittest discover -s .agents/tests -p "test_remote_dev_consumer.py" -v
       - name: Launcher status
-        # Exit 1 (no checkout) is expected without the token; the JSON is the
-        # useful artifact either way.
-        run: python -B .agents/scripts/remote_dev.py status || true
+        if: steps.fetch-remote-dev.outputs.fetched == 'true'
+        run: python -B .agents/scripts/remote_dev.py status
+      - name: Note skipped launcher status
+        if: steps.fetch-remote-dev.outputs.fetched != 'true'
+        run: echo "Skipped remote_dev.py status: private checkout was not fetched (REMOTE_DEV_READ_TOKEN unset)."
       - name: Generated Claude shims and ModelScope Trae projection are in sync
         run: python -B .agents/scripts/sync_claude_skills.py --check

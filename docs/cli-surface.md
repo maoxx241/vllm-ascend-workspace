@@ -1,5 +1,7 @@
 # CLI surface: current inventory and historical proposal
 
+Status: current
+
 This document is the inventory and guidance record for the scaffold CLI
 surface. It does **not** implement the historical thirteen-command dispatcher,
 delete or rename business CLIs, or change domain validators.
@@ -29,7 +31,7 @@ entry points.
 | Measurement | AST `__main__` / `__main__.py` discovery of tracked (and untracked-unignored) Python outside `vllm/` and `vllm-ascend/`; overlay and owner selectors from `.agents/policy/cli-surface-inventory.json`; committed `.agents/deps/*.json` pins; no import, fetch, `--help`, NPU or SSH |
 
 The census is the AST of the inspected files plus those committed pins. The
-117-entry overlay and four owner-selector records live in
+119-entry overlay and four owner-selector records live in
 `.agents/policy/cli-surface-inventory.json` (metadata only; not executable).
 Re-run the generator after this overlay changes. Do not paste a future commit
 SHA into this file as if it were an input.
@@ -42,23 +44,23 @@ are **not** the original 132-entry snapshot and **not** the unimplemented
 
 | Measure | Value |
 |---|---|
-| Entry points (definition in §3) | **117** |
-| Supported agent-facing launchers | 68 |
+| Entry points (definition in §3) | **119** |
+| Supported agent-facing launchers | 69 |
 | Compatibility wrappers | 17 |
 | Internal / diagnostic CLIs | 13 |
 | Generated projections | 4 |
 | Hooks | 3 |
 | Remote payloads | 8 |
 | Test / maturation harnesses | 4 |
-| Responsibility | mechanics 101 · mixed 16 · judgment 0 |
-| Files importing `argparse` (non-test) | 97 |
+| Responsibility | mechanics 102 · mixed 16 · judgment 0 |
+| Files importing `argparse` (non-test) | 98 |
 | Skills that ship at least one entry point | 23 |
-| Parser styles | argparse 95 · delegated 18 · bare 3 · bare-argv 1 |
+| Parser styles | argparse 96 · delegated 18 · bare 3 · bare-argv 1 |
 | Historical snapshot (original #85) | 132 entries; mechanics 81 · judgment 8 · mixed 8 · redundant 35 |
 | Historical proposed surface | **13 nouns**, 75 verbs (unimplemented) |
 
-The 117 roles are non-overlapping: every discovered entry has exactly one
-support role, and the seven role counts sum to 117. Support role is not
+The 119 roles are non-overlapping: every discovered entry has exactly one
+support role, and the seven role counts sum to 119. Support role is not
 inferred from a future `vaws <noun>` label, from a `__main__` guard alone, or
 from the absence of a basename mention.
 
@@ -67,7 +69,7 @@ from the absence of a basename mention.
 An **entry point** is a Python file that
 
 - is tracked (or untracked and not ignored) outside `vllm/`, `vllm-ascend/`,
-  `.git/`, `.vaws-local/`, `.remote-dev/state/`;
+  `.git/`, `.vaws-local/`, `.vaws-local/remote-dev-state/`;
 - is not a test (`tests/` directories, `test_*.py`, `selftest_*.py`,
   `conftest.py`) and not `__init__.py`;
 - has an `if __name__ == "__main__":` guard or is a `__main__.py`.
@@ -171,14 +173,14 @@ later main.
 |---|---|---|---|
 | `vllm-ascend-workspace/remote-dev` | `b6acc21d147e369e771f1ff916973d74d667691e` | `.agents/scripts/remote_dev.py` | `mcp/server.py`, `tools/remote_*.py`, client hooks, resolver/result contract |
 | `vllm-ascend-workspace/vaws-coordinator` | `2e16e894e31a12d85a11117a2772031f30fdfebe` | `.agents/scripts/vaws.py` | `task_server.py`, `scripts/vaws.py`, `hooks/vaws_session.py`, `server.py` |
-| `vllm-ascend-workspace/vaws-top` | `e13478484b9f52e8847169a785eebc32b268787f` | `.agents/skills/npu-fleet-monitor/scripts/manage_monitor.py` | `scripts/vaws-top.py`, `scripts/vaws-top-mcp.py` (external clone, not a scaffold subdirectory) |
+| `vllm-ascend-workspace/vaws-top` | `e13478484b9f52e8847169a785eebc32b268787f` | `.agents/skills/npu-fleet-monitor/scripts/manage_monitor.py` | `vaws-top.py`, `vaws-top-mcp.py` (external clone scripts, not a scaffold subdirectory) |
 | `vllm-ascend-workspace/vaws-knowledge` | `e04d50f7bc5702afbe2e2988f7c28a3268e1a7f3` | none (test-only kit) | `VAWS_KNOWLEDGE_KIT_ROOT`; not a runtime dependency and not vendored |
 
 `knowledge_shared_cache.py import` copies from a **local** corpus/verified
 directory and binds source identity. It does not fetch over the network and
 is not an auto-install of the conformance kit.
 
-Deleted in-tree `.remote-dev/**` and `.agents/coordinator/**` paths are not
+Deleted in-tree remote-dev and coordinator paths are not
 resurrected in the current census. A compatibility wrapper whose current
 target is itself is not a `local-target-missing` finding.
 
@@ -237,7 +239,7 @@ routing and deletion directions from that draft are withdrawn:
 
 - do not delete the planner/analyze scripts or their tests;
 - do not make `.agents/scripts/vaws.py` a global noun dispatcher;
-- do not point current replacements at deleted `.remote-dev/tools/*.py` files;
+- do not point current replacements at deleted remote-dev tool scripts;
 - do not treat basename silence as authorization to remove a CLI.
 
 ## 9. Historical snapshot (original #85, 132 entries)
@@ -395,33 +397,32 @@ committed external contract). "Proposed" is the unimplemented original #85
 option.
 
 <!-- current-cli-surface-table -->
-
 | Entry point | Style | Verbs | Options | Refs | Responsibility | Support role | Current target | Proposed |
 |---|---|---|---|---|---|---|---|---|
 | `.agents/hooks/knowledge_session_end.py` | bare | - | 0 | client-config:1, routing:1, test:2 | mechanics | hook | .agents/hooks/knowledge_session_end.py | - |
 | `.agents/hooks/tracked_leak_precommit.py` | argparse | - | 8 | docs:1, policy:1, test:1 | mechanics | hook | .agents/hooks/tracked_leak_precommit.py | - |
-| `.agents/hooks/vaws_session.py` | argparse | - | 4 | docs:3, other:1, policy:2, script:3, source-map:1, test:2 | mechanics | hook | .agents/hooks/vaws_session.py | - |
+| `.agents/hooks/vaws_session.py` | argparse | - | 4 | docs:4, other:1, policy:2, script:3, source-map:1, test:2 | mechanics | hook | .agents/hooks/vaws_session.py | - |
 | `.agents/maturation/run.py` | argparse | - | 23 | docs:4, other:1, routing:1, script:3, skill-doc:11, test:5 | mechanics | harness | .agents/maturation/run.py | - |
-| `.agents/scripts/cli_surface_inventory.py` | argparse | - | 3 | test:1 | mechanics | supported | .agents/scripts/cli_surface_inventory.py | vaws lint |
-| `.agents/scripts/envelope_lint.py` | argparse | scan, check, run | 5 | docs:1, test:1 | mechanics | supported | .agents/scripts/envelope_lint.py | vaws lint |
+| `.agents/scripts/cli_surface_inventory.py` | argparse | - | 3 | policy:1, test:2 | mechanics | supported | .agents/scripts/cli_surface_inventory.py | vaws lint |
+| `.agents/scripts/envelope_lint.py` | argparse | scan, check, run | 5 | docs:1, test:2 | mechanics | supported | .agents/scripts/envelope_lint.py | vaws lint |
 | `.agents/scripts/knowledge_capture.py` | argparse | - | 9 | docs:2, other:2, routing:2, script:2, skill-doc:2, test:3 | mixed | supported | .agents/scripts/knowledge_capture.py | vaws knowledge |
 | `.agents/scripts/knowledge_export.py` | argparse | - | 7 | other:2, routing:2, script:1, skill-doc:3, test:1 | mechanics | supported | .agents/scripts/knowledge_export.py | vaws knowledge |
 | `.agents/scripts/knowledge_migrate_v2.py` | argparse | - | 7 | routing:1, skill-doc:2, test:1 | mechanics | supported | .agents/scripts/knowledge_migrate_v2.py | vaws knowledge |
 | `.agents/scripts/knowledge_query.py` | argparse | - | 12 | docs:1, routing:2, test:3 | mechanics | supported | .agents/scripts/knowledge_query.py | vaws knowledge |
-| `.agents/scripts/knowledge_shared_cache.py` | argparse | status, import, clear | 6 | docs:1, routing:1, script:1, skill-doc:2, test:2 | mechanics | supported | .agents/scripts/knowledge_shared_cache.py | vaws knowledge |
+| `.agents/scripts/knowledge_shared_cache.py` | argparse | status, import, clear | 6 | docs:1, routing:1, script:2, skill-doc:2, test:2 | mechanics | supported | .agents/scripts/knowledge_shared_cache.py | vaws knowledge |
 | `.agents/scripts/knowledge_validate.py` | argparse | - | 1 | other:3, routing:1, script:1, skill-doc:1, test:2 | mechanics | supported | .agents/scripts/knowledge_validate.py | vaws knowledge |
-| `.agents/scripts/remote_artifact_manifest.py` | delegated | - | 4 | docs:1, routing:1, skill-doc:3 | mechanics | compatibility | .agents/scripts/remote_artifact_manifest.py | vaws remote |
-| `.agents/scripts/remote_artifact_pull.py` | delegated | - | 5 | docs:1, routing:1, skill-doc:4 | mechanics | compatibility | .agents/scripts/remote_artifact_pull.py | vaws remote |
-| `.agents/scripts/remote_artifact_push.py` | delegated | - | 5 | docs:1, routing:1, skill-doc:1 | mechanics | compatibility | .agents/scripts/remote_artifact_push.py | vaws remote |
+| `.agents/scripts/remote_artifact_manifest.py` | delegated | - | 4 | docs:1, policy:1, routing:1, skill-doc:3 | mechanics | compatibility | .agents/scripts/remote_artifact_manifest.py | vaws remote |
+| `.agents/scripts/remote_artifact_pull.py` | delegated | - | 5 | docs:1, policy:1, routing:1, skill-doc:4 | mechanics | compatibility | .agents/scripts/remote_artifact_pull.py | vaws remote |
+| `.agents/scripts/remote_artifact_push.py` | delegated | - | 5 | docs:1, policy:1, routing:1, skill-doc:1 | mechanics | compatibility | .agents/scripts/remote_artifact_push.py | vaws remote |
 | `.agents/scripts/remote_cleanup.py` | delegated | - | 13 | docs:1, routing:1, skill-doc:3 | mechanics | supported | .agents/scripts/remote_cleanup.py | vaws session |
-| `.agents/scripts/remote_dev.py` | argparse | status, bootstrap, server, hook, tool, env | 6 | client-config:3, docs:4, mirror:24, other:4, policy:1, script:6, source-map:1, test:4 | mechanics | supported | .agents/scripts/remote_dev.py | vaws remote |
+| `.agents/scripts/remote_dev.py` | argparse | status, bootstrap, server, hook, tool, env | 6 | client-config:3, docs:5, mirror:24, other:4, policy:1, routing:1, script:6, skill-doc:13, source-map:1, test:4 | mechanics | supported | .agents/scripts/remote_dev.py | vaws remote |
 | `.agents/scripts/remote_exec.py` | delegated | - | 8 | docs:1, routing:1, skill-doc:2, test:1 | mechanics | compatibility | .agents/scripts/remote_exec.py | vaws remote |
 | `.agents/scripts/remote_job_collect.py` | delegated | - | 5 | docs:1, routing:1, skill-doc:1 | mechanics | compatibility | .agents/scripts/remote_job_collect.py | vaws remote |
 | `.agents/scripts/remote_job_start.py` | delegated | - | 10 | docs:2, routing:1, skill-doc:2 | mechanics | compatibility | .agents/scripts/remote_job_start.py | vaws remote |
-| `.agents/scripts/remote_job_status.py` | delegated | - | 4 | docs:1, routing:1, skill-doc:1 | mechanics | compatibility | .agents/scripts/remote_job_status.py | vaws remote |
-| `.agents/scripts/remote_job_stop.py` | delegated | - | 5 | docs:1, routing:1, skill-doc:1 | mechanics | compatibility | .agents/scripts/remote_job_stop.py | vaws remote |
-| `.agents/scripts/remote_job_tail.py` | delegated | - | 6 | docs:1, routing:1, skill-doc:1 | mechanics | compatibility | .agents/scripts/remote_job_tail.py | vaws remote |
-| `.agents/scripts/remote_probe.py` | delegated | - | 4 | docs:2, routing:1, skill-doc:3, test:2 | mechanics | compatibility | .agents/scripts/remote_probe.py | vaws remote |
+| `.agents/scripts/remote_job_status.py` | delegated | - | 4 | docs:1, policy:1, routing:1, skill-doc:1 | mechanics | compatibility | .agents/scripts/remote_job_status.py | vaws remote |
+| `.agents/scripts/remote_job_stop.py` | delegated | - | 5 | docs:1, policy:1, routing:1, skill-doc:1 | mechanics | compatibility | .agents/scripts/remote_job_stop.py | vaws remote |
+| `.agents/scripts/remote_job_tail.py` | delegated | - | 6 | docs:1, policy:1, routing:1, skill-doc:1 | mechanics | compatibility | .agents/scripts/remote_job_tail.py | vaws remote |
+| `.agents/scripts/remote_probe.py` | delegated | - | 4 | docs:2, policy:1, routing:1, skill-doc:3, test:2 | mechanics | compatibility | .agents/scripts/remote_probe.py | vaws remote |
 | `.agents/scripts/remote_service_logs.py` | delegated | - | 4 | docs:1, routing:1, skill-doc:1 | mechanics | supported | .agents/scripts/remote_service_logs.py | vaws serve |
 | `.agents/scripts/remote_service_start.py` | delegated | - | 3 | docs:2, routing:1, skill-doc:3 | mechanics | compatibility | .agents/skills/vllm-ascend-serving/scripts/serve_start.py | vaws serve |
 | `.agents/scripts/remote_service_status.py` | delegated | - | 3 | docs:1, routing:1, skill-doc:1 | mechanics | compatibility | .agents/skills/vllm-ascend-serving/scripts/serve_status.py | vaws serve |
@@ -430,21 +431,23 @@ option.
 | `.agents/scripts/remote_sync_plan.py` | delegated | - | 5 | docs:2, routing:1, skill-doc:6 | mechanics | compatibility | .agents/skills/remote-code-parity/scripts/parity_sync.py | vaws sync |
 | `.agents/scripts/remote_target_resolve.py` | delegated | - | 3 | docs:1, routing:1, skill-doc:3 | mechanics | compatibility | .agents/scripts/remote_target_resolve.py | vaws remote |
 | `.agents/scripts/remote_toolbox_stress.py` | argparse | - | 13 | docs:1, routing:1, skill-doc:1 | mechanics | harness | .agents/scripts/remote_toolbox_stress.py | - |
-| `.agents/scripts/repo_boundary_check.py` | argparse | - | 6 | docs:1, other:1, policy:2, test:3 | mechanics | supported | .agents/scripts/repo_boundary_check.py | vaws lint |
+| `.agents/scripts/repo_boundary_check.py` | argparse | - | 6 | docs:3, other:1, policy:4, script:1, test:3 | mechanics | supported | .agents/scripts/repo_boundary_check.py | vaws lint |
 | `.agents/scripts/run_manifest.py` | argparse | init, validate | 10 | docs:5, other:2, policy:2, routing:2, test:3 | mechanics | supported | .agents/scripts/run_manifest.py | vaws manifest |
 | `.agents/scripts/skill_catalog.py` | argparse | - | 2 | other:1, test:2 | mechanics | supported | .agents/scripts/skill_catalog.py | vaws lint |
-| `.agents/scripts/split_reconcile.py` | argparse | - | 5 | docs:1, other:1, policy:1, test:1 | mechanics | supported | .agents/scripts/split_reconcile.py | vaws lint |
-| `.agents/scripts/sync_claude_skills.py` | argparse | - | 1 | docs:3, mirror:1, other:3, policy:1, routing:1, skill-doc:1, test:2 | mechanics | supported | .agents/scripts/sync_claude_skills.py | vaws lint |
+| `.agents/scripts/split_reconcile.py` | argparse | - | 5 | docs:1, other:1, policy:2, test:1 | mechanics | supported | .agents/scripts/split_reconcile.py | vaws lint |
+| `.agents/scripts/sync_claude_skills.py` | argparse | - | 1 | docs:3, mirror:2, other:3, policy:2, routing:1, skill-doc:1, test:2 | mechanics | supported | .agents/scripts/sync_claude_skills.py | vaws lint |
 | `.agents/scripts/tracked_leak_scan.py` | argparse | - | 10 | docs:1, hook:1, other:1, policy:1, test:3 | mechanics | supported | .agents/scripts/tracked_leak_scan.py | vaws lint |
-| `.agents/scripts/vaws.py` | argparse | status, bootstrap, env, hook, task-server | 6 | client-config:2, docs:4, other:4, policy:2, script:2, skill-doc:1, source-map:1, test:3 | mechanics | supported | .agents/scripts/vaws.py | vaws task |
+| `.agents/scripts/tracked_path_check.py` | argparse | - | 6 | docs:1, other:1, policy:1, test:2 | mechanics | supported | .agents/scripts/tracked_path_check.py | vaws lint |
+| `.agents/scripts/vaws.py` | argparse | status, bootstrap, env, hook, task-server | 6 | client-config:2, docs:5, other:4, policy:2, script:2, skill-doc:1, source-map:1, test:4 | mechanics | supported | .agents/scripts/vaws.py | vaws task |
 | `.agents/scripts/vaws_client_setup.py` | argparse | - | 5 | docs:3, other:2, policy:2, skill-doc:2, test:2 | mechanics | supported | .agents/scripts/vaws_client_setup.py | vaws workspace |
+| `.agents/scripts/vaws_deps.py` | argparse | status, bootstrap, doctor | 3 | docs:2, policy:1, routing:3, script:1, skill-doc:4, source-map:1, test:2 | mechanics | supported | .agents/scripts/vaws_deps.py | vaws workspace |
 | `.agents/scripts/workspace_identity.py` | argparse | summary, ensure, validate-alias, set-alias, decline-alias | 1 | docs:1, routing:1, skill-doc:5 | mechanics | supported | .agents/scripts/workspace_identity.py | vaws workspace |
 | `.agents/scripts/workspace_profile.py` | argparse | summary, validate, ensure | 4 | docs:1, routing:2, script:1, skill-doc:8 | mechanics | supported | .agents/scripts/workspace_profile.py | vaws workspace |
-| `.agents/skills/ascend-memory-profiling/scripts/mem_analyze.py` | argparse | - | 1 | docs:1, routing:1, skill-doc:1 | mixed | supported | .agents/skills/ascend-memory-profiling/scripts/mem_analyze.py | vaws profile |
-| `.agents/skills/ascend-memory-profiling/scripts/mem_collect.py` | argparse | - | 25 | docs:3, routing:1, script:1, skill-doc:2, test:1 | mechanics | supported | .agents/skills/ascend-memory-profiling/scripts/mem_collect.py | vaws profile |
-| `.agents/skills/ascend-memory-profiling/scripts/weight_inspector.py` | argparse | - | 0 | docs:1, routing:1, script:1, skill-doc:1 | mechanics | payload | .agents/skills/ascend-memory-profiling/scripts/weight_inspector.py | - |
+| `.agents/skills/ascend-memory-profiling/scripts/mem_analyze.py` | argparse | - | 1 | docs:1, policy:1, routing:1, skill-doc:1 | mixed | supported | .agents/skills/ascend-memory-profiling/scripts/mem_analyze.py | vaws profile |
+| `.agents/skills/ascend-memory-profiling/scripts/mem_collect.py` | argparse | - | 25 | docs:3, policy:1, routing:1, script:1, skill-doc:2, test:1 | mechanics | supported | .agents/skills/ascend-memory-profiling/scripts/mem_collect.py | vaws profile |
+| `.agents/skills/ascend-memory-profiling/scripts/weight_inspector.py` | argparse | - | 0 | docs:1, policy:1, routing:1, script:1, skill-doc:1 | mechanics | payload | .agents/skills/ascend-memory-profiling/scripts/weight_inspector.py | - |
 | `.agents/skills/ascend-operator-debug/scripts/operator_debug.py` | argparse | plan, record, analyze | 3 | docs:1, routing:1, skill-doc:2, test:1 | mixed | supported | .agents/skills/ascend-operator-debug/scripts/operator_debug.py | guidance |
-| `.agents/skills/ascend-profiling-analysis/scripts/ascend_profile/analyze.py` | argparse | - | 14 | docs:2, routing:1, script:2, skill-doc:9, test:1 | mechanics | payload | .agents/skills/ascend-profiling-analysis/scripts/ascend_profile/analyze.py | - |
+| `.agents/skills/ascend-profiling-analysis/scripts/ascend_profile/analyze.py` | argparse | - | 14 | docs:2, policy:1, routing:1, script:2, skill-doc:9, test:1 | mechanics | payload | .agents/skills/ascend-profiling-analysis/scripts/ascend_profile/analyze.py | - |
 | `.agents/skills/ascend-profiling-analysis/scripts/ascend_profile/classify.py` | argparse | - | 1 | docs:1, skill-doc:3 | mechanics | internal | .agents/skills/ascend-profiling-analysis/scripts/ascend_profile/analyze.py | - |
 | `.agents/skills/ascend-profiling-analysis/scripts/ascend_profile/cross_rank.py` | argparse | - | 1 | docs:1, skill-doc:4, test:1 | mechanics | internal | .agents/skills/ascend-profiling-analysis/scripts/ascend_profile/analyze.py | - |
 | `.agents/skills/ascend-profiling-analysis/scripts/ascend_profile/diagnostics.py` | argparse | - | 1 | docs:1, script:3, skill-doc:6, test:2 | mixed | payload | .agents/skills/ascend-profiling-analysis/scripts/ascend_profile/diagnostics.py | - |
@@ -454,49 +457,49 @@ option.
 | `.agents/skills/ascend-profiling-analysis/scripts/ascend_profile/report.py` | argparse | - | 6 | docs:1, script:3, skill-doc:4, test:2 | mechanics | internal | .agents/skills/ascend-profiling-analysis/scripts/ascend_profile/analyze.py | - |
 | `.agents/skills/ascend-profiling-analysis/scripts/ascend_profile/segment.py` | argparse | - | 3 | docs:1, script:2, skill-doc:8, test:1 | mechanics | internal | .agents/skills/ascend-profiling-analysis/scripts/ascend_profile/analyze.py | - |
 | `.agents/skills/ascend-profiling-analysis/scripts/ascend_profile/summarize.py` | argparse | - | 8 | docs:1, skill-doc:5, test:1 | mechanics | internal | .agents/skills/ascend-profiling-analysis/scripts/ascend_profile/analyze.py | - |
-| `.agents/skills/ascend-profiling-analysis/scripts/ascend_profile/sweep.py` | argparse | - | 13 | docs:1, routing:1, script:2, skill-doc:4 | mechanics | payload | .agents/skills/ascend-profiling-analysis/scripts/ascend_profile/sweep.py | - |
-| `.agents/skills/ascend-profiling-analysis/scripts/dev/golden_db_vs_csv.py` | argparse | - | 4 | docs:1, skill-doc:2 | mechanics | harness | .agents/skills/ascend-profiling-analysis/scripts/dev/golden_db_vs_csv.py | - |
-| `.agents/skills/ascend-profiling-analysis/scripts/profile_analyze.py` | argparse | - | 25 | docs:2, routing:1, script:1, skill-doc:5, test:1 | mechanics | supported | .agents/skills/ascend-profiling-analysis/scripts/profile_analyze.py | vaws profile |
-| `.agents/skills/ascend-profiling-analysis/scripts/profile_sweep.py` | argparse | - | 16 | docs:1, routing:1, script:1, skill-doc:4 | mechanics | supported | .agents/skills/ascend-profiling-analysis/scripts/profile_sweep.py | vaws profile |
-| `.agents/skills/ascend-profiling-collection/scripts/collect_torch_profile_case.py` | argparse | - | 33 | docs:2, routing:1, skill-doc:3, test:1 | mechanics | supported | .agents/skills/ascend-profiling-collection/scripts/collect_torch_profile_case.py | vaws profile |
-| `.agents/skills/ascend-profiling-collection/scripts/profile_control.py` | argparse | - | 4 | docs:2, routing:1, script:1, skill-doc:3 | mechanics | internal | .agents/skills/ascend-profiling-collection/scripts/collect_torch_profile_case.py | - |
-| `.agents/skills/ascend-profiling-collection/scripts/run_remote_analyse.py` | argparse | - | 7 | docs:2, routing:1, script:1, skill-doc:3 | mechanics | internal | .agents/skills/ascend-profiling-collection/scripts/collect_torch_profile_case.py | - |
+| `.agents/skills/ascend-profiling-analysis/scripts/ascend_profile/sweep.py` | argparse | - | 13 | docs:1, policy:1, routing:1, script:2, skill-doc:4 | mechanics | payload | .agents/skills/ascend-profiling-analysis/scripts/ascend_profile/sweep.py | - |
+| `.agents/skills/ascend-profiling-analysis/scripts/dev/golden_db_vs_csv.py` | argparse | - | 4 | docs:1, policy:1, skill-doc:2 | mechanics | harness | .agents/skills/ascend-profiling-analysis/scripts/dev/golden_db_vs_csv.py | - |
+| `.agents/skills/ascend-profiling-analysis/scripts/profile_analyze.py` | argparse | - | 25 | docs:2, policy:1, routing:1, script:1, skill-doc:5, test:1 | mechanics | supported | .agents/skills/ascend-profiling-analysis/scripts/profile_analyze.py | vaws profile |
+| `.agents/skills/ascend-profiling-analysis/scripts/profile_sweep.py` | argparse | - | 16 | docs:1, policy:1, routing:1, script:1, skill-doc:4 | mechanics | supported | .agents/skills/ascend-profiling-analysis/scripts/profile_sweep.py | vaws profile |
+| `.agents/skills/ascend-profiling-collection/scripts/collect_torch_profile_case.py` | argparse | - | 33 | docs:2, policy:1, routing:1, skill-doc:3, test:1 | mechanics | supported | .agents/skills/ascend-profiling-collection/scripts/collect_torch_profile_case.py | vaws profile |
+| `.agents/skills/ascend-profiling-collection/scripts/profile_control.py` | argparse | - | 4 | docs:2, policy:1, routing:1, script:1, skill-doc:3 | mechanics | internal | .agents/skills/ascend-profiling-collection/scripts/collect_torch_profile_case.py | - |
+| `.agents/skills/ascend-profiling-collection/scripts/run_remote_analyse.py` | argparse | - | 7 | docs:2, policy:1, routing:1, script:1, skill-doc:3 | mechanics | internal | .agents/skills/ascend-profiling-collection/scripts/collect_torch_profile_case.py | - |
 | `.agents/skills/ascend-triton-kernel-optimization/scripts/triton_optimization.py` | argparse | plan, record, analyze | 3 | docs:1, routing:1, skill-doc:2, test:1 | mixed | supported | .agents/skills/ascend-triton-kernel-optimization/scripts/triton_optimization.py | guidance |
 | `.agents/skills/ascend-triton-kernel-validation/scripts/triton_validation.py` | argparse | plan, record, analyze | 4 | docs:1, routing:1, skill-doc:2, test:1 | mixed | supported | .agents/skills/ascend-triton-kernel-validation/scripts/triton_validation.py | guidance |
 | `.agents/skills/ascend-triton-kernel-validation/scripts/validate_triton_impl.py` | argparse | - | 1 | docs:1, skill-doc:1, test:1 | mechanics | supported | .agents/skills/ascend-triton-kernel-validation/scripts/validate_triton_impl.py | vaws lint |
 | `.agents/skills/ascend-triton-operator-development/scripts/triton_development.py` | argparse | plan, finalize | 6 | docs:1, routing:1, skill-doc:2, test:1 | mixed | supported | .agents/skills/ascend-triton-operator-development/scripts/triton_development.py | guidance |
 | `.agents/skills/ascend-triton-workflow/scripts/triton_workflow.py` | argparse | plan, link, finalize | 4 | docs:1, routing:1, skill-doc:2, test:1 | mixed | supported | .agents/skills/ascend-triton-workflow/scripts/triton_workflow.py | guidance |
 | `.agents/skills/curate-workspace-knowledge/scripts/knowledge_curate.py` | argparse | list, inspect, promote, merge, reject, deprecate, resolve, verify, list-unresolved | 21 | other:2, policy:1, routing:1, skill-doc:2, test:4 | mixed | supported | .agents/skills/curate-workspace-knowledge/scripts/knowledge_curate.py | vaws knowledge |
-| `.agents/skills/machine-management/scripts/inventory.py` | argparse | summary, get, put, upsert, remove | 15 | docs:1, policy:1, routing:1, script:4, skill-doc:4, test:1 | mechanics | internal | .agents/skills/machine-management/scripts/machine_add.py | vaws machine |
-| `.agents/skills/machine-management/scripts/machine_add.py` | argparse | - | 13 | docs:1, routing:1, script:3, skill-doc:4 | mechanics | supported | .agents/skills/machine-management/scripts/machine_add.py | vaws machine |
-| `.agents/skills/machine-management/scripts/machine_remove.py` | argparse | - | 1 | docs:1, routing:1, script:1, skill-doc:4 | mechanics | supported | .agents/skills/machine-management/scripts/machine_remove.py | vaws machine |
-| `.agents/skills/machine-management/scripts/machine_repair.py` | argparse | - | 8 | docs:1, routing:1, script:1, skill-doc:4 | mechanics | supported | .agents/skills/machine-management/scripts/machine_repair.py | vaws machine |
-| `.agents/skills/machine-management/scripts/machine_verify.py` | argparse | - | 2 | docs:1, mirror:1, routing:1, script:1, skill-doc:4 | mechanics | supported | .agents/skills/machine-management/scripts/machine_verify.py | vaws machine |
-| `.agents/skills/machine-management/scripts/manage_machine.py` | argparse | probe-host, bootstrap-host-key, bootstrap-container, smoke, verify-machine, mesh-export-key, mesh-add-peer, mesh-remove-peer, clean-local-known-hosts, remove-container | 25 | docs:3, routing:1, script:6, skill-doc:4, test:1 | mechanics | internal | .agents/skills/machine-management/scripts/machine_add.py | vaws machine |
+| `.agents/skills/machine-management/scripts/inventory.py` | argparse | summary, get, put, upsert, remove | 15 | docs:1, policy:2, routing:1, script:4, skill-doc:4, test:2 | mechanics | internal | .agents/skills/machine-management/scripts/machine_add.py | vaws machine |
+| `.agents/skills/machine-management/scripts/machine_add.py` | argparse | - | 13 | docs:1, policy:1, routing:1, script:3, skill-doc:4 | mechanics | supported | .agents/skills/machine-management/scripts/machine_add.py | vaws machine |
+| `.agents/skills/machine-management/scripts/machine_remove.py` | argparse | - | 1 | docs:1, policy:1, routing:1, script:1, skill-doc:4 | mechanics | supported | .agents/skills/machine-management/scripts/machine_remove.py | vaws machine |
+| `.agents/skills/machine-management/scripts/machine_repair.py` | argparse | - | 8 | docs:1, policy:1, routing:1, script:1, skill-doc:4 | mechanics | supported | .agents/skills/machine-management/scripts/machine_repair.py | vaws machine |
+| `.agents/skills/machine-management/scripts/machine_verify.py` | argparse | - | 2 | docs:1, mirror:1, policy:1, routing:1, script:1, skill-doc:4 | mechanics | supported | .agents/skills/machine-management/scripts/machine_verify.py | vaws machine |
+| `.agents/skills/machine-management/scripts/manage_machine.py` | argparse | probe-host, bootstrap-host-key, bootstrap-container, smoke, verify-machine, mesh-export-key, mesh-add-peer, mesh-remove-peer, clean-local-known-hosts, remove-container | 25 | docs:3, policy:1, routing:1, script:6, skill-doc:4, test:1 | mechanics | internal | .agents/skills/machine-management/scripts/machine_add.py | vaws machine |
 | `.agents/skills/modelscope/scripts/download_from_modelscope.py` | argparse | - | 12 | docs:1, mirror:2, routing:1, script:2, skill-doc:1, test:1 | mechanics | payload | .agents/skills/modelscope/scripts/download_from_modelscope.py | - |
 | `.agents/skills/modelscope/scripts/modelscope_auto.py` | argparse | ensure, status, verify, worker | 11 | docs:1, mirror:1, routing:1, script:1, skill-doc:1, test:1 | mechanics | supported | .agents/skills/modelscope/scripts/modelscope_auto.py | vaws model |
 | `.agents/skills/modelscope/scripts/modelscope_download_status.py` | argparse | - | 3 | docs:1, mirror:1, routing:1, script:1, skill-doc:1, test:1 | mechanics | internal | .agents/skills/modelscope/scripts/modelscope_auto.py | - |
 | `.agents/skills/modelscope/scripts/verify_modelscope_sha256.py` | argparse | - | 8 | docs:1, mirror:2, routing:1, script:2, skill-doc:1, test:1 | mechanics | payload | .agents/skills/modelscope/scripts/verify_modelscope_sha256.py | - |
-| `.agents/skills/npu-fleet-monitor/scripts/manage_monitor.py` | argparse | ensure, status, restart, stop | 7 | docs:3, policy:2, routing:3, skill-doc:1, source-map:1, test:2 | mechanics | supported | .agents/skills/npu-fleet-monitor/scripts/manage_monitor.py | vaws machine |
+| `.agents/skills/npu-fleet-monitor/scripts/manage_monitor.py` | argparse | ensure, status, restart, stop | 7 | docs:4, policy:3, routing:3, skill-doc:1, source-map:1, test:2 | mechanics | supported | .agents/skills/npu-fleet-monitor/scripts/manage_monitor.py | vaws machine |
 | `.agents/skills/remote-code-parity/scripts/gc_runtime_cache.py` | argparse | - | 7 | docs:1, routing:1, skill-doc:3 | mechanics | supported | .agents/skills/remote-code-parity/scripts/gc_runtime_cache.py | vaws sync |
 | `.agents/skills/remote-code-parity/scripts/install_consent.py` | argparse | resolve, set, batch-set, resolve-sync-mode, set-sync-mode | 7 | docs:1, routing:1, script:1, skill-doc:5 | mechanics | supported | .agents/skills/remote-code-parity/scripts/install_consent.py | vaws sync |
 | `.agents/skills/remote-code-parity/scripts/parity_sync.py` | argparse | - | 17 | docs:5, mirror:1, routing:2, script:3, skill-doc:10, test:2 | mechanics | supported | .agents/skills/remote-code-parity/scripts/parity_sync.py | vaws sync |
 | `.agents/skills/remote-code-parity/scripts/parity_watch.py` | argparse | - | 2 | docs:1, skill-doc:3, test:1 | mechanics | supported | .agents/skills/remote-code-parity/scripts/parity_watch.py | vaws sync |
 | `.agents/skills/remote-code-parity/scripts/remote_code_parity.py` | argparse | plan, sync | 9 | docs:3, policy:1, routing:1, script:4, skill-doc:3, test:3 | mechanics | payload | .agents/skills/remote-code-parity/scripts/remote_code_parity.py | - |
 | `.agents/skills/remote-code-parity/scripts/transport_benchmark.py` | argparse | - | 4 | docs:1, skill-doc:2 | mechanics | harness | .agents/skills/remote-code-parity/scripts/transport_benchmark.py | - |
-| `.agents/skills/repo-init/scripts/install_gh_user.py` | bare | - | 0 | docs:1, script:1 | mechanics | supported | .agents/skills/repo-init/scripts/install_gh_user.py | vaws workspace |
-| `.agents/skills/repo-init/scripts/repo_init_probe.py` | argparse | - | 1 | docs:1, mirror:1, routing:1, skill-doc:4 | mechanics | supported | .agents/skills/repo-init/scripts/repo_init_probe.py | vaws workspace |
-| `.agents/skills/repo-init/scripts/repo_init_profile.py` | argparse | plan, apply, apply-alias | 3 | docs:1, routing:1, skill-doc:4 | mechanics | supported | .agents/skills/repo-init/scripts/repo_init_profile.py | vaws workspace |
-| `.agents/skills/repo-init/scripts/repo_topology.py` | argparse | compare-main, configure, ensure-main | 8 | docs:1, routing:1, skill-doc:4 | mechanics | supported | .agents/skills/repo-init/scripts/repo_topology.py | vaws workspace |
-| `.agents/skills/repo-init/scripts/resolve_vllm_ci_pin.py` | argparse | - | 1 | docs:1, skill-doc:4 | mechanics | supported | .agents/skills/repo-init/scripts/resolve_vllm_ci_pin.py | vaws workspace |
-| `.agents/skills/session-management/scripts/npu_coordination.py` | argparse | submit, acquire, preflight, activate, heartbeat, release, cancel, status, gc, hold-add, hold-remove | 37 | docs:3, routing:2, script:3, skill-doc:4, source-map:1, test:1 | mechanics | supported | .agents/skills/session-management/scripts/npu_coordination.py | vaws session |
-| `.agents/skills/session-management/scripts/session_create.py` | argparse | - | 20 | docs:1, routing:2, script:2, skill-doc:12, test:3 | mechanics | supported | .agents/skills/session-management/scripts/session_create.py | vaws session |
-| `.agents/skills/session-management/scripts/session_diff.py` | argparse | - | 3 | docs:1, script:1, skill-doc:4 | mechanics | supported | .agents/skills/session-management/scripts/session_diff.py | vaws session |
-| `.agents/skills/session-management/scripts/session_gc.py` | argparse | - | 3 | docs:1, routing:1, skill-doc:5, test:1 | mechanics | supported | .agents/skills/session-management/scripts/session_gc.py | vaws session |
-| `.agents/skills/session-management/scripts/session_group.py` | argparse | create, status, list, teardown | 7 | docs:1, routing:1, skill-doc:3, test:1 | mechanics | supported | .agents/skills/session-management/scripts/session_group.py | vaws session |
-| `.agents/skills/session-management/scripts/session_list.py` | argparse | - | 1 | docs:1, routing:1, skill-doc:2 | mechanics | supported | .agents/skills/session-management/scripts/session_list.py | vaws session |
-| `.agents/skills/session-management/scripts/session_remove.py` | argparse | - | 6 | docs:2, routing:1, script:2, skill-doc:5, test:1 | mechanics | supported | .agents/skills/session-management/scripts/session_remove.py | vaws session |
-| `.agents/skills/session-management/scripts/session_status.py` | argparse | - | 2 | docs:1, routing:1, skill-doc:1 | mechanics | supported | .agents/skills/session-management/scripts/session_status.py | vaws session |
+| `.agents/skills/repo-init/scripts/install_gh_user.py` | bare | - | 0 | docs:1, policy:1, script:1 | mechanics | supported | .agents/skills/repo-init/scripts/install_gh_user.py | vaws workspace |
+| `.agents/skills/repo-init/scripts/repo_init_probe.py` | argparse | - | 1 | docs:1, mirror:1, policy:1, routing:1, skill-doc:4 | mechanics | supported | .agents/skills/repo-init/scripts/repo_init_probe.py | vaws workspace |
+| `.agents/skills/repo-init/scripts/repo_init_profile.py` | argparse | plan, apply, apply-alias | 3 | docs:1, policy:1, routing:1, skill-doc:4 | mechanics | supported | .agents/skills/repo-init/scripts/repo_init_profile.py | vaws workspace |
+| `.agents/skills/repo-init/scripts/repo_topology.py` | argparse | compare-main, configure, ensure-main | 8 | docs:1, policy:1, routing:1, skill-doc:4 | mechanics | supported | .agents/skills/repo-init/scripts/repo_topology.py | vaws workspace |
+| `.agents/skills/repo-init/scripts/resolve_vllm_ci_pin.py` | argparse | - | 1 | docs:1, policy:1, skill-doc:4 | mechanics | supported | .agents/skills/repo-init/scripts/resolve_vllm_ci_pin.py | vaws workspace |
+| `.agents/skills/session-management/scripts/npu_coordination.py` | argparse | submit, acquire, preflight, activate, heartbeat, release, cancel, status, gc, hold-add, hold-remove | 37 | docs:4, policy:1, routing:2, script:3, skill-doc:4, source-map:1, test:1 | mechanics | supported | .agents/skills/session-management/scripts/npu_coordination.py | vaws session |
+| `.agents/skills/session-management/scripts/session_create.py` | argparse | - | 20 | docs:1, policy:1, routing:2, script:2, skill-doc:12, test:3 | mechanics | supported | .agents/skills/session-management/scripts/session_create.py | vaws session |
+| `.agents/skills/session-management/scripts/session_diff.py` | argparse | - | 3 | docs:1, policy:1, script:1, skill-doc:4 | mechanics | supported | .agents/skills/session-management/scripts/session_diff.py | vaws session |
+| `.agents/skills/session-management/scripts/session_gc.py` | argparse | - | 3 | docs:1, policy:1, routing:1, skill-doc:5, test:1 | mechanics | supported | .agents/skills/session-management/scripts/session_gc.py | vaws session |
+| `.agents/skills/session-management/scripts/session_group.py` | argparse | create, status, list, teardown | 7 | docs:1, policy:1, routing:1, skill-doc:3, test:1 | mechanics | supported | .agents/skills/session-management/scripts/session_group.py | vaws session |
+| `.agents/skills/session-management/scripts/session_list.py` | argparse | - | 1 | docs:1, policy:1, routing:1, skill-doc:2 | mechanics | supported | .agents/skills/session-management/scripts/session_list.py | vaws session |
+| `.agents/skills/session-management/scripts/session_remove.py` | argparse | - | 6 | docs:2, policy:1, routing:1, script:2, skill-doc:5, test:1 | mechanics | supported | .agents/skills/session-management/scripts/session_remove.py | vaws session |
+| `.agents/skills/session-management/scripts/session_status.py` | argparse | - | 2 | docs:1, policy:1, routing:1, skill-doc:1 | mechanics | supported | .agents/skills/session-management/scripts/session_status.py | vaws session |
 | `.agents/skills/vllm-ascend-benchmark/scripts/bench_compare.py` | argparse | - | 28 | docs:2, skill-doc:3 | mixed | supported | .agents/skills/vllm-ascend-benchmark/scripts/bench_compare.py | vaws bench |
 | `.agents/skills/vllm-ascend-benchmark/scripts/bench_run.py` | argparse | - | 16 | docs:3, routing:1, skill-doc:6, test:1 | mechanics | supported | .agents/skills/vllm-ascend-benchmark/scripts/bench_run.py | vaws bench |
 | `.agents/skills/vllm-ascend-change-validation/scripts/change_validation.py` | argparse | plan, link, finalize | 11 | docs:3, routing:1, skill-doc:6, test:1 | mixed | supported | .agents/skills/vllm-ascend-change-validation/scripts/change_validation.py | guidance |
@@ -515,7 +518,6 @@ option.
 | `.trae/skills/modelscope/scripts/modelscope_auto.py` | argparse | ensure, status, verify, worker | 11 | docs:1, mirror:1, routing:1, script:1, skill-doc:1, test:1 | mechanics | generated | .agents/skills/modelscope/scripts/modelscope_auto.py | - |
 | `.trae/skills/modelscope/scripts/modelscope_download_status.py` | argparse | - | 3 | docs:1, mirror:1, routing:1, script:1, skill-doc:1, test:1 | mechanics | generated | .agents/skills/modelscope/scripts/modelscope_download_status.py | - |
 | `.trae/skills/modelscope/scripts/verify_modelscope_sha256.py` | argparse | - | 8 | docs:1, mirror:2, routing:1, script:2, skill-doc:1, test:1 | mechanics | generated | .agents/skills/modelscope/scripts/verify_modelscope_sha256.py | - |
-
 <!-- /current-cli-surface-table -->
 
 ## 11. Measurement limitations

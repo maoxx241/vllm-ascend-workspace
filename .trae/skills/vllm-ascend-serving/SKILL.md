@@ -7,22 +7,24 @@ description: Start, check, or stop a single-node vLLM Ascend online service on a
 
 Thin routing stub — the full skill definition lives at `.agents/skills/vllm-ascend-serving/SKILL.md`. Read that file for complete rules, decision gates, and workflow steps.
 
+Serving is session-only. Inside a session worktree the session is auto-resolved. Outside a worktree, pass `--session-id` or `--session-file`. `--machine` is not a serving target; only `serve_probe_npus.py` still accepts it for host NPU probing.
+
 Quick entry points:
 
 ```bash
 # Start a service
 python3 .agents/skills/vllm-ascend-serving/scripts/serve_start.py \
-  --machine <alias-or-ip> --model <path> --tp <N>
+  [--session-id <id> | --session-file <path>] --model <path> --tp <N>
 
 # Check status
 python3 .agents/skills/vllm-ascend-serving/scripts/serve_status.py \
-  --machine <alias-or-ip>
+  [--session-id <id> | --session-file <path>]
 
 # Stop a service
 python3 .agents/skills/vllm-ascend-serving/scripts/serve_stop.py \
-  --machine <alias-or-ip>
+  [--session-id <id> | --session-file <path>]
 
-# Probe NPU availability
+# Probe NPU availability (legacy host probe still accepts --machine)
 python3 .agents/skills/vllm-ascend-serving/scripts/serve_probe_npus.py \
-  --machine <alias-or-ip>
+  [--session-id <id> | --machine <alias-or-ip>]
 ```

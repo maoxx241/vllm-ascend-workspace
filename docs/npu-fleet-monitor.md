@@ -1,5 +1,7 @@
 # NPU Fleet Monitor 本地部署
 
+Status: current
+
 监控前端和采集后端维护在独立仓库 [`vllm-ascend-workspace/vaws-top`](https://github.com/vllm-ascend-workspace/vaws-top)。脚手架只保留部署入口 `npu-fleet-monitor`；运行时、高级 Agent Skill 和观测契约由该仓库自己拥有。观测记录明确携带 `allocation_authority: false`，不能用来分配 NPU、选择任务身份、杀进程或清理容器。Coordinator execution leases 仍是权威。
 
 ## 一键拉起

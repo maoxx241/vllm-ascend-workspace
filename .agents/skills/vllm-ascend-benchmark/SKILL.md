@@ -7,7 +7,8 @@ description: Run vLLM online-serving benchmarks on a workspace-managed remote co
 
 Run `vllm bench serve` on a **ready** session-managed remote container and produce structured performance results. Supports single-run and multi-run (warm-service) modes.
 
-Remote substrate rule: use `.remote-dev` remote tools for ad hoc remote
+Remote substrate rule: use remote-dev companion tools (`remote_*` MCP tools,
+launched via `python3 .agents/scripts/remote_dev.py`) for ad hoc remote
 read/edit/bash/search/patch work around benchmark setup or result inspection.
 Use this skill for the domain benchmark workflow and keep its scripts as the
 compatibility backend for managed VAWS sessions.
@@ -37,7 +38,7 @@ compatibility backend for managed VAWS sessions.
 - Progress goes to `stderr` as `__VAWS_BENCHMARK_PROGRESS__=<json>`. Final result goes to `stdout` as JSON.
 - Keep local benchmark state under `.vaws-local/sessions/<session-id>/benchmark/`; results are written to `.vaws-local/sessions/<session-id>/benchmark/runs/`.
 - **Formal regression verdicts** are not a shared 3% rule. After comparable measurements, use `vllm-ascend-performance-regression` declared per-metric direction/threshold and quality gates; see [behavior](references/behavior.md). `bench_compare.py` reports deltas; it does not apply that verdict policy.
-- **Multi-state comparisons** (baseline vs PR vs modified) are a first-class workflow: use `bench_compare.py`, which checks out each git ref *in the container*, benchmarks every state with identical serve/bench args, and reports TPOT/throughput deltas. Do not hand-write a bespoke comparison script — put reusable model/service configurations into a named preset under `presets/` instead (see below). The old bespoke `.agents/scripts/dsv4_flash_benchmark.py` was deleted; `presets/dsv4-flash.json` carries its DSV4 Flash configuration, with the two loader args adapted (`enable_multithread_load` as a JSON boolean; the old `--safetensors-load-strategy prefetch` was dropped in favor of multithreaded loading — the flag still exists at the pinned vllm ref 967c5c3b, so this is a deliberate replacement, not an upstream removal — verified on real A3 hardware). Note `bench_compare.py` runs back-to-back iterations with no inter-run sleep (the old script slept 15s between rounds), so absolute numbers are not directly comparable to historical bespoke-script results.
+- **Multi-state comparisons** (baseline vs PR vs modified) are a first-class workflow: use `bench_compare.py`, which checks out each git ref *in the container*, benchmarks every state with identical serve/bench args, and reports TPOT/throughput deltas. Do not hand-write a bespoke comparison script — put reusable model/service configurations into a named preset under `presets/` instead (see below). The old bespoke `dsv4_flash_benchmark.py` helper was deleted; `presets/dsv4-flash.json` carries its DSV4 Flash configuration, with the two loader args adapted (`enable_multithread_load` as a JSON boolean; the old `--safetensors-load-strategy prefetch` was dropped in favor of multithreaded loading — the flag still exists at the pinned vllm ref 967c5c3b, so this is a deliberate replacement, not an upstream removal — verified on real A3 hardware). Note `bench_compare.py` runs back-to-back iterations with no inter-run sleep (the old script slept 15s between rounds), so absolute numbers are not directly comparable to historical bespoke-script results.
 - **Native-input gate.** `bench_compare.py` aligns source only and never rebuilds compiled custom ops. After each state's checkout and optional `--remote-patch-file` application, it fingerprints the effective in-container `csrc`/`cmake`/requirements inputs and compares the digest against the first state's. A mismatch fails the run with an explanation. An unavailable digest also fails closed. Pass `--allow-stale-native` only to explicitly downgrade either condition to a loud warning plus `native_input_changed: true` or `native_input_unverified: true`.
 - **Partial results are never lost.** Each completed state is persisted under the session's `benchmark/runs/` dir as it finishes; on any failure the error JSON still carries `partial_states` (completed labels) and `result_paths`.
 - **Never hand-roll stale-process cleanup.** A past bespoke cleanup SIGTERM'd a session's dedicated sshd (`Exiting on signal 15`), dropped the container SSH port, and forced a rebuild. Use `--stale-cleanup` (backed by `safe_stale_cleanup`), which only reaps vLLM `EngineCore`/`Worker` children by name, skips PID 1, excludes anything matching `sshd`/`vaws`, and kills explicit pids only (never a process group).
@@ -96,7 +97,7 @@ Per-field priority is always: **explicit CLI arg > preset > nightly YAML > built
 
 Shipped presets:
 
-- `dsv4-flash` — DeepSeek-V4-Flash W4A8 MTP (tp8, port 30001, served name `dsv4-w4a8`, 6 runs / 1 warmup, fixed 512/512 config). This is the replacement for the deleted bespoke `.agents/scripts/dsv4_flash_benchmark.py`; do not re-create such one-off scripts — extend or add a preset instead.
+- `dsv4-flash` — DeepSeek-V4-Flash W4A8 MTP (tp8, port 30001, served name `dsv4-w4a8`, 6 runs / 1 warmup, fixed 512/512 config). This is the replacement for the deleted bespoke `dsv4_flash_benchmark.py` helper; do not re-create such one-off scripts — extend or add a preset instead.
 
 ## Workflow
 

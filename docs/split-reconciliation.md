@@ -1,8 +1,10 @@
 # Split reconciliation
 
+Status: current
+
 `vllm-ascend-workspace` is being split into several repositories under the
 `vllm-ascend-workspace` organization. Each extraction wrote a careful
-`docs/HANDOFF.md` saying what it removed and where that thing now lives. The
+destination `HANDOFF.md` saying what it removed and where that thing now lives. The
 handoffs were accurate. Nobody compared them against the destinations, and
 three items fell into the gap between two repositories, each side believing
 the other had them.
@@ -36,13 +38,13 @@ Every ledger row carries both, separately attributed:
   "what": "Linux remote job receipt protocol: the child-subreaper supervisor ...",
   "kind": "module",
   "source":      {"repo": "remote-dev", "path": "core/managed_jobs.py",
-                  "scaffold_path": ".remote-dev/core/managed_jobs.py"},
+                  "scaffold_path": "<former-in-tree-path>"},
   "destination": {"repo": "vaws-coordinator", "path": "...",
                   "evidence": [{"kind": "symbols", "glob": "*managed_jobs.py",
                                 "exclude": ["tests/*", "docs/*"],
                                 "names": ["control_job", "job_status", "worker"]}]},
   "declared_by": [{"repo": "remote-dev", "commit": "900ad15...",
-                   "document": "docs/HANDOFF.md", "section": "4.2",
+                   "document": "HANDOFF.md", "section": "4.2",
                    "says": "The supervisor moves to vllm-ascend-workspace/vaws-coordinator"}],
   "recorded":    {"state": "missing", "observed_on": "2026-09-07",
                   "observed_commit": "f7c0682...", "observed_by": "...",
@@ -175,7 +177,7 @@ aggregate success is not verified arrival.
 
 ### Receipts (optional, destination-published)
 
-A destination may publish a tracked receipt at `docs/split-receipt.json`:
+A destination may publish a tracked receipt at destination-docs `split-receipt.json`:
 
 ```json
 {"version": 1, "items": {"<ledger id>": {"arrived_in": "<commit>",
@@ -215,7 +217,7 @@ the live ledger state.
 
 remote-dev commit `900ad15`: "The supervisor moves to
 `vllm-ascend-workspace/vaws-coordinator`", and deleted `core/managed_jobs.py`
-with its eight tests. The coordinator's `docs/HANDOFF.md` §3 listed the same
+with its eight tests. The coordinator's destination `HANDOFF.md` §3 listed the same
 file as an *external dependency on remote-dev*, and at `f7c0682` its `main`
 still read it from the remote-dev checkout (`lib/vaws_remote_dev.py`,
 `backend.py`). Each handoff was internally consistent; together they left the
@@ -281,7 +283,7 @@ destination edits, and no receipts:
 
 | Destination | Identity | Published `origin/main` |
 |-------------|----------|-------------------------|
-| scaffold | `maoxx241/vllm-ascend-workspace` (transfer has not happened) | `257dc131c2015d0e01445288efb89bc5ab825b5f` |
+| scaffold | `vllm-ascend-workspace/vllm-ascend-workspace` | `257dc131c2015d0e01445288efb89bc5ab825b5f` |
 | `vaws-coordinator` | `vllm-ascend-workspace/vaws-coordinator` | `2e16e894e31a12d85a11117a2772031f30fdfebe` |
 | `vaws-top` | `vllm-ascend-workspace/vaws-top` | `e13478484b9f52e8847169a785eebc32b268787f` |
 
@@ -337,4 +339,4 @@ That red run is the mechanism working: nothing arrives unrecorded.
 
 What the ledger does **not** track: scaffold-side call sites that must be
 rewired to consume an extracted repository. Those are the boundary guard's R1
-and R4 findings in `docs/repo-boundaries.md`.
+and R4 findings in the dated [2026-09-07 boundary snapshot](audits/repo-boundaries-2026-09-07.md).

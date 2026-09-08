@@ -7,7 +7,7 @@ copy those repositories into a second business checkout.
 For continuous staging, `parity_watch.py --interval 1 -- <low-level sync
 arguments>` accepts the direct endpoint/workspace arguments and always uses
 `source-only`. It emits one JSON line per transferred snapshot. See the
-[ready-runtime recipe](../../../coordinator/README.md) for the full example
+[ready-runtime recipe](../../../../docs/coordinator-consumption.md) for the full example
 and the separate materialize/request/preflight/launch lifecycle.
 
 Remote toolbox sync planning:

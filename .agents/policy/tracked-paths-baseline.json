@@ -1,0 +1,937 @@
+{
+  "version": 1,
+  "generated_on": "2026-09-08",
+  "note": "Accepted missing-path hits as of 2026-09-08. After the post-migration routing fix, only dated audit snapshots and the frozen CLI historical table remain. Every row is attributed historical-evidence. A row whose violation no longer exists is a hard failure in --mode enforce. Regenerating with --write-baseline preserves removed_by and why and leaves new rows as unassigned (also a hard failure).",
+  "accepted": [
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/access-family.md",
+      "resolved": ".github/vllm-main-verified.commit",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": ".github/vllm-main-verified.commit"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/access-family.md",
+      "resolved": "\u002eremote-dev/README.md",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": "\u002eremote-dev/README.md"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/access-family.md",
+      "resolved": "\u002eremote-dev/core/artifact_ops.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": "\u002eremote-dev/core/artifact_ops.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/access-family.md",
+      "resolved": "\u002eremote-dev/core/context_snapshot.py:89-",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": "\u002eremote-dev/core/context_snapshot.py:89-"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/access-family.md",
+      "resolved": "\u002eremote-dev/core/endpoint.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": "\u002eremote-dev/core/endpoint.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/access-family.md",
+      "resolved": "\u002eremote-dev/core/endpoint.resolve_endpoint",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": "\u002eremote-dev/core/endpoint.resolve_endpoint"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/access-family.md",
+      "resolved": "\u002eremote-dev/core/errors.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": "\u002eremote-dev/core/errors.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/access-family.md",
+      "resolved": "\u002eremote-dev/core/result.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": "\u002eremote-dev/core/result.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/access-family.md",
+      "resolved": "\u002eremote-dev/core/shell_ops.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": "\u002eremote-dev/core/shell_ops.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/access-family.md",
+      "resolved": "\u002eremote-dev/core/ssh_transport.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": "\u002eremote-dev/core/ssh_transport.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/access-family.md",
+      "resolved": "\u002eremote-dev/tools/remote_job_status.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": "\u002eremote-dev/tools/remote_job_status.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/access-family.md",
+      "resolved": "scripts/install-gh-user.ps1",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": "scripts/install-gh-user.ps1"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/access-family.md",
+      "resolved": "scripts/install_gh_user.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": "scripts/install_gh_user.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/access-family.md",
+      "resolved": "scripts/inventory.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": "scripts/inventory.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/access-family.md",
+      "resolved": "scripts/machine_add.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": "scripts/machine_add.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/access-family.md",
+      "resolved": "scripts/machine_remove.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": "scripts/machine_remove.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/access-family.md",
+      "resolved": "scripts/machine_repair.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": "scripts/machine_repair.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/access-family.md",
+      "resolved": "scripts/machine_verify.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": "scripts/machine_verify.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/access-family.md",
+      "resolved": "scripts/manage_machine.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": "scripts/manage_machine.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/access-family.md",
+      "resolved": "scripts/manage_monitor.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": "scripts/manage_monitor.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/access-family.md",
+      "resolved": "scripts/npu_coordination.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": "scripts/npu_coordination.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/access-family.md",
+      "resolved": "scripts/repo_init_probe.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": "scripts/repo_init_probe.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/access-family.md",
+      "resolved": "scripts/repo_init_profile.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": "scripts/repo_init_profile.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/access-family.md",
+      "resolved": "scripts/repo_topology.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": "scripts/repo_topology.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/access-family.md",
+      "resolved": "scripts/resolve_vllm_ci_pin.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": "scripts/resolve_vllm_ci_pin.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/access-family.md",
+      "resolved": "scripts/session_create.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": "scripts/session_create.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/access-family.md",
+      "resolved": "scripts/session_diff.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": "scripts/session_diff.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/access-family.md",
+      "resolved": "scripts/session_gc.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": "scripts/session_gc.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/access-family.md",
+      "resolved": "scripts/session_group.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": "scripts/session_group.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/access-family.md",
+      "resolved": "scripts/session_list.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": "scripts/session_list.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/access-family.md",
+      "resolved": "scripts/session_remove.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": "scripts/session_remove.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/access-family.md",
+      "resolved": "scripts/session_status.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": "scripts/session_status.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/measurement-family.md",
+      "resolved": "scripts/collect_torch_profile_case.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": "scripts/collect_torch_profile_case.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/measurement-family.md",
+      "resolved": "scripts/dev/golden_db_vs_csv.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": "scripts/dev/golden_db_vs_csv.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/measurement-family.md",
+      "resolved": "scripts/mem_analyze.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": "scripts/mem_analyze.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/measurement-family.md",
+      "resolved": "scripts/mem_collect.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": "scripts/mem_collect.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/measurement-family.md",
+      "resolved": "scripts/profile_analyze.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": "scripts/profile_analyze.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/measurement-family.md",
+      "resolved": "scripts/profile_control.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": "scripts/profile_control.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/measurement-family.md",
+      "resolved": "scripts/profile_sweep.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": "scripts/profile_sweep.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/measurement-family.md",
+      "resolved": "scripts/run_remote_analyse.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": "scripts/run_remote_analyse.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/measurement-family.md",
+      "resolved": "scripts/selftest_knowledge_hooks.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": "scripts/selftest_knowledge_hooks.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/measurement-family.md",
+      "resolved": "scripts/selftest_parallel_analyse.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": "scripts/selftest_parallel_analyse.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/measurement-family.md",
+      "resolved": "scripts/weight_inspector.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": "scripts/weight_inspector.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/repo-boundaries-2026-09-07.md",
+      "resolved": "docs/.agents/policy/repo-boundaries-baseline.json",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": "../.agents/policy/repo-boundaries-baseline.json"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/repo-boundaries-2026-09-07.md",
+      "resolved": "docs/.agents/policy/repo-boundaries.json",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": "../.agents/policy/repo-boundaries.json"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/repo-boundaries-2026-09-07.md",
+      "resolved": "docs/.agents/scripts/repo_boundary_check.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": "../.agents/scripts/repo_boundary_check.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/repo-boundaries-2026-09-07.md",
+      "resolved": ".agents/lib/vaws_managed_execution.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": ".agents/lib/vaws_managed_execution.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/repo-boundaries-2026-09-07.md",
+      "resolved": ".agents/lib/vaws_ready_runtime.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": ".agents/lib/vaws_ready_runtime.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/repo-boundaries-2026-09-07.md",
+      "resolved": ".agents/lib/vaws_runtime_profile.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": ".agents/lib/vaws_runtime_profile.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/repo-boundaries-2026-09-07.md",
+      "resolved": ".agents/lib/vaws_task_client.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": ".agents/lib/vaws_task_client.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/repo-boundaries-2026-09-07.md",
+      "resolved": ".agents/skills/ascend-profiling-",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": ".agents/skills/ascend-profiling-"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/repo-boundaries-2026-09-07.md",
+      "resolved": "\u002eremote-dev/DESIGN.md",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": "\u002eremote-dev/DESIGN.md"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/repo-boundaries-2026-09-07.md",
+      "resolved": "\u002eremote-dev/README.md",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": "\u002eremote-dev/README.md"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/repo-boundaries-2026-09-07.md",
+      "resolved": "\u002eremote-dev/core",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": "\u002eremote-dev/core"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/repo-boundaries-2026-09-07.md",
+      "resolved": "\u002eremote-dev/core/endpoint.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": "\u002eremote-dev/core/endpoint.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/repo-boundaries-2026-09-07.md",
+      "resolved": "\u002eremote-dev/core/managed_jobs.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": "\u002eremote-dev/core/managed_jobs.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/repo-boundaries-2026-09-07.md",
+      "resolved": "\u002eremote-dev/core/ssh_transport.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": "\u002eremote-dev/core/ssh_transport.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/repo-boundaries-2026-09-07.md",
+      "resolved": "\u002eremote-dev/core/vaws_ops.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": "\u002eremote-dev/core/vaws_ops.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/repo-boundaries-2026-09-07.md",
+      "resolved": "\u002eremote-dev/endpoints.json",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": "\u002eremote-dev/endpoints.json"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/repo-boundaries-2026-09-07.md",
+      "resolved": "\u002eremote-dev/mcp",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": "\u002eremote-dev/mcp"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/repo-boundaries-2026-09-07.md",
+      "resolved": "\u002eremote-dev/mcp/schemas.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": "\u002eremote-dev/mcp/schemas.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/repo-boundaries-2026-09-07.md",
+      "resolved": "\u002eremote-dev/mcp/server.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": "\u002eremote-dev/mcp/server.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/repo-boundaries-2026-09-07.md",
+      "resolved": "\u002eremote-dev/mcp/tools.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": "\u002eremote-dev/mcp/tools.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/repo-boundaries-2026-09-07.md",
+      "resolved": "\u002eremote-dev/schemas",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": "\u002eremote-dev/schemas"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/repo-boundaries-2026-09-07.md",
+      "resolved": "\u002eremote-dev/schemas/result.schema.json",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": "\u002eremote-dev/schemas/result.schema.json"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/repo-boundaries-2026-09-07.md",
+      "resolved": "\u002eremote-dev/state",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": "\u002eremote-dev/state"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/repo-boundaries-2026-09-07.md",
+      "resolved": "\u002eremote-dev/state/client-setup",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": "\u002eremote-dev/state/client-setup"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/repo-boundaries-2026-09-07.md",
+      "resolved": "\u002eremote-dev/tests/test_cli_help.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": "\u002eremote-dev/tests/test_cli_help.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/repo-boundaries-2026-09-07.md",
+      "resolved": "\u002eremote-dev/tests/test_endpoint.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": "\u002eremote-dev/tests/test_endpoint.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/repo-boundaries-2026-09-07.md",
+      "resolved": "\u002eremote-dev/tests/test_managed_jobs.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": "\u002eremote-dev/tests/test_managed_jobs.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/repo-boundaries-2026-09-07.md",
+      "resolved": "\u002eremote-dev/tests/test_mcp_schema.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": "\u002eremote-dev/tests/test_mcp_schema.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/repo-boundaries-2026-09-07.md",
+      "resolved": "\u002eremote-dev/tests/test_vaws_ops.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": "\u002eremote-dev/tests/test_vaws_ops.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/repo-boundaries-2026-09-07.md",
+      "resolved": "\u002eremote-dev/tools",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": "\u002eremote-dev/tools"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/repo-boundaries-2026-09-07.md",
+      "resolved": "\u002eremote-dev/tools/sync_claude_skills.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": "\u002eremote-dev/tools/sync_claude_skills.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/repo-boundaries-2026-09-07.md",
+      "resolved": "\u002eremote-dev/tools/validate_remote_dev_scaffold.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": "\u002eremote-dev/tools/validate_remote_dev_scaffold.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/run-deliver-family.md",
+      "resolved": ".agents/scripts/remote_service_",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": ".agents/scripts/remote_service_"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/verdict-debug-family.md",
+      "resolved": ".agents/lib/vaws_knowledge.load_knowledge_file",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": ".agents/lib/vaws_knowledge.load_knowledge_file"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/verdict-debug-family.md",
+      "resolved": ".agents/lib/vaws_run_manifest",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": ".agents/lib/vaws_run_manifest"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/audits/verdict-debug-family.md",
+      "resolved": "docs/kernel-notes.md",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated snapshot; paths intentionally describe the 2026-09-07 tree",
+      "named_path": "docs/kernel-notes.md"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/cli-surface.md",
+      "resolved": "\u002eremote-dev/core/managed_jobs.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated #85 CLI snapshot pinned by test_cli_surface_inventory.py; paths describe the pre-extraction tree",
+      "named_path": "\u002eremote-dev/core/managed_jobs.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/cli-surface.md",
+      "resolved": "\u002eremote-dev/hooks/claude_remote_guard.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated #85 CLI snapshot pinned by test_cli_surface_inventory.py; paths describe the pre-extraction tree",
+      "named_path": "\u002eremote-dev/hooks/claude_remote_guard.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/cli-surface.md",
+      "resolved": "\u002eremote-dev/hooks/codex_remote_guard.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated #85 CLI snapshot pinned by test_cli_surface_inventory.py; paths describe the pre-extraction tree",
+      "named_path": "\u002eremote-dev/hooks/codex_remote_guard.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/cli-surface.md",
+      "resolved": "\u002eremote-dev/mcp/server.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated #85 CLI snapshot pinned by test_cli_surface_inventory.py; paths describe the pre-extraction tree",
+      "named_path": "\u002eremote-dev/mcp/server.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/cli-surface.md",
+      "resolved": "\u002eremote-dev/tools/remote_apply_patch.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated #85 CLI snapshot pinned by test_cli_surface_inventory.py; paths describe the pre-extraction tree",
+      "named_path": "\u002eremote-dev/tools/remote_apply_patch.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/cli-surface.md",
+      "resolved": "\u002eremote-dev/tools/remote_artifact_manifest.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated #85 CLI snapshot pinned by test_cli_surface_inventory.py; paths describe the pre-extraction tree",
+      "named_path": "\u002eremote-dev/tools/remote_artifact_manifest.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/cli-surface.md",
+      "resolved": "\u002eremote-dev/tools/remote_artifact_pull.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated #85 CLI snapshot pinned by test_cli_surface_inventory.py; paths describe the pre-extraction tree",
+      "named_path": "\u002eremote-dev/tools/remote_artifact_pull.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/cli-surface.md",
+      "resolved": "\u002eremote-dev/tools/remote_artifact_push.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated #85 CLI snapshot pinned by test_cli_surface_inventory.py; paths describe the pre-extraction tree",
+      "named_path": "\u002eremote-dev/tools/remote_artifact_push.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/cli-surface.md",
+      "resolved": "\u002eremote-dev/tools/remote_bash.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated #85 CLI snapshot pinned by test_cli_surface_inventory.py; paths describe the pre-extraction tree",
+      "named_path": "\u002eremote-dev/tools/remote_bash.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/cli-surface.md",
+      "resolved": "\u002eremote-dev/tools/remote_context_snapshot.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated #85 CLI snapshot pinned by test_cli_surface_inventory.py; paths describe the pre-extraction tree",
+      "named_path": "\u002eremote-dev/tools/remote_context_snapshot.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/cli-surface.md",
+      "resolved": "\u002eremote-dev/tools/remote_edit.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated #85 CLI snapshot pinned by test_cli_surface_inventory.py; paths describe the pre-extraction tree",
+      "named_path": "\u002eremote-dev/tools/remote_edit.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/cli-surface.md",
+      "resolved": "\u002eremote-dev/tools/remote_glob.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated #85 CLI snapshot pinned by test_cli_surface_inventory.py; paths describe the pre-extraction tree",
+      "named_path": "\u002eremote-dev/tools/remote_glob.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/cli-surface.md",
+      "resolved": "\u002eremote-dev/tools/remote_grep.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated #85 CLI snapshot pinned by test_cli_surface_inventory.py; paths describe the pre-extraction tree",
+      "named_path": "\u002eremote-dev/tools/remote_grep.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/cli-surface.md",
+      "resolved": "\u002eremote-dev/tools/remote_job_status.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated #85 CLI snapshot pinned by test_cli_surface_inventory.py; paths describe the pre-extraction tree",
+      "named_path": "\u002eremote-dev/tools/remote_job_status.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/cli-surface.md",
+      "resolved": "\u002eremote-dev/tools/remote_job_stop.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated #85 CLI snapshot pinned by test_cli_surface_inventory.py; paths describe the pre-extraction tree",
+      "named_path": "\u002eremote-dev/tools/remote_job_stop.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/cli-surface.md",
+      "resolved": "\u002eremote-dev/tools/remote_job_tail.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated #85 CLI snapshot pinned by test_cli_surface_inventory.py; paths describe the pre-extraction tree",
+      "named_path": "\u002eremote-dev/tools/remote_job_tail.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/cli-surface.md",
+      "resolved": "\u002eremote-dev/tools/remote_ls.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated #85 CLI snapshot pinned by test_cli_surface_inventory.py; paths describe the pre-extraction tree",
+      "named_path": "\u002eremote-dev/tools/remote_ls.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/cli-surface.md",
+      "resolved": "\u002eremote-dev/tools/remote_monitor.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated #85 CLI snapshot pinned by test_cli_surface_inventory.py; paths describe the pre-extraction tree",
+      "named_path": "\u002eremote-dev/tools/remote_monitor.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/cli-surface.md",
+      "resolved": "\u002eremote-dev/tools/remote_multi_edit.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated #85 CLI snapshot pinned by test_cli_surface_inventory.py; paths describe the pre-extraction tree",
+      "named_path": "\u002eremote-dev/tools/remote_multi_edit.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/cli-surface.md",
+      "resolved": "\u002eremote-dev/tools/remote_probe.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated #85 CLI snapshot pinned by test_cli_surface_inventory.py; paths describe the pre-extraction tree",
+      "named_path": "\u002eremote-dev/tools/remote_probe.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/cli-surface.md",
+      "resolved": "\u002eremote-dev/tools/remote_read.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated #85 CLI snapshot pinned by test_cli_surface_inventory.py; paths describe the pre-extraction tree",
+      "named_path": "\u002eremote-dev/tools/remote_read.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/cli-surface.md",
+      "resolved": "\u002eremote-dev/tools/remote_write.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated #85 CLI snapshot pinned by test_cli_surface_inventory.py; paths describe the pre-extraction tree",
+      "named_path": "\u002eremote-dev/tools/remote_write.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/cli-surface.md",
+      "resolved": "\u002eremote-dev/tools/sync_claude_skills.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated #85 CLI snapshot pinned by test_cli_surface_inventory.py; paths describe the pre-extraction tree",
+      "named_path": "\u002eremote-dev/tools/sync_claude_skills.py"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/cli-surface.md",
+      "resolved": "\u002eremote-dev/tools/validate_remote_dev_scaffold.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-08",
+      "why": "dated #85 CLI snapshot pinned by test_cli_surface_inventory.py; paths describe the pre-extraction tree",
+      "named_path": "\u002eremote-dev/tools/validate_remote_dev_scaffold.py"
+    }
+  ],
+  "accepted_counts_by_attribution": {
+    "historical-evidence": 103
+  }
+}

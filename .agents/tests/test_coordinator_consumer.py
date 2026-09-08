@@ -49,6 +49,14 @@ def write_fake_checkout(root: Path) -> Path:
     return root
 
 
+def _init_git_checkout(root: Path) -> None:
+    subprocess.run(["git", "init"], cwd=root, check=True, capture_output=True, text=True)
+    subprocess.run(["git", "config", "user.email", "dev@example.com"], cwd=root, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "dev"], cwd=root, check=True, capture_output=True)
+    subprocess.run(["git", "add", "-A"], cwd=root, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "fake"], cwd=root, check=True, capture_output=True)
+
+
 class LocatorTests(unittest.TestCase):
     def test_env_root_must_look_like_a_checkout(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -62,12 +70,15 @@ class LocatorTests(unittest.TestCase):
     def test_fake_checkout_is_accepted(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             write_fake_checkout(Path(tmp))
-            self.assertEqual(
-                coordinator.coordinator_root(env={coordinator.COORDINATOR_ROOT_ENV: tmp}),
-                Path(tmp).resolve(),
+            with self.assertRaises(coordinator.CoordinatorUnavailable) as ctx:
+                coordinator.coordinator_root(env={coordinator.COORDINATOR_ROOT_ENV: tmp})
+            self.assertIn("not a vaws-coordinator checkout", str(ctx.exception))
+            self.assertIn("bootstrap", str(ctx.exception))
+            self.assertIsNone(
+                coordinator.coordinator_root(required=False, env={coordinator.COORDINATOR_ROOT_ENV: tmp})
             )
             status = coordinator.checkout_status({coordinator.COORDINATOR_ROOT_ENV: tmp})
-            self.assertEqual(status["state"], "ready")
+            self.assertEqual(status["state"], "not_git")
             self.assertEqual(status["root_source"], "env")
             self.assertIsNone(status["manager_state_dir_default"])
 
@@ -524,6 +535,7 @@ class HookAdapterTests(unittest.TestCase):
     def test_explicit_path_flags_work_without_ambient_vaws_env(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = write_fake_checkout(Path(tmp) / "checkout")
+            _init_git_checkout(root)
             registry = Path(tmp) / "registry with spaces"
             registry.mkdir()
             (root / "hooks" / "vaws_session.py").write_text(
@@ -584,10 +596,14 @@ class NoInTreeTaskWriterTests(unittest.TestCase):
 class CoordinatorCheckoutTests(unittest.TestCase):
     def test_pin_matches_the_configured_checkout(self) -> None:
         status = coordinator.checkout_status()
-        self.assertEqual(status["state"], "ready")
         pin = coordinator.load_dependency()
-        if status["pin_matches"] is False:
-            self.skipTest(f"checkout {status['commit']} is not the pinned {pin['commit']}")
+        mismatched = status["pin_matches"] is False
+        if mismatched:
+            message = f"checkout {status['commit']} is not the pinned {pin['commit']}"
+            if os.environ.get("CI"):
+                self.fail(message)
+            self.skipTest(message)
+        self.assertIn(status["state"], {"ready", "wrong_origin"})
         self.assertEqual(status["commit"], pin["commit"])
 
     def test_arrival_blobs_match_the_pin(self) -> None:

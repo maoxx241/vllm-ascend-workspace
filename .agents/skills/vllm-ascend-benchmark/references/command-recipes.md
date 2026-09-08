@@ -85,7 +85,7 @@ counts). Explicit CLI args override preset values per field; `--model` is always
 required because weight paths are machine-specific.
 
 `dsv4-flash` carries the DeepSeek-V4-Flash W4A8 MTP configuration and replaces
-the deleted bespoke `.agents/scripts/dsv4_flash_benchmark.py` — do not hand-write
+the deleted bespoke `dsv4_flash_benchmark.py` helper — do not hand-write
 new one-off benchmark scripts; add or extend a preset instead.
 
 ```bash

@@ -1,6 +1,8 @@
 # Leak remediation: what is exposed, and what the options cost
 
-Status: **report only.** Nothing in this document has been acted on. No history
+Status: dated 2026-09-07 at 161fed1 — historical evidence, superseded by [docs/tracked-leak-guard.md](tracked-leak-guard.md)
+
+Nothing in this document has been acted on. No history
 has been rewritten and nothing has been force-pushed. Rewriting the history of a
 public repository with 35 forks and open pull requests is the owner's decision,
 not an agent's.
@@ -13,7 +15,7 @@ this document if it quoted them, which is the intended behaviour.
 
 Ordinary merge of actual published main
 `257dc131c2015d0e01445288efb89bc5ab825b5f` (PR #90, tree
-`dc18fcd13ae02468892d3097a226d92dbd302927`) deleted tracked `.remote-dev/**`.
+`dc18fcd13ae02468892d3097a226d92dbd302927`) deleted the tracked in-tree remote-dev tree.
 The dated bodies in "What is exposed" remain historical evidence of the
 pre-extraction snapshot used by #83; they are not a census of this merged
 tree.
@@ -23,7 +25,7 @@ Current-tree status of those historical findings:
 - Finding 1 (knowledge RFC 1918 range) is still in
   `.agents/knowledge/known-failure-signatures.yaml`. The
   `knowledge-failure-signatures-private-range` allowance stays.
-- Finding 2 (`.remote-dev/DESIGN.md`) is absent from the current tree. The
+- Finding 2 (former in-tree remote-dev `DESIGN.md`) is absent from the current tree. The
   #83 wording change is history-only; extraction removed the file.
 - Finding 3 (profiling command-recipes home path) remains the #83 placeholder
   in the current tree.
@@ -31,8 +33,8 @@ Current-tree status of those historical findings:
   current tree. `SKILL.md` uses `/mnt/weight/<user>/profiling/…`; the
   unit test uses `/mnt/weight/profiling-shared/…`. The
   `profiling-analysis-shared-storage-owner` allowance was removed.
-- Finding 5's `.remote-dev/README.md` occurrence and finding 6's
-  `.remote-dev/tests/` placeholders are absent from the current tree. The
+- Finding 5's former in-tree remote-dev `README.md` occurrence and finding 6's
+  former in-tree remote-dev test placeholders are absent from the current tree. The
   skill-recipe example hosts remain.
 - Allowlist entries whose complete owning paths were the extracted tree
   (`remote-dev-tests-placeholder-host`, `remote-dev-readme-example-host`)
@@ -124,7 +126,7 @@ same blobs.
 
 ### 2. Personal laptop path
 
-- **Where:** `.remote-dev/DESIGN.md`, line 4 — a `/Users/<person>/Downloads/…`
+- **Where:** former in-tree remote-dev `DESIGN.md`, line 4 — a `/Users/<person>/Downloads/…`
   reference to an untracked design draft.
 - **History:** introduced 2026-05-25, present in **29 commits on `main`**
   through 2026-09-07.
@@ -176,7 +178,7 @@ same blobs.
   `.agents/skills/remote-toolbox/references/` (11),
   `.agents/skills/ascend-profiling-analysis/SKILL.md` (2),
   `.agents/skills/machine-management/scripts/manage_machine.py` (2),
-  `.remote-dev/README.md` (1).
+  former in-tree remote-dev `README.md` (1).
 - **Actual risk:** unclear, and that is the problem. These are globally
   routable addresses in space assigned to real operators, used as if they were
   documentation examples. Either they are sanitized versions of a real jump
@@ -196,7 +198,7 @@ same blobs.
 
 ### 6. Private and placeholder addresses in tests and recipes
 
-The `1.2.3.x` dotted-quad placeholder (42 occurrences in `.remote-dev/tests/`)
+The `1.2.3.x` dotted-quad placeholder (42 occurrences in the former in-tree remote-dev tests)
 and `10.0.0.x` (20 occurrences across skill tests and recipes). Both are
 conventional placeholders; the former is nevertheless globally routable and the
 latter is

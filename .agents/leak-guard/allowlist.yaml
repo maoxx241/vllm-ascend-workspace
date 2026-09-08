@@ -139,6 +139,12 @@ allowlist:
     match_regex: ^git@github\.com$
     justification: Fixed GitHub SSH transport syntax shared by every GitHub user; not a personal address.
 
+  - id: dependency-plane-github-ssh-transport
+    path_glob: .agents/lib/vaws_dependency.py
+    categories: [email]
+    match: git@github.com
+    justification: Fixed GitHub SSH transport prefix used only to normalize origin URLs against pin identity; it is a service account name shared by every GitHub user, not a personal address.
+
   - id: npu-fleet-monitor-tests-github-ssh-transport
     path_glob: .agents/skills/npu-fleet-monitor/tests/test_manage_monitor.py
     categories: [email]

@@ -45,6 +45,10 @@ jobs:
         run: |
           python -B .agents/scripts/repo_boundary_check.py --mode enforce
           python -B -m unittest discover -s .agents/tests -p "test_repo_boundary_check.py"
+      - name: Check tracked in-tree paths
+        run: |
+          python -B .agents/scripts/tracked_path_check.py --mode enforce
+          python -B -m unittest discover -s .agents/tests -p "test_tracked_path_check.py"
       - name: Run catalog tests
         run: python -B -m unittest discover -s .agents/tests -p "test_*catalog.py"
       - name: Run generated skill projection tests
@@ -53,19 +57,26 @@ jobs:
         run: python -B .agents/scripts/sync_claude_skills.py --check
       - name: Run manifest and knowledge tests
         run: python -B -m unittest discover -s .agents/tests -p "test_run_manifest.py"
+      - name: Read pinned knowledge kit commit
+        id: knowledge-pin
+        run: |
+          commit="$(python3 -c 'import json; print(json.load(open(".agents/deps/vaws-knowledge.json"))["commit"])')"
+          echo "commit=${commit}" >> "$GITHUB_OUTPUT"
       - name: Check out pinned knowledge conformance kit
         uses: actions/checkout@v4
         with:
           repository: vllm-ascend-workspace/vaws-knowledge
-          ref: e04d50f7bc5702afbe2e2988f7c28a3268e1a7f3
-          path: .vaws-local/vaws-knowledge-e04d50f7
+          ref: ${{ steps.knowledge-pin.outputs.commit }}
+          path: .vaws-local/vaws-knowledge-kit
           persist-credentials: false
       - name: Install knowledge kit test tools
         run: python -m pip install pyyaml
       - name: Run knowledge evidence-chain tests
         env:
-          VAWS_KNOWLEDGE_KIT_ROOT: ${{ github.workspace }}/.vaws-local/vaws-knowledge-e04d50f7
+          VAWS_KNOWLEDGE_KIT_ROOT: ${{ github.workspace }}/.vaws-local/vaws-knowledge-kit
         run: python -B -m unittest discover -s .agents/tests -p "test_knowledge*.py"
+      - name: Workflows must not duplicate pin SHAs
+        run: python -B -m unittest discover -s .agents/tests -p "test_workflow_pin_refs.py"
       - name: Run knowledge curation tests
         run: python -B -m unittest discover -s .agents/skills/curate-workspace-knowledge/tests
       - name: Run graph-debug tests
@@ -91,6 +102,11 @@ jobs:
         run: |
           python -B -m unittest discover -s .agents/skills/vllm-ascend-benchmark/tests
           python -B -m unittest discover -s .agents/skills/machine-management/tests
+
+      - name: Run npu-fleet-monitor consumer tests
+        # 41 tests. They build synthetic git fixtures and do not need the
+        # private vaws-top checkout or a token.
+        run: python -B -m unittest discover -s .agents/skills/npu-fleet-monitor/tests
 
       - name: Validate parameterized Ray helpers
         run: bash -n scripts/ray_head.sh scripts/ray_worker.sh

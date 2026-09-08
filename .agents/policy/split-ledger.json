@@ -379,7 +379,7 @@
         "observed_commit": "257dc131c2015d0e01445288efb89bc5ab825b5f",
         "observed_by": "L2 refresh with the L1 corrected checker against published refs/remotes/origin/main at the exact destination SHA in observed_commit; Git origin is local identity metadata, not cryptographic proof of publication; source-presence only, not runtime, client reachability, tests passing, or deployment evidence"
       },
-      "notes": "Recorded missing at scaffold 161fed1, when the tests still lived only in the in-tree .remote-dev/tests/test_endpoint.py copy. At published scaffold main 257dc131c2015d0e01445288efb89bc5ab825b5f (PR #90) the three FindSessionBindingTests names are defined under .agents/tests/. Source-presence at that commit, not that the tests ran. Identity remains maoxx241/vllm-ascend-workspace; transfer has not happened."
+      "notes": "Recorded missing at scaffold 161fed1, when the tests still lived only in the in-tree .remote-dev/tests/test_endpoint.py copy. At published scaffold main 257dc131c2015d0e01445288efb89bc5ab825b5f (PR #90) the three FindSessionBindingTests names are defined under .agents/tests/. Source-presence at that commit, not that the tests ran. Scaffold identity is now vllm-ascend-workspace/vllm-ascend-workspace after the organization transfer."
     },
     {
       "id": "remote-dev.sync-claude-skills",
@@ -412,7 +412,7 @@
         "observed_commit": "257dc131c2015d0e01445288efb89bc5ab825b5f",
         "observed_by": "L2 refresh with the L1 corrected checker against published refs/remotes/origin/main at the exact destination SHA in observed_commit; Git origin is local identity metadata, not cryptographic proof of publication; source-presence only, not runtime, client reachability, tests passing, or deployment evidence"
       },
-      "notes": "Recorded missing at scaffold 161fed1, when the generator still lived at .remote-dev/tools/sync_claude_skills.py. At 257dc131c2015d0e01445288efb89bc5ab825b5f the declared path .agents/scripts/sync_claude_skills.py is in the published tree. Source-presence of that path, not that shims were regenerated. Identity remains maoxx241/vllm-ascend-workspace; transfer has not happened."
+      "notes": "Recorded missing at scaffold 161fed1, when the generator still lived at .remote-dev/tools/sync_claude_skills.py. At 257dc131c2015d0e01445288efb89bc5ab825b5f the declared path .agents/scripts/sync_claude_skills.py is in the published tree. Source-presence of that path, not that shims were regenerated. Scaffold identity is now vllm-ascend-workspace/vllm-ascend-workspace after the organization transfer."
     },
     {
       "id": "remote-dev.claude-shim-tests",
@@ -453,7 +453,7 @@
         "observed_commit": "257dc131c2015d0e01445288efb89bc5ab825b5f",
         "observed_by": "L2 refresh with the L1 corrected checker against published refs/remotes/origin/main at the exact destination SHA in observed_commit; Git origin is local identity metadata, not cryptographic proof of publication; source-presence only, not runtime, client reachability, tests passing, or deployment evidence"
       },
-      "notes": "Recorded missing at scaffold 161fed1. At 257dc131c2015d0e01445288efb89bc5ab825b5f the three shim-check names are defined under .agents/tests/. Source-presence of the test definitions, not that the tests ran. Identity remains maoxx241/vllm-ascend-workspace; transfer has not happened."
+      "notes": "Recorded missing at scaffold 161fed1. At 257dc131c2015d0e01445288efb89bc5ab825b5f the three shim-check names are defined under .agents/tests/. Source-presence of the test definitions, not that the tests ran. Scaffold identity is now vllm-ascend-workspace/vllm-ascend-workspace after the organization transfer."
     },
     {
       "id": "remote-dev.managed-endpoint-resolver",
@@ -490,7 +490,7 @@
         "observed_commit": "257dc131c2015d0e01445288efb89bc5ab825b5f",
         "observed_by": "L2 refresh with the L1 corrected checker against published refs/remotes/origin/main at the exact destination SHA in observed_commit; Git origin is local identity metadata, not cryptographic proof of publication; source-presence only, not runtime, client reachability, tests passing, or deployment evidence"
       },
-      "notes": "Without this plugin every session_id / machine selector and every zero-argument call inside a session worktree would fail with EndpointError once the scaffold consumed extracted remote-dev. Recorded missing at 161fed1. At 257dc131c2015d0e01445288efb89bc5ab825b5f a module under .agents/lib references register_resolver(. That is source-presence of the registration call, not proof that resolution works at runtime. Identity remains maoxx241/vllm-ascend-workspace; transfer has not happened."
+      "notes": "Without this plugin every session_id / machine selector and every zero-argument call inside a session worktree would fail with EndpointError once the scaffold consumed extracted remote-dev. Recorded missing at 161fed1. At 257dc131c2015d0e01445288efb89bc5ab825b5f a module under .agents/lib references register_resolver(. That is source-presence of the registration call, not proof that resolution works at runtime. Scaffold identity is now vllm-ascend-workspace/vllm-ascend-workspace after the organization transfer."
     },
     {
       "id": "coordinator.package-root",
