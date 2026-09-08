@@ -14,6 +14,10 @@ Tracked files live under `.agents/deps/`. The schema is
 `commit`, `root_env`, `default_checkout`, `bootstrap`, `consumed_surface`,
 and `identity`. Optional fields are `note` and `extensions`.
 
+`consumed_surface` is either an array of surface names or an object mapping
+each surface to the implementing path (a string, or a string list when one
+surface has several files). Prefer the object form when the mapping is known.
+
 `default_checkout` is a template. Placeholders are `{shared_workspace_root}`,
 `{home}`, and `{repo_dirname}`. vaws-top keeps its existing default:
 
@@ -24,6 +28,10 @@ Do not relocate an existing user checkout.
 Coordinator-only facts (`tree`, `pinned_mirrors`, `arrival_blobs`) live under
 `extensions` and stay byte-identical to the previous top-level values.
 
+`identity.canonical_origin` is true on all four pins: a non-canonical origin
+is reported as `wrong_origin` (usable, always warned). `false` would drop
+origin from identity and never emit `wrong_origin`.
+
 ## Loader
 
 `.agents/lib/vaws_dependency.py` is the only identity check.
@@ -33,36 +41,61 @@ Coordinator-only facts (`tree`, `pinned_mirrors`, `arrival_blobs`) live under
 | `load_pin(name)` | validate one pin; raise `DependencyPinError` with a field path |
 | `all_pins()` | every tracked pin |
 | `checkout_path(name)` | resolved path and source (`env` or `default`) |
-| `inspect(name)` | never raises; `state` is `missing`, `not_git`, `wrong_origin`, `off_pin`, or `ready` |
-| `resolve(name, required=True)` | execution path. `ready` and `off_pin` both return the path |
+| `inspect(name)` | never raises; `state` is one of the six values below |
+| `resolve(name, required=True)` | execution path; identity drift still returns the path |
 | `bootstrap(name)` | clone at the pin. Private pins fall back to `gh repo clone` |
 
-Identity is uniform: `git rev-parse HEAD` must work, `identity.required_files`
-must exist, and when `identity.canonical_origin` is true the origin URL must
-match `url`. A directory of empty required files is `not_git`.
+`inspect()` assigns exactly one state, in this order:
+
+| state | Meaning |
+|---|---|
+| `missing` | path does not exist |
+| `not_git` | path exists, `git rev-parse HEAD` failed |
+| `wrong_origin` | git checkout, origin does not match `url` |
+| `incomplete` | git checkout, origin fine, one or more `identity.required_files` absent. `problems` names exactly which |
+| `off_pin` | everything present, `HEAD != commit` |
+| `ready` | everything present, `HEAD == commit` |
+
+A directory of required files that is not a git checkout is `not_git`. A real
+git checkout that is missing a required file is `incomplete`, never `not_git`.
+
+## Resolve vs warn
+
+| Class | States | `resolve()` | `status` |
+|---|---|---|---|
+| Unusable → blocks | `missing`, `not_git`, `incomplete` | raises `DependencyUnavailable` (incomplete names the missing files and the bootstrap command) | exit 1 |
+| Usable but not the pinned identity → warns | `off_pin`, `wrong_origin` | returns the path | exit 1 unless acknowledged |
+
+`VAWS_DEPS_ALLOW_OFF_PIN` (comma-separated names, or `*`) acknowledges both
+identity-drift states. It downgrades the status exit to 0 for the named deps.
+`vaws_deps.py doctor` records those names under `acknowledged_drift`. The
+escape hatch is visible, not hidden.
 
 Existing locators stay as thin wrappers:
 
 * `vaws_remote_dev.remote_dev_root` / `checkout_status` / `looks_like_checkout`
 * `vaws_coordinator.coordinator_root` / `checkout_status`
-* `manage_monitor` locate / ensure (still refuses `off_pin` on ensure)
+* `manage_monitor` locate / ensure
 * `knowledge_kit.resolve_kit_root` (still requires an explicit kit path)
+
+`resolve()` is the runtime gate. `manage_monitor.py ensure` is a clone-time
+decision and stays stricter: it still refuses to clone or reset into a
+wrong-origin or off_pin directory. Status and locate may report those trees;
+ensure will not write into them.
 
 ## Pin drift
 
-Drift is never an execution gate. A developer checkout that is `off_pin` still
-runs. That matches `docs/coordinator-consumption.md`.
+Drift is never an execution gate. A developer checkout that is `off_pin`, or a
+fork that is `wrong_origin`, still runs. That matches
+`docs/coordinator-consumption.md` and the user's "能跑但是提醒就行" decision.
 
 Drift is never silent. `remote_dev.py status`, `vaws.py status`,
 `manage_monitor.py status`, and `vaws_deps.py status` exit 1 when an inspected
-dep is `off_pin`, and the payload names the mismatch.
-
-`VAWS_DEPS_ALLOW_OFF_PIN` (comma-separated names, or `*`) downgrades that
-status exit to 0 for the named deps. `vaws_deps.py doctor` records the names
-under `acknowledged_drift`. The escape hatch is visible, not hidden.
+dep is drifted, and the payload names the mismatch.
 
 In CI (`CI` is set), `test_pin_matches_the_configured_checkout` fails on
-mismatch. Locally it may skip.
+commit mismatch. Locally it may skip. A fork at the pinned commit is
+`wrong_origin`, not a commit mismatch.
 
 ## Capability report
 
@@ -73,12 +106,15 @@ Capabilities:
 
 | Capability | Needs |
 |---|---|
-| `remote_endpoints` | remote-dev `ready` or `off_pin` |
+| `remote_endpoints` | remote-dev in a usable state (`ready`, `off_pin`, or `wrong_origin`) |
 | `resolver_registration` | remote-dev, the tracked plugin file, and `REMOTE_DEV_RESOLVERS` in tracked MCP config |
 | `task_pool` | vaws-coordinator |
 | `fleet_observation` | vaws-top |
 | `shared_knowledge` | the shared knowledge cache (same inspector as the knowledge client) |
 | `conformance_kit` | vaws-knowledge checkout |
+
+A usable-but-drifted checkout is `available` and `degraded`. The capability
+report carries a `degradation[]` entry. Unusable states are not available.
 
 Each capability uses the knowledge-client degradation fields: `layer`,
 `detail`, `effect`, `remedy`, `expected_source_repo`, `expected_source_ref`.
@@ -86,7 +122,7 @@ Each capability uses the knowledge-client degradation fields: `layer`,
 
 `resolver_registration` names the layer:
 
-* remote-dev missing → `dependency`
+* remote-dev missing or unusable → `dependency`
 * plugin file missing → `scaffold`
 * `REMOTE_DEV_RESOLVERS` absent from tracked `.mcp.json` / `.cursor/mcp.json` → `client_config`
 
@@ -101,8 +137,8 @@ stderr; one JSON object on stdout.
 ## Hooks
 
 `remote_dev.py hook`, `vaws.py hook`, and `.agents/hooks/vaws_session.py`
-still exit 0 when the dep is missing. A missing substrate must not block the
-client's own tools.
+still exit 0 when the dep is unusable. A missing substrate must not block the
+client's own tools. Identity-drifted checkouts still exec.
 
 They now name the lost capability and the exact bootstrap command on stderr,
 and append one line to
@@ -122,4 +158,5 @@ python3 .agents/scripts/vaws_deps.py doctor
 ```
 
 `--reset` fetches and checks out the pin only when the working tree is clean.
-An `off_pin` dest is never reset without that flag.
+An `off_pin` dest is never reset without that flag. A `wrong_origin` dest is
+never overwritten by bootstrap; choose a different dest.
