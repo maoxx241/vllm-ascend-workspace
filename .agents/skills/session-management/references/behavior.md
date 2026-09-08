@@ -31,7 +31,7 @@ Missing completion receipts retain ownership for reconciliation.
 The optional independent HTTP MCP coordinator separates task identity,
 prepared-container checkout and host execution leases. All clients of a pool
 use one manager; linked worktree inventory sharing alone is not allocation.
-See [coordinator lifecycle](../../../coordinator/README.md). Never create local
+See [coordinator consumption](../../../../docs/coordinator-consumption.md). Never create local
 legacy NPU leases in addition to the pool's host-authoritative requests.
 Returning a container quarantines it until re-verification. Queue messages,
 accepted yield requests and SSH failures never release devices. There is no
@@ -150,7 +150,9 @@ the behavior of Session creation, serving, benchmark, profiling, or arbitrary
 remote commands.
 
 The local wrapper resolves a managed machine or Session to the bare-metal host,
-then executes the stdlib-only coordinator there. Shared state lives at:
+then executes the coordinator-owned stdlib host-queue module
+(`host/vaws_npu_coordination.py` from the pinned vaws-coordinator checkout)
+there. Shared state lives at:
 
 ```text
 /tmp/vaws-npu-coordinator/v1/coordinator.sqlite3

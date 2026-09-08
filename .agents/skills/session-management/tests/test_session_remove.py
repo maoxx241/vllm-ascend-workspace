@@ -63,11 +63,27 @@ class SessionRemoveTests(unittest.TestCase):
 
     def test_gc_host_confirmation_is_required_and_uncertainty_keeps_lease(self) -> None:
         session = {"remote": {"host": "host", "host_port": 22, "container": {"name": "task-container"}}, "leases": {"npu_devices": [0]}}
-        for result, expected in ((subprocess.CompletedProcess([], 255, "", "Permission denied"), None), (subprocess.CompletedProcess([], 0, json.dumps({"alive": False}), ""), False)):
-            with mock.patch.object(session_gc.subprocess, "run", return_value=result) as call:
-                self.assertIs(session_gc._probe_session_container(session)["alive"], expected)
-            self.assertIn("22", call.call_args.args[0])
-            self.assertIn("_confirmed_free_probe", call.call_args.args[0][-1])
+        lib = ROOT / ".agents" / "lib"
+        if str(lib) not in sys.path:
+            sys.path.insert(0, str(lib))
+        with tempfile.TemporaryDirectory() as tmp:
+            standin = Path(tmp) / "host_queue_standin.py"
+            standin.write_text(
+                "def _confirmed_free_probe(*args, **kwargs):\n"
+                "    return {'status': 'ok', 'free': []}\n",
+                encoding="utf-8",
+            )
+            for result, expected in (
+                (subprocess.CompletedProcess([], 255, "", "Permission denied"), None),
+                (subprocess.CompletedProcess([], 0, json.dumps({"alive": False}), ""), False),
+            ):
+                with mock.patch(
+                    "vaws_host_queue_module.host_queue_module_path",
+                    return_value=standin,
+                ), mock.patch.object(session_gc.subprocess, "run", return_value=result) as call:
+                    self.assertIs(session_gc._probe_session_container(session)["alive"], expected)
+                self.assertIn("22", call.call_args.args[0])
+                self.assertIn("_confirmed_free_probe", call.call_args.args[0][-1])
 
     def test_remote_cleanup_exception_marks_session_needs_repair(self) -> None:
         lookup = SimpleNamespace(

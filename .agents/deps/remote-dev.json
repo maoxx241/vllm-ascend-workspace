@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "name": "remote-dev",
+  "repository": "vllm-ascend-workspace/remote-dev",
+  "url": "https://github.com/vllm-ascend-workspace/remote-dev.git",
+  "visibility": "private",
+  "ref": "main",
+  "commit": "62045af1f76c803ca392ae413b56bcfe290e6450",
+  "root_env": "VAWS_REMOTE_DEV_ROOT",
+  "default_checkout": "{shared_workspace_root}/.vaws-local/remote-dev",
+  "bootstrap": "python3 .agents/scripts/remote_dev.py bootstrap",
+  "consumed_surface": {
+    "mcp_server": "mcp/server.py",
+    "cli_tools": "tools/remote_*.py",
+    "hooks": ["hooks/claude_remote_guard.py", "hooks/codex_remote_guard.py"],
+    "resolver_plugin_api": "core.endpoint.register_resolver / resolver_setup / EndpointError",
+    "result_contract": "core.result.make_result (schemas/result.schema.json)"
+  },
+  "identity": {
+    "required_files": [
+      "mcp/server.py",
+      "core/endpoint.py",
+      "core/shell_ops.py",
+      "tools/_cli.py",
+      "service-api.json"
+    ],
+    "canonical_origin": true
+  },
+  "service_api": {
+    "min": 1,
+    "max": 1
+  },
+  "note": "remote-dev is consumed as an external checkout, not a submodule and not a vendored copy. The repository is private; a private third .gitmodules entry would break `git submodule update --init --recursive` for every public cloner. The scaffold locates the checkout through VAWS_REMOTE_DEV_ROOT or the default path above, registers .agents/lib/vaws_remote_dev_plugin.py as the endpoint resolver, and points the substrate at the Ascend runtime environment file. Bump `commit` deliberately; `remote_dev.py status` reports drift. identity.canonical_origin is true so a fork is reported as wrong_origin (usable, always warned). false would drop origin from identity and never emit wrong_origin."
+}

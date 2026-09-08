@@ -12,10 +12,11 @@ owned processes and device occupancy are resolved. Do not pass their task,
 binding, or job ids as legacy `--session-id` values. Direct remote companion
 tools still use explicit endpoints and do not enforce a pool lease themselves.
 
-Compatibility note: `.remote-dev` is now the preferred local-tool-like surface
-for ordinary remote endpoint development. Use this skill when the task needs
-managed VAWS target resolution, session containers, parity/sync, service
-adapters, artifact compatibility, or cleanup internals.
+Compatibility note: remote-dev companion tools (`remote_*` MCP tools, launched
+via `python3 .agents/scripts/remote_dev.py`) are now the preferred
+local-tool-like surface for ordinary remote endpoint development. Use this
+skill when the task needs managed VAWS target resolution, session containers,
+parity/sync, service adapters, artifact compatibility, or cleanup internals.
 
 Use this skill when an agent needs to operate a managed VAWS machine or session
 container backend instead of writing raw SSH, scp, sftp, manual tail, or manual

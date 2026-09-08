@@ -2,6 +2,12 @@
 
 Local `vllm` + `vllm-ascend` development scaffold. `vllm/` and `vllm-ascend/` are Git submodules.
 
+The canonical scaffold is `vllm-ascend-workspace/vllm-ascend-workspace`
+(public, non-fork). Submodule URLs stay on `vllm-project/vllm` and
+`vllm-project/vllm-ascend`. Personal development forks such as
+`maoxx241/vllm` and `maoxx241/vllm-ascend` sit outside the organization
+and are not replacement community upstreams.
+
 This repository provides a remote development substrate first, then
 vLLM-Ascend skills on top.
 
@@ -49,7 +55,7 @@ Repo-local skills live under `.agents/skills/`. Each has its own `SKILL.md` with
 |-------|---------|
 | `repo-init` | Initialize workspace: `gh`, GitHub auth, submodules, fork topology |
 | `machine-management` | Add / verify / repair / remove a remote NPU machine |
-| `npu-fleet-monitor` | Deploy, start, inspect, restart, or stop the loopback-only NPU monitoring dashboard from its standalone worktree |
+| `npu-fleet-monitor` | Deploy, start, inspect, restart, or stop the loopback-only NPU monitoring dashboard from the standalone vaws-top repository |
 | `session-management` | Create / inspect / remove / group isolated agent sessions (local worktree + remote container + leases) |
 | `remote-toolbox` | Compatibility backend for managed VAWS target/probe/exec/job/sync/service/artifact/cleanup tools |
 | `remote-code-parity` | Sync local working tree to remote container before execution |
@@ -59,7 +65,7 @@ Repo-local skills live under `.agents/skills/`. Each has its own `SKILL.md` with
 | `ascend-memory-profiling` | Profile HBM memory usage on Ascend NPU for vLLM serving scenarios |
 | `ascend-profiling-collection` | Collect one Ascend torch-profiler case end-to-end (start service, bracket workload with `/start_profile` + `/stop_profile`, run `analyse()`, verify outputs, write manifest) |
 | `ascend-profiling-analysis` | Analyze collected Ascend torch-profiler roots/manifests and generate reports |
-| `curate-workspace-knowledge` | Explicitly review, deduplicate, promote, merge, reject, or deprecate verified knowledge candidates |
+| `curate-workspace-knowledge` | Explicitly review, deduplicate, promote, merge, reject, or deprecate verified knowledge candidates; resolve unresolved v2 coordinates and gate upstream export |
 | `vllm-ascend-graph-debug` | Diagnose Ascend graph compile, capture, replay, and graph/eager correctness divergence |
 | `vllm-ascend-correctness-validation` | Plan and compare baseline/candidate, eager/graph, offline/online, and task-metric correctness evidence |
 | `vllm-ascend-change-validation` | Map code diffs to required validation evidence and aggregate downstream runs into PR reports |
@@ -74,8 +80,8 @@ Repo-local skills live under `.agents/skills/`. Each has its own `SKILL.md` with
 | `vllm-ascend-pd-serving` | Orchestrate grouped prefill/decode services, connector configuration, rollback, and smoke tests |
 
 None of these are gates for normal local coding, docs work, or unrelated Git tasks.
-For remote endpoint work, prefer `.remote-dev` tools first and use these skills
-for domain workflows.
+For remote endpoint work, prefer remote-dev companion tools first and use these
+skills for domain workflows.
 
 ## Repo-wide rules
 
@@ -87,27 +93,36 @@ for domain workflows.
   work. Bind actual business worktrees and keep local development available
   without the coordinator. Do not pass new task/binding/job ids to legacy
   session commands or create duplicate local NPU leases for pool executions.
-- The optional shared runtime pool is documented in `.agents/coordinator/README.md`.
+- The optional shared runtime pool lives in the external `vaws-coordinator`
+  checkout (pin: `.agents/deps/coordinator.json`). See
+  [docs/coordinator-consumption.md](docs/coordinator-consumption.md).
   Pool bindings use its execution leases and ordinary remote-dev endpoints;
   do not create duplicate legacy local NPU leases or pass a binding id as a
-  legacy session id. All clients of a pool must use the same manager.
-  Stage edits during runs; materialize and refresh native artifacts only
-  after its executions are released. Model services restart for changed code.
+  legacy session id. All clients of a pool must use the same manager and the
+  same explicit `--state-dir`. Stage edits during runs; materialize and
+  refresh native artifacts only after its executions are released. Model
+  services restart for changed code.
 - Never write secrets, passwords, or tokens into tracked files.
-- Keep VAWS runtime state under `.vaws-local/` and remote-dev endpoint/tool
-  state under `.remote-dev/state/`. Both are untracked.
+- Keep VAWS runtime state under `.vaws-local/`, remote-dev state under
+  `.vaws-local/remote-dev-state/`, and the local task registry under
+  `.vaws-local/agent-sessions/`. All are untracked.
 - Keep `.gitmodules` on community upstream URLs.
-- Prefer `.remote-dev` remote companion tools or skill wrapper scripts over raw SSH / shell commands for remote operations.
+- Prefer remote-dev companion tools (`remote_*` MCP tools, launched via `python3 .agents/scripts/remote_dev.py`) or skill wrapper scripts over raw SSH / shell commands for remote operations.
 - Skill wrappers: progress on `stderr`, final JSON on `stdout`.
 - Execution skills must use Run Manifest v1 from `.agents/lib/vaws_run_manifest.py` for new cross-workflow runs and keep manifests under untracked `.vaws-local/`.
 - Read fast-changing compatibility, capability, validation, and failure-signature facts from `.agents/knowledge/`; treat missing facts as unknown rather than supported.
+- Knowledge is federated across three layers: `shared` (read-only cache of `vllm-ascend-workspace/vaws-knowledge` under `.vaws-local/knowledge/shared/`), `project` (`.agents/knowledge/`, both v1 `<kind>.yaml` and v2 `<kind>.v2.yaml`), and `candidate` (unreviewed local observations). `knowledge_query.py` reads all three, names the layer per match, and reports any layer it could not consult — a degraded answer is never an authoritative "no".
 - On a concrete practical failure, query compact formal matches with `.agents/scripts/knowledge_query.py` before repeating diagnosis. After a novel fix has a confirmed cause and verification evidence, capture a candidate with `.agents/scripts/knowledge_capture.py`.
-- Invoke `curate-workspace-knowledge` only for explicit knowledge review or promotion; normal workflows use the shared capture and query scripts directly.
+- Applicability is a coordinate, not prose. Capture reads soc / cann / driver / python_abi / torch / torch_npu / vllm / vllm_ascend / model / topology / execution_mode / component from the Run Manifest, `--env`, or the candidate scope, and records anything unavailable as `unknown`. Never invent a version to fill a dimension; an unresolved dimension blocks `verified` and blocks export by design.
+- Invoke `curate-workspace-knowledge` only for explicit knowledge review, promotion, coordinate resolution, or upstream export; normal workflows use the shared capture and query scripts directly.
+- Propose knowledge upstream only through `.agents/scripts/knowledge_export.py`. It is the source-side redaction gate: internal addresses, user paths, hostnames, container names, internal mounts, and unresolved coordinates never leave this fork.
 - Before reporting a blocking problem or asking the user to intervene, query `.agents/knowledge/` with `.agents/scripts/knowledge_query.py` using the observed failure signature. State explicitly when no verified match exists.
 - Use the remote-dev substrate for agent-facing remote read/edit/bash/search/patch/job/artifact work. Use the remote toolbox entrypoints as the managed VAWS compatibility backend before falling back to bare SSH.
 - Remote work runs inside a `session-management` session. From inside the session worktree, parity, serving, benchmark, and profiling commands auto-resolve the session from the cwd binding; pass `--session-id` only when running outside the worktree or targeting another session. Domain skill commands (serving, benchmark, profiling) are session-only; `--machine` exists only for machine registration and `session_create.py` base-machine selection. Legacy compatibility surfaces still accept `--machine`: `remote-code-parity/scripts/parity_sync.py`, `session-management/scripts/npu_coordination.py`, and `vllm-ascend-serving/scripts/serve_probe_npus.py`.
+- The four external repositories (remote-dev, vaws-coordinator, vaws-top, vaws-knowledge) are consumed through one pin schema under `.agents/deps/` and one locator. Check workspace capability with `python3 .agents/scripts/vaws_deps.py doctor` before assuming remote endpoints, the task pool, fleet observation, or shared knowledge are available; a `partial` outcome names what is missing and the bootstrap command. See [docs/dependency-plane.md](docs/dependency-plane.md).
+- Documentation under `docs/` carries a `Status:` line. `Status: current` is a contract; `Status: dated` is evidence and is never a direction. See [docs/README.md](docs/README.md).
 - This repo targets Huawei Ascend NPU. Local machines (Mac/PC) cannot run `torch`/`torch_npu`-dependent code. Do not attempt local test execution — go straight to the remote container.
 
 ## Maintenance
 
-When changing a skill, update the whole package together: `SKILL.md`, `scripts/`, `references/`, `agents/`, and other supporting files as applicable. When the change affects shared state, also update `.agents/scripts/workspace_profile.py`, `.agents/lib/vaws_local_state.py`, `.agents/lib/vaws_session_id.py`, `.agents/lib/vaws_session_state.py`, and `.agents/lib/vaws_remote_toolbox.py` as applicable.
+When changing a skill, update the whole package together: `SKILL.md`, `scripts/`, `references/`, `agents/`, and other supporting files as applicable. When the change affects shared state, also update `.agents/scripts/workspace_profile.py`, `.agents/lib/vaws_local_state.py`, `.agents/lib/vaws_session_id.py`, `.agents/lib/vaws_session_state.py`, `.agents/lib/vaws_remote_toolbox.py`, and `.agents/lib/vaws_coordinator.py` as applicable.

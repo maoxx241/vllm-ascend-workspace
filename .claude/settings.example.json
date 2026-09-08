@@ -23,7 +23,11 @@
       "mcp__remote-dev__remote_job_tail",
       "mcp__remote-dev__remote_job_stop",
       "mcp__remote-dev__remote_context_snapshot",
-      "mcp__remote-dev__remote_probe"
+      "mcp__remote-dev__remote_probe",
+      "mcp__vaws-task__vaws_session",
+      "mcp__vaws-task__vaws_run",
+      "mcp__vaws-task__vaws_execution",
+      "mcp__vaws-task__vaws_finish"
     ],
     "deny": [
       "Bash(sshpass *)",
@@ -40,7 +44,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 .remote-dev/hooks/claude_remote_guard.py",
+            "command": "python3 .agents/scripts/remote_dev.py hook claude",
             "timeout": 30
           }
         ]
@@ -50,7 +54,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 .remote-dev/hooks/claude_remote_guard.py",
+            "command": "python3 .agents/scripts/remote_dev.py hook claude",
             "timeout": 30
           }
         ]

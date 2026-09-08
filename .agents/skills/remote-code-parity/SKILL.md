@@ -12,7 +12,7 @@ External business worktrees can be selected with repeatable
 `parity_sync.py` or the low-level helper. Snapshots come from those exact
 worktrees without resetting them or maintaining copied branches.
 
-The opt-in [ready-runtime coordinator](../../coordinator/README.md) uses
+The opt-in [ready-runtime coordinator](../../../docs/coordinator-consumption.md) uses
 `--apply-mode materialize` for a compatible warm runtime, not a legacy first
 install. Its execution gate verifies source/build identity and complete native
 artifacts before allocating cards. `parity_watch.py` continuously publishes
@@ -35,7 +35,7 @@ that execution before starting another code revision.
 
 ## Do not use this skill when
 
-- the task is ad-hoc remote verification (run one command, read a log, check remote state) with no dependency on local code changes — use `.remote-dev` `remote.bash` / `remote.read` directly; parity is never a prerequisite for that
+- the task is ad-hoc remote verification (run one command, read a log, check remote state) with no dependency on local code changes — use remote-dev companion tools (`remote_*` MCP tools, launched via `python3 .agents/scripts/remote_dev.py`) such as `remote.bash` / `remote.read` directly; parity is never a prerequisite for that
 - the main task is adding or repairing a machine, SSH, or container bootstrap
 - the task is generic fork / remote topology setup
 - the task is ordinary local coding with no remote execution

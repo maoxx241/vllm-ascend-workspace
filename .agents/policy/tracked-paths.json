@@ -1,0 +1,110 @@
+{
+  "version": 1,
+  "doc": "docs/tracked-path-guard.md",
+  "checker": ".agents/scripts/tracked_path_check.py",
+  "why": "A tracked Markdown, YAML, JSON, or TOML file must not name an in-tree path that does not exist. After the multi-repo split, routing docs that still point at `\u002eremote-dev/state/` or a deleted coordinator tree are drift, not history.",
+  "format_note": "JSON, not YAML, so the guard stays stdlib-only and can run in every existing CI job without a pip install step.",
+  "scan": {
+    "include_suffixes": [
+      ".md",
+      ".yaml",
+      ".yml",
+      ".json",
+      ".toml"
+    ],
+    "include_suffixes_why": "These are the tracked routing and policy surfaces an agent actually reads. Python is already covered by repo_boundary_check.py.",
+    "skip_roots": [
+      "vllm",
+      "vllm-ascend"
+    ],
+    "skip_roots_why": "Volatile upstream submodules; not ours to police.",
+    "fixture_paths": [
+      ".agents/tests/test_tracked_path_check.py"
+    ],
+    "fixture_paths_why": "This guard's own tests must name dead paths as fixtures to prove detection. Nothing else belongs here: a file that genuinely needs an exemption needs a baseline row or a skip_paths entry with a why.",
+    "skip_paths": [
+      {
+        "path": "docs/audits/split-ledger-2026-09-07.json",
+        "why": "The retired ledger records historical source locations that left this tree. Those scaffold_path values stay as written as the extraction record."
+      },
+      {
+        "path": ".agents/policy/repo-boundaries.json",
+        "why": "Rule why-strings name the departed paths whose in-tree form the boundary guard forbids. Editing them would change a sibling-owned policy."
+      },
+      {
+        "path": ".agents/tests/fixtures/cli-surface-inventory.json",
+        "why": "Historical CLI overlay fixture that intentionally names deleted \u002eremote-dev tools as substrate targets."
+      },
+      {
+        "path": ".agents/deps/vaws-top.json",
+        "why": "Pin file that lists published path descriptors of the external vaws-top repository, not files in this tree."
+      },
+      {
+        "path": ".agents/policy/tracked-paths.json",
+        "why": "This policy names scan roots and allow prefixes; those strings are not claims the prefixes exist as files."
+      },
+      {
+        "path": ".agents/policy/tracked-paths-baseline.json",
+        "why": "The baseline must repeat the dead token it is accepting; scanning it would make every row a new violation."
+      },
+      {
+        "path": ".grok/config.example.toml",
+        "why": "Sibling-owned client example that names the untracked local `.grok/config.toml` copy target."
+      },
+      {
+        "path": ".agents/skills/ascend-profiling-analysis/scripts/ascend_profile/knowledge/known_counterexamples.md",
+        "why": "Sibling-owned skill-script knowledge file. It names a retired helper under scripts/; this package cannot edit .agents/skills/*/scripts/."
+      }
+    ],
+    "skip_paths_why": "A handful of tracked policy/fixture files must name departed or external paths as data. They are listed here with a why, not hidden in the fixture exemption."
+  },
+  "token_prefixes": [
+    ".agents/",
+    "\u002eremote-dev/",
+    ".claude/",
+    ".codex/",
+    ".cursor/",
+    ".grok/",
+    ".trae/",
+    ".github/",
+    "docs/",
+    "scripts/"
+  ],
+  "token_prefixes_why": "These are the in-repo roots an agent is told to open. A token must start with one of them and contain at least one slash, so a prose mention of `docs` or `scripts` is not a path.",
+  "allow_prefixes": [
+    {
+      "prefix": ".vaws-local/",
+      "why": "Untracked runtime state; legitimately absent from the tracked tree."
+    },
+    {
+      "prefix": ".vaws-runtime/",
+      "why": "Untracked runtime state; legitimately absent from the tracked tree."
+    },
+    {
+      "prefix": "<",
+      "why": "Placeholder tokens such as <session-id> or <vaws-top>/scripts/vaws-top.py are not real paths."
+    },
+    {
+      "prefix": ".agents/scripts/vaws_deps.py",
+      "why": "Sibling package lands the dependency-plane command; routing documents it before the script exists in this tree."
+    },
+    {
+      "prefix": ".agents/coordinator/",
+      "why": "Extracted to vaws-coordinator. Naming the departed root is not a claim the directory is still in this tree."
+    },
+    {
+      "prefix": ".agents/skills/vaws-top/",
+      "why": "Published path descriptor of the external vaws-top repository, not an in-tree skill."
+    }
+  ],
+  "allow_prefixes_why": "\u002eremote-dev/state/ is deliberately absent: that path is post-migration drift and must fail. Placeholders and untracked state roots are the only silent exceptions.",
+  "rules": [
+    {
+      "id": "missing-path",
+      "kind": "missing-in-tree-path",
+      "severity": "error",
+      "title": "Tracked docs must not name a missing in-tree path",
+      "why": "A reader who follows a `.agents/`, `docs/`, or `\u002eremote-dev/` path that is not in this tree is being routed at the pre-migration layout."
+    }
+  ]
+}

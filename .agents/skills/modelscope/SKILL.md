@@ -14,6 +14,8 @@ Use the bundled scripts from this skill directory. Prefer the compact manager fi
 
 Do not inline long `nohup`/`setsid` shell blocks. Do not read or tail large logs unless a task fails or the user asks.
 
+Edit only `.agents/skills/modelscope`. `python3 .agents/scripts/sync_claude_skills.py` regenerates `.trae/skills/modelscope` from this package.
+
 ## Model Mapping
 
 Represent every model as `MODEL_ID=LOCAL_DIR`.

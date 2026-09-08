@@ -7,7 +7,8 @@ description: Analyze Ascend NPU torch profiler output (kernel_details.csv / trac
 
 > Status: **experimental / beta**. 当前 PR 主要提供：远端 pipeline、evidence-chained report、HTML 三级聚焦视图、stage selector。Knowledge 已分层：kernel 分类规则（`kernel_signatures.yaml:match_rules`）、attention 家族判定（`attention_families.yaml:cheat_sheet.resolver`）、diagnosis 阈值与文案（`diagnosis_rules.yaml`）、segment 层锚点先验（`segmentation_rules.yaml`）均为运行时加载的 YAML；仍在 Python 内的是 `segment.py` 切分策略、`classify.py` block 拆分、以及 finding 的触发条件（见 [Knowledge map](#knowledge-map-for-agents)）。新模型 / 新算子族碰到问题时，优先改 knowledge YAML；改 Python 前请把 counterexample 落到 `knowledge/known_counterexamples.md`。
 
-Remote substrate rule: use `.remote-dev` remote tools for ad hoc remote
+Remote substrate rule: use remote-dev companion tools (`remote_*` MCP tools,
+launched via `python3 .agents/scripts/remote_dev.py`) for ad hoc remote
 read/edit/bash/search/patch work around profiling roots and generated reports.
 Use this skill for the domain analysis workflow and keep its scripts as the
 compatibility backend for managed VAWS sessions.
@@ -88,14 +89,16 @@ Flag notes:
 
 ### 分析共享存储上的归档 root
 
-collection skill 的 `--archive-dir` 会把每个 rank 的 `ASCEND_PROFILER_OUTPUT/` + profiler 元数据归档到 `<archive-dir>/<tag>_<ts>/<rank-dir-basename>/`，归档根本身就是合法的 profiling root。共享存储（如 `/mnt/weight/m00663269/profiling/`，366TB，挂在所有受管机器+容器）上的归档 root 可以在**任意**机器上分析，无需重新采集：
+collection skill 的 `--archive-dir` 会把每个 rank 的 `ASCEND_PROFILER_OUTPUT/` + profiler 元数据归档到 `<archive-dir>/<tag>_<ts>/<rank-dir-basename>/`，归档根本身就是合法的 profiling root。共享存储（如 `/mnt/weight/<user>/profiling/`，366TB，挂在所有受管机器+容器）上的归档 root 可以在**任意**机器上分析，无需重新采集：
 
 ```bash
 python3 .agents/skills/ascend-profiling-analysis/scripts/profile_analyze.py \
-  --remote-profile-root /mnt/weight/m00663269/profiling/archives/<tag>_<ts>/ \
-  --archive-output /mnt/weight/m00663269/profiling/analysis   # 产物也留共享存储
+  --remote-profile-root /mnt/weight/<user>/profiling/archives/<tag>_<ts>/ \
+  --archive-output /mnt/weight/<user>/profiling/analysis   # 产物也留共享存储
   # 或 --no-pull：产物留在远端 output dir，本地零拉回
 ```
+
+`<user>` 是共享挂载上归档目录的所有者账号，按目标机器上的实际目录替换；collection skill 的 `--archive-dir` 与 `profile_analyze.py --archive-output` 的帮助文本使用同一写法。
 
 `--remote-output-dir` 同样可以指到共享存储路径，让远端 analyze 的直接产物一开始就落在共享 FS 上。
 
@@ -170,7 +173,7 @@ python3 .agents/skills/ascend-profiling-analysis/scripts/profile_sweep.py \
   "machine": "173.131.1.2",
   "remote_profile_root": "/tmp/prof_35b_tp4/s1",
   "remote_output_dir": "/tmp/ascend_profile_framework/runs/20260507_xxx",
-  "archived_output_dir": "/mnt/weight/m00663269/profiling/analysis/20260507_xxx",
+  "archived_output_dir": "/mnt/weight/<user>/profiling/analysis/20260507_xxx",
   "local_output_dir": ".vaws-local/profiling-analysis/runs/20260507_xxx",
   "stage_timings": [{"stage": "normalize", "elapsed_s": 12.3}, ...],
   "mode": "fast",

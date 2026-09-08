@@ -2,9 +2,11 @@
 
 ## Relationship to remote-dev
 
-Use `.remote-dev` tools for ad hoc remote read/edit/bash/search/patch around
-benchmark setup and result inspection. This skill owns benchmark lifecycle and
-keeps the existing scripts as the managed VAWS compatibility backend.
+Use remote-dev companion tools (`remote_*` MCP tools, launched via
+`python3 .agents/scripts/remote_dev.py`) for ad hoc remote
+read/edit/bash/search/patch around benchmark setup and result inspection.
+This skill owns benchmark lifecycle and keeps the existing scripts as the
+managed VAWS compatibility backend.
 
 ## Lifecycle
 
@@ -73,9 +75,26 @@ runs) and comparing the returned JSON itself.
 
 For performance regression comparisons, all runs must use identical core benchmark parameters (`--serve-args`, `--bench-args`, `--extra-env`, `--tp`). Only the code state should change between runs. If any configuration parameter differs, the agent must explicitly record the difference in its output and treat the result as a **configuration comparison**, not a pure regression comparison.
 
-### Regression判定
+### Regression verdicts
 
-Given baseline throughput `T_b` and patched throughput `T_p`, compute the ratio `r = T_p / T_b`. If `r < 0.97`, the patched version is considered a throughput regression. The same threshold applies to `spec_decode_acceptance_rate` when speculative decoding is enabled. TTFT and TPOT regressions use inverted comparison (`r = T_b / T_p`) since lower is better for latency metrics.
+This skill measures and reports deltas. Formal `passed` / `failed` /
+`inconclusive` verdicts belong to `vllm-ascend-performance-regression`:
+predeclare per-metric `direction` (`higher` or `lower`) and
+`max_relative_regression`, then let `.agents/skills/vllm-ascend-performance-regression/scripts/performance_regression.py analyze`
+apply those criteria together with measurement-quality and comparability gates
+(`config_hash` identity, warmup exclusion, at least two decision values per
+state, `max_cv`, optional outlier policy). Scripts may apply declared criteria
+deterministically. Missing, noisy, or noncomparable measurements are
+`inconclusive`; they are not a pass, a fail, or an unstructured agent judgment.
+
+A 3% relative bound (`max_relative_regression: 0.03`) may appear in an
+experiment config as one chosen policy for a higher-is-better metric such as
+throughput. It is illustrative of a chosen policy, not a universal rule for
+throughput, latency, or speculative acceptance, and it does not override
+declared thresholds or quality gates.
+
+`bench_compare.py` reports per-state, per-case deltas. It does not itself apply
+a shared 3% verdict.
 
 ## Remote Execution
 

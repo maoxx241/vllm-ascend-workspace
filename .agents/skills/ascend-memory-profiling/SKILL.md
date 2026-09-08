@@ -7,7 +7,8 @@ description: Profile and attribute HBM memory usage on Ascend NPU for vLLM servi
 
 Collect and analyze HBM memory usage on Ascend NPU devices running vLLM serving workloads. Produces a structured breakdown of memory by component, with every value traceable to its data source.
 
-Remote substrate rule: use `.remote-dev` remote tools for ad hoc remote
+Remote substrate rule: use remote-dev companion tools (`remote_*` MCP tools,
+launched via `python3 .agents/scripts/remote_dev.py`) for ad hoc remote
 read/edit/bash/search/patch work around memory profiling setup and output
 inspection. Use this skill for the domain HBM workflow and keep its scripts as
 the compatibility backend for managed VAWS sessions.
@@ -279,7 +280,7 @@ If the safetensors-based analysis shows unexpected results, the agent should:
 ## Limitations
 
 - Activation measurement relies on npu-smi delta between idle and inference states. This captures peak but not fine-grained activation lifetime.
-- `torch_npu.profiler` via vLLM's `/start_profile`/`/stop_profile` endpoints currently does not produce device-side data (device_0/data is empty). Use msprof wrapping instead.
+- Endpoint-based `torch_npu.profiler` via vLLM `/start_profile`/`/stop_profile` has been observed with empty device-side data (`device_0/data`). That observation is not a universal capability prohibition, and this skill does not record a version, date, or topology for it. A 2xx response from those endpoints is control-plane evidence only; it is not device-data evidence. For torch-profiler captures, use [`ascend-profiling-collection`](../ascend-profiling-collection/SKILL.md), which verifies per-rank analyse outputs and expected rank count ([output checks](../ascend-profiling-collection/references/acceptance.md)). Missing or empty per-rank artifacts mean the capture is incomplete. This skill still uses msprof wrapping for HBM attribution; keep the msprof workflow and the limitations below.
 - msprof wrapping profiles the main process only. TP worker processes are separate -- each gets its own PROF directory with per-device data.
 - msprof export for 8-card runs may take several minutes. The timeout is set to 1800s.
 

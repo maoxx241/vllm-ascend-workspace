@@ -86,8 +86,16 @@ class RunManifestTests(unittest.TestCase):
 
 class KnowledgeValidationTests(unittest.TestCase):
     def test_repository_knowledge_files_are_valid(self) -> None:
-        files = validate_knowledge_dir(ROOT / ".agents" / "knowledge")
-        self.assertEqual(set(files), set(KNOWLEDGE_FILES))
+        files = set(validate_knowledge_dir(ROOT / ".agents" / "knowledge"))
+        # Every v1 family must validate; the directory additionally holds the
+        # migrated federated v2 documents, which the same call validates
+        # against the v2 contract.
+        self.assertLessEqual(set(KNOWLEDGE_FILES), files)
+        extra = files - set(KNOWLEDGE_FILES)
+        self.assertTrue(
+            all(name.endswith(".v2.yaml") for name in extra),
+            f"unexpected knowledge documents: {sorted(extra)}",
+        )
 
     def test_unknown_support_is_not_implicitly_valid(self) -> None:
         document = {

@@ -1,0 +1,18 @@
+Values that must never be reported, so a precision regression fails a test.
+loopback: 127.0.0.1 and ::1 and bind-all 0.0.0.0
+rfc 5737 documentation addresses: 192.0.2.10, 198.51.100.4, 203.0.113.9
+rfc 3849 documentation address: 2001:db8::1
+rfc 7042 documentation mac: 00:00:5e:00:53:2a
+shared container root: /vllm-workspace/.vaws-runtime/serving
+shared weight mount: /home/weights/Qwen3-32B
+container model directory: /root/Qwen3-32B
+container tool state: /root/.cache/huggingface and /root/.ssh/config
+reserved mailbox: service@example.invalid and test@example.com
+python attribute access, not a hostname: spec.local and args.local_path
+short git sha, not an identity token: c015161
+version string that looks like an address: 1.2.3.4.5
+env var name as a value: token_env = "VAWS_COORDINATOR_TOKEN"
+path as a value: token_file = "/private/path/to/token"
+cli mode as a value: bootstrap = "password-once"
+placeholder as a value: password = "<your-password>"
+python code, not a credential: token = invocation_id

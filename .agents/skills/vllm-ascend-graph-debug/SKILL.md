@@ -11,10 +11,10 @@ description: Diagnose vLLM Ascend cudagraph and ACL Graph compile, capture, repl
 
 从仓库根目录使用 `scripts/graph_debug_case.py`：
 
-1. `init` 创建 `.vaws-local/graph-debug/<case-id>/case.json` 和 Run Manifest v1。
+1. `init` 创建 `.vaws-local/graph-debug/<case-id>/case.json` 和 Run Manifest v1；作为 PR 证据时传 `--parent-run-id`。
 2. 每轮单变量实验后立即用 `record` 追加假设、预期、观测、结论和下一步。
-3. 需要中间状态对拍时，用 `compare` 对齐 eager/graph JSONL snapshot 并找到首个分叉。
-4. 修复后用 `finalize` 同时记录最小复现、原始复现和 instrumentation 清理状态。
+3. 需要中间状态对拍时，用 `compare` 对齐 eager/graph JSONL snapshot 并找到首个分叉。`compare` 会先消费一份观测式可比性凭证（`{stem}.identity.json`）；对不上的两次 snapshot 不会被当成一对。
+4. 修复后用 `finalize` 同时记录最小复现、原始复现和 instrumentation 清理状态；每个 `pass` 都必须附上对应的重跑输出（`--minimal-evidence` / `--original-evidence`），且至少有一条 `record`。没有证据的 `pass` 会被拒绝，manifest 不会进入 `passed`。
 
 按需读取：
 
@@ -158,7 +158,7 @@ export HCCL_DETERMINISTIC=true
 定位完成后：
 
 1. 删除或关闭 debug buffer、同步、落盘、确定性调试开关。
-2. 用最小复现验证修复。
-3. 用原始复现验证问题不再出现。
-4. 运行 `finalize`，写清根因、修复点、已验证场景和仍未覆盖的风险。
+2. 用最小复现验证修复，保留重跑输出。
+3. 用原始复现验证问题不再出现，保留重跑输出。
+4. 运行 `finalize`，写清根因、修复点、已验证场景和仍未覆盖的风险，并用 `--minimal-evidence` / `--original-evidence` 附上两份重跑输出。
 5. 对照 [Acceptance](references/acceptance.md) 验证 `case.json`、comparison artifacts 和 Run Manifest。

@@ -7,7 +7,8 @@ description: Collect one Ascend torch-profiler case end-to-end on a workspace-ma
 
 Collect one torch-profiler case on a workspace-managed remote Ascend NPU container.
 
-Remote substrate rule: use `.remote-dev` remote tools for ad hoc remote
+Remote substrate rule: use remote-dev companion tools (`remote_*` MCP tools,
+launched via `python3 .agents/scripts/remote_dev.py`) for ad hoc remote
 read/edit/bash/search/patch work around profile setup and output inspection.
 Use this skill for the domain collection workflow and keep its scripts as the
 compatibility backend for managed VAWS sessions.

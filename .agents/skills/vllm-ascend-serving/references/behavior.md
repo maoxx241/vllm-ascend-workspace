@@ -2,7 +2,7 @@
 
 ## Optional prepared-runtime path
 
-See [the shared coordinator](../../../coordinator/README.md) for pool bindings.
+See [the shared coordinator](../../../../docs/coordinator-consumption.md) for pool bindings.
 Legacy session wrappers remain separate. A pool launch uses an exact snapshot,
 the host coordinator's active fence and declared free TCP ports, then records
 the newly launched PID and heartbeats without waiting for model loading to
@@ -12,9 +12,11 @@ process to claim that new source has been tested.
 
 ## Relationship to remote-dev
 
-Use `.remote-dev` tools for ad hoc remote read/edit/bash/search/patch around a
-service. This skill owns service lifecycle semantics and keeps the existing
-scripts as the managed VAWS compatibility backend.
+Use remote-dev companion tools (`remote_*` MCP tools, launched via
+`python3 .agents/scripts/remote_dev.py`) for ad hoc remote
+read/edit/bash/search/patch around a service. This skill owns service
+lifecycle semantics and keeps the existing scripts as the managed VAWS
+compatibility backend.
 
 ## Escaping safety
 
@@ -94,13 +96,15 @@ The launch script sources `/etc/profile.d/vaws-ascend-env.sh` if it exists and p
 2. Searching `_cann_ops_custom/` for `*/bin/set_env.bash` (vendor name is not hardcoded)
 3. Sourcing the found script, which sets `ASCEND_CUSTOM_OPP_PATH` and adds `libcust_opapi.so` to `LD_LIBRARY_PATH`
 
-After `remote-code-parity` sync, these build artifacts may be missing because they are untracked. Rebuild with:
-
-```bash
-cd /vllm-workspace/vllm-ascend && bash csrc/build_aclnn.sh /vllm-workspace/vllm-ascend ascend910b
-```
-
-Installation note: parity installs with the HuaweiCloud pip index and handles `numpy<2.0.0` (CANN hard dependency) automatically. Do not skip it or manually override numpy to >=2.0.
+After `remote-code-parity` sync, those untracked build artifacts can be missing.
+Do not rebuild with a hardcoded `csrc/build_aclnn.sh … ascend910b` invocation or
+an in-container `pip install`. Recover with the session-aware
+`parity_sync.py --force-reinstall` command that `serve_start.py` already emits
+(`parity_sync.py` parser `--force-reinstall`). That existing path resolves the
+runtime/environment, reconciles declared dependencies, and performs the editable
+custom-op build. If parity cannot establish a compatible build, fail closed and
+inspect its captured logs. Do not bypass prior session/user authorization or
+invent a SoC or runtime path.
 
 ## Extra args escaping
 

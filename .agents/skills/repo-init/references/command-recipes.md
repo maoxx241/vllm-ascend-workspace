@@ -90,8 +90,24 @@ python3 .agents/skills/repo-init/scripts/resolve_vllm_ci_pin.py --vllm-ascend-di
 ```
 
 Then check out `vllm/` at the returned `vllm_ref`. The resolver prefers
-`.github/vllm-main-verified.commit`; older checkouts may fall back to a
+`vllm-ascend/.github/vllm-main-verified.commit`; older checkouts may fall back to a
 workflow `vllm_version` or docs `main_vllm_commit` value.
+
+## External dependency plane
+
+The four extracted repositories are not submodules. Inspect capability, then
+optionally install. Name capabilities from `doctor`; do not re-derive them.
+
+```bash
+python3 .agents/scripts/vaws_deps.py doctor
+python3 .agents/scripts/vaws_deps.py bootstrap all --dry-run
+python3 .agents/scripts/vaws_deps.py bootstrap all
+```
+
+`bootstrap all` continues past private `access-denied` and exits 0 when every
+public pin succeeded. `remote-dev` and `vaws-top` need organization access;
+`vaws-coordinator` and `vaws-knowledge` do not. See
+[docs/dependency-plane.md](../../../../docs/dependency-plane.md).
 
 ## Quiet main comparison
 
@@ -103,13 +119,15 @@ python3 .agents/skills/repo-init/scripts/repo_topology.py compare-main --repo vl
 
 ## Remote configuration
 
-Workspace example:
+Use `configure` only for **explicit fresh setup** after the user selected a topology. Do not use it to migrate established remotes: it unifies fetch and push URLs for the specified `origin` and `upstream`, flattening an explicit `pushurl` or protocol split. Other remotes such as `upstream2` are preserved. For an already-configured clone, choose keep-current and leave fetch/push/protocol/pushurl/extra remotes intact.
+
+Fresh workspace setup example:
 
 ```bash
-python3 .agents/skills/repo-init/scripts/repo_topology.py configure   --repo .   --origin-url git@github.com:USER/vllm-ascend-workspace.git   --upstream-url git@github.com:maoxx241/vllm-ascend-workspace.git
+python3 .agents/skills/repo-init/scripts/repo_topology.py configure   --repo .   --origin-url git@github.com:USER/vllm-ascend-workspace.git   --upstream-url git@github.com:vllm-ascend-workspace/vllm-ascend-workspace.git
 ```
 
-`vllm-ascend` example:
+Fresh `vllm-ascend` setup example (community upstream; personal fork is `origin` when the user selected one):
 
 ```bash
 python3 .agents/skills/repo-init/scripts/repo_topology.py configure   --repo vllm-ascend   --origin-url git@github.com:USER/vllm-ascend.git   --upstream-url git@github.com:vllm-project/vllm-ascend.git
