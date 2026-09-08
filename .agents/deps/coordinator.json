@@ -5,7 +5,7 @@
   "url": "https://github.com/vllm-ascend-workspace/vaws-coordinator.git",
   "visibility": "public",
   "ref": "main",
-  "commit": "d3c4e82a3c0e3f0be31727abf17b7863bcedba77",
+  "commit": "a7d5005a4df6ab8adf5b16a965127e81a30ee3fc",
   "root_env": "VAWS_COORDINATOR_ROOT",
   "default_checkout": "{shared_workspace_root}/.vaws-local/vaws-coordinator",
   "bootstrap": "python3 .agents/scripts/vaws.py bootstrap",
@@ -39,7 +39,7 @@
   },
   "note": "vaws-coordinator is consumed as an external checkout, not a submodule and not a vendored copy. Locate it through VAWS_COORDINATOR_ROOT or the default path above. Bump `commit` deliberately; `vaws.py status` reports drift. This pin is the independently accepted merged main. It does not change the remote-dev pin in remote-dev.json. identity.canonical_origin is true so a fork is reported as wrong_origin (usable, always warned). false would drop origin from identity and never emit wrong_origin.",
   "extensions": {
-    "tree": "d3f91bc6375a876fc01d46b1835feabd61db2729",
+    "tree": "2660b7fe09c660b8827444753a87ec3bf554d551",
     "pinned_mirrors": {
       "vaws_build_inputs": {
         "scaffold_path": ".agents/lib/vaws_build_inputs.py",
@@ -56,7 +56,7 @@
       "lib/vaws_runtime_profile.py": "14e0e0e9afd7171119f8f3d09472f69488235b51",
       "lib/vaws_ops.py": "ec175c382edfe0baf0806b0f3572f572c1d35ff6",
       "lib/vaws_build_inputs.py": "426c97a47de22d110b2e827257fc79eeba544d85",
-      "task_server.py": "f59a9a8cde60193b10d6ddda3ef4a43b5fe337fe",
+      "task_server.py": "1d77f7de536f01c0a158099d6f211a24b624432b",
       "scripts/vaws.py": "c712c200aeab867f217ea069f6a670a513dc108b",
       "hooks/vaws_session.py": "8e9b796b3dd98c65666bd465f748eb7cfcce6b58",
       "workers/managed_jobs.py": "ddb6811c4d28d5add31973e4bf8731909b0a9783",

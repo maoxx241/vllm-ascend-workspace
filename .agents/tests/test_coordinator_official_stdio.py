@@ -47,6 +47,15 @@ def have_sdk() -> bool:
 @unittest.skipUnless(CHECKOUT, "no vaws-coordinator checkout (set VAWS_COORDINATOR_ROOT)")
 @unittest.skipUnless(have_sdk(), "official MCP SDK 2.1.1 is not installed")
 class OfficialStdioTests(unittest.TestCase):
+    def setUp(self) -> None:
+        status = coordinator.checkout_status()
+        pin = coordinator.load_dependency()
+        if status["pin_matches"] is False:
+            message = f"checkout {status['commit']} is not the pinned {pin['commit']}"
+            if os.environ.get("CI"):
+                self.fail(message)
+            self.skipTest(message)
+
     def test_local_only_task_lifecycle(self) -> None:
         asyncio.run(self._run())
 
@@ -126,7 +135,8 @@ class OfficialStdioTests(unittest.TestCase):
                     async with ClientSession(read, write) as client:
                         initialized = (await client.initialize()).model_dump(by_alias=True)
                         capability = initialized["capabilities"]["experimental"]["vaws-coordinator-task"]
-                        self.assertEqual(capability["service_api_version"], "1")
+                        self.assertEqual(capability["service_api_version"], 1)
+                        self.assertIsInstance(capability["service_api_version"], int)
                         names = [tool.name for tool in (await client.list_tools()).tools]
                         self.assertEqual(set(names), {"vaws_session", "vaws_run", "vaws_execution", "vaws_finish"})
 

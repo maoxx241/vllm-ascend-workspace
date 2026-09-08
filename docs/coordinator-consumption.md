@@ -6,8 +6,8 @@ The shared runtime pool, local task registry and four `vaws_*` tools used to
 live in this repository under `.agents/coordinator/` and a handful of
 `.agents/lib` modules. They now live in
 [`vllm-ascend-workspace/vaws-coordinator`](https://github.com/vllm-ascend-workspace/vaws-coordinator)
-at accepted main `d3c4e82a3c0e3f0be31727abf17b7863bcedba77` (tree
-`d3f91bc6375a876fc01d46b1835feabd61db2729`). This scaffold consumes that
+at accepted main `a7d5005a4df6ab8adf5b16a965127e81a30ee3fc` (tree
+`2660b7fe09c660b8827444753a87ec3bf554d551`). This scaffold consumes that
 checkout as an **external checkout**, matching the remote-dev pin/install
 pattern from #90.
 
