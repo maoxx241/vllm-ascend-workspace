@@ -525,15 +525,78 @@ def _clone_gh(repository: str, dest: Path, ref: str) -> subprocess.CompletedProc
     )
 
 
+def bootstrap_plan(
+    name: str,
+    *,
+    dest: Path | None = None,
+    env: Mapping[str, str] | None = None,
+    repo_root: Path = ROOT,
+) -> dict[str, Any]:
+    """Resolve the planned checkout without touching the network."""
+    pin = load_pin(name)
+    mapping = _mapping(env)
+    if dest is None:
+        dest, source = checkout_path(name, mapping, repo_root=repo_root)
+    else:
+        dest = Path(dest).expanduser()
+        source = "dest"
+    dest = dest.expanduser()
+    return {
+        "name": name,
+        "dest": str(dest),
+        "url": str(pin["url"]),
+        "ref": str(pin["ref"]),
+        "pinned_commit": str(pin["commit"]),
+        "source": source,
+        "visibility": pin.get("visibility"),
+        "bootstrap": pin["bootstrap"],
+        "root_env": pin["root_env"],
+        "dry_run": True,
+        "state": "planned",
+    }
+
+
+def bootstrap_public_failed(payload: Mapping[str, Any], *, reset: bool = False) -> bool:
+    """True when a public pin did not reach a successful bootstrap outcome."""
+    state = payload.get("state")
+    if state == "ready":
+        return False
+    if state == "off_pin" and reset:
+        return False
+    if state == "planned":
+        return False
+    return True
+
+
+def bootstrap_all_exit_code(
+    results: Mapping[str, Mapping[str, Any]],
+    pins: Mapping[str, Mapping[str, Any]] | None = None,
+    *,
+    reset: bool = False,
+) -> int:
+    """Exit 1 only when a public dependency failed. Private denial is not a failure."""
+    known = pins if pins is not None else all_pins()
+    for name, payload in results.items():
+        pin = known.get(name) or {}
+        if pin.get("visibility") != "public":
+            continue
+        if bootstrap_public_failed(payload, reset=reset):
+            return 1
+    return 0
+
+
 def bootstrap(
     name: str,
     *,
     dest: Path | None = None,
     env: Mapping[str, str] | None = None,
     reset: bool = False,
+    dry_run: bool = False,
     repo_root: Path = ROOT,
 ) -> dict[str, Any]:
     """Clone ``url`` at ``commit``. Never resets an off_pin tree unless asked."""
+    if dry_run:
+        return bootstrap_plan(name, dest=dest, env=env, repo_root=repo_root)
     pin = load_pin(name)
     mapping = _mapping(env)
     if dest is None:
@@ -552,6 +615,7 @@ def bootstrap(
         "ref": ref,
         "pinned_commit": commit,
         "source": source,
+        "visibility": pin.get("visibility"),
         "bootstrap": pin["bootstrap"],
         "root_env": pin["root_env"],
     }
@@ -631,9 +695,10 @@ def bootstrap(
             if shutil.which("gh"):
                 cloned = _clone_gh(str(pin["repository"]), dest, ref)
             if cloned.returncode != 0:
+                error = (cloned.stderr or cloned.stdout).strip()[-2000:]
                 payload.update(
-                    state="failed",
-                    error=(cloned.stderr or cloned.stdout).strip()[-2000:],
+                    state="access-denied",
+                    error=error,
                     remedy="gh auth login",
                 )
                 return payload

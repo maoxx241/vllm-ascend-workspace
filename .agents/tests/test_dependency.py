@@ -303,6 +303,100 @@ class InspectResolveTests(unittest.TestCase):
             self.assertEqual(payload["state"], "wrong_origin")
 
 
+class BootstrapPlanAndAllTests(unittest.TestCase):
+    def test_dry_run_names_all_four_destinations_without_git(self) -> None:
+        env = {
+            "HOME": "/tmp/vaws-dry-run-home",
+            "VAWS_REMOTE_DEV_ROOT": "/tmp/vaws-dry-run/remote-dev",
+            "VAWS_COORDINATOR_ROOT": "/tmp/vaws-dry-run/vaws-coordinator",
+            "VAWS_TOP_ROOT": "/tmp/vaws-dry-run/" + deps.VAWS_TOP_NAME,
+            "VAWS_KNOWLEDGE_KIT_ROOT": "/tmp/vaws-dry-run/vaws-knowledge",
+        }
+        original_git = deps._git
+
+        def fail_git(*argv: str, **kwargs: object) -> object:
+            raise AssertionError(f"dry-run must not call git: {argv}")
+
+        deps._git = fail_git  # type: ignore[method-assign]
+        try:
+            plans = {name: deps.bootstrap(name, env=env, dry_run=True) for name in deps.all_pins()}
+        finally:
+            deps._git = original_git  # type: ignore[method-assign]
+        self.assertEqual(
+            set(plans),
+            {"remote-dev", "vaws-coordinator", deps.VAWS_TOP_NAME, "vaws-knowledge"},
+        )
+        for name, payload in plans.items():
+            self.assertEqual(payload["state"], "planned", name)
+            self.assertTrue(payload["dry_run"], name)
+            self.assertTrue(payload["dest"], name)
+            self.assertEqual(payload["name"], name)
+
+    def test_bootstrap_all_exit_ignores_private_access_denied(self) -> None:
+        pins = deps.all_pins()
+        results = {
+            "remote-dev": {"state": "access-denied", "remedy": "gh auth login"},
+            "vaws-coordinator": {"state": "ready"},
+            deps.VAWS_TOP_NAME: {"state": "access-denied", "remedy": "gh auth login"},
+            "vaws-knowledge": {"state": "ready"},
+        }
+        self.assertEqual(deps.bootstrap_all_exit_code(results, pins), 0)
+        results["vaws-knowledge"] = {"state": "failed"}
+        self.assertEqual(deps.bootstrap_all_exit_code(results, pins), 1)
+
+    def test_private_clone_failure_is_access_denied(self) -> None:
+        fail = subprocess.CompletedProcess(
+            args=["git", "clone"],
+            returncode=128,
+            stdout="",
+            stderr="ERROR: Repository not found.",
+        )
+        original_clone = deps._clone_url
+        original_gh = deps._clone_gh
+        deps._clone_url = lambda *a, **k: fail  # type: ignore[method-assign]
+        deps._clone_gh = lambda *a, **k: fail  # type: ignore[method-assign]
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                dest = Path(tmp) / "remote-dev"
+                payload = deps.bootstrap("remote-dev", dest=dest)
+                self.assertFalse(dest.exists())
+        finally:
+            deps._clone_url = original_clone  # type: ignore[method-assign]
+            deps._clone_gh = original_gh  # type: ignore[method-assign]
+        self.assertEqual(payload["state"], "access-denied")
+        self.assertEqual(payload["remedy"], "gh auth login")
+
+    def test_bootstrap_all_cli_dry_run_prints_one_payload(self) -> None:
+        env = {key: value for key, value in os.environ.items() if not key.startswith("VAWS_")}
+        env.update(
+            {
+                "HOME": tempfile.mkdtemp(),
+                "VAWS_REMOTE_DEV_ROOT": "/tmp/vaws-dry-run-cli/remote-dev",
+                "VAWS_COORDINATOR_ROOT": "/tmp/vaws-dry-run-cli/vaws-coordinator",
+                "VAWS_TOP_ROOT": "/tmp/vaws-dry-run-cli/" + deps.VAWS_TOP_NAME,
+                "VAWS_KNOWLEDGE_KIT_ROOT": "/tmp/vaws-dry-run-cli/vaws-knowledge",
+            }
+        )
+        proc = subprocess.run(
+            [sys.executable, str(SCRIPTS / "vaws_deps.py"), "bootstrap", "all", "--dry-run"],
+            capture_output=True,
+            text=True,
+            env=env,
+            check=False,
+            cwd=str(ROOT),
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        payload = json.loads(proc.stdout)
+        self.assertEqual(
+            set(payload),
+            {"remote-dev", "vaws-coordinator", deps.VAWS_TOP_NAME, "vaws-knowledge"},
+        )
+        for name, row in payload.items():
+            self.assertEqual(row["state"], "planned", name)
+            self.assertIn("dest", row)
+            self.assertTrue(row["dest"])
+
+
 class HookLedgerTests(unittest.TestCase):
     def test_ledger_is_bounded_and_readable(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
