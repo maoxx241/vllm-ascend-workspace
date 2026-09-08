@@ -58,3 +58,18 @@ def require_pinned_provider() -> Path:
     if dirty:
         raise AssertionError(f"remote-dev checkout {root} is not clean")
     return root
+
+
+def require_optional_provider() -> Path:
+    """Integration gate: skip when no checkout exists, fail if one is invalid.
+
+    A configured ``VAWS_REMOTE_DEV_ROOT`` that does not exist is treated as
+    absent (skip), so a hermetic suite can hide the shared ``.vaws-local``
+    default with ``/nonexistent`` without turning every joint test into a
+    failure. An existing path that is malformed, dirty, or off-pin still
+    fails; ``skipTest`` is not used to hide those assertion failures.
+    """
+    configured = os.environ.get(remote_dev.REMOTE_DEV_ROOT_ENV, "").strip()
+    if configured and not Path(configured).expanduser().exists():
+        raise unittest.SkipTest("no remote-dev checkout (set VAWS_REMOTE_DEV_ROOT)")
+    return require_pinned_provider()

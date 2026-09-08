@@ -41,7 +41,7 @@ from maturation.invoke import (  # noqa: E402
     launcher_argv,
     run_cli,
 )
-from maturation_provider import require_pinned_provider  # noqa: E402
+from maturation_provider import require_optional_provider  # noqa: E402
 
 MUX_VAR = "REMOTE_DEV_SSH_MUX"
 MUX_OFF = "0"
@@ -412,7 +412,7 @@ class ExternalRoutingTests(unittest.TestCase):
         self.assertEqual(proc.stdout.strip(), "ok")
 
     def test_incompatible_cached_mcp_fails_without_eviction(self) -> None:
-        provider = require_pinned_provider()
+        provider = require_optional_provider()
         code = (
             "import sys, types\n"
             f"sys.path.insert(0, {str(AGENTS)!r})\n"
@@ -437,7 +437,7 @@ class ExternalRoutingTests(unittest.TestCase):
         self.assertIn("mcp-file /tmp/other-mcp/__init__.py", proc.stdout)
 
     def test_configured_checkout_provenance_in_fresh_interpreter(self) -> None:
-        provider = require_pinned_provider()
+        provider = require_optional_provider()
         code = (
             "import os, sys\n"
             f"sys.path.insert(0, {str(AGENTS)!r})\n"
@@ -461,7 +461,7 @@ class ExternalRoutingTests(unittest.TestCase):
         self.assertTrue(core_file.startswith(pinned), core_file)
 
     def test_apply_keeps_caller_overrides_and_fills_state_runtime_resolver(self) -> None:
-        provider = require_pinned_provider()
+        provider = require_optional_provider()
         with tempfile.TemporaryDirectory() as tmp:
             state = str(Path(tmp) / "state")
             resolver = "/abs/plugin.py:setup"
@@ -483,7 +483,7 @@ class ExternalRoutingTests(unittest.TestCase):
                 self.assertEqual(os.environ.get(MUX_VAR), parent_before.get(MUX_VAR))
 
     def test_inprocess_dispatcher_uses_pinned_source_with_fake_transport(self) -> None:
-        provider = require_pinned_provider()
+        provider = require_optional_provider()
         code = (
             "import json, os, subprocess, sys\n"
             "from unittest import mock\n"

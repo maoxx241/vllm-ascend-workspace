@@ -31,6 +31,9 @@ import vaws_remote_dev_plugin as plugin  # noqa: E402
 import vaws_session_id  # noqa: E402
 from vaws_remote_toolbox import RemoteToolboxError  # noqa: E402
 
+# Integration marker: skip the real-substrate cases when no checkout exists
+# (including a hermetic VAWS_REMOTE_DEV_ROOT=/nonexistent hide). Must pass
+# when the shared .vaws-local checkout is present and usable.
 SUBSTRATE = remote_dev.remote_dev_root(required=False)
 requires_substrate = unittest.skipUnless(SUBSTRATE, "no remote-dev checkout (set VAWS_REMOTE_DEV_ROOT)")
 
@@ -595,8 +598,16 @@ class NoInTreeSubstrateTests(unittest.TestCase):
         self.assertEqual(self._actionable_python_strings(self.GUARD_RUNTIME_EXCLUSION_FILE, source), [])
 
     def test_vaws_cli_reports_moved_task_tools_without_traceback(self) -> None:
-        env = {key: value for key, value in os.environ.items() if key != "VAWS_COORDINATOR_ROOT"}
-        proc = subprocess.run([sys.executable, str(SCRIPTS / "vaws.py"), "session", "--json", "{}"], capture_output=True, text=True, env=env, check=False)
+        with tempfile.TemporaryDirectory() as tmp:
+            env = {key: value for key, value in os.environ.items()}
+            env["VAWS_COORDINATOR_ROOT"] = tmp
+            proc = subprocess.run(
+                [sys.executable, str(SCRIPTS / "vaws.py"), "session", "--json", "{}"],
+                capture_output=True,
+                text=True,
+                env=env,
+                check=False,
+            )
         self.assertEqual(proc.returncode, 1, proc.stderr)
         self.assertNotIn("Traceback", proc.stderr)
         payload = json.loads(proc.stdout)["result"]
