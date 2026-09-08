@@ -43,6 +43,13 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / ".agents" / "lib"))
+from vaws_dependency import (  # noqa: E402
+    USABLE_STATES,
+    hook_skip_message,
+    inspect,
+    record_hook_degradation,
+    status_exit_code,
+)
 from vaws_remote_dev import (  # noqa: E402
     REMOTE_DEV_ROOT_ENV,
     RemoteDevUnavailable,
@@ -106,7 +113,7 @@ def _exec(root: Path, relative: str, args: list[str]) -> int:
 def cmd_status(args: argparse.Namespace) -> int:
     payload = checkout_status()
     print(json.dumps(payload, ensure_ascii=False, indent=2))
-    return 0 if payload["state"] == "ready" else 1
+    return status_exit_code({"remote-dev": payload["state"]})
 
 
 def _git(*argv: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
@@ -172,15 +179,16 @@ def cmd_server(args: argparse.Namespace) -> int:
 
 
 def cmd_hook(args: argparse.Namespace) -> int:
-    root = remote_dev_root(required=False)
-    if root is None:
+    info = inspect("remote-dev")
+    if info["state"] not in USABLE_STATES:
         # Guards default to allow and only observe; a missing substrate must
         # not block the client's own tools. Consume stdin so the client does
         # not see a broken pipe, and return an allow decision (empty output).
         sys.stdin.read()
-        progress(f"remote-dev hook skipped: no checkout ({REMOTE_DEV_ROOT_ENV} unset and default missing)")
+        progress(hook_skip_message("remote-dev", info))
+        record_hook_degradation(hook="remote_dev", dep="remote-dev", state=info["state"])
         return 0
-    return _exec(root, HOOKS[args.client], [])
+    return _exec(Path(info["path"]), HOOKS[args.client], [])
 
 
 def cmd_tool(args: argparse.Namespace) -> int:

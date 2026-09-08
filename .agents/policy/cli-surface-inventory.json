@@ -310,6 +310,13 @@
       "note": "writes client MCP/hook config files; does not apply the coordinator JSON helper as a preserving migration",
       "proposed_target": "vaws workspace"
     },
+    ".agents/scripts/vaws_deps.py": {
+      "responsibility": "mechanics",
+      "support_role": "supported",
+      "target_kind": "self",
+      "note": "unified dependency plane: status/bootstrap/doctor; doctor emits Result Envelope v1 capability report",
+      "proposed_target": "vaws workspace"
+    },
     ".agents/scripts/workspace_identity.py": {
       "responsibility": "mechanics",
       "support_role": "supported",

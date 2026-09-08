@@ -18,7 +18,6 @@ Nothing here falls back to in-tree copies of the moved task-state writers.
 """
 from __future__ import annotations
 
-import json
 import os
 import subprocess
 import sys
@@ -30,6 +29,13 @@ LIB = ROOT / ".agents" / "lib"
 if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
+from vaws_dependency import (  # noqa: E402
+    USABLE_STATES,
+    checkout_path,
+    inspect,
+    load_pin,
+    load_pin_file,
+)
 from vaws_local_state import (  # noqa: E402
     agent_sessions_root,
     shared_inventory_path,
@@ -70,12 +76,19 @@ class CoordinatorUnavailable(RuntimeError):
     """No usable vaws-coordinator checkout is configured."""
 
 
+def _flatten_pin(pin: dict[str, Any]) -> dict[str, Any]:
+    """Expose coordinator extensions at the top level for existing callers."""
+    data = dict(pin)
+    for key, value in (pin.get("extensions") or {}).items():
+        data.setdefault(key, value)
+    return data
+
+
 def load_dependency(path: Path = DEPENDENCY_FILE) -> dict[str, Any]:
     """Return the tracked dependency pin (repository, ref, commit)."""
-    data = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(data, dict) or data.get("schema_version") != 1:
-        raise CoordinatorUnavailable(f"unsupported coordinator dependency file: {path}")
-    return data
+    if path == DEPENDENCY_FILE:
+        return _flatten_pin(load_pin("vaws-coordinator"))
+    return _flatten_pin(load_pin_file(path))
 
 
 def default_checkout_dir(repo_root: Path = ROOT) -> Path:
@@ -84,7 +97,8 @@ def default_checkout_dir(repo_root: Path = ROOT) -> Path:
     One checkout per shared workspace, next to the machine inventory, so every
     linked session worktree reaches the same revision.
     """
-    return shared_workspace_root(repo_root) / LOCAL_STATE_DIRNAME / CHECKOUT_DIRNAME
+    path, _source = checkout_path("vaws-coordinator", env={}, repo_root=repo_root)
+    return path
 
 
 def looks_like_checkout(path: Path) -> bool:
@@ -92,10 +106,8 @@ def looks_like_checkout(path: Path) -> bool:
 
 
 def _configured_root(env: Mapping[str, str]) -> tuple[Path | None, str]:
-    configured = env.get(COORDINATOR_ROOT_ENV, "").strip()
-    if configured:
-        return Path(configured).expanduser(), "env"
-    return default_checkout_dir(), "default"
+    path, source = checkout_path("vaws-coordinator", env=env)
+    return path, source
 
 
 def coordinator_root(*, required: bool = True, env: Mapping[str, str] | None = None) -> Path | None:
@@ -103,19 +115,22 @@ def coordinator_root(*, required: bool = True, env: Mapping[str, str] | None = N
 
     Order: ``VAWS_COORDINATOR_ROOT``, then the default checkout directory. A
     configured path that does not look like a checkout is an error either way;
-    a missing default is an error only when ``required``.
+    a missing default is an error only when ``required``. Identity drift
+    (``off_pin``, ``wrong_origin``) is not an execution gate.
     """
     env = os.environ if env is None else env
-    candidate, source = _configured_root(env)
-    if candidate is not None and looks_like_checkout(candidate):
-        return candidate.resolve()
+    info = inspect("vaws-coordinator", env)
+    if info["state"] in USABLE_STATES:
+        return Path(info["path"]).expanduser().resolve()
     if not required:
         return None
-    hint = f"clone it with `python3 .agents/scripts/vaws.py bootstrap` or set {COORDINATOR_ROOT_ENV}"
-    if source == "env":
+    pin = load_pin("vaws-coordinator")
+    hint = f"clone it with `{pin['bootstrap']}` or set {pin['root_env']}"
+    candidate = Path(info["path"])
+    if info["source"] == "env":
         raise CoordinatorUnavailable(
             f"{COORDINATOR_ROOT_ENV}={candidate} is not a vaws-coordinator checkout "
-            f"(expected {', '.join(REQUIRED_FILES)}); {hint}"
+            f"(state={info['state']}); {hint}"
         )
     raise CoordinatorUnavailable(f"vaws-coordinator checkout not found at {candidate}; {hint}")
 
@@ -215,16 +230,18 @@ def checkout_status(env: Mapping[str, str] | None = None, *, repo_root: Path = R
         "historical_manager_state_dir": str(historical_manager_state_dir(repo_root)),
         "manager_state_dir_default": None,
     }
-    if candidate is None or not candidate.exists():
-        payload.update(state="missing", commit=None, pin_matches=None)
-    elif not looks_like_checkout(candidate):
-        payload.update(
-            state="invalid",
-            commit=None,
-            pin_matches=None,
-            missing=[relative for relative in REQUIRED_FILES if not (candidate / relative).is_file()],
-        )
-    else:
-        commit = checkout_commit(candidate)
-        payload.update(state="ready", commit=commit, pin_matches=(commit == pin.get("commit")) if commit else None)
+    info = inspect("vaws-coordinator", env, repo_root=repo_root)
+    payload.update(
+        root=info["path"],
+        root_source=info["source"],
+        state=info["state"],
+        commit=info["commit"],
+        pin_matches=info["pin_matches"],
+        origin_matches=info["origin_matches"],
+        problems=info["problems"],
+    )
+    if info["state"] in {"not_git", "incomplete"}:
+        payload["missing"] = [
+            relative for relative in REQUIRED_FILES if not (Path(info["path"]) / relative).is_file()
+        ]
     return payload

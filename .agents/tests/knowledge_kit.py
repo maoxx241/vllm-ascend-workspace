@@ -13,6 +13,12 @@ from pathlib import Path
 from typing import Mapping
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+LIB = REPO_ROOT / ".agents" / "lib"
+if str(LIB) not in sys.path:
+    sys.path.insert(0, str(LIB))
+
+from vaws_dependency import load_pin_file  # noqa: E402
+
 DEPS_PATH = REPO_ROOT / ".agents" / "deps" / "vaws-knowledge.json"
 KIT_ROOT_ENV = "VAWS_KNOWLEDGE_KIT_ROOT"
 LOCAL_KIT_FILE = ".vaws-local/knowledge-kit-root"
@@ -28,8 +34,8 @@ class KitInvalid(Exception):
 
 
 def pinned_commit(repo_root: Path = REPO_ROOT) -> str:
-    payload = json.loads((repo_root / ".agents" / "deps" / "vaws-knowledge.json").read_text(encoding="utf-8"))
-    commit = payload.get("commit")
+    pin = load_pin_file(repo_root / ".agents" / "deps" / "vaws-knowledge.json")
+    commit = pin.get("commit")
     if not isinstance(commit, str) or len(commit) != 40:
         raise KitInvalid(f"{DEPS_PATH} does not declare a 40-character commit")
     return commit

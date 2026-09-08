@@ -31,11 +31,14 @@ LIB_DIR = REPO_ROOT / ".agents" / "lib"
 if str(LIB_DIR) not in sys.path:
     sys.path.insert(0, str(LIB_DIR))
 
+from vaws_dependency import checkout_path as dependency_checkout_path  # noqa: E402
+from vaws_dependency import load_pin as dependency_load_pin  # noqa: E402
 from vaws_local_state import shared_inventory_path, shared_workspace_root  # noqa: E402
 
 CANONICAL_HOST = "github.com"
 CANONICAL_REPO = "vllm-ascend-workspace/vaws-top"
 DEPENDENCY_FILE = REPO_ROOT / ".agents" / "deps" / (CANONICAL_REPO.rsplit("/", 1)[-1] + ".json")
+TRACKED_DEPENDENCY_FILE = REPO_ROOT / ".agents" / "deps" / (CANONICAL_REPO.rsplit("/", 1)[-1] + ".json")
 DEFAULT_URL = "http://127.0.0.1:8789/api/health"
 DASHBOARD_URL = "http://127.0.0.1:8788"
 CLONE_ROOT_ENV = "VAWS_TOP_ROOT"
@@ -110,7 +113,8 @@ def _subprocess_run(command: list[str], *, cwd: Path | None = None) -> subproces
 
 
 def default_clone_dir() -> Path:
-    return Path.home() / "vaws-worktrees" / REPO_ROOT.name / "npu-fleet-monitor"
+    path, _source = dependency_checkout_path(CANONICAL_REPO.rsplit("/", 1)[-1], env={})
+    return path
 
 
 def resolve_clone_dir(requested: Path | None, env: Mapping[str, str] | None = None) -> tuple[Path, str]:
@@ -123,17 +127,8 @@ def resolve_clone_dir(requested: Path | None, env: Mapping[str, str] | None = No
     return default_clone_dir().expanduser().resolve(), "default"
 
 
-def load_pin(path: Path | None = None) -> dict[str, Any]:
-    pin_path = path or DEPENDENCY_FILE
-    if not pin_path.is_file():
-        raise MonitorError(
-            f"dependency pin is missing at {pin_path}; refusing to run an unpinned checkout"
-        )
-    try:
-        data = json.loads(pin_path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise MonitorError(f"dependency pin is not valid JSON: {pin_path}") from exc
-    if not isinstance(data, dict) or data.get("schema_version") != 1:
+def _validate_monitor_pin(data: dict[str, Any], pin_path: Path) -> dict[str, Any]:
+    if data.get("schema_version") != 1:
         raise MonitorError(f"unsupported dependency pin: {pin_path}")
     commit = str(data.get("commit") or "").strip()
     if not _looks_like_commit(commit):
@@ -148,6 +143,23 @@ def load_pin(path: Path | None = None) -> dict[str, Any]:
         )
     require_canonical_url(str(data.get("url") or "").strip(), what="dependency pin url")
     return data
+
+
+def load_pin(path: Path | None = None) -> dict[str, Any]:
+    pin_path = path or DEPENDENCY_FILE
+    if pin_path.resolve() == TRACKED_DEPENDENCY_FILE.resolve() and pin_path.is_file():
+        return _validate_monitor_pin(dependency_load_pin(CANONICAL_REPO.rsplit("/", 1)[-1]), pin_path)
+    if not pin_path.is_file():
+        raise MonitorError(
+            f"dependency pin is missing at {pin_path}; refusing to run an unpinned checkout"
+        )
+    try:
+        data = json.loads(pin_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise MonitorError(f"dependency pin is not valid JSON: {pin_path}") from exc
+    if not isinstance(data, dict):
+        raise MonitorError(f"unsupported dependency pin: {pin_path}")
+    return _validate_monitor_pin(data, pin_path)
 
 
 def _looks_like_commit(value: str) -> bool:
@@ -822,6 +834,13 @@ def payload_for(
         "commit": commit,
         "pinned_commit": None if pin is None else pin.get("commit"),
         "pin_matches": None if pin is None or commit is None else commit == pin.get("commit"),
+        "state": (
+            "ready"
+            if pin is not None and commit is not None and commit == pin.get("commit")
+            else "off_pin"
+            if commit
+            else "missing"
+        ),
         "root_source": root_source,
         "agent_skill": str(clone / AGENT_SKILL) if clone else None,
         "cli": str(clone / CLI_ENTRY) if clone else None,
