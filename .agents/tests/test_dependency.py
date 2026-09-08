@@ -483,6 +483,61 @@ class BootstrapPlanAndAllTests(unittest.TestCase):
         self.assertEqual(payload["state"], "access-denied")
         self.assertEqual(payload["remedy"], "gh auth login")
 
+    def test_bootstrap_incomplete_reports_reset_remedy_and_reset_lands_ready(self) -> None:
+        pin = deps.load_pin("vaws-coordinator")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "coord"
+            root.mkdir()
+            _synthetic_off_pin(root, pin)
+            complete = subprocess.run(
+                ["git", "rev-list", "--max-parents=0", "HEAD"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            missing = "service-api.json"
+            (root / missing).unlink()
+            _git(root, "add", "-A")
+            _git(root, "commit", "-m", "drop required file")
+            env = {"VAWS_COORDINATOR_ROOT": str(root)}
+            original_load = deps.load_pin
+
+            def load_with_local_pin(name: str, *args: object, **kwargs: object) -> dict:
+                loaded = original_load(name, *args, **kwargs)
+                if name == "vaws-coordinator":
+                    loaded = dict(loaded)
+                    loaded["commit"] = complete
+                return loaded
+
+            deps.load_pin = load_with_local_pin  # type: ignore[method-assign]
+            try:
+                payload = deps.bootstrap("vaws-coordinator", env=env, reset=False)
+                self.assertEqual(payload["state"], "incomplete")
+                self.assertFalse(payload["pin_matches"])
+                self.assertIn("--reset", payload["remedy"])
+                self.assertTrue(payload.get("problems"))
+                self.assertIn(missing, payload["remedy"])
+                self.assertTrue(deps.bootstrap_public_failed(payload))
+
+                original_git = deps._git
+
+                def git_skip_network_fetch(*argv: str, **kwargs: object) -> subprocess.CompletedProcess[str]:
+                    if argv and argv[0] == "fetch":
+                        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+                    return original_git(*argv, **kwargs)
+
+                deps._git = git_skip_network_fetch  # type: ignore[method-assign]
+                try:
+                    reset_payload = deps.bootstrap("vaws-coordinator", env=env, reset=True)
+                finally:
+                    deps._git = original_git  # type: ignore[method-assign]
+                self.assertEqual(reset_payload["state"], "ready")
+                self.assertTrue(reset_payload["pin_matches"])
+                self.assertTrue((root / missing).is_file())
+            finally:
+                deps.load_pin = original_load  # type: ignore[method-assign]
+
     def test_bootstrap_all_cli_dry_run_prints_one_payload(self) -> None:
         env = {key: value for key, value in os.environ.items() if not key.startswith("VAWS_")}
         env.update(

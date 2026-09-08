@@ -661,7 +661,7 @@ def bootstrap(
     dry_run: bool = False,
     repo_root: Path = ROOT,
 ) -> dict[str, Any]:
-    """Clone ``url`` at ``commit``. Never resets an off_pin tree unless asked."""
+    """Clone ``url`` at ``commit``. Never resets an off_pin or incomplete tree unless asked."""
     if dry_run:
         return bootstrap_plan(name, dest=dest, env=env, repo_root=repo_root)
     pin = load_pin(name)
@@ -697,6 +697,24 @@ def bootstrap(
                 pin_matches=False,
                 remedy=(
                     f"checkout is at {info['commit']}, pin is {commit}; "
+                    "pass --reset to fetch and checkout the pin when the working tree is clean"
+                ),
+            )
+            return payload
+        if info["state"] == "incomplete" and not reset:
+            missing = [
+                rel
+                for rel in (pin.get("identity") or {}).get("required_files") or []
+                if not (dest / rel).is_file()
+            ]
+            payload.update(
+                state="incomplete",
+                commit=info["commit"],
+                pin_matches=False,
+                problems=info["problems"],
+                remedy=(
+                    f"checkout is at {info['commit']} and is missing {', '.join(missing)}; "
+                    f"pin is {commit}; "
                     "pass --reset to fetch and checkout the pin when the working tree is clean"
                 ),
             )

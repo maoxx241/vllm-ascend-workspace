@@ -159,7 +159,8 @@ python3 .agents/scripts/vaws_deps.py doctor
 ```
 
 `--reset` fetches and checks out the pin only when the working tree is clean.
-An `off_pin` dest is never reset without that flag. A `wrong_origin` dest is
+An `off_pin` dest is never reset without that flag. An `incomplete` checkout,
+like `off_pin`, is never rewritten without `--reset`. A `wrong_origin` dest is
 never overwritten by bootstrap; choose a different dest.
 
 `--dry-run` prints one JSON object of planned destinations and does not
