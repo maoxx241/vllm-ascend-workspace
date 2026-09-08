@@ -232,8 +232,8 @@
     {
       "id": "aclgraph-replay-skips-in-forward-python-dump-calls",
       "status": "active",
-      "source": "measured on 192.168.13.155 single-card Qwen3-0.6B while validating ascend-tensor-dump (2026-09-07)",
-      "applicable_versions": "Measured 2026-09-07 on vllm-ascend 0.19.1rc2.dev1835+gf69831343 with torch 2.10.0 / torch_npu 2.10.0.post4.dev20260715, A3, aclgraph default mode. Applies to any capture point inside a graph-captured region.",
+      "source": "measured on a single-card Qwen3-0.6B service on the target host while validating ascend-tensor-dump (2026-09-07)",
+      "applicable_versions": "Measured 2026-09-07 on a vllm-ascend 0.19.1rc2 development build with torch 2.10.0 / torch_npu 2.10.0.post4 nightly, A3, aclgraph default mode. Applies to any capture point inside a graph-captured region.",
       "updated_at": "2026-09-07",
       "first_seen": "2026-09-07",
       "scope": {
@@ -253,15 +253,15 @@
           "per-layer dump stages missing only in graph mode"
         ],
         "verification": [
-          "Identical instrumentation on Qwen3-0.6B produced 114 records in eager mode and 2 records under aclgraph for the same decode step, while all 28 graph_slot buffers came back populated; the 2 survivors were the model-runner capture points outside the graph (192.168.13.155, 2026-09-07)."
+          "Identical instrumentation on Qwen3-0.6B produced 114 records in eager mode and 2 records under aclgraph for the same decode step, while all 28 graph_slot buffers came back populated; the 2 survivors were the model-runner capture points outside the graph (target host, 2026-09-07)."
         ]
       }
     },
     {
       "id": "dump-row-limit-corrupts-one-dimensional-weights",
       "status": "active",
-      "source": "measured on 192.168.13.155 single-card Qwen3-0.6B while validating ascend-tensor-dump operator replay (2026-09-07)",
-      "applicable_versions": "Measured 2026-09-07 on vllm-ascend 0.19.1rc2.dev1835+gf69831343, torch_npu 2.10.0.post4.dev20260715, A3. Applies to any dump tooling that row-limits captured tensors uniformly.",
+      "source": "measured on a single-card Qwen3-0.6B service on the target host while validating ascend-tensor-dump operator replay (2026-09-07)",
+      "applicable_versions": "Measured 2026-09-07 on a vllm-ascend 0.19.1rc2 development build with torch_npu 2.10.0.post4 nightly, A3. Applies to any dump tooling that row-limits captured tensors uniformly.",
       "updated_at": "2026-09-07",
       "first_seen": "2026-09-07",
       "scope": {
@@ -281,14 +281,14 @@
           "captured weight shape equals dump row limit"
         ],
         "verification": [
-          "With DUMP_PROBE_ROWS=8, gamma was captured as [8] and replay of torch_npu.npu_add_rms_norm failed with aclnnAddRmsNorm 561103; exempting 1-D tensors restored gamma to [1024] and the replay matched a float32 reference within bf16 tolerance on all three outputs (192.168.13.155, 2026-09-07)."
+          "With DUMP_PROBE_ROWS=8, gamma was captured as [8] and replay of torch_npu.npu_add_rms_norm failed with aclnnAddRmsNorm 561103; exempting 1-D tensors restored gamma to [1024] and the replay matched a float32 reference within bf16 tolerance on all three outputs (target host, 2026-09-07)."
         ]
       }
     },
     {
       "id": "dump-comparison-reports-aligned-despite-one-sided-coverage",
       "status": "active",
-      "source": "measured on 192.168.13.155 while validating ascend-tensor-dump eager-vs-graph comparison (2026-09-07)",
+      "source": "measured on the target host while validating ascend-tensor-dump eager-vs-graph comparison (2026-09-07)",
       "applicable_versions": "Measured 2026-09-07 while comparing eager and aclgraph dumps of Qwen3-0.6B on A3. The reasoning error applies to any stage-keyed dump comparison.",
       "updated_at": "2026-09-07",
       "first_seen": "2026-09-07",
@@ -309,15 +309,15 @@
           "eager versus graph dump verdict aligned"
         ],
         "verification": [
-          "An eager-vs-graph diff with 2 comparable stages and 112 left-only stages reported ALIGNED with exit 0; after ranking coverage asymmetry it reports COVERAGE_MISMATCH with exit 1, while a dump compared against itself still reports ALIGNED over all 114 stages (192.168.13.155, 2026-09-07)."
+          "An eager-vs-graph diff with 2 comparable stages and 112 left-only stages reported ALIGNED with exit 0; after ranking coverage asymmetry it reports COVERAGE_MISMATCH with exit 1, while a dump compared against itself still reports ALIGNED over all 114 stages (target host, 2026-09-07)."
         ]
       }
     },
     {
       "id": "capture-point-added-to-a-branch-the-build-does-not-take",
       "status": "active",
-      "source": "measured on 192.168.13.155 while instrumenting vllm_ascend RMSNorm for ascend-tensor-dump operator replay (2026-09-07)",
-      "applicable_versions": "Measured 2026-09-07 on vllm-ascend 0.19.1rc2.dev1835+gf69831343 where enable_custom_op() is true. Applies to any operator wrapper with a custom-op fallback pair.",
+      "source": "measured on the target host while instrumenting vllm_ascend RMSNorm for ascend-tensor-dump operator replay (2026-09-07)",
+      "applicable_versions": "Measured 2026-09-07 on a vllm-ascend 0.19.1rc2 development build where enable_custom_op() is true. Applies to any operator wrapper with a custom-op fallback pair.",
       "updated_at": "2026-09-07",
       "first_seen": "2026-09-07",
       "scope": {
@@ -337,7 +337,7 @@
           "no tensor file written despite capture_inputs call"
         ],
         "verification": [
-          "capture_inputs placed in the torch_npu.npu_add_rms_norm fallback arm recorded nothing because enable_custom_op() was true; moving it above the branch captured all 56 calls of the armed forward (192.168.13.155, 2026-09-07)."
+          "capture_inputs placed in the torch_npu.npu_add_rms_norm fallback arm recorded nothing because enable_custom_op() was true; moving it above the branch captured all 56 calls of the armed forward (target host, 2026-09-07)."
         ]
       }
     }
