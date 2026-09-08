@@ -36,7 +36,7 @@ The Agent will detect your environment, install required tools, and configure Gi
 
 ## Local NPU fleet monitoring
 
-The `npu-fleet-monitor` Skill deploys a persistent NPU fleet monitoring service. The application is maintained in the standalone `vllm-ascend-workspace/vaws-top` repository; the deployment entrypoint clones or locates that pin, builds the frontend, and installs and enables a systemd user service:
+The `npu-fleet-monitor` Skill deploys a persistent NPU fleet monitoring service. The application is maintained in the standalone `vllm-ascend-workspace/vaws-top` repository and runs as `uvx vaws-top`:
 
 ```bash
 python3 .agents/skills/npu-fleet-monitor/scripts/manage_monitor.py ensure

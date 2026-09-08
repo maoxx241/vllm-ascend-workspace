@@ -7,9 +7,9 @@ description: Review, deduplicate, promote, merge, reject, or deprecate verified 
 
 Keep `.agents/knowledge/` as the project layer: the only formal, tracked
 knowledge this repo owns. Treat `.vaws-local/knowledge/candidates/` as an
-untracked review queue, never as a second authoritative store, and
-`.vaws-local/knowledge/shared/` as a read-only cache of the federated commons
-(`vllm-ascend-workspace/vaws-knowledge`) that is never edited here.
+untracked review queue, never as a second authoritative store. The
+`shared` layer is the corpus inside the installed `vaws-knowledge` package
+and is never edited here.
 
 New promotions write the federated **v2** contract to
 `.agents/knowledge/<kind>.v2.yaml`. The v1 `<kind>.yaml` documents stay in
@@ -59,8 +59,6 @@ Related shared scripts, outside this Skill:
 
 - `.agents/scripts/knowledge_migrate_v2.py`: convert v1 documents to v2;
 - `.agents/scripts/knowledge_export.py`: the source-side export gate;
-- `.agents/scripts/knowledge_shared_cache.py`: manage the read-only shared
-  cache;
 - `.agents/scripts/knowledge_validate.py`: validate both generations and
   report redaction posture.
 
@@ -86,8 +84,8 @@ Read only the reference needed for the active operation:
   `.agents/scripts/knowledge_export.py`, which strips internal addresses,
   user paths, hostnames, container names and mounts, and refuses unresolved
   coordinates.
-- Never write into `.vaws-local/knowledge/shared/`; the shared layer flows one
-  way, downward.
+- Never write a local copy of the shared corpus; the shared layer is the
+  installed `vaws-knowledge` package and flows one way, downward.
 - Prefer `merge` over a new entry when cause and applicability match.
 - Use `--force-new` only after reviewing an identical fingerprint with a
   different confirmed cause.

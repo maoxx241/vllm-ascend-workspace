@@ -4,15 +4,15 @@
 One query surface, three layers with different trust (see the federated
 commons README):
 
-| layer       | source                                    | trust |
-|-------------|-------------------------------------------|-------|
-| `shared`    | read-only cache pulled from `vaws-knowledge` | evidence + non-submitter confirmation |
-| `project`   | `.agents/knowledge/` in this repo          | tied to this checkout, may be non-public |
-| `candidate` | `.vaws-local/knowledge/candidates/`        | unreviewed single observation |
+| layer       | source                                              | trust |
+|-------------|-----------------------------------------------------|-------|
+| `shared`    | corpus shipped in the installed ``vaws-knowledge``  | commons review; each entry carries its own status |
+| `project`   | `.agents/knowledge/` in this repo                   | tied to this checkout, may be non-public |
+| `candidate` | `.vaws-local/knowledge/candidates/`                 | unreviewed single observation |
 
 Two rules drive the whole module:
 
-- **Never fail hard.** A missing cache, a malformed document or an absent
+- **Never fail hard.** A missing package, a malformed document or an absent
   knowledge service degrades the answer; it never becomes the reason a
   diagnosis stops.
 - **A missing fact is never "supported".** Every payload states which layers
@@ -20,10 +20,10 @@ Two rules drive the whole module:
   That inversion — reading absence as approval — is an explicit repo-wide rule
   in `AGENTS.md`.
 
-The shared layer is served from a local read-only cache. Calling into the
-upstream knowledge MCP service is deliberately *not* implemented here: the
-service is not published yet, so the probe reports it as absent rather than
-pretending to consult it.
+The shared layer is the corpus inside the installed ``vaws-knowledge``
+package. Calling into the upstream knowledge MCP service is deliberately
+*not* implemented here: the service is not published yet, so the probe
+reports it as absent rather than pretending to consult it.
 """
 
 from __future__ import annotations
@@ -34,13 +34,15 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 import vaws_knowledge_v1 as v1
-import vaws_knowledge_shared as shared
 import vaws_knowledge_v2 as v2
 
 LAYERS: tuple[str, ...] = ("shared", "project", "candidate")
 DEFAULT_LAYERS: tuple[str, ...] = ("shared", "project")
 
-SHARED_CACHE_METADATA = shared.SHARED_CACHE_METADATA
+SHARED_SOURCE_REPO = "vllm-ascend-workspace/vaws-knowledge"
+SHARED_REMEDY = "uv sync"
+ABSENT = "absent"
+AVAILABLE = "available"
 MCP_ENDPOINT_FILE = "mcp-endpoint.json"
 MCP_ENDPOINT_ENV = "VAWS_KNOWLEDGE_MCP_ENDPOINT"
 
@@ -53,7 +55,6 @@ UNKNOWN_SEMANTICS = (
 def default_paths(repo_root: Path) -> dict[str, Path]:
     return {
         "knowledge_dir": repo_root / ".agents" / "knowledge",
-        "shared_dir": repo_root / ".vaws-local" / "knowledge" / "shared",
         "candidate_dir": repo_root / ".vaws-local" / "knowledge" / "candidates",
     }
 
@@ -84,23 +85,77 @@ def _probe_project(knowledge_dir: Path) -> dict[str, Any]:
     }
 
 
-def _probe_shared(shared_dir: Path) -> dict[str, Any]:
-    inspection = shared.inspect_shared_cache(shared_dir)
-    payload = {
-        "status": inspection["status"],
-        "path": inspection["path"],
-        "detail": inspection.get("detail"),
-        "problems": inspection.get("problems") or [],
-        "documents": inspection.get("documents") or [],
-        "source_repo": inspection.get("source_repo"),
-        "source_ref": inspection.get("source_ref"),
-        "expected_source_repo": inspection.get("expected_source_repo"),
-        "expected_source_ref": inspection.get("expected_source_ref"),
-        "pulled_at": inspection.get("pulled_at"),
+def _probe_shared() -> dict[str, Any]:
+    try:
+        from vaws_knowledge import corpus as packaged
+    except ImportError:
+        return {
+            "status": ABSENT,
+            "path": None,
+            "detail": "vaws-knowledge is not installed",
+            "remedy": SHARED_REMEDY,
+            "problems": [],
+            "documents": [],
+            "source_repo": SHARED_SOURCE_REPO,
+            "source_ref": None,
+        }
+    root = packaged.corpus_root()
+    source_ref = packaged.installed_commit()
+    if not root.is_dir():
+        return {
+            "status": ABSENT,
+            "path": str(root),
+            "detail": "installed vaws-knowledge has no corpus",
+            "remedy": SHARED_REMEDY,
+            "problems": [],
+            "documents": [],
+            "source_repo": SHARED_SOURCE_REPO,
+            "source_ref": source_ref,
+        }
+    files = list(packaged.iter_entry_files())
+    return {
+        "status": AVAILABLE,
+        "path": str(root),
+        "detail": "shared layer is the installed vaws-knowledge corpus",
+        "problems": [],
+        "documents": [path.name for path in files],
+        "source_repo": SHARED_SOURCE_REPO,
+        "source_ref": source_ref,
     }
-    if inspection["status"] == shared.ABSENT:
-        payload["remedy"] = inspection.get("remedy")
-    return payload
+
+
+def load_shared_entries() -> tuple[list[dict[str, Any]], list[str], dict[str, Any]]:
+    """Load every packaged corpus entry. No extra status filter here."""
+
+    inspection = _probe_shared()
+    if inspection["status"] != AVAILABLE:
+        return [], list(inspection.get("problems") or []), inspection
+    from vaws_knowledge import corpus as packaged
+
+    source_ref = packaged.installed_commit()
+    entries: list[dict[str, Any]] = []
+    problems: list[str] = []
+    for path in packaged.iter_entry_files():
+        try:
+            document = v2.load_document(path)
+        except v2.KnowledgeV2Error as exc:
+            problems.append(str(exc))
+            continue
+        kind = document.get("kind")
+        raw_entries = document.get("entries", [])
+        if not isinstance(raw_entries, list):
+            problems.append(f"{path}: entries must be an array")
+            continue
+        for entry in raw_entries:
+            if not isinstance(entry, Mapping):
+                continue
+            record = deepcopy(dict(entry))
+            record["_kind"] = kind
+            record["_source_file"] = path.name
+            record["_source_repo"] = SHARED_SOURCE_REPO
+            record["_source_ref"] = source_ref
+            entries.append(record)
+    return entries, problems, inspection
 
 
 def _probe_candidates(candidate_dir: Path) -> dict[str, Any]:
@@ -125,7 +180,7 @@ def _probe_mcp(repo_root: Path) -> dict[str, Any]:
             "status": "absent",
             "detail": (
                 "knowledge MCP service not configured; shared results come from the "
-                "local read-only cache only"
+                "installed vaws-knowledge corpus"
             ),
         }
     return {
@@ -133,7 +188,7 @@ def _probe_mcp(repo_root: Path) -> dict[str, Any]:
         "detail": (
             "an endpoint is configured but this client does not call it yet; the "
             "upstream server package is unpublished, so shared results still come "
-            "from the local cache"
+            "from the installed vaws-knowledge corpus"
         ),
         "source": MCP_ENDPOINT_ENV if endpoint else str(descriptor),
     }
@@ -143,13 +198,12 @@ def probe_capabilities(
     *,
     repo_root: Path,
     knowledge_dir: Path | None = None,
-    shared_dir: Path | None = None,
     candidate_dir: Path | None = None,
 ) -> dict[str, Any]:
     paths = default_paths(repo_root)
     return {
         "project": _probe_project(knowledge_dir or paths["knowledge_dir"]),
-        "shared": _probe_shared(shared_dir or paths["shared_dir"]),
+        "shared": _probe_shared(),
         "candidate": _probe_candidates(candidate_dir or paths["candidate_dir"]),
         "knowledge_mcp": _probe_mcp(repo_root),
         "validator": {
@@ -303,7 +357,6 @@ def query(
     include_deprecated: bool = False,
     min_score: int = 0,
     knowledge_dir: Path | None = None,
-    shared_dir: Path | None = None,
     candidate_dir: Path | None = None,
 ) -> dict[str, Any]:
     """Query the configured layers and describe exactly what answered."""
@@ -316,13 +369,11 @@ def query(
 
     paths = default_paths(repo_root)
     knowledge_dir = knowledge_dir or paths["knowledge_dir"]
-    shared_dir = shared_dir or paths["shared_dir"]
     candidate_dir = candidate_dir or paths["candidate_dir"]
 
     capabilities = probe_capabilities(
         repo_root=repo_root,
         knowledge_dir=knowledge_dir,
-        shared_dir=shared_dir,
         candidate_dir=candidate_dir,
     )
 
@@ -384,7 +435,7 @@ def query(
 
     if "shared" in layers:
         capability = capabilities["shared"]
-        if capability["status"] != shared.AVAILABLE:
+        if capability["status"] != AVAILABLE:
             missing.append(
                 {
                     "layer": "shared",
@@ -404,9 +455,7 @@ def query(
                 problems.append(detail)
         else:
             answered.append("shared")
-            shared_entries, shared_problems, _inspection = shared.load_shared_entries(
-                shared_dir
-            )
+            shared_entries, shared_problems, _inspection = load_shared_entries()
             problems.extend(shared_problems)
             matches.extend(
                 _v2_matches(
@@ -453,7 +502,7 @@ def query(
                 "layer": "knowledge_mcp",
                 "status": capabilities["knowledge_mcp"]["status"],
                 "detail": capabilities["knowledge_mcp"]["detail"],
-                "effect": "shared results come from the local read-only cache",
+                "effect": "shared results come from the installed vaws-knowledge corpus",
             }
         )
 
@@ -491,14 +540,12 @@ def get_entry(
     entry_id: str,
     layers: Sequence[str] = LAYERS,
     knowledge_dir: Path | None = None,
-    shared_dir: Path | None = None,
     candidate_dir: Path | None = None,
 ) -> dict[str, Any] | None:
     """Fetch one full entry by v1 id, v2 slug, v2 uuid, or candidate id."""
 
     paths = default_paths(repo_root)
     knowledge_dir = knowledge_dir or paths["knowledge_dir"]
-    shared_dir = shared_dir or paths["shared_dir"]
     candidate_dir = candidate_dir or paths["candidate_dir"]
 
     if "project" in layers and knowledge_dir.is_dir():
@@ -510,8 +557,8 @@ def get_entry(
             found.setdefault("layer", "project")
             return found
     if "shared" in layers:
-        entries, _problems, inspection = shared.load_shared_entries(shared_dir)
-        if inspection.get("status") == shared.AVAILABLE:
+        entries, _problems, inspection = load_shared_entries()
+        if inspection.get("status") == AVAILABLE:
             for entry in entries:
                 if entry_id in {entry.get("slug"), entry.get("uuid")}:
                     record = deepcopy(entry)

@@ -17,7 +17,7 @@ must name git+https tag sources because `vaws-coordinator` depends on
 |---|---|---|---|
 | `vaws-remote-dev` | `remote_dev` | `v0.1.0` | process-in import + MCP server |
 | `vaws-coordinator` | `vaws_coordinator` | `v0.1.0` | process-in import + stdio MCP |
-| `vaws-knowledge` | `vaws_knowledge` | `v0.1.1` | process-in import + MCP |
+| `vaws-knowledge` | `vaws_knowledge` | `v0.1.2` | process-in import + MCP |
 | `vaws-top` | — | uvx only | fleet dashboard; not imported |
 
 `uv sync` writes `.venv` and records the resolved git commits in `uv.lock`.
@@ -91,23 +91,15 @@ release wheel.
 | `task_pool` | `vaws-coordinator` |
 | `host_npu_authority` | `vaws-coordinator` |
 | `fleet_observation` | `uvx`, `vaws-top` |
-| `shared_knowledge` | local `.vaws-local/knowledge/shared/` cache |
+| `shared_knowledge` | `vaws-knowledge` (importable, with packaged corpus) |
 | `conformance_kit` | `vaws-knowledge` |
 
 ## Shared knowledge corpus
 
-The knowledge **engine** is the package. The verified **corpus** is data and
-is not SHA-locked. Import it explicitly:
-
-```bash
-python3 .agents/scripts/knowledge_shared_cache.py import \
-  --from <clone>/corpus/verified \
-  --source-repo vllm-ascend-workspace/vaws-knowledge \
-  --source-ref <commit-sha>
-```
-
-A shallow clone of latest verified is enough. Do not treat the corpus
-checkout as a pin.
+The knowledge **engine** and its **corpus** both ship in the installed
+`vaws-knowledge` package. After `uv sync`, `shared_knowledge` is available
+and query reads `vaws_knowledge.corpus`. The remedy for a missing corpus is
+`uv sync`. Do not clone the commons or import YAML by hand.
 
 ## What was removed
 

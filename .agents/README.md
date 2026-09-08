@@ -60,7 +60,6 @@ compatibility backend for managed sessions, sync, service adapters, and cleanup.
 - `.agents/scripts/knowledge_capture.py` records or merges one verified, redacted candidate without loading a Skill, reading the environment coordinate from a Run Manifest, `--env` pairs, or the candidate scope.
 - `.agents/scripts/knowledge_migrate_v2.py` converts v1 documents to `<kind>.v2.yaml` and reports, per entry, which coordinate dimensions still need a human.
 - `.agents/scripts/knowledge_export.py` is the source-side export gate for proposing project knowledge to `vllm-ascend-workspace/vaws-knowledge`.
-- `.agents/scripts/knowledge_shared_cache.py` manages the read-only local cache of the shared layer.
 - `.agents/hooks/knowledge_session_end.py` flushes only candidates explicitly deferred for the ending Codex session; it never reads the transcript.
 - `.agents/knowledge/` is the project layer: v1 `<kind>.yaml` documents, federated v2 `<kind>.v2.yaml` documents, and the `MIGRATION-v2.md` report.
 - `.agents/schemas/` stores the machine-readable Run Manifest and knowledge contracts, including the project-layer v2 and candidate v2 schemas.
@@ -68,8 +67,7 @@ compatibility backend for managed sessions, sync, service adapters, and cleanup.
 - `.agents/lib/vaws_run_manifest.py` is the shared Run Manifest v1 library for workflow correlation and artifact links.
 - `.agents/lib/vaws_knowledge_v1.py` is the shared v1 knowledge validation, capture, and query library, and the dual-read entry point for v2 documents.
 - `.agents/lib/vaws_knowledge_v2.py` is the federated v2 contract library: validation, canonicalization, content hashing, coordinates, and the export shape.
-- `.agents/lib/vaws_knowledge_client.py` is the three-layer query client with capability probing and graceful degradation.
-- `.agents/lib/vaws_knowledge_shared.py` is the shared-cache trust boundary: only declared verified-zone corpus may be mounted as `shared`, and query/get apply the importer-owned source policy.
+- `.agents/lib/vaws_knowledge_client.py` is the three-layer query client with capability probing and graceful degradation. The `shared` layer is the corpus inside the installed `vaws-knowledge` package.
 - `.agents/tests/knowledge_client_adapter.py` is the tracked protocol adapter for the vaws-knowledge conformance kit shipped with the package.
 - `.agents/lib/vaws_knowledge_migrate.py` is the mechanical v1 -> v2 conversion library.
 - `.agents/lib/vaws_redaction.py` is the scaffold redaction policy (BLOCK/EXPORT and recursive scan) over `vaws_knowledge.redact`. Detection rules and the live profile are declared by that package.
@@ -164,7 +162,6 @@ Current primary helpers:
 - `scripts/knowledge_capture.py`
 - `scripts/knowledge_migrate_v2.py`
 - `scripts/knowledge_export.py`
-- `scripts/knowledge_shared_cache.py`
 - `scripts/workspace_profile.py`
 - `.agents/tests/test_vaws_scaffold_safety.py`
 
@@ -199,7 +196,6 @@ Untracked workspace-local state lives under `.vaws-local/`:
 - `.vaws-local/knowledge/pending/<session-key>/`
 - `.vaws-local/knowledge/session-end/`
 - `.vaws-local/knowledge/reviewed/`
-- `.vaws-local/knowledge/shared/` (read-only cache of the federated commons)
 - `.vaws-local/knowledge/export/` (upstream proposal bundles and export ledger)
 
 Parallel remote work should use `session-management` first. A session owns a local worktree, a dedicated remote container, session-scoped serving/benchmark/profiling state, and resource leases. Existing `--machine` commands remain legacy-compatible for single-tenant workflows.

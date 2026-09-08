@@ -96,7 +96,7 @@ PROJECT_LAYER = "project"
 VERIFIED_LAYER = "verified"
 VERIFIED_CONTEXT = "verified"
 # Reviewed lifecycle states that may exist in corpus/verified/. Unverified
-# observations are the review-zone, not the shared cache.
+# observations are the review-zone, not a separate trust layer.
 SHARED_ENTRY_STATUSES = frozenset({"verified", "stale", "deprecated", "resolved"})
 
 # The two entry body variants. An entry has exactly one; content_hash is
@@ -1065,8 +1065,8 @@ def validate_entry(
 
     ``context='project'`` allows unresolved coordinate markers.
     ``context='export'`` refuses them, which is the whole point of the marker.
-    ``context='verified'`` is the shared-cache boundary: unresolved markers
-    and unverified entries are refused.
+    ``context='verified'`` is the commons verified-zone boundary: unresolved
+    markers and unverified entries are refused.
     """
 
     allow_unresolved = context == PROJECT_LAYER

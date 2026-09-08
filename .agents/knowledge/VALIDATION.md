@@ -69,8 +69,8 @@ same public command-line surfaces, in a temporary simulated repository:
 4. resolve each remaining dimension (bounded values and a stated `any` basis);
 5. verify with a followable reference and a non-submitter confirmation;
 6. export a proposal bundle, then re-export and observe the reported no-op;
-7. query across `shared` / `project` / `candidate` with the shared cache both
-   absent (degraded, reported) and present;
+7. query across `shared` / `project` / `candidate` with the installed
+   `vaws-knowledge` corpus both absent (degraded, reported) and present;
 8. validate both generations.
 
 `.agents/tests/test_knowledge_migration_v2.py` covers the v1 -> v2 conversion
@@ -117,5 +117,5 @@ Result: **154 tests passed** across the shared suite and the
 under test is contract logic.
 
 Not validated: no upstream PR was opened against `vaws-knowledge` (its
-`tools/` and `server/` packages are unpublished), and the shared cache was
-only populated from a locally produced bundle, never from a network pull.
+`tools/` and `server/` packages are unpublished), and the shared layer was
+only exercised from a local package install, never from a network pull.

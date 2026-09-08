@@ -18,8 +18,8 @@ from vaws_dependency import (
     inspect,
     require_package,
 )
-from vaws_knowledge_client import _probe_shared, default_paths
-from vaws_knowledge_shared import AVAILABLE as SHARED_AVAILABLE
+from vaws_knowledge_client import AVAILABLE as SHARED_AVAILABLE
+from vaws_knowledge_client import _probe_shared
 from vaws_result_envelope import (
     dumps,
     make_attempt,
@@ -53,7 +53,7 @@ CAPABILITY_DEPS = {
     "task_pool": ("vaws-coordinator",),
     "host_npu_authority": ("vaws-coordinator",),
     "fleet_observation": ("uvx", "vaws-top"),
-    "shared_knowledge": (),
+    "shared_knowledge": ("vaws-knowledge",),
     "conformance_kit": ("vaws-knowledge",),
 }
 FLEET_REMEDY = (
@@ -107,22 +107,17 @@ def _dep_degradation(
 
 def _shared_degradation(repo_root: Path) -> dict[str, Any] | None:
     """Reuse the knowledge client's shared-layer degradation entry verbatim."""
-    capability = _probe_shared(default_paths(repo_root)["shared_dir"])
+    del repo_root
+    capability = _probe_shared()
     if capability["status"] == SHARED_AVAILABLE:
         return None
     return {
         "layer": "shared",
         "status": capability.get("status", "absent"),
         "detail": capability.get("detail", ""),
-        "remedy": capability.get("remedy") or (
-            "python3 .agents/scripts/knowledge_shared_cache.py import "
-            "--from <clone>/corpus/verified "
-            "--source-repo vllm-ascend-workspace/vaws-knowledge --source-ref <commit-sha>"
-        ),
+        "remedy": capability.get("remedy") or REMEDY,
         "source_repo": capability.get("source_repo"),
         "source_ref": capability.get("source_ref"),
-        "expected_source_repo": capability.get("expected_source_repo"),
-        "expected_source_ref": capability.get("expected_source_ref"),
         "effect": "degraded to project+candidate; shared facts were not consulted",
     }
 
@@ -478,7 +473,7 @@ def build_doctor_envelope(
             reason_code="path_missing",
             message=summary,
             attribution_basis=[
-                "vaws_deps doctor inspected installed packages, uv.lock, and the local knowledge cache",
+                "vaws_deps doctor inspected installed packages, uv.lock, and the installed vaws-knowledge corpus",
                 f"{len(report['degradation'])} degradation entries were recorded",
             ],
             confidence="high",

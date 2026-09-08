@@ -120,6 +120,7 @@ class ResolverDegradationTests(unittest.TestCase):
     def test_capability_deps_use_distribution_names(self) -> None:
         self.assertEqual(CAPABILITY_DEPS["remote_endpoints"], ("vaws-remote-dev",))
         self.assertEqual(CAPABILITY_DEPS["task_pool"], ("vaws-coordinator",))
+        self.assertEqual(CAPABILITY_DEPS["shared_knowledge"], ("vaws-knowledge",))
         self.assertEqual(CAPABILITY_DEPS["conformance_kit"], ("vaws-knowledge",))
         self.assertEqual(CAPABILITY_DEPS["fleet_observation"], ("uvx", "vaws-top"))
 
