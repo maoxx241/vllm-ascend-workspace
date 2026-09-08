@@ -54,7 +54,7 @@ def synthetic_candidate() -> dict:
     return {
         "kind": "known-failure-signatures",
         "summary": "Zqxjk flovmar blorpt requires acknowledgements",
-        "owner_skill": "remote-code-parity",
+        "owner_skill": "code-parity",
         "scope": {"component": ["synthetic-transport"]},
         "fingerprints": [FINGERPRINT],
         "symptom": "The zqxjk flovmar stalls after its first blorpt.",

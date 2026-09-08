@@ -99,7 +99,7 @@ OK
 $ python3 .agents/scripts/knowledge_validate.py
 status: passed
 v1_documents: 6, v2_documents: 1, v2_entries: 2
-redaction: profile r1, problems [], export_blockers []
+redaction: profile follows vaws_knowledge.redact, problems [], export_blockers []
 entries_awaiting_human_coordinate:
   gloo-init-container-hostname-missing-from-etc-hosts: cann, driver,
     python_abi, torch, torch_npu, vllm, vllm_ascend, model, execution_mode

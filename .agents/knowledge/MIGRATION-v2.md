@@ -10,7 +10,7 @@ identity coordinate: `derived_uuid(origin_repo, kind, slug)` in
 it would mint a new identity for the same claim. The historical origin is
 therefore preserved on those rows; new captures should use the organization
 repository.
-- redaction profile: `r1`
+- redaction profile: declared by `vaws_knowledge.redact`
 - migrated entries: 2
 - blocked entries: 9
 

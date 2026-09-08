@@ -72,7 +72,7 @@ compatibility backend for managed sessions, sync, service adapters, and cleanup.
 - `.agents/lib/vaws_knowledge_shared.py` is the shared-cache trust boundary: only declared verified-zone corpus may be mounted as `shared`, and query/get apply the importer-owned source policy.
 - `.agents/tests/knowledge_client_adapter.py` is the tracked protocol adapter for the vaws-knowledge conformance kit shipped with the package.
 - `.agents/lib/vaws_knowledge_migrate.py` is the mechanical v1 -> v2 conversion library.
-- `.agents/lib/vaws_redaction.py` is the versioned source-side redaction ruleset shared by every knowledge write and export.
+- `.agents/lib/vaws_redaction.py` is the scaffold redaction policy (BLOCK/EXPORT and recursive scan) over `vaws_knowledge.redact`. Detection rules and the live profile are declared by that package.
 - `.agents/lib/vaws_session_id.py` and `.agents/lib/vaws_session_state.py` are the shared libraries for session identity, state, locks, and leases.
 - `.agents/lib/vaws_remote_toolbox.py` is the shared library for remote target resolution, SSH execution, job observation, artifact streaming, sync adapters, service adapters, and cleanup.
 - `.agents/lib/vaws_validate.py` is the shared validation library for agent-facing ids, environment names, path boundaries, and NPU device lists.

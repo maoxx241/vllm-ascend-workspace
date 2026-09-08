@@ -37,6 +37,8 @@ jobs:
         run: uv sync --locked --group dev
       - name: Lockfile matches pyproject
         run: uv lock --check
+      - name: Run the full .agents/tests suite
+        run: uv run python -B -m pytest .agents/tests -q
       - name: Validate catalog
         run: uv run python -B .agents/scripts/skill_catalog.py
       - name: Validate shared knowledge
@@ -94,8 +96,6 @@ jobs:
           uv run python -B -m unittest discover -s .agents/skills/machine-management/tests
 
       - name: Run npu-fleet-monitor consumer tests
-        # Parallel package still imports the old locator. Expected red
-        # until that skill lands on the package plane.
         run: uv run python -B -m unittest discover -s .agents/skills/npu-fleet-monitor/tests
 
       - name: Validate parameterized Ray helpers
