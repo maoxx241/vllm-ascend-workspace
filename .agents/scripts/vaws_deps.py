@@ -4,7 +4,7 @@
 Subcommands:
 
     status [name...]    JSON inspect payload; exit 1 on identity drift unless allowed
-    bootstrap <name|all> [--dest] [--reset]
+    bootstrap <name|all> [--dest] [--reset] [--dry-run]
     doctor              Result Envelope v1 capability report
 
 Progress goes to stderr. Each command prints one JSON object on stdout.
@@ -26,6 +26,7 @@ from vaws_dependency import (  # noqa: E402
     DependencyPinError,
     all_pins,
     bootstrap,
+    bootstrap_all_exit_code,
     inspect,
     load_pin,
     status_exit_code,
@@ -84,17 +85,24 @@ def cmd_bootstrap(args: argparse.Namespace) -> int:
         _print({"error": "--dest cannot be combined with bootstrap all"})
         return 2
     results: dict[str, object] = {}
-    exit_code = 0
     for name in names:
-        progress(f"bootstrapping {name}")
-        payload = bootstrap(name, dest=dest, reset=args.reset)
+        if args.dry_run:
+            progress(f"planning {name}")
+        else:
+            progress(f"bootstrapping {name}")
+        payload = bootstrap(name, dest=dest, reset=args.reset, dry_run=args.dry_run)
         results[name] = payload
-        if payload.get("state") not in {"ready", "off_pin"}:
-            exit_code = 1
-        elif payload.get("state") == "off_pin" and not args.reset:
-            exit_code = 1
     _print(results if args.name == "all" else results[names[0]])
-    return exit_code
+    if args.dry_run:
+        return 0
+    if args.name == "all":
+        return bootstrap_all_exit_code(results, reset=args.reset)
+    payload = results[names[0]]
+    if payload.get("state") not in {"ready", "off_pin"}:
+        return 1
+    if payload.get("state") == "off_pin" and not args.reset:
+        return 1
+    return 0
 
 
 def cmd_doctor(args: argparse.Namespace) -> int:
@@ -126,6 +134,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--reset",
         action="store_true",
         help="fetch and checkout the pin when the working tree is clean",
+    )
+    boot.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="print planned destinations without cloning or touching the network",
     )
     boot.set_defaults(func=cmd_bootstrap)
 
