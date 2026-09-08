@@ -1,6 +1,6 @@
 ---
 name: repo-init
-description: Initialize this workspace after clone. Use for requests like “初始化仓库”, “配置 gh / GitHub 登录”, “初始化子模块”, or “把 vllm / vllm-ascend remotes 改成我的 fork”. Do not use for ordinary coding, serving, benchmarking, or unrelated Git tasks.
+description: Initialize this workspace after clone. Use for requests like “初始化仓库”, “配置 gh / GitHub 登录”, “初始化子模块”, “bootstrap 外部依赖”, or “把 vllm / vllm-ascend remotes 改成我的 fork”. Do not use for ordinary coding, serving, benchmarking, or unrelated Git tasks.
 ---
 
 # Repo Init
@@ -15,6 +15,7 @@ This skill is optional. Do not treat it as a prerequisite for unrelated work.
 - the user asks to install or configure `gh`
 - the user asks to sign into GitHub
 - the user asks to initialize recursive submodules
+- the user asks to bootstrap the four external dependency checkouts (`remote-dev`, `vaws-coordinator`, `vaws-top`, `vaws-knowledge`)
 - the user asks to configure forks or remotes for the workspace, `vllm`, or `vllm-ascend`
 - the user asks for a broad workspace init and the local machine profile is missing
 
@@ -80,6 +81,12 @@ CI-pinned vLLM resolver:
 
 - `python3 .agents/skills/repo-init/scripts/resolve_vllm_ci_pin.py --vllm-ascend-dir vllm-ascend`
 
+Optional external-dependency plane (do not re-derive capabilities; use `doctor`'s report):
+
+- `python3 .agents/scripts/vaws_deps.py doctor`
+- `python3 .agents/scripts/vaws_deps.py bootstrap all`
+- `python3 .agents/scripts/vaws_deps.py bootstrap all --dry-run`
+
 Reference files:
 
 - `.agents/skills/repo-init/references/behavior.md`
@@ -109,12 +116,13 @@ That checkpoint must cover:
    - recommended fork mode
    - community-only mode
 4. whether to initialize submodules now
-5. vllm submodule version alignment — **always include this question in the grouped checkpoint when the probe shows submodules are not yet initialized**. Since all questions are asked in a single batch, you cannot wait for the answer to question 4 before deciding whether to include question 5. If the user later chooses not to initialize submodules, simply ignore their version-alignment answer. Options:
+5. whether to bootstrap the four external dependency checkouts now — **optional and explicitly skippable**. The four are separate repositories, not submodules. Two (`remote-dev`, `vaws-top`) are private and need organization access. A user with no organization access must still complete `repo-init` successfully; private clone denial is documented and non-fatal.
+6. vllm submodule version alignment — **always include this question in the grouped checkpoint when the probe shows submodules are not yet initialized**. Since all questions are asked in a single batch, you cannot wait for the answer to question 4 before deciding whether to include question 6. If the user later chooses not to initialize submodules, simply ignore their version-alignment answer. Options:
    - **CI-pinned** (default): check out `vllm/` at the commit CI actually tests against — resolve it with `resolve_vllm_ci_pin.py`, which prefers `vllm-ascend/.github/vllm-main-verified.commit` and falls back to older workflow/docs sources
    - **upstream main**: both submodules track their respective upstream `main` HEAD
    - **keep current**: leave `vllm/` at whatever commit it is already on
 
-Skip question 4 only when the probe shows submodules are already initialized (nothing to align).
+Skip question 4 (and question 6) only when the probe shows submodules are already initialized (nothing to init or align). Question 5 stays in the grouped checkpoint for broad init even when submodules are already present.
 
 If the user only asked for a narrow GitHub auth / `gh` task, skip the machine-profile and version-alignment questions.
 
@@ -188,6 +196,17 @@ Execute categories in the order listed below. **Submodule init must complete bef
 7. remote rewiring for `vllm` and `vllm-ascend` submodule repos (only after step 4)
 8. branch tracking updates
 9. optional fork sync
+10. optional external-dependency bootstrap (`python3 .agents/scripts/vaws_deps.py bootstrap all`) when the user approved it. Continue if a private pin is `access-denied`. Skip this step entirely when the user declined or deferred it.
+
+### 4b. Report workspace capabilities from `doctor`
+
+After the approved mutations — and even when the user skipped bootstrap — run:
+
+```
+python3 .agents/scripts/vaws_deps.py doctor
+```
+
+Read `extensions.capability_report.capabilities`. Name exactly which capabilities are available and which are not, using that report. Do not re-derive capability logic. A user without organization access is a successful `repo-init` with private-dependent capabilities degraded.
 
 ### 5. Finish compactly
 
@@ -197,4 +216,6 @@ Report:
 - `gh` / auth result
 - submodule result
 - remote topology result for each repo
+- dependency bootstrap result when it ran (per-dep outcome from `bootstrap all`)
+- capabilities the user does and does not have, copied from `doctor`
 - any remaining choice the user deferred

@@ -12,7 +12,7 @@ contract. `Status: dated` is evidence and is never a direction.
 - [cli-surface.md](cli-surface.md) — current CLI inventory and the unimplemented historical thirteen-command proposal.
 - [comparability-certificate.md](comparability-certificate.md) — observational comparability certificate for paired measurements.
 - [coordinator-consumption.md](coordinator-consumption.md) — how this scaffold consumes the external vaws-coordinator checkout.
-- [dependency-plane.md](dependency-plane.md) — one pin schema, one locator, one bootstrap for the four external repositories; `vaws_deps.py status|bootstrap|doctor`.
+- [dependency-plane.md](dependency-plane.md) — one pin schema, one locator, one bootstrap for the four external repositories; `vaws_deps.py status|bootstrap|doctor`. Covers the optional `bootstrap all` path and what works without organization access to the two private repos.
 - [npu-fleet-monitor.md](npu-fleet-monitor.md) — local deploy and lifecycle of the standalone vaws-top fleet monitor.
 - [property-testing.md](property-testing.md) — property-based tests for the deterministic cores.
 - [remote-dev-consumption.md](remote-dev-consumption.md) — how this scaffold consumes the external remote-dev checkout.

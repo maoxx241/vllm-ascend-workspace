@@ -437,10 +437,10 @@ option.
 | `.agents/scripts/split_reconcile.py` | argparse | - | 5 | docs:1, other:1, policy:2, test:1 | mechanics | supported | .agents/scripts/split_reconcile.py | vaws lint |
 | `.agents/scripts/sync_claude_skills.py` | argparse | - | 1 | docs:3, mirror:2, other:3, policy:2, routing:1, skill-doc:1, test:2 | mechanics | supported | .agents/scripts/sync_claude_skills.py | vaws lint |
 | `.agents/scripts/tracked_leak_scan.py` | argparse | - | 10 | docs:1, hook:1, other:1, policy:1, test:3 | mechanics | supported | .agents/scripts/tracked_leak_scan.py | vaws lint |
-| `.agents/scripts/tracked_path_check.py` | argparse | - | 6 | docs:1, other:1, policy:1, test:1 | mechanics | supported | .agents/scripts/tracked_path_check.py | vaws lint |
+| `.agents/scripts/tracked_path_check.py` | argparse | - | 6 | docs:1, other:1, policy:1, test:2 | mechanics | supported | .agents/scripts/tracked_path_check.py | vaws lint |
 | `.agents/scripts/vaws.py` | argparse | status, bootstrap, env, hook, task-server | 6 | client-config:2, docs:5, other:4, policy:2, script:2, skill-doc:1, source-map:1, test:4 | mechanics | supported | .agents/scripts/vaws.py | vaws task |
 | `.agents/scripts/vaws_client_setup.py` | argparse | - | 5 | docs:3, other:2, policy:2, skill-doc:2, test:2 | mechanics | supported | .agents/scripts/vaws_client_setup.py | vaws workspace |
-| `.agents/scripts/vaws_deps.py` | argparse | status, bootstrap, doctor | 2 | docs:2, policy:1, routing:1, script:1, source-map:1, test:2 | mechanics | supported | .agents/scripts/vaws_deps.py | vaws workspace |
+| `.agents/scripts/vaws_deps.py` | argparse | status, bootstrap, doctor | 3 | docs:2, policy:1, routing:3, script:1, skill-doc:4, source-map:1, test:2 | mechanics | supported | .agents/scripts/vaws_deps.py | vaws workspace |
 | `.agents/scripts/workspace_identity.py` | argparse | summary, ensure, validate-alias, set-alias, decline-alias | 1 | docs:1, routing:1, skill-doc:5 | mechanics | supported | .agents/scripts/workspace_identity.py | vaws workspace |
 | `.agents/scripts/workspace_profile.py` | argparse | summary, validate, ensure | 4 | docs:1, routing:2, script:1, skill-doc:8 | mechanics | supported | .agents/scripts/workspace_profile.py | vaws workspace |
 | `.agents/skills/ascend-memory-profiling/scripts/mem_analyze.py` | argparse | - | 1 | docs:1, policy:1, routing:1, skill-doc:1 | mixed | supported | .agents/skills/ascend-memory-profiling/scripts/mem_analyze.py | vaws profile |

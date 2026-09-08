@@ -38,7 +38,7 @@ Rules:
 
 ### Stage 0: applicability
 
-Use `repo-init` only for workspace setup, GitHub auth / CLI setup, recursive submodules, fork / remote topology, and the local machine profile during broad init.
+Use `repo-init` only for workspace setup, GitHub auth / CLI setup, recursive submodules, the optional external-dependency bootstrap, fork / remote topology, and the local machine profile during broad init.
 
 ### Stage 1: probe plus identity bootstrap
 
@@ -65,6 +65,7 @@ That question must cover:
 - machine username choice when the profile is missing
 - repo topology mode: keep current, recommended fork mode, or community-only
 - whether to initialize submodules now
+- whether to bootstrap the four external dependency checkouts now (optional, skippable; private clone denial is non-fatal)
 - vllm submodule version alignment (CI-pinned / upstream main / keep current) — always include this when the probe shows submodules are uninitialized, because all questions are asked in one batch and you cannot wait for the submodule-init answer first; ignore the answer if the user later declines submodule init
 
 For the machine username branch, use the fixed three-option model from `repo_init_profile.py plan`:
@@ -109,6 +110,23 @@ prefers `vllm-ascend/.github/vllm-main-verified.commit`, which is the current up
 source of truth, and falls back to older workflow/docs sources for older
 checkouts. Report the resolver source in the summary so later remote install
 or parity work can tell which pairing was deployed.
+
+### Stage 5b: optional external dependencies
+
+The four extracted repositories are not submodules. After the approved
+submodule work, offer:
+
+```
+python3 .agents/scripts/vaws_deps.py bootstrap all
+```
+
+Rules:
+
+- the step is optional and explicitly skippable
+- a user without organization access must still finish `repo-init`
+- `remote-dev` and `vaws-top` are private; clone denial is documented and non-fatal
+- `vaws-coordinator` and `vaws-knowledge` are public
+- do not reimplement capability logic; after bootstrap or skip, run `python3 .agents/scripts/vaws_deps.py doctor` and name available / unavailable capabilities from that report
 
 ### Stage 6: topology
 
@@ -167,3 +185,5 @@ A successful run usually ends with:
 - recursive submodules initialized when the user approved it
 - remotes matching the user's selected topology
 - local `main` tracking the selected working remote where the user approved branch movement
+- external-dependency bootstrap offered and, if accepted, reported from `vaws_deps.py`; private denial does not fail the run
+- finish names capabilities from `vaws_deps.py doctor`, not from a re-derived list

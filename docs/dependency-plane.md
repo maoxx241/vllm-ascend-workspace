@@ -153,10 +153,51 @@ The ledger keeps the last 200 lines. `doctor` surfaces the last 10 as
 
 ```
 python3 .agents/scripts/vaws_deps.py status [name...]
-python3 .agents/scripts/vaws_deps.py bootstrap <name|all> [--dest] [--reset]
+python3 .agents/scripts/vaws_deps.py bootstrap <name|all> [--dest] [--reset] [--dry-run]
 python3 .agents/scripts/vaws_deps.py doctor
 ```
 
 `--reset` fetches and checks out the pin only when the working tree is clean.
 An `off_pin` dest is never reset without that flag. A `wrong_origin` dest is
 never overwritten by bootstrap; choose a different dest.
+
+`--dry-run` prints one JSON object of planned destinations and does not
+touch the network.
+
+`bootstrap all` continues past failures and prints one object keyed by
+dependency name. It exits 0 when every public pin succeeded, even if a
+private pin was `access-denied`. It exits 1 only when a public pin failed.
+
+## Bootstrap
+
+These four repositories are not git submodules. `git submodule update
+--init --recursive` does not fetch them. A clone that only initializes
+submodules looks complete and still has no remote endpoints, task pool,
+fleet observation, or shared knowledge.
+
+| Repository | Visibility | Organization access | Capability |
+|---|---|---|---|
+| `remote-dev` | private | required | `remote_endpoints`, `resolver_registration` |
+| `vaws-coordinator` | public | not required | `task_pool` |
+| `vaws-top` | private | required | `fleet_observation` |
+| `vaws-knowledge` | public | not required | `conformance_kit` |
+
+`repo-init` and the README quick-start offer:
+
+```
+python3 .agents/scripts/vaws_deps.py bootstrap all
+python3 .agents/scripts/vaws_deps.py doctor
+```
+
+Installing the four is optional and skippable. A user without organization
+access can finish `repo-init` successfully. The two public pins clone; the
+two private pins report `access-denied` with remedy `gh auth login`. That
+is a documented, non-fatal outcome.
+
+After a public-only bootstrap, `doctor` reports `task_pool` and
+`conformance_kit` as available. `remote_endpoints`, `resolver_registration`,
+and `fleet_observation` stay degraded until the private checkouts exist.
+`shared_knowledge` is the local cache of the knowledge corpus, not the
+kit checkout; import it separately if you need the shared layer.
+
+Name capabilities from `doctor`'s report. Do not re-derive them.
