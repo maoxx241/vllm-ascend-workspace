@@ -12,7 +12,9 @@ dimension so promotion cannot quietly claim a coordinate nobody established.
 
 The v1 invocation (``--input`` with ``applicable_versions`` in the payload)
 keeps working: the payload is written forward as a schema 2 candidate whose
-coordinate is all-``unknown`` when no environment is available.
+coordinate is all-``unknown`` when no environment is available. Capture
+records a failure-signature candidate (the ``rule`` body after promotion).
+A ``measurement`` body is a different claim shape and is not invented here.
 """
 
 from __future__ import annotations

@@ -480,5 +480,205 @@ class MatchViewTests(unittest.TestCase):
         self.assertIsNone(v2.status_warning(verified))
 
 
+def sample_measurement(**overrides) -> dict:
+    entry = {
+        "uuid": "b1f0c4d2-6e57-4a19-9c3d-08f5e2a71b64",
+        "slug": "ascend000-example-platform-config-peaks",
+        "content_hash": "sha256:" + "0" * 64,
+        "status": "unverified",
+        "confidence": "low",
+        "scope": {
+            "soc": {"values": ["Ascend000"]},
+            "cann": {"values": ["0.0.EXAMPLE"]},
+            "driver": {
+                "any": True,
+                "basis": "Read from a file on disk; no device is opened and no driver call is made.",
+            },
+            "python_abi": {
+                "any": True,
+                "basis": "A vendor constant parsed out of text; no compiled extension participates.",
+            },
+            "torch": {
+                "any": True,
+                "basis": "Declared by the toolkit, not by a framework; torch is not on this path.",
+            },
+            "torch_npu": {
+                "any": True,
+                "basis": "Declared by the toolkit, not by the plugin, which is not involved.",
+            },
+            "vllm": {
+                "any": True,
+                "basis": "A hardware capability declared by the vendor; no vLLM code establishes it.",
+            },
+            "vllm_ascend": {
+                "any": True,
+                "basis": "A hardware capability declared by the vendor; no plugin code establishes it.",
+            },
+            "model": {
+                "any": True,
+                "basis": "A peak throughput of the silicon; no weights are loaded.",
+            },
+            "topology": {
+                "any": True,
+                "basis": "A per-device declaration; it says nothing about how many are used together.",
+            },
+            "execution_mode": {
+                "any": True,
+                "basis": "Nothing is executed, so graph capture and eager dispatch are alike irrelevant.",
+            },
+            "component": {
+                "any": True,
+                "basis": "A hardware capability constant; no software subsystem owns it.",
+            },
+        },
+        "provenance": {
+            "contributor": "anonymous",
+            "origin_repo": "vllm-ascend-workspace/vaws-knowledge",
+            "submitted_at": "2026-09-08",
+            "redaction_profile": "r2",
+        },
+        "lifecycle": {
+            "first_seen": "2026-09-08",
+            "updated_at": "2026-09-08",
+            "superseded_by": None,
+            "resolved_by": None,
+        },
+        "measurement": {
+            "summary": (
+                "Ascend000 declares a 2.70336 TFLOPS fp16 dense matmul peak "
+                "in the example platform_config"
+            ),
+            "subject": {
+                "id": "Ascend000",
+                "aliases": ["000-EXAMPLE"],
+                "family": "Ascend000",
+                "architecture": "davinci-example",
+                "core_version": "AIC-X-000",
+                "compiler_target": "dav-x000",
+            },
+            "method": {
+                "type": "vendor_platform_config",
+                "description": (
+                    "Read out of the platform_config .ini shipped with the example "
+                    "toolkit release. The peak follows from the declared cube shape "
+                    "and clock; no operator was executed. Reproduce by parsing the "
+                    "same file from any installation of that release."
+                ),
+                "parameters": [
+                    {"name": "cube_shape_m_n_k", "value": "16x16x16"},
+                    {"name": "npu_arch", "value": "0000"},
+                ],
+                "source": {
+                    "kind": "vendor_file",
+                    "ref": "cann-0.0.EXAMPLE:platform_config:Ascend000.ini",
+                    "note": "Example toolkit release platform_config snapshot.",
+                },
+            },
+            "quantities": [
+                {
+                    "name": "fp16_dense_matmul_peak",
+                    "basis": "theoretical",
+                    "value": "2.70336",
+                    "unit": "tflops",
+                    "qualifier": "dense matmul, cube 16x16x16",
+                },
+                {
+                    "name": "ai_core_count",
+                    "basis": "declared",
+                    "value": "1",
+                    "unit": "count",
+                },
+            ],
+            "notes": [
+                "A theoretical peak is the correct MFU denominator and is not what an operator achieves."
+            ],
+        },
+    }
+    entry.update(overrides)
+    return v2.with_content_hash(entry)
+
+
+class MeasurementBodyTests(unittest.TestCase):
+    """Second body variant: scope + measurement, keyed by the body's name."""
+
+    ANCHOR = "sha256:0b8758c6544e9eaed88c711a56350b8b2bfc048bcc2e851f6dd851da70fe4950"
+
+    def test_kit_anchor_hash(self) -> None:
+        entry = sample_measurement()
+        self.assertEqual(v2.body_key(entry), "measurement")
+        self.assertEqual(v2.content_hash(entry), self.ANCHOR)
+        self.assertEqual(set(json.loads(v2.canonical_payload(entry))), {"measurement", "scope"})
+        self.assertNotIn("rule", json.loads(v2.canonical_payload(entry)))
+
+    def test_key_order_and_whitespace_do_not_change_hash(self) -> None:
+        entry = sample_measurement()
+        scrambled = deepcopy(entry)
+        scrambled["measurement"] = {
+            "quantities": list(entry["measurement"]["quantities"]),
+            "notes": list(entry["measurement"]["notes"]),
+            "method": {
+                "source": dict(entry["measurement"]["method"]["source"]),
+                "parameters": list(entry["measurement"]["method"]["parameters"]),
+                "description": entry["measurement"]["method"]["description"] + "   ",
+                "type": entry["measurement"]["method"]["type"],
+            },
+            "subject": dict(reversed(list(entry["measurement"]["subject"].items()))),
+            "summary": "  " + entry["measurement"]["summary"] + "\r\n",
+        }
+        self.assertEqual(v2.content_hash(entry), v2.content_hash(scrambled))
+
+    def test_neither_or_both_bodies_are_refused(self) -> None:
+        missing = sample_entry()
+        del missing["rule"]
+        with self.assertRaisesRegex(v2.KnowledgeV2Error, "no body"):
+            v2.content_hash(missing)
+        both = sample_measurement()
+        both["rule"] = sample_entry()["rule"]
+        with self.assertRaisesRegex(v2.KnowledgeV2Error, "both"):
+            v2.content_hash(both)
+
+    def test_valid_measurement_passes_schema(self) -> None:
+        entry = sample_measurement()
+        self.assertEqual(v2.validate_entry(entry, context=v2.PROJECT_LAYER), [])
+
+    def test_quantity_without_unit_is_refused(self) -> None:
+        entry = sample_measurement()
+        del entry["measurement"]["quantities"][0]["unit"]
+        entry = v2.with_content_hash(entry)
+        errors = v2.validate_entry(entry, context=v2.PROJECT_LAYER)
+        self.assertTrue(any("unit" in error for error in errors))
+
+    def test_numeric_quantity_value_is_refused(self) -> None:
+        entry = sample_measurement()
+        entry["measurement"]["quantities"][0]["value"] = 2.70336
+        errors = v2.validate_entry(entry, context=v2.PROJECT_LAYER, check_hash=False)
+        self.assertTrue(any("decimal string" in error for error in errors))
+
+    def test_match_view_exposes_body_and_null_rule_fields(self) -> None:
+        view = v2.match_view(sample_measurement())
+        self.assertEqual(view["body"], "measurement")
+        self.assertIsNone(view["rule"]["symptom"])
+        self.assertIn("Ascend000", view["rule"]["summary"])
+        self.assertEqual(view["measurement"]["subject"]["id"], "Ascend000")
+
+    def test_contradicting_values_at_overlapping_scope_conflict(self) -> None:
+        left = sample_measurement()
+        right = deepcopy(left)
+        right["uuid"] = "d4e81a37-9c02-4b6d-91f8-5a7c30e2b418"
+        right["measurement"]["quantities"][0]["value"] = "2.5"
+        right = v2.with_content_hash(right)
+        self.assertTrue(v2.measurement_contradictions(left, right))
+        sustained = deepcopy(left)
+        sustained["measurement"]["quantities"][0]["basis"] = "sustained"
+        sustained["measurement"]["quantities"][0]["unit"] = "ratio"
+        sustained["measurement"]["quantities"][0]["value"] = "0.95"
+        sustained = v2.with_content_hash(sustained)
+        self.assertEqual(v2.measurement_contradictions(left, sustained), [])
+        disjoint = deepcopy(right)
+        disjoint["scope"]["cann"] = {"values": ["1.0.EXAMPLE"]}
+        disjoint = v2.with_content_hash(disjoint)
+        self.assertEqual(v2.measurement_contradictions(left, disjoint), [])
+
+
 if __name__ == "__main__":
     unittest.main()

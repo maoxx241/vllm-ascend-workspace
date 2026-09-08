@@ -243,6 +243,82 @@
       }
     },
 
+    "measurement_quantity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "basis", "value", "unit"],
+      "properties": {
+        "name": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_]{0,63}$" },
+        "basis": { "enum": ["declared", "theoretical", "measured", "sustained"] },
+        "value": { "type": "string", "pattern": "^-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$" },
+        "unit": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,31}$" },
+        "qualifier": { "type": "string", "minLength": 1 }
+      }
+    },
+
+    "measurement_subject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "aliases": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "family": { "type": "string", "minLength": 1 },
+        "architecture": { "type": "string", "minLength": 1 },
+        "core_version": { "type": "string", "minLength": 1 },
+        "compiler_target": { "type": "string", "minLength": 1 }
+      }
+    },
+
+    "measurement_parameter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "value"],
+      "properties": {
+        "name": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_]{0,63}$" },
+        "value": { "type": "string", "minLength": 1 }
+      }
+    },
+
+    "measurement_source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "ref"],
+      "properties": {
+        "kind": { "enum": ["vendor_file", "run_manifest", "pull_request", "issue", "commit", "ci_run"] },
+        "ref": { "type": "string", "minLength": 1, "pattern": "^\\S+$" },
+        "note": { "type": "string" }
+      }
+    },
+
+    "measurement": {
+      "$comment": "Second body variant. A number has no symptom or resolution. Exactly one of rule / measurement per entry; content_hash is scope + that body, keyed by the body's own name.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["summary", "subject", "method", "quantities"],
+      "properties": {
+        "summary": { "type": "string", "minLength": 1 },
+        "subject": { "$ref": "#/$defs/measurement_subject" },
+        "method": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "description", "source"],
+          "properties": {
+            "type": { "enum": ["vendor_platform_config", "microbenchmark"] },
+            "description": { "type": "string", "minLength": 12 },
+            "parameters": { "type": "array", "items": { "$ref": "#/$defs/measurement_parameter" } },
+            "source": { "$ref": "#/$defs/measurement_source" }
+          }
+        },
+        "quantities": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/measurement_quantity" }
+        },
+        "notes": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+      }
+    },
+
     "entry": {
       "type": "object",
       "additionalProperties": false,
@@ -254,8 +330,7 @@
         "confidence",
         "scope",
         "provenance",
-        "lifecycle",
-        "rule"
+        "lifecycle"
       ],
       "properties": {
         "uuid": { "$ref": "#/$defs/uuid" },
@@ -272,9 +347,16 @@
         "verification": { "$ref": "#/$defs/verification" },
         "lifecycle": { "$ref": "#/$defs/lifecycle" },
         "conflicts": { "type": "array", "items": { "$ref": "#/$defs/conflict" } },
-        "rule": { "$ref": "#/$defs/rule" }
+        "rule": { "$ref": "#/$defs/rule" },
+        "measurement": { "$ref": "#/$defs/measurement" }
       },
       "allOf": [
+        {
+          "oneOf": [
+            { "required": ["rule"] },
+            { "required": ["measurement"] }
+          ]
+        },
         {
           "if": {
             "properties": { "status": { "enum": ["verified", "stale"] } },

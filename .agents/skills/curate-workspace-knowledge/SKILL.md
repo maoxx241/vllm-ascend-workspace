@@ -14,7 +14,9 @@ untracked review queue, never as a second authoritative store, and
 New promotions write the federated **v2** contract to
 `.agents/knowledge/<kind>.v2.yaml`. The v1 `<kind>.yaml` documents stay in
 place and stay readable (`--schema 1` still writes them) so existing consumers
-keep working.
+keep working. A v2 entry has exactly one body (`rule` or `measurement`);
+candidate promotion still writes a `rule`. Measurement entries are first-class
+when listing, querying, hashing, or exporting.
 
 ## Workflow
 

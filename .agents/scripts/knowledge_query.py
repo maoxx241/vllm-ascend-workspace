@@ -9,8 +9,9 @@ Backwards compatible on purpose. The v1 invocation
 ``--query "<text>" [--kind K] [--limit N] [--include-deprecated]`` returns the
 same ``matches`` array with the same keys it always did, because other skills
 and an ``AGENTS.md`` routing rule depend on it. New behaviour is additive:
-matches gain ``layer`` / ``schema_version``, and the payload gains
-``coverage``, ``degradation`` and ``capabilities``.
+matches gain ``layer`` / ``schema_version`` / ``body`` (``rule`` or
+``measurement``), ``--bodies`` filters those variants, and the payload
+gains ``coverage``, ``degradation`` and ``capabilities``.
 
 Degradation is always visible and never fatal. A missing shared cache or an
 absent knowledge service narrows the answer and says so; an empty result is
@@ -61,6 +62,11 @@ def main(argv: list[str] | None = None) -> int:
         help="also return v2 entries nobody else has confirmed",
     )
     parser.add_argument(
+        "--bodies",
+        default=None,
+        help="comma-separated body variants to return (rule,measurement). Default: both.",
+    )
+    parser.add_argument(
         "--layer",
         action="append",
         dest="layers",
@@ -93,8 +99,13 @@ def main(argv: list[str] | None = None) -> int:
         help="local candidate queue (default .vaws-local/knowledge/candidates)",
     )
     args = parser.parse_args(argv)
+    bodies = (
+        [item.strip() for item in args.bodies.split(",") if item.strip()]
+        if args.bodies
+        else None
+    )
 
-    # A caller that points --knowledge-dir at another checkout (or a test
+    # A caller that points --knowledge-dir at another checkout (or a test)
     # sandbox) means that tree, not this one: derive the sibling layer
     # locations from it so a query never mixes two repositories.
     repo_root = ROOT
@@ -142,6 +153,7 @@ def main(argv: list[str] | None = None) -> int:
                 knowledge_dir=args.knowledge_dir,
                 query=args.query,
                 kinds=args.kinds,
+                bodies=bodies,
                 limit=args.limit,
                 include_deprecated=args.include_deprecated,
                 include_unverified=args.include_unverified,
@@ -164,6 +176,7 @@ def main(argv: list[str] | None = None) -> int:
                 query=args.query,
                 layers=args.layers or client.DEFAULT_LAYERS,
                 kinds=args.kinds,
+                bodies=bodies,
                 limit=args.limit,
                 include_unverified=args.include_unverified,
                 include_deprecated=args.include_deprecated,

@@ -587,7 +587,7 @@
       "responsibility": "mechanics",
       "support_role": "supported",
       "target_kind": "self",
-      "note": "ensure/status/restart/stop of the loopback dashboard; locates the vaws-top checkout, does not count provider CLIs",
+      "note": "deploy/start/status/restart/stop of the loopback dashboard as a local uvx process pinned to a vaws-top tag; does not count provider CLIs",
       "proposed_target": "vaws machine",
       "external_owner": "vaws-top"
     },

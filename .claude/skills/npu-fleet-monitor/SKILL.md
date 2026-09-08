@@ -1,7 +1,7 @@
 <!-- Generated Claude Code shim from .agents/skills/npu-fleet-monitor/SKILL.md. Do not edit. -->
 ---
 name: npu-fleet-monitor
-description: Clone or locate the standalone vaws-top repository and provide its basic CLI/MCP query entrypoints. Use when vaws-top is not yet available, for basic fleet discovery and server inspection, or to deploy, inspect, restart, or stop its local loopback service. Do not use to allocate NPUs, choose a task identity, kill processes, or treat fleet inventory as authority. Detailed fleet-query guidance lives in the standalone repository skill.
+description: Start, inspect, restart, or stop the loopback-only vaws-top NPU fleet monitor as a local uvx process, and provide its basic CLI/MCP query entrypoints. Use when the local dashboard is needed, for basic fleet discovery and server inspection, or to check whether the monitor is up. Do not use to allocate NPUs, choose a task identity, kill processes, or treat fleet inventory as authority. Detailed fleet-query guidance lives in the standalone vaws-top repository skill.
 ---
 
 # vaws-top entry

@@ -1221,16 +1221,12 @@ class CurrentMainFindingScopeTests(unittest.TestCase):
             ["ipv4:" + SYNTHETIC_IPV4],
         )
 
-    def test_github_ssh_transport_is_allowed_only_on_the_three_exact_files(self) -> None:
+    def test_github_ssh_transport_is_allowed_only_on_the_exact_files(self) -> None:
         value = "git@github.com"
         cases = (
             (
                 ".agents/scripts/repo_boundary_check.py",
                 "repo-boundary-check-github-ssh-transport",
-            ),
-            (
-                ".agents/skills/npu-fleet-monitor/tests/test_manage_monitor.py",
-                "npu-fleet-monitor-tests-github-ssh-transport",
             ),
             (
                 ".agents/tests/test_repo_boundary_check.py",
@@ -1246,6 +1242,13 @@ class CurrentMainFindingScopeTests(unittest.TestCase):
                 )
                 self.assertEqual(
                     self._unallowlisted(self._scan(value, self.OTHER_SRC)),
+                    ["email:" + value],
+                )
+                # The uvx-based monitor tests no longer name the SSH transport.
+                self.assertEqual(
+                    self._unallowlisted(
+                        self._scan(value, ".agents/skills/npu-fleet-monitor/tests/test_manage_monitor.py")
+                    ),
                     ["email:" + value],
                 )
                 self.assertEqual(
@@ -1358,7 +1361,7 @@ class PhaseBKnowledgeFixtureScopeTests(unittest.TestCase):
         return [item for item in self._scan(text, path) if item.category == category]
 
     def test_declarations_are_exact_paths_and_singleton_categories(self) -> None:
-        self.assertEqual(len(self.policy.entries), 28)
+        self.assertEqual(len(self.policy.entries), 27)
         self.assertNotIn("knowledge-failure-signatures-private-range", self.by_id)
         for case in self.CASES:
             with self.subTest(entry=case["id"]):

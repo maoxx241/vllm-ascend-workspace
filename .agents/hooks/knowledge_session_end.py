@@ -51,7 +51,7 @@ def _resolve_repo_root(payload: Mapping[str, Any]) -> Path:
     if isinstance(cwd, str) and cwd:
         current = Path(cwd).resolve()
         for candidate in (current, *current.parents):
-            if (candidate / ".agents" / "lib" / "vaws_knowledge.py").is_file():
+            if (candidate / ".agents" / "lib" / "vaws_knowledge_v1.py").is_file():
                 return candidate
     return ROOT
 

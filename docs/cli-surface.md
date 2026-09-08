@@ -397,6 +397,7 @@ committed external contract). "Proposed" is the unimplemented original #85
 option.
 
 <!-- current-cli-surface-table -->
+
 | Entry point | Style | Verbs | Options | Refs | Responsibility | Support role | Current target | Proposed |
 |---|---|---|---|---|---|---|---|---|
 | `.agents/hooks/knowledge_session_end.py` | bare | - | 0 | client-config:1, routing:1, test:2 | mechanics | hook | .agents/hooks/knowledge_session_end.py | - |
@@ -408,7 +409,7 @@ option.
 | `.agents/scripts/knowledge_capture.py` | argparse | - | 9 | docs:2, other:2, routing:2, script:2, skill-doc:4, test:3 | mixed | supported | .agents/scripts/knowledge_capture.py | vaws knowledge |
 | `.agents/scripts/knowledge_export.py` | argparse | - | 7 | other:2, routing:2, script:1, skill-doc:3, test:1 | mechanics | supported | .agents/scripts/knowledge_export.py | vaws knowledge |
 | `.agents/scripts/knowledge_migrate_v2.py` | argparse | - | 7 | routing:1, skill-doc:2, test:1 | mechanics | supported | .agents/scripts/knowledge_migrate_v2.py | vaws knowledge |
-| `.agents/scripts/knowledge_query.py` | argparse | - | 12 | docs:1, routing:2, test:3 | mechanics | supported | .agents/scripts/knowledge_query.py | vaws knowledge |
+| `.agents/scripts/knowledge_query.py` | argparse | - | 13 | docs:1, routing:2, test:3 | mechanics | supported | .agents/scripts/knowledge_query.py | vaws knowledge |
 | `.agents/scripts/knowledge_shared_cache.py` | argparse | status, import, clear | 6 | docs:2, routing:1, script:2, skill-doc:2, test:2 | mechanics | supported | .agents/scripts/knowledge_shared_cache.py | vaws knowledge |
 | `.agents/scripts/knowledge_validate.py` | argparse | - | 1 | other:3, routing:1, script:1, skill-doc:1, test:2 | mechanics | supported | .agents/scripts/knowledge_validate.py | vaws knowledge |
 | `.agents/scripts/remote_artifact_manifest.py` | delegated | - | 4 | docs:1, policy:1, routing:1, skill-doc:3 | mechanics | compatibility | .agents/scripts/remote_artifact_manifest.py | vaws remote |
@@ -475,12 +476,12 @@ option.
 | `.agents/skills/machine-management/scripts/machine_remove.py` | argparse | - | 1 | docs:1, policy:1, routing:1, script:1, skill-doc:4 | mechanics | supported | .agents/skills/machine-management/scripts/machine_remove.py | vaws machine |
 | `.agents/skills/machine-management/scripts/machine_repair.py` | argparse | - | 8 | docs:1, policy:1, routing:1, script:1, skill-doc:4 | mechanics | supported | .agents/skills/machine-management/scripts/machine_repair.py | vaws machine |
 | `.agents/skills/machine-management/scripts/machine_verify.py` | argparse | - | 2 | docs:1, mirror:1, policy:1, routing:1, script:1, skill-doc:4 | mechanics | supported | .agents/skills/machine-management/scripts/machine_verify.py | vaws machine |
-| `.agents/skills/machine-management/scripts/manage_machine.py` | argparse | probe-host, bootstrap-host-key, bootstrap-container, smoke, verify-machine, mesh-export-key, mesh-add-peer, mesh-remove-peer, clean-local-known-hosts, remove-container | 25 | docs:3, policy:1, routing:1, script:6, skill-doc:4, test:1 | mechanics | internal | .agents/skills/machine-management/scripts/machine_add.py | vaws machine |
+| `.agents/skills/machine-management/scripts/manage_machine.py` | argparse | probe-host, bootstrap-host-key, bootstrap-container, smoke, verify-machine, mesh-export-key, mesh-add-peer, mesh-remove-peer, clean-local-known-hosts, remove-container | 25 | docs:2, policy:1, routing:1, script:6, skill-doc:4 | mechanics | internal | .agents/skills/machine-management/scripts/machine_add.py | vaws machine |
 | `.agents/skills/modelscope/scripts/download_from_modelscope.py` | argparse | - | 12 | docs:1, mirror:2, routing:1, script:2, skill-doc:1, test:1 | mechanics | payload | .agents/skills/modelscope/scripts/download_from_modelscope.py | - |
 | `.agents/skills/modelscope/scripts/modelscope_auto.py` | argparse | ensure, status, verify, worker | 11 | docs:1, mirror:1, routing:1, script:1, skill-doc:1, test:1 | mechanics | supported | .agents/skills/modelscope/scripts/modelscope_auto.py | vaws model |
 | `.agents/skills/modelscope/scripts/modelscope_download_status.py` | argparse | - | 3 | docs:1, mirror:1, routing:1, script:1, skill-doc:1, test:1 | mechanics | internal | .agents/skills/modelscope/scripts/modelscope_auto.py | - |
 | `.agents/skills/modelscope/scripts/verify_modelscope_sha256.py` | argparse | - | 8 | docs:1, mirror:2, routing:1, script:2, skill-doc:1, test:1 | mechanics | payload | .agents/skills/modelscope/scripts/verify_modelscope_sha256.py | - |
-| `.agents/skills/npu-fleet-monitor/scripts/manage_monitor.py` | argparse | ensure, status, restart, stop | 7 | docs:3, policy:3, routing:3, skill-doc:1, test:2 | mechanics | supported | .agents/skills/npu-fleet-monitor/scripts/manage_monitor.py | vaws machine |
+| `.agents/skills/npu-fleet-monitor/scripts/manage_monitor.py` | argparse | deploy, start, status, restart, stop | 6 | docs:3, policy:2, routing:3, skill-doc:1, test:2 | mechanics | supported | .agents/skills/npu-fleet-monitor/scripts/manage_monitor.py | vaws machine |
 | `.agents/skills/remote-code-parity/scripts/gc_runtime_cache.py` | argparse | - | 7 | docs:1, routing:1, skill-doc:3 | mechanics | supported | .agents/skills/remote-code-parity/scripts/gc_runtime_cache.py | vaws sync |
 | `.agents/skills/remote-code-parity/scripts/install_consent.py` | argparse | resolve, set, batch-set, resolve-sync-mode, set-sync-mode | 7 | docs:1, routing:1, script:1, skill-doc:5 | mechanics | supported | .agents/skills/remote-code-parity/scripts/install_consent.py | vaws sync |
 | `.agents/skills/remote-code-parity/scripts/parity_sync.py` | argparse | - | 17 | docs:5, mirror:1, routing:2, script:3, skill-doc:10, test:2 | mechanics | supported | .agents/skills/remote-code-parity/scripts/parity_sync.py | vaws sync |
@@ -518,6 +519,7 @@ option.
 | `.trae/skills/modelscope/scripts/modelscope_auto.py` | argparse | ensure, status, verify, worker | 11 | docs:1, mirror:1, routing:1, script:1, skill-doc:1, test:1 | mechanics | generated | .agents/skills/modelscope/scripts/modelscope_auto.py | - |
 | `.trae/skills/modelscope/scripts/modelscope_download_status.py` | argparse | - | 3 | docs:1, mirror:1, routing:1, script:1, skill-doc:1, test:1 | mechanics | generated | .agents/skills/modelscope/scripts/modelscope_download_status.py | - |
 | `.trae/skills/modelscope/scripts/verify_modelscope_sha256.py` | argparse | - | 8 | docs:1, mirror:2, routing:1, script:2, skill-doc:1, test:1 | mechanics | generated | .agents/skills/modelscope/scripts/verify_modelscope_sha256.py | - |
+
 <!-- /current-cli-surface-table -->
 
 ## 11. Measurement limitations

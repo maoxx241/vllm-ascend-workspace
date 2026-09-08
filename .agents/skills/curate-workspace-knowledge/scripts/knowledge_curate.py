@@ -598,6 +598,8 @@ def _duplicate_v2_slugs(
     for entry in document["entries"]:
         if entry.get("status") == "deprecated":
             continue
+        if v2.body_key(entry) != "rule":
+            continue
         rule = entry.get("rule", {})
         existing = v2.normalize_fingerprints(rule.get("fingerprints", []) or [])
         if fingerprints & set(existing):
@@ -966,7 +968,7 @@ def list_unresolved(knowledge_dir: Path) -> dict[str, Any]:
                 "entry_id": entry["slug"],
                 "kind": entry.get("_kind"),
                 "status": entry["status"],
-                "summary": entry["rule"]["summary"],
+                "summary": v2.entry_summary(entry),
                 "unresolved": [
                     {
                         "dimension": name,
