@@ -135,44 +135,68 @@ def resolve_kit_root(
     return root.resolve()
 
 
+def runner_supports_conflicts(runner: Path) -> bool:
+    """Return True when this kit's runner accepts ``--conflicts-cmd``.
+
+    The flag arrived in vaws-knowledge v0.1.0 with the measurement conflict
+    gate. The currently pinned kit still has the older runner; passing the
+    flag there is a usage error, not a skip.
+    """
+
+    try:
+        return "--conflicts-cmd" in runner.read_text(encoding="utf-8")
+    except OSError:
+        return False
+
+
+def build_client_kit_argv(
+    kit_root: Path,
+    *,
+    repo_root: Path = REPO_ROOT,
+    python: str | None = None,
+) -> list[str]:
+    runner = kit_root / "conformance" / "runner.py"
+    interpreter = python if python is not None else sys.executable
+    adapter = repo_root / ".agents" / "tests" / "knowledge_client_adapter.py"
+
+    def command(operation: str) -> str:
+        return shlex.join([interpreter, str(adapter), operation])
+
+    argv = [
+        interpreter,
+        str(runner),
+        "--vectors",
+        str(kit_root / "conformance" / "vectors"),
+        "--gate-vectors",
+        str(kit_root / "conformance" / "gate_vectors"),
+        "--hash-cmd",
+        command("hash"),
+        "--payload-cmd",
+        command("payload"),
+        "--schema-cmd",
+        command("schema"),
+        "--redaction-cmd",
+        command("redaction"),
+        "--export-cmd",
+        command("export"),
+        "--input-format",
+        "entry-json",
+        "--gate-format",
+        "document-json",
+    ]
+    if runner_supports_conflicts(runner):
+        argv.extend(["--conflicts-cmd", command("conflicts")])
+    return argv
+
+
 def run_client_kit(
     kit_root: Path,
     *,
     repo_root: Path = REPO_ROOT,
     timeout: float = 60.0,
 ) -> subprocess.CompletedProcess[str]:
-    runner = kit_root / "conformance" / "runner.py"
-    python = sys.executable
-    adapter = repo_root / ".agents" / "tests" / "knowledge_client_adapter.py"
-
-    def command(operation: str) -> str:
-        return shlex.join([python, str(adapter), operation])
-
     return subprocess.run(
-        [
-            python,
-            str(runner),
-            "--vectors",
-            str(kit_root / "conformance" / "vectors"),
-            "--gate-vectors",
-            str(kit_root / "conformance" / "gate_vectors"),
-            "--hash-cmd",
-            command("hash"),
-            "--payload-cmd",
-            command("payload"),
-            "--schema-cmd",
-            command("schema"),
-            "--redaction-cmd",
-            command("redaction"),
-            "--export-cmd",
-            command("export"),
-            "--conflicts-cmd",
-            command("conflicts"),
-            "--input-format",
-            "entry-json",
-            "--gate-format",
-            "document-json",
-        ],
+        build_client_kit_argv(kit_root, repo_root=repo_root),
         check=False,
         capture_output=True,
         text=True,
