@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Query compact knowledge summaries or fetch one entry by id.
 
-Three layers behind one query surface: ``shared`` (read-only cache pulled from
-the federated commons), ``project`` (``.agents/knowledge/``, v1 and v2
+Three layers behind one query surface: ``shared`` (corpus in the installed
+``vaws-knowledge`` package), ``project`` (``.agents/knowledge/``, v1 and v2
 documents), and ``candidate`` (unreviewed local observations).
 
 Backwards compatible on purpose. The v1 invocation
@@ -13,7 +13,7 @@ matches gain ``layer`` / ``schema_version`` / ``body`` (``rule`` or
 ``measurement``), ``--bodies`` filters those variants, and the payload
 gains ``coverage``, ``degradation`` and ``capabilities``.
 
-Degradation is always visible and never fatal. A missing shared cache or an
+Degradation is always visible and never fatal. A missing installed corpus or an
 absent knowledge service narrows the answer and says so; an empty result is
 reported as ``no-match``, which means *unknown*, never *supported*.
 """
@@ -87,12 +87,6 @@ def main(argv: list[str] | None = None) -> int:
         default=ROOT / ".agents" / "knowledge",
     )
     parser.add_argument(
-        "--shared-dir",
-        type=Path,
-        default=None,
-        help="read-only shared cache directory (default .vaws-local/knowledge/shared)",
-    )
-    parser.add_argument(
         "--candidate-dir",
         type=Path,
         default=None,
@@ -123,7 +117,6 @@ def main(argv: list[str] | None = None) -> int:
                 "capabilities": client.probe_capabilities(
                     repo_root=repo_root,
                     knowledge_dir=args.knowledge_dir,
-                    shared_dir=args.shared_dir,
                     candidate_dir=args.candidate_dir,
                 ),
                 "unknown_semantics": client.UNKNOWN_SEMANTICS,
@@ -139,7 +132,6 @@ def main(argv: list[str] | None = None) -> int:
                     entry_id=args.id,
                     layers=args.layers or client.LAYERS,
                     knowledge_dir=args.knowledge_dir,
-                    shared_dir=args.shared_dir,
                     candidate_dir=args.candidate_dir,
                 )
             payload = {
@@ -181,7 +173,6 @@ def main(argv: list[str] | None = None) -> int:
                 include_unverified=args.include_unverified,
                 include_deprecated=args.include_deprecated,
                 knowledge_dir=args.knowledge_dir,
-                shared_dir=args.shared_dir,
                 candidate_dir=args.candidate_dir,
             )
     except KnowledgeError as exc:

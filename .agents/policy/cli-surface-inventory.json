@@ -85,14 +85,7 @@
       "responsibility": "mechanics",
       "support_role": "supported",
       "target_kind": "self",
-      "note": "shared/project/candidate query surface with --capabilities and layer coverage; missing shared cache degrades visibly",
-      "proposed_target": "vaws knowledge"
-    },
-    ".agents/scripts/knowledge_shared_cache.py": {
-      "responsibility": "mechanics",
-      "support_role": "supported",
-      "target_kind": "self",
-      "note": "status/import/clear of a local shared cache; import is a local directory, not a network fetch",
+      "note": "shared/project/candidate query surface with --capabilities and layer coverage; missing installed corpus degrades visibly",
       "proposed_target": "vaws knowledge"
     },
     ".agents/scripts/knowledge_validate.py": {

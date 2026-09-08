@@ -116,10 +116,9 @@ cancellation isolation, or constitute a hardware replay.
 conformance kit now ships inside the `vaws-knowledge` package (19 vectors).
 An optional `VAWS_KNOWLEDGE_KIT_ROOT` override still selects an external
 checkout; that is a test input, not a runtime dependency. Two scaffold v2 entries remain
-unverified and export-blocked; nine model facts remain v1. Shared-cache
-import is an explicit local
-`.agents/scripts/knowledge_shared_cache.py import` and is not a periodic
-automatic pull-back. Root has accepted all three bounded live runs. Preview
+unverified and export-blocked; nine model facts remain v1. The shared
+layer is the corpus inside the installed `vaws-knowledge` package, not a
+local cache import. Root has accepted all three bounded live runs. Preview
 `34144173739` is a valid zero-eligible-input result (propose job skipped;
 one controlled incomplete-scope refusal; parent plus 35 accessible forks =
 36 observed repositories; fork-count discrepancy 1; no complete-universe

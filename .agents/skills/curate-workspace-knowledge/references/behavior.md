@@ -7,8 +7,8 @@
   v2 `<kind>.v2.yaml`.
 - `.vaws-local/knowledge/candidates/` is an untracked review queue.
 - `.vaws-local/knowledge/reviewed/` is an untracked disposition audit.
-- `.vaws-local/knowledge/shared/` is a read-only cache of the commons
-  (`vllm-ascend-workspace/vaws-knowledge`). Never written by this repo.
+- The `shared` layer is the corpus inside the installed `vaws-knowledge`
+  package. Never written by this repo.
 - `.vaws-local/knowledge/export/` holds proposal bundles plus the export
   ledger used for upstream idempotency.
 - Codex local Memories remain personal generated state and never override formal

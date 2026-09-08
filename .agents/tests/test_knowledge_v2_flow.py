@@ -25,7 +25,6 @@ CAPTURE = ROOT / ".agents" / "scripts" / "knowledge_capture.py"
 QUERY = ROOT / ".agents" / "scripts" / "knowledge_query.py"
 VALIDATE = ROOT / ".agents" / "scripts" / "knowledge_validate.py"
 EXPORT = ROOT / ".agents" / "scripts" / "knowledge_export.py"
-CACHE = ROOT / ".agents" / "scripts" / "knowledge_shared_cache.py"
 CURATE = (
     ROOT
     / ".agents"
@@ -88,7 +87,6 @@ class V2FlowBase(unittest.TestCase):
         shutil.copytree(ROOT / ".agents" / "knowledge", self.knowledge)
         self.candidates = self.sandbox / ".vaws-local" / "knowledge" / "candidates"
         self.reviewed = self.sandbox / ".vaws-local" / "knowledge" / "reviewed"
-        self.shared = self.sandbox / ".vaws-local" / "knowledge" / "shared"
         self.export = self.sandbox / ".vaws-local" / "knowledge" / "export"
         self.input = self.sandbox / "candidate.json"
         self.input.write_text(json.dumps(synthetic_candidate()), encoding="utf-8")
@@ -137,8 +135,6 @@ class V2FlowBase(unittest.TestCase):
             QUERY,
             "--knowledge-dir",
             str(self.knowledge),
-            "--shared-dir",
-            str(self.shared),
             "--candidate-dir",
             str(self.candidates),
             *arguments,
@@ -477,11 +473,12 @@ class ThreeLayerQueryTest(V2FlowBase):
             *self.env_arguments(),
         )
 
-    def test_missing_shared_layer_degrades_and_says_so(self) -> None:
+    def test_unavailable_layers_are_named_without_failing(self) -> None:
         payload = self.query("--query", FINGERPRINT)
         self.assertTrue(payload["degraded"])
-        self.assertIn("shared", [item["layer"] for item in payload["degradation"]])
-        self.assertEqual(payload["coverage"]["layers_answered"], ["project"])
+        self.assertIn("project", payload["coverage"]["layers_answered"])
+        self.assertIn("shared", payload["coverage"]["layers_answered"])
+        self.assertIn("knowledge_mcp", [item["layer"] for item in payload["degradation"]])
         for item in payload["degradation"]:
             self.assertTrue(item.get("detail"))
 
@@ -524,53 +521,27 @@ class ThreeLayerQueryTest(V2FlowBase):
         # Applicability is rendered from the structured coordinate, not prose.
         self.assertIn("soc", match["applicable_versions"])
 
-    def test_shared_cache_is_consulted_once_imported(self) -> None:
-        self.promote_and_verify()
-        document = v2.load_document(
-            self.knowledge / f"known-failure-signatures{v2.V2_SUFFIX}"
+    def test_shared_layer_reads_the_installed_corpus(self) -> None:
+        from vaws_knowledge.corpus import installed_commit
+
+        payload = self.query(
+            "--query",
+            "Ascend910B4",
+            "--layer",
+            "shared",
+            "--include-unverified",
+            "--bodies",
+            "measurement",
         )
-        synthetic = next(
-            item for item in document["entries"] if item["slug"] == "synthetic-ack-gate"
-        )
-        verified_zone = {
-            "schema_version": 2,
-            "kind": "known-failure-signatures",
-            "layer": "verified",
-            "updated_at": document["updated_at"],
-            "entries": [synthetic],
-        }
-        source = self.sandbox / "corpus" / "verified"
-        source.mkdir(parents=True)
-        (source / "known-failure-signatures.yaml").write_text(
-            json.dumps(verified_zone, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-        )
-        imported = self.run_script(
-            CACHE,
-            "--shared-dir",
-            str(self.shared),
-            "import",
-            "--from",
-            str(source),
-            "--source-repo",
-            "vllm-ascend-workspace/vaws-knowledge",
-            "--source-ref",
-            "0123456789abcdef0123456789abcdef01234567",
-        )
-        self.assertEqual(imported["entry_count"], 1)
-        self.assertEqual(
-            imported["source_repo"], "vllm-ascend-workspace/vaws-knowledge"
-        )
-        payload = self.query("--query", FINGERPRINT, "--layer", "shared")
-        self.assertEqual(
-            {match["layer"] for match in payload["matches"]}, {"shared"}
-        )
+        self.assertEqual({match["layer"] for match in payload["matches"]}, {"shared"})
         self.assertEqual(payload["coverage"]["layers_answered"], ["shared"])
         self.assertNotIn("shared", payload["coverage"]["layers_unavailable"])
         self.assertEqual(
-            payload["matches"][0]["source_ref"],
-            "0123456789abcdef0123456789abcdef01234567",
+            payload["matches"][0]["source_repo"],
+            "vllm-ascend-workspace/vaws-knowledge",
         )
+        self.assertEqual(payload["matches"][0]["source_ref"], installed_commit())
+        self.assertEqual(payload["matches"][0]["body"], "measurement")
 
     def test_candidate_layer_is_available_before_review(self) -> None:
         self.capture(*self.env_arguments())
@@ -599,10 +570,14 @@ class ThreeLayerQueryTest(V2FlowBase):
         payload = self.query("--capabilities")
         capabilities = payload["capabilities"]
         self.assertEqual(capabilities["project"]["status"], "available")
-        self.assertEqual(capabilities["shared"]["status"], "absent")
+        self.assertEqual(capabilities["shared"]["status"], "available")
+        self.assertEqual(
+            capabilities["shared"]["source_repo"],
+            "vllm-ascend-workspace/vaws-knowledge",
+        )
+        self.assertTrue(capabilities["shared"]["source_ref"])
         self.assertEqual(capabilities["knowledge_mcp"]["status"], "absent")
         self.assertFalse(capabilities["validator"]["jsonschema"])
-        self.assertTrue(capabilities["shared"]["remedy"])
 
     def test_broken_project_document_does_not_break_the_query(self) -> None:
         (self.knowledge / f"model-capabilities{v2.V2_SUFFIX}").write_text(

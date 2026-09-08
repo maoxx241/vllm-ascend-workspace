@@ -30,4 +30,4 @@
       into the document.
 - [ ] Export refuses unresolved coordinates and `export`-severity redaction
       findings, and re-exporting an unchanged entry is a reported no-op.
-- [ ] `.vaws-local/knowledge/shared/` is never written by this repo.
+- [ ] This repo never writes a local copy of the shared `vaws-knowledge` corpus.
