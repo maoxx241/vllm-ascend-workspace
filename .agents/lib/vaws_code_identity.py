@@ -74,6 +74,7 @@ def _create_identity_snapshot(workspace_root: Path) -> tuple[str, dict[str, dict
         IDENTITY_SNAPSHOT_ID,
         tuple(parity.DEFAULT_DENYLIST),
         unpopulated="gitlink",
+        with_build_inputs=False,
     )
     repos: dict[str, dict[str, Any]] = {}
     snapshot = ""

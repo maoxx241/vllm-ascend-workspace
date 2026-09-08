@@ -111,18 +111,37 @@ class CodeIdentityTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
             _init_repo(repo)
+            child = repo / "vllm-ascend"
+            child.mkdir()
+            _init_repo(child)
             gitlink = "ab" * 20
+            _run(
+                child,
+                "update-index",
+                "--add",
+                "--cacheinfo",
+                f"160000,{gitlink},csrc/third_party/fake",
+            )
+            child_head = _run(child, "rev-parse", "HEAD")
+            (repo / ".gitmodules").write_text(
+                '[submodule "vllm-ascend"]\n\tpath = vllm-ascend\n\turl = ./vllm-ascend\n',
+                encoding="utf-8",
+            )
             _run(
                 repo,
                 "update-index",
                 "--add",
                 "--cacheinfo",
-                f"160000,{gitlink},sub",
+                f"160000,{child_head},vllm-ascend",
             )
+            _run(repo, "add", ".gitmodules")
             (repo / "dirty.txt").write_text("changed\n", encoding="utf-8")
             identity = code_identity(repo)
             self.assertTrue(identity["dirty"])
-            self.assertEqual(identity["repos"]["sub"]["snapshot_commit"], gitlink)
+            self.assertEqual(
+                identity["repos"]["vllm-ascend/csrc/third_party/fake"]["snapshot_commit"],
+                gitlink,
+            )
 
 
 class ParityRefGcTests(unittest.TestCase):

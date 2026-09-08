@@ -1739,6 +1739,7 @@ def build_snapshot_records(
     records: list[SnapshotRecord] | None = None,
     *,
     unpopulated: str = 'error',
+    with_build_inputs: bool = True,
 ) -> list[SnapshotRecord]:
     tree = discover_repo_tree(workspace_root, '.', None, source_roots, unpopulated=unpopulated)
     child_records: dict[str, SnapshotRecord] = {}
@@ -1757,13 +1758,14 @@ def build_snapshot_records(
         child_records[node.relpath] = record
         record.source_path = str(node.repo_path.resolve()) if node.repo_path.exists() else str(node.repo_path)
         ordered_records.append(record)
-    for record in ordered_records:
-        if record.relpath in ('vllm', 'vllm-ascend'):
-            source = record_source(workspace_root, record)
-            if not is_git_worktree(source):
-                continue
-            patterns = VLLM_REINSTALL_PATTERNS if record.relpath == 'vllm' else VLLM_ASCEND_REINSTALL_PATTERNS
-            record.build_inputs = build_input_fingerprints(source, record.commit, patterns)
+    if with_build_inputs:
+        for record in ordered_records:
+            if record.relpath in ('vllm', 'vllm-ascend'):
+                source = record_source(workspace_root, record)
+                if not is_git_worktree(source):
+                    continue
+                patterns = VLLM_REINSTALL_PATTERNS if record.relpath == 'vllm' else VLLM_ASCEND_REINSTALL_PATTERNS
+                record.build_inputs = build_input_fingerprints(source, record.commit, patterns)
     return ordered_records
 
 

@@ -154,7 +154,7 @@ Transport selection:
 Optional cache cleanup helper:
 
 - POSIX: `python3 .agents/skills/remote-code-parity/scripts/gc_runtime_cache.py ...`
-- POSIX: `python3 .agents/skills/remote-code-parity/scripts/remote_code_parity.py gc --workspace-root <root>` deletes `refs/parity/` older than 7 days that no Run Manifest `code.snapshot_commit` still names. Successful sync keeps those refs so the orphan snapshot commit stays reachable. Snapshot commit messages are the constant prefix plus repo id only, so identity and sync of the same tree share one SHA. Identity (and `gc`) pass `unpopulated="gitlink"` and use the parent-index gitlink for nested modules that are not populated; `plan`/`sync` stay `unpopulated="error"`.
+- POSIX: `python3 .agents/skills/remote-code-parity/scripts/remote_code_parity.py gc --workspace-root <root>` deletes `refs/parity/` older than 7 days that no Run Manifest `code.snapshot_commit` still names. Successful sync keeps those refs so the orphan snapshot commit stays reachable. Snapshot commit messages are the constant prefix plus repo id only, so identity and sync of the same tree share one SHA. Identity (and `gc`) pass `unpopulated="gitlink"` and `with_build_inputs=False`: unpopulated nested modules use the parent-index gitlink, and identity never fingerprints native build inputs. `plan`/`sync` stay `unpopulated="error"` and still compute build inputs.
 
 Reference files:
 
