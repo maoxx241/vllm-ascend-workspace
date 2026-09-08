@@ -39,7 +39,7 @@ class SpecLockTests(unittest.TestCase):
         )
         self.assertEqual(
             locked["vaws-knowledge"]["commit"],
-            "93be969f04a5f681fee1686bfd1f2bf319a90f12",
+            "2a89241b83e6ae85deb99926088d9c9c6d07364b",
         )
         self.assertEqual(
             locked["vaws-remote-dev"]["commit"],
