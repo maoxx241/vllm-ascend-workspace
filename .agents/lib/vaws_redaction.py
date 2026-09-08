@@ -21,12 +21,27 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Iterable, Mapping
 
-import vaws_knowledge.redact as _commons
-
-REDACTION_PROFILE = _commons.REDACTION_PROFILE
-
 BLOCK = "block"
 EXPORT = "export"
+
+
+def _commons() -> Any:
+    # Imported on first use so tracked-leak-guard CI (no venv) can still
+    # import this module through vaws_knowledge_v1 for SECRET_* constants.
+    import vaws_knowledge.redact as redact
+
+    return redact
+
+
+def __getattr__(name: str) -> Any:
+    if name == "REDACTION_PROFILE":
+        return _commons().REDACTION_PROFILE
+    if name == "RULES":
+        commons = _commons()
+        return tuple(
+            (rule.id, severity_for(rule.id), rule.description) for rule in commons.RULES
+        )
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 _BLOCK_EXACT = frozenset(
     {
@@ -52,11 +67,6 @@ def severity_for(rule_id: str) -> str:
     if rule_id in _BLOCK_EXACT or any(rule_id.startswith(prefix) for prefix in _BLOCK_PREFIXES):
         return BLOCK
     return EXPORT
-
-
-RULES: tuple[tuple[str, str, str], ...] = tuple(
-    (rule.id, severity_for(rule.id), rule.description) for rule in _commons.RULES
-)
 
 
 class RedactionError(ValueError):
@@ -97,7 +107,7 @@ def mask(value: str) -> str:
 def _scan_text(text: str, path: str) -> list[Finding]:
     return [
         Finding(hit.rule, severity_for(hit.rule), path, mask(hit.value))
-        for hit in _commons.scan_text(text, allow=None, path=path)
+        for hit in _commons().scan_text(text, allow=None, path=path)
     ]
 
 
@@ -137,7 +147,7 @@ def require_writable(value: Any, *, path: str = "payload") -> None:
     if findings:
         raise RedactionError(
             "redaction profile "
-            + REDACTION_PROFILE
+            + _commons().REDACTION_PROFILE
             + " blocks this payload: "
             + "; ".join(f"{item.path}: {item.rule} ({item.masked})" for item in findings)
         )
@@ -150,7 +160,7 @@ def require_exportable(value: Any, *, path: str = "payload") -> None:
     if findings:
         raise RedactionError(
             "redaction profile "
-            + REDACTION_PROFILE
+            + _commons().REDACTION_PROFILE
             + " blocks this export: "
             + "; ".join(f"{item.path}: {item.rule} ({item.masked})" for item in findings)
         )
@@ -160,6 +170,10 @@ def ruleset() -> list[dict[str, str]]:
     """Machine-readable description of the active profile."""
 
     return [
-        {"rule": name, "severity": severity, "description": description}
-        for name, severity, description in RULES
+        {
+            "rule": rule.id,
+            "severity": severity_for(rule.id),
+            "description": rule.description,
+        }
+        for rule in _commons().RULES
     ]
