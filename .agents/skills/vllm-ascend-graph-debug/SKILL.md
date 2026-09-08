@@ -105,7 +105,7 @@ description: Diagnose vLLM Ascend cudagraph and ACL Graph compile, capture, repl
 1. 把 `.agents/skills/ascend-tensor-dump/assets/dump_probe.py` 复制进被测包。
 2. 模块 `__init__` 里 `graph_slot(name, shape, dtype)` 预分配；forward 内 `capture_graph(name, tensor)` 只做图内 `copy_`；图外 `finish()` 读回。
 3. Eager 对照一侧用 `capture(stage, tensor)`，两侧写出同一套 key。
-4. 用 `scripts/dump_compare.py diff` 找首个分叉 stage，用 `tensors` 出逐张量指标。
+4. 用 `.agents/skills/ascend-tensor-dump/scripts/dump_compare.py diff` 找首个分叉 stage，用 `tensors` 出逐张量指标。
 
 该 skill 的 manifest 同时记录 `stride` / `storage_ptr` / `npu_format`，因此 replay 读到固定地址错位、缓存踩踏这类问题能直接从 `storage_aliases` 看出来，而不是只看到数值偏差。
 
