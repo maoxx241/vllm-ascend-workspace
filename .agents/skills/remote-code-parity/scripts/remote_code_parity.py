@@ -228,12 +228,16 @@ class SubmoduleEntry:
     path: str
 
 
+UNPOPULATED_POLICIES = ('error', 'gitlink')
+
+
 @dataclass
 class RepoNode:
     relpath: str
     repo_path: Path
     submodule_name: str | None
     children: list['RepoNode'] = field(default_factory=list)
+    gitlink_commit: str | None = None
 
 
 @dataclass
@@ -342,6 +346,23 @@ def ensure_populated_worktree(repo: Path, relpath: str) -> None:
         )
 
 
+def index_gitlinks(repo: Path) -> dict[str, str]:
+    result = git(repo, ['ls-files', '--stage'], check=False)
+    links: dict[str, str] = {}
+    for line in result.stdout.splitlines():
+        meta, separator, path = line.partition('\t')
+        if not separator:
+            continue
+        parts = meta.split()
+        if len(parts) >= 2 and parts[0] == '160000' and len(parts[1]) == 40:
+            links[path] = parts[1]
+    return links
+
+
+def resolve_index_gitlink(repo: Path, path: str) -> str | None:
+    return index_gitlinks(repo).get(path) or gitlink_for_path(repo, git_head(repo), path)
+
+
 def list_submodules(repo: Path) -> list[SubmoduleEntry]:
     gitmodules = repo / '.gitmodules'
     if not gitmodules.exists():
@@ -357,14 +378,51 @@ def list_submodules(repo: Path) -> list[SubmoduleEntry]:
     return entries
 
 
-def discover_repo_tree(repo: Path, relpath: str = '.', submodule_name: str | None = None, source_roots: dict[str, Path] | None = None) -> RepoNode:
+def discover_repo_tree(
+    repo: Path,
+    relpath: str = '.',
+    submodule_name: str | None = None,
+    source_roots: dict[str, Path] | None = None,
+    *,
+    unpopulated: str = 'error',
+) -> RepoNode:
+    if unpopulated not in UNPOPULATED_POLICIES:
+        raise ValueError(f'unpopulated must be error or gitlink, got {unpopulated!r}')
     ensure_populated_worktree(repo, relpath)
     node = RepoNode(relpath=relpath, repo_path=repo, submodule_name=submodule_name)
-    for entry in list_submodules(repo):
+    entries = list(list_submodules(repo))
+    seen = {entry.path for entry in entries}
+    if unpopulated == 'gitlink':
+        for path in index_gitlinks(repo):
+            if path not in seen:
+                entries.append(SubmoduleEntry(name=path, path=path))
+                seen.add(path)
+    for entry in entries:
         child_relpath = entry.path if relpath in ('', '.') else f'{relpath}/{entry.path}'
         child_repo = (source_roots or {}).get(child_relpath, repo / entry.path)
-        ensure_populated_worktree(child_repo, child_relpath)
-        node.children.append(discover_repo_tree(child_repo, child_relpath, entry.name, source_roots))
+        if is_git_worktree(child_repo):
+            node.children.append(
+                discover_repo_tree(
+                    child_repo,
+                    child_relpath,
+                    entry.name,
+                    source_roots,
+                    unpopulated=unpopulated,
+                )
+            )
+            continue
+        if unpopulated == 'error':
+            ensure_populated_worktree(child_repo, child_relpath)
+        gitlink = resolve_index_gitlink(repo, entry.path)
+        if gitlink:
+            node.children.append(
+                RepoNode(
+                    relpath=child_relpath,
+                    repo_path=child_repo,
+                    submodule_name=entry.name,
+                    gitlink_commit=gitlink,
+                )
+            )
     return node
 
 
@@ -406,8 +464,8 @@ def synthetic_ref(workspace_id: str, snapshot_id: str, relpath: str) -> str:
     return f'refs/parity/{workspace_id}/{snapshot_id}/{sanitize_repo_id(relpath)}'
 
 
-def commit_message(workspace_id: str, relpath: str) -> str:
-    return f'remote-code-parity tree snapshot {workspace_id} {sanitize_repo_id(relpath)}'
+def commit_message(relpath: str) -> str:
+    return f'remote-code-parity tree snapshot {sanitize_repo_id(relpath)}'
 
 
 def gitlink_for_path(repo: Path, commit: str | None, path: str) -> str | None:
@@ -489,7 +547,7 @@ def build_synthetic_snapshot(
             )
 
         tree = git(repo, ['write-tree'], env=env).stdout.strip()
-        commit = git(repo, ['commit-tree', tree, '-m', commit_message(workspace_id, node.relpath)], env=env).stdout.strip()
+        commit = git(repo, ['commit-tree', tree, '-m', commit_message(node.relpath)], env=env).stdout.strip()
         if source_head:
             diff = git(repo, ['diff', '--name-only', f'{source_head}..{commit}']).stdout.splitlines()
         else:
@@ -515,7 +573,11 @@ def build_synthetic_snapshot(
 
 def cleanup_synthetic_refs(workspace_root: Path, records: list[SnapshotRecord]) -> None:
     for record in records:
+        if not record.ref:
+            continue
         repo = record_source(workspace_root, record)
+        if not is_git_worktree(repo):
+            continue
         git(repo, ['update-ref', '-d', record.ref], check=False)
 
 
@@ -1653,25 +1715,55 @@ def parse_sources(values: list[str]) -> dict[str, Path]:
     return sources
 
 
-def build_snapshot_records(workspace_root: Path, workspace_id: str, snapshot_id: str, denylist: tuple[str, ...], source_roots: dict[str, Path] | None = None, records: list[SnapshotRecord] | None = None) -> list[SnapshotRecord]:
-    tree = discover_repo_tree(workspace_root, '.', None, source_roots)
+def gitlink_snapshot_record(node: RepoNode) -> SnapshotRecord:
+    commit = node.gitlink_commit or ''
+    return SnapshotRecord(
+        relpath=node.relpath,
+        repo_id=sanitize_repo_id(node.relpath),
+        source_head=commit or None,
+        parent=commit or None,
+        commit=commit,
+        tree='',
+        ref='',
+        changed_paths=[],
+        submodules=[],
+    )
+
+
+def build_snapshot_records(
+    workspace_root: Path,
+    workspace_id: str,
+    snapshot_id: str,
+    denylist: tuple[str, ...],
+    source_roots: dict[str, Path] | None = None,
+    records: list[SnapshotRecord] | None = None,
+    *,
+    unpopulated: str = 'error',
+) -> list[SnapshotRecord]:
+    tree = discover_repo_tree(workspace_root, '.', None, source_roots, unpopulated=unpopulated)
     child_records: dict[str, SnapshotRecord] = {}
     ordered_records = records if records is not None else []
     for node in iter_postorder(tree):
-        record = build_synthetic_snapshot(
-            node,
-            workspace_id=workspace_id,
-            snapshot_id=snapshot_id,
-            denylist=denylist,
-            child_commits=child_records,
-        )
+        if node.gitlink_commit:
+            record = gitlink_snapshot_record(node)
+        else:
+            record = build_synthetic_snapshot(
+                node,
+                workspace_id=workspace_id,
+                snapshot_id=snapshot_id,
+                denylist=denylist,
+                child_commits=child_records,
+            )
         child_records[node.relpath] = record
-        record.source_path = str(node.repo_path.resolve())
+        record.source_path = str(node.repo_path.resolve()) if node.repo_path.exists() else str(node.repo_path)
         ordered_records.append(record)
     for record in ordered_records:
         if record.relpath in ('vllm', 'vllm-ascend'):
+            source = record_source(workspace_root, record)
+            if not is_git_worktree(source):
+                continue
             patterns = VLLM_REINSTALL_PATTERNS if record.relpath == 'vllm' else VLLM_ASCEND_REINSTALL_PATTERNS
-            record.build_inputs = build_input_fingerprints(record_source(workspace_root, record), record.commit, patterns)
+            record.build_inputs = build_input_fingerprints(source, record.commit, patterns)
     return ordered_records
 
 

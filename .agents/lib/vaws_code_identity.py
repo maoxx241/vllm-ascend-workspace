@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Workspace code identity from git objects.
 
-Code identity is a git commit: HEAD when the worktree is clean, otherwise the
-last remote-code-parity snapshot commit. The snapshot ref is what keeps that
-orphan commit reachable for experiment records.
+Code identity is a git commit: HEAD when the worktree is clean, otherwise a
+deterministic parentless snapshot of the current tree. The snapshot ref keeps
+that orphan commit reachable for experiment records.
 """
 
 from __future__ import annotations
@@ -15,7 +15,6 @@ from pathlib import Path
 from typing import Any, Mapping
 
 GIT_SHA_RE = r"^[0-9a-f]{40}$"
-STATE_RELATIVE = Path(".vaws-local/remote-code-parity/runtime-state.json")
 IDENTITY_WORKSPACE_ID = "identity"
 IDENTITY_SNAPSHOT_ID = "current"
 
@@ -52,43 +51,6 @@ def _repo_dirty(repo: Path) -> bool:
     return bool(status.strip())
 
 
-def _latest_parity_snapshots(workspace_root: Path) -> dict[str, str]:
-    """Return last_snapshot_commits from the most recently synced container."""
-    path = workspace_root / STATE_RELATIVE
-    if not path.is_file():
-        return {}
-    try:
-        state = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
-    latest_at = ""
-    latest: dict[str, str] = {}
-    servers = state.get("servers")
-    if not isinstance(servers, Mapping):
-        return {}
-    for server in servers.values():
-        if not isinstance(server, Mapping):
-            continue
-        containers = server.get("containers")
-        if not isinstance(containers, Mapping):
-            continue
-        for container in containers.values():
-            if not isinstance(container, Mapping):
-                continue
-            commits = container.get("last_snapshot_commits")
-            synced = container.get("last_sync_at") or ""
-            if not isinstance(commits, Mapping) or not commits:
-                continue
-            if str(synced) >= latest_at:
-                latest_at = str(synced)
-                latest = {
-                    str(relpath): str(commit)
-                    for relpath, commit in commits.items()
-                    if isinstance(commit, str) and len(commit) == 40
-                }
-    return latest
-
-
 def _load_parity():
     scripts = (
         Path(__file__).resolve().parents[1]
@@ -111,6 +73,7 @@ def _create_identity_snapshot(workspace_root: Path) -> tuple[str, dict[str, dict
         IDENTITY_WORKSPACE_ID,
         IDENTITY_SNAPSHOT_ID,
         tuple(parity.DEFAULT_DENYLIST),
+        unpopulated="gitlink",
     )
     repos: dict[str, dict[str, Any]] = {}
     snapshot = ""
@@ -144,17 +107,15 @@ def code_identity(workspace_root: Path | str) -> dict[str, Any]:
     """Return git-object identity for ``workspace_root``.
 
     When the worktree is clean, ``snapshot_commit`` equals ``source_head``.
-    When it is dirty, the snapshot is the last parity sync commit if one is
-    recorded, otherwise a deterministic parentless snapshot is created and
-    kept under ``refs/parity/identity/current/``.
+    When it is dirty, a deterministic parentless snapshot of the current tree
+    is created and kept under ``refs/parity/identity/current/``. Unpopulated
+    nested submodules contribute their parent-index gitlink SHA.
     """
     root = Path(workspace_root).resolve()
     if not (root / ".git").exists():
         raise CodeIdentityError(f"not a git worktree: {root}")
     source_head = _git_head(root)
     dirty = _repo_dirty(root)
-    last = _latest_parity_snapshots(root)
-    workspace_snapshot = last.get(".")
 
     if not dirty:
         repos = _clean_repos(source_head)
@@ -162,30 +123,6 @@ def code_identity(workspace_root: Path | str) -> dict[str, Any]:
             "source_head": source_head,
             "snapshot_commit": source_head,
             "dirty": False,
-            "repos": repos,
-        }
-
-    if workspace_snapshot and workspace_snapshot != source_head:
-        repos = {
-            relpath: {
-                "source_head": source_head if relpath == "." else None,
-                "snapshot_commit": commit,
-                "dirty": True,
-            }
-            for relpath, commit in last.items()
-        }
-        repos.setdefault(
-            ".",
-            {
-                "source_head": source_head,
-                "snapshot_commit": workspace_snapshot,
-                "dirty": True,
-            },
-        )
-        return {
-            "source_head": source_head,
-            "snapshot_commit": workspace_snapshot,
-            "dirty": True,
             "repos": repos,
         }
 
@@ -245,8 +182,10 @@ def gc_parity_refs(
     cutoff = (time.time() if now is None else now) - max_age_days * 86400
     deleted: list[dict[str, str]] = []
     kept: list[dict[str, str]] = []
-    tree = parity.discover_repo_tree(root, ".", None, None)
+    tree = parity.discover_repo_tree(root, ".", None, None, unpopulated="gitlink")
     for node in parity.iter_postorder(tree):
+        if node.gitlink_commit or not parity.is_git_worktree(node.repo_path):
+            continue
         listed = parity.git(
             node.repo_path,
             ["for-each-ref", "--format=%(objectname)\t%(refname)", "refs/parity"],

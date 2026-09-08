@@ -18,6 +18,7 @@ if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
 from vaws_code_identity import (  # noqa: E402
+    _load_parity,
     code_identity,
     collect_referenced_snapshot_commits,
     gc_parity_refs,
@@ -87,6 +88,41 @@ class CodeIdentityTests(unittest.TestCase):
             )
             self.assertEqual(manifest["code"]["snapshot_commit"], source_head)
             self.assertFalse(manifest["code"]["dirty"])
+
+    def test_dirty_snapshot_matches_parity_with_other_workspace_id(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            _init_repo(repo)
+            (repo / "dirty.txt").write_text("changed\n", encoding="utf-8")
+            identity = code_identity(repo)
+            parity = _load_parity()
+            records = parity.build_snapshot_records(
+                repo,
+                "any-other-workspace-id",
+                "sync-snapshot",
+                tuple(parity.DEFAULT_DENYLIST),
+                unpopulated="gitlink",
+            )
+            root = next(record for record in records if record.relpath == ".")
+            self.assertEqual(identity["snapshot_commit"], root.commit)
+            parity.cleanup_synthetic_refs(repo, records)
+
+    def test_unpopulated_gitlink_is_the_submodule_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            _init_repo(repo)
+            gitlink = "ab" * 20
+            _run(
+                repo,
+                "update-index",
+                "--add",
+                "--cacheinfo",
+                f"160000,{gitlink},sub",
+            )
+            (repo / "dirty.txt").write_text("changed\n", encoding="utf-8")
+            identity = code_identity(repo)
+            self.assertTrue(identity["dirty"])
+            self.assertEqual(identity["repos"]["sub"]["snapshot_commit"], gitlink)
 
 
 class ParityRefGcTests(unittest.TestCase):
