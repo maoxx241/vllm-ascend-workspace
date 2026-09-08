@@ -3,7 +3,21 @@
   "name": "vaws-knowledge",
   "repository": "vllm-ascend-workspace/vaws-knowledge",
   "url": "https://github.com/vllm-ascend-workspace/vaws-knowledge.git",
+  "visibility": "public",
+  "ref": "main",
   "commit": "e04d50f7bc5702afbe2e2988f7c28a3268e1a7f3",
   "root_env": "VAWS_KNOWLEDGE_KIT_ROOT",
+  "default_checkout": "{shared_workspace_root}/.vaws-local/vaws-knowledge",
+  "bootstrap": "python3 .agents/scripts/vaws_deps.py bootstrap vaws-knowledge",
+  "consumed_surface": [
+    "conformance_kit",
+    "shared_corpus"
+  ],
+  "identity": {
+    "required_files": [
+      "conformance/runner.py"
+    ],
+    "canonical_origin": false
+  },
   "note": "External conformance kit used by knowledge client tests. Not a runtime dependency and not vendored. CI checks out this exact commit with persist-credentials: false."
 }

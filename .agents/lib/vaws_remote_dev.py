@@ -26,7 +26,6 @@ substrate only; nothing here is imported by the substrate.
 """
 from __future__ import annotations
 
-import json
 import os
 import subprocess
 import sys
@@ -38,8 +37,12 @@ LIB = ROOT / ".agents" / "lib"
 if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
-from vaws_local_state import shared_workspace_root  # noqa: E402
-
+from vaws_dependency import (  # noqa: E402
+    checkout_path,
+    inspect,
+    load_pin,
+    load_pin_file,
+)
 REMOTE_DEV_ROOT_ENV = "VAWS_REMOTE_DEV_ROOT"
 DEPENDENCY_FILE = ROOT / ".agents" / "deps" / "remote-dev.json"
 RESOLVER_PLUGIN = LIB / "vaws_remote_dev_plugin.py"
@@ -76,10 +79,9 @@ class RemoteDevUnavailable(RuntimeError):
 
 def load_dependency(path: Path = DEPENDENCY_FILE) -> dict[str, Any]:
     """Return the tracked dependency pin (repository, ref, commit)."""
-    data = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(data, dict) or data.get("schema_version") != 1:
-        raise RemoteDevUnavailable(f"unsupported remote-dev dependency file: {path}")
-    return data
+    if path == DEPENDENCY_FILE:
+        return load_pin("remote-dev")
+    return load_pin_file(path)
 
 
 def default_checkout_dir(repo_root: Path = ROOT) -> Path:
@@ -88,7 +90,8 @@ def default_checkout_dir(repo_root: Path = ROOT) -> Path:
     One checkout per shared workspace, next to the machine inventory, so every
     linked session worktree reaches the same revision.
     """
-    return shared_workspace_root(repo_root) / LOCAL_STATE_DIRNAME / CHECKOUT_DIRNAME
+    path, _source = checkout_path("remote-dev", env={}, repo_root=repo_root)
+    return path
 
 
 def looks_like_checkout(path: Path) -> bool:
@@ -96,10 +99,8 @@ def looks_like_checkout(path: Path) -> bool:
 
 
 def _configured_root(env: Mapping[str, str]) -> tuple[Path | None, str]:
-    configured = env.get(REMOTE_DEV_ROOT_ENV, "").strip()
-    if configured:
-        return Path(configured).expanduser(), "env"
-    return default_checkout_dir(), "default"
+    path, source = checkout_path("remote-dev", env=env)
+    return path, source
 
 
 def remote_dev_root(*, required: bool = True, env: Mapping[str, str] | None = None) -> Path | None:
@@ -107,19 +108,22 @@ def remote_dev_root(*, required: bool = True, env: Mapping[str, str] | None = No
 
     Order: ``VAWS_REMOTE_DEV_ROOT``, then the default checkout directory. A
     configured path that does not look like a checkout is an error either way;
-    a missing default is an error only when ``required``.
+    a missing default is an error only when ``required``. Drift (``off_pin``)
+    is not an execution gate.
     """
     env = os.environ if env is None else env
-    candidate, source = _configured_root(env)
-    if candidate is not None and looks_like_checkout(candidate):
-        return candidate.resolve()
+    info = inspect("remote-dev", env)
+    if info["state"] in {"ready", "off_pin"}:
+        return Path(info["path"]).expanduser().resolve()
     if not required:
         return None
-    hint = f"clone it with `python3 .agents/scripts/remote_dev.py bootstrap` or set {REMOTE_DEV_ROOT_ENV}"
-    if source == "env":
+    pin = load_pin("remote-dev")
+    hint = f"clone it with `{pin['bootstrap']}` or set {pin['root_env']}"
+    candidate = Path(info["path"])
+    if info["source"] == "env":
         raise RemoteDevUnavailable(
             f"{REMOTE_DEV_ROOT_ENV}={candidate} is not a remote-dev checkout "
-            f"(expected {', '.join(REQUIRED_FILES)}); {hint}"
+            f"(state={info['state']}); {hint}"
         )
     raise RemoteDevUnavailable(f"remote-dev checkout not found at {candidate}; {hint}")
 
@@ -211,11 +215,11 @@ def checkout_commit(root: Path) -> str | None:
 def checkout_status(env: Mapping[str, str] | None = None, *, repo_root: Path = ROOT) -> dict[str, Any]:
     """Describe the configured checkout without importing it."""
     env = os.environ if env is None else env
-    candidate, source = _configured_root(env)
+    info = inspect("remote-dev", env, repo_root=repo_root)
     pin = load_dependency()
     payload: dict[str, Any] = {
-        "root": str(candidate) if candidate else None,
-        "root_source": source,
+        "root": info["path"],
+        "root_source": info["source"],
         "root_env": REMOTE_DEV_ROOT_ENV,
         "repository": pin.get("repository"),
         "pinned_ref": pin.get("ref"),
@@ -223,13 +227,14 @@ def checkout_status(env: Mapping[str, str] | None = None, *, repo_root: Path = R
         "resolver": resolver_spec(repo_root),
         "runtime_env_file": env.get("REMOTE_DEV_RUNTIME_ENV_FILE", ASCEND_RUNTIME_ENV_FILE),
         "state_dir": str(state_dir(repo_root)),
+        "state": info["state"],
+        "commit": info["commit"],
+        "pin_matches": info["pin_matches"],
+        "origin_matches": info["origin_matches"],
+        "problems": info["problems"],
     }
-    if candidate is None or not candidate.exists():
-        payload.update(state="missing", commit=None, pin_matches=None)
-    elif not looks_like_checkout(candidate):
-        payload.update(state="invalid", commit=None, pin_matches=None,
-                       missing=[relative for relative in REQUIRED_FILES if not (candidate / relative).is_file()])
-    else:
-        commit = checkout_commit(candidate)
-        payload.update(state="ready", commit=commit, pin_matches=(commit == pin.get("commit")) if commit else None)
+    if info["state"] == "not_git":
+        payload["missing"] = [
+            relative for relative in REQUIRED_FILES if not (Path(info["path"]) / relative).is_file()
+        ]
     return payload

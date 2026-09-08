@@ -175,9 +175,15 @@ class LocatorTests(unittest.TestCase):
             for relative in remote_dev.REQUIRED_FILES:
                 (root / relative).parent.mkdir(parents=True, exist_ok=True)
                 (root / relative).write_text("", encoding="utf-8")
-            self.assertEqual(remote_dev.remote_dev_root(env={remote_dev.REMOTE_DEV_ROOT_ENV: tmp}), root.resolve())
+            with self.assertRaises(remote_dev.RemoteDevUnavailable) as ctx:
+                remote_dev.remote_dev_root(env={remote_dev.REMOTE_DEV_ROOT_ENV: tmp})
+            self.assertIn("not a remote-dev checkout", str(ctx.exception))
+            self.assertIn("bootstrap", str(ctx.exception))
+            self.assertIsNone(
+                remote_dev.remote_dev_root(required=False, env={remote_dev.REMOTE_DEV_ROOT_ENV: tmp})
+            )
             status = remote_dev.checkout_status({remote_dev.REMOTE_DEV_ROOT_ENV: tmp})
-            self.assertEqual(status["state"], "ready")
+            self.assertEqual(status["state"], "not_git")
             self.assertEqual(status["root_source"], "env")
 
     def test_substrate_environment_fills_defaults_and_absolutises_paths(self) -> None:
@@ -502,6 +508,10 @@ class NoInTreeSubstrateTests(unittest.TestCase):
             # existed; that prose is history, not a path anything reads.
             ".agents/policy/repo-boundaries.json",
             ".agents/policy/repo-boundaries-baseline.json",
+            # Historical CLI census names deleted substrate paths as inventory.
+            ".agents/scripts/cli_surface_inventory.py",
+            ".agents/tests/fixtures/cli-surface-inventory.json",
+            ".agents/tests/test_cli_surface_inventory.py",
         }
         offenders = []
         for relative in tracked:

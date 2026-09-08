@@ -53,6 +53,12 @@ from vaws_coordinator import (  # noqa: E402
     load_dependency,
     looks_like_checkout,
 )
+from vaws_dependency import (  # noqa: E402
+    hook_skip_message,
+    inspect,
+    record_hook_degradation,
+    status_exit_code,
+)
 
 LAUNCHER_OPS = {"status", "bootstrap", "env", "hook", "task-server"}
 TASK_OPS = {"attach", "session", "run", "execution", "finish"}
@@ -125,7 +131,7 @@ def _exec(root: Path, relative: str, args: list[str]) -> int:
 def cmd_status(_args: argparse.Namespace) -> int:
     payload = checkout_status()
     print(json.dumps(payload, ensure_ascii=False, indent=2))
-    return 0 if payload["state"] == "ready" else 1
+    return status_exit_code({"vaws-coordinator": payload["state"]})
 
 
 def _git(*argv: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
@@ -229,14 +235,14 @@ def cmd_env(args: argparse.Namespace) -> int:
 
 
 def cmd_hook(args: argparse.Namespace) -> int:
-    try:
-        root = coordinator_root()
-    except CoordinatorUnavailable as exc:
+    info = inspect("vaws-coordinator")
+    if info["state"] not in {"ready", "off_pin"}:
         sys.stdin.read()
-        progress(f"vaws session hook skipped: {exc}")
+        progress(hook_skip_message("vaws-coordinator", info))
+        record_hook_degradation(hook="vaws", dep="vaws-coordinator", state=info["state"])
         print("")
         return 0
-    return _exec(root, "hooks/vaws_session.py", list(args.args))
+    return _exec(Path(info["path"]), "hooks/vaws_session.py", list(args.args))
 
 
 def cmd_task_server(_args: argparse.Namespace) -> int:

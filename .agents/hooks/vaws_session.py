@@ -18,7 +18,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / ".agents" / "lib"))
-from vaws_coordinator import COORDINATOR_ROOT_ENV, CoordinatorUnavailable, coordinator_environment, coordinator_root
+from vaws_coordinator import COORDINATOR_ROOT_ENV, coordinator_environment
+from vaws_dependency import hook_skip_message, inspect, record_hook_degradation
 
 
 def main() -> int:
@@ -32,16 +33,14 @@ def main() -> int:
         os.environ[COORDINATOR_ROOT_ENV] = str(Path(args.coordinator_root).expanduser())
     if args.agent_sessions_dir.strip():
         os.environ["VAWS_AGENT_SESSIONS_DIR"] = str(Path(args.agent_sessions_dir).expanduser())
-    try:
-        checkout = coordinator_root()
-    except CoordinatorUnavailable as exc:
+    info = inspect("vaws-coordinator")
+    if info["state"] not in {"ready", "off_pin"}:
         sys.stdin.read()
-        print(
-            f"VAWS local association unavailable: {exc}. Local tools remain usable.",
-            file=sys.stderr,
-        )
+        print(hook_skip_message("vaws-coordinator", info), file=sys.stderr)
+        record_hook_degradation(hook="vaws_session", dep="vaws-coordinator", state=info["state"])
         print("")
         return 0
+    checkout = Path(info["path"]).expanduser()
     script = checkout / "hooks" / "vaws_session.py"
     if not script.is_file():
         print(

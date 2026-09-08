@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vllm-ascend-workspace.local/schemas/dependency-v1.schema.json",
+  "title": "VAWS external dependency pin v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "name",
+    "repository",
+    "url",
+    "visibility",
+    "ref",
+    "commit",
+    "root_env",
+    "default_checkout",
+    "bootstrap",
+    "consumed_surface",
+    "identity"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "repository": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$"
+    },
+    "url": {
+      "type": "string",
+      "minLength": 1
+    },
+    "visibility": {
+      "enum": ["public", "private"]
+    },
+    "ref": {
+      "type": "string",
+      "minLength": 1
+    },
+    "commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "root_env": {
+      "type": "string",
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+    },
+    "default_checkout": {
+      "type": "string",
+      "minLength": 1
+    },
+    "bootstrap": {
+      "type": "string",
+      "minLength": 1
+    },
+    "consumed_surface": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["required_files", "canonical_origin"],
+      "properties": {
+        "required_files": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "canonical_origin": {
+          "type": "boolean"
+        }
+      }
+    },
+    "note": {
+      "type": "string"
+    },
+    "extensions": {
+      "type": "object"
+    }
+  }
+}
