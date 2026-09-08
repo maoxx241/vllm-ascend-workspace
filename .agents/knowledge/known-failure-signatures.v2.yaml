@@ -12,7 +12,7 @@
       "provenance": {
         "contributor": "maoxx241",
         "origin_repo": "maoxx241/vllm-ascend-workspace",
-        "redaction_profile": "r1",
+        "redaction_profile": "r2",
         "submitted_at": "2026-09-07"
       },
       "rule": {
@@ -100,7 +100,7 @@
       "provenance": {
         "contributor": "maoxx241",
         "origin_repo": "maoxx241/vllm-ascend-workspace",
-        "redaction_profile": "r1",
+        "redaction_profile": "r2",
         "submitted_at": "2026-09-07"
       },
       "rule": {

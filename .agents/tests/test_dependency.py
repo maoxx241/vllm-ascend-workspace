@@ -24,7 +24,7 @@ class SpecLockTests(unittest.TestCase):
         versions = deps.required_versions()
         self.assertEqual(versions["vaws-remote-dev"], "0.1.0")
         self.assertEqual(versions["vaws-coordinator"], "0.1.0")
-        self.assertEqual(versions["vaws-knowledge"], "0.1.0")
+        self.assertEqual(versions["vaws-knowledge"], "0.1.1")
         self.assertNotIn(deps.VAWS_TOP_NAME, versions)
 
     def test_status_tracks_only_the_three_packages(self) -> None:
@@ -39,14 +39,15 @@ class SpecLockTests(unittest.TestCase):
         )
         self.assertEqual(
             locked["vaws-knowledge"]["commit"],
-            "afe396071540ff28623a53c3edd22fca6de011af",
+            "19b60cb1538691880a05925305d85108acd7ee0f",
         )
         self.assertEqual(
             locked["vaws-remote-dev"]["commit"],
             "2d2d9297fbf74259f6733b3f4a0ab35150608d56",
         )
+        expected_versions = deps.required_versions()
         for name in deps.PACKAGE_NAMES:
-            self.assertEqual(locked[name]["version"], "0.1.0", name)
+            self.assertEqual(locked[name]["version"], expected_versions[name], name)
             self.assertIn("github.com/vllm-ascend-workspace", locked[name]["url"] or "")
 
     def test_inspect_ready_when_installed_matches_lock(self) -> None:
@@ -58,7 +59,7 @@ class SpecLockTests(unittest.TestCase):
             self.assertEqual(info["name"], name)
             self.assertIn(info["state"], deps.STATES)
             if info["state"] == "ready":
-                self.assertEqual(info["installed_version"], "0.1.0")
+                self.assertEqual(info["installed_version"], deps.locked_packages()[name]["version"])
                 self.assertEqual(info["installed_commit"], deps.locked_packages()[name]["commit"])
                 self.assertEqual(info["remedy"], "uv sync")
 

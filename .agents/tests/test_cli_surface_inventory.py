@@ -314,8 +314,12 @@ class RepositoryCoherenceTests(unittest.TestCase):
         )
         self.assertIsNone(by_repository["vllm-ascend-workspace/vaws-top"]["commit"])
         self.assertEqual(
+            by_repository["vllm-ascend-workspace/vaws-top"]["declaration"],
+            "npu-fleet-monitor uvx release wheel",
+        )
+        self.assertEqual(
             by_repository["vllm-ascend-workspace/vaws-knowledge"]["commit"],
-            "afe396071540ff28623a53c3edd22fca6de011af",
+            "19b60cb1538691880a05925305d85108acd7ee0f",
         )
         for meta in owners.values():
             self.assertEqual(meta["source_availability"], "uninspected")

@@ -173,6 +173,7 @@ def load_catalog(path: Path | None = None) -> dict:
             raise CatalogError(f"CLI surface catalog entry {key!r} is missing overlay fields: {catalog_path}")
         parsed[key] = {str(field): str(value) for field, value in meta.items()}
     deps: list[tuple[str, str]] = []
+    labels: dict[str, str] = {}
     for item in declarations:
         if not isinstance(item, dict):
             raise CatalogError(f"CLI surface catalog dep_declarations entries must be objects: {catalog_path}")
@@ -181,14 +182,20 @@ def load_catalog(path: Path | None = None) -> dict:
         if not isinstance(ident, str) or not ident or not isinstance(package, str) or not package:
             raise CatalogError(f"CLI surface catalog dep_declarations requires id and package: {catalog_path}")
         deps.append((ident, package))
+        declaration = item.get("declaration")
+        if isinstance(declaration, str) and declaration.strip():
+            labels[ident] = declaration.strip()
+            labels[package] = declaration.strip()
     loaded = dict(data)
     loaded["classification"] = parsed
     loaded["dep_declarations"] = deps
+    loaded["dep_declaration_labels"] = labels
     return loaded
 
 
 _CATALOG = load_catalog()
 DEP_DECLARATIONS = tuple(_CATALOG["dep_declarations"])
+DEP_DECLARATION_LABELS = dict(_CATALOG["dep_declaration_labels"])
 CLASSIFICATION = dict(_CATALOG["classification"])
 
 
@@ -647,7 +654,9 @@ def load_external_owners(repo_root: Path) -> dict[str, dict]:
     for ident, package in DEP_DECLARATIONS:
         row = locked.get(package) or locked.get(ident) or {}
         owners[ident] = {
-            "declaration": "pyproject.toml",
+            "declaration": DEP_DECLARATION_LABELS.get(ident)
+            or DEP_DECLARATION_LABELS.get(package)
+            or "pyproject.toml",
             "name": package,
             "repository": repos.get(ident) or repos.get(package),
             "commit": row.get("commit"),
