@@ -49,7 +49,7 @@ The coordinator consumer now **exists** in this combined tree: pin, locator,
 launcher, dual-provider client setup, owned-hook preservation, and residual
 compatibility adapters. Arrival evidence and the deleted in-tree writers are
 in [coordinator-consumption.md](coordinator-consumption.md). The pin is
-`d3c4e82a3c0e3f0be31727abf17b7863bcedba77`. Task tools, registry writes, and
+`a7d5005a4df6ab8adf5b16a965127e81a30ee3fc`. Task tools, registry writes, and
 the managed supervisor are not reimplemented here.
 
 The first-stage vaws-top consumer now **exists** in this combined tree:
@@ -70,7 +70,7 @@ current tree.
 
 | Repository | Role | Exact SHA |
 |---|---|---|
-| `vaws-coordinator` | accepted actual main after independent #1/#2 | `d3c4e82a3c0e3f0be31727abf17b7863bcedba77` |
+| `vaws-coordinator` | accepted actual main after independent #1/#2/#4 | `a7d5005a4df6ab8adf5b16a965127e81a30ee3fc` |
 | `remote-dev` | ledger + glob + mux accepted actual provider main | `62045af1f76c803ca392ae413b56bcfe290e6450` |
 | `vaws-top` | independently inspected standalone main consumed by this first-stage locator | `e7af28e629e7fd79c47e9b096f1dc1fd94f665ab` |
 
@@ -98,7 +98,7 @@ metadata; current visibility comes from the organization inventory.
 |---|---:|---|---|---|
 | `vllm-ascend-workspace/vllm-ascend-workspace` | 1196723340 | public, non-fork | `7af4ac3106649d2dbbed712c780a14db8bf25113` | canonical scaffold |
 | `vllm-ascend-workspace/remote-dev` | 1360023179 | private | `62045af1f76c803ca392ae413b56bcfe290e6450` | transport and explicit endpoints |
-| `vllm-ascend-workspace/vaws-coordinator` | 1360026044 | public | `d3c4e82a3c0e3f0be31727abf17b7863bcedba77` | task/provider/pool protocol and managed worker |
+| `vllm-ascend-workspace/vaws-coordinator` | 1360026044 | public | `a7d5005a4df6ab8adf5b16a965127e81a30ee3fc` | task/provider/pool protocol and managed worker |
 | `vllm-ascend-workspace/vaws-knowledge` | 1359978527 | public | `1eac65cf2f8ff4f1451c788f0964005ea0dfdee2` | formal knowledge corpus and source identity |
 | `vllm-ascend-workspace/vaws-top` | 1360023247 | private | `e7af28e629e7fd79c47e9b096f1dc1fd94f665ab` | fleet monitoring; observation only |
 | `vllm-ascend-workspace/.github` | 1360014025 | public | `fc6a1929fc13b2844f47012a1dec296daff09936` | organization landing metadata, not a runtime provider |

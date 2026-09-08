@@ -111,8 +111,8 @@ class LocatorTests(unittest.TestCase):
     def test_dependency_pin_names_the_accepted_main(self) -> None:
         pin = coordinator.load_dependency()
         self.assertEqual(pin["repository"], "vllm-ascend-workspace/vaws-coordinator")
-        self.assertEqual(pin["commit"], "d3c4e82a3c0e3f0be31727abf17b7863bcedba77")
-        self.assertEqual(pin["tree"], "d3f91bc6375a876fc01d46b1835feabd61db2729")
+        self.assertEqual(pin["commit"], "a7d5005a4df6ab8adf5b16a965127e81a30ee3fc")
+        self.assertEqual(pin["tree"], "2660b7fe09c660b8827444753a87ec3bf554d551")
         self.assertEqual(pin["visibility"], "public")
         self.assertEqual(
             pin["pinned_mirrors"]["vaws_build_inputs"]["sha256"],
@@ -611,7 +611,13 @@ class CoordinatorCheckoutTests(unittest.TestCase):
         self.assertEqual(status["commit"], pin["commit"])
 
     def test_arrival_blobs_match_the_pin(self) -> None:
+        status = coordinator.checkout_status()
         pin = coordinator.load_dependency()
+        if status["pin_matches"] is False:
+            message = f"checkout {status['commit']} is not the pinned {pin['commit']}"
+            if os.environ.get("CI"):
+                self.fail(message)
+            self.skipTest(message)
         for relative, blob in pin["arrival_blobs"].items():
             result = subprocess.run(
                 ["git", "-C", str(CHECKOUT), "rev-parse", f"HEAD:{relative}"],

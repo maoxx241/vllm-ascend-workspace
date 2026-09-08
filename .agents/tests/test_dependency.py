@@ -116,12 +116,12 @@ class PinSchemaTests(unittest.TestCase):
     def test_coordinator_pin_consumes_the_bundled_host_queue(self) -> None:
         raw = json.loads((ROOT / ".agents/deps/coordinator.json").read_text(encoding="utf-8"))
         pin = deps.load_pin("vaws-coordinator")
-        self.assertEqual(pin["commit"], "d3c4e82a3c0e3f0be31727abf17b7863bcedba77")
+        self.assertEqual(pin["commit"], "a7d5005a4df6ab8adf5b16a965127e81a30ee3fc")
         self.assertEqual(pin["consumed_surface"]["host_queue_module"], "host/vaws_npu_coordination.py")
         self.assertNotIn("scaffold", pin["consumed_surface"]["host_queue_interface"])
         self.assertIn("host/vaws_npu_coordination.py", pin["identity"]["required_files"])
         self.assertIn("service-api.json", pin["identity"]["required_files"])
-        self.assertEqual(pin["extensions"]["tree"], "d3f91bc6375a876fc01d46b1835feabd61db2729")
+        self.assertEqual(pin["extensions"]["tree"], "2660b7fe09c660b8827444753a87ec3bf554d551")
         self.assertEqual(
             pin["extensions"]["arrival_blobs"]["host/vaws_npu_coordination.py"],
             "00f81e8300717307da06556f7c2cbdebf6b14ed7",
