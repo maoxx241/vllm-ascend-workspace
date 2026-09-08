@@ -5,9 +5,11 @@ and not vendored copies. This module is the single loader and identity check
 for those pins. Locator wrappers in ``vaws_remote_dev``, ``vaws_coordinator``,
 ``manage_monitor``, and ``knowledge_kit`` stay as thin public adapters.
 
-Pin drift (``off_pin``) is never an execution gate: ``resolve()`` still
-returns the path so a developer checkout can run. Status commands report the
-mismatch and exit 1 unless ``VAWS_DEPS_ALLOW_OFF_PIN`` names the dep.
+Identity drift (``off_pin``, ``wrong_origin``) is never an execution gate:
+``resolve()`` still returns the path so a developer checkout or fork can run.
+Status commands report the mismatch and exit 1 unless ``VAWS_DEPS_ALLOW_OFF_PIN``
+names the dep (the variable acknowledges both drift states). Unusable trees
+(``missing``, ``not_git``, ``incomplete``) still block.
 """
 from __future__ import annotations
 
@@ -30,7 +32,10 @@ LEDGER_MAX_LINES = 200
 ALLOW_OFF_PIN_ENV = "VAWS_DEPS_ALLOW_OFF_PIN"
 PLACEHOLDER_RE = re.compile(r"\{([a-z_]+)\}")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
-STATES = ("missing", "not_git", "wrong_origin", "off_pin", "ready")
+STATES = ("missing", "not_git", "wrong_origin", "incomplete", "off_pin", "ready")
+BLOCKING_STATES = frozenset({"missing", "not_git", "incomplete"})
+DRIFT_STATES = frozenset({"off_pin", "wrong_origin"})
+USABLE_STATES = frozenset({"ready"}) | DRIFT_STATES
 VAWS_TOP_NAME = "vaws" + "-top"
 KNOWN_PIN_FILES = (
     "remote-dev.json",
@@ -66,6 +71,18 @@ def _path_join(parent: str, key: str) -> str:
 
 def _validate_against_schema(instance: Any, schema: Mapping[str, Any], path: str = "$") -> None:
     """Subset JSON Schema validator (stdlib). Field paths go on the error."""
+    if "oneOf" in schema:
+        errors: list[str] = []
+        for option in schema["oneOf"]:
+            if not isinstance(option, Mapping):
+                continue
+            try:
+                _validate_against_schema(instance, option, path)
+                return
+            except DependencyPinError as exc:
+                errors.append(str(exc))
+        detail = errors[-1] if errors else "no variant matched"
+        raise DependencyPinError(f"{path}: does not match any oneOf variant; {detail}", field=path)
     if "const" in schema and instance != schema["const"]:
         raise DependencyPinError(
             f"{path}: expected const {schema['const']!r}, got {instance!r}",
@@ -103,6 +120,12 @@ def _validate_against_schema(instance: Any, schema: Mapping[str, Any], path: str
                 field=path,
             )
     if expected_type == "object" and isinstance(instance, dict):
+        min_props = schema.get("minProperties")
+        if isinstance(min_props, int) and len(instance) < min_props:
+            raise DependencyPinError(
+                f"{path}: object has fewer than minProperties {min_props}",
+                field=path,
+            )
         required = schema.get("required") or []
         for key in required:
             if key not in instance:
@@ -274,18 +297,17 @@ def git_working_tree_clean(path: Path) -> bool:
 
 def _normalize_origin(url: str) -> str:
     value = url.strip()
-    ssh_host = "github.com"
-    if value.startswith("git@") and value.split("@", 1)[-1].startswith(ssh_host + ":"):
+    if value.startswith("git@github.com:"):
         path = value.split(":", 1)[1]
         return f"https://github.com/{path.removesuffix('.git')}".rstrip("/").lower()
     parsed = value
     for scheme in ("ssh://", "git+ssh://"):
-        prefix = scheme + "git@" + ssh_host + "/"
+        prefix = f"{scheme}git@github.com/"
         if parsed.startswith(prefix):
             parsed = "https://github.com/" + parsed[len(prefix) :]
             break
     else:
-        git_prefix = "git://" + ssh_host + "/"
+        git_prefix = "git://github.com/"
         if parsed.startswith(git_prefix):
             parsed = "https://github.com/" + parsed[len(git_prefix) :]
     parsed = parsed.removesuffix(".git").rstrip("/")
@@ -401,7 +423,7 @@ def inspect(
             name=name,
             path=path,
             source=source,
-            state="not_git",
+            state="incomplete",
             commit=commit,
             pin_commit=pin_commit,
             pin_matches=(commit == pin_commit) if pin_commit else None,
@@ -432,15 +454,18 @@ def resolve(
     env: Mapping[str, str] | None = None,
     repo_root: Path = ROOT,
 ) -> Path | None:
-    """Execution-path locator. ``off_pin`` is not a gate."""
+    """Execution-path locator. Identity drift is not a gate."""
     pin = load_pin(name)
     info = inspect(name, env, repo_root=repo_root)
-    if info["state"] in {"ready", "off_pin"}:
+    if info["state"] in USABLE_STATES:
         return Path(info["path"]).expanduser()
     if not required:
         return None
+    extra = ""
+    if info["state"] == "incomplete" and info.get("problems"):
+        extra = f": {'; '.join(info['problems'])}"
     raise DependencyUnavailable(
-        f"{name} checkout is {info['state']} at {info['path']}; "
+        f"{name} checkout is {info['state']} at {info['path']}{extra}; "
         f"clone it with `{pin['bootstrap']}` or set {pin['root_env']}"
     )
 
@@ -464,11 +489,11 @@ def status_exit_code(
     states: Mapping[str, str],
     env: Mapping[str, str] | None = None,
 ) -> int:
-    """Exit 1 unless every inspected dep is ready or an allowed off_pin."""
+    """Exit 1 unless every inspected dep is ready or an acknowledged drift."""
     for name, state in states.items():
         if state == "ready":
             continue
-        if state == "off_pin" and off_pin_allowed(name, env):
+        if state in DRIFT_STATES and off_pin_allowed(name, env):
             continue
         return 1
     return 0

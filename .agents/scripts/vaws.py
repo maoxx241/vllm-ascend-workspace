@@ -54,6 +54,7 @@ from vaws_coordinator import (  # noqa: E402
     looks_like_checkout,
 )
 from vaws_dependency import (  # noqa: E402
+    USABLE_STATES,
     hook_skip_message,
     inspect,
     record_hook_degradation,
@@ -236,7 +237,7 @@ def cmd_env(args: argparse.Namespace) -> int:
 
 def cmd_hook(args: argparse.Namespace) -> int:
     info = inspect("vaws-coordinator")
-    if info["state"] not in {"ready", "off_pin"}:
+    if info["state"] not in USABLE_STATES:
         sys.stdin.read()
         progress(hook_skip_message("vaws-coordinator", info))
         record_hook_degradation(hook="vaws", dep="vaws-coordinator", state=info["state"])

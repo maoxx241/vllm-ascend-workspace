@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from vaws_dependency import (
+    USABLE_STATES,
     VAWS_TOP_NAME,
     acknowledged_drift,
     all_pins,
@@ -57,7 +58,7 @@ CAPABILITY_DEPS = {
 
 
 def _usable(state: str) -> bool:
-    return state in {"ready", "off_pin"}
+    return state in USABLE_STATES
 
 
 def _dep_degradation(
@@ -152,7 +153,7 @@ def evaluate_capabilities(
     remote_pin = pins["remote-dev"]
     remote_ok = _usable(remote["state"])
     remote_deg: list[dict[str, Any]] = []
-    if not remote_ok:
+    if remote["state"] != "ready":
         remote_deg.append(
             _dep_degradation(
                 remote_pin,
@@ -169,7 +170,7 @@ def evaluate_capabilities(
 
     resolver_deg: list[dict[str, Any]] = []
     plugin = repo_root / PLUGIN_RELATIVE
-    if not remote_ok:
+    if remote["state"] != "ready":
         resolver_deg.append(
             _dep_degradation(
                 remote_pin,
@@ -223,7 +224,7 @@ def evaluate_capabilities(
     coord_pin = pins["vaws-coordinator"]
     coord_ok = _usable(coord["state"])
     coord_deg: list[dict[str, Any]] = []
-    if not coord_ok:
+    if coord["state"] != "ready":
         coord_deg.append(
             _dep_degradation(
                 coord_pin,
@@ -242,7 +243,7 @@ def evaluate_capabilities(
     top_pin = pins[VAWS_TOP_NAME]
     top_ok = _usable(top["state"])
     top_deg: list[dict[str, Any]] = []
-    if not top_ok:
+    if top["state"] != "ready":
         top_deg.append(
             _dep_degradation(
                 top_pin,
@@ -269,7 +270,7 @@ def evaluate_capabilities(
     kit_pin = pins["vaws-knowledge"]
     kit_ok = _usable(kit["state"])
     kit_deg: list[dict[str, Any]] = []
-    if not kit_ok:
+    if kit["state"] != "ready":
         kit_deg.append(
             _dep_degradation(
                 kit_pin,

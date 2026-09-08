@@ -44,6 +44,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / ".agents" / "lib"))
 from vaws_dependency import (  # noqa: E402
+    USABLE_STATES,
     hook_skip_message,
     inspect,
     record_hook_degradation,
@@ -179,7 +180,7 @@ def cmd_server(args: argparse.Namespace) -> int:
 
 def cmd_hook(args: argparse.Namespace) -> int:
     info = inspect("remote-dev")
-    if info["state"] not in {"ready", "off_pin"}:
+    if info["state"] not in USABLE_STATES:
         # Guards default to allow and only observe; a missing substrate must
         # not block the client's own tools. Consume stdin so the client does
         # not see a broken pipe, and return an allow decision (empty output).

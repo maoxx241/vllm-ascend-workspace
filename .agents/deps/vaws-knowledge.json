@@ -9,15 +9,15 @@
   "root_env": "VAWS_KNOWLEDGE_KIT_ROOT",
   "default_checkout": "{shared_workspace_root}/.vaws-local/vaws-knowledge",
   "bootstrap": "python3 .agents/scripts/vaws_deps.py bootstrap vaws-knowledge",
-  "consumed_surface": [
-    "conformance_kit",
-    "shared_corpus"
-  ],
+  "consumed_surface": {
+    "conformance_kit": "conformance/runner.py",
+    "shared_corpus": "corpus/verified"
+  },
   "identity": {
     "required_files": [
       "conformance/runner.py"
     ],
-    "canonical_origin": false
+    "canonical_origin": true
   },
-  "note": "External conformance kit used by knowledge client tests. Not a runtime dependency and not vendored. CI checks out this exact commit with persist-credentials: false."
+  "note": "External conformance kit used by knowledge client tests. Not a runtime dependency and not vendored. CI checks out this exact commit with persist-credentials: false. identity.canonical_origin is true so a fork is reported as wrong_origin (usable, always warned). false would drop origin from identity and never emit wrong_origin."
 }

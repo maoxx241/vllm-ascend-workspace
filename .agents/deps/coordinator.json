@@ -9,16 +9,17 @@
   "root_env": "VAWS_COORDINATOR_ROOT",
   "default_checkout": "{shared_workspace_root}/.vaws-local/vaws-coordinator",
   "bootstrap": "python3 .agents/scripts/vaws.py bootstrap",
-  "consumed_surface": [
-    "task_stdio_server",
-    "task_cli",
-    "session_hook",
-    "http_manager",
-    "host_queue_interface",
-    "build_inputs"
-  ],
-    "identity": {
+  "consumed_surface": {
+    "task_stdio_server": "task_server.py",
+    "task_cli": "scripts/vaws.py",
+    "session_hook": "hooks/vaws_session.py",
+    "http_manager": "server.py",
+    "host_queue_interface": "lib/vaws_host_queue.py (VAWS_HOST_QUEUE_MODULE -> scaffold vaws_npu_coordination.py)",
+    "build_inputs": "lib/vaws_build_inputs.py"
+  },
+  "identity": {
     "required_files": [
+      "task_server.py",
       "scripts/vaws.py",
       "hooks/vaws_session.py",
       "lib/vaws_ops.py",
@@ -27,9 +28,9 @@
       "workers/managed_jobs.py",
       "server.py"
     ],
-    "canonical_origin": false
+    "canonical_origin": true
   },
-  "note": "vaws-coordinator is consumed as an external checkout, not a submodule and not a vendored copy. Locate it through VAWS_COORDINATOR_ROOT or the default path above. Bump `commit` deliberately; `vaws.py status` reports drift. This pin is the independently accepted merged main. It does not change the remote-dev pin in remote-dev.json.",
+  "note": "vaws-coordinator is consumed as an external checkout, not a submodule and not a vendored copy. Locate it through VAWS_COORDINATOR_ROOT or the default path above. Bump `commit` deliberately; `vaws.py status` reports drift. This pin is the independently accepted merged main. It does not change the remote-dev pin in remote-dev.json. identity.canonical_origin is true so a fork is reported as wrong_origin (usable, always warned). false would drop origin from identity and never emit wrong_origin.",
   "extensions": {
     "tree": "fc64eacacf16060446895e2fa0a23a1fe0d17b4e",
     "pinned_mirrors": {

@@ -9,13 +9,13 @@
   "root_env": "VAWS_TOP_ROOT",
   "default_checkout": "{home}/vaws-worktrees/{repo_dirname}/npu-fleet-monitor",
   "bootstrap": "python3 .agents/skills/npu-fleet-monitor/scripts/manage_monitor.py ensure",
-  "consumed_surface": [
-    "agent_skill",
-    "cli",
-    "mcp",
-    "start",
-    "install_user_service"
-  ],
+  "consumed_surface": {
+    "agent_skill": ".agents/skills/vaws-top/SKILL.md",
+    "cli": "scripts/vaws-top.py",
+    "mcp": "scripts/vaws-top-mcp.py",
+    "start": "scripts/start.sh",
+    "install_user_service": "scripts/install-user-service.sh"
+  },
   "identity": {
     "required_files": [
       "package.json",
@@ -28,5 +28,5 @@
     ],
     "canonical_origin": true
   },
-  "note": "vaws-top is consumed as an external checkout, not a submodule and not a vendored copy. The scaffold locates the checkout through VAWS_TOP_ROOT, --clone-dir, or the documented default path above. Bump `commit` deliberately after root refreshes the published main; missing pins fail closed instead of running unpinned. The extracted monitor owns its runtime and advanced skill; this consumer only locates/bootstraps the local loopback service and hands off to that skill. Observation records are not NPU allocation authority."
+  "note": "vaws-top is consumed as an external checkout, not a submodule and not a vendored copy. The scaffold locates the checkout through VAWS_TOP_ROOT, --clone-dir, or the documented default path above. Bump `commit` deliberately after root refreshes the published main; missing pins fail closed instead of running unpinned. The extracted monitor owns its runtime and advanced skill; this consumer only locates/bootstraps the local loopback service and hands off to that skill. Observation records are not NPU allocation authority. identity.canonical_origin is true so a fork is reported as wrong_origin (usable, always warned). false would drop origin from identity and never emit wrong_origin. manage_monitor ensure still refuses to clone or reset into a wrong-origin or off_pin directory; that is a clone-time decision, not resolve()."
 }

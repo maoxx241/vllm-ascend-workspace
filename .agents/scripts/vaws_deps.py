@@ -3,7 +3,7 @@
 
 Subcommands:
 
-    status [name...]    JSON inspect payload; exit 1 on off_pin unless allowed
+    status [name...]    JSON inspect payload; exit 1 on identity drift unless allowed
     bootstrap <name|all> [--dest] [--reset]
     doctor              Result Envelope v1 capability report
 

@@ -38,6 +38,7 @@ if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
 from vaws_dependency import (  # noqa: E402
+    USABLE_STATES,
     checkout_path,
     inspect,
     load_pin,
@@ -108,12 +109,12 @@ def remote_dev_root(*, required: bool = True, env: Mapping[str, str] | None = No
 
     Order: ``VAWS_REMOTE_DEV_ROOT``, then the default checkout directory. A
     configured path that does not look like a checkout is an error either way;
-    a missing default is an error only when ``required``. Drift (``off_pin``)
-    is not an execution gate.
+    a missing default is an error only when ``required``. Identity drift
+    (``off_pin``, ``wrong_origin``) is not an execution gate.
     """
     env = os.environ if env is None else env
     info = inspect("remote-dev", env)
-    if info["state"] in {"ready", "off_pin"}:
+    if info["state"] in USABLE_STATES:
         return Path(info["path"]).expanduser().resolve()
     if not required:
         return None
@@ -233,7 +234,7 @@ def checkout_status(env: Mapping[str, str] | None = None, *, repo_root: Path = R
         "origin_matches": info["origin_matches"],
         "problems": info["problems"],
     }
-    if info["state"] == "not_git":
+    if info["state"] in {"not_git", "incomplete"}:
         payload["missing"] = [
             relative for relative in REQUIRED_FILES if not (Path(info["path"]) / relative).is_file()
         ]

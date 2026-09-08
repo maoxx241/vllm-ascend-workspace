@@ -19,7 +19,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / ".agents" / "lib"))
 from vaws_coordinator import COORDINATOR_ROOT_ENV, coordinator_environment
-from vaws_dependency import hook_skip_message, inspect, record_hook_degradation
+from vaws_dependency import USABLE_STATES, hook_skip_message, inspect, record_hook_degradation
 
 
 def main() -> int:
@@ -34,7 +34,7 @@ def main() -> int:
     if args.agent_sessions_dir.strip():
         os.environ["VAWS_AGENT_SESSIONS_DIR"] = str(Path(args.agent_sessions_dir).expanduser())
     info = inspect("vaws-coordinator")
-    if info["state"] not in {"ready", "off_pin"}:
+    if info["state"] not in USABLE_STATES:
         sys.stdin.read()
         print(hook_skip_message("vaws-coordinator", info), file=sys.stderr)
         record_hook_degradation(hook="vaws_session", dep="vaws-coordinator", state=info["state"])
