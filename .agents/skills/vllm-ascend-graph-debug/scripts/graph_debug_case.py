@@ -30,12 +30,12 @@ from vaws_comparability import (  # noqa: E402
     issue_certificate,
     merge_identities,
 )
+from vaws_code_identity import manifest_code  # noqa: E402
 from vaws_run_manifest import (  # noqa: E402
     RunManifestError,
     add_artifact,
     load_manifest,
     new_manifest,
-    sha256_file,
     transition_status,
     write_manifest,
 )
@@ -158,6 +158,7 @@ def init_case(
     topology: Mapping[str, Any] | None = None,
     parent_run_id: str | None = None,
     created_at: str | None = None,
+    code: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     if case_dir.exists() and any(case_dir.iterdir()):
         raise GraphDebugError(f"case directory is not empty: {case_dir}")
@@ -187,6 +188,7 @@ def init_case(
         run_type="debug",
         run_id=case_id,
         parent_run_id=parent_run_id,
+        code=code,
         workspace_snapshot=workspace_snapshot,
         environment=environment,
         model=model,
@@ -687,7 +689,6 @@ def finalize_case(
         validation_records[kind] = {
             "path": destination.relative_to(case_dir).as_posix(),
             "source": str(source.resolve()),
-            "sha256": sha256_file(destination),
         }
 
     case["resolution"] = {
@@ -714,7 +715,6 @@ def finalize_case(
             name=f"validation-{artifact_name}",
             kind="reproduction-rerun-output",
             uri=record_row["path"],
-            sha256=record_row["sha256"],
             updated_at=timestamp,
         )
     manifest = add_artifact(
@@ -820,6 +820,7 @@ def main(argv: list[str] | None = None) -> int:
                 model=_json_object(args.model, "model"),
                 topology=_json_object(args.topology, "topology"),
                 parent_run_id=args.parent_run_id,
+                code=manifest_code(ROOT),
             )
             payload = {
                 "status": "created",

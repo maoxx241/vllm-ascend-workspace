@@ -6,7 +6,7 @@
 - [ ] Machine policy, devices, model and weight hash, environment, topology (`tp` and `dp`), Serving arguments, Benchmark arguments, dataset, request rate, and concurrency are written into `shared`; `plan` refuses a config missing any of them.
 - [ ] `parity-check.json` was read including its `not_checked` list; it certifies the declaration, not the observed runtime.
 - [ ] Each measure-phase result recorded its own `observation`; `analyze` consumed a comparable observational certificate. Empty, null, declared-only, or partially observed identity cannot pass.
-- [ ] Every measurement uses the planned config hash.
+- [ ] Every measurement inlines the planned `shared` object.
 
 ## Execution
 

@@ -114,7 +114,7 @@ class GraphDebugCaseTests(unittest.TestCase):
             self.assertIn("graph-debug-case", artifacts)
             for name in ("validation-minimal-reproduction", "validation-original-reproduction"):
                 self.assertIn(name, artifacts)
-                self.assertRegex(artifacts[name]["sha256"], r"^[0-9a-f]{64}$")
+                self.assertNotIn("sha256", artifacts[name])
                 self.assertTrue((case_dir / artifacts[name]["uri"]).is_file())
 
     def test_init_then_finalize_cannot_reach_passed(self) -> None:

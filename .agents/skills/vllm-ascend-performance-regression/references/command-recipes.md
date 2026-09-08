@@ -8,7 +8,7 @@ python -B .agents/skills/vllm-ascend-performance-regression/scripts/performance_
   --config /path/to/experiment-config.json
 ```
 
-Read the returned config hash and `schedule.json`.
+Read the returned `shared` object and `schedule.json`.
 
 ## Normalize and record
 
@@ -21,7 +21,7 @@ python -B .agents/skills/vllm-ascend-performance-regression/scripts/performance_
   --state baseline \
   --phase measure \
   --ordinal 1 \
-  --config-hash <hash-from-plan>
+  --shared '{"machine":"example"}'
 
 python -B .agents/skills/vllm-ascend-performance-regression/scripts/performance_regression.py record \
   --output-dir .vaws-local/performance-regression/change-001 \

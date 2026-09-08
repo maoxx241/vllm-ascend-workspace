@@ -183,7 +183,7 @@ class SessionGroupTests(unittest.TestCase):
             )
             self.assertTrue(first_snapshot["dirty"])
             self.assertNotEqual(
-                first_snapshot["dirty_digest"], second_snapshot["dirty_digest"]
+                first_snapshot["snapshot_commit"], second_snapshot["snapshot_commit"]
             )
             with self.assertRaisesRegex(groups.SessionGroupError, "same workspace"):
                 groups.create_group(
@@ -231,8 +231,8 @@ class SessionGroupTests(unittest.TestCase):
 
             self.assertEqual(created["status"], "ready")
             self.assertEqual(
-                created["members"][0]["snapshot"]["dirty_digest"],
-                created["members"][1]["snapshot"]["dirty_digest"],
+                created["members"][0]["snapshot"]["snapshot_commit"],
+                created["members"][1]["snapshot"]["snapshot_commit"],
             )
 
     def test_rejects_different_dirty_submodule_contents(self) -> None:

@@ -19,6 +19,7 @@ LIB = ROOT / ".agents" / "lib"
 if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
+from vaws_code_identity import manifest_code  # noqa: E402
 from vaws_run_manifest import (  # noqa: E402
     RunManifestError,
     add_artifact,
@@ -207,7 +208,11 @@ def validate_result(result: Mapping[str, Any], planned_ids: set[str]) -> None:
 
 
 def plan(
-    output_dir: Path, *, config_path: Path, created_at: str | None = None
+    output_dir: Path,
+    *,
+    config_path: Path,
+    created_at: str | None = None,
+    code: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     if output_dir.exists() and any(output_dir.iterdir()):
         raise OperatorDebugError(f"output directory is not empty: {output_dir}")
@@ -245,6 +250,7 @@ def plan(
     manifest = new_manifest(
         run_type="debug",
         run_id=config["run_id"],
+        code=code,
         workspace_snapshot=config.get("workspace_snapshot", {}),
         environment=config.get("environment", {}),
         model=config.get("model", {}),
@@ -484,7 +490,9 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         if args.action == "plan":
-            payload = plan(args.output_dir, config_path=args.config)
+            payload = plan(
+                args.output_dir, config_path=args.config, code=manifest_code(ROOT)
+            )
         elif args.action == "record":
             payload = record(args.output_dir, result_path=args.result)
         else:

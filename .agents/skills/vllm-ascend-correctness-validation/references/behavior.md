@@ -65,8 +65,7 @@ Each state writes:
       "enforce_eager": true
     },
     "base_url": null,
-    "served_model": null,
-    "cases_sha256": "<64 lowercase hex>"
+    "served_model": null
   },
   "cases": [
     {
@@ -92,7 +91,7 @@ Each state writes:
 
 `status` is `ok`, `error`, or `unsupported`. An executor may provide text, token IDs, token strings, numeric evidence, task metrics, or a relevant subset.
 
-`execution` records what decided the run's behaviour besides the code under test. The harness fills it from its config (`engine_args`, `model`, `base_url`, `served_model`) and adds `cases_sha256`, the digest of the case array it actually executed. The AISBench adapter requires it via `normalize --execution`. It is a declaration of the launch configuration, not an observation of the running service.
+`execution` records what decided the run's behaviour besides the code under test. The harness fills it from its config (`engine_args`, `model`, `base_url`, `served_model`). Case files live in git; `code.snapshot_commit` already covers them. The AISBench adapter requires an execution block via `normalize --execution`. It is a declaration of the launch configuration, not an observation of the running service.
 
 ## Execution identity check
 
@@ -100,7 +99,7 @@ Each state writes:
 
 - each result's `label` must equal the `baseline_label` / `candidate_label` recorded at `init` (passing one file twice is rejected);
 - both results must carry an `execution` block with an `engine_args` object;
-- every key where the two `execution` blocks differ (`engine_args.*` flattened, plus `model`, `base_url`, `served_model`, `cases_sha256`) must have been declared at `init` with `--allowed-difference KEY`.
+- every key where the two `execution` blocks differ (`engine_args.*` flattened, plus `model`, `base_url`, `served_model`) must have been declared at `init` with `--allowed-difference KEY`.
 
 An undeclared difference aborts the comparison with the list of differing keys and leaves the manifest non-terminal. This is what stops a deliberate eager-versus-graph comparison from being reported as a code regression: with `--allowed-difference engine_args.enforce_eager` the comparison runs, and the report and `execution.json` state that the divergence is attributable to that declared variable. Without the declaration the comparison is not a code comparison and is not performed.
 
@@ -112,7 +111,7 @@ The check compares declared launch configuration. It cannot see differences that
 
 - the Run Manifest identity written at `init` is **declared**;
 - offline `execution.engine_args` and `execution.model` are **observed** (they were passed to `LLM`); online those two are **declared** (never sent to the service);
-- `base_url`, `served_model`, and `cases_sha256` are **observed**;
+- `base_url` and `served_model` are **observed**;
 - an optional result `observation` object is **observed** and is required for `workspace_snapshot`, `environment`, `model`, `topology`, and `native_digest`.
 
 `consume_certificate` recomputes the verdict from the identity body, including each side's declaration/observation mismatches. Empty identity groups, and null or whitespace-only identity scalars, are recorded as `unknown` and block `comparable`, so they block `passed`. They are not rejected at `init`. Two `{"text": ""}` outputs are `infrastructure_failure` (`empty-output-is-not-agreement`), not `exact_match`.

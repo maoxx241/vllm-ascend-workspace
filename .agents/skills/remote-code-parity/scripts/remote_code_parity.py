@@ -228,12 +228,16 @@ class SubmoduleEntry:
     path: str
 
 
+UNPOPULATED_POLICIES = ('error', 'gitlink')
+
+
 @dataclass
 class RepoNode:
     relpath: str
     repo_path: Path
     submodule_name: str | None
     children: list['RepoNode'] = field(default_factory=list)
+    gitlink_commit: str | None = None
 
 
 @dataclass
@@ -342,6 +346,23 @@ def ensure_populated_worktree(repo: Path, relpath: str) -> None:
         )
 
 
+def index_gitlinks(repo: Path) -> dict[str, str]:
+    result = git(repo, ['ls-files', '--stage'], check=False)
+    links: dict[str, str] = {}
+    for line in result.stdout.splitlines():
+        meta, separator, path = line.partition('\t')
+        if not separator:
+            continue
+        parts = meta.split()
+        if len(parts) >= 2 and parts[0] == '160000' and len(parts[1]) == 40:
+            links[path] = parts[1]
+    return links
+
+
+def resolve_index_gitlink(repo: Path, path: str) -> str | None:
+    return index_gitlinks(repo).get(path) or gitlink_for_path(repo, git_head(repo), path)
+
+
 def list_submodules(repo: Path) -> list[SubmoduleEntry]:
     gitmodules = repo / '.gitmodules'
     if not gitmodules.exists():
@@ -357,14 +378,51 @@ def list_submodules(repo: Path) -> list[SubmoduleEntry]:
     return entries
 
 
-def discover_repo_tree(repo: Path, relpath: str = '.', submodule_name: str | None = None, source_roots: dict[str, Path] | None = None) -> RepoNode:
+def discover_repo_tree(
+    repo: Path,
+    relpath: str = '.',
+    submodule_name: str | None = None,
+    source_roots: dict[str, Path] | None = None,
+    *,
+    unpopulated: str = 'error',
+) -> RepoNode:
+    if unpopulated not in UNPOPULATED_POLICIES:
+        raise ValueError(f'unpopulated must be error or gitlink, got {unpopulated!r}')
     ensure_populated_worktree(repo, relpath)
     node = RepoNode(relpath=relpath, repo_path=repo, submodule_name=submodule_name)
-    for entry in list_submodules(repo):
+    entries = list(list_submodules(repo))
+    seen = {entry.path for entry in entries}
+    if unpopulated == 'gitlink':
+        for path in index_gitlinks(repo):
+            if path not in seen:
+                entries.append(SubmoduleEntry(name=path, path=path))
+                seen.add(path)
+    for entry in entries:
         child_relpath = entry.path if relpath in ('', '.') else f'{relpath}/{entry.path}'
         child_repo = (source_roots or {}).get(child_relpath, repo / entry.path)
-        ensure_populated_worktree(child_repo, child_relpath)
-        node.children.append(discover_repo_tree(child_repo, child_relpath, entry.name, source_roots))
+        if is_git_worktree(child_repo):
+            node.children.append(
+                discover_repo_tree(
+                    child_repo,
+                    child_relpath,
+                    entry.name,
+                    source_roots,
+                    unpopulated=unpopulated,
+                )
+            )
+            continue
+        if unpopulated == 'error':
+            ensure_populated_worktree(child_repo, child_relpath)
+        gitlink = resolve_index_gitlink(repo, entry.path)
+        if gitlink:
+            node.children.append(
+                RepoNode(
+                    relpath=child_relpath,
+                    repo_path=child_repo,
+                    submodule_name=entry.name,
+                    gitlink_commit=gitlink,
+                )
+            )
     return node
 
 
@@ -406,8 +464,8 @@ def synthetic_ref(workspace_id: str, snapshot_id: str, relpath: str) -> str:
     return f'refs/parity/{workspace_id}/{snapshot_id}/{sanitize_repo_id(relpath)}'
 
 
-def commit_message(workspace_id: str, relpath: str) -> str:
-    return f'remote-code-parity tree snapshot {workspace_id} {sanitize_repo_id(relpath)}'
+def commit_message(relpath: str) -> str:
+    return f'remote-code-parity tree snapshot {sanitize_repo_id(relpath)}'
 
 
 def gitlink_for_path(repo: Path, commit: str | None, path: str) -> str | None:
@@ -489,7 +547,7 @@ def build_synthetic_snapshot(
             )
 
         tree = git(repo, ['write-tree'], env=env).stdout.strip()
-        commit = git(repo, ['commit-tree', tree, '-m', commit_message(workspace_id, node.relpath)], env=env).stdout.strip()
+        commit = git(repo, ['commit-tree', tree, '-m', commit_message(node.relpath)], env=env).stdout.strip()
         if source_head:
             diff = git(repo, ['diff', '--name-only', f'{source_head}..{commit}']).stdout.splitlines()
         else:
@@ -515,7 +573,11 @@ def build_synthetic_snapshot(
 
 def cleanup_synthetic_refs(workspace_root: Path, records: list[SnapshotRecord]) -> None:
     for record in records:
+        if not record.ref:
+            continue
         repo = record_source(workspace_root, record)
+        if not is_git_worktree(repo):
+            continue
         git(repo, ['update-ref', '-d', record.ref], check=False)
 
 
@@ -1653,25 +1715,57 @@ def parse_sources(values: list[str]) -> dict[str, Path]:
     return sources
 
 
-def build_snapshot_records(workspace_root: Path, workspace_id: str, snapshot_id: str, denylist: tuple[str, ...], source_roots: dict[str, Path] | None = None) -> list[SnapshotRecord]:
-    tree = discover_repo_tree(workspace_root, '.', None, source_roots)
+def gitlink_snapshot_record(node: RepoNode) -> SnapshotRecord:
+    commit = node.gitlink_commit or ''
+    return SnapshotRecord(
+        relpath=node.relpath,
+        repo_id=sanitize_repo_id(node.relpath),
+        source_head=commit or None,
+        parent=commit or None,
+        commit=commit,
+        tree='',
+        ref='',
+        changed_paths=[],
+        submodules=[],
+    )
+
+
+def build_snapshot_records(
+    workspace_root: Path,
+    workspace_id: str,
+    snapshot_id: str,
+    denylist: tuple[str, ...],
+    source_roots: dict[str, Path] | None = None,
+    records: list[SnapshotRecord] | None = None,
+    *,
+    unpopulated: str = 'error',
+    with_build_inputs: bool = True,
+) -> list[SnapshotRecord]:
+    tree = discover_repo_tree(workspace_root, '.', None, source_roots, unpopulated=unpopulated)
     child_records: dict[str, SnapshotRecord] = {}
-    ordered_records: list[SnapshotRecord] = []
+    ordered_records = records if records is not None else []
     for node in iter_postorder(tree):
-        record = build_synthetic_snapshot(
-            node,
-            workspace_id=workspace_id,
-            snapshot_id=snapshot_id,
-            denylist=denylist,
-            child_commits=child_records,
-        )
+        if node.gitlink_commit:
+            record = gitlink_snapshot_record(node)
+        else:
+            record = build_synthetic_snapshot(
+                node,
+                workspace_id=workspace_id,
+                snapshot_id=snapshot_id,
+                denylist=denylist,
+                child_commits=child_records,
+            )
         child_records[node.relpath] = record
-        record.source_path = str(node.repo_path.resolve())
+        record.source_path = str(node.repo_path.resolve()) if node.repo_path.exists() else str(node.repo_path)
         ordered_records.append(record)
-    for record in ordered_records:
-        if record.relpath in ('vllm', 'vllm-ascend'):
-            patterns = VLLM_REINSTALL_PATTERNS if record.relpath == 'vllm' else VLLM_ASCEND_REINSTALL_PATTERNS
-            record.build_inputs = build_input_fingerprints(record_source(workspace_root, record), record.commit, patterns)
+    if with_build_inputs:
+        for record in ordered_records:
+            if record.relpath in ('vllm', 'vllm-ascend'):
+                source = record_source(workspace_root, record)
+                if not is_git_worktree(source):
+                    continue
+                patterns = VLLM_REINSTALL_PATTERNS if record.relpath == 'vllm' else VLLM_ASCEND_REINSTALL_PATTERNS
+                record.build_inputs = build_input_fingerprints(source, record.commit, patterns)
     return ordered_records
 
 
@@ -1692,8 +1786,9 @@ def run_plan(args: argparse.Namespace) -> int:
     marker_dirname = validate_relative_posix_path(args.marker_dirname, label='marker dirname')
     root_preserve_paths = resolved_root_preserve_paths(marker_dirname, args.preserve_path)
     snapshot_id = args.snapshot_id or now_utc().replace(':', '').replace('-', '')
-    records = build_snapshot_records(workspace_root, workspace_id, snapshot_id, tuple(DEFAULT_DENYLIST), parse_sources(getattr(args, 'source', [])))
+    records: list[SnapshotRecord] = []
     try:
+        records = build_snapshot_records(workspace_root, workspace_id, snapshot_id, tuple(DEFAULT_DENYLIST), parse_sources(getattr(args, 'source', [])), records)
         manifest = make_manifest(
             workspace_root=workspace_root,
             workspace_id=workspace_id,
@@ -1723,10 +1818,12 @@ def run_sync(args: argparse.Namespace) -> int:
     container = SshEndpoint(host=args.container_host, port=args.container_port, user=args.container_user)
 
     emit_progress('snapshot-build', workspace_id=workspace_id, snapshot_id=snapshot_id)
-    records = build_snapshot_records(workspace_root, workspace_id, snapshot_id, tuple(DEFAULT_DENYLIST), parse_sources(getattr(args, 'source', [])))
+    records: list[SnapshotRecord] = []
+    keep_refs = False
     manifest_path = manifest_path_for(container_cache_root, workspace_id, snapshot_id)
     current_phase = 'snapshot-built'
     try:
+        records = build_snapshot_records(workspace_root, workspace_id, snapshot_id, tuple(DEFAULT_DENYLIST), parse_sources(getattr(args, 'source', [])), records)
         try:
             record_map = {record.relpath: record for record in records}
             prior_runtime_state = load_runtime_state(workspace_root)
@@ -1770,6 +1867,7 @@ def run_sync(args: argparse.Namespace) -> int:
                         summary = summary_payload(status='ready', server_name=args.server_name, container_identity=args.container_identity, workspace_id=workspace_id, container_cache_root=container_cache_root, records=records, reinstall_status='not-needed', reason='snapshot and installed build inputs unchanged', first_install=False, runtime_install_env=last_container_state.get('last_runtime_install_env', {}), observed_runtime_commits=observed)
                         summary['fast_path'] = 'snapshot'
                         print(json_dump(summary))
+                        keep_refs = True
                         return 0
 
             auto_selected_materialize = False
@@ -1829,6 +1927,7 @@ def run_sync(args: argparse.Namespace) -> int:
                     summary['apply_mode'] = args.apply_mode
                     summary['manifest_path'] = manifest_path
                     print(json_dump(summary))
+                    keep_refs = True
                     return 0
 
                 lock_path = lock_path_for(container_cache_root, workspace_id, args.container_identity)
@@ -1965,6 +2064,7 @@ def run_sync(args: argparse.Namespace) -> int:
                     summary['manifest_path'] = manifest_path
                     summary['transfers'] = transfer_reports
                     print(json_dump(summary))
+                    keep_refs = True
                     return 0
                 finally:
                     emit_progress('release-lock', lock_path=lock_path)
@@ -2043,6 +2143,7 @@ def run_sync(args: argparse.Namespace) -> int:
                     observed_runtime_commits=None,
                 )
                 print(json_dump(summary))
+                keep_refs = True
                 return 0
 
             lock_path = lock_path_for(container_cache_root, workspace_id, args.container_identity)
@@ -2272,6 +2373,7 @@ def run_sync(args: argparse.Namespace) -> int:
                 )
                 summary['transfers'] = transfer_reports
                 print(json_dump(summary))
+                keep_refs = True
                 return 0
             finally:
                 emit_progress('release-lock', lock_path=lock_path)
@@ -2279,7 +2381,24 @@ def run_sync(args: argparse.Namespace) -> int:
         except Exception as exc:
             raise RuntimeError(f'{current_phase}: {exc}') from exc
     finally:
-        cleanup_synthetic_refs(workspace_root, records)
+        if not keep_refs:
+            cleanup_synthetic_refs(workspace_root, records)
+
+
+def run_gc(args: argparse.Namespace) -> int:
+    lib = Path(__file__).resolve().parents[3] / 'lib'
+    if str(lib) not in sys.path:
+        sys.path.insert(0, str(lib))
+    from vaws_code_identity import gc_parity_refs
+
+    result = gc_parity_refs(
+        Path(args.workspace_root),
+        max_age_days=args.max_age_days,
+        now=args.now,
+    )
+    print(json_dump(result))
+    return 0
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description='Prepare or enforce remote code parity for a ready runtime.', allow_abbrev=False)
@@ -2322,6 +2441,19 @@ def build_parser() -> argparse.ArgumentParser:
         help='auto picks materialize for pure-Python changes and install only when native/dependency files changed (or first install); source-only publishes snapshots only; materialize updates runtime sources without install/rebuild; install forces the full parity behavior.',
     )
 
+    gc = subparsers.add_parser(
+        'gc',
+        help='Delete unused refs/parity refs older than seven days.',
+    )
+    gc.add_argument('--workspace-root', required=True, help='Local workspace root.')
+    gc.add_argument('--max-age-days', type=int, default=7)
+    gc.add_argument(
+        '--now',
+        type=float,
+        default=None,
+        help='Unix timestamp used as now; tests pin this so age is deterministic.',
+    )
+
     return parser
 
 
@@ -2333,6 +2465,8 @@ def main() -> int:
             return run_plan(args)
         if args.command == 'sync':
             return run_sync(args)
+        if args.command == 'gc':
+            return run_gc(args)
         parser.error(f'unsupported command: {args.command}')
         return 2
     except Exception as exc:

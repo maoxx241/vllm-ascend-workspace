@@ -135,6 +135,8 @@ Required behavior:
 - support `auto`, `git`, and `bundle` transport selection; `auto` falls back to
   the existing self-contained bundle import if receive-pack is unavailable
 - publish deterministic parentless tree snapshot commits so first use of an empty container mirror does not require shipping the full upstream history of large repos such as `vllm`
+- snapshot commit messages are `remote-code-parity tree snapshot <repo-id>` only (no workspace id), so the same tree always yields the same snapshot SHA
+- `build_snapshot_records(..., unpopulated="error"|"gitlink", with_build_inputs=True|False)` is explicit: `plan`/`sync` error on an unpopulated child and compute native build-input fingerprints; identity/`gc` record the parent-index gitlink SHA, skip build-input fingerprints, and do not require that worktree
 - keep the parentless snapshots so first hydration sends only the current tree,
   not upstream history; direct push may negotiate against an existing mirror,
   while the bundle fallback remains independent of remote base history

@@ -17,6 +17,7 @@ LIB = ROOT / ".agents" / "lib"
 if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
+from vaws_code_identity import manifest_code  # noqa: E402
 from vaws_run_manifest import (  # noqa: E402
     RunManifestError,
     TERMINAL_STATUSES,
@@ -115,7 +116,13 @@ def validate_config(config: Mapping[str, Any]) -> None:
         raise WorkflowError("; ".join(errors))
 
 
-def plan(output_dir: Path, *, config_path: Path, created_at: str | None = None) -> dict[str, Any]:
+def plan(
+    output_dir: Path,
+    *,
+    config_path: Path,
+    created_at: str | None = None,
+    code: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     if output_dir.exists() and any(output_dir.iterdir()):
         raise WorkflowError(f"output directory is not empty: {output_dir}")
     config = _load_json(config_path, "workflow config")
@@ -145,6 +152,7 @@ def plan(output_dir: Path, *, config_path: Path, created_at: str | None = None) 
     manifest = new_manifest(
         run_type="change-validation",
         run_id=config["run_id"],
+        code=code,
         workspace_snapshot=config.get("workspace_snapshot", {}),
         environment=config.get("environment", {}),
         topology={"target": config["target"]},
@@ -283,7 +291,9 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         if args.action == "plan":
-            payload = plan(args.output_dir, config_path=args.config)
+            payload = plan(
+                args.output_dir, config_path=args.config, code=manifest_code(ROOT)
+            )
         elif args.action == "link":
             payload = link(args.output_dir, stage=args.stage, child_path=args.manifest)
         else:

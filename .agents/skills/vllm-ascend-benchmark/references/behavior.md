@@ -82,7 +82,7 @@ This skill measures and reports deltas. Formal `passed` / `failed` /
 predeclare per-metric `direction` (`higher` or `lower`) and
 `max_relative_regression`, then let `.agents/skills/vllm-ascend-performance-regression/scripts/performance_regression.py analyze`
 apply those criteria together with measurement-quality and comparability gates
-(`config_hash` identity, warmup exclusion, at least two decision values per
+(`shared` identity, warmup exclusion, at least two decision values per
 state, `max_cv`, optional outlier policy). Scripts may apply declared criteria
 deterministically. Missing, noisy, or noncomparable measurements are
 `inconclusive`; they are not a pass, a fail, or an unstructured agent judgment.

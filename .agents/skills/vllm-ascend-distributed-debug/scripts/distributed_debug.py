@@ -18,6 +18,7 @@ LIB = ROOT / ".agents" / "lib"
 if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
+from vaws_code_identity import manifest_code  # noqa: E402
 from vaws_run_manifest import (  # noqa: E402
     RunManifestError,
     add_artifact,
@@ -240,7 +241,11 @@ def validate_event(event: Mapping[str, Any], known_ranks: set[int]) -> None:
 
 
 def init_case(
-    output_dir: Path, *, config_path: Path, created_at: str | None = None
+    output_dir: Path,
+    *,
+    config_path: Path,
+    created_at: str | None = None,
+    code: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     if output_dir.exists() and any(output_dir.iterdir()):
         raise DistributedDebugError(f"output directory is not empty: {output_dir}")
@@ -274,6 +279,7 @@ def init_case(
         run_type="debug",
         run_id=config["run_id"],
         parent_run_id=config.get("parent_run_id"),
+        code=code,
         workspace_snapshot=config.get("workspace_snapshot", {}),
         environment=config.get("environment", {}),
         model=config.get("model", {}),
@@ -596,7 +602,9 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         if args.action == "init":
-            payload = init_case(args.output_dir, config_path=args.config)
+            payload = init_case(
+                args.output_dir, config_path=args.config, code=manifest_code(ROOT)
+            )
         elif args.action == "ingest":
             payload = ingest_events(args.output_dir, events_path=args.events)
         else:

@@ -32,5 +32,5 @@ Do not mark a graph-debug case resolved until every required item passes.
 - [ ] The minimal reproduction passes after the fix, and its rerun output is attached with `--minimal-evidence`.
 - [ ] The original reproduction passes after the fix, and its rerun output is attached with `--original-evidence`.
 - [ ] Temporary buffers, logging, synchronization, deterministic overrides, and workarounds are removed or intentionally disabled.
-- [ ] `case.json`, comparison artifacts, `validation/` evidence, and Run Manifest v1 validate, and the manifest links the evidence with SHA256.
+- [ ] `case.json`, comparison artifacts, `validation/` evidence, and Run Manifest v1 validate, and the manifest links the evidence.
 - [ ] Remaining untested combinations are listed as risks rather than implied supported.

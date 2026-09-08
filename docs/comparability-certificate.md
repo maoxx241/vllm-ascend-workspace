@@ -58,7 +58,6 @@ points abort before classification when the certificate is `not-comparable`.
 | `topology.*` | observed from a recorded observation; declared from the manifest / `shared` | TP, DP, device list. Restarting with a different TP on the same URL is the failure mode this exists to catch. |
 | `engine_args.*` | **observed** offline (passed to `LLM`); **declared** online (never sent to the service) | Eager/graph, TP, feature flags. Labelling the online copy `observed` would launder the declarative gate. |
 | `base_url`, `served_model` | observed when the harness used them for HTTP | The request target, not the process flags behind it. |
-| `cases_sha256` | observed (digest of the case array the producer iterated) | Different case files are an undeclared difference. |
 | `serve_args`, `bench_args`, `dataset` | observed from a measurement observation; declared from perf `shared` | Workload identity. |
 | `max_concurrency`, `request_rate` | observed from a measurement observation; declared from `shared` | Audit C5 / case 6. |
 | `npu_devices` | observed from a measurement observation; declared from `shared` | Card count. |

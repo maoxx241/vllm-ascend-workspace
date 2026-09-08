@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import math
 import os
@@ -29,6 +28,7 @@ from vaws_comparability import (  # noqa: E402
     issue_certificate,
     merge_identities,
 )
+from vaws_code_identity import manifest_code  # noqa: E402
 from vaws_run_manifest import (  # noqa: E402
     RunManifestError,
     add_artifact,
@@ -48,9 +48,8 @@ DEFAULT_BENCHMARK_METRICS = {
     "itl": "mean_itl_ms",
     "acceptance_rate": "acceptance_rate",
 }
-# Every non-code condition the parity certificate claims to hold constant. The
-# `config_hash` is only meaningful if these are actually written down: hashing a
-# free-form `shared` object proves nothing about concurrency or parallelism.
+# Every non-code condition the parity certificate claims to hold constant.
+# Record the shared object itself and compare it by structure, not a hash.
 REQUIRED_SHARED_KEYS = (
     "machine",
     "npu_devices",
@@ -112,11 +111,10 @@ def _load_json(path: Path, label: str) -> dict[str, Any]:
     return payload
 
 
-def config_hash(shared: Mapping[str, Any]) -> str:
-    encoded = json.dumps(
-        shared, ensure_ascii=False, sort_keys=True, separators=(",", ":")
-    ).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
+def same_shared(left: Mapping[str, Any], right: Mapping[str, Any]) -> bool:
+    return json.dumps(
+        left, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ) == json.dumps(right, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
 def parse_metric_maps(values: Sequence[str]) -> dict[str, str]:
@@ -137,7 +135,7 @@ def normalize_benchmark_result(
     state: str,
     phase: str,
     ordinal: int,
-    fingerprint: str,
+    shared: Mapping[str, Any],
     source: str,
     metric_map: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
@@ -169,7 +167,7 @@ def normalize_benchmark_result(
         "state": state,
         "phase": phase,
         "ordinal": ordinal,
-        "config_hash": fingerprint,
+        "shared": dict(shared),
         "metrics": normalized_metrics,
         "source": source,
     }
@@ -344,7 +342,7 @@ def build_parity_check(config: Mapping[str, Any]) -> dict[str, Any]:
 
     The certificate is declarative: it proves the operator wrote down every
     required non-code condition once and that both states are pinned to that
-    same declaration by `config_hash`. It does not observe what the services
+    same declaration by inlined `shared`. It does not observe what the services
     actually ran with; `basis` and `not_checked` say so in the artifact itself.
     """
     shared = config["shared"]
@@ -352,7 +350,6 @@ def build_parity_check(config: Mapping[str, Any]) -> dict[str, Any]:
         "schema_version": SCHEMA_VERSION,
         "status": "passed",
         "basis": "declared-configuration",
-        "config_hash": config_hash(shared),
         "shared": shared,
         "allowed_difference": list(PARITY_ALLOWED_DIFFERENCES),
         "checks": [
@@ -393,6 +390,7 @@ def plan(
     *,
     config_path: Path,
     created_at: str | None = None,
+    code: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     if output_dir.exists() and any(output_dir.iterdir()):
         raise PerformanceRegressionError(f"output directory is not empty: {output_dir}")
@@ -401,10 +399,10 @@ def plan(
     run_id = config.get("run_id")
     if not isinstance(run_id, str) or not run_id:
         raise PerformanceRegressionError("run_id must be a non-empty string")
-    fingerprint = config_hash(config["shared"])
+    shared = dict(config["shared"])
     schedule = {
         "schema_version": SCHEMA_VERSION,
-        "config_hash": fingerprint,
+        "shared": shared,
         "entries": build_schedule(warmups=config.get("warmups", 1), runs=config["runs"]),
     }
     timestamp = created_at or utc_now()
@@ -412,13 +410,13 @@ def plan(
         "schema_version": SCHEMA_VERSION,
         "run_id": run_id,
         "status": "planned",
-        "config_hash": fingerprint,
+        "shared": shared,
         "created_at": timestamp,
         "updated_at": timestamp,
     }
     measurements = {
         "schema_version": SCHEMA_VERSION,
-        "config_hash": fingerprint,
+        "shared": shared,
         "measurements": [],
     }
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -432,12 +430,13 @@ def plan(
         "# Performance regression reproduction\n\n"
         "Follow `schedule.json` in order. For every entry, establish code parity for "
         "the named state, run the shared Serving and Benchmark configuration, and "
-        "record a normalized result with the exact `config_hash`.\n",
+        "record a normalized result with the same `shared` object.\n",
     )
     manifest = new_manifest(
         run_type="performance",
         run_id=run_id,
         parent_run_id=config.get("parent_run_id"),
+        code=code,
         workspace_snapshot={
             "baseline": config["baseline"]["code_snapshot"],
             "candidate": config["candidate"]["code_snapshot"],
@@ -461,7 +460,7 @@ def plan(
     return {
         "status": "planned",
         "run_id": run_id,
-        "config_hash": fingerprint,
+        "shared": shared,
         "schedule_entries": len(schedule["entries"]),
     }
 
@@ -477,9 +476,9 @@ def validate_measurement(measurement: Mapping[str, Any]) -> None:
     ordinal = measurement.get("ordinal")
     if not isinstance(ordinal, int) or isinstance(ordinal, bool) or ordinal < 1:
         errors.append("ordinal must be a positive integer")
-    fingerprint = measurement.get("config_hash")
-    if not isinstance(fingerprint, str) or len(fingerprint) != 64:
-        errors.append("config_hash must be a SHA256 string")
+    shared = measurement.get("shared")
+    if not isinstance(shared, Mapping):
+        errors.append("shared must be an object")
     metrics = measurement.get("metrics")
     if not isinstance(metrics, Mapping) or not metrics:
         errors.append("metrics must be a non-empty object")
@@ -508,9 +507,9 @@ def record(
     validate_measurement(result)
     schedule = _load_json(output_dir / "schedule.json", "schedule")
     measurements = _load_json(output_dir / "measurements.json", "measurements")
-    if result["config_hash"] != schedule["config_hash"]:
+    if not same_shared(result["shared"], schedule["shared"]):
         raise PerformanceRegressionError(
-            "measurement config_hash does not match the planned experiment"
+            "measurement shared does not match the planned experiment"
         )
     pending = next(
         (entry for entry in schedule["entries"] if entry["status"] == "pending"),
@@ -530,7 +529,7 @@ def record(
         "state": result["state"],
         "phase": result["phase"],
         "ordinal": result["ordinal"],
-        "config_hash": result["config_hash"],
+        "shared": dict(result["shared"]),
         "metrics": {name: float(value) for name, value in result["metrics"].items()},
         "source": result.get("source"),
         "recorded_at": timestamp,
@@ -678,7 +677,7 @@ def analyze_documents(
     return {
         "schema_version": SCHEMA_VERSION,
         "status": status,
-        "config_hash": schedule["config_hash"],
+        "shared": schedule["shared"],
         "exclude_outliers": exclude_outliers,
         "max_cv": max_cv,
         "missing_metrics": sorted(set(missing_metrics)),
@@ -693,7 +692,7 @@ def render_report(comparison: Mapping[str, Any]) -> str:
         "# Performance regression report",
         "",
         f"- Status: **{comparison['status']}**",
-        f"- Config hash: `{comparison['config_hash']}`",
+        "- Shared configuration is recorded in `schedule.json`.",
         f"- Outliers excluded from decision: `{comparison['exclude_outliers']}`",
         f"- Maximum accepted CV: `{comparison['max_cv']}`",
         "",
@@ -951,7 +950,11 @@ def build_parser() -> argparse.ArgumentParser:
     normalize_parser.add_argument("--state", required=True, choices=STATES)
     normalize_parser.add_argument("--phase", required=True, choices=PHASES)
     normalize_parser.add_argument("--ordinal", required=True, type=int)
-    normalize_parser.add_argument("--config-hash", required=True)
+    normalize_parser.add_argument(
+        "--shared",
+        required=True,
+        help="JSON object of the planned shared configuration",
+    )
     normalize_parser.add_argument(
         "--metric-map",
         action="append",
@@ -969,16 +972,23 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.action == "plan":
             emit_progress("plan", output_dir=str(args.output_dir))
-            payload = plan(args.output_dir, config_path=args.config)
+            payload = plan(
+                args.output_dir,
+                config_path=args.config,
+                code=manifest_code(ROOT),
+            )
         elif args.action == "normalize":
             emit_progress("normalize", result=str(args.result))
             benchmark = _load_json(args.result, "Benchmark result")
+            shared = json.loads(args.shared)
+            if not isinstance(shared, dict):
+                raise PerformanceRegressionError("--shared must be a JSON object")
             normalized = normalize_benchmark_result(
                 benchmark,
                 state=args.state,
                 phase=args.phase,
                 ordinal=args.ordinal,
-                fingerprint=args.config_hash,
+                shared=shared,
                 source=str(args.result.resolve()),
                 metric_map=parse_metric_maps(args.metric_map),
             )

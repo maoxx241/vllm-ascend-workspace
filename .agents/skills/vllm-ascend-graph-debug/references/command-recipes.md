@@ -71,7 +71,7 @@ python -B .agents/skills/vllm-ascend-graph-debug/scripts/graph_debug_case.py fin
 ```
 
 Every `pass` result must be backed by the corresponding `--*-evidence` file (the
-rerun output after the fix); the files are copied into `validation/` and hashed
-into the manifest. Finalize also requires at least one prior `record`. When
+rerun output after the fix); the files are copied into `validation/` and
+linked from the manifest. Finalize also requires at least one prior `record`. When
 something is missing the command exits 1 and lists every missing item, leaving
 the case `active` and the manifest non-terminal.

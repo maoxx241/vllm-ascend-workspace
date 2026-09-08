@@ -16,7 +16,7 @@ LIB = ROOT / ".agents" / "lib"
 if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
-from vaws_run_manifest import add_artifact, new_manifest, sha256_file, transition_status, write_manifest
+from vaws_run_manifest import add_artifact, new_manifest, transition_status, write_manifest
 
 
 def load_module():
@@ -30,6 +30,7 @@ def load_module():
 
 
 optimization = load_module()
+sha256_file = optimization.sha256_file
 NOW = "2026-08-03T12:00:00Z"
 
 
@@ -47,7 +48,6 @@ def passed_manifest(path: Path, run_id: str, parent: str, kernel: Path, case_ids
         name="kernel",
         kind="triton-kernel",
         uri=str(kernel),
-        sha256=sha256_file(kernel),
         updated_at=NOW,
     )
     manifest = add_artifact(
