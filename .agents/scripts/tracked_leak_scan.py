@@ -24,11 +24,6 @@ LIB = ROOT / ".agents" / "lib"
 if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
-from vaws_venv import ensure_workspace_interpreter  # noqa: E402
-
-ensure_workspace_interpreter(repo_root=ROOT)
-
-
 from vaws_leak_guard import (  # noqa: E402
     CATEGORIES,
     LeakGuardError,
