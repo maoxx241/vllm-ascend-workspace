@@ -53,9 +53,10 @@ python3 .agents/skills/curate-workspace-knowledge/scripts/knowledge_curate.py \
   or driver version is the confident-but-wrong knowledge this design exists to
   prevent.
 - Never write an internal address, hostname, user path, or credential here.
-  `knowledge_validate.py` fails on those (`block` severity). Internal mount
-  paths and container instance names are legal here and refused on export
-  (`export` severity).
+  `knowledge_validate.py` fails on those (`block` severity). Container names,
+  internal machine identifiers, employee ids, and ticket ids are legal here
+  and refused on export (`export` severity). Detection follows
+  `vaws_knowledge.redact`; the live profile is declared by that package.
 - Propose upstream only through `.agents/scripts/knowledge_export.py`.
 
 ## Shared conformance kit

@@ -13,8 +13,6 @@ from __future__ import annotations
 
 import json
 import re
-import shutil
-import subprocess
 import sys
 import tomllib
 from importlib import metadata
@@ -36,7 +34,7 @@ PACKAGE_NAMES = (
     "vaws-knowledge",
 )
 VAWS_TOP_NAME = "vaws-top"
-KNOWN_NAMES = PACKAGE_NAMES + (VAWS_TOP_NAME,)
+KNOWN_NAMES = PACKAGE_NAMES
 GIT_COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 REQUIREMENT_RE = re.compile(
     r"^(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*)\s*(?P<spec>==\s*(?P<version>[^;]+))?"
@@ -232,57 +230,9 @@ def _payload(
     }
 
 
-def _probe_uvx_vaws_top() -> tuple[bool, list[str]]:
-    """True when the fleet dashboard console script is on PATH or listed by ``uv tool list``."""
-    if shutil.which(VAWS_TOP_NAME):
-        return True, []
-    uv = shutil.which("uv")
-    if uv is None:
-        return False, [f"uvx/uv is not on PATH; {VAWS_TOP_NAME} cannot be probed"]
-    try:
-        result = subprocess.run(
-            [uv, "tool", "list"],
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            text=True,
-            timeout=15,
-            check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        return False, [f"uv tool list failed: {exc}"]
-    if result.returncode != 0:
-        detail = (result.stderr or result.stdout).strip() or f"exit {result.returncode}"
-        return False, [f"uv tool list failed: {detail[-200:]}"]
-    for line in result.stdout.splitlines():
-        token = line.strip().split()[0] if line.strip() else ""
-        if token == VAWS_TOP_NAME:
-            return True, []
-    return False, [f"uvx {VAWS_TOP_NAME} is not installed"]
-
-
-def inspect_fleet() -> dict[str, Any]:
-    available, problems = _probe_uvx_vaws_top()
-    state = "ready" if available else "missing"
-    return {
-        "name": VAWS_TOP_NAME,
-        "state": state,
-        "required_version": None,
-        "locked_version": None,
-        "locked_commit": None,
-        "locked_url": "https://github.com/vllm-ascend-workspace/vaws-top",
-        "installed_version": None,
-        "installed_commit": None,
-        "problems": problems,
-        "remedy": REMEDY,
-        "probe": "uvx",
-    }
-
-
 def inspect(name: str, repo_root: Path = ROOT) -> dict[str, Any]:
     """Describe one package. Never raises for missing or drifted installs."""
     key = _norm_name(name)
-    if key == VAWS_TOP_NAME:
-        return inspect_fleet()
     if key not in PACKAGE_NAMES:
         return _payload(
             name=key,

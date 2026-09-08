@@ -50,8 +50,8 @@ def write_knowledge_dir(root: Path, entries: dict[str, list[dict]] | None = None
 def candidate_payload() -> dict:
     return {
         "kind": "known-failure-signatures",
-        "summary": "Remote SSH frames require acknowledgements",
-        "owner_skill": "remote-code-parity",
+        "summary": "SSH frames require acknowledgements",
+        "owner_skill": "code-parity",
         "scope": {
             "component": ["ssh-transport"],
             "machine": ["hvv-sz"],
@@ -97,7 +97,7 @@ class CandidateTests(unittest.TestCase):
     def test_secret_like_values_are_rejected(self) -> None:
         payload = candidate_payload()
         payload["resolution"] = "Use token sk-abcdefghijklmnopqrstuvwxyz123456"
-        with self.assertRaisesRegex(KnowledgeError, "secret-like value"):
+        with self.assertRaisesRegex(KnowledgeError, "credential-known-format"):
             normalize_candidate(payload, now=NOW)
 
     def test_absolute_evidence_paths_are_rejected(self) -> None:

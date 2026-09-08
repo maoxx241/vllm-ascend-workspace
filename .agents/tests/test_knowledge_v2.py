@@ -20,6 +20,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / ".agents" / "lib"))
 
 import vaws_knowledge_v2 as v2  # noqa: E402
+import vaws_redaction as redaction  # noqa: E402
 
 NOW = "2026-09-07T00:00:00Z"
 
@@ -53,7 +54,7 @@ def sample_entry(**overrides) -> dict:
             "contributor": "submitter",
             "origin_repo": "owner/fork",
             "submitted_at": "2026-09-07",
-            "redaction_profile": "r1",
+            "redaction_profile": redaction.REDACTION_PROFILE,
         },
         "lifecycle": {
             "first_seen": "2026-09-01",
@@ -367,7 +368,7 @@ class DocumentTests(unittest.TestCase):
         entry["rule"]["resolution"] = "ssh into 10.198.51.100 and restart"
         with self.assertRaises(Exception) as caught:
             self.write([v2.with_content_hash(entry)])
-        self.assertIn("ip-address", str(caught.exception))
+        self.assertIn("ipv4-address", str(caught.exception))
 
     def test_malformed_document_degrades_to_a_problem(self) -> None:
         path = self.root / f"model-capabilities{v2.V2_SUFFIX}"
@@ -390,7 +391,9 @@ class ExportTests(unittest.TestCase):
             submitted_at="2026-09-07",
         )
         self.assertEqual(exported["provenance"]["contributor"], "handle")
-        self.assertEqual(exported["provenance"]["redaction_profile"], "r1")
+        self.assertEqual(
+            exported["provenance"]["redaction_profile"], redaction.REDACTION_PROFILE
+        )
         self.assertEqual(exported["content_hash"], v2.content_hash(entry))
 
     def test_export_refuses_unresolved_dimensions(self) -> None:
@@ -404,11 +407,11 @@ class ExportTests(unittest.TestCase):
         entry = sample_entry()
         entry["status"] = "verified"
         entry["verification"] = verification()
-        entry["rule"]["resolution"] = "remount /mnt/weight/GLM-4.5 before launch"
+        entry["rule"]["resolution"] = "measured on remote 131 before launch"
         entry = v2.with_content_hash(entry)
         with self.assertRaises(Exception) as caught:
             v2.export_entry(entry, contributor="handle", origin_repo="owner/fork")
-        self.assertIn("internal-mount-path", str(caught.exception))
+        self.assertIn("internal-machine-identifier", str(caught.exception))
 
     def test_exported_document_declares_the_unverified_layer(self) -> None:
         entry = sample_entry()

@@ -55,9 +55,14 @@ python3 .agents/scripts/vaws_deps.py doctor
 python3 .agents/scripts/vaws_deps.py sync
 ```
 
+`status` inspects only the three `pyproject.toml` packages. `vaws-top` is
+not a package and is not part of `status` or its exit code.
+
 `status` and `doctor` print one JSON object on stdout. Progress goes to
 stderr. `doctor` is Result Envelope v1 (`vaws.result-envelope.v1`). That
-envelope is not `remote-dev.result.v1`.
+envelope is not `remote-dev.result.v1`. A missing `uvx` degrades
+`fleet_observation`; the remedy is
+`python3 .agents/skills/npu-fleet-monitor/scripts/manage_monitor.py deploy`.
 
 `sync` wraps `uv sync`. It never runs automatically from an entry script.
 
@@ -76,6 +81,8 @@ whose remedy is `uv sync`.
 
 `.agents/lib/vaws_capability.py` keeps the same seven capabilities. A
 `missing` package makes the capabilities that list it unavailable.
+`fleet_observation` is not a package: it needs `uvx` plus the `vaws-top`
+release wheel.
 
 | Capability | Depends on |
 |---|---|
@@ -83,7 +90,7 @@ whose remedy is `uv sync`.
 | `resolver_registration` | `vaws-remote-dev` |
 | `task_pool` | `vaws-coordinator` |
 | `host_npu_authority` | `vaws-coordinator` |
-| `fleet_observation` | `uvx vaws-top` |
+| `fleet_observation` | `uvx`, `vaws-top` |
 | `shared_knowledge` | local `.vaws-local/knowledge/shared/` cache |
 | `conformance_kit` | `vaws-knowledge` |
 

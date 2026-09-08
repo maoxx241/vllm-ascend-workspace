@@ -16,8 +16,14 @@ SCRIPTS = ROOT / ".agents" / "scripts"
 if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
-from vaws_capability import CAPABILITY_DEPS, CAPABILITY_ORDER, build_doctor_envelope, dumps_doctor  # noqa: E402
-from vaws_dependency import VAWS_TOP_NAME  # noqa: E402
+from vaws_capability import (  # noqa: E402
+    CAPABILITY_DEPS,
+    CAPABILITY_ORDER,
+    FLEET_REMEDY,
+    build_doctor_envelope,
+    dumps_doctor,
+    evaluate_capabilities,
+)
 from vaws_result_envelope import validate_envelope  # noqa: E402
 
 
@@ -115,7 +121,23 @@ class ResolverDegradationTests(unittest.TestCase):
         self.assertEqual(CAPABILITY_DEPS["remote_endpoints"], ("vaws-remote-dev",))
         self.assertEqual(CAPABILITY_DEPS["task_pool"], ("vaws-coordinator",))
         self.assertEqual(CAPABILITY_DEPS["conformance_kit"], ("vaws-knowledge",))
-        self.assertEqual(CAPABILITY_DEPS["fleet_observation"], (VAWS_TOP_NAME,))
+        self.assertEqual(CAPABILITY_DEPS["fleet_observation"], ("uvx", "vaws-top"))
+
+    def test_fleet_observation_without_uvx_uses_deploy_remedy(self) -> None:
+        from unittest.mock import patch
+
+        with patch("vaws_capability.shutil.which", return_value=None):
+            report = evaluate_capabilities()
+        cap = report["capabilities"]["fleet_observation"]
+        self.assertFalse(cap["available"])
+        self.assertTrue(cap["degraded"])
+        self.assertEqual(cap["depends_on"], ["uvx", "vaws-top"])
+        self.assertTrue(cap["degradation"])
+        self.assertEqual(cap["degradation"][0]["remedy"], FLEET_REMEDY)
+        self.assertEqual(
+            FLEET_REMEDY,
+            "python3 .agents/skills/npu-fleet-monitor/scripts/manage_monitor.py deploy",
+        )
 
     def test_acknowledged_drift_is_empty(self) -> None:
         envelope = build_doctor_envelope(

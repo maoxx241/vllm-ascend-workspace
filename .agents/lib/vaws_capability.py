@@ -7,13 +7,13 @@ capability uses the same degradation entry fields as
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 from typing import Any, Mapping
 
 from vaws_dependency import (
     REMEDY,
     USABLE_STATES,
-    VAWS_TOP_NAME,
     all_packages,
     inspect,
     require_package,
@@ -52,20 +52,29 @@ CAPABILITY_DEPS = {
     "resolver_registration": ("vaws-remote-dev",),
     "task_pool": ("vaws-coordinator",),
     "host_npu_authority": ("vaws-coordinator",),
-    "fleet_observation": (VAWS_TOP_NAME,),
+    "fleet_observation": ("uvx", "vaws-top"),
     "shared_knowledge": (),
     "conformance_kit": ("vaws-knowledge",),
 }
+FLEET_REMEDY = (
+    "python3 .agents/skills/npu-fleet-monitor/scripts/manage_monitor.py deploy"
+)
 SOURCE_REPOS = {
     "vaws-remote-dev": "vllm-ascend-workspace/remote-dev",
     "vaws-coordinator": "vllm-ascend-workspace/vaws-coordinator",
     "vaws-knowledge": "vllm-ascend-workspace/vaws-knowledge",
-    VAWS_TOP_NAME: "vllm-ascend-workspace/vaws-top",
 }
 
 
 def _usable(state: str) -> bool:
     return state in USABLE_STATES
+
+
+def _probe_fleet_observation() -> tuple[bool, list[str]]:
+    """True when ``uvx`` is on PATH so ``uvx vaws-top`` can be invoked."""
+    if shutil.which("uvx") is None:
+        return False, ["uvx is not on PATH"]
+    return True, []
 
 
 def _dep_degradation(
@@ -278,15 +287,16 @@ def evaluate_capabilities(
         degradation=host_deg,
     )
 
-    top = deps[VAWS_TOP_NAME]
-    top_ok = _usable(top["state"])
+    top_ok, top_problems = _probe_fleet_observation()
     top_deg: list[dict[str, Any]] = []
-    if top["state"] != "ready":
+    if not top_ok:
         top_deg.append(
-            _dep_degradation(
-                top,
-                effect=f"npu-fleet-monitor cannot exec uvx {VAWS_TOP_NAME}",
-            )
+            {
+                "layer": "tool",
+                "detail": "; ".join(top_problems),
+                "effect": "npu-fleet-monitor cannot run the release wheel through uvx",
+                "remedy": FLEET_REMEDY,
+            }
         )
     capabilities["fleet_observation"] = _capability(
         available=top_ok,

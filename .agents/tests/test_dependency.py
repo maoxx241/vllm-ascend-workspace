@@ -27,6 +27,10 @@ class SpecLockTests(unittest.TestCase):
         self.assertEqual(versions["vaws-knowledge"], "0.1.0")
         self.assertNotIn(deps.VAWS_TOP_NAME, versions)
 
+    def test_status_tracks_only_the_three_packages(self) -> None:
+        self.assertEqual(deps.KNOWN_NAMES, deps.PACKAGE_NAMES)
+        self.assertNotIn(deps.VAWS_TOP_NAME, deps.all_packages())
+
     def test_lock_records_the_v0_1_0_commits(self) -> None:
         locked = deps.locked_packages()
         self.assertEqual(
