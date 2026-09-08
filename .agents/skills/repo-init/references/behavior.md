@@ -122,7 +122,9 @@ Rules:
 - add `upstream` only when it helps the chosen workflow
 - `vllm` user fork is optional
 - `vllm-ascend` user fork is recommended but not mandatory
+- matching personal forks are reported; do not treat them as community upstream, assume push access, or select them merely because they exist
 - if the user chose "keep current", do not rewrite remotes just because the recommended topology differs
+- `configure` is explicit fresh-setup intent, not a migration of established fetch/push/protocol/pushurl/extra remotes
 - configure workspace remotes first, then submodule remotes (after submodule init)
 
 ### Stage 7: main-branch comparison and tracking

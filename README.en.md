@@ -14,7 +14,7 @@ Developing vLLM Ascend typically involves editing code locally, running tests on
 
 ```bash
 # Clone the repository
-git clone https://github.com/maoxx241/vllm-ascend-workspace.git
+git clone https://github.com/vllm-ascend-workspace/vllm-ascend-workspace.git
 cd vllm-ascend-workspace
 
 # Initialize submodules
@@ -137,7 +137,7 @@ When talking to an Agent:
 - **Local state stays untracked** — User-specific remotes, auth, and machine config live only in the untracked `.vaws-local/` directory.
 - **Parallel tasks stay isolated** — Remote parallel work should use sessions: each task gets its own local worktree, remote container, state namespace, and resource leases.
 - **Remote operations are structured** — Agents should prefer the remote toolbox for JSON results, observable logs, resumable artifact manifests, and cleanup-capable state.
-- **Submodules point to community** — `.gitmodules` always targets `vllm-project` official repos. Personal forks are a local runtime concern.
+- **Submodules point to community** — `.gitmodules` always targets `vllm-project` official repos. Personal forks are local remote candidates, not submodule URLs, and are not selected merely because they exist.
 - **Agent-driven, not Agent-dependent** — Everything can be done manually. Agent skills just make it more convenient.
 
 ## Recommended remote topology
@@ -147,9 +147,11 @@ Skills recommend the following topology, but never enforce it:
 
 | Repository    | `origin`             | `upstream`                       |
 | ------------- | -------------------- | -------------------------------- |
-| workspace     | Your fork (optional) | `maoxx241/vllm-ascend-workspace` |
+| workspace     | Your fork (optional) | `vllm-ascend-workspace/vllm-ascend-workspace` |
 | `vllm`        | Your fork (optional) | `vllm-project/vllm`              |
 | `vllm-ascend` | Your fork            | `vllm-project/vllm-ascend`       |
+
+The canonical scaffold is `vllm-ascend-workspace/vllm-ascend-workspace` (public, non-fork). The current personal development forks are `maoxx241/vllm` and `maoxx241/vllm-ascend`, outside the organization and not replacement upstreams. Established fetch/push/protocol/`pushurl`/extra remotes stay as configured; `configure` is for explicit fresh setup only.
 
 
 ## Multi-tool support

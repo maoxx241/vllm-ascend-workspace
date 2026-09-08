@@ -512,6 +512,62 @@ Independent coordinator #1 (`84cb6bdd01a2eb5afedd3e7216ace4cc7acc1285`) and
 landed on that coordinator main. Their control-plane evidence is source,
 protocol, and Linux process-supervision evidence only.
 
+Accepted scaffold main at the post-transfer documentation dispatch includes
+#90, #98, #91, #100, #84, and #85. That is this source tree, not installed
+client, runtime, or hardware evidence.
+
+### Current source repositories
+
+Canonical clone/upstream for the scaffold is the organization repository.
+The organization inventory is six repositories. The two business forks are
+personal public repositories outside that inventory: source-plane inputs,
+not extraction destinations and not deployment units. `.gitmodules` still
+points at `vllm-project/vllm` and `vllm-project/vllm-ascend`; default-branch
+SHAs below are identity facts, not submodule gitlink updates. remote-dev and
+vaws-top numeric ids are retained from the dated 2026-09-07T13:13:24Z
+metadata; current visibility comes from the organization inventory.
+
+| Organization repository | Id | Visibility | Observed default-branch SHA | Responsibility |
+|---|---:|---|---|---|
+| `vllm-ascend-workspace/vllm-ascend-workspace` | 1196723340 | public, non-fork | `7af4ac3106649d2dbbed712c780a14db8bf25113` | canonical scaffold |
+| `vllm-ascend-workspace/remote-dev` | 1360023179 | private | `b6acc21d147e369e771f1ff916973d74d667691e` | transport and explicit endpoints |
+| `vllm-ascend-workspace/vaws-coordinator` | 1360026044 | public | `2e16e894e31a12d85a11117a2772031f30fdfebe` | task/provider/pool protocol and managed worker |
+| `vllm-ascend-workspace/vaws-knowledge` | 1359978527 | public | `1eac65cf2f8ff4f1451c788f0964005ea0dfdee2` | formal knowledge corpus and source identity |
+| `vllm-ascend-workspace/vaws-top` | 1360023247 | private | `e13478484b9f52e8847169a785eebc32b268787f` | fleet monitoring; observation only |
+| `vllm-ascend-workspace/.github` | 1360014025 | public | `fc6a1929fc13b2844f47012a1dec296daff09936` | organization landing metadata, not a runtime provider |
+
+| Personal source-plane fork | Id | Visibility | Observed default-branch SHA | Parent / source |
+|---|---:|---|---|---|
+| `maoxx241/vllm` | 1009465986 | public fork | `a435e3108d82eb96d9b3954c1935afbbf4c5f69b` | `vllm-project/vllm` (599547518) |
+| `maoxx241/vllm-ascend` | 924147541 | public fork | `d52c1b8de956507e6ace7ba351a998ed5cee6ce5` | `vllm-project/vllm-ascend` (924058625) |
+
+Source main SHA, scaffold dependency pin, accepted consumer wiring, installed
+runtime, and hardware qualification remain distinct facts. A later default
+branch does not by itself bump a pin or broaden validation. remote-dev issues
+#1 and #2 remain open; code presence is not issue closure. The accepted mux
+change isolates the deliberate-interruption path locally; it does not repair
+every failure from killing an SSH ControlMaster, promise universal
+cancellation isolation, or constitute a hardware replay.
+
+`vaws-knowledge` Stage 2 #9 is on the accepted source main above. The
+scaffold pin `.agents/deps/vaws-knowledge.json` remains
+`e04d50f7bc5702afbe2e2988f7c28a3268e1a7f3`, an external conformance **test
+kit** selected through `VAWS_KNOWLEDGE_KIT_ROOT`, not a runtime dependency,
+and is not bumped to that source main. Two scaffold v2 entries remain
+unverified and export-blocked; nine model facts remain v1. Shared-cache
+import is an explicit local
+`.agents/scripts/knowledge_shared_cache.py import` and is not a periodic
+automatic pull-back. Root has accepted all three bounded live runs. Preview
+`34144173739` is a valid zero-eligible-input result (propose job skipped;
+one controlled incomplete-scope refusal; parent plus 35 accessible forks =
+36 observed repositories; fork-count discrepancy 1; no complete-universe
+claim). Proposal `34145663787` is nothing-to-propose with `wrote=false`.
+Snapshot `34145761264` published an empty verified-layer snapshot
+(`entry_count=0`). Advisory is unavailable for "no eligible input" and
+`provider.called=false`. Scope limits are retained. Consumer refresh, an
+actual Grok/provider semantic review, a positive candidate proposal, and a
+nonempty verified corpus were not run.
+
 ### Ownership that current work must preserve
 
 **Task tools and the managed-job worker belong to the coordinator.** The
@@ -581,7 +637,12 @@ byte-identical. Mutable task, lease, or host-queue writers may not be copied.
 
 ## 6. Routing documentation
 
-The repo's maintenance rule requires `AGENTS.md` and `.agents/README.md` to be
-updated alongside a change like this. Both files are owned by sibling agents
-right now, so this branch does not edit them; the exact lines to add are in the
-pull request description instead.
+Current clone, ownership, and agent-routing overviews live in `README.md`,
+`README.en.md`, `AGENTS.md`, and `.agents/README.md`. Those files carry the
+current organization owner. The earlier sibling-agent note that this branch
+would not edit them is historical and does not apply to the integrated tree.
+
+Coordinator task/provider/worker ownership, coordinator → remote-dev
+transport direction, scaffold host-allocation authority, and vaws-top
+observation-only status are unchanged. Source integration is not
+installed-client, runtime, or hardware evidence.

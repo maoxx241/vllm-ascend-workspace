@@ -246,7 +246,7 @@ class ShippedLedgerTests(unittest.TestCase):
                 self.assertEqual(destination["revision_scope"], "published-default-branch")
                 self.assertEqual(destination["published_ref"], "refs/remotes/origin/main")
                 self.assertEqual(destination["selected_commit"], published)
-                self.assertEqual(destination["identity_repo"], "maoxx241/vllm-ascend-workspace")
+                self.assertEqual(destination["identity_repo"], "vllm-ascend-workspace/vllm-ascend-workspace")
 
     def test_report_mode_never_fails(self):
         code, payload = invoke("--repo-root", str(ROOT), "--mode", "report")
@@ -793,6 +793,27 @@ class ImmutableSnapshotTests(GitCheckoutFixture):
         self.assertEqual(payload["items"][0]["verdict"], "arrived")
         self.assertEqual(payload["destinations"]["dest"]["identity_host"], "github.com")
         self.assertEqual(payload["destinations"]["dest"]["identity_repo"], "org/dest")
+
+    def test_organization_scaffold_slug_matches_and_wrong_slug_is_unverified(self):
+        origin = "git@github.com:vllm-ascend-workspace/vllm-ascend-workspace.git"
+        self.publish(self.dest, {"lib/here.py": "X = 1\n"}, origin=origin)
+        ledger = ledger_skeleton()
+        ledger["repositories"]["dest"]["repo"] = "vllm-ascend-workspace/vllm-ascend-workspace"
+        ledger["items"].append(item("here", state="arrived", follow_up=None))
+        code, payload = self.run_ledger(ledger, "--destination", f"dest={self.dest}")
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["items"][0]["verdict"], "arrived")
+        self.assertEqual(
+            payload["destinations"]["dest"]["identity_repo"],
+            "vllm-ascend-workspace/vllm-ascend-workspace",
+        )
+
+        ledger["repositories"]["dest"]["repo"] = "example-user/vllm-ascend-workspace"
+        code, payload = self.run_ledger(ledger, "--destination", f"dest={self.dest}")
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["items"][0]["verdict"], "unverified")
+        self.assertFalse(payload["destinations"]["dest"]["reachable"])
+        self.assertIn("does not belong", payload["destinations"]["dest"]["reason"])
 
     def test_origin_credentials_are_not_echoed(self):
         origin_marker = "supersecret-origin-token"

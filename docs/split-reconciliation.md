@@ -266,7 +266,14 @@ byte-pinned copies (`vaws_build_inputs.py`, vendored `vaws_run_manifest.py`)
 whose digests match both sides, and the `vaws-top` history whose head commit
 is an ancestor of the new repository's `main`.
 
-### Current published-main snapshot (2026-09-07, after #90)
+### Historical published-main snapshot (2026-09-07, after #90)
+
+The dated table below records the pre-transfer scaffold owner at that
+observation. After the verified same-id transfer, the current ledger
+`repositories.scaffold.repo` identity is
+`vllm-ascend-workspace/vllm-ascend-workspace`. That is a current-owner
+correction, not a new observation of source arrival; the eight #91 refresh
+rows, their recorded commits, and the table facts stay as written.
 
 Re-evaluated with the L1 corrected checker against already-fetched
 `refs/remotes/origin/main` at these exact commits, with no fetch, no
