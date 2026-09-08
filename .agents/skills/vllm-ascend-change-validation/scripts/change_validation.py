@@ -22,7 +22,7 @@ if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
 from vaws_code_identity import manifest_code  # noqa: E402
-from vaws_knowledge import load_knowledge_file  # noqa: E402
+from vaws_knowledge_v1 import load_knowledge_file  # noqa: E402
 from vaws_run_manifest import (  # noqa: E402
     RunManifestError,
     add_artifact,

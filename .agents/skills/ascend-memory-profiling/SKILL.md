@@ -8,7 +8,7 @@ description: Profile and attribute HBM memory usage on Ascend NPU for vLLM servi
 Collect and analyze HBM memory usage on Ascend NPU devices running vLLM serving workloads. Produces a structured breakdown of memory by component, with every value traceable to its data source.
 
 Remote substrate rule: use remote-dev companion tools (`remote_*` MCP tools,
-launched via `python3 .agents/scripts/remote_dev.py`) for ad hoc remote
+launched via `uv run remote-dev` or MCP) for ad hoc remote
 read/edit/bash/search/patch work around memory profiling setup and output
 inspection. Use this skill for the domain HBM workflow and keep its scripts as
 the compatibility backend for managed VAWS sessions.

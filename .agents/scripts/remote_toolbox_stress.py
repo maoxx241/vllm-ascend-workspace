@@ -21,6 +21,11 @@ LIB_DIR = Path(__file__).resolve().parents[1] / "lib"
 if str(LIB_DIR) not in sys.path:
     sys.path.insert(0, str(LIB_DIR))
 
+
+from vaws_venv import ensure_workspace_interpreter  # noqa: E402
+
+ensure_workspace_interpreter(repo_root=LIB_DIR.parent.parent)
+
 from vaws_remote_toolbox import (  # noqa: E402
     ARTIFACT_STATE_DIR,
     RemoteToolboxError,

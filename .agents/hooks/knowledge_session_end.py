@@ -16,7 +16,7 @@ LIB = ROOT / ".agents" / "lib"
 if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
-from vaws_knowledge import (  # noqa: E402
+from vaws_knowledge_v1 import (  # noqa: E402
     MAX_CANDIDATE_BYTES,
     KnowledgeError,
     capture_candidate,
@@ -51,7 +51,7 @@ def _resolve_repo_root(payload: Mapping[str, Any]) -> Path:
     if isinstance(cwd, str) and cwd:
         current = Path(cwd).resolve()
         for candidate in (current, *current.parents):
-            if (candidate / ".agents" / "lib" / "vaws_knowledge.py").is_file():
+            if (candidate / ".agents" / "lib" / "vaws_knowledge_v1.py").is_file():
                 return candidate
     return ROOT
 

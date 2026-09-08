@@ -1,9 +1,8 @@
-"""Scaffold-side contract with the external remote-dev substrate.
+"""Scaffold-side contract with the installed vaws-remote-dev package.
 
-Everything here runs without a remote-dev checkout except the tests marked
-``requires_substrate``, which exercise the real resolver registration through
-``core.endpoint`` when ``VAWS_REMOTE_DEV_ROOT`` points at one (CI provides it
-only when a read token for the private repository is configured).
+Everything here runs against the resolver plugin and client configuration.
+``SubstrateIntegrationTests`` exercise real ``remote_dev.core.endpoint``
+registration when the package is importable.
 """
 from __future__ import annotations
 
@@ -31,11 +30,10 @@ import vaws_remote_dev_plugin as plugin  # noqa: E402
 import vaws_session_id  # noqa: E402
 from vaws_remote_toolbox import RemoteToolboxError  # noqa: E402
 
-# Integration marker: skip the real-substrate cases when no checkout exists
-# (including a hermetic VAWS_REMOTE_DEV_ROOT=/nonexistent hide). Must pass
-# when the shared .vaws-local checkout is present and usable.
-SUBSTRATE = remote_dev.remote_dev_root(required=False)
-requires_substrate = unittest.skipUnless(SUBSTRATE, "no remote-dev checkout (set VAWS_REMOTE_DEV_ROOT)")
+requires_package = unittest.skipUnless(
+    importlib.util.find_spec("remote_dev") is not None,
+    "vaws-remote-dev is not installed; run `uv sync`",
+)
 
 
 def load_script(name: str):
@@ -164,39 +162,14 @@ class ResolverPluginMappingTests(unittest.TestCase):
         self.assertEqual(proc.stdout.strip(), "False")
 
 
-class LocatorTests(unittest.TestCase):
-    def test_env_root_must_look_like_a_checkout(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            with self.assertRaises(remote_dev.RemoteDevUnavailable) as ctx:
-                remote_dev.remote_dev_root(env={remote_dev.REMOTE_DEV_ROOT_ENV: tmp})
-            self.assertIn("not a remote-dev checkout", str(ctx.exception))
-            self.assertIsNone(remote_dev.remote_dev_root(required=False, env={remote_dev.REMOTE_DEV_ROOT_ENV: tmp}))
 
-    def test_fake_checkout_is_accepted(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            for relative in remote_dev.REQUIRED_FILES:
-                (root / relative).parent.mkdir(parents=True, exist_ok=True)
-                (root / relative).write_text("", encoding="utf-8")
-            with self.assertRaises(remote_dev.RemoteDevUnavailable) as ctx:
-                remote_dev.remote_dev_root(env={remote_dev.REMOTE_DEV_ROOT_ENV: tmp})
-            self.assertIn("not a remote-dev checkout", str(ctx.exception))
-            self.assertIn("bootstrap", str(ctx.exception))
-            self.assertIsNone(
-                remote_dev.remote_dev_root(required=False, env={remote_dev.REMOTE_DEV_ROOT_ENV: tmp})
-            )
-            status = remote_dev.checkout_status({remote_dev.REMOTE_DEV_ROOT_ENV: tmp})
-            self.assertEqual(status["state"], "not_git")
-            self.assertEqual(status["root_source"], "env")
-
+class PackageWiringTests(unittest.TestCase):
     def test_substrate_environment_fills_defaults_and_absolutises_paths(self) -> None:
         env = remote_dev.substrate_environment({"REMOTE_DEV_RESOLVERS": ".agents/lib/vaws_remote_dev_plugin.py:setup",
                                                 "REMOTE_DEV_STATE_DIR": ".vaws-local/remote-dev-state"})
         self.assertEqual(env["REMOTE_DEV_RUNTIME_ENV_FILE"], "/etc/profile.d/vaws-ascend-env.sh")
-        self.assertEqual(env["REMOTE_DEV_SSH_MUX_DIR"], "~/.ssh/vaws-mux")
         self.assertEqual(env["REMOTE_DEV_RESOLVERS"], f"{(ROOT / '.agents/lib/vaws_remote_dev_plugin.py').resolve()}:setup")
         self.assertEqual(env["REMOTE_DEV_STATE_DIR"], str(ROOT / ".vaws-local/remote-dev-state"))
-        # Permission defaults are left to the client configuration.
         self.assertNotIn("REMOTE_DEV_DEFAULT_ROOT", env)
 
     def test_substrate_environment_keeps_caller_values(self) -> None:
@@ -205,101 +178,56 @@ class LocatorTests(unittest.TestCase):
         self.assertEqual(env["REMOTE_DEV_RUNTIME_ENV_FILE"], "/etc/profile.d/other.sh")
         self.assertEqual(env["REMOTE_DEV_RESOLVERS"], "/abs/plugin.py:setup,pkg.mod:resolver")
 
-    def test_dependency_pin_names_the_private_repository_and_a_commit(self) -> None:
-        pin = remote_dev.load_dependency()
-        self.assertEqual(pin["repository"], "vllm-ascend-workspace/remote-dev")
-        self.assertRegex(pin["commit"], r"^[0-9a-f]{40}$")
-        self.assertEqual(pin["visibility"], "private")
-
-
-class LauncherTests(unittest.TestCase):
-    def setUp(self) -> None:
-        self.launcher = load_script("remote_dev")
-
-    def test_legacy_selector_flags_become_selectors(self) -> None:
-        translate = self.launcher.translate_legacy_selectors
-        self.assertEqual(translate(["--machine", "host-a", "--command", "nproc"]),
-                         ["--selector", "machine=host-a", "--command", "nproc"])
-        self.assertEqual(translate(["--session-id=s1", "--root", "/x"]), ["--selector", "session_id=s1", "--root", "/x"])
-        self.assertEqual(translate(["--session-file", "/p/session.json"]), ["--selector", "session_file=/p/session.json"])
-        self.assertEqual(translate(["--selector", "machine=x"]), ["--selector", "machine=x"])
-        with self.assertRaises(ValueError):
-            translate(["--machine"])
-
-    def test_status_without_checkout_reports_missing_and_exits_nonzero(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            env = {**os.environ, remote_dev.REMOTE_DEV_ROOT_ENV: str(Path(tmp) / "absent")}
-            proc = subprocess.run([sys.executable, str(SCRIPTS / "remote_dev.py"), "status"], capture_output=True, text=True, env=env, check=False)
-        self.assertEqual(proc.returncode, 1, proc.stderr)
-        payload = json.loads(proc.stdout)
-        self.assertEqual(payload["state"], "missing")
-        self.assertEqual(payload["root_source"], "env")
-        self.assertTrue(payload["resolver"].endswith("vaws_remote_dev_plugin.py:setup"))
-
-    def test_hook_without_checkout_allows_and_consumes_stdin(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            env = {**os.environ, remote_dev.REMOTE_DEV_ROOT_ENV: str(Path(tmp) / "absent")}
-            proc = subprocess.run([sys.executable, str(SCRIPTS / "remote_dev.py"), "hook", "claude"], input='{"tool_name": "Bash"}',
-                                  capture_output=True, text=True, env=env, check=False)
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertEqual(proc.stdout, "")
-        self.assertIn("skipped", proc.stderr)
-
-    def test_server_and_tool_without_checkout_fail_closed(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            env = {**os.environ, remote_dev.REMOTE_DEV_ROOT_ENV: str(Path(tmp) / "absent")}
-            for argv in (["server"], ["tool", "remote_bash", "--command", "true"]):
-                proc = subprocess.run([sys.executable, str(SCRIPTS / "remote_dev.py"), *argv], capture_output=True, text=True, env=env, check=False)
-                self.assertEqual(proc.returncode, 2, argv)
-                self.assertIn("bootstrap", proc.stderr)
-
-    def test_env_json_lists_substrate_keys(self) -> None:
-        proc = subprocess.run([sys.executable, str(SCRIPTS / "remote_dev.py"), "env", "--json"], capture_output=True, text=True, check=False)
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        payload = json.loads(proc.stdout)
-        self.assertIn("REMOTE_DEV_RESOLVERS", payload)
-        self.assertIn("REMOTE_DEV_RUNTIME_ENV_FILE", payload)
-        self.assertTrue(all(key.startswith("REMOTE_DEV_") for key in payload))
+    def test_package_status_names_the_lock(self) -> None:
+        status = remote_dev.package_status()
+        self.assertEqual(status["name"], "vaws-remote-dev")
+        self.assertIn(status["state"], {"missing", "off_spec", "ready"})
+        self.assertEqual(status["remedy"], "uv sync")
+        self.assertTrue(status["resolver"].endswith("vaws_remote_dev_plugin.py:setup"))
 
 
 class ClientConfigurationTests(unittest.TestCase):
-    LAUNCHER_ARGS = [".agents/scripts/remote_dev.py", "server"]
+    SERVER_ARGS = ["-m", "remote_dev.mcp.server"]
+    TASK_ARGS = ["-m", "vaws_coordinator", "task-server"]
     REQUIRED_ENV = ("REMOTE_DEV_RUNTIME_ENV_FILE", "REMOTE_DEV_RESOLVERS", "REMOTE_DEV_STATE_DIR")
 
-    def test_tracked_json_clients_use_the_launcher_and_inject_the_environment(self) -> None:
+    def test_tracked_json_clients_use_the_package_and_inject_the_environment(self) -> None:
         for relative in (".mcp.json", ".cursor/mcp.json"):
             with self.subTest(file=relative):
                 servers = json.loads((ROOT / relative).read_text(encoding="utf-8"))["mcpServers"]
                 entry = servers["remote-dev"]
-                self.assertEqual(entry["args"], self.LAUNCHER_ARGS)
-                self.assertEqual(servers["vaws-task"]["args"], [".agents/scripts/vaws.py", "task-server"])
+                self.assertEqual(entry["args"], self.SERVER_ARGS)
+                self.assertTrue(entry["command"].endswith(".venv/bin/python") or entry["command"].endswith("python"), entry["command"])
+                self.assertEqual(servers["vaws-task"]["args"], self.TASK_ARGS)
                 for key in self.REQUIRED_ENV:
                     self.assertIn(key, entry["env"])
                 self.assertEqual(entry["env"]["REMOTE_DEV_RUNTIME_ENV_FILE"], remote_dev.ASCEND_RUNTIME_ENV_FILE)
                 self.assertEqual(entry["env"]["REMOTE_DEV_RESOLVERS"], ".agents/lib/vaws_remote_dev_plugin.py:setup")
 
-    def test_tracked_toml_examples_use_the_launcher_and_inject_the_environment(self) -> None:
+    def test_tracked_toml_examples_use_the_package_and_inject_the_environment(self) -> None:
         for relative, server in ((".codex/config.example.toml", "remote_dev"), (".grok/config.example.toml", "remote-dev")):
             with self.subTest(file=relative):
                 data = tomllib.loads((ROOT / relative).read_text(encoding="utf-8"))
                 entry = data["mcp_servers"][server]
-                self.assertTrue(entry["args"][0].endswith("/.agents/scripts/remote_dev.py"), entry["args"])
-                self.assertEqual(entry["args"][1], "server")
+                self.assertEqual(entry["args"], self.SERVER_ARGS)
                 task = data["mcp_servers"].get("vaws_task") or data["mcp_servers"]["vaws-task"]
-                self.assertEqual(task["args"][1], "task-server")
+                self.assertEqual(task["args"], self.TASK_ARGS)
                 for key in self.REQUIRED_ENV:
                     self.assertIn(key, entry["env"])
                 self.assertTrue(entry["env"]["REMOTE_DEV_RESOLVERS"].endswith("vaws_remote_dev_plugin.py:setup"))
 
-    def test_claude_and_codex_hooks_go_through_the_launcher(self) -> None:
+    def test_claude_and_codex_hooks_use_the_package_guards(self) -> None:
         settings = json.loads((ROOT / ".claude/settings.example.json").read_text(encoding="utf-8"))
         commands = [hook["command"] for group in settings["hooks"]["PreToolUse"] for hook in group["hooks"]]
         self.assertTrue(commands)
-        self.assertTrue(all(command == "python3 .agents/scripts/remote_dev.py hook claude" for command in commands), commands)
+        self.assertTrue(all("remote_dev.hooks.claude_remote_guard" in command for command in commands), commands)
         codex = (ROOT / ".codex/config.example.toml").read_text(encoding="utf-8")
-        self.assertIn(".agents/scripts/remote_dev.py\" hook codex", codex)
+        self.assertIn("remote_dev.hooks.codex_remote_guard", codex)
+        self.assertNotIn(".agents/scripts/remote_dev.py", settings.__class__.__name__ or "")
+        self.assertNotIn("remote_dev.py", json.dumps(settings))
+        self.assertNotIn(".agents/scripts/remote_dev.py", codex)
 
-    def test_client_setup_emits_launcher_entry_with_environment(self) -> None:
+    def test_client_setup_emits_package_entry_with_environment(self) -> None:
         setup = load_script("vaws_client_setup")
         with tempfile.TemporaryDirectory() as tmp:
             project = Path(tmp).resolve()
@@ -307,13 +235,13 @@ class ClientConfigurationTests(unittest.TestCase):
             servers = json.loads(files[project / ".mcp.json"])["mcpServers"]
             mcp = servers["remote-dev"]
             self.assertEqual(set(servers), {"remote-dev", "vaws-task"})
-            self.assertEqual(mcp["args"], [str(ROOT / ".agents/scripts/remote_dev.py"), "server"])
-            self.assertEqual(servers["vaws-task"]["args"], [str(ROOT / ".agents/scripts/vaws.py"), "task-server"])
+            self.assertEqual(mcp["args"], self.SERVER_ARGS)
+            self.assertEqual(servers["vaws-task"]["args"], self.TASK_ARGS)
             for key in self.REQUIRED_ENV:
                 self.assertIn(key, mcp["env"])
             codex = tomllib.loads(setup.configuration("codex", project)[project / ".codex/config.toml"])
-            self.assertEqual(codex["mcp_servers"]["remote_dev"]["args"][1], "server")
-            self.assertEqual(codex["mcp_servers"]["vaws_task"]["args"][1], "task-server")
+            self.assertEqual(codex["mcp_servers"]["remote_dev"]["args"], self.SERVER_ARGS)
+            self.assertEqual(codex["mcp_servers"]["vaws_task"]["args"], self.TASK_ARGS)
             self.assertIn("REMOTE_DEV_RESOLVERS", codex["mcp_servers"]["remote_dev"]["env"])
         self.assertFalse(str(setup.BACKUP_DIR).startswith(str(ROOT / ".remote-dev")))
         self.assertTrue(str(setup.BACKUP_DIR).startswith(str(ROOT / ".vaws-local")))
@@ -598,21 +526,29 @@ class NoInTreeSubstrateTests(unittest.TestCase):
         self.assertEqual(self._actionable_python_strings(self.GUARD_RUNTIME_EXCLUSION_FILE, source), [])
 
     def test_vaws_cli_reports_moved_task_tools_without_traceback(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            env = {key: value for key, value in os.environ.items()}
-            env["VAWS_COORDINATOR_ROOT"] = tmp
-            proc = subprocess.run(
-                [sys.executable, str(SCRIPTS / "vaws.py"), "session", "--json", "{}"],
-                capture_output=True,
-                text=True,
-                env=env,
-                check=False,
-            )
+        python = str(Path(sys.base_prefix) / "bin" / "python3")
+        if not Path(python).is_file() or Path(python).resolve() == Path(sys.executable).resolve():
+            self.skipTest("no Python 3.11+ interpreter outside .venv")
+        drop = {"VIRTUAL_ENV", "PYTHONPATH", "PYTHONHOME"}
+        env = {
+            key: value
+            for key, value in os.environ.items()
+            if key not in drop and not key.startswith("UV_")
+        }
+        env["VAWS_SKIP_VENV_REEXEC"] = "1"
+        proc = subprocess.run(
+            [python, str(SCRIPTS / "vaws.py"), "session", "--json", "{}"],
+            capture_output=True,
+            text=True,
+            env=env,
+            check=False,
+        )
         self.assertEqual(proc.returncode, 1, proc.stderr)
         self.assertNotIn("Traceback", proc.stderr)
         payload = json.loads(proc.stdout)["result"]
         self.assertEqual((payload["tool"], payload["outcome"], payload["status"]), ("vaws.session", "blocked", "unavailable"))
         self.assertIn("vaws-coordinator", payload["summary"] + json.dumps(payload))
+        self.assertIn("uv sync", payload["summary"] + json.dumps(payload) + proc.stderr)
 
     def test_vaws_cli_help_matrix(self) -> None:
         for args in (["--help"], ["attach", "--help"], ["session", "--help"], ["run", "--help"], ["execution", "--help"], ["finish", "--help"]):
@@ -833,17 +769,17 @@ class ClaudeSkillShimTests(unittest.TestCase):
                 self.assertNotIn("`.remote-dev`", body)
 
 
-@requires_substrate
+
+@requires_package
 class SubstrateIntegrationTests(unittest.TestCase):
-    """Real registration through `core.endpoint` in a fresh interpreter."""
+    """Real registration through `remote_dev.core.endpoint` in a fresh interpreter."""
 
     def _run(self, code: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
         return subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env={**os.environ, **(env or {})}, check=False)
 
     def test_resolvers_env_registers_the_scaffold_selector_fields(self) -> None:
         code = (
-            f"import sys; sys.path.insert(0, {str(SUBSTRATE)!r})\n"
-            "from core.endpoint import selector_fields, registered_resolvers\n"
+            "from remote_dev.core.endpoint import selector_fields, registered_resolvers\n"
             "print(sorted(selector_fields())); print([r.name for r in registered_resolvers()])\n"
         )
         proc = self._run(code, {"REMOTE_DEV_RESOLVERS": remote_dev.resolver_spec()})
@@ -862,11 +798,12 @@ class SubstrateIntegrationTests(unittest.TestCase):
                               "container": {"name": "vaws-test", "ssh_port": 46000, "runtime_root": "/vllm-workspace"}}],
             }), encoding="utf-8")
             code = (
-                f"import sys; sys.path.insert(0, {str(SUBSTRATE)!r}); sys.path.insert(0, {str(LIB)!r})\n"
-                "import json, pathlib, vaws_remote_dev_plugin as plugin\n"
+                "import json, pathlib, sys\n"
+                f"sys.path.insert(0, {str(LIB)!r})\n"
+                "import vaws_remote_dev_plugin as plugin\n"
                 f"plugin.REPO_ROOT = pathlib.Path({str(repo)!r})\n"
                 "plugin.setup()\n"
-                "from core.endpoint import resolve_endpoint, has_selector\n"
+                "from remote_dev.core.endpoint import resolve_endpoint, has_selector\n"
                 "ep = resolve_endpoint({'machine': 'host-a', 'root': '/vllm-workspace'})\n"
                 "t = ep.to_result_target(); t.pop('source'); t['has_selector'] = has_selector({'machine': 'x'})\n"
                 "print(json.dumps(t, sort_keys=True))\n"
@@ -885,12 +822,13 @@ class SubstrateIntegrationTests(unittest.TestCase):
     def test_empty_payload_without_binding_yields_the_substrate_error(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             code = (
-                f"import sys; sys.path.insert(0, {str(SUBSTRATE)!r}); sys.path.insert(0, {str(LIB)!r})\n"
-                "import pathlib, vaws_remote_dev_plugin as plugin\n"
+                "import pathlib, sys\n"
+                f"sys.path.insert(0, {str(LIB)!r})\n"
+                "import vaws_remote_dev_plugin as plugin\n"
                 f"plugin.REPO_ROOT = pathlib.Path({tmp!r})\n"
                 "plugin.setup()\n"
-                "from core.endpoint import resolve_endpoint\n"
-                "from core.errors import EndpointError\n"
+                "from remote_dev.core.endpoint import resolve_endpoint\n"
+                "from remote_dev.core.errors import EndpointError\n"
                 "try:\n    resolve_endpoint({})\nexcept EndpointError as exc:\n    print(str(exc))\n"
             )
             proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, cwd=tmp, check=False)

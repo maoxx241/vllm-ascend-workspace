@@ -3,7 +3,7 @@
 ## Relationship to remote-dev
 
 Use remote-dev companion tools (`remote_*` MCP tools, launched via
-`python3 .agents/scripts/remote_dev.py`) for ad hoc remote
+`uv run remote-dev` / MCP) for ad hoc remote
 read/edit/bash/search/patch around profiling roots and generated reports.
 This skill owns analysis semantics and keeps the existing scripts as the
 managed VAWS compatibility backend.

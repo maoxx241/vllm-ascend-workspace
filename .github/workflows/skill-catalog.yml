@@ -30,141 +30,112 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: false
-      - uses: actions/setup-python@v5
+      - uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.12"
+      - name: Install locked workspace packages
+        run: uv sync --locked --group dev
+      - name: Lockfile matches pyproject
+        run: uv lock --check
+      - name: Run the full .agents/tests suite
+        run: uv run python -B -m pytest .agents/tests -q
       - name: Validate catalog
-        run: python -B .agents/scripts/skill_catalog.py
+        run: uv run python -B .agents/scripts/skill_catalog.py
       - name: Validate shared knowledge
-        run: python -B .agents/scripts/knowledge_validate.py
+        run: uv run python -B .agents/scripts/knowledge_validate.py
       - name: Check repository boundaries
         # Enforce mode fails on a violation the dated baseline does not
         # already record, and on a baseline row whose violation is gone.
         # See docs/repo-boundaries.md. Submodules are not checked out here
         # and the guard skips them regardless.
         run: |
-          python -B .agents/scripts/repo_boundary_check.py --mode enforce
-          python -B -m unittest discover -s .agents/tests -p "test_repo_boundary_check.py"
+          uv run python -B .agents/scripts/repo_boundary_check.py --mode enforce
+          uv run python -B -m unittest discover -s .agents/tests -p "test_repo_boundary_check.py"
       - name: Check tracked in-tree paths
         run: |
-          python -B .agents/scripts/tracked_path_check.py --mode enforce
-          python -B -m unittest discover -s .agents/tests -p "test_tracked_path_check.py"
+          uv run python -B .agents/scripts/tracked_path_check.py --mode enforce
+          uv run python -B -m unittest discover -s .agents/tests -p "test_tracked_path_check.py"
       - name: Run catalog tests
-        run: python -B -m unittest discover -s .agents/tests -p "test_*catalog.py"
+        run: uv run python -B -m unittest discover -s .agents/tests -p "test_*catalog.py"
       - name: Run generated skill projection tests
-        run: python -B -m unittest discover -s .agents/tests -p "test_sync_claude_skills.py"
+        run: uv run python -B -m unittest discover -s .agents/tests -p "test_sync_claude_skills.py"
       - name: Check generated Claude shims and ModelScope Trae projection
-        run: python -B .agents/scripts/sync_claude_skills.py --check
+        run: uv run python -B .agents/scripts/sync_claude_skills.py --check
       - name: Run manifest and knowledge tests
         run: |
-          python -B -m unittest discover -s .agents/tests -p "test_run_manifest.py"
-          python -B -m unittest discover -s .agents/tests -p "test_code_identity.py"
-      - name: Read pinned knowledge kit commit
-        id: knowledge-pin
-        run: |
-          commit="$(python3 -c 'import json; print(json.load(open(".agents/deps/vaws-knowledge.json"))["commit"])')"
-          echo "commit=${commit}" >> "$GITHUB_OUTPUT"
-      - name: Check out pinned knowledge conformance kit
-        uses: actions/checkout@v4
-        with:
-          repository: vllm-ascend-workspace/vaws-knowledge
-          ref: ${{ steps.knowledge-pin.outputs.commit }}
-          path: .vaws-local/vaws-knowledge-kit
-          persist-credentials: false
-      - name: Install knowledge kit test tools
-        run: python -m pip install pyyaml
+          uv run python -B -m unittest discover -s .agents/tests -p "test_run_manifest.py"
+          uv run python -B -m unittest discover -s .agents/tests -p "test_code_identity.py"
       - name: Run knowledge evidence-chain tests
-        env:
-          VAWS_KNOWLEDGE_KIT_ROOT: ${{ github.workspace }}/.vaws-local/vaws-knowledge-kit
-        run: python -B -m unittest discover -s .agents/tests -p "test_knowledge*.py"
-      - name: Workflows must not duplicate pin SHAs
-        run: python -B -m unittest discover -s .agents/tests -p "test_workflow_pin_refs.py"
+        run: uv run python -B -m unittest discover -s .agents/tests -p "test_knowledge*.py"
+      - name: Workflows must not duplicate lock SHAs
+        run: uv run python -B -m unittest discover -s .agents/tests -p "test_workflow_pin_refs.py"
       - name: Run knowledge curation tests
-        run: python -B -m unittest discover -s .agents/skills/curate-workspace-knowledge/tests
+        run: uv run python -B -m unittest discover -s .agents/skills/curate-workspace-knowledge/tests
       - name: Run graph-debug tests
-        run: python -B -m unittest discover -s .agents/skills/vllm-ascend-graph-debug/tests
+        run: uv run python -B -m unittest discover -s .agents/skills/vllm-ascend-graph-debug/tests
       - name: Run correctness-validation tests
-        run: python -B -m unittest discover -s .agents/skills/vllm-ascend-correctness-validation/tests
+        run: uv run python -B -m unittest discover -s .agents/skills/vllm-ascend-correctness-validation/tests
       - name: Run change-validation tests
-        run: python -B -m unittest discover -s .agents/skills/vllm-ascend-change-validation/tests
+        run: uv run python -B -m unittest discover -s .agents/skills/vllm-ascend-change-validation/tests
       - name: Run performance-regression tests
-        run: python -B -m unittest discover -s .agents/skills/vllm-ascend-performance-regression/tests
-
-      - name: Read pinned coordinator commit
-        id: coordinator-pin
-        run: |
-          commit="$(python3 -c 'import json; print(json.load(open(".agents/deps/coordinator.json"))["commit"])')"
-          echo "commit=${commit}" >> "$GITHUB_OUTPUT"
-      - name: Check out pinned coordinator
-        uses: actions/checkout@v4
-        with:
-          repository: vllm-ascend-workspace/vaws-coordinator
-          ref: ${{ steps.coordinator-pin.outputs.commit }}
-          path: .vaws-local/vaws-coordinator
-          persist-credentials: false
+        run: uv run python -B -m unittest discover -s .agents/skills/vllm-ascend-performance-regression/tests
 
       - name: Run session-management tests
-        env:
-          VAWS_COORDINATOR_ROOT: ${{ github.workspace }}/.vaws-local/vaws-coordinator
-        run: python -B -m unittest discover -s .agents/skills/session-management/tests
+        run: uv run python -B -m unittest discover -s .agents/skills/session-management/tests
 
       - name: Run scaffold ownership and parity regressions
-        env:
-          VAWS_COORDINATOR_ROOT: ${{ github.workspace }}/.vaws-local/vaws-coordinator
         run: |
-          python -B -m unittest discover -s .agents/tests -p "test_vaws_scaffold_safety.py"
-          python -B -m unittest discover -s .agents/tests -p "test_shared_inventory_state.py"
-          python -B -m unittest discover -s .agents/skills/remote-code-parity/tests
-          python -B -m unittest discover -s .agents/skills/vllm-ascend-serving/tests
+          uv run python -B -m unittest discover -s .agents/tests -p "test_vaws_scaffold_safety.py"
+          uv run python -B -m unittest discover -s .agents/tests -p "test_shared_inventory_state.py"
+          uv run python -B -m unittest discover -s .agents/skills/remote-code-parity/tests
+          uv run python -B -m unittest discover -s .agents/skills/vllm-ascend-serving/tests
 
       - name: Run benchmark smoke and machine-management tests
         run: |
-          python -B -m unittest discover -s .agents/skills/vllm-ascend-benchmark/tests
-          python -B -m unittest discover -s .agents/skills/machine-management/tests
+          uv run python -B -m unittest discover -s .agents/skills/vllm-ascend-benchmark/tests
+          uv run python -B -m unittest discover -s .agents/skills/machine-management/tests
 
       - name: Run npu-fleet-monitor consumer tests
-        # 41 tests. They build synthetic git fixtures and do not need the
-        # private vaws-top checkout or a token.
-        run: python -B -m unittest discover -s .agents/skills/npu-fleet-monitor/tests
+        run: uv run python -B -m unittest discover -s .agents/skills/npu-fleet-monitor/tests
 
       - name: Validate parameterized Ray helpers
         run: bash -n scripts/ray_head.sh scripts/ray_worker.sh
 
       - name: Run distributed-debug tests
-        run: python -B -m unittest discover -s .agents/skills/vllm-ascend-distributed-debug/tests
+        run: uv run python -B -m unittest discover -s .agents/skills/vllm-ascend-distributed-debug/tests
 
       - name: Run operator-debug tests
-        run: python -B -m unittest discover -s .agents/skills/ascend-operator-debug/tests
+        run: uv run python -B -m unittest discover -s .agents/skills/ascend-operator-debug/tests
 
       - name: Run tensor-dump tests
         run: |
-          python -B -m unittest discover -s .agents/skills/ascend-tensor-dump/tests
-          python -B -m py_compile \
+          uv run python -B -m unittest discover -s .agents/skills/ascend-tensor-dump/tests
+          uv run python -B -m py_compile \
             .agents/skills/ascend-tensor-dump/assets/dump_probe.py \
             .agents/skills/ascend-tensor-dump/assets/replay_op.py
 
       - name: Run Triton development tests
-        run: python -B -m unittest discover -s .agents/skills/ascend-triton-operator-development/tests
+        run: uv run python -B -m unittest discover -s .agents/skills/ascend-triton-operator-development/tests
 
       - name: Run Triton validation tests
-        run: python -B -m unittest discover -s .agents/skills/ascend-triton-kernel-validation/tests
+        run: uv run python -B -m unittest discover -s .agents/skills/ascend-triton-kernel-validation/tests
 
       - name: Run Triton optimization tests
-        run: python -B -m unittest discover -s .agents/skills/ascend-triton-kernel-optimization/tests
+        run: uv run python -B -m unittest discover -s .agents/skills/ascend-triton-kernel-optimization/tests
 
       - name: Run Triton workflow tests
-        run: python -B -m unittest discover -s .agents/skills/ascend-triton-workflow/tests
+        run: uv run python -B -m unittest discover -s .agents/skills/ascend-triton-workflow/tests
 
       - name: Run PD-serving tests
-        run: python -B -m unittest discover -s .agents/skills/vllm-ascend-pd-serving/tests
+        run: uv run python -B -m unittest discover -s .agents/skills/vllm-ascend-pd-serving/tests
 
       - name: Run memory-profiling tests
-        run: python -B -m unittest discover -s .agents/skills/ascend-memory-profiling/tests
+        run: uv run python -B -m unittest discover -s .agents/skills/ascend-memory-profiling/tests
 
       - name: Run profiling-analysis tests
         run: |
-          python -m pip install pytest -r .agents/skills/ascend-profiling-analysis/requirements.txt
-          python -B -m pytest .agents/skills/ascend-profiling-analysis/tests -q
+          uv pip install -r .agents/skills/ascend-profiling-analysis/requirements.txt
+          uv run python -B -m pytest .agents/skills/ascend-profiling-analysis/tests -q
 
   # In-tree `.agents/coordinator/` is gone. Scaffold-side consumer contracts
   # live in coordinator.yml. Linux subreaper and HTTP manager tests live in

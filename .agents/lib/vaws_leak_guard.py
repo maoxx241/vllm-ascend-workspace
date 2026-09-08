@@ -34,7 +34,7 @@ if str(LIB) not in sys.path:
 
 # Reuse, rather than restate, the secret-shaped patterns that already gate
 # knowledge candidates. This module only adds the categories they miss.
-from vaws_knowledge import SECRET_KEY_RE, SECRET_VALUE_RES  # noqa: E402
+from vaws_knowledge_v1 import SECRET_KEY_RE, SECRET_VALUE_RES  # noqa: E402
 
 SCHEMA_VERSION = 1
 MAX_FILE_BYTES = 2 * 1024 * 1024

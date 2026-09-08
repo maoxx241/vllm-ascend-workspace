@@ -6,8 +6,7 @@ The canonical scaffold repository is `vllm-ascend-workspace/vllm-ascend-workspac
 Current clone, fork, and remote-topology guidance lives in the `repo-init`
 skill; matching personal forks are local remote candidates, not community upstreams.
 
-Remote development is an external checkout (`vllm-ascend-workspace/remote-dev`),
-located through `VAWS_REMOTE_DEV_ROOT` or `.vaws-local/remote-dev`. Use native
+Remote development is the installed `vaws-remote-dev` package. Use native
 local tools for local work, and use remote-dev companion tools for remote
 endpoint work:
 
@@ -67,18 +66,17 @@ compatibility backend for managed sessions, sync, service adapters, and cleanup.
 - `.agents/schemas/` stores the machine-readable Run Manifest and knowledge contracts, including the project-layer v2 and candidate v2 schemas.
 - `.agents/lib/vaws_local_state.py` is the shared library for untracked local runtime state.
 - `.agents/lib/vaws_run_manifest.py` is the shared Run Manifest v1 library for workflow correlation and artifact links.
-- `.agents/lib/vaws_knowledge.py` is the shared v1 knowledge validation, capture, and query library, and the dual-read entry point for v2 documents.
+- `.agents/lib/vaws_knowledge_v1.py` is the shared v1 knowledge validation, capture, and query library, and the dual-read entry point for v2 documents.
 - `.agents/lib/vaws_knowledge_v2.py` is the federated v2 contract library: validation, canonicalization, content hashing, coordinates, and the export shape.
 - `.agents/lib/vaws_knowledge_client.py` is the three-layer query client with capability probing and graceful degradation.
 - `.agents/lib/vaws_knowledge_shared.py` is the shared-cache trust boundary: only declared verified-zone corpus may be mounted as `shared`, and query/get apply the importer-owned source policy.
-- `.agents/tests/knowledge_client_adapter.py` is the tracked protocol adapter for the pinned vaws-knowledge conformance kit.
-- `.agents/deps/vaws-knowledge.json` pins the exact external kit commit. Set `VAWS_KNOWLEDGE_KIT_ROOT` to a checkout of that commit; unconfigured local runs skip the kit suite with that message.
+- `.agents/tests/knowledge_client_adapter.py` is the tracked protocol adapter for the vaws-knowledge conformance kit shipped with the package.
 - `.agents/lib/vaws_knowledge_migrate.py` is the mechanical v1 -> v2 conversion library.
-- `.agents/lib/vaws_redaction.py` is the versioned source-side redaction ruleset shared by every knowledge write and export.
+- `.agents/lib/vaws_redaction.py` is the scaffold redaction policy (BLOCK/EXPORT and recursive scan) over `vaws_knowledge.redact`. Detection rules and the live profile are declared by that package.
 - `.agents/lib/vaws_session_id.py` and `.agents/lib/vaws_session_state.py` are the shared libraries for session identity, state, locks, and leases.
 - `.agents/lib/vaws_remote_toolbox.py` is the shared library for remote target resolution, SSH execution, job observation, artifact streaming, sync adapters, service adapters, and cleanup.
 - `.agents/lib/vaws_validate.py` is the shared validation library for agent-facing ids, environment names, path boundaries, and NPU device lists.
-- `.agents/lib/vaws_coordinator.py` locates the external vaws-coordinator checkout (task identity, `vaws_*` tools, runtime pool). Pin: `.agents/deps/coordinator.json`.
+- `.agents/lib/vaws_coordinator_launch.py` launches the installed vaws-coordinator package (task identity, `vaws_*` tools, runtime pool).
 - `AGENTS.md` carries repository-wide routing rules and mandatory decision gates.
 
 ## Script-first convention
@@ -208,8 +206,8 @@ Parallel remote work should use `session-management` first. A session owns a loc
 
 Independent agents with separate workspace-local lease files may optionally use
 `session-management/scripts/npu_coordination.py`. The protocol module it ships
-is the coordinator-owned `host/vaws_npu_coordination.py` from the pinned
-checkout. It keeps an ephemeral, host-shared SQLite queue under
+is the coordinator-owned `vaws_coordinator.host.vaws_npu_coordination` from
+the installed package. It keeps an ephemeral, host-shared SQLite queue under
 `/tmp/vaws-npu-coordinator/v1/`, defers to actual host NPU occupancy and
 manual holds, and never becomes a mandatory execution gate.
 

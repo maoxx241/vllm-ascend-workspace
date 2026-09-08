@@ -2,8 +2,8 @@
   "mcpServers": {
     "remote-dev": {
       "type": "stdio",
-      "command": "python3",
-      "args": [".agents/scripts/remote_dev.py", "server"],
+      "command": ".venv/bin/python",
+      "args": ["-m", "remote_dev.mcp.server"],
       "env": {
         "REMOTE_DEV_DEFAULT_USER": "root",
         "REMOTE_DEV_DEFAULT_ROOT": "/vllm-workspace",
@@ -16,8 +16,8 @@
     },
     "vaws-task": {
       "type": "stdio",
-      "command": "python3",
-      "args": [".agents/scripts/vaws.py", "task-server"],
+      "command": ".venv/bin/python",
+      "args": ["-m", "vaws_coordinator", "task-server"],
       "env": {
         "VAWS_AGENT_SESSIONS_DIR": ".vaws-local/agent-sessions"
       }

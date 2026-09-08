@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
-"""Locate the pinned vaws-knowledge kit and run it against the client adapter."""
+"""Locate the vaws-knowledge conformance kit and run it against the client adapter.
 
+The engine is the installed ``vaws-knowledge`` package. Vectors ship with that
+package. An explicit ``VAWS_KNOWLEDGE_KIT_ROOT`` (or
+``.vaws-local/knowledge-kit-root``) still overrides the package so a local
+clone can be used. The kit checkout is not SHA-locked.
+"""
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import shlex
 import subprocess
@@ -17,80 +21,59 @@ LIB = REPO_ROOT / ".agents" / "lib"
 if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
-from vaws_dependency import load_pin_file  # noqa: E402
-
-DEPS_PATH = REPO_ROOT / ".agents" / "deps" / "vaws-knowledge.json"
 KIT_ROOT_ENV = "VAWS_KNOWLEDGE_KIT_ROOT"
 LOCAL_KIT_FILE = ".vaws-local/knowledge-kit-root"
-EXPECTED_VECTOR_COUNT = 17
+EXPECTED_VECTOR_COUNT = 19
 
 
 class KitUnconfigured(Exception):
-    """No explicit kit root was provided."""
+    """No kit root was provided and the installed package has no vectors."""
 
 
 class KitInvalid(Exception):
-    """A configured kit root is missing, incomplete, or the wrong revision."""
+    """A configured kit root is missing or incomplete."""
 
 
-def pinned_commit(repo_root: Path = REPO_ROOT) -> str:
-    pin = load_pin_file(repo_root / ".agents" / "deps" / "vaws-knowledge.json")
-    commit = pin.get("commit")
-    if not isinstance(commit, str) or len(commit) != 40:
-        raise KitInvalid(f"{DEPS_PATH} does not declare a 40-character commit")
-    return commit
+def packaged_kit_root() -> Path | None:
+    try:
+        import vaws_knowledge.conformance as conformance
+    except ImportError:
+        return None
+    root = Path(conformance.__file__).resolve().parent
+    if (root / "runner.py").is_file() and (root / "vectors").is_dir():
+        return root
+    return None
 
 
-def _git(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        ["git", "-C", str(root), *args],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+def _vector_count(root: Path) -> int:
+    vectors_dir = root / "vectors"
+    if not vectors_dir.is_dir():
+        # checkout layout: conformance/vectors
+        vectors_dir = root / "conformance" / "vectors"
+    if not vectors_dir.is_dir():
+        return 0
+    return len(list(vectors_dir.glob("*.yaml")))
 
 
-def _verify_pinned_git_kit(root: Path, expected: str) -> None:
-    """Require a clean Git checkout or worktree of the pinned kit commit.
+def _runner_path(root: Path) -> Path:
+    packaged = root / "runner.py"
+    if packaged.is_file():
+        return packaged
+    return root / "conformance" / "runner.py"
 
-    ``.git`` may be a directory or a worktree file. Executed runner, vector
-    and gate-vector bytes must match the pinned commit; a matching filename
-    count is not identity.
-    """
 
-    inside = _git(root, "rev-parse", "--is-inside-work-tree")
-    if inside.returncode != 0 or inside.stdout.strip() != "true":
-        raise KitInvalid(f"kit root {root} is not a Git checkout of {expected}")
-    toplevel = _git(root, "rev-parse", "--show-toplevel")
-    if toplevel.returncode != 0:
-        raise KitInvalid(f"git rev-parse --show-toplevel failed in {root}")
-    if Path(toplevel.stdout.strip()).resolve() != root.resolve():
-        raise KitInvalid(
-            f"kit root {root} is not a Git toplevel of {expected}; "
-            "refusing a nested or borrowed repository"
-        )
-    head = _git(root, "rev-parse", "HEAD")
-    if head.returncode != 0 or head.stdout.strip() != expected:
-        raise KitInvalid(
-            f"kit root {root} is git commit {head.stdout.strip() or 'unknown'}, "
-            f"expected {expected}"
-        )
-    dirty = _git(
-        root,
-        "diff",
-        "--quiet",
-        expected,
-        "--",
-        "conformance/runner.py",
-        "conformance/vectors",
-        "conformance/gate_vectors",
-    )
-    if dirty.returncode == 1:
-        raise KitInvalid(
-            f"kit root {root} executed kit files do not match {expected}"
-        )
-    if dirty.returncode != 0:
-        raise KitInvalid(f"git diff failed in {root}: {dirty.stderr.strip()}")
+def _vectors_dir(root: Path) -> Path:
+    packaged = root / "vectors"
+    if packaged.is_dir():
+        return packaged
+    return root / "conformance" / "vectors"
+
+
+def _gate_vectors_dir(root: Path) -> Path:
+    packaged = root / "gate_vectors"
+    if packaged.is_dir():
+        return packaged
+    return root / "conformance" / "gate_vectors"
 
 
 def resolve_kit_root(
@@ -99,40 +82,34 @@ def resolve_kit_root(
     environ: Mapping[str, str] | None = None,
     read_local_file: bool = True,
 ) -> Path:
-    """Return the configured kit root or raise.
-
-    Configuration is explicit: ``VAWS_KNOWLEDGE_KIT_ROOT``, or a one-line path
-    in ``.vaws-local/knowledge-kit-root``. Unconfigured is not a pass. A
-    configured missing path, non-Git tree, wrong revision, or dirty executed
-    runner/vector bytes is a failure, not a skip.
-    """
-
-    expected = pinned_commit(repo_root)
+    """Return an explicit kit checkout, or the installed package kit."""
     mapping = os.environ if environ is None else environ
     raw = str(mapping.get(KIT_ROOT_ENV, "")).strip()
     if not raw and read_local_file:
         local = repo_root / LOCAL_KIT_FILE
         if local.is_file():
             raw = local.read_text(encoding="utf-8").strip()
-    if not raw:
+    if raw:
+        root = Path(raw)
+        if not root.is_dir():
+            raise KitInvalid(f"{KIT_ROOT_ENV} is {raw!r} but that path does not exist")
+        runner = _runner_path(root)
+        if not runner.is_file():
+            raise KitInvalid(f"kit root {root} is missing conformance/runner.py")
+        count = _vector_count(root)
+        if count != EXPECTED_VECTOR_COUNT:
+            raise KitInvalid(
+                f"kit root {root} has {count} hash vectors, expected {EXPECTED_VECTOR_COUNT}"
+            )
+        return root.resolve()
+    packaged = packaged_kit_root()
+    if packaged is None:
         raise KitUnconfigured(
-            f"{KIT_ROOT_ENV} is not set; shared-kit client tests require an explicit "
-            f"git checkout of {expected}"
+            f"{KIT_ROOT_ENV} is not set and the vaws-knowledge package has no "
+            "conformance vectors; clone vllm-ascend-workspace/vaws-knowledge "
+            "and pass --from <clone> or set the env, or run `uv sync`"
         )
-    root = Path(raw)
-    if not root.is_dir():
-        raise KitInvalid(f"{KIT_ROOT_ENV} is {raw!r} but that path does not exist")
-    runner = root / "conformance" / "runner.py"
-    if not runner.is_file():
-        raise KitInvalid(f"kit root {root} is missing conformance/runner.py")
-    vectors_dir = root / "conformance" / "vectors"
-    vector_count = len(list(vectors_dir.glob("*.yaml"))) if vectors_dir.is_dir() else 0
-    if vector_count != EXPECTED_VECTOR_COUNT:
-        raise KitInvalid(
-            f"kit root {root} has {vector_count} hash vectors, expected {EXPECTED_VECTOR_COUNT}"
-        )
-    _verify_pinned_git_kit(root, expected)
-    return root.resolve()
+    return packaged
 
 
 def runner_supports_conflicts(runner: Path) -> bool:
@@ -155,7 +132,7 @@ def build_client_kit_argv(
     repo_root: Path = REPO_ROOT,
     python: str | None = None,
 ) -> list[str]:
-    runner = kit_root / "conformance" / "runner.py"
+    runner = _runner_path(kit_root)
     interpreter = python if python is not None else sys.executable
     adapter = repo_root / ".agents" / "tests" / "knowledge_client_adapter.py"
 
@@ -166,9 +143,9 @@ def build_client_kit_argv(
         interpreter,
         str(runner),
         "--vectors",
-        str(kit_root / "conformance" / "vectors"),
+        str(_vectors_dir(kit_root)),
         "--gate-vectors",
-        str(kit_root / "conformance" / "gate_vectors"),
+        str(_gate_vectors_dir(kit_root)),
         "--hash-cmd",
         command("hash"),
         "--payload-cmd",

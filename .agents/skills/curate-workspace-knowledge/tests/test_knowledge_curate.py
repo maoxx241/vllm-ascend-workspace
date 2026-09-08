@@ -23,7 +23,7 @@ SCRIPT = (
 if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
-from vaws_knowledge import KNOWLEDGE_FILES, capture_candidate  # noqa: E402
+from vaws_knowledge_v1 import KNOWLEDGE_FILES, capture_candidate  # noqa: E402
 
 NOW = "2026-07-27T12:00:00Z"
 

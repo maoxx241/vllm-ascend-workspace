@@ -1,12 +1,13 @@
 """Official MCP SDK against the consumed task server subprocess.
 
-Local-only: no manager, no remote-dev, no network. The launcher locates the
-coordinator checkout through VAWS_COORDINATOR_ROOT. Skip when the official
-SDK or the checkout is missing; this package does not install dependencies.
+Local-only: no manager, no remote-dev, no network. The launcher execs the
+installed vaws-coordinator package. Skip when the official SDK or the
+package is missing; this file does not install dependencies.
 """
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import json
 import os
 import subprocess
@@ -22,18 +23,13 @@ TESTS = Path(__file__).resolve().parent
 if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
-import vaws_coordinator as coordinator  # noqa: E402
-
-# Integration marker: skip when no coordinator exists (including a hermetic
-# VAWS_COORDINATOR_ROOT=/nonexistent hide). Must pass when the checkout is
-# present, the official SDK is installed, and the pin matches.
-CHECKOUT = coordinator.coordinator_root(required=False)
+PACKAGE_PRESENT = importlib.util.find_spec("vaws_coordinator") is not None
 try:
     import importlib.metadata
     from mcp import ClientSession, StdioServerParameters
     from mcp.client.stdio import stdio_client
     SDK_VERSION = importlib.metadata.version("mcp")
-except Exception:  # noqa: BLE001 - skipUnless needs a boolean, not a specific import error
+except Exception:  # noqa: BLE001 - skipUnless needs a boolean
     ClientSession = None
     StdioServerParameters = None
     stdio_client = None
@@ -44,18 +40,9 @@ def have_sdk() -> bool:
     return ClientSession is not None and SDK_VERSION == "2.1.1"
 
 
-@unittest.skipUnless(CHECKOUT, "no vaws-coordinator checkout (set VAWS_COORDINATOR_ROOT)")
+@unittest.skipUnless(PACKAGE_PRESENT, "vaws-coordinator is not installed; run `uv sync`")
 @unittest.skipUnless(have_sdk(), "official MCP SDK 2.1.1 is not installed")
 class OfficialStdioTests(unittest.TestCase):
-    def setUp(self) -> None:
-        status = coordinator.checkout_status()
-        pin = coordinator.load_dependency()
-        if status["pin_matches"] is False:
-            message = f"checkout {status['commit']} is not the pinned {pin['commit']}"
-            if os.environ.get("CI"):
-                self.fail(message)
-            self.skipTest(message)
-
     def test_local_only_task_lifecycle(self) -> None:
         asyncio.run(self._run())
 
@@ -82,7 +69,6 @@ class OfficialStdioTests(unittest.TestCase):
                 for key, value in os.environ.items()
                 if not key.startswith("VAWS_") and key != "PYTHONPATH"
             }
-            environment["VAWS_COORDINATOR_ROOT"] = str(CHECKOUT)
             environment["VAWS_AGENT_SESSIONS_DIR"] = str(temp / "registry")
             sitecustomize = temp / "sitecustomize.py"
             sitecustomize.write_text((TESTS / "guarded_local_entry.py").read_text(encoding="utf-8"), encoding="utf-8")
@@ -135,8 +121,9 @@ class OfficialStdioTests(unittest.TestCase):
                     async with ClientSession(read, write) as client:
                         initialized = (await client.initialize()).model_dump(by_alias=True)
                         capability = initialized["capabilities"]["experimental"]["vaws-coordinator-task"]
-                        self.assertEqual(capability["service_api_version"], 1)
-                        self.assertIsInstance(capability["service_api_version"], int)
+                        self.assertIn("version", capability)
+                        self.assertIn("host_protocol_schema_version", capability)
+                        self.assertIsInstance(capability["version"], str)
                         names = [tool.name for tool in (await client.list_tools()).tools]
                         self.assertEqual(set(names), {"vaws_session", "vaws_run", "vaws_execution", "vaws_finish"})
 

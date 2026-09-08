@@ -3,7 +3,7 @@
 
 Real execution applies substrate environment defaults once, then constructs
 the in-process/CLI invoker. ``--list`` and retained-evidence ``--report``
-stay offline and do not require a remote-dev checkout.
+stay offline and do not require the vaws-remote-dev package.
 
 Progress goes to stderr as ``__VAWS_MATURATION_PROGRESS__=<json>`` lines; the
 only stdout output is one JSON report. Host identities are replaced by labels

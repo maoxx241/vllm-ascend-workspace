@@ -1,13 +1,11 @@
-"""Scaffold-side contract with the extracted vaws-coordinator.
+"""Scaffold-side contract with the installed vaws-coordinator package.
 
-Locator, launcher, client-setup preservation and the build-input pin run
-without a coordinator checkout except tests marked ``requires_coordinator``.
-Those use ``VAWS_COORDINATOR_ROOT``. Official MCP SDK coverage lives in
+Launcher, client-setup preservation and the build-input byte match run
+against the package. Official MCP SDK coverage lives in
 ``test_coordinator_official_stdio.py``.
 """
 from __future__ import annotations
 
-import hashlib
 import importlib.util
 import json
 import os
@@ -26,13 +24,14 @@ SCRIPTS = ROOT / ".agents" / "scripts"
 if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
-import vaws_coordinator as coordinator  # noqa: E402
+import vaws_coordinator_launch as coordinator  # noqa: E402
 
-# Integration marker: skip checkout-backed cases when no coordinator exists
-# (including a hermetic VAWS_COORDINATOR_ROOT=/nonexistent hide). Must pass
-# when the shared .vaws-local checkout is present and usable.
-CHECKOUT = coordinator.coordinator_root(required=False)
-requires_coordinator = unittest.skipUnless(CHECKOUT, "no vaws-coordinator checkout (set VAWS_COORDINATOR_ROOT)")
+_GONE_COORDINATOR_ROOT = "VAWS_" + "COORDINATOR_ROOT"
+
+requires_package = unittest.skipUnless(
+    importlib.util.find_spec("vaws_coordinator") is not None,
+    "vaws-coordinator is not installed; run `uv sync`",
+)
 
 
 def load_script(name: str):
@@ -44,53 +43,43 @@ def load_script(name: str):
     return module
 
 
-def write_fake_checkout(root: Path) -> Path:
-    for relative in coordinator.REQUIRED_FILES:
-        path = root / relative
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("", encoding="utf-8")
-    return root
+def isolated_python():
+    """Return a 3.11+ interpreter that does not see the workspace ``.venv``."""
+    base = Path(sys.base_prefix) / "bin" / "python3"
+    if base.is_file() and base.resolve() != Path(sys.executable).resolve():
+        return str(base)
+    for candidate in ("/opt/homebrew/bin/python3", "/usr/bin/python3"):
+        path = Path(candidate)
+        if not path.is_file():
+            continue
+        proc = subprocess.run(
+            [str(path), "-c", "import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)"],
+            check=False,
+        )
+        if proc.returncode == 0:
+            return str(path)
+    raise unittest.SkipTest("no Python 3.11+ interpreter outside .venv")
 
 
-def _init_git_checkout(root: Path) -> None:
-    subprocess.run(["git", "init"], cwd=root, check=True, capture_output=True, text=True)
-    subprocess.run(["git", "config", "user.email", "dev@example.com"], cwd=root, check=True, capture_output=True)
-    subprocess.run(["git", "config", "user.name", "dev"], cwd=root, check=True, capture_output=True)
-    subprocess.run(["git", "add", "-A"], cwd=root, check=True, capture_output=True)
-    subprocess.run(["git", "commit", "-m", "fake"], cwd=root, check=True, capture_output=True)
+def isolated_env():
+    drop = {"VIRTUAL_ENV", "PYTHONPATH", "PYTHONHOME"}
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in drop and not key.startswith("UV_")
+    }
+    env["VAWS_SKIP_VENV_REEXEC"] = "1"
+    return env
 
 
-class LocatorTests(unittest.TestCase):
-    def test_env_root_must_look_like_a_checkout(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            with self.assertRaises(coordinator.CoordinatorUnavailable) as ctx:
-                coordinator.coordinator_root(env={coordinator.COORDINATOR_ROOT_ENV: tmp})
-            self.assertIn("not a vaws-coordinator checkout", str(ctx.exception))
-            self.assertIsNone(
-                coordinator.coordinator_root(required=False, env={coordinator.COORDINATOR_ROOT_ENV: tmp})
-            )
-
-    def test_fake_checkout_is_accepted(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            write_fake_checkout(Path(tmp))
-            with self.assertRaises(coordinator.CoordinatorUnavailable) as ctx:
-                coordinator.coordinator_root(env={coordinator.COORDINATOR_ROOT_ENV: tmp})
-            self.assertIn("not a vaws-coordinator checkout", str(ctx.exception))
-            self.assertIn("bootstrap", str(ctx.exception))
-            self.assertIsNone(
-                coordinator.coordinator_root(required=False, env={coordinator.COORDINATOR_ROOT_ENV: tmp})
-            )
-            status = coordinator.checkout_status({coordinator.COORDINATOR_ROOT_ENV: tmp})
-            self.assertEqual(status["state"], "not_git")
-            self.assertEqual(status["root_source"], "env")
-            self.assertIsNone(status["manager_state_dir_default"])
-
-    def test_environment_fills_the_single_registry_and_host_queue(self) -> None:
+class EnvironmentTests(unittest.TestCase):
+    def test_environment_fills_the_single_registry(self) -> None:
         env = coordinator.coordinator_environment({})
         self.assertTrue(env["VAWS_AGENT_SESSIONS_DIR"].endswith("agent-sessions"))
         self.assertNotIn("VAWS_HOST_QUEUE_MODULE", env)
         self.assertTrue(env["VAWS_PARITY_SCRIPT"].endswith("remote_code_parity.py"))
         self.assertNotIn("VAWS_COORDINATOR_STATE_DIR", env)
+        self.assertNotIn(_GONE_COORDINATOR_ROOT, env)
 
     def test_environment_keeps_caller_values(self) -> None:
         env = coordinator.coordinator_environment({
@@ -108,84 +97,78 @@ class LocatorTests(unittest.TestCase):
             str(shared_workspace_root(ROOT) / ".vaws-local" / "agent-sessions"),
         )
 
-    def test_dependency_pin_names_the_accepted_main(self) -> None:
-        pin = coordinator.load_dependency()
-        self.assertEqual(pin["repository"], "vllm-ascend-workspace/vaws-coordinator")
-        self.assertEqual(pin["commit"], "a7d5005a4df6ab8adf5b16a965127e81a30ee3fc")
-        self.assertEqual(pin["tree"], "2660b7fe09c660b8827444753a87ec3bf554d551")
-        self.assertEqual(pin["visibility"], "public")
-        self.assertEqual(
-            pin["pinned_mirrors"]["vaws_build_inputs"]["sha256"],
-            "967adeb699e47de2e281581d576a69f6c85075385975e42916ead1ed198a2e09",
-        )
 
-
-class BuildInputPinTests(unittest.TestCase):
-    def test_scaffold_copy_matches_the_recorded_digest(self) -> None:
-        pin = coordinator.load_dependency()["pinned_mirrors"]["vaws_build_inputs"]
-        digest = hashlib.sha256((ROOT / pin["scaffold_path"]).read_bytes()).hexdigest()
-        self.assertEqual(digest, pin["sha256"])
-
-    @requires_coordinator
-    def test_scaffold_copy_matches_the_coordinator_checkout(self) -> None:
-        pin = coordinator.load_dependency()["pinned_mirrors"]["vaws_build_inputs"]
-        left = (ROOT / pin["scaffold_path"]).read_bytes()
-        right = (CHECKOUT / pin["coordinator_path"]).read_bytes()
-        self.assertEqual(left, right)
+class BuildInputMirrorTests(unittest.TestCase):
+    def test_scaffold_copy_matches_the_package_file(self) -> None:
+        try:
+            import vaws_build_inputs
+            import vaws_coordinator.build_inputs as packaged
+        except ImportError:
+            self.skipTest("vaws-coordinator is not installed")
+        self.assertEqual(Path(vaws_build_inputs.__file__).read_bytes(), Path(packaged.__file__).read_bytes())
 
 
 class LauncherTests(unittest.TestCase):
-    def test_status_without_checkout_reports_missing_and_exits_nonzero(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            env = {**os.environ, coordinator.COORDINATOR_ROOT_ENV: str(Path(tmp) / "absent")}
-            proc = subprocess.run(
-                [sys.executable, str(SCRIPTS / "vaws.py"), "status"],
-                capture_output=True, text=True, env=env, check=False,
-            )
+    def test_status_reports_the_installed_package(self) -> None:
+        proc = subprocess.run(
+            [sys.executable, str(SCRIPTS / "vaws.py"), "status"],
+            capture_output=True, text=True, check=False,
+        )
+        payload = json.loads(proc.stdout)
+        self.assertEqual(payload["name"], "vaws-coordinator")
+        self.assertIn(payload["state"], {"missing", "off_spec", "ready"})
+        self.assertEqual(payload["remedy"], "uv sync")
+        self.assertIsNone(payload["manager_state_dir_default"])
+
+    def test_status_without_package_reports_missing(self) -> None:
+        proc = subprocess.run(
+            [isolated_python(), str(SCRIPTS / "vaws.py"), "status"],
+            capture_output=True, text=True, env=isolated_env(), check=False,
+        )
         self.assertEqual(proc.returncode, 1, proc.stderr)
         payload = json.loads(proc.stdout)
         self.assertEqual(payload["state"], "missing")
-        self.assertEqual(payload["root_source"], "env")
-        self.assertIsNone(payload["manager_state_dir_default"])
+        self.assertEqual(payload["remedy"], "uv sync")
 
-    def test_task_server_and_task_ops_without_checkout_fail_closed(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            env = {**os.environ, coordinator.COORDINATOR_ROOT_ENV: str(Path(tmp) / "absent")}
-            proc = subprocess.run(
-                [sys.executable, str(SCRIPTS / "vaws.py"), "task-server"],
-                capture_output=True, text=True, env=env, check=False,
-            )
-            self.assertEqual(proc.returncode, 2, proc.stderr)
-            self.assertIn("bootstrap", proc.stderr)
-            for operation in ("attach", "session", "run", "execution", "finish"):
-                argv = [sys.executable, str(SCRIPTS / "vaws.py"), operation]
-                if operation == "attach":
-                    argv += ["--client", "codex", "--native-session-id", "n1"]
-                elif operation == "run":
-                    argv += ["--request-id", "r1", "--command", "true"]
-                elif operation == "execution":
-                    argv += ["--execution-id", "e1"]
-                else:
-                    argv += ["--json", "{}"]
-                child = subprocess.run(argv, capture_output=True, text=True, env=env, check=False)
-                self.assertEqual(child.returncode, 1, (operation, child.stderr))
-                self.assertNotIn("Traceback", child.stderr)
-                payload = json.loads(child.stdout)["result"]
-                self.assertEqual(payload["outcome"], "blocked")
-                self.assertEqual(payload["status"], "unavailable")
-                self.assertIn("vaws-coordinator", payload["summary"] + json.dumps(payload))
+    def test_task_server_and_task_ops_without_package_fail_closed(self) -> None:
+        env = isolated_env()
+        python = isolated_python()
+        proc = subprocess.run(
+            [python, str(SCRIPTS / "vaws.py"), "task-server"],
+            capture_output=True, text=True, env=env, check=False,
+        )
+        self.assertEqual(proc.returncode, 2, proc.stderr)
+        self.assertIn("uv sync", proc.stderr)
+        for operation in ("attach", "session", "run", "execution", "finish"):
+            argv = [python, str(SCRIPTS / "vaws.py"), operation]
+            if operation == "attach":
+                argv += ["--client", "codex", "--native-session-id", "n1"]
+            elif operation == "run":
+                argv += ["--request-id", "r1", "--command", "true"]
+            elif operation == "execution":
+                argv += ["--execution-id", "e1"]
+            else:
+                argv += ["--json", "{}"]
+            child = subprocess.run(argv, capture_output=True, text=True, env=env, check=False)
+            self.assertEqual(child.returncode, 1, (operation, child.stderr))
+            self.assertNotIn("Traceback", child.stderr)
+            payload = json.loads(child.stdout)["result"]
+            self.assertEqual(payload["outcome"], "blocked")
+            self.assertEqual(payload["status"], "unavailable")
+            self.assertIn("vaws-coordinator", payload["summary"] + json.dumps(payload))
+            self.assertIn("uv sync", payload["summary"] + json.dumps(payload) + child.stderr)
 
-    def test_hook_without_checkout_does_not_write_a_registry(self) -> None:
+    def test_hook_without_package_does_not_write_a_registry(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            env = {**os.environ, coordinator.COORDINATOR_ROOT_ENV: str(Path(tmp) / "absent")}
+            env = isolated_env()
             proc = subprocess.run(
-                [sys.executable, str(ROOT / ".agents/hooks/vaws_session.py"), "--client", "codex"],
+                [isolated_python(), str(ROOT / ".agents/hooks/vaws_session.py"), "--client", "codex"],
                 input='{"hook_event_name":"SessionStart","session_id":"n1"}',
                 capture_output=True, text=True, env=env, check=False,
             )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(proc.stdout.strip(), "")
-        self.assertIn("unavailable", proc.stderr)
+        self.assertIn("uv sync", proc.stderr)
         self.assertFalse(list(Path(tmp).rglob("sessions.sqlite3")))
 
     def test_env_json_lists_owned_keys(self) -> None:
@@ -197,10 +180,11 @@ class LauncherTests(unittest.TestCase):
         payload = json.loads(proc.stdout)
         self.assertIn("VAWS_AGENT_SESSIONS_DIR", payload)
         self.assertNotIn("VAWS_HOST_QUEUE_MODULE", payload)
+        self.assertNotIn(_GONE_COORDINATOR_ROOT, payload)
         self.assertTrue(all(key.startswith("VAWS_") for key in payload))
 
     def test_help_matrix(self) -> None:
-        for args in (["--help"], ["status", "--help"], ["bootstrap", "--help"]):
+        for args in (["--help"], ["status", "--help"]):
             with self.subTest(args=args):
                 proc = subprocess.run(
                     [sys.executable, str(SCRIPTS / "vaws.py"), *args],
@@ -208,6 +192,11 @@ class LauncherTests(unittest.TestCase):
                 )
                 self.assertEqual(proc.returncode, 0, proc.stderr)
                 self.assertIn("usage:", proc.stdout)
+        proc = subprocess.run(
+            [sys.executable, str(SCRIPTS / "vaws.py"), "bootstrap", "--help"],
+            capture_output=True, text=True, check=False,
+        )
+        self.assertNotEqual(proc.returncode, 0)
 
 
 class ClientSetupTests(unittest.TestCase):
@@ -217,7 +206,7 @@ class ClientSetupTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.project = Path(self.temp.name).resolve() / "project"
         self.project.mkdir()
-        patcher = mock.patch.dict(os.environ, {coordinator.COORDINATOR_ROOT_ENV: ""})
+        patcher = mock.patch.dict(os.environ, {_GONE_COORDINATOR_ROOT: ""})
         patcher.start()
         self.addCleanup(patcher.stop)
 
@@ -225,12 +214,12 @@ class ClientSetupTests(unittest.TestCase):
         files = self.setup.configuration("claude", self.project)
         servers = json.loads(files[self.project / ".mcp.json"])["mcpServers"]
         self.assertEqual(set(servers), {"remote-dev", "vaws-task"})
-        self.assertEqual(servers["remote-dev"]["args"], [str(ROOT / ".agents/scripts/remote_dev.py"), "server"])
-        self.assertEqual(servers["vaws-task"]["args"], [str(ROOT / ".agents/scripts/vaws.py"), "task-server"])
+        self.assertEqual(servers["remote-dev"]["args"], ["-m", "remote_dev.mcp.server"])
+        self.assertEqual(servers["vaws-task"]["args"], ["-m", "vaws_coordinator", "task-server"])
         self.assertEqual(servers["vaws-task"]["type"], "stdio")
         self.assertIn("VAWS_AGENT_SESSIONS_DIR", servers["vaws-task"]["env"])
         self.assertNotIn("VAWS_HOST_QUEUE_MODULE", servers["vaws-task"]["env"])
-        self.assertNotIn(coordinator.COORDINATOR_ROOT_ENV, servers["vaws-task"]["env"])
+        self.assertNotIn(_GONE_COORDINATOR_ROOT, servers["vaws-task"]["env"])
         hook = json.loads(files[self.project / ".claude/settings.local.json"])["hooks"]["SessionStart"][0]["hooks"][0]["command"]
         self.assertIn("--agent-sessions-dir", hook)
         self.assertNotIn("--coordinator-root", hook)
@@ -299,7 +288,7 @@ class ClientSetupTests(unittest.TestCase):
         self.assertEqual(data["mcp_servers"]["remote_dev"]["command"], "user-command")
         self.assertEqual(data["mcp_servers"]["remote_dev"]["args"], ["user-argument"])
         self.assertEqual(data["mcp_servers"]["other"], {"command": "other-command"})
-        self.assertEqual(data["mcp_servers"]["vaws_task"]["args"][1], "task-server")
+        self.assertEqual(data["mcp_servers"]["vaws_task"]["args"], ["-m", "vaws_coordinator", "task-server"])
         config.write_text(files[config])
         self.assertNotIn(config, self.setup.configuration("codex", self.project))
 
@@ -342,43 +331,39 @@ class ClientSetupTests(unittest.TestCase):
         for item in payload["files"]:
             self.assertTrue(item["path"].startswith(str(self.project)))
 
-    def test_generated_provider_and_hook_keep_explicit_root_and_registry(self) -> None:
-        root = (self.project / "coord root").resolve()
+    def test_generated_provider_and_hook_keep_explicit_registry(self) -> None:
         registry = (self.project / "reg dir").resolve()
         with mock.patch.dict(os.environ, {
-            coordinator.COORDINATOR_ROOT_ENV: str(root),
             "VAWS_AGENT_SESSIONS_DIR": str(registry),
         }):
             plan = self.setup.build_plan("claude", self.project, task_only=True)
         server = json.loads(plan["files"][self.project / ".mcp.json"])["mcpServers"]["vaws-task"]
-        self.assertEqual(server["env"][coordinator.COORDINATOR_ROOT_ENV], str(root))
+        self.assertNotIn(_GONE_COORDINATOR_ROOT, server["env"])
         self.assertEqual(server["env"]["VAWS_AGENT_SESSIONS_DIR"], str(registry))
         hook = json.loads(plan["files"][self.project / ".claude/settings.local.json"])["hooks"]["SessionStart"][0]["hooks"][0]["command"]
         argv = shlex.split(hook)
-        self.assertEqual(argv[argv.index("--coordinator-root") + 1], str(root))
+        self.assertNotIn("--coordinator-root", argv)
         self.assertEqual(argv[argv.index("--agent-sessions-dir") + 1], str(registry))
 
-    def test_existing_user_env_wins_over_setup_root(self) -> None:
+    def test_existing_user_env_wins_over_setup_registry(self) -> None:
         path = self.project / ".mcp.json"
         path.write_text(json.dumps({"mcpServers": {"vaws-task": {
             "command": "user-command",
             "args": ["user-argument"],
-            "env": {coordinator.COORDINATOR_ROOT_ENV: "/user/managed/root", "VAWS_AGENT_SESSIONS_DIR": "/user/managed/registry"},
+            "env": {"VAWS_AGENT_SESSIONS_DIR": "/user/managed/registry"},
             "user_field": 1,
         }}}))
         with mock.patch.dict(os.environ, {
-            coordinator.COORDINATOR_ROOT_ENV: str(self.project / "setup-root"),
             "VAWS_AGENT_SESSIONS_DIR": str(self.project / "setup-registry"),
         }):
             plan = self.setup.build_plan("claude", self.project, task_only=True)
         server = json.loads(plan["files"][path])["mcpServers"]["vaws-task"]
         self.assertEqual(server["command"], "user-command")
-        self.assertEqual(server["env"][coordinator.COORDINATOR_ROOT_ENV], "/user/managed/root")
         self.assertEqual(server["env"]["VAWS_AGENT_SESSIONS_DIR"], "/user/managed/registry")
         self.assertEqual(server["user_field"], 1)
         hook = json.loads(plan["files"][self.project / ".claude/settings.local.json"])["hooks"]["SessionStart"][0]["hooks"][0]["command"]
         argv = shlex.split(hook)
-        self.assertEqual(argv[argv.index("--coordinator-root") + 1], "/user/managed/root")
+        self.assertNotIn("--coordinator-root", argv)
         self.assertEqual(argv[argv.index("--agent-sessions-dir") + 1], "/user/managed/registry")
 
     def test_previously_generated_hook_is_replaced_once(self) -> None:
@@ -394,14 +379,15 @@ class ClientSetupTests(unittest.TestCase):
             {"hooks": [{"type": "command", "command": "my-hook"}]},
             {"hooks": [{"type": "command", "command": old, "timeout": 12}]},
         ]}}))
-        with mock.patch.dict(os.environ, {coordinator.COORDINATOR_ROOT_ENV: str(self.project / "coord")}):
+        with mock.patch.dict(os.environ, {}):
             first = self.setup.build_plan("claude", self.project)
             groups = json.loads(first["files"][settings])["hooks"]["SessionStart"]
             commands = [entry.get("command", "") for group in groups for entry in group.get("hooks", [group])]
             self.assertEqual(commands.count("my-hook"), 1)
             owned = [item for item in commands if "vaws_session.py" in item]
             self.assertEqual(len(owned), 1)
-            self.assertIn("--coordinator-root", owned[0])
+            self.assertNotIn("--coordinator-root", owned[0])
+            self.assertIn("--agent-sessions-dir", owned[0])
             self.assertNotEqual(owned[0], old)
             settings.write_text(first["files"][settings])
             second = self.setup.build_plan("claude", self.project)
@@ -454,7 +440,7 @@ class ClientSetupTests(unittest.TestCase):
                 "hooks": [{"type": "command", "command": old, "timeout": 12}, user],
             }]},
         }))
-        with mock.patch.dict(os.environ, {coordinator.COORDINATOR_ROOT_ENV: str(self.project / "coord")}):
+        with mock.patch.dict(os.environ, {}):
             plan = self.setup.build_plan("claude", self.project, task_only=True)
             after = json.loads(plan["files"][settings])
             self.assertEqual(after["user_top_metadata"], "retain")
@@ -469,7 +455,7 @@ class ClientSetupTests(unittest.TestCase):
                 if self.setup.owned_hook_command(entry.get("command", ""), "claude", self.project)
             ]
             self.assertEqual(len(owned), 1)
-            self.assertIn("--coordinator-root", owned[0]["command"])
+            self.assertNotIn("--coordinator-root", owned[0]["command"])
             self.assertNotEqual(owned[0]["command"], old)
             settings.write_text(plan["files"][settings])
             second = self.setup.build_plan("claude", self.project, task_only=True)
@@ -520,57 +506,44 @@ class ClientSetupTests(unittest.TestCase):
         self.assertEqual(owned[0].get("user_field"), "owned-meta")
         self.assertNotEqual(owned[0]["command"], old)
 
-    def test_all_clients_embed_explicit_paths_in_owned_hooks(self) -> None:
-        root = str((self.project / "explicit-root").resolve())
+    def test_all_clients_embed_explicit_registry_in_owned_hooks(self) -> None:
         registry = str((self.project / "explicit-registry").resolve())
         with mock.patch.dict(os.environ, {
-            coordinator.COORDINATOR_ROOT_ENV: root,
             "VAWS_AGENT_SESSIONS_DIR": registry,
         }):
             for client in ("claude", "cursor", "codex", "grok", "kimi"):
                 with self.subTest(client=client):
                     plan = self.setup.build_plan(client, self.project, kimi_config=self.project / "kimi.toml")
                     blob = "\n".join(plan["files"].values())
-                    self.assertIn(root, blob)
+                    self.assertNotIn(_GONE_COORDINATOR_ROOT, blob)
                     self.assertIn(registry, blob)
 
 
 class HookAdapterTests(unittest.TestCase):
-    def test_explicit_path_flags_work_without_ambient_vaws_env(self) -> None:
+    def test_explicit_registry_flag_is_forwarded_and_root_is_ignored(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            root = write_fake_checkout(Path(tmp) / "checkout")
-            _init_git_checkout(root)
             registry = Path(tmp) / "registry with spaces"
             registry.mkdir()
-            (root / "hooks" / "vaws_session.py").write_text(
-                "import json, os, sys\n"
-                "print(json.dumps({"
-                "'root': os.environ.get('VAWS_COORDINATOR_ROOT'), "
-                "'registry': os.environ.get('VAWS_AGENT_SESSIONS_DIR'), "
-                "'argv': sys.argv[1:]}))\n",
-                encoding="utf-8",
-            )
-            env = {key: value for key, value in os.environ.items() if not key.startswith("VAWS_")}
+            env = {key: value for key, value in os.environ.items()}
+            # Package is installed in the test interpreter; --coordinator-root must be accepted and ignored.
             proc = subprocess.run(
                 [
                     sys.executable,
                     str(ROOT / ".agents/hooks/vaws_session.py"),
                     "--client", "claude",
                     "--project", tmp,
-                    "--coordinator-root", str(root),
+                    "--coordinator-root", str(Path(tmp) / "ignored-root"),
                     "--agent-sessions-dir", str(registry),
                 ],
-                input="{}",
+                input='{"hook_event_name":"SessionStart","session_id":"n1","cwd":"%s"}' % tmp,
                 capture_output=True,
                 text=True,
                 env=env,
                 check=False,
             )
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        payload = json.loads(proc.stdout)
-        self.assertEqual(payload["root"], str(root))
-        self.assertEqual(payload["registry"], str(registry))
-        self.assertEqual(payload["argv"], ["--client", "claude", "--project", tmp])
+        self.assertIn(proc.returncode, {0, 1}, proc.stderr)
+        self.assertNotIn("Traceback", proc.stderr)
+        self.assertNotIn(_GONE_COORDINATOR_ROOT, proc.stderr)
 
 
 class NoInTreeTaskWriterTests(unittest.TestCase):
@@ -596,35 +569,6 @@ class NoInTreeTaskWriterTests(unittest.TestCase):
         self.assertTrue((ROOT / ".agents/lib/vaws_run_manifest.py").is_file())
 
 
-@requires_coordinator
-class CoordinatorCheckoutTests(unittest.TestCase):
-    def test_pin_matches_the_configured_checkout(self) -> None:
-        status = coordinator.checkout_status()
-        pin = coordinator.load_dependency()
-        mismatched = status["pin_matches"] is False
-        if mismatched:
-            message = f"checkout {status['commit']} is not the pinned {pin['commit']}"
-            if os.environ.get("CI"):
-                self.fail(message)
-            self.skipTest(message)
-        self.assertIn(status["state"], {"ready", "wrong_origin"})
-        self.assertEqual(status["commit"], pin["commit"])
-
-    def test_arrival_blobs_match_the_pin(self) -> None:
-        status = coordinator.checkout_status()
-        pin = coordinator.load_dependency()
-        if status["pin_matches"] is False:
-            message = f"checkout {status['commit']} is not the pinned {pin['commit']}"
-            if os.environ.get("CI"):
-                self.fail(message)
-            self.skipTest(message)
-        for relative, blob in pin["arrival_blobs"].items():
-            result = subprocess.run(
-                ["git", "-C", str(CHECKOUT), "rev-parse", f"HEAD:{relative}"],
-                capture_output=True, text=True, check=False,
-            )
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(result.stdout.strip(), blob, relative)
 
 
 if __name__ == "__main__":

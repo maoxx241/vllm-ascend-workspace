@@ -53,16 +53,17 @@ python3 .agents/skills/curate-workspace-knowledge/scripts/knowledge_curate.py \
   or driver version is the confident-but-wrong knowledge this design exists to
   prevent.
 - Never write an internal address, hostname, user path, or credential here.
-  `knowledge_validate.py` fails on those (`block` severity). Internal mount
-  paths and container instance names are legal here and refused on export
-  (`export` severity).
+  `knowledge_validate.py` fails on those (`block` severity). Container names,
+  internal machine identifiers, employee ids, and ticket ids are legal here
+  and refused on export (`export` severity). Detection follows
+  `vaws_knowledge.redact`; the live profile is declared by that package.
 - Propose upstream only through `.agents/scripts/knowledge_export.py`.
 
 ## Shared conformance kit
 
-The client adapter is `.agents/tests/knowledge_client_adapter.py`. The pinned
-kit commit is `.agents/deps/vaws-knowledge.json`. Configure
-`VAWS_KNOWLEDGE_KIT_ROOT` to a checkout of that commit, or write the path to
+The client adapter is `.agents/tests/knowledge_client_adapter.py`. The
+conformance kit ships inside the `vaws-knowledge` package. Optionally set
+`VAWS_KNOWLEDGE_KIT_ROOT` to an external checkout, or write the path to
 untracked `.vaws-local/knowledge-kit-root`, then:
 
 ```bash

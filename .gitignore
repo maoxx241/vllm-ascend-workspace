@@ -24,8 +24,8 @@ docs/superpowers/
 .vaws-local/
 .vaws-runtime/
 .remote-code-parity/
-# remote-dev is an external checkout now (see .agents/deps/remote-dev.json);
-# anything left at the old in-tree path is stale local state, never source.
+# remote-dev is an installed package now; anything left at the old in-tree
+# path is stale local state, never source.
 .remote-dev/
 .machine-inventory.json
 .worktrees/

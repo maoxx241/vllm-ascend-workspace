@@ -16,7 +16,7 @@ service process. The legacy wrappers here are not yet transparent adapters for
 pool bindings. Do not allocate a second local NPU lease for the pool run.
 
 Remote substrate rule: use remote-dev companion tools (`remote_*` MCP tools,
-launched via `python3 .agents/scripts/remote_dev.py`) for ad hoc remote
+launched via `uv run remote-dev` or MCP) for ad hoc remote
 read/edit/bash/search/patch work around a service. Use this skill for the
 domain service lifecycle contract and keep its scripts as the compatibility
 backend for managed VAWS sessions.

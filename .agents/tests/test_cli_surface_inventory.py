@@ -177,15 +177,26 @@ class RoleAndExternalTests(unittest.TestCase):
         _overlay_script(self.root, ".agents/scripts/drift.py")
         write(
             self.root,
-            ".agents/deps/remote-dev.json",
-            json.dumps(
-                {
-                    "name": "remote-dev",
-                    "repository": "vllm-ascend-workspace/remote-dev",
-                    "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                    "consumed_surface": {"cli_tools": "tools/remote_*.py"},
-                }
-            ),
+            "pyproject.toml",
+            """
+            [project]
+            name = "fixture"
+            version = "0"
+            dependencies = ["vaws-remote-dev==0.1.0"]
+            [tool.uv.sources]
+            vaws-remote-dev = { git = "https://github.com/vllm-ascend-workspace/remote-dev", tag = "v0.1.0" }
+            """,
+        )
+        write(
+            self.root,
+            "uv.lock",
+            """
+            version = 1
+            [[package]]
+            name = "vaws-remote-dev"
+            version = "0.1.0"
+            source = { git = "https://github.com/vllm-ascend-workspace/remote-dev?tag=v0.1.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }
+            """,
         )
         inventory.CLASSIFICATION = {
             ".agents/scripts/local.py": inventory._cls("mechanics", "supported", "local owner"),
@@ -215,6 +226,7 @@ class RoleAndExternalTests(unittest.TestCase):
             payload["external_owners"]["remote-dev"]["commit"],
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         )
+        self.assertEqual(payload["external_owners"]["remote-dev"]["declaration"], "pyproject.toml")
 
 
 class ClassificationOverlayTests(unittest.TestCase):
@@ -289,24 +301,25 @@ class RepositoryCoherenceTests(unittest.TestCase):
         self.assertEqual(proposed["agent_command_count"], 13)
         self.assertEqual(proposed["agent_commands"], list(inventory.HISTORICAL_PROPOSED_COMMANDS))
 
-    def test_external_owners_come_from_committed_pins(self) -> None:
+    def test_external_owners_come_from_the_lockfile(self) -> None:
         owners = self.payload["external_owners"]
         by_repository = {meta["repository"]: meta for meta in owners.values()}
         self.assertEqual(
             by_repository["vllm-ascend-workspace/remote-dev"]["commit"],
-            "62045af1f76c803ca392ae413b56bcfe290e6450",
+            "2d2d9297fbf74259f6733b3f4a0ab35150608d56",
         )
         self.assertEqual(
             by_repository["vllm-ascend-workspace/vaws-coordinator"]["commit"],
-            "a7d5005a4df6ab8adf5b16a965127e81a30ee3fc",
+            "818811b2ca1e5598c3dc14a9435b069035548ea0",
         )
+        self.assertIsNone(by_repository["vllm-ascend-workspace/vaws-top"]["commit"])
         self.assertEqual(
-            by_repository["vllm-ascend-workspace/vaws-top"]["commit"],
-            "e7af28e629e7fd79c47e9b096f1dc1fd94f665ab",
+            by_repository["vllm-ascend-workspace/vaws-top"]["declaration"],
+            "npu-fleet-monitor uvx release wheel",
         )
         self.assertEqual(
             by_repository["vllm-ascend-workspace/vaws-knowledge"]["commit"],
-            "4208de3ca88f5146472353f23c5f5d216767bf47",
+            "19b60cb1538691880a05925305d85108acd7ee0f",
         )
         for meta in owners.values():
             self.assertEqual(meta["source_availability"], "uninspected")

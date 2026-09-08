@@ -7,17 +7,16 @@ capability uses the same degradation entry fields as
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 from typing import Any, Mapping
 
 from vaws_dependency import (
+    REMEDY,
     USABLE_STATES,
-    VAWS_TOP_NAME,
-    acknowledged_drift,
-    all_pins,
+    all_packages,
     inspect,
-    read_hook_degradations,
-    resolve,
+    require_package,
 )
 from vaws_knowledge_client import _probe_shared, default_paths
 from vaws_knowledge_shared import AVAILABLE as SHARED_AVAILABLE
@@ -49,13 +48,21 @@ CAPABILITY_ORDER = (
     "conformance_kit",
 )
 CAPABILITY_DEPS = {
-    "remote_endpoints": ("remote-dev",),
-    "resolver_registration": ("remote-dev",),
+    "remote_endpoints": ("vaws-remote-dev",),
+    "resolver_registration": ("vaws-remote-dev",),
     "task_pool": ("vaws-coordinator",),
     "host_npu_authority": ("vaws-coordinator",),
-    "fleet_observation": (VAWS_TOP_NAME,),
+    "fleet_observation": ("uvx", "vaws-top"),
     "shared_knowledge": (),
     "conformance_kit": ("vaws-knowledge",),
+}
+FLEET_REMEDY = (
+    "python3 .agents/skills/npu-fleet-monitor/scripts/manage_monitor.py deploy"
+)
+SOURCE_REPOS = {
+    "vaws-remote-dev": "vllm-ascend-workspace/remote-dev",
+    "vaws-coordinator": "vllm-ascend-workspace/vaws-coordinator",
+    "vaws-knowledge": "vllm-ascend-workspace/vaws-knowledge",
 }
 
 
@@ -63,77 +70,38 @@ def _usable(state: str) -> bool:
     return state in USABLE_STATES
 
 
-def _service_api_incompatible(info: Mapping[str, Any]) -> dict[str, Any] | None:
-    api = info.get("service_api") or {}
-    if api.get("state") != "incompatible":
-        return None
-    accepted = api.get("accepted") or {}
-    lo, hi = accepted.get("min"), accepted.get("max")
-    return {
-        "layer": "dependency",
-        "detail": (
-            f"{info.get('name')} service API is incompatible: "
-            f"supports {api.get('supports')} vs accepted {lo}..{hi}"
-        ),
-        "effect": "dependent capabilities are degraded/unavailable; execution is not blocked",
-        "remedy": (
-            f"bump the pin or update the checkout to a build whose `supports` includes {lo}..{hi}"
-        ),
-        "expected_source_repo": None,
-        "expected_source_ref": None,
-    }
-
-
-def _apply_service_api(
-    capabilities: dict[str, Any],
-    pins: Mapping[str, Mapping[str, Any]],
-    deps: Mapping[str, Mapping[str, Any]],
-) -> list[str]:
-    warnings: list[str] = []
-    for dep_name, info in deps.items():
-        api = info.get("service_api") or {}
-        pin = pins.get(dep_name) or {}
-        if api.get("state") == "undeclared":
-            detail = api.get("detail") or "service-api.json is missing or predates the contract"
-            warnings.append(f"{dep_name} service API is undeclared: {detail}")
-        incompatible = _service_api_incompatible(info)
-        if incompatible is None:
-            continue
-        incompatible["expected_source_repo"] = pin.get("repository")
-        incompatible["expected_source_ref"] = pin.get("commit") or pin.get("ref")
-        for cap_name, depends in CAPABILITY_DEPS.items():
-            if dep_name not in depends:
-                continue
-            cap = capabilities[cap_name]
-            cap["available"] = False
-            cap["degraded"] = True
-            cap["degradation"].append(incompatible)
-    return warnings
+def _probe_fleet_observation() -> tuple[bool, list[str]]:
+    """True when ``uvx`` is on PATH so ``uvx vaws-top`` can be invoked."""
+    if shutil.which("uvx") is None:
+        return False, ["uvx is not on PATH"]
+    return True, []
 
 
 def _dep_degradation(
-    pin: Mapping[str, Any],
     info: Mapping[str, Any],
     *,
     layer: str = "dependency",
     effect: str,
 ) -> dict[str, Any]:
-    api_state = (info.get("service_api") or {}).get("state")
-    if _usable(str(info.get("state") or "")) and api_state in {"compatible", "undeclared"}:
+    name = str(info.get("name") or "")
+    if _usable(str(info.get("state") or "")) and info.get("state") != "ready":
         effect = (
-            f"runs an unpinned build of {info.get('name')} "
-            f"(service API {api_state}); behaviour may differ from the accepted pin"
+            f"runs an off-spec install of {name} "
+            f"(installed {info.get('installed_version')} "
+            f"commit {info.get('installed_commit')}; "
+            f"lock {info.get('locked_version')} "
+            f"commit {info.get('locked_commit')}); behaviour may differ"
         )
     return {
         "layer": layer,
         "detail": (
-            f"{info.get('name')} checkout is {info.get('state')} at {info.get('path')}"
+            f"{name} is {info.get('state')}"
             + (f": {'; '.join(info.get('problems') or ())}" if info.get("problems") else "")
         ),
         "effect": effect,
-        "remedy": str(pin.get("bootstrap") or ""),
-        "expected_source_repo": pin.get("repository"),
-        "expected_source_ref": pin.get("commit") or pin.get("ref"),
+        "remedy": str(info.get("remedy") or REMEDY),
+        "expected_source_repo": SOURCE_REPOS.get(name),
+        "expected_source_ref": info.get("locked_commit") or info.get("required_version"),
     }
 
 
@@ -142,7 +110,6 @@ def _shared_degradation(repo_root: Path) -> dict[str, Any] | None:
     capability = _probe_shared(default_paths(repo_root)["shared_dir"])
     if capability["status"] == SHARED_AVAILABLE:
         return None
-    # Same fields as vaws_knowledge_client.query_knowledge shared-layer missing[].
     return {
         "layer": "shared",
         "status": capability.get("status", "absent"),
@@ -201,20 +168,18 @@ def evaluate_capabilities(
     repo_root: Path = ROOT,
     env: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
-    pins = all_pins()
-    deps = {name: inspect(name, env, repo_root=repo_root) for name in pins}
+    del env  # interpreter state is the source of truth; env is kept for envelope shape
+    deps = all_packages(repo_root)
     capabilities: dict[str, Any] = {}
 
-    remote = deps["remote-dev"]
-    remote_pin = pins["remote-dev"]
+    remote = deps["vaws-remote-dev"]
     remote_ok = _usable(remote["state"])
     remote_deg: list[dict[str, Any]] = []
     if remote["state"] != "ready":
         remote_deg.append(
             _dep_degradation(
-                remote_pin,
                 remote,
-                effect="remote companion tools cannot start; host+port recipes that go through the launcher fail closed",
+                effect="remote companion tools cannot start; host+port recipes that go through the package fail closed",
             )
         )
     capabilities["remote_endpoints"] = _capability(
@@ -229,7 +194,6 @@ def evaluate_capabilities(
     if remote["state"] != "ready":
         resolver_deg.append(
             _dep_degradation(
-                remote_pin,
                 remote,
                 layer="dependency",
                 effect=(
@@ -277,13 +241,11 @@ def evaluate_capabilities(
     )
 
     coord = deps["vaws-coordinator"]
-    coord_pin = pins["vaws-coordinator"]
     coord_ok = _usable(coord["state"])
     coord_deg: list[dict[str, Any]] = []
     if coord["state"] != "ready":
         coord_deg.append(
             _dep_degradation(
-                coord_pin,
                 coord,
                 effect="vaws_* task tools and the native session hook cannot exec the coordinator",
             )
@@ -295,23 +257,27 @@ def evaluate_capabilities(
         degradation=coord_deg,
     )
 
-    host_module = Path(coord["path"]) / "host/vaws_npu_coordination.py" if coord.get("path") else None
-    host_ok = coord_ok and bool(host_module and host_module.is_file())
+    host_ok = False
+    if coord_ok:
+        try:
+            from vaws_coordinator.host import vaws_npu_coordination as _host
+
+            host_ok = bool(getattr(_host, "__file__", None))
+        except ImportError:
+            host_ok = False
     host_deg: list[dict[str, Any]] = []
     if not host_ok:
         host_deg.append(
             _dep_degradation(
-                coord_pin,
                 coord,
-                effect="host NPU queue protocol cannot be loaded from the coordinator checkout",
+                effect="host NPU queue protocol cannot be imported from vaws_coordinator.host",
             )
         )
     elif coord["state"] != "ready":
         host_deg.append(
             _dep_degradation(
-                coord_pin,
                 coord,
-                effect="host NPU queue protocol cannot be loaded from the coordinator checkout",
+                effect="host NPU queue protocol cannot be imported from vaws_coordinator.host",
             )
         )
     capabilities["host_npu_authority"] = _capability(
@@ -321,17 +287,16 @@ def evaluate_capabilities(
         degradation=host_deg,
     )
 
-    top = deps[VAWS_TOP_NAME]
-    top_pin = pins[VAWS_TOP_NAME]
-    top_ok = _usable(top["state"])
+    top_ok, top_problems = _probe_fleet_observation()
     top_deg: list[dict[str, Any]] = []
-    if top["state"] != "ready":
+    if not top_ok:
         top_deg.append(
-            _dep_degradation(
-                top_pin,
-                top,
-                effect="npu-fleet-monitor cannot locate the standalone fleet dashboard checkout",
-            )
+            {
+                "layer": "tool",
+                "detail": "; ".join(top_problems),
+                "effect": "npu-fleet-monitor cannot run the release wheel through uvx",
+                "remedy": FLEET_REMEDY,
+            }
         )
     capabilities["fleet_observation"] = _capability(
         available=top_ok,
@@ -349,15 +314,13 @@ def evaluate_capabilities(
     )
 
     kit = deps["vaws-knowledge"]
-    kit_pin = pins["vaws-knowledge"]
     kit_ok = _usable(kit["state"])
     kit_deg: list[dict[str, Any]] = []
     if kit["state"] != "ready":
         kit_deg.append(
             _dep_degradation(
-                kit_pin,
                 kit,
-                effect="the vaws-knowledge conformance kit is not available to knowledge client tests",
+                effect="the vaws-knowledge engine is not available to knowledge client tests",
             )
         )
     capabilities["conformance_kit"] = _capability(
@@ -367,23 +330,21 @@ def evaluate_capabilities(
         degradation=kit_deg,
     )
 
-    warnings = _apply_service_api(capabilities, pins, deps)
     flat: list[dict[str, Any]] = []
     for name in CAPABILITY_ORDER:
         flat.extend(capabilities[name]["degradation"])
-    drift = acknowledged_drift(env)
     return {
         "deps": deps,
         "capabilities": capabilities,
         "degraded": any(capabilities[name]["degraded"] for name in CAPABILITY_ORDER),
         "degradation": flat,
-        "warnings": warnings,
-        "acknowledged_drift": drift,
-        "recent_hook_degradations": read_hook_degradations(repo_root=repo_root),
+        "warnings": [],
+        "acknowledged_drift": [],
+        "recent_hook_degradations": [],
     }
 
 
-def _bootstrap_actions(report: Mapping[str, Any]) -> list[dict[str, str | None]]:
+def _sync_actions(report: Mapping[str, Any]) -> list[dict[str, str | None]]:
     seen: set[str] = set()
     actions: list[dict[str, str | None]] = []
     for entry in report.get("degradation") or []:
@@ -393,7 +354,7 @@ def _bootstrap_actions(report: Mapping[str, Any]) -> list[dict[str, str | None]]
         seen.add(remedy)
         actions.append(
             {
-                "description": str(entry.get("effect") or entry.get("detail") or "bootstrap a missing dependency"),
+                "description": str(entry.get("effect") or entry.get("detail") or "install a missing dependency"),
                 "command": remedy,
                 "ref": None,
             }
@@ -401,7 +362,7 @@ def _bootstrap_actions(report: Mapping[str, Any]) -> list[dict[str, str | None]]
     if not actions:
         actions.append(
             {
-                "description": "no bootstrap required",
+                "description": "no sync required",
                 "command": None,
                 "ref": None,
             }
@@ -412,10 +373,10 @@ def _bootstrap_actions(report: Mapping[str, Any]) -> list[dict[str, str | None]]
 def _parts_for(report: Mapping[str, Any]) -> list[dict[str, Any]]:
     parts = [
         make_part(
-            unit="dependency_pins",
+            unit="dependency_lock",
             unit_kind="check",
             outcome="success",
-            summary="tracked dependency pin files validate against dependency-v1",
+            summary="pyproject.toml and uv.lock describe the three workspace packages",
         )
     ]
     for name in CAPABILITY_ORDER:
@@ -455,8 +416,7 @@ def build_doctor_envelope(
     command = make_command(
         argv=argv,
         cwd=str(repo_root),
-        env_keys=["HOME", "CI", "VAWS_DEPS_ALLOW_OFF_PIN", "VAWS_REMOTE_DEV_ROOT",
-                  "VAWS_COORDINATOR_ROOT", "VAWS_TOP_ROOT", "VAWS_KNOWLEDGE_KIT_ROOT"],
+        env_keys=["HOME", "CI", "VAWS_SKIP_VENV_REEXEC", "VAWS_KNOWLEDGE_KIT_ROOT"],
     )
     attempt = make_attempt(command=command, reproduce=command["display"])
     environment = make_environment(source="unknown")
@@ -471,15 +431,15 @@ def build_doctor_envelope(
             operation=operation,
             outcome="failure",
             exit_code=2,
-            summary=f"dependency pin is invalid: {pin_error}"[:400],
+            summary=f"dependency spec is invalid: {pin_error}"[:400],
             attempt=attempt,
             environment=environment,
             evidence=make_evidence(),
             next_step=make_next_step(
                 actions=[
                     {
-                        "description": "fix the tracked pin file named in the failure",
-                        "command": None,
+                        "description": "fix pyproject.toml or uv.lock named in the failure",
+                        "command": REMEDY,
                         "ref": None,
                     }
                 ]
@@ -488,7 +448,7 @@ def build_doctor_envelope(
                 layer="caller",
                 reason_code="bad_arguments",
                 message=str(pin_error),
-                attribution_basis=["load_pin() rejected a tracked .agents/deps pin against dependency-v1"],
+                attribution_basis=["inspect() rejected pyproject.toml or uv.lock"],
                 confidence="high",
                 ruled_out=["transport", "remote_env", "remote_workload", "device"],
             ),
@@ -518,7 +478,7 @@ def build_doctor_envelope(
             reason_code="path_missing",
             message=summary,
             attribution_basis=[
-                "vaws_deps doctor inspected pinned checkouts and local knowledge cache on this laptop",
+                "vaws_deps doctor inspected installed packages, uv.lock, and the local knowledge cache",
                 f"{len(report['degradation'])} degradation entries were recorded",
             ],
             confidence="high",
@@ -532,7 +492,7 @@ def build_doctor_envelope(
         attempt=attempt,
         environment=environment,
         evidence=make_evidence(),
-        next_step=make_next_step(actions=_bootstrap_actions(report)),
+        next_step=make_next_step(actions=_sync_actions(report)),
         failure=failure,
         parts=parts,
         extensions={"capability_report": report},
@@ -545,5 +505,10 @@ def dumps_doctor(envelope: Mapping[str, Any]) -> str:
     return dumps(dict(envelope))
 
 
-def checkout_usable(name: str, env: Mapping[str, str] | None = None) -> Path | None:
-    return resolve(name, required=False, env=env)
+def checkout_usable(name: str, env: Mapping[str, str] | None = None) -> bool:
+    del env
+    return inspect(name)["state"] in USABLE_STATES
+
+
+def package_required(name: str) -> dict[str, Any]:
+    return require_package(name)

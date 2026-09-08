@@ -32,6 +32,11 @@ LIB = ROOT / ".agents" / "lib"
 if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
+from vaws_venv import ensure_workspace_interpreter  # noqa: E402
+
+ensure_workspace_interpreter(repo_root=ROOT)
+
+
 import vaws_knowledge_client as client  # noqa: E402
 import vaws_knowledge_shared as shared  # noqa: E402
 import vaws_knowledge_v2 as v2  # noqa: E402

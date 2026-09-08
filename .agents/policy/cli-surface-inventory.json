@@ -4,19 +4,20 @@
   "dep_declarations": [
     {
       "id": "remote-dev",
-      "filename": "remote-dev.json"
+      "package": "vaws-remote-dev"
     },
     {
       "id": "vaws-coordinator",
-      "filename": "coordinator.json"
+      "package": "vaws-coordinator"
     },
     {
       "id": "vaws-top",
-      "filename": "vaws-top.json"
+      "package": "vaws-top",
+      "declaration": "npu-fleet-monitor uvx release wheel"
     },
     {
       "id": "vaws-knowledge",
-      "filename": "vaws-knowledge.json"
+      "package": "vaws-knowledge"
     }
   ],
   "classification": {
@@ -36,7 +37,7 @@
       "responsibility": "mechanics",
       "support_role": "hook",
       "target_kind": "self",
-      "note": "compatibility adapter that execs the coordinator native-session hook when the checkout is present",
+      "note": "compatibility adapter that execs the coordinator native-session hook from the installed package",
       "external_owner": "vaws-coordinator"
     },
     ".agents/maturation/run.py": {
@@ -129,14 +130,6 @@
       "note": "dry-run-capable cleanup of jobs/services/leases/known-hosts/temp",
       "proposed_target": "vaws session"
     },
-    ".agents/scripts/remote_dev.py": {
-      "responsibility": "mechanics",
-      "support_role": "supported",
-      "target_kind": "self",
-      "note": "scaffold launcher for extracted remote-dev: status/bootstrap/server/hook/tool/env; tool NAME is not expanded into provider verbs",
-      "proposed_target": "vaws remote",
-      "external_owner": "remote-dev"
-    },
     ".agents/scripts/remote_exec.py": {
       "responsibility": "mechanics",
       "support_role": "compatibility",
@@ -183,7 +176,7 @@
       "responsibility": "mechanics",
       "support_role": "compatibility",
       "target_kind": "self",
-      "note": "managed toolbox probe; C1 direct probe is remote_dev.py tool remote_probe",
+      "note": "managed toolbox probe; C1 direct probe is remote-dev probe",
       "proposed_target": "vaws remote"
     },
     ".agents/scripts/remote_service_logs.py": {
@@ -292,7 +285,7 @@
       "responsibility": "mechanics",
       "support_role": "supported",
       "target_kind": "self",
-      "note": "coordinator launcher (status/bootstrap/env/hook/task-server) plus attach/session/run/execution/finish delegated outside argparse subparsers",
+      "note": "coordinator launcher (status/env/hook/task-server) plus attach/session/run/execution/finish delegated outside argparse subparsers",
       "proposed_target": "vaws task",
       "external_owner": "vaws-coordinator"
     },
@@ -307,7 +300,7 @@
       "responsibility": "mechanics",
       "support_role": "supported",
       "target_kind": "self",
-      "note": "unified dependency plane: status/bootstrap/doctor; doctor emits Result Envelope v1 capability report",
+      "note": "unified dependency plane: status/doctor/sync; doctor emits Result Envelope v1 capability report",
       "proposed_target": "vaws workspace"
     },
     ".agents/scripts/workspace_identity.py": {

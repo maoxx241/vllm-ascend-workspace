@@ -859,7 +859,7 @@ def _validate_provenance(value: Any, path: str, errors: list[str]) -> None:
         errors.append(f"{path}.submitted_at must use YYYY-MM-DD")
     profile = value.get("redaction_profile")
     if not isinstance(profile, str) or not REDACTION_PROFILE_RE.fullmatch(profile):
-        errors.append(f"{path}.redaction_profile must look like r1")
+        errors.append(f"{path}.redaction_profile must look like r<N>")
     unknown = sorted(
         set(value) - {"contributor", "origin_repo", "submitted_at", "redaction_profile"}
     )

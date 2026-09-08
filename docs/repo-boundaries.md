@@ -38,26 +38,22 @@ A reader following current migration directions must reach the already
 accepted task-provider, worker, and host-authority ownership, and must
 **never reinstall task dispatch into remote-dev**.
 
-This combined tree consumes remote-dev through the #90 external checkout,
-launcher (`.agents/scripts/remote_dev.py`), and resolver
+This combined tree consumes remote-dev as the installed `vaws-remote-dev`
+package (`uv.lock`) plus the resolver
 (`.agents/lib/vaws_remote_dev_plugin.py`). Tracked `.remote-dev` is gone.
-The pin is `62045af1f76c803ca392ae413b56bcfe290e6450`. That is a statement
-about this source, not a claim that this PR has already merged publicly, and
-not a runtime or hardware qualification.
+The local launcher `.agents/scripts/remote_dev.py` is gone so the package
+name is not shadowed.
 
-The coordinator consumer now **exists** in this combined tree: pin, locator,
-launcher, dual-provider client setup, owned-hook preservation, and residual
-compatibility adapters. Arrival evidence and the deleted in-tree writers are
-in [coordinator-consumption.md](coordinator-consumption.md). The pin is
-`a7d5005a4df6ab8adf5b16a965127e81a30ee3fc`. Task tools, registry writes, and
-the managed supervisor are not reimplemented here.
+The coordinator consumer now **exists** in this combined tree: the
+`vaws-coordinator` package, launcher, dual-provider client setup,
+owned-hook preservation, and residual compatibility adapters. Arrival
+evidence and the deleted in-tree writers are in
+[coordinator-consumption.md](coordinator-consumption.md). Task tools,
+registry writes, and the managed supervisor are not reimplemented here.
 
 The first-stage vaws-top consumer now **exists** in this combined tree:
-`npu-fleet-monitor` locates the published repository instead of a scaffold
-`vaws-top` branch worktree. The pin is
-`e7af28e629e7fd79c47e9b096f1dc1fd94f665ab`. vaws-top is published in its
-canonical repository but private; published is not public, and this
-integration does not change visibility. That is pinned source consumption,
+`npu-fleet-monitor` runs `uvx vaws-top`. That skill is landing on the
+package plane in a parallel change. vaws-top is a service, not an import.
 not a runtime, client, or NPU deployment.
 
 The SHAs below are source implementation facts from independent
@@ -117,9 +113,9 @@ every failure from killing an SSH ControlMaster, promise universal
 cancellation isolation, or constitute a hardware replay.
 
 `vaws-knowledge` Stage 2 #9 is on the accepted source main above. The
-scaffold pin `.agents/deps/vaws-knowledge.json` is
-`4208de3ca88f5146472353f23c5f5d216767bf47`, an external conformance **test
-kit** selected through `VAWS_KNOWLEDGE_KIT_ROOT`, not a runtime dependency. Two scaffold v2 entries remain
+conformance kit now ships inside the `vaws-knowledge` package (19 vectors).
+An optional `VAWS_KNOWLEDGE_KIT_ROOT` override still selects an external
+checkout; that is a test input, not a runtime dependency. Two scaffold v2 entries remain
 unverified and export-blocked; nine model facts remain v1. Shared-cache
 import is an explicit local
 `.agents/scripts/knowledge_shared_cache.py import` and is not a periodic

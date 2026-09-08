@@ -4,12 +4,9 @@
 These tests cover the consumer package: ``run_cli`` copies ``os.environ``
 and, when ``kill_after_ms`` is set, adds ``REMOTE_DEV_SSH_MUX=0`` to that
 copy before ``Popen``. CLI calls are launched through
-``.agents/scripts/remote_dev.py tool``. They use fake subprocesses, a fake
-transport under the pinned checkout, or test-owned local children only. They
-do not contact a host, kill a shared SSH process, or claim that this package
-alone fixes remote-dev #2: effective OpenSSH ``ControlMaster=no`` /
-``ControlPath=none`` / ``ControlPersist=no`` requires the provider, which
-root integrates separately.
+``python -m remote_dev <tool> --input-json -``. They use fake subprocesses,
+a fake transport against the installed package, or test-owned local children
+only. They do not contact a host.
 """
 
 from __future__ import annotations
@@ -32,7 +29,6 @@ if str(AGENTS) not in sys.path:
     sys.path.insert(0, str(AGENTS))
 
 from maturation.invoke import (  # noqa: E402
-    LAUNCHER,
     CliResult,
     RemoteDevUnavailable,
     RemoteDevInvoker,
@@ -338,19 +334,15 @@ class InterruptedCliMuxTests(unittest.TestCase):
         self.assertEqual(launched, [])
 
 
-ROOT_ENV = "VAWS_REMOTE_DEV_ROOT"
-CONFIGURED_CHECKOUT = Path("/configured/remote-dev-checkout")
-
-
 class ExternalRoutingTests(unittest.TestCase):
-    """Real-invoker routing against the locator/launcher, with no host connection."""
+    """Real-invoker routing against the installed package CLI, with no host connection."""
 
     def test_canonical_tool_names_and_launcher_argv(self) -> None:
-        self.assertEqual(cli_tool_name("remote.bash"), "remote_bash")
-        self.assertEqual(cli_tool_name("probe"), "remote_probe")
-        self.assertEqual(cli_tool_name("remote_read.py"), "remote_read")
+        self.assertEqual(cli_tool_name("remote.bash"), "bash")
+        self.assertEqual(cli_tool_name("probe"), "probe")
+        self.assertEqual(cli_tool_name("remote_read.py"), "read")
         argv = launcher_argv("remote.glob", python="/usr/bin/python3")
-        self.assertEqual(argv, ["/usr/bin/python3", str(LAUNCHER), "tool", "remote_glob", "--input-json", "-"])
+        self.assertEqual(argv, ["/usr/bin/python3", "-m", "remote_dev", "glob", "--input-json", "-"])
 
     def test_call_cli_uses_launcher_argv_and_json_payload(self) -> None:
         captured: dict[str, Any] = {}
@@ -362,7 +354,7 @@ class ExternalRoutingTests(unittest.TestCase):
             return CliResult(payload={"result": {"status": "ok"}}, returncode=0, killed=False, duration_ms=1)
 
         invoker = RemoteDevInvoker(python="/usr/bin/python3")
-        with mock.patch("maturation.invoke.remote_dev_root", return_value=CONFIGURED_CHECKOUT), mock.patch(
+        with mock.patch("maturation.invoke.require_package", return_value={"state": "ready"}), mock.patch(
             "maturation.invoke.run_cli", fake_run_cli
         ):
             result = invoker.call_cli(
@@ -375,7 +367,7 @@ class ExternalRoutingTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         self.assertEqual(
             captured["argv"],
-            ["/usr/bin/python3", str(LAUNCHER), "tool", "remote_bash", "--input-json", "-"],
+            ["/usr/bin/python3", "-m", "remote_dev", "bash", "--input-json", "-"],
         )
         self.assertEqual(captured["payload"]["command"], "printf hi")
         self.assertEqual(captured["payload"]["host"], "192.0.2.9")
@@ -384,23 +376,23 @@ class ExternalRoutingTests(unittest.TestCase):
         self.assertEqual(captured["kwargs"]["timeout_s"], 9.0)
 
     def test_missing_source_fails_before_remote_work(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            missing = str(Path(tmp) / "absent")
-            with mock.patch.dict(os.environ, {ROOT_ENV: missing}, clear=False):
-                invoker = RemoteDevInvoker()
-                with self.assertRaises(RemoteDevUnavailable) as ctx:
-                    invoker.call("remote.probe", {"host": "192.0.2.9", "port": 22})
-                self.assertIn("bootstrap", str(ctx.exception))
-                self.assertIn(ROOT_ENV, str(ctx.exception))
-                with self.assertRaises(RemoteDevUnavailable):
-                    invoker.call_cli("remote.probe", {"host": "192.0.2.9", "port": 22})
+        invoker = RemoteDevInvoker()
+        with mock.patch(
+            "maturation.invoke.require_package",
+            side_effect=RemoteDevUnavailable("vaws-remote-dev is missing; install it with `uv sync`"),
+        ):
+            with self.assertRaises(RemoteDevUnavailable) as ctx:
+                invoker.call("remote.probe", {"host": "192.0.2.9", "port": 22})
+            self.assertIn("uv sync", str(ctx.exception))
+            with self.assertRaises(RemoteDevUnavailable):
+                invoker.call_cli("remote.probe", {"host": "192.0.2.9", "port": 22})
 
-    def test_import_does_not_require_checkout_or_mutate_environment(self) -> None:
+    def test_import_does_not_require_package_or_mutate_environment(self) -> None:
         code = (
             "import os, sys\n"
             f"sys.path.insert(0, {str(AGENTS)!r})\n"
             f"sys.path.insert(0, {str(AGENTS / 'lib')!r})\n"
-            f"os.environ[{ROOT_ENV!r}] = {str(Path('/no/such/remote-dev-checkout'))!r}\n"
+            "os.environ['VAWS_SKIP_VENV_REEXEC'] = '1'\n"
             "before = dict(os.environ)\n"
             "import maturation.invoke as invoke\n"
             "assert dict(os.environ) == before\n"
@@ -411,15 +403,15 @@ class ExternalRoutingTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(proc.stdout.strip(), "ok")
 
-    def test_incompatible_cached_mcp_fails_without_eviction(self) -> None:
+    def test_incompatible_cached_package_fails_without_eviction(self) -> None:
         provider = require_optional_provider()
         code = (
             "import sys, types\n"
             f"sys.path.insert(0, {str(AGENTS)!r})\n"
             f"sys.path.insert(0, {str(AGENTS / 'lib')!r})\n"
-            "fake = types.ModuleType('mcp')\n"
-            "fake.__file__ = '/tmp/other-mcp/__init__.py'\n"
-            "sys.modules['mcp'] = fake\n"
+            "fake = types.ModuleType('remote_dev')\n"
+            "fake.__file__ = '/tmp/other-remote-dev/__init__.py'\n"
+            "sys.modules['remote_dev'] = fake\n"
             "from maturation.invoke import RemoteDevInvoker, RemoteDevUnavailable\n"
             "try:\n"
             "    RemoteDevInvoker().call('remote.probe', {'host': '192.0.2.9', 'port': 22})\n"
@@ -427,36 +419,35 @@ class ExternalRoutingTests(unittest.TestCase):
             "    print('failed', str(exc))\n"
             "else:\n"
             "    raise SystemExit('expected configuration error')\n"
-            "print('mcp-file', sys.modules['mcp'].__file__)\n"
+            "print('remote-dev-file', sys.modules['remote_dev'].__file__)\n"
         )
-        env = {**os.environ, ROOT_ENV: str(provider)}
-        proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env, check=False)
+        proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=False)
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertIn("incompatible mcp already imported", proc.stdout)
-        self.assertIn("/tmp/other-mcp/__init__.py", proc.stdout)
-        self.assertIn("mcp-file /tmp/other-mcp/__init__.py", proc.stdout)
+        self.assertIn("incompatible remote_dev already imported", proc.stdout)
+        self.assertIn("/tmp/other-remote-dev/__init__.py", proc.stdout)
+        self.assertIn("remote-dev-file /tmp/other-remote-dev/__init__.py", proc.stdout)
+        self.assertTrue(provider.is_dir())
 
-    def test_configured_checkout_provenance_in_fresh_interpreter(self) -> None:
+    def test_installed_package_provenance_in_fresh_interpreter(self) -> None:
         provider = require_optional_provider()
         code = (
-            "import os, sys\n"
+            "import sys\n"
             f"sys.path.insert(0, {str(AGENTS)!r})\n"
             f"sys.path.insert(0, {str(AGENTS / 'lib')!r})\n"
             "from maturation.invoke import RemoteDevInvoker, apply_real_execution_environment\n"
-            "checkout = apply_real_execution_environment()\n"
+            "installed = apply_real_execution_environment()\n"
             "invoker = RemoteDevInvoker()\n"
             "invoker._dispatcher()\n"
-            "import mcp.tools, core\n"
-            "print(checkout)\n"
-            "print(mcp.tools.__file__)\n"
-            "print(core.__file__)\n"
+            "import remote_dev.mcp.tools, remote_dev.core\n"
+            "print(installed)\n"
+            "print(remote_dev.mcp.tools.__file__)\n"
+            "print(remote_dev.core.__file__)\n"
         )
-        env = {**os.environ, ROOT_ENV: str(provider)}
-        proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env, check=False)
+        proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=False)
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        checkout, tools_file, core_file = proc.stdout.strip().splitlines()
+        installed, tools_file, core_file = proc.stdout.strip().splitlines()
         pinned = str(provider.resolve())
-        self.assertEqual(checkout, pinned)
+        self.assertEqual(installed, pinned)
         self.assertTrue(tools_file.startswith(pinned), tools_file)
         self.assertTrue(core_file.startswith(pinned), core_file)
 
@@ -466,7 +457,6 @@ class ExternalRoutingTests(unittest.TestCase):
             state = str(Path(tmp) / "state")
             resolver = "/abs/plugin.py:setup"
             overrides = {
-                ROOT_ENV: str(provider),
                 "REMOTE_DEV_RUNTIME_ENV_FILE": "/etc/profile.d/custom.sh",
                 "REMOTE_DEV_STATE_DIR": state,
                 "REMOTE_DEV_RESOLVERS": resolver,
@@ -474,15 +464,15 @@ class ExternalRoutingTests(unittest.TestCase):
             }
             with mock.patch.dict(os.environ, overrides, clear=False):
                 parent_before = dict(os.environ)
-                checkout = apply_real_execution_environment()
-                self.assertEqual(checkout, provider.resolve())
+                installed = apply_real_execution_environment()
+                self.assertEqual(installed, provider.resolve())
                 self.assertEqual(os.environ.get("REMOTE_DEV_RUNTIME_ENV_FILE"), "/etc/profile.d/custom.sh")
                 self.assertEqual(os.environ.get("REMOTE_DEV_STATE_DIR"), state)
                 self.assertEqual(os.environ.get("REMOTE_DEV_RESOLVERS"), resolver)
                 self.assertEqual(os.environ.get(MUX_VAR), "1")
                 self.assertEqual(os.environ.get(MUX_VAR), parent_before.get(MUX_VAR))
 
-    def test_inprocess_dispatcher_uses_pinned_source_with_fake_transport(self) -> None:
+    def test_inprocess_dispatcher_uses_installed_package_with_fake_transport(self) -> None:
         provider = require_optional_provider()
         code = (
             "import json, os, subprocess, sys\n"
@@ -493,8 +483,8 @@ class ExternalRoutingTests(unittest.TestCase):
             "apply_real_execution_environment()\n"
             "invoker = RemoteDevInvoker()\n"
             "invoker._dispatcher()\n"
-            "import core.ssh_transport as transport\n"
-            "import mcp.tools\n"
+            "import remote_dev.core.ssh_transport as transport\n"
+            "import remote_dev.mcp.tools\n"
             "def fake_run(argv, **kwargs):\n"
             "    output = json.dumps({'status': 'ok', 'summary': {'hostname': 'fixture', 'python': '3.9.9'}, 'fake_transport': True})\n"
             "    if kwargs.get('text'):\n"
@@ -502,13 +492,12 @@ class ExternalRoutingTests(unittest.TestCase):
             "    return subprocess.CompletedProcess(list(argv), 0, output.encode(), b'')\n"
             "with mock.patch.object(transport.subprocess, 'run', fake_run):\n"
             "    payload = invoker.call('remote.probe', {'host': '192.0.2.9', 'port': 22222, 'user': 'fixture', 'root': '/tmp', 'cwd': '/tmp', 'runtime_env': False})\n"
-            "print(mcp.tools.__file__)\n"
-            "print(json.dumps({'status': payload['result']['status'], 'fake': payload['result'].get('probe', {}).get('fake_transport'), 'origin': mcp.tools.__file__}))\n"
+            "print(remote_dev.mcp.tools.__file__)\n"
+            "print(json.dumps({'status': payload['result']['status'], 'fake': payload['result'].get('probe', {}).get('fake_transport'), 'origin': remote_dev.mcp.tools.__file__}))\n"
         )
         with tempfile.TemporaryDirectory() as tmp:
             env = {
                 **os.environ,
-                ROOT_ENV: str(provider),
                 "REMOTE_DEV_STATE_DIR": str(Path(tmp) / "state"),
                 "REMOTE_DEV_SSH_MUX_DIR": str(Path(tmp) / "mux"),
             }

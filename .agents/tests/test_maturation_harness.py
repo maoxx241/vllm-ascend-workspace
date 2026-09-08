@@ -636,10 +636,9 @@ class CliTests(unittest.TestCase):
         proc = subprocess.run([sys.executable, str(self.RUN), "--report", "does-not-exist", "--evidence-root", tempfile.gettempdir()], capture_output=True, text=True, check=False)
         self.assertEqual(proc.returncode, 2)
 
-    def test_list_and_synthetic_report_without_checkout(self) -> None:
+    def test_list_and_synthetic_report_without_package(self) -> None:
         _require_pyyaml()
-        missing = str(Path(tempfile.mkdtemp()) / "absent-checkout")
-        env = {**os.environ, "VAWS_REMOTE_DEV_ROOT": missing}
+        env = {**os.environ, "VAWS_SKIP_VENV_REEXEC": "1"}
         listed = subprocess.run([sys.executable, str(self.RUN), "--list"], capture_output=True, text=True, env=env, check=False)
         self.assertEqual(listed.returncode, 0, listed.stderr)
         self.assertEqual(json.loads(listed.stdout)["status"], "ok")
@@ -687,10 +686,18 @@ class CliTests(unittest.TestCase):
 
     def test_real_execution_missing_source_fails_without_traceback(self) -> None:
         _require_pyyaml()
-        missing = str(Path(tempfile.mkdtemp()) / "absent-checkout")
-        env = {**os.environ, "VAWS_REMOTE_DEV_ROOT": missing}
+        python = str(Path(sys.base_prefix) / "bin" / "python3")
+        if not Path(python).is_file() or Path(python).resolve() == Path(sys.executable).resolve():
+            self.skipTest("no Python 3.11+ interpreter outside .venv")
+        drop = {"VIRTUAL_ENV", "PYTHONPATH", "PYTHONHOME"}
+        env = {
+            key: value
+            for key, value in os.environ.items()
+            if key not in drop and not key.startswith("UV_")
+        }
+        env["VAWS_SKIP_VENV_REEXEC"] = "1"
         proc = subprocess.run(
-            [sys.executable, str(self.RUN), "--endpoint", "203.0.113.8:22", "--repetitions", "1"],
+            [python, str(self.RUN), "--endpoint", "203.0.113.8:22", "--repetitions", "1"],
             capture_output=True,
             text=True,
             env=env,
@@ -701,7 +708,7 @@ class CliTests(unittest.TestCase):
         payload = json.loads(proc.stdout)
         self.assertEqual(payload["status"], "failed")
         self.assertIn("RemoteDevUnavailable", payload["error"])
-        self.assertIn("bootstrap", payload["error"])
+        self.assertIn("uv sync", payload["error"])
 
 
 class InvokeTests(unittest.TestCase):

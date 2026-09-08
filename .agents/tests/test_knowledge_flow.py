@@ -38,7 +38,7 @@ def synthetic_candidate(session_id: str) -> dict:
     return {
         "kind": "known-failure-signatures",
         "summary": "Zqxjk flovmar blorpt requires acknowledgements",
-        "owner_skill": "remote-code-parity",
+        "owner_skill": "code-parity",
         "scope": {"component": ["synthetic-transport"]},
         "fingerprints": ["zqxjk flovmar blorpt acknowledgement nonce"],
         "symptom": "The zqxjk flovmar stalls after its first blorpt.",
@@ -80,7 +80,7 @@ class KnowledgeFlowE2ETest(unittest.TestCase):
 
         # The hook resolves the simulated repository from this marker but imports
         # the implementation under test from the real worktree.
-        marker = self.sandbox / ".agents" / "lib" / "vaws_knowledge.py"
+        marker = self.sandbox / ".agents" / "lib" / "vaws_knowledge_v1.py"
         marker.parent.mkdir(parents=True)
         marker.write_text("# simulated repository marker\n", encoding="utf-8")
 

@@ -23,12 +23,12 @@ Load it into a substrate process with::
 
     REMOTE_DEV_RESOLVERS=/abs/path/.agents/lib/vaws_remote_dev_plugin.py:setup
 
-(`.agents/scripts/remote_dev.py` sets this for the MCP server, CLI wrappers
-and hooks), or call :func:`setup` after importing ``core.endpoint`` in an
-embedding process. Nothing from the substrate is imported at module import
-time: the mapping is testable without a checkout, and the substrate's
-``core`` package is only required when a resolution actually happens inside
-a substrate process.
+(`.venv/bin/python -m remote_dev.mcp.server` inherits this from the client
+MCP env), or call :func:`setup` after importing ``remote_dev.core.endpoint``
+in an embedding process. Nothing from the substrate is imported at module
+import time: the mapping is testable without the package, and
+``remote_dev.core`` is only required when a resolution actually happens
+inside a substrate process.
 """
 from __future__ import annotations
 
@@ -111,11 +111,11 @@ def resolve_vaws(payload: dict[str, Any]) -> dict[str, Any] | None:
 
 def setup() -> None:
     """Register the resolver with the substrate (a ``REMOTE_DEV_RESOLVERS`` setup hook)."""
-    from core.endpoint import register_resolver  # type: ignore[import-not-found]
+    from remote_dev.core.endpoint import register_resolver
 
     register_resolver(resolve_vaws, name=RESOLVER_NAME, fields=FIELDS, description=DESCRIPTION)
 
 
 # Equivalent to the substrate's `@resolver_setup` decorator without importing
-# `core.endpoint` at module import time (see the module docstring).
+# `remote_dev.core.endpoint` at module import time (see the module docstring).
 setup.remote_dev_resolver_setup = True  # type: ignore[attr-defined]

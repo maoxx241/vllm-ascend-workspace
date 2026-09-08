@@ -32,7 +32,7 @@ if str(LIB) not in sys.path:
 
 import vaws_knowledge_v2 as v2  # noqa: E402
 import vaws_redaction as redaction  # noqa: E402
-from vaws_knowledge import (  # noqa: E402
+from vaws_knowledge_v1 import (  # noqa: E402
     COORDINATE_DIMENSIONS,
     COORDINATE_UNKNOWN,
     KNOWLEDGE_FILES,

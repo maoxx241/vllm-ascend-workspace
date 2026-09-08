@@ -144,7 +144,7 @@ class MigrateEntryTests(unittest.TestCase):
         report = self.migrate_one()
         self.assertNotIn(ADDRESS_FRAGMENT, json.dumps(report))
         self.assertTrue(
-            any("ip-address" in note for note in report["removed"]),
+            any("ipv4-address" in note for note in report["removed"]),
             report["removed"],
         )
 

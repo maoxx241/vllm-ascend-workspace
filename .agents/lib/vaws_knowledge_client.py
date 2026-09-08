@@ -33,7 +33,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-import vaws_knowledge as v1
+import vaws_knowledge_v1 as v1
 import vaws_knowledge_shared as shared
 import vaws_knowledge_v2 as v2
 

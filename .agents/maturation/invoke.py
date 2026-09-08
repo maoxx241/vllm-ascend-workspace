@@ -1,20 +1,17 @@
-"""Invoke the external remote-dev substrate through the scaffold locator.
+"""Invoke the installed vaws-remote-dev package.
 
 Two paths are exercised on purpose:
 
-* ``inprocess`` — the MCP dispatcher (``mcp.tools.call_tool``) imported from
-  the configured checkout, the same code path an agent's MCP client takes.
-* ``cli`` — ``.agents/scripts/remote_dev.py tool remote_<name> --input-json -``
-  as a separate killable process. That launcher execve-replaces itself with
-  the checkout's ``tools`` wrapper, so the PID and process group created by
-  ``run_cli`` remain the wrapper's.
+* ``inprocess`` — the MCP dispatcher (``remote_dev.mcp.tools.call_tool``),
+  the same code path an agent's MCP client takes.
+* ``cli`` — ``python -m remote_dev <tool> --input-json -`` as a separate
+  killable process.
 
-The checkout is located through ``vaws_remote_dev.remote_dev_root``
-(``VAWS_REMOTE_DEV_ROOT``, else the shared default). Importing this package,
-listing operations, and replaying retained evidence do not require a checkout
-and do not mutate the process environment. Direct library callers of the real
-inprocess invoker must call :func:`apply_real_execution_environment` once
-before constructing :class:`RemoteDevInvoker` or starting endpoint workers.
+Importing this package, listing operations, and replaying retained evidence
+do not require the package to be importable and do not mutate the process
+environment. Direct library callers of the real inprocess invoker must call
+:func:`apply_real_execution_environment` once before constructing
+:class:`RemoteDevInvoker` or starting endpoint workers.
 
 Tests inject a fake invoker; nothing here is required to reach a host.
 """
@@ -29,19 +26,18 @@ import sys
 import threading
 import time
 from dataclasses import dataclass, field
+from importlib import metadata
 from pathlib import Path
 from typing import Any, Callable, Mapping, Protocol
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 LIB_DIR = REPO_ROOT / ".agents" / "lib"
-LAUNCHER = REPO_ROOT / ".agents" / "scripts" / "remote_dev.py"
 if str(LIB_DIR) not in sys.path:
     sys.path.insert(0, str(LIB_DIR))
 
 from vaws_remote_dev import (  # noqa: E402
     RemoteDevUnavailable,
-    add_substrate_to_path,
-    remote_dev_root,
+    require_package,
     substrate_environment,
 )
 
@@ -79,22 +75,38 @@ class Invoker(Protocol):
 
 
 def cli_tool_name(tool: str) -> str:
-    """Canonical wrapper name accepted by ``remote_dev.py tool``."""
+    """CLI verb accepted by ``python -m remote_dev`` (``probe``, ``multi-edit``)."""
     name = tool.split(".", 1)[1] if tool.startswith("remote.") else tool
     if name.endswith(".py"):
         name = name[:-3]
-    if not name.startswith("remote_"):
-        name = "remote_" + name
-    return name
+    if name.startswith("remote_"):
+        name = name[len("remote_") :]
+    if name.startswith("remote-"):
+        name = name[len("remote-") :]
+    return name.replace("_", "-")
 
 
 def launcher_argv(tool: str, *, python: str | None = None) -> list[str]:
-    """Argv for the scaffold launcher; stdin is the JSON tool payload."""
-    return [python or sys.executable, str(LAUNCHER), "tool", cli_tool_name(tool), "--input-json", "-"]
+    """Argv for the installed package CLI; stdin is the JSON tool payload."""
+    return [python or sys.executable, "-m", "remote_dev", cli_tool_name(tool), "--input-json", "-"]
+
+
+def package_root() -> Path:
+    """Installed ``remote_dev`` package directory from the distribution."""
+    require_package()
+    try:
+        dist = metadata.distribution("vaws-remote-dev")
+    except metadata.PackageNotFoundError as exc:
+        raise RemoteDevUnavailable("vaws-remote-dev is not installed; run `uv sync`") from exc
+    located = Path(dist.locate_file("remote_dev"))
+    if located.is_dir():
+        return located.resolve()
+    init = located / "__init__.py" if located.suffix != ".py" else located
+    return init.resolve().parent if init.exists() else located.resolve()
 
 
 def apply_real_execution_environment(*, repo_root: Path | None = None) -> Path:
-    """Fill substrate defaults in ``os.environ`` and require a usable checkout.
+    """Fill substrate defaults in ``os.environ`` and require the package.
 
     Call once from the standalone real-execution entry point, and from library
     callers of the real inprocess invoker, before constructing
@@ -105,10 +117,7 @@ def apply_real_execution_environment(*, repo_root: Path | None = None) -> Path:
     """
     root = repo_root or REPO_ROOT
     os.environ.update(substrate_environment(os.environ, repo_root=root))
-    checkout = remote_dev_root()
-    if checkout is None:
-        raise RemoteDevUnavailable("remote-dev checkout not found")
-    return checkout
+    return package_root()
 
 
 def _module_file(module: Any) -> Path | None:
@@ -126,41 +135,30 @@ def _is_under(path: Path, root: Path) -> bool:
         return False
 
 
-def _require_compatible_cached_module(name: str, checkout: Path) -> None:
+def _require_compatible_cached_module(name: str, installed_root: Path) -> None:
     module = sys.modules.get(name)
     if module is None:
         return
     origin = _module_file(module)
-    if origin is None or not _is_under(origin, checkout):
+    if origin is None or not _is_under(origin, installed_root):
         raise RemoteDevUnavailable(
             f"incompatible {name} already imported from {origin}; "
-            f"expected the remote-dev checkout at {checkout}. "
-            "Set VAWS_REMOTE_DEV_ROOT to that checkout and start a fresh "
-            "interpreter; the harness will not evict another application's modules."
+            f"expected the installed remote_dev package at {installed_root}. "
+            "Start a fresh interpreter; the harness will not evict another "
+            "application's modules."
         )
 
 
 def _prepare_substrate_imports() -> Path:
-    """Resolve the checkout and put its ``mcp`` package first on ``sys.path``."""
-    checkout = remote_dev_root()
-    if checkout is None:
-        raise RemoteDevUnavailable("remote-dev checkout not found")
-    checkout = checkout.resolve()
-    for name in ("mcp", "mcp.tools", "core"):
-        _require_compatible_cached_module(name, checkout)
-    add_substrate_to_path(checkout, prepend=True)
-    entry = str(checkout)
-    if not sys.path or sys.path[0] != entry:
-        try:
-            sys.path.remove(entry)
-        except ValueError:
-            pass
-        sys.path.insert(0, entry)
-    return checkout
+    """Require the installed package and refuse a colliding cached module."""
+    installed = package_root()
+    for name in ("remote_dev", "remote_dev.mcp", "remote_dev.mcp.tools", "remote_dev.core"):
+        _require_compatible_cached_module(name, installed)
+    return installed
 
 
 class RemoteDevInvoker:
-    """Real invoker backed by the substrate's MCP dispatcher and CLI launcher."""
+    """Real invoker backed by the package MCP dispatcher and CLI."""
 
     def __init__(self, *, python: str | None = None) -> None:
         self._python = python or sys.executable
@@ -170,13 +168,13 @@ class RemoteDevInvoker:
     def _dispatcher(self) -> Callable[[str, dict[str, Any]], dict[str, Any]]:
         with self._lock:
             if self._call_tool is None:
-                checkout = _prepare_substrate_imports()
-                from mcp.tools import call_tool  # type: ignore  # noqa: PLC0415
+                installed = _prepare_substrate_imports()
+                from remote_dev.mcp.tools import call_tool  # noqa: PLC0415
 
-                origin = _module_file(sys.modules.get("mcp.tools"))
-                if origin is None or not _is_under(origin, checkout):
+                origin = _module_file(sys.modules.get("remote_dev.mcp.tools"))
+                if origin is None or not _is_under(origin, installed):
                     raise RemoteDevUnavailable(
-                        f"mcp.tools loaded from {origin}, not the configured checkout {checkout}"
+                        f"remote_dev.mcp.tools loaded from {origin}, not {installed}"
                     )
                 self._call_tool = call_tool
         return self._call_tool
@@ -193,7 +191,7 @@ class RemoteDevInvoker:
         kill_mode: str = "wrapper",
         timeout_s: float = 300.0,
     ) -> CliResult:
-        remote_dev_root()
+        require_package()
         argv = launcher_argv(tool, python=self._python)
         return run_cli(argv, dict(args), kill_after_ms=kill_after_ms, kill_mode=kill_mode, timeout_s=timeout_s)
 

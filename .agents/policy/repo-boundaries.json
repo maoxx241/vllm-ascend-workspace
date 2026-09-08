@@ -38,7 +38,7 @@
       ".agents/lib",
       ".agents/skills/remote-code-parity/scripts"
     ],
-    "module_search_paths_note": "Directories that some entry point actually places on sys.path. Ownership of a derived module name is resolved from the owning file's path, so moving a file between subsystems moves its module with it. `.remote-dev` and `.agents/coordinator` are absent because both left this tree and are consumed as external checkouts."
+    "module_search_paths_note": "Directories that some entry point actually places on sys.path. Ownership of a derived module name is resolved from the owning file's path, so moving a file between subsystems moves its module with it. `.remote-dev` and `.agents/coordinator` are absent because both left this tree and are consumed as installed packages."
   },
   "ignored_modules": [
     {
@@ -64,7 +64,7 @@
         "core.errors"
       ],
       "public_modules_note": "The result contract and error taxonomy are schema-pinned (`schemas/result.schema.json` in the substrate) and remain the only import-level surface a consumer should bind to. The substrate additionally publishes the resolver plugin interface (`core.endpoint.register_resolver` / `resolver_setup` / `EndpointError`), which is how consumer selectors such as `machine` / `session_id` reach it. Because no substrate file is in this tree any more, these names are documentation for reviewers rather than something the guard can attribute.",
-      "roots_note": "No roots on `main`: the substrate left this tree with its extraction and is consumed as an external checkout (`.agents/deps/remote-dev.json`, `VAWS_REMOTE_DEV_ROOT`). Only consumers are in this repository: the resolver plugin `.agents/lib/vaws_remote_dev_plugin.py`, the launcher `.agents/scripts/remote_dev.py`, and the client configuration. The boundary is now a repository boundary, which is why this subsystem declares no paths."
+      "roots_note": "No roots on `main`: the substrate left this tree with its extraction and is consumed as the installed `vaws-remote-dev` package (`uv.lock`). Only consumers are in this repository: the resolver plugin `.agents/lib/vaws_remote_dev_plugin.py` and the client configuration. The boundary is now a repository boundary, which is why this subsystem declares no paths."
     },
     {
       "id": "coordinator",
@@ -72,17 +72,17 @@
       "layer": 20,
       "summary": "Task identity, shared runtime pool, managed job supervision. Consumes remote-dev; must not consume the domain layer.",
       "roots": [],
-      "roots_note": "No roots on this tree: the coordinator left with its extraction and is consumed as an external checkout (`.agents/deps/coordinator.json`, `VAWS_COORDINATOR_ROOT`). Only consumers remain: `.agents/lib/vaws_coordinator.py`, `.agents/scripts/vaws.py`, `.agents/hooks/vaws_session.py`, and `.agents/scripts/vaws_client_setup.py`.",
+      "roots_note": "No roots on this tree: the coordinator left with its extraction and is consumed as the installed `vaws-coordinator` package (`uv.lock`). Only consumers remain: `.agents/lib/vaws_coordinator_launch.py`, `.agents/scripts/vaws.py`, `.agents/hooks/vaws_session.py`, and `.agents/scripts/vaws_client_setup.py`.",
       "public_paths": [],
       "private_paths": [],
       "public_modules": [],
-      "public_modules_note": "The task facade, stdio server and HTTP manager live in vaws-coordinator. This repository locates that checkout; it does not import those modules from an in-tree copy."
+      "public_modules_note": "The task facade, stdio server and HTTP manager live in the vaws-coordinator package. This repository imports those modules from site-packages; it does not keep an in-tree copy."
     },
     {
       "id": "vaws-top",
       "repo": "vllm-ascend-workspace/vaws-top",
       "layer": 10,
-      "summary": "Loopback-only NPU fleet dashboard. Consumed as an external checkout of vllm-ascend-workspace/vaws-top; the scaffold consumer is `.agents/skills/npu-fleet-monitor/`.",
+      "summary": "Loopback-only NPU fleet dashboard. Consumed as a uvx service of vllm-ascend-workspace/vaws-top; the scaffold consumer is `.agents/skills/npu-fleet-monitor/`.",
       "roots": [],
       "roots_note": "No roots on `main`: the dashboard source is not in this tree. Only the bootstrap entry (`.agents/skills/npu-fleet-monitor/`) is, and that is a consumer.",
       "public_paths": [],
@@ -99,7 +99,8 @@
         "scripts/vaws-top.py",
         "scripts/vaws-top-mcp.py",
         "scripts/start.sh",
-        "scripts/install-user-service.sh"
+        "scripts/install-user-service.sh",
+        "vaws-top"
       ],
       "published_external_references_note": "Exact published surfaces of the extracted repository. A consumer may name an entire canonical GitHub URL, join one of these paths onto a located clone, or assign the descriptor. Substring `://`/`git@`, extra URL path, file URLs, mixed command strings, Path/open of the skill file, and Path(__file__)/ROOT joins that read that file are not exemptions."
     },

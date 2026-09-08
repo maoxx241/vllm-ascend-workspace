@@ -8,7 +8,7 @@ description: Analyze Ascend NPU torch profiler output (kernel_details.csv / trac
 > Status: **experimental / beta**. 当前 PR 主要提供：远端 pipeline、evidence-chained report、HTML 三级聚焦视图、stage selector。Knowledge 已分层：kernel 分类规则（`kernel_signatures.yaml:match_rules`）、attention 家族判定（`attention_families.yaml:cheat_sheet.resolver`）、diagnosis 阈值与文案（`diagnosis_rules.yaml`）、segment 层锚点先验（`segmentation_rules.yaml`）均为运行时加载的 YAML；仍在 Python 内的是 `segment.py` 切分策略、`classify.py` block 拆分、以及 finding 的触发条件（见 [Knowledge map](#knowledge-map-for-agents)）。新模型 / 新算子族碰到问题时，优先改 knowledge YAML；改 Python 前请把 counterexample 落到 `knowledge/known_counterexamples.md`。
 
 Remote substrate rule: use remote-dev companion tools (`remote_*` MCP tools,
-launched via `python3 .agents/scripts/remote_dev.py`) for ad hoc remote
+launched via `uv run remote-dev` or MCP) for ad hoc remote
 read/edit/bash/search/patch work around profiling roots and generated reports.
 Use this skill for the domain analysis workflow and keep its scripts as the
 compatibility backend for managed VAWS sessions.
@@ -333,7 +333,7 @@ XLSX 包新增 sheet：`step_anatomy`、`step_class_summary`、`layer_class_summ
 
 ## Workspace knowledge hooks
 
-产物拉回本地后、stdout 输出前，wrapper 会用工作区知识库（`.agents/knowledge/`，经 `.agents/lib/vaws_knowledge.py`）对 `analysis_summary` 做**本地视图层富化**——远端产物与 manifest 一律不改，富化结果回写本地拉回的 `report/analysis_summary.json`，stdout 嵌入同一份富化版本：
+产物拉回本地后、stdout 输出前，wrapper 会用工作区知识库（`.agents/knowledge/`，经 `.agents/lib/vaws_knowledge_v1.py`）对 `analysis_summary` 做**本地视图层富化**——远端产物与 manifest 一律不改，富化结果回写本地拉回的 `report/analysis_summary.json`，stdout 嵌入同一份富化版本：
 
 - **findings 知识引用**：每个 rollup 组用 `finding_type + summary` 查 `known-failure-signatures`（顺带 `validation-rules`），取 top-3（score>0）填入该组的 `knowledge_refs`：`{entry_id, kind, summary, resolution, applicable_versions, score}`。无命中保持空数组；空知识库是合法状态。
 - **layer_validation 回填**：仅当 `expected_layers` 为 null（无 config.json、无 fingerprint catalog 层数）时，用 `--model-id` 或 `identity.model.candidate_names` 查 `model-capabilities`；命中且条目 `rule.expected_layers` 有值时回填，`expected_source` 标为 `knowledge:<entry_id>`，按已检测层数（min/max + outlier inventory）重算 `layers_match`（mismatch 时 status 从 `ok` 翻成 `degraded`），并写 `layers_note` 说明来源。条目层数字段为 null（如 config-driven 的 GLM-5）时不回填。
