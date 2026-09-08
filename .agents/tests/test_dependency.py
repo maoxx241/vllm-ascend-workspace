@@ -67,6 +67,14 @@ class PinSchemaTests(unittest.TestCase):
             self.assertTrue(str(ctx.exception.field or "").startswith("$"))
 
 
+class OriginNormalizationTests(unittest.TestCase):
+    def test_https_and_ssh_origins_match(self) -> None:
+        https = "https://github.com/vllm-ascend-workspace/vaws-coordinator.git"
+        ssh = "git@" + "github.com:vllm-ascend-workspace/vaws-coordinator.git"
+        self.assertTrue(deps.origins_match(https, ssh))
+        self.assertTrue(deps.origins_match("ssh://git@" + "github.com/vllm-ascend-workspace/vaws-coordinator", https))
+
+
 class InspectResolveTests(unittest.TestCase):
     def test_fake_checkout_is_not_git(self) -> None:
         pin = deps.load_pin("vaws-coordinator")

@@ -274,14 +274,20 @@ def git_working_tree_clean(path: Path) -> bool:
 
 def _normalize_origin(url: str) -> str:
     value = url.strip()
-    if value.startswith("git@github.com:"):
+    ssh_host = "github.com"
+    if value.startswith("git@") and value.split("@", 1)[-1].startswith(ssh_host + ":"):
         path = value.split(":", 1)[1]
         return f"https://github.com/{path.removesuffix('.git')}".rstrip("/").lower()
     parsed = value
-    for prefix in ("ssh://git@github.com/", "git+ssh://git@github.com/", "git://github.com/"):
+    for scheme in ("ssh://", "git+ssh://"):
+        prefix = scheme + "git@" + ssh_host + "/"
         if parsed.startswith(prefix):
             parsed = "https://github.com/" + parsed[len(prefix) :]
             break
+    else:
+        git_prefix = "git://" + ssh_host + "/"
+        if parsed.startswith(git_prefix):
+            parsed = "https://github.com/" + parsed[len(git_prefix) :]
     parsed = parsed.removesuffix(".git").rstrip("/")
     return parsed.lower()
 
