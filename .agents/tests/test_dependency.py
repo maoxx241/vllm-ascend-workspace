@@ -99,15 +99,9 @@ class PinSchemaTests(unittest.TestCase):
             tuple(deps.load_pin("remote-dev")["identity"]["required_files"]),
             remote_dev.REQUIRED_FILES,
         )
-        scripts = ROOT / ".agents" / "skills" / "npu-fleet-monitor" / "scripts"
-        if str(scripts) not in sys.path:
-            sys.path.insert(0, str(scripts))
-        import manage_monitor  # noqa: E402
-
-        self.assertEqual(
-            tuple(deps.load_pin(deps.VAWS_TOP_NAME)["identity"]["required_files"]),
-            manage_monitor.REQUIRED_FILES,
-        )
+        # npu-fleet-monitor no longer consumes a vaws-top checkout: it installs
+        # the released wheel through uvx, so there is no wrapper file list to
+        # match against the pin.
         self.assertIn(
             "task_server.py",
             deps.load_pin("vaws-coordinator")["identity"]["required_files"],
