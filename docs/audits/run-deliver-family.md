@@ -1,5 +1,7 @@
 # Audit — the "run and deliver" family
 
+Status: dated 2026-09-07 at 161fed1 — historical evidence
+
 Scope: `vllm-ascend-serving`, `vllm-ascend-benchmark`,
 `vllm-ascend-pd-serving`, `remote-code-parity`, `modelscope`.
 

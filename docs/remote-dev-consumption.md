@@ -1,19 +1,21 @@
 # Consuming remote-dev
 
+Status: current
+
 The remote development substrate used to live in this repository at
 `.remote-dev/`. It is now its own repository,
 [`vllm-ascend-workspace/remote-dev`](https://github.com/vllm-ascend-workspace/remote-dev),
 and this scaffold consumes it as an **external checkout**. This document is the
 consumer-side contract: how the checkout is located, what the scaffold injects
-into it, and what changed for anyone who was using `.remote-dev/...` paths.
+into it, and what changed for anyone who was using former in-tree remote-dev paths.
 
-Phase 1 of the sequenced plan in [repo-boundaries.md](repo-boundaries.md).
+Phase 1 of the sequenced plan in the dated [2026-09-07 boundary snapshot](audits/repo-boundaries-2026-09-07.md).
 
 ## 1. Why an external checkout, and not a submodule or a vendored copy
 
 | Option | Why not |
 |---|---|
-| **Git submodule** at `.remote-dev/` | The substrate is a **private** repository and this scaffold is public. A third `.gitmodules` entry would make `git clone --recurse-submodules` and `git submodule update --init --recursive` fail for every cloner without access — including the two commands `repo-init` tells agents to run — and it would fail while *initialising the upstream `vllm` / `vllm-ascend` trees they do have access to*. The substrate's own handoff also schedules a history rewrite before it goes public (`docs/HANDOFF.md` §6), which changes every commit id, so a gitlink pinned today would dangle. |
+| **Git submodule** at `.remote-dev/` | The substrate is a **private** repository and this scaffold is public. A third `.gitmodules` entry would make `git clone --recurse-submodules` and `git submodule update --init --recursive` fail for every cloner without access — including the two commands `repo-init` tells agents to run — and it would fail while *initialising the upstream `vllm` / `vllm-ascend` trees they do have access to*. The substrate's own handoff also schedules a history rewrite before it goes public (remote-dev `HANDOFF.md` §6), which changes every commit id, so a gitlink pinned today would dangle. |
 | **Vendored copy** | It is what we are removing. A copy drifts, and imports keep succeeding against stale code, which is the failure mode this extraction exists to end. |
 | **Installed dependency** (`pip install`) | The substrate ships no packaging metadata and deliberately has no third-party dependencies; it is run as scripts (`mcp/server.py`, `tools/remote_*.py`, `hooks/*.py`). Installing it would add packaging to a repository that does not want it, and would still leave the hooks and the MCP server to be located by path. |
 | **External checkout** (chosen) | One directory outside the tracked tree, one environment variable, and a tracked pin. Works for a cloner without access (they get a clear, actionable error instead of a broken `git submodule` run), survives the planned history rewrite (bump `commit` in one JSON file), and keeps `.gitmodules` on the community upstream URLs as `AGENTS.md` requires — in the letter and in the spirit, since no private URL enters it. |
@@ -99,11 +101,11 @@ failing on an import.
 
 | Before | Now |
 |---|---|
-| `python3 .remote-dev/mcp/server.py` | `python3 .agents/scripts/remote_dev.py server` |
-| `python3 .remote-dev/tools/remote_bash.py --machine <alias> ...` | `python3 .agents/scripts/remote_dev.py tool remote_bash --machine <alias> ...` (the launcher rewrites `--machine` / `--session-id` / `--session-file` into the substrate's `--selector KEY=VALUE`) |
-| `python3 .remote-dev/hooks/claude_remote_guard.py` | `python3 .agents/scripts/remote_dev.py hook claude` (`hook codex` for Codex) |
-| `.remote-dev/state/...` | `.vaws-local/remote-dev-state/...` |
-| `.remote-dev/tools/sync_claude_skills.py` | `.agents/scripts/sync_claude_skills.py` |
+| former in-tree remote-dev `mcp/server.py` | `python3 .agents/scripts/remote_dev.py server` |
+| former in-tree remote-dev `tools/remote_bash.py --machine <alias> ...` | `python3 .agents/scripts/remote_dev.py tool remote_bash --machine <alias> ...` (the launcher rewrites `--machine` / `--session-id` / `--session-file` into the substrate's `--selector KEY=VALUE`) |
+| former in-tree remote-dev `hooks/claude_remote_guard.py` | `python3 .agents/scripts/remote_dev.py hook claude` (`hook codex` for Codex) |
+| former in-tree remote-dev `state/...` | `.vaws-local/remote-dev-state/...` |
+| former in-tree remote-dev `tools/sync_claude_skills.py` | `.agents/scripts/sync_claude_skills.py` |
 | MCP tool names `remote_*` | unchanged, still served under the `remote-dev` server name |
 | MCP tool names `vaws_session` / `vaws_run` / `vaws_execution` / `vaws_finish` | **no longer served here.** They are coordinator semantics and moved to `vllm-ascend-workspace/vaws-coordinator`; see section 6. |
 

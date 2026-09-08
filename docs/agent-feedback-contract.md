@@ -1,5 +1,7 @@
 # Agent feedback contract — Result Envelope v1
 
+Status: current
+
 Whatever an agent runs in this workspace must come back with enough
 structured information to locate a failure **without re-running it**.
 
@@ -42,12 +44,13 @@ points under `.agents/`:
 | Reproducibility is partial at best. | `remote_exec` records the remote `command` but not the wrapper script it was actually wrapped in; `parity_sync` builds a full low-level argv and only prints it under `--print-derived-args`. In the failure path the exact command is gone. |
 | 12 entry points can corrupt their own `stdout`. | `envelope_lint.py scan` reports `stdout_purity_risk: 12` — plain `print("…")` calls on the JSON channel. |
 
-The closest existing prior art is `.remote-dev/core/result.py` +
-`.remote-dev/schemas/result.schema.json`: a real result contract with
+The closest existing prior art now lives in the extracted
+`vllm-ascend-workspace/remote-dev` repository (`core/result.py` and
+`schemas/result.schema.json`): a real result contract with
 `tool`, `invocation_id`, `target`, `outcome`, `status`, `summary`, `preview`,
 `refs`, `artifacts`, `next`. This design builds on it rather than around it:
 the outcome vocabulary, the preview/ref split and the invocation id all carry
-over. What it adds is the part `.remote-dev` deliberately left open —
+over. What it adds is the part remote-dev deliberately left open —
 `outcome: "failed"` still does not say *which layer* failed, `target` is an
 untyped object, there is no environment identity, and `next` is free-form.
 
@@ -109,16 +112,16 @@ to the whole experiment it belonged to.
 
 ### 2.4 Bounded output
 
-`text_preview()` keeps the head/tail shape of
-`.remote-dev/core/preview.py` — same field names, so a remote-dev result lifts
+`text_preview()` keeps the head/tail shape of remote-dev's
+`core/preview.py` — same field names, so a remote-dev result lifts
 into an envelope without reshaping — and adds one rule: **a truncated preview
 must carry a `ref`**. The validator rejects a truncated preview without one.
 A large payload can then never crowd out the diagnosis, because the diagnosis
 is always the bounded part and the bulk is always one dereference away.
 
-The shape is duplicated rather than imported: `.remote-dev/` is a substrate
-slated for extraction into its own repository, and `.agents/` must not take a
-hard import dependency across that boundary.
+The shape is duplicated rather than imported: remote-dev is already an
+external repository, and `.agents/` must not take a hard import dependency
+across that boundary.
 
 ## 3. The failure taxonomy
 
@@ -480,9 +483,10 @@ thin alias during transition if callers parse the old shape.
 
 ## 11. Adoption in the extracted `remote-dev` repo
 
-`.remote-dev/core/result.py` and `.remote-dev/schemas/result.schema.json` are
-the ancestor of this design and are unchanged by it. When `remote-dev` is
-extracted, it should adopt the envelope on its own terms:
+remote-dev's `core/result.py` and `schemas/result.schema.json` (now in the
+external `vllm-ascend-workspace/remote-dev` repository) are the ancestor of
+this design and are unchanged by it. Now that remote-dev is extracted, it
+should adopt the envelope on its own terms:
 
 - Keep `remote-dev.result.v1` as the wire format for its MCP tools, and add
   the envelope fields it is missing: a `failure` block with the same seven-layer

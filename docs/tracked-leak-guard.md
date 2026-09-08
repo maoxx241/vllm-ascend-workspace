@@ -1,5 +1,7 @@
 # Tracked-file leak guard
 
+Status: current
+
 `AGENTS.md` says: *never write secrets, passwords, or tokens into tracked
 files.* Nothing enforced that rule, and an audit of `main` found an internal
 address range, a personal laptop path, and a personal remote path already
@@ -65,7 +67,7 @@ repository do not republish the value they are complaining about. Use
 - Tracked blobs only, from `git ls-files -s`. Gitlinks (mode `160000`) are
   dropped, so `vllm/` and `vllm-ascend/` submodule content is never read: it is
   upstream, volatile, and not ours to police.
-- `.vaws-local/`, `.vaws-runtime/`, and `.remote-dev/state/` are excluded by
+- `.vaws-local/`, `.vaws-runtime/`, and `.vaws-local/remote-dev-state/` are excluded by
   policy as well as by `.gitignore`, so a stray `git add -f` cannot smuggle
   runtime state past the guard silently — it is reported as skipped, with a
   count in the JSON payload.

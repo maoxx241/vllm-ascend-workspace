@@ -1,5 +1,7 @@
 # 审计报告：operator 与 Triton 开发家族
 
+Status: dated 2026-09-07 at 161fed1 — historical evidence
+
 审计对象（5 个 skill 包，6 个 argparse 入口，约 2,618 行 Python）：
 
 - `.agents/skills/ascend-operator-debug/`

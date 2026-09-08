@@ -1,5 +1,7 @@
 # Observational comparability certificate
 
+Status: current
+
 A pair of experiments that differ in two ways cannot be attributed to either.
 This certificate is the mechanical form of that rule: it diffs the identity
 **observed** from each of two actual runs, key by key, classifies every

@@ -108,7 +108,7 @@ entries_awaiting_human_coordinate:
     execution_mode
 
 $ python3 .agents/scripts/knowledge_export.py \
-    --origin-repo maoxx241/vllm-ascend-workspace --check
+    --origin-repo vllm-ascend-workspace/vllm-ascend-workspace --check
 status: partial; exportable []; blocked 2 (unresolved coordinate dimensions)
 ```
 

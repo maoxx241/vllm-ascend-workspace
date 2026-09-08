@@ -1,5 +1,7 @@
 # 审计判决：validation / debug 家族
 
+Status: dated 2026-09-07 at 161fed1 — historical evidence
+
 本文档是 2026-09-07 对脚手架提交
 `161fed1b0fe6b48359be3f0cf33bb7d8befae113`（`161fed1`）的日期快照记录，
 不是当前操作指南。文中所有陈述与 `file:line` 引用都描述该树。这是只读审计：

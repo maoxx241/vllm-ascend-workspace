@@ -1,5 +1,7 @@
 # Audit: the measurement and analysis family
 
+Status: dated 2026-09-07 at 161fed1 — historical evidence
+
 Scope: `.agents/skills/ascend-profiling-collection/`,
 `.agents/skills/ascend-profiling-analysis/`,
 `.agents/skills/ascend-memory-profiling/`.

@@ -2,9 +2,11 @@
 
 ## Relationship to remote-dev
 
-Stated once in SKILL.md ("Remote substrate rule"): `.remote-dev` tools for ad
-hoc remote read/edit/bash/search/patch work; this skill owns the collection
-workflow and keeps its scripts as the managed VAWS compatibility backend.
+Stated once in SKILL.md ("Remote substrate rule"): remote-dev companion tools
+(`remote_*` MCP tools, launched via `python3 .agents/scripts/remote_dev.py`)
+for ad hoc remote read/edit/bash/search/patch work; this skill owns the
+collection workflow and keeps its scripts as the managed VAWS compatibility
+backend.
 
 ## Why profiler control lives here, not in the serving skill
 

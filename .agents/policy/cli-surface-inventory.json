@@ -288,6 +288,13 @@
       "note": "tracked-tree identifier scan with optional --strict-allowlist",
       "proposed_target": "vaws lint"
     },
+    ".agents/scripts/tracked_path_check.py": {
+      "responsibility": "mechanics",
+      "support_role": "supported",
+      "target_kind": "self",
+      "note": "tracked Markdown/YAML/JSON/TOML scan against .agents/policy/tracked-paths.json and its dated baseline",
+      "proposed_target": "vaws lint"
+    },
     ".agents/scripts/vaws.py": {
       "responsibility": "mechanics",
       "support_role": "supported",

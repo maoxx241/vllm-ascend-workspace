@@ -171,7 +171,7 @@ If the request was just “初始化仓库” or similarly broad, do not silentl
 After recursive submodule init completes, if the user chose CI-pinned alignment:
 
 - Extract the CI-pinned vllm ref with `python3 .agents/skills/repo-init/scripts/resolve_vllm_ci_pin.py --vllm-ascend-dir vllm-ascend`.
-- Prefer `.github/vllm-main-verified.commit` when present. Older checkouts may only expose a `vllm_version` workflow matrix or `docs/source/conf.py`; treat those as fallbacks and report which source was used.
+- Prefer `vllm-ascend/.github/vllm-main-verified.commit` when present. Older checkouts may only expose a `vllm_version` workflow matrix or `vllm-ascend/docs/source/conf.py`; treat those as fallbacks and report which source was used.
 - Check out `vllm/` at that commit.
 - Report the active version combination (vllm commit + vllm-ascend branch) in the finish summary.
 

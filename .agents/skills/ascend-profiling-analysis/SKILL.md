@@ -7,7 +7,8 @@ description: Analyze Ascend NPU torch profiler output (kernel_details.csv / trac
 
 > Status: **experimental / beta**. 当前 PR 主要提供：远端 pipeline、evidence-chained report、HTML 三级聚焦视图、stage selector。Knowledge 已分层：kernel 分类规则（`kernel_signatures.yaml:match_rules`）、attention 家族判定（`attention_families.yaml:cheat_sheet.resolver`）、diagnosis 阈值与文案（`diagnosis_rules.yaml`）、segment 层锚点先验（`segmentation_rules.yaml`）均为运行时加载的 YAML；仍在 Python 内的是 `segment.py` 切分策略、`classify.py` block 拆分、以及 finding 的触发条件（见 [Knowledge map](#knowledge-map-for-agents)）。新模型 / 新算子族碰到问题时，优先改 knowledge YAML；改 Python 前请把 counterexample 落到 `knowledge/known_counterexamples.md`。
 
-Remote substrate rule: use `.remote-dev` remote tools for ad hoc remote
+Remote substrate rule: use remote-dev companion tools (`remote_*` MCP tools,
+launched via `python3 .agents/scripts/remote_dev.py`) for ad hoc remote
 read/edit/bash/search/patch work around profiling roots and generated reports.
 Use this skill for the domain analysis workflow and keep its scripts as the
 compatibility backend for managed VAWS sessions.

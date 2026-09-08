@@ -1,5 +1,7 @@
 # Deterministic-core maturation
 
+Status: dated 2026-09-07 at 161fed1 — historical evidence, superseded by [docs/property-testing.md](property-testing.md)
+
 The scaffold's target state collapses deterministic mechanics — SSH transport,
 file operations, patch application, search, the job registry, artifact
 transfer with hash verification, environment probing — into a small CLI

@@ -73,7 +73,7 @@ A successful run should satisfy all applicable items below.
 ### Submodules and topology
 
 - initializes submodules recursively when the user approved it
-- resolves CI-pinned vLLM alignment with `resolve_vllm_ci_pin.py`, preferring `.github/vllm-main-verified.commit` over older workflow/docs fallbacks
+- resolves CI-pinned vLLM alignment with `resolve_vllm_ci_pin.py`, preferring `vllm-ascend/.github/vllm-main-verified.commit` over older workflow/docs fallbacks
 - completes submodule init before configuring submodule remotes
 - `repo_topology.py configure --repo <submodule>` errors out when the submodule is not initialized (git root mismatch)
 - preserves nonstandard remotes
