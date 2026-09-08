@@ -113,26 +113,20 @@ class PinSchemaTests(unittest.TestCase):
             deps.load_pin("vaws-coordinator")["identity"]["required_files"],
         )
 
-    def test_coordinator_surfaces_match_origin_main_values(self) -> None:
+    def test_coordinator_pin_consumes_the_bundled_host_queue(self) -> None:
         raw = json.loads((ROOT / ".agents/deps/coordinator.json").read_text(encoding="utf-8"))
         pin = deps.load_pin("vaws-coordinator")
-        main = json.loads(
-            subprocess.check_output(
-                ["git", "show", "origin/main:.agents/deps/coordinator.json"],
-                cwd=ROOT,
-                text=True,
-            )
-        )
+        self.assertEqual(pin["commit"], "d3c4e82a3c0e3f0be31727abf17b7863bcedba77")
+        self.assertEqual(pin["consumed_surface"]["host_queue_module"], "host/vaws_npu_coordination.py")
+        self.assertNotIn("scaffold", pin["consumed_surface"]["host_queue_interface"])
+        self.assertIn("host/vaws_npu_coordination.py", pin["identity"]["required_files"])
+        self.assertIn("service-api.json", pin["identity"]["required_files"])
+        self.assertEqual(pin["extensions"]["tree"], "d3f91bc6375a876fc01d46b1835feabd61db2729")
         self.assertEqual(
-            json.dumps(main["consumed_surface"], sort_keys=True, separators=(",", ":")),
-            json.dumps(pin["consumed_surface"], sort_keys=True, separators=(",", ":")),
+            pin["extensions"]["arrival_blobs"]["host/vaws_npu_coordination.py"],
+            "00f81e8300717307da06556f7c2cbdebf6b14ed7",
         )
         for key in ("tree", "pinned_mirrors", "arrival_blobs"):
-            self.assertEqual(
-                json.dumps(main[key], sort_keys=True, separators=(",", ":")),
-                json.dumps(pin["extensions"][key], sort_keys=True, separators=(",", ":")),
-                key,
-            )
             self.assertEqual(
                 json.dumps(raw["extensions"][key], sort_keys=True, separators=(",", ":")),
                 json.dumps(pin["extensions"][key], sort_keys=True, separators=(",", ":")),

@@ -416,7 +416,8 @@ empty; that is the invariant worth keeping.
 
 Closed by §5; retained as the 2026-09-07 reasoning.
 
-`.agents/lib/vaws_npu_coordination.py` is the host's advisory NPU lease
+The then-scaffold host-queue module (later coordinator
+`host/vaws_npu_coordination.py`) is the host's advisory NPU lease
 authority. It is used by the `session-management` skill (a domain consumer) and
 by `.agents/coordinator/backend.py`, which exec-loads the skill's wrapper script
 to reach it. Both readings were defensible, and both failure modes are bad:

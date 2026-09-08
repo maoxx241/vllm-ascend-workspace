@@ -43,6 +43,7 @@ CAPABILITY_ORDER = (
     "remote_endpoints",
     "resolver_registration",
     "task_pool",
+    "host_npu_authority",
     "fleet_observation",
     "shared_knowledge",
     "conformance_kit",
@@ -51,6 +52,7 @@ CAPABILITY_DEPS = {
     "remote_endpoints": ("remote-dev",),
     "resolver_registration": ("remote-dev",),
     "task_pool": ("vaws-coordinator",),
+    "host_npu_authority": ("vaws-coordinator",),
     "fleet_observation": (VAWS_TOP_NAME,),
     "shared_knowledge": (),
     "conformance_kit": ("vaws-knowledge",),
@@ -237,6 +239,32 @@ def evaluate_capabilities(
         degraded=bool(coord_deg),
         depends_on=CAPABILITY_DEPS["task_pool"],
         degradation=coord_deg,
+    )
+
+    host_module = Path(coord["path"]) / "host/vaws_npu_coordination.py" if coord.get("path") else None
+    host_ok = coord_ok and bool(host_module and host_module.is_file())
+    host_deg: list[dict[str, Any]] = []
+    if not host_ok:
+        host_deg.append(
+            _dep_degradation(
+                coord_pin,
+                coord,
+                effect="host NPU queue protocol cannot be loaded from the coordinator checkout",
+            )
+        )
+    elif coord["state"] != "ready":
+        host_deg.append(
+            _dep_degradation(
+                coord_pin,
+                coord,
+                effect="host NPU queue protocol cannot be loaded from the coordinator checkout",
+            )
+        )
+    capabilities["host_npu_authority"] = _capability(
+        available=host_ok,
+        degraded=bool(host_deg),
+        depends_on=CAPABILITY_DEPS["host_npu_authority"],
+        degradation=host_deg,
     )
 
     top = deps[VAWS_TOP_NAME]

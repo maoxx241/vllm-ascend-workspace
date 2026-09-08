@@ -109,6 +109,7 @@ Capabilities:
 | `remote_endpoints` | remote-dev in a usable state (`ready`, `off_pin`, or `wrong_origin`) |
 | `resolver_registration` | remote-dev, the tracked plugin file, and `REMOTE_DEV_RESOLVERS` in tracked MCP config |
 | `task_pool` | vaws-coordinator |
+| `host_npu_authority` | vaws-coordinator checkout usable and `host/vaws_npu_coordination.py` present |
 | `fleet_observation` | vaws-top |
 | `shared_knowledge` | the shared knowledge cache (same inspector as the knowledge client) |
 | `conformance_kit` | vaws-knowledge checkout |

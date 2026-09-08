@@ -150,7 +150,9 @@ the behavior of Session creation, serving, benchmark, profiling, or arbitrary
 remote commands.
 
 The local wrapper resolves a managed machine or Session to the bare-metal host,
-then executes the stdlib-only coordinator there. Shared state lives at:
+then executes the coordinator-owned stdlib host-queue module
+(`host/vaws_npu_coordination.py` from the pinned vaws-coordinator checkout)
+there. Shared state lives at:
 
 ```text
 /tmp/vaws-npu-coordinator/v1/coordinator.sqlite3

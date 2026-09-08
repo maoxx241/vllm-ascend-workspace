@@ -25,7 +25,11 @@ for _p in (str(LIB_DIR), str(MM_SCRIPTS)):
 
 import inventory as inventory_store  # noqa: E402
 from vaws_local_state import ensure_state_dir  # noqa: E402
-from vaws_npu_coordination import parse_npu_smi_info  # noqa: E402
+from vaws_host_queue_module import load_host_protocol  # noqa: E402
+
+
+def parse_npu_smi_info(stdout: str) -> dict[str, Any]:
+    return load_host_protocol().parse_npu_smi_info(stdout)
 from vaws_remote_toolbox import (  # noqa: E402
     SshEndpoint,
     ascend_env_preamble,

@@ -95,7 +95,6 @@ def task_server_env():
         "VAWS_AGENT_SESSIONS_DIR",
         "VAWS_PARITY_SCRIPT",
         "VAWS_PARITY_WORKSPACE_ROOT",
-        "VAWS_HOST_QUEUE_MODULE",
         "VAWS_MACHINE_INVENTORY",
     )
     payload = {key: env[key] for key in keys if key in env}

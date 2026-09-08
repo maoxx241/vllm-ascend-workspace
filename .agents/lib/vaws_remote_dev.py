@@ -61,7 +61,13 @@ ASCEND_RUNTIME_ENV_FILE = "/etc/profile.d/vaws-ascend-env.sh"
 # managed toolbox share one multiplexed connection per endpoint.
 SSH_MUX_DIR = "~/.ssh/vaws-mux"
 
-REQUIRED_FILES = ("mcp/server.py", "core/endpoint.py", "core/shell_ops.py", "tools/_cli.py")
+REQUIRED_FILES = (
+    "mcp/server.py",
+    "core/endpoint.py",
+    "core/shell_ops.py",
+    "tools/_cli.py",
+    "service-api.json",
+)
 
 # Environment keys this module owns defaults for. Anything the caller (client
 # config, shell) already set wins; see `substrate_environment`. The

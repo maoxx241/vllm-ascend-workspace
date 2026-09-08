@@ -181,7 +181,9 @@ def _probe_session_container(session: dict[str, Any], *, devices: list[int] | No
         return {"alive": None, "reason": f"session missing container endpoint: {exc}"}
     # Reuse the coordinator's NPU parser/confirmation logic on the host. Docker
     # and NPU commands use argv, never interpolated shell expressions.
-    source = (LIB_DIR / "vaws_npu_coordination.py").read_text(encoding="utf-8")
+    from vaws_host_queue_module import host_queue_module_path  # noqa: PLC0415
+
+    source = host_queue_module_path().read_text(encoding="utf-8")
     runner = r'''
 import sys
 request = json.loads(sys.argv[1])

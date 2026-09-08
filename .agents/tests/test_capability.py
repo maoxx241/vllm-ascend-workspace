@@ -115,6 +115,17 @@ class ResolverDegradationTests(unittest.TestCase):
         self.assertIn("dependency", layers)
         self.assertNotIn("client_config", layers)
 
+    def test_host_npu_authority_is_unavailable_without_coordinator(self) -> None:
+        envelope = build_doctor_envelope(
+            argv=["python3", ".agents/scripts/vaws_deps.py", "doctor"],
+            env=ABSENT_ENV,
+        )
+        cap = envelope["extensions"]["capability_report"]["capabilities"]["host_npu_authority"]
+        self.assertFalse(cap["available"])
+        self.assertTrue(cap["degraded"])
+        self.assertEqual(cap["depends_on"], ["vaws-coordinator"])
+        self.assertTrue(any("bootstrap" in (item.get("remedy") or "") for item in cap["degradation"]))
+
     def test_acknowledged_drift_is_recorded(self) -> None:
         env = {**ABSENT_ENV, "VAWS_DEPS_ALLOW_OFF_PIN": "vaws-coordinator"}
         envelope = build_doctor_envelope(

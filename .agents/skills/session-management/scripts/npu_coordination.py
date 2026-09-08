@@ -23,14 +23,15 @@ LIB_DIR = ROOT / ".agents" / "lib"
 if str(LIB_DIR) not in sys.path:
     sys.path.insert(0, str(LIB_DIR))
 
-from vaws_npu_coordination import (  # noqa: E402
-    DEFAULT_ESTIMATED_DURATION_SECONDS,
-    DEFAULT_GRANT_TTL_SECONDS,
-    DEFAULT_HEARTBEAT_TTL_SECONDS,
-    DEFAULT_QUEUE_TTL_SECONDS,
-    DEFAULT_START_TTL_SECONDS,
-    DEFAULT_STATE_DIR,
-)
+from vaws_host_queue_module import host_queue_module_path, load_host_protocol  # noqa: E402
+
+_host = load_host_protocol()
+DEFAULT_ESTIMATED_DURATION_SECONDS = _host.DEFAULT_ESTIMATED_DURATION_SECONDS
+DEFAULT_GRANT_TTL_SECONDS = _host.DEFAULT_GRANT_TTL_SECONDS
+DEFAULT_HEARTBEAT_TTL_SECONDS = _host.DEFAULT_HEARTBEAT_TTL_SECONDS
+DEFAULT_QUEUE_TTL_SECONDS = _host.DEFAULT_QUEUE_TTL_SECONDS
+DEFAULT_START_TTL_SECONDS = _host.DEFAULT_START_TTL_SECONDS
+DEFAULT_STATE_DIR = _host.DEFAULT_STATE_DIR
 from vaws_local_state import ensure_workspace_identity, load_workspace_identity  # noqa: E402
 
 PROGRESS_SENTINEL = "__VAWS_NPU_COORDINATION_PROGRESS__="
@@ -99,7 +100,7 @@ def resolve_target(args: argparse.Namespace) -> tuple[str, LocalEndpoint, dict[s
 
 
 def build_remote_command(request: dict[str, Any]) -> str:
-    source = (LIB_DIR / "vaws_npu_coordination.py").read_text(encoding="utf-8")
+    source = host_queue_module_path().read_text(encoding="utf-8")
     request_json = json.dumps(request, ensure_ascii=False, separators=(",", ":"))
     delimiter = "__VAWS_NPU_COORDINATION_SOURCE__"
     runner = """

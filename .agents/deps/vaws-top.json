@@ -5,7 +5,7 @@
   "url": "https://github.com/vllm-ascend-workspace/vaws-top.git",
   "visibility": "private",
   "ref": "main",
-  "commit": "e13478484b9f52e8847169a785eebc32b268787f",
+  "commit": "e7af28e629e7fd79c47e9b096f1dc1fd94f665ab",
   "root_env": "VAWS_TOP_ROOT",
   "default_checkout": "{home}/vaws-worktrees/{repo_dirname}/npu-fleet-monitor",
   "bootstrap": "python3 .agents/skills/npu-fleet-monitor/scripts/manage_monitor.py ensure",
@@ -24,7 +24,8 @@
       "scripts/vaws-top.py",
       "scripts/vaws-top-mcp.py",
       "deploy/npu-fleet-monitor.service",
-      ".agents/skills/vaws-top/SKILL.md"
+      ".agents/skills/vaws-top/SKILL.md",
+      "service-api.json"
     ],
     "canonical_origin": true
   },

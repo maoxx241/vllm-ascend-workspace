@@ -7,7 +7,7 @@ Every task-facing call goes through this launcher so one place knows where the
 checkout is and which environment it needs:
 
     VAWS_AGENT_SESSIONS_DIR   the single local task registry
-    VAWS_HOST_QUEUE_MODULE    scaffold `vaws_npu_coordination.py`
+    VAWS_HOST_QUEUE_MODULE    override only; coordinator defaults to its bundled host queue
     VAWS_MACHINE_INVENTORY    shared inventory JSON
     VAWS_PARITY_SCRIPT        scaffold `remote_code_parity.py`
     VAWS_REMOTE_DEV_ROOT      optional; local attach/finish do not need it
@@ -219,7 +219,6 @@ def cmd_env(args: argparse.Namespace) -> int:
     env = coordinator_environment()
     keys = [
         "VAWS_AGENT_SESSIONS_DIR",
-        "VAWS_HOST_QUEUE_MODULE",
         "VAWS_MACHINE_INVENTORY",
         "VAWS_PARITY_SCRIPT",
         "VAWS_PARITY_WORKSPACE_ROOT",

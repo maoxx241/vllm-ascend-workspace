@@ -5,7 +5,7 @@
   "url": "https://github.com/vllm-ascend-workspace/remote-dev.git",
   "visibility": "private",
   "ref": "main",
-  "commit": "b6acc21d147e369e771f1ff916973d74d667691e",
+  "commit": "62045af1f76c803ca392ae413b56bcfe290e6450",
   "root_env": "VAWS_REMOTE_DEV_ROOT",
   "default_checkout": "{shared_workspace_root}/.vaws-local/remote-dev",
   "bootstrap": "python3 .agents/scripts/remote_dev.py bootstrap",
@@ -21,7 +21,8 @@
       "mcp/server.py",
       "core/endpoint.py",
       "core/shell_ops.py",
-      "tools/_cli.py"
+      "tools/_cli.py",
+      "service-api.json"
     ],
     "canonical_origin": true
   },

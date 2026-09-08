@@ -6,7 +6,8 @@ Scope: `.agents/skills/repo-init/`, `.agents/skills/machine-management/`,
 `.agents/skills/session-management/`, `.agents/skills/remote-toolbox/`,
 `.agents/skills/npu-fleet-monitor/`, plus the shared code they own or are
 owned by: `.agents/scripts/remote_*.py`, `.agents/lib/vaws_remote_toolbox.py`,
-`.agents/lib/vaws_session_*.py`, `.agents/lib/vaws_npu_coordination.py`.
+`.agents/lib/vaws_session_*.py`, plus the then-scaffold host-queue module
+(later coordinator `host/vaws_npu_coordination.py`).
 
 Read for cross-checking, not audited: `.remote-dev/` (target resolution and
 result contract), `.agents/coordinator/` (host authority and pool bindings),
