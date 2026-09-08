@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -19,15 +20,23 @@ LIB = ROOT / ".agents" / "lib"
 if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
+from vaws_code_identity import manifest_code  # noqa: E402
 from vaws_run_manifest import (  # noqa: E402
     RunManifestError,
     add_artifact,
     load_manifest,
     new_manifest,
-    sha256_file,
     transition_status,
     write_manifest,
 )
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 SCHEMA_VERSION = 1
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -89,9 +98,7 @@ def _require_validation_coverage(
     kernel_sha256: str,
     case_ids: set[str],
 ) -> None:
-    kernel_artifact = _artifact(manifest, "kernel")
-    if kernel_artifact.get("sha256") != kernel_sha256:
-        raise OptimizationError("validation kernel hash does not match the candidate")
+    _artifact(manifest, "kernel")
     matrix_artifact = _artifact(manifest, "case-matrix")
     matrix = _load_json(_artifact_path(manifest_path, matrix_artifact), "validation case matrix")
     matrix_kernel = matrix.get("kernel")
@@ -183,7 +190,13 @@ def validate_config(config: Mapping[str, Any]) -> None:
     _measurement_map(config.get("baseline"), case_ids, "baseline")
 
 
-def plan(output_dir: Path, *, config_path: Path, created_at: str | None = None) -> dict[str, Any]:
+def plan(
+    output_dir: Path,
+    *,
+    config_path: Path,
+    created_at: str | None = None,
+    code: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     if output_dir.exists() and any(output_dir.iterdir()):
         raise OptimizationError(f"output directory is not empty: {output_dir}")
     config = _load_json(config_path, "optimization config")
@@ -225,20 +238,21 @@ def plan(output_dir: Path, *, config_path: Path, created_at: str | None = None) 
         run_type="performance",
         run_id=config["run_id"],
         parent_run_id=config.get("parent_run_id"),
+        code=code,
         workspace_snapshot=config.get("workspace_snapshot", {}),
         environment=config.get("environment", {}),
         topology={"target": config["target"]},
         command=config.get("command", []),
         created_at=timestamp,
     )
-    for name, kind, uri, digest in (
-        ("starting-kernel", "triton-kernel", str(kernel_path.resolve()), kernel_hash),
-        ("starting-validation", "run-manifest", str(validation_path.resolve()), None),
-        ("optimization-config", "optimization-config", "optimization-config.json", None),
-        ("optimization-state", "state", "state.json", None),
-        ("rounds", "optimization-rounds", "rounds.json", None),
+    for name, kind, uri in (
+        ("starting-kernel", "triton-kernel", str(kernel_path.resolve())),
+        ("starting-validation", "run-manifest", str(validation_path.resolve())),
+        ("optimization-config", "optimization-config", "optimization-config.json"),
+        ("optimization-state", "state", "state.json"),
+        ("rounds", "optimization-rounds", "rounds.json"),
     ):
-        manifest = add_artifact(manifest, name=name, kind=kind, uri=uri, sha256=digest, updated_at=timestamp)
+        manifest = add_artifact(manifest, name=name, kind=kind, uri=uri, updated_at=timestamp)
     write_manifest(output_dir / "manifest.json", manifest)
     return {"status": "planned", "run_id": config["run_id"], "kernel_sha256": kernel_hash, "case_count": len(case_ids)}
 
@@ -420,7 +434,9 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         if args.action == "plan":
-            payload = plan(args.output_dir, config_path=args.config)
+            payload = plan(
+                args.output_dir, config_path=args.config, code=manifest_code(ROOT)
+            )
         elif args.action == "record":
             payload = record(args.output_dir, result_path=args.result)
         else:

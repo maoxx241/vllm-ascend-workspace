@@ -56,7 +56,9 @@ jobs:
       - name: Check generated Claude shims and ModelScope Trae projection
         run: python -B .agents/scripts/sync_claude_skills.py --check
       - name: Run manifest and knowledge tests
-        run: python -B -m unittest discover -s .agents/tests -p "test_run_manifest.py"
+        run: |
+          python -B -m unittest discover -s .agents/tests -p "test_run_manifest.py"
+          python -B -m unittest discover -s .agents/tests -p "test_code_identity.py"
       - name: Read pinned knowledge kit commit
         id: knowledge-pin
         run: |

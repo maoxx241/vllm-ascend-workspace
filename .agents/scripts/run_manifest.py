@@ -13,6 +13,7 @@ LIB = ROOT / ".agents" / "lib"
 if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
+from vaws_code_identity import manifest_code  # noqa: E402
 from vaws_run_manifest import (  # noqa: E402
     RUN_TYPES,
     RunManifestError,
@@ -47,6 +48,12 @@ def build_parser() -> argparse.ArgumentParser:
     init.add_argument("--topology", default="{}")
     init.add_argument("--command", action="append", default=[])
     init.add_argument("--env", action="append", default=[], metavar="NAME=VALUE")
+    init.add_argument(
+        "--workspace-root",
+        type=Path,
+        default=None,
+        help="Fill code identity from this git worktree",
+    )
 
     validate = subparsers.add_parser("validate", help="validate an existing manifest")
     validate.add_argument("manifest", type=Path)
@@ -71,6 +78,11 @@ def main(argv: list[str] | None = None) -> int:
                 run_type=args.run_type,
                 run_id=args.run_id,
                 parent_run_id=args.parent_run_id,
+                code=(
+                    manifest_code(args.workspace_root)
+                    if args.workspace_root is not None
+                    else None
+                ),
                 workspace_snapshot=_json_object(
                     args.workspace_snapshot, "workspace-snapshot"
                 ),

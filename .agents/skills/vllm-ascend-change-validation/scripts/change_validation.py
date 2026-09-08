@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import re
@@ -22,6 +21,7 @@ LIB = ROOT / ".agents" / "lib"
 if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
+from vaws_code_identity import manifest_code  # noqa: E402
 from vaws_knowledge import load_knowledge_file  # noqa: E402
 from vaws_run_manifest import (  # noqa: E402
     RunManifestError,
@@ -153,7 +153,6 @@ def parse_diff(diff_text: str) -> dict[str, Any]:
     file_rows = sorted(files.values(), key=lambda row: row["path"])
     return {
         "schema_version": SCHEMA_VERSION,
-        "sha256": hashlib.sha256(diff_text.encode("utf-8")).hexdigest(),
         "file_count": len(file_rows),
         "additions": sum(row["additions"] for row in file_rows),
         "deletions": sum(row["deletions"] for row in file_rows),
@@ -355,6 +354,7 @@ def plan_change(
     diff_text: str,
     knowledge_path: Path,
     created_at: str | None = None,
+    code: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     if output_dir.exists() and any(output_dir.iterdir()):
         raise ChangeValidationError(f"output directory is not empty: {output_dir}")
@@ -399,10 +399,10 @@ def plan_change(
     manifest = new_manifest(
         run_type="change-validation",
         run_id=run_id,
+        code=code,
         workspace_snapshot={
             "baseline": baseline,
             "candidate": candidate,
-            "diff_sha256": diff_summary["sha256"],
         },
         created_at=timestamp,
     )
@@ -657,6 +657,11 @@ def main(argv: list[str] | None = None) -> int:
                     baseline=args.baseline,
                     candidate=args.candidate,
                 )
+            workspace = (
+                args.repo_root.resolve()
+                if args.repo_root is not None
+                else ROOT
+            )
             payload = plan_change(
                 args.output_dir,
                 run_id=args.run_id,
@@ -666,6 +671,7 @@ def main(argv: list[str] | None = None) -> int:
                 target_repositories=args.target_repository,
                 diff_text=diff_text,
                 knowledge_path=args.knowledge,
+                code=manifest_code(workspace),
             )
         elif args.action == "link":
             emit_progress("link-run", manifest=str(args.run_manifest))

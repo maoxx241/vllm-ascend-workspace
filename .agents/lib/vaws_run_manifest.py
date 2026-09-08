@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import math
 import os
@@ -38,8 +37,13 @@ STATUS_TRANSITIONS = {
     "cancelled": frozenset(),
 }
 SAFE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,127}$")
-SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+GIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 RFC3339_UTC_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$")
+DEFAULT_CODE = {
+    "source_head": "0" * 40,
+    "snapshot_commit": "0" * 40,
+    "dirty": False,
+}
 SECRET_ENV_RE = re.compile(
     r"(?:^|_)(?:API_?KEY|ACCESS_?KEY|AUTH|CREDENTIAL|"
     r"PASS(?:WD|WORD)?|SECRET|TOKEN|KEY)(?:_|$)",
@@ -63,11 +67,30 @@ def generate_run_id(run_type: str, *, now: str | None = None) -> str:
     return f"{run_type}-{timestamp}-{uuid.uuid4().hex[:8]}"
 
 
+def _resolve_code(
+    code: Mapping[str, Any] | None,
+    workspace_root: Path | str | None,
+) -> dict[str, Any]:
+    if code is not None:
+        return {
+            "source_head": code["source_head"],
+            "snapshot_commit": code["snapshot_commit"],
+            "dirty": bool(code["dirty"]),
+        }
+    if workspace_root is not None:
+        from vaws_code_identity import manifest_code
+
+        return manifest_code(workspace_root)
+    return dict(DEFAULT_CODE)
+
+
 def new_manifest(
     *,
     run_type: str,
     run_id: str | None = None,
     parent_run_id: str | None = None,
+    code: Mapping[str, Any] | None = None,
+    workspace_root: Path | str | None = None,
     workspace_snapshot: Mapping[str, Any] | None = None,
     environment: Mapping[str, Any] | None = None,
     model: Mapping[str, Any] | None = None,
@@ -82,6 +105,7 @@ def new_manifest(
         "run_id": run_id or generate_run_id(run_type, now=timestamp),
         "parent_run_id": parent_run_id,
         "run_type": run_type,
+        "code": _resolve_code(code, workspace_root),
         "workspace_snapshot": dict(workspace_snapshot or {}),
         "environment": dict(environment or {}),
         "model": dict(model or {}),
@@ -151,18 +175,26 @@ def _validate_artifacts(value: Any, errors: list[str]) -> None:
             if name in names:
                 errors.append(f"artifact name is duplicated: {name!r}")
             names.add(name)
-        unknown = sorted(set(item) - {"name", "kind", "uri", "sha256"})
+        unknown = sorted(set(item) - {"name", "kind", "uri"})
         if unknown:
             errors.append(
                 f"artifacts[{index}] has unknown fields: {', '.join(unknown)}"
             )
-        sha256 = item.get("sha256")
-        if "sha256" in item and (
-            not isinstance(sha256, str) or not SHA256_RE.fullmatch(sha256)
-        ):
-            errors.append(
-                f"artifacts[{index}].sha256 must be 64 lowercase hex characters"
-            )
+
+
+def _validate_code(value: Any, errors: list[str]) -> None:
+    item = _require_mapping(value, "code", errors)
+    if not item:
+        return
+    for field in ("source_head", "snapshot_commit"):
+        sha = item.get(field)
+        if not isinstance(sha, str) or not GIT_SHA_RE.fullmatch(sha):
+            errors.append(f"code.{field} must be 40 lowercase hex characters")
+    if type(item.get("dirty")) is not bool:
+        errors.append("code.dirty must be a boolean")
+    unknown = sorted(set(item) - {"source_head", "snapshot_commit", "dirty"})
+    if unknown:
+        errors.append(f"code has unknown fields: {', '.join(unknown)}")
 
 
 def validate_manifest(manifest: Mapping[str, Any]) -> None:
@@ -201,6 +233,7 @@ def validate_manifest(manifest: Mapping[str, Any]) -> None:
         if SECRET_ENV_RE.search(key):
             errors.append(f"environment_variables must not contain secret-like key: {key}")
 
+    _validate_code(manifest.get("code"), errors)
     _validate_artifacts(manifest.get("artifacts"), errors)
 
     for field in ("created_at", "updated_at"):
@@ -213,6 +246,7 @@ def validate_manifest(manifest: Mapping[str, Any]) -> None:
         "run_id",
         "parent_run_id",
         "run_type",
+        "code",
         "workspace_snapshot",
         "environment",
         "model",
@@ -255,26 +289,14 @@ def add_artifact(
     name: str,
     kind: str,
     uri: str,
-    sha256: str | None = None,
     updated_at: str | None = None,
 ) -> dict[str, Any]:
     validate_manifest(manifest)
-    artifact = {"name": name, "kind": kind, "uri": uri}
-    if sha256 is not None:
-        artifact["sha256"] = sha256
     updated = deepcopy(dict(manifest))
-    updated["artifacts"].append(artifact)
+    updated["artifacts"].append({"name": name, "kind": kind, "uri": uri})
     updated["updated_at"] = updated_at or utc_now()
     validate_manifest(updated)
     return updated
-
-
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def load_manifest(path: Path) -> dict[str, Any]:

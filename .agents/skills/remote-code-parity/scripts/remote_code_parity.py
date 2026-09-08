@@ -1653,10 +1653,10 @@ def parse_sources(values: list[str]) -> dict[str, Path]:
     return sources
 
 
-def build_snapshot_records(workspace_root: Path, workspace_id: str, snapshot_id: str, denylist: tuple[str, ...], source_roots: dict[str, Path] | None = None) -> list[SnapshotRecord]:
+def build_snapshot_records(workspace_root: Path, workspace_id: str, snapshot_id: str, denylist: tuple[str, ...], source_roots: dict[str, Path] | None = None, records: list[SnapshotRecord] | None = None) -> list[SnapshotRecord]:
     tree = discover_repo_tree(workspace_root, '.', None, source_roots)
     child_records: dict[str, SnapshotRecord] = {}
-    ordered_records: list[SnapshotRecord] = []
+    ordered_records = records if records is not None else []
     for node in iter_postorder(tree):
         record = build_synthetic_snapshot(
             node,
@@ -1692,8 +1692,9 @@ def run_plan(args: argparse.Namespace) -> int:
     marker_dirname = validate_relative_posix_path(args.marker_dirname, label='marker dirname')
     root_preserve_paths = resolved_root_preserve_paths(marker_dirname, args.preserve_path)
     snapshot_id = args.snapshot_id or now_utc().replace(':', '').replace('-', '')
-    records = build_snapshot_records(workspace_root, workspace_id, snapshot_id, tuple(DEFAULT_DENYLIST), parse_sources(getattr(args, 'source', [])))
+    records: list[SnapshotRecord] = []
     try:
+        records = build_snapshot_records(workspace_root, workspace_id, snapshot_id, tuple(DEFAULT_DENYLIST), parse_sources(getattr(args, 'source', [])), records)
         manifest = make_manifest(
             workspace_root=workspace_root,
             workspace_id=workspace_id,
@@ -1723,10 +1724,12 @@ def run_sync(args: argparse.Namespace) -> int:
     container = SshEndpoint(host=args.container_host, port=args.container_port, user=args.container_user)
 
     emit_progress('snapshot-build', workspace_id=workspace_id, snapshot_id=snapshot_id)
-    records = build_snapshot_records(workspace_root, workspace_id, snapshot_id, tuple(DEFAULT_DENYLIST), parse_sources(getattr(args, 'source', [])))
+    records: list[SnapshotRecord] = []
+    keep_refs = False
     manifest_path = manifest_path_for(container_cache_root, workspace_id, snapshot_id)
     current_phase = 'snapshot-built'
     try:
+        records = build_snapshot_records(workspace_root, workspace_id, snapshot_id, tuple(DEFAULT_DENYLIST), parse_sources(getattr(args, 'source', [])), records)
         try:
             record_map = {record.relpath: record for record in records}
             prior_runtime_state = load_runtime_state(workspace_root)
@@ -1770,6 +1773,7 @@ def run_sync(args: argparse.Namespace) -> int:
                         summary = summary_payload(status='ready', server_name=args.server_name, container_identity=args.container_identity, workspace_id=workspace_id, container_cache_root=container_cache_root, records=records, reinstall_status='not-needed', reason='snapshot and installed build inputs unchanged', first_install=False, runtime_install_env=last_container_state.get('last_runtime_install_env', {}), observed_runtime_commits=observed)
                         summary['fast_path'] = 'snapshot'
                         print(json_dump(summary))
+                        keep_refs = True
                         return 0
 
             auto_selected_materialize = False
@@ -1829,6 +1833,7 @@ def run_sync(args: argparse.Namespace) -> int:
                     summary['apply_mode'] = args.apply_mode
                     summary['manifest_path'] = manifest_path
                     print(json_dump(summary))
+                    keep_refs = True
                     return 0
 
                 lock_path = lock_path_for(container_cache_root, workspace_id, args.container_identity)
@@ -1965,6 +1970,7 @@ def run_sync(args: argparse.Namespace) -> int:
                     summary['manifest_path'] = manifest_path
                     summary['transfers'] = transfer_reports
                     print(json_dump(summary))
+                    keep_refs = True
                     return 0
                 finally:
                     emit_progress('release-lock', lock_path=lock_path)
@@ -2043,6 +2049,7 @@ def run_sync(args: argparse.Namespace) -> int:
                     observed_runtime_commits=None,
                 )
                 print(json_dump(summary))
+                keep_refs = True
                 return 0
 
             lock_path = lock_path_for(container_cache_root, workspace_id, args.container_identity)
@@ -2272,6 +2279,7 @@ def run_sync(args: argparse.Namespace) -> int:
                 )
                 summary['transfers'] = transfer_reports
                 print(json_dump(summary))
+                keep_refs = True
                 return 0
             finally:
                 emit_progress('release-lock', lock_path=lock_path)
@@ -2279,7 +2287,24 @@ def run_sync(args: argparse.Namespace) -> int:
         except Exception as exc:
             raise RuntimeError(f'{current_phase}: {exc}') from exc
     finally:
-        cleanup_synthetic_refs(workspace_root, records)
+        if not keep_refs:
+            cleanup_synthetic_refs(workspace_root, records)
+
+
+def run_gc(args: argparse.Namespace) -> int:
+    lib = Path(__file__).resolve().parents[3] / 'lib'
+    if str(lib) not in sys.path:
+        sys.path.insert(0, str(lib))
+    from vaws_code_identity import gc_parity_refs
+
+    result = gc_parity_refs(
+        Path(args.workspace_root),
+        max_age_days=args.max_age_days,
+        now=args.now,
+    )
+    print(json_dump(result))
+    return 0
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description='Prepare or enforce remote code parity for a ready runtime.', allow_abbrev=False)
@@ -2322,6 +2347,19 @@ def build_parser() -> argparse.ArgumentParser:
         help='auto picks materialize for pure-Python changes and install only when native/dependency files changed (or first install); source-only publishes snapshots only; materialize updates runtime sources without install/rebuild; install forces the full parity behavior.',
     )
 
+    gc = subparsers.add_parser(
+        'gc',
+        help='Delete unused refs/parity refs older than seven days.',
+    )
+    gc.add_argument('--workspace-root', required=True, help='Local workspace root.')
+    gc.add_argument('--max-age-days', type=int, default=7)
+    gc.add_argument(
+        '--now',
+        type=float,
+        default=None,
+        help='Unix timestamp used as now; tests pin this so age is deterministic.',
+    )
+
     return parser
 
 
@@ -2333,6 +2371,8 @@ def main() -> int:
             return run_plan(args)
         if args.command == 'sync':
             return run_sync(args)
+        if args.command == 'gc':
+            return run_gc(args)
         parser.error(f'unsupported command: {args.command}')
         return 2
     except Exception as exc:

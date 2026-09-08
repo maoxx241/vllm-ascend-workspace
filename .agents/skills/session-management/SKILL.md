@@ -66,9 +66,9 @@ The existing managed-session mode described below binds:
 - one `.vaws-local/sessions/<session-id>/` state namespace
 - local leases for container SSH port, service port, and optional NPU devices
 
-A session group binds two or more ready sessions with the same code and
-submodule snapshot, including content-level parity for dirty worktrees, plus
-explicit startup and reverse shutdown order. Grouping
+A session group binds two or more ready sessions with the same
+`code.snapshot_commit` (HEAD when clean, a deterministic dirty snapshot
+otherwise) plus explicit startup and reverse shutdown order. Grouping
 does not create another container or duplicate member leases.
 
 ## Use This Skill When

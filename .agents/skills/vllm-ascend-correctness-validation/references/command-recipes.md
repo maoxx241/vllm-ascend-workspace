@@ -65,8 +65,7 @@ Harness config includes the case array plus:
 ```
 
 The harness copies `model`, `engine_args`, `base_url`, and `served_model` into
-the result's `execution` block and adds `cases_sha256`. Use the same case array
-verbatim in both harness configs; a different array is an undeclared difference.
+the result's `execution` block. Case files are identified by `code.snapshot_commit`.
 
 ## Compare
 

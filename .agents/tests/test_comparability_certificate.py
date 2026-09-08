@@ -67,7 +67,6 @@ def observed(
             "tensor_parallel_size": tp,
             "enforce_eager": enforce_eager,
         },
-        "cases_sha256": "aa" * 32,
         "native_digest": native_digest,
         "serve_args": ["--host", "service.example.invalid"],
         "bench_args": ["--num-prompts", "64"],
@@ -135,7 +134,6 @@ class OriginLabelTests(unittest.TestCase):
                 "model": "/models/example",
                 "base_url": "http://service.example.invalid:8000",
                 "served_model": "example",
-                "cases_sha256": "aa" * 32,
             },
             run_id="run-a",
             online=True,
@@ -144,7 +142,7 @@ class OriginLabelTests(unittest.TestCase):
         self.assertEqual(identity.leaves["model"].origin, "declared")
         self.assertEqual(identity.leaves["base_url"].origin, "observed")
         self.assertEqual(identity.leaves["served_model"].origin, "observed")
-        self.assertEqual(identity.leaves["cases_sha256"].origin, "observed")
+        self.assertNotIn("cases_sha256", identity.leaves)
 
     def test_offline_execution_labels_constructor_args_observed(self) -> None:
         identity = identity_from_execution_block(
@@ -153,7 +151,6 @@ class OriginLabelTests(unittest.TestCase):
                 "model": "/models/example",
                 "base_url": None,
                 "served_model": None,
-                "cases_sha256": "aa" * 32,
             },
             run_id="run-a",
             online=False,

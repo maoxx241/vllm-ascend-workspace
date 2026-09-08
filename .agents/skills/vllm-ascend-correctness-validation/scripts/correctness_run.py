@@ -31,12 +31,12 @@ from vaws_comparability import (  # noqa: E402
     issue_certificate,
     merge_identities,
 )
+from vaws_code_identity import manifest_code  # noqa: E402
 from vaws_run_manifest import (  # noqa: E402
     RunManifestError,
     add_artifact,
     load_manifest,
     new_manifest,
-    sha256_file,
     transition_status,
     write_manifest,
 )
@@ -206,6 +206,7 @@ def init_run(
     allowed_differences: Sequence[str] | None = None,
     parent_run_id: str | None = None,
     created_at: str | None = None,
+    code: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     if run_dir.exists() and any(run_dir.iterdir()):
         raise CorrectnessError(f"run directory is not empty: {run_dir}")
@@ -248,6 +249,7 @@ def init_run(
         run_type="correctness",
         run_id=run_id,
         parent_run_id=parent_run_id,
+        code=code,
         workspace_snapshot=workspace_snapshot,
         environment=environment,
         model=model,
@@ -659,7 +661,7 @@ def check_run_identity(
     carry an execution block, and every execution difference must be listed in
     `allowed_differences`. An undeclared difference means the comparison would
     attribute a divergence to code that may instead come from eager/graph mode,
-    tensor-parallel degree, a different model, or a different case array.
+    tensor-parallel degree, or a different model.
     """
     problems: list[str] = []
     for side, document in (("baseline", baseline), ("candidate", candidate)):
@@ -875,7 +877,6 @@ def compare_run(
             name=name,
             kind=kind,
             uri=uri,
-            sha256=sha256_file(run_dir / uri),
             updated_at=timestamp,
         )
     manifest = transition_status(manifest, comparison["status"], updated_at=timestamp)
@@ -953,6 +954,7 @@ def main(argv: list[str] | None = None) -> int:
                 candidate_command=args.candidate_command,
                 allowed_differences=args.allowed_difference,
                 parent_run_id=args.parent_run_id,
+                code=manifest_code(ROOT),
             )
             payload = {
                 "status": "created",

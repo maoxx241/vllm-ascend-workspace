@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -22,15 +23,23 @@ if str(Path(__file__).resolve().parent) not in sys.path:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from validate_triton_impl import analyze_file  # noqa: E402
+from vaws_code_identity import manifest_code  # noqa: E402
 from vaws_run_manifest import (  # noqa: E402
     RunManifestError,
     add_artifact,
     load_manifest,
     new_manifest,
-    sha256_file,
     transition_status,
     write_manifest,
 )
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 SCHEMA_VERSION = 1
 MODES = {"eager", "compile", "graph"}
@@ -168,7 +177,14 @@ def validate_result(result: Mapping[str, Any], planned_ids: set[str]) -> None:
         raise ValidationError("; ".join(errors))
 
 
-def plan(output_dir: Path, *, config_path: Path, kernel: Path, created_at: str | None = None) -> dict[str, Any]:
+def plan(
+    output_dir: Path,
+    *,
+    config_path: Path,
+    kernel: Path,
+    created_at: str | None = None,
+    code: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     if output_dir.exists() and any(output_dir.iterdir()):
         raise ValidationError(f"output directory is not empty: {output_dir}")
     if not kernel.is_file():
@@ -192,20 +208,21 @@ def plan(output_dir: Path, *, config_path: Path, kernel: Path, created_at: str |
         run_type="correctness",
         run_id=config["run_id"],
         parent_run_id=config.get("parent_run_id"),
+        code=code,
         workspace_snapshot=config.get("workspace_snapshot", {}),
         environment=config.get("environment", {}),
         topology={"target": config["target"]},
         command=config.get("command", []),
         created_at=timestamp,
     )
-    for name, kind, uri, digest in (
-        ("kernel", "triton-kernel", str(kernel.resolve()), sha256_file(kernel)),
-        ("validation-config", "validation-config", "validation-config.json", None),
-        ("static-check", "static-check", "static-check.json", None),
-        ("case-matrix", "case-matrix", "case-matrix.json", None),
-        ("results", "validation-results", "results.json", None),
+    for name, kind, uri in (
+        ("kernel", "triton-kernel", str(kernel.resolve())),
+        ("validation-config", "validation-config", "validation-config.json"),
+        ("static-check", "static-check", "static-check.json"),
+        ("case-matrix", "case-matrix", "case-matrix.json"),
+        ("results", "validation-results", "results.json"),
     ):
-        manifest = add_artifact(manifest, name=name, kind=kind, uri=uri, sha256=digest, updated_at=timestamp)
+        manifest = add_artifact(manifest, name=name, kind=kind, uri=uri, updated_at=timestamp)
     write_manifest(output_dir / "manifest.json", manifest)
     return {"status": "planned", "run_id": config["run_id"], "case_count": len(config["cases"]), "kernel_sha256": sha256_file(kernel)}
 
@@ -302,7 +319,12 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         if args.action == "plan":
-            payload = plan(args.output_dir, config_path=args.config, kernel=args.kernel)
+            payload = plan(
+                args.output_dir,
+                config_path=args.config,
+                kernel=args.kernel,
+                code=manifest_code(ROOT),
+            )
         elif args.action == "record":
             payload = record(args.output_dir, result_path=args.result)
         else:

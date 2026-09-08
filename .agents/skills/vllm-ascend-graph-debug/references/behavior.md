@@ -40,7 +40,7 @@ A case is resolved only when both reproductions pass and instrumentation is remo
 - `--original-result pass` requires `--original-evidence PATH`, the non-empty output of rerunning the original reproduction after the fix;
 - resolving a case (both results `pass`) requires at least one recorded experiment.
 
-Evidence files are copied into `validation/`, hashed, and linked from the Run Manifest as `reproduction-rerun-output` artifacts, so a reviewer can open exactly what the `pass` claim rests on. A `fail` result needs no evidence file; it can only lead to `inconclusive`. The script checks that evidence exists and is non-empty; it does not interpret its contents.
+Evidence files are copied into `validation/` and linked from the Run Manifest as `reproduction-rerun-output` artifacts, so a reviewer can open exactly what the `pass` claim rests on. A `fail` result needs no evidence file; it can only lead to `inconclusive`. The script checks that evidence exists and is non-empty; it does not interpret its contents.
 
 ## Snapshot contract
 
@@ -95,12 +95,12 @@ Default tolerances are zero. Choose non-zero tolerances explicitly and record wh
 
 ## Run Manifest integration
 
-`init` creates Run Manifest v1 with `run_type=debug` and the optional `parent_run_id`. The first experiment or comparison moves it to `running`. Each comparison becomes a linked artifact. `finalize` links `case.json` and every validation evidence file (with SHA256) and moves the manifest to:
+`init` creates Run Manifest v1 with `run_type=debug` and the optional `parent_run_id`. The first experiment or comparison moves it to `running`. Each comparison becomes a linked artifact. `finalize` links `case.json` and every validation evidence file and moves the manifest to:
 
 - `passed` for a resolved case;
 - `inconclusive` otherwise.
 
-`passed` is unreachable without at least one experiment record and two hashed rerun outputs; `init` followed directly by `finalize` is rejected.
+`passed` is unreachable without at least one experiment record and two rerun outputs; `init` followed directly by `finalize` is rejected.
 
 Do not store passwords, tokens, credentials, or secret environment variables in case inputs.
 

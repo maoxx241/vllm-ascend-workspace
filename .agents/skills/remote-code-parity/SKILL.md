@@ -154,6 +154,7 @@ Transport selection:
 Optional cache cleanup helper:
 
 - POSIX: `python3 .agents/skills/remote-code-parity/scripts/gc_runtime_cache.py ...`
+- POSIX: `python3 .agents/skills/remote-code-parity/scripts/remote_code_parity.py gc --workspace-root <root>` deletes `refs/parity/` older than 7 days that no Run Manifest `code.snapshot_commit` still names. Successful sync keeps those refs so the orphan snapshot commit stays reachable.
 
 Reference files:
 

@@ -9,6 +9,7 @@
     "run_id",
     "parent_run_id",
     "run_type",
+    "code",
     "workspace_snapshot",
     "environment",
     "model",
@@ -47,6 +48,28 @@
         "performance",
         "profiling"
       ]
+    },
+    "code": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_head",
+        "snapshot_commit",
+        "dirty"
+      ],
+      "properties": {
+        "source_head": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "snapshot_commit": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "dirty": {
+          "type": "boolean"
+        }
+      }
     },
     "workspace_snapshot": {
       "type": "object"
@@ -94,10 +117,6 @@
           "uri": {
             "type": "string",
             "minLength": 1
-          },
-          "sha256": {
-            "type": "string",
-            "pattern": "^[0-9a-f]{64}$"
           }
         }
       }

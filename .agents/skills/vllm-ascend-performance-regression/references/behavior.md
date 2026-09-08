@@ -55,7 +55,7 @@
 }
 ```
 
-All conditions except code snapshot, session ID, and display label belong in `shared`. Its canonical SHA256 is the required `config_hash`. `parent_run_id` is optional and names the change-validation plan this experiment is evidence for; `change_validation.py link` refuses manifests without it.
+All conditions except code snapshot, session ID, and display label belong in `shared`. The object is stored in the schedule and every measurement, and `record` compares it by structure. `parent_run_id` is optional and names the change-validation plan this experiment is evidence for; `change_validation.py link` refuses manifests without it.
 
 ### Required `shared` keys
 
@@ -74,13 +74,13 @@ All conditions except code snapshot, session ID, and display label belong in `sh
 | `max_concurrency` | positive integer |
 | `request_rate` | positive number or `"inf"` |
 
-The rejection lists every missing or malformed key. Hashing a free-form object such as `{"note": "same"}` would produce a `config_hash` that certifies nothing, so it is not allowed.
+The rejection lists every missing or malformed key. A free-form object such as `{"note": "same"}` cannot satisfy the required keys, so it is not allowed.
 
 ## Parity check
 
 `parity-check.json` states what it verified and on what basis:
 
-- `basis`: `declared-configuration`. The certificate proves the operator recorded every required non-code condition once and that both states are pinned to the same declaration by `config_hash`;
+- `basis`: `declared-configuration`. The certificate proves the operator recorded every required non-code condition once and that both states are pinned to the same inlined `shared` object;
 - `checks`: required keys present, `topology.tp`/`topology.dp` recorded, sessions distinct, code snapshots recorded;
 - `not_checked`: the observed runtime configuration of either service, raw Benchmark artifact contents, and whether a measurement labelled `baseline` really came from that state.
 
@@ -113,7 +113,7 @@ Normalize one Benchmark result at a time:
   "state": "baseline",
   "phase": "measure",
   "ordinal": 1,
-  "config_hash": "<64 lowercase hex>",
+  "shared": { "machine": "example", "npu_devices": [0, 1] },
   "metrics": {
     "throughput": 1234.5,
     "ttft": 18.2,
@@ -136,7 +136,7 @@ those observations, and it does not copy the first observed row onto later
 repetitions. A missing, empty, malformed, or absent measure row aborts and
 names the state and `schedule_id` or `phase+ordinal`.
 
-The controller rejects out-of-order state, phase, ordinal, or config hash.
+The controller rejects out-of-order state, phase, ordinal, or a different `shared` object.
 
 ## Statistics
 

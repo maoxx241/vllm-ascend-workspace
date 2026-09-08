@@ -64,7 +64,6 @@ def execution(**engine_args) -> dict:
         "engine_args": {"tensor_parallel_size": 2, **engine_args},
         "base_url": None,
         "served_model": None,
-        "cases_sha256": "a" * 64,
     }
 
 
@@ -255,7 +254,8 @@ class ComparisonTests(unittest.TestCase):
                 "execution-identity",
                 "comparability-certificate",
             ):
-                self.assertRegex(artifacts[name]["sha256"], r"^[0-9a-f]{64}$")
+                self.assertIn(name, artifacts)
+                self.assertNotIn("sha256", artifacts[name])
 
     def test_empty_text_cannot_pass_a_run(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -509,14 +509,13 @@ class ExecutionIdentityTests(unittest.TestCase):
                     run_dir, baseline_path=same, candidate_path=same, updated_at=NOW
                 )
 
-    def test_different_case_arrays_are_an_undeclared_difference(self) -> None:
+    def test_different_engine_args_are_an_undeclared_difference(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             run_dir = init_run(root)
             cases = [result("case-1", {"text": "ok"})]
             left = execution()
-            right = execution()
-            right["cases_sha256"] = "b" * 64
+            right = execution(enforce_eager=True)
             baseline = write_json(
                 root / "baseline.json", result_document("base", cases, execution_block=left)
             )
@@ -525,7 +524,7 @@ class ExecutionIdentityTests(unittest.TestCase):
                 result_document("candidate", cases, execution_block=right),
             )
             with self.assertRaisesRegex(
-                correctness.CorrectnessError, "undeclared fields: cases_sha256"
+                correctness.CorrectnessError, "undeclared fields: engine_args.enforce_eager"
             ):
                 correctness.compare_run(
                     run_dir, baseline_path=baseline, candidate_path=candidate, updated_at=NOW
@@ -594,7 +593,7 @@ class HarnessTests(unittest.TestCase):
         )
         self.assertEqual(document["cases"][0]["status"], "unsupported")
 
-    def test_result_records_engine_args_and_case_digest(self) -> None:
+    def test_result_records_engine_args(self) -> None:
         """Regression: engine_args used to reach neither result nor manifest."""
         cases = [{"id": "unsupported-1", "mode": "future-mode"}]
         config = {
@@ -613,7 +612,7 @@ class HarnessTests(unittest.TestCase):
         )
         self.assertEqual(document["execution"]["model"], "/models/example")
         self.assertEqual(document["execution"]["served_model"], "example")
-        self.assertEqual(document["execution"]["cases_sha256"], harness.cases_sha256(cases))
+        self.assertNotIn("cases_sha256", document["execution"])
         correctness.validate_execution_block(document, label="candidate")
 
     def test_non_object_engine_args_are_rejected_before_execution(self) -> None:

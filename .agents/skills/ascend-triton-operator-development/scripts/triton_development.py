@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -17,16 +18,24 @@ LIB = ROOT / ".agents" / "lib"
 if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
+from vaws_code_identity import manifest_code  # noqa: E402
 from vaws_run_manifest import (  # noqa: E402
     RunManifestError,
     TERMINAL_STATUSES,
     add_artifact,
     load_manifest,
     new_manifest,
-    sha256_file,
     transition_status,
     write_manifest,
 )
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 SCHEMA_VERSION = 1
 MODES = {"direct", "gpu-migration"}
@@ -139,7 +148,13 @@ def validate_config(config: Mapping[str, Any]) -> None:
         raise DevelopmentError("; ".join(errors))
 
 
-def plan(output_dir: Path, *, config_path: Path, created_at: str | None = None) -> dict[str, Any]:
+def plan(
+    output_dir: Path,
+    *,
+    config_path: Path,
+    created_at: str | None = None,
+    code: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     if output_dir.exists() and any(output_dir.iterdir()):
         raise DevelopmentError(f"output directory is not empty: {output_dir}")
     config = _load_json(config_path, "development config")
@@ -179,6 +194,7 @@ def plan(output_dir: Path, *, config_path: Path, created_at: str | None = None) 
     manifest = new_manifest(
         run_type="debug",
         run_id=config["run_id"],
+        code=code,
         parent_run_id=config.get("parent_run_id"),
         workspace_snapshot=config.get("workspace_snapshot", {}),
         environment=config.get("environment", {}),
@@ -233,9 +249,7 @@ def finalize(
     if validation["status"] not in TERMINAL_STATUSES:
         raise DevelopmentError("validation manifest must be terminal")
     kernel_hash = sha256_file(kernel)
-    kernel_artifact = _artifact(validation, "kernel")
-    if kernel_artifact.get("sha256") != kernel_hash:
-        raise DevelopmentError("validation kernel hash does not match the development candidate")
+    _artifact(validation, "kernel")
     matrix_artifact = _artifact(validation, "case-matrix")
     matrix = _load_json(_artifact_path(validation_manifest, matrix_artifact), "validation case matrix")
     matrix_kernel = matrix.get("kernel")
@@ -271,14 +285,14 @@ def finalize(
     if manifest["status"] == "planned":
         manifest = transition_status(manifest, "running", updated_at=timestamp)
     artifacts = (
-        ("kernel", "triton-kernel", str(kernel.resolve()), kernel_hash),
-        ("semantic-report", "semantic-report", str(semantic_report.resolve()), sha256_file(semantic_report)),
-        ("sketch", "kernel-sketch", str(sketch.resolve()), sha256_file(sketch)),
-        ("development-result", "result", "development-result.json", None),
-        ("validation-manifest", "run-manifest", str(validation_manifest.resolve()), None),
+        ("kernel", "triton-kernel", str(kernel.resolve())),
+        ("semantic-report", "semantic-report", str(semantic_report.resolve())),
+        ("sketch", "kernel-sketch", str(sketch.resolve())),
+        ("development-result", "result", "development-result.json"),
+        ("validation-manifest", "run-manifest", str(validation_manifest.resolve())),
     )
-    for name, kind, uri, digest in artifacts:
-        manifest = add_artifact(manifest, name=name, kind=kind, uri=uri, sha256=digest, updated_at=timestamp)
+    for name, kind, uri in artifacts:
+        manifest = add_artifact(manifest, name=name, kind=kind, uri=uri, updated_at=timestamp)
     report = (
         "# Ascend Triton development report\n\n"
         f"- Status: **{terminal}**\n"
@@ -318,7 +332,9 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         if args.action == "plan":
-            payload = plan(args.output_dir, config_path=args.config)
+            payload = plan(
+                args.output_dir, config_path=args.config, code=manifest_code(ROOT)
+            )
         else:
             payload = finalize(
                 args.output_dir,

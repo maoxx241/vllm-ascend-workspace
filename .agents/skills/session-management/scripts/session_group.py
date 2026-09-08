@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import subprocess
@@ -19,6 +18,7 @@ LIB = ROOT / ".agents" / "lib"
 if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
+from vaws_code_identity import code_identity  # noqa: E402
 from vaws_session_state import (  # noqa: E402
     SessionStateError,
     load_session_lookup,
@@ -111,119 +111,19 @@ def _git_text(repo: Path, *args: str) -> str:
     )
 
 
-def _digest_value(digest: Any, label: bytes, value: bytes) -> None:
-    digest.update(len(label).to_bytes(4, "big"))
-    digest.update(label)
-    digest.update(len(value).to_bytes(8, "big"))
-    digest.update(value)
-
-
-def _submodule_paths(repo: Path) -> list[Path]:
-    gitmodules = repo / ".gitmodules"
-    if not gitmodules.is_file():
-        return []
-    output = _git_bytes(
-        repo,
-        "config",
-        "--file",
-        str(gitmodules),
-        "--get-regexp",
-        r"^submodule\..*\.path$",
-        allowed_returncodes=(0, 1),
-    )
-    paths: list[Path] = []
-    for raw_line in output.splitlines():
-        _key, separator, raw_path = raw_line.partition(b" ")
-        if not separator or not raw_path:
-            continue
-        relative = Path(os.fsdecode(raw_path))
-        child = repo / relative
-        if child.is_dir() and (child / ".git").exists():
-            paths.append(relative)
-    return sorted(paths, key=lambda item: os.fsencode(item.as_posix()))
-
-
-def _dirty_worktree_digest(repo: Path) -> str:
-    """Hash executable source state not represented by HEAD or gitlinks."""
-    digest = hashlib.sha256()
-    tracked_diff = _git_bytes(
-        repo,
-        "diff",
-        "--binary",
-        "--full-index",
-        "--no-ext-diff",
-        "--no-textconv",
-        "--submodule=short",
-        "HEAD",
-        "--",
-    )
-    _digest_value(digest, b"tracked-diff", tracked_diff)
-
-    untracked = _git_bytes(
-        repo,
-        "ls-files",
-        "--others",
-        "--exclude-standard",
-        "-z",
-    )
-    for raw_path in sorted(item for item in untracked.split(b"\0") if item):
-        path = repo / Path(os.fsdecode(raw_path))
-        metadata = path.lstat()
-        _digest_value(digest, b"untracked-path", raw_path)
-        _digest_value(
-            digest, b"untracked-mode", str(metadata.st_mode).encode("ascii")
-        )
-        if path.is_symlink():
-            _digest_value(
-                digest, b"untracked-symlink", os.fsencode(os.readlink(path))
-            )
-            continue
-        if not path.is_file():
-            _digest_value(digest, b"untracked-special", b"")
-            continue
-        file_digest = hashlib.sha256()
-        with path.open("rb") as stream:
-            while chunk := stream.read(1024 * 1024):
-                file_digest.update(chunk)
-        _digest_value(digest, b"untracked-content", file_digest.digest())
-
-    for relative in _submodule_paths(repo):
-        child = repo / relative
-        child_status = _git_text(
-            child, "status", "--porcelain=v1", "--untracked-files=normal"
-        )
-        if not child_status:
-            continue
-        _digest_value(digest, b"submodule-path", os.fsencode(relative.as_posix()))
-        _digest_value(
-            digest,
-            b"submodule-head",
-            _git_text(child, "rev-parse", "HEAD").encode("ascii"),
-        )
-        _digest_value(
-            digest,
-            b"submodule-dirty",
-            bytes.fromhex(_dirty_worktree_digest(child)),
-        )
-    return digest.hexdigest()
-
-
 def workspace_snapshot(session: Mapping[str, Any]) -> dict[str, Any]:
     worktree = Path(session["local"]["worktree_root"])
     if not worktree.is_dir():
         raise SessionGroupError(f"session worktree does not exist: {worktree}")
 
-    status = _git_text(
-        worktree, "status", "--porcelain=v1", "--untracked-files=normal"
-    )
-    dirty = bool(status)
+    identity = code_identity(worktree)
     return {
-        "workspace_head": _git_text(worktree, "rev-parse", "HEAD"),
+        "workspace_head": identity["source_head"],
+        "snapshot_commit": identity["snapshot_commit"],
         "submodules": _git_text(
             worktree, "submodule", "status", "--recursive"
         ).splitlines(),
-        "dirty": dirty,
-        "dirty_digest": _dirty_worktree_digest(worktree) if dirty else None,
+        "dirty": identity["dirty"],
     }
 
 

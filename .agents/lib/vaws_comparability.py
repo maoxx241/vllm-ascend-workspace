@@ -45,7 +45,6 @@ DEFAULT_MUST_OBSERVE = IDENTITY_GROUPS
 CORRECTNESS_MUST_OBSERVE = (
     *IDENTITY_GROUPS,
     "engine_args",
-    "cases_sha256",
     "native_digest",
 )
 PERFORMANCE_MUST_OBSERVE = (
@@ -290,8 +289,7 @@ def identity_from_execution_block(
     constructor, so they are observed. Online: ``base_url`` and
     ``served_model`` were used for the HTTP request (observed);
     ``engine_args`` and ``model`` were never sent to the service (declared).
-    ``cases_sha256`` is always the digest of the case array the producer
-    iterated, so it is observed.
+    Case files live in git; ``code.snapshot_commit`` already covers them.
     """
     if not isinstance(execution, Mapping):
         raise ComparabilityError("execution block must be an object")
@@ -308,7 +306,6 @@ def identity_from_execution_block(
         ).leaves
     )
     field_origins = {
-        "cases_sha256": "observed",
         "base_url": "observed",
         "served_model": "observed",
         "model": "declared" if online else "observed",

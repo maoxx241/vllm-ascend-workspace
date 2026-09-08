@@ -131,10 +131,9 @@ leave an unreachable Session advertised as `ready`.
 
 `session_group.py create` binds existing ready sessions. It requires unique
 member names, unique session IDs, and identical live workspace plus recursive
-submodule snapshots. Dirty worktrees are compared with a content digest that
-covers tracked diffs, untracked files, and recursively dirty submodules rather
-than a boolean dirty flag. This prevents a distributed service from silently
-mixing code states.
+submodule snapshots. Dirty worktrees are compared by `code.snapshot_commit`,
+the deterministic parentless git snapshot of the current tree. This prevents a
+distributed service from silently mixing code states.
 
 The caller declares startup order. Shutdown always uses the reverse order.
 `teardown` delegates each member to `session_remove.py`, continues through every

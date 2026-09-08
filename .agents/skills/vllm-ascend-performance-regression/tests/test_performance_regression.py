@@ -91,7 +91,7 @@ def recorded_observation(*, commit: str = "abc") -> dict:
 
 def measurement(
     entry: dict,
-    fingerprint: str,
+    shared: dict,
     *,
     throughput: float,
     ttft: float,
@@ -102,7 +102,7 @@ def measurement(
         "state": entry["state"],
         "phase": entry["phase"],
         "ordinal": entry["ordinal"],
-        "config_hash": fingerprint,
+        "shared": shared,
         "metrics": {"throughput": throughput, "ttft": ttft},
     }
     if observation is not None:
@@ -124,7 +124,7 @@ class PerformanceRegressionTests(unittest.TestCase):
             state="baseline",
             phase="measure",
             ordinal=1,
-            fingerprint="a" * 64,
+            shared={"machine": "test"},
             source="/tmp/bench.json",
         )
         self.assertEqual(result["metrics"], {"throughput": 123.0, "ttft": 45.0})
@@ -141,7 +141,7 @@ class PerformanceRegressionTests(unittest.TestCase):
             state="candidate",
             phase="warmup",
             ordinal=1,
-            fingerprint="b" * 64,
+            shared={"machine": "test"},
             source="/tmp/bench.json",
         )
         self.assertEqual(result["metrics"], {"throughput": 120.0, "tpot": 4.5})
@@ -230,7 +230,7 @@ class PerformanceRegressionTests(unittest.TestCase):
     def test_regression_is_detected(self) -> None:
         experiment = config()
         schedule = {
-            "config_hash": performance.config_hash(experiment["shared"]),
+            "shared": experiment["shared"],
             "entries": performance.build_schedule(warmups=1, runs=3),
         }
         for entry in schedule["entries"]:
@@ -241,7 +241,7 @@ class PerformanceRegressionTests(unittest.TestCase):
                 {
                     **measurement(
                         entry,
-                        schedule["config_hash"],
+                        schedule["shared"],
                         throughput=100.0 if entry["state"] == "baseline" else 90.0,
                         ttft=10.0 if entry["state"] == "baseline" else 11.0,
                     ),
@@ -259,7 +259,7 @@ class PerformanceRegressionTests(unittest.TestCase):
     def test_high_variation_is_inconclusive(self) -> None:
         experiment = config()
         schedule = {
-            "config_hash": performance.config_hash(experiment["shared"]),
+            "shared": experiment["shared"],
             "entries": performance.build_schedule(warmups=1, runs=3),
         }
         for entry in schedule["entries"]:
@@ -279,7 +279,7 @@ class PerformanceRegressionTests(unittest.TestCase):
                 {
                     **measurement(
                         entry,
-                        schedule["config_hash"],
+                        schedule["shared"],
                         throughput=value,
                         ttft=10.0,
                     ),
@@ -308,7 +308,7 @@ class PerformanceRegressionTests(unittest.TestCase):
                     json.dumps(
                         measurement(
                             entry,
-                            planned["config_hash"],
+                            planned["shared"],
                             throughput=100.0,
                             ttft=10.0,
                             observation=recorded_observation(
@@ -341,7 +341,7 @@ class PerformanceRegressionTests(unittest.TestCase):
                     json.dumps(
                         measurement(
                             entry,
-                            planned["config_hash"],
+                            planned["shared"],
                             throughput=100.0,
                             ttft=10.0,
                         )
@@ -358,7 +358,7 @@ class PerformanceRegressionTests(unittest.TestCase):
             self.assertEqual(manifest["status"], "running")
             self.assertFalse((output / "comparison.json").exists())
 
-    def test_wrong_config_hash_is_rejected(self) -> None:
+    def test_wrong_shared_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             config_path = root / "config.json"
@@ -368,13 +368,14 @@ class PerformanceRegressionTests(unittest.TestCase):
             entry = json.loads(
                 (output / "schedule.json").read_text(encoding="utf-8")
             )["entries"][0]
+            wrong = dict(config()["shared"], machine="other-machine")
             result_path = root / "wrong.json"
             result_path.write_text(
-                json.dumps(measurement(entry, "0" * 64, throughput=1.0, ttft=1.0)),
+                json.dumps(measurement(entry, wrong, throughput=1.0, ttft=1.0)),
                 encoding="utf-8",
             )
             with self.assertRaisesRegex(
-                performance.PerformanceRegressionError, "config_hash"
+                performance.PerformanceRegressionError, "shared"
             ):
                 performance.record(output, result_path=result_path, recorded_at=NOW)
 
@@ -402,7 +403,7 @@ class PerformanceRegressionTests(unittest.TestCase):
                     json.dumps(
                         measurement(
                             entry,
-                            planned["config_hash"],
+                            planned["shared"],
                             throughput=100.0,
                             ttft=10.0,
                             observation=observation,
@@ -454,7 +455,7 @@ class PerformanceRegressionTests(unittest.TestCase):
                     json.dumps(
                         measurement(
                             entry,
-                            planned["config_hash"],
+                            planned["shared"],
                             throughput=100.0,
                             ttft=10.0,
                             observation=observation,
@@ -492,7 +493,7 @@ class PerformanceRegressionTests(unittest.TestCase):
                     json.dumps(
                         measurement(
                             entry,
-                            planned["config_hash"],
+                            planned["shared"],
                             throughput=100.0,
                             ttft=10.0,
                             observation=observation,
@@ -534,7 +535,7 @@ class PerformanceRegressionTests(unittest.TestCase):
                     json.dumps(
                         measurement(
                             entry,
-                            planned["config_hash"],
+                            planned["shared"],
                             throughput=100.0,
                             ttft=10.0,
                             observation=observation,

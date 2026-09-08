@@ -56,10 +56,15 @@ def env_name(gen: Gen) -> str:
 
 
 def artifact(gen: Gen, name: str) -> dict[str, Any]:
-    item = {"name": name, "kind": gen.choice(("report", "raw", "log", gen.word(1, 8))), "uri": gen.choice(("report.md", "file:///tmp/x", gen.word(1, 12)))}
-    if gen.boolean(0.5):
-        item["sha256"] = gen.text("0123456789abcdef", 64, 64)
-    return item
+    return {"name": name, "kind": gen.choice(("report", "raw", "log", gen.word(1, 8))), "uri": gen.choice(("report.md", "file:///tmp/x", gen.word(1, 12)))}
+
+
+def code_identity(gen: Gen) -> dict[str, Any]:
+    return {
+        "source_head": gen.text("0123456789abcdef", 40, 40),
+        "snapshot_commit": gen.text("0123456789abcdef", 40, 40),
+        "dirty": gen.boolean(),
+    }
 
 
 def valid_manifest(gen: Gen) -> dict[str, Any]:
@@ -74,6 +79,7 @@ def valid_manifest(gen: Gen) -> dict[str, Any]:
         "run_id": safe_id(gen),
         "parent_run_id": None if gen.boolean() else safe_id(gen),
         "run_type": gen.choice(sorted(rm.RUN_TYPES)),
+        "code": code_identity(gen),
         "workspace_snapshot": gen.json_object(),
         "environment": gen.json_object(),
         "model": gen.json_object(),
@@ -179,6 +185,7 @@ CORRUPTIONS: dict[str, list[Any]] = {
     "run_id": ["", "A", "-x", "x/y", "a" * 129, None, 1, "a b"],
     "parent_run_id": ["", "-x", "a" * 129, 1, "Upper"],
     "run_type": ["unknown", "", None, "Correctness"],
+    "code": ["str", [], None, 1, {"source_head": "abc", "snapshot_commit": "0" * 40, "dirty": False}],
     "workspace_snapshot": ["str", [], None, 1],
     "environment": ["str", [], None],
     "model": [[], None, 1],
@@ -257,23 +264,19 @@ class InvalidManifestProperties(unittest.TestCase):
                 with self.assertRaises(RunManifestError):
                     new_manifest(run_type="debug", environment_variables={key: "x"}, created_at="2026-07-25T12:00:00Z")
 
-    def test_add_artifact_never_produces_duplicates_or_invalid_hashes(self) -> None:
+    def test_add_artifact_never_produces_duplicates(self) -> None:
         def body(gen: Gen, _index: int) -> None:
             manifest = new_manifest(run_type="performance", created_at="2026-07-25T12:00:00Z")
             names = []
             for _ in range(gen.integer(1, 4)):
                 name = gen.word(1, 8)
-                sha = gen.text("0123456789abcdef", 64, 64) if gen.boolean() else None
                 if name in names:
                     with self.assertRaisesRegex(RunManifestError, "duplicated"):
-                        add_artifact(manifest, name=name, kind="k", uri="u", sha256=sha, updated_at="2026-07-25T12:00:01Z")
+                        add_artifact(manifest, name=name, kind="k", uri="u", updated_at="2026-07-25T12:00:01Z")
                     continue
-                manifest = add_artifact(manifest, name=name, kind="k", uri="u", sha256=sha, updated_at="2026-07-25T12:00:01Z")
+                manifest = add_artifact(manifest, name=name, kind="k", uri="u", updated_at="2026-07-25T12:00:01Z")
                 names.append(name)
             self.assertEqual([item["name"] for item in manifest["artifacts"]], names)
-            for bad in ("ABC", "0" * 63, "g" * 64, ""):
-                with self.assertRaises(RunManifestError):
-                    add_artifact(manifest, name="fresh-" + bad[:1], kind="k", uri="u", sha256=bad)
 
         run_cases(100, body, label="add_artifact")
 
@@ -288,9 +291,10 @@ class SchemaAgreementProperties(unittest.TestCase):
         self.assertEqual(set(props["run_type"]["enum"]), set(rm.RUN_TYPES))
         self.assertEqual(set(props["status"]["enum"]), set(rm.RUN_STATUSES))
         self.assertEqual(props["created_at"]["pattern"], rm.RFC3339_UTC_RE.pattern)
-        self.assertEqual(props["artifacts"]["items"]["properties"]["sha256"]["pattern"], rm.SHA256_RE.pattern)
+        self.assertEqual(props["code"]["properties"]["source_head"]["pattern"], rm.GIT_SHA_RE.pattern)
+        self.assertEqual(props["code"]["properties"]["snapshot_commit"]["pattern"], rm.GIT_SHA_RE.pattern)
         self.assertEqual(set(SCHEMA["required"]), {
-            "schema_version", "run_id", "parent_run_id", "run_type", "workspace_snapshot", "environment", "model",
+            "schema_version", "run_id", "parent_run_id", "run_type", "code", "workspace_snapshot", "environment", "model",
             "topology", "command", "environment_variables", "artifacts", "status", "created_at", "updated_at",
         })
 
@@ -319,13 +323,10 @@ class SchemaAgreementProperties(unittest.TestCase):
                     validate_manifest(bad)
 
     def test_known_defect_validator_accepts_artifact_shapes_the_schema_forbids(self) -> None:
-        """KNOWN DEFECT (low-medium): artifacts are ``additionalProperties:
-        false`` with ``sha256: {type: string}`` in the schema, but the Python
-        validator neither rejects unknown artifact keys nor ``sha256: null``.
-        Manifests carrying either are accepted, written and re-loaded here yet
-        rejected by any schema-based consumer. Evidence: both validate."""
+        """Unknown artifact keys are rejected. ``sha256`` is no longer a field."""
         manifest = new_manifest(run_type="debug", created_at="2026-07-25T12:00:00Z")
         self.assertFalse(SCHEMA["properties"]["artifacts"]["items"]["additionalProperties"])
+        self.assertNotIn("sha256", SCHEMA["properties"]["artifacts"]["items"]["properties"])
         for item in ({"name": "a", "kind": "k", "uri": "u", "extra": 1}, {"name": "a", "kind": "k", "uri": "u", "sha256": None}):
             with self.subTest(item=item):
                 with self.assertRaises(RunManifestError):
