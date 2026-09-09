@@ -596,9 +596,10 @@
     },
     ".agents/skills/remote-code-parity/scripts/remote_code_parity.py": {
       "responsibility": "mechanics",
-      "support_role": "payload",
+      "support_role": "supported",
       "target_kind": "self",
-      "note": "thin CLI over vaws_coordinator.parity; spawned by parity_sync, toolbox adapters and the coordinator"
+      "note": "thin local CLI over vaws_coordinator.parity; spawned by parity_sync and the coordinator on the workstation, not on the NPU container",
+      "proposed_target": "vaws sync"
     },
     ".agents/skills/remote-code-parity/scripts/transport_benchmark.py": {
       "responsibility": "mechanics",
@@ -796,9 +797,9 @@
     },
     ".trae/skills/modelscope/scripts/download_from_modelscope.py": {
       "responsibility": "mechanics",
-      "support_role": "generated",
+      "support_role": "payload",
       "target_kind": "local-entry",
-      "note": "Trae projection generated from the canonical download script by sync_claude_skills.py",
+      "note": "Trae byte-copy of the canonical payload download script; inherits payload (no shim, no .agents/lib)",
       "target": ".agents/skills/modelscope/scripts/download_from_modelscope.py"
     },
     ".trae/skills/modelscope/scripts/modelscope_auto.py": {
@@ -817,9 +818,9 @@
     },
     ".trae/skills/modelscope/scripts/verify_modelscope_sha256.py": {
       "responsibility": "mechanics",
-      "support_role": "generated",
+      "support_role": "payload",
       "target_kind": "local-entry",
-      "note": "Trae projection generated from the canonical verify script",
+      "note": "Trae byte-copy of the canonical payload verify script; inherits payload (no shim, no .agents/lib)",
       "target": ".agents/skills/modelscope/scripts/verify_modelscope_sha256.py"
     }
   }

@@ -31,12 +31,22 @@ zero unexplained mismatches.
 from __future__ import annotations
 
 import argparse
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[5]
+LIB = ROOT / ".agents" / "lib"
+if str(LIB) not in sys.path:
+    sys.path.insert(0, str(LIB))
+
+from vaws_venv import ensure_workspace_interpreter  # noqa: E402
+
+ensure_workspace_interpreter(repo_root=ROOT)
+
 import csv
 import json
-import sys
 import time
 from decimal import Decimal, InvalidOperation
-from pathlib import Path
 from typing import Any, Iterable, Iterator, Mapping
 
 csv.field_size_limit(1024 * 1024 * 1024)

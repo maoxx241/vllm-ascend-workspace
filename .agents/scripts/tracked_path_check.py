@@ -40,6 +40,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable
 
+ROOT = Path(__file__).resolve().parents[2]
+LIB = ROOT / ".agents" / "lib"
+if str(LIB) not in sys.path:
+    sys.path.insert(0, str(LIB))
+
+from vaws_venv import ensure_workspace_interpreter  # noqa: E402
+
+ensure_workspace_interpreter(repo_root=ROOT)
+
+
 DEFAULT_POLICY = ".agents/policy/tracked-paths.json"
 DEFAULT_BASELINE = ".agents/policy/tracked-paths-baseline.json"
 UNATTRIBUTED = "unassigned"
@@ -214,21 +224,52 @@ def load_policy(path: Path, repo_root: Path) -> Policy:
     )
 
 
-def tracked_files(repo_root: Path, policy: Policy) -> list[str]:
+def git_ls_files(repo_root: Path) -> list[str]:
+    """Return the tracked tree as ``git ls-files`` sees it.
+
+    Existence for this guard is that listing, not the working tree. An
+    untracked leftover must not hide a dead reference or turn a baseline
+    row stale. Rebuilt on every call; do not cache by ``repo_root``.
+    """
     try:
-        output = subprocess.check_output(
+        completed = subprocess.run(
             ["git", "ls-files", "-z"],
             cwd=repo_root,
-            stderr=subprocess.DEVNULL,
+            check=True,
+            capture_output=True,
         )
-    except (subprocess.CalledProcessError, FileNotFoundError) as exc:
-        raise TrackedPathError(f"cannot list tracked files under {repo_root}: {exc}") from exc
-    suffixes = set(policy.include_suffixes)
+    except FileNotFoundError as exc:
+        raise TrackedPathError(
+            f"git is not available; cannot decide tracked-tree existence under {repo_root}"
+        ) from exc
+    except subprocess.CalledProcessError as exc:
+        err = (exc.stderr or b"").decode("utf-8", errors="replace").strip()
+        raise TrackedPathError(
+            f"git ls-files failed under {repo_root}: {err or exc}"
+        ) from exc
     files: list[str] = []
-    for raw in output.split(b"\0"):
+    for raw in completed.stdout.split(b"\0"):
         if not raw:
             continue
-        rel = raw.decode("utf-8", errors="replace")
+        files.append(raw.decode("utf-8", errors="replace"))
+    return files
+
+
+def tracked_tree_index(repo_root: Path) -> frozenset[str]:
+    """Tracked files plus every directory prefix that contains one."""
+    paths: set[str] = set()
+    for rel in git_ls_files(repo_root):
+        paths.add(rel)
+        parts = rel.split("/")
+        for index in range(1, len(parts)):
+            paths.add("/".join(parts[:index]))
+    return frozenset(paths)
+
+
+def tracked_files(repo_root: Path, policy: Policy) -> list[str]:
+    suffixes = set(policy.include_suffixes)
+    files: list[str] = []
+    for rel in git_ls_files(repo_root):
         if any(rel == root or rel.startswith(root + "/") for root in policy.skip_roots):
             continue
         if rel in policy.fixture_paths or rel in policy.skip_paths:
@@ -273,23 +314,31 @@ def is_allowed(token: str, allow_prefixes: Iterable[str]) -> bool:
     return False
 
 
-def path_exists(repo_root: Path, rel: str) -> bool:
+def path_exists(
+    repo_root: Path, rel: str, tracked: frozenset[str] | None = None
+) -> bool:
     if not rel:
         return True
-    return (repo_root / rel).exists()
+    index = tracked if tracked is not None else tracked_tree_index(repo_root)
+    return rel.rstrip("/") in index
 
 
-def scripts_exists(repo_root: Path, token: str, referring: str) -> bool:
+def scripts_exists(
+    repo_root: Path,
+    token: str,
+    referring: str,
+    tracked: frozenset[str] | None = None,
+) -> bool:
     """``scripts/foo.py`` may be repo-root, ``.agents/scripts/``, or skill-local."""
-    if path_exists(repo_root, token):
+    if path_exists(repo_root, token, tracked):
         return True
     if not token.startswith("scripts/"):
         return False
-    if path_exists(repo_root, ".agents/" + token):
+    if path_exists(repo_root, ".agents/" + token, tracked):
         return True
     parts = Path(referring).parts
     if len(parts) >= 3 and parts[0] in {".agents", ".trae"} and parts[1] == "skills":
-        return path_exists(repo_root, f"{parts[0]}/skills/{parts[2]}/{token}")
+        return path_exists(repo_root, f"{parts[0]}/skills/{parts[2]}/{token}", tracked)
     return False
 
 
@@ -335,6 +384,7 @@ def os_normpath(value: str) -> str:
 def collect_violations(repo_root: Path, policy: Policy, scanned: list[str]) -> list[Violation]:
     rule = policy.rule("missing-in-tree-path")
     token_re = _token_regex(policy.token_prefixes)
+    tracked = tracked_tree_index(repo_root)
     merged: dict[str, Violation] = {}
 
     def record(path: str, token: str, resolved: str, line: int, message: str) -> None:
@@ -366,7 +416,9 @@ def collect_violations(repo_root: Path, policy: Policy, scanned: list[str]) -> l
                     continue
                 if is_allowed(cleaned, policy.allow_prefixes) or is_allowed(check, policy.allow_prefixes):
                     continue
-                if scripts_exists(repo_root, check, relpath) or path_exists(repo_root, check):
+                if scripts_exists(repo_root, check, relpath, tracked) or path_exists(
+                    repo_root, check, tracked
+                ):
                     continue
                 record(
                     relpath,
@@ -385,7 +437,9 @@ def collect_violations(repo_root: Path, policy: Policy, scanned: list[str]) -> l
                 token = href.split("#", 1)[0].strip()
                 if is_allowed(token, policy.allow_prefixes) or is_allowed(resolved, policy.allow_prefixes):
                     continue
-                if resolved.startswith("../") or not path_exists(repo_root, resolved):
+                if resolved.startswith("../") or not path_exists(
+                    repo_root, resolved, tracked
+                ):
                     record(
                         relpath,
                         token,

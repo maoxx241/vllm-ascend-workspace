@@ -1527,4 +1527,12 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
+    import sys
+    from pathlib import Path
+    _repo_root = Path(__file__).resolve().parents[5]
+    _lib = _repo_root / ".agents" / "lib"
+    if str(_lib) not in sys.path:
+        sys.path.insert(0, str(_lib))
+    from vaws_venv import ensure_workspace_interpreter
+    ensure_workspace_interpreter(repo_root=_repo_root)
     raise SystemExit(main())

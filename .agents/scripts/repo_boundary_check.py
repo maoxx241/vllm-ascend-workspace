@@ -42,6 +42,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, Iterator, Sequence
 
+ROOT = Path(__file__).resolve().parents[2]
+LIB = ROOT / ".agents" / "lib"
+if str(LIB) not in sys.path:
+    sys.path.insert(0, str(LIB))
+
+from vaws_venv import ensure_workspace_interpreter  # noqa: E402
+
+ensure_workspace_interpreter(repo_root=ROOT)
+
+
 DEFAULT_POLICY = ".agents/policy/repo-boundaries.json"
 DEFAULT_BASELINE = ".agents/policy/repo-boundaries-baseline.json"
 UNATTRIBUTED = "unassigned"

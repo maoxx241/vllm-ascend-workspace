@@ -43,6 +43,11 @@ the first `*`. A `scripts/<name>.py` token also resolves as
 Markdown links such as `](../<file>.md)` are resolved against the referring
 file.
 
+A named path exists only when `git ls-files` lists that file or a file
+under that directory. An untracked leftover on disk does not satisfy the
+reference and does not turn a baseline row stale. The working tree is
+not consulted.
+
 `.vaws-local/` and `.vaws-runtime/` are allowed (untracked state).
 Placeholders such as `<session-id>` are allowed. The former in-tree
 remote-dev `state/` directory is **not** allowed: that path is drift.

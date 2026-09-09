@@ -17,11 +17,21 @@ import argparse
 import json
 import os
 import pathlib
+import sys
+
+ROOT = pathlib.Path(__file__).resolve().parents[4]
+LIB = ROOT / ".agents" / "lib"
+if str(LIB) not in sys.path:
+    sys.path.insert(0, str(LIB))
+
+from vaws_venv import ensure_workspace_interpreter  # noqa: E402
+
+ensure_workspace_interpreter(repo_root=ROOT)
+
 import platform
 import re
 import shutil
 import subprocess
-import sys
 from dataclasses import asdict, dataclass
 from typing import Any, Dict, List, Optional, Tuple
 

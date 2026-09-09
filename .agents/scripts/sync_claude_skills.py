@@ -11,12 +11,21 @@ this command regenerates the Trae projection.
 """
 from __future__ import annotations
 
+import sys
+
 import argparse
 import shutil
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
+LIB = ROOT / ".agents" / "lib"
+if str(LIB) not in sys.path:
+    sys.path.insert(0, str(LIB))
+from vaws_venv import ensure_workspace_interpreter  # noqa: E402
+
+ensure_workspace_interpreter(repo_root=ROOT)
+
 AGENTS_SKILLS = ROOT / ".agents" / "skills"
 CLAUDE_SKILLS = ROOT / ".claude" / "skills"
 TRAE_SKILLS = ROOT / ".trae" / "skills"

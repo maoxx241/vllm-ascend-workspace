@@ -37,6 +37,16 @@ import time
 import uuid
 from pathlib import Path
 
+ROOT = Path(__file__).resolve().parents[4]
+LIB = ROOT / ".agents" / "lib"
+if str(LIB) not in sys.path:
+    sys.path.insert(0, str(LIB))
+
+from vaws_venv import ensure_workspace_interpreter  # noqa: E402
+
+ensure_workspace_interpreter(repo_root=ROOT)
+
+
 from _common import (
     ENV_PREAMBLE,
     MSPROF_WRAPPER_REMOTE_PATH,

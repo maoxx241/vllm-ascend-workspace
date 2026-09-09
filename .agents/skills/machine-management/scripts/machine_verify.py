@@ -8,8 +8,21 @@ All outputs are JSON.
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
 import argparse
 from typing import Sequence
+
+ROOT = Path(__file__).resolve().parents[4]
+LIB = ROOT / ".agents" / "lib"
+if str(LIB) not in sys.path:
+    sys.path.insert(0, str(LIB))
+
+from vaws_venv import ensure_workspace_interpreter  # noqa: E402
+
+ensure_workspace_interpreter(repo_root=ROOT)
+
 
 from _workflow_common import (  # noqa: E402
     WorkflowError,

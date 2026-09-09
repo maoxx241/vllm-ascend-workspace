@@ -26,6 +26,16 @@ import sys
 from pathlib import Path
 from typing import Any, Iterable
 
+ROOT = Path(__file__).resolve().parents[4]
+LIB = ROOT / ".agents" / "lib"
+if str(LIB) not in sys.path:
+    sys.path.insert(0, str(LIB))
+
+from vaws_venv import ensure_workspace_interpreter  # noqa: E402
+
+ensure_workspace_interpreter(repo_root=ROOT)
+
+
 STAT_NAMES = ("nan_count", "inf_count", "max_abs", "min", "max", "mean")
 
 DEFAULT_MAX_ELEMENTS = 2_000_000
