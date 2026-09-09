@@ -32,6 +32,11 @@ if str(LIB) not in sys.path:
 
 import vaws_knowledge_v2 as v2  # noqa: E402
 import vaws_redaction as redaction  # noqa: E402
+from vaws_knowledge.canonical import content_hash as commons_content_hash  # noqa: E402
+from vaws_knowledge.server.capture import (  # noqa: E402
+    schema_validate,
+    validate_entry as commons_validate_entry,
+)
 from vaws_knowledge_v1 import (  # noqa: E402
     COORDINATE_DIMENSIONS,
     COORDINATE_UNKNOWN,
@@ -872,6 +877,22 @@ def verify_entry(
     errors = v2.validate_entry(entry, path=entry["slug"], context="export")
     if errors:
         raise KnowledgeError("; ".join(errors))
+    commons_problems = commons_validate_entry(entry, kind=str(document.get("kind") or "known-failure-signatures"))
+    if commons_problems:
+        raise KnowledgeError("; ".join(commons_problems))
+    schema = schema_validate(
+        {
+            "schema_version": v2.SCHEMA_VERSION,
+            "kind": document.get("kind"),
+            "layer": v2.EXPORT_LAYER,
+            "updated_at": entry["lifecycle"]["updated_at"],
+            "entries": [entry],
+        }
+    )
+    if schema.get("ran") and schema.get("errors"):
+        raise KnowledgeError("; ".join(schema["errors"]))
+    if entry.get("content_hash") != commons_content_hash(entry):
+        raise KnowledgeError("content_hash disagrees with vaws_knowledge.canonical")
     document["updated_at"] = v2.today(timestamp)
     v2.write_document(path, document)
     return {

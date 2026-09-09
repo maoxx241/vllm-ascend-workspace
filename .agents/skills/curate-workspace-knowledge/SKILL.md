@@ -9,7 +9,10 @@ Keep `.agents/knowledge/` as the project layer: the only formal, tracked
 knowledge this repo owns. Treat `.vaws-local/knowledge/candidates/` as an
 untracked review queue, never as a second authoritative store. The
 `shared` layer is the corpus inside the installed `vaws-knowledge` package
-and is never edited here.
+and is never edited here. Query, capture, hash, and schema checks run on
+that installed engine; the scripts here are thin CLIs and curation policy.
+Agents can call `knowledge_query` / `knowledge_explain` / `knowledge_capture`
+on the `vaws-knowledge` MCP server.
 
 New promotions write the federated **v2** contract to
 `.agents/knowledge/<kind>.v2.yaml`. The v1 `<kind>.yaml` documents stay in

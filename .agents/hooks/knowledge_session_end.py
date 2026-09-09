@@ -16,6 +16,13 @@ LIB = ROOT / ".agents" / "lib"
 if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
+from vaws_venv import ensure_workspace_interpreter  # noqa: E402
+
+ensure_workspace_interpreter(repo_root=ROOT)
+
+import vaws_redaction as redaction  # noqa: E402
+from vaws_knowledge.server.capture import CaptureRefused, CaptureRejected, capture  # noqa: E402
+from vaws_knowledge_service import commons_entry, infer_repo_root, service_config  # noqa: E402
 from vaws_knowledge_v1 import (  # noqa: E402
     MAX_CANDIDATE_BYTES,
     KnowledgeError,
@@ -54,6 +61,20 @@ def _resolve_repo_root(payload: Mapping[str, Any]) -> Path:
             if (candidate / ".agents" / "lib" / "vaws_knowledge_v1.py").is_file():
                 return candidate
     return ROOT
+
+
+def _write_commons(candidate: Mapping[str, Any], knowledge_dir: Path) -> None:
+    redaction.require_writable(candidate, path="payload")
+    repo_root = infer_repo_root(knowledge_dir.resolve(), knowledge_dir.resolve().parent)
+    capture(
+        commons_entry(candidate, candidate.get("environment") or {}),
+        kind=str(candidate.get("kind") or "known-failure-signatures"),
+        config=service_config(
+            repo_root,
+            project_root=knowledge_dir.resolve(),
+            candidate_root=repo_root / ".vaws-local" / "knowledge" / "candidate",
+        ),
+    )
 
 
 def process_session_end(
@@ -107,6 +128,8 @@ def process_session_end(
             )
             if result["status"] not in {"passed", "already-promoted"}:
                 raise KnowledgeError(f"unexpected capture status: {result['status']}")
+            if result["status"] != "already-promoted":
+                _write_commons(candidate, knowledge_dir)
             path.unlink()
             processed.append(
                 {
@@ -115,7 +138,7 @@ def process_session_end(
                     "action": result.get("action"),
                 }
             )
-        except (KnowledgeError, OSError) as exc:
+        except (KnowledgeError, OSError, CaptureRefused, CaptureRejected, redaction.RedactionError) as exc:
             errors.append({"file": path.name, "error": str(exc)})
 
     try:

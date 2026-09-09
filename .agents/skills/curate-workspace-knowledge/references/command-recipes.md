@@ -102,10 +102,11 @@ python3 .agents/scripts/knowledge_export.py \
 ```
 
 The shared layer is the corpus inside the installed `vaws-knowledge`
-package. After `uv sync`, query it directly:
+package. After `uv sync`, query it directly (or call the `vaws-knowledge`
+MCP tools `knowledge_query` / `knowledge_explain` / `knowledge_capture`):
 
 ```bash
-python3 .agents/scripts/knowledge_query.py --capabilities
+python3 .agents/scripts/knowledge_query.py --query Ascend910B4 --include-unverified --limit 1
 ```
 
 Convert the remaining v1 documents and report what needs human input:

@@ -24,7 +24,7 @@ class SpecLockTests(unittest.TestCase):
         versions = deps.required_versions()
         self.assertEqual(versions["vaws-remote-dev"], "0.1.0")
         self.assertEqual(versions["vaws-coordinator"], "0.1.0")
-        self.assertEqual(versions["vaws-knowledge"], "0.1.2")
+        self.assertEqual(versions["vaws-knowledge"], "0.1.3")
         self.assertNotIn(deps.VAWS_TOP_NAME, versions)
 
     def test_status_tracks_only_the_three_packages(self) -> None:
@@ -39,7 +39,7 @@ class SpecLockTests(unittest.TestCase):
         )
         self.assertEqual(
             locked["vaws-knowledge"]["commit"],
-            "2b6cda4782f535614b32a9a402df18faaac8ef3b",
+            "1c3b15d0812e2ed5f768c2dc97857816a389d758",
         )
         self.assertEqual(
             locked["vaws-remote-dev"]["commit"],

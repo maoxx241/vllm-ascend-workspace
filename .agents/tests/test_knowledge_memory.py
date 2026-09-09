@@ -302,7 +302,7 @@ class CliTests(unittest.TestCase):
                 text=True,
             )
             self.assertEqual(queried.returncode, 0, queried.stderr)
-            self.assertEqual(json.loads(queried.stdout)["matches"], [])
+            self.assertEqual(json.loads(queried.stdout)["results"], [])
             self.assertEqual(queried.stderr, "")
 
     def test_deferred_capture_uses_session_scoped_pending_directory(self) -> None:

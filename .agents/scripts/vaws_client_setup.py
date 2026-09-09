@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
-"""Install scoped native session hooks and the two stdio MCP entries.
+"""Install scoped native session hooks and the stdio MCP entries.
 
 This configures files only. It does not grant client trust, change approval
 policies, authenticate clients, run hooks, or contact a remote machine. It
 never writes a bearer token and must not be applied to the operator's live
 client configuration from tests.
 
-Two logical providers are written when needed, because two repositories serve
-two different things and neither proxies the other:
+Three logical providers are written when needed:
 
 * `vaws-task` -> `python -m vaws_coordinator task-server`, which serves
   `vaws_session` / `vaws_run` / `vaws_execution` / `vaws_finish`. Local
   attach/finish need no manager.
 * `remote-dev` -> `python -m remote_dev.mcp.server`, which serves `remote_*`.
+* `vaws-knowledge` -> `python -m vaws_knowledge.server.mcp_server`, which
+  serves `knowledge_query` / `knowledge_explain` / `knowledge_capture`.
 
 `--task-only` skips the remote-dev entry.
 
@@ -42,6 +43,7 @@ from vaws_venv import ensure_workspace_interpreter
 ensure_workspace_interpreter(repo_root=ROOT)
 
 from vaws_coordinator_launch import coordinator_environment
+from vaws_knowledge_service import knowledge_server_env
 from vaws_local_state import agent_sessions_root
 from vaws_remote_dev import ASCEND_RUNTIME_ENV_FILE, resolver_spec, state_dir
 
@@ -50,6 +52,7 @@ EVENTS = ("SessionStart", "SessionEnd", "SubagentStart", "SubagentStop", "PreToo
 BACKUP_DIR = ROOT / ".vaws-local/client-setup-backups"
 TASK_SERVER_NAME = "vaws-task"
 REMOTE_DEV_SERVER_NAME = "remote-dev"
+KNOWLEDGE_SERVER_NAME = "vaws-knowledge"
 HOOK_TIMEOUT_SECONDS = 12
 STALE_TOOL_PREFIX_MARKERS = (
     "mcp__remote-dev__vaws_",
@@ -65,6 +68,10 @@ def remote_dev_server_args():
 
 def task_server_args():
     return ["-m", "vaws_coordinator", "task-server"]
+
+
+def knowledge_server_args():
+    return ["-m", "vaws_knowledge.server.mcp_server"]
 
 
 def remote_dev_env():
@@ -143,6 +150,13 @@ def desired_mcp_servers(*, task_only=False):
         "type": "stdio",
         "timeout": 600000,
         "env": task_server_env(),
+    }
+    servers[KNOWLEDGE_SERVER_NAME] = {
+        "command": sys.executable,
+        "args": knowledge_server_args(),
+        "type": "stdio",
+        "timeout": 600000,
+        "env": knowledge_server_env(ROOT),
     }
     return servers
 

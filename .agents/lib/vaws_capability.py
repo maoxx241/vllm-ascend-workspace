@@ -1,8 +1,6 @@
 """Workspace capability report built on the knowledge degradation shape.
 
-Capabilities are what an agent can do, not which files exist. Each
-capability uses the same degradation entry fields as
-``vaws_knowledge_client`` so one learned shape covers both surfaces.
+Capabilities are what an agent can do, not which files exist.
 """
 from __future__ import annotations
 
@@ -18,8 +16,48 @@ from vaws_dependency import (
     inspect,
     require_package,
 )
-from vaws_knowledge_client import AVAILABLE as SHARED_AVAILABLE
-from vaws_knowledge_client import _probe_shared
+SHARED_AVAILABLE = "available"
+SHARED_ABSENT = "absent"
+SHARED_SOURCE_REPO = "vllm-ascend-workspace/vaws-knowledge"
+
+
+def probe_shared() -> dict[str, Any]:
+    try:
+        from vaws_knowledge import corpus as packaged
+    except ImportError:
+        return {
+            "status": SHARED_ABSENT,
+            "path": None,
+            "detail": "vaws-knowledge is not installed",
+            "remedy": REMEDY,
+            "problems": [],
+            "documents": [],
+            "source_repo": SHARED_SOURCE_REPO,
+            "source_ref": None,
+        }
+    root = packaged.corpus_root()
+    source_ref = packaged.installed_commit()
+    if not root.is_dir():
+        return {
+            "status": SHARED_ABSENT,
+            "path": str(root),
+            "detail": "installed vaws-knowledge has no corpus",
+            "remedy": REMEDY,
+            "problems": [],
+            "documents": [],
+            "source_repo": SHARED_SOURCE_REPO,
+            "source_ref": source_ref,
+        }
+    files = list(packaged.iter_entry_files())
+    return {
+        "status": SHARED_AVAILABLE,
+        "path": str(root),
+        "detail": "shared layer is the installed vaws-knowledge corpus",
+        "problems": [],
+        "documents": [path.name for path in files],
+        "source_repo": SHARED_SOURCE_REPO,
+        "source_ref": source_ref,
+    }
 from vaws_result_envelope import (
     dumps,
     make_attempt,
@@ -106,9 +144,8 @@ def _dep_degradation(
 
 
 def _shared_degradation(repo_root: Path) -> dict[str, Any] | None:
-    """Reuse the knowledge client's shared-layer degradation entry verbatim."""
     del repo_root
-    capability = _probe_shared()
+    capability = probe_shared()
     if capability["status"] == SHARED_AVAILABLE:
         return None
     return {

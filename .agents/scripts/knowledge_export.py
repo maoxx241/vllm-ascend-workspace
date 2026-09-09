@@ -38,6 +38,7 @@ ensure_workspace_interpreter(repo_root=ROOT)
 
 import vaws_knowledge_v2 as v2  # noqa: E402
 import vaws_redaction as redaction  # noqa: E402
+from vaws_knowledge.canonical import content_hash as commons_content_hash  # noqa: E402
 
 DEFAULT_EXPORT_DIR = ROOT / ".vaws-local" / "knowledge" / "export"
 LEDGER_NAME = "export-ledger.json"
@@ -125,6 +126,8 @@ def main(argv: list[str] | None = None) -> int:
                 contributor=args.contributor,
                 origin_repo=args.origin_repo,
             )
+            if prepared["content_hash"] != commons_content_hash(prepared):
+                raise v2.KnowledgeV2Error("content_hash disagrees with vaws_knowledge.canonical")
         except (v2.KnowledgeV2Error, redaction.RedactionError) as exc:
             emit_progress("blocked", f"{slug}: {exc}")
             blocked.append(

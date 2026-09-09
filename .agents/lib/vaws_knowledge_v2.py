@@ -26,13 +26,9 @@ Two deliberate differences from the upstream contract, both local-only:
    Export rewrites it to ``unverified`` (a proposal lands in
    ``corpus/unverified/``).
 
-Everything else — the twelve dimensions, the two body variants (``rule`` /
-``measurement``), the status/confidence rules, the canonicalization, the
-``additionalProperties: false`` egress whitelist — is enforced exactly as
-documented, using the standard library only. ``jsonschema`` is not available
-in this environment, so validation is hand-written; it is checked against
-the upstream ``examples/valid-entry.yaml`` shape and the shared conformance
-kit in ``.agents/tests/test_knowledge_v2.py``.
+Hashing and the query engine live in the installed ``vaws-knowledge``
+package. This module keeps the project-layer contract: unresolved markers,
+``layer: project``, document I/O, and the curation/export rewrite.
 """
 
 from __future__ import annotations
@@ -49,6 +45,14 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 import vaws_redaction as redaction
+from vaws_knowledge._common import ToolError
+from vaws_knowledge.canonical import canonical_json, content_hash as commons_content_hash
+from vaws_knowledge.canonical import body_key as commons_body_key
+from vaws_knowledge.canonical import canonical_payload as commons_canonical_object
+from vaws_knowledge.server.capture import schema_validate, validate_entry as commons_validate_entry
+from vaws_knowledge.server.query import searchable_view
+
+_CANONICAL_ERRORS = (ValueError, ToolError)
 
 SCHEMA_VERSION = 2
 UPSTREAM_SCHEMA_ID = (
@@ -295,210 +299,60 @@ def new_document(kind: str, *, layer: str = PROJECT_LAYER, now: str | None = Non
 
 
 # ---------------------------------------------------------------------------
-# canonicalization and content hashing (docs/federation.md)
+# hashing — installed vaws-knowledge.canonical
 # ---------------------------------------------------------------------------
 
-ASCII_WHITESPACE = " \t\n\r\x0b\x0c"
 _ASCII_LOWER = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
 _ASCII_WS_RUN = re.compile(r"[ \t\n\r\x0b\x0c]+")
-
-
-def _ascii_lower(value: str) -> str:
-    """Step 2: A–Z → a–z only. Non-ASCII letters are left unchanged."""
-
-    return value.translate(_ASCII_LOWER)
-
-
-def _normalize_text(value: str) -> str:
-    """Step 3: LF endings, per-line trailing ASCII whitespace, then outer ASCII strip."""
-
-    text = value.replace("\r\n", "\n").replace("\r", "\n")
-    text = "\n".join(line.rstrip(ASCII_WHITESPACE) for line in text.split("\n"))
-    return text.strip(ASCII_WHITESPACE)
-
-
-def _normalize_fingerprints(items: Any) -> Any:
-    """Step 2. Non-list values are left for the validator to reject."""
-
-    if not isinstance(items, list):
-        return items
-    seen: set[str] = set()
-    for item in items:
-        if not isinstance(item, str):
-            return list(items)
-        norm = _ASCII_WS_RUN.sub(" ", _ascii_lower(item).strip(ASCII_WHITESPACE))
-        if norm:
-            seen.add(norm)
-    return sorted(seen, key=lambda value: value.encode("utf-8"))
+ASCII_WHITESPACE = " \t\n\r\x0b\x0c"
 
 
 def normalize_fingerprints(values: Sequence[Any]) -> list[str]:
-    """Canonical fingerprint form per docs/federation.md (also used for dedupe)."""
+    """Canonical fingerprint form, used by curation dedupe."""
 
     if not isinstance(values, (list, tuple)):
         raise KnowledgeV2Error(
             "fingerprints must be a list of strings; canonicalization does not "
             f"stringify {type(values).__name__}"
         )
+    seen: set[str] = set()
     for index, item in enumerate(values):
         if not isinstance(item, str):
             raise KnowledgeV2Error(
                 f"fingerprints[{index}] must be a string, got {type(item).__name__} "
                 f"{item!r}; canonicalization does not stringify fingerprint items"
             )
-    return _normalize_fingerprints(list(values))
-
-
-def _payload_type_error(value: Any, path: str, *, in_fingerprints: bool = False) -> str | None:
-    """Step 0: name a type that must not be coerced into a published hash."""
-
-    if isinstance(value, Mapping):
-        for key, child in value.items():
-            if not isinstance(key, str):
-                return (
-                    f"{path}: mapping keys must be strings, got {type(key).__name__} "
-                    f"{key!r}; canonicalization does not stringify keys"
-                )
-            child_path = f"{path}.{key}"
-            if key == "fingerprints" and not isinstance(child, list):
-                return (
-                    f"{child_path} must be a list of strings, got {type(child).__name__}; "
-                    "canonicalization does not stringify fingerprint items"
-                )
-            err = _payload_type_error(
-                child, child_path, in_fingerprints=(key == "fingerprints")
-            )
-            if err:
-                return err
-        return None
-    if isinstance(value, list):
-        if in_fingerprints:
-            for index, item in enumerate(value):
-                if not isinstance(item, str):
-                    return (
-                        f"{path}[{index}]: fingerprint items must be strings, got "
-                        f"{type(item).__name__} {item!r}; canonicalization does not "
-                        "stringify them"
-                    )
-            return None
-        for index, item in enumerate(value):
-            err = _payload_type_error(item, f"{path}[{index}]")
-            if err:
-                return err
-        return None
-    if isinstance(value, bool) or value is None or isinstance(value, str):
-        return None
-    if isinstance(value, (int, float)):
-        return (
-            f"{path}: numeric value {value!r} is a {type(value).__name__} and is not "
-            "canonicalized; quote it as a string (canonicalization does not stringify types)"
-        )
-    return (
-        f"{path}: unsupported type {type(value).__name__}; "
-        "canonicalization does not coerce it"
-    )
-
-
-def _normalize_tree(value: Any) -> Any:
-    if isinstance(value, Mapping):
-        out: dict[str, Any] = {}
-        for key, child in value.items():
-            if not isinstance(key, str):
-                raise KnowledgeV2Error(
-                    "canonical_payload: mapping keys must be strings, got "
-                    f"{type(key).__name__} {key!r}; canonicalization does not stringify keys"
-                )
-            out[key] = _normalize_tree(child)
-        return out
-    if isinstance(value, list):
-        return [_normalize_tree(item) for item in value]
-    if isinstance(value, str):
-        return _normalize_text(value)
-    return value
+        norm = _ASCII_WS_RUN.sub(" ", item.translate(_ASCII_LOWER).strip(ASCII_WHITESPACE))
+        if norm:
+            seen.add(norm)
+    return sorted(seen, key=lambda value: value.encode("utf-8"))
 
 
 def body_key(entry: Mapping[str, Any]) -> str | None:
-    """Name of the entry's single body key, or ``None`` if it has not got one.
-
-    Exactly one of ``rule`` / ``measurement`` is expected. Two bodies is
-    ambiguous rather than richer, so it is refused here as well as by the
-    schema: hashing both under one revision would let a change to either look
-    like a change to the entry as a whole.
-    """
-
     if not isinstance(entry, Mapping):
         return None
-    present = [key for key in BODY_KEYS if key in entry]
-    return present[0] if len(present) == 1 else None
+    return commons_body_key(entry)
 
 
 def canonical_object(entry: Mapping[str, Any]) -> dict[str, Any]:
-    """Return the canonical ``{<body>: ..., "scope": ...}`` mapping for ``entry``.
-
-    The body key is ``rule`` or ``measurement``. A missing ``scope``, a missing
-    body or two bodies raise rather than hashing a partial payload, matching
-    ``vaws_knowledge.canonical.canonical_payload``.
-    """
-
-    if not isinstance(entry, Mapping):
-        raise KnowledgeV2Error("canonical_payload: entry must be a mapping")
-    body = body_key(entry)
-    if body is None:
-        present = [key for key in BODY_KEYS if key in entry]
-        if len(present) > 1:
-            raise KnowledgeV2Error(
-                "canonical_payload: entry declares both "
-                + " and ".join(f"'{name}'" for name in present)
-                + "; an entry has exactly one body and content_hash cannot cover two"
-            )
-        raise KnowledgeV2Error(
-            "canonical_payload: entry has no body; content_hash is defined over "
-            "scope + one of " + ", ".join(f"'{key}'" for key in BODY_KEYS)
-        )
-    if "scope" not in entry:
-        raise KnowledgeV2Error(
-            "canonical_payload: entry is missing 'scope'; content_hash is defined "
-            f"over scope + {body} and cannot be computed without both"
-        )
-    for key in ("scope", body):
-        if not isinstance(entry[key], Mapping):
-            raise KnowledgeV2Error(
-                f"canonical_payload: {key} must be a mapping, got "
-                f"{type(entry[key]).__name__}"
-            )
-        err = _payload_type_error(entry[key], key)
-        if err:
-            raise KnowledgeV2Error("canonical_payload: " + err)
-    body_tree = _normalize_tree(entry[body])
-    if isinstance(body_tree, dict) and "fingerprints" in body_tree:
-        # Step 2 applies to the original fingerprint strings, not to the
-        # already step-3-normalized copies in the walked tree.
-        body_tree["fingerprints"] = _normalize_fingerprints(entry[body].get("fingerprints"))
-    scope = _normalize_tree(entry["scope"])
-    return {body: body_tree, "scope": scope}
+    try:
+        return commons_canonical_object(entry)
+    except _CANONICAL_ERRORS as exc:
+        raise KnowledgeV2Error(str(exc)) from exc
 
 
 def canonical_payload(entry: Mapping[str, Any]) -> str:
-    """Canonical JSON serialization of ``scope`` + body, per docs/federation.md.
-
-    Only what the entry *claims* is hashed: not status, not dates, not
-    provenance. Re-verifying or re-reviewing an entry must not change its
-    revision. The return value is the exact UTF-8 JSON string that is hashed.
-    The payload key is the body's own name, so a rule entry hashes
-    byte-for-byte as it always did.
-    """
-
-    return json.dumps(
-        canonical_object(entry),
-        sort_keys=True,
-        ensure_ascii=False,
-        separators=(",", ":"),
-    )
+    try:
+        return canonical_json(entry)
+    except _CANONICAL_ERRORS as exc:
+        raise KnowledgeV2Error(str(exc)) from exc
 
 
 def content_hash(entry: Mapping[str, Any]) -> str:
-    digest = hashlib.sha256(canonical_payload(entry).encode("utf-8")).hexdigest()
-    return f"sha256:{digest}"
+    try:
+        return commons_content_hash(entry)
+    except _CANONICAL_ERRORS as exc:
+        raise KnowledgeV2Error(str(exc)) from exc
 
 
 def with_content_hash(entry: Mapping[str, Any]) -> dict[str, Any]:
@@ -1309,41 +1163,6 @@ def entry_summary(entry: Mapping[str, Any]) -> str:
     return str(entry.get("slug") or entry.get("uuid") or "")
 
 
-def searchable_view(entry: Mapping[str, Any]) -> dict[str, Any]:
-    """A rule-shaped view of whichever body the entry carries.
-
-    Mirrors ``vaws_knowledge.server.query.searchable_view``: a measurement
-    has no symptom, so subject id, aliases and quantity names play the
-    fingerprint role; summary and method description play the prose role.
-    """
-
-    if body_key(entry) != "measurement":
-        rule = entry.get("rule")
-        return dict(rule) if isinstance(rule, Mapping) else {}
-    measurement = entry.get("measurement")
-    if not isinstance(measurement, Mapping):
-        return {}
-    subject = measurement.get("subject") if isinstance(measurement.get("subject"), Mapping) else {}
-    method = measurement.get("method") if isinstance(measurement.get("method"), Mapping) else {}
-    quantities = measurement.get("quantities") if isinstance(measurement.get("quantities"), list) else []
-    tokens: list[str] = []
-    if subject.get("id"):
-        tokens.append(str(subject["id"]))
-    tokens.extend(str(alias) for alias in (subject.get("aliases") or []) if isinstance(alias, str))
-    for quantity in quantities:
-        if not isinstance(quantity, Mapping):
-            continue
-        if quantity.get("name"):
-            tokens.append(str(quantity["name"]))
-        if quantity.get("name") and quantity.get("basis"):
-            tokens.append(f"{quantity['name']} {quantity['basis']}")
-    return {
-        "summary": measurement.get("summary"),
-        "resolution": method.get("description"),
-        "fingerprints": tokens,
-    }
-
-
 def match_view(entry: Mapping[str, Any]) -> dict[str, Any]:
     """Adapt a v2 entry to the shape the v1 scorer understands.
 
@@ -1582,10 +1401,25 @@ def export_entry(
         "submitted_at": submitted_at or today(),
         "redaction_profile": redaction.REDACTION_PROFILE,
     }
-    prepared["content_hash"] = content_hash(prepared)
+    prepared["content_hash"] = commons_content_hash(prepared)
     errors = validate_entry(prepared, path="entry", context="export")
     if errors:
         raise KnowledgeV2Error("; ".join(errors))
+    kind = str(entry.get("_kind") or "known-failure-signatures")
+    commons_problems = commons_validate_entry(prepared, kind=kind)
+    if commons_problems:
+        raise KnowledgeV2Error("; ".join(commons_problems))
+    schema = schema_validate(
+        {
+            "schema_version": SCHEMA_VERSION,
+            "kind": kind,
+            "layer": EXPORT_LAYER,
+            "updated_at": prepared.get("lifecycle", {}).get("updated_at") or today(),
+            "entries": [prepared],
+        }
+    )
+    if schema.get("ran") and schema.get("errors"):
+        raise KnowledgeV2Error("; ".join(schema["errors"]))
     redaction.require_exportable(prepared, path="entry")
     return prepared
 

@@ -32,6 +32,7 @@ ensure_workspace_interpreter(repo_root=ROOT)
 
 import vaws_knowledge_v2 as v2  # noqa: E402
 import vaws_redaction as redaction  # noqa: E402
+from vaws_knowledge.canonical import content_hash as commons_content_hash  # noqa: E402
 from vaws_knowledge_v1 import KnowledgeError, validate_knowledge_dir  # noqa: E402
 
 
@@ -69,6 +70,17 @@ def main(argv: list[str] | None = None) -> int:
         for entry in v2_entries
         if v2.unresolved_dimensions(entry)
     }
+    hash_mismatches = []
+    for entry in v2_entries:
+        try:
+            expected = commons_content_hash(entry)
+        except ValueError:
+            continue
+        if entry.get("content_hash") != expected:
+            hash_mismatches.append(str(entry.get("slug")))
+    if hash_mismatches:
+        print(json.dumps({"status": "failed", "error": "content_hash mismatch: " + ", ".join(hash_mismatches)}))
+        return 1
     print(
         json.dumps(
             {

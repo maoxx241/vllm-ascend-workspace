@@ -407,7 +407,7 @@ option.
 | `.agents/scripts/knowledge_capture.py` | argparse | - | 9 | docs:2, other:2, routing:2, script:2, skill-doc:4, test:3 | mixed | supported | .agents/scripts/knowledge_capture.py | vaws knowledge |
 | `.agents/scripts/knowledge_export.py` | argparse | - | 7 | other:2, routing:2, script:1, skill-doc:3, test:1 | mechanics | supported | .agents/scripts/knowledge_export.py | vaws knowledge |
 | `.agents/scripts/knowledge_migrate_v2.py` | argparse | - | 7 | routing:1, skill-doc:2, test:1 | mechanics | supported | .agents/scripts/knowledge_migrate_v2.py | vaws knowledge |
-| `.agents/scripts/knowledge_query.py` | argparse | - | 12 | docs:1, routing:2, skill-doc:1, test:3 | mechanics | supported | .agents/scripts/knowledge_query.py | vaws knowledge |
+| `.agents/scripts/knowledge_query.py` | argparse | - | 9 | docs:1, routing:2, skill-doc:1, test:2 | mechanics | supported | .agents/scripts/knowledge_query.py | vaws knowledge |
 | `.agents/scripts/knowledge_validate.py` | argparse | - | 1 | other:3, routing:1, script:1, skill-doc:1, test:2 | mechanics | supported | .agents/scripts/knowledge_validate.py | vaws knowledge |
 | `.agents/scripts/remote_artifact_manifest.py` | delegated | - | 4 | docs:1, policy:1, routing:1, skill-doc:3 | mechanics | compatibility | .agents/scripts/remote_artifact_manifest.py | vaws remote |
 | `.agents/scripts/remote_artifact_pull.py` | delegated | - | 5 | docs:1, policy:1, routing:1, skill-doc:4 | mechanics | compatibility | .agents/scripts/remote_artifact_pull.py | vaws remote |

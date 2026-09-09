@@ -28,3 +28,16 @@ tool_timeout_sec = 600
 
 [mcp_servers.vaws-task.env]
 VAWS_AGENT_SESSIONS_DIR = "/absolute/path/to/vllm-ascend-workspace/.vaws-local/agent-sessions"
+
+[mcp_servers.vaws-knowledge]
+command = "/absolute/path/to/vllm-ascend-workspace/.venv/bin/python"
+args = ["-m", "vaws_knowledge.server.mcp_server"]
+enabled = true
+startup_timeout_sec = 20
+tool_timeout_sec = 600
+
+[mcp_servers.vaws-knowledge.env]
+VAWS_KNOWLEDGE_PROJECT_ROOTS = ".agents/knowledge"
+VAWS_KNOWLEDGE_CANDIDATE_ROOT = ".vaws-local/knowledge/candidate"
+VAWS_KNOWLEDGE_ORIGIN_REPO = "vllm-ascend-workspace/vllm-ascend-workspace"
+VAWS_KNOWLEDGE_REDACTION_PROFILE = "r2"

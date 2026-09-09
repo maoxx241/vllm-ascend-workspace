@@ -12,8 +12,10 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / ".agents" / "lib"))
+from vaws_knowledge_v1 import get_knowledge_entry, query_knowledge  # noqa: E402
+
 CAPTURE = ROOT / ".agents" / "scripts" / "knowledge_capture.py"
-QUERY = ROOT / ".agents" / "scripts" / "knowledge_query.py"
 VALIDATE = ROOT / ".agents" / "scripts" / "knowledge_validate.py"
 HOOK = ROOT / ".agents" / "hooks" / "knowledge_session_end.py"
 CURATE = (
@@ -203,23 +205,13 @@ class KnowledgeFlowE2ETest(unittest.TestCase):
         self.assertFalse((self.candidates / f"{candidate_id}.json").exists())
         self.assertTrue((self.reviewed / f"{candidate_id}.json").is_file())
 
-        queried = self.run_json(
-            QUERY,
-            "--query",
-            "synthetic framed transfer acknowledgement timeout",
-            "--knowledge-dir",
-            str(self.formal),
+        queried = query_knowledge(
+            knowledge_dir=self.formal,
+            query="synthetic framed transfer acknowledgement timeout",
         )
-        self.assertEqual(queried["matches"][0]["id"], entry_id)
-
-        fetched = self.run_json(
-            QUERY,
-            "--id",
-            entry_id,
-            "--knowledge-dir",
-            str(self.formal),
-        )
-        self.assertEqual(fetched["result"]["entry"]["status"], "active")
+        self.assertEqual(queried[0]["id"], entry_id)
+        fetched = get_knowledge_entry(knowledge_dir=self.formal, entry_id=entry_id)
+        self.assertEqual(fetched["entry"]["status"], "active")
 
         recaptured = self.run_json(
             CAPTURE,
@@ -244,23 +236,17 @@ class KnowledgeFlowE2ETest(unittest.TestCase):
         )
         self.assertEqual(deprecated["action"], "deprecated")
 
-        hidden = self.run_json(
-            QUERY,
-            "--query",
-            "zqxjk flovmar blorpt acknowledgement nonce",
-            "--knowledge-dir",
-            str(self.formal),
+        hidden = query_knowledge(
+            knowledge_dir=self.formal,
+            query="zqxjk flovmar blorpt acknowledgement nonce",
         )
-        self.assertNotIn(entry_id, [match["id"] for match in hidden["matches"]])
-        retained = self.run_json(
-            QUERY,
-            "--query",
-            "zqxjk flovmar blorpt acknowledgement nonce",
-            "--include-deprecated",
-            "--knowledge-dir",
-            str(self.formal),
+        self.assertNotIn(entry_id, [match["id"] for match in hidden])
+        retained = query_knowledge(
+            knowledge_dir=self.formal,
+            query="zqxjk flovmar blorpt acknowledgement nonce",
+            include_deprecated=True,
         )
-        self.assertEqual(retained["matches"][0]["id"], entry_id)
+        self.assertEqual(retained[0]["id"], entry_id)
 
         validated = self.run_json(
             VALIDATE, "--knowledge-dir", str(self.formal)

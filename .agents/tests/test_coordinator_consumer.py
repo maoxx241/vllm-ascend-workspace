@@ -213,7 +213,7 @@ class ClientSetupTests(unittest.TestCase):
     def test_fresh_json_emits_both_launchers(self) -> None:
         files = self.setup.configuration("claude", self.project)
         servers = json.loads(files[self.project / ".mcp.json"])["mcpServers"]
-        self.assertEqual(set(servers), {"remote-dev", "vaws-task"})
+        self.assertEqual(set(servers), {"remote-dev", "vaws-task", "vaws-knowledge"})
         self.assertEqual(servers["remote-dev"]["args"], ["-m", "remote_dev.mcp.server"])
         self.assertEqual(servers["vaws-task"]["args"], ["-m", "vaws_coordinator", "task-server"])
         self.assertEqual(servers["vaws-task"]["type"], "stdio")
@@ -228,11 +228,11 @@ class ClientSetupTests(unittest.TestCase):
         servers = json.loads(
             self.setup.configuration("claude", self.project, task_only=True)[self.project / ".mcp.json"]
         )["mcpServers"]
-        self.assertEqual(list(servers), ["vaws-task"])
+        self.assertEqual(set(servers), {"vaws-task", "vaws-knowledge"})
         grok = tomllib.loads(
             self.setup.configuration("grok", self.project, task_only=True)[self.project / ".grok/config.toml"]
         )
-        self.assertEqual(list(grok["mcp_servers"]), ["vaws_task"])
+        self.assertEqual(set(grok["mcp_servers"]), {"vaws_task", "vaws_knowledge"})
 
     def test_json_preserves_hand_managed_remote_dev_command_args_type(self) -> None:
         path = self.project / ".mcp.json"
