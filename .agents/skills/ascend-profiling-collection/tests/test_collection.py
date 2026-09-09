@@ -31,8 +31,6 @@ for path in (str(SCRIPTS), str(LIB)):
     if path not in sys.path:
         sys.path.insert(0, path)
 
-os.environ.setdefault("VAWS_SKIP_VENV_REEXEC", "1")
-
 
 def _load(name: str, filename: str):
     sys.modules.pop(name, None)
@@ -42,7 +40,11 @@ def _load(name: str, filename: str):
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.modules[name] = module
-    spec.loader.exec_module(module)
+    # profile_control / collect call ensure_workspace_interpreter at import.
+    # Scope the skip to this exec so collection cannot disable the hop
+    # for the rest of the pytest process.
+    with mock.patch.dict(os.environ, {"VAWS_SKIP_VENV_REEXEC": "1"}):
+        spec.loader.exec_module(module)
     return module
 
 
