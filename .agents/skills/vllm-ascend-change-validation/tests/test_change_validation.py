@@ -17,7 +17,7 @@ LIB = ROOT / ".agents" / "lib"
 if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
-from vaws_run_manifest import (  # noqa: E402
+from vaws_coordinator.run_manifest import (  # noqa: E402
     add_artifact,
     new_manifest,
     transition_status,
@@ -139,6 +139,7 @@ def passed_child(
         run_id="child-1",
         parent_run_id=parent_run_id,
         created_at=NOW,
+        workspace_root=ROOT,
     )
     child = transition_status(child, "running", updated_at=NOW)
     if with_artifact:

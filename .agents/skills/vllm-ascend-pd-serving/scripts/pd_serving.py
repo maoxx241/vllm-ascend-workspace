@@ -20,8 +20,13 @@ LIB = ROOT / ".agents" / "lib"
 if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
-from vaws_code_identity import manifest_code  # noqa: E402
-from vaws_run_manifest import (  # noqa: E402
+from vaws_venv import ensure_workspace_interpreter  # noqa: E402
+
+ensure_workspace_interpreter(repo_root=ROOT)
+
+
+from vaws_coordinator.code_identity import manifest_code  # noqa: E402
+from vaws_coordinator.run_manifest import (  # noqa: E402
     RunManifestError,
     add_artifact,
     load_manifest,
@@ -281,6 +286,7 @@ def plan(
     group_path: Path,
     created_at: str | None = None,
     code: Mapping[str, Any] | None = None,
+    workspace_root: Path | None = None,
 ) -> dict[str, Any]:
     if output_dir.exists() and any(output_dir.iterdir()):
         raise PdServingError(f"output directory is not empty: {output_dir}")
@@ -329,6 +335,7 @@ def plan(
         run_type="debug",
         run_id=config["run_id"],
         code=code,
+        workspace_root=workspace_root or ROOT,
         workspace_snapshot=group["members"][0]["snapshot"],
         topology={
             "session_group": group["group_id"],

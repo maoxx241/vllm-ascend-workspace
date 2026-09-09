@@ -230,7 +230,7 @@
       "responsibility": "mechanics",
       "support_role": "supported",
       "target_kind": "self",
-      "note": "Run Manifest v1 init/validate; shared owner with vaws_run_manifest.py lifecycle APIs",
+      "note": "Run Manifest v1 init/validate; thin CLI over vaws_coordinator.run_manifest",
       "proposed_target": "vaws manifest"
     },
     ".agents/scripts/skill_catalog.py": {
@@ -604,7 +604,7 @@
       "responsibility": "mechanics",
       "support_role": "payload",
       "target_kind": "self",
-      "note": "implementation payload spawned by parity_sync, toolbox adapters and the coordinator"
+      "note": "thin CLI over vaws_coordinator.parity; spawned by parity_sync, toolbox adapters and the coordinator"
     },
     ".agents/skills/remote-code-parity/scripts/transport_benchmark.py": {
       "responsibility": "mechanics",

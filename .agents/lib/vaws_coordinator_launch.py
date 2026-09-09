@@ -1,9 +1,10 @@
 """Launch the installed ``vaws-coordinator`` package with scaffold environment.
 
 The coordinator package does not read former checkout-root environment
-variables. It reads ``VAWS_PARITY_SCRIPT``,
-``VAWS_PARITY_WORKSPACE_ROOT``, ``VAWS_MACHINE_INVENTORY``,
-``VAWS_AGENT_SESSIONS_DIR``, and ``VAWS_HOST_QUEUE_MODULE``.
+variables and does not locate this tree by path. It reads
+``VAWS_AGENT_SESSIONS_DIR``, optional ``VAWS_COORDINATOR_STATE_DIR``, and
+optional ``VAWS_HOST_QUEUE_MODULE``. Machine records are seeded into the
+coordinator's own store as a document, never as a consumer path.
 """
 from __future__ import annotations
 
@@ -35,14 +36,7 @@ from vaws_local_state import (  # noqa: E402
 
 PACKAGE = "vaws-coordinator"
 LOCAL_STATE_DIRNAME = ".vaws-local"
-PARITY_SCRIPT = (
-    ROOT / ".agents" / "skills" / "remote-code-parity" / "scripts" / "remote_code_parity.py"
-)
-
-DEFAULT_ENV = {
-    "VAWS_PARITY_SCRIPT": str(PARITY_SCRIPT),
-    "VAWS_PARITY_WORKSPACE_ROOT": str(ROOT),
-}
+MACHINES_FILENAME = "machines.json"
 
 
 class CoordinatorUnavailable(RuntimeError):
@@ -59,20 +53,33 @@ def _absolute_path(value: str, repo_root: Path) -> str:
 def coordinator_environment(base: Mapping[str, str] | None = None, *, repo_root: Path = ROOT) -> dict[str, str]:
     """Environment for a coordinator process (task server, CLI, hook)."""
     env = dict(os.environ if base is None else base)
-    for key, value in DEFAULT_ENV.items():
-        env.setdefault(key, value)
     env.setdefault("VAWS_AGENT_SESSIONS_DIR", str(agent_sessions_root(repo_root)))
     sessions = Path(env["VAWS_AGENT_SESSIONS_DIR"]).expanduser()
     if not sessions.is_absolute():
         sessions = shared_workspace_root(repo_root) / sessions
     env["VAWS_AGENT_SESSIONS_DIR"] = str(sessions)
-    env.setdefault("VAWS_MACHINE_INVENTORY", str(shared_inventory_path(repo_root)))
-    env["VAWS_MACHINE_INVENTORY"] = _absolute_path(env["VAWS_MACHINE_INVENTORY"], repo_root)
     if "VAWS_HOST_QUEUE_MODULE" in env:
         env["VAWS_HOST_QUEUE_MODULE"] = _absolute_path(env["VAWS_HOST_QUEUE_MODULE"], repo_root)
-    env["VAWS_PARITY_SCRIPT"] = _absolute_path(env["VAWS_PARITY_SCRIPT"], repo_root)
-    env["VAWS_PARITY_WORKSPACE_ROOT"] = _absolute_path(env["VAWS_PARITY_WORKSPACE_ROOT"], repo_root)
+    if "VAWS_COORDINATOR_STATE_DIR" in env:
+        env["VAWS_COORDINATOR_STATE_DIR"] = _absolute_path(env["VAWS_COORDINATOR_STATE_DIR"], repo_root)
     return env
+
+
+def seed_machine_directory(env: Mapping[str, str], *, repo_root: Path = ROOT) -> Path | None:
+    """Copy the shared inventory document into the coordinator-owned store."""
+    inventory = shared_inventory_path(repo_root)
+    if not inventory.is_file():
+        return None
+    override = env.get("VAWS_COORDINATOR_STATE_DIR", "")
+    if override:
+        state_dir = Path(override).expanduser()
+    else:
+        sessions = Path(env.get("VAWS_AGENT_SESSIONS_DIR") or agent_sessions_root(repo_root))
+        state_dir = sessions.expanduser().resolve().parent / "coordinator"
+    dest = state_dir / MACHINES_FILENAME
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(inventory.read_text(encoding="utf-8"), encoding="utf-8")
+    return dest
 
 
 def historical_manager_state_dir(repo_root: Path = ROOT) -> Path:
@@ -118,6 +125,7 @@ def exec_module(module: str, args: list[str], *, repo_root: Path = ROOT) -> int:
     """Replace this process with ``python -m <module> ...`` under scaffold env."""
     require_package(repo_root)
     env = coordinator_environment(repo_root=repo_root)
+    seed_machine_directory(env, repo_root=repo_root)
     command = [sys.executable, "-m", module, *args]
     os.execve(sys.executable, command, env)
     return 0  # pragma: no cover - execve does not return

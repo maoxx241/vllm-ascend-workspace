@@ -17,14 +17,14 @@ LIB = ROOT / ".agents" / "lib"
 if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
-from vaws_code_identity import (  # noqa: E402
+from vaws_coordinator.code_identity import (  # noqa: E402
     _load_parity,
     code_identity,
     collect_referenced_snapshot_commits,
     gc_parity_refs,
     manifest_code,
 )
-from vaws_run_manifest import new_manifest, write_manifest  # noqa: E402
+from vaws_coordinator.run_manifest import new_manifest, write_manifest  # noqa: E402
 
 NOW = "2026-09-08T12:00:00Z"
 

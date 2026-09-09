@@ -25,9 +25,8 @@ from vaws_venv import ensure_workspace_interpreter  # noqa: E402
 
 ensure_workspace_interpreter(repo_root=ROOT)
 
-from vaws_code_identity import manifest_code  # noqa: E402
 from vaws_knowledge_service import load_json_object  # noqa: E402
-from vaws_run_manifest import (  # noqa: E402
+from vaws_coordinator.run_manifest import (  # noqa: E402
     RunManifestError,
     add_artifact,
     load_manifest,
@@ -359,6 +358,7 @@ def plan_change(
     knowledge_path: Path,
     created_at: str | None = None,
     code: Mapping[str, Any] | None = None,
+    workspace_root: Path | None = None,
 ) -> dict[str, Any]:
     if output_dir.exists() and any(output_dir.iterdir()):
         raise ChangeValidationError(f"output directory is not empty: {output_dir}")
@@ -404,6 +404,7 @@ def plan_change(
         run_type="change-validation",
         run_id=run_id,
         code=code,
+        workspace_root=workspace_root or ROOT,
         workspace_snapshot={
             "baseline": baseline,
             "candidate": candidate,
@@ -675,7 +676,7 @@ def main(argv: list[str] | None = None) -> int:
                 target_repositories=args.target_repository,
                 diff_text=diff_text,
                 knowledge_path=args.knowledge,
-                code=manifest_code(workspace),
+                workspace_root=workspace,
             )
         elif args.action == "link":
             emit_progress("link-run", manifest=str(args.run_manifest))

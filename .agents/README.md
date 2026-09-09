@@ -62,7 +62,7 @@ compatibility backend for managed sessions, sync, service adapters, and cleanup.
 - `.agents/knowledge/` is the project layer: federated v2 `<kind>.v2.yaml` documents only.
 - `.agents/schemas/` stores the machine-readable Run Manifest and knowledge contracts, including the project-layer v2 and candidate v2 schemas.
 - `.agents/lib/vaws_local_state.py` is the shared library for untracked local runtime state.
-- `.agents/lib/vaws_run_manifest.py` is the shared Run Manifest v1 library for workflow correlation and artifact links.
+- `vaws_coordinator.run_manifest` is the shared Run Manifest v1 library for workflow correlation and artifact links.
 - `.agents/lib/vaws_knowledge_v2.py` keeps the project-layer contract (unbounded-range unresolved encoding, document I/O, curation/export). Hashing and query live in the installed `vaws-knowledge` package.
 - `.agents/lib/vaws_knowledge_service.py` builds the scaffold `ServiceConfig` (packaged shared + this repo's project/candidate roots).
 - `.agents/tests/knowledge_client_adapter.py` is the tracked protocol adapter for the vaws-knowledge conformance kit shipped with the package.

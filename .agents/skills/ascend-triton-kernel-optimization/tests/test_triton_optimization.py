@@ -16,7 +16,7 @@ LIB = ROOT / ".agents" / "lib"
 if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
-from vaws_run_manifest import add_artifact, new_manifest, transition_status, write_manifest
+from vaws_coordinator.run_manifest import add_artifact, new_manifest, transition_status, write_manifest
 
 
 def load_module():
@@ -42,7 +42,13 @@ def passed_manifest(path: Path, run_id: str, parent: str, kernel: Path, case_ids
     }
     matrix_path = path.parent / f"{path.stem}-case-matrix.json"
     matrix_path.write_text(json.dumps(matrix), encoding="utf-8")
-    manifest = new_manifest(run_type="correctness", run_id=run_id, parent_run_id=parent, created_at=NOW)
+    manifest = new_manifest(
+        run_type="correctness",
+        run_id=run_id,
+        parent_run_id=parent,
+        created_at=NOW,
+        workspace_root=ROOT,
+    )
     manifest = add_artifact(
         manifest,
         name="kernel",

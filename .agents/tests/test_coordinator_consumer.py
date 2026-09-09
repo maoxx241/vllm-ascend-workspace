@@ -82,7 +82,6 @@ class EnvironmentTests(unittest.TestCase):
         env = coordinator.coordinator_environment({})
         self.assertTrue(env["VAWS_AGENT_SESSIONS_DIR"].endswith("agent-sessions"))
         self.assertNotIn("VAWS_HOST_QUEUE_MODULE", env)
-        self.assertTrue(env["VAWS_PARITY_SCRIPT"].endswith("remote_code_parity.py"))
         self.assertNotIn("VAWS_COORDINATOR_STATE_DIR", env)
         self.assertNotIn(_GONE_COORDINATOR_ROOT, env)
 
@@ -788,7 +787,8 @@ class NoInTreeTaskWriterTests(unittest.TestCase):
     def test_build_inputs_mirror_remains_for_parity(self) -> None:
         self.assertTrue((ROOT / ".agents/lib/vaws_build_inputs.py").is_file())
         self.assertTrue((ROOT / ".agents/lib/vaws_host_queue_module.py").is_file())
-        self.assertTrue((ROOT / ".agents/lib/vaws_run_manifest.py").is_file())
+        self.assertFalse((ROOT / ".agents/lib/vaws_run_manifest.py").is_file())
+        import vaws_coordinator.run_manifest  # noqa: F401
 
 
 

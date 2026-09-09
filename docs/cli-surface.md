@@ -154,7 +154,7 @@ These planner/analyze commands stay. They are **mixed** and **supported**:
 
 Certificate issue/consume/identity merging lives in
 `.agents/lib/vaws_comparability.py`. Run Manifest validation, lifecycle and
-atomic persistence live in `.agents/lib/vaws_run_manifest.py`. Correctness
+atomic persistence live in `vaws_coordinator.run_manifest`. Correctness
 execution blocks, graph snapshot sidecars, per-measurement performance
 observations and child-run evidence adapters remain because their evidence
 semantics differ. A few duplicated numeric/local-artifact helper lines do not
@@ -427,7 +427,7 @@ option.
 | `.agents/scripts/remote_target_resolve.py` | delegated | - | 3 | routing:1 | mechanics | compatibility | .agents/scripts/remote_target_resolve.py | vaws remote |
 | `.agents/scripts/remote_toolbox_stress.py` | argparse | - | 13 | docs:1, routing:1 | mechanics | harness | .agents/scripts/remote_toolbox_stress.py | - |
 | `.agents/scripts/repo_boundary_check.py` | argparse | - | 6 | docs:2, other:1, policy:3, script:1, test:3 | mechanics | supported | .agents/scripts/repo_boundary_check.py | vaws lint |
-| `.agents/scripts/run_manifest.py` | argparse | init, validate | 11 | docs:4, other:1, policy:1, routing:2, test:3 | mechanics | supported | .agents/scripts/run_manifest.py | vaws manifest |
+| `.agents/scripts/run_manifest.py` | argparse | init, validate | 11 | docs:3, other:1, policy:2, routing:1, test:2 | mechanics | supported | .agents/scripts/run_manifest.py | vaws manifest |
 | `.agents/scripts/skill_catalog.py` | argparse | - | 2 | other:1, test:2 | mechanics | supported | .agents/scripts/skill_catalog.py | vaws lint |
 | `.agents/scripts/sync_claude_skills.py` | argparse | - | 1 | docs:1, mirror:2, other:3, policy:1, routing:1, skill-doc:1, test:2 | mechanics | supported | .agents/scripts/sync_claude_skills.py | vaws lint |
 | `.agents/scripts/tracked_leak_scan.py` | argparse | - | 10 | docs:1, hook:1, other:1, policy:1, script:1, test:3 | mechanics | supported | .agents/scripts/tracked_leak_scan.py | vaws lint |
@@ -477,11 +477,11 @@ option.
 | `.agents/skills/modelscope/scripts/modelscope_download_status.py` | argparse | - | 3 | mirror:1, routing:1, script:1, skill-doc:1, test:1 | mechanics | internal | .agents/skills/modelscope/scripts/modelscope_auto.py | - |
 | `.agents/skills/modelscope/scripts/verify_modelscope_sha256.py` | argparse | - | 8 | mirror:2, routing:1, script:2, skill-doc:1, test:1 | mechanics | payload | .agents/skills/modelscope/scripts/verify_modelscope_sha256.py | - |
 | `.agents/skills/npu-fleet-monitor/scripts/manage_monitor.py` | argparse | deploy, start, status, restart, stop | 6 | docs:2, policy:1, routing:4, script:1, skill-doc:1, test:3 | mechanics | supported | .agents/skills/npu-fleet-monitor/scripts/manage_monitor.py | vaws machine |
-| `.agents/skills/remote-code-parity/scripts/gc_runtime_cache.py` | argparse | - | 7 | routing:1, skill-doc:3 | mechanics | supported | .agents/skills/remote-code-parity/scripts/gc_runtime_cache.py | vaws sync |
-| `.agents/skills/remote-code-parity/scripts/install_consent.py` | argparse | resolve, set, batch-set, resolve-sync-mode, set-sync-mode | 7 | routing:1, script:1, skill-doc:5 | mechanics | supported | .agents/skills/remote-code-parity/scripts/install_consent.py | vaws sync |
-| `.agents/skills/remote-code-parity/scripts/parity_sync.py` | argparse | - | 17 | docs:1, mirror:1, routing:2, script:3, skill-doc:10, test:2 | mechanics | supported | .agents/skills/remote-code-parity/scripts/parity_sync.py | vaws sync |
-| `.agents/skills/remote-code-parity/scripts/parity_watch.py` | argparse | - | 2 | skill-doc:3, test:1 | mechanics | supported | .agents/skills/remote-code-parity/scripts/parity_watch.py | vaws sync |
-| `.agents/skills/remote-code-parity/scripts/remote_code_parity.py` | argparse | plan, sync, gc | 12 | docs:3, routing:1, script:4, skill-doc:3, test:3 | mechanics | payload | .agents/skills/remote-code-parity/scripts/remote_code_parity.py | - |
+| `.agents/skills/remote-code-parity/scripts/gc_runtime_cache.py` | argparse | - | 7 | routing:1, script:1, skill-doc:3 | mechanics | supported | .agents/skills/remote-code-parity/scripts/gc_runtime_cache.py | vaws sync |
+| `.agents/skills/remote-code-parity/scripts/install_consent.py` | argparse | resolve, set, batch-set, resolve-sync-mode, set-sync-mode | 7 | routing:1, skill-doc:5 | mechanics | supported | .agents/skills/remote-code-parity/scripts/install_consent.py | vaws sync |
+| `.agents/skills/remote-code-parity/scripts/parity_sync.py` | argparse | - | 17 | docs:1, mirror:1, routing:2, script:4, skill-doc:10, test:2 | mechanics | supported | .agents/skills/remote-code-parity/scripts/parity_sync.py | vaws sync |
+| `.agents/skills/remote-code-parity/scripts/parity_watch.py` | argparse | - | 2 | script:1, skill-doc:3, test:1 | mechanics | supported | .agents/skills/remote-code-parity/scripts/parity_watch.py | vaws sync |
+| `.agents/skills/remote-code-parity/scripts/remote_code_parity.py` | bare | - | 0 | docs:2, routing:1, script:2, skill-doc:3 | mechanics | payload | .agents/skills/remote-code-parity/scripts/remote_code_parity.py | - |
 | `.agents/skills/remote-code-parity/scripts/transport_benchmark.py` | argparse | - | 4 | skill-doc:2 | mechanics | harness | .agents/skills/remote-code-parity/scripts/transport_benchmark.py | - |
 | `.agents/skills/repo-init/scripts/install_gh_user.py` | bare | - | 0 | script:1 | mechanics | supported | .agents/skills/repo-init/scripts/install_gh_user.py | vaws workspace |
 | `.agents/skills/repo-init/scripts/repo_init_probe.py` | argparse | - | 1 | mirror:1, routing:1, skill-doc:4 | mechanics | supported | .agents/skills/repo-init/scripts/repo_init_probe.py | vaws workspace |

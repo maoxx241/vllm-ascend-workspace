@@ -16,7 +16,7 @@ LIB = ROOT / ".agents" / "lib"
 if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
-from vaws_run_manifest import new_manifest, transition_status, write_manifest
+from vaws_coordinator.run_manifest import new_manifest, transition_status, write_manifest
 
 
 def load_module():
@@ -64,6 +64,7 @@ class WorkflowTests(unittest.TestCase):
                     run_id=f"{stage}-child",
                     parent_run_id="triton-softmax-001",
                     created_at=NOW,
+                    workspace_root=ROOT,
                 )
                 child = transition_status(child, "running", updated_at=NOW)
                 child = transition_status(child, "passed", updated_at=NOW)

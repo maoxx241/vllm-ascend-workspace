@@ -18,8 +18,7 @@ from vaws_venv import ensure_workspace_interpreter  # noqa: E402
 ensure_workspace_interpreter(repo_root=ROOT)
 
 
-from vaws_code_identity import manifest_code  # noqa: E402
-from vaws_run_manifest import (  # noqa: E402
+from vaws_coordinator.run_manifest import (  # noqa: E402
     RUN_TYPES,
     RunManifestError,
     load_manifest,
@@ -56,8 +55,13 @@ def build_parser() -> argparse.ArgumentParser:
     init.add_argument(
         "--workspace-root",
         type=Path,
-        default=None,
-        help="Fill code identity from this git worktree",
+        default=Path.cwd(),
+        help=(
+            "Git worktree whose HEAD fills code.source_head / "
+            "code.snapshot_commit / code.dirty. Defaults to the current "
+            "working directory. There is no SHA fallback: if this path "
+            "is not a git worktree, init fails."
+        ),
     )
 
     validate = subparsers.add_parser("validate", help="validate an existing manifest")
@@ -83,11 +87,7 @@ def main(argv: list[str] | None = None) -> int:
                 run_type=args.run_type,
                 run_id=args.run_id,
                 parent_run_id=args.parent_run_id,
-                code=(
-                    manifest_code(args.workspace_root)
-                    if args.workspace_root is not None
-                    else None
-                ),
+                workspace_root=args.workspace_root,
                 workspace_snapshot=_json_object(
                     args.workspace_snapshot, "workspace-snapshot"
                 ),
