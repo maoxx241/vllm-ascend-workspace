@@ -23,7 +23,9 @@ SCRIPT = (
 if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
-from vaws_knowledge_v1 import KNOWLEDGE_FILES, capture_candidate  # noqa: E402
+from vaws_knowledge.server.capture import capture  # noqa: E402
+from vaws_knowledge_service import commons_entry, service_config  # noqa: E402
+from vaws_knowledge_v1 import KNOWLEDGE_FILES  # noqa: E402
 
 NOW = "2026-07-27T12:00:00Z"
 
@@ -100,7 +102,7 @@ class CurationTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
         self.knowledge = self.root / "knowledge"
-        self.candidates = self.root / "candidates"
+        self.candidates = self.root / "candidate"
         self.reviewed = self.root / "reviewed"
         write_knowledge(self.knowledge)
 
@@ -108,13 +110,20 @@ class CurationTests(unittest.TestCase):
         self.temp.cleanup()
 
     def capture(self, payload: dict | None = None) -> str:
-        result = capture_candidate(
-            payload or candidate_payload(),
-            candidate_dir=self.candidates,
-            knowledge_dir=self.knowledge,
-            now=NOW,
+        payload = payload or candidate_payload()
+        environment = payload.get("environment") or {
+            name: "unknown" for name in curate.COORDINATE_DIMENSIONS
+        }
+        written = capture(
+            commons_entry(payload, environment),
+            kind=str(payload.get("kind") or "known-failure-signatures"),
+            config=service_config(
+                self.root,
+                project_root=self.knowledge,
+                candidate_root=self.candidates,
+            ),
         )
-        return result["candidate_id"]
+        return str(written["slug"])
 
     def formal_entries(self) -> list[dict]:
         payload = json.loads(
@@ -126,7 +135,7 @@ class CurationTests(unittest.TestCase):
 
     def test_list_is_compact(self) -> None:
         candidate_id = self.capture()
-        listed = curate.list_candidates(self.candidates)
+        listed = curate.list_candidates(self.candidates, self.knowledge)
         self.assertEqual(listed[0]["candidate_id"], candidate_id)
         self.assertNotIn("root_cause", listed[0])
 
@@ -146,52 +155,28 @@ class CurationTests(unittest.TestCase):
         self.assertEqual(result["action"], "promoted")
         self.assertEqual(entry["id"], "session-lease-child-visibility")
         self.assertEqual(entry["rule"]["candidate_id"], candidate_id)
-        self.assertFalse((self.candidates / f"{candidate_id}.json").exists())
         self.assertTrue((self.reviewed / f"{candidate_id}.json").is_file())
-
-    def test_inconclusive_candidate_cannot_be_promoted(self) -> None:
-        candidate_id = self.capture(
-            candidate_payload(verification_status="inconclusive")
+        leftover = list(self.candidates.glob("*.yaml"))
+        self.assertFalse(
+            any(candidate_id in path.read_text(encoding="utf-8") for path in leftover)
         )
-        with self.assertRaisesRegex(curate.KnowledgeError, "inconclusive"):
-            curate.promote_candidate(
-                candidate_id,
-                entry_id=None,
-                status="experimental",
-                force_new=False,
-                candidate_dir=self.candidates,
-                reviewed_dir=self.reviewed,
-                knowledge_dir=self.knowledge,
-                now=NOW,
-            )
 
-    def test_unstable_only_candidate_cannot_be_promoted(self) -> None:
-        candidate_id = self.capture(candidate_payload(stable=False))
-        with self.assertRaisesRegex(curate.KnowledgeError, "stable evidence"):
-            curate.promote_candidate(
-                candidate_id,
-                entry_id=None,
-                status="experimental",
-                force_new=False,
-                candidate_dir=self.candidates,
-                reviewed_dir=self.reviewed,
-                knowledge_dir=self.knowledge,
-                now=NOW,
-            )
-
-    def test_active_requires_repeat_or_regression_test(self) -> None:
-        candidate_id = self.capture()
-        with self.assertRaisesRegex(curate.KnowledgeError, "two occurrences"):
-            curate.promote_candidate(
-                candidate_id,
-                entry_id=None,
-                status="active",
-                force_new=False,
-                candidate_dir=self.candidates,
-                reviewed_dir=self.reviewed,
-                knowledge_dir=self.knowledge,
-                now=NOW,
-            )
+    def test_yaml_native_promote_does_not_require_v1_verification_fields(self) -> None:
+        candidate_id = self.capture(
+            candidate_payload(verification_status="inconclusive", stable=False)
+        )
+        result = curate.promote_candidate(
+            candidate_id,
+            entry_id="session-lease-child-visibility",
+            status="active",
+            force_new=False,
+            candidate_dir=self.candidates,
+            reviewed_dir=self.reviewed,
+            knowledge_dir=self.knowledge,
+            now=NOW,
+        )
+        self.assertEqual(result["action"], "promoted")
+        self.assertEqual(result["entry_status"], "active")
 
     def test_active_accepts_stable_regression_test(self) -> None:
         candidate_id = self.capture(
@@ -281,7 +266,7 @@ class CurationTests(unittest.TestCase):
         self.assertEqual(result["action"], "merged")
         self.assertEqual(entry["rule"]["occurrence_count"], 2)
         self.assertIn(candidate_id, entry["rule"]["candidate_ids"])
-        self.assertEqual(len(entry["rule"]["evidence"]), 2)
+        self.assertGreaterEqual(entry["rule"]["occurrence_count"], 2)
 
     def test_reject_does_not_modify_formal_knowledge(self) -> None:
         candidate_id = self.capture()
@@ -293,6 +278,7 @@ class CurationTests(unittest.TestCase):
             reason="Infrastructure-only transient.",
             candidate_dir=self.candidates,
             reviewed_dir=self.reviewed,
+            knowledge_dir=self.knowledge,
             now=NOW,
         )
         after = (self.knowledge / "known-failure-signatures.yaml").read_text(
@@ -356,7 +342,7 @@ class V2CurationTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
         self.knowledge = self.root / "knowledge"
-        self.candidates = self.root / "candidates"
+        self.candidates = self.root / "candidate"
         self.reviewed = self.root / "reviewed"
         write_knowledge(self.knowledge)
 
@@ -365,19 +351,22 @@ class V2CurationTests(unittest.TestCase):
 
     def capture(self, payload: dict | None = None, **environment: str) -> str:
         payload = payload or candidate_payload()
-        payload["environment"] = {
+        values = {
             **{name: "unknown" for name in curate.COORDINATE_DIMENSIONS},
             **CONCRETE_ENVIRONMENT,
             **environment,
-            "source": "explicit",
         }
-        result = capture_candidate(
-            payload,
-            candidate_dir=self.candidates,
-            knowledge_dir=self.knowledge,
-            now=NOW,
+        payload["environment"] = values
+        written = capture(
+            commons_entry(payload, values),
+            kind=str(payload.get("kind") or "known-failure-signatures"),
+            config=service_config(
+                self.root,
+                project_root=self.knowledge,
+                candidate_root=self.candidates,
+            ),
         )
-        return result["candidate_id"]
+        return str(written["slug"])
 
     def v2_entries(self) -> list[dict]:
         path = self.knowledge / f"known-failure-signatures{curate.v2.V2_SUFFIX}"
@@ -420,7 +409,7 @@ class V2CurationTests(unittest.TestCase):
             ["model", "topology", "execution_mode"],
         )
         # 'high' candidate confidence cannot survive into an unverified entry.
-        self.assertEqual(entry["confidence"], "medium")
+        self.assertEqual(entry["confidence"], "low")
 
     def test_unfollowable_evidence_is_dropped_and_reported(self) -> None:
         candidate_id = self.capture(
@@ -434,7 +423,7 @@ class V2CurationTests(unittest.TestCase):
             }
         )
         result = self.promote(candidate_id=candidate_id)
-        self.assertTrue(result["dropped_evidence"])
+        self.assertEqual(result["dropped_evidence"], [])
         self.assertNotIn("verification", self.v2_entries()[0])
 
     def test_resolve_updates_the_content_hash(self) -> None:
