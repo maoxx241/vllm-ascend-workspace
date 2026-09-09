@@ -1,0 +1,381 @@
+# Target state
+
+Status: current
+
+This document is the single definition of where the workspace ends up after the
+repository split. It supersedes `repo-boundaries.md` as the direction; that file
+is kept only until its guard summary is folded into §7 here. Every remaining
+work package derives from this document, and a work package that needs a
+mechanism this document does not name is a signal to amend this document
+first, not to build the mechanism.
+
+Facts below cite line counts from the 2026-09-09 surveys of the scaffold and
+the four packages. Numbers are rounded to what matters for sizing, not audit.
+
+## 1. Axioms
+
+These were decided by the owner and are not reopened by work packages.
+
+1. **Everything packageable is packaged.** The four external repositories are
+   Python packages pinned by `uv.lock`. The scaffold is a `package = false`
+   `uv` project: skills, glue, local state, submodules. `repo-init` runs
+   `uv sync`; a fresh clone plus `repo-init` is the whole install.
+2. **The package version is the contract.** There is no `service-api.json`,
+   no `service_api_version` handshake, no side-channel compatibility file.
+   All four packages already deleted theirs in their packaging commits
+   (knowledge decision 28 records it). A breaking change is a version bump.
+3. **Code identity is Git.** A `code` field is a Git SHA (`source_head`,
+   `snapshot_commit`). No content hash of source files anywhere. The only
+   sanctioned non-Git hash is `content_hash` over a knowledge entry body,
+   owned by `vaws_knowledge.canonical`, and a future compile-artifact →
+   source mapping if one is ever needed.
+4. **Local only.** MCP servers are pulled and run on the user's machine and
+   serve that user. Nothing in this project offers a network service to
+   others. Knowledge reaches the shared corpus only through pull requests.
+5. **One concern, one owner.** For every concern in §2 exactly one repository
+   holds the implementation. Everyone else imports it or calls its CLI. A
+   second implementation, a vendored copy, or a "thin compatibility layer"
+   that re-implements behaviour is a defect, whatever it is called.
+6. **Unreleased, so breaking is allowed.** No shim for the previous shape of
+   anything in this document. Delete, do not deprecate.
+7. **Simplest mechanism that satisfies the axiom above.** When two designs
+   both satisfy 1–6, the one with fewer files wins.
+8. **Fable designs and accepts; Grok implements.** Work packages carry an
+   acceptance predicate from §7 and are accepted by re-running it
+   independently, not by reading the diff.
+
+## 2. Ownership matrix
+
+| Concern | Owner | Scaffold keeps | Scaffold deletes |
+|---|---|---|---|
+| SSH transport; remote read/write/edit/glob/grep/bash/patch/job/artifact/monitor | **remote-dev** | `vaws_remote_dev.py` (env injection), `vaws_remote_dev_plugin.py` (endpoint resolver), client config | `vaws_remote_toolbox.py` (2402), `vaws_ssh.py` (85), 17 × `remote_*.py` wrappers (340), `remote_toolbox_stress.py` (239), skill `remote-toolbox` (389), every `subprocess(["ssh", …])` in skill `_common.py` files |
+| Task / session identity, runtime pool, NPU and port leases, host queue, machine directory | **vaws-coordinator** | `vaws_coordinator_launch.py`, the *binding* of a worktree to a coordinator session (`current-session.json`) | lease allocation in `vaws_session_state.py` (`allocate_session_leases` … `release_all_session_leases`, `leases.json`), `vaws_host_queue_module.py` (72; callers import `vaws_coordinator.host_queue` directly), local `machine-inventory.json` as an authority |
+| Code parity (working tree → remote snapshot) | **vaws-coordinator** | skill `remote-code-parity` as a thin CLI | `remote_code_parity.py` (2485) body, `vaws_build_inputs.py` (69) — move into coordinator; coordinator stops reading `VAWS_PARITY_SCRIPT` / `VAWS_MACHINE_INVENTORY` |
+| Run Manifest v1 and code identity | **vaws-coordinator** (`vaws_coordinator.run_manifest`, `vaws_coordinator.code_identity`) | `run_manifest.py` CLI as a thin wrapper, or nothing if the package ships a CLI | `vaws_run_manifest.py` (336), `vaws_code_identity.py` (224), `schemas/run-manifest-v1.schema.json` (143); coordinator deletes `vendor/` |
+| Knowledge contract, canonical form, `content_hash`, validation, redaction rules, three-layer query, capture, export | **vaws-knowledge** | `.agents/knowledge/*.v2.yaml` (project layer data), thin CLIs `knowledge_query.py` / `knowledge_capture.py` / `knowledge_export.py` / `knowledge_validate.py`, hooks, skill `curate-workspace-knowledge` as workflow only | `vaws_knowledge_v2.py` (1638), `vaws_knowledge_v1.py` (1020), `vaws_knowledge_migrate.py` (427), `vaws_knowledge_client.py` (591), `knowledge_migrate_v2.py` (241), `knowledge_hash_parity.py` (190), four `schemas/knowledge-*.json` (932, zero runtime readers), six v1 YAML files after their 21 entries are migrated |
+| Leak detection rules | **vaws-knowledge** (`vaws_knowledge.redact.RULES`) | `vaws_leak_guard.py` tree walk, allowlist, pre-commit hook; `vaws_redaction.py` BLOCK/EXPORT classification | `vaws_leak_guard.scan_text` own rule set, `maturation/redact.py` |
+| Fleet observation | **vaws-top** | skill `npu-fleet-monitor` (`uvx` release wheel, pidfile, health probe) | nothing further; already reduced to 444 lines |
+| npu-smi parsing | coordinator for occupancy (`host_queue.parse_npu_smi_info`); vaws-top for display | nothing | every npu-smi parser in `manage_machine.py`, `mem_collect.py`, serving `_common.py`, `serve_probe_npus.py` |
+| Agent-facing workflow report (Result Envelope v1) | **scaffold** (`vaws_result_envelope.py`, `envelope_lint.py`, `schemas/result-envelope-v1.schema.json`) | all of it | eleven per-skill progress sentinels and hand-rolled JSON shapes (§4.3) — see §5.3 |
+| Client configuration (hooks, MCP entries for six clients) | **scaffold** (`vaws_client_setup.py`) | all | nothing |
+| Skills, workflows, decision gates | **scaffold** | `.agents/skills/` | dead subsystem `.agents/maturation/` (3519, zero production importers, not in CI) |
+| Local state layout (`.vaws-local/`) | **scaffold** (`vaws_local_state.py`) | all | state written by deleted concerns above (`sessions/leases.json`, `remote-toolbox/`, `knowledge/candidates/*.json`, `maturation/`) |
+| Guards and CI | **scaffold** | `repo_boundary_check`, `tracked_path_check`, `cli_surface_inventory`, `skill_catalog`, `tracked_leak_scan`, `sync_claude_skills` | policy content that refers to pre-split shapes (§7 rewrites it) |
+
+Dependency direction after this document is realised:
+
+```
+scaffold ──► vaws-coordinator ──► vaws-remote-dev
+scaffold ──► vaws-knowledge
+scaffold ──uvx──► vaws-top
+```
+
+No package imports the scaffold. No package reaches into the scaffold by
+file path or environment variable. No cycle.
+
+## 3. The five repositories
+
+### 3.1 remote-dev (`vaws-remote-dev`)
+
+Problem: a remote Linux host over SSH behaves like a local worktree; every
+local editor tool has a remote twin plus endpoint fields. Holds no consumer
+state, knows no consumer. This is already true at v0.1.0 (255 tests).
+
+Debts that this document accepts as work: `respect_gitignore` is advertised
+but not implemented; CI installs editable and never builds a wheel; README
+lists a deleted `docs/` directory.
+
+### 3.2 vaws-coordinator
+
+Problem: the local process that coordinates *this user's* remote Ascend
+containers and host NPU allocation. Not a hosted service.
+
+Grows by exactly the concerns in §2 that move in: parity, run manifest, code
+identity, machine directory. Shrinks by `vendor/`. Its reverse dependency on
+the scaffold (`VAWS_PARITY_SCRIPT`, `VAWS_MACHINE_INVENTORY`) ends; a
+consumer passes data, never a path into its own tree.
+
+Debts: CI still carries a private-token step for remote-dev (public since
+2026-09-08); host state directory is the literal `/tmp/vaws-npu-coordinator/v1/`.
+
+### 3.3 vaws-knowledge
+
+Problem: federated, evidence-gated knowledge commons; a failure diagnosed once
+on Ascend is not diagnosed twice. Already the authority for contract,
+canonical form, redaction, query, capture (591 tests; wheel ships the corpus;
+PR #15 mounts it by default).
+
+Debts: `server/capture.py` re-implements `content_hash` inside the package
+itself; `sync/README.md` still names `tools/*.py` paths from before
+packaging.
+
+### 3.4 vaws-top
+
+Problem: local single-user Ascend fleet monitor. Observes, never allocates.
+Complete for this document's purposes. Debt: console HTTP routes have no
+tests; building from Git needs Node 22 (release wheel does not).
+
+### 3.5 scaffold (`vllm-ascend-workspace`)
+
+Problem: the place an agent opens. Submodules `vllm/` and `vllm-ascend/`,
+the skills that turn package primitives into Ascend workflows, the local
+state directory, client configuration, and the guards that keep all of this
+honest. Nothing here talks to a remote host except through remote-dev, and
+nothing here decides who owns an NPU except through the coordinator.
+
+## 4. Scaffold target shape
+
+### 4.1 `.agents/lib/` after this document
+
+| Stays | Lines | Why it is scaffold |
+|---|---:|---|
+| `vaws_result_envelope.py` | 1507 | agent-facing workflow contract, owned here (§5.3) |
+| `vaws_leak_guard.py` | 1329 → smaller | tracked-tree walk and allowlist; detection delegated |
+| `vaws_comparability.py` | 654 | domain: paired-measurement certificate |
+| `vaws_local_state.py` | 514 | `.vaws-local/` layout |
+| `vaws_capability.py` | 509 | capability / degradation report |
+| `vaws_dependency.py` | 340 | `pyproject` / `uv.lock` / installed reconciliation |
+| `vaws_session_state.py` | 880 → binding only | which coordinator session this worktree is attached to |
+| `vaws_session_id.py` | 254 | `current-session.json` |
+| `vaws_redaction.py` | 179 | BLOCK/EXPORT classification over commons rules |
+| `vaws_coordinator_launch.py` | 123 | start the installed coordinator |
+| `vaws_remote_dev_plugin.py` | 121 | endpoint resolver for the scaffold's machines |
+| `vaws_remote_dev.py` | 105 | environment injection into remote-dev |
+| `vaws_validate.py` | 76 | id / env / device CSV validation |
+| `vaws_venv.py` | 55 | `.venv` re-exec shim |
+
+Fourteen modules, about 6 500 lines, down from twenty-four and 13 510.
+
+### 4.2 `.agents/scripts/`
+
+Guards (`repo_boundary_check`, `tracked_path_check`, `cli_surface_inventory`,
+`skill_catalog`, `tracked_leak_scan`, `sync_claude_skills`, `envelope_lint`),
+dependency plane (`vaws_deps`, `vaws_client_setup`, `vaws`), identity
+(`workspace_identity`, `workspace_profile`), and the thin knowledge CLIs.
+Everything that was a wrapper over a deleted library goes with the library.
+
+### 4.3 Skills
+
+A skill is a `SKILL.md`, a workflow, decision gates, and scripts that compose
+package primitives. A skill script may call `remote_dev.core.*`,
+`vaws_coordinator.*`, `vaws_knowledge.*`, and other skills' published entry
+points. A skill script may not open an SSH connection, parse `npu-smi`,
+allocate a lease, or hash a knowledge body itself.
+
+Twenty-five skills, 101 407 lines. Four are load-bearing by in-degree —
+`vllm-ascend-serving`, `remote-code-parity`, `session-management`,
+`machine-management` — and they are exactly the four that hold the duplicated
+SSH and npu-smi code. Fixing those four fixes most of §2's "deletes" column,
+because the other skills reach remote hosts *through* them.
+
+Two facts constrain how the skill layer is cleaned:
+
+**Every skill invented its own result shape.** No skill imports
+`vaws_result_envelope.py`. Instead there are eleven distinct progress
+sentinels — `__VAWS_PROGRESS__`, `__VAWS_SERVING_PROGRESS__`,
+`__VAWS_PARITY_PROGRESS__`, `__VAWS_BENCHMARK_PROGRESS__`,
+`__VAWS_SESSION_PROGRESS__`, `__VAWS_PROFILE_ANALYSIS_PROGRESS__`,
+`__VAWS_MATURATION_PROGRESS__`, `__VAWS_REMOTE_TOOLBOX_PROGRESS__`,
+`__VAWS_PROFILING_COLLECTION_PROGRESS__`,
+`__VAWS_NPU_COORDINATION_PROGRESS__`, `__VAWS_MEMPROF_PROGRESS__` — plus
+`__VAWS_JSON__` for terminal payloads, three of them hand-written rather than
+delegated to the shared library. Two disappear with the deletions in §2
+(`maturation`, `remote_toolbox`); nine belong to skills that stay.
+
+So the envelope this document keeps as scaffold-owned (§5.3) is, today, a
+contract with no producers. Either the skills adopt it or it is not a
+contract; the work list picks adoption, starting with the four load-bearing
+skills.
+
+**SSH strategy legitimately forks.** Short commands multiplex; long streams
+must not (`mux=False` in the analysis and collection wrappers). That divergence
+is already a recorded failure signature, so the remote-dev migration has to
+preserve it as an endpoint option rather than flatten it.
+
+`ascend-profiling-analysis` (44 179 lines, 30 % of the scaffold) is out of
+scope for this round by owner decision; only its `knowledge/` directory moves
+(§8). One property of it does bear on §2: its analysis framework runs *inside
+the remote container* after a tar-over-ssh push of `scripts/ascend_profile/`,
+which is a third code-transport mechanism next to parity and remote-dev
+artifacts. When it is in scope, that push becomes a remote-dev artifact push.
+
+Skills with no tests at all: `ascend-profiling-collection` (its two
+`selftest_*.py` sit in `scripts/`, outside discovery), `modelscope`,
+`remote-toolbox`. Skills absent from CI: those three plus
+`repo-init/test_workspace_identity.py` (538 lines, in the skill root rather
+than a `tests/` directory). `modelscope` is referenced by no other skill.
+
+### 4.4 Entry points
+
+Every tracked Python entry point under `.agents/` — scripts, hooks, skill
+scripts — carries the `ensure_workspace_interpreter` shim so that `python3
+path/to/script.py` works from a shell that has not activated `.venv`. A guard
+test enforces this; CI runs the entry-point smoke with the system interpreter
+as well as `uv run`, because the two disagreeing is exactly the failure that
+CI was not catching.
+
+### 4.5 Local state
+
+`.vaws-local/` keeps: `machine-profile.json`, `workspace-identity.json`,
+`current-session.json`, `agent-sessions/`, `remote-dev-state/`,
+`knowledge/candidate/*.yaml` (commons candidate layer), per-skill run
+directories, `client-setup-backups/`. It loses every path in §2's "deletes"
+column. Coordinator and remote-dev state lives where those packages put it
+(`VAWS_COORDINATOR_STATE_DIR`, `REMOTE_DEV_STATE_DIR`), both pointed inside
+`.vaws-local/` by the scaffold.
+
+## 5. Cross-repository contracts
+
+### 5.1 Version is the contract
+
+A consumer checks `importlib.metadata.version(...)` and the `uv.lock` pin.
+`vaws_deps.py doctor` reports drift as a warning and continues (owner
+decision 2026-09-08: warn, do not block).
+
+### 5.2 Run Manifest v1
+
+Exactly one module: `vaws_coordinator.run_manifest`. Its `code` field is
+required and is Git identity (`source_head`, `snapshot_commit`, both matching
+`GIT_SHA_RE`). The scaffold's current `vaws_run_manifest.py` is the version
+that moves; the coordinator's `vendor/vaws_run_manifest.py` (upstream ref
+`161fed1`, no `code` field, SHA-256 identity) is deleted.
+
+This is not hygiene. On 2026-09-09 a manifest produced by the vendored copy
+was rejected by the scaffold's validator with `missing top-level fields:
+code` while both declared `schema_version: 1`. Two producers under one
+version number were writing incompatible records, and each repository's CI
+tested only its own copy.
+
+### 5.3 Two result contracts, two levels
+
+`remote-dev.result.v1` (remote-dev, 781-byte schema, seven required fields)
+is the result of **one remote tool call**: `tool`, `target`, `outcome`,
+`status`, `summary`, plus `preview` / `refs` / `artifacts` / `changed_files`.
+
+Result Envelope v1 (scaffold, seventeen required fields) is the report of
+**one agent-facing operation**: `envelope_id`, `operation`, `attempt`,
+`failure` with layer attribution, `environment`, `evidence`, `next_step`,
+`parts` for fan-out, `children` digests, `extensions`.
+
+They compose: a remote-dev result lifts into an envelope's `parts` or
+`children` without reshaping (`vaws_result_envelope.py:192`). The coordinator
+emits remote-dev results because it performs remote tool calls; skills emit
+envelopes because they perform operations. The earlier note that the
+scaffold should "stop maintaining its own envelope" was wrong and is
+withdrawn.
+
+### 5.4 Knowledge entry
+
+Schema v2 as shipped by `vaws-knowledge`. One body, `rule` or `measurement`.
+`content_hash` covers `scope` plus that body and is computed only by
+`vaws_knowledge.canonical.content_hash`. The scaffold's project layer is
+`.agents/knowledge/*.v2.yaml`; the candidate layer is
+`.vaws-local/knowledge/candidate/*.yaml`; the shared layer is the corpus
+inside the installed wheel. v1 documents do not exist after migration.
+
+### 5.4a Applicability is reachable
+
+`AGENTS.md` states that applicability is a coordinate, and schema v2 carries
+twelve scope dimensions. Commons implements the evaluation
+(`evaluate_scope`, `Applicability`, `COVERED` / `MISMATCH` / `UNDECIDABLE` /
+`ASSUMED_ANY`) and `query()` accepts a `reader_coordinate`. Neither the
+scaffold CLI nor the commons CLI exposes a way to pass one, so today an agent
+cannot ask "does this apply to my container" — it gets every entry regardless
+of coordinates, and the response's `reader_coordinate` is always empty. In
+the target state both CLIs and the MCP tool accept coordinate arguments, and
+the scaffold fills what it knows from the Run Manifest and machine profile
+without the agent restating it.
+
+### 5.5 Redaction
+
+Detection rules are `vaws_knowledge.redact.RULES`. The scaffold classifies
+each rule id as BLOCK or EXPORT (`vaws_redaction.py`) and walks its tracked
+tree (`vaws_leak_guard.py`). No other regex set for hosts, addresses, users,
+or paths exists in the scaffold.
+
+### 5.6 Endpoint
+
+A remote endpoint is `host`, `port`, `user`, `root`, `cwd` as defined by
+remote-dev. The scaffold's machine inventory becomes a coordinator-owned
+machine directory; the scaffold's resolver plugin maps a machine id to an
+endpoint by asking the coordinator.
+
+## 6. Deletion inventory
+
+Before touching any skill script, this document deletes about 19 000 tracked
+lines:
+
+| Area | Lines |
+|---|---:|
+| `.agents/lib/` modules moved or deleted (§4.1) | ≈ 6 900 |
+| `.agents/scripts/` wrappers over deleted libraries | ≈ 1 100 |
+| `.agents/maturation/` | 3 519 |
+| `.agents/schemas/knowledge-*.json`, `run-manifest-v1.schema.json` | 1 075 |
+| skill `remote-toolbox` | 389 |
+| `docs/audits/` (103 tracked-path violations among them), `deterministic-core-maturation.md`, `leak-remediation.md`, `repo-boundaries.md` | ≈ 5 600 |
+| `.agents/policy/tracked-paths-baseline.json` (mostly audit paths) | ≈ 900 |
+| `.agents/knowledge/*.yaml` v1 after migration | 752 |
+
+Git history is the archive for dated evidence. A `Status: dated` document
+that has been superseded is deleted, not kept; the `Status:` convention
+survives only for documents that are evidence and have no successor yet.
+
+## 7. Acceptance predicates
+
+Each predicate is a shell or Python check that a work package's acceptance
+runs on a fresh clone after `repo-init`. All must hold at the end; a work
+package names the subset it makes true.
+
+| # | Predicate |
+|---|---|
+| P1 | No scaffold Python spawns `ssh`: `rg -l '"ssh"' .agents --glob '*.py'` returns nothing outside `vaws_remote_dev*.py` configuration. |
+| P2 | No `npu-smi` string in any scaffold Python file. |
+| P3 | No writer of `leases.json` in the scaffold; `rg allocate_session_leases .agents` is empty. |
+| P4 | `rg 'def content_hash\|def canonical_payload\|def canonical_object' .agents` is empty. |
+| P5 | `rg 'def scan_text' .agents` is empty; leak guard imports `vaws_knowledge.redact`. |
+| P6 | `import vaws_coordinator.run_manifest` succeeds; `.agents/lib/vaws_run_manifest.py` and the coordinator's `vendor/` are absent; a manifest written by `vaws_coordinator.ready_runtime` passes `vaws_coordinator.run_manifest.validate_manifest`. |
+| P7 | `rg 'VAWS_PARITY_SCRIPT\|VAWS_MACHINE_INVENTORY'` across the coordinator source is empty. |
+| P8 | `.agents/knowledge/` contains only `*.v2.yaml`; `vaws-knowledge validate .agents/knowledge` exits 0. |
+| P9 | Every tracked `.agents/**/*.py` containing `if __name__ == "__main__"` contains `ensure_workspace_interpreter`; guard test in `.agents/tests`. |
+| P10 | `tracked_path_check.py --mode enforce` passes with an empty baseline. |
+| P11 | `rg -l 'Status: dated' docs` is empty. |
+| P12 | Fresh clone → `repo-init` → `python3 .agents/scripts/vaws_deps.py doctor` reports `success` with all capabilities available, using the system `python3`. |
+| P13 | `.agents/maturation/` and `.agents/skills/remote-toolbox/` do not exist; `docs/README.md` lists every file under `docs/`. |
+| P14 | Each of the four package CIs has a job that runs `uv build`, installs the wheel into a clean venv, imports the top-level package, and runs the console script with `--help`. |
+| P15 | `repo_boundary_check.py --mode enforce` passes, and `.agents/policy/repo-boundaries.json` contains no reference to an HTTP manager, `starlette`, `.agents/coordinator/`, or `.remote-dev/`. The checker's rules encode P1–P5 so that they are enforced in CI, not only at acceptance. |
+| P16 | `pytest .agents/tests` and every skill `tests/` directory pass under both `uv run` and system `python3`. Every skill has a discoverable `tests/` directory and every one of them is in CI. |
+| P17 | `rg -o '__VAWS_[A-Z_]+_PROGRESS__' .agents \| sort -u` yields at most one sentinel, and the four load-bearing skills emit Result Envelope v1 that passes `envelope_lint.py`. |
+| P18 | A remote endpoint can request an unmultiplexed connection through remote-dev, and the analysis and collection long-stream paths use it rather than their own `ssh` invocation. |
+| P19 | `knowledge_query.py` and the `knowledge_query` MCP tool accept reader coordinates; a query naming a `soc` that an entry's scope excludes does not return that entry, and the response's `reader_coordinate` is populated. |
+| P20 | For every client, a config entry that a scaffold setup run reports as rewritten is absent from the written file afterwards, under both the hyphen and underscore spellings of the server name. |
+
+## 8. Out of scope for this round
+
+- `ascend-profiling-analysis` internals. Its `knowledge/` measurement data
+  moves to `vaws-knowledge` as `measurement` entries (all `unverified`, per
+  commons decision 24); the analyser reads them through the knowledge client
+  with `include-unverified` and a built-in fallback. Nothing else in the
+  skill changes.
+- Publishing the scaffold itself as a package.
+- Any hosted or multi-user service.
+- Compile-artifact → source mapping for operators (axiom 3 reserves the
+  slot; nothing needs it yet).
+
+## 9. Decisions recorded here
+
+| Date | Decision | Why |
+|---|---|---|
+| 2026-09-08 | Pin drift warns, never blocks | owner |
+| 2026-09-08 | remote-dev is a pip-installable pure tool dependency | owner |
+| 2026-09-08 | Hashes: Git for code, `content_hash` for knowledge bodies, nothing else | owner |
+| 2026-09-08 | Everything local; knowledge shared only by PR | owner |
+| 2026-09-09 | Contract is the package version; no `service-api.json` | all four packages converged independently; knowledge decision 28 |
+| 2026-09-09 | Run Manifest and code identity live in the coordinator | vendored copy proven incompatible under the same version; coordinator is already the execution authority and already on the dependency path; both modules are stdlib-only |
+| 2026-09-09 | Parity and machine directory live in the coordinator | ends the package → scaffold path dependency; the coordinator is the only caller that needs them as a library |
+| 2026-09-09 | Two result contracts are two levels, not a duplicate | remote-dev result = one tool call; Envelope = one operation; they compose by design. Withdraws the earlier "converge on `remote-dev.result.v1`" note |
+| 2026-09-09 | `.agents/maturation/` is deleted | zero production importers, absent from CI, superseding document already published |
+| 2026-09-09 | Superseded dated docs are deleted | Git is the archive; the 103 dead-path violations were all in `docs/audits/` |
+| 2026-09-09 | `ascend-profiling-analysis` deferred | owner |
+| 2026-09-09 | Skills adopt Result Envelope v1 rather than the envelope being deleted | it currently has zero producers and eleven competing sentinels; a contract with no producers is not a contract, and the attribution/evidence structure is what agents need |
+| 2026-09-09 | Unmultiplexed SSH stays an endpoint option | long-stream `mux=False` is a recorded failure signature, not an accident |
+| 2026-09-09 | Reader coordinates become reachable from the CLI and MCP tool | the twelve-dimension scope and the whole applicability axiom are currently unreachable: no entry point accepts a coordinate |

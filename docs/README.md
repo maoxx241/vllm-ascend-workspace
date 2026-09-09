@@ -16,7 +16,8 @@ contract. `Status: dated` is evidence and is never a direction.
 - [npu-fleet-monitor.md](npu-fleet-monitor.md) — local deploy and lifecycle of the standalone vaws-top fleet monitor.
 - [property-testing.md](property-testing.md) — property-based tests for the deterministic cores.
 - [remote-dev-consumption.md](remote-dev-consumption.md) — how this scaffold consumes the installed vaws-remote-dev package.
-- [repo-boundaries.md](repo-boundaries.md) — current consumer-side boundary contract and guard summary.
+- [repo-boundaries.md](repo-boundaries.md) — current consumer-side boundary contract and guard summary; superseded as direction by target-state.md.
+- [target-state.md](target-state.md) — the single definition of the post-split end state: axioms, ownership matrix, contracts, deletion inventory, acceptance predicates.
 - [tracked-leak-guard.md](tracked-leak-guard.md) — tracked-file leak scanner, hook, and CI.
 - [tracked-path-guard.md](tracked-path-guard.md) — anti-rot guard against dead in-tree paths in tracked docs.
 
