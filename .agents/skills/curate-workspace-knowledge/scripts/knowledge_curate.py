@@ -4,9 +4,11 @@
 Curation writes only the federated v2 contract (``<kind>.v2.yaml``).
 
 A v2 promotion never invents a coordinate. Whatever the candidate recorded as
-``unknown`` becomes an explicit unresolved marker, which keeps the entry at
+``unknown`` becomes an unbounded range (``min`` and ``max`` both null), which
+the package treats as undecidable. That keeps the entry at
 ``status: unverified`` and out of any export until ``resolve`` and ``verify``
-fill it in from a real run.
+fill it in from a real run. The curator hint for each gap is returned in
+``needs_human_input``, not stored inside ``scope``.
 """
 
 from __future__ import annotations
@@ -287,7 +289,7 @@ def scope_from_environment(
 
     A concrete value becomes a single-valued ``values`` constraint — the claim
     is asserted exactly where it was observed, and nowhere else. ``unknown``
-    becomes an unresolved marker rather than ``any``: ``any`` is a positive
+    becomes an unbounded range rather than ``any``: ``any`` is a positive
     claim of independence that requires an examined basis, and nobody examined
     anything here.
     """
@@ -300,9 +302,10 @@ def scope_from_environment(
         if value and value != COORDINATE_UNKNOWN:
             scope[dimension] = v2.values_constraint([value])
             continue
-        needs = v2.UNRESOLVED_HINTS[dimension]
-        scope[dimension] = v2.unresolved_constraint(needs)
-        pending.append({"dimension": dimension, "needs": needs})
+        scope[dimension] = v2.range_constraint(None, None)
+        pending.append(
+            {"dimension": dimension, "needs": v2.unresolved_needs(dimension)}
+        )
     return scope, pending
 
 
@@ -379,13 +382,17 @@ def _project_scope_from_entry(
     for dimension in v2.SCOPE_DIMENSIONS:
         node = raw.get(dimension)
         if isinstance(node, Mapping):
-            if node.get("unresolved") is True or "any" in node or "range" in node:
-                scope[dimension] = dict(node)
-                if node.get("unresolved") is True:
+            if node.get("any") is True:
+                scope[dimension] = {"any": True, "basis": node.get("basis")}
+                continue
+            if "range" in node:
+                bounds = node.get("range") if isinstance(node.get("range"), Mapping) else {}
+                scope[dimension] = v2.range_constraint(bounds.get("min"), bounds.get("max"))
+                if v2.is_unresolved(scope[dimension]):
                     pending.append(
                         {
                             "dimension": dimension,
-                            "needs": str(node.get("needs") or v2.UNRESOLVED_HINTS[dimension]),
+                            "needs": v2.unresolved_needs(dimension),
                         }
                     )
                 continue
@@ -399,9 +406,10 @@ def _project_scope_from_entry(
                 if concrete:
                     scope[dimension] = v2.values_constraint(concrete)
                     continue
-        needs = v2.UNRESOLVED_HINTS[dimension]
-        scope[dimension] = v2.unresolved_constraint(needs)
-        pending.append({"dimension": dimension, "needs": needs})
+        scope[dimension] = v2.range_constraint(None, None)
+        pending.append(
+            {"dimension": dimension, "needs": v2.unresolved_needs(dimension)}
+        )
     return scope, pending
 
 
@@ -792,7 +800,7 @@ def list_unresolved(knowledge_dir: Path) -> dict[str, Any]:
                 "unresolved": [
                     {
                         "dimension": name,
-                        "needs": entry["scope"][name].get("needs", ""),
+                        "needs": v2.unresolved_needs(name),
                     }
                     for name in dimensions
                 ],

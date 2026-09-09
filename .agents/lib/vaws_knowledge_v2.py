@@ -10,25 +10,17 @@ Contract source of truth (not vendored here):
 
 in https://github.com/vllm-ascend-workspace/vaws-knowledge.
 
-Two deliberate differences from the upstream contract, both local-only:
-
-1. **Unresolved coordinate markers.** A migrated or freshly captured entry
-   often has dimensions nobody has actually established. Upstream has no
-   representation for that on purpose — an entry there is either bounded or
-   explicitly claimed independent. So this fork adds a third, *project-layer
-   only* constraint form ``{"unresolved": true, "needs": "..."}``. It is not
-   upstream-valid, which is exactly the point: an entry carrying one cannot be
-   exported and cannot reach ``status: verified``. Guessing a plausible CANN
-   range instead would produce the confident-but-wrong knowledge the whole
-   design exists to prevent.
-2. **``layer: project``.** Project-layer documents live in this repo, not in
-   the upstream corpus directories, so they carry their own layer label.
-   Export rewrites it to ``unverified`` (a proposal lands in
-   ``corpus/unverified/``).
+Project-layer documents use the same three admissible scope forms as the
+installed package: ``{any, basis}``, ``{values}``, or ``{range: {min, max}}``.
+A dimension nobody has established is written as
+``{"range": {"min": null, "max": null}}``. The package evaluates that as
+``UNDECIDABLE`` (``server/query.py``): it is the honest encoding of an
+unresolved dimension, not a match. Export and ``verified`` refuse that shape.
+The curator hint for what to go find lives in ``UNRESOLVED_HINTS`` and in the
+curate response (``needs_human_input``), not inside ``scope``.
 
 Hashing and the query engine live in the installed ``vaws-knowledge``
-package. This module keeps the project-layer contract: unresolved markers,
-``layer: project``, document I/O, and the curation/export rewrite.
+package. This module keeps document I/O, curation, and the export rewrite.
 """
 
 from __future__ import annotations
@@ -165,7 +157,6 @@ BOT_IDENTITY = re.compile(
     r"^vaws-?(?:bot|ci|review)|^ci$)"
 )
 MIN_BASIS_LENGTH = 12
-MIN_NEEDS_LENGTH = 12
 
 # What a human has to supply per dimension before an entry can leave
 # ``unverified``. Shared by migration and by candidate promotion so both ask
@@ -287,7 +278,7 @@ def write_document(path: Path, document: Mapping[str, Any], *, context: str = PR
     _write_json_atomic(path, document)
 
 
-def new_document(kind: str, *, layer: str = PROJECT_LAYER, now: str | None = None) -> dict[str, Any]:
+def new_document(kind: str, *, layer: str = EXPORT_LAYER, now: str | None = None) -> dict[str, Any]:
     return {
         "schema_version": SCHEMA_VERSION,
         "kind": kind,
@@ -359,14 +350,29 @@ def range_constraint(minimum: str | None, maximum: str | None) -> dict[str, Any]
     return {"range": {"min": minimum, "max": maximum}}
 
 
-def unresolved_constraint(needs: str) -> dict[str, Any]:
-    """Project-layer only marker: this dimension has not been established."""
-
-    return {"unresolved": True, "needs": needs}
-
-
 def is_unresolved(constraint: Any) -> bool:
-    return isinstance(constraint, Mapping) and constraint.get("unresolved") is True
+    """True when the dimension bounds nothing.
+
+    The package-valid encoding is an unbounded range. A leftover
+    ``unresolved`` marker is treated the same so export/verify still refuse it.
+    """
+
+    if not isinstance(constraint, Mapping):
+        return False
+    if constraint.get("unresolved") is True:
+        return True
+    bounds = constraint.get("range")
+    return (
+        isinstance(bounds, Mapping)
+        and bounds.get("min") is None
+        and bounds.get("max") is None
+    )
+
+
+def unresolved_needs(dimension: str) -> str:
+    """What a curator has to supply for an unresolved dimension."""
+
+    return UNRESOLVED_HINTS[dimension]
 
 
 def unresolved_dimensions(entry: Mapping[str, Any]) -> list[str]:
@@ -410,26 +416,18 @@ def _validate_constraint(
             bound = bounds.get(side)
             if bound is not None and not isinstance(bound, str):
                 errors.append(f"{path}.range.{side} must be a string or null")
-        return
-    if keys in ({"unresolved"}, {"unresolved", "needs"}, {"unresolved", "needs", "note"}):
-        if not allow_unresolved:
+        if (
+            bounds.get("min") is None
+            and bounds.get("max") is None
+            and not allow_unresolved
+        ):
             errors.append(
-                f"{path} is an unresolved project-layer marker and cannot be exported; "
+                f"{path} is an unresolved unbounded range and cannot be exported; "
                 "a human must supply this coordinate first"
             )
-            return
-        if value.get("unresolved") is not True:
-            errors.append(f"{path}.unresolved must be true")
-        needs = value.get("needs")
-        if not isinstance(needs, str) or len(needs.strip()) < MIN_NEEDS_LENGTH:
-            errors.append(f"{path}.needs must state what a human has to supply")
-        note = value.get("note")
-        if note is not None and not isinstance(note, str):
-            errors.append(f"{path}.note must be a string")
         return
     errors.append(
         f"{path} must be exactly one of: {{any, basis}}, {{values}}, {{range}}"
-        + (", {unresolved, needs}" if allow_unresolved else "")
     )
 
 
@@ -898,10 +896,10 @@ def validate_entry(
 ) -> list[str]:
     """Return contract violations for one entry.
 
-    ``context='project'`` allows unresolved coordinate markers.
-    ``context='export'`` refuses them, which is the whole point of the marker.
-    ``context='verified'`` is the commons verified-zone boundary: unresolved
-    markers and unverified entries are refused.
+    ``context='project'`` allows an unbounded range (the unresolved encoding).
+    ``context='export'`` refuses it. ``context='verified'`` is the commons
+    verified-zone boundary: unresolved dimensions and unverified entries
+    are refused.
     """
 
     allow_unresolved = context == PROJECT_LAYER
@@ -1216,9 +1214,14 @@ def _constraint_kind(constraint: Any) -> str:
     if keys == {"values"}:
         return "values"
     if keys == {"range"}:
+        bounds = constraint.get("range")
+        if (
+            isinstance(bounds, Mapping)
+            and bounds.get("min") is None
+            and bounds.get("max") is None
+        ):
+            return "unresolved"
         return "range"
-    if "unresolved" in keys:
-        return "unresolved"
     return "invalid"
 
 
@@ -1232,7 +1235,7 @@ def _normalized_values(constraint: Mapping[str, Any]) -> set[str]:
 def _dimension_disjoint(left: Any, right: Any) -> bool:
     """True only when both sides are bounded and their value sets do not meet.
 
-    ``any``, unresolved markers, ranges that cannot be compared, and malformed
+    ``any``, unbounded ranges, ranges that cannot be compared, and malformed
     constraints are treated as overlapping: that is the conservative reading
     ``vaws_knowledge.bot.conflicts.relate_dimension`` uses for ``any`` and
     unknown, and it is enough for the shared kit's measurement vectors.

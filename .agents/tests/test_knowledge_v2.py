@@ -203,29 +203,34 @@ class CanonicalizationTests(unittest.TestCase):
 class CoordinateContractTests(unittest.TestCase):
     def test_unresolved_marker_blocks_verified_status(self) -> None:
         entry = sample_entry()
-        entry["scope"]["cann"] = v2.unresolved_constraint(
-            "the CANN version of the verification container"
-        )
+        entry["scope"]["cann"] = v2.range_constraint(None, None)
         entry["verification"] = verification()
         entry["status"] = "verified"
         entry = v2.with_content_hash(entry)
         errors = v2.validate_entry(entry, context=v2.PROJECT_LAYER)
         self.assertTrue(any("unresolved dimensions" in error for error in errors))
 
+    def test_retired_unresolved_marker_is_refused_even_in_project_context(self) -> None:
+        entry = sample_entry()
+        entry["scope"]["cann"] = {
+            "unresolved": True,
+            "needs": "the CANN version of the verification container",
+        }
+        entry = v2.with_content_hash(entry)
+        errors = v2.validate_entry(entry, context=v2.PROJECT_LAYER)
+        self.assertTrue(errors)
+        self.assertFalse(any("unresolved, needs" in error for error in errors))
+
     def test_unresolved_marker_is_allowed_while_unverified(self) -> None:
         entry = sample_entry()
-        entry["scope"]["driver"] = v2.unresolved_constraint(
-            "the driver version of the verification host"
-        )
+        entry["scope"]["driver"] = v2.range_constraint(None, None)
         entry = v2.with_content_hash(entry)
         self.assertEqual(v2.validate_entry(entry, context=v2.PROJECT_LAYER), [])
         self.assertEqual(v2.unresolved_dimensions(entry), ["driver"])
 
     def test_unresolved_marker_is_refused_in_export_context(self) -> None:
         entry = sample_entry()
-        entry["scope"]["driver"] = v2.unresolved_constraint(
-            "the driver version of the verification host"
-        )
+        entry["scope"]["driver"] = v2.range_constraint(None, None)
         entry = v2.with_content_hash(entry)
         errors = v2.validate_entry(entry, context="export")
         self.assertTrue(any("unresolved" in error for error in errors))
@@ -302,9 +307,7 @@ class StatusGateTests(unittest.TestCase):
 
     def test_verified_zone_refuses_unresolved_scope(self) -> None:
         entry = sample_entry()
-        entry["scope"]["cann"] = v2.unresolved_constraint(
-            "the CANN version of the verification container"
-        )
+        entry["scope"]["cann"] = v2.range_constraint(None, None)
         entry = v2.with_content_hash(entry)
         errors = v2.validate_entry(entry, context=v2.VERIFIED_CONTEXT)
         self.assertTrue(any("unresolved" in error for error in errors))
@@ -402,7 +405,7 @@ class ExportTests(unittest.TestCase):
 
     def test_export_refuses_unresolved_dimensions(self) -> None:
         entry = sample_entry()
-        entry["scope"]["cann"] = v2.unresolved_constraint("the verified CANN version")
+        entry["scope"]["cann"] = v2.range_constraint(None, None)
         entry = v2.with_content_hash(entry)
         with self.assertRaisesRegex(v2.KnowledgeV2Error, "unresolved"):
             v2.export_entry(entry, contributor="handle", origin_repo="owner/fork")
@@ -465,7 +468,7 @@ class ExportTests(unittest.TestCase):
 class MatchViewTests(unittest.TestCase):
     def test_scope_summary_states_unknown_dimensions_explicitly(self) -> None:
         entry = sample_entry()
-        entry["scope"]["cann"] = v2.unresolved_constraint("the verified CANN version")
+        entry["scope"]["cann"] = v2.range_constraint(None, None)
         summary = v2.scope_summary(entry["scope"])
         self.assertIn("cann", summary)
         self.assertIn("unresolved", summary.lower())

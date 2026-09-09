@@ -1,6 +1,6 @@
 ---
 name: curate-workspace-knowledge
-description: Review, deduplicate, promote, merge, reject, or deprecate verified vLLM Ascend workspace knowledge candidates, resolve unresolved v2 coordinate dimensions, and gate export to the federated commons. Use only when the user explicitly asks to curate, persist, review, merge, promote, deprecate, or upstream project knowledge (沉淀、整理、复盘、合并、提升、废弃、上游), or explicitly invokes this Skill to review `.vaws-local/knowledge/candidate`. Do not use during normal diagnosis, serving, benchmarking, profiling, remote execution, code review, or candidate capture/query; those workflows call the shared scripts directly without loading this Skill.
+description: Review, deduplicate, promote, reject, or deprecate verified vLLM Ascend workspace knowledge candidates, resolve unresolved v2 coordinate dimensions, and gate export to the federated commons. Use only when the user explicitly asks to curate, persist, review, promote, deprecate, or upstream project knowledge (沉淀、整理、复盘、提升、废弃、上游), or explicitly invokes this Skill to review `.vaws-local/knowledge/candidate`. Do not use during normal diagnosis, serving, benchmarking, profiling, remote execution, code review, or candidate capture/query; those workflows call the shared scripts directly without loading this Skill.
 ---
 
 # Curate Workspace Knowledge
@@ -30,7 +30,8 @@ when listing, querying, hashing, or exporting.
    at least one stable test, commit, issue, or PR evidence item exists.
 4. Choose exactly one disposition:
    - `promote` a novel candidate;
-   - `merge` it into an existing entry with the same cause and scope;
+   - edit the existing v2 document (or promote a revision that supersedes it)
+     when cause and applicability already match;
    - `reject` an unsupported, transient, secret-bearing, or duplicate candidate;
    - `deprecate` a stale formal entry.
 5. For a v2 promotion, close the coordinate before claiming anything:
@@ -77,8 +78,8 @@ Read only the reference needed for the active operation:
 - Require a regression test or two verified occurrences before `active`
   (v1) or before promoting with the `active` evidence gate (v2).
 - Never invent a coordinate. A dimension nobody established stays an
-  unresolved marker; `any` is a positive claim of independence and needs a
-  basis describing what was actually examined.
+  unbounded range (`min` and `max` both null); `any` is a positive claim
+  of independence and needs a basis describing what was actually examined.
 - A v2 entry reaches `verified` only with a complete coordinate, followable
   evidence, and a confirming handle that is not the submitter.
 - Never publish upstream from a raw document. Export only through
@@ -87,7 +88,9 @@ Read only the reference needed for the active operation:
   coordinates.
 - Never write a local copy of the shared corpus; the shared layer is the
   installed `vaws-knowledge` package and flows one way, downward.
-- Prefer `merge` over a new entry when cause and applicability match.
+- When cause and applicability match an existing entry, edit that v2
+  document or promote a revision that supersedes it. Do not add a
+  duplicate. `merge` is retired.
 - Use `--force-new` only after reviewing an identical fingerprint with a
   different confirmed cause.
 - Keep deterministic behavior in the owning Skill's scripts and tests; store

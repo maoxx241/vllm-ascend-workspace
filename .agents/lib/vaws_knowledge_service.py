@@ -15,7 +15,13 @@ import hashlib
 from datetime import datetime, timezone
 
 from vaws_knowledge.redact import REDACTION_PROFILE
-from vaws_knowledge.server.layers import ServiceConfig, load_config, load_entries
+from vaws_knowledge.server.layers import (
+    DEFAULT_STATUSES,
+    OPT_IN_STATUSES,
+    ServiceConfig,
+    load_config,
+    load_entries,
+)
 from vaws_knowledge.server.query import SCOPE_DIMENSIONS, query as commons_query
 
 COORDINATE_DIMENSIONS = SCOPE_DIMENSIONS
@@ -68,9 +74,24 @@ def query_knowledge(
     min_score: int = 0,
     include_unverified: bool = True,
 ) -> list[dict[str, Any]]:
-    """Project-layer query through the installed engine, shaped for existing callers."""
+    """Project-layer query through the installed engine, shaped for existing callers.
 
-    del include_deprecated
+    Each record includes the entry ``status`` and the layer it was read from
+    so a caller can tell verified/unverified/deprecated and shared/project
+    apart. ``include_unverified`` defaults to True because every project-layer
+    entry is unverified. ``include_deprecated`` is forwarded as an explicit
+    status list; the package never adds deprecated on its own.
+    """
+
+    statuses = None
+    if include_deprecated:
+        statuses = list(DEFAULT_STATUSES)
+        if include_unverified:
+            statuses.extend(
+                status for status in OPT_IN_STATUSES if status not in statuses
+            )
+        if "deprecated" not in statuses:
+            statuses.append("deprecated")
     repo = infer_repo_root(knowledge_dir, knowledge_dir.parent)
     config = service_config(repo, project_root=knowledge_dir)
     selected = list(kinds) if kinds else [None]
@@ -83,6 +104,7 @@ def query_knowledge(
             bodies=bodies,
             limit=max(limit, 1),
             include_unverified=include_unverified,
+            statuses=statuses,
         )
         for result in response.results:
             payload = result.to_dict()

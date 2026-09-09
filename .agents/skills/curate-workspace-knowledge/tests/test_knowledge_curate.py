@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -155,9 +156,15 @@ class V2CurationTests(unittest.TestCase):
             {**CONCRETE_ENVIRONMENT, "model": "unknown"}
         )
         self.assertEqual(scope["soc"], {"values": ["Ascend910_93"]})
+        self.assertEqual(scope["model"], {"range": {"min": None, "max": None}})
         self.assertTrue(curate.v2.is_unresolved(scope["model"]))
         self.assertNotIn("any", scope["model"])
+        self.assertNotIn("unresolved", scope["model"])
         self.assertIn("model", [item["dimension"] for item in pending])
+        self.assertEqual(
+            next(item["needs"] for item in pending if item["dimension"] == "model"),
+            curate.v2.unresolved_needs("model"),
+        )
 
     def test_promotion_lands_unverified_with_named_gaps(self) -> None:
         result = self.promote()
@@ -172,6 +179,31 @@ class V2CurationTests(unittest.TestCase):
         )
         # 'high' candidate confidence cannot survive into an unverified entry.
         self.assertEqual(entry["confidence"], "low")
+        for item in result["needs_human_input"]:
+            self.assertEqual(item["needs"], curate.v2.unresolved_needs(item["dimension"]))
+            self.assertEqual(
+                entry["scope"][item["dimension"]],
+                {"range": {"min": None, "max": None}},
+            )
+
+    def test_promote_writes_a_document_the_package_validator_accepts(self) -> None:
+        # Capture stamps first_seen from the real clock; the frozen NOW used
+        # by other tests is earlier than that and the package refuses
+        # first_seen after updated_at. Let promote use wall-clock time.
+        result = self.promote(now=None)
+        self.assertEqual(result["status"], "passed")
+        completed = subprocess.run(
+            [sys.executable, "-m", "vaws_knowledge", "validate", str(self.knowledge)],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(
+            completed.returncode,
+            0,
+            completed.stdout + completed.stderr,
+        )
 
     def test_unfollowable_evidence_is_dropped_and_reported(self) -> None:
         candidate_id = self.capture(

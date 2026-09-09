@@ -103,6 +103,14 @@
     {
       "prefix": ".agents/lib/vaws_knowledge.py",
       "why": "Historical name of the retired v1 knowledge store. Routing text may still name it."
+    },
+    {
+      "prefix": ".agents/maturation/",
+      "why": "docs/target-state.md must name the deleted harness P13 forbids. The specification is not a routing claim that the directory still exists."
+    },
+    {
+      "prefix": ".agents/skills/remote-toolbox/",
+      "why": "docs/target-state.md must name the deleted skill package P13 forbids, distinct from vaws_remote_toolbox.py."
     }
   ],
   "allow_prefixes_why": "\u002eremote-dev/state/ is deliberately absent: that path is post-migration drift and must fail. Placeholders and untracked state roots are the only silent exceptions.",

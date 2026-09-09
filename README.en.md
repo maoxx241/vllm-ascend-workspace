@@ -60,7 +60,7 @@ After deployment, open <http://127.0.0.1:8788>. The dashboard shows NPU/AICore, 
 | **ascend-memory-profiling** | Profile and attribute HBM memory usage on Ascend NPU, with per-component breakdown and evidence chains | When you need to analyze memory consumption of a vLLM serving workload |
 | **ascend-profiling-collection** | Collect Ascend torch-profiler data: start service, bracket profile window, run workload, remote analyse, and write a manifest | When you need kernel_details/trace_view captures |
 | **ascend-profiling-analysis** | Analyze collected profiler roots/manifests and generate step/layer/operator/cross-rank reports | When you need to analyze profiling output |
-| **curate-workspace-knowledge** | Review, deduplicate, promote, merge, reject, or deprecate verified project knowledge candidates | When explicitly curating or maintaining project knowledge |
+| **curate-workspace-knowledge** | Review, deduplicate, promote, reject, or deprecate verified project knowledge candidates | When explicitly curating or maintaining project knowledge |
 | **vllm-ascend-graph-debug** | Diagnose graph compile, capture, replay, and graph/eager correctness divergence | When graph mode fails or diverges from eager mode |
 | **vllm-ascend-correctness-validation** | Compare baseline/candidate, eager/graph, offline/online, and AISBench correctness | When validating accuracy or normalized outputs |
 | **vllm-ascend-change-validation** | Derive validation plans from code diffs and aggregate PR evidence | When validating a workspace change or PR |

@@ -60,7 +60,7 @@ python3 .agents/skills/npu-fleet-monitor/scripts/manage_monitor.py ensure
 | **ascend-memory-profiling** | 采集并分析昇腾 NPU 的 HBM 显存占用，按组件拆分并溯源 | 需要分析 vLLM 推理服务的显存占用时 |
 | **ascend-profiling-collection** | 采集 Ascend torch profiler：起服务、控制 profile 窗口、运行 workload、远端 analyse 并写 manifest | 需要采集 kernel_details/trace_view 时 |
 | **ascend-profiling-analysis** | 分析已采集的 profiler root/manifest，生成 step/layer/operator/cross-rank 诊断报告 | 需要分析 profiling 结果或生成报告时 |
-| **curate-workspace-knowledge** | 审核、去重、提升、合并、拒绝或废弃已验证的项目知识候选；补全 v2 坐标维度并把守上游导出 | 显式要求沉淀、整理、维护或上游贡献项目知识时 |
+| **curate-workspace-knowledge** | 审核、去重、提升、拒绝或废弃已验证的项目知识候选；补全 v2 坐标维度并把守上游导出 | 显式要求沉淀、整理、维护或上游贡献项目知识时 |
 | **vllm-ascend-graph-debug** | 定位图编译、捕获、重放及 graph/eager 正确性分歧 | 图模式失败或与 eager 结果不一致时 |
 | **vllm-ascend-correctness-validation** | 对比 baseline/candidate、eager/graph、离线/在线和 AISBench 正确性 | 需要精度验证或输出对拍时 |
 | **vllm-ascend-change-validation** | 根据代码 diff 生成验证计划并汇总证据和 PR 报告 | 验证工作区变更或 PR 时 |

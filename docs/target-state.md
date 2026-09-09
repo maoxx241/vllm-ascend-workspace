@@ -57,7 +57,7 @@ These were decided by the owner and are not reopened by work packages.
 | npu-smi parsing | coordinator for occupancy (`host_queue.parse_npu_smi_info`); vaws-top for display | nothing | every npu-smi parser in `manage_machine.py`, `mem_collect.py`, serving `_common.py`, `serve_probe_npus.py` |
 | Agent-facing workflow report (Result Envelope v1) | **scaffold** (`vaws_result_envelope.py`, `envelope_lint.py`, `schemas/result-envelope-v1.schema.json`) | all of it | eleven per-skill progress sentinels and hand-rolled JSON shapes (§4.3) — see §5.3 |
 | Client configuration (hooks, MCP entries for six clients) | **scaffold** (`vaws_client_setup.py`) | all | nothing |
-| Skills, workflows, decision gates | **scaffold** | `.agents/skills/` | unused maturation harness (3519, zero production importers, not in CI) |
+| Skills, workflows, decision gates | **scaffold** | `.agents/skills/` | dead subsystem `.agents/maturation/` (3519, zero production importers, not in CI) |
 | Local state layout (`.vaws-local/`) | **scaffold** (`vaws_local_state.py`) | all | state written by deleted concerns above (`sessions/leases.json`, `remote-toolbox/`, `knowledge/candidates/*.json`, `maturation/`) |
 | Guards and CI | **scaffold** | `repo_boundary_check`, `tracked_path_check`, `cli_surface_inventory`, `skill_catalog`, `tracked_leak_scan`, `sync_claude_skills` | policy content that refers to pre-split shapes (§7 rewrites it) |
 
@@ -376,12 +376,12 @@ lines:
 |---|---:|
 | `.agents/lib/` modules moved or deleted (§4.1) | ≈ 6 900 |
 | `.agents/scripts/` wrappers over deleted libraries | ≈ 1 100 |
-| unused maturation harness under `.agents` | 3 519 |
+| `.agents/maturation/` | 3 519 |
 | `.agents/schemas/knowledge-*.json`, `run-manifest-v1.schema.json` | 1 075 |
-| unused remote-toolbox skill package | 389 |
+| skill `remote-toolbox` | 389 |
 
 Two of these names collide and must not be confused when the deletion is
-executed. The unused remote-toolbox skill package is five markdown files with no
+executed. `.agents/skills/remote-toolbox/` is five markdown files with no
 scripts, referenced only by documents and the leak allowlist; deleting it is
 safe on its own. `.agents/lib/vaws_remote_toolbox.py` is the 2402-line
 implementation with 31 importers across ten skills, and it can only go after
@@ -391,8 +391,8 @@ and P13 names only the first.
 | `.agents/policy/tracked-paths-baseline.json` (mostly audit paths) | ≈ 900 |
 | `.agents/knowledge/*.yaml` v1 after migration | 752 |
 
-Git history is the archive for dated evidence. A superseded document whose
-Status line marks it dated is deleted, not kept; the `Status:` convention
+Git history is the archive for dated evidence. A `Status: dated` document
+that has been superseded is deleted, not kept; the `Status:` convention
 survives only for documents that are evidence and have no successor yet.
 
 ## 7. Acceptance predicates
@@ -413,10 +413,10 @@ package names the subset it makes true.
 | P8 | `.agents/knowledge/` contains only `*.v2.yaml`; `vaws-knowledge validate .agents/knowledge` exits 0. |
 | P9 | Every tracked `.agents/**/*.py` with `if __name__ == "__main__"` that the inventory does **not** classify as `payload` contains `ensure_workspace_interpreter`; every `payload` one imports nothing from `.agents/lib`. One guard test asserts both halves against the inventory. |
 | P10 | `tracked_path_check.py --mode enforce` passes with an empty baseline. |
-| P11 | No remaining document under `docs/` carries a dated Status header. |
+| P11 | `rg -l 'Status: dated' docs` is empty. |
 | P11a | A pull request that touches only `docs/` runs the document guards. Until 2026-09-09 the job holding them was filtered to `.agents/**`, so a docs-only change merged without the anti-rot guard whose subject is tracked documents. |
 | P12 | Fresh clone → `repo-init` → `python3 .agents/scripts/vaws_deps.py doctor` reports `success` with all capabilities available, using the system `python3`. |
-| P13 | The unused maturation harness and the unused remote-toolbox skill package do not exist; `docs/README.md` lists every file under `docs/`. |
+| P13 | `.agents/maturation/` and `.agents/skills/remote-toolbox/` do not exist; `docs/README.md` lists every file under `docs/`. |
 | P14 | Each of the four package CIs has a job that runs `uv build`, installs the wheel into a clean venv, imports the top-level package, and runs the console script with `--help`. |
 | P15 | `repo_boundary_check.py --mode enforce` passes, and `.agents/policy/repo-boundaries.json` contains no reference to an HTTP manager, `starlette`, `.agents/coordinator/`, or `.remote-dev/`. The checker's rules encode P1–P5 so that they are enforced in CI, not only at acceptance. |
 | P16 | `pytest .agents/tests` and every skill `tests/` directory pass under both `uv run` and system `python3`. Every skill has a discoverable `tests/` directory and every one of them is in CI. |
@@ -467,7 +467,7 @@ package names the subset it makes true.
 | 2026-09-09 | Parity and machine directory live in the coordinator | ends the package → scaffold path dependency; the coordinator is the only caller that needs them as a library |
 | 2026-09-09 | Two result contracts are two levels, not a duplicate | remote-dev result = one tool call; Envelope = one operation. Withdraws the earlier "converge on `remote-dev.result.v1`" note |
 | 2026-09-09 | The lift between the two levels is an owned conversion with an explicit outcome mapping | "composes without reshaping" was checked and is false in all twelve outcome × slot combinations; the vocabularies overlap without matching and `unit`/`envelope_id`/`depth` are properties of the operation, not of the call |
-| 2026-09-09 | The unused maturation harness is deleted | zero production importers, absent from CI, superseding document already published |
+| 2026-09-09 | `.agents/maturation/` is deleted | zero production importers, absent from CI, superseding document already published |
 | 2026-09-09 | Superseded dated docs are deleted | Git is the archive; the 103 dead-path violations were all in `docs/audits/` |
 | 2026-09-09 | `ascend-profiling-analysis` deferred at the analysis/transport line | owner deferred the skill; its 770-line SSH and tar transport still has to move, because P1 and P18 cannot hold otherwise and the same wrapper exists in ten skills |
 | 2026-09-09 | Skills adopt Result Envelope v1 rather than the envelope being deleted | it currently has zero producers and eleven competing sentinels; a contract with no producers is not a contract, and the attribution/evidence structure is what agents need |

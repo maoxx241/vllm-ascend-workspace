@@ -160,6 +160,25 @@ class QueryTests(unittest.TestCase):
             knowledge_dir=self.root, query="legacy transfer timeout"
         )
         self.assertNotIn("legacy-transfer", {match["id"] for match in matches})
+        for match in matches:
+            self.assertIn(match["status"], {"verified", "stale", "resolved", "unverified"})
+            self.assertIn("layer", match)
+
+    def test_include_deprecated_returns_deprecated_entries(self) -> None:
+        hidden = query_knowledge(
+            knowledge_dir=self.root, query="legacy transfer timeout"
+        )
+        self.assertNotIn("legacy-transfer", {match["id"] for match in hidden})
+        matches = query_knowledge(
+            knowledge_dir=self.root,
+            query="legacy transfer timeout",
+            include_deprecated=True,
+        )
+        slugs = {match["id"] for match in matches}
+        self.assertIn("legacy-transfer", slugs)
+        deprecated = next(match for match in matches if match["id"] == "legacy-transfer")
+        self.assertEqual(deprecated["status"], "deprecated")
+        self.assertIn("layer", deprecated)
 
     def test_full_entry_is_fetched_only_by_id(self) -> None:
         result = get_knowledge_entry(

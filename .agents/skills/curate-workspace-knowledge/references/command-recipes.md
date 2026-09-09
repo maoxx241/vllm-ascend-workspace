@@ -62,12 +62,8 @@ python3 .agents/skills/curate-workspace-knowledge/scripts/knowledge_curate.py \
   --env vllm=0.11.0 --env vllm_ascend=0.11.0rc1
 ```
 
-Merge a matching candidate (v1 entries only):
-
-```bash
-python3 .agents/skills/curate-workspace-knowledge/scripts/knowledge_curate.py \
-  merge --candidate-id <candidate-id> --entry-id <formal-id>
-```
+`merge` is retired. When cause and applicability match, edit the existing
+v2 document or promote a revision that supersedes it.
 
 Reject a candidate:
 
