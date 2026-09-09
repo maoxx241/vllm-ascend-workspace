@@ -208,12 +208,31 @@ than a `tests/` directory). `modelscope` is referenced by no other skill.
 
 ### 4.4 Entry points
 
-Every tracked Python entry point under `.agents/` — scripts, hooks, skill
-scripts — carries the `ensure_workspace_interpreter` shim so that `python3
-path/to/script.py` works from a shell that has not activated `.venv`. A guard
-test enforces this; CI runs the entry-point smoke with the system interpreter
-as well as `uv run`, because the two disagreeing is exactly the failure that
-CI was not catching.
+Tracked Python under `.agents/` divides into two populations, and they get
+opposite treatment. 202 files carry `if __name__ == "__main__"`; 34 carry the
+shim today.
+
+**Local entry points** — anything an agent or a hook runs on the workstation
+— carry `ensure_workspace_interpreter`, so that `python3 path/to/script.py`
+works from a shell that never activated `.venv`. A guard test enforces this,
+and CI runs the entry-point smoke under the system interpreter as well as
+`uv run`, because the two disagreeing is exactly the failure CI was not
+catching.
+
+**Remote payloads** must not carry it. These are files whose `__main__` runs
+on the NPU container, reached by copying the source over and invoking the
+container's interpreter: `weight_inspector.py` is read and written to
+`/tmp/_vaws_weight_inspector.py`, and the tensor-dump assets are imported
+inside the vLLM process. There is no `.venv` and no scaffold checkout at the
+far end, so the shim would add an import that cannot resolve. Their contract
+is the opposite one: stdlib-only, no scaffold imports, runnable by a bare
+`python3`.
+
+The line between the two populations is not a new list to maintain. The CLI
+surface inventory already classifies nine entry points as `payload`
+("executable spawned on the container or by another command"), and that
+classification is the input to the guard. A file that changes population has
+to change its inventory row in the same commit, which is the point.
 
 ### 4.5 Local state
 
@@ -258,12 +277,45 @@ Result Envelope v1 (scaffold, seventeen required fields) is the report of
 `failure` with layer attribution, `environment`, `evidence`, `next_step`,
 `parts` for fan-out, `children` digests, `extensions`.
 
-They compose: a remote-dev result lifts into an envelope's `parts` or
-`children` without reshaping (`vaws_result_envelope.py:192`). The coordinator
-emits remote-dev results because it performs remote tool calls; skills emit
-envelopes because they perform operations. The earlier note that the
-scaffold should "stop maintaining its own envelope" was wrong and is
-withdrawn.
+The coordinator emits remote-dev results because it performs remote tool
+calls; skills emit envelopes because they perform operations. The earlier
+note that the scaffold should "stop maintaining its own envelope" was wrong
+and is withdrawn: it would delete the layer that attributes a failure.
+
+Two levels do **not** mean the outer one accepts the inner one as it stands.
+An earlier draft of this section said a result lifts into `parts` or
+`children` "without reshaping", citing `vaws_result_envelope.py:192`. That
+citation only covers `preview` field compatibility, and the claim is false.
+Feeding `remote_dev.result.make_result()` output straight into the
+validators fails in all twelve combinations of six outcomes by two slots:
+
+| Slot | Missing fields | Outcome rejections |
+|------|----------------|--------------------|
+| `parts` | `unit` | `failed`, `timeout`, `needs_input`, `cancelled` are not in `PART_OUTCOMES`; `blocked` additionally requires `layer` |
+| `children` | `envelope_id`, `depth` | `failed`, `timeout`, `needs_input` are not envelope outcomes |
+
+The two vocabularies overlap without matching. remote-dev has
+`needs_input`, `failed` and `timeout`; the envelope has `partial` and, for
+parts only, `skipped`. `cancelled` is a legal envelope outcome but not a
+legal part outcome.
+
+So the contract is a **named conversion**, owned by whoever holds Result
+Envelope v1, and it must state three things:
+
+1. The outcome mapping, in full, in both directions where a direction
+   exists. `failed` to `failure` and `timeout` to `failure` are lossy, so
+   the original belongs in the part's or child's evidence rather than being
+   discarded.
+2. Where `unit`, `envelope_id` and `depth` come from. They are properties of
+   the *operation's* structure, not of the remote call, so the caller
+   supplies them; a result cannot self-describe as a part.
+3. Which layer a converted failure is attributed to. A remote-dev failure is
+   not automatically the `remote` layer: a non-zero exit code from a command
+   the agent composed is an `operation` failure that happened to travel over
+   remote-dev.
+
+The conversion is a function with tests over the full outcome cross-product,
+not an assertion in prose.
 
 ### 5.4 Knowledge entry
 
@@ -279,13 +331,28 @@ inside the installed wheel. v1 documents do not exist after migration.
 `AGENTS.md` states that applicability is a coordinate, and schema v2 carries
 twelve scope dimensions. Commons implements the evaluation
 (`evaluate_scope`, `Applicability`, `COVERED` / `MISMATCH` / `UNDECIDABLE` /
-`ASSUMED_ANY`) and `query()` accepts a `reader_coordinate`. Neither the
-scaffold CLI nor the commons CLI exposes a way to pass one, so today an agent
-cannot ask "does this apply to my container" — it gets every entry regardless
-of coordinates, and the response's `reader_coordinate` is always empty. In
-the target state both CLIs and the MCP tool accept coordinate arguments, and
-the scaffold fills what it knows from the Run Manifest and machine profile
-without the agent restating it.
+`ASSUMED_ANY`) and `query()` accepts a `reader_coordinate`.
+
+The MCP path is already wired: the tool schema in the locked
+`vaws-knowledge` v0.1.3 declares `reader_coordinate` on both query tools and
+forwards it to `query()`. An agent speaking MCP can ask "does this apply to
+my container" today. This corrects an earlier draft of this section, which
+said no entry point could pass a coordinate; that was true of `main` before
+the knowledge engine moved into the package and is no longer true.
+
+Two gaps remain, and they are the whole of the work here:
+
+- Neither CLI exposes coordinate arguments, so every script and hook that
+  shells out gets unscoped answers with an empty `reader_coordinate` in the
+  response.
+- Nothing fills the coordinate automatically. The agent has to restate
+  twelve dimensions that the Run Manifest and the machine profile already
+  know. An axiom the caller must retype by hand is an axiom that gets
+  skipped.
+
+The target state exposes the arguments on both CLIs and has the scaffold
+populate what it can derive, leaving the agent to override rather than
+originate. Building a second MCP surface is not part of it.
 
 ### 5.5 Redaction
 
@@ -313,6 +380,14 @@ lines:
 | `.agents/maturation/` | 3 519 |
 | `.agents/schemas/knowledge-*.json`, `run-manifest-v1.schema.json` | 1 075 |
 | skill `remote-toolbox` | 389 |
+
+Two of these names collide and must not be confused when the deletion is
+executed. `.agents/skills/remote-toolbox/` is five markdown files with no
+scripts, referenced only by documents and the leak allowlist; deleting it is
+safe on its own. `.agents/lib/vaws_remote_toolbox.py` is the 2402-line
+implementation with 31 importers across ten skills, and it can only go after
+those importers move to remote-dev. They are separate steps in that order,
+and P13 names only the first.
 | `docs/audits/` (103 tracked-path violations among them), `deterministic-core-maturation.md`, `leak-remediation.md`, `repo-boundaries.md` | ≈ 5 600 |
 | `.agents/policy/tracked-paths-baseline.json` (mostly audit paths) | ≈ 900 |
 | `.agents/knowledge/*.yaml` v1 after migration | 752 |
@@ -337,7 +412,7 @@ package names the subset it makes true.
 | P6 | `import vaws_coordinator.run_manifest` succeeds; `.agents/lib/vaws_run_manifest.py` and the coordinator's `vendor/` are absent; a manifest written by `vaws_coordinator.ready_runtime` passes `vaws_coordinator.run_manifest.validate_manifest`. |
 | P7 | `rg 'VAWS_PARITY_SCRIPT\|VAWS_MACHINE_INVENTORY'` across the coordinator source is empty. |
 | P8 | `.agents/knowledge/` contains only `*.v2.yaml`; `vaws-knowledge validate .agents/knowledge` exits 0. |
-| P9 | Every tracked `.agents/**/*.py` containing `if __name__ == "__main__"` contains `ensure_workspace_interpreter`; guard test in `.agents/tests`. |
+| P9 | Every tracked `.agents/**/*.py` with `if __name__ == "__main__"` that the inventory does **not** classify as `payload` contains `ensure_workspace_interpreter`; every `payload` one imports nothing from `.agents/lib`. One guard test asserts both halves against the inventory. |
 | P10 | `tracked_path_check.py --mode enforce` passes with an empty baseline. |
 | P11 | `rg -l 'Status: dated' docs` is empty. |
 | P11a | A pull request that touches only `docs/` runs the document guards. Until 2026-09-09 the job holding them was filtered to `.agents/**`, so a docs-only change merged without the anti-rot guard whose subject is tracked documents. |
@@ -348,16 +423,33 @@ package names the subset it makes true.
 | P16 | `pytest .agents/tests` and every skill `tests/` directory pass under both `uv run` and system `python3`. Every skill has a discoverable `tests/` directory and every one of them is in CI. |
 | P17 | `rg -o '__VAWS_[A-Z_]+_PROGRESS__' .agents \| sort -u` yields at most one sentinel, and the four load-bearing skills emit Result Envelope v1 that passes `envelope_lint.py`. |
 | P18 | A remote endpoint can request an unmultiplexed connection through remote-dev, and the analysis and collection long-stream paths use it rather than their own `ssh` invocation. |
-| P19 | `knowledge_query.py` and the `knowledge_query` MCP tool accept reader coordinates; a query naming a `soc` that an entry's scope excludes does not return that entry, and the response's `reader_coordinate` is populated. |
+| P19 | Both knowledge CLIs accept reader coordinates (the MCP tool already does); a query naming a `soc` that an entry's scope excludes does not return that entry, the response's `reader_coordinate` is populated, and a caller inside a run gets the derivable dimensions filled without passing them. |
 | P20 | For every client, a config entry that a scaffold setup run reports as rewritten is absent from the written file afterwards, under both the hyphen and underscore spellings of the server name. |
+| P21 | A named function converts a `remote-dev.result.v1` into a `parts` entry and into a `children` digest, and its tests cover all six remote-dev outcomes against both slots; every produced object passes `validate_envelope`, and a lossy outcome mapping keeps the original outcome in evidence. |
+| P22 | No skill's private helper module spawns `ssh` or `tar`; `ascend-profiling-analysis` reaches hosts through remote-dev while its analysis modules are byte-identical to their pre-migration content. |
 
 ## 8. Out of scope for this round
 
-- `ascend-profiling-analysis` internals. Its `knowledge/` measurement data
-  moves to `vaws-knowledge` as `measurement` entries (all `unverified`, per
-  commons decision 24); the analyser reads them through the knowledge client
-  with `include-unverified` and a built-in fallback. Nothing else in the
-  skill changes.
+- `ascend-profiling-analysis` **analysis logic**. Its `knowledge/`
+  measurement data moves to `vaws-knowledge` as `measurement` entries (all
+  `unverified`, per commons decision 24); the analyser reads them through the
+  knowledge client with `include-unverified` and a built-in fallback.
+
+  The boundary here needs stating precisely, because an earlier draft said
+  "nothing else in the skill changes" and that contradicted P1 and P18. The
+  skill has its own SSH and tar transport in its private `_common` module
+  (`_ssh_base_cmd`, `ssh_stream` with keepalive options for long
+  streams). P1 forbids scaffold Python from spawning `ssh`, and P18
+  names this skill's long-stream path specifically. Those cannot hold while
+  the skill keeps its own transport.
+
+  So the split is transport versus analysis, not skill versus skill. The
+  transport wrapper is **in scope this round**: that module is 770 of the
+  skill's 44 178 lines, and the same pattern appears in ten skills, so it is
+  one change made once rather than a special case. The remaining ~43 400
+  lines of analysis logic are out of scope and are not read, moved or
+  reshaped. What is deferred is the analyser; what moves now is how it
+  reaches a host.
 - Publishing the scaffold itself as a package.
 - Any hosted or multi-user service.
 - Compile-artifact → source mapping for operators (axiom 3 reserves the
@@ -374,10 +466,12 @@ package names the subset it makes true.
 | 2026-09-09 | Contract is the package version; no `service-api.json` | all four packages converged independently; knowledge decision 28 |
 | 2026-09-09 | Run Manifest and code identity live in the coordinator | vendored copy proven incompatible under the same version; coordinator is already the execution authority and already on the dependency path; both modules are stdlib-only |
 | 2026-09-09 | Parity and machine directory live in the coordinator | ends the package → scaffold path dependency; the coordinator is the only caller that needs them as a library |
-| 2026-09-09 | Two result contracts are two levels, not a duplicate | remote-dev result = one tool call; Envelope = one operation; they compose by design. Withdraws the earlier "converge on `remote-dev.result.v1`" note |
+| 2026-09-09 | Two result contracts are two levels, not a duplicate | remote-dev result = one tool call; Envelope = one operation. Withdraws the earlier "converge on `remote-dev.result.v1`" note |
+| 2026-09-09 | The lift between the two levels is an owned conversion with an explicit outcome mapping | "composes without reshaping" was checked and is false in all twelve outcome × slot combinations; the vocabularies overlap without matching and `unit`/`envelope_id`/`depth` are properties of the operation, not of the call |
 | 2026-09-09 | `.agents/maturation/` is deleted | zero production importers, absent from CI, superseding document already published |
 | 2026-09-09 | Superseded dated docs are deleted | Git is the archive; the 103 dead-path violations were all in `docs/audits/` |
-| 2026-09-09 | `ascend-profiling-analysis` deferred | owner |
+| 2026-09-09 | `ascend-profiling-analysis` deferred at the analysis/transport line | owner deferred the skill; its 770-line SSH and tar transport still has to move, because P1 and P18 cannot hold otherwise and the same wrapper exists in ten skills |
 | 2026-09-09 | Skills adopt Result Envelope v1 rather than the envelope being deleted | it currently has zero producers and eleven competing sentinels; a contract with no producers is not a contract, and the attribution/evidence structure is what agents need |
 | 2026-09-09 | Unmultiplexed SSH stays an endpoint option | long-stream `mux=False` is a recorded failure signature, not an accident |
-| 2026-09-09 | Reader coordinates become reachable from the CLI and MCP tool | the twelve-dimension scope and the whole applicability axiom are currently unreachable: no entry point accepts a coordinate |
+| 2026-09-09 | Reader coordinates become reachable from both CLIs and are auto-filled where derivable | the MCP tool in v0.1.3 already accepts them; the gap is CLI exposure plus population from the Run Manifest and machine profile. No second MCP surface |
+| 2026-09-09 | The interpreter shim applies to local entry points only, keyed off the inventory's `payload` class | remote payloads run on the container with no `.venv` and no scaffold checkout; 202 files carry `__main__` and nine are already classified as payloads |
