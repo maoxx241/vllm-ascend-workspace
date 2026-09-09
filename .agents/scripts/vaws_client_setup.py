@@ -409,6 +409,15 @@ def stale_prefix_hits(text):
     return [marker for marker in STALE_TOOL_PREFIX_MARKERS if marker in text]
 
 
+def mcp_server_aliases(name):
+    """Hyphen name plus the underscore form TOML/JSON may already use."""
+    aliases = []
+    for alias in (name, name.replace("-", "_")):
+        if alias not in aliases:
+            aliases.append(alias)
+    return aliases
+
+
 def merge_json(path, *, hooks=None, mcp=None, notes=None, client=None, project=None):
     value = json.loads(path.read_text()) if path.exists() else {}
     notes = [] if notes is None else notes
@@ -420,15 +429,37 @@ def merge_json(path, *, hooks=None, mcp=None, notes=None, client=None, project=N
             value.setdefault("version", 1)
     if mcp:
         servers = value.setdefault("mcpServers", {})
+        checkout = project or ROOT
         for name, desired in mcp.items():
-            existing = servers.get(name)
-            if existing is None:
+            aliases = mcp_server_aliases(name)
+            found_keys = [alias for alias in aliases if alias in servers]
+            if not found_keys:
                 servers[name] = dict(desired)
                 continue
+            stale_keys = [
+                alias for alias in found_keys
+                if is_stale_scaffold_entry(servers[alias], checkout)
+            ]
+            if stale_keys:
+                merged, action = merge_server_entry(
+                    servers[stale_keys[0]], desired, checkout=checkout
+                )
+                for alias in aliases:
+                    servers.pop(alias, None)
+                servers[name] = merged
+                notes.append({
+                    "path": str(path),
+                    "server": name,
+                    "action": "rewritten-stale",
+                    "fields": ["command", "args", "type"],
+                    "reason": "stale-checkout-path",
+                })
+                continue
+            source_key = found_keys[0]
             merged, action = merge_server_entry(
-                existing, desired, checkout=project or ROOT
+                servers[source_key], desired, checkout=checkout
             )
-            servers[name] = merged
+            servers[source_key] = merged
             if action == "preserved":
                 notes.append({
                     "path": str(path),
@@ -436,14 +467,6 @@ def merge_json(path, *, hooks=None, mcp=None, notes=None, client=None, project=N
                     "action": "preserved",
                     "fields": ["command", "args", "type"],
                     "reason": "existing-named-server",
-                })
-            elif action == "rewritten-stale":
-                notes.append({
-                    "path": str(path),
-                    "server": name,
-                    "action": "rewritten-stale",
-                    "fields": ["command", "args", "type"],
-                    "reason": "stale-checkout-path",
                 })
     text = json.dumps(value, indent=2, ensure_ascii=False) + "\n"
     for marker in stale_prefix_hits(text):
@@ -501,11 +524,12 @@ def build_plan(client, project, *, kimi_config=None, task_only=False):
         changed = False
         for name, entry in servers.items():
             key = name.replace("-", "_")
-            if any(candidate in existing for candidate in (key, name)):
-                current = existing.get(key) or existing.get(name) or {}
-                if is_stale_scaffold_entry(current, project):
+            aliases = mcp_server_aliases(name)
+            matching = [alias for alias in aliases if alias in existing]
+            if matching:
+                if any(is_stale_scaffold_entry(existing[alias], project) for alias in matching):
                     text = managed_toml_text(
-                        drop_toml_server_tables(text, key),
+                        drop_toml_server_tables(text, *aliases),
                         name,
                         toml_server_body(key, entry),
                     )
@@ -553,21 +577,26 @@ def build_plan(client, project, *, kimi_config=None, task_only=False):
     }
 
 
-def drop_toml_server_tables(original, key):
-    """Remove ``[mcp_servers.<key>]`` and its dotted child tables."""
+def drop_toml_server_tables(original, *names):
+    """Remove ``[mcp_servers.<name>]`` and dotted children for each name."""
 
-    prefix = f"[mcp_servers.{key}"
-    kept = []
-    skipping = False
-    for line in original.splitlines(keepends=True):
-        stripped = line.strip()
-        if stripped.startswith("[") and stripped.endswith("]"):
-            skipping = stripped.startswith(prefix) and (
-                stripped == prefix + "]" or stripped.startswith(prefix + ".")
-            )
-        if not skipping:
-            kept.append(line)
-    return "".join(kept)
+    text = original
+    for name in names:
+        if not name:
+            continue
+        prefix = f"[mcp_servers.{name}"
+        kept = []
+        skipping = False
+        for line in text.splitlines(keepends=True):
+            stripped = line.strip()
+            if stripped.startswith("[") and stripped.endswith("]"):
+                skipping = stripped.startswith(prefix) and (
+                    stripped == prefix + "]" or stripped.startswith(prefix + ".")
+                )
+            if not skipping:
+                kept.append(line)
+        text = "".join(kept)
+    return text
 
 
 def managed_toml_text(original, name, text):
