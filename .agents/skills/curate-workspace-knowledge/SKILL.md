@@ -18,9 +18,11 @@ on the `vaws-knowledge` MCP server.
 
 New promotions write the federated **v2** contract to
 `.agents/knowledge/<kind>.v2.yaml`. The project layer contains only
-`*.v2.yaml`. A v2 entry has exactly one body (`rule` or `measurement`);
-candidate promotion still writes a `rule`. Measurement entries are first-class
-when listing, querying, hashing, or exporting.
+`*.v2.yaml`. A v2 entry has exactly one body (`rule`, `measurement`, or
+`reference`). Candidate promotion still writes a `rule`. Runtime bodies
+require a coordinate; a sourced reference hashes the reference body only
+and must not invent runtime coordinates. Schema, hash, redaction, and
+export belong to the installed `vaws-knowledge` package.
 
 ## Workflow
 

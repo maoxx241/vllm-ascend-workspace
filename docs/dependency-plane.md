@@ -15,17 +15,16 @@ must name git+https tag sources because `vaws-coordinator` depends on
 
 | Package | Module | Source tag | Role |
 |---|---|---|---|
-| `vaws-remote-dev` | `remote_dev` | `v0.3.0` | process-in import + MCP server |
-| `vaws-coordinator` | `vaws_coordinator` | `v0.2.0` | process-in import + stdio MCP |
-| `vaws-knowledge` | `vaws_knowledge` | `v0.1.5` | process-in import + MCP |
+| `vaws-remote-dev` | `remote_dev` | `v0.5.0` | process-in import + MCP server |
+| `vaws-coordinator` | `vaws_coordinator` | `v0.3.1` | process-in import + stdio MCP |
+| `vaws-knowledge` | `vaws_knowledge` | `v0.2.0` | process-in import + MCP |
 | `vaws-top` | — | uvx only | fleet dashboard; not imported |
 
 `uv sync` writes `.venv` and records the resolved git commits in `uv.lock`.
 CI runs `uv lock --check`. Do not copy those SHAs into workflows.
 
-The closeout candidate is checked with local installations of remote-dev
-0.4.0 and coordinator 0.3.0. Their formal pins remain pending contract
-alignment and publication; `uv sync` alone still installs the tags above.
+The workspace consumes these release tags through the lockfile. Acceptance
+uses the installed packages, including their public APIs and packaged data.
 
 ## Loader
 
@@ -83,7 +82,7 @@ whose remedy is `uv sync`.
 
 ## Capabilities
 
-`.agents/lib/vaws_capability.py` keeps the same seven capabilities. A
+`.agents/lib/vaws_capability.py` keeps these capabilities. A
 `missing` package makes the capabilities that list it unavailable.
 `fleet_observation` is not a package: it needs `uvx` plus the `vaws-top`
 release wheel.
@@ -91,7 +90,6 @@ release wheel.
 | Capability | Depends on |
 |---|---|
 | `remote_endpoints` | `vaws-remote-dev` |
-| `resolver_registration` | `vaws-remote-dev` |
 | `task_pool` | `vaws-coordinator` |
 | `host_npu_authority` | `vaws-coordinator` |
 | `fleet_observation` | `uvx`, `vaws-top` |

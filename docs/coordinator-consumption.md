@@ -2,79 +2,99 @@
 
 Status: current
 
-The shared runtime pool, local task registry and four `vaws_*` tools live in
-the public package
-[`vaws-coordinator`](https://github.com/vllm-ascend-workspace/vaws-coordinator)
-(`v0.2.0`, locked by `uv.lock`). This scaffold imports that package. It does
-not clone a checkout and does not read a former checkout-root environment variable.
+The local task registry, environment/runtime pool, NPU and port leases, and
+the four `vaws_*` tools live in
+[`vaws-coordinator`](https://github.com/vllm-ascend-workspace/vaws-coordinator).
+This workspace imports that package. It does not clone a checkout, does not
+own request association, and does not tick the pool.
 
-This document is the consumer-side contract. See
-[dependency-plane.md](dependency-plane.md) for install and capability
-reporting.
+See [target-state.md](target-state.md) and [dependency-plane.md](dependency-plane.md).
 
-The closeout candidate's session resource calls require coordinator 0.3.0.
-They are checked with a local candidate package installation; the published
-tag and lock update follow the remaining contract alignment.
+The closeout candidate is checked with a local editable package. The
+published tag and lock update are parent-owned.
 
-## 1. Why a package
+## 1. Public actions
 
-The coordinator is run as `python -m vaws_coordinator task-server` and
-`python -m vaws_coordinator.vaws`. A checkout plus `sys.path` was the
-previous model; it collided with the scaffold's own
-`.agents/lib/vaws_coordinator.py`. That file is now
-`vaws_coordinator_launch.py`. The package is the only `vaws_coordinator`
-import.
+Configure clients with `python3 .agents/scripts/vaws_client_setup.py`.
+The native hook supplies `context_file`; never guess the task from cwd or
+history.
 
-**Consequence:** cloning this scaffold without `uv sync` does not give you
-the task tools. Local docs and Git work are unaffected. Missing packages
-return `blocked` / `unavailable` with `uv sync`. Nothing falls back to
-in-tree copies of the moved writers.
+| Tool | Meaning |
+|---|---|
+| `vaws_session` | Inspect this native attachment's VAWS task; bind actual worktrees |
+| `vaws_run` | Submit `command` plus `env` / `environment` / `resources` / `topology` / `timeout_seconds` / `service` / `restart`. Skills do not pass `request_id` / `profile_key` / `runtime_id` / a Python path |
+| `vaws_execution` | Status, tail, stop, or read the ordinary endpoint of one owned execution |
+| `vaws_finish` | Close admission; stop owned executions; keep container, roots, evidence |
 
-## 2. Installing
+CLI: `python3 .agents/scripts/vaws.py session|run|execution|finish` execs
+`python -m vaws_coordinator.vaws`. MCP: `python -m vaws_coordinator task-server`.
 
-```bash
-uv sync
-python3 .agents/scripts/vaws.py status
-python3 .agents/scripts/vaws.py env --json
-```
+A long-running service uses `timeout_seconds=None`, `resources.service_port=0`
+(or an explicit port), and a task-scoped business name (`service`). The same
+spec reconnects; a changed spec without `restart=True` is an error. `--relaunch`
+is `restart=True`. Status reads package facts. Health/first-token are skill
+business checks against the returned endpoint and port once the execution is
+actually running.
 
-`uv.lock` records the git commit. Do not copy that SHA into workflows.
+Container hostname `/etc/hosts` repair is coordinator environment preparation,
+not a per-model launch snippet.
 
-## 3. What the scaffold injects
+## 2. Environment this workspace injects
 
 | Variable | Value | Why |
 |---|---|---|
-| `VAWS_AGENT_SESSIONS_DIR` | `<shared workspace>/.vaws-local/agent-sessions` | One local task registry. |
-| `VAWS_HOST_QUEUE_MODULE` | unset by this scaffold | Host NPU authority is the package's `vaws_coordinator.host.vaws_npu_coordination`. The env var is an override. |
-| `VAWS_COORDINATOR_STATE_DIR` | unset by this scaffold; defaults to `<shared workspace>/.vaws-local/coordinator` | Coordinator-owned pool state and machine directory. The launch layer may seed `machines.json` from the shared inventory document. |
+| `VAWS_AGENT_SESSIONS_DIR` | `<shared workspace>/.vaws-local/agent-sessions` | One local task registry directory for the package |
+| `VAWS_COORDINATOR_STATE_DIR` | unset; package default under `.vaws-local/coordinator` | Coordinator-owned pool and machine directory |
+| `VAWS_HOST_QUEUE_MODULE` | unset | Host NPU authority is the package module |
 
-The package does not read former checkout-root environment variables.
+There is no workspace `leases.json` and no `session.json` resource authority.
 
-There is **no default manager `--state-dir`**. Requesting remote execution
-without a manager is blocked/unavailable.
+## 3. User container
 
-## 4. Two MCP providers
+Each host has one persistent container `vaws-<user>` (example `vaws-maoxx241`).
+Bootstrap, recipe execution, and runtime registration belong to the
+coordinator (`python -m vaws_coordinator provision --host ... --image ...
+--user ...`). This workspace may store the configured username as project
+config; it does not create or delete that container from skills, and the
+launcher does not copy project `machine-inventory.json` over coordinator
+`machines.json`.
 
-| Server | Command | Serves |
-|---|---|---|
-| `remote-dev` | `.venv/bin/python -m remote_dev.mcp.server` | `remote_*` |
-| `vaws-task` | `.venv/bin/python -m vaws_coordinator task-server` | `vaws_session`, `vaws_run`, `vaws_execution`, `vaws_finish` |
+## 4. Public TaskClient
 
-Native attach/resume keeps the existing task id. A new native session creates
-a distinct task unless the user explicitly associates it. Cwd and recent
-activity never join a task.
+Skills import the installed package. They do not keep a workspace request
+ledger or paper over unfinished package behavior.
 
-Configure clients with `python3 .agents/scripts/vaws_client_setup.py`.
+```python
+from vaws_coordinator.task_client import TaskClient
 
-## 5. Host NPU queue
+client = TaskClient(context_file)  # native session hook; never cwd/history
+client.sources({"vllm": "/actual/vllm", "vllm-ascend": "/actual/vllm-ascend"})
+reply = client.run(
+    command='"$VAWS_PYTHON" -m vllm.entrypoints.cli.main serve ... --port "$VAWS_SERVICE_PORT"',
+    env=None,
+    environment={"recipe": "rc", "python_abi": "cp311", "soc": "ascend910b"},
+    resources={"npu_count": 2, "service_port": 0},
+    timeout_seconds=None,
+    service="vllm",
+    restart=False,
+)
+# reply["state"] may be queued | preparing | waiting | waiting_for_runtime | running | ...
+observation = client.observe(reply["execution_id"], "status")
+target = client.target(reply["execution_id"])  # live only while running
+client.observe(reply["execution_id"], "tail")
+client.observe(reply["execution_id"], "tail", role="prefill")
+client.observe(reply["execution_id"], "target", role="decode")
+client.observe(reply["execution_id"], "stop")
+client.finish()
+```
 
-`session_gc.py` / `npu_coordination.py` still ship a module path to the remote
-host. `.agents/lib/vaws_host_queue_module.py` is a thin shim over
-`vaws_coordinator.host_queue`. `host_queue_module_path()` returns
-`Path(module.__file__)`.
+`preparing` is observable pending state during long environment setup. Skills
+report it as `queued` with the same `execution_id`; they do not poll or retry.
 
-Session NPUs and host SSH/service ports are reserved through
-`vaws_coordinator.session_resources.SessionResourceClient` over the same host
-database as the pool. The scaffold stores only the coordinator receipt in
-`session.json`. Records without a receipt are unsupported for resource
-actions; they are not auto-adopted.
+A multi-role PD launch uses `topology={"roles": [{"name", "command",
+"npu_count"|"devices", "service_port", "host"?, "env"?}, ...]}`. Role `env`
+is literal data. The package reserves the full group before any role starts
+and returns per-role `target` / `tail` on `observe(..., role=...)` and on
+`roles[]`. Unmatched environment constraints stay `waiting_for_runtime`. CLI:
+`python3 .agents/scripts/vaws.py session|run|execution|finish`. MCP:
+`python -m vaws_coordinator task-server`.

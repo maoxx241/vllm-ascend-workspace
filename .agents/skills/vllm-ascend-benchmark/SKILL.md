@@ -5,7 +5,7 @@ description: Run vLLM online-serving benchmarks on a workspace-managed remote co
 
 # vLLM Ascend Benchmark
 
-Run `vllm bench serve` on a **ready** session-managed remote container and produce structured performance results. Supports single-run and multi-run (warm-service) modes.
+Run `vllm bench serve` on a coordinator-managed remote container and produce structured performance results. Supports single-run and multi-run (warm-service) modes.
 
 Remote substrate rule: use remote-dev companion tools (`remote_*` MCP tools,
 launched via `uv run remote-dev` or MCP) for ad hoc remote
@@ -25,18 +25,18 @@ compatibility backend for managed VAWS sessions.
 - the task is running a full nightly CI matrix
 - the task is offline / batch inference
 - the user only wants to start or stop a service without benchmarking (use `vllm-ascend-serving`)
-- no session exists yet for the target (use `session-management` first)
+- no native task context exists yet (pass `--context-file` / `VAWS_CONTEXT_FILE`)
 
 ## Critical rules
 
 - Benchmark parameters are assembled by the agent based on user intent and executed through the scripts below. The agent must not construct raw `vllm bench serve` commands and run them directly on the remote.
 - **User intent takes priority** over nightly configs. Nightly YAML files under `vllm-ascend/tests/e2e/nightly/single_node/models/configs/` are a **reference source** for discovering how to configure a given model or feature (MTP, graph mode, TP count, etc.), not an execution template to run verbatim.
 - Nightly configs are used as a **fallback** only when the user specifies a model but provides no other parameters.
-- Benchmarking is **session-only**. `bench_run.py` takes an optional `--session-id <id>` / `--session-file <path>`; when both are omitted, the session is auto-resolved from the nearest `.vaws-local/current-session.json` worktree binding (cwd upward), so running from inside a session worktree needs zero target arguments. If no binding is found, the command fails fast with instructions to pass `--session-id` or create a session with `session-management`'s `session_create.py`.
-- After benchmarking, the service is automatically stopped. No residual processes should remain. Cleanup stops only that session's service.
-- If service startup returns a non-ready result after launching a PID, benchmark cleanup still calls `serve_stop.py --force` for the same session.
+- Task identity is `--context-file` / `VAWS_CONTEXT_FILE`. Never guess from cwd. A live service is addressed by `--execution-id` / `--service`; that does not allocate the same NPUs again. A queued or preparing serve is reported as `queued` with the same execution id; do not force-stop or resubmit it. Stop only a service this benchmark started. Live `--execution-id` still requires health/models/first-token evidence.
+- After benchmarking, a service this run started is stopped. A supplied `--execution-id` service is left running.
+- If this run started a service that did not become ready, cleanup stops only that owned service.
 - Progress goes to `stderr` as `__VAWS_PROGRESS__=<json>`. Final result goes to `stdout` as JSON.
-- Keep local benchmark state under `.vaws-local/sessions/<session-id>/benchmark/`; results are written to `.vaws-local/sessions/<session-id>/benchmark/runs/`.
+- Keep local benchmark state under `.vaws-local/tasks/<task-id>/benchmark/`.
 - **Formal regression verdicts** are not a shared 3% rule. After comparable measurements, use `vllm-ascend-performance-regression` declared per-metric direction/threshold and quality gates; see [behavior](references/behavior.md). `bench_compare.py` reports deltas; it does not apply that verdict policy.
 - **Multi-state comparisons** (baseline vs PR vs modified) are a first-class workflow: use `bench_compare.py`, which checks out each git ref *in the container*, benchmarks every state with identical serve/bench args, and reports TPOT/throughput deltas. Do not hand-write a bespoke comparison script — put reusable model/service configurations into a named preset under `presets/` instead (see below). The old bespoke `dsv4_flash_benchmark.py` helper was deleted; `presets/dsv4-flash.json` carries its DSV4 Flash configuration, with the two loader args adapted (`enable_multithread_load` as a JSON boolean; the old `--safetensors-load-strategy prefetch` was dropped in favor of multithreaded loading — the flag still exists at the pinned vllm ref 967c5c3b, so this is a deliberate replacement, not an upstream removal — verified on real A3 hardware). Note `bench_compare.py` runs back-to-back iterations with no inter-run sleep (the old script slept 15s between rounds), so absolute numbers are not directly comparable to historical bespoke-script results.
 - **Native-input gate.** `bench_compare.py` aligns source only and never rebuilds compiled custom ops. After each state's checkout and optional `--remote-patch-file` application, it fingerprints the effective in-container `csrc`/`cmake`/requirements inputs and compares the digest against the first state's. A mismatch fails the run with an explanation. An unavailable digest also fails closed. Pass `--allow-stale-native` only to explicitly downgrade either condition to a loud warning plus `native_input_changed: true` or `native_input_unverified: true`.
@@ -52,10 +52,8 @@ compatibility backend for managed VAWS sessions.
 ## Public entry point
 
 ```bash
-# Inside a session worktree the session is auto-resolved — no target flag needed.
-# Outside a worktree, pass --session-id <id> (or --session-file <path>).
 python3 .agents/skills/vllm-ascend-benchmark/scripts/bench_run.py \
-  [--session-id <id> | --session-file <path>] \
+  [--context-file <path>] [--execution-id <id>] [--service vllm] \
   --model <remote-weight-path> \
   [--preset <name>] \
   [--tp <N>] [--dp <N>] \
@@ -101,9 +99,9 @@ Shipped presets:
 
 ## Workflow
 
-### 1. Resolve the target session
+### 1. Resolve the native task
 
-The session comes from `--session-id` / `--session-file`, or is auto-resolved from the nearest `.vaws-local/current-session.json` worktree binding. If neither is given and no binding is found, the command fails fast and tells the user to pass `--session-id` or create a session with `session_create.py`.
+Task identity is `--context-file` / `VAWS_CONTEXT_FILE`. A live service is `--execution-id` or `--service`. Do not guess from cwd.
 
 ### 2. Assemble configuration
 
@@ -118,13 +116,13 @@ When `--refer-nightly` is used, the YAML is parsed for `server_cmd`, `envs`, and
 
 ### 3. Stop any existing service
 
-If a service is already running in the target session, stop it before proceeding.
+Do not stop a supplied live `--execution-id` service. A new start reconnects by service name unless `--relaunch`/restart is requested by serving.
 
 ### 4. Start the service
 
 Uses `serve_start.py` internally to launch the vLLM service with the assembled configuration. Parity sync is handled automatically by the serving skill.
 
-If startup fails or times out after a remote PID was recorded, `bench_run.py` calls `serve_stop.py --force` before returning failure.
+If this run started a service that did not become ready, it stops only that owned service. A queued start is reported as `queued` with the same execution id.
 
 ### 5. Run benchmark iterations
 
@@ -144,7 +142,7 @@ Single-run output (`--runs 1`, the default):
 ```json
 {
   "status": "ok",
-  "session_id": "pr123",
+  "task_id": "<task-id>",
   "model": "/home/weights/Qwen3.5-35B",
   "metrics": {
     "output_throughput": 1234.5,
@@ -161,7 +159,7 @@ Multi-run output (`--runs N` where N > 1):
 ```json
 {
   "status": "ok",
-  "session_id": "pr123",
+  "task_id": "<task-id>",
   "model": "/home/weights/Qwen3.5-35B",
   "runs": 5,
   "warmup_runs": 1,
@@ -202,7 +200,7 @@ python3 .agents/skills/vllm-ascend-benchmark/scripts/bench_compare.py \
 
 # Fully explicit
 python3 .agents/skills/vllm-ascend-benchmark/scripts/bench_compare.py \
-  [--session-id <id> | --session-file <path>] \
+  [--context-file <path>] [--host <ip>] [--execution-id <id>] \
   --model <remote-weight-path> \
   --state baseline=<commit> --state pr10741=pr:10741 \
   [--preset <name>] [--vllm-ref <vllm-commit>] \

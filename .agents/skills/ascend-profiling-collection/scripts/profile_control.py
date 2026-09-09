@@ -8,17 +8,17 @@ it just passes ``--profiler-config`` through to ``vllm serve`` and never
 touches the profiler window.
 
 The POST is executed inside the container via SSH against
-``http://127.0.0.1:<port>``, so no SSH tunnel is required. The port is read
-from the serving skill's recorded state for that machine; a service must
+``http://127.0.0.1:<port>``, so no SSH tunnel is required. The port comes
+from the named coordinator service or ``--execution-id``. A service must
 already be running.
 
 Multi-rank torch profiler setup/finalization can take much longer than an
 ordinary inference request, so the timeout is long by default.
 
 Usage:
-    python3 profile_control.py --action start_profile          # bound session
-    python3 profile_control.py --session-id <id> --action start_profile
-    python3 profile_control.py --session-id <id> --action stop_profile [--timeout 900]
+    python3 profile_control.py --action start_profile --service vllm
+    python3 profile_control.py --execution-id <id> --action start_profile
+    python3 profile_control.py --execution-id <id> --action stop_profile [--timeout 900]
 
 Progress on stderr, final JSON on stdout.
 """
@@ -45,13 +45,8 @@ _SCRIPT_DIR = Path(__file__).resolve().parent
 if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 
-from _common import (
-    emit_progress,
-    load_serving_state,
-    print_json,
-    resolve_execution_target,
-    ssh_exec,
-)
+from _common import emit_progress, endpoint_from_reply, print_json, service_port_of, ssh_exec  # noqa: E402
+from vaws_task_target import executions_for_service, task_client  # noqa: E402
 
 DEFAULT_TIMEOUT_SECONDS = 600
 ALLOWED_ACTIONS = ("start_profile", "stop_profile")
@@ -110,8 +105,9 @@ def post_remote_action(ep, port: int, action: str, timeout: int) -> dict[str, An
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
-    p.add_argument("--session-id", help="VAWS session id; defaults to the bound session of the current worktree")
-    p.add_argument("--session-file", help="explicit session.json path")
+    p.add_argument("--context-file")
+    p.add_argument("--execution-id")
+    p.add_argument("--service", default="vllm")
     p.add_argument(
         "--action",
         required=True,
@@ -135,52 +131,26 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
     try:
-        target = resolve_execution_target(
-            session_id=args.session_id,
-            session_file=args.session_file,
-        )
-        alias = target.alias
-        ep = target.endpoint
-
-        state = load_serving_state(
-            target.session_id,
-            state_repo_root=target.state_repo_root,
-        )
-        if state is None:
-            print_json({
-                "status": "not_found",
-                "machine": alias,
-                "session_id": target.session_id,
-                "action": args.action,
-                "message": (
-                    f"no serving state recorded for session {target.session_id}; "
-                    "start the service via vllm-ascend-serving first"
-                ),
-            })
-            return 2
-        port = state.get("port")
+        client = task_client(args.context_file)
+        if args.execution_id:
+            observation = client.observe(args.execution_id, "status")
+        else:
+            rows = executions_for_service(client, args.service)
+            if not rows:
+                print_json({"status": "not_found", "action": args.action, "message": "no service execution"})
+                return 2
+            observation = client.observe(str(rows[-1].get("id") or rows[-1].get("execution_id")), "status")
+        port = service_port_of(observation)
         if not port:
-            print_json({
-                "status": "not_found",
-                "machine": alias,
-                "session_id": target.session_id,
-                "action": args.action,
-                "message": "serving state has no port; service may have failed to launch",
-            })
+            print_json({"status": "not_found", "action": args.action, "message": "execution has no service port"})
             return 2
-
-        emit_progress(
-            "profile_control",
-            f"posting {args.action} to 127.0.0.1:{port}",
-            timeout=args.timeout,
-        )
+        ep = endpoint_from_reply(observation)
+        emit_progress("profile_control", f"posting {args.action} to 127.0.0.1:{port}", timeout=args.timeout)
         result = post_remote_action(ep, int(port), args.action, args.timeout)
-
         ok = bool(result.get("ok"))
         print_json({
             "status": "ok" if ok else "failed",
-            "machine": alias,
-            "session_id": target.session_id,
+            "execution_id": observation.get("execution_id"),
             "action": args.action,
             "port": port,
             "http_status": result.get("status"),
@@ -192,7 +162,8 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:
         print_json({
             "status": "failed",
-            "session_id": getattr(args, "session_id", None),
+            "execution_id": getattr(args, "execution_id", None),
+            "service": getattr(args, "service", None),
             "action": getattr(args, "action", None),
             "error": str(exc),
         })

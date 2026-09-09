@@ -1,22 +1,11 @@
 #!/usr/bin/env python3
-"""Stop a vllm-ascend service on a session-managed remote container.
-
-Usage:
-    python3 serve_stop.py                     # auto-resolve bound session
-    python3 serve_stop.py --session-id <id>
-    python3 serve_stop.py --session-id <id> --force
-
-Progress on stderr, final JSON on stdout.
-"""
+"""Stop a coordinator-owned vllm-ascend service. The user container remains."""
 
 from __future__ import annotations
 
 import argparse
-import contextlib
 import sys
-import time
 from pathlib import Path
-from typing import Any
 
 ROOT = Path(__file__).resolve().parents[4]
 LIB = ROOT / ".agents" / "lib"
@@ -27,204 +16,66 @@ from vaws_venv import ensure_workspace_interpreter  # noqa: E402
 
 ensure_workspace_interpreter(repo_root=ROOT)
 
-
 _SCRIPT_DIR = Path(__file__).resolve().parent
 if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 
-from _common import (
-    emit_progress,
-    load_serving_state,
-    now_utc,
-    print_json,
-    resolve_execution_target,
-    save_serving_state,
-    ssh_exec,
-)
-from vaws_session_state import file_lock, release_service_port, session_lock_dir
+from _common import SERVICE_NAME, emit_progress, print_json  # noqa: E402
+from vaws_task_target import DONE, executions_for_service, task_client, task_id_of  # noqa: E402
 
 
-GRACE_PERIOD_SECONDS = 5
-
-
-def check_alive(ep, pid: int) -> bool:
-    r = ssh_exec(ep, f"kill -0 {pid} 2>/dev/null && echo alive || echo dead", check=False)
-    if r.returncode != 0 or r.stdout.strip() not in ("alive", "dead"):
-        raise RuntimeError("service process state is unknown; SSH failure is not proof of exit")
-    return r.stdout.strip() == "alive"
-
-
-def reap_vllm_workers(ep) -> int:
-    """SIGKILL leftover ``VLLM::``-titled EngineCore/Worker processes.
-
-    Returns the number of processes found before reaping. Best-effort: a
-    session container hosts exactly one service, so once the recorded main
-    pid is dead any surviving ``VLLM::`` process is an orphan holding NPUs.
-    """
-    count = ssh_exec(
-        ep, "ps -eo comm= | grep -c '^VLLM::' || true", check=False
-    )
-    try:
-        found = int(count.stdout.strip() or "0")
-    except ValueError:
-        found = 0
-    if found:
-        emit_progress("stop", f"reaping {found} orphaned VLLM:: worker processes")
-        ssh_exec(ep, "pkill -9 -f '^VLLM::' || true", check=False)
-    return found
+def pick_id(client, service: str, execution_id: str | None) -> str | None:
+    if execution_id:
+        return execution_id
+    if not service:
+        return None
+    rows = executions_for_service(client, service)
+    if not rows:
+        return None
+    return str(rows[-1].get("id") or rows[-1].get("execution_id") or "") or None
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
-    p.add_argument("--session-id", help="VAWS session id; defaults to the bound session of the current worktree")
-    p.add_argument("--session-file", help="explicit session.json path")
-    p.add_argument("--force", action="store_true", help="use SIGKILL if graceful stop fails")
-    return p
+    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
+    parser.add_argument("--context-file")
+    parser.add_argument("--execution-id")
+    parser.add_argument("--service", default=SERVICE_NAME)
+    parser.add_argument("--force", action="store_true")
+    return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    lock_stack = contextlib.ExitStack()
-
     try:
-        target = resolve_execution_target(
-            session_id=args.session_id,
-            session_file=args.session_file,
-        )
-        alias = target.alias
-        ep = target.endpoint
-        emit_progress("lock", f"acquiring serving lock for session {target.session_id}")
-        lock_stack.enter_context(
-            file_lock(session_lock_dir(target.state_repo_root) / f"{target.session_id}.serving.lock")
-        )
-
-        state = load_serving_state(
-            target.session_id,
-            state_repo_root=target.state_repo_root,
-        )
-        if state is None:
+        client = task_client(args.context_file)
+        task_id = task_id_of(client)
+        execution_id = pick_id(client, args.service, args.execution_id)
+        if not execution_id:
             print_json({
                 "status": "not_found",
-                "machine": alias,
-                "mode": target.mode,
-                "session_id": target.session_id,
-                "message": "no serving state recorded for this machine",
+                "task_id": task_id,
+                "service": args.service,
+                "container_preserved": True,
             })
             return 0
-
-        pid = state.get("pid")
-        if not pid:
-            print_json({
-                "status": "not_found",
-                "machine": alias,
-                "mode": target.mode,
-                "session_id": target.session_id,
-                "message": "serving state has no pid",
-            })
-            return 0
-
-        alive = check_alive(ep, pid)
-        if not alive:
-            emit_progress("stop", f"pid={pid} is already gone")
-            reaped = reap_vllm_workers(ep)
-            state["status"] = "stopped"
-            state["stopped_at"] = now_utc()
-            save_serving_state(
-                target.session_id,
-                state,
-                state_repo_root=target.state_repo_root,
-            )
-            release_service_port(
-                session=target.session,
-                host_endpoint=target.host_endpoint,
-                port=state.get("port"),
-            )
-            print_json({
-                "status": "stopped",
-                "machine": alias,
-                "mode": target.mode,
-                "session_id": target.session_id,
-                "pid": pid,
-                "reaped_workers": reaped,
-                "message": "process was already stopped",
-            })
-            return 0
-
-        # SIGINT first (graceful)
-        emit_progress("stop", f"sending SIGINT to pid={pid}")
-        ssh_exec(ep, f"kill -2 {pid} 2>/dev/null || true", check=False)
-        time.sleep(GRACE_PERIOD_SECONDS)
-
-        if check_alive(ep, pid):
-            emit_progress("stop", f"still alive, sending SIGTERM to pid={pid}")
-            ssh_exec(ep, f"kill -15 {pid} 2>/dev/null || true", check=False)
-            time.sleep(GRACE_PERIOD_SECONDS)
-
-        if check_alive(ep, pid):
-            if args.force:
-                emit_progress("stop", f"still alive, sending SIGKILL to pid={pid}")
-                ssh_exec(ep, f"kill -9 {pid} 2>/dev/null || true", check=False)
-                time.sleep(1)
-            else:
-                print_json({
-                    "status": "failed",
-                    "machine": alias,
-                    "mode": target.mode,
-                    "session_id": target.session_id,
-                    "pid": pid,
-                    "error": f"process {pid} did not exit after SIGINT+SIGTERM; rerun with --force to SIGKILL",
-                })
-                return 1
-
-        stopped = not check_alive(ep, pid)
-        reaped = 0
-        if stopped:
-            # The recorded pid is only the API server / launch shell. vLLM
-            # renames EngineCore/Worker processes to ``VLLM::...`` titles and
-            # they routinely outlive the main pid (observed: crashed engine
-            # left 16 TP workers holding every leased NPU). The session
-            # container is dedicated to this one service, so pattern-killing
-            # the leftovers cannot hit a sibling session.
-            reaped = reap_vllm_workers(ep)
-        state["status"] = "stopped" if stopped else "alive"
-        if stopped:
-            state["stopped_at"] = now_utc()
-        save_serving_state(
-            target.session_id,
-            state,
-            state_repo_root=target.state_repo_root,
-        )
-        if stopped:
-            release_service_port(
-                session=target.session,
-                host_endpoint=target.host_endpoint,
-                port=state.get("port"),
-            )
-
-        output: dict[str, Any] = {
-            "status": "stopped" if stopped else "failed",
-            "machine": alias,
-            "mode": target.mode,
-            "session_id": target.session_id,
-            "pid": pid,
-            "stopped": stopped,
-            "reaped_workers": reaped,
-        }
-        if not stopped:
-            output["error"] = "process refused to exit"
-
-        print_json(output)
-        return 0 if stopped else 1
-
-    except Exception as exc:
+        emit_progress("stop", f"stopping execution {execution_id}")
+        result = client.observe(execution_id, "stop", args.force)
+        state = str(result.get("state") or "")
+        terminal = state in DONE
         print_json({
-            "status": "failed",
-            "error": str(exc),
-            "session_id": getattr(args, "session_id", None),
+            "status": "stopped" if terminal else "incomplete",
+            "task_id": task_id,
+            "service": args.service,
+            "execution_id": execution_id,
+            "state": state,
+            "container_preserved": True,
+            "result": result,
+            **({} if terminal else {"error": result.get("error") or "stop did not confirm a terminal state"}),
         })
+        return 0 if terminal else 1
+    except Exception as exc:
+        print_json({"status": "failed", "error": str(exc)})
         return 2
-    finally:
-        lock_stack.close()
 
 
 if __name__ == "__main__":

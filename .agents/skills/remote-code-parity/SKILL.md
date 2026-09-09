@@ -1,338 +1,50 @@
 ---
 name: remote-code-parity
-description: Ensure a ready remote runtime runs the exact current local workspace state before any remote smoke, service launch, or benchmark. Use automatically immediately before remote execution when direct local-to-container SSH already works and local uncommitted changes must be reflected remotely. Do not use for initial machine attach, generic Git topology work, or unrelated local-only coding.
+description: Inspect or publish local workspace sources onto a prepared container work root before direct remote smoke. Do not use for managed coordinator executions, machine bootstrap, or generic Git topology work.
 ---
 
 # Remote Code Parity
 
-Keep a **ready** remote runtime in exact code parity with the local `vllm-ascend-workspace` checkout.
+Coordinator `vaws_run` prepares managed sources. Do not call
+`parity_sync.py --execution-id` against a live execution root.
 
-External business worktrees can be selected with repeatable
-`--source vllm=/actual/worktree --source vllm-ascend=/actual/worktree` on
-`parity_sync.py` or the low-level helper. Snapshots come from those exact
-worktrees without resetting them or maintaining copied branches.
-
-The opt-in [ready-runtime coordinator](../../../docs/coordinator-consumption.md) uses
-`--apply-mode materialize` for a compatible warm runtime, not a legacy first
-install. Its execution gate verifies source/build identity and complete native
-artifacts before allocating cards. `parity_watch.py` continuously publishes
-content changes with `source-only`; it never modifies running source or builds.
-Only materialize after all executions on that binding have been released.
-The watcher alone is not execution parity or model readiness.
-
-The task-facing `vaws_run` tool performs the materialize step automatically
-from its bound actual business worktrees before queueing the managed job.
-Retrying an uncertain launch uses the same execution id and pinned snapshot;
-it must not synchronize underneath a possibly running service. Stop/finish
-that execution before starting another code revision.
+Direct source-only inspection may use this skill against an explicit
+`--host` and optional `--runtime-root` (default `/vllm-workspace`). The
+workspace wrapper does not install, materialize, or record first-install
+consent. Those belong to coordinator preparation.
 
 ## Use this skill when
 
-- a remote smoke, service launch, or benchmark is about to start
-- `machine-management` already proved direct local -> container SSH by key
-- the request depends on local committed, staged, unstaged, or untracked **non-ignored** files
-- the user expects “run my current local workspace remotely” instead of “run the latest pushed branch remotely”
+- a direct container SSH endpoint already works
+- the request is to inspect or publish local sources into a prepared root
+- the user is not asking to mutate a live coordinator execution
 
 ## Do not use this skill when
 
-- the task is ad-hoc remote verification (run one command, read a log, check remote state) with no dependency on local code changes — use remote-dev companion tools (`remote_*` MCP tools, launched via `uv run remote-dev` or MCP) such as `remote.bash` / `remote.read` directly; parity is never a prerequisite for that
-- the main task is adding or repairing a machine, SSH, or container bootstrap
-- the task is generic fork / remote topology setup
-- the task is ordinary local coding with no remote execution
-- the runtime cannot yet accept direct key-based login
+- a coordinator execution already owns the work root
+- the task is machine attach, serving, or generic remote I/O
 - the user only wants a Git commit, push, or PR
 
-## Critical rules
-
-- Treat the **local working tree** as the source of truth: committed + staged + unstaged + untracked non-ignored.
-- Do **not** require the user to commit or push before parity.
-- Do **not** use `scp`, `sftp`, `rsync`, `sshpass`, or `expect`.
-- Do **not** require GitHub credentials on the host or in the container.
-- Keep the sync path **container-only** after machine attach: no host storage root, no host mirror, no host lock.
-- Session is the default target surface. With no target arg, `parity_sync.py` auto-binds from the current worktree's `.vaws-local/current-session.json` binding; `--session-id <id>` / `--session-file <path>` are explicit alternatives. Session mode derives the workspace root, container endpoint, workspace id, and container identity from `.vaws-local/sessions/<id>/session.json`. `--machine <alias>` remains available as a legacy single-tenant machine surface.
-- Use synthetic snapshot refs so dirty working trees can move through Git transport.
-- Keep container cache / lock / manifest paths isolated by `workspace_id` under a container-local cache root.
-- Preserve runtime-private paths under `/vllm-workspace`, in particular `Mooncake/` (image-provided runtime) and `.vaws-runtime/` (workspace-managed runtime artifacts such as profiler dumps consumed by downstream skills). The exact list lives in `DEFAULT_ROOT_PRESERVE_PATHS` on `vaws_coordinator.parity` (re-exported by the thin `scripts/remote_code_parity.py` CLI).
-- Container locks should record owner metadata and recover stale lock directories after the bounded stale interval; failed mirror hydration should best-effort clean any matching legacy `git-receive-pack` process trees and discard that repo's partial mirror before retry.
-- Keep `stdout` reserved for one Result Envelope v1 and stream phase progress on `stderr` as `__VAWS_PROGRESS__=<json>`.
-- Prefer incremental Git `receive-pack` directly into the container-local bare
-  mirrors. In `auto` mode, fall back to the self-contained full-bundle transfer
-  when Git push is unavailable.
-- Runtime install progress should be attributable at the package-step level: uninstall, `vllm`, `vllm-ascend` requirements, `vllm-ascend`, import smoke, and marker write.
-- Publish each synthetic snapshot to both the parity ref and an advertised branch ref inside the container-local mirror. Git push reuses objects already present in that mirror; the bundle fallback remains self-contained and does not require remote base objects.
-- Keep deterministic parentless snapshot commits as the runtime identity. Maintain
-  a separate endpoint-scoped transport-carrier ref whose commits form a chain
-  over the same trees; this gives receive-pack a common ancestor without making
-  snapshot ids target-dependent or pulling upstream history into first sync.
-- Materialize child repos explicitly; do not rely on `git submodule update` to fetch synthetic child commits.
-- Synthetic commits are deterministic parentless tree snapshots. Keep the real `HEAD` as provenance and compare native/dependency input fingerprints with the last installed inputs; commit movement alone is not a rebuild reason.
-- Native submodules are fingerprinted recursively by file content, not their task-specific synthetic commit ids. Missing or unpopulated native dependencies cannot establish a cache hit.
-- If a clean child repo only differs from the parent through the parentless transport commit id, suppress that transport-only child gitlink path from the parent repo's `changed_paths`.
-- Use dynamic Python / pip discovery plus a shell-safe env preamble, and source optional Ascend env scripts under a `set +u` / `set -u` guard instead of relying on shell-specific variables.
-- Runtime dependency installs use the single A3-tested HuaweiCloud pip index. Do not configure default extra indexes, mirror fallback, or caller-provided pip index overrides in parity.
-- Runtime editable installs use `--no-deps`; dependency ownership stays in `vllm-ascend` requirements. Cache / compile env such as `PIP_CACHE_DIR`, `FETCHCONTENT_BASE_DIR`, `VAWS_BUILD_JOBS`, `MAX_JOBS`, and `CMAKE_BUILD_PARALLEL_LEVEL` may be explicitly passed into the remote install shell, and the effective remote install env is recorded in the manifest/runtime state with URL userinfo redacted.
-- If editable install or dependency verification fails, fail closed with the captured log instead of trying alternate package sources, installing `uv`, refreshing the packaging stack, or changing install modes.
-- Before invoking parity, confirm the local working tree represents the **intended deployment state**. If any submodule source files have uncommitted changes made for temporary debugging or hypothesis testing, revert them before syncing — do not sync exploratory patches to the remote.
-- If a previous parity sync in this session led to a failed remote execution and the agent subsequently modified local code, do not re-sync until the root cause of the failure is confirmed from remote logs (not from hypothesis).
-- Fail closed if parity cannot be proven.
-- First replacement of image-provided `vllm` / `vllm-ascend` requires explicit user consent for that logical container identity.
-- `install_consent.py set`, `batch-set`, and `set-sync-mode` must include `--approved-by-user`.
-- If the user explicitly says to use local `vllm` / `vllm-ascend`, replace image packages, or run current workspace code remotely, record both decisions in one atomic write: `set-sync-mode --sync-mode local --allow-first-install --approved-by-user`. Do not ask a second first-install question for the same container identity.
-- Keep local runtime state only under `.vaws-local/remote-code-parity/`.
-
-## Preconditions
-
-This skill assumes an upper skill already proved:
-
-- container SSH works by key
-- the runtime root path is known
-- recursive submodules are initialized and populated
-- the target machine / container is the intended execution target
-
-If any of those are uncertain, stop and route back to `machine-management` or `repo-init`.
-
-## Local state
-
-Keep local untracked state here:
-
-- `.vaws-local/remote-code-parity/install-consents.json`
-- `.vaws-local/remote-code-parity/runtime-state.json`
-- `install-consents.json` and `runtime-state.json` writes must be atomic and lock-protected.
-
-Container-local cache layout under the cache root:
-
-- `workspaces/<workspace_id>/mirrors/`
-- `workspaces/<workspace_id>/locks/`
-- `workspaces/<workspace_id>/manifests/`
-
-## Cross-platform launcher rule
-
-- macOS / Linux / WSL: `python3 ...`
-- Windows: `py -3 ...`
-
-Container commands in this skill assume Linux shells.
-
-## Script-first entry points
-
-Normal agent entrypoint (session is the default target; run from inside the session worktree for zero-arg auto-bind):
-
-- POSIX: `python3 .agents/skills/remote-code-parity/scripts/parity_sync.py [--session-id <id> | --session-file <path>] ...`
-- Windows: `py -3 .agents/skills/remote-code-parity/scripts/parity_sync.py [--session-id <id> | --session-file <path>] ...`
-- Legacy machine surface: append `--machine <alias-or-ip>` for single-tenant base-container work.
-
-Apply-mode split:
-
-- `--apply-mode auto` (default): unchanged content snapshots and installed build inputs use the verified snapshot fast path; Python-only changes run `materialize`; changed native/dependency/build inputs or a required first install run `install`. File-status fingerprints never authorize execution.
-- `--apply-mode source-only`: publish source snapshots to the container cache only; no runtime materialization and no install/rebuild.
-- `--apply-mode materialize`: publish snapshots and update the runtime source tree; no install/rebuild.
-- `--apply-mode install`: full parity behavior with consent, materialization, install/rebuild triggers, and verification.
-
-Agent-facing sync tools:
-
-- `python3 .agents/scripts/remote_sync_plan.py ... --mode auto|source-only|materialize|install`
-- `python3 .agents/scripts/remote_sync_apply.py ... --mode auto|source-only|materialize|install`
-
-Consent helper:
-
-- POSIX: `python3 .agents/skills/remote-code-parity/scripts/install_consent.py resolve ...`
-- POSIX: `python3 .agents/skills/remote-code-parity/scripts/install_consent.py set ... --approved-by-user`
-- POSIX: `python3 .agents/skills/remote-code-parity/scripts/install_consent.py set-sync-mode ... --sync-mode local --allow-first-install --approved-by-user`
-- POSIX: `python3 .agents/skills/remote-code-parity/scripts/install_consent.py batch-set --input FILE.json --approved-by-user`
-
-Low-level helper:
-
-- POSIX: `python3 .agents/skills/remote-code-parity/scripts/remote_code_parity.py sync ...`
-
-Transport selection:
-
-- `--transport auto` (default): incremental Git push first, full bundle fallback.
-- `--transport git`: require incremental Git push and fail closed on transport failure.
-- `--transport bundle`: force the legacy self-contained full-bundle path.
-- `scripts/transport_benchmark.py` compares full-bundle payloads with
-  incremental receive-pack payloads in isolated temporary repositories.
-
-Optional cache cleanup helper:
-
-- POSIX: `python3 .agents/skills/remote-code-parity/scripts/gc_runtime_cache.py ...`
-- POSIX: `python3 .agents/skills/remote-code-parity/scripts/remote_code_parity.py gc --workspace-root <root>` deletes `refs/parity/` older than 7 days that no Run Manifest `code.snapshot_commit` still names. Successful sync keeps those refs so the orphan snapshot commit stays reachable. Snapshot commit messages are the constant prefix plus repo id only, so identity and sync of the same tree share one SHA. Identity (and `gc`) pass `unpopulated="gitlink"` and `with_build_inputs=False`: unpopulated nested modules use the parent-index gitlink, and identity never fingerprints native build inputs. `plan`/`sync` stay `unpopulated="error"` and still compute build inputs.
-
-Reference files:
-
-- `.agents/skills/remote-code-parity/references/behavior.md`
-- `.agents/skills/remote-code-parity/references/command-recipes.md`
-- `.agents/skills/remote-code-parity/references/acceptance.md`
-
-## Workflow
-
-### 1. Check sync mode before anything else
-
-Before running parity for a container, check the persisted `sync_mode`:
-
-- `unset` (first use): the agent must proactively ask the user whether to sync local code (`local`) or use the container's image-provided vllm + vllm-ascend (`image`). If the user chooses local replacement, record it via `install_consent.py set-sync-mode --sync-mode local --allow-first-install --approved-by-user`; if the user chooses image packages, record `--sync-mode image --approved-by-user`.
-- `local`: proceed with the full parity flow below.
-- `image`: `parity_sync.py` returns `status: skipped` immediately. The agent skips parity and proceeds with remote execution using image-provided packages.
-
-The user can switch sync mode at any time. `--force-reinstall` overrides `image` mode.
-If the agent forgets to set sync mode, `parity_sync.py` returns `status: blocked` before remote mutation.
-
-### 2. Resolve the ready target from inventory
-
-For normal agent work, start from `parity_sync.py`. The session is the default target: run it from inside the session worktree and the target auto-binds from the `.vaws-local/current-session.json` worktree binding, or pass `--session-id` / `--session-file` explicitly. Use legacy `--machine` only for single-tenant base-container work.
-
-Collect from local machine inventory:
-
-- machine alias
-- container SSH endpoint
-- runtime root inside the container
-- logical container identity: `<container-name>@<runtime-root>`
-- workspace id
-
-Stop if the request is not actually about imminent remote execution.
-
-### 3. Capture synthetic snapshot refs
-
-Create synthetic Git commits for the workspace repo and nested submodules in **postorder**:
-
-1. leaf submodules first
-2. then parent submodules
-3. workspace root last
-
-For each repo:
-
-- build a temporary index from `HEAD`
-- stage the full current working tree with `git add -A`
-- reset local-only denylist paths and child-submodule paths from that temporary index
-- replace child submodule gitlinks with the child synthetic snapshot commit ids
-- write a deterministic parentless synthetic commit for the resulting tree
-- record the repo's original `HEAD` as `source_head`; do not make the synthetic commit a child of that `HEAD`, because an empty container mirror would otherwise receive full vLLM history on first push
-- filter transport-only child gitlink paths out of `changed_paths` when the child `source_head` matches the parent gitlink and the child has no logical changes
-
-Ignored files stay ignored. The snapshot source of truth is tracked + untracked non-ignored.
-
-### 4. Publish mirrors directly into the container cache
-
-For each repo in scope:
-
-- ensure the container-local bare mirror repo exists under the cache root
-- push the synthetic ref over SSH directly into the container-local bare mirror,
-  together with the endpoint-scoped transport-carrier ref, allowing Git to omit
-  objects already reachable from the previous carrier
-- in `auto` mode, if `git-receive-pack` cannot complete, create a self-contained
-  local Git bundle, stream it to the remote, and fetch it into the same mirror
-- update `refs/parity/<workspace_id>/current` and an advertised branch ref inside that same mirror
-- write a compact manifest for this sync attempt under `manifests/`
-- use a **container-local** lock while mutating cache or runtime state
-
-Preferred scope:
-
-- workspace root
-- `vllm/`
-- `vllm-ascend/`
-- recursive nested populated submodules if discovered
-
-### 5. Handle first-time runtime replacement
-
-Use a container-side marker under `/vllm-workspace/.remote-code-parity/` to detect whether editable replacement already happened.
-
-If the container identity has never been approved:
-
-- resolve the consent state from `.vaws-local/remote-code-parity/install-consents.json`
-- if there is no `allow`, stop with `status == blocked`
-- do **not** silently continue with the image-provided packages
-- if the user already approved `local` sync with `--allow-first-install`, this consent is already present; do not ask again
-
-If the user already approved this container identity:
-
-- uninstall image-provided `vllm` / `vllm-ascend` best-effort
-- delete `/vllm-workspace/vllm` and `/vllm-workspace/vllm-ascend`
-- do **not** delete the entire `/vllm-workspace`
-
-### 6. Materialize the mirrors in place inside `/vllm-workspace`
-
-Inside the container:
-
-- initialize the root repo in place if needed
-- fetch each repo from the container-local mirror path
-- force the runtime repo to the synthetic parity ref
-- rewrite submodule URLs to container-local mirror paths
-- rewrite submodule URLs to those mirror paths and recursively materialize child repos explicitly
-- preserve runtime-private paths such as `Mooncake`, `.vaws-runtime`, and `.remote-code-parity`
-- ensure the checked-out commits match the manifest
-
-Do not claim success before the container-side commit ids match the snapshot manifest.
-
-### 7. Reinstall only when required after first install
-
-After the first approved replacement, reinstall only when one of the following triggers fires:
-
-**Trigger 1 — changed-path pattern match:**
-
-- `vllm`: `requirements*`, `pyproject.toml`, `setup.*`, `CMake*`, `cmake/**`, `csrc/**`, and common native-source suffixes
-- `vllm-ascend`: same as `vllm`, plus `vllm_ascend/_cann_ops_custom/**`
-- pure Python, docs, configs, tests, and ordinary scripts: parity only, no rebuild
-
-**Trigger 2 — commit drift from last sync:**
-
-Compare the snapshot's native/dependency Git blobs, submodule gitlinks and
-semantic build environment with `installed_build_inputs` in runtime state.
-This handles committed Python-only changes without rebuilding and detects
-reverting previously installed dirty native changes. Missing legacy input
-records cause one conservative rebuild. A ready runtime profile supplies
-`VAWS_ENVIRONMENT_FINGERPRINT`; changing it invalidates native reuse. This does
-not infer compatibility for an unregistered or externally modified environment.
-
-**Trigger 3 — dependency cascade:**
-
-When `vllm` triggers reinstall (by either trigger), `vllm-ascend` is also reinstalled because it depends on `vllm` internals.
-
-**Uninstall scope:**
-
-Only uninstall the packages that will actually be reinstalled. If only `vllm-ascend` needs reinstall, `vllm` is not uninstalled. On first install, the uninstall step is skipped because `first_install_prepare_script` already handled it.
-
-**Force reinstall:**
-
-Pass `--force-reinstall` to `parity_sync.py` to unconditionally reinstall both `vllm` and `vllm-ascend` regardless of what changed. This overrides all trigger logic above but still runs the full sync flow (snapshot, mirror hydration, materialize, install, verify).
-
-**`--force-reinstall` usage discipline:**
-
-Use `--force-reinstall` only when (a) it is the first sync to a new container, (b) the previous install is known to be broken, or (c) the user explicitly requests it. Do not default to `--force-reinstall` as a precaution — the trigger matrix above already handles normal cases, and unnecessary force-reinstall adds 5–15 minutes of remote compilation time per invocation.
-
-**No-change fast path:**
-
-If all snapshot commits match `last_snapshot_commits` and no reinstall is needed (and `--force-reinstall` is not set), the sync verifies container-side commits with a single SSH call and returns `status == ready` immediately, skipping mirror hydration, materialize, and manifest upload.
-
-Use these commands inside the container when required. The normal path first unifies the runtime Python across `python`, `python3`, CMake, and CANN helper tools, sources optional Ascend env scripts under a `set +u` / `set -u` guard, then uses pip with the single A3-tested HuaweiCloud index. Editable installs use `--no-deps`; dependency ownership stays in the `vllm-ascend` requirements step so `vllm` cannot upgrade `numpy` away from the CANN-compatible version. Build parallelism defaults to `min(available CPUs, 128)` through both `MAX_JOBS` and `CMAKE_BUILD_PARALLEL_LEVEL`. Do not bootstrap `uv`, probe mirror candidates, retry across indexes, or retry by dropping `--no-build-isolation`.
-
-### `vllm`
+## Entry points
 
 ```bash
-export VLLM_TARGET_DEVICE=empty
-export TORCH_DEVICE_BACKEND_AUTOLOAD=0
-pip install --no-deps -e . --no-build-isolation
+python3 .agents/skills/remote-code-parity/scripts/parity_sync.py \
+  --host <container-ip> --print-derived-args
+python3 .agents/skills/remote-code-parity/scripts/parity_sync.py \
+  --host <container-ip> [--runtime-root /vllm-workspace] [--dry-run]
+python3 .agents/scripts/remote_sync_plan.py --host <container-ip>
+python3 .agents/scripts/remote_sync_apply.py --host <container-ip>
 ```
 
-### `vllm-ascend`
+Low-level package CLI (coordinator-owned install/materialize, not the
+normal agent path):
 
 ```bash
-pip install -r requirements.txt
-export MAX_JOBS="${MAX_JOBS:-128}"
-export CMAKE_BUILD_PARALLEL_LEVEL="${CMAKE_BUILD_PARALLEL_LEVEL:-$MAX_JOBS}"
-pip install --no-deps -v -e . --no-build-isolation
+python3 .agents/skills/remote-code-parity/scripts/remote_code_parity.py sync ...
 ```
 
-### 8. Finish with proof, not assumptions
+`stdout` is one Result Envelope v1. Progress is `__VAWS_PROGRESS__=` on
+`stderr`.
 
-- Finish with real import smoke (`import vllm`, `import vllm_ascend`, `import torch_npu`) instead of `find_spec()` only, and keep the generated smoke snippet syntactically valid under shell heredoc quoting.
-
-
-Return a compact JSON summary that includes:
-
-- final `status`
-- `container_cache_root`
-- synthetic snapshot commit ids
-- observed runtime commit ids
-- whether reinstall ran or was blocked
-- whether this was the first install path
-- the reason when the skill stopped early
-
-Success means `status == ready` and runtime commit ids match the synthetic snapshot ids exactly.
+Deleted: `install_consent.py`, `--session-id`, `--machine`, first-install
+gates as a required normal flow.

@@ -21,7 +21,8 @@ if str(LIB_DIR) not in sys.path:
 from vaws_remote_dev import ssh_exec  # noqa: E402
 from vaws_remote_target import SshEndpoint, ascend_env_preamble  # noqa: E402
 from vaws_result_envelope import PROGRESS_SENTINEL, progress as envelope_progress, unwrap_skill_payload  # noqa: E402
-from vaws_session_state import load_session_lookup, session_benchmark_dir  # noqa: E402
+from vaws_session_state import benchmark_dir  # noqa: E402
+from vaws_task_target import task_client, task_id_of  # noqa: E402
 from vaws_validate import require_env_name  # noqa: E402
 
 SERVING_SCRIPTS = ROOT / ".agents" / "skills" / "vllm-ascend-serving" / "scripts"
@@ -67,18 +68,17 @@ def safe_token(value: str) -> str:
 
 
 def benchmark_runs_dir(config: "BenchConfig") -> Path:
-    lookup = load_session_lookup(
-        session_id=config.session_id,
-        session_file=config.session_file,
-        repo_root=ROOT,
-    )
-    return session_benchmark_dir(lookup.session["session_id"], lookup.state_repo_root) / "runs"
+    task_id = config.task_id
+    if not task_id:
+        client = task_client(config.context_file)
+        task_id = task_id_of(client)
+    return benchmark_dir(task_id, ROOT) / "runs"
 
 
 def write_local_result(config: "BenchConfig", result: dict[str, Any]) -> Path:
     runs_dir = benchmark_runs_dir(config)
     runs_dir.mkdir(parents=True, exist_ok=True)
-    target_token = safe_token(config.session_id or "benchmark")
+    target_token = safe_token(config.task_id or "benchmark")
     filename = (
         f"{now_utc().replace(':', '-')}_{target_token}_"
         f"{os.getpid()}_{uuid.uuid4().hex[:8]}.json"
@@ -293,8 +293,10 @@ def _preset_env(data: dict[str, Any], key: str) -> dict[str, str]:
 @dataclass
 class BenchConfig:
     """Assembled benchmark configuration ready for execution."""
-    session_id: str | None = None
-    session_file: str | None = None
+    context_file: str | None = None
+    task_id: str | None = None
+    execution_id: str | None = None
+    service: str = "vllm"
     model: str = ""
     tp: int | None = None
     dp: int | None = None
@@ -314,10 +316,10 @@ class BenchConfig:
     def to_serve_start_args(self) -> list[str]:
         """Build CLI args for serve_start.py."""
         args = ["--model", self.model]
-        if self.session_file:
-            args.extend(["--session-file", self.session_file])
-        else:
-            args.extend(["--session-id", self.session_id or ""])
+        if self.context_file:
+            args.extend(["--context-file", self.context_file])
+        if self.service:
+            args.extend(["--service", self.service])
         if self.served_model_name:
             args.extend(["--served-model-name", self.served_model_name])
         if self.tp is not None:
@@ -332,8 +334,6 @@ class BenchConfig:
             args.extend(["--health-timeout", str(self.health_timeout)])
         for k, v in self.env.items():
             args.extend(["--extra-env", f"{k}={v}"])
-        if self.skip_parity:
-            args.append("--skip-parity")
         if self.serve_args:
             args.append("--")
             args.extend(self.serve_args)
@@ -379,10 +379,12 @@ class BenchConfig:
 
     def summary_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {"model": self.model}
-        if self.session_id:
-            d["session_id"] = self.session_id
-        if self.session_file:
-            d["session_file"] = self.session_file
+        if self.task_id:
+            d["task_id"] = self.task_id
+        if self.execution_id:
+            d["execution_id"] = self.execution_id
+        if self.service:
+            d["service"] = self.service
         if self.preset_name:
             d["preset"] = self.preset_name
         if self.tp is not None:
@@ -406,8 +408,9 @@ class BenchConfig:
 
 def assemble_config(
     *,
-    session_id: str | None = None,
-    session_file: str | None = None,
+    context_file: str | None = None,
+    execution_id: str | None = None,
+    service: str = "vllm",
     model: str,
     tp: int | None = None,
     dp: int | None = None,
@@ -421,29 +424,16 @@ def assemble_config(
     bench_env: list[str] | None = None,
     refer_nightly: str | None = None,
     preset: str | None = None,
-    skip_parity: bool = False,
 ) -> BenchConfig:
     """Assemble a BenchConfig with CLI > preset > nightly > default priority.
 
-    Benchmarks are session-only. The session is resolved once here (including
-    worktree-binding auto-resolution) and pinned into the config so every
-    downstream subprocess targets the same session explicitly.
+    The task comes from ``--context-file`` / ``VAWS_CONTEXT_FILE``. A running
+    service is addressed by its execution endpoint and port; the benchmark
+    does not acquire that service's NPUs again.
 
     ``preset`` names a JSON file under the skill's ``presets/`` directory.
-    Recognized preset keys: ``tp``, ``dp``, ``port``, ``devices``,
-    ``served_model_name``, ``health_timeout``, ``vllm_ref``, ``runs``,
-    ``warmup_runs``, ``env`` (object), ``bench_env`` (object), ``serve_args``
-    (array), ``bench_args`` (array), ``fixed_request_dataset`` (object) and
-    ``bench_request_counts`` (array of int). The resolved preset dict is kept
-    on ``cfg.preset`` so callers can read non-config keys (``vllm_ref``,
-    ``fixed_request_dataset``, ``bench_request_counts``, ``runs``,
-    ``warmup_runs``) from it.
     """
-    lookup = load_session_lookup(
-        session_id=session_id,
-        session_file=session_file,
-        repo_root=ROOT,
-    )
+    client = task_client(context_file)
     nightly_ref: NightlyReference | None = None
     if refer_nightly:
         nightly_ref = parse_nightly_yaml(refer_nightly)
@@ -453,10 +443,11 @@ def assemble_config(
         preset_dict = load_preset(preset)
 
     cfg = BenchConfig(
-        session_id=lookup.session["session_id"],
-        session_file=str(lookup.session_file),
+        context_file=context_file,
+        task_id=task_id_of(client),
+        execution_id=execution_id,
+        service=service or "vllm",
         model=model,
-        skip_parity=skip_parity,
         nightly_ref=nightly_ref,
         preset_name=preset,
         preset=preset_dict,
@@ -614,10 +605,12 @@ def call_serve_stop(config: BenchConfig, force: bool = False) -> dict[str, Any]:
     """Call serve_stop.py and return its JSON output."""
     script = str(SERVING_SCRIPTS / "serve_stop.py")
     cmd = [sys.executable, script]
-    if config.session_file:
-        cmd.extend(["--session-file", config.session_file])
-    else:
-        cmd.extend(["--session-id", config.session_id or ""])
+    if config.context_file:
+        cmd.extend(["--context-file", config.context_file])
+    if config.execution_id:
+        cmd.extend(["--execution-id", config.execution_id])
+    if config.service:
+        cmd.extend(["--service", config.service])
     if force:
         cmd.append("--force")
 
@@ -636,18 +629,23 @@ def call_serve_stop(config: BenchConfig, force: bool = False) -> dict[str, Any]:
 
 def _get_ssh_endpoint(
     *,
-    session_id: str | None = None,
-    session_file: str | None = None,
+    context_file: str | None = None,
+    execution_id: str | None = None,
+    host: str | None = None,
+    port: int | None = None,
 ) -> tuple[str, int]:
-    """Resolve the session container SSH host and port."""
-    lookup = load_session_lookup(
-        session_id=session_id,
-        session_file=session_file,
-        repo_root=ROOT,
-    )
-    remote = lookup.session["remote"]
-    container = remote["container"]
-    return remote["host"], int(container["ssh_port"])
+    """Ordinary SSH host/port for remote I/O. Live services use coordinator target()."""
+    if host:
+        return str(host), int(port or 22)
+    from vaws_task_target import execution_target, task_client
+
+    if not execution_id:
+        raise RuntimeError("benchmark remote I/O requires --execution-id or --host")
+    target = execution_target(task_client(context_file), str(execution_id))
+    endpoint = target.get("endpoint") or {}
+    if not endpoint.get("host"):
+        raise RuntimeError("coordinator target has no ordinary endpoint")
+    return str(endpoint["host"]), int(endpoint.get("port") or 22)
 
 
 def ssh_run_script(
@@ -765,7 +763,7 @@ def run_bench_on_remote(
     import shlex
 
     bench_cmd_parts = config.to_bench_serve_args(base_url, served_model_name)
-    target_token = safe_token(config.session_id or "benchmark")
+    target_token = safe_token(config.task_id or "benchmark")
     result_filename = (
         f"result_bench_{target_token}_{now_utc().replace(':', '-')}_"
         f"{os.getpid()}_{uuid.uuid4().hex[:8]}.json"

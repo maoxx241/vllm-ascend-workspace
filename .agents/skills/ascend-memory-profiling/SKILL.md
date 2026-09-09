@@ -62,7 +62,7 @@ All memory attribution is based on measured data — **no estimation or guessing
 
 **Always use the `vllm-ascend-serving` skill for service lifecycle management.** This profiling skill only collects and analyzes data — it attaches to a running service. **msprof wrapping is mandatory** for a complete, traceable memory breakdown.
 
-Memory profiling is **session-only**. `mem_collect.py` takes an optional `--session-id <id>` / `--session-file <session.json>`; when both are omitted, the session is auto-resolved from the nearest `.vaws-local/current-session.json` worktree binding (walking up from the current working directory), so running from inside a session worktree needs zero target arguments. If no binding is found, the command fails fast with instructions to pass `--session-id` or create a session with `session-management`'s `session_create.py`. The skill reads serving state from `.vaws-local/sessions/<session-id>/serving.json` and talks only to that session's dedicated container.
+Memory profiling uses `--context-file` / `VAWS_CONTEXT_FILE` and `--execution-id` / `--service`. It does not guess a session from cwd. Attach mode reads coordinator service facts, not a workspace session ledger.
 
 Prefer `--attach` (service managed by `vllm-ascend-serving`). Standalone mode starts its own service as a fallback; it leases its service port through the session lease mechanism and releases the lease on exit, so it never bypasses session port leases or shared state isolation.
 
@@ -74,8 +74,7 @@ Before starting the service, verify that msprof is available on the remote machi
 python3 -c "
 import sys; sys.path.insert(0, '.agents/skills/ascend-memory-profiling/scripts')
 from _common import check_msprof_available, resolve_execution_target
-# session_id=None auto-resolves from the current session worktree binding
-target = resolve_execution_target(session_id='<session-id-or-none>')
+target = resolve_execution_target(context_file=None, execution_id='<id>', service='vllm')
 ep = target['endpoint']
 print(check_msprof_available(ep))
 "
@@ -92,14 +91,14 @@ Upload the msprof wrapper, then start the service with `--wrap-script`:
 python3 -c "
 import sys; sys.path.insert(0, '.agents/skills/ascend-memory-profiling/scripts')
 from _common import resolve_execution_target, upload_msprof_wrapper
-target = resolve_execution_target(session_id='<session-id-or-none>')
+target = resolve_execution_target(execution_id='<id>', service='vllm')
 ep = target['endpoint']
 print(upload_msprof_wrapper(ep, mem_freq=50))
 "
 # Start service with msprof wrapping (inside a session worktree the session is
-# auto-resolved; otherwise add --session-id <id>)
+# coordinator-owned service; pass --execution-id if attaching)
 python3 .agents/skills/vllm-ascend-serving/scripts/serve_start.py \
-  [--session-id <id>] --model <path> --tp <N> \
+  --model <path> --tp <N> --service vllm \
   --wrap-script /tmp/_vaws_msprof_wrap.sh \
   [-- --speculative-config '...' --compilation-config '...' ...]
 ```
@@ -119,7 +118,7 @@ python3 .agents/skills/ascend-memory-profiling/scripts/mem_collect.py \
 
 # Explicit session target
 python3 .agents/skills/ascend-memory-profiling/scripts/mem_collect.py \
-  --session-id <id> --attach
+  --execution-id <id> --attach
 ```
 
 Use `--session-file <session.json>` when the session file path is the stable handle.
@@ -135,7 +134,7 @@ What happens:
 
 ```bash
 python3 .agents/skills/vllm-ascend-serving/scripts/serve_stop.py \
-  --session-id <id>
+  --service vllm
 ```
 
 Use the same target form that was used for `serve_start.py`.
@@ -146,7 +145,7 @@ After stop, run `mem_collect --attach` again **with `--resume-run`** pointing to
 
 ```bash
 python3 .agents/skills/ascend-memory-profiling/scripts/mem_collect.py \
-  --session-id <id> --attach \
+  --execution-id <id> --attach \
   --resume-run .vaws-local/memory-profiling/<run-dir-from-step-2>/
 ```
 
@@ -178,13 +177,12 @@ When the serving skill is unavailable (e.g. bootstrap scenario), `mem_collect.py
 
 ```bash
 python3 .agents/skills/ascend-memory-profiling/scripts/mem_collect.py \
-  --session-id <id> \
   --model <remote-weight-path> \
   --tp <N> [--dp <N>] [--tag <name>] \
   [--speculative-config '...'] [--compilation-config '...'] ...
 ```
 
-(As everywhere, `--session-id` can be omitted inside a session worktree.)
+Task identity is `--context-file` / `VAWS_CONTEXT_FILE`.
 
 This runs all phases internally: baseline → start (with msprof) → health check → snapshot → inference → stop → msprof export. msprof is always enabled in standalone mode; a pre-flight check verifies msprof availability before starting. The service port is leased through the session lease mechanism (no ad-hoc free-port scanning) and the lease is released on exit.
 
@@ -226,8 +224,8 @@ CANN Runtime                   |      125.3 |      0.122 |   0.4% | msprof npu_m
 
 | Skill | Interaction |
 |-------|-------------|
-| `vllm-ascend-serving` | **Service lifecycle**: Use `serve_start.py` to start (with `--wrap-script` for msprof), `serve_stop.py` to stop. This skill reads serving state from `.vaws-local/sessions/<session-id>/serving.json` — the only serving state location, recorded in the attach-mode manifest as `serving_state_ref`. The serving skill is agnostic to msprof — it only knows about the wrapper script. |
-| `session-management` | **Session targets**: Use `session_create.py` to create sessions; all serving and memory-collection commands resolve their session from `--session-id`, `--session-file`, or the current worktree binding. Serving state lives under `.vaws-local/sessions/<session-id>/serving.json`. |
+| `vllm-ascend-serving` | **Service lifecycle**: Use `serve_start.py` / `serve_stop.py`. Attach mode uses `--execution-id` / `--service`. |
+| `session-management` | Bind actual worktrees. Remote runtime belongs to coordinator. |
 | `machine-management` | **Base machine registry**: Sessions are created on top of registered machines; this skill itself only targets sessions. |
 | `remote-code-parity` | **Automatic via serving**: The serving skill calls parity sync before service start. |
 

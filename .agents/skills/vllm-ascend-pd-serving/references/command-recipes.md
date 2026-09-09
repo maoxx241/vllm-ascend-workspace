@@ -6,7 +6,7 @@
 python -B .agents/skills/vllm-ascend-pd-serving/scripts/pd_serving.py plan \
   --output-dir .vaws-local/pd-serving/case-001 \
   --config /path/to/pd-config.json \
-  --group-file .vaws-local/sessions/groups/pd-group/group.json
+  --group-file .vaws-local/task-groups/pd-group/group.json
 ```
 
 ## Start and inspect

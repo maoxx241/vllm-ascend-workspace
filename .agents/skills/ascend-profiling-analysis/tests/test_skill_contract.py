@@ -34,8 +34,9 @@ def test_analyze_wrapper_has_required_args() -> None:
     parser = profile_analyze._build_parser()
     opts = _option_set(parser)
     for required in (
-        "--session-id",
-        "--session-file",
+        "--context-file",
+        "--execution-id",
+        "--host",
         "--manifest",
         "--remote-profile-root",
         "--tag",
@@ -69,8 +70,9 @@ def test_sweep_wrapper_has_required_args() -> None:
     parser = profile_sweep._build_parser()
     opts = _option_set(parser)
     for required in (
-        "--session-id",
-        "--session-file",
+        "--context-file",
+        "--execution-id",
+        "--host",
         "--search-root",
         "--tag",
         "--limit",
@@ -131,15 +133,22 @@ def test_required_remote_python_dependency_fails_closed() -> None:
 
 
 def test_required_remote_python_dependency_selects_importable_interpreter() -> None:
-    results = iter(
-        [
-            SimpleNamespace(returncode=0, stdout="", stderr=""),
-            SimpleNamespace(returncode=0, stdout="OK\n", stderr=""),
-        ]
-    )
-    with mock.patch.object(common, "ssh_exec", side_effect=lambda *a, **k: next(results)):
+    with mock.patch.object(
+        common,
+        "ssh_exec",
+        return_value=SimpleNamespace(returncode=0, stdout="OK\n", stderr=""),
+    ):
         py = common.remote_python_with_module(object(), "yaml", required=True)
-    assert py == "/usr/local/python3.10/bin/python3"
+    assert py == "python3"
+    with mock.patch.object(
+        common,
+        "ssh_exec",
+        return_value=SimpleNamespace(returncode=0, stdout="OK\n", stderr=""),
+    ):
+        py = common.remote_python_with_module(
+            object(), "yaml", required=True, python="/opt/vaws/bin/python"
+        )
+    assert py == "/opt/vaws/bin/python"
 
 
 def test_remote_python_probe_timeout_required_fails_closed() -> None:

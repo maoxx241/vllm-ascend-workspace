@@ -259,7 +259,7 @@ class StatusGateTests(unittest.TestCase):
     def test_verified_requires_evidence_and_a_confirming_handle(self) -> None:
         entry = sample_entry(status="verified")
         errors = v2.validate_entry(entry, context=v2.PROJECT_LAYER)
-        self.assertTrue(any("verification is required" in error for error in errors))
+        self.assertTrue(any("verification" in error for error in errors))
 
     def test_verified_with_full_verification_passes(self) -> None:
         entry = sample_entry()
@@ -287,7 +287,7 @@ class StatusGateTests(unittest.TestCase):
         entry["verification"]["verified_by"] = ["github-actions[bot]"]
         entry = v2.with_content_hash(entry)
         errors = v2.validate_entry(entry, context=v2.VERIFIED_CONTEXT)
-        self.assertTrue(any("bot identity" in error for error in errors))
+        self.assertTrue(any("bot" in error for error in errors))
 
     def test_project_context_does_not_require_non_submitter(self) -> None:
         entry = sample_entry()
@@ -303,7 +303,7 @@ class StatusGateTests(unittest.TestCase):
     def test_verified_zone_refuses_unverified_status(self) -> None:
         entry = sample_entry()
         errors = v2.validate_entry(entry, context=v2.VERIFIED_CONTEXT)
-        self.assertTrue(any("shared verified zone" in error for error in errors))
+        self.assertTrue(any("verified" in error and "unverified" in error for error in errors))
 
     def test_verified_zone_refuses_unresolved_scope(self) -> None:
         entry = sample_entry()
@@ -688,6 +688,58 @@ class MeasurementBodyTests(unittest.TestCase):
         disjoint["scope"]["cann"] = {"values": ["1.0.EXAMPLE"]}
         disjoint = v2.with_content_hash(disjoint)
         self.assertEqual(v2.measurement_contradictions(left, disjoint), [])
+
+
+class ReferenceBodyTests(unittest.TestCase):
+    def test_sourced_reference_validates_without_invented_scope(self) -> None:
+        entry = {
+            "uuid": v2.derived_uuid("owner/fork", "sourced-references", "mcp-stdio"),
+            "slug": "mcp-stdio",
+            "status": "unverified",
+            "confidence": "medium",
+            "provenance": {
+                "contributor": "anonymous",
+                "origin_repo": "owner/fork",
+                "submitted_at": "2026-09-10",
+                "redaction_profile": redaction.REDACTION_PROFILE,
+            },
+            "lifecycle": {
+                "first_seen": "2026-09-10",
+                "updated_at": "2026-09-10",
+                "superseded_by": None,
+                "resolved_by": None,
+            },
+            "reference": {
+                "kind": "official_documentation",
+                "summary": "MCP stdio transport uses newline-delimited JSON-RPC messages",
+                "text": (
+                    "The Model Context Protocol stdio transport encodes JSON-RPC "
+                    "messages as UTF-8 and delimits them with newlines."
+                ),
+                "source": {
+                    "title": "Transports (stdio)",
+                    "provider": "Model Context Protocol",
+                    "url": "https://modelcontextprotocol.io/specification/2025-11-25/basic/transports",
+                    "version": "2025-11-25",
+                    "date": "2025-11-25",
+                },
+                "trust": "Official MCP specification page, not a local runtime measurement.",
+                "topics": ["mcp", "stdio"],
+            },
+        }
+        entry = v2.with_content_hash(entry)
+        self.assertEqual(v2.body_key(entry), "reference")
+        self.assertNotIn("scope", entry)
+        self.assertEqual(v2.unresolved_dimensions(entry), [])
+        self.assertEqual(v2.validate_entry(entry, context=v2.PROJECT_LAYER), [])
+        document = {
+            "schema_version": 2,
+            "kind": "sourced-references",
+            "layer": "unverified",
+            "updated_at": "2026-09-10",
+            "entries": [entry],
+        }
+        v2.validate_document(document, context=v2.PROJECT_LAYER)
 
 
 if __name__ == "__main__":

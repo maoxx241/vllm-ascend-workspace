@@ -12,11 +12,12 @@ between them.
 
 | Repository | Owns | Paths |
 |---|---|---|
-| this scaffold | Run Manifest, shared validators, session identity/leases/locks, and the scaffold generator support module | `.agents/tests/test_property_run_manifest.py`, `test_property_validate.py`, `test_property_session_state.py`, `test_property_support.py` |
+| this scaffold | Run Manifest, shared validators, local report-id canonicalization, and the scaffold generator support module | `.agents/tests/test_property_run_manifest.py`, `test_property_validate.py`, `test_property_session_state.py`, `test_property_support.py` |
 | standalone `remote-dev` | path policy, permissions, endpoint payloads, patch ops, read ledger, previews, artifact manifests, and its own generator support module | `tests/test_property_path_policy.py`, `test_property_permissions.py`, `test_property_endpoint.py`, `test_property_patch_ops.py`, `test_property_read_ledger.py`, `test_property_preview.py`, `test_property_artifacts.py`, `test_property_support.py` |
 
-Managed machine/session endpoint mapping belongs to the scaffold resolver
-(`.agents/lib/vaws_remote_dev_plugin.py`), not to remote-dev property tests.
+Generic remote-dev endpoints are explicit `host`/`port`. Coordinator
+`TaskClient.target` returns those for a bound execution. There is no
+workspace resolver plugin.
 
 ## Running
 

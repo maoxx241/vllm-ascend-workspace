@@ -2,8 +2,7 @@
 """Shared utilities for ascend-profiling-analysis scripts.
 
 Responsibilities kept minimal on purpose:
-  - resolve the session target (explicit --session-id/--session-file or the
-    bound session of the cwd worktree) to an SSH endpoint
+  - resolve a coordinator execution or an explicit host/port endpoint
   - run remote bash commands and stream stdout/stderr back
   - tar-sync the framework subtree (``scripts/ascend_profile/``) to the
     remote work dir
@@ -40,14 +39,10 @@ from vaws_remote_dev import ssh_argv, ssh_exec, ssh_run_bytes, ssh_stream as rem
 from vaws_result_envelope import PROGRESS_SENTINEL, progress as envelope_progress  # noqa: E402
 from vaws_remote_target import (  # noqa: E402
     SshEndpoint,
-    container_endpoint_from_record,
     print_json as _lib_print_json,
 )
-from vaws_session_state import (  # noqa: E402
-    SessionStateError,
-    load_session_lookup,
-    session_record_for_execution,
-)
+from vaws_session_state import SessionStateError  # noqa: E402
+from vaws_task_target import task_client, task_id_of  # noqa: E402
 
 ANALYSIS_STATE_DIR = ROOT / ".vaws-local" / "profiling-analysis" / "runs"
 
@@ -223,28 +218,46 @@ def get_machine_alias(machine: dict[str, Any]) -> str:
 
 def resolve_execution_target(
     *,
-    session_id: str | None = None,
-    session_file: str | Path | None = None,
+    context_file: str | None = None,
+    execution_id: str | None = None,
+    host: str | None = None,
+    port: int | None = None,
+    user: str = "root",
+    service: str | None = None,
 ) -> dict[str, Any]:
-    """Resolve the session execution target (session-only).
+    """Ordinary endpoint for remote analysis I/O. No cwd session resolver."""
+    from vaws_remote_target import SshEndpoint, ssh_endpoint_from_mapping
+    from vaws_task_target import executions_for_service, task_client, task_id_of
 
-    With no explicit id/file the session is auto-resolved from the nearest
-    worktree binding (cwd upward).
-    """
-    lookup = load_session_lookup(
-        session_id=session_id,
-        session_file=session_file,
-        repo_root=ROOT,
-    )
-    record = session_record_for_execution(lookup.session)
+    if host:
+        endpoint = SshEndpoint(host=host, port=int(port or 22), user=user)
+        return {
+            "mode": "endpoint",
+            "alias": host,
+            "endpoint": endpoint,
+            "task_id": None,
+            "execution_id": None,
+            "python": None,
+        }
+    client = task_client(context_file)
+    task_id = task_id_of(client)
+    if not execution_id:
+        if not service:
+            raise SessionStateError("analysis needs --execution-id, --service, or --host")
+        rows = executions_for_service(client, service)
+        if not rows:
+            raise SessionStateError(f"coordinator has no execution named {service!r}")
+        execution_id = str(rows[-1].get("id") or rows[-1].get("execution_id"))
+    observation = client.observe(str(execution_id), "status")
+    target = observation.get("target") or {}
+    endpoint = ssh_endpoint_from_mapping(target.get("endpoint") or observation.get("endpoint"))
     return {
-        "mode": "session",
-        "record": record,
-        "alias": get_machine_alias(record),
-        "endpoint": container_endpoint_from_record(record),
-        "session_id": lookup.session["session_id"],
-        "session_file": str(lookup.session_file),
-        "session": lookup.session,
+        "mode": "execution",
+        "alias": str(target.get("container_name") or endpoint.host),
+        "endpoint": endpoint,
+        "task_id": task_id,
+        "execution_id": execution_id,
+        "python": target.get("python"),
     }
 
 
@@ -501,18 +514,10 @@ def remote_python_with_module(
     module: str,
     *,
     required: bool = False,
+    python: str | None = None,
 ) -> str:
-    """Find a python3 on the remote host that can import ``module``.
-
-    Defaults match ascend-memory-profiling for consistency. Optional probes
-    fall back to plain ``python3``; required probes fail closed so a missing
-    analysis dependency is reported before framework sync or execution.
-    """
-    candidates = [
-        "/usr/local/python3.11.14/bin/python3",
-        "/usr/local/python3.10/bin/python3",
-        "python3",
-    ]
+    """Use the coordinator-selected interpreter, or python3 on a direct host."""
+    candidates = [python] if python else ["python3"]
     for cand in candidates:
         try:
             check = ssh_exec(
@@ -586,13 +591,26 @@ def fail_return(phase: str, error: Any, **extra: Any) -> int:
 
 def resolve_wrapper_target(
     *,
-    session_id: str | None = None,
-    session_file: str | Path | None = None,
+    context_file: str | None = None,
+    execution_id: str | None = None,
+    host: str | None = None,
+    port: int | None = None,
+    user: str = "root",
+    service: str | None = None,
 ) -> tuple[dict[str, Any] | None, int | None]:
-    """Resolve the session target; on failure emit phase=resolve (exit 2)."""
+    """Resolve a coordinator execution or explicit host; on failure emit phase=resolve."""
+    from vaws_task_target import TaskTargetError
+
     try:
-        return resolve_execution_target(session_id=session_id, session_file=session_file), None
-    except (ValueError, SessionStateError) as exc:
+        return resolve_execution_target(
+            context_file=context_file,
+            execution_id=execution_id,
+            host=host,
+            port=port,
+            user=user,
+            service=service,
+        ), None
+    except (ValueError, SessionStateError, TaskTargetError, RuntimeError) as exc:
         return None, fail_return("resolve", exc)
 
 
@@ -600,16 +618,16 @@ def require_remote_python(
     endpoint: SshEndpoint,
     *,
     alias: str,
-    session_id: str | None,
+    python: str | None = None,
     module: str = "yaml",
 ) -> tuple[str | None, int | None]:
-    """Preflight a remote python that can import ``module`` (exit 2 on failure)."""
+    """Preflight the coordinator-selected interpreter, or python3 on a direct host."""
     try:
-        return remote_python_with_module(endpoint, module, required=True), None
+        return remote_python_with_module(
+            endpoint, module, required=True, python=python
+        ), None
     except RuntimeError as exc:
-        return None, fail_return(
-            "dependency_preflight", exc, machine=alias, session_id=session_id
-        )
+        return None, fail_return("dependency_preflight", exc, machine=alias)
 
 
 def prepare_run_dir(

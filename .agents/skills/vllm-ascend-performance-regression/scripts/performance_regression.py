@@ -68,7 +68,7 @@ REQUIRED_SHARED_KEYS = (
     "request_rate",
 )
 REQUIRED_TOPOLOGY_KEYS = ("tp", "dp")
-PARITY_ALLOWED_DIFFERENCES = ("code_snapshot", "session_id", "label")
+PARITY_ALLOWED_DIFFERENCES = ("code_snapshot", "service", "label")
 
 
 class PerformanceRegressionError(ValueError):
@@ -260,14 +260,14 @@ def validate_config(config: Mapping[str, Any]) -> None:
         if not isinstance(value, Mapping):
             errors.append(f"{state} must be an object")
             continue
-        for field in ("label", "code_snapshot", "session_id"):
+        for field in ("label", "code_snapshot", "service"):
             if not isinstance(value.get(field), str) or not value[field].strip():
                 errors.append(f"{state}.{field} must be a non-empty string")
     if isinstance(config.get("baseline"), Mapping) and isinstance(
         config.get("candidate"), Mapping
     ):
-        if config["baseline"].get("session_id") == config["candidate"].get("session_id"):
-            errors.append("baseline and candidate session_id must be different")
+        if config["baseline"].get("service") == config["candidate"].get("service"):
+            errors.append("baseline and candidate service names must be different")
     shared = config.get("shared")
     if not isinstance(shared, Mapping) or not shared:
         errors.append("shared must be a non-empty object")
@@ -371,8 +371,8 @@ def build_parity_check(config: Mapping[str, Any]) -> dict[str, Any]:
             },
             {
                 "check": "distinct-sessions",
-                "baseline": config["baseline"]["session_id"],
-                "candidate": config["candidate"]["session_id"],
+                "baseline": config["baseline"]["service"],
+                "candidate": config["candidate"]["service"],
                 "result": "passed",
             },
             {

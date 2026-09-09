@@ -1,17 +1,12 @@
 #!/usr/bin/env python3
-"""Conservative local GC for stale VAWS session metadata.
+"""Report unresolved coordinator executions. Never auto-delete or release.
 
-Metadata loss and an unreachable container never prove resources are free.
-``--reap-dead`` checks the host Docker state and repeatedly observes leased
-devices free before releasing leases. All uncertainty retains ownership.
+Age, local PID death and missing local metadata are not release evidence.
 """
 
 from __future__ import annotations
 
 import argparse
-import json
-import shlex
-import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -25,20 +20,8 @@ from vaws_venv import ensure_workspace_interpreter  # noqa: E402
 
 ensure_workspace_interpreter(repo_root=ROOT)
 
-from vaws_remote_dev import ssh_exec  # noqa: E402
-from vaws_remote_target import SshEndpoint  # noqa: E402
-from vaws_result_envelope import emit_skill_json, unwrap_skill_payload  # noqa: E402
-from vaws_session_state import (  # noqa: E402
-    SessionStateError,
-    host_endpoint_from_session,
-    load_index,
-    load_session_lookup,
-    release_all_session_leases,
-    session_live_leases,
-    session_receipt,
-)
-
-REAP_SSH_TIMEOUT_SECONDS = 20
+from vaws_result_envelope import emit_skill_json  # noqa: E402
+from vaws_task_target import DONE, task_client, task_id_of  # noqa: E402
 
 
 def print_json(data: dict[str, Any]) -> None:
@@ -49,189 +32,40 @@ def print_json(data: dict[str, Any]) -> None:
     )
 
 
-def probe_container_alive(host: str, port: int, user: str = "root") -> dict[str, Any]:
-    """Probe a session container's SSH endpoint.
-
-    Returns a verdict with ``alive`` True/False/None. ``None`` means the probe
-    was inconclusive (timeout / transient), so the caller must NOT reap.
-    """
-    result = ssh_exec(
-        SshEndpoint(host=host, port=port, user=user),
-        "true",
-        check=False,
-        timeout=REAP_SSH_TIMEOUT_SECONDS + 10,
-        connect_timeout=REAP_SSH_TIMEOUT_SECONDS,
-    )
-    if result.returncode == 255 and "timed out" in (result.stderr or ""):
-        return {"alive": None, "reason": "ssh probe timed out (inconclusive)"}
-    if result.returncode == 0:
-        return {"alive": True, "reason": "container ssh reachable"}
-    # sshd can fail while container workers remain alive. This includes
-    # connection refused, authentication failure, routing failure and timeout.
-    return {
-        "alive": None,
-        "reason": f"container ssh unreachable; workload state unknown (rc={result.returncode})",
-        "stderr_tail": (result.stderr or "")[-200:],
-    }
-
-
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
-    mode = parser.add_mutually_exclusive_group()
-    mode.add_argument(
-        "--dry-run",
-        action="store_true",
-        default=True,
-        help="show stale lease releases without mutating state (default)",
-    )
-    mode.add_argument(
-        "--apply",
-        action="store_true",
-        help="apply releases proven safe by --reap-dead; metadata alone never releases leases",
-    )
-    parser.add_argument(
-        "--reap-dead",
-        action="store_true",
-        help=(
-            "verify container absence/stopped state on the host and repeatedly "
-            "confirm leased NPUs free before reaping; inconclusive probes retain leases"
-        ),
-    )
+    parser.add_argument("--context-file", help="VAWS task context; defaults to VAWS_CONTEXT_FILE")
     return parser
 
 
-def main() -> int:
-    args = build_parser().parse_args()
-    dry_run = not args.apply
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
     try:
-        index = load_index(ROOT)
-        released: list[str] = []
-        checked: list[dict[str, Any]] = []
-        active: list[str] = []
-        reaped_dead: list[str] = []
-        receipt_owners: list[str] = []
-        for sid in sorted(index.get("sessions", {})):
-            try:
-                lookup = load_session_lookup(session_id=sid, repo_root=ROOT)
-                session = lookup.session
-            except Exception as exc:  # noqa: BLE001
-                checked.append({"session_id": sid, "status": "missing-state", "error": str(exc)})
-                active.append(sid)
-                continue
-            try:
-                session_receipt(session)
-                has_receipt = True
-            except SessionStateError:
-                has_receipt = False
-            if has_receipt:
-                receipt_owners.append(sid)
-            if args.reap_dead and has_receipt:
-                live = session_live_leases(session=session)
-                probe = _probe_session_container(session, devices=live["npu_devices"])
-                entry: dict[str, Any] = {
-                    "session_id": sid,
-                    "status": session.get("status"),
-                    "container_probe": probe,
-                }
-                if probe.get("alive") is False:
-                    if not dry_run:
-                        released_payload = release_all_session_leases(
-                            session=session,
-                            host_endpoint=host_endpoint_from_session(session),
-                        )
-                        entry["release"] = {
-                            "status": released_payload.get("status"),
-                            "reason": released_payload.get("reason"),
-                        }
-                        if released_payload.get("status") != "released":
-                            active.append(sid)
-                            checked.append(entry)
-                            continue
-                    released.append(sid)
-                    reaped_dead.append(sid)
-                    entry["reaped"] = True
-                else:
-                    active.append(sid)
-                checked.append(entry)
-            else:
-                active.append(sid)
-                checked.append(
-                    {
-                        "session_id": sid,
-                        "status": session.get("status"),
-                        "receipt": has_receipt,
-                    }
-                )
-        print_json(
+        client = task_client(args.context_file)
+        status = client.status()
+        executions = list(status.get("executions") or [])
+        unresolved = [
             {
-                "status": "ok",
-                "dry_run": dry_run,
-                "reap_dead": args.reap_dead,
-                "checked": checked,
-                "active_session_leases": sorted(set(active) & set(receipt_owners)),
-                "released_lease_sessions": [] if dry_run else sorted(set(released)),
-                "would_release_lease_sessions": sorted(set(released)) if dry_run else [],
-                "reaped_dead_containers": sorted(set(reaped_dead)),
+                "execution_id": row.get("id") or row.get("execution_id"),
+                "state": row.get("phase") or row.get("state"),
+                "service": (row.get("spec") or {}).get("service") or row.get("service"),
             }
-        )
+            for row in executions
+            if (row.get("phase") or row.get("state")) not in DONE
+        ]
+        print_json({
+            "status": "ok",
+            "task_id": task_id_of(client),
+            "task_state": (status.get("session") or {}).get("state"),
+            "unresolved": unresolved,
+            "released": False,
+            "deleted": False,
+            "note": "GC reports unresolved ownership only; retry stop/finish after the condition clears",
+        })
         return 0
     except Exception as exc:
-        print_json({"status": "failed", "error": str(exc)})
+        print_json({"status": "failed", "error": str(exc), "released": False, "deleted": False})
         return 2
-
-
-def _probe_session_container(session: dict[str, Any], *, devices: list[int] | None = None) -> dict[str, Any]:
-    try:
-        remote = session["remote"]
-        host = remote["host"]
-        port = int(remote.get("host_port", 22))
-        user = remote.get("host_user", "root")
-        name = remote["container"]["name"]
-    except (KeyError, TypeError, ValueError) as exc:
-        return {"alive": None, "reason": f"session missing container endpoint: {exc}"}
-    # Reuse the coordinator's NPU parser/confirmation logic on the host. Docker
-    # and NPU commands use argv, never interpolated shell expressions.
-    from vaws_host_queue_module import host_queue_module_path  # noqa: PLC0415
-
-    source = host_queue_module_path().read_text(encoding="utf-8")
-    runner = r'''
-import sys
-request = json.loads(sys.argv[1])
-names = subprocess.run(["docker", "container", "ls", "-a", "--format", "{{.Names}}"], capture_output=True, text=True, timeout=10)
-if names.returncode:
-    raise RuntimeError("host Docker state unavailable")
-exists = request["name"] in names.stdout.splitlines()
-running = False
-if exists:
-    state = subprocess.run(["docker", "inspect", "--type", "container", request["name"]], capture_output=True, text=True, timeout=10, check=True)
-    running = bool(json.loads(state.stdout)[0]["State"]["Running"])
-if running:
-    result = {"alive": True, "reason": "host confirms container is running"}
-else:
-    wanted = set(request["devices"])
-    observed = _confirmed_free_probe(samples=2, interval_seconds=1, probe=probe_npu_occupancy) if wanted else {"status": "ok", "free": []}
-    free = observed.get("status") == "ok" and wanted.issubset(set(observed.get("free", [])))
-    result = {"alive": False if free else None, "reason": "host confirms stopped/absent container and free devices" if free else "device occupancy is busy or unknown", "container_exists": exists}
-print(json.dumps(result))
-'''
-    request = {"name": name, "devices": devices if devices is not None else session.get("leases", {}).get("npu_devices", [])}
-    command = shlex.join(["python3", "-c", source + "\n" + runner, json.dumps(request)])
-    try:
-        result = ssh_exec(
-            SshEndpoint(host=host, port=port, user=user),
-            command,
-            check=False,
-            timeout=60,
-            connect_timeout=REAP_SSH_TIMEOUT_SECONDS,
-        )
-        if result.returncode:
-            return {"alive": None, "reason": "host confirmation failed", "returncode": result.returncode}
-        payload = unwrap_skill_payload(json.loads(result.stdout))
-        if not isinstance(payload, dict) or payload.get("alive") not in (True, False, None):
-            raise ValueError("invalid host confirmation response")
-        return payload
-    except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
-        return {"alive": None, "reason": f"host confirmation inconclusive: {exc}"}
 
 
 if __name__ == "__main__":

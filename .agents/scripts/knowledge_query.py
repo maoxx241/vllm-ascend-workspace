@@ -2,8 +2,9 @@
 """Thin CLI over ``vaws_knowledge.server.query``.
 
 Shared is the packaged corpus. Project is ``.agents/knowledge``. Candidate is
-``.vaws-local/knowledge/candidate``. Output is the commons ``QueryResponse``
-envelope (or the ``explain`` payload for ``--id``).
+``.vaws-local/knowledge/candidate``. Query bodies are ``rule``,
+``measurement``, and sourced ``reference``. Output is the commons
+``QueryResponse`` envelope (or the ``explain`` payload for ``--id``).
 """
 
 from __future__ import annotations
@@ -102,7 +103,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--bodies",
         default=None,
-        help="comma-separated body variants (rule,measurement). Default: both.",
+        help="comma-separated body variants (rule,measurement,reference). Default: all.",
     )
     parser.add_argument(
         "--layer",

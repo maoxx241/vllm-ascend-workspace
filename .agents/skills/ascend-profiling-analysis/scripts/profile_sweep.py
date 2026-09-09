@@ -3,8 +3,7 @@
 
 This is a thin wrapper around ``ascend_profile.sweep`` (which already
 discovers roots and aggregates results). The wrapper handles:
-  - session target resolution (explicit --session-id/--session-file or the
-    bound session of the cwd worktree)
+  - execution or explicit host targeting for remote I/O
   - tar-sync of ``scripts/ascend_profile/`` to the remote work dir
   - launching ``sweep`` on the remote
   - pulling back ``sweep_summary.json`` and ``sweep_class_rollup.csv``
@@ -73,8 +72,12 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         allow_abbrev=False,
     )
-    parser.add_argument("--session-id", help="VAWS session id; defaults to the bound session of the current worktree")
-    parser.add_argument("--session-file", help="explicit session.json path")
+    parser.add_argument("--context-file", help="VAWS task context; defaults to VAWS_CONTEXT_FILE")
+    parser.add_argument("--execution-id", help="coordinator execution used for remote I/O")
+    parser.add_argument("--service", default="", help="named service lookup when --execution-id is omitted")
+    parser.add_argument("--host", help="explicit container SSH host")
+    parser.add_argument("--port", type=int, help="explicit container SSH port")
+    parser.add_argument("--user", default="root")
     parser.add_argument(
         "--search-root",
         action="append",
@@ -202,8 +205,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     started = time.time()
 
     target, fail = common.resolve_wrapper_target(
-        session_id=args.session_id,
-        session_file=args.session_file,
+        context_file=args.context_file,
+        execution_id=args.execution_id,
+        host=args.host,
+        port=args.port,
+        user=args.user,
+        service=args.service or None,
     )
     if fail is not None:
         return fail
@@ -214,13 +221,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         "resolve",
         "target resolved",
         machine=alias,
-        session_id=target["session_id"],
+        execution_id=target.get("execution_id"),
         host=endpoint.host,
         ssh_port=endpoint.port,
     )
 
     py, fail = common.require_remote_python(
-        endpoint, alias=alias, session_id=target["session_id"]
+        endpoint, alias=alias, python=target.get("python")
     )
     if fail is not None:
         return fail

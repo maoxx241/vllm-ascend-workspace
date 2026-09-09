@@ -16,7 +16,7 @@ rules.
 |---------|-------------|------|
 | Scanner | `.agents/scripts/tracked_leak_scan.py` | on demand |
 | Pre-commit hook | `.agents/hooks/tracked_leak_precommit.py` | every `git commit` |
-| CI | `.github/workflows/tracked-leak-guard.yml` | every pull request |
+| CI | `.github/workflows/skill-catalog.yml` | every pull request |
 
 Detection lives in `.agents/lib/vaws_leak_guard.py`, which extends the
 secret-shaped patterns already used for knowledge documents

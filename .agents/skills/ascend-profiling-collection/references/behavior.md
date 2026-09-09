@@ -102,7 +102,7 @@ One directory per invocation. Nothing else is ever written here. The remote prof
 
 Code parity is enforced transitively through `serve_start.py`. The collection skill must not call parity itself. The `.vaws-runtime` preserve carve-out and pip-only HuaweiCloud runtime install path are owned by the parity skill; see `.agents/skills/remote-code-parity/SKILL.md`.
 
-When `--session-id` is used, `serve_start.py`, `profile_control.py`, and `serve_stop.py` all use the session container and session serving state. This allows two profiling collections on the same base host to run without stopping each other's services.
+`serve_start.py`, `profile_control.py`, and `serve_stop.py` address a named `--service` or `--execution-id`. Two collections on the same host must use distinct service names so they do not stop each other.
 
 ## Manifest schema versioning
 

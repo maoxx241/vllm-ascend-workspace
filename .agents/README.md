@@ -63,14 +63,14 @@ compatibility backend for managed sessions, sync, service adapters, and cleanup.
 - `.agents/schemas/` stores the machine-readable Run Manifest and knowledge contracts, including the project-layer v2 and candidate v2 schemas.
 - `.agents/lib/vaws_local_state.py` is the shared library for untracked local runtime state.
 - `vaws_coordinator.run_manifest` is the shared Run Manifest v1 library for workflow correlation and artifact links.
-- `.agents/lib/vaws_knowledge_v2.py` keeps the project-layer contract (unbounded-range unresolved encoding, document I/O, curation/export). Hashing and query live in the installed `vaws-knowledge` package.
+- `.agents/lib/vaws_knowledge_v2.py` is project I/O and curation over the installed `vaws-knowledge` engine (schema, hash, redaction, export, contradiction).
 - `.agents/lib/vaws_knowledge_service.py` builds the scaffold `ServiceConfig` (packaged shared + this repo's project/candidate roots).
 - `.agents/tests/knowledge_client_adapter.py` is the tracked protocol adapter for the vaws-knowledge conformance kit shipped with the package.
 - `.agents/lib/vaws_redaction.py` is the scaffold redaction policy (BLOCK/EXPORT and recursive scan) over `vaws_knowledge.redact`. Detection rules and the live profile are declared by that package.
-- `.agents/lib/vaws_session_id.py` and `.agents/lib/vaws_session_state.py` are the shared libraries for session identity, state, locks, and leases.
+- `.agents/lib/vaws_session_id.py` and `.agents/lib/vaws_session_state.py` are local identity/business-report helpers. Resource ownership is coordinator.
 - `.agents/lib/vaws_remote_dev.py` injects scaffold environment into the installed `vaws-remote-dev` package and is the only scaffold place that may call its SSH transport.
-- `.agents/lib/vaws_remote_target.py` maps machines and sessions to host/container endpoints. It is not SSH transport.
-- `.agents/lib/vaws_remote_adapters.py` keeps service, sync, and cleanup CLIs that remote-dev v0.3.0 cannot express.
+- `.agents/lib/vaws_remote_target.py` maps ordinary host/port or coordinator execution endpoints. It is not SSH transport.
+- `.agents/lib/vaws_remote_adapters.py` is a thin wrapper over serving and source-only parity.
 - `.agents/lib/vaws_validate.py` is the shared validation library for agent-facing ids, environment names, path boundaries, and NPU device lists.
 - `.agents/lib/vaws_coordinator_launch.py` launches the installed vaws-coordinator package (task identity, `vaws_*` tools, runtime pool).
 - `AGENTS.md` carries repository-wide routing rules and mandatory decision gates.
@@ -81,7 +81,7 @@ When a workflow has deterministic shell, SSH, Git, or local-state mechanics, pre
 
 Wrapper-style helpers should stream bounded phase progress on `stderr` and keep one final machine-readable JSON payload on `stdout`.
 
-For machine-management specifically, image selection is an explicit user decision gate: choose `local-latest`, `rc`, `main`, `stable`, or a concrete custom image reference. `local-latest` scans the target host's Docker images and deploys the newest machine-compatible `vllm-ascend` image without pulling; `rc` remains the recommended registry-backed developer track. Do not silently fall back to `auto`, `latest`, or another moving tag.
+For machine-management specifically, this skill only stores the project username. Container prepare, image selection, repair, and deletion belong to `python -m vaws_coordinator provision --host ... --image ... --user ...`. `--image` is `local-latest`, `rc`, `main`, `stable`, or a concrete image reference. Do not silently fall back to `auto`, `latest`, or another moving tag.
 
 When you add or revise a helper script, keep the CLI alias-tolerant and give safe defaults for metadata that can be inferred. The goal is to reduce agent parameter brittleness, not to force one exact flag spelling.
 
@@ -92,13 +92,8 @@ Current primary helpers:
 - `repo-init/scripts/repo_topology.py`
 - `machine-management/scripts/machine_add.py`
 - `machine-management/scripts/machine_verify.py`
-- `machine-management/scripts/machine_repair.py`
-- `machine-management/scripts/machine_remove.py`
 - `npu-fleet-monitor/scripts/manage_monitor.py`
-- `session-management/scripts/session_create.py`
-- `session-management/scripts/session_list.py`
-- `session-management/scripts/session_status.py`
-- `session-management/scripts/session_remove.py`
+- `session-management/scripts/session_diff.py`
 - `session-management/scripts/session_group.py`
 - `session-management/scripts/session_gc.py`
 - `scripts/remote_target_resolve.py`
@@ -121,7 +116,6 @@ Current primary helpers:
 - `scripts/remote_cleanup.py`
 - `remote-code-parity/scripts/parity_sync.py`
 - `remote-code-parity/scripts/remote_code_parity.py`
-- `remote-code-parity/scripts/install_consent.py`
 - `remote-code-parity/scripts/gc_runtime_cache.py`
 - `modelscope/scripts/modelscope_auto.py`
 - `modelscope/scripts/download_from_modelscope.py`
@@ -161,10 +155,9 @@ Current primary helpers:
 - `scripts/workspace_profile.py`
 - `.agents/tests/test_vaws_scaffold_safety.py`
 
-Low-level machine-management helpers remain available for implementation work and debugging:
-
-- `machine-management/scripts/inventory.py`
-- `machine-management/scripts/manage_machine.py`
+Deleted machine-management helpers (do not call): `inventory.py`,
+`manage_machine.py`, `machine_repair.py`, `machine_remove.py`. Container
+prepare is `python -m vaws_coordinator provision`.
 
 Reference files under `references/` are fallback detail, not the default execution path.
 

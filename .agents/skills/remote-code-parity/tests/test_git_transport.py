@@ -85,6 +85,30 @@ class GitTransportTests(unittest.TestCase):
             self.assertEqual(before, {name: (git(repo, "rev-parse", "HEAD"), git(repo, "status", "--porcelain")) for name, repo in sources.items()})
             parity.cleanup_synthetic_refs(root, records)
 
+    def test_wrapper_forwards_bound_sources_as_source_only(self) -> None:
+        args = argparse.Namespace(
+            execution_id=None,
+            host="192.0.2.10",
+            port=22,
+            runtime_root="/vllm-workspace",
+            container_name=None,
+            workspace_id="ws",
+            container_user="root",
+            container_cache_root="/cache",
+            preserve_path=[],
+            snapshot_id=None,
+            print_manifest=False,
+            dry_run=False,
+            transport="auto",
+            source=["vllm=/tmp/vllm", "vllm-ascend=/tmp/vllm-ascend"],
+        )
+        derived = wrapper.build_derived_args(ROOT, args)
+        cmd = wrapper.build_low_level_command(derived, args)
+        self.assertEqual(cmd[cmd.index("--apply-mode") + 1], "source-only")
+        self.assertIn("--source", cmd)
+        self.assertIn("vllm=/tmp/vllm", cmd)
+        self.assertIn("vllm-ascend=/tmp/vllm-ascend", cmd)
+
     def test_watcher_always_stages_and_acknowledges_only_pre_sync_content(self):
         watcher = load_module("_parity_watcher_test", SCRIPTS / "parity_watch.py")
         args = argparse.Namespace(apply_mode="auto", force_reinstall=False, dry_run=False,

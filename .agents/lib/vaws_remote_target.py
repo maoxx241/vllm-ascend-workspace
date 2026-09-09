@@ -1,48 +1,25 @@
-"""Resolve VAWS machines and sessions to host/container endpoints.
-
-This is not SSH transport. Endpoint construction and option knowledge live in
-``vaws-remote-dev``. This module only maps inventory and session records to
-``host`` / ``port`` / ``user`` plus the Ascend runtime preamble used inside
-remote scripts.
-"""
+"""Ordinary host/port endpoints. Not a VAWS identity resolver."""
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import subprocess
 import sys
 import time
 from dataclasses import dataclass
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Any, Sequence
 
-from vaws_local_state import (
-    ROOT,
-    WorkspaceStateError,
-    resolve_inventory_read_path,
-    shared_inventory_path,
-    utc_now_iso,
-)
-from vaws_remote_dev import ASCEND_RUNTIME_ENV_FILE, state_dir
-from vaws_session_state import (
-    load_session_lookup,
-    session_record_for_execution,
-    session_serving_state_path,
-)
-from vaws_result_envelope import (  # noqa: E402
-    PROGRESS_SENTINEL,
-    progress as envelope_progress,
-    unwrap_skill_payload,
-)
+from vaws_local_state import ROOT, utc_now_iso
+from vaws_result_envelope import PROGRESS_SENTINEL, progress as envelope_progress, unwrap_skill_payload
 from vaws_validate import ValidationError
 
-DEFAULT_REMOTE_TOOLBOX_ROOT = ".vaws-runtime/remote-toolbox"
 TAIL_CHARS = 12000
+OPTIONAL_ASCEND_ENV_FILE = "/etc/profile.d/vaws-ascend-env.sh"
 
 
 class RemoteTargetError(RuntimeError):
-    """Deterministic user-facing target-resolution or wrapper failure."""
+    """Deterministic user-facing endpoint failure."""
 
 
 @dataclass(frozen=True)
@@ -70,63 +47,14 @@ class SshEndpoint:
         return payload
 
 
-@dataclass(frozen=True)
-class RemoteTarget:
-    mode: str
-    alias: str
-    target_id: str
-    workspace_id: str
-    workspace_root: Path
-    runtime_root: str
-    container_name: str
-    container_image: str
-    container_endpoint: SshEndpoint
-    host_endpoint: SshEndpoint
-    state_repo_root: Path
-    record: dict[str, Any]
-    session_id: str | None = None
-    session_file: Path | None = None
-    session: dict[str, Any] | None = None
-    leased_devices: list[int] | None = None
-
-    def remote_toolbox_root(self) -> str:
-        return str(PurePosixPath(self.runtime_root) / DEFAULT_REMOTE_TOOLBOX_ROOT)
-
-    def to_dict(self) -> dict[str, Any]:
-        remote_state = state_dir(self.state_repo_root)
-        state_paths: dict[str, Any] = {
-            "repo_root": str(self.state_repo_root),
-            "remote_dev": str(remote_state),
-            "logs": str(remote_state / "logs"),
-            "jobs": str(remote_state / "jobs"),
-            "artifacts": str(remote_state / "artifacts"),
-        }
-        if self.session_id:
-            state_paths["session_file"] = str(self.session_file) if self.session_file else None
-            state_paths["serving_state"] = str(
-                session_serving_state_path(self.session_id, self.state_repo_root)
-            )
-        else:
-            state_paths["serving_state"] = None
-        return {
-            "mode": self.mode,
-            "alias": self.alias,
-            "target_id": self.target_id,
-            "session_id": self.session_id,
-            "session_file": str(self.session_file) if self.session_file else None,
-            "workspace_id": self.workspace_id,
-            "workspace_root": str(self.workspace_root),
-            "runtime_root": self.runtime_root,
-            "remote_toolbox_root": self.remote_toolbox_root(),
-            "leased_devices": self.leased_devices or [],
-            "host": self.host_endpoint.to_dict(plane="host"),
-            "container": {
-                "name": self.container_name,
-                "image_record": self.container_image,
-                **self.container_endpoint.to_dict(plane="container"),
-            },
-            "state_paths": state_paths,
-        }
+def ssh_endpoint_from_mapping(data: dict[str, Any] | None) -> SshEndpoint:
+    if not isinstance(data, dict) or not data.get("host"):
+        raise RemoteTargetError("endpoint mapping is missing host")
+    return SshEndpoint(
+        host=str(data["host"]),
+        port=int(data.get("port") or 22),
+        user=str(data.get("user") or "root"),
+    )
 
 
 def json_dumps(data: Any) -> str:
@@ -137,13 +65,7 @@ def print_json(data: dict[str, Any]) -> None:
     print(json_dumps(data))
 
 
-def emit_progress(
-    phase: str,
-    message: str | None = None,
-    *,
-    sentinel: str | None = None,
-    **extra: Any,
-) -> None:
+def emit_progress(phase: str, message: str | None = None, *, sentinel: str | None = None, **extra: Any) -> None:
     if sentinel is not None and sentinel != PROGRESS_SENTINEL:
         raise ValueError("progress sentinel is owned by vaws_result_envelope")
     envelope_progress(phase, message or phase, **extra)
@@ -163,164 +85,16 @@ def tail_text(value: str, limit: int = TAIL_CHARS) -> str:
     return value[-limit:]
 
 
-def derive_workspace_id(repo_root: Path) -> str:
-    base = "".join(ch if ch.isalnum() or ch in "._-" else "-" for ch in repo_root.name.lower()).strip(".-")
-    digest = hashlib.sha1(str(repo_root.resolve()).encode("utf-8")).hexdigest()[:8]
-    return f"{base or 'workspace'}-{digest}"
-
-
-def load_inventory(repo_root: Path = ROOT) -> tuple[dict[str, Any], Path]:
-    preferred = shared_inventory_path(repo_root)
-    path = resolve_inventory_read_path(preferred, repo_root=repo_root)
-    if not path.exists():
-        raise RemoteTargetError(
-            f"machine inventory not found at {preferred}; register the machine first "
-            "with machine-management/scripts/machine_add.py"
-        )
-    return json.loads(path.read_text(encoding="utf-8")), path
-
-
-def _find_machine_record(identifier: str, repo_root: Path = ROOT) -> tuple[dict[str, Any], Path]:
-    inventory, path = load_inventory(repo_root)
-    matches: list[dict[str, Any]] = []
-    for record in inventory.get("machines", []):
-        host = record.get("host", {})
-        alias = record.get("alias")
-        ip = host.get("ip") if isinstance(host, dict) else host
-        if identifier in {alias, ip}:
-            matches.append(record)
-    if not matches:
-        raise RemoteTargetError(f"machine {identifier!r} not found in inventory {path}")
-    if len(matches) > 1:
-        raise RemoteTargetError(f"machine {identifier!r} matched multiple inventory records")
-    return matches[0], path
-
-
-def _container_endpoint(record: dict[str, Any]) -> SshEndpoint:
-    host = record.get("host", {})
-    container = record.get("container", {})
-    if not isinstance(host, dict) or not isinstance(container, dict):
-        raise RemoteTargetError("machine record must contain host and container objects")
-    port = container.get("ssh_port")
-    if not isinstance(port, int):
-        raise RemoteTargetError("machine record is missing container.ssh_port")
-    return SshEndpoint(host=str(host["ip"]), port=port, user=str(container.get("user", "root")))
-
-
-def container_endpoint_from_record(record: dict[str, Any]) -> SshEndpoint:
-    """Lenient container-SSH endpoint from a machine/session record dict."""
-    host_info = record.get("host", {})
-    container_info = record.get("container", {})
-    if isinstance(host_info, dict):
-        ip = str(host_info.get("ip", ""))
-        host_port = int(host_info.get("port", 22))
-        host_user = str(host_info.get("user", "root"))
-    else:
-        ip = str(host_info)
-        host_port = 22
-        host_user = "root"
-    if not isinstance(container_info, dict):
-        container_info = {}
-    ssh_port = container_info.get("ssh_port")
-    if ssh_port is not None:
-        return SshEndpoint(
-            host=ip, port=int(ssh_port), user=str(container_info.get("user") or "root")
-        )
-    return SshEndpoint(host=ip, port=host_port, user=host_user)
-
-
-def _host_endpoint(record: dict[str, Any]) -> SshEndpoint:
-    host = record.get("host", {})
-    if not isinstance(host, dict):
-        raise RemoteTargetError("machine record must contain host object")
-    return SshEndpoint(
-        host=str(host["ip"]),
-        port=int(host.get("port", host.get("ssh_port", 22))),
-        user=str(host.get("user", "root")),
-    )
-
-
-def resolve_remote_target(
-    *,
-    machine: str | None = None,
-    session_id: str | None = None,
-    session_file: str | Path | None = None,
-    repo_root: Path = ROOT,
-) -> RemoteTarget:
-    repo_root = repo_root.expanduser().resolve()
-    if machine and (session_id or session_file):
-        raise RemoteTargetError("use exactly one target surface: --machine or --session-id/--session-file")
-    if not machine:
-        lookup = load_session_lookup(
-            session_id=session_id,
-            session_file=session_file,
-            repo_root=repo_root,
-        )
-        session = lookup.session
-        record = session_record_for_execution(session)
-        container = record["container"]
-        session_container = session["remote"]["container"]
-        runtime_root = (
-            session_container.get("runtime_root")
-            or container.get("workdir")
-            or "/vllm-workspace"
-        )
-        workspace_root = Path(session["local"]["worktree_root"]).expanduser().resolve()
-        return RemoteTarget(
-            mode="session",
-            alias=record["alias"],
-            target_id=session["session_id"],
-            workspace_id=str(session.get("workspace_id") or session["session_id"]),
-            workspace_root=workspace_root,
-            runtime_root=runtime_root,
-            container_name=str(container.get("name") or session_container["name"]),
-            container_image=str(container.get("image") or session_container.get("image") or ""),
-            container_endpoint=_container_endpoint(record),
-            host_endpoint=_host_endpoint(record),
-            state_repo_root=lookup.state_repo_root,
-            record=record,
-            session_id=session["session_id"],
-            session_file=lookup.session_file,
-            session=session,
-            leased_devices=[int(item) for item in session.get("leases", {}).get("npu_devices", [])],
-        )
-
-    record, _ = _find_machine_record(machine, repo_root)
-    container = record["container"]
-    runtime_root = container.get("runtime_root") or container.get("workdir") or "/vllm-workspace"
-    alias = str(record.get("alias") or machine)
-    return RemoteTarget(
-        mode="legacy",
-        alias=alias,
-        target_id=alias,
-        workspace_id=derive_workspace_id(repo_root),
-        workspace_root=repo_root,
-        runtime_root=str(runtime_root),
-        container_name=str(container.get("name") or ""),
-        container_image=str(container.get("image") or ""),
-        container_endpoint=_container_endpoint(record),
-        host_endpoint=_host_endpoint(record),
-        state_repo_root=repo_root,
-        record=record,
-        leased_devices=[],
-    )
-
-
 def ascend_env_preamble(*, set_e: bool = True, export_driver_lib: bool = False) -> str:
-    """Standard Ascend environment preamble for remote bash snippets.
-
-    remote-dev sources the same file through ``Endpoint.runtime_env_file``.
-    This helper remains for scripts that embed the preamble inside a larger
-    snippet rather than using the endpoint runtime-env flag.
-    """
+    """Optional remote snippet. Coordinator launch env is authoritative."""
     lines: list[str] = []
     if set_e:
         lines.append("set -e")
     lines.extend(
         [
-            f"if [ -f {ASCEND_RUNTIME_ENV_FILE} ]; then",
+            f"if [ -f {OPTIONAL_ASCEND_ENV_FILE} ]; then",
             "  set +u",
-            f"  source {ASCEND_RUNTIME_ENV_FILE}",
+            f"  source {OPTIONAL_ASCEND_ENV_FILE}",
             "  set -u",
             "fi",
         ]
@@ -335,24 +109,9 @@ def ascend_env_preamble(*, set_e: bool = True, export_driver_lib: bool = False) 
     return "\n".join(lines)
 
 
-def add_target_args(parser: argparse.ArgumentParser) -> None:
-    group = parser.add_argument_group("target")
-    group.add_argument("--machine", help="machine alias or host IP")
-    group.add_argument("--session-id", help="VAWS session id")
-    group.add_argument("--session-file", help="explicit session.json path")
-
-
-def target_from_args(args: argparse.Namespace) -> RemoteTarget:
-    return resolve_remote_target(
-        machine=getattr(args, "machine", None),
-        session_id=getattr(args, "session_id", None),
-        session_file=getattr(args, "session_file", None),
-    )
-
-
 def cli_error(exc: BaseException, *, started_at: str, start: float) -> int:
     status = "failed"
-    if isinstance(exc, (RemoteTargetError, WorkspaceStateError, ValidationError, FileNotFoundError)):
+    if isinstance(exc, (RemoteTargetError, ValidationError, FileNotFoundError)):
         status = "needs_input"
     if isinstance(exc, subprocess.TimeoutExpired):
         status = "timeout"
@@ -386,33 +145,36 @@ def run_json_command(cmd: list[str], *, cwd: Path = ROOT, relay_stderr: bool = T
     return result.returncode, payload, stdout, stderr
 
 
+def add_target_args(parser: argparse.ArgumentParser) -> None:
+    from vaws_task_target import add_task_args
+
+    group = parser.add_argument_group("target")
+    group.add_argument("--host", help="explicit remote host")
+    group.add_argument("--port", type=int, help="explicit remote SSH port")
+    group.add_argument("--user", default="root")
+    add_task_args(group)
+
+
 def selector_args(args: argparse.Namespace) -> list[str]:
-    """Translate toolbox target flags into remote-dev ``--selector`` argv."""
-    translated: list[str] = []
-    if getattr(args, "machine", None):
-        translated.extend(["--selector", f"machine={args.machine}"])
-    if getattr(args, "session_id", None):
-        translated.extend(["--selector", f"session_id={args.session_id}"])
-    if getattr(args, "session_file", None):
-        translated.extend(["--selector", f"session_file={args.session_file}"])
-    return translated
+    """Ordinary remote-dev endpoint flags. No VAWS resolver selectors."""
+    out: list[str] = []
+    if getattr(args, "host", None):
+        out.extend(["--host", str(args.host)])
+        if getattr(args, "port", None):
+            out.extend(["--port", str(args.port)])
+        if getattr(args, "user", None):
+            out.extend(["--user", str(args.user)])
+    return out
 
 
-def cli_target_resolve(argv: Sequence[str] | None = None) -> int:
-    started_at = now_iso()
-    start = time.monotonic()
-    parser = argparse.ArgumentParser(description="Resolve a VAWS remote target.", allow_abbrev=False)
-    add_target_args(parser)
-    args = parser.parse_args(argv)
-    try:
-        target = target_from_args(args)
-        print_json({
-            "status": "ok",
-            "target": target.to_dict(),
-            "started_at": started_at,
-            "duration_ms": duration_ms(start),
-            "logs": {},
-        })
-        return 0
-    except Exception as exc:  # noqa: BLE001
-        return cli_error(exc, started_at=started_at, start=start)
+def endpoint_from_args(args: argparse.Namespace) -> SshEndpoint:
+    if getattr(args, "host", None):
+        return SshEndpoint(str(args.host), int(getattr(args, "port", None) or 22), str(getattr(args, "user", None) or "root"))
+    execution_id = getattr(args, "execution_id", None)
+    if not execution_id:
+        raise RemoteTargetError("pass --host/--port or --execution-id with task context")
+    from vaws_task_target import task_client
+
+    observation = task_client(getattr(args, "context_file", None)).observe(str(execution_id), "status")
+    target = observation.get("target") if isinstance(observation.get("target"), dict) else {}
+    return ssh_endpoint_from_mapping(target.get("endpoint") or observation.get("endpoint"))

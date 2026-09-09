@@ -63,8 +63,8 @@
         "core.result",
         "core.errors"
       ],
-      "public_modules_note": "The result contract and error taxonomy are schema-pinned (`schemas/result.schema.json` in the substrate) and remain the only import-level surface a consumer should bind to. The substrate additionally publishes the resolver plugin interface (`core.endpoint.register_resolver` / `resolver_setup` / `EndpointError`), which is how consumer selectors such as `machine` / `session_id` reach it. Because no substrate file is in this tree any more, these names are documentation for reviewers rather than something the guard can attribute.",
-      "roots_note": "No roots on `main`: the substrate left this tree with its extraction and is consumed as the installed `vaws-remote-dev` package (`uv.lock`). Only consumers are in this repository: the resolver plugin `.agents/lib/vaws_remote_dev_plugin.py` and the client configuration. The boundary is now a repository boundary, which is why this subsystem declares no paths."
+      "public_modules_note": "The result contract and error taxonomy are schema-pinned (`schemas/result.schema.json` in the substrate) and remain the only import-level surface a consumer should bind to. Generic tools take explicit host/port; this workspace does not inject a VAWS resolver.",
+      "roots_note": "No roots on `main`: the substrate left this tree with its extraction and is consumed as the installed `vaws-remote-dev` package (`uv.lock`). Only consumers remain: client MCP wiring and skills that pass ordinary host/port or coordinator-returned endpoints."
     },
     {
       "id": "coordinator",

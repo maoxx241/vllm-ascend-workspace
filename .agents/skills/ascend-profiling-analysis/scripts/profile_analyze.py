@@ -6,8 +6,8 @@ Inputs (one of):
   --remote-profile-root <abs-path>            -- raw remote profiling root (historical)
 
 Behavior:
-  1. Resolve the session + SSH endpoint (explicit --session-id/--session-file,
-     the manifest's recorded session, or the bound session of the cwd worktree).
+  1. Resolve the SSH endpoint from --execution-id / --host, or a collection
+     manifest's recorded execution_id / host.
   2. Tar-sync ``scripts/ascend_profile/`` to ``<remote-work-dir>/ascend_profile/``.
   3. Remote: ``python3 -m ascend_profile.analyze <ROOT> --output <OUT> --verbose``.
   4. Validate required artifacts exist on the remote.
@@ -54,8 +54,12 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         allow_abbrev=False,
     )
-    parser.add_argument("--session-id", help="VAWS session id; defaults to the bound session of the current worktree")
-    parser.add_argument("--session-file", help="explicit session.json path")
+    parser.add_argument("--context-file", help="VAWS task context; defaults to VAWS_CONTEXT_FILE")
+    parser.add_argument("--execution-id", help="coordinator execution used for remote I/O")
+    parser.add_argument("--service", default="", help="named service lookup when --execution-id is omitted")
+    parser.add_argument("--host", help="explicit container SSH host")
+    parser.add_argument("--port", type=int, help="explicit container SSH port")
+    parser.add_argument("--user", default="root")
     src = parser.add_mutually_exclusive_group(required=True)
     src.add_argument("--manifest", help="path to ascend-profiling-collection manifest.json")
     src.add_argument("--remote-profile-root", help="absolute remote path to profiling root")
@@ -847,15 +851,21 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     remote_profile_root = input_info["remote_profile_root"]
     manifest = input_info["manifest"]
-    if manifest is not None and not args.session_id and not args.session_file:
-        args.session_id = manifest.get("session_id")
-        args.session_file = manifest.get("session_file")
+    if manifest is not None:
+        args.execution_id = args.execution_id or manifest.get("execution_id")
+        args.context_file = args.context_file or manifest.get("context_file")
+        args.host = args.host or manifest.get("host")
+        args.port = args.port or manifest.get("port")
     if manifest is not None and not args.hardware_model:
         args.hardware_model = _manifest_default_hardware_model(manifest)
 
     target, fail = common.resolve_wrapper_target(
-        session_id=args.session_id,
-        session_file=args.session_file,
+        context_file=args.context_file,
+        execution_id=args.execution_id,
+        host=args.host,
+        port=args.port,
+        user=args.user,
+        service=args.service or None,
     )
     if fail is not None:
         return fail
@@ -867,13 +877,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         "target resolved",
         machine=alias,
         mode=target["mode"],
-        session_id=target["session_id"],
+        execution_id=target.get("execution_id"),
         host=endpoint.host,
         ssh_port=endpoint.port,
     )
 
     py, fail = common.require_remote_python(
-        endpoint, alias=alias, session_id=target["session_id"]
+        endpoint, alias=alias, python=target.get("python")
     )
     if fail is not None:
         return fail
@@ -883,7 +893,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         explicit_dir=args.local_output_dir,
         overwrite=args.overwrite,
         alias=alias,
-        session_id=target["session_id"],
+        session_id=target.get("task_id") or target.get("execution_id"),
     )
     if fail is not None:
         return fail
@@ -1142,8 +1152,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         "segmentation_strategies": segment_health.get("strategy_modes") or {},
         "machine": alias,
         "target_mode": target["mode"],
-        "session_id": target["session_id"],
-        "session_file": target["session_file"],
+        "task_id": target.get("task_id"),
+        "execution_id": target.get("execution_id"),
         "remote_profile_root": remote_profile_root,
         "remote_output_dir": remote_output_dir,
         "archived_output_dir": archived_output_dir,

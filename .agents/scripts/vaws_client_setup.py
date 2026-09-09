@@ -47,7 +47,7 @@ import tomllib  # noqa: E402
 from vaws_coordinator_launch import coordinator_environment
 from vaws_knowledge_service import knowledge_server_env
 from vaws_local_state import agent_sessions_root
-from vaws_remote_dev import ASCEND_RUNTIME_ENV_FILE, resolver_spec, state_dir
+from vaws_remote_dev import state_dir
 
 CLIENTS = {"claude", "grok", "kimi", "codex", "cursor"}
 EVENTS = ("SessionStart", "SessionEnd", "SubagentStart", "SubagentStop", "PreToolUse", "UserPromptSubmit")
@@ -80,10 +80,6 @@ def remote_dev_env():
     """Environment the remote-dev MCP server needs; the launcher fills the same defaults."""
     return {
         "REMOTE_DEV_DEFAULT_USER": "root",
-        "REMOTE_DEV_DEFAULT_ROOT": "/vllm-workspace",
-        "REMOTE_DEV_DEFAULT_CWD": "/vllm-workspace",
-        "REMOTE_DEV_RUNTIME_ENV_FILE": ASCEND_RUNTIME_ENV_FILE,
-        "REMOTE_DEV_RESOLVERS": resolver_spec(),
         "REMOTE_DEV_STATE_DIR": str(state_dir()),
     }
 

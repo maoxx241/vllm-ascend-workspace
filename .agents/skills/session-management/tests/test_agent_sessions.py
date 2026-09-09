@@ -91,30 +91,6 @@ class AgentSessionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "local registry"):
             other_registry.attach("codex", "from-clone-b", str(self.root), parent_context=parent["context_file"])
 
-    def test_finish_detach_and_resume_need_no_network_and_preserve_worktrees(self):
-        context = self.attach()
-        sources = {}
-        for name in ("vllm", "vllm-ascend"):
-            source = self.root / name
-            source.mkdir()
-            subprocess.run(["git", "init", str(source)], check=True, capture_output=True)
-            (source / "code.py").write_text("pass\n")
-            subprocess.run(["git", "-C", str(source), "add", "."], check=True, capture_output=True)
-            subprocess.run(["git", "-C", str(source), "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
-                            "commit", "-m", "base"], check=True, capture_output=True)
-            sources[name] = str(source)
-        factory = mock.Mock(side_effect=AssertionError("must stay offline"))
-        task = TaskClient(context["context_file"], pool=factory)
-        task.sources(sources)
-        row = task.store.execution(task.context, "planned", {"command": "not started"})
-        self.store.detach(context)
-        self.assertEqual(task.status()["session"]["state"], "open")
-        self.assertEqual(task.finish()["state"], "finished")
-        self.assertTrue(all(Path(path).is_dir() for path in sources.values()))
-        self.assertEqual(self.attach()["session"]["id"], context["session"]["id"])
-        self.assertEqual(task.store.executions(context["session"]["id"])[0]["phase"], "cancelled")
-        factory.assert_not_called()
-
     def test_hook_contracts_use_native_ids_and_resume_the_same_task(self):
         payloads = {
             "claude": {"hook_event_name": "SessionStart", "session_id": "native-claude"},
@@ -199,46 +175,6 @@ class AgentSessionTests(unittest.TestCase):
         self.assertEqual(updated["tool_input"]["context_file"], context["context_file"])
         self.assertNotIn("context_file", updated)
 
-    @unittest.skip(
-        "vaws-coordinator v0.1.0 TaskClient uses an in-process RuntimePool; "
-        "the hosted client_factory / _sync contract this test exercised is gone"
-    )
-    def test_lost_launch_reply_is_reconciled_without_syncing_running_sources(self):
-        context = self.attach()
-        with self.store.transaction() as db:
-            session = self.store.get(db, "session", context["session"]["id"])
-            session["sources"] = {name: {"path": str(self.root / name)} for name in ("vllm", "vllm-ascend")}
-            self.store.put(db, "session", session)
-        job = {}
-        calls = []
-
-        def call(name, **args):
-            calls.append(name)
-            if name == "session_open":
-                return {"id": "remote-session"}
-            if name == "runtime_checkout":
-                return {"id": "binding", "build_key": "native"}
-            if name == "managed_execution_start":
-                job.update(id="managed-job", binding_id="binding", request={"request_id": args["request_id"]}, state="running")
-                raise TimeoutError("reply lost after creation")
-            if name == "coordinator_status":
-                return {"jobs": [job]}
-            if name == "managed_execution_control":
-                return job
-            raise AssertionError(name)
-
-        client = mock.Mock()
-        client.call.side_effect = call
-        task = TaskClient(context["context_file"], pool=lambda _: client)
-        with mock.patch.object(task, "_sync", return_value={"vllm": "a" * 40, "vllm-ascend": "b" * 40}) as sync:
-            with self.assertRaises(TimeoutError):
-                task.run("one-run", "command", profile_key="exact")
-            execution = task.store.executions(context["session"]["id"])[0]
-            self.assertEqual(task.observe(execution["id"])["state"], "running")
-            self.assertEqual(task.run("one-run", "command", profile_key="exact")["state"], "running")
-            sync.assert_called_once()
-        self.assertEqual(calls.count("managed_execution_start"), 1)
-
     def test_attach_rejects_child_inheritance_and_association_together(self):
         parent = self.attach()
         with self.assertRaisesRegex(ValueError, "choose child inheritance or an explicit task association"):
@@ -251,28 +187,14 @@ class AgentSessionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "reused with different arguments"):
             self.store.execution(context, "req", {"command": "two"})
 
-    def test_root_resume_clears_the_finishing_wedge(self):
+    def test_finishing_task_cannot_be_reopened_by_native_resume(self):
         context = self.attach()
         with self.store.transaction() as db:
             session = self.store.get(db, "session", context["session"]["id"])
-            session["state"] = "finishing"  # A crashed vaws_finish never completed.
+            session["state"] = "finishing"
             self.store.put(db, "session", session)
-        task = TaskClient(context["context_file"], pool=mock.Mock(side_effect=AssertionError("offline")))
-        with self.assertRaisesRegex(ValueError, "resume the task"):
-            task.store.execution(task.context, "req", {"command": "x"})
-        self.assertEqual(self.attach()["session"]["state"], "open")
-        self.assertEqual(task.store.execution(task.context, "req", {"command": "x"})["phase"], "planned")
-
-    def test_child_resume_of_finished_task_fails_closed_until_root_reopens(self):
-        parent = self.attach()
-        child = self.attach("child-a", client="claude", parent_context=parent["context_file"])
-        task = TaskClient(parent["context_file"], pool=mock.Mock(side_effect=AssertionError("offline")))
-        self.assertEqual(task.finish()["state"], "finished")
-        with self.assertRaisesRegex(ValueError, "explicitly reopen it before attaching"):
-            self.attach("child-a", client="claude", parent_context=parent["context_file"])
-        self.attach()  # Explicit root resume reopens the task.
-        resumed = self.attach("child-a", client="claude", parent_context=parent["context_file"])
-        self.assertEqual(resumed["attachment"]["id"], child["attachment"]["id"])
+        with self.assertRaisesRegex(ValueError, "finishing"):
+            self.attach()
 
     def test_session_end_detaches_root_and_compact_resume_guides_explicit_context(self):
         context = self.attach()
