@@ -47,7 +47,7 @@ def passed_manifest(path: Path, run_id: str, parent: str, kernel: Path, case_ids
         run_id=run_id,
         parent_run_id=parent,
         created_at=NOW,
-        code={"source_head": "a" * 40, "snapshot_commit": "b" * 40, "dirty": False},
+        workspace_root=ROOT,
     )
     manifest = add_artifact(
         manifest,

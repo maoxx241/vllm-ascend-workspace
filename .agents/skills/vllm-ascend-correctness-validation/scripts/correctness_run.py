@@ -212,6 +212,7 @@ def init_run(
     parent_run_id: str | None = None,
     created_at: str | None = None,
     code: Mapping[str, Any] | None = None,
+    workspace_root: Path | None = None,
 ) -> dict[str, Any]:
     if run_dir.exists() and any(run_dir.iterdir()):
         raise CorrectnessError(f"run directory is not empty: {run_dir}")
@@ -255,6 +256,7 @@ def init_run(
         run_id=run_id,
         parent_run_id=parent_run_id,
         code=code,
+        workspace_root=workspace_root or ROOT,
         workspace_snapshot=workspace_snapshot,
         environment=environment,
         model=model,

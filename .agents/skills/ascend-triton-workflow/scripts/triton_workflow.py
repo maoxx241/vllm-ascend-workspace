@@ -127,6 +127,7 @@ def plan(
     config_path: Path,
     created_at: str | None = None,
     code: Mapping[str, Any] | None = None,
+    workspace_root: Path | None = None,
 ) -> dict[str, Any]:
     if output_dir.exists() and any(output_dir.iterdir()):
         raise WorkflowError(f"output directory is not empty: {output_dir}")
@@ -158,6 +159,7 @@ def plan(
         run_type="change-validation",
         run_id=config["run_id"],
         code=code,
+        workspace_root=workspace_root or ROOT,
         workspace_snapshot=config.get("workspace_snapshot", {}),
         environment=config.get("environment", {}),
         topology={"target": config["target"]},

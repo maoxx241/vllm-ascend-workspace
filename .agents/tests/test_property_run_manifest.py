@@ -31,15 +31,9 @@ if str(LIB) not in sys.path:
 import vaws_coordinator.run_manifest as rm  # noqa: E402
 from vaws_coordinator.run_manifest import RunManifestError, add_artifact, generate_run_id, load_manifest, new_manifest as _new_manifest, transition_status, validate_manifest, write_manifest  # noqa: E402
 
-FIXED_CODE = {
-    "source_head": "a" * 40,
-    "snapshot_commit": "b" * 40,
-    "dirty": False,
-}
-
-
 def new_manifest(**kwargs):
-    kwargs.setdefault("code", FIXED_CODE)
+    if "code" not in kwargs and "workspace_root" not in kwargs:
+        kwargs["workspace_root"] = ROOT
     return _new_manifest(**kwargs)
 from test_property_support import Gen, run_cases  # noqa: E402
 

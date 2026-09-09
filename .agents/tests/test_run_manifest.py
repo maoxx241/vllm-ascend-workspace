@@ -30,14 +30,48 @@ from vaws_coordinator.run_manifest import (  # noqa: E402
 )
 
 NOW = "2026-07-25T12:00:00Z"
-CODE = {
-    "source_head": "a" * 40,
-    "snapshot_commit": "b" * 40,
-    "dirty": False,
-}
 
 
 class RunManifestTests(unittest.TestCase):
+    def test_missing_identity_is_refused(self) -> None:
+        with self.assertRaisesRegex(RunManifestError, "code identity is required"):
+            new_manifest(
+                run_type="debug",
+                run_id="debug-case-1",
+                created_at=NOW,
+            )
+
+    def test_workspace_root_resolves_real_identity(self) -> None:
+        manifest = new_manifest(
+            run_type="debug",
+            run_id="debug-case-1",
+            created_at=NOW,
+            workspace_root=ROOT,
+        )
+        self.assertRegex(manifest["code"]["source_head"], r"^[0-9a-f]{40}$")
+        self.assertNotEqual(manifest["code"]["source_head"], "0" * 40)
+        self.assertRegex(manifest["code"]["snapshot_commit"], r"^[0-9a-f]{40}$")
+        self.assertNotEqual(manifest["code"]["snapshot_commit"], "0" * 40)
+
+    def test_cli_workspace_root_defaults_to_cwd(self) -> None:
+        import importlib.util
+
+        scripts = ROOT / ".agents" / "scripts"
+        spec = importlib.util.spec_from_file_location(
+            "run_manifest_cli", scripts / "run_manifest.py"
+        )
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        parser = module.build_parser()
+        init_help = parser._subparsers._group_actions[0].choices["init"].format_help()
+        self.assertIn("current working directory", init_help)
+        self.assertIn("--workspace-root", init_help)
+        args = parser.parse_args(
+            ["init", "--run-type", "debug", "--output", "manifest.json"]
+        )
+        self.assertEqual(args.workspace_root, Path.cwd())
+
     def test_round_trip_and_status_transition(self) -> None:
         manifest = new_manifest(
             run_type="correctness",
@@ -45,7 +79,7 @@ class RunManifestTests(unittest.TestCase):
             workspace_snapshot={"workspace": "abc123", "dirty": False},
             command=["python", "run.py"],
             created_at=NOW,
-            code=CODE,
+            workspace_root=ROOT,
         )
         running = transition_status(manifest, "running", updated_at=NOW)
         with tempfile.TemporaryDirectory() as tmp:
@@ -55,7 +89,10 @@ class RunManifestTests(unittest.TestCase):
 
     def test_invalid_status_transition_is_rejected(self) -> None:
         manifest = new_manifest(
-            run_type="debug", run_id="debug-case-1", created_at=NOW, code=CODE
+            run_type="debug",
+            run_id="debug-case-1",
+            created_at=NOW,
+            workspace_root=ROOT,
         )
         with self.assertRaises(RunManifestError):
             transition_status(manifest, "passed", updated_at=NOW)
@@ -67,12 +104,15 @@ class RunManifestTests(unittest.TestCase):
                 run_id="profile-case-1",
                 environment_variables={"SERVICE_API_TOKEN": "do-not-store"},
                 created_at=NOW,
-                code=CODE,
+                workspace_root=ROOT,
             )
 
     def test_duplicate_artifact_name_is_rejected(self) -> None:
         manifest = new_manifest(
-            run_type="performance", run_id="perf-case-1", created_at=NOW, code=CODE
+            run_type="performance",
+            run_id="perf-case-1",
+            created_at=NOW,
+            workspace_root=ROOT,
         )
         manifest = add_artifact(
             manifest,

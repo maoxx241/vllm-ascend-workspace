@@ -77,7 +77,7 @@ class DevelopmentTests(unittest.TestCase):
                 run_id="validation-child",
                 parent_run_id="triton-softmax-001",
                 created_at=NOW,
-                code={"source_head": "a" * 40, "snapshot_commit": "b" * 40, "dirty": False},
+                workspace_root=ROOT,
             )
             matrix_path = root / "case-matrix.json"
             matrix_path.write_text(

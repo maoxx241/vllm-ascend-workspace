@@ -159,6 +159,7 @@ def plan(
     config_path: Path,
     created_at: str | None = None,
     code: Mapping[str, Any] | None = None,
+    workspace_root: Path | None = None,
 ) -> dict[str, Any]:
     if output_dir.exists() and any(output_dir.iterdir()):
         raise DevelopmentError(f"output directory is not empty: {output_dir}")
@@ -200,6 +201,7 @@ def plan(
         run_type="debug",
         run_id=config["run_id"],
         code=code,
+        workspace_root=workspace_root or ROOT,
         parent_run_id=config.get("parent_run_id"),
         workspace_snapshot=config.get("workspace_snapshot", {}),
         environment=config.get("environment", {}),

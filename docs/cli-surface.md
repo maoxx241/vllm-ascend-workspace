@@ -429,7 +429,7 @@ option.
 | `.agents/scripts/remote_target_resolve.py` | delegated | - | 3 | docs:1, routing:1, skill-doc:3 | mechanics | compatibility | .agents/scripts/remote_target_resolve.py | vaws remote |
 | `.agents/scripts/remote_toolbox_stress.py` | argparse | - | 13 | docs:2, routing:1, skill-doc:1 | mechanics | harness | .agents/scripts/remote_toolbox_stress.py | - |
 | `.agents/scripts/repo_boundary_check.py` | argparse | - | 6 | docs:4, other:1, policy:4, script:1, test:3 | mechanics | supported | .agents/scripts/repo_boundary_check.py | vaws lint |
-| `.agents/scripts/run_manifest.py` | argparse | init, validate | 11 | docs:5, other:2, policy:2, routing:1, test:1 | mechanics | supported | .agents/scripts/run_manifest.py | vaws manifest |
+| `.agents/scripts/run_manifest.py` | argparse | init, validate | 11 | docs:5, other:2, policy:2, routing:1, test:2 | mechanics | supported | .agents/scripts/run_manifest.py | vaws manifest |
 | `.agents/scripts/skill_catalog.py` | argparse | - | 2 | other:1, test:2 | mechanics | supported | .agents/scripts/skill_catalog.py | vaws lint |
 | `.agents/scripts/sync_claude_skills.py` | argparse | - | 1 | docs:3, mirror:2, other:3, policy:1, routing:1, skill-doc:1, test:2 | mechanics | supported | .agents/scripts/sync_claude_skills.py | vaws lint |
 | `.agents/scripts/tracked_leak_scan.py` | argparse | - | 10 | docs:1, hook:1, other:1, policy:1, test:3 | mechanics | supported | .agents/scripts/tracked_leak_scan.py | vaws lint |

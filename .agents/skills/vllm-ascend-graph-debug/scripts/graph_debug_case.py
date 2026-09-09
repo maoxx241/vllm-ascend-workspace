@@ -164,6 +164,7 @@ def init_case(
     parent_run_id: str | None = None,
     created_at: str | None = None,
     code: Mapping[str, Any] | None = None,
+    workspace_root: Path | None = None,
 ) -> dict[str, Any]:
     if case_dir.exists() and any(case_dir.iterdir()):
         raise GraphDebugError(f"case directory is not empty: {case_dir}")
@@ -194,6 +195,7 @@ def init_case(
         run_id=case_id,
         parent_run_id=parent_run_id,
         code=code,
+        workspace_root=workspace_root or ROOT,
         workspace_snapshot=workspace_snapshot,
         environment=environment,
         model=model,

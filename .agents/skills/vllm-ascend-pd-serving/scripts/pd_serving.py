@@ -286,6 +286,7 @@ def plan(
     group_path: Path,
     created_at: str | None = None,
     code: Mapping[str, Any] | None = None,
+    workspace_root: Path | None = None,
 ) -> dict[str, Any]:
     if output_dir.exists() and any(output_dir.iterdir()):
         raise PdServingError(f"output directory is not empty: {output_dir}")
@@ -334,6 +335,7 @@ def plan(
         run_type="debug",
         run_id=config["run_id"],
         code=code,
+        workspace_root=workspace_root or ROOT,
         workspace_snapshot=group["members"][0]["snapshot"],
         topology={
             "session_group": group["group_id"],

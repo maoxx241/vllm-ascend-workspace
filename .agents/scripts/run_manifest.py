@@ -55,8 +55,13 @@ def build_parser() -> argparse.ArgumentParser:
     init.add_argument(
         "--workspace-root",
         type=Path,
-        required=True,
-        help="Git worktree whose identity fills code",
+        default=Path.cwd(),
+        help=(
+            "Git worktree whose HEAD fills code.source_head / "
+            "code.snapshot_commit / code.dirty. Defaults to the current "
+            "working directory. There is no SHA fallback: if this path "
+            "is not a git worktree, init fails."
+        ),
     )
 
     validate = subparsers.add_parser("validate", help="validate an existing manifest")

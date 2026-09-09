@@ -139,7 +139,7 @@ def passed_child(
         run_id="child-1",
         parent_run_id=parent_run_id,
         created_at=NOW,
-        code={"source_head": "a" * 40, "snapshot_commit": "b" * 40, "dirty": False},
+        workspace_root=ROOT,
     )
     child = transition_status(child, "running", updated_at=NOW)
     if with_artifact:
