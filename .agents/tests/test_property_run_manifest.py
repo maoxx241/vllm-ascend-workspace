@@ -29,7 +29,18 @@ if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
 import vaws_coordinator.run_manifest as rm  # noqa: E402
-from vaws_coordinator.run_manifest import RunManifestError, add_artifact, generate_run_id, load_manifest, new_manifest, transition_status, validate_manifest, write_manifest  # noqa: E402
+from vaws_coordinator.run_manifest import RunManifestError, add_artifact, generate_run_id, load_manifest, new_manifest as _new_manifest, transition_status, validate_manifest, write_manifest  # noqa: E402
+
+FIXED_CODE = {
+    "source_head": "a" * 40,
+    "snapshot_commit": "b" * 40,
+    "dirty": False,
+}
+
+
+def new_manifest(**kwargs):
+    kwargs.setdefault("code", FIXED_CODE)
+    return _new_manifest(**kwargs)
 from test_property_support import Gen, run_cases  # noqa: E402
 
 SCHEMA = json.loads((ROOT / ".agents" / "schemas" / "run-manifest-v1.schema.json").read_text(encoding="utf-8"))
@@ -60,9 +71,15 @@ def artifact(gen: Gen, name: str) -> dict[str, Any]:
 
 
 def code_identity(gen: Gen) -> dict[str, Any]:
+    head = gen.text("0123456789abcdef", 40, 40)
+    snap = gen.text("0123456789abcdef", 40, 40)
+    if head == "0" * 40:
+        head = "a" * 40
+    if snap == "0" * 40:
+        snap = "b" * 40
     return {
-        "source_head": gen.text("0123456789abcdef", 40, 40),
-        "snapshot_commit": gen.text("0123456789abcdef", 40, 40),
+        "source_head": head,
+        "snapshot_commit": snap,
         "dirty": gen.boolean(),
     }
 

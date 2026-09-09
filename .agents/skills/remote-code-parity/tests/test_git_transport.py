@@ -28,8 +28,9 @@ def load_module(name: str, path: Path):
     return module
 
 
+import vaws_coordinator.parity as parity
+
 common = load_module("common", SCRIPTS / "common.py")
-parity = load_module("_remote_code_parity_git_transport_test", SCRIPTS / "remote_code_parity.py")
 wrapper = load_module("_parity_sync_git_transport_test", SCRIPTS / "parity_sync.py")
 
 

@@ -30,6 +30,11 @@ from vaws_coordinator.run_manifest import (  # noqa: E402
 )
 
 NOW = "2026-07-25T12:00:00Z"
+CODE = {
+    "source_head": "a" * 40,
+    "snapshot_commit": "b" * 40,
+    "dirty": False,
+}
 
 
 class RunManifestTests(unittest.TestCase):
@@ -40,6 +45,7 @@ class RunManifestTests(unittest.TestCase):
             workspace_snapshot={"workspace": "abc123", "dirty": False},
             command=["python", "run.py"],
             created_at=NOW,
+            code=CODE,
         )
         running = transition_status(manifest, "running", updated_at=NOW)
         with tempfile.TemporaryDirectory() as tmp:
@@ -49,7 +55,7 @@ class RunManifestTests(unittest.TestCase):
 
     def test_invalid_status_transition_is_rejected(self) -> None:
         manifest = new_manifest(
-            run_type="debug", run_id="debug-case-1", created_at=NOW
+            run_type="debug", run_id="debug-case-1", created_at=NOW, code=CODE
         )
         with self.assertRaises(RunManifestError):
             transition_status(manifest, "passed", updated_at=NOW)
@@ -61,11 +67,12 @@ class RunManifestTests(unittest.TestCase):
                 run_id="profile-case-1",
                 environment_variables={"SERVICE_API_TOKEN": "do-not-store"},
                 created_at=NOW,
+                code=CODE,
             )
 
     def test_duplicate_artifact_name_is_rejected(self) -> None:
         manifest = new_manifest(
-            run_type="performance", run_id="perf-case-1", created_at=NOW
+            run_type="performance", run_id="perf-case-1", created_at=NOW, code=CODE
         )
         manifest = add_artifact(
             manifest,

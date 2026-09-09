@@ -64,6 +64,7 @@ class WorkflowTests(unittest.TestCase):
                     run_id=f"{stage}-child",
                     parent_run_id="triton-softmax-001",
                     created_at=NOW,
+                    code={"source_head": "a" * 40, "snapshot_commit": "b" * 40, "dirty": False},
                 )
                 child = transition_status(child, "running", updated_at=NOW)
                 child = transition_status(child, "passed", updated_at=NOW)
