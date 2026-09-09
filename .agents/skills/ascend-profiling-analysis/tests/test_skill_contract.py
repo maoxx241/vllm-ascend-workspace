@@ -7,7 +7,11 @@ full pipeline.
 """
 from __future__ import annotations
 
+import io
 import subprocess
+import tarfile
+import tempfile
+from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
@@ -169,6 +173,77 @@ def test_ssh_base_cmd_sets_default_connect_timeout() -> None:
     assert f"ConnectTimeout={common.SSH_CONNECT_TIMEOUT_SECONDS}" in cmd
 
 
+def test_sync_to_remote_uses_run_bytes_and_excludes_bytecode() -> None:
+    """If this helper goes back to spawning local ``tar``/``ssh``, Popen is called."""
+    with tempfile.TemporaryDirectory() as tmp:
+        src = Path(tmp) / "src"
+        src.mkdir()
+        (src / "ok.py").write_text("x = 1\n", encoding="utf-8")
+        (src / "__pycache__").mkdir()
+        (src / "__pycache__" / "ok.cpython-311.pyc").write_bytes(b"nope")
+        (src / "skip.pyc").write_bytes(b"nope")
+        seen: dict[str, object] = {}
+
+        def fake_exec(_endpoint, script, **_kwargs):
+            seen["wipe"] = script
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        def fake_bytes(_endpoint, remote_command, *, stdin=None, **_kwargs):
+            seen["remote"] = remote_command
+            seen["stdin"] = stdin
+            return SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
+
+        with (
+            mock.patch.object(common, "ssh_exec", side_effect=fake_exec),
+            mock.patch.object(common, "ssh_run_bytes", side_effect=fake_bytes),
+            mock.patch.object(common.subprocess, "Popen") as popen,
+        ):
+            common.sync_to_remote(object(), src, "/tmp/dst")
+            popen.assert_not_called()
+
+        assert "rm -rf" in str(seen["wipe"])
+        assert "tar -xz" in str(seen["remote"])
+        with tarfile.open(fileobj=io.BytesIO(seen["stdin"]), mode="r:gz") as tf:
+            names = [name.replace("\\", "/").lstrip("./") for name in tf.getnames()]
+        assert any(name == "ok.py" or name.endswith("/ok.py") for name in names)
+        assert not any("__pycache__" in name or name.endswith(".pyc") for name in names)
+
+
+def test_sync_from_remote_extracts_via_tarfile() -> None:
+    buf = io.BytesIO()
+    payload = b"hi\n"
+    with tarfile.open(fileobj=buf, mode="w:gz") as tf:
+        info = tarfile.TarInfo(name="hello.txt")
+        info.size = len(payload)
+        tf.addfile(info, io.BytesIO(payload))
+    with tempfile.TemporaryDirectory() as tmp:
+        dest = Path(tmp) / "out"
+        with (
+            mock.patch.object(
+                common,
+                "ssh_run_bytes",
+                return_value=SimpleNamespace(returncode=0, stdout=buf.getvalue(), stderr=b""),
+            ),
+            mock.patch.object(common.subprocess, "Popen") as popen,
+        ):
+            common.sync_from_remote(object(), "/remote", dest)
+            popen.assert_not_called()
+        assert (dest / "hello.txt").read_bytes() == payload
+
+
+def test_sync_from_remote_empty_stdout_is_ok() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        dest = Path(tmp) / "out"
+        dest.mkdir()
+        with mock.patch.object(
+            common,
+            "ssh_run_bytes",
+            return_value=SimpleNamespace(returncode=0, stdout=b"", stderr=b""),
+        ):
+            common.sync_from_remote(object(), "/remote", dest)
+        assert list(dest.iterdir()) == []
+
+
 def test_all_stage_parsers_disable_abbrev() -> None:
     """acceptance.md: every argparse parser must set allow_abbrev=False."""
     from ascend_profile import (
@@ -211,5 +286,8 @@ if __name__ == "__main__":
     test_remote_python_probe_timeout_required_fails_closed()
     test_remote_python_probe_timeout_optional_falls_back_to_python3()
     test_ssh_base_cmd_sets_default_connect_timeout()
+    test_sync_to_remote_uses_run_bytes_and_excludes_bytecode()
+    test_sync_from_remote_extracts_via_tarfile()
+    test_sync_from_remote_empty_stdout_is_ok()
     test_all_stage_parsers_disable_abbrev()
     print("ok")

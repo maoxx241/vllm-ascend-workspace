@@ -1,4 +1,4 @@
-"""Service, sync, and cleanup adapters that remote-dev v0.2.0 cannot express.
+"""Service, sync, and cleanup adapters that remote-dev v0.3.0 cannot express.
 
 These spawn existing serving/parity/session CLIs. SSH, when needed, goes
 through ``vaws_remote_dev``. This is not a second transport.

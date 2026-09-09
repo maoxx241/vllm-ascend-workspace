@@ -70,7 +70,7 @@ compatibility backend for managed sessions, sync, service adapters, and cleanup.
 - `.agents/lib/vaws_session_id.py` and `.agents/lib/vaws_session_state.py` are the shared libraries for session identity, state, locks, and leases.
 - `.agents/lib/vaws_remote_dev.py` injects scaffold environment into the installed `vaws-remote-dev` package and is the only scaffold place that may call its SSH transport.
 - `.agents/lib/vaws_remote_target.py` maps machines and sessions to host/container endpoints. It is not SSH transport.
-- `.agents/lib/vaws_remote_adapters.py` keeps service, sync, and cleanup CLIs that remote-dev v0.2.0 cannot express.
+- `.agents/lib/vaws_remote_adapters.py` keeps service, sync, and cleanup CLIs that remote-dev v0.3.0 cannot express.
 - `.agents/lib/vaws_validate.py` is the shared validation library for agent-facing ids, environment names, path boundaries, and NPU device lists.
 - `.agents/lib/vaws_coordinator_launch.py` launches the installed vaws-coordinator package (task identity, `vaws_*` tools, runtime pool).
 - `AGENTS.md` carries repository-wide routing rules and mandatory decision gates.

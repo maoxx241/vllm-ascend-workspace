@@ -14,11 +14,9 @@ from __future__ import annotations
 import contextlib
 import importlib.util
 import json
-import socket
 import subprocess
 import sys
 import threading
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -61,7 +59,7 @@ def _load_serving_common():
 SERVING = _load_serving_common()
 # Loading serving common put LIB_DIR on sys.path.
 from vaws_local_state import allocate_run_dir, safe_run_token  # noqa: E402
-from vaws_remote_dev import ssh_argv  # noqa: E402
+from vaws_remote_dev import open_local_forward, require_transport  # noqa: E402
 from vaws_remote_target import ascend_env_preamble  # noqa: E402
 
 SshEndpoint = SERVING.SshEndpoint
@@ -125,69 +123,24 @@ ASCEND_ENV_PREAMBLE = ascend_env_preamble()
 # Local SSH tunnel for sending workload requests from the local machine
 # ---------------------------------------------------------------------------
 
-def _find_free_local_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind(("127.0.0.1", 0))
-        sock.listen(1)
-        return int(sock.getsockname()[1])
-
-
 @contextlib.contextmanager
 def open_local_tunnel(ep, remote_port: int):
     """Open an ephemeral ``ssh -L`` tunnel to ``127.0.0.1:<remote_port>``.
 
     Yields a dict with ``local_port`` and ``base_url``. Used by the workload
     sender so multimodal payloads (image data URLs) can be assembled locally
-    and POSTed without round-tripping through SSH heredocs.
+    and POSTed without round-tripping through SSH heredocs. Transport lives
+    in ``vaws-remote-dev`` ``open_local_forward``.
     """
-    local_port = _find_free_local_port()
-    base = list(ssh_argv(ep, long_stream=True))
-    sep = base.index("--")
-    cmd = [
-        *base[:sep],
-        "-o", "ExitOnForwardFailure=yes",
-        "-N",
-        "-L", f"127.0.0.1:{local_port}:127.0.0.1:{remote_port}",
-        *base[sep:],
-    ]
-    proc = subprocess.Popen(
-        cmd,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
+    api = require_transport()
     try:
-        deadline = time.time() + 15
-        last_error = ""
-        while time.time() < deadline:
-            if proc.poll() is not None:
-                stderr = proc.stderr.read() if proc.stderr is not None else ""
-                raise RuntimeError(
-                    f"ssh tunnel exited early (rc={proc.returncode}): {stderr[:2000]}"
-                )
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-                sock.settimeout(0.5)
-                try:
-                    sock.connect(("127.0.0.1", local_port))
-                    yield {
-                        "local_port": local_port,
-                        "base_url": f"http://127.0.0.1:{local_port}",
-                    }
-                    return
-                except OSError as exc:
-                    last_error = str(exc)
-                    time.sleep(0.2)
-        raise RuntimeError(
-            f"timed out waiting for ssh tunnel to localhost:{local_port} ({last_error})"
-        )
-    finally:
-        if proc.poll() is None:
-            proc.terminate()
-            try:
-                proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait(timeout=5)
+        with open_local_forward(ep, remote_port) as fwd:
+            yield {
+                "local_port": int(fwd.local_port),
+                "base_url": f"http://{fwd.local_host}:{fwd.local_port}",
+            }
+    except api["RemoteExecutionError"] as exc:
+        raise RuntimeError(str(exc)) from exc
 
 
 # ---------------------------------------------------------------------------

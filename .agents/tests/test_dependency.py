@@ -21,7 +21,7 @@ import vaws_dependency as deps  # noqa: E402
 class SpecLockTests(unittest.TestCase):
     def test_pyproject_requires_the_three_packages(self) -> None:
         versions = deps.required_versions()
-        self.assertEqual(versions["vaws-remote-dev"], "0.2.0")
+        self.assertEqual(versions["vaws-remote-dev"], "0.3.0")
         self.assertEqual(versions["vaws-coordinator"], "0.2.0")
         self.assertEqual(versions["vaws-knowledge"], "0.1.4")
         self.assertNotIn(deps.VAWS_TOP_NAME, versions)
@@ -42,7 +42,7 @@ class SpecLockTests(unittest.TestCase):
         )
         self.assertEqual(
             locked["vaws-remote-dev"]["commit"],
-            "8ecc09d5865a564d3b7cab822a1d474d12b2dcb9",
+            "8f3cebfd1c42839fef41b06aaf8da4052cc23954",
         )
         expected_versions = deps.required_versions()
         for name in deps.PACKAGE_NAMES:

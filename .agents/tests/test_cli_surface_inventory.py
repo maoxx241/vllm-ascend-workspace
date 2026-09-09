@@ -306,7 +306,7 @@ class RepositoryCoherenceTests(unittest.TestCase):
         by_repository = {meta["repository"]: meta for meta in owners.values()}
         self.assertEqual(
             by_repository["vllm-ascend-workspace/remote-dev"]["commit"],
-            "8ecc09d5865a564d3b7cab822a1d474d12b2dcb9",
+            "8f3cebfd1c42839fef41b06aaf8da4052cc23954",
         )
         self.assertEqual(
             by_repository["vllm-ascend-workspace/vaws-coordinator"]["commit"],
