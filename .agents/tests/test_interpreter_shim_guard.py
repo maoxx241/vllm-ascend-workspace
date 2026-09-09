@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""P9: local entries hop onto ``.venv``; remote payloads stay lib-free.
+"""Local inventoried entries hop onto ``.venv``; remote payloads stay lib-free.
 
 Test files are not entry points. A ``__main__`` file that is neither a test
 nor in the CLI-surface inventory is a classification gap, not a file to shim.

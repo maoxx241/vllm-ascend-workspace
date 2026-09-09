@@ -785,6 +785,7 @@ class NoInTreeTaskWriterTests(unittest.TestCase):
         self.assertEqual(tracked.stdout.strip(), "", tracked.stdout)
 
     def test_build_inputs_live_in_the_coordinator_package(self) -> None:
+        """Run Manifest and build-inputs are imported from the package; scaffold copies are gone."""
         self.assertFalse((ROOT / ".agents/lib/vaws_build_inputs.py").is_file())
         self.assertTrue((ROOT / ".agents/lib/vaws_host_queue_module.py").is_file())
         self.assertFalse((ROOT / ".agents/lib/vaws_run_manifest.py").is_file())
