@@ -19,11 +19,7 @@ CODEX_EXAMPLE = ROOT / ".codex" / "config.example.toml"
 if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
-from vaws_knowledge_v1 import (  # noqa: E402
-    KNOWLEDGE_FILES,
-    capture_candidate,
-    knowledge_session_key,
-)
+from vaws_knowledge_service import knowledge_session_key  # noqa: E402
 
 NOW = "2026-07-27T12:00:00Z"
 
@@ -43,18 +39,6 @@ hook = load_hook()
 
 def write_knowledge(root: Path) -> None:
     root.mkdir(parents=True, exist_ok=True)
-    for filename, kind in KNOWLEDGE_FILES.items():
-        (root / filename).write_text(
-            json.dumps(
-                {
-                    "schema_version": 1,
-                    "kind": kind,
-                    "updated_at": "2026-07-27",
-                    "entries": [],
-                }
-            ),
-            encoding="utf-8",
-        )
 
 
 def candidate_payload(session_id: str) -> dict:
@@ -100,19 +84,21 @@ class SessionEndHookTests(unittest.TestCase):
 
     def defer(self, session_id: str) -> str:
         session_key = knowledge_session_key(session_id)
-        result = capture_candidate(
-            candidate_payload(session_id),
-            candidate_dir=(
-                self.root
-                / ".vaws-local"
-                / "knowledge"
-                / "pending"
-                / session_key
-            ),
-            knowledge_dir=self.root / ".agents" / "knowledge",
-            now=NOW,
+        pending = (
+            self.root
+            / ".vaws-local"
+            / "knowledge"
+            / "pending"
+            / session_key
         )
-        return result["candidate_id"]
+        pending.mkdir(parents=True, exist_ok=True)
+        candidate_id = f"pending-{session_key[:8]}"
+        payload = candidate_payload(session_id)
+        payload["candidate_id"] = candidate_id
+        (pending / f"{candidate_id}.json").write_text(
+            json.dumps(payload), encoding="utf-8"
+        )
+        return candidate_id
 
     def payload(self, session_id: str) -> dict:
         return {

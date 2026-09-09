@@ -20,74 +20,101 @@ Covered:
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import conftest  # noqa: F401 — registers scripts/ on sys.path
 
 import profile_analyze
 
+ROOT = Path(__file__).resolve().parents[4]
+LIB = ROOT / ".agents" / "lib"
+if str(LIB) not in sys.path:
+    sys.path.insert(0, str(LIB))
+
+import vaws_knowledge_v2 as v2  # noqa: E402
+
 KIND_FILES = {
-    "version-compatibility.yaml": "version-compatibility",
-    "model-capabilities.yaml": "model-capabilities",
-    "parallelism-compatibility.yaml": "parallelism-compatibility",
-    "backend-constraints.yaml": "backend-constraints",
-    "validation-rules.yaml": "validation-rules",
-    "known-failure-signatures.yaml": "known-failure-signatures",
+    "known-failure-signatures.v2.yaml": "known-failure-signatures",
+    "model-capabilities.v2.yaml": "model-capabilities",
 }
 
-FAILURE_ENTRY = {
-    "id": "demo-gloo-hostname",
-    "status": "active",
-    "source": "test fixture",
-    "applicable_versions": "test-only",
-    "updated_at": "2026-09-03",
-    "rule": {
-        "summary": "gloo init fails when the container hostname is missing from /etc/hosts",
-        "symptom": "gloo makeDeviceForHostname name or service not known",
-        "root_cause": "fresh container lacks its hostname in /etc/hosts",
-        "resolution": "add 127.0.0.1 <hostname> to /etc/hosts before serve_start",
-        "avoidance": "check /etc/hosts before debugging gloo env vars",
-        "fingerprints": ["gloo makedeviceforhostname", "name or service not known hostname"],
-    },
-}
 
-MODEL_ENTRY = {
-    "id": "model-demomodel-7b",
-    "status": "active",
-    "source": "test fixture",
-    "applicable_versions": "test-only",
-    "updated_at": "2026-09-03",
-    "rule": {
-        "summary": "DemoModel-7B: 40-layer test model",
-        "expected_layers": 40,
-        "fingerprints": ["demomodel-7b"],
-    },
-}
+def _scope(**values: str) -> dict:
+    scope = {name: {"range": {"min": None, "max": None}} for name in v2.SCOPE_DIMENSIONS}
+    for name, value in values.items():
+        scope[name] = {"values": [value]}
+    return scope
 
-MODEL_ENTRY_NO_LAYERS = {
-    "id": "model-configdriven-13b",
-    "status": "active",
-    "source": "test fixture",
-    "applicable_versions": "test-only",
-    "updated_at": "2026-09-03",
-    "rule": {
-        "summary": "ConfigDriven-13B: layer count is config-driven, no verified value",
-        "expected_layers": None,
-        "fingerprints": ["configdriven-13b"],
-    },
-}
+
+def _v2_entry(*, kind: str, slug: str, summary: str, fingerprints: list[str], resolution: str) -> dict:
+    return v2.with_content_hash(
+        {
+            "uuid": v2.derived_uuid("owner/fork", kind, slug),
+            "slug": slug,
+            "content_hash": "sha256:" + "0" * 64,
+            "status": "unverified",
+            "confidence": "low",
+            "scope": _scope(component="profiling"),
+            "provenance": {
+                "contributor": "submitter",
+                "origin_repo": "owner/fork",
+                "submitted_at": "2026-09-03",
+                "redaction_profile": "r2",
+            },
+            "lifecycle": {
+                "first_seen": "2026-09-03",
+                "updated_at": "2026-09-03",
+                "superseded_by": None,
+                "resolved_by": None,
+            },
+            "rule": {
+                "summary": summary,
+                "symptom": summary,
+                "root_cause": "recorded for the test fixture",
+                "resolution": resolution,
+                "fingerprints": fingerprints,
+            },
+        }
+    )
+
+
+FAILURE_ENTRY = _v2_entry(
+    kind="known-failure-signatures",
+    slug="demo-gloo-hostname",
+    summary="gloo init fails when the container hostname is missing from /etc/hosts",
+    fingerprints=["gloo makedeviceforhostname", "name or service not known hostname"],
+    resolution="add 127.0.0.1 <hostname> to /etc/hosts before serve_start",
+)
+
+MODEL_ENTRY = _v2_entry(
+    kind="model-capabilities",
+    slug="model-demomodel-7b",
+    summary="DemoModel-7B: 40-layer test model",
+    fingerprints=["demomodel-7b"],
+    resolution="Layer count is no longer a structured v2 field.",
+)
+
+MODEL_ENTRY_NO_LAYERS = _v2_entry(
+    kind="model-capabilities",
+    slug="model-configdriven-13b",
+    summary="ConfigDriven-13B: layer count is config-driven, no verified value",
+    fingerprints=["configdriven-13b"],
+    resolution="No verified layer count.",
+)
 
 
 def _write_knowledge_dir(root: Path, entries_by_kind: dict[str, list[dict]]) -> Path:
     root.mkdir(parents=True, exist_ok=True)
     for filename, kind in KIND_FILES.items():
-        payload = {
-            "schema_version": 1,
+        document = {
+            "schema_version": 2,
             "kind": kind,
+            "layer": "unverified",
             "updated_at": "2026-09-03",
             "entries": entries_by_kind.get(kind, []),
         }
-        (root / filename).write_text(json.dumps(payload), encoding="utf-8")
+        v2.write_document(root / filename, document, context=v2.PROJECT_LAYER)
     return root
 
 
@@ -158,7 +185,6 @@ def test_finding_group_attaches_knowledge_refs(tmp_path: Path) -> None:
     assert ref["kind"] == "known-failure-signatures"
     assert ref["summary"] == FAILURE_ENTRY["rule"]["summary"]
     assert ref["resolution"] == FAILURE_ENTRY["rule"]["resolution"]
-    assert ref["applicable_versions"] == "test-only"
     assert ref["score"] > 0
     # No token overlap -> explicit empty array, not a missing key.
     assert out["findings"][1]["knowledge_refs"] == []
@@ -202,9 +228,8 @@ def test_missing_knowledge_dir_does_not_raise(tmp_path: Path) -> None:
 
 def test_invalid_knowledge_document_does_not_raise(tmp_path: Path) -> None:
     knowledge_dir = _write_knowledge_dir(tmp_path, {})
-    # Corrupt one document: unknown top-level field makes it invalid.
-    (knowledge_dir / "validation-rules.yaml").write_text(
-        json.dumps({"schema_version": 1, "kind": "validation-rules", "updated_at": "2026-09-03", "entries": [], "bogus": 1}),
+    (knowledge_dir / "known-failure-signatures.v2.yaml").write_text(
+        json.dumps({"schema_version": 2, "kind": "known-failure-signatures", "not": "valid"}),
         encoding="utf-8",
     )
     summary = _summary(findings=[_finding("x", "gloo makeDeviceForHostname")])
@@ -237,11 +262,9 @@ def test_layer_backfill_from_candidate_names(tmp_path: Path) -> None:
         summary, knowledge_dir=knowledge_dir
     )
     lv = out["layer_validation"]
-    assert lv["expected_layers"] == 40
-    assert lv["expected_source"] == "knowledge:model-demomodel-7b"
-    assert lv["layers_match"] is True  # detected min/max are 40
-    assert lv["status"] == "ok"
-    assert "model-demomodel-7b" in lv["layers_note"]
+    # v2 rule bodies have no expected_layers field; backfill is retired.
+    assert lv["expected_layers"] is None
+    assert lv["expected_source"] == "unknown"
 
 
 def test_layer_backfill_uses_explicit_model_id_first(tmp_path: Path) -> None:
@@ -252,7 +275,7 @@ def test_layer_backfill_uses_explicit_model_id_first(tmp_path: Path) -> None:
     out = profile_analyze._enrich_analysis_summary_with_knowledge(
         summary, knowledge_dir=knowledge_dir, model_id="DemoModel-7B"
     )
-    assert out["layer_validation"]["expected_layers"] == 40
+    assert out["layer_validation"]["expected_layers"] is None
 
 
 def test_layer_backfill_skipped_when_expected_known(tmp_path: Path) -> None:
@@ -278,9 +301,8 @@ def test_layer_backfill_mismatch_flips_status_to_degraded(tmp_path: Path) -> Non
         summary, knowledge_dir=knowledge_dir
     )
     lv = out["layer_validation"]
-    assert lv["expected_layers"] == 40
-    assert lv["layers_match"] is False
-    assert lv["status"] == "degraded"
+    assert lv["expected_layers"] is None
+    assert lv["status"] == "ok"
 
 
 def test_layer_backfill_respects_outlier_inventories(tmp_path: Path) -> None:
@@ -300,9 +322,7 @@ def test_layer_backfill_respects_outlier_inventories(tmp_path: Path) -> None:
         summary, knowledge_dir=knowledge_dir
     )
     lv = out["layer_validation"]
-    # 40 is not min/max but is present in an outlier inventory.
-    assert lv["layers_match"] is True
-    # Pre-existing degraded status is preserved (never upgraded silently).
+    assert lv["expected_layers"] is None
     assert lv["status"] == "degraded"
 
 
@@ -342,7 +362,7 @@ def test_layer_backfill_no_detected_layers_keeps_match_null(tmp_path: Path) -> N
         summary, knowledge_dir=knowledge_dir
     )
     lv = out["layer_validation"]
-    assert lv["expected_layers"] == 40
+    assert lv["expected_layers"] is None
     assert lv["layers_match"] is None
 
 

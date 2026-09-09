@@ -27,13 +27,16 @@ ensure_workspace_interpreter(repo_root=ROOT)
 
 import vaws_redaction as redaction  # noqa: E402
 from vaws_knowledge.server.capture import CaptureRefused, CaptureRejected, capture  # noqa: E402
-from vaws_knowledge_service import commons_entry, infer_repo_root, service_config  # noqa: E402
-from vaws_knowledge_v1 import (  # noqa: E402
-    MAX_CANDIDATE_BYTES,
+from vaws_knowledge_service import (  # noqa: E402
     KnowledgeError,
+    commons_entry,
+    infer_repo_root,
     knowledge_session_key,
-    load_candidate,
+    load_json_object,
+    service_config,
 )
+
+MAX_CANDIDATE_BYTES = 64 * 1024
 
 MAX_PENDING_PER_SESSION = 32
 
@@ -62,7 +65,7 @@ def _resolve_repo_root(payload: Mapping[str, Any]) -> Path:
     if isinstance(cwd, str) and cwd:
         current = Path(cwd).resolve()
         for candidate in (current, *current.parents):
-            if (candidate / ".agents" / "lib" / "vaws_knowledge_v1.py").is_file():
+            if (candidate / ".agents" / "lib" / "vaws_knowledge_service.py").is_file():
                 return candidate
     return ROOT
 
@@ -120,7 +123,7 @@ def process_session_end(
                 raise KnowledgeError(
                     f"pending candidate exceeds {MAX_CANDIDATE_BYTES} bytes"
                 )
-            candidate = load_candidate(path)
+            candidate = load_json_object(path)
             if candidate["source"].get("session_id") != session_id:
                 raise KnowledgeError("pending candidate session does not match hook session")
             written = _write_commons(candidate, knowledge_dir, root)

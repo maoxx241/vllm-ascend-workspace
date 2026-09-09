@@ -27,7 +27,7 @@ EXPORT = "export"
 
 def _commons() -> Any:
     # Imported on first use so tracked-leak-guard CI (no venv) can still
-    # import this module through vaws_knowledge_v1 for SECRET_* constants.
+    # import this module through the knowledge service for SECRET_* constants.
     import vaws_knowledge.redact as redact
 
     return redact

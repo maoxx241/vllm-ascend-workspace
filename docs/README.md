@@ -2,8 +2,9 @@
 
 Status: current
 
-Every Markdown file under `docs/` is listed here. `Status: current` is a
-contract. `Status: dated` is evidence and is never a direction.
+Every file under `docs/` is listed here. `Status: current` is a
+contract. A dated Status line is evidence and is never a direction; Git
+is the archive for dated evidence.
 
 ## Current contracts
 
@@ -16,19 +17,10 @@ contract. `Status: dated` is evidence and is never a direction.
 - [npu-fleet-monitor.md](npu-fleet-monitor.md) — local deploy and lifecycle of the standalone vaws-top fleet monitor.
 - [property-testing.md](property-testing.md) — property-based tests for the deterministic cores.
 - [remote-dev-consumption.md](remote-dev-consumption.md) — how this scaffold consumes the installed vaws-remote-dev package.
-- [repo-boundaries.md](repo-boundaries.md) — current consumer-side boundary contract and guard summary; superseded as direction by target-state.md.
 - [target-state.md](target-state.md) — the single definition of the post-split end state: axioms, ownership matrix, contracts, deletion inventory, acceptance predicates.
 - [tracked-leak-guard.md](tracked-leak-guard.md) — tracked-file leak scanner, hook, and CI.
 - [tracked-path-guard.md](tracked-path-guard.md) — anti-rot guard against dead in-tree paths in tracked docs.
 
-## Dated evidence (do not follow as direction)
+## Ledger
 
-- [audits/access-family.md](audits/access-family.md) — 2026-09-07 access and infrastructure family audit.
-- [audits/measurement-family.md](audits/measurement-family.md) — 2026-09-07 measurement and analysis family audit.
-- [audits/operator-triton-family.md](audits/operator-triton-family.md) — 2026-09-07 operator and Triton family audit.
-- [audits/repo-boundaries-2026-09-07.md](audits/repo-boundaries-2026-09-07.md) — 2026-09-07 boundary snapshot, 71-row inventory, and historical plan.
-- [audits/split-reconciliation-2026-09-07.md](audits/split-reconciliation-2026-09-07.md) — retired split-ledger record; 26/26 arrived.
-- [audits/run-deliver-family.md](audits/run-deliver-family.md) — 2026-09-07 run-and-deliver family audit.
-- [audits/verdict-debug-family.md](audits/verdict-debug-family.md) — 2026-09-07 validation/debug family audit.
-- [deterministic-core-maturation.md](deterministic-core-maturation.md) — first hardware pass of the maturation harness.
-- [leak-remediation.md](leak-remediation.md) — leak-exposure report; not an authorization to rewrite history.
+- [audits/split-ledger-2026-09-07.json](audits/split-ledger-2026-09-07.json) — machine-readable split-arrival ledger retained for consumer tests.

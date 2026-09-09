@@ -53,7 +53,6 @@ After deployment, open <http://127.0.0.1:8788>. The dashboard shows NPU/AICore, 
 | **machine-management** | Add, verify, repair, or remove a remote Ascend NPU server and its managed container          | When setting up a remote NPU dev machine                   |
 | **npu-fleet-monitor**  | Build, start, inspect, or stop the local NPU dashboard from the standalone vaws-top repository | When continuously monitoring fleet resources and history  |
 | **session-management** | Create, inspect, group, and clean isolated sessions: local worktree, remote container, state namespace, and resource leases | For parallel remote work, multiple agents, or PD deployments |
-| **remote-toolbox**    | Structured target/probe/exec/job/sync/service/artifact/cleanup tools for remote containers | When agents need local-tool-like control of a remote session container |
 | **remote-code-parity** | Sync the full local workspace state (including uncommitted changes) to a remote container    | Triggered automatically before remote test or service runs |
 | **modelscope**       | Download, resume, status-check, and SHA256-verify ModelScope model weights                  | When model weights need to be downloaded into an explicit local directory |
 | **vllm-ascend-serving** | Launch a vLLM Ascend inference service on a remote container, with NPU probing, auto card selection, and incremental restart | When you need an inference service on a remote machine |
@@ -61,7 +60,7 @@ After deployment, open <http://127.0.0.1:8788>. The dashboard shows NPU/AICore, 
 | **ascend-memory-profiling** | Profile and attribute HBM memory usage on Ascend NPU, with per-component breakdown and evidence chains | When you need to analyze memory consumption of a vLLM serving workload |
 | **ascend-profiling-collection** | Collect Ascend torch-profiler data: start service, bracket profile window, run workload, remote analyse, and write a manifest | When you need kernel_details/trace_view captures |
 | **ascend-profiling-analysis** | Analyze collected profiler roots/manifests and generate step/layer/operator/cross-rank reports | When you need to analyze profiling output |
-| **curate-workspace-knowledge** | Review, deduplicate, promote, merge, reject, or deprecate verified project knowledge candidates | When explicitly curating or maintaining project knowledge |
+| **curate-workspace-knowledge** | Review, deduplicate, promote, reject, or deprecate verified project knowledge candidates | When explicitly curating or maintaining project knowledge |
 | **vllm-ascend-graph-debug** | Diagnose graph compile, capture, replay, and graph/eager correctness divergence | When graph mode fails or diverges from eager mode |
 | **vllm-ascend-correctness-validation** | Compare baseline/candidate, eager/graph, offline/online, and AISBench correctness | When validating accuracy or normalized outputs |
 | **vllm-ascend-change-validation** | Derive validation plans from code diffs and aggregate PR evidence | When validating a workspace change or PR |
@@ -121,7 +120,6 @@ When talking to an Agent:
 │   │   ├── machine-management/    # Remote machine management skill
 │   │   ├── npu-fleet-monitor/     # Local NPU monitor deployment skill
 │   │   ├── session-management/    # Parallel session isolation skill
-│   │   ├── remote-toolbox/        # Structured remote toolbox
 │   │   ├── remote-code-parity/    # Code synchronization skill
 │   │   ├── modelscope/            # ModelScope weight download and verification skill
 │   │   ├── vllm-ascend-serving/   # Inference serving skill

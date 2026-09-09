@@ -48,7 +48,7 @@ jobs:
       - name: Check repository boundaries
         # Enforce mode fails on a violation the dated baseline does not
         # already record, and on a baseline row whose violation is gone.
-        # See docs/repo-boundaries.md. Submodules are not checked out here
+        # See docs/target-state.md. Submodules are not checked out here
         # and the guard skips them regardless.
         run: |
           uv run python -B .agents/scripts/repo_boundary_check.py --mode enforce

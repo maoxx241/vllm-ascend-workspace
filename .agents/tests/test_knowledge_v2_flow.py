@@ -580,7 +580,7 @@ class ThreeLayerQueryTest(V2FlowBase):
         )
 
     def test_v1_entries_stay_queryable_through_v1_reader(self) -> None:
-        from vaws_knowledge_v1 import query_knowledge
+        from vaws_knowledge_service import query_knowledge
 
         matches = query_knowledge(
             knowledge_dir=self.knowledge, query="deepseek v3.1 layers"

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -25,7 +26,6 @@ if str(LIB) not in sys.path:
 
 from vaws_knowledge.server.capture import capture  # noqa: E402
 from vaws_knowledge_service import commons_entry, service_config  # noqa: E402
-from vaws_knowledge_v1 import KNOWLEDGE_FILES  # noqa: E402
 
 NOW = "2026-07-27T12:00:00Z"
 
@@ -44,20 +44,8 @@ curate = load_module()
 
 
 def write_knowledge(root: Path, entries: dict[str, list[dict]] | None = None) -> None:
-    entries = entries or {}
+    del entries
     root.mkdir(parents=True, exist_ok=True)
-    for filename, kind in KNOWLEDGE_FILES.items():
-        (root / filename).write_text(
-            json.dumps(
-                {
-                    "schema_version": 1,
-                    "kind": kind,
-                    "updated_at": "2026-07-27",
-                    "entries": entries.get(kind, []),
-                }
-            ),
-            encoding="utf-8",
-        )
 
 
 def candidate_payload(
@@ -95,231 +83,6 @@ def candidate_payload(
             "commits": ["823df4b"],
         },
     }
-
-
-class CurationTests(unittest.TestCase):
-    def setUp(self) -> None:
-        self.temp = tempfile.TemporaryDirectory()
-        self.root = Path(self.temp.name)
-        self.knowledge = self.root / "knowledge"
-        self.candidates = self.root / "candidate"
-        self.reviewed = self.root / "reviewed"
-        write_knowledge(self.knowledge)
-
-    def tearDown(self) -> None:
-        self.temp.cleanup()
-
-    def capture(self, payload: dict | None = None) -> str:
-        payload = payload or candidate_payload()
-        environment = payload.get("environment") or {
-            name: "unknown" for name in curate.COORDINATE_DIMENSIONS
-        }
-        written = capture(
-            commons_entry(payload, environment),
-            kind=str(payload.get("kind") or "known-failure-signatures"),
-            config=service_config(
-                self.root,
-                project_root=self.knowledge,
-                candidate_root=self.candidates,
-            ),
-        )
-        return str(written["slug"])
-
-    def formal_entries(self) -> list[dict]:
-        payload = json.loads(
-            (self.knowledge / "known-failure-signatures.yaml").read_text(
-                encoding="utf-8"
-            )
-        )
-        return payload["entries"]
-
-    def test_list_is_compact(self) -> None:
-        candidate_id = self.capture()
-        listed = curate.list_candidates(self.candidates, self.knowledge)
-        self.assertEqual(listed[0]["candidate_id"], candidate_id)
-        self.assertNotIn("root_cause", listed[0])
-
-    def test_experimental_promotion_writes_formal_and_archives(self) -> None:
-        candidate_id = self.capture()
-        result = curate.promote_candidate(
-            candidate_id,
-            entry_id="session-lease-child-visibility",
-            status="experimental",
-            force_new=False,
-            candidate_dir=self.candidates,
-            reviewed_dir=self.reviewed,
-            knowledge_dir=self.knowledge,
-            now=NOW,
-        )
-        entry = self.formal_entries()[0]
-        self.assertEqual(result["action"], "promoted")
-        self.assertEqual(entry["id"], "session-lease-child-visibility")
-        self.assertEqual(entry["rule"]["candidate_id"], candidate_id)
-        self.assertTrue((self.reviewed / f"{candidate_id}.json").is_file())
-        leftover = list(self.candidates.glob("*.yaml"))
-        self.assertFalse(
-            any(candidate_id in path.read_text(encoding="utf-8") for path in leftover)
-        )
-
-    def test_yaml_native_promote_does_not_require_v1_verification_fields(self) -> None:
-        candidate_id = self.capture(
-            candidate_payload(verification_status="inconclusive", stable=False)
-        )
-        result = curate.promote_candidate(
-            candidate_id,
-            entry_id="session-lease-child-visibility",
-            status="active",
-            force_new=False,
-            candidate_dir=self.candidates,
-            reviewed_dir=self.reviewed,
-            knowledge_dir=self.knowledge,
-            now=NOW,
-        )
-        self.assertEqual(result["action"], "promoted")
-        self.assertEqual(result["entry_status"], "active")
-
-    def test_active_accepts_stable_regression_test(self) -> None:
-        candidate_id = self.capture(
-            candidate_payload(evidence_kind="regression-test")
-        )
-        result = curate.promote_candidate(
-            candidate_id,
-            entry_id=None,
-            status="active",
-            force_new=False,
-            candidate_dir=self.candidates,
-            reviewed_dir=self.reviewed,
-            knowledge_dir=self.knowledge,
-            now=NOW,
-        )
-        self.assertEqual(result["entry_status"], "active")
-
-    def test_duplicate_fingerprint_requires_merge_or_force(self) -> None:
-        candidate_id = self.capture()
-        duplicate = {
-            "id": "existing-lease-rule",
-            "source": "existing evidence",
-            "applicable_versions": "all",
-            "updated_at": "2026-07-27",
-            "status": "active",
-            "rule": {
-                "summary": "Existing",
-                "fingerprints": ["child process sees devices outside its lease"],
-            },
-        }
-        write_knowledge(
-            self.knowledge, {"known-failure-signatures": [duplicate]}
-        )
-        with self.assertRaisesRegex(curate.KnowledgeError, "use merge"):
-            curate.promote_candidate(
-                candidate_id,
-                entry_id="new-lease-rule",
-                status="experimental",
-                force_new=False,
-                candidate_dir=self.candidates,
-                reviewed_dir=self.reviewed,
-                knowledge_dir=self.knowledge,
-                now=NOW,
-            )
-
-    def test_merge_updates_existing_evidence_and_occurrences(self) -> None:
-        candidate_id = self.capture()
-        existing = {
-            "id": "existing-lease-rule",
-            "source": "existing evidence",
-            "applicable_versions": "old",
-            "updated_at": "2026-07-26",
-            "status": "experimental",
-            "rule": {
-                "candidate_id": "older-candidate",
-                "candidate_ids": ["older-candidate"],
-                "summary": "Old summary",
-                "owner_skill": "session-management",
-                "scope": {},
-                "fingerprints": ["older fingerprint"],
-                "symptom": "Old",
-                "root_cause": "Old",
-                "resolution": "Old",
-                "avoidance": "",
-                "verification": {"status": "passed", "checks": ["old"]},
-                "evidence": [
-                    {"kind": "commit", "uri": "commit:old", "stable": True}
-                ],
-                "confidence": "medium",
-                "occurrence_count": 1,
-                "first_seen_at": "2026-07-26T12:00:00Z",
-                "last_verified_at": "2026-07-26T12:00:00Z",
-            },
-        }
-        write_knowledge(
-            self.knowledge, {"known-failure-signatures": [existing]}
-        )
-        result = curate.merge_candidate(
-            candidate_id,
-            entry_id="existing-lease-rule",
-            candidate_dir=self.candidates,
-            reviewed_dir=self.reviewed,
-            knowledge_dir=self.knowledge,
-            now=NOW,
-        )
-        entry = self.formal_entries()[0]
-        self.assertEqual(result["action"], "merged")
-        self.assertEqual(entry["rule"]["occurrence_count"], 2)
-        self.assertIn(candidate_id, entry["rule"]["candidate_ids"])
-        self.assertGreaterEqual(entry["rule"]["occurrence_count"], 2)
-
-    def test_reject_does_not_modify_formal_knowledge(self) -> None:
-        candidate_id = self.capture()
-        before = (self.knowledge / "known-failure-signatures.yaml").read_text(
-            encoding="utf-8"
-        )
-        result = curate.reject_candidate(
-            candidate_id,
-            reason="Infrastructure-only transient.",
-            candidate_dir=self.candidates,
-            reviewed_dir=self.reviewed,
-            knowledge_dir=self.knowledge,
-            now=NOW,
-        )
-        after = (self.knowledge / "known-failure-signatures.yaml").read_text(
-            encoding="utf-8"
-        )
-        self.assertEqual(result["action"], "rejected")
-        self.assertEqual(before, after)
-
-    def test_deprecate_retains_entry_and_replacement(self) -> None:
-        old = {
-            "id": "old-rule",
-            "source": "old evidence",
-            "applicable_versions": "old",
-            "updated_at": "2026-07-26",
-            "status": "active",
-            "rule": {},
-        }
-        new = {
-            "id": "new-rule",
-            "source": "new evidence",
-            "applicable_versions": "new",
-            "updated_at": "2026-07-27",
-            "status": "active",
-            "rule": {},
-        }
-        write_knowledge(
-            self.knowledge, {"known-failure-signatures": [old, new]}
-        )
-        curate.deprecate_entry(
-            "old-rule",
-            superseded_by="new-rule",
-            reason="New transport supersedes it.",
-            knowledge_dir=self.knowledge,
-            now=NOW,
-        )
-        entries = {entry["id"]: entry for entry in self.formal_entries()}
-        self.assertEqual(entries["old-rule"]["status"], "deprecated")
-        self.assertEqual(
-            entries["old-rule"]["rule"]["deprecation"]["superseded_by"],
-            "new-rule",
-        )
 
 
 CONCRETE_ENVIRONMENT = {
@@ -393,9 +156,15 @@ class V2CurationTests(unittest.TestCase):
             {**CONCRETE_ENVIRONMENT, "model": "unknown"}
         )
         self.assertEqual(scope["soc"], {"values": ["Ascend910_93"]})
+        self.assertEqual(scope["model"], {"range": {"min": None, "max": None}})
         self.assertTrue(curate.v2.is_unresolved(scope["model"]))
         self.assertNotIn("any", scope["model"])
+        self.assertNotIn("unresolved", scope["model"])
         self.assertIn("model", [item["dimension"] for item in pending])
+        self.assertEqual(
+            next(item["needs"] for item in pending if item["dimension"] == "model"),
+            curate.v2.unresolved_needs("model"),
+        )
 
     def test_promotion_lands_unverified_with_named_gaps(self) -> None:
         result = self.promote()
@@ -410,6 +179,31 @@ class V2CurationTests(unittest.TestCase):
         )
         # 'high' candidate confidence cannot survive into an unverified entry.
         self.assertEqual(entry["confidence"], "low")
+        for item in result["needs_human_input"]:
+            self.assertEqual(item["needs"], curate.v2.unresolved_needs(item["dimension"]))
+            self.assertEqual(
+                entry["scope"][item["dimension"]],
+                {"range": {"min": None, "max": None}},
+            )
+
+    def test_promote_writes_a_document_the_package_validator_accepts(self) -> None:
+        # Capture stamps first_seen from the real clock; the frozen NOW used
+        # by other tests is earlier than that and the package refuses
+        # first_seen after updated_at. Let promote use wall-clock time.
+        result = self.promote(now=None)
+        self.assertEqual(result["status"], "passed")
+        completed = subprocess.run(
+            [sys.executable, "-m", "vaws_knowledge", "validate", str(self.knowledge)],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(
+            completed.returncode,
+            0,
+            completed.stdout + completed.stderr,
+        )
 
     def test_unfollowable_evidence_is_dropped_and_reported(self) -> None:
         candidate_id = self.capture(

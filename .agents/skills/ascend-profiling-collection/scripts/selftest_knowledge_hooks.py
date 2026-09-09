@@ -37,44 +37,77 @@ from collect_torch_profile_case import (  # noqa: E402
     knowledge_preflight_advisories,
 )
 
+ROOT = Path(__file__).resolve().parents[4]
+LIB = ROOT / ".agents" / "lib"
+if str(LIB) not in sys.path:
+    sys.path.insert(0, str(LIB))
+
+from vaws_venv import ensure_workspace_interpreter  # noqa: E402
+
+ensure_workspace_interpreter(repo_root=ROOT)
+
+import vaws_knowledge_v2 as v2  # noqa: E402
+
 KIND_FILES = {
-    "version-compatibility.yaml": "version-compatibility",
-    "model-capabilities.yaml": "model-capabilities",
-    "parallelism-compatibility.yaml": "parallelism-compatibility",
-    "backend-constraints.yaml": "backend-constraints",
-    "validation-rules.yaml": "validation-rules",
-    "known-failure-signatures.yaml": "known-failure-signatures",
+    "known-failure-signatures.v2.yaml": "known-failure-signatures",
+    "model-capabilities.v2.yaml": "model-capabilities",
 }
 
-MODEL_ENTRY = {
-    "id": "model-demomodel-7b",
-    "status": "active",
-    "source": "selftest fixture",
-    "applicable_versions": "selftest-only",
-    "updated_at": "2026-09-03",
-    "rule": {
-        "summary": "DemoModel-7B: 40-layer test model; verified tp2 enforce_eager",
-        "expected_layers": 40,
-        "fingerprints": ["demomodel-7b"],
-        "verified_configs": [{"tp": 2, "mode": "enforce_eager"}],
-    },
-}
 
-FAILURE_ENTRY = {
-    "id": "demo-gloo-hostname",
-    "status": "active",
-    "source": "selftest fixture",
-    "applicable_versions": "selftest-only",
-    "updated_at": "2026-09-03",
-    "rule": {
-        "summary": "gloo init fails when the container hostname is missing from /etc/hosts",
-        "symptom": "gloo makeDeviceForHostname name or service not known",
-        "root_cause": "fresh container lacks its hostname in /etc/hosts",
-        "resolution": "add 127.0.0.1 <hostname> to /etc/hosts before serve_start",
-        "avoidance": "check /etc/hosts before debugging gloo env vars",
-        "fingerprints": ["gloo makedeviceforhostname", "name or service not known hostname"],
-    },
-}
+def _scope(**values: str) -> dict:
+    scope = {name: {"range": {"min": None, "max": None}} for name in v2.SCOPE_DIMENSIONS}
+    for name, value in values.items():
+        scope[name] = {"values": [value]}
+    return scope
+
+
+def _v2_entry(*, kind: str, slug: str, summary: str, fingerprints: list[str], resolution: str) -> dict:
+    return v2.with_content_hash(
+        {
+            "uuid": v2.derived_uuid("owner/fork", kind, slug),
+            "slug": slug,
+            "content_hash": "sha256:" + "0" * 64,
+            "status": "unverified",
+            "confidence": "low",
+            "scope": _scope(component="profiling"),
+            "provenance": {
+                "contributor": "submitter",
+                "origin_repo": "owner/fork",
+                "submitted_at": "2026-09-03",
+                "redaction_profile": "r2",
+            },
+            "lifecycle": {
+                "first_seen": "2026-09-03",
+                "updated_at": "2026-09-03",
+                "superseded_by": None,
+                "resolved_by": None,
+            },
+            "rule": {
+                "summary": summary,
+                "symptom": summary,
+                "root_cause": "recorded for the test fixture",
+                "resolution": resolution,
+                "fingerprints": fingerprints,
+            },
+        }
+    )
+
+
+MODEL_ENTRY = _v2_entry(
+    kind="model-capabilities",
+    slug="model-demomodel-7b",
+    summary="DemoModel-7B: 40-layer test model; verified tp2 enforce_eager",
+    fingerprints=["demomodel-7b"],
+    resolution="Use the recorded tp2 enforce_eager configuration.",
+)
+
+FAILURE_ENTRY = _v2_entry(
+    kind="known-failure-signatures",
+    slug="demo-gloo-hostname",
+    summary="gloo init fails when the container hostname is missing from /etc/hosts",
+    fingerprints=["gloo makedeviceforhostname", "name or service not known hostname"],
+    resolution="add 127.0.0.1 <hostname> to /etc/hosts before serve_start",
+)
 
 _FAILURES: list[str] = []
 
@@ -89,13 +122,14 @@ def check(label: str, cond: bool, detail: str = "") -> None:
 def write_knowledge_dir(root: Path, entries_by_kind: dict[str, list[dict]]) -> Path:
     root.mkdir(parents=True, exist_ok=True)
     for filename, kind in KIND_FILES.items():
-        payload = {
-            "schema_version": 1,
+        document = {
+            "schema_version": 2,
             "kind": kind,
+            "layer": "unverified",
             "updated_at": "2026-09-03",
             "entries": entries_by_kind.get(kind, []),
         }
-        (root / filename).write_text(json.dumps(payload), encoding="utf-8")
+        v2.write_document(root / filename, document, context=v2.PROJECT_LAYER)
     return root
 
 

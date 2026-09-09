@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Validate all shared workspace knowledge documents.
 
-Covers both generations in ``.agents/knowledge/``: v1 ``<kind>.yaml`` and
-federated v2 ``<kind>.v2.yaml``. Also reports the redaction posture of the
-project layer, split by severity:
+Covers federated v2 ``<kind>.v2.yaml`` documents in ``.agents/knowledge/``.
+Also reports the redaction posture of the project layer, split by severity:
 
 - ``block`` findings (addresses, hostnames, user paths, secrets) fail
   validation — they must not be in a tracked file at all;
@@ -33,7 +32,7 @@ ensure_workspace_interpreter(repo_root=ROOT)
 import vaws_knowledge_v2 as v2  # noqa: E402
 import vaws_redaction as redaction  # noqa: E402
 from vaws_knowledge.canonical import content_hash as commons_content_hash  # noqa: E402
-from vaws_knowledge_v1 import KnowledgeError, validate_knowledge_dir  # noqa: E402
+from vaws_knowledge_service import KnowledgeError  # noqa: E402
 
 
 def redaction_report(knowledge_dir: Path) -> dict[str, Any]:
@@ -60,11 +59,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
     try:
-        files = validate_knowledge_dir(args.knowledge_dir)
-    except KnowledgeError as exc:
+        files = sorted(path.name for path, _kind in v2.iter_documents(args.knowledge_dir))
+        v2_entries, problems = v2.load_entries(args.knowledge_dir)
+        if problems:
+            raise KnowledgeError("\n".join(problems))
+    except (KnowledgeError, v2.KnowledgeV2Error) as exc:
         print(json.dumps({"status": "failed", "error": str(exc)}))
         return 1
-    v2_entries, _problems = v2.load_entries(args.knowledge_dir)
     unresolved = {
         str(entry.get("slug")): v2.unresolved_dimensions(entry)
         for entry in v2_entries
@@ -87,8 +88,7 @@ def main(argv: list[str] | None = None) -> int:
                 "status": "passed",
                 "knowledge_dir": str(args.knowledge_dir.resolve()),
                 "files": files,
-                "v1_documents": [name for name in files if not name.endswith(v2.V2_SUFFIX)],
-                "v2_documents": [name for name in files if name.endswith(v2.V2_SUFFIX)],
+                "v2_documents": files,
                 "v2_entries": len(v2_entries),
                 "entries_awaiting_human_coordinate": unresolved,
                 "redaction": redaction_report(args.knowledge_dir),

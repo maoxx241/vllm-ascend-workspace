@@ -1,13 +1,13 @@
 {
   "version": 1,
-  "doc": "docs/repo-boundaries.md",
+  "doc": "docs/target-state.md",
   "checker": ".agents/scripts/repo_boundary_check.py",
   "format_note": "JSON, not YAML, so the guard stays stdlib-only and can run in every existing CI job without a pip install step.",
   "scan": {
     "include_suffixes": [
       ".py"
     ],
-    "scan_scope_note": "Only Python is scanned for violations. Markdown/config mentions are inventoried by hand in docs/repo-boundaries.md; they carry no import-time coupling.",
+    "scan_scope_note": "Only Python is scanned for violations. Markdown/config mentions are inventoried by hand in docs/target-state.md; they carry no import-time coupling.",
     "skip_roots": [
       "vllm",
       "vllm-ascend",
