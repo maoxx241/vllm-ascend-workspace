@@ -33,19 +33,18 @@ if str(LIB_DIR) not in sys.path:
     sys.path.insert(0, str(LIB_DIR))
 
 from vaws_local_state import allocate_run_dir  # noqa: E402
-from vaws_remote_toolbox import (  # noqa: E402
+from vaws_remote_dev import ssh_argv, ssh_exec, ssh_stream as remote_ssh_stream  # noqa: E402
+from vaws_remote_target import (  # noqa: E402
     SshEndpoint,
     container_endpoint_from_record,
     emit_progress as _lib_emit_progress,
     print_json as _lib_print_json,
-    ssh_exec,
 )
 from vaws_session_state import (  # noqa: E402
     SessionStateError,
     load_session_lookup,
     session_record_for_execution,
 )
-from vaws_ssh import base_ssh_options  # noqa: E402
 
 ANALYSIS_STATE_DIR = ROOT / ".vaws-local" / "profiling-analysis" / "runs"
 PROGRESS_SENTINEL = "__VAWS_PROFILE_ANALYSIS_PROGRESS__="
@@ -208,7 +207,7 @@ FAST_PULL_PATHS = (
 
 
 # ---------------------------------------------------------------------------
-# SSH endpoint (SshEndpoint itself is imported from vaws_remote_toolbox)
+# SSH endpoint (SshEndpoint itself is imported from vaws_remote_target)
 # ---------------------------------------------------------------------------
 
 def get_machine_alias(machine: dict[str, Any]) -> str:
@@ -263,25 +262,13 @@ def print_json(data: dict[str, Any]) -> None:
 # ---------------------------------------------------------------------------
 # Remote command execution
 #
-# ``ssh_exec`` is imported from vaws_remote_toolbox (bounded connect phase,
-# wall-clock timeout mapped to rc=255). ``_ssh_base_cmd`` stays local because
-# ``ssh_stream`` adds ServerAlive keepalive options for long-running streams
-# (and the timeout regression tests patch it).
+# ``ssh_exec`` is the short multiplexed path. ``ssh_stream`` uses
+# ``Endpoint.for_long_stream`` + ``run_stream``. Tests that need a local
+# stand-in patch ``_ssh_base_cmd``.
 # ---------------------------------------------------------------------------
 
 def _ssh_base_cmd(endpoint: SshEndpoint) -> list[str]:
-    # mux=False: this builder serves ssh_stream's hour-scale sessions, and a
-    # muxed channel can outlive the remote side without noticing (observed:
-    # remote analyze completed, mux master alive, session client hung until
-    # the local timeout). Same failure class as the collection tunnel.
-    return [
-        "ssh",
-        *base_ssh_options(connect_timeout=SSH_CONNECT_TIMEOUT_SECONDS, mux=False),
-        "-o", "ServerAliveInterval=30",
-        "-o", "ServerAliveCountMax=10",
-        "-p", str(endpoint.port),
-        endpoint.destination(),
-    ]
+    return ssh_argv(endpoint, long_stream=True, connect_timeout_s=SSH_CONNECT_TIMEOUT_SECONDS)
 
 
 def ssh_stream(
@@ -293,78 +280,16 @@ def ssh_stream(
 ) -> int:
     """Run a remote command, streaming stdout/stderr to local stderr.
 
-    Returns the remote exit code. Useful for long-running ``analyze.py`` runs
-    where users want to see stage progress live.
-
-    Silent-hang handling: ``timeout`` is enforced two ways at once. First, the
-    remote command is wrapped in ``timeout --preserve-status <s>s bash -c …``
-    so an unresponsive remote process is killed at the source even if it
-    stops producing output. Second, the local reader uses ``select.select``
-    with a small slice so wall-clock timeouts are honoured immediately even
-    when stdout pipes through a slow buffer.
+    Returns the remote exit code. Transport, keepalive, and the dual timeout
+    live in ``vaws-remote-dev`` ``run_stream``.
     """
-    import select
-
-    remote_payload = script
-    if timeout is not None and timeout > 0:
-        # Add a small grace margin (5 s) so the remote-side ``timeout`` fires
-        # first and exits with a useful message before the local killer takes
-        # over. We still keep ``--preserve-status`` to surface the wrapped
-        # command's real exit code on success.
-        margin = max(int(timeout) - 5, 1)
-        remote_payload = (
-            f"timeout --preserve-status {margin}s bash -lc "
-            f"{shlex.quote(script)}"
-        )
-
-    cmd = [*_ssh_base_cmd(endpoint), "bash", "-c", shlex.quote(remote_payload)]
-    proc = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1,
+    return remote_ssh_stream(
+        endpoint,
+        script,
+        forward_prefix=forward_prefix,
+        timeout=timeout,
+        connect_timeout=SSH_CONNECT_TIMEOUT_SECONDS,
     )
-    assert proc.stdout is not None
-    fd = proc.stdout.fileno()
-    started = time.time()
-    deadline = started + timeout if timeout is not None else None
-    try:
-        while True:
-            if deadline is not None:
-                remaining = deadline - time.time()
-                if remaining <= 0:
-                    proc.kill()
-                    raise TimeoutError(
-                        f"remote command exceeded {timeout}s (no output for the wall-clock window)"
-                    )
-                # Slice the select wait so we react to deadline promptly.
-                wait = min(remaining, 5.0)
-            else:
-                wait = 5.0
-            ready, _, _ = select.select([fd], [], [], wait)
-            if ready:
-                line = proc.stdout.readline()
-                if not line:
-                    break
-                sys.stderr.write(
-                    forward_prefix + line if not line.startswith(forward_prefix) else line
-                )
-                sys.stderr.flush()
-            else:
-                # No data this slice; loop and re-check deadline. If the
-                # process has already exited we'd see eof on next readline.
-                if proc.poll() is not None:
-                    # Drain anything still buffered.
-                    remainder = proc.stdout.read()
-                    if remainder:
-                        sys.stderr.write(forward_prefix + remainder)
-                        sys.stderr.flush()
-                    break
-        return proc.wait()
-    finally:
-        if proc.poll() is None:
-            proc.terminate()
 
 
 # ---------------------------------------------------------------------------
@@ -373,13 +298,7 @@ def ssh_stream(
 
 def _ssh_pipe_cmd(endpoint: SshEndpoint, remote_cmd: str) -> list[str]:
     """SSH command that runs a remote shell snippet, suitable for tar piping."""
-    return [
-        "ssh",
-        *base_ssh_options(),
-        "-p", str(endpoint.port),
-        endpoint.destination(),
-        remote_cmd,
-    ]
+    return [*ssh_argv(endpoint), remote_cmd]
 
 
 def sync_to_remote(

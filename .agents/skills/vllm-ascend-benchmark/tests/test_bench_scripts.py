@@ -151,17 +151,17 @@ class BenchEnvExportTests(unittest.TestCase):
         )
         captured = {}
 
-        def fake_run(cmd, **kwargs):
-            captured["cmd"] = cmd
+        def fake_ssh(endpoint, script, **kwargs):
+            captured["script"] = script
             return subprocess.CompletedProcess(
-                cmd, 0, stdout='{"output_throughput": 1.0}', stderr="",
+                ["ssh"], 0, stdout='{"output_throughput": 1.0}', stderr="",
             )
 
-        with mock.patch.object(_common.subprocess, "run", side_effect=fake_run):
+        with mock.patch.object(_common, "ssh_exec", side_effect=fake_ssh):
             result = _common.run_bench_on_remote(
                 cfg, "http://127.0.0.1:30001", "m", "10.0.0.1", 2222,
             )
-        script = " ".join(captured["cmd"])
+        script = captured["script"]
         self.assertIn("export PYTHONPATH=", script)
         self.assertIn("export VLLM_VERSION=", script)
         self.assertEqual(result["output_throughput"], 1.0)
@@ -170,15 +170,15 @@ class BenchEnvExportTests(unittest.TestCase):
         cfg = _common.BenchConfig(session_id="s", model="/m")
         captured = {}
 
-        def fake_run(cmd, **kwargs):
-            captured["cmd"] = cmd
+        def fake_ssh(endpoint, script, **kwargs):
+            captured["script"] = script
             return subprocess.CompletedProcess(
-                cmd, 0, stdout='{"output_throughput": 1.0}', stderr="",
+                ["ssh"], 0, stdout='{"output_throughput": 1.0}', stderr="",
             )
 
-        with mock.patch.object(_common.subprocess, "run", side_effect=fake_run):
+        with mock.patch.object(_common, "ssh_exec", side_effect=fake_ssh):
             _common.run_bench_on_remote(cfg, "http://127.0.0.1:30001", "m", "10.0.0.1", 2222)
-        self.assertNotIn("export PYTHONPATH=", " ".join(captured["cmd"]))
+        self.assertNotIn("export PYTHONPATH=", captured["script"])
 
 
 class FixedDatasetArgsTests(unittest.TestCase):

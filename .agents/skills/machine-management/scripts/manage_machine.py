@@ -33,7 +33,7 @@ _LIB_DIR = pathlib.Path(__file__).resolve().parents[4] / ".agents" / "lib"
 if str(_LIB_DIR) not in sys.path:
     sys.path.insert(0, str(_LIB_DIR))
 
-from vaws_ssh import control_master_options  # noqa: E402
+from vaws_remote_dev import ssh_argv  # noqa: E402
 
 
 IMAGE_REGISTRY_NJU = "quay.nju.edu.cn/ascend/vllm-ascend"
@@ -760,23 +760,34 @@ def ssh_command(
     extra_options: Sequence[str] = (),
     identity_file: pathlib.Path | None = None,
 ) -> list[str]:
-    command = [
-        "ssh",
-        "-o",
-        f"BatchMode={'yes' if batch_mode else 'no'}",
-        "-o",
-        "StrictHostKeyChecking=accept-new",
-        "-o",
-        "LogLevel=ERROR",
-        "-o",
-        "ConnectTimeout=10",
-        *control_master_options(),
-    ]
-    if identity_file is not None:
-        command.extend(["-i", str(identity_file), "-o", "IdentitiesOnly=yes"])
+    if not batch_mode:
+        # remote-dev always uses BatchMode=yes. Interactive password bootstrap
+        # has no package equivalent; keep a local interactive argv and do not
+        # attach it to a ControlMaster.
+        command = [
+            "ssh",
+            "-o",
+            "BatchMode=no",
+            "-o",
+            "StrictHostKeyChecking=accept-new",
+            "-o",
+            "LogLevel=ERROR",
+            "-o",
+            "ConnectTimeout=10",
+        ]
+        if identity_file is not None:
+            command.extend(["-i", str(identity_file), "-o", "IdentitiesOnly=yes"])
+        for option in extra_options:
+            command.extend(["-o", option])
+        command.extend(["-p", str(target.port), f"{target.user}@{target.host}"])
+        return command
+    command = ssh_argv(
+        target,
+        connect_timeout_s=10,
+        identity_file=str(identity_file) if identity_file is not None else None,
+    )
     for option in extra_options:
         command.extend(["-o", option])
-    command.extend(["-p", str(target.port), f"{target.user}@{target.host}"])
     return command
 
 

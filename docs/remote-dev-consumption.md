@@ -5,7 +5,7 @@ Status: current
 The remote development substrate used to live in this repository at
 `.remote-dev/`. It is now the public package
 [`vaws-remote-dev`](https://github.com/vllm-ascend-workspace/remote-dev)
-(`v0.1.0`, locked by `uv.lock`). This document is the consumer-side
+(`v0.2.0`, locked by `uv.lock`). This document is the consumer-side
 contract.
 
 Phase 1 of the sequenced plan recorded in [target-state.md](target-state.md).
@@ -67,3 +67,18 @@ from the package; there is no `remote_dev.endpoint`.
 
 The local launcher `.agents/scripts/remote_dev.py` is deleted so
 `import remote_dev` resolves to the package.
+
+## 6. Skill transport
+
+Skills do not construct SSH options. They call `.agents/lib/vaws_remote_dev.py`:
+
+| Call | Package API | Connection |
+|---|---|---|
+| Short command | `ssh_exec` → `run_script` | Default multiplexed connection |
+| Long-lived stream | `ssh_stream` → `Endpoint.for_long_stream()` + `run_stream` | Independent connection (`ControlMaster=no`) plus keepalives |
+| Composed argv only | `ssh_argv(..., long_stream=True)` | Same independent options; used when a skill must append `-N -L` |
+
+`run_stream` refuses a multiplexed endpoint (`RemoteExecutionError`). Do not
+pass `ssh_mux=True` for a stream. If the package is missing or older than
+v0.2.0, `require_transport()` fails and names `uv sync` as the remedy. There
+is no fallback to raw `ssh`.

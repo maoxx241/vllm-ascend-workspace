@@ -18,9 +18,9 @@ LIB_DIR = ROOT / ".agents" / "lib"
 if str(LIB_DIR) not in sys.path:
     sys.path.insert(0, str(LIB_DIR))
 
-from vaws_remote_toolbox import ascend_env_preamble  # noqa: E402
+from vaws_remote_dev import ssh_exec  # noqa: E402
+from vaws_remote_target import SshEndpoint, ascend_env_preamble  # noqa: E402
 from vaws_session_state import load_session_lookup, session_benchmark_dir  # noqa: E402
-from vaws_ssh import base_ssh_options  # noqa: E402
 from vaws_validate import require_env_name  # noqa: E402
 
 SERVING_SCRIPTS = ROOT / ".agents" / "skills" / "vllm-ascend-serving" / "scripts"
@@ -661,16 +661,12 @@ def ssh_run_script(
     timeout: int = 300,
 ) -> subprocess.CompletedProcess:
     """Run an arbitrary bash script inside the session container over SSH."""
-    import shlex
-
-    ssh_cmd = [
-        "ssh",
-        *base_ssh_options(),
-        "-p", str(container_port),
-        f"root@{container_ip}",
-        "bash", "-c", shlex.quote(script),
-    ]
-    return subprocess.run(ssh_cmd, capture_output=True, text=True, timeout=timeout)
+    return ssh_exec(
+        SshEndpoint(host=container_ip, port=container_port, user="root"),
+        script,
+        check=False,
+        timeout=timeout,
+    )
 
 
 def _git_ref_fetch_checkout(repo_dir: str, ref: str, branch: str) -> str:
@@ -753,7 +749,7 @@ def remote_align_source(
 def _ascend_env_preamble() -> str:
     """Shell preamble that sources the Ascend CANN environment.
 
-    Canonical form lives in ``vaws_remote_toolbox.ascend_env_preamble``; the
+    Canonical form lives in ``vaws_remote_target.ascend_env_preamble``; the
     trailing newline keeps this prefix concatenation-safe for the one-line
     remote scripts below (the historical copy was a ``; ``-terminated
     one-liner — semantically identical, differently formatted).
@@ -794,16 +790,13 @@ def run_bench_on_remote(
         + f"cd /tmp && {bench_cmd} 2>&1 && cat /tmp/{result_filename}"
     )
 
-    ssh_cmd = [
-        "ssh",
-        *base_ssh_options(),
-        "-p", str(container_port),
-        f"root@{container_ip}",
-        "bash", "-c", shlex.quote(remote_script),
-    ]
-
     emit_progress("bench_run", f"running vllm bench serve on {target_token}")
-    proc = subprocess.run(ssh_cmd, capture_output=True, text=True, timeout=1200)
+    proc = ssh_exec(
+        SshEndpoint(host=container_ip, port=container_port, user="root"),
+        remote_script,
+        check=False,
+        timeout=1200,
+    )
 
     if proc.returncode != 0:
         raise RuntimeError(
@@ -1269,14 +1262,12 @@ printf "remaining=%%s\n" "$(ps -eo pid=,comm= | awk -v re="$match_re" '$1!=1 && 
 exit 0
 ''' % (_VLLM_STALE_COMM_RE, action)
 
-    ssh_cmd = [
-        "ssh",
-        *base_ssh_options(),
-        "-p", str(container_port),
-        f"root@{container_ip}",
-        "bash", "-c", shlex.quote(remote_script),
-    ]
-    proc = subprocess.run(ssh_cmd, capture_output=True, text=True, timeout=120)
+    proc = ssh_exec(
+        SshEndpoint(host=container_ip, port=container_port, user="root"),
+        remote_script,
+        check=False,
+        timeout=120,
+    )
     out = proc.stdout or ""
     matched = ""
     remaining = ""

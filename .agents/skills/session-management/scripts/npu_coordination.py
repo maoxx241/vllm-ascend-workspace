@@ -73,7 +73,7 @@ def resolve_target(args: argparse.Namespace) -> tuple[str, LocalEndpoint, dict[s
             "host": {"host": endpoint.host, "port": endpoint.port, "user": endpoint.user},
         }
 
-    from vaws_remote_toolbox import resolve_remote_target
+    from vaws_remote_target import resolve_remote_target
 
     target = resolve_remote_target(
         machine=args.machine,
@@ -132,24 +132,15 @@ def ssh_execute(
     *,
     timeout: float,
 ) -> subprocess.CompletedProcess[str]:
-    cmd = [
-        "ssh",
-        "-T",
-        "-n",
-        "-o",
-        "BatchMode=yes",
-        "-o",
-        "StrictHostKeyChecking=accept-new",
-        "-o",
-        "LogLevel=ERROR",
-        "-p",
-        str(endpoint.port),
-        endpoint.destination(),
-        "bash",
-        "-c",
-        shlex.quote(command),
-    ]
-    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False)
+    from vaws_remote_dev import ssh_exec
+    from vaws_remote_target import SshEndpoint
+
+    return ssh_exec(
+        SshEndpoint(host=endpoint.host, port=endpoint.port, user=endpoint.user),
+        command,
+        check=False,
+        timeout=timeout,
+    )
 
 
 def add_target_arguments(parser: argparse.ArgumentParser) -> None:

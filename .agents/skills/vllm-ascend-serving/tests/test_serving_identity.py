@@ -464,28 +464,41 @@ class SshTimeoutTests(unittest.TestCase):
         return _common.SshEndpoint(host="192.0.2.1", port=22)
 
     def test_ssh_exec_passes_connect_and_subprocess_timeouts(self):
-        with mock.patch.object(
-            _common.subprocess, "run",
-            return_value=SimpleNamespace(returncode=0, stdout="", stderr=""),
-        ) as run:
+        argv = _common._ssh_base_cmd(self.endpoint())
+        self.assertIn(f"ConnectTimeout={_common.SSH_CONNECT_TIMEOUT_SECONDS}", " ".join(argv))
+        captured: dict[str, object] = {}
+        original = _common.remote_ssh_exec
+
+        def fake_exec(endpoint, script, **kwargs):
+            captured["timeout"] = kwargs.get("timeout")
+            captured["connect_timeout"] = kwargs.get("connect_timeout")
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        try:
+            _common.remote_ssh_exec = fake_exec
             _common.ssh_exec(self.endpoint(), "true", check=False)
-        self.assertEqual(run.call_args.kwargs["timeout"], _common.SSH_EXEC_DEFAULT_TIMEOUT_SECONDS)
-        cmd = run.call_args.args[0]
-        self.assertIn(f"ConnectTimeout={_common.SSH_CONNECT_TIMEOUT_SECONDS}", cmd)
+        finally:
+            _common.remote_ssh_exec = original
+        self.assertEqual(captured["timeout"], _common.SSH_EXEC_DEFAULT_TIMEOUT_SECONDS)
 
     def test_ssh_exec_timeout_is_an_unknown_result(self):
-        with mock.patch.object(
-            _common.subprocess, "run",
-            side_effect=subprocess.TimeoutExpired(cmd="ssh", timeout=7),
-        ):
+        original = _common.remote_ssh_exec
+
+        def timed_out(endpoint, script, **kwargs):
+            result = SimpleNamespace(returncode=255, stdout="", stderr="ssh_exec timed out after 7s")
+            if kwargs.get("check", True):
+                raise RuntimeError(f"remote command failed (rc=255):\nstderr: {result.stderr}")
+            return result
+
+        try:
+            _common.remote_ssh_exec = timed_out
             result = _common.ssh_exec(self.endpoint(), "true", check=False, timeout=7)
-        self.assertEqual(result.returncode, 255)
-        self.assertIn("timed out", result.stderr)
-        with mock.patch.object(
-            _common.subprocess, "run",
-            side_effect=subprocess.TimeoutExpired(cmd="ssh", timeout=7),
-        ), self.assertRaisesRegex(RuntimeError, "rc=255"):
-            _common.ssh_exec(self.endpoint(), "true", check=True, timeout=7)
+            self.assertEqual(result.returncode, 255)
+            self.assertIn("timed out", result.stderr)
+            with self.assertRaisesRegex(RuntimeError, "rc=255"):
+                _common.ssh_exec(self.endpoint(), "true", check=True, timeout=7)
+        finally:
+            _common.remote_ssh_exec = original
 
     def test_run_parity_timeout_kills_child(self):
         class FakeProc:

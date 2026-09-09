@@ -262,7 +262,7 @@ threshold or field-weighted scoring would cut noise. Deferred because
 - `resolve_execution_target` exists in three near-copies
   (analysis `_common.py`, serving `_common.py` delegates to lib,
   memory-profiling `_common.py`). Converge analysis + memory-profiling
-  onto `.agents/lib/vaws_remote_toolbox.py` (`resolve_remote_target`).
+  onto `.agents/lib/vaws_remote_target.py` (`resolve_remote_target`).
 - tar-over-ssh sync primitives + `ssh_stream` + `remote_python_with_module`
   in analysis `_common.py` are generic; move to lib when a second
   consumer appears.

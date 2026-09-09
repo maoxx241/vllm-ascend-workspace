@@ -20,7 +20,7 @@ _LIB_DIR = Path(__file__).resolve().parents[4] / '.agents' / 'lib'
 if str(_LIB_DIR) not in sys.path:
     sys.path.insert(0, str(_LIB_DIR))
 
-from vaws_ssh import base_ssh_options  # noqa: E402
+from vaws_remote_dev import ssh_argv, ssh_exec as remote_ssh_exec, ssh_run_bytes  # noqa: E402
 
 WORKSPACE_ID_PATTERN = re.compile(r'[^A-Za-z0-9._-]+')
 STATE_SUBDIR = Path('.vaws-local/remote-code-parity')
@@ -235,13 +235,7 @@ def quoted(script: str) -> str:
 
 
 def _ssh_base_cmd(endpoint: SshEndpoint) -> list[str]:
-    return [
-        'ssh',
-        *base_ssh_options(),
-        '-p',
-        str(endpoint.port),
-        endpoint.destination(),
-    ]
+    return ssh_argv(endpoint)
 
 
 def parse_progress_event(line: str) -> dict[str, Any] | None:
@@ -263,8 +257,8 @@ def ssh_exec(
     check: bool = True,
     capture_output: bool = True,
 ) -> subprocess.CompletedProcess[str]:
-    cmd = [*_ssh_base_cmd(endpoint), 'bash', '-c', shlex.quote(script)]
-    return run(cmd, check=check, capture_output=capture_output)
+    del capture_output
+    return remote_ssh_exec(endpoint, script, check=check)
 
 
 def ssh_exec_stream(
@@ -274,7 +268,7 @@ def ssh_exec_stream(
     check: bool = True,
     stream_progress: bool = True,
 ) -> SshStreamingResult:
-    cmd = [*_ssh_base_cmd(endpoint), 'bash', '-c', shlex.quote(script)]
+    cmd = [*ssh_argv(endpoint, long_stream=True), 'bash', '-c', shlex.quote(script)]
     proc = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
@@ -370,11 +364,12 @@ def ssh_exec_stream(
 
 def ssh_stream_to_file(endpoint: SshEndpoint, remote_path: str, payload: str) -> None:
     script = f'mkdir -p {quoted(str(Path(remote_path).parent))} && cat > {quoted(remote_path)}'
-    cmd = [*_ssh_base_cmd(endpoint), 'bash', '-c', shlex.quote(script)]
-    result = subprocess.run(cmd, input=payload, text=True, capture_output=True)
+    result = ssh_run_bytes(endpoint, script, stdin=payload.encode())
     if result.returncode != 0:
         raise RuntimeError(
-            f'failed to stream payload to {remote_path}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}'
+            f'failed to stream payload to {remote_path}\n'
+            f'stdout:\n{result.stdout.decode("utf-8", errors="replace")}\n'
+            f'stderr:\n{result.stderr.decode("utf-8", errors="replace")}'
         )
 
 
@@ -383,8 +378,7 @@ def ssh_stream_bytes_to_file(endpoint: SshEndpoint, remote_path: str, payload: b
         f'mkdir -p {quoted(str(Path(remote_path).parent))} && '
         f'head -c {len(payload)} > {quoted(remote_path)}'
     )
-    cmd = [*_ssh_base_cmd(endpoint), 'bash', '-c', shlex.quote(script)]
-    result = subprocess.run(cmd, input=payload, capture_output=True)
+    result = ssh_run_bytes(endpoint, script, stdin=payload)
     if result.returncode != 0:
         raise RuntimeError(
             f'failed to stream binary payload to {remote_path}\n'

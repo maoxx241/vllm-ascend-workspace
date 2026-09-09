@@ -582,7 +582,7 @@ class PolicyContractTests(unittest.TestCase):
     def test_module_ownership_follows_the_file_not_the_policy_text(self) -> None:
         policy = guard.load_policy(POLICY, ROOT)
         ownership = guard.Ownership(policy, ROOT)
-        owner = ownership.subsystem_for_module("vaws_ssh")
+        owner = ownership.subsystem_for_module("vaws_remote_dev")
         self.assertIsNotNone(owner)
         assert owner is not None
         self.assertEqual(owner.id, "scaffold-domain")

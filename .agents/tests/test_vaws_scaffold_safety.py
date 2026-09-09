@@ -17,8 +17,8 @@ LIB_DIR = ROOT / ".agents" / "lib"
 if str(LIB_DIR) not in sys.path:
     sys.path.insert(0, str(LIB_DIR))
 
-import vaws_remote_toolbox as toolbox  # noqa: E402
-from vaws_remote_toolbox import RemoteTarget, SshEndpoint  # noqa: E402
+from vaws_remote_adapters import cleanup  # noqa: E402
+from vaws_remote_target import RemoteTarget, SshEndpoint  # noqa: E402
 from vaws_session_id import normalize_session_id  # noqa: E402
 from vaws_session_state import (  # noqa: E402
     SessionStateError,
@@ -92,48 +92,7 @@ class SessionIdTests(unittest.TestCase):
         self.assertNotEqual(sid_a, sid_b)
 
 
-class RemoteToolboxSafetyTests(unittest.TestCase):
-    def test_job_record_path_stays_under_job_state_dir(self) -> None:
-        valid = toolbox._job_record_path("job-abc_123")
-        self.assertIn(toolbox.JOB_STATE_DIR.resolve(), valid.parents)
-        with self.assertRaises(ValidationError):
-            toolbox._job_record_path("../sessions/leases")
-
-    def test_duplicate_job_id_is_blocked_before_remote_launch(self) -> None:
-        original_dir = toolbox.JOB_STATE_DIR
-        try:
-            with tempfile.TemporaryDirectory() as tmp:
-                toolbox.JOB_STATE_DIR = Path(tmp)  # type: ignore[assignment]
-                target = RemoteTarget(
-                    mode="session",
-                    alias="machine-a",
-                    target_id="sess-abc",
-                    workspace_id="sess-abc",
-                    workspace_root=Path(tmp),
-                    runtime_root="/workspace",
-                    container_name="vaws-test",
-                    container_image="image",
-                    container_endpoint=SshEndpoint("127.0.0.1", 46000),
-                    host_endpoint=SshEndpoint("127.0.0.1", 22),
-                    state_repo_root=Path(tmp),
-                    record={},
-                    session_id="sess-abc",
-                    session_file=Path(tmp) / "session.json",
-                    session={"session_id": "sess-abc"},
-                    leased_devices=[],
-                )
-                toolbox._save_job_record("job-collision", {"job_id": "job-collision", "target": target.to_dict()})
-                payload = toolbox.start_remote_job(target, command="echo should-not-run", job_id="job-collision")
-                self.assertEqual(payload["status"], "blocked")
-                self.assertIn("already exists", payload["error"])
-        finally:
-            toolbox.JOB_STATE_DIR = original_dir  # type: ignore[assignment]
-
-    def test_env_items_validate_before_shell_export(self) -> None:
-        self.assertEqual(toolbox._parse_env_items(["A_B=1"]), {"A_B": "1"})
-        with self.assertRaises(ValidationError):
-            toolbox._parse_env_items(["A-B=1"])
-
+class RemoteAdapterSafetyTests(unittest.TestCase):
     def test_cleanup_leases_only_is_blocked_for_session_target(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = RemoteTarget(
@@ -154,7 +113,7 @@ class RemoteToolboxSafetyTests(unittest.TestCase):
                 session={"session_id": "sess-abc"},
                 leased_devices=[0],
             )
-            payload = toolbox.cleanup(
+            payload = cleanup(
                 target,
                 dry_run=True,
                 jobs=False,
@@ -167,16 +126,6 @@ class RemoteToolboxSafetyTests(unittest.TestCase):
                 force=False,
             )
             self.assertEqual(payload["status"], "blocked")
-
-    def test_artifact_manifest_rejects_symlinks(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            target = root / "target.txt"
-            target.write_text("secret\n", encoding="utf-8")
-            link = root / "link.txt"
-            link.symlink_to(target)
-            with self.assertRaises(toolbox.RemoteToolboxError):
-                toolbox._local_manifest(link)
 
 
 class LeaseValidationTests(unittest.TestCase):

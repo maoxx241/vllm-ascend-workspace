@@ -37,7 +37,7 @@ points under `.agents/`:
 | No script attributes a layer. | `envelope_lint.py scan` finds `layer_attribution` in 1 of 107 entry points (the lint itself). |
 | Failure is frequently a bare string. | `.agents/skills/ascend-profiling-collection/scripts/profile_control.py` ends with `{"status": "failed", "error": str(exc)}`. Whether that exception was a bad `--action`, a dead SSH mux, a container without `python3`, or a service that never bound its port is unrecoverable from the payload. |
 | The one existing diagnosis helper is a single-cause guess. | `serve_start.py::diagnose_env_failure` pattern-matches stderr and always concludes "remote Python package version mismatch" with a `parity_sync --force-reinstall` recovery command. It is genuinely useful, and it is also the exact shape of a confident wrong attribution: it cannot say "I do not know". |
-| The shared exec path drops attribution on the floor. | `vaws_remote_toolbox.remote_exec` distinguishes `timeout` from a non-zero exit, but a timeout is reported identically whether SSH never connected, the mux dropped the stream, or the workload hung. `_cli_error` maps *any* unexpected exception to `status: failed` with `target: null`. |
+| The shared exec path drops attribution on the floor. | Thin `remote_exec.py` now prints `remote-dev.result.v1`. A timeout is still reported identically whether SSH never connected, the mux dropped the stream, or the workload hung. Adapter `cli_error` maps *any* unexpected exception to `status: failed` with `target: null`. |
 | Environment identity is captured but not attached to results. | `probe_remote` collects `torch`/`torch_npu`/`vllm`/`vllm_ascend`, CANN version files and `npu-smi` output, and `machine_*` normalizes a SoC token — but none of it appears in a `serve_start`, `bench_run` or `parity_sync` result, so two results cannot be compared and neither can become a knowledge candidate. |
 | Partial success collapses to a boolean. | `bench_run.py` invented `status: "cleanup_failed"` precisely because "the data is good but the service leaked" did not fit `ok`/`failed`. That is the right instinct with no structure to express it. |
 | Nested calls lose their inner result. | `_common.call_json_command` raises `RuntimeError("command failed (rc=…) … stdout=… stderr=…")`, so a child's structured payload is flattened into the parent's error *string*. |
@@ -434,14 +434,14 @@ Migration is per-script and mechanical once the shared helpers land.
 
 **Wave 0 — shared helpers (one change, no behaviour change).**
 Add `envelope_*` helpers next to the existing `print_json` / `emit_progress`
-in `vaws_remote_toolbox`, `vllm-ascend-serving/scripts/_common.py`,
+in `vaws_remote_target`, `vllm-ascend-serving/scripts/_common.py`,
 `vllm-ascend-benchmark/scripts/_common.py`,
 `ascend-profiling-collection/scripts/_common.py` and
 `remote-code-parity/scripts/common.py`. Keep both emitters; nothing switches
 yet.
 
 **Wave 1 — the shared exec and probe path.**
-`vaws_remote_toolbox.remote_exec`, `probe_remote` and `_cli_error`, plus the
+`remote_exec.py` / `remote_probe.py` (thin over vaws-remote-dev) and adapter `cli_error`, plus the
 thin `.agents/scripts/remote_*.py` wrappers that delegate to them. This is the
 highest-value wave: it is where `transport` vs `remote_env` vs
 `remote_workload` is actually distinguishable (SSH exit 255 and no remote

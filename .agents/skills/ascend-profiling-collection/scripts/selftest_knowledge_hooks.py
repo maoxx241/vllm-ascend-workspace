@@ -31,12 +31,6 @@ _SCRIPT_DIR = Path(__file__).resolve().parent
 if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 
-from collect_torch_profile_case import (  # noqa: E402
-    _failure_payload,
-    knowledge_failure_matches,
-    knowledge_preflight_advisories,
-)
-
 ROOT = Path(__file__).resolve().parents[4]
 LIB = ROOT / ".agents" / "lib"
 if str(LIB) not in sys.path:
@@ -45,6 +39,12 @@ if str(LIB) not in sys.path:
 from vaws_venv import ensure_workspace_interpreter  # noqa: E402
 
 ensure_workspace_interpreter(repo_root=ROOT)
+
+from collect_torch_profile_case import (  # noqa: E402
+    _failure_payload,
+    knowledge_failure_matches,
+    knowledge_preflight_advisories,
+)
 
 import vaws_knowledge_v2 as v2  # noqa: E402
 

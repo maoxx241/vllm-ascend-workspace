@@ -124,4 +124,4 @@ skills for domain workflows.
 
 ## Maintenance
 
-When changing a skill, update the whole package together: `SKILL.md`, `scripts/`, `references/`, `agents/`, and other supporting files as applicable. When the change affects shared state, also update `.agents/scripts/workspace_profile.py`, `.agents/lib/vaws_local_state.py`, `.agents/lib/vaws_session_id.py`, `.agents/lib/vaws_session_state.py`, `.agents/lib/vaws_remote_toolbox.py`, and `.agents/lib/vaws_coordinator_launch.py` as applicable.
+When changing a skill, update the whole package together: `SKILL.md`, `scripts/`, `references/`, `agents/`, and other supporting files as applicable. When the change affects shared state, also update `.agents/scripts/workspace_profile.py`, `.agents/lib/vaws_local_state.py`, `.agents/lib/vaws_session_id.py`, `.agents/lib/vaws_session_state.py`, `.agents/lib/vaws_remote_dev.py`, `.agents/lib/vaws_remote_target.py`, and `.agents/lib/vaws_coordinator_launch.py` as applicable.

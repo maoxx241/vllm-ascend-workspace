@@ -30,13 +30,13 @@ from vaws_host_queue_module import load_host_protocol  # noqa: E402
 
 def parse_npu_smi_info(stdout: str) -> dict[str, Any]:
     return load_host_protocol().parse_npu_smi_info(stdout)
-from vaws_remote_toolbox import (  # noqa: E402
+from vaws_remote_dev import ssh_argv, ssh_exec as remote_ssh_exec  # noqa: E402
+from vaws_remote_target import (  # noqa: E402
     SshEndpoint,
     ascend_env_preamble,
     resolve_remote_target,
 )
 from vaws_session_state import session_serving_state_path  # noqa: E402
-from vaws_ssh import base_ssh_options  # noqa: E402
 from vaws_validate import parse_device_csv  # noqa: E402
 
 PROGRESS_SENTINEL = "__VAWS_SERVING_PROGRESS__="
@@ -69,12 +69,7 @@ class ExecutionTarget:
 
 
 def _ssh_base_cmd(endpoint: SshEndpoint) -> list[str]:
-    return [
-        "ssh",
-        *base_ssh_options(connect_timeout=SSH_CONNECT_TIMEOUT_SECONDS),
-        "-p", str(endpoint.port),
-        endpoint.destination(),
-    ]
+    return ssh_argv(endpoint, connect_timeout_s=SSH_CONNECT_TIMEOUT_SECONDS)
 
 
 def ssh_exec(
@@ -84,24 +79,13 @@ def ssh_exec(
     check: bool = True,
     timeout: float | None = SSH_EXEC_DEFAULT_TIMEOUT_SECONDS,
 ) -> subprocess.CompletedProcess[str]:
-    # Serving keeps its own copy so the serving surface stays untouched;
-    # vaws_remote_toolbox.ssh_exec is the equivalent shared implementation
-    # for new code.
-    cmd = [*_ssh_base_cmd(endpoint), "bash", "-c", shlex.quote(script)]
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=timeout)
-    except subprocess.TimeoutExpired as exc:
-        # A timed-out probe is an unknown result (same shape as a lost SSH
-        # connection, rc 255), never proof of remote success or failure.
-        result = subprocess.CompletedProcess(
-            cmd, 255, "", f"ssh_exec timed out after {exc.timeout}s"
-        )
-    if check and result.returncode != 0:
-        raise RuntimeError(
-            f"remote command failed (rc={result.returncode}):\n"
-            f"stderr: {result.stderr[:2000]}"
-        )
-    return result
+    return remote_ssh_exec(
+        endpoint,
+        script,
+        check=check,
+        timeout=timeout,
+        connect_timeout=SSH_CONNECT_TIMEOUT_SECONDS,
+    )
 
 
 # ---------------------------------------------------------------------------
