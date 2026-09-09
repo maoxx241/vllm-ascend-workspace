@@ -17,10 +17,6 @@ is the archive for dated evidence.
 - [npu-fleet-monitor.md](npu-fleet-monitor.md) — local deploy and lifecycle of the standalone vaws-top fleet monitor.
 - [property-testing.md](property-testing.md) — property-based tests for the deterministic cores.
 - [remote-dev-consumption.md](remote-dev-consumption.md) — how this scaffold consumes the installed vaws-remote-dev package.
-- [target-state.md](target-state.md) — the single definition of the post-split end state: axioms, ownership matrix, contracts, deletion inventory, acceptance predicates.
+- [target-state.md](target-state.md) — the single definition of the post-split end state: axioms, ownership matrix, and cross-repository contracts.
 - [tracked-leak-guard.md](tracked-leak-guard.md) — tracked-file leak scanner, hook, and CI.
 - [tracked-path-guard.md](tracked-path-guard.md) — anti-rot guard against dead in-tree paths in tracked docs.
-
-## Ledger
-
-- [audits/split-ledger-2026-09-07.json](audits/split-ledger-2026-09-07.json) — machine-readable split-arrival ledger retained for consumer tests.

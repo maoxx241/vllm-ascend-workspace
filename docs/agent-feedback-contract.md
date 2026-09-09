@@ -25,26 +25,7 @@ that presents as a model bug, where starting from the traceback is the most
 expensive possible route. A result that does not say *which layer* it is
 talking about invites exactly that route.
 
-### What the survey found
-
-Read against a representative spread of the 107 `__main__`-guarded entry
-points under `.agents/`:
-
-| Observation | Evidence |
-|---|---|
-| The output convention is about *placement*, not *content*. | `.agents/README.md`: "Wrapper-style helpers should stream bounded phase progress on `stderr` and keep one final machine-readable JSON payload on `stdout`." Nothing about required fields. |
-| `status` is overloaded and inconsistent across scripts. | At least 14 distinct top-level `status` values appear across `.agents`: `failed` (48 files), `ok` (29), `ready` (11), `blocked` (9), `needs_input` (6), `not_found` (5), `unknown` (5), `needs_repair` (4), `skipped` (4), `timeout` (2), `cancelled` (2), `running` (2), `degraded` (2), plus `cleanup_failed` assigned through a variable in `bench_run.py`. A consumer cannot switch on it, and the values mix outcome, readiness and cause. |
-| No script attributes a layer. | `envelope_lint.py scan` finds `layer_attribution` in 1 of 107 entry points (the lint itself). |
-| Failure is frequently a bare string. | `.agents/skills/ascend-profiling-collection/scripts/profile_control.py` ends with `{"status": "failed", "error": str(exc)}`. Whether that exception was a bad `--action`, a dead SSH mux, a container without `python3`, or a service that never bound its port is unrecoverable from the payload. |
-| The one existing diagnosis helper is a single-cause guess. | `serve_start.py::diagnose_env_failure` pattern-matches stderr and always concludes "remote Python package version mismatch" with a `parity_sync --force-reinstall` recovery command. It is genuinely useful, and it is also the exact shape of a confident wrong attribution: it cannot say "I do not know". |
-| The shared exec path drops attribution on the floor. | Thin `remote_exec.py` now prints `remote-dev.result.v1`. A timeout is still reported identically whether SSH never connected, the mux dropped the stream, or the workload hung. Adapter `cli_error` maps *any* unexpected exception to `status: failed` with `target: null`. |
-| Environment identity is captured but not attached to results. | `probe_remote` collects `torch`/`torch_npu`/`vllm`/`vllm_ascend`, CANN version files and `npu-smi` output, and `machine_*` normalizes a SoC token — but none of it appears in a `serve_start`, `bench_run` or `parity_sync` result, so two results cannot be compared and neither can become a knowledge candidate. |
-| Partial success collapses to a boolean. | `bench_run.py` invented `status: "cleanup_failed"` precisely because "the data is good but the service leaked" did not fit `ok`/`failed`. That is the right instinct with no structure to express it. |
-| Nested calls lose their inner result. | `_common.call_json_command` raises `RuntimeError("command failed (rc=…) … stdout=… stderr=…")`, so a child's structured payload is flattened into the parent's error *string*. |
-| Reproducibility is partial at best. | `remote_exec` records the remote `command` but not the wrapper script it was actually wrapped in; `parity_sync` builds a full low-level argv and only prints it under `--print-derived-args`. In the failure path the exact command is gone. |
-| 12 entry points can corrupt their own `stdout`. | `envelope_lint.py scan` reports `stdout_purity_risk: 12` — plain `print("…")` calls on the JSON channel. |
-
-The closest existing prior art now lives in the extracted
+The closest existing prior art lives in the extracted
 `vllm-ascend-workspace/remote-dev` repository (`core/result.py` and
 `schemas/result.schema.json`): a real result contract with
 `tool`, `invocation_id`, `target`, `outcome`, `status`, `summary`, `preview`,
@@ -413,14 +394,8 @@ envelope on `stdout`, no progress sentinel on `stdout`, and a process exit
 code that agrees with `exit_code`.
 
 The lint emits an envelope itself, so it is both the first conformant entry
-point and a worked example.
-
-Current state of this tree (`scan`, 2026-09-07): **1 of 107 entry points
-conform (0.9%)** — the lint itself. That number is meant to be low; a lint
-that pretended otherwise would be worthless. The useful signal is the
-per-check breakdown: 61.7% already emit JSON on `stdout` and 37.4% already
-keep progress on `stderr`, while 0.9% attribute a layer and 3.7% record
-environment identity.
+point and a worked example. Adoption counts belong to a `scan` run, not to
+this contract.
 
 ## 10. Migration plan
 
@@ -447,8 +422,8 @@ highest-value wave: it is where `transport` vs `remote_env` vs
 `remote_workload` is actually distinguishable (SSH exit 255 and no remote
 output ⇒ `transport`; remote shell ran and the command exited non-zero ⇒
 `remote_workload`; timeout with a remote pid alive ⇒ `remote_workload`,
-timeout with nothing started ⇒ `transport`), and roughly 20 wrappers inherit
-the result for free. `probe_remote` already collects everything
+timeout with nothing started ⇒ `transport`), and the thin `remote_*`
+wrappers inherit the result. `probe_remote` already collects everything
 `environment` needs, so this wave is also where environment identity starts
 flowing.
 
@@ -473,8 +448,8 @@ are mostly `caller` / `tool` / local-state faults and are cheap.
 
 **Wave 5 — enforce.**
 Once each wave lands, raise `envelope_lint.py scan --fail-under` in CI to the
-new floor. Fix the 12 `stdout_purity_risk` scripts on the way through, since
-a plain `print()` breaks the contract regardless of the envelope.
+new floor. Fix scripts that print on the JSON channel on the way through,
+since a plain `print()` breaks the contract regardless of the envelope.
 
 Per-script recipe: build `operation` and `attempt` before doing anything, so
 the failure path already has them; return an envelope from every exit path;

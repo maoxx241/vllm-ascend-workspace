@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""P21: convert remote-dev.result.v1 into envelope parts and children.
+"""Convert remote-dev.result.v1 into envelope parts and children.
 
 The twelve cells are the cross product of the six remote-dev outcomes and
 the two envelope slots. Every converted object is placed in a wrapping

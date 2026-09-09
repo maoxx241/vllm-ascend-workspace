@@ -6,9 +6,8 @@ The remote development substrate used to live in this repository at
 `.remote-dev/`. It is now the public package
 [`vaws-remote-dev`](https://github.com/vllm-ascend-workspace/remote-dev)
 (`v0.3.0`, locked by `uv.lock`). This document is the consumer-side
-contract.
-
-Phase 1 of the sequenced plan recorded in [target-state.md](target-state.md).
+contract. See [target-state.md](target-state.md) for the destination
+this consumption realises.
 
 ## 1. Why a package
 

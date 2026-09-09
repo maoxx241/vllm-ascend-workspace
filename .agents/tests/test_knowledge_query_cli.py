@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""P19: the scaffold knowledge CLI accepts reader coordinates."""
+"""The scaffold knowledge CLI accepts reader coordinates and withholds mismatches."""
 
 from __future__ import annotations
 

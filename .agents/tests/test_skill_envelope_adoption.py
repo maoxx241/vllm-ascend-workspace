@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""P17: the four load-bearing skills emit Result Envelope v1 on stdout.
+"""The four load-bearing skills emit Result Envelope v1 on stdout.
 
 These commands are hermetic: they take the plan/dry-run or local-miss path
 and never start a remote workload.

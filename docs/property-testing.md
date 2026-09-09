@@ -32,9 +32,8 @@ From a standalone `remote-dev` checkout (not the former in-tree remote-dev tests
 python3 -m unittest discover -s tests
 ```
 
-The three `#90` `SubstrateIntegrationTests` need an explicit external
-remote-dev source root. They live in `.agents/tests/test_remote_dev_consumer.py`
-once that extraction lands. From this scaffold root:
+The three `#90` `SubstrateIntegrationTests` live in
+`.agents/tests/test_remote_dev_consumer.py`. From this scaffold root:
 
 ```bash
 uv sync
