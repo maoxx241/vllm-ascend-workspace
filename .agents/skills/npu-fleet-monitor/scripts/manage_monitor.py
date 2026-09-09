@@ -36,7 +36,7 @@ from vaws_local_state import STATE_DIRNAME, shared_inventory_path, shared_worksp
 VAWS_TOP_REPO = "vllm-ascend-workspace/vaws-top"
 # Single version constant: the release tag. The wheel filename below is derived
 # from it so the tag and the wheel version cannot drift apart.
-VAWS_TOP_REF = "v0.1.0"
+VAWS_TOP_REF = "v0.1.1"
 VAWS_TOP_VERSION = VAWS_TOP_REF.removeprefix("v")
 # The console script is named after the repository and the import package uses
 # underscores; derive both so the only literal naming the extracted project is
