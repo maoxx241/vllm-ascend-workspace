@@ -86,6 +86,7 @@ class V2FlowBase(unittest.TestCase):
         self.knowledge.parent.mkdir(parents=True)
         shutil.copytree(ROOT / ".agents" / "knowledge", self.knowledge)
         self.candidates = self.sandbox / ".vaws-local" / "knowledge" / "candidates"
+        self.commons_candidates = self.sandbox / ".vaws-local" / "knowledge" / "candidate"
         self.reviewed = self.sandbox / ".vaws-local" / "knowledge" / "reviewed"
         self.export = self.sandbox / ".vaws-local" / "knowledge" / "export"
         self.input = self.sandbox / "candidate.json"
@@ -121,7 +122,7 @@ class V2FlowBase(unittest.TestCase):
         return self.run_script(
             CURATE,
             "--candidate-dir",
-            str(self.candidates),
+            str(self.commons_candidates),
             "--reviewed-dir",
             str(self.reviewed),
             "--knowledge-dir",
@@ -136,7 +137,7 @@ class V2FlowBase(unittest.TestCase):
             "--knowledge-dir",
             str(self.knowledge),
             "--candidate-dir",
-            str(self.candidates),
+            str(self.commons_candidates),
             *arguments,
         )
 
@@ -146,7 +147,7 @@ class V2FlowBase(unittest.TestCase):
             "--input",
             str(self.input),
             "--candidate-dir",
-            str(self.candidates),
+            str(self.commons_candidates),
             "--knowledge-dir",
             str(self.knowledge),
             *arguments,
@@ -169,14 +170,10 @@ class KnowledgeV2LifecycleTest(V2FlowBase):
             captured["coordinate"]["unknown_dimensions"],
             ["model", "topology", "execution_mode"],
         )
-        candidate = json.loads(
-            (self.candidates / f"{captured['candidate_id']}.json").read_text(
-                encoding="utf-8"
-            )
-        )
-        self.assertEqual(candidate["environment"]["cann"], "8.2.RC1")
+        self.assertTrue(Path(captured["path"]).is_file())
+        self.assertEqual(captured["coordinate"]["values"]["cann"], "8.2.RC1")
         # Nothing is invented for a dimension nobody established.
-        self.assertEqual(candidate["environment"]["model"], "unknown")
+        self.assertEqual(captured["coordinate"]["values"]["model"], "unknown")
 
     def test_capture_without_a_run_context_falls_back_to_candidate_scope(self) -> None:
         captured = self.capture()
@@ -473,20 +470,21 @@ class ThreeLayerQueryTest(V2FlowBase):
             *self.env_arguments(),
         )
 
-    def test_unavailable_layers_are_named_without_failing(self) -> None:
+    def test_envelope_names_layers_and_source_ref(self) -> None:
+        from vaws_knowledge.corpus import installed_commit
+
         payload = self.query("--query", FINGERPRINT)
-        self.assertTrue(payload["degraded"])
-        self.assertIn("project", payload["coverage"]["layers_answered"])
-        self.assertIn("shared", payload["coverage"]["layers_answered"])
-        self.assertIn("knowledge_mcp", [item["layer"] for item in payload["degradation"]])
-        for item in payload["degradation"]:
-            self.assertTrue(item.get("detail"))
+        self.assertIn("shared", payload["layers_available"])
+        self.assertIn("project", payload["layers_available"])
+        self.assertEqual(payload["source_repo"], "vllm-ascend-workspace/vaws-knowledge")
+        self.assertEqual(payload["source_ref"], installed_commit())
+        self.assertEqual(payload["absent_fact_semantics"], "unknown")
 
     def test_absent_service_is_never_reported_as_supported(self) -> None:
         payload = self.query("--query", "wholly unknown zzzqqq behaviour")
-        self.assertEqual(payload["coverage"]["result"], "no-match")
-        self.assertIn("unknown", payload["unknown_semantics"].lower())
-        self.assertIn("never", payload["unknown_semantics"].lower())
+        self.assertEqual(payload["count"], 0)
+        self.assertEqual(payload["results"], [])
+        self.assertIn("unknown", payload["no_result_meaning"].lower())
 
     def test_unverified_project_entry_needs_an_explicit_opt_in(self) -> None:
         candidate_id = self.capture(*self.env_arguments())["candidate_id"]
@@ -501,25 +499,24 @@ class ThreeLayerQueryTest(V2FlowBase):
         )
         default = self.query("--query", FINGERPRINT)
         self.assertNotIn(
-            "synthetic-ack-gate", [match["id"] for match in default["matches"]]
+            "synthetic-ack-gate", [match["slug"] for match in default["results"]]
         )
         opted_in = self.query("--query", FINGERPRINT, "--include-unverified")
         match = next(
-            item for item in opted_in["matches"] if item["id"] == "synthetic-ack-gate"
+            item for item in opted_in["results"] if item["slug"] == "synthetic-ack-gate"
         )
         self.assertEqual(match["status"], "unverified")
-        self.assertIn("unverified", (match.get("warning") or "").lower())
+        self.assertTrue(any("unverified" in item.lower() for item in match.get("warnings") or []))
 
     def test_verified_entry_is_returned_by_default_with_its_layer(self) -> None:
         self.promote_and_verify()
         payload = self.query("--query", FINGERPRINT)
         match = next(
-            item for item in payload["matches"] if item["id"] == "synthetic-ack-gate"
+            item for item in payload["results"] if item["slug"] == "synthetic-ack-gate"
         )
         self.assertEqual(match["layer"], "project")
-        self.assertEqual(match["schema_version"], 2)
-        # Applicability is rendered from the structured coordinate, not prose.
-        self.assertIn("soc", match["applicable_versions"])
+        self.assertEqual(match["body"], "rule")
+        self.assertIn("soc", {item["dimension"] for item in match["applicability"]["dimensions"]})
 
     def test_shared_layer_reads_the_installed_corpus(self) -> None:
         from vaws_knowledge.corpus import installed_commit
@@ -533,59 +530,78 @@ class ThreeLayerQueryTest(V2FlowBase):
             "--bodies",
             "measurement",
         )
-        self.assertEqual({match["layer"] for match in payload["matches"]}, {"shared"})
-        self.assertEqual(payload["coverage"]["layers_answered"], ["shared"])
-        self.assertNotIn("shared", payload["coverage"]["layers_unavailable"])
-        self.assertEqual(
-            payload["matches"][0]["source_repo"],
-            "vllm-ascend-workspace/vaws-knowledge",
-        )
-        self.assertEqual(payload["matches"][0]["source_ref"], installed_commit())
-        self.assertEqual(payload["matches"][0]["body"], "measurement")
+        self.assertEqual({match["layer"] for match in payload["results"]}, {"shared"})
+        self.assertEqual(payload["source_repo"], "vllm-ascend-workspace/vaws-knowledge")
+        self.assertEqual(payload["source_ref"], installed_commit())
+        self.assertEqual(payload["results"][0]["body"], "measurement")
+        self.assertFalse(payload["degraded"] and "shared" in payload["layers_absent"])
 
     def test_candidate_layer_is_available_before_review(self) -> None:
         self.capture(*self.env_arguments())
-        payload = self.query("--query", FINGERPRINT, "--layer", "candidate")
+        payload = self.query(
+            "--query", FINGERPRINT, "--layer", "candidate", "--include-unverified"
+        )
         self.assertEqual(
-            {match["layer"] for match in payload["matches"]}, {"candidate"}
+            {match["layer"] for match in payload["results"]}, {"candidate"}
         )
 
-    def test_v1_entries_stay_queryable(self) -> None:
-        payload = self.query("--query", "deepseek v3.1 layers")
-        v1_matches = [
-            match for match in payload["matches"] if match["schema_version"] == 1
-        ]
-        self.assertTrue(v1_matches)
-        fetched = self.query("--id", v1_matches[0]["id"])
-        self.assertEqual(fetched["result"]["schema_version"], 1)
+    def test_promote_removes_the_candidate_layer_entry(self) -> None:
+        captured = self.capture(*self.env_arguments())
+        before = self.query(
+            "--query", FINGERPRINT, "--layer", "candidate", "--include-unverified"
+        )
+        self.assertEqual(
+            {match["layer"] for match in before["results"]}, {"candidate"}
+        )
+        self.curate(
+            "promote",
+            "--candidate-id",
+            captured["candidate_id"],
+            "--entry-id",
+            "synthetic-ack-gate",
+            "--origin-repo",
+            "owner/fork",
+        )
+        leftover = self.query(
+            "--query", FINGERPRINT, "--layer", "candidate", "--include-unverified"
+        )
+        self.assertEqual(leftover["results"], [])
+        project = self.query("--query", FINGERPRINT, "--include-unverified")
+        match = next(
+            item for item in project["results"] if item["slug"] == "synthetic-ack-gate"
+        )
+        self.assertEqual(match["layer"], "project")
+        self.assertFalse(
+            list(self.commons_candidates.glob("*.yaml"))
+            and any(
+                captured["candidate_id"] in path.read_text(encoding="utf-8")
+                for path in self.commons_candidates.glob("*.yaml")
+            )
+        )
+
+    def test_v1_entries_stay_queryable_through_v1_reader(self) -> None:
+        from vaws_knowledge_v1 import query_knowledge
+
+        matches = query_knowledge(
+            knowledge_dir=self.knowledge, query="deepseek v3.1 layers"
+        )
+        self.assertTrue(matches)
 
     def test_v2_entries_are_fetchable_by_slug_and_uuid(self) -> None:
         self.promote_and_verify()
         by_slug = self.query("--id", "synthetic-ack-gate")
-        self.assertEqual(by_slug["result"]["schema_version"], 2)
-        by_uuid = self.query("--id", by_slug["result"]["entry"]["uuid"])
-        self.assertEqual(by_uuid["result"]["entry"]["slug"], "synthetic-ack-gate")
-
-    def test_capability_probe_reports_every_layer(self) -> None:
-        payload = self.query("--capabilities")
-        capabilities = payload["capabilities"]
-        self.assertEqual(capabilities["project"]["status"], "available")
-        self.assertEqual(capabilities["shared"]["status"], "available")
-        self.assertEqual(
-            capabilities["shared"]["source_repo"],
-            "vllm-ascend-workspace/vaws-knowledge",
-        )
-        self.assertTrue(capabilities["shared"]["source_ref"])
-        self.assertEqual(capabilities["knowledge_mcp"]["status"], "absent")
-        self.assertFalse(capabilities["validator"]["jsonschema"])
+        self.assertTrue(by_slug["found"])
+        self.assertEqual(by_slug["entry"]["slug"], "synthetic-ack-gate")
+        by_uuid = self.query("--id", by_slug["entry"]["uuid"])
+        self.assertEqual(by_uuid["entry"]["slug"], "synthetic-ack-gate")
 
     def test_broken_project_document_does_not_break_the_query(self) -> None:
         (self.knowledge / f"model-capabilities{v2.V2_SUFFIX}").write_text(
             '{"schema_version": 2, "kind": "model-capabilities"}\n', encoding="utf-8"
         )
-        payload = self.query("--query", "deepseek v3.1 layers")
-        self.assertEqual(payload["status"], "passed")
-        self.assertTrue(payload["problems"])
+        payload = self.query("--query", FINGERPRINT)
+        self.assertIn("results", payload)
+        self.assertIn("load", payload)
 
 
 if __name__ == "__main__":

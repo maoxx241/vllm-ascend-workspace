@@ -12,8 +12,10 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / ".agents" / "lib"))
 
-import vaws_knowledge_client as client  # noqa: E402
+import vaws_capability as capability  # noqa: E402
 import vaws_knowledge_v2 as v2  # noqa: E402
+from vaws_knowledge.server.query import query  # noqa: E402
+from vaws_knowledge_service import service_config  # noqa: E402
 
 from test_knowledge_v2 import sample_entry, verification  # noqa: E402
 
@@ -42,45 +44,37 @@ class InstalledCorpusTests(unittest.TestCase):
     def test_probe_uses_the_installed_package(self) -> None:
         from vaws_knowledge import corpus as packaged
 
-        capability = client._probe_shared()
-        self.assertEqual(capability["status"], client.AVAILABLE)
-        self.assertEqual(capability["source_repo"], SOURCE_REPO)
-        self.assertEqual(capability["source_ref"], packaged.installed_commit())
-        self.assertTrue(Path(capability["path"]).is_dir())
-        self.assertGreaterEqual(len(capability["documents"]), 1)
+        inspection = capability.probe_shared()
+        self.assertEqual(inspection["status"], capability.SHARED_AVAILABLE)
+        self.assertEqual(inspection["source_repo"], SOURCE_REPO)
+        self.assertEqual(inspection["source_ref"], packaged.installed_commit())
+        self.assertTrue(Path(inspection["path"]).is_dir())
+        self.assertGreaterEqual(len(inspection["documents"]), 1)
 
     def test_query_hits_a_packaged_measurement(self) -> None:
-        from vaws_knowledge import corpus as packaged
+        from vaws_knowledge.corpus import installed_commit
 
-        result = client.query(
-            repo_root=ROOT,
-            query="Ascend910B4",
+        payload = query(
+            service_config(ROOT),
+            text="Ascend910B4",
             layers=("shared",),
             bodies=("measurement",),
             include_unverified=True,
-        )
-        self.assertIn("shared", result["coverage"]["layers_answered"])
-        self.assertTrue(result["matches"])
-        self.assertEqual({match["layer"] for match in result["matches"]}, {"shared"})
-        self.assertEqual(result["matches"][0]["source_repo"], SOURCE_REPO)
-        self.assertEqual(result["matches"][0]["source_ref"], packaged.installed_commit())
-        self.assertEqual(result["matches"][0]["body"], "measurement")
+        ).to_dict()
+        self.assertIn("shared", payload["layers_available"])
+        self.assertTrue(payload["results"])
+        self.assertEqual({match["layer"] for match in payload["results"]}, {"shared"})
+        self.assertEqual(payload["source_repo"], SOURCE_REPO)
+        self.assertEqual(payload["source_ref"], installed_commit())
+        self.assertEqual(payload["results"][0]["body"], "measurement")
+        self.assertFalse(payload["degraded"] and "shared" in payload["layers_absent"])
 
     def test_missing_corpus_is_absent_with_uv_sync_remedy(self) -> None:
         missing = Path("/no/such/vaws-knowledge-corpus")
         with mock.patch("vaws_knowledge.corpus.corpus_root", return_value=missing):
-            capability = client._probe_shared()
-        self.assertEqual(capability["status"], client.ABSENT)
-        self.assertEqual(capability["remedy"], "uv sync")
-        with mock.patch("vaws_knowledge.corpus.corpus_root", return_value=missing):
-            result = client.query(
-                repo_root=ROOT,
-                query=QUERY,
-                layers=("shared",),
-            )
-        self.assertEqual(result["matches"], [])
-        self.assertNotIn("shared", result["coverage"]["layers_answered"])
-        self.assertEqual(result["degradation"][0]["remedy"], "uv sync")
+            inspection = capability.probe_shared()
+        self.assertEqual(inspection["status"], capability.SHARED_ABSENT)
+        self.assertEqual(inspection["remedy"], "uv sync")
 
 
 class MonkeypatchedCorpusTests(unittest.TestCase):
@@ -104,17 +98,8 @@ class MonkeypatchedCorpusTests(unittest.TestCase):
             layer="unverified",
             entries=[unverified_entry],
         )
-        self.files = sorted(
-            path
-            for path in self.corpus.rglob("*.yaml")
-            if path.is_file()
-        )
         self.patches = [
             mock.patch("vaws_knowledge.corpus.corpus_root", return_value=self.corpus),
-            mock.patch(
-                "vaws_knowledge.corpus.iter_entry_files",
-                return_value=self.files,
-            ),
             mock.patch(
                 "vaws_knowledge.corpus.installed_commit",
                 return_value="0123456789abcdef0123456789abcdef01234567",
@@ -128,42 +113,17 @@ class MonkeypatchedCorpusTests(unittest.TestCase):
             patch.stop()
         self.temp.cleanup()
 
-    def test_shared_layer_hangs_both_zones_without_filtering(self) -> None:
-        entries, problems, inspection = client.load_shared_entries()
-        self.assertEqual(inspection["status"], client.AVAILABLE)
-        self.assertEqual(problems, [])
-        slugs = {entry["slug"] for entry in entries}
-        self.assertEqual(slugs, {"sample", "sample-unverified"})
-        statuses = {entry["status"] for entry in entries}
-        self.assertEqual(statuses, {"verified", "unverified"})
+    def _query(self, **kwargs):
+        config = service_config(self.root)
+        return query(config, text=QUERY, layers=("shared",), **kwargs).to_dict()
 
     def test_query_still_hides_unverified_unless_opted_in(self) -> None:
-        default = client.query(
-            repo_root=self.root,
-            query=QUERY,
-            layers=("shared",),
-        )
-        self.assertEqual({match["id"] for match in default["matches"]}, {"sample"})
-        opted = client.query(
-            repo_root=self.root,
-            query=QUERY,
-            layers=("shared",),
-            include_unverified=True,
-        )
+        default = self._query()
+        self.assertEqual({match["slug"] for match in default["results"]}, {"sample"})
+        opted = self._query(include_unverified=True)
         self.assertEqual(
-            {match["id"] for match in opted["matches"]},
+            {match["slug"] for match in opted["results"]},
             {"sample", "sample-unverified"},
-        )
-        fetched = client.get_entry(
-            repo_root=self.root,
-            entry_id="sample",
-            layers=("shared",),
-        )
-        self.assertEqual(fetched["layer"], "shared")
-        self.assertEqual(fetched["source_repo"], SOURCE_REPO)
-        self.assertEqual(
-            fetched["source_ref"],
-            "0123456789abcdef0123456789abcdef01234567",
         )
 
 

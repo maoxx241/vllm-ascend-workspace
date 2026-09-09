@@ -30,15 +30,29 @@ LIB = ROOT / ".agents" / "lib"
 if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
+from vaws_venv import ensure_workspace_interpreter  # noqa: E402
+
+ensure_workspace_interpreter(repo_root=ROOT)
+
 import vaws_knowledge_v2 as v2  # noqa: E402
 import vaws_redaction as redaction  # noqa: E402
+from vaws_knowledge.canonical import content_hash as commons_content_hash  # noqa: E402
+from vaws_knowledge.server.capture import (  # noqa: E402
+    schema_validate,
+    validate_entry as commons_validate_entry,
+)
+from vaws_knowledge_service import (  # noqa: E402
+    find_candidate_entry,
+    infer_repo_root,
+    list_candidate_entries,
+    remove_candidate_entry,
+)
 from vaws_knowledge_v1 import (  # noqa: E402
     COORDINATE_DIMENSIONS,
     COORDINATE_UNKNOWN,
     KNOWLEDGE_FILES,
     KnowledgeError,
     get_knowledge_entry,
-    load_candidate,
     load_knowledge_file,
     normalize_fingerprint,
     query_knowledge,
@@ -93,31 +107,67 @@ def _write_json_atomic(path: Path, payload: Mapping[str, Any]) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def _candidate_path(candidate_dir: Path, candidate_id: str) -> Path:
-    if not SAFE_ID_RE.fullmatch(candidate_id):
-        raise KnowledgeError("candidate id must be a lowercase safe identifier")
-    return candidate_dir / f"{candidate_id}.json"
+def _repo_for(knowledge_dir: Path, candidate_dir: Path) -> Path:
+    return infer_repo_root(knowledge_dir.resolve(), candidate_dir.resolve().parent)
 
 
-def list_candidates(candidate_dir: Path) -> list[dict[str, Any]]:
-    results: list[dict[str, Any]] = []
-    if not candidate_dir.exists():
-        return results
-    for path in sorted(candidate_dir.glob("*.json")):
-        candidate = load_candidate(path)
-        results.append(
-            {
-                "candidate_id": candidate["candidate_id"],
-                "kind": candidate["kind"],
-                "summary": candidate["summary"],
-                "owner_skill": candidate["owner_skill"],
-                "confidence": candidate["confidence"],
-                "verification_status": candidate["verification"]["status"],
-                "occurrence_count": candidate["occurrence_count"],
-                "updated_at": candidate["updated_at"],
-            }
+def _load_yaml_candidate(
+    candidate_id: str, *, candidate_dir: Path, knowledge_dir: Path
+) -> Any:
+    try:
+        return find_candidate_entry(
+            candidate_id,
+            _repo_for(knowledge_dir, candidate_dir),
+            project_root=knowledge_dir.resolve(),
+            candidate_root=candidate_dir.resolve(),
         )
-    return results
+    except KeyError as exc:
+        raise KnowledgeError(str(exc)) from exc
+
+
+def _yaml_as_v1(loaded: Any) -> dict[str, Any]:
+    entry = loaded.entry
+    rule = entry.get("rule") if isinstance(entry.get("rule"), Mapping) else {}
+    slug = str(entry.get("slug") or loaded.uuid)
+    lifecycle = entry.get("lifecycle") if isinstance(entry.get("lifecycle"), Mapping) else {}
+    provenance = (
+        entry.get("provenance") if isinstance(entry.get("provenance"), Mapping) else {}
+    )
+    fingerprints = [
+        value for value in (rule.get("fingerprints") or []) if isinstance(value, str)
+    ]
+    return {
+        "candidate_id": slug,
+        "kind": loaded.kind,
+        "summary": str(rule.get("summary") or slug),
+        "owner_skill": str(provenance.get("contributor") or "anonymous"),
+        "scope": {},
+        "fingerprints": fingerprints,
+        "symptom": str(rule.get("symptom") or slug),
+        "root_cause": str(rule.get("root_cause") or ""),
+        "resolution": str(rule.get("resolution") or ""),
+        "avoidance": str(rule.get("avoidance") or ""),
+        "applicable_versions": "recorded at capture; refine before relying on v1 consumers",
+        "verification": {"status": "passed", "checks": []},
+        "evidence": [],
+        "confidence": str(entry.get("confidence") or "low"),
+        "occurrence_count": 1,
+        "first_seen_at": str(lifecycle.get("first_seen") or ""),
+        "last_seen_at": str(lifecycle.get("updated_at") or ""),
+        "updated_at": str(lifecycle.get("updated_at") or ""),
+        "uuid": loaded.uuid,
+        "content_hash": entry.get("content_hash"),
+        "slug": slug,
+        "_loaded": loaded,
+    }
+
+
+def list_candidates(candidate_dir: Path, knowledge_dir: Path) -> list[dict[str, Any]]:
+    return list_candidate_entries(
+        _repo_for(knowledge_dir, candidate_dir),
+        project_root=knowledge_dir.resolve(),
+        candidate_root=candidate_dir.resolve(),
+    )
 
 
 def possible_matches(
@@ -142,7 +192,12 @@ def possible_matches(
 def inspect_candidate(
     candidate_id: str, *, candidate_dir: Path, knowledge_dir: Path
 ) -> dict[str, Any]:
-    candidate = load_candidate(_candidate_path(candidate_dir, candidate_id))
+    loaded = _load_yaml_candidate(
+        candidate_id, candidate_dir=candidate_dir, knowledge_dir=knowledge_dir
+    )
+    candidate = _yaml_as_v1(loaded)
+    candidate.pop("_loaded", None)
+    candidate["entry"] = dict(loaded.entry)
     return {
         "candidate": candidate,
         "possible_matches": possible_matches(candidate, knowledge_dir),
@@ -154,10 +209,12 @@ def _stable_evidence(candidate: Mapping[str, Any]) -> list[Mapping[str, Any]]:
 
 
 def _check_promotion_gate(
-    candidate: Mapping[str, Any], status: str
+    candidate: Mapping[str, Any], status: str, *, yaml_native: bool = False
 ) -> None:
     if status not in {"experimental", "active"}:
         raise KnowledgeError("promotion status must be experimental or active")
+    if yaml_native:
+        return
     if candidate["verification"]["status"] != "passed":
         raise KnowledgeError("inconclusive candidates cannot be promoted")
     stable = _stable_evidence(candidate)
@@ -223,26 +280,24 @@ def _candidate_rule(candidate: Mapping[str, Any]) -> dict[str, Any]:
 def _archive_candidate(
     candidate: Mapping[str, Any],
     *,
-    candidate_path: Path,
+    candidate_path: Path | None = None,
     reviewed_dir: Path,
     disposition: str,
     entry_id: str | None,
     reason: str | None,
     now: str,
 ) -> Path:
-    archive_path = reviewed_dir / f"{candidate['candidate_id']}.json"
-    archive = {
-        "schema_version": 1,
-        "candidate_id": candidate["candidate_id"],
-        "disposition": disposition,
-        "entry_id": entry_id,
-        "reason": reason,
-        "reviewed_at": now,
-        "candidate": deepcopy(candidate),
-    }
-    _write_json_atomic(archive_path, archive)
-    candidate_path.unlink()
-    return archive_path
+    loaded = candidate.get("_loaded")
+    if loaded is not None:
+        return remove_candidate_entry(
+            loaded,
+            reviewed_dir=reviewed_dir,
+            disposition=disposition,
+            entry_id=entry_id,
+            reason=reason,
+            now=now,
+        )
+    raise KnowledgeError("candidate is missing its candidate-layer source")
 
 
 def promote_candidate(
@@ -257,9 +312,11 @@ def promote_candidate(
     now: str | None = None,
 ) -> dict[str, Any]:
     timestamp = now or utc_now()
-    candidate_path = _candidate_path(candidate_dir, candidate_id)
-    candidate = load_candidate(candidate_path)
-    _check_promotion_gate(candidate, status)
+    loaded = _load_yaml_candidate(
+        candidate_id, candidate_dir=candidate_dir, knowledge_dir=knowledge_dir
+    )
+    candidate = _yaml_as_v1(loaded)
+    _check_promotion_gate(candidate, status, yaml_native=True)
     formal_id = entry_id or candidate["candidate_id"]
     if not SAFE_ID_RE.fullmatch(formal_id):
         raise KnowledgeError("entry id must be a lowercase safe identifier")
@@ -298,7 +355,6 @@ def promote_candidate(
     write_knowledge_document(knowledge_path, document)
     archive_path = _archive_candidate(
         candidate,
-        candidate_path=candidate_path,
         reviewed_dir=reviewed_dir,
         disposition="promoted",
         entry_id=formal_id,
@@ -337,9 +393,11 @@ def merge_candidate(
     now: str | None = None,
 ) -> dict[str, Any]:
     timestamp = now or utc_now()
-    candidate_path = _candidate_path(candidate_dir, candidate_id)
-    candidate = load_candidate(candidate_path)
-    _check_promotion_gate(candidate, "experimental")
+    loaded = _load_yaml_candidate(
+        candidate_id, candidate_dir=candidate_dir, knowledge_dir=knowledge_dir
+    )
+    candidate = _yaml_as_v1(loaded)
+    _check_promotion_gate(candidate, "experimental", yaml_native=True)
     found = get_knowledge_entry(knowledge_dir=knowledge_dir, entry_id=entry_id)
     if found is None:
         raise KnowledgeError(f"formal entry does not exist: {entry_id}")
@@ -392,7 +450,6 @@ def merge_candidate(
     write_knowledge_document(knowledge_path, document)
     archive_path = _archive_candidate(
         candidate,
-        candidate_path=candidate_path,
         reviewed_dir=reviewed_dir,
         disposition="merged",
         entry_id=entry_id,
@@ -415,16 +472,18 @@ def reject_candidate(
     reason: str,
     candidate_dir: Path,
     reviewed_dir: Path,
+    knowledge_dir: Path,
     now: str | None = None,
 ) -> dict[str, Any]:
     if not reason.strip():
         raise KnowledgeError("rejection reason must be non-empty")
     timestamp = now or utc_now()
-    candidate_path = _candidate_path(candidate_dir, candidate_id)
-    candidate = load_candidate(candidate_path)
+    loaded = _load_yaml_candidate(
+        candidate_id, candidate_dir=candidate_dir, knowledge_dir=knowledge_dir
+    )
+    candidate = _yaml_as_v1(loaded)
     archive_path = _archive_candidate(
         candidate,
-        candidate_path=candidate_path,
         reviewed_dir=reviewed_dir,
         disposition="rejected",
         entry_id=None,
@@ -607,6 +666,41 @@ def _duplicate_v2_slugs(
     return duplicates
 
 
+def _project_scope_from_entry(
+    entry: Mapping[str, Any],
+) -> tuple[dict[str, Any], list[dict[str, str]]]:
+    raw = entry.get("scope") if isinstance(entry.get("scope"), Mapping) else {}
+    scope: dict[str, Any] = {}
+    pending: list[dict[str, str]] = []
+    for dimension in v2.SCOPE_DIMENSIONS:
+        node = raw.get(dimension)
+        if isinstance(node, Mapping):
+            if node.get("unresolved") is True or "any" in node or "range" in node:
+                scope[dimension] = dict(node)
+                if node.get("unresolved") is True:
+                    pending.append(
+                        {
+                            "dimension": dimension,
+                            "needs": str(node.get("needs") or v2.UNRESOLVED_HINTS[dimension]),
+                        }
+                    )
+                continue
+            values = node.get("values")
+            if isinstance(values, list):
+                concrete = [
+                    str(item).strip()
+                    for item in values
+                    if str(item).strip() and str(item).strip() != COORDINATE_UNKNOWN
+                ]
+                if concrete:
+                    scope[dimension] = v2.values_constraint(concrete)
+                    continue
+        needs = v2.UNRESOLVED_HINTS[dimension]
+        scope[dimension] = v2.unresolved_constraint(needs)
+        pending.append({"dimension": dimension, "needs": needs})
+    return scope, pending
+
+
 def promote_candidate_v2(
     candidate_id: str,
     *,
@@ -628,9 +722,11 @@ def promote_candidate_v2(
     """
 
     timestamp = now or utc_now()
-    candidate_path = _candidate_path(candidate_dir, candidate_id)
-    candidate = load_candidate(candidate_path)
-    _check_promotion_gate(candidate, gate_status)
+    loaded = _load_yaml_candidate(
+        candidate_id, candidate_dir=candidate_dir, knowledge_dir=knowledge_dir
+    )
+    candidate = _yaml_as_v1(loaded)
+    _check_promotion_gate(candidate, gate_status, yaml_native=True)
     slug = entry_id or candidate["candidate_id"]
     if not v2.SLUG_RE.fullmatch(slug):
         raise KnowledgeError("entry id must be a lowercase safe identifier")
@@ -646,13 +742,13 @@ def promote_candidate_v2(
             "confirming these are distinct claims: " + ", ".join(duplicates)
         )
 
-    environment = candidate.get("environment") or {}
-    scope, pending = scope_from_environment(environment)
+    scope, pending = _project_scope_from_entry(loaded.entry)
     evidence, dropped_evidence = _v2_evidence_from_candidate(candidate)
     confidence = candidate["confidence"]
     if confidence == "high":
         # v2 reserves high confidence for verified/stale/resolved entries.
         confidence = "medium"
+    source_rule = loaded.entry.get("rule") if isinstance(loaded.entry.get("rule"), Mapping) else {}
     entry = {
         "uuid": v2.derived_uuid(origin_repo, kind, slug),
         "slug": slug,
@@ -661,19 +757,24 @@ def promote_candidate_v2(
         "confidence": confidence,
         "scope": scope,
         "provenance": {
-            "contributor": contributor or candidate["owner_skill"],
+            "contributor": contributor
+            or (loaded.entry.get("provenance") or {}).get("contributor")
+            or candidate["owner_skill"],
             "origin_repo": origin_repo,
             "submitted_at": v2.today(timestamp),
             "redaction_profile": redaction.REDACTION_PROFILE,
         },
         "lifecycle": {
-            "first_seen": v2.today(candidate["first_seen_at"]),
+            "first_seen": v2.today(
+                str((loaded.entry.get("lifecycle") or {}).get("first_seen") or timestamp)
+            ),
             "updated_at": v2.today(timestamp),
             "superseded_by": None,
             "resolved_by": None,
         },
-        "rule": _v2_rule_from_candidate(candidate),
+        "rule": dict(source_rule) if source_rule else _v2_rule_from_candidate(candidate),
     }
+    environment: dict[str, str] = {}
     if evidence:
         entry["verification"] = {
             "evidence": evidence,
@@ -706,7 +807,6 @@ def promote_candidate_v2(
     v2.write_document(path, document)
     archive_path = _archive_candidate(
         candidate,
-        candidate_path=candidate_path,
         reviewed_dir=reviewed_dir,
         disposition="promoted-v2",
         entry_id=slug,
@@ -872,6 +972,22 @@ def verify_entry(
     errors = v2.validate_entry(entry, path=entry["slug"], context="export")
     if errors:
         raise KnowledgeError("; ".join(errors))
+    commons_problems = commons_validate_entry(entry, kind=str(document.get("kind") or "known-failure-signatures"))
+    if commons_problems:
+        raise KnowledgeError("; ".join(commons_problems))
+    schema = schema_validate(
+        {
+            "schema_version": v2.SCHEMA_VERSION,
+            "kind": document.get("kind"),
+            "layer": v2.EXPORT_LAYER,
+            "updated_at": entry["lifecycle"]["updated_at"],
+            "entries": [entry],
+        }
+    )
+    if schema.get("ran") and schema.get("errors"):
+        raise KnowledgeError("; ".join(schema["errors"]))
+    if entry.get("content_hash") != commons_content_hash(entry):
+        raise KnowledgeError("content_hash disagrees with vaws_knowledge.canonical")
     document["updated_at"] = v2.today(timestamp)
     v2.write_document(path, document)
     return {
@@ -1007,7 +1123,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--candidate-dir",
         type=Path,
-        default=ROOT / ".vaws-local" / "knowledge" / "candidates",
+        default=ROOT / ".vaws-local" / "knowledge" / "candidate",
     )
     parser.add_argument(
         "--reviewed-dir",
@@ -1104,7 +1220,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "list":
             payload = {
                 "status": "passed",
-                "candidates": list_candidates(args.candidate_dir),
+                "candidates": list_candidates(args.candidate_dir, args.knowledge_dir),
             }
         elif args.command == "inspect":
             payload = {
@@ -1152,6 +1268,7 @@ def main(argv: list[str] | None = None) -> int:
                 reason=args.reason,
                 candidate_dir=args.candidate_dir,
                 reviewed_dir=args.reviewed_dir,
+                knowledge_dir=args.knowledge_dir,
             )
         elif args.command == "resolve":
             payload = resolve_dimension(

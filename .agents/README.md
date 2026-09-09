@@ -56,7 +56,7 @@ compatibility backend for managed sessions, sync, service adapters, and cleanup.
 - `.agents/scripts/workspace_identity.py` manages the persistent local UUID4 and optional unified project/agent/resource alias.
 - `.agents/scripts/run_manifest.py` creates and validates shared Run Manifest v1 files.
 - `.agents/scripts/knowledge_validate.py` validates both knowledge generations (v1 and federated v2) and reports the redaction posture of the project layer.
-- `.agents/scripts/knowledge_query.py` is the three-layer query client: it retrieves compact matching summaries across `shared`, `project` and `candidate`, expands one entry by id or slug, probes layer availability with `--capabilities`, and reports every layer it could not consult.
+- `.agents/scripts/knowledge_query.py` is a thin CLI over `vaws_knowledge.server.query`. It prints the commons `QueryResponse` envelope (layer, source_ref, degraded). Agents can call the same engine through the `vaws-knowledge` MCP tools.
 - `.agents/scripts/knowledge_capture.py` records or merges one verified, redacted candidate without loading a Skill, reading the environment coordinate from a Run Manifest, `--env` pairs, or the candidate scope.
 - `.agents/scripts/knowledge_migrate_v2.py` converts v1 documents to `<kind>.v2.yaml` and reports, per entry, which coordinate dimensions still need a human.
 - `.agents/scripts/knowledge_export.py` is the source-side export gate for proposing project knowledge to `vllm-ascend-workspace/vaws-knowledge`.
@@ -66,8 +66,8 @@ compatibility backend for managed sessions, sync, service adapters, and cleanup.
 - `.agents/lib/vaws_local_state.py` is the shared library for untracked local runtime state.
 - `.agents/lib/vaws_run_manifest.py` is the shared Run Manifest v1 library for workflow correlation and artifact links.
 - `.agents/lib/vaws_knowledge_v1.py` is the shared v1 knowledge validation, capture, and query library, and the dual-read entry point for v2 documents.
-- `.agents/lib/vaws_knowledge_v2.py` is the federated v2 contract library: validation, canonicalization, content hashing, coordinates, and the export shape.
-- `.agents/lib/vaws_knowledge_client.py` is the three-layer query client with capability probing and graceful degradation. The `shared` layer is the corpus inside the installed `vaws-knowledge` package.
+- `.agents/lib/vaws_knowledge_v2.py` keeps the project-layer contract (unresolved markers, `layer: project`, document I/O, curation/export). Hashing and query live in the installed `vaws-knowledge` package.
+- `.agents/lib/vaws_knowledge_service.py` builds the scaffold `ServiceConfig` (packaged shared + this repo's project/candidate roots).
 - `.agents/tests/knowledge_client_adapter.py` is the tracked protocol adapter for the vaws-knowledge conformance kit shipped with the package.
 - `.agents/lib/vaws_knowledge_migrate.py` is the mechanical v1 -> v2 conversion library.
 - `.agents/lib/vaws_redaction.py` is the scaffold redaction policy (BLOCK/EXPORT and recursive scan) over `vaws_knowledge.redact`. Detection rules and the live profile are declared by that package.
@@ -192,7 +192,7 @@ Untracked workspace-local state lives under `.vaws-local/`:
 - `.vaws-local/memory-profiling/`
 - `.vaws-local/ascend-profiling-collection/runs/`
 - `.vaws-local/profiling-analysis/runs/`
-- `.vaws-local/knowledge/candidates/`
+- `.vaws-local/knowledge/candidate/`
 - `.vaws-local/knowledge/pending/<session-key>/`
 - `.vaws-local/knowledge/session-end/`
 - `.vaws-local/knowledge/reviewed/`

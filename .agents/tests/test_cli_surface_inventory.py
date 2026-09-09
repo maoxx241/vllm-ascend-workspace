@@ -319,7 +319,7 @@ class RepositoryCoherenceTests(unittest.TestCase):
         )
         self.assertEqual(
             by_repository["vllm-ascend-workspace/vaws-knowledge"]["commit"],
-            "2b6cda4782f535614b32a9a402df18faaac8ef3b",
+            "16befcade10ec2acca74731888339524574a326c",
         )
         for meta in owners.values():
             self.assertEqual(meta["source_availability"], "uninspected")

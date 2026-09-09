@@ -85,7 +85,7 @@
       "responsibility": "mechanics",
       "support_role": "supported",
       "target_kind": "self",
-      "note": "shared/project/candidate query surface with --capabilities and layer coverage; missing installed corpus degrades visibly",
+      "note": "thin CLI over vaws_knowledge.server.query; prints the commons QueryResponse envelope",
       "proposed_target": "vaws knowledge"
     },
     ".agents/scripts/knowledge_validate.py": {

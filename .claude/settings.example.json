@@ -27,7 +27,10 @@
       "mcp__vaws-task__vaws_session",
       "mcp__vaws-task__vaws_run",
       "mcp__vaws-task__vaws_execution",
-      "mcp__vaws-task__vaws_finish"
+      "mcp__vaws-task__vaws_finish",
+      "mcp__vaws-knowledge__knowledge_query",
+      "mcp__vaws-knowledge__knowledge_explain",
+      "mcp__vaws-knowledge__knowledge_capture"
     ],
     "deny": [
       "Bash(sshpass *)",

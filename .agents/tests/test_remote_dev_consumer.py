@@ -234,7 +234,7 @@ class ClientConfigurationTests(unittest.TestCase):
             files = setup.configuration("claude", project)
             servers = json.loads(files[project / ".mcp.json"])["mcpServers"]
             mcp = servers["remote-dev"]
-            self.assertEqual(set(servers), {"remote-dev", "vaws-task"})
+            self.assertEqual(set(servers), {"remote-dev", "vaws-task", "vaws-knowledge"})
             self.assertEqual(mcp["args"], self.SERVER_ARGS)
             self.assertEqual(servers["vaws-task"]["args"], self.TASK_ARGS)
             for key in self.REQUIRED_ENV:

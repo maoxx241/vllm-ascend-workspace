@@ -1,0 +1,357 @@
+"""Scaffold ServiceConfig: packaged shared + this repo's project/candidate."""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import subprocess
+import tempfile
+from copy import deepcopy
+from pathlib import Path
+from typing import Any, Mapping
+
+from vaws_knowledge.redact import REDACTION_PROFILE
+from vaws_knowledge.server.layers import ServiceConfig, load_config, load_entries
+
+_SLUG_UNSAFE = re.compile(r"[^a-z0-9]+")
+
+SOURCE_REPO = "vllm-ascend-workspace/vaws-knowledge"
+PROJECT_ROOT_RELATIVE = ".agents/knowledge"
+CANDIDATE_ROOT_RELATIVE = ".vaws-local/knowledge/candidate"
+SHARED_AVAILABLE = "available"
+SHARED_ABSENT = "absent"
+SHARED_REMEDY = "uv sync"
+
+
+def infer_repo_root(knowledge_dir: Path, fallback: Path) -> Path:
+    resolved = knowledge_dir.resolve()
+    if resolved.parent.name == ".agents":
+        return resolved.parent.parent
+    return fallback
+
+
+def origin_repo_from_url(url: str) -> str:
+    text = url.strip()
+    text = re.sub(r"\.git$", "", text)
+    if text.startswith("git@") and ":" in text:
+        return text.split(":", 1)[1]
+    parts = [part for part in re.split(r"[/:]", text) if part]
+    if len(parts) >= 2:
+        return f"{parts[-2]}/{parts[-1]}"
+    return text or "local/unpublished"
+
+
+def origin_repo_from_git(repo_root: Path) -> str:
+    proc = subprocess.run(
+        ["git", "-C", str(repo_root), "remote", "get-url", "origin"],
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        return "local/unpublished"
+    return origin_repo_from_url(proc.stdout.strip())
+
+
+def knowledge_identity(repo_root: Path) -> dict[str, str]:
+    return {
+        "contributor": "anonymous",
+        "origin_repo": origin_repo_from_git(repo_root),
+        "redaction_profile": REDACTION_PROFILE,
+    }
+
+
+def knowledge_server_env(repo_root: Path) -> dict[str, str]:
+    """Relative env paths, matching tracked mcp.json style."""
+
+    identity = knowledge_identity(repo_root)
+    return {
+        "VAWS_KNOWLEDGE_PROJECT_ROOTS": PROJECT_ROOT_RELATIVE,
+        "VAWS_KNOWLEDGE_CANDIDATE_ROOT": CANDIDATE_ROOT_RELATIVE,
+        "VAWS_KNOWLEDGE_ORIGIN_REPO": identity["origin_repo"],
+        "VAWS_KNOWLEDGE_REDACTION_PROFILE": identity["redaction_profile"],
+    }
+
+
+def probe_shared() -> dict[str, Any]:
+    try:
+        from vaws_knowledge import corpus as packaged
+    except ImportError:
+        return {
+            "status": SHARED_ABSENT,
+            "path": None,
+            "detail": "vaws-knowledge is not installed",
+            "remedy": SHARED_REMEDY,
+            "problems": [],
+            "documents": [],
+            "source_repo": SOURCE_REPO,
+            "source_ref": None,
+        }
+    root = packaged.corpus_root()
+    source_ref = packaged.installed_commit()
+    if not root.is_dir():
+        return {
+            "status": SHARED_ABSENT,
+            "path": str(root),
+            "detail": "installed vaws-knowledge has no corpus",
+            "remedy": SHARED_REMEDY,
+            "problems": [],
+            "documents": [],
+            "source_repo": SOURCE_REPO,
+            "source_ref": source_ref,
+        }
+    files = list(packaged.iter_entry_files())
+    return {
+        "status": SHARED_AVAILABLE,
+        "path": str(root),
+        "detail": "shared layer is the installed vaws-knowledge corpus",
+        "problems": [],
+        "documents": [path.name for path in files],
+        "source_repo": SOURCE_REPO,
+        "source_ref": source_ref,
+    }
+
+
+def service_config(
+    repo_root: Path,
+    *,
+    project_root: Path | None = None,
+    candidate_root: Path | None = None,
+) -> ServiceConfig:
+    project = project_root or (repo_root / PROJECT_ROOT_RELATIVE)
+    candidate = candidate_root or (repo_root / CANDIDATE_ROOT_RELATIVE)
+    return load_config(
+        {
+            "layers": {
+                "project": {"roots": [str(project)]},
+                "candidate": {"root": str(candidate)},
+            },
+            "identity": knowledge_identity(repo_root),
+        },
+        env={},
+        base_dir=repo_root,
+    )
+
+
+def scope_from_coordinate(coordinate: Mapping[str, str]) -> dict[str, Any]:
+    from vaws_knowledge_v1 import COORDINATE_DIMENSIONS, COORDINATE_UNKNOWN
+
+    scope: dict[str, Any] = {}
+    for name in COORDINATE_DIMENSIONS:
+        value = str(coordinate.get(name) or COORDINATE_UNKNOWN).strip() or COORDINATE_UNKNOWN
+        scope[name] = {"values": [value]}
+    return scope
+
+
+def slugify(text: str) -> str:
+    slug = _SLUG_UNSAFE.sub("-", text.strip().lower()).strip("-")
+    return slug[:80] or "captured-entry"
+
+
+def _payload_rule(payload: Mapping[str, Any]) -> dict[str, Any]:
+    nested = payload.get("rule")
+    if isinstance(nested, Mapping):
+        return dict(nested)
+    return {}
+
+
+def commons_entry(payload: Mapping[str, Any], coordinate: Mapping[str, str]) -> dict[str, Any]:
+    nested = _payload_rule(payload)
+    slug = str(
+        payload.get("entry_id")
+        or payload.get("slug")
+        or nested.get("slug")
+        or slugify(str(payload.get("summary") or nested.get("summary") or "captured-entry"))
+    )
+    rule = {
+        "summary": str(payload.get("summary") or nested.get("summary") or slug),
+        "symptom": str(
+            payload.get("symptom") or nested.get("symptom") or payload.get("summary") or slug
+        ),
+        "root_cause": str(
+            payload.get("root_cause")
+            or nested.get("root_cause")
+            or "recorded at capture; mechanism not yet refined"
+        ),
+        "resolution": str(
+            payload.get("resolution") or nested.get("resolution") or "recorded at capture"
+        ),
+    }
+    avoidance = payload.get("avoidance") or nested.get("avoidance")
+    if avoidance:
+        rule["avoidance"] = str(avoidance)
+    fingerprints = payload.get("fingerprints")
+    if fingerprints is None:
+        fingerprints = nested.get("fingerprints")
+    if isinstance(fingerprints, list):
+        rule["fingerprints"] = [str(item) for item in fingerprints if str(item).strip()]
+    return {
+        "slug": slug,
+        "kind": str(payload.get("kind") or "known-failure-signatures"),
+        "rule": rule,
+        "scope": scope_from_coordinate(coordinate),
+    }
+
+
+def _write_json_atomic(path: Path, payload: Mapping[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent)
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            json.dump(payload, stream, ensure_ascii=False, indent=2, sort_keys=True)
+            stream.write("\n")
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def list_candidate_entries(
+    repo_root: Path,
+    *,
+    project_root: Path | None = None,
+    candidate_root: Path | None = None,
+) -> list[dict[str, Any]]:
+    config = service_config(
+        repo_root, project_root=project_root, candidate_root=candidate_root
+    )
+    report = load_entries(config, ["candidate"])
+    results: list[dict[str, Any]] = []
+    for loaded in report.entries:
+        entry = loaded.entry
+        rule = entry.get("rule") if isinstance(entry.get("rule"), Mapping) else {}
+        slug = str(entry.get("slug") or loaded.uuid)
+        results.append(
+            {
+                "candidate_id": slug,
+                "uuid": loaded.uuid,
+                "slug": slug,
+                "content_hash": entry.get("content_hash"),
+                "kind": loaded.kind,
+                "summary": rule.get("summary") or slug,
+                "status": entry.get("status"),
+                "confidence": entry.get("confidence"),
+                "updated_at": (entry.get("lifecycle") or {}).get("updated_at"),
+                "source": loaded.source,
+            }
+        )
+    results.sort(key=lambda item: str(item["slug"]))
+    return results
+
+
+def find_candidate_entry(
+    identifier: str,
+    repo_root: Path,
+    *,
+    project_root: Path | None = None,
+    candidate_root: Path | None = None,
+) -> Any:
+    config = service_config(
+        repo_root, project_root=project_root, candidate_root=candidate_root
+    )
+    report = load_entries(config, ["candidate"])
+    for loaded in report.entries:
+        entry = loaded.entry
+        markers = {
+            loaded.uuid,
+            str(entry.get("uuid") or ""),
+            str(entry.get("slug") or ""),
+            str(entry.get("content_hash") or ""),
+        }
+        if identifier in markers:
+            return loaded
+    raise KeyError(f"candidate not found: {identifier}")
+
+
+def remove_candidate_entry(
+    loaded: Any,
+    *,
+    reviewed_dir: Path,
+    disposition: str,
+    entry_id: str | None,
+    reason: str | None,
+    now: str,
+) -> Path:
+    """Archive one yaml entry and drop it from the candidate layer."""
+
+    import yaml
+
+    slug = str(loaded.entry.get("slug") or loaded.uuid)
+    archive_path = reviewed_dir / f"{slug}.json"
+    _write_json_atomic(
+        archive_path,
+        {
+            "schema_version": 2,
+            "candidate_id": slug,
+            "uuid": loaded.uuid,
+            "content_hash": loaded.entry.get("content_hash"),
+            "disposition": disposition,
+            "entry_id": entry_id,
+            "reason": reason,
+            "reviewed_at": now,
+            "candidate": deepcopy(dict(loaded.entry)),
+        },
+    )
+    path = Path(loaded.root) / loaded.source
+    document = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    entries = [
+        item
+        for item in (document.get("entries") or [])
+        if isinstance(item, Mapping) and item.get("uuid") != loaded.uuid
+    ]
+    document["entries"] = entries
+    if entries:
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(
+            yaml.safe_dump(document, sort_keys=False, allow_unicode=True),
+            encoding="utf-8",
+        )
+        os.replace(tmp, path)
+    else:
+        path.unlink(missing_ok=True)
+    return archive_path
+
+
+def already_promoted_slug(
+    payload: Mapping[str, Any],
+    knowledge_dir: Path,
+) -> str | None:
+    """Return the project slug if this capture is already a formal entry."""
+
+    from vaws_knowledge_v1 import load_knowledge_file, KNOWLEDGE_FILES
+
+    import vaws_knowledge_v2 as v2
+
+    slug = str(commons_entry(payload, payload.get("environment") or {}).get("slug") or "")
+    for path, _kind in v2.iter_documents(knowledge_dir):
+        try:
+            document = v2.load_document(path)
+        except Exception:  # noqa: BLE001 - a broken project file is not a hit
+            continue
+        for entry in document.get("entries") or []:
+            if not isinstance(entry, Mapping) or entry.get("status") == "deprecated":
+                continue
+            if slug and entry.get("slug") == slug:
+                return slug
+    for filename in KNOWLEDGE_FILES:
+        path = knowledge_dir / filename
+        if not path.is_file():
+            continue
+        try:
+            document = load_knowledge_file(path)
+        except Exception:  # noqa: BLE001 - missing or unreadable v1 is not a hit
+            continue
+        for entry in document.get("entries") or []:
+            if not isinstance(entry, Mapping) or entry.get("status") == "deprecated":
+                continue
+            rule = entry.get("rule") if isinstance(entry.get("rule"), Mapping) else {}
+            ids = {entry.get("id")}
+            if isinstance(rule.get("candidate_id"), str):
+                ids.add(rule["candidate_id"])
+            if isinstance(rule.get("candidate_ids"), list):
+                ids.update(item for item in rule["candidate_ids"] if isinstance(item, str))
+            if slug and slug in ids:
+                return slug
+    return None

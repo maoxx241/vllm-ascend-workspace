@@ -1,21 +1,9 @@
 #!/usr/bin/env python3
-"""Query compact knowledge summaries or fetch one entry by id.
+"""Thin CLI over ``vaws_knowledge.server.query``.
 
-Three layers behind one query surface: ``shared`` (corpus in the installed
-``vaws-knowledge`` package), ``project`` (``.agents/knowledge/``, v1 and v2
-documents), and ``candidate`` (unreviewed local observations).
-
-Backwards compatible on purpose. The v1 invocation
-``--query "<text>" [--kind K] [--limit N] [--include-deprecated]`` returns the
-same ``matches`` array with the same keys it always did, because other skills
-and an ``AGENTS.md`` routing rule depend on it. New behaviour is additive:
-matches gain ``layer`` / ``schema_version`` / ``body`` (``rule`` or
-``measurement``), ``--bodies`` filters those variants, and the payload
-gains ``coverage``, ``degradation`` and ``capabilities``.
-
-Degradation is always visible and never fatal. A missing installed corpus or an
-absent knowledge service narrows the answer and says so; an empty result is
-reported as ``no-match``, which means *unknown*, never *supported*.
+Shared is the packaged corpus. Project is ``.agents/knowledge``. Candidate is
+``.vaws-local/knowledge/candidate``. Output is the commons ``QueryResponse``
+envelope (or the ``explain`` payload for ``--id``).
 """
 
 from __future__ import annotations
@@ -34,52 +22,43 @@ from vaws_venv import ensure_workspace_interpreter  # noqa: E402
 
 ensure_workspace_interpreter(repo_root=ROOT)
 
+from vaws_knowledge.server.layers import LAYERS, load_entries  # noqa: E402
+from vaws_knowledge.server.query import explain, query  # noqa: E402
+from vaws_knowledge_service import infer_repo_root, service_config  # noqa: E402
 
-import vaws_knowledge_client as client  # noqa: E402
-from vaws_knowledge_v1 import (  # noqa: E402
-    KnowledgeError,
-    get_knowledge_entry,
-    query_knowledge,
-)
+
+def _explain(config, ident: str, layers: list[str] | None) -> dict:
+    wanted = layers or list(LAYERS)
+    report = load_entries(config, wanted)
+    for loaded in report.entries:
+        if loaded.uuid == ident or str(loaded.entry.get("slug") or "") == ident:
+            return explain(config, loaded.uuid, layers=layers)
+    return explain(config, ident, layers=layers)
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--query")
-    mode.add_argument("--id")
-    mode.add_argument(
-        "--capabilities",
-        action="store_true",
-        help="report which layers are available without querying",
-    )
-    parser.add_argument("--kind", action="append", dest="kinds")
-    parser.add_argument("--limit", type=int, default=3)
-    parser.add_argument("--include-deprecated", action="store_true")
+    mode.add_argument("--id", help="explain one entry by uuid or slug")
+    parser.add_argument("--kind")
+    parser.add_argument("--limit", type=int, default=20)
     parser.add_argument(
         "--include-unverified",
         action="store_true",
-        help="also return v2 entries nobody else has confirmed",
+        help="include unverified status and the candidate layer",
     )
     parser.add_argument(
         "--bodies",
         default=None,
-        help="comma-separated body variants to return (rule,measurement). Default: both.",
+        help="comma-separated body variants (rule,measurement). Default: both.",
     )
     parser.add_argument(
         "--layer",
         action="append",
         dest="layers",
-        choices=list(client.LAYERS),
-        help=(
-            "layer to consult; repeatable. Default: shared+project. "
-            "Omitting a layer is reported in coverage."
-        ),
-    )
-    parser.add_argument(
-        "--project-only",
-        action="store_true",
-        help="legacy single-layer behaviour: only .agents/knowledge/",
+        choices=list(LAYERS),
+        help="layer to consult; repeatable. Default: shared+project.",
     )
     parser.add_argument(
         "--knowledge-dir",
@@ -89,8 +68,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--candidate-dir",
         type=Path,
-        default=None,
-        help="local candidate queue (default .vaws-local/knowledge/candidates)",
+        default=ROOT / ".vaws-local" / "knowledge" / "candidate",
     )
     args = parser.parse_args(argv)
     bodies = (
@@ -98,87 +76,26 @@ def main(argv: list[str] | None = None) -> int:
         if args.bodies
         else None
     )
-
-    # A caller that points --knowledge-dir at another checkout (or a test)
-    # sandbox) means that tree, not this one: derive the sibling layer
-    # locations from it so a query never mixes two repositories.
-    repo_root = ROOT
     knowledge_dir = args.knowledge_dir.resolve()
-    if knowledge_dir != (ROOT / ".agents" / "knowledge").resolve():
-        if knowledge_dir.parent.name == ".agents":
-            repo_root = knowledge_dir.parent.parent
-        else:
-            repo_root = knowledge_dir.parent
-
-    try:
-        if args.capabilities:
-            payload = {
-                "status": "passed",
-                "capabilities": client.probe_capabilities(
-                    repo_root=repo_root,
-                    knowledge_dir=args.knowledge_dir,
-                    candidate_dir=args.candidate_dir,
-                ),
-                "unknown_semantics": client.UNKNOWN_SEMANTICS,
-            }
-        elif args.id:
-            if args.project_only:
-                result = get_knowledge_entry(
-                    knowledge_dir=args.knowledge_dir, entry_id=args.id
-                )
-            else:
-                result = client.get_entry(
-                    repo_root=repo_root,
-                    entry_id=args.id,
-                    layers=args.layers or client.LAYERS,
-                    knowledge_dir=args.knowledge_dir,
-                    candidate_dir=args.candidate_dir,
-                )
-            payload = {
-                "status": "passed" if result else "not-found",
-                "id": args.id,
-                "result": result,
-                "unknown_semantics": client.UNKNOWN_SEMANTICS,
-            }
-        elif args.project_only:
-            matches = query_knowledge(
-                knowledge_dir=args.knowledge_dir,
-                query=args.query,
-                kinds=args.kinds,
-                bodies=bodies,
-                limit=args.limit,
-                include_deprecated=args.include_deprecated,
-                include_unverified=args.include_unverified,
-            )
-            payload = {
-                "status": "passed",
-                "query": args.query,
-                "matches": matches,
-                "coverage": {
-                    "layers_requested": ["project"],
-                    "layers_answered": ["project"],
-                    "layers_unavailable": [],
-                    "result": "match" if matches else "no-match",
-                },
-                "unknown_semantics": client.UNKNOWN_SEMANTICS,
-            }
-        else:
-            payload = client.query(
-                repo_root=repo_root,
-                query=args.query,
-                layers=args.layers or client.DEFAULT_LAYERS,
-                kinds=args.kinds,
-                bodies=bodies,
-                limit=args.limit,
-                include_unverified=args.include_unverified,
-                include_deprecated=args.include_deprecated,
-                knowledge_dir=args.knowledge_dir,
-                candidate_dir=args.candidate_dir,
-            )
-    except KnowledgeError as exc:
-        print(json.dumps({"status": "failed", "error": str(exc)}))
-        return 1
-    print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+    repo_root = infer_repo_root(knowledge_dir, knowledge_dir.parent)
+    config = service_config(
+        repo_root,
+        project_root=knowledge_dir,
+        candidate_root=args.candidate_dir.resolve(),
+    )
+    if args.id:
+        payload = _explain(config, args.id, args.layers)
+    else:
+        payload = query(
+            config,
+            text=args.query,
+            layers=args.layers,
+            include_unverified=args.include_unverified,
+            kind=args.kind,
+            bodies=bodies,
+            limit=args.limit,
+        ).to_dict()
+    print(json.dumps(payload, ensure_ascii=False))
     return 0
 
 

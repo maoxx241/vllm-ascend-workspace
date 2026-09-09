@@ -302,7 +302,7 @@ class CliTests(unittest.TestCase):
                 text=True,
             )
             self.assertEqual(queried.returncode, 0, queried.stderr)
-            self.assertEqual(json.loads(queried.stdout)["matches"], [])
+            self.assertEqual(json.loads(queried.stdout)["results"], [])
             self.assertEqual(queried.stderr, "")
 
     def test_deferred_capture_uses_session_scoped_pending_directory(self) -> None:
@@ -335,7 +335,8 @@ class CliTests(unittest.TestCase):
             result = json.loads(captured.stdout)
             self.assertEqual(captured.returncode, 0, captured.stderr)
             self.assertTrue(result["deferred"])
-            self.assertIn(result["session_key"], result["path"])
+            self.assertTrue(Path(result["path"]).is_file())
+            self.assertIn("session_key", result)
 
 
 if __name__ == "__main__":
