@@ -17,9 +17,14 @@ events: list[dict] = []
 
 
 def audit(event, args):
-    if event in ("socket.connect", "socket.getaddrinfo", "socket.bind"):
+    if event == "socket.getaddrinfo":
         events.append({"kind": "network_attempt", "event": event})
         raise RuntimeError("local-only acceptance forbids network")
+    if event in ("socket.connect", "socket.bind"):
+        address = args[1] if len(args) > 1 else None
+        if isinstance(address, (tuple, list)):
+            events.append({"kind": "network_attempt", "event": event})
+            raise RuntimeError("local-only acceptance forbids network")
 
 
 class NoForeignProvider(importlib.abc.MetaPathFinder):

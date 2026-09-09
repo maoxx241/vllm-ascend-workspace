@@ -91,7 +91,7 @@ class EnvironmentTests(unittest.TestCase):
             "VAWS_HOST_QUEUE_MODULE": "/tmp/host.py",
         })
         self.assertEqual(env["VAWS_AGENT_SESSIONS_DIR"], "/tmp/explicit-registry")
-        self.assertEqual(env["VAWS_HOST_QUEUE_MODULE"], "/tmp/host.py")
+        self.assertNotIn("VAWS_HOST_QUEUE_MODULE", env)
 
     def test_relative_registry_path_uses_the_shared_workspace(self) -> None:
         from vaws_local_state import shared_workspace_root
@@ -186,6 +186,55 @@ class LauncherTests(unittest.TestCase):
         self.assertNotIn("VAWS_HOST_QUEUE_MODULE", payload)
         self.assertNotIn(_GONE_COORDINATOR_ROOT, payload)
         self.assertTrue(all(key.startswith("VAWS_") for key in payload))
+
+    def test_exec_module_preserves_existing_coordinator_machines(self) -> None:
+        self.assertFalse(hasattr(coordinator, "seed_machine_directory"))
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            local = repo / ".vaws-local"
+            local.mkdir()
+            inventory = local / "machine-inventory.json"
+            inventory.write_text(
+                '{"schema_version": 1, "hosts": [{"host": "old.example"}]}\n',
+                encoding="utf-8",
+            )
+            state_dir = local / "coordinator"
+            state_dir.mkdir()
+            machines = state_dir / "machines.json"
+            original = '{"schema_version": 1, "hosts": [{"host": "provisioned.example"}]}\n'
+            machines.write_text(original, encoding="utf-8")
+            sessions = local / "agent-sessions"
+            sessions.mkdir()
+            captured: dict[str, object] = {}
+
+            def fake_execve(executable, command, env):
+                captured["env"] = dict(env)
+                captured["command"] = list(command)
+                raise SystemExit(0)
+
+            isolated = {
+                key: value
+                for key, value in os.environ.items()
+                if key != "VAWS_COORDINATOR_STATE_DIR"
+            }
+            isolated["VAWS_COORDINATOR_STATE_DIR"] = str(state_dir)
+            isolated["VAWS_AGENT_SESSIONS_DIR"] = str(sessions)
+            with mock.patch.object(coordinator, "require_package", return_value={"state": "ready"}), mock.patch.object(
+                coordinator.os, "execve", side_effect=fake_execve
+            ), mock.patch.dict(os.environ, isolated, clear=True):
+                with self.assertRaises(SystemExit):
+                    coordinator.exec_module("vaws_coordinator", ["status"], repo_root=repo)
+            self.assertEqual(machines.read_text(encoding="utf-8"), original)
+            self.assertEqual(
+                inventory.read_text(encoding="utf-8"),
+                '{"schema_version": 1, "hosts": [{"host": "old.example"}]}\n',
+            )
+            env = captured["env"]
+            assert isinstance(env, dict)
+            self.assertEqual(
+                Path(env["VAWS_COORDINATOR_STATE_DIR"]).resolve(),
+                state_dir.resolve(),
+            )
 
     def test_help_matrix(self) -> None:
         for args in (["--help"], ["status", "--help"]):
@@ -787,7 +836,7 @@ class NoInTreeTaskWriterTests(unittest.TestCase):
     def test_build_inputs_live_in_the_coordinator_package(self) -> None:
         """Run Manifest and build-inputs are imported from the package; scaffold copies are gone."""
         self.assertFalse((ROOT / ".agents/lib/vaws_build_inputs.py").is_file())
-        self.assertTrue((ROOT / ".agents/lib/vaws_host_queue_module.py").is_file())
+        self.assertFalse((ROOT / ".agents/lib/vaws_host_queue_module.py").is_file())
         self.assertFalse((ROOT / ".agents/lib/vaws_run_manifest.py").is_file())
         import vaws_coordinator.build_inputs  # noqa: F401
         import vaws_coordinator.run_manifest  # noqa: F401

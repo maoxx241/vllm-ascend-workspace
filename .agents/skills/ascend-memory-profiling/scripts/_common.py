@@ -22,15 +22,9 @@ for _p in (str(LIB_DIR), str(MM_SCRIPTS)):
 from vaws_local_state import allocate_run_dir  # noqa: E402
 from vaws_remote_dev import ssh_exec, ssh_run_bytes  # noqa: E402
 from vaws_result_envelope import progress as envelope_progress  # noqa: E402
-from vaws_remote_target import (  # noqa: E402
-    SshEndpoint,
-    container_endpoint_from_record,
-)
-from vaws_session_state import (  # noqa: E402
-    load_session_lookup,
-    session_record_for_execution,
-    session_serving_state_path,
-)
+from vaws_remote_target import SshEndpoint, ssh_endpoint_from_mapping  # noqa: E402
+from vaws_session_state import load_serving_state as load_task_serving_state  # noqa: E402
+from vaws_task_target import executions_for_service, execution_target, task_client, task_id_of  # noqa: E402
 
 MEMPROF_STATE_DIR = ROOT / ".vaws-local" / "memory-profiling"
 
@@ -64,29 +58,33 @@ def progress(msg: str, **extra: Any) -> None:
 
 def resolve_execution_target(
     *,
-    session_id: str | None = None,
-    session_file: str | None = None,
+    context_file: str | None = None,
+    execution_id: str | None = None,
+    service: str = "vllm",
 ) -> dict[str, Any]:
-    """Resolve the session execution target (session-only).
-
-    With no explicit id/file the session is auto-resolved from the nearest
-    worktree binding (cwd upward).
-    """
-    lookup = load_session_lookup(
-        session_id=session_id,
-        session_file=session_file,
-        repo_root=ROOT,
-    )
-    record = session_record_for_execution(lookup.session)
+    """Authoritative coordinator routing for a live or historical execution."""
+    client = task_client(context_file)
+    task_id = task_id_of(client)
+    if not execution_id:
+        rows = executions_for_service(client, service)
+        if not rows:
+            raise RuntimeError("memory profiling needs --execution-id or a live named service")
+        execution_id = str(rows[-1].get("id") or rows[-1].get("execution_id"))
+    target = execution_target(client, str(execution_id))
+    endpoint = ssh_endpoint_from_mapping(target.get("endpoint"))
     return {
-        "mode": "session",
-        "record": record,
-        "alias": record["alias"],
-        "endpoint": container_endpoint_from_record(record),
-        "session_id": lookup.session["session_id"],
-        "session_file": str(lookup.session_file),
-        "session": lookup.session,
-        "state_repo_root": lookup.state_repo_root,
+        "mode": "execution",
+        "record": {"alias": target.get("container_name") or endpoint.host},
+        "alias": str(target.get("container_name") or endpoint.host),
+        "endpoint": endpoint,
+        "task_id": task_id,
+        "execution_id": str(execution_id),
+        "session_id": task_id,
+        "python": target.get("python"),
+        "service_port": target.get("service_port"),
+        "live": bool(target.get("live")),
+        "target": target,
+        "client": client,
     }
 
 
@@ -94,38 +92,24 @@ def ensure_run_dir(tag: str = "") -> Path:
     return allocate_run_dir(MEMPROF_STATE_DIR, tag)
 
 
-def find_python(endpoint: SshEndpoint) -> str:
-    """Detect the Python binary with torch_npu on the remote machine."""
-    for candidate in [
-        "/usr/local/python3.11.15/bin/python3",
-        "/usr/local/python3.11.14/bin/python3",
-        "/usr/local/python3.10/bin/python3",
-        "python3",
-    ]:
-        r = ssh_exec(endpoint, f"{ENV_PREAMBLE} {candidate} -c 'import torch_npu' 2>/dev/null && echo OK", check=False)
-        if "OK" in r.stdout:
-            return candidate
-    raise RuntimeError("No Python with torch_npu found on remote machine")
+def selected_python(target: dict[str, Any]) -> str:
+    """Use the coordinator-selected interpreter. Do not scan fallbacks."""
+    python = target.get("python") if isinstance(target, dict) else None
+    if not python:
+        raise RuntimeError(
+            "coordinator target has no python; the selected environment owns the interpreter"
+        )
+    return str(python)
 
 
 def load_serving_state(
-    session_id: str,
+    task_id: str,
     *,
     state_repo_root: Path = ROOT,
 ) -> dict[str, Any] | None:
-    """Read the serving skill's persisted state for a session.
-
-    Returns None if no state file exists or it's unparseable.
-    The state dict contains: model, pid, port, runtime_dir, log_stdout,
-    log_stderr, tp, dp, devices, status, started_at, etc.
-    """
-    path = session_serving_state_path(session_id, state_repo_root)
-    if not path.exists():
-        return None
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return None
+    """Read the serving skill's persisted receipt for a task."""
+    del state_repo_root
+    return load_task_serving_state(task_id)
 
 
 def get_machine_alias(machine: dict[str, Any]) -> str:

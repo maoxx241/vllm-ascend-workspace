@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://vllm-ascend-workspace.local/schemas/knowledge-v2-project.schema.json",
   "title": "vLLM Ascend Workspace Project-Layer Knowledge Document v2",
-  "$comment": "Project layer of the federated knowledge model. The upstream contract is https://github.com/vllm-ascend-workspace/vaws-knowledge/schemas/knowledge-v2.schema.json and is NOT vendored here; this file describes only the local project layer, which differs in exactly two ways. (1) A constraint may additionally be an unresolved marker {unresolved, needs}: a coordinate nobody has established yet is representable locally, is refused by the export gate, and blocks status verified. (2) layer may be 'project'. Export rewrites layer to 'unverified' and drops nothing else, so anything valid upstream stays valid. jsonschema is not installed in this environment; the executable enforcement of this contract is .agents/lib/vaws_knowledge_v2.py, and this file is the machine-readable statement of the same rules.",
+  "$comment": "Project-layer note only. The executable contract is the installed vaws-knowledge schema/validate/canonical/export/redact APIs. Unresolved coordinates are unbounded ranges; sourced references omit runtime scope. This file is not a second body/schema engine.",
 
   "type": "object",
   "additionalProperties": false,

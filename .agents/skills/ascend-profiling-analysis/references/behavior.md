@@ -10,7 +10,7 @@ managed VAWS compatibility backend.
 
 ## Lifecycle
 
-1. **Resolve session** target: auto-resolved from the cwd worktree binding (`.vaws-local/current-session.json`) when no target arg is passed, or from an explicit `--session-id` / `--session-file`. A session-scoped `--manifest` supplies the session automatically.
+1. **Resolve target** from `--execution-id` / `--host`, or a collection manifest's recorded `execution_id` / `host`. Do not guess a session from cwd.
 2. **Resolve input**:
    - `--manifest <local-run-dir>/manifest.json` → produced by `ascend-profiling-collection`. We require `analysis_status == "ok"` and a non-empty `remote_profile_root`.
    - `--remote-profile-root <abs-path>` → raw remote path (used for historical roots not collected through the collection skill).

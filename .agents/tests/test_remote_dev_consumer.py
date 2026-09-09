@@ -1,8 +1,7 @@
 """Scaffold-side contract with the installed vaws-remote-dev package.
 
-Everything here runs against the resolver plugin and client configuration.
-``SubstrateIntegrationTests`` exercise real ``remote_dev.core.endpoint``
-registration when the package is importable.
+Generic remote-dev tools stay explicit host/port. This workspace does not
+inject a VAWS resolver.
 """
 from __future__ import annotations
 
@@ -26,8 +25,6 @@ if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
 import vaws_remote_dev as remote_dev  # noqa: E402
-import vaws_remote_dev_plugin as plugin  # noqa: E402
-import vaws_session_id  # noqa: E402
 from vaws_remote_target import RemoteTargetError  # noqa: E402
 
 requires_package = unittest.skipUnless(
@@ -57,139 +54,40 @@ def fake_target(*, session_id=None, alias="host-a", port=46000, runtime_root="/v
 
 
 class FindSessionBindingTests(unittest.TestCase):
-    """The cwd-upward auto-bind walk stops at the repository root (D2).
-
-    Moved from the substrate's ``tests/test_endpoint.py``: the walk is scaffold
-    behaviour (``vaws_session_id``) that the resolver plugin now relies on.
-    """
-
-    def setUp(self) -> None:
-        self.temp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temp.cleanup)
-        base = Path(self.temp.name).resolve()
-        self.repo = base / "repo"
-        self.deep = self.repo / "a" / "b"
-        self.deep.mkdir(parents=True)
-        self.elsewhere = base / "elsewhere"
-        self.elsewhere.mkdir()
-        self._write_binding(base, "sess-stray-above-repo")
-
-    def _write_binding(self, directory: Path, session_id: str) -> None:
-        state = directory / ".vaws-local"
-        state.mkdir(parents=True, exist_ok=True)
-        (state / "current-session.json").write_text(
-            json.dumps({"schema_version": 1, "session_id": session_id, "source": "test"}), encoding="utf-8"
-        )
-
-    def test_walk_finds_binding_at_or_below_repo_root(self) -> None:
-        self._write_binding(self.repo, "sess-in-repo")
-        with mock.patch.object(vaws_session_id, "_binding_walk_stop", return_value=self.repo):
-            found = vaws_session_id.find_session_binding(self.deep)
-        self.assertIsNotNone(found)
-        self.assertEqual(found[0], self.repo)
-        self.assertEqual(found[1]["session_id"], "sess-in-repo")
-
-    def test_walk_ignores_stray_binding_above_repo_root(self) -> None:
-        with mock.patch.object(vaws_session_id, "_binding_walk_stop", return_value=self.repo):
-            self.assertIsNone(vaws_session_id.find_session_binding(self.deep))
-
-    def test_walk_outside_repo_keeps_legacy_unbounded_behavior(self) -> None:
-        with mock.patch.object(vaws_session_id, "_binding_walk_stop", return_value=self.repo):
-            found = vaws_session_id.find_session_binding(self.elsewhere)
-        self.assertIsNotNone(found)
-        self.assertEqual(found[1]["session_id"], "sess-stray-above-repo")
+    def test_workspace_does_not_guess_task_from_cwd(self) -> None:
+        import vaws_session_id
+        self.assertFalse(hasattr(vaws_session_id, "find_session_binding"))
+        self.assertFalse(hasattr(vaws_session_id, "resolve_session_id"))
 
 
 class ResolverPluginMappingTests(unittest.TestCase):
-    """The plugin reproduces the substrate's former `_endpoint_from_managed`."""
-
-    def test_machine_maps_to_container_endpoint_with_ascend_runtime_env(self) -> None:
-        with mock.patch.object(plugin, "resolve_remote_target", return_value=fake_target()) as resolver:
-            payload = plugin.resolve_vaws({"machine": "host-a", "root": "/vllm-workspace"})
-        resolver.assert_called_once_with(repo_root=plugin.REPO_ROOT, machine="host-a", session_id=None, session_file=None)
-        self.assertEqual(payload["host"], "203.0.113.10")
-        self.assertEqual(payload["port"], 46000)
-        self.assertEqual(payload["user"], "root")
-        self.assertEqual(payload["cwd"], "/vllm-workspace")
-        self.assertEqual(payload["kind"], "managed-machine")
-        self.assertEqual(payload["alias"], "host-a")
-        self.assertEqual(payload["runtime_env_file"], remote_dev.ASCEND_RUNTIME_ENV_FILE)
-        self.assertEqual(payload["source"], {"vaws_target": fake_target().to_dict()})
-        # Caller overrides (root/cwd/user/...) are merged by the substrate, so
-        # the plugin must not pre-empt them.
-        self.assertNotIn("root", payload)
-
-    def test_session_selector_marks_managed_session(self) -> None:
-        target = fake_target(session_id="sess-1", alias="host-b", port=46008, runtime_root="/vllm-workspace/s1")
-        with mock.patch.object(plugin, "resolve_remote_target", return_value=target):
-            payload = plugin.resolve_vaws({"session_id": "sess-1"})
-        self.assertEqual(payload["kind"], "managed-session")
-        self.assertEqual(payload["alias"], "sess-1")
-        self.assertEqual(payload["cwd"], "/vllm-workspace/s1")
-
-    def test_worktree_auto_bind_uses_session_id_as_alias(self) -> None:
-        target = fake_target(session_id="sess-bound", alias="host-b")
-        with mock.patch.object(plugin, "resolve_remote_target", return_value=target):
-            payload = plugin.resolve_vaws({})
-        self.assertEqual(payload["kind"], "managed-session")
-        self.assertEqual(payload["alias"], "sess-bound")
-
-    def test_no_selector_and_no_binding_declines(self) -> None:
-        with mock.patch.object(plugin, "resolve_remote_target", side_effect=RemoteTargetError("no binding")):
-            self.assertIsNone(plugin.resolve_vaws({}))
-            self.assertIsNone(plugin.resolve_vaws({"root": "/vllm-workspace"}))
-
-    def test_selector_that_cannot_resolve_raises(self) -> None:
-        with mock.patch.object(plugin, "resolve_remote_target", side_effect=RemoteTargetError("not found")):
-            with self.assertRaises(Exception) as ctx:
-                plugin.resolve_vaws({"machine": "ghost"})
-        self.assertIn("ghost", str(ctx.exception))
-        self.assertIn("not found", str(ctx.exception))
-
-    def test_setup_is_marked_as_substrate_setup_hook(self) -> None:
-        self.assertTrue(getattr(plugin.setup, "remote_dev_resolver_setup", False))
-        self.assertEqual(plugin.FIELDS, ("machine", "session_id", "session_file"))
-
-    def test_plugin_imports_nothing_from_the_substrate_at_import_time(self) -> None:
-        code = (
-            "import importlib.util, sys\n"
-            f"spec = importlib.util.spec_from_file_location('p', {str(plugin.__file__)!r})\n"
-            "m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n"
-            "print(any(name == 'core' or name.startswith('core.') for name in sys.modules))\n"
-        )
-        proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=False)
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertEqual(proc.stdout.strip(), "False")
-
+    def test_resolver_plugin_is_deleted(self) -> None:
+        self.assertFalse((ROOT / ".agents/lib/vaws_remote_dev_plugin.py").is_file())
 
 
 class PackageWiringTests(unittest.TestCase):
-    def test_substrate_environment_fills_defaults_and_absolutises_paths(self) -> None:
-        env = remote_dev.substrate_environment({"REMOTE_DEV_RESOLVERS": ".agents/lib/vaws_remote_dev_plugin.py:setup",
-                                                "REMOTE_DEV_STATE_DIR": ".vaws-local/remote-dev-state"})
-        self.assertEqual(env["REMOTE_DEV_RUNTIME_ENV_FILE"], "/etc/profile.d/vaws-ascend-env.sh")
-        self.assertEqual(env["REMOTE_DEV_RESOLVERS"], f"{(ROOT / '.agents/lib/vaws_remote_dev_plugin.py').resolve()}:setup")
+    def test_substrate_environment_strips_resolvers(self) -> None:
+        env = remote_dev.substrate_environment({
+            "REMOTE_DEV_RESOLVERS": ".agents/lib/vaws_remote_dev_plugin.py:setup",
+            "REMOTE_DEV_STATE_DIR": ".vaws-local/remote-dev-state",
+        })
+        self.assertNotIn("REMOTE_DEV_RESOLVERS", env)
         self.assertEqual(env["REMOTE_DEV_STATE_DIR"], str(ROOT / ".vaws-local/remote-dev-state"))
         self.assertNotIn("REMOTE_DEV_DEFAULT_ROOT", env)
-
-    def test_substrate_environment_keeps_caller_values(self) -> None:
-        env = remote_dev.substrate_environment({"REMOTE_DEV_RUNTIME_ENV_FILE": "/etc/profile.d/other.sh",
-                                                "REMOTE_DEV_RESOLVERS": "/abs/plugin.py:setup,pkg.mod:resolver"})
-        self.assertEqual(env["REMOTE_DEV_RUNTIME_ENV_FILE"], "/etc/profile.d/other.sh")
-        self.assertEqual(env["REMOTE_DEV_RESOLVERS"], "/abs/plugin.py:setup,pkg.mod:resolver")
 
     def test_package_status_names_the_lock(self) -> None:
         status = remote_dev.package_status()
         self.assertEqual(status["name"], "vaws-remote-dev")
         self.assertIn(status["state"], {"missing", "off_spec", "ready"})
         self.assertEqual(status["remedy"], "uv sync")
-        self.assertTrue(status["resolver"].endswith("vaws_remote_dev_plugin.py:setup"))
+        self.assertNotIn("resolver", status)
 
 
 class ClientConfigurationTests(unittest.TestCase):
     SERVER_ARGS = ["-m", "remote_dev.mcp.server"]
     TASK_ARGS = ["-m", "vaws_coordinator", "task-server"]
-    REQUIRED_ENV = ("REMOTE_DEV_RUNTIME_ENV_FILE", "REMOTE_DEV_RESOLVERS", "REMOTE_DEV_STATE_DIR")
+    REQUIRED_ENV = ("REMOTE_DEV_DEFAULT_USER", "REMOTE_DEV_STATE_DIR")
+    FORBIDDEN_ENV = ("REMOTE_DEV_RESOLVERS", "REMOTE_DEV_RUNTIME_ENV_FILE")
 
     def test_tracked_json_clients_use_the_package_and_inject_the_environment(self) -> None:
         for relative in (".mcp.json", ".cursor/mcp.json"):
@@ -201,8 +99,8 @@ class ClientConfigurationTests(unittest.TestCase):
                 self.assertEqual(servers["vaws-task"]["args"], self.TASK_ARGS)
                 for key in self.REQUIRED_ENV:
                     self.assertIn(key, entry["env"])
-                self.assertEqual(entry["env"]["REMOTE_DEV_RUNTIME_ENV_FILE"], remote_dev.ASCEND_RUNTIME_ENV_FILE)
-                self.assertEqual(entry["env"]["REMOTE_DEV_RESOLVERS"], ".agents/lib/vaws_remote_dev_plugin.py:setup")
+                for key in self.FORBIDDEN_ENV:
+                    self.assertNotIn(key, entry["env"])
 
     def test_tracked_toml_examples_use_the_package_and_inject_the_environment(self) -> None:
         for relative, server in ((".codex/config.example.toml", "remote_dev"), (".grok/config.example.toml", "remote-dev")):
@@ -214,7 +112,8 @@ class ClientConfigurationTests(unittest.TestCase):
                 self.assertEqual(task["args"], self.TASK_ARGS)
                 for key in self.REQUIRED_ENV:
                     self.assertIn(key, entry["env"])
-                self.assertTrue(entry["env"]["REMOTE_DEV_RESOLVERS"].endswith("vaws_remote_dev_plugin.py:setup"))
+                for key in self.FORBIDDEN_ENV:
+                    self.assertNotIn(key, entry["env"])
 
     def test_claude_and_codex_hooks_use_the_package_guards(self) -> None:
         settings = json.loads((ROOT / ".claude/settings.example.json").read_text(encoding="utf-8"))
@@ -242,7 +141,7 @@ class ClientConfigurationTests(unittest.TestCase):
             codex = tomllib.loads(setup.configuration("codex", project)[project / ".codex/config.toml"])
             self.assertEqual(codex["mcp_servers"]["remote_dev"]["args"], self.SERVER_ARGS)
             self.assertEqual(codex["mcp_servers"]["vaws_task"]["args"], self.TASK_ARGS)
-            self.assertIn("REMOTE_DEV_RESOLVERS", codex["mcp_servers"]["remote_dev"]["env"])
+            self.assertNotIn("REMOTE_DEV_RESOLVERS", codex["mcp_servers"]["remote_dev"]["env"])
         self.assertFalse(str(setup.BACKUP_DIR).startswith(str(ROOT / ".remote-dev")))
         self.assertTrue(str(setup.BACKUP_DIR).startswith(str(ROOT / ".vaws-local")))
 
@@ -252,7 +151,7 @@ class ClientConfigurationTests(unittest.TestCase):
             project = Path(tmp).resolve()
             (project / ".mcp.json").write_text(json.dumps({"mcpServers": {"remote-dev": {"env": {"REMOTE_DEV_RUNTIME_ENV_FILE": "/etc/profile.d/custom.sh"}}}}))
             mcp = json.loads(setup.configuration("claude", project)[project / ".mcp.json"])["mcpServers"]["remote-dev"]
-            self.assertEqual(mcp["env"]["REMOTE_DEV_RUNTIME_ENV_FILE"], "/etc/profile.d/custom.sh")
+            self.assertNotIn("REMOTE_DEV_RESOLVERS", mcp["env"])
 
 
 OLD_SUBSTRATE_PATH = ".remote-dev/"
@@ -487,87 +386,6 @@ class ClaudeSkillShimTests(unittest.TestCase):
                 self.assertNotEqual(body, source.read_text(encoding="utf-8"))
                 self.assertNotIn("`.remote-dev`", body)
 
-
-
-@requires_package
-class SubstrateIntegrationTests(unittest.TestCase):
-    """Real registration through `remote_dev.core.endpoint` in a fresh interpreter."""
-
-    def _run(self, code: str, env: dict[str, str] | None = None, cwd: str | None = None) -> subprocess.CompletedProcess:
-        child_env = {
-            key: value
-            for key, value in os.environ.items()
-            if not key.startswith("REMOTE_DEV_")
-        }
-        if env:
-            child_env.update(env)
-        return subprocess.run(
-            [sys.executable, "-c", code],
-            capture_output=True,
-            text=True,
-            env=child_env,
-            cwd=cwd,
-            check=False,
-        )
-
-    def test_resolvers_env_registers_the_scaffold_selector_fields(self) -> None:
-        code = (
-            "from remote_dev.core.endpoint import selector_fields, registered_resolvers\n"
-            "print(sorted(selector_fields())); print([r.name for r in registered_resolvers()])\n"
-        )
-        proc = self._run(code, {"REMOTE_DEV_RESOLVERS": remote_dev.resolver_spec()})
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        fields, names = proc.stdout.strip().splitlines()
-        self.assertEqual(fields, str(sorted(["host", "port", "alias", "machine", "session_id", "session_file"])))
-        self.assertEqual(names, "['vaws']")
-
-    def test_machine_selector_resolves_from_a_fake_inventory_with_runtime_env_file(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            repo = Path(tmp) / "repo"
-            (repo / ".vaws-local").mkdir(parents=True)
-            (repo / ".vaws-local" / "machine-inventory.json").write_text(json.dumps({
-                "schema_version": 1,
-                "machines": [{"alias": "host-a", "host": {"ip": "203.0.113.10", "port": 22, "user": "root"},
-                              "container": {"name": "vaws-test", "ssh_port": 46000, "runtime_root": "/vllm-workspace"}}],
-            }), encoding="utf-8")
-            code = (
-                "import json, pathlib, sys\n"
-                f"sys.path.insert(0, {str(LIB)!r})\n"
-                "import vaws_remote_dev_plugin as plugin\n"
-                f"plugin.REPO_ROOT = pathlib.Path({str(repo)!r})\n"
-                "plugin.setup()\n"
-                "from remote_dev.core.endpoint import resolve_endpoint, has_selector\n"
-                "ep = resolve_endpoint({'machine': 'host-a', 'root': '/vllm-workspace'})\n"
-                "t = ep.to_result_target(); t.pop('source'); t['has_selector'] = has_selector({'machine': 'x'})\n"
-                "print(json.dumps(t, sort_keys=True))\n"
-            )
-            proc = self._run(code)
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        target = json.loads(proc.stdout)
-        self.assertEqual((target["host"], target["port"], target["user"]), ("203.0.113.10", 46000, "root"))
-        self.assertEqual(target["root"], "/vllm-workspace")
-        self.assertEqual(target["cwd"], "/vllm-workspace")
-        self.assertEqual(target["kind"], "managed-machine")
-        self.assertEqual(target["alias"], "host-a")
-        self.assertEqual(target["runtime_env_file"], remote_dev.ASCEND_RUNTIME_ENV_FILE)
-        self.assertTrue(target["has_selector"])
-
-    def test_empty_payload_without_binding_yields_the_substrate_error(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            code = (
-                "import pathlib, sys\n"
-                f"sys.path.insert(0, {str(LIB)!r})\n"
-                "import vaws_remote_dev_plugin as plugin\n"
-                f"plugin.REPO_ROOT = pathlib.Path({tmp!r})\n"
-                "plugin.setup()\n"
-                "from remote_dev.core.endpoint import resolve_endpoint\n"
-                "from remote_dev.core.errors import EndpointError\n"
-                "try:\n    resolve_endpoint({})\nexcept EndpointError as exc:\n    print(str(exc))\n"
-            )
-            proc = self._run(code, cwd=tmp)
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertIn("no endpoint target", proc.stdout)
-        self.assertIn("registered resolvers: vaws", proc.stdout)
 
 
 if __name__ == "__main__":

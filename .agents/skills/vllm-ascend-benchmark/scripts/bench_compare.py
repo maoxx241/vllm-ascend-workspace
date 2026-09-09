@@ -152,8 +152,11 @@ def _split_sections(argv: list[str]) -> tuple[list[str], list[str] | None, list[
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__, allow_abbrev=False,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--session-id", help="VAWS session id; defaults to the bound session")
-    p.add_argument("--session-file", help="explicit session.json path")
+    p.add_argument("--context-file", help="VAWS task context; defaults to VAWS_CONTEXT_FILE")
+    p.add_argument("--execution-id", help="live execution whose container is used for source I/O")
+    p.add_argument("--host", help="explicit container SSH host for source I/O")
+    p.add_argument("--ssh-port", type=int, dest="ssh_port", help="explicit container SSH port")
+    p.add_argument("--service", default="vllm")
     p.add_argument("--model", required=True, help="remote model weight path")
     p.add_argument("--state", action="append", type=_parse_state, required=True,
                    help="LABEL=REF to benchmark (repeatable). REF supports pr:NNNN / commit / branch.")
@@ -417,6 +420,7 @@ def _run_one_state(
         start = call_serve_start(config)
         if start.get("status") != "ready":
             raise RuntimeError(f"[{label}] service not ready: {str(start)[:1500]}")
+        config.execution_id = start.get("execution_id") or config.execution_id
         base_url = start["base_url"]
         served_model = start.get("served_model_name") or config.served_model_name or Path(args.model).name
 
@@ -579,8 +583,9 @@ def main(argv: list[str] | None = None) -> int:
             base_bench_args = []
 
         config = assemble_config(
-            session_id=args.session_id,
-            session_file=args.session_file,
+            context_file=args.context_file,
+            execution_id=args.execution_id,
+            service=args.service,
             model=args.model,
             tp=args.tp,
             dp=args.dp,
@@ -593,15 +598,20 @@ def main(argv: list[str] | None = None) -> int:
             extra_env=args.extra_env,
             bench_env=args.bench_env,
             preset=args.preset,
-            # States align source directly in-container; parity sync would
-            # overwrite the checked-out state, so it is always skipped here.
-            skip_parity=True,
         )
 
-        container_ip, container_port = _get_ssh_endpoint(
-            session_id=config.session_id,
-            session_file=config.session_file,
-        )
+        if args.host:
+            container_ip, container_port = args.host, int(args.ssh_port or 22)
+        elif args.execution_id:
+            container_ip, container_port = _get_ssh_endpoint(
+                context_file=args.context_file,
+                execution_id=args.execution_id,
+            )
+        else:
+            raise RuntimeError(
+                "bench_compare needs --host/--ssh-port or --execution-id for "
+                "user-container I/O without taking a second NPU lease"
+            )
 
         cases = build_cases(
             base_bench_args,
@@ -713,7 +723,7 @@ def main(argv: list[str] | None = None) -> int:
 
         result = {
             "status": "ok",
-            "session_id": config.session_id,
+            "task_id": config.task_id,
             "model": args.model,
             "preset": args.preset,
             "vllm_ref": vllm_ref,

@@ -477,8 +477,11 @@ def promote_candidate_v2(
             "redaction_profile": redaction.REDACTION_PROFILE,
         },
         "lifecycle": {
-            "first_seen": v2.today(
-                str((loaded.entry.get("lifecycle") or {}).get("first_seen") or timestamp)
+            "first_seen": min(
+                v2.today(
+                    str((loaded.entry.get("lifecycle") or {}).get("first_seen") or timestamp)
+                ),
+                v2.today(timestamp),
             ),
             "updated_at": v2.today(timestamp),
             "superseded_by": None,

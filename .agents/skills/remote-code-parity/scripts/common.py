@@ -4,13 +4,11 @@ from __future__ import annotations
 import contextlib
 import json
 import os
-import queue
 import re
 import shlex
 import subprocess
 import sys
 import tempfile
-import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,8 +18,8 @@ _LIB_DIR = Path(__file__).resolve().parents[4] / '.agents' / 'lib'
 if str(_LIB_DIR) not in sys.path:
     sys.path.insert(0, str(_LIB_DIR))
 
-from vaws_remote_dev import ssh_argv, ssh_exec as remote_ssh_exec, ssh_run_bytes  # noqa: E402
-from vaws_result_envelope import PROGRESS_SENTINEL, emit_skill_json  # noqa: E402
+from vaws_remote_dev import ssh_exec as remote_ssh_exec, ssh_run_bytes  # noqa: E402
+from vaws_result_envelope import emit_skill_json  # noqa: E402
 
 WORKSPACE_ID_PATTERN = re.compile(r'[^A-Za-z0-9._-]+')
 STATE_SUBDIR = Path('.vaws-local/remote-code-parity')
@@ -62,14 +60,6 @@ class SshEndpoint:
 
     def destination(self) -> str:
         return f'{self.user}@{self.host}'
-
-
-@dataclass(frozen=True)
-class SshStreamingResult:
-    returncode: int
-    stdout: str
-    stderr: str
-    progress_events: list[dict[str, Any]]
 
 
 def run(
@@ -242,22 +232,6 @@ def quoted(script: str) -> str:
     return shlex.quote(script)
 
 
-def _ssh_base_cmd(endpoint: SshEndpoint) -> list[str]:
-    return ssh_argv(endpoint)
-
-
-def parse_progress_event(line: str) -> dict[str, Any] | None:
-    if not line.startswith(PROGRESS_SENTINEL):
-        return None
-    try:
-        payload = json.loads(line[len(PROGRESS_SENTINEL) :])
-    except json.JSONDecodeError:
-        return None
-    if not isinstance(payload, dict):
-        return None
-    return payload
-
-
 def ssh_exec(
     endpoint: SshEndpoint,
     script: str,
@@ -267,107 +241,6 @@ def ssh_exec(
 ) -> subprocess.CompletedProcess[str]:
     del capture_output
     return remote_ssh_exec(endpoint, script, check=check)
-
-
-def ssh_exec_stream(
-    endpoint: SshEndpoint,
-    script: str,
-    *,
-    check: bool = True,
-    stream_progress: bool = True,
-) -> SshStreamingResult:
-    cmd = [*ssh_argv(endpoint, long_stream=True), 'bash', '-c', shlex.quote(script)]
-    proc = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        encoding='utf-8',
-        errors='replace',
-    )
-
-    assert proc.stdout is not None
-    assert proc.stderr is not None
-
-    q: queue.Queue[tuple[str, str | None]] = queue.Queue()
-    stdout_parts: list[str] = []
-    stderr_parts: list[str] = []
-    progress_events: list[dict[str, Any]] = []
-
-    def reader(stream_name: str, pipe: Any) -> None:
-        try:
-            for line in pipe:
-                q.put((stream_name, line))
-        finally:
-            q.put((stream_name, None))
-
-    threads = [
-        threading.Thread(target=reader, args=('stdout', proc.stdout), daemon=True),
-        threading.Thread(target=reader, args=('stderr', proc.stderr), daemon=True),
-    ]
-    for thread in threads:
-        thread.start()
-
-    done_streams: set[str] = set()
-    while len(done_streams) < 2 or proc.poll() is None:
-        try:
-            stream_name, line = q.get(timeout=0.2)
-        except queue.Empty:
-            continue
-        if line is None:
-            done_streams.add(stream_name)
-            continue
-        if stream_name == 'stdout':
-            stdout_parts.append(line)
-            continue
-        event = parse_progress_event(line)
-        if event is not None:
-            progress_events.append(event)
-            if stream_progress:
-                sys.stderr.write(line if line.endswith('\n') else line + '\n')
-                sys.stderr.flush()
-            continue
-        stderr_parts.append(line)
-
-    returncode = proc.wait()
-    for thread in threads:
-        thread.join(timeout=1)
-
-    while True:
-        try:
-            stream_name, line = q.get_nowait()
-        except queue.Empty:
-            break
-        if line is None:
-            continue
-        if stream_name == 'stdout':
-            stdout_parts.append(line)
-            continue
-        event = parse_progress_event(line)
-        if event is not None:
-            if event not in progress_events:
-                progress_events.append(event)
-            if stream_progress:
-                sys.stderr.write(line if line.endswith('\n') else line + '\n')
-                sys.stderr.flush()
-            continue
-        stderr_parts.append(line)
-
-    stdout = ''.join(stdout_parts)
-    stderr = ''.join(stderr_parts)
-    if check and returncode != 0:
-        rendered_cmd = ' '.join(shlex.quote(part) for part in cmd)
-        raise RuntimeError(
-            f'command failed ({returncode}): {rendered_cmd}\n'
-            f'stdout:\n{stdout}\n'
-            f'stderr:\n{stderr}'
-        )
-    return SshStreamingResult(
-        returncode=returncode,
-        stdout=stdout,
-        stderr=stderr,
-        progress_events=progress_events,
-    )
 
 
 def ssh_stream_to_file(endpoint: SshEndpoint, remote_path: str, payload: str) -> None:

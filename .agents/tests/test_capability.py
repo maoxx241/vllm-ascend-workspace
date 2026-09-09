@@ -93,17 +93,6 @@ class DoctorEnvelopeTests(unittest.TestCase):
 
 
 class ResolverDegradationTests(unittest.TestCase):
-    def test_missing_spec_is_dependency_layer(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            envelope = build_doctor_envelope(
-                argv=["python3", ".agents/scripts/vaws_deps.py", "doctor"],
-                repo_root=Path(tmp),
-            )
-        cap = envelope["extensions"]["capability_report"]["capabilities"]["resolver_registration"]
-        self.assertTrue(cap["degraded"])
-        layers = {item["layer"] for item in cap["degradation"]}
-        self.assertIn("dependency", layers)
-
     def test_host_npu_authority_depends_on_coordinator_package(self) -> None:
         self.assertEqual(CAPABILITY_DEPS["host_npu_authority"], ("vaws-coordinator",))
         with tempfile.TemporaryDirectory() as tmp:

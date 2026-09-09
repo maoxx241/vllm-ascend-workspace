@@ -382,7 +382,7 @@ package happens to be importable.
 python3 .agents/scripts/envelope_lint.py scan                     # static survey of .agents
 python3 .agents/scripts/envelope_lint.py scan --details           # + per-entry-point table
 python3 .agents/scripts/envelope_lint.py check --payload-file p.json
-python3 .agents/scripts/envelope_lint.py run -- python3 .agents/scripts/remote_probe.py --session-id x
+python3 .agents/scripts/envelope_lint.py run -- python3 .agents/scripts/remote_probe.py --host 192.0.2.10
 ```
 
 `scan` is a source heuristic and says so: four required checks

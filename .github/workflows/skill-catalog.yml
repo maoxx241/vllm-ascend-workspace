@@ -1,26 +1,10 @@
-name: Skill catalog
+name: CI
 
 on:
   pull_request:
-    paths:
-      - ".agents/**"
-      - "docs/**"
-      - "AGENTS.md"
-      - "README.md"
-      - "README.en.md"
-      - ".trae/skills/modelscope/**"
-      - ".github/workflows/skill-catalog.yml"
   push:
     branches:
       - main
-    paths:
-      - ".agents/**"
-      - "docs/**"
-      - "AGENTS.md"
-      - "README.md"
-      - "README.en.md"
-      - ".trae/skills/modelscope/**"
-      - ".github/workflows/skill-catalog.yml"
 
 permissions:
   contents: read
@@ -37,6 +21,15 @@ jobs:
           python-version: "3.12"
       - name: Install locked workspace packages
         run: uv sync --locked --group dev
+      - name: Doctor via system python3
+        run: |
+          python3 .agents/scripts/vaws_deps.py doctor > "${RUNNER_TEMP}/doctor.json"
+          python3 -c 'import json, pathlib, sys
+          envelope = json.loads(pathlib.Path(sys.argv[1]).read_text())
+          outcome = envelope.get("outcome")
+          if outcome != "success":
+              raise SystemExit(f"doctor outcome {outcome!r} is not success")
+          ' "${RUNNER_TEMP}/doctor.json"
       - name: Lockfile matches pyproject
         run: uv lock --check
       - name: Run the full .agents/tests suite
@@ -50,31 +43,19 @@ jobs:
         # already record, and on a baseline row whose violation is gone.
         # See docs/target-state.md. Submodules are not checked out here
         # and the guard skips them regardless.
-        run: |
-          uv run python -B .agents/scripts/repo_boundary_check.py --mode enforce
-          uv run python -B -m unittest discover -s .agents/tests -p "test_repo_boundary_check.py"
+        run: uv run python -B .agents/scripts/repo_boundary_check.py --mode enforce
       - name: Check tracked in-tree paths
-        run: |
-          uv run python -B .agents/scripts/tracked_path_check.py --mode enforce
-          uv run python -B -m unittest discover -s .agents/tests -p "test_tracked_path_check.py"
-      - name: Run catalog tests
-        run: uv run python -B -m unittest discover -s .agents/tests -p "test_*catalog.py"
+        run: uv run python -B .agents/scripts/tracked_path_check.py --mode enforce
+      - name: Scan tracked files for leaks
+        run: uv run python -B .agents/scripts/tracked_leak_scan.py --format json
+      - name: Launcher status
+        run: uv run python -B .agents/scripts/vaws.py status
       - name: Run repo-init tests
         run: uv run python -B -m unittest discover -s .agents/skills/repo-init/tests
-      - name: Run generated skill projection tests
-        run: uv run python -B -m unittest discover -s .agents/tests -p "test_sync_claude_skills.py"
       - name: Check generated Claude shims and ModelScope Trae projection
         run: uv run python -B .agents/scripts/sync_claude_skills.py --check
       - name: Run modelscope tests
         run: uv run python -B -m unittest discover -s .agents/skills/modelscope/tests
-      - name: Run manifest and knowledge tests
-        run: |
-          uv run python -B -m unittest discover -s .agents/tests -p "test_run_manifest.py"
-          uv run python -B -m unittest discover -s .agents/tests -p "test_code_identity.py"
-      - name: Run knowledge evidence-chain tests
-        run: uv run python -B -m unittest discover -s .agents/tests -p "test_knowledge*.py"
-      - name: Workflows must not duplicate lock SHAs
-        run: uv run python -B -m unittest discover -s .agents/tests -p "test_workflow_pin_refs.py"
       - name: Run knowledge curation tests
         run: uv run python -B -m unittest discover -s .agents/skills/curate-workspace-knowledge/tests
       - name: Run graph-debug tests
@@ -91,8 +72,6 @@ jobs:
 
       - name: Run scaffold ownership and parity regressions
         run: |
-          uv run python -B -m unittest discover -s .agents/tests -p "test_vaws_scaffold_safety.py"
-          uv run python -B -m unittest discover -s .agents/tests -p "test_shared_inventory_state.py"
           uv run python -B -m unittest discover -s .agents/skills/remote-code-parity/tests
           uv run python -B -m unittest discover -s .agents/skills/vllm-ascend-serving/tests
 
@@ -145,7 +124,3 @@ jobs:
         run: |
           uv pip install -r .agents/skills/ascend-profiling-analysis/requirements.txt
           uv run python -B -m pytest .agents/skills/ascend-profiling-analysis/tests -q
-
-  # In-tree `.agents/coordinator/` is gone. Scaffold-side consumer contracts
-  # live in coordinator.yml. Linux subreaper and HTTP manager tests live in
-  # the vaws-coordinator repository.

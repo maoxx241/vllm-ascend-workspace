@@ -74,11 +74,9 @@ from vaws_result_envelope import (
 )
 
 ROOT = Path(__file__).resolve().parents[2]
-PLUGIN_RELATIVE = ".agents/lib/vaws_remote_dev_plugin.py"
 TRACKED_MCP_CONFIGS = (".mcp.json", ".cursor/mcp.json")
 CAPABILITY_ORDER = (
     "remote_endpoints",
-    "resolver_registration",
     "task_pool",
     "host_npu_authority",
     "fleet_observation",
@@ -87,7 +85,6 @@ CAPABILITY_ORDER = (
 )
 CAPABILITY_DEPS = {
     "remote_endpoints": ("vaws-remote-dev",),
-    "resolver_registration": ("vaws-remote-dev",),
     "task_pool": ("vaws-coordinator",),
     "host_npu_authority": ("vaws-coordinator",),
     "fleet_observation": ("uvx", "vaws-top"),
@@ -214,62 +211,20 @@ def evaluate_capabilities(
                 effect="remote companion tools cannot start; host+port recipes that go through the package fail closed",
             )
         )
+    if _mcp_resolvers_configured(repo_root):
+        remote_deg.append(
+            {
+                "layer": "config",
+                "detail": "tracked MCP still injects REMOTE_DEV_RESOLVERS",
+                "effect": "generic remote-dev tools must stay explicit host/port; do not inject a VAWS resolver",
+                "remedy": "remove REMOTE_DEV_RESOLVERS from tracked MCP config and re-run vaws_client_setup.py",
+            }
+        )
     capabilities["remote_endpoints"] = _capability(
         available=remote_ok,
         degraded=bool(remote_deg),
         depends_on=CAPABILITY_DEPS["remote_endpoints"],
         degradation=remote_deg,
-    )
-
-    resolver_deg: list[dict[str, Any]] = []
-    plugin = repo_root / PLUGIN_RELATIVE
-    if remote["state"] != "ready":
-        resolver_deg.append(
-            _dep_degradation(
-                remote,
-                layer="dependency",
-                effect=(
-                    "only host+port endpoints resolve; --machine / --session-id / "
-                    "worktree auto-bind silently unavailable"
-                ),
-            )
-        )
-    if not plugin.is_file():
-        resolver_deg.append(
-            {
-                "layer": "scaffold",
-                "detail": f"{PLUGIN_RELATIVE} is not reachable from the scaffold root",
-                "effect": (
-                    "only host+port endpoints resolve; --machine / --session-id / "
-                    "worktree auto-bind silently unavailable"
-                ),
-                "remedy": "restore .agents/lib/vaws_remote_dev_plugin.py from the scaffold repository",
-                "expected_source_repo": "vllm-ascend-workspace/vllm-ascend-workspace",
-                "expected_source_ref": "main",
-            }
-        )
-    if not _mcp_resolvers_configured(repo_root):
-        resolver_deg.append(
-            {
-                "layer": "client_config",
-                "detail": "REMOTE_DEV_RESOLVERS is absent from tracked .mcp.json / .cursor/mcp.json",
-                "effect": (
-                    "only host+port endpoints resolve; --machine / --session-id / "
-                    "worktree auto-bind silently unavailable"
-                ),
-                "remedy": (
-                    "set REMOTE_DEV_RESOLVERS=.agents/lib/vaws_remote_dev_plugin.py:setup "
-                    "in the tracked remote-dev MCP server env"
-                ),
-                "expected_source_repo": "vllm-ascend-workspace/vllm-ascend-workspace",
-                "expected_source_ref": "main",
-            }
-        )
-    capabilities["resolver_registration"] = _capability(
-        available=remote_ok and plugin.is_file() and _mcp_resolvers_configured(repo_root),
-        degraded=bool(resolver_deg),
-        depends_on=CAPABILITY_DEPS["resolver_registration"],
-        degradation=resolver_deg,
     )
 
     coord = deps["vaws-coordinator"]

@@ -2,40 +2,37 @@
 
 ## Config
 
-The deployment references one ready Session Group. Each group member hosts at
-most one vLLM service and each service declares:
+The deployment references one service group whose members are `name` plus
+task-scoped `service` names. Code identity comes from the native task /
+`manifest_code`, not a per-member snapshot field.
+
+Each service declares:
 
 - stable name and `prefill` or `decode` role;
-- Session Group member;
-- model, TP/DP, optional port and health timeout;
-- environment and exact vLLM arguments.
+- group member;
+- model, TP/DP, optional port, host, and health timeout;
+- environment and exact vLLM arguments (connector JSON included).
 
-At least one service of each role is required. `startup_order` contains every
-service exactly once. Shutdown and rollback use the reverse order.
+At least one service of each role is required. `startup_order` names every
+service once. That order is only the topology role list; the coordinator
+reserves the full group before any role `go`.
 
-Planning validates every group member's name, session ID, and non-empty code
-snapshot before creating lifecycle state. All member snapshots must match; a
-malformed or mixed-snapshot group is rejected as input instead of failing later
-while constructing the Run Manifest.
-
-Connector type is `nixl`, `mooncake`, or `custom`. Connector options are recorded
-for traceability, but the controller never synthesizes version-sensitive vLLM
-arguments from them; exact connector CLI JSON remains explicit in each service.
+Connector type is `nixl`, `mooncake`, or `custom`. The controller never
+synthesizes connector CLI from type/options.
 
 ## Proxy boundary
 
-The MVP accepts an externally managed proxy or load-balancer URL. It verifies the
-health endpoint and sends smoke requests through it, but does not own the proxy
-process. This prevents generic process supervision from being duplicated inside
-the Skill.
+The MVP accepts an externally managed proxy URL. It verifies health and smoke
+through that URL. It does not own the proxy process.
 
 ## Lifecycle
 
-- `plan`: immutable config, group snapshot, lifecycle, state, and Run Manifest;
-- `start`: ordered single-node Serving calls with reverse rollback;
-- `status`: every member service plus proxy health;
-- `smoke`: one configured proxy request and raw response;
-- `stop`: reverse-order member stop.
+- `plan`: config, group, topology roles, state, Run Manifest
+- `start`: one `TaskClient.run(topology=..., service=<group_id>, timeout_seconds=None)`
+- queued / preparing / waiting is a truthful status with the same `execution_id`
+- `status`: that execution plus proxy health; `observation.roles[]` carries per-role target/tail
+- `smoke`: one configured proxy request
+- `stop`: `observe(execution_id, "stop")` for that same execution
 
 A successful proxy request proves the routed request path. Connector-level KV
-transfer requires corroborating service logs or connector metrics.
+transfer requires corroborating service logs.

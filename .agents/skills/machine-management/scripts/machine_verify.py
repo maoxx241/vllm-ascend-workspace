@@ -1,17 +1,10 @@
 #!/usr/bin/env python3
-"""Verify one managed machine read-only.
-
-This is the public agent-facing entrypoint. Prefer this wrapper over calling
-``manage_machine.py verify-machine`` directly for normal readiness checks.
-All outputs are JSON.
-"""
-
+"""Report the local machine username document. Host/container proof is coordinator-owned."""
 from __future__ import annotations
 
+import argparse
 import sys
 from pathlib import Path
-
-import argparse
 from typing import Sequence
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -23,70 +16,21 @@ from vaws_venv import ensure_workspace_interpreter  # noqa: E402
 
 ensure_workspace_interpreter(repo_root=ROOT)
 
-
-from _workflow_common import (  # noqa: E402
-    WorkflowError,
-    emit_progress,
-    find_record,
-    machine_summary,
-    print_json,
-    stamp_machine_verified,
-    status_payload,
-    verify_machine,
-)
-
-
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
-    parser.add_argument("--machine", required=True, help="machine alias or host IP from inventory")
-    parser.add_argument("--python", help="optional explicit python path inside the container")
-    return parser
+from vaws_local_state import profile_summary  # noqa: E402
+from vaws_result_envelope import emit_skill_json  # noqa: E402
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = build_parser()
-    args = parser.parse_args(argv)
+    argparse.ArgumentParser(description=__doc__, allow_abbrev=False).parse_args(argv)
     try:
-        record = find_record(args.machine)
-        if record is None:
-            print_json(
-                status_payload(
-                    "unmanaged",
-                    success=False,
-                    action="verify-skipped",
-                    message=f"no managed machine found for {args.machine}",
-                )
-            )
-            return 0
-        emit_progress(action="verify", phase="verify", message="running managed-machine verification", machine=record["alias"])
-        verified = verify_machine(
-            record,
-            python=args.python,
-            progress_cb=lambda phase, message: emit_progress(action="verify", phase=phase, message=message, machine=record["alias"]),
-        )
-        if verified.get("status") == "ready":
-            stamp_machine_verified(record["alias"])
-            print_json(verified)
-            return 0
-        if verified.get("status") == "blocked":
-            print_json(verified)
-            return 0
-        print_json(
-            status_payload(
-                "needs_repair",
-                success=False,
-                action="verify-found-drift",
-                message="machine is managed but not ready",
-                machine=machine_summary(record),
-                verify=verified,
-            )
+        emit_skill_json(
+            {"status": "ok", "profile": profile_summary(), "note": "container SSH/NPU proof is coordinator-owned"},
+            skill="machine-management",
+            entry_point=".agents/skills/machine-management/scripts/machine_verify.py",
         )
         return 0
-    except WorkflowError as exc:
-        print_json({"success": False, "status": "blocked", "action": "failed", "error": str(exc)})
-        return 2
-    except Exception as exc:  # noqa: BLE001
-        print_json({"success": False, "status": "blocked", "action": "failed", "error": str(exc)})
+    except Exception as exc:
+        emit_skill_json({"status": "failed", "error": str(exc)}, skill="machine-management", entry_point=".agents/skills/machine-management/scripts/machine_verify.py")
         return 2
 
 

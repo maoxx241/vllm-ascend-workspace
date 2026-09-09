@@ -50,7 +50,7 @@ After deployment, open <http://127.0.0.1:8788>. The dashboard shows NPU/AICore, 
 | Skill                  | Purpose                                                                                      | When to use                                                |
 | ---------------------- | -------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
 | **repo-init**          | Install GitHub CLI, authenticate, initialize submodules, run `uv sync`, configure forks and remote topology | After first clone                                          |
-| **machine-management** | Add, verify, repair, or remove a remote Ascend NPU server and its managed container          | When setting up a remote NPU dev machine                   |
+| **machine-management** | Record the project username for `vaws-<user>`; container prepare is `vaws-coordinator provision` | When configuring the remote NPU username                   |
 | **npu-fleet-monitor**  | Build, start, inspect, or stop the local NPU dashboard from the standalone vaws-top repository | When continuously monitoring fleet resources and history  |
 | **session-management** | Create, inspect, group, and clean isolated sessions: local worktree, remote container, state namespace, and resource leases | For parallel remote work, multiple agents, or PD deployments |
 | **remote-code-parity** | Sync the full local workspace state (including uncommitted changes) to a remote container    | Triggered automatically before remote test or service runs |
@@ -178,7 +178,7 @@ This repository supports mainstream AI coding tools:
 ### Done
 
 - **repo-init** — Workspace initialization: GitHub CLI install, auth, submodules, fork & remote topology
-- **machine-management** — Remote machine management: add, verify, repair, remove Ascend NPU servers and managed containers
+- **machine-management** — Project username config for `vaws-<user>`; container prepare is coordinator provision
 - **npu-fleet-monitor** — Standalone vaws-top repository monitoring service with automatic build, user-systemd startup, and loopback health checks
 - **remote-code-parity** — Code sync: push full local workspace state (including uncommitted changes) to remote containers
 - **vllm-ascend-serving** — Service launch: idle NPU detection, idle port detection, one-click vLLM Ascend inference serving

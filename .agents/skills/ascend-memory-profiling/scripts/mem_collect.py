@@ -32,6 +32,7 @@ import json
 import os
 import re
 import shlex
+import subprocess
 import sys
 import time
 import uuid
@@ -47,18 +48,20 @@ from vaws_venv import ensure_workspace_interpreter  # noqa: E402
 ensure_workspace_interpreter(repo_root=ROOT)
 
 
+from vaws_coordinator.device_inventory import parse_npu_smi_hbm  # noqa: E402
+
 from _common import (
     ENV_PREAMBLE,
     MSPROF_WRAPPER_REMOTE_PATH,
     SshEndpoint,
     check_msprof_available,
     ensure_run_dir,
-    find_python,
     get_machine_alias,
     load_serving_state,
     progress,
     resolve_execution_target,
     run_msprof_export,
+    selected_python,
     ssh_exec,
     ssh_upload,
     ssh_write_text,
@@ -89,7 +92,7 @@ def _emit_env_recovery_hint(log_text: str, session_id: str | None = None) -> Non
         return
     if not any(pat in log_text for pat in _ENV_ERROR_PATTERNS):
         return
-    target_arg = f"--session-id {session_id}" if session_id else ""
+    target_arg = ""
     recovery_cmd = (
         "python3 .agents/skills/remote-code-parity/scripts/parity_sync.py "
         f"{target_arg} --force-reinstall".replace("  ", " ")
@@ -104,8 +107,9 @@ def _emit_env_recovery_hint(log_text: str, session_id: str | None = None) -> Non
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Collect Ascend NPU memory profiling data")
-    p.add_argument("--session-id", help="VAWS session id; defaults to the bound session of the current worktree")
-    p.add_argument("--session-file", help="explicit session.json path")
+    p.add_argument("--context-file", help="VAWS task context; defaults to VAWS_CONTEXT_FILE")
+    p.add_argument("--execution-id", help="managed service execution; defaults to the live named service")
+    p.add_argument("--service", default="vllm")
     p.add_argument("--model", default="", help="Remote model weight path (auto-detected in attach mode)")
     p.add_argument("--tp", type=int, default=None, help="Tensor parallel size (auto-detected in attach mode)")
     p.add_argument("--dp", type=int, default=None, help="Data parallel size (auto-detected in attach mode)")
@@ -143,31 +147,7 @@ def collect_npu_smi(ep: SshEndpoint, label: str, local_path: Path) -> dict:
     progress(f"Collecting npu-smi snapshot: {label}")
     r = ssh_exec(ep, f"{ENV_PREAMBLE} npu-smi info", timeout=30)
     (local_path / f"{label}_npu_smi.txt").write_text(r.stdout)
-
-    hbm = {}
-    lines = r.stdout.splitlines()
-    current_npu = None
-    for line in lines:
-        stripped = line.strip().strip("|").strip()
-        if not stripped or stripped.startswith("+") or stripped.startswith("="):
-            continue
-        parts = [p.strip() for p in stripped.split("|")]
-        # Line with NPU ID and name (e.g., "0     910B4")
-        col0 = parts[0].strip() if parts else ""
-        tokens = col0.split()
-        if len(tokens) >= 2 and tokens[0].isdigit() and any(c.isalpha() for c in tokens[1]):
-            current_npu = int(tokens[0])
-            continue
-        # Line with HBM data: look for "XXXX / YYYYY" pattern in last column
-        if current_npu is not None:
-            hbm_match = re.search(r"(\d+)\s*/\s*(\d+)\s*$", stripped)
-            if hbm_match:
-                used = int(hbm_match.group(1))
-                total = int(hbm_match.group(2))
-                if total > 1000:  # HBM is typically > 1000 MB
-                    hbm[current_npu] = {"used_mb": used, "total_mb": total}
-                    current_npu = None
-    return hbm
+    return parse_npu_smi_hbm(r.stdout)
 
 
 def build_serve_command(args: argparse.Namespace, python: str) -> str:
@@ -205,40 +185,6 @@ def _compute_devices(args: argparse.Namespace) -> str:
         return args.devices
     total = args.tp * args.dp
     return ",".join(str(i) for i in range(total))
-
-
-def start_service_with_msprof(
-    ep: SshEndpoint,
-    args: argparse.Namespace,
-    python: str,
-    remote_dir: str,
-) -> None:
-    """Start vLLM serve wrapped by msprof for component-level memory data."""
-    serve_cmd = build_serve_command(args, python)
-    devices = _compute_devices(args)
-
-    script_path = f"{remote_dir}/_serve.sh"
-    script_content = (
-        f"#!/bin/bash\n"
-        f"{ENV_PREAMBLE}\n"
-        f"export PATH=$(dirname {python}):$PATH\n"
-        f"export ASCEND_RT_VISIBLE_DEVICES={devices}\n"
-        f"exec {serve_cmd}\n"
-    )
-    ssh_write_text(ep, script_content, script_path)
-    ssh_exec(ep, f"chmod +x {script_path}")
-
-    msprof_cmd = (
-        f"{ENV_PREAMBLE} "
-        f"cd /tmp; "
-        f"nohup msprof --output={remote_dir}/msprof_data "
-        f"--sys-hardware-mem=on --sys-hardware-mem-freq={args.msprof_mem_freq} "
-        f'--application="bash {script_path}" '
-        f"> {remote_dir}/msprof_stdout.log 2>&1 & "
-        f"echo $!"
-    )
-    r = ssh_exec(ep, msprof_cmd)
-    progress(f"msprof started, PID hint: {r.stdout.strip()}")
 
 
 def wait_for_health(ep: SshEndpoint, port: int, timeout: int) -> float:
@@ -308,18 +254,6 @@ def send_inference(
         return json.loads(r.stdout)
     except json.JSONDecodeError:
         return {"raw": r.stdout[:500]}
-
-
-def stop_service(ep: SshEndpoint) -> None:
-    """Kill all vLLM and msprof processes."""
-    progress("Stopping service and msprof...")
-    ssh_exec(ep, (
-        "pkill -f 'vllm.entrypoints' 2>/dev/null; "
-        "sleep 3; "
-        "pkill -9 -f 'vllm.entrypoints' 2>/dev/null; "
-        "sleep 2; "
-        "true"
-    ), check=False)
 
 
 def collect_vllm_logs(ep: SshEndpoint, remote_dir: str, local_path: Path) -> str:
@@ -455,58 +389,21 @@ def collect_weight_manifest(ep: SshEndpoint, python: str, model_path: str, local
         return {}
 
 
-def _resolve_attach_state(args: argparse.Namespace) -> dict:
-    """Load and validate serving state for attach mode.
-
-    Accepts 'ready', 'started', or 'stopped'.  When stopped, only msprof CSV
-    collection and weight/config analysis are possible (no health check, no
-    inference).
-    """
-    state = load_serving_state(
-        args.session_id,
-        state_repo_root=getattr(args, "_state_repo_root", Path(__file__).resolve().parents[4]),
-    )
-    if state is None:
-        raise SystemExit(
-            f"No serving state found for session '{args.session_id}'. "
-            "Start a service first with the vllm-ascend-serving skill, "
-            "or run in standalone mode (without --attach)."
-        )
-
-    status = state.get("status", "unknown")
-    if status not in ("ready", "started", "stopped"):
-        raise SystemExit(
-            f"Service for session '{args.session_id}' has status '{status}'. "
-            "Expected 'ready', 'started', or 'stopped'. "
-            "Start a service first with the vllm-ascend-serving skill."
-        )
-
-    return state
+def _resolve_attach_state(args: argparse.Namespace, target: dict) -> dict:
+    """Merge coordinator facts with optional local business launch config."""
+    report = load_serving_state(args.session_id) or {}
+    live = bool(target.get("live"))
+    return {
+        **report,
+        "status": "ready" if live else "stopped",
+        "port": target.get("service_port") or report.get("port"),
+        "execution_id": target.get("execution_id"),
+    }
 
 
 def _parse_npu_smi_text(text: str) -> dict:
     """Parse raw npu-smi info output into {npu_id: {used_mb, total_mb}}."""
-    hbm = {}
-    current_npu = None
-    for line in text.splitlines():
-        stripped = line.strip().strip("|").strip()
-        if not stripped or stripped.startswith("+") or stripped.startswith("="):
-            continue
-        parts = [p.strip() for p in stripped.split("|")]
-        col0 = parts[0].strip() if parts else ""
-        tokens = col0.split()
-        if len(tokens) >= 2 and tokens[0].isdigit() and any(c.isalpha() for c in tokens[1]):
-            current_npu = int(tokens[0])
-            continue
-        if current_npu is not None:
-            hbm_match = re.search(r"(\d+)\s*/\s*(\d+)\s*$", stripped)
-            if hbm_match:
-                used = int(hbm_match.group(1))
-                total = int(hbm_match.group(2))
-                if total > 1000:
-                    hbm[current_npu] = {"used_mb": used, "total_mb": total}
-                    current_npu = None
-    return hbm
+    return parse_npu_smi_hbm(text)
 
 
 def _load_baseline_from(baseline_path: str, run_dir: Path) -> dict:
@@ -565,30 +462,29 @@ def _collect_serving_logs(ep: SshEndpoint, serving_state: dict, local_path: Path
 
 def main() -> None:
     args = parse_args()
-    target = resolve_execution_target(
-        session_id=args.session_id,
-        session_file=args.session_file,
-    )
-    machine = target["record"]
-    ep = target["endpoint"]
-    args._state_repo_root = target["state_repo_root"]
-    args._session = target.get("session")
-    args.session_id = target["session_id"]
-    args.session_file = target["session_file"]
-
     if args.attach:
-        _main_attach(args, machine, ep)
-    else:
-        _main_standalone(args, machine, ep)
+        target = resolve_execution_target(
+            context_file=args.context_file,
+            execution_id=args.execution_id,
+            service=args.service,
+        )
+        args.session_id = target["task_id"]
+        args.execution_id = target["execution_id"]
+        args.session_file = None
+        args._python = selected_python(target)
+        _main_attach(args, target["record"], target["endpoint"], target)
+        return
+    _main_standalone(args)
 
 
 def _main_attach(
     args: argparse.Namespace,
     machine: dict,
     ep: SshEndpoint,
+    target: dict | None = None,
 ) -> None:
     """Attach mode: profile a service already managed by vllm-ascend-serving."""
-    serving_state = _resolve_attach_state(args)
+    serving_state = _resolve_attach_state(args, target or {})
     alias = get_machine_alias(machine)
 
     svc_model = serving_state.get("model", "")
@@ -632,7 +528,7 @@ def _main_attach(
     progress(f"Output directory: {run_dir}")
     ssh_exec(ep, f"mkdir -p {remote_dir}")
 
-    python = find_python(ep)
+    python = getattr(args, "_python", None) or selected_python(target or {})
 
     # Detect msprof: serving used our wrapper → msprof data at runtime_dir/msprof_data
     svc_wrap = serving_state.get("wrap_script", "")
@@ -658,7 +554,7 @@ def _main_attach(
         "msprof_enabled": msprof_used,
         "msprof_output_dir": msprof_data_dir,
         "run_dir": str(run_dir),
-        "serving_state_ref": f".vaws-local/sessions/{args.session_id}/serving.json",
+        "serving_state_ref": f".vaws-local/tasks/{args.session_id}/serving.json",
         "serving_runtime_dir": svc_runtime_dir,
         "speculative_config": args.speculative_config,
         "compilation_config": args.compilation_config,
@@ -796,73 +692,63 @@ def _extract_serve_config_from_extra_args(
             i += 1
 
 
-def _release_standalone_port(args: argparse.Namespace, machine: dict, leased_port: int | None) -> None:
-    if leased_port is None:
-        return
-    from vaws_session_state import release_service_port
-
-    release_service_port(
-        repo_root=getattr(args, "_state_repo_root", Path(__file__).resolve().parents[4]),
-        machine_alias=get_machine_alias(machine),
-        session_id=args.session_id,
-        port=leased_port,
-    )
-
-
-def _main_standalone(
-    args: argparse.Namespace,
-    machine: dict,
-    ep: SshEndpoint,
-) -> None:
-    """Standalone mode: start service, profile, stop (inside the session container)."""
+def _main_standalone(args: argparse.Namespace) -> None:
+    """Standalone mode: one TaskClient.run via serve_start, then profile and stop."""
     if not args.model:
         raise SystemExit("--model is required in standalone mode")
-    tp = args.tp if args.tp is not None else 1
-    dp = args.dp if args.dp is not None else 1
-    leased_port = None
+    serving = ROOT / ".agents" / "skills" / "vllm-ascend-serving" / "scripts"
+    cmd = [
+        sys.executable,
+        str(serving / "serve_start.py"),
+        "--model", args.model,
+        "--service", args.service or "vllm-memprof",
+    ]
+    if args.context_file:
+        cmd.extend(["--context-file", args.context_file])
+    if args.tp is not None:
+        cmd.extend(["--tp", str(args.tp)])
+    if args.dp is not None:
+        cmd.extend(["--dp", str(args.dp)])
     if args.port is not None:
-        port = args.port
-    else:
-        from vaws_session_state import allocate_service_port
-
-        port = allocate_service_port(
-            repo_root=getattr(args, "_state_repo_root", Path(__file__).resolve().parents[4]),
-            machine_alias=get_machine_alias(machine),
-            session_id=args.session_id,
-        )
-        leased_port = port
-        progress(f"Leased session service port {port} for standalone profiling")
+        cmd.extend(["--port", str(args.port)])
+    if args.devices:
+        cmd.extend(["--devices", args.devices])
+    if args.health_timeout:
+        cmd.extend(["--health-timeout", str(args.health_timeout)])
+    progress("Starting managed vLLM execution for standalone memory profiling")
+    proc = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True, check=False)
+    if proc.stderr:
+        sys.stderr.write(proc.stderr)
+    try:
+        start_result = json.loads(proc.stdout) if proc.stdout.strip() else {}
+    except json.JSONDecodeError:
+        raise SystemExit(f"serve_start produced non-JSON: {proc.stdout[:1000]}")
+    if start_result.get("status") != "ready":
+        print(json.dumps({"status": "failed", "phase": "serve_start", "serve_result": start_result}, indent=2))
+        sys.exit(1)
+    target = resolve_execution_target(
+        context_file=args.context_file,
+        execution_id=start_result.get("execution_id"),
+        service=args.service or "vllm-memprof",
+    )
+    args.session_id = target["task_id"]
+    args.execution_id = target["execution_id"]
+    args._python = selected_python(target)
+    ep = target["endpoint"]
+    tp = args.tp if args.tp is not None else start_result.get("tp") or 1
+    dp = args.dp if args.dp is not None else start_result.get("dp") or 1
+    port = start_result.get("port") or target.get("service_port")
     args.tp = tp
     args.dp = dp
     args.port = port
-    # The leased service port must be released on every exit path, not just the
-    # health-check timeout; a failure in any phase below would otherwise leak it.
     try:
-        if not args.devices:
-            session = getattr(args, "_session", None)
-            leased_devices = session.get("leases", {}).get("npu_devices", []) if isinstance(session, dict) else []
-            if leased_devices:
-                selected = sorted(int(item) for item in leased_devices)
-                need = tp * dp
-                if len(selected) < need:
-                    raise SystemExit(
-                        f"session {args.session_id} leases {len(selected)} NPU devices "
-                        f"but standalone memory profiling needs {need} (tp={tp}, dp={dp})"
-                    )
-                args.devices = ",".join(str(item) for item in selected[:need])
-                progress(f"Using leased session devices: {args.devices}")
-
         model_tag = Path(args.model).name.replace("/", "_")
         run_dir = ensure_run_dir(tag=args.tag or model_tag)
         remote_dir = unique_remote_tmp("vaws_memprof", args.session_id)
-
         progress(f"Output directory: {run_dir}")
         ssh_exec(ep, f"mkdir -p {remote_dir}")
-
-        python = find_python(ep)
+        python = args._python
         progress(f"Python: {python}")
-
-        # Pre-flight: verify msprof is available
         check_msprof_available(ep)
 
         manifest: dict = {
@@ -885,50 +771,45 @@ def _main_standalone(
             "image_url": args.image_url,
         }
 
-        # Phase 0: baseline
-        manifest["baseline_hbm"] = collect_npu_smi(ep, "baseline", run_dir)
-
-        # Phase 1: start service (always with msprof for traceable memory data)
-        start_service_with_msprof(ep, args, python, remote_dir)
-
-        try:
-            manifest["startup_seconds"] = wait_for_health(ep, port, args.health_timeout)
-        except TimeoutError as e:
-            progress(f"ERROR: {e}")
-            log_text = collect_vllm_logs(ep, remote_dir, run_dir)
-            stop_service(ep)
-            _emit_env_recovery_hint(log_text, args.session_id)
-            manifest["error"] = str(e)
-            print(json.dumps(manifest, indent=2, ensure_ascii=False))
-            sys.exit(1)
-
-        # Phase 2: after ready
+        manifest["baseline_hbm"] = {}
+        manifest["startup_seconds"] = start_result.get("readiness", {}).get("elapsed_seconds")
         manifest["after_ready_hbm"] = collect_npu_smi(ep, "after_ready", run_dir)
-        collect_vllm_logs(ep, remote_dir, run_dir)
-
-        # Phase 3: inference
         manifest["inference_response"] = send_inference(ep, args, port=port)
         manifest["after_infer_hbm"] = collect_npu_smi(ep, "after_infer", run_dir)
-
-        # Phase 4: stop service
-        stop_service(ep)
-        time.sleep(5)
-
-        # Phase 5: msprof export (via shared helper)
+        stop_cmd = [
+            sys.executable,
+            str(serving / "serve_stop.py"),
+            "--service", args.service or "vllm-memprof",
+            "--force",
+        ]
+        if args.context_file:
+            stop_cmd.extend(["--context-file", args.context_file])
+        if args.execution_id:
+            stop_cmd.extend(["--execution-id", str(args.execution_id)])
+        subprocess.run(stop_cmd, cwd=str(ROOT), capture_output=True, text=True, check=False)
+        time.sleep(2)
         run_msprof_export(ep, f"{remote_dir}/msprof_data")
         manifest["msprof_csvs"] = collect_msprof_csvs(ep, remote_dir, run_dir)
-
-        # Phase 6: model config + weight manifest
         manifest["model_config"] = collect_model_config(ep, args.model, run_dir)
         manifest["weight_manifest_collected"] = bool(
             collect_weight_manifest(ep, python, args.model, run_dir)
         )
-
         (run_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False))
         progress(f"Collection complete. Data saved to {run_dir}")
         print(json.dumps(manifest, indent=2, ensure_ascii=False))
-    finally:
-        _release_standalone_port(args, machine, leased_port)
+    except Exception:
+        stop_cmd = [
+            sys.executable,
+            str(serving / "serve_stop.py"),
+            "--service", args.service or "vllm-memprof",
+            "--force",
+        ]
+        if args.context_file:
+            stop_cmd.extend(["--context-file", args.context_file])
+        if getattr(args, "execution_id", None):
+            stop_cmd.extend(["--execution-id", str(args.execution_id)])
+        subprocess.run(stop_cmd, cwd=str(ROOT), capture_output=True, text=True, check=False)
+        raise
 
 
 if __name__ == "__main__":

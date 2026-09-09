@@ -1,10 +1,10 @@
 <!-- Generated Claude Code shim from .agents/skills/machine-management/SKILL.md. Do not edit. -->
 ---
 name: machine-management
-description: Add, verify, repair, or remove a managed remote NPU host for this workspace. Use for requests like “配置服务器”, “加一台机器”, “检查 ready”, “修容器 SSH”, or “移除机器”. Do not use for code sync, rebuilds, serving, or benchmarking.
+description: Store the project username for the persistent vaws user container. Bootstrap, repair, and deletion belong to vaws-coordinator.
 ---
 
-# Machine Management
+# Machine username (project config)
 
 Canonical skill source:
 

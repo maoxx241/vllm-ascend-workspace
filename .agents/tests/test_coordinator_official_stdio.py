@@ -7,6 +7,7 @@ package is missing; this file does not install dependencies.
 from __future__ import annotations
 
 import asyncio
+import getpass
 import importlib.util
 import json
 import os
@@ -24,6 +25,9 @@ if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
 PACKAGE_PRESENT = importlib.util.find_spec("vaws_coordinator") is not None
+if PACKAGE_PRESENT:
+    from vaws_coordinator.agent_session import AgentSessions, load_context
+    from vaws_coordinator.ready_runtime import safe_id
 try:
     import importlib.metadata
     from mcp import ClientSession, StdioServerParameters
@@ -148,33 +152,54 @@ class OfficialStdioTests(unittest.TestCase):
                         self.assertTrue(missing["isError"])
                         self.assertEqual(missing_state["status"], "unavailable")
 
-                        unavailable, blocked = await call(
+                        ran, run_state = await call(
                             "vaws_run",
                             first["context_file"],
-                            request_id="offline-request",
                             command="true",
                         )
-                        self.assertTrue(unavailable["isError"])
-                        self.assertEqual((blocked["outcome"], blocked["status"]), ("blocked", "unavailable"))
-                        self.assertTrue(
-                            any("No remote success is implied" in warning for warning in blocked["warnings"])
-                        )
+                        self.assertTrue(ran["isError"])
+                        self.assertEqual((run_state["outcome"], run_state["status"]), ("blocked", "unavailable"))
+                        self.assertIn("vllm", run_state["summary"])
+                        self.assertIn("vllm-ascend", run_state["summary"])
                         _, after_run = await call("vaws_session", first["context_file"])
-                        planned = after_run["data"]["executions"]
-                        self.assertEqual(len(planned), 1)
-                        self.assertEqual(planned[0]["phase"], "planned")
-                        foreign, rejected = await call(
-                            "vaws_execution", separate["context_file"], execution_id=planned[0]["id"]
+                        self.assertEqual(after_run["data"]["executions"], [])
+
+                        context_a = load_context(first["context_file"])
+                        store = AgentSessions(Path(environment["VAWS_AGENT_SESSIONS_DIR"]))
+                        owned = store.execution(
+                            context_a,
+                            "stdio-ownership-fixture",
+                            {"command": "true"},
                         )
-                        self.assertTrue(foreign["isError"])
+                        owned.update(
+                            phase="cancelled",
+                            admitted=False,
+                            user=safe_id(getpass.getuser()),
+                        )
+                        store.save_execution(owned)
+                        eid = owned["id"]
+                        self.assertEqual(len(eid), 64)
+
+                        _, after_fixture = await call("vaws_session", first["context_file"])
+                        owned_ids = [
+                            row.get("id") or row.get("execution_id")
+                            for row in after_fixture["data"]["executions"]
+                        ]
+                        self.assertIn(eid, owned_ids)
+
+                        foreign, rejected = await call(
+                            "vaws_execution",
+                            separate["context_file"],
+                            execution_id=eid,
+                        )
+                        self.assertTrue(foreign["isError"], rejected)
                         self.assertIn("another VAWS task", rejected["summary"])
 
                         finished, terminal = await call("vaws_finish", first["context_file"])
-                        self.assertFalse(finished["isError"])
+                        self.assertFalse(finished["isError"], terminal)
                         self.assertEqual(terminal["status"], "finished")
                         self.assertTrue(terminal["data"]["worktrees_preserved"])
                         self.assertTrue(marker.read_text().startswith("test-owned"))
-                        self.assertEqual(terminal["data"]["executions"][0]["state"], "cancelled")
                         _, neighbor = await call("vaws_session", separate["context_file"])
                         self.assertEqual(neighbor["status"], "open")
                         reopened = attach("acceptance-native-a")

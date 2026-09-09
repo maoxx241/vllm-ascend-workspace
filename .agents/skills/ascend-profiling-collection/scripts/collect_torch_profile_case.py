@@ -477,18 +477,16 @@ def _build_serve_args(args: argparse.Namespace, profiler_config: dict[str, Any])
         "--served-model-name", args.served_model_name,
         "--tp", str(args.tp),
     ]
-    if args.session_file:
-        serve_args[:0] = ["--session-file", args.session_file]
-    else:
-        serve_args[:0] = ["--session-id", args.session_id]
+    if getattr(args, "context_file", None):
+        serve_args[:0] = ["--context-file", args.context_file]
+    if getattr(args, "service", None):
+        serve_args[:0] = ["--service", args.service]
     if args.dp is not None and args.dp > 1:
         serve_args.extend(["--dp", str(args.dp)])
     serve_args.extend([
         "--extra-env",
         "PYTORCH_NPU_ALLOC_CONF=expandable_segments:True",
     ])
-    if args.skip_parity:
-        serve_args.append("--skip-parity")
     if args.health_timeout is not None:
         serve_args.extend(["--health-timeout", str(args.health_timeout)])
 
@@ -668,8 +666,9 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
 
     # Required: target + workload identity
-    p.add_argument("--session-id", help="VAWS session id; defaults to the bound session of the current worktree")
-    p.add_argument("--session-file", help="explicit session.json path")
+    p.add_argument("--context-file", help="VAWS task context; defaults to VAWS_CONTEXT_FILE")
+    p.add_argument("--execution-id", help="live service execution; omit to start a new one")
+    p.add_argument("--service", default="vllm")
     p.add_argument("--model", required=True,
                    help="absolute remote path to model weights")
     p.add_argument("--served-model-name", required=True,
@@ -801,8 +800,6 @@ def build_parser() -> argparse.ArgumentParser:
                    help="resize the image to this pixel height before encoding")
 
     # Optional: parity opt-out (forwarded to serving)
-    p.add_argument("--skip-parity", action="store_true")
-
     return p
 
 
@@ -813,17 +810,9 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
-    # Resolve the session once (including worktree-binding auto-resolution)
-    # and pin it, so every downstream subprocess targets the same session.
-    session_target = resolve_execution_target(
-        session_id=args.session_id,
-        session_file=args.session_file,
-    )
-    args.session_id = session_target.session_id
-    args.session_file = (
-        str(session_target.session_file) if session_target.session_file else args.session_file
-    )
-    machine_alias = session_target.alias
+    machine_alias = getattr(args, "service", None) or "vllm"
+    args.session_id = machine_alias
+    args.session_file = None
 
     run_dir = unique_collection_run_dir(
         tag=args.tag,
@@ -897,6 +886,7 @@ def main(argv: list[str] | None = None) -> int:
 
     service_result: dict[str, Any] | None = None
     stop_result: dict[str, Any] | None = None
+    started_service = False
     try:
         # Preflight knowledge advisory: known capabilities/compatibility/
         # failure signatures for this exact "<model> tp<N> <mode>" shape.
@@ -911,15 +901,40 @@ def main(argv: list[str] | None = None) -> int:
             advisories=[item["entry_id"] for item in advisories] or None,
         )
 
-        emit_progress("serve_start", f"starting service on session {args.session_id}")
-        service_result = call_serve_start(serve_args)
+        started_service = False
+        if args.execution_id:
+            emit_progress("serve_start", f"using live execution {args.execution_id}")
+            session_target = resolve_execution_target(
+                context_file=args.context_file,
+                execution_id=args.execution_id,
+                service=args.service,
+            )
+            from vaws_task_target import execution_target, task_client
+            routed = execution_target(task_client(args.context_file), str(args.execution_id))
+            service_result = {
+                "status": "ready",
+                "execution_id": args.execution_id,
+                "port": routed.get("service_port"),
+            }
+        else:
+            emit_progress("serve_start", f"starting service {args.service}")
+            service_result = call_serve_start(serve_args)
+            started_service = True
         manifest["service_result"] = service_result
-        if service_result.get("status") != "ready":
+        if service_result.get("status") != "ready" and not args.execution_id:
             raise RuntimeError(f"service did not become ready: {service_result}")
-
-        runtime_dir = service_result["runtime_dir"]
-        port = int(service_result["port"])
-        profile_root = f"{runtime_dir}/{args.torch_profiler_dir}"
+        if not args.execution_id:
+            session_target = resolve_execution_target(
+                context_file=args.context_file,
+                execution_id=service_result.get("execution_id"),
+                service=args.service,
+            )
+        port = int(service_result.get("port") or 0)
+        if not port:
+            raise RuntimeError("service has no port")
+        cwd = session_target.cwd or "/vllm-workspace"
+        profile_root = f"{cwd.rstrip('/')}/{args.torch_profiler_dir}"
+        args.session_id = session_target.task_id or args.session_id
 
         ep = session_target.endpoint
 
@@ -982,11 +997,14 @@ def main(argv: list[str] | None = None) -> int:
         # done, but profiler thread shutdown has historically lagged.
         time.sleep(POST_STOP_FLUSH_SECONDS)
 
-        emit_progress("serve_stop", "stopping service")
-        stop_result = call_serve_stop(
-            session_id=args.session_id,
-            session_file=args.session_file,
-        )
+        stop_result = {"status": "left_running"}
+        if started_service:
+            emit_progress("serve_stop", "stopping service")
+            stop_result = call_serve_stop(
+                context_file=getattr(args, "context_file", None),
+                execution_id=service_result.get("execution_id"),
+                service=getattr(args, "service", None),
+            )
         manifest["stop_result"] = stop_result
 
         expected_ranks = manifest["expected_ranks"]
@@ -1079,23 +1097,17 @@ def main(argv: list[str] | None = None) -> int:
         manifest["status"] = "failed"
         manifest["error"] = _failure_payload(str(exc))
         manifest["failed_at"] = now_utc()
-        if stop_result is None:
+        if stop_result is None and started_service:
             try:
                 stop_result = call_serve_stop(
-                    session_id=args.session_id,
-                    session_file=args.session_file,
+                    context_file=getattr(args, "context_file", None),
+                    execution_id=service_result.get("execution_id") if service_result else None,
+                    service=getattr(args, "service", None),
+                    force=True,
                 )
                 manifest["stop_result"] = stop_result
-            except Exception:  # noqa: BLE001
-                try:
-                    stop_result = call_serve_stop(
-                        session_id=args.session_id,
-                        session_file=args.session_file,
-                        force=True,
-                    )
-                    manifest["stop_result"] = stop_result
-                except Exception as stop_exc:  # noqa: BLE001
-                    manifest["stop_error"] = str(stop_exc)
+            except Exception as stop_exc:  # noqa: BLE001
+                manifest["stop_error"] = str(stop_exc)
 
         (run_dir / "manifest.json").write_text(
             json.dumps(manifest, indent=2, ensure_ascii=False) + "\n",

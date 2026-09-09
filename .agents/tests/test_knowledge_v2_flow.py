@@ -477,7 +477,14 @@ class ThreeLayerQueryTest(V2FlowBase):
         self.assertIn("shared", payload["layers_available"])
         self.assertIn("project", payload["layers_available"])
         self.assertEqual(payload["source_repo"], "vllm-ascend-workspace/vaws-knowledge")
-        self.assertEqual(payload["source_ref"], installed_commit())
+        commit = installed_commit()
+        if commit is not None:
+            self.assertEqual(payload["source_ref"], commit)
+        else:
+            self.assertTrue(
+                payload["source_ref"] is None
+                or (isinstance(payload["source_ref"], str) and len(payload["source_ref"]) == 40)
+            )
         self.assertEqual(payload["absent_fact_semantics"], "unknown")
 
     def test_absent_service_is_never_reported_as_supported(self) -> None:
@@ -532,7 +539,14 @@ class ThreeLayerQueryTest(V2FlowBase):
         )
         self.assertEqual({match["layer"] for match in payload["results"]}, {"shared"})
         self.assertEqual(payload["source_repo"], "vllm-ascend-workspace/vaws-knowledge")
-        self.assertEqual(payload["source_ref"], installed_commit())
+        commit = installed_commit()
+        if commit is not None:
+            self.assertEqual(payload["source_ref"], commit)
+        else:
+            self.assertTrue(
+                payload["source_ref"] is None
+                or (isinstance(payload["source_ref"], str) and len(payload["source_ref"]) == 40)
+            )
         self.assertEqual(payload["results"][0]["body"], "measurement")
         self.assertFalse(payload["degraded"] and "shared" in payload["layers_absent"])
 

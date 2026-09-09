@@ -1,18 +1,10 @@
 #!/usr/bin/env python3
-"""Check the status of a running vllm-ascend service.
-
-Usage:
-    python3 serve_status.py                    # auto-resolve bound session
-    python3 serve_status.py --session-id <id>
-
-Progress on stderr, final JSON on stdout.
-"""
+"""Read coordinator facts for a vllm-ascend service, then optional business health."""
 
 from __future__ import annotations
 
 import argparse
 import json
-import shlex
 import sys
 from pathlib import Path
 from typing import Any
@@ -26,28 +18,12 @@ from vaws_venv import ensure_workspace_interpreter  # noqa: E402
 
 ensure_workspace_interpreter(repo_root=ROOT)
 
-
 _SCRIPT_DIR = Path(__file__).resolve().parent
 if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 
-from _common import (
-    emit_progress,
-    load_serving_state,
-    now_utc,
-    print_json,
-    resolve_execution_target,
-    save_serving_state,
-    ssh_exec,
-)
-from vaws_session_state import release_service_port
-
-
-def check_alive(ep, pid: int) -> bool:
-    r = ssh_exec(ep, f"kill -0 {pid} 2>/dev/null && echo alive || echo dead", check=False)
-    if r.returncode != 0 or r.stdout.strip() not in ("alive", "dead"):
-        raise RuntimeError("service process state is unknown; SSH failure is not proof of exit")
-    return r.stdout.strip() == "alive"
+from _common import SERVICE_NAME, emit_progress, endpoint_from_reply, print_json, service_port_of, ssh_exec  # noqa: E402
+from vaws_task_target import DONE, PENDING, RUNNING, executions_for_service, task_client, task_id_of  # noqa: E402
 
 
 def check_health(ep, port: int) -> bool:
@@ -55,14 +31,12 @@ def check_health(ep, port: int) -> bool:
         f"curl -s -o /dev/null -w '%{{http_code}}' --connect-timeout 3 --max-time 5"
         f" http://127.0.0.1:{port}/health 2>/dev/null || echo 000"
     )
-    r = ssh_exec(ep, script, check=False)
-    return r.stdout.strip() == "200"
+    return ssh_exec(ep, script, check=False).stdout.strip() == "200"
 
 
 def check_models(ep, port: int) -> dict[str, Any] | None:
     script = f"curl -s --connect-timeout 3 --max-time 5 http://127.0.0.1:{port}/v1/models 2>/dev/null || true"
-    r = ssh_exec(ep, script, check=False)
-    text = r.stdout.strip()
+    text = ssh_exec(ep, script, check=False).stdout.strip()
     if not text:
         return None
     try:
@@ -72,121 +46,102 @@ def check_models(ep, port: int) -> dict[str, Any] | None:
         return None
 
 
+def classify(state: str) -> str:
+    if state in DONE:
+        return "terminal"
+    if state in RUNNING:
+        return "running"
+    if state in PENDING:
+        return "pending"
+    return "pending"
+
+
+def pick_execution(client, service: str, execution_id: str | None) -> dict[str, Any] | None:
+    if execution_id:
+        return client.observe(execution_id, "status")
+    if not service:
+        return None
+    rows = executions_for_service(client, service)
+    if not rows:
+        return None
+    row = rows[-1]
+    eid = row.get("id") or row.get("execution_id")
+    return client.observe(eid, "status") if eid else row
+
+
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
-    p.add_argument("--session-id", help="VAWS session id; defaults to the bound session of the current worktree")
-    p.add_argument("--session-file", help="explicit session.json path")
-    return p
+    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
+    parser.add_argument("--context-file")
+    parser.add_argument("--execution-id")
+    parser.add_argument("--service", default=SERVICE_NAME)
+    return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-
     try:
-        target = resolve_execution_target(
-            session_id=args.session_id,
-            session_file=args.session_file,
-        )
-        alias = target.alias
-        ep = target.endpoint
-
-        state = load_serving_state(
-            target.session_id,
-            state_repo_root=target.state_repo_root,
-        )
-        if state is None:
+        client = task_client(args.context_file)
+        task_id = task_id_of(client)
+        observation = pick_execution(client, args.service, args.execution_id)
+        if not observation:
             print_json({
                 "status": "not_found",
-                "machine": alias,
-                "mode": target.mode,
-                "session_id": target.session_id,
-                "message": "no serving state recorded for this machine",
+                "task_id": task_id,
+                "service": args.service,
+                "message": "coordinator has no matching service execution",
             })
             return 0
-
-        pid = state.get("pid")
-        port = state.get("port")
-        if not pid or not port:
-            print_json({
-                "status": "not_found",
-                "machine": alias,
-                "mode": target.mode,
-                "session_id": target.session_id,
-                "message": "serving state is missing pid or port",
-                "state": state,
-            })
-            return 0
-
-        emit_progress("probe", f"checking pid={pid} port={port}")
-
-        alive = check_alive(ep, pid)
-        health = check_health(ep, port) if alive else False
-        models = check_models(ep, port) if health else None
-
-        if alive and health and models is not None:
-            status = "ready"
-        elif alive and health:
-            status = "alive_healthy"
-        elif alive:
-            status = "alive"
-        else:
-            status = "stopped"
-
-        state["status"] = status
-        state["status_checked_at"] = now_utc()
-        if status == "stopped":
-            state["stopped_at"] = state.get("stopped_at") or state["status_checked_at"]
-        save_serving_state(
-            target.session_id,
-            state,
-            state_repo_root=target.state_repo_root,
-        )
-        if status == "stopped":
-            release_service_port(
-                repo_root=target.state_repo_root,
-                machine_alias=alias,
-                session_id=target.session_id,
-                port=state.get("port"),
-            )
-
+        state = str(observation.get("state") or observation.get("phase") or "")
+        kind = classify(state)
+        execution_id = observation.get("execution_id") or observation.get("id")
         output: dict[str, Any] = {
-            "status": status,
-            "machine": alias,
-            "mode": target.mode,
-            "session_id": target.session_id,
-            "alive": alive,
-            "health": health,
-            "models_ok": models is not None,
-            "pid": pid,
-            "port": port,
-            "base_url": state.get("base_url"),
-            "served_model_name": state.get("served_model_name"),
-            "model": state.get("model"),
-            "log_stdout": state.get("log_stdout"),
-            "log_stderr": state.get("log_stderr"),
-            "runtime_dir": state.get("runtime_dir"),
-            "started_at": state.get("started_at"),
+            "task_id": task_id,
+            "service": args.service,
+            "execution_id": execution_id,
+            "state": state,
+            "observation": observation,
+            "running": kind == "running",
+            "ready": False,
         }
-
-        if not alive:
-            stderr_path = state.get("log_stderr")
-            if stderr_path:
-                r = ssh_exec(
-                    ep,
-                    f"tail -20 {shlex.quote(stderr_path)} 2>/dev/null || echo '(no log)'",
-                    check=False,
-                )
-                output["stderr_tail"] = r.stdout.strip()
-
+        if kind == "pending":
+            output["status"] = "queued"
+            print_json(output)
+            return 0
+        if kind == "terminal":
+            output["status"] = "stopped" if state == "cancelled" else state
+            print_json(output)
+            return 0
+        emit_progress("probe", f"execution {execution_id} is running")
+        port = service_port_of(observation)
+        if port is None:
+            output["status"] = "incomplete"
+            output["error"] = "running execution has no service port"
+            print_json(output)
+            return 0
+        try:
+            endpoint = endpoint_from_reply(observation)
+        except Exception as exc:
+            output["status"] = "incomplete"
+            output["error"] = str(exc)
+            print_json(output)
+            return 0
+        health = check_health(endpoint, port)
+        models = check_models(endpoint, port) if health else None
+        if health and models is not None:
+            output["status"] = "ready"
+            output["ready"] = True
+        elif health:
+            output["status"] = "alive_healthy"
+        else:
+            output["status"] = "running"
+        output["port"] = port
+        output["health"] = health
+        output["models_ok"] = models is not None
+        output["base_url"] = f"http://{endpoint.host}:{port}"
         print_json(output)
         return 0
-
     except Exception as exc:
-        print_json({
-            "status": "failed",
-            "error": str(exc),
-            "session_id": getattr(args, "session_id", None),
-        })
+        print_json({"status": "failed", "error": str(exc)})
         return 2
 
 

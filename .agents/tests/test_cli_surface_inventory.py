@@ -302,15 +302,18 @@ class RepositoryCoherenceTests(unittest.TestCase):
         self.assertEqual(proposed["agent_commands"], list(inventory.HISTORICAL_PROPOSED_COMMANDS))
 
     def test_external_owners_come_from_the_lockfile(self) -> None:
+        import vaws_dependency as deps
+
         owners = self.payload["external_owners"]
         by_repository = {meta["repository"]: meta for meta in owners.values()}
+        locked = deps.locked_packages(ROOT)
         self.assertEqual(
             by_repository["vllm-ascend-workspace/remote-dev"]["commit"],
-            "8f3cebfd1c42839fef41b06aaf8da4052cc23954",
+            locked["vaws-remote-dev"]["commit"],
         )
         self.assertEqual(
             by_repository["vllm-ascend-workspace/vaws-coordinator"]["commit"],
-            "74a03d3ab4dad24182e085554f00e457a970220e",
+            locked["vaws-coordinator"]["commit"],
         )
         self.assertIsNone(by_repository["vllm-ascend-workspace/vaws-top"]["commit"])
         self.assertEqual(
@@ -319,7 +322,7 @@ class RepositoryCoherenceTests(unittest.TestCase):
         )
         self.assertEqual(
             by_repository["vllm-ascend-workspace/vaws-knowledge"]["commit"],
-            "ae39db2c4ad9cf658b38f6624f6bc49e76274418",
+            locked["vaws-knowledge"]["commit"],
         )
         for meta in owners.values():
             self.assertEqual(meta["source_availability"], "uninspected")
@@ -346,6 +349,9 @@ class RepositoryCoherenceTests(unittest.TestCase):
             self.assertIn(f"`{record['path']}`", current_section, record["path"])
         self.assertNotIn("`.remote-dev/tools/remote_bash.py`", current_section)
         self.assertNotIn("`.agents/coordinator/server.py`", current_section)
+        current_paths = {record["path"] for record in self.payload["entry_points"]}
+        self.assertEqual(len(current_paths), self.payload["entry_point_count"])
+        self.assertTrue(all(f"`{path}`" in current_section for path in current_paths))
 
     def test_historical_docs_table_is_delimited_and_dated(self) -> None:
         rows = inventory.extract_delimited_table(

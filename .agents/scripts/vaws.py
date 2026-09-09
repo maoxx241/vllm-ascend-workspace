@@ -5,7 +5,6 @@ Every task-facing call goes through this launcher so one place injects the
 scaffold environment the package needs:
 
     VAWS_AGENT_SESSIONS_DIR   the single local task registry
-    VAWS_HOST_QUEUE_MODULE    override only; coordinator defaults to its bundled host queue
     VAWS_COORDINATOR_STATE_DIR
                               optional override for the coordinator-owned store
 

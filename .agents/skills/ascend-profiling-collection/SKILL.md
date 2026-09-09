@@ -49,14 +49,14 @@ This skill is **only** about collection: start a profiled service, bracket a wor
   2. number of `*_ascend_pt` directories does not match `tp * (dp or 1)`
   3. workload was not real — follow-up request failed or benchmark wave fell below `--benchmark-success-threshold`
 - Progress on `stderr` as `__VAWS_PROGRESS__=<json>`. Final manifest on `stdout` as one JSON object.
-- Collection is **session-scoped**. Run the entry points from inside a session worktree and they auto-resolve the session by walking up to the nearest `.vaws-local/current-session.json` binding — no target args needed. Pass `--session-id <id>` / `--session-file <path>` explicitly only when running from outside the worktree. Service start/stop and parity stay scoped to that session.
+- Collection uses `--context-file` / `VAWS_CONTEXT_FILE` and `--execution-id` / `--service`. Do not guess a session from cwd.
 - Local state lives under `.vaws-local/ascend-profiling-collection/runs/` for collection manifests; serving/parity state lives under the session namespace.
 
 ## Public entry point
 
 ```bash
 python3 .agents/skills/ascend-profiling-collection/scripts/collect_torch_profile_case.py \
-  [--session-id <id> | --session-file <path>] \
+  [--context-file <path>] [--execution-id <id>] [--service vllm] \
   --model <remote-weight-path> \
   --served-model-name <name> \
   --tp <N> \
@@ -83,7 +83,7 @@ python3 .agents/skills/ascend-profiling-collection/scripts/collect_torch_profile
 
 ### Required parameters and why
 
-The target session is auto-resolved from the current worktree binding, so no target arg is required when running from inside a session worktree. Add `--session-id <id>` / `--session-file <path>` only to target a session from outside its worktree.
+Task identity is `--context-file` / `VAWS_CONTEXT_FILE`. A live service is `--execution-id` or `--service`.
 
 The script intentionally has no Qwen-specific defaults. The agent must always pass:
 
@@ -107,20 +107,20 @@ The agent can call these directly if it already has a service running and only w
 ```bash
 # Start a profile window on a service that the serving skill already launched
 python3 .agents/skills/ascend-profiling-collection/scripts/profile_control.py \
-  [--session-id <id> | --session-file <path>] --action start_profile [--timeout 900]
+  [--execution-id <id> | --service vllm] --action start_profile [--timeout 900]
 
 # Close it
 python3 .agents/skills/ascend-profiling-collection/scripts/profile_control.py \
-  [--session-id <id> | --session-file <path>] --action stop_profile [--timeout 900]
+  [--execution-id <id> | --service vllm] --action stop_profile [--timeout 900]
 ```
 
-The script reads the service port from `.vaws-local/sessions/<id>/serving.json` for the resolved session (auto-resolved from the worktree binding, or the one named by `--session-id` / `--session-file`). A service must be running.
+The script reads the service port from the coordinator execution named by `--execution-id` or `--service`. A service must be running.
 
 ### Re-run `analyse()` on an existing root
 
 ```bash
 python3 .agents/skills/ascend-profiling-collection/scripts/run_remote_analyse.py \
-  [--session-id <id> | --session-file <path>] --profile-root <remote-path> \
+  [--execution-id <id> | --host <ip>] --profile-root <remote-path> \
   [--expected-ranks <N>] [--analyse-timeout <s>] [--analyse-parallelism <N>] \
   [--analyse-export {db|text|both}]
 ```
@@ -158,7 +158,7 @@ Manifest additions (see the schema table below): top-level `archive_dir` (the ac
 
 ## Workflow
 
-1. **Resolve session** from the worktree binding (or `--session-id` / `--session-file`); the session container endpoint comes from the session's remote state, which `machine-management` bootstrapped.
+1. **Resolve the native task** (`--context-file`) and the live service (`--execution-id` / `--service`).
 2. **Build serving args** — encode `--profiler-config` (always written) and the chosen graph mode.
 3. **Start service** by shelling out to `serve_start.py`. Parity sync is automatic via the serving skill.
 4. **Open SSH tunnel** to the service port so workload requests can be assembled locally (multimodal payloads need local image encoding).

@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""Tests for multi-session prefill/decode lifecycle orchestration."""
+"""Tests for PD full-group topology admission."""
 
 from __future__ import annotations
 
 import importlib.util
 import json
-import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[4]
 SKILL = ROOT / ".agents" / "skills" / "vllm-ascend-pd-serving"
@@ -29,25 +29,18 @@ def load_module():
 
 pd = load_module()
 NOW = "2026-07-25T12:00:00Z"
+CODE = {"source_head": "a" * 40, "snapshot_commit": "b" * 40, "dirty": False}
 
 
 def group() -> dict:
-    snapshot = {"workspace_head": "abc", "submodules": [], "dirty": False}
     return {
         "schema_version": 1,
         "group_id": "pd-group",
         "status": "ready",
+        "context_file": "/tmp/ctx.json",
         "members": [
-            {
-                "name": "prefill-member",
-                "session_id": "prefill-session",
-                "snapshot": snapshot,
-            },
-            {
-                "name": "decode-member",
-                "session_id": "decode-session",
-                "snapshot": snapshot,
-            },
+            {"name": "prefill-member", "service": "prefill"},
+            {"name": "decode-member", "service": "decode"},
         ],
     }
 
@@ -89,37 +82,13 @@ def config() -> dict:
 
 
 class PdServingTests(unittest.TestCase):
-    def test_rejects_group_member_without_snapshot(self) -> None:
+    def test_group_create_output_is_accepted(self) -> None:
+        pd.validate_config(config(), group())
+
+    def test_rejects_members_that_alias_one_service(self) -> None:
         invalid_group = group()
-        invalid_group["members"][0].pop("snapshot")
-
-        with self.assertRaisesRegex(
-            pd.PdServingError,
-            "snapshot must be a non-empty object",
-        ):
-            pd.validate_config(config(), invalid_group)
-
-    def test_rejects_mixed_group_snapshots(self) -> None:
-        invalid_group = group()
-        invalid_group["members"][1]["snapshot"] = {
-            "workspace_head": "different",
-            "submodules": [],
-            "dirty": False,
-        }
-
-        with self.assertRaisesRegex(
-            pd.PdServingError,
-            "share one code snapshot",
-        ):
-            pd.validate_config(config(), invalid_group)
-
-    def test_rejects_members_that_alias_one_session(self) -> None:
-        invalid_group = group()
-        invalid_group["members"][1]["session_id"] = invalid_group["members"][0][
-            "session_id"
-        ]
-
-        with self.assertRaisesRegex(pd.PdServingError, "session_id is duplicated"):
+        invalid_group["members"][1]["service"] = invalid_group["members"][0]["service"]
+        with self.assertRaisesRegex(pd.PdServingError, "service is duplicated"):
             pd.validate_config(config(), invalid_group)
 
     def test_requires_both_roles(self) -> None:
@@ -128,7 +97,25 @@ class PdServingTests(unittest.TestCase):
         with self.assertRaisesRegex(pd.PdServingError, "both prefill and decode"):
             pd.validate_config(invalid, group())
 
-    def test_plan_preserves_declared_order(self) -> None:
+    def test_topology_contains_every_role_command(self) -> None:
+        topology = pd.topology_from_config(config())
+        names = [role["name"] for role in topology["roles"]]
+        self.assertEqual(names, ["decode", "prefill"])
+        for role in topology["roles"]:
+            self.assertIn('"$VAWS_PYTHON"', role["command"])
+            self.assertIn("--kv-transfer-config", role["command"])
+            self.assertEqual(role["npu_count"], 1)
+
+    def test_role_env_is_topology_data_not_shell_json(self) -> None:
+        cfg = config()
+        cfg["services"][0]["env"] = {"HCCL_BUFFSIZE": "1024$"}
+        topology = pd.topology_from_config(cfg)
+        decode = next(role for role in topology["roles"] if role["name"] == "decode")
+        self.assertEqual(decode["env"]["HCCL_BUFFSIZE"], "1024$")
+        self.assertNotIn("export HCCL_BUFFSIZE", decode["command"])
+        self.assertNotIn('"1024$"', decode["command"])
+
+    def test_plan_from_group_create_shape(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             config_path = root / "config.json"
@@ -141,14 +128,13 @@ class PdServingTests(unittest.TestCase):
                 config_path=config_path,
                 group_path=group_path,
                 created_at=NOW,
+                code=CODE,
             )
             self.assertEqual(result["startup_order"], ["decode", "prefill"])
-            lifecycle = json.loads(
-                (output / "lifecycle.json").read_text(encoding="utf-8")
-            )
-            self.assertEqual(lifecycle["shutdown"], ["prefill", "decode"])
+            lifecycle = json.loads((output / "lifecycle.json").read_text(encoding="utf-8"))
+            self.assertEqual(len(lifecycle["topology"]["roles"]), 2)
 
-    def test_partial_start_rolls_back_in_reverse(self) -> None:
+    def test_start_submits_one_topology_run(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             config_path = root / "config.json"
@@ -161,37 +147,100 @@ class PdServingTests(unittest.TestCase):
                 config_path=config_path,
                 group_path=group_path,
                 created_at=NOW,
+                code=CODE,
             )
-            calls = []
+            captured: dict = {}
 
-            def runner(command, **_kwargs):
-                calls.append(command)
-                if "serve_start.py" in command[1] and "--session-id" in command:
-                    session_id = command[command.index("--session-id") + 1]
-                    if session_id == "prefill-session":
-                        return subprocess.CompletedProcess(
-                            command, 1, '{"status":"failed"}', ""
-                        )
-                    return subprocess.CompletedProcess(
-                        command, 0, '{"status":"ready"}', ""
-                    )
-                return subprocess.CompletedProcess(
-                    command, 0, '{"status":"stopped"}', ""
-                )
+            def fake_run(command, **kwargs):
+                captured["command"] = command
+                captured.update(kwargs)
+                return {
+                    "execution_id": "exec-1",
+                    "state": "queued",
+                    "service": "pd-group",
+                }
 
-            result = pd.start(output, runner=runner, updated_at=NOW)
-            self.assertEqual(result["status"], "failed")
-            self.assertEqual(result["rollback"], ["decode"])
-            self.assertIn("serve_stop.py", calls[-1][1])
+            client = SimpleNamespace(
+                context={"session": {"id": "task-1"}},
+                run=fake_run,
+            )
+            result = pd.start(output, client=client, updated_at=NOW)
+            self.assertEqual(result["status"], "queued")
+            self.assertEqual(result["execution_id"], "exec-1")
+            self.assertIn("topology", captured)
+            self.assertEqual(len(captured["topology"]["roles"]), 2)
+            self.assertEqual(captured["service"], "pd-group")
+            self.assertIsNone(captured["timeout_seconds"])
+            self.assertNotIn("npu_count", captured)
 
-    def test_service_command_forwards_role_args(self) -> None:
-        service = config()["services"][0]
-        member = group()["members"][1]
-        command = pd.service_command(service, member, action="start")
-        self.assertIn("--kv-transfer-config", command)
-        self.assertEqual(
-            command[command.index("--session-id") + 1], "decode-session"
-        )
+    def test_preparing_is_queued_with_the_same_execution(self) -> None:
+        self.assertIn("preparing", pd.PENDING)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config_path = root / "config.json"
+            group_path = root / "group.json"
+            config_path.write_text(json.dumps(config()), encoding="utf-8")
+            group_path.write_text(json.dumps(group()), encoding="utf-8")
+            output = root / "run"
+            pd.plan(
+                output,
+                config_path=config_path,
+                group_path=group_path,
+                created_at=NOW,
+                code=CODE,
+            )
+            client = SimpleNamespace(
+                context={"session": {"id": "task-1"}},
+                run=lambda command, **kwargs: {
+                    "execution_id": "exec-prep",
+                    "state": "preparing",
+                    "service": "pd-group",
+                },
+                observe=lambda eid, action="status", force=False, role=None: {
+                    "state": "preparing",
+                    "execution_id": eid,
+                    "roles": [
+                        {"name": "decode", "state": "preparing"},
+                        {"name": "prefill", "state": "preparing"},
+                    ],
+                },
+            )
+            started = pd.start(output, client=client, updated_at=NOW)
+            self.assertEqual(started["status"], "queued")
+            self.assertEqual(started["execution_id"], "exec-prep")
+            self.assertEqual(started["state"], "preparing")
+            self.assertFalse(started["running"])
+            result = pd.status(output, client=client)
+            self.assertEqual(result["status"], "queued")
+            self.assertEqual(result["execution_id"], "exec-prep")
+            self.assertEqual(result["state"], "preparing")
+            self.assertFalse(result["running"])
+
+    def test_stop_uses_the_same_execution(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config_path = root / "config.json"
+            group_path = root / "group.json"
+            config_path.write_text(json.dumps(config()), encoding="utf-8")
+            group_path.write_text(json.dumps(group()), encoding="utf-8")
+            output = root / "run"
+            pd.plan(
+                output,
+                config_path=config_path,
+                group_path=group_path,
+                created_at=NOW,
+                code=CODE,
+            )
+            client = SimpleNamespace(
+                context={"session": {"id": "task-1"}},
+                run=lambda *a, **k: {"execution_id": "exec-1", "state": "running", "service": "pd-group"},
+                observe=lambda eid, action="status", force=False: {"state": "cancelled", "execution_id": eid},
+            )
+            pd.start(output, client=client, updated_at=NOW)
+            result = pd.stop(output, force=True, client=client, updated_at=NOW)
+            self.assertEqual(result["execution_id"], "exec-1")
+            self.assertEqual(result["status"], "stopped")
+            self.assertTrue(result["container_preserved"])
 
 
 if __name__ == "__main__":

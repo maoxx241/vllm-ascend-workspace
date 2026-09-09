@@ -50,7 +50,7 @@ python3 .agents/skills/npu-fleet-monitor/scripts/manage_monitor.py ensure
 | 技能                       | 用途                                             | 何时使用               |
 | ------------------------ | ---------------------------------------------- | ------------------ |
 | **repo-init**            | 安装 GitHub CLI、登录 GitHub、初始化子模块、运行 `uv sync`、配置 Fork 和远程仓库拓扑 | 首次 clone 后初始化工作区   |
-| **machine-management**   | 添加、验证、修复或移除远程昇腾 NPU 服务器及其托管容器                  | 需要配置远程 NPU 开发机时    |
+| **machine-management**   | 记录项目用户名 `vaws-<user>`；容器准备由 `vaws-coordinator provision` 负责 | 需要配置远程 NPU 开发机用户名时 |
 | **npu-fleet-monitor**    | 从独立 vaws-top 仓库构建、拉起、检查或停止本地 NPU 监控页面            | 需要持续查看设备、主机和历史资源状态时 |
 | **session-management**   | 创建、检查、分组和清理隔离 session：本地 worktree、远端容器、状态目录和资源 lease | 多 agent、多任务或 PD 场景并行远端执行时 |
 | **remote-code-parity**   | 将本地工作区的完整状态（含未提交的修改）同步到远程容器                    | 在远程机器上运行测试或服务前自动触发 |
@@ -181,7 +181,7 @@ python3 .agents/skills/npu-fleet-monitor/scripts/manage_monitor.py ensure
 ### 已完成
 
 - [x] **repo-init** — 工作区初始化：GitHub CLI 安装、认证、子模块、Fork 与远程仓库拓扑配置
-- [x] **machine-management** — 远程机器管理：添加、验证、修复、移除昇腾 NPU 服务器及托管容器
+- [x] **machine-management** — 项目用户名配置：`vaws-<user>` 文档；容器准备由 coordinator provision 负责
 - [x] **npu-fleet-monitor** — 独立 vaws-top 仓库监控服务：自动构建、systemd 用户服务拉起和回环健康检查
 - [x] **remote-code-parity** — 代码同步：将本地完整工作区状态（含未提交修改）同步到远程容器
 - [x] **vllm-ascend-serving** — 服务拉起：支持空闲 NPU 检测、空闲端口检测，一键拉起 vLLM Ascend 推理服务

@@ -90,23 +90,24 @@ class FakeProcess:
         return self.returncode
 
 
-def fake_endpoint() -> SimpleNamespace:
-    return SimpleNamespace(host="192.0.2.10", port=46001, user="root")
+def fake_endpoint():
+    return common.SshEndpoint(host="192.0.2.10", port=46001, user="root")
 
 
-def fake_target(*, alias: str = "machine-a", session_id: str = "sess-a") -> SimpleNamespace:
-    return SimpleNamespace(
-        session_id=session_id,
-        session_file=None,
+def fake_target(*, alias: str = "machine-a", session_id: str = "sess-a"):
+    return common.ExecutionTarget(
+        mode="endpoint",
         alias=alias,
         endpoint=fake_endpoint(),
-        state_repo_root=ROOT,
+        cwd="/vllm-workspace",
+        session_id=session_id,
+        task_id=session_id,
     )
 
 
 def collect_argv(tmp: str, **overrides: object) -> list[str]:
     values: dict[str, object] = {
-        "--session-id": "sess-a",
+        "--service": "vllm",
         "--model": "/models/Qwen",
         "--served-model-name": "Qwen",
         "--tp": "1",

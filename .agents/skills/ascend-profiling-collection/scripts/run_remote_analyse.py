@@ -46,13 +46,13 @@ Exit codes:
     2  -- the SSH or analyse() call itself failed
 
 Usage:
-    python3 run_remote_analyse.py [--session-id <id>] \\
+    python3 run_remote_analyse.py --execution-id <id> \\
         --profile-root <path> [--expected-ranks <N>] \\
         [--analyse-timeout <s>] [--analyse-parallelism <N>] \\
         [--analyse-export {db,text,both}]
 
-With no --session-id/--session-file the bound session of the current worktree
-is used.
+Pass --host/--port for a direct container, or --execution-id / --context-file
+for a coordinator-owned execution.
 
 The agent should always pass ``--expected-ranks`` when invoking this from a
 collection orchestrator (typically ``tp * (dp or 1)``); otherwise a partial
@@ -627,9 +627,11 @@ def analyse_profile_root(
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
-    target = p.add_mutually_exclusive_group()
-    target.add_argument("--session-id", help="VAWS session id; defaults to the bound session of the current worktree")
-    target.add_argument("--session-file", help="explicit session.json path")
+    p.add_argument("--context-file")
+    p.add_argument("--execution-id")
+    p.add_argument("--host")
+    p.add_argument("--port", type=int)
+    p.add_argument("--user", default="root")
     p.add_argument(
         "--profile-root",
         required=True,
@@ -693,8 +695,11 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         target = resolve_execution_target(
-            session_id=args.session_id,
-            session_file=args.session_file,
+            context_file=getattr(args, "context_file", None),
+            execution_id=getattr(args, "execution_id", None),
+            host=getattr(args, "host", None),
+            port=getattr(args, "port", None),
+            user=getattr(args, "user", "root"),
         )
         alias = target.alias
         ep = target.endpoint
@@ -708,8 +713,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         bundle["machine"] = alias
         bundle["mode"] = target.mode
-        bundle["session_id"] = target.session_id
-        bundle["session_file"] = str(target.session_file) if target.session_file else None
+        bundle["execution_id"] = getattr(target, "execution_id", None)
 
         worst = bundle["analysis_status"]
         if worst == "no_profile_dirs":
@@ -725,8 +729,8 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:
         print_json({
             "status": "failed",
-            "session_id": getattr(args, "session_id", None),
-            "session_file": getattr(args, "session_file", None),
+            "execution_id": getattr(args, "execution_id", None),
+            "host": getattr(args, "host", None),
             "profile_root": getattr(args, "profile_root", None),
             "error": str(exc),
         })

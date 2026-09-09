@@ -112,7 +112,7 @@ profiling data, for example:
 
 ```bash
 python3 .agents/skills/ascend-profiling-analysis/scripts/profile_analyze.py \
-  --session-id <session-id> \
+  --host <container-ip> \
   --remote-profile-root PROFILE_ROOT \
   --remote-output-dir OUT_DIR
 ```

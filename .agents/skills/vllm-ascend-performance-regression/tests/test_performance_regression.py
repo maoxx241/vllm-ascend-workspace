@@ -37,12 +37,12 @@ def config() -> dict:
         "baseline": {
             "label": "baseline",
             "code_snapshot": "abc",
-            "session_id": "base-session",
+            "service": "baseline-svc",
         },
         "candidate": {
             "label": "candidate",
             "code_snapshot": "def",
-            "session_id": "candidate-session",
+            "service": "candidate-svc",
         },
         "shared": {
             "machine": "host",
@@ -164,7 +164,7 @@ class PerformanceRegressionTests(unittest.TestCase):
 
     def test_same_session_is_rejected(self) -> None:
         invalid = config()
-        invalid["candidate"]["session_id"] = invalid["baseline"]["session_id"]
+        invalid["candidate"]["service"] = invalid["baseline"]["service"]
         with self.assertRaisesRegex(performance.PerformanceRegressionError, "different"):
             performance.validate_config(invalid)
 

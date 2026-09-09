@@ -1,17 +1,14 @@
 #!/usr/bin/env python3
-"""Add or attach one managed machine for this workspace.
+"""Record the project username used for vaws-<user> containers.
 
-This is the public agent-facing entrypoint. Prefer this wrapper over calling
-``inventory.py`` or ``manage_machine.py`` directly for normal add/attach work.
-All outputs are JSON.
+Container bootstrap and recipe execution belong to vaws-coordinator.
+This entry only stores the local machine username document.
 """
-
 from __future__ import annotations
 
+import argparse
 import sys
 from pathlib import Path
-
-import argparse
 from typing import Sequence
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -23,396 +20,37 @@ from vaws_venv import ensure_workspace_interpreter  # noqa: E402
 
 ensure_workspace_interpreter(repo_root=ROOT)
 
-
-import manage_machine as machine_ops
-from _workflow_common import (  # noqa: E402
-    WorkflowError,
-    bootstrap_container,
-    bootstrap_host_key,
-    check_host_key,
-    choose_alias,
-    emit_progress,
-    find_record,
-    host_target,
-    image_request_matches_record,
-    list_records,
-    local_image_discovery_blocker,
-    load_or_create_profile,
-    machine_summary,
-    print_json,
-    probe_host,
-    public_key_needs_input_payload,
-    resolve_password_args,
-    resolve_workflow_image,
-    status_payload,
-    stamp_machine_verified,
-    sync_mesh,
-    upsert_machine_record,
-    verify_machine,
-)
-from vaws_local_state import (  # noqa: E402
-    default_container_name,
-    effective_workspace_alias,
-    workspace_identity_summary,
-)
-
-
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
-    parser.add_argument("--host", required=True, help="host IP or DNS name")
-    parser.add_argument("--alias", help="optional stable alias; defaults to the host value")
-    parser.add_argument("--host-user", default=machine_ops.DEFAULT_HOST_USER, help=f"SSH user (default: {machine_ops.DEFAULT_HOST_USER})")
-    parser.add_argument("--host-port", type=int, default=machine_ops.DEFAULT_HOST_PORT, help=f"host SSH port (default: {machine_ops.DEFAULT_HOST_PORT})")
-    parser.add_argument("--machine-username", help="workspace machine username; letters and digits only")
-    parser.add_argument(
-        "--generate-machine-username",
-        "--generate",
-        dest="generate_machine_username",
-        action="store_true",
-        default=False,
-        help="generate a default workspace machine username; only use after explicit user consent",
-    )
-    parser.add_argument(
-        "--image",
-        help=(
-            "explicit image selector: `local-latest`, `rc`, `main`, `stable`, or a full non-latest image reference; "
-            "this workflow does not default implicitly"
-        ),
-    )
-    parser.add_argument(
-        "--machine-type",
-        choices=machine_ops.MACHINE_TYPE_CHOICES,
-        help="override detected machine type when npu-smi cannot infer it",
-    )
-    parser.add_argument("--workdir", default=machine_ops.DEFAULT_WORKDIR, help=f"container workdir (default: {machine_ops.DEFAULT_WORKDIR})")
-    parser.add_argument("--public-key-file", help="local public key to install; defaults to ~/.ssh/id_ed25519.pub if present")
-    password_group = parser.add_mutually_exclusive_group()
-    password_group.add_argument("--password", help="host password already supplied by the user in the current chat")
-    password_group.add_argument("--password-env", help="read the host password from one environment variable")
-    password_group.add_argument("--password-stdin", action="store_true", help="read the host password from standard input")
-    return parser
+from vaws_local_state import default_container_name, ensure_profile, profile_summary  # noqa: E402
+from vaws_result_envelope import emit_skill_json  # noqa: E402
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = build_parser()
+    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
+    parser.add_argument("--machine-username", help="letters and digits; becomes vaws-<user>")
+    parser.add_argument("--generate-machine-username", action="store_true")
     args = parser.parse_args(argv)
     try:
-        requested_machine_type = (
-            machine_ops.normalize_machine_type(args.machine_type) if args.machine_type else None
-        )
-        emit_progress(action="add", phase="profile", message="ensuring local machine profile", machine=args.host)
-        profile, needs_profile, profile_action = load_or_create_profile(
+        profile, action = ensure_profile(
             machine_username=args.machine_username,
-            generate_machine_username=args.generate_machine_username,
+            allow_update=False,
+            generate=args.generate_machine_username,
         )
-        if needs_profile is not None:
-            print_json(needs_profile)
-            return 0
-        assert profile is not None
-
-        existing = find_record(args.host)
-        alias = choose_alias(explicit_alias=args.alias, host=args.host)
-        existing_from_host = existing is not None
-        if existing is not None:
-            alias = existing["alias"]
-        else:
-            existing = find_record(alias)
-
-        image, image_needs_input = resolve_workflow_image(
-            explicit_image=args.image,
-            existing_record=existing,
-            action="machine add / attach",
-        )
-        if image_needs_input is not None:
-            print_json(image_needs_input)
-            return 0
-        assert image is not None
-
-        existing_machine_type_hint = None
-        if existing is not None:
-            if existing["host"].get("machine_type"):
-                existing_machine_type_hint = machine_ops.normalize_machine_type(existing["host"]["machine_type"])
-            elif existing["container"].get("machine_type"):
-                existing_machine_type_hint = machine_ops.normalize_machine_type(existing["container"]["machine_type"])
-            else:
-                existing_machine_type_hint = machine_ops.infer_machine_type_from_image(existing["container"].get("image"))
-            if requested_machine_type is not None and existing_machine_type_hint is not None and requested_machine_type != existing_machine_type_hint:
-                raise WorkflowError(
-                    f"explicit machine type {requested_machine_type} does not match the recorded machine type {existing_machine_type_hint}"
-                )
-            verified = verify_machine(existing)
-            if (
-                verified.get("status") == "ready"
-                and image_request_matches_record(image, existing)
-                and (
-                    requested_machine_type is None
-                    or (existing_machine_type_hint is not None and requested_machine_type == existing_machine_type_hint)
-                )
-            ):
-                message = (
-                    "machine is already managed and ready; no mutation was needed"
-                    if existing_from_host
-                    else "machine alias already exists in inventory and is ready"
-                )
-                stamp_machine_verified(existing["alias"])
-                print_json(
-                    status_payload(
-                        "ready",
-                        success=True,
-                        action="already-ready",
-                        message=message,
-                        machine=machine_summary(existing),
-                        profile={
-                            "action": profile_action,
-                            "machine_username": profile["machine_username"],
-                            "container_name": profile["container_name"],
-                        },
-                        workspace_identity=workspace_identity_summary(),
-                        verify=verified,
-                    )
-                )
-                return 0
-            if verified.get("status") == "blocked":
-                print_json(verified)
-                return 0
-
-        target_host = existing["host"]["ip"] if existing is not None else args.host
-        target_user = existing["host"]["user"] if existing is not None else args.host_user
-        target_port = existing["host"]["port"] if existing is not None else args.host_port
-        target = host_target(host=target_host, user=target_user, port=target_port)
-
-        private_key = None
-        public_key_needs_input = None
-        try:
-            key_path = machine_ops.find_public_key(args.public_key_file)
-            private_key = machine_ops.private_key_for_public_key(key_path)
-        except machine_ops.MachineManagementError as exc:
-            public_key_needs_input = public_key_needs_input_payload(str(exc))
-        if public_key_needs_input is not None:
-            print_json(public_key_needs_input)
-            return 0
-
-        password = resolve_password_args(args)
-        emit_progress(action="add", phase="host-auth", message="checking host key SSH", machine=alias)
-        host_ssh_precheck = check_host_key(target, private_key)
-        host_auth = None
-        if not host_ssh_precheck["ok"]:
-            host_auth = bootstrap_host_key(target, public_key_file=args.public_key_file, password=password)
-            if host_auth.get("status") == "needs_input":
-                print_json(host_auth)
-                return 0
-            if host_auth.get("status") == "blocked":
-                print_json(host_auth)
-                return 0
-        else:
-            host_auth = {"success": True, "result": "already-configured", "precheck": host_ssh_precheck}
-
-        emit_progress(action="add", phase="probe", message="probing host prerequisites", machine=alias)
-        probe = probe_host(
-            target,
-            image=image,
-            machine_type=requested_machine_type or existing_machine_type_hint,
-        )
-        if probe.get("status") == "blocked":
-            print_json(probe)
-            return 0
-        image_discovery_blocker = local_image_discovery_blocker(probe)
-        if image_discovery_blocker is not None:
-            print_json(image_discovery_blocker)
-            return 0
-        free_port = probe.get("free_port")
-        if not isinstance(free_port, int) and existing is None:
-            print_json(
-                status_payload(
-                    "blocked",
-                    success=False,
-                    action="choose-container-port",
-                    message="host probe succeeded but did not produce a free high SSH port",
-                    probe=probe,
-                )
-            )
-            return 0
-
-        probed_machine_type = (
-            machine_ops.normalize_machine_type(probe.get("machine_type"))
-            if probe.get("machine_type")
-            else None
-        )
-        existing_host_machine_type = (
-            machine_ops.normalize_machine_type(existing["host"]["machine_type"])
-            if existing is not None and existing["host"].get("machine_type")
-            else None
-        )
-        existing_container_machine_type = (
-            machine_ops.normalize_machine_type(existing["container"]["machine_type"])
-            if existing is not None and existing["container"].get("machine_type")
-            else None
-        )
-        if requested_machine_type is not None and probed_machine_type is not None and requested_machine_type != probed_machine_type:
-            raise WorkflowError(
-                f"explicit machine type {requested_machine_type} does not match detected host type {probed_machine_type}"
-            )
-        machine_type = (
-            requested_machine_type
-            or probed_machine_type
-            or existing_host_machine_type
-            or existing_container_machine_type
-            or existing_machine_type_hint
-        )
-        if machine_type is None:
-            print_json(
-                status_payload(
-                    "blocked",
-                    success=False,
-                    action="detect-machine-type",
-                    message="host probe succeeded but machine type could not be inferred; rerun with --machine-type A2|A3|A5|310P",
-                    probe=probe,
-                )
-            )
-            return 0
-
-        detected_soc = machine_ops.normalize_soc_token(probe.get("detected_soc"))
-        existing_soc = (
-            machine_ops.normalize_soc_token(existing["host"]["soc"])
-            if existing is not None and existing["host"].get("soc")
-            else None
-        )
-        soc = detected_soc or existing_soc
-
-        unified_alias = effective_workspace_alias()
-        namespace = (
-            existing.get("namespace") if existing is not None else None
-        ) or unified_alias or profile["machine_username"]
-        container_name = (
-            existing["container"]["name"]
-            if existing is not None
-            else default_container_name(namespace)
-        )
-        container_port = existing["container"]["ssh_port"] if existing is not None else free_port
-        workdir = existing["container"]["workdir"] if existing is not None else args.workdir
-
-        emit_progress(action="add", phase="bootstrap", message="bootstrapping or repairing the managed container", machine=alias)
-        container = bootstrap_container(
-            target,
-            host=target_host,
-            container_name=container_name,
-            container_ssh_port=container_port,
-            image=image,
-            workdir=workdir,
-            namespace=namespace,
-            machine_type=machine_type,
-            soc=soc,
-            public_key_file=args.public_key_file,
-            replace_container_on_image_change=bool(args.image),
-        )
-        if container.get("status") in {"needs_input", "needs_repair", "blocked"}:
-            print_json(container)
-            return 0
-
-        actual_image = container.get("selected_image") or container.get("image") or image
-        bootstrap_method = "password-once" if host_ssh_precheck.get("ok") is False and password.value is not None else None
-        container_machine_type = (
-            machine_ops.normalize_machine_type(container.get("container_type"))
-            if container.get("container_type")
-            else machine_type
-        )
-        emit_progress(action="add", phase="inventory", message="persisting machine record and refreshing mesh", machine=alias)
-        inventory_payload, record = upsert_machine_record(
-            alias=alias,
-            namespace=namespace,
-            host_ip=target_host,
-            host_port=target_port,
-            host_user=target_user,
-            container_name=container_name,
-            container_ssh_port=container_port,
-            image=actual_image,
-            workdir=workdir,
-            bootstrap_method=bootstrap_method,
-            host_machine_type=machine_type,
-            host_soc=soc,
-            container_machine_type=container_machine_type,
-        )
-        peers = [peer for peer in list_records() if peer["alias"] != record["alias"]]
-        mesh = sync_mesh(record, peers=peers)
-        emit_progress(action="add", phase="verify", message="running final readiness verification", machine=record["alias"])
-        verified = verify_machine(
-            record,
-            progress_cb=lambda phase, message: emit_progress(action="add", phase=phase, message=message, machine=record["alias"]),
-        )
-        if verified.get("status") == "blocked":
-            print_json(verified)
-            return 0
-        if verified.get("status") != "ready":
-            print_json(
-                status_payload(
-                    "needs_repair",
-                    success=False,
-                    action="post-bootstrap-verify-failed",
-                    message="bootstrap finished but final readiness verification still reports drift",
-                    machine=machine_summary(record),
-                    profile={
-                        "action": profile_action,
-                        "machine_username": profile["machine_username"],
-                        "container_name": profile["container_name"],
-                    },
-                    workspace_identity=workspace_identity_summary(),
-                    host_auth=host_auth,
-                    probe=probe,
-                    container=container,
-                    inventory=inventory_payload,
-                    mesh=mesh,
-                    verify=verified,
-                )
-            )
-            return 0
-
-        if not mesh.get("success", True):
-            print_json(
-                status_payload(
-                    "needs_repair",
-                    success=False,
-                    action="mesh-sync-failed",
-                    message="machine verified but SSH mesh sync to peers failed; cross-machine operations will not work until repaired",
-                    machine=machine_summary(record),
-                    host_auth=host_auth,
-                    probe=probe,
-                    container=container,
-                    inventory=inventory_payload,
-                    mesh=mesh,
-                    verify=verified,
-                )
-            )
-            return 0
-
-        stamp_machine_verified(record["alias"])
-        action = "repaired" if existing is not None else "created"
-        print_json(
-            status_payload(
-                "ready",
-                success=True,
-                action=action,
-                message="machine is managed and ready",
-                machine=machine_summary(record),
-                profile={
-                    "action": profile_action,
-                    "machine_username": profile["machine_username"],
-                    "container_name": profile["container_name"],
-                },
-                workspace_identity=workspace_identity_summary(),
-                host_auth=host_auth,
-                probe=probe,
-                container=container,
-                inventory=inventory_payload,
-                mesh=mesh,
-                verify=verified,
-            )
-        )
+        payload = {
+            "status": "ok",
+            "action": action,
+            "machine_username": profile["machine_username"],
+            "container_name": default_container_name(profile["machine_username"]),
+            "profile": profile_summary(),
+            "next_steps": [
+                "Coordinator owns container bootstrap and runtime registration.",
+                "Call python -m vaws_coordinator provision --host <host> --image <image> --user <user>.",
+                "Do not create per-task Docker names from this workspace.",
+            ],
+        }
+        emit_skill_json(payload, skill="machine-management", entry_point=".agents/skills/machine-management/scripts/machine_add.py")
         return 0
-    except WorkflowError as exc:
-        print_json({"success": False, "status": "blocked", "action": "failed", "error": str(exc)})
-        return 2
-    except Exception as exc:  # noqa: BLE001
-        print_json({"success": False, "status": "blocked", "action": "failed", "error": str(exc)})
+    except Exception as exc:
+        emit_skill_json({"status": "failed", "error": str(exc)}, skill="machine-management", entry_point=".agents/skills/machine-management/scripts/machine_add.py")
         return 2
 
 

@@ -54,7 +54,7 @@ compatibility backend for managed VAWS sessions.
 
 ```bash
 python3 .agents/skills/ascend-profiling-analysis/scripts/profile_analyze.py \
-  [--session-id <id> | --session-file <session.json>] \
+  [--context-file <path>] [--execution-id <id> | --host <ip>] \
   ( --manifest <local-run-dir>/manifest.json
    | --remote-profile-root <remote-path> ) \
   [--tag <name>] \
@@ -76,7 +76,7 @@ python3 .agents/skills/ascend-profiling-analysis/scripts/profile_analyze.py \
 
 Flag notes:
 
-- Target resolution is **session-based**. With no target arg the session is auto-resolved by walking up from the current working directory to the nearest `.vaws-local/current-session.json` worktree binding — running from inside a session worktree needs zero target args. Pass `--session-id <id>` / `--session-file <session.json>` to target a session explicitly. When `--manifest` comes from a session-scoped collection, the session recorded in the manifest is picked up automatically.
+- Target resolution uses `--execution-id` / `--host`, or a collection manifest's recorded `execution_id` / `host`. Do not guess a session from cwd.
 - `--local-output-dir`: explicit local dir to write pulled artifacts into. If omitted, defaults to `.vaws-local/profiling-analysis/runs/<timestamp>_<tag>/`. Pass `--overwrite` to allow a non-empty target.
 - `--remote-output-dir`: explicit **absolute** remote output dir. Useful with `--from-stage` / `--only-stage` to **reuse a previous run's normalize/segment artifacts** when iterating on classify / diagnostics / report. Default: `<remote-work-dir>/runs/<local-run-dir-name>`.
 - `--mode fast|full`（**默认 fast**):fast 让远端 analyze 跳过 xlsx、host-trace 归因与全量 HTML(`--skip-xlsx --skip-host-trace --report-mode summary`)，拉回 17 项精益清单（report.md + analysis_summary.json + manifests + class 级 CSV + findings);`analysis_summary.json` 会完整嵌入 stdout JSON——agent 一次调用拿到结论。full 保持旧行为（全量产物 + 全量拉回清单）。fast 与显式 `--report-mode/--skip-html` 同给时 fast 强制 summary。
@@ -104,7 +104,7 @@ python3 .agents/skills/ascend-profiling-analysis/scripts/profile_analyze.py \
 
 行为：
 
-1. 解析 session state，得到目标容器 SSH endpoint：未显式传 target 时从 cwd 向上找最近的 `.vaws-local/current-session.json` worktree 绑定自动解析（在 session worktree 内运行零参数即可）；也可显式传 `--session-id` / `--session-file`。若 `--manifest` 来自 session-scoped collection 且未显式传 target，则优先使用 manifest 里记录的 `session_file` / `session_id`，确保分析在采集同一个 session 容器内运行。
+1. 解析远端 SSH endpoint：`--execution-id` / `--host`，或 collection manifest 记录的 `execution_id` / `host`。不要从 cwd 猜测 session。
 2. 解析输入：
    - `--manifest`：读取 `analysis_status`、`remote_profile_root`、`schema_version`；若不是 `ok` 直接失败。
    - `--remote-profile-root`：直接走原始路径（用于历史 profiling）。
@@ -119,7 +119,7 @@ python3 .agents/skills/ascend-profiling-analysis/scripts/profile_analyze.py \
 
 ```bash
 python3 .agents/skills/ascend-profiling-analysis/scripts/profile_sweep.py \
-  [--session-id <id> | --session-file <session.json>] \
+  [--context-file <path>] [--execution-id <id> | --host <ip>] \
   --search-root <remote-path> [--search-root <remote-path> ...] \
   [--tag <name>] \
   [--limit <N>] \
@@ -133,7 +133,7 @@ python3 .agents/skills/ascend-profiling-analysis/scripts/profile_sweep.py \
 
 行为：
 
-- 目标同样是 session-based：零参数时从 cwd 向上自动解析 worktree 绑定的 session（在 session worktree 内运行即可），也可显式 `--session-id` / `--session-file`。
+- 目标同样是 `--execution-id` / `--host`，不要从 cwd 猜测 session。
 - 通过 `python3 -m ascend_profile.sweep` 在远端发现所有含 `kernel_details.csv` 的 root，逐个 analyze，产 `sweep_summary.json`。
 - 拉回 `sweep_summary.json` 和每个 root 的 lightweight 产物。HTML 报告默认 **不** 拉回，因为 sweep 跑很多 root 时 HTML 累计可能上 GB；要拉就显式加 `--pull-html`。
 - sweep 默认在远端跑 `--skip-html` 以节省时间和磁盘；要为每个 root 都渲染 HTML，传 `--render-html` 并可选 `--report-mode`。

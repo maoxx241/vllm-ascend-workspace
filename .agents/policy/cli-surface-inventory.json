@@ -163,7 +163,7 @@
       "responsibility": "mechanics",
       "support_role": "supported",
       "target_kind": "self",
-      "note": "current service log tailer used with serve_start/status/stop",
+      "note": "current service log tailer; optional --role selects observe(action='tail', role=...)",
       "proposed_target": "vaws serve"
     },
     ".agents/scripts/remote_service_start.py": {
@@ -488,50 +488,22 @@
       "note": "list/inspect/promote/merge/reject/deprecate/resolve/verify file moves are mechanics; which verb applies is the review",
       "proposed_target": "vaws knowledge"
     },
-    ".agents/skills/machine-management/scripts/inventory.py": {
-      "responsibility": "mechanics",
-      "support_role": "internal",
-      "target_kind": "local-entry",
-      "note": "library imported by _workflow_common; CLI (summary/get/put/upsert/remove) is low-level diagnostic",
-      "target": ".agents/skills/machine-management/scripts/machine_add.py",
-      "proposed_target": "vaws machine"
-    },
+
     ".agents/skills/machine-management/scripts/machine_add.py": {
       "responsibility": "mechanics",
       "support_role": "supported",
       "target_kind": "self",
-      "note": "SSH bootstrap + container + inventory upsert; image track stays an explicit user gate",
-      "proposed_target": "vaws machine"
-    },
-    ".agents/skills/machine-management/scripts/machine_remove.py": {
-      "responsibility": "mechanics",
-      "support_role": "supported",
-      "target_kind": "self",
-      "note": "inventory removal + optional container teardown",
-      "proposed_target": "vaws machine"
-    },
-    ".agents/skills/machine-management/scripts/machine_repair.py": {
-      "responsibility": "mechanics",
-      "support_role": "supported",
-      "target_kind": "self",
-      "note": "idempotent re-run of bootstrap steps",
+      "note": "local username document for vaws-<user>; container prepare is python -m vaws_coordinator provision",
       "proposed_target": "vaws machine"
     },
     ".agents/skills/machine-management/scripts/machine_verify.py": {
       "responsibility": "mechanics",
       "support_role": "supported",
       "target_kind": "self",
-      "note": "read-only host/container/NPU facts",
+      "note": "read-only local username document; host/container proof is coordinator-owned",
       "proposed_target": "vaws machine"
     },
-    ".agents/skills/machine-management/scripts/manage_machine.py": {
-      "responsibility": "mechanics",
-      "support_role": "internal",
-      "target_kind": "local-entry",
-      "note": "host/container library imported by _workflow_common; CLI is low-level diagnostic",
-      "target": ".agents/skills/machine-management/scripts/machine_add.py",
-      "proposed_target": "vaws machine"
-    },
+
     ".agents/skills/modelscope/scripts/download_from_modelscope.py": {
       "responsibility": "mechanics",
       "support_role": "payload",
@@ -571,13 +543,6 @@
       "support_role": "supported",
       "target_kind": "self",
       "note": "prunes the container cache root",
-      "proposed_target": "vaws sync"
-    },
-    ".agents/skills/remote-code-parity/scripts/install_consent.py": {
-      "responsibility": "mechanics",
-      "support_role": "supported",
-      "target_kind": "self",
-      "note": "records install consent and sync-mode overrides",
       "proposed_target": "vaws sync"
     },
     ".agents/skills/remote-code-parity/scripts/parity_sync.py": {
@@ -642,20 +607,7 @@
       "note": "parses the vllm-ascend CI pin",
       "proposed_target": "vaws workspace"
     },
-    ".agents/skills/session-management/scripts/npu_coordination.py": {
-      "responsibility": "mechanics",
-      "support_role": "supported",
-      "target_kind": "self",
-      "note": "optional host-shared SQLite NPU queue; observation from vaws-top is not allocation authority",
-      "proposed_target": "vaws session"
-    },
-    ".agents/skills/session-management/scripts/session_create.py": {
-      "responsibility": "mechanics",
-      "support_role": "supported",
-      "target_kind": "self",
-      "note": "worktree + container + lease creation",
-      "proposed_target": "vaws session"
-    },
+
     ".agents/skills/session-management/scripts/session_diff.py": {
       "responsibility": "mechanics",
       "support_role": "supported",
@@ -667,37 +619,17 @@
       "responsibility": "mechanics",
       "support_role": "supported",
       "target_kind": "self",
-      "note": "stale metadata GC with --reap-dead",
+      "note": "reports unresolved coordinator executions; never auto-releases",
       "proposed_target": "vaws session"
     },
     ".agents/skills/session-management/scripts/session_group.py": {
       "responsibility": "mechanics",
       "support_role": "supported",
       "target_kind": "self",
-      "note": "create/status/list/teardown of session groups",
+      "note": "create/status/list/teardown of named service groups",
       "proposed_target": "vaws session"
     },
-    ".agents/skills/session-management/scripts/session_list.py": {
-      "responsibility": "mechanics",
-      "support_role": "supported",
-      "target_kind": "self",
-      "note": "read local session/lease state",
-      "proposed_target": "vaws session"
-    },
-    ".agents/skills/session-management/scripts/session_remove.py": {
-      "responsibility": "mechanics",
-      "support_role": "supported",
-      "target_kind": "self",
-      "note": "teardown service/container/worktree/leases",
-      "proposed_target": "vaws session"
-    },
-    ".agents/skills/session-management/scripts/session_status.py": {
-      "responsibility": "mechanics",
-      "support_role": "supported",
-      "target_kind": "self",
-      "note": "one session plus live probe",
-      "proposed_target": "vaws session"
-    },
+
     ".agents/skills/vllm-ascend-benchmark/scripts/bench_compare.py": {
       "responsibility": "mixed",
       "support_role": "supported",

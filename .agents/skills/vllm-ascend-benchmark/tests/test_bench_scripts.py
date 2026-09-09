@@ -25,15 +25,12 @@ import _common  # noqa: E402
 import bench_compare  # noqa: E402
 import bench_run  # noqa: E402
 
-FAKE_LOOKUP = SimpleNamespace(
-    session={"session_id": "s"},
-    session_file="/tmp/session.json",
-)
-
-
 def _assemble(**kwargs):
-    """assemble_config with session resolution mocked out."""
-    with mock.patch.object(_common, "load_session_lookup", return_value=FAKE_LOOKUP):
+    kwargs.pop("session_id", None)
+    client = SimpleNamespace(context={"session": {"id": "task-1"}})
+    with mock.patch.object(_common, "task_client", return_value=client), mock.patch.object(
+        _common, "task_id_of", return_value="task-1"
+    ):
         return _common.assemble_config(**kwargs)
 
 
@@ -45,6 +42,84 @@ class BenchmarkEntrypointSmokeTests(unittest.TestCase):
                                       capture_output=True, text=True, check=False)
                 self.assertEqual(proc.returncode, 0, proc.stderr)
                 self.assertIn("usage:", proc.stdout)
+
+
+class BenchQueuedTests(unittest.TestCase):
+    def test_queued_serve_is_not_force_stopped(self):
+        cfg = SimpleNamespace(
+            context_file=None, execution_id=None, service="vllm",
+            task_id="task-1", model="/m", health_timeout=None,
+        )
+        stop = mock.Mock(side_effect=AssertionError("must not stop queued work"))
+        with mock.patch.object(bench_run, "assemble_config", return_value=cfg), mock.patch.object(
+            bench_run, "call_serve_start",
+            return_value={"status": "queued", "execution_id": "exec-q", "state": "queued"},
+        ), mock.patch.object(bench_run, "call_serve_stop", stop), mock.patch.object(
+            bench_run, "print_json"
+        ) as printed:
+            rc = bench_run.main(["--model", "/m"])
+        self.assertEqual(rc, 0)
+        payload = printed.call_args[0][0]
+        self.assertEqual(payload["status"], "queued")
+        self.assertEqual(payload["execution_id"], "exec-q")
+        stop.assert_not_called()
+
+    def test_preparing_execution_is_not_force_stopped(self):
+        from vaws_task_target import PENDING
+
+        self.assertIn("preparing", PENDING)
+        cfg = SimpleNamespace(
+            context_file=None, execution_id="exec-prep", service="vllm",
+            task_id="task-1", model="/m", health_timeout=30,
+        )
+        stop = mock.Mock(side_effect=AssertionError("must not stop preparing work"))
+        client = SimpleNamespace(
+            observe=lambda *a, **k: {"state": "preparing", "execution_id": "exec-prep"},
+        )
+        with mock.patch.object(bench_run, "assemble_config", return_value=cfg), mock.patch.object(
+            bench_run, "call_serve_stop", stop
+        ), mock.patch.object(bench_run, "print_json") as printed, mock.patch(
+            "vaws_task_target.task_client", return_value=client
+        ):
+            rc = bench_run.main(["--execution-id", "exec-prep", "--model", "/m"])
+        self.assertEqual(rc, 0)
+        payload = printed.call_args[0][0]
+        self.assertEqual(payload["status"], "queued")
+        self.assertEqual(payload["execution_id"], "exec-prep")
+        self.assertEqual(payload["state"], "preparing")
+        stop.assert_not_called()
+
+    def test_supplied_live_service_is_not_stopped_on_error(self):
+        cfg = SimpleNamespace(
+            context_file=None, execution_id="exec-live", service="vllm",
+            task_id="task-1", model="/m", health_timeout=30,
+        )
+        stop = mock.Mock(side_effect=AssertionError("must not stop a supplied service"))
+        fake_serve = SimpleNamespace(
+            wait_for_ready=lambda *a, **k: {"ready": False, "error": "health failed"},
+        )
+        live = {
+            "state": "running", "live": True, "service_port": 8000,
+            "endpoint": {"host": "10.0.0.1", "port": 22, "user": "root"},
+        }
+        client = SimpleNamespace(
+            observe=lambda *a, **k: {"state": "running", "execution_id": "exec-live"},
+        )
+        with mock.patch.object(bench_run, "assemble_config", return_value=cfg), mock.patch.object(
+            bench_run, "call_serve_stop", stop
+        ), mock.patch.object(bench_run, "print_json") as printed, mock.patch(
+            "vaws_task_target.task_client", return_value=client
+        ), mock.patch(
+            "vaws_task_target.execution_target", return_value=live
+        ), mock.patch(
+            "vaws_remote_target.ssh_endpoint_from_mapping",
+            return_value=SimpleNamespace(host="10.0.0.1", port=22, user="root"),
+        ), mock.patch.dict(sys.modules, {"serve_start": fake_serve}):
+            rc = bench_run.main(["--execution-id", "exec-live", "--model", "/m"])
+        self.assertEqual(rc, 1)
+        payload = printed.call_args[0][0]
+        self.assertEqual(payload["status"], "incomplete")
+        stop.assert_not_called()
 
 
 class PresetTests(unittest.TestCase):
@@ -75,7 +150,7 @@ class PresetTests(unittest.TestCase):
 
 class AssembleConfigPresetTests(unittest.TestCase):
     def test_preset_values_flow_into_config(self):
-        cfg = _assemble(preset="dsv4-flash", model="/m", session_id="s")
+        cfg = _assemble(preset="dsv4-flash", model="/m")
         self.assertEqual(cfg.tp, 8)
         self.assertEqual(cfg.dp, 1)
         self.assertEqual(cfg.port, 30001)
@@ -102,7 +177,7 @@ class AssembleConfigPresetTests(unittest.TestCase):
 
     def test_cli_overrides_beat_preset(self):
         cfg = _assemble(
-            preset="dsv4-flash", model="/m", session_id="s",
+            preset="dsv4-flash", model="/m",
             tp=4, dp=2, port=40000, devices="0,1", served_model_name="other",
             health_timeout=10,
             extra_env=["VLLM_VERSION=9.9"],
@@ -128,7 +203,7 @@ class AssembleConfigPresetTests(unittest.TestCase):
 class ServeStartArgsTests(unittest.TestCase):
     def test_new_flags_emitted_when_set(self):
         cfg = _common.BenchConfig(
-            session_id="s", model="/m",
+             model="/m",
             served_model_name="dsv4-w4a8", devices="0,1", health_timeout=1200,
         )
         args = cfg.to_serve_start_args()
@@ -137,7 +212,7 @@ class ServeStartArgsTests(unittest.TestCase):
         self.assertEqual(args[args.index("--health-timeout") + 1], "1200")
 
     def test_new_flags_omitted_when_unset(self):
-        args = _common.BenchConfig(session_id="s", model="/m").to_serve_start_args()
+        args = _common.BenchConfig( model="/m").to_serve_start_args()
         self.assertNotIn("--served-model-name", args)
         self.assertNotIn("--devices", args)
         self.assertNotIn("--health-timeout", args)
@@ -146,7 +221,7 @@ class ServeStartArgsTests(unittest.TestCase):
 class BenchEnvExportTests(unittest.TestCase):
     def test_bench_env_exported_in_remote_script(self):
         cfg = _common.BenchConfig(
-            session_id="s", model="/m",
+             model="/m",
             bench_env={"PYTHONPATH": "/a:/b", "VLLM_VERSION": "0.21.0"},
         )
         captured = {}
@@ -167,7 +242,7 @@ class BenchEnvExportTests(unittest.TestCase):
         self.assertEqual(result["output_throughput"], 1.0)
 
     def test_no_bench_env_means_no_exports(self):
-        cfg = _common.BenchConfig(session_id="s", model="/m")
+        cfg = _common.BenchConfig( model="/m")
         captured = {}
 
         def fake_ssh(endpoint, script, **kwargs):
@@ -350,7 +425,7 @@ class StreamingTimeoutTests(unittest.TestCase):
         self.assertEqual(payload, {"ok": 1})
 
     def test_call_serve_start_bounds_subprocess_by_health_timeout(self):
-        cfg = _common.BenchConfig(session_id="s", model="/m", health_timeout=1200)
+        cfg = _common.BenchConfig( model="/m", health_timeout=1200)
         with mock.patch.object(
             _common, "_run_json_command_streaming",
             return_value=(0, {"status": "ready"}, '{"status": "ready"}', ""),
@@ -362,7 +437,7 @@ class StreamingTimeoutTests(unittest.TestCase):
         )
 
     def test_call_serve_start_timeout_falls_back_to_serving_default(self):
-        cfg = _common.BenchConfig(session_id="s", model="/m")
+        cfg = _common.BenchConfig( model="/m")
         with mock.patch.object(
             _common, "_run_json_command_streaming",
             return_value=(0, {"status": "ready"}, '{"status": "ready"}', ""),
@@ -527,7 +602,7 @@ class RemoteHelperTests(unittest.TestCase):
 
 class BenchCompareMainTests(unittest.TestCase):
     def _run_main(self, extra_args, digests, *, call_order=None):
-        cfg = _common.BenchConfig(session_id="s", model="/m")
+        cfg = _common.BenchConfig(task_id="task-1", model="/m")
         written = []
         call_order = call_order if call_order is not None else []
 
@@ -576,6 +651,7 @@ class BenchCompareMainTests(unittest.TestCase):
                     contextlib.redirect_stderr(io.StringIO()):
                 rc = bench_compare.main([
                     "--model", "/m", "--runs", "1", "--warmup-runs", "0",
+                    "--host", "10.0.0.1",
                     *extra_args,
                 ])
         return rc, json.loads(stdout.getvalue()), written
@@ -637,7 +713,7 @@ class BenchCompareMainTests(unittest.TestCase):
         self.assertEqual(rc, 0, out)
         # The effective assembled config is traceable even when preset-driven.
         self.assertEqual(out["config"]["model"], "/m")
-        self.assertEqual(out["config"]["session_id"], "s")
+        self.assertEqual(out["config"]["task_id"], "task-1")
 
     def test_unavailable_native_digest_fails_closed(self):
         rc, out, written = self._run_main(

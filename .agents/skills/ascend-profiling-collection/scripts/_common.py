@@ -19,6 +19,7 @@ import sys
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
+from dataclasses import dataclass
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -64,11 +65,49 @@ from vaws_remote_target import ascend_env_preamble  # noqa: E402
 
 SshEndpoint = SERVING.SshEndpoint
 ssh_exec = SERVING.ssh_exec
-resolve_machine = SERVING.resolve_machine
-resolve_execution_target = SERVING.resolve_execution_target
-container_endpoint = SERVING.container_endpoint
-host_endpoint = SERVING.host_endpoint
-load_serving_state = SERVING.load_serving_state
+endpoint_from_reply = SERVING.endpoint_from_reply
+service_port_of = SERVING.service_port_of
+
+
+@dataclass
+class ExecutionTarget:
+    mode: str
+    alias: str
+    endpoint: Any
+    execution_id: str | None = None
+    task_id: str | None = None
+    python: str | None = None
+    cwd: str | None = None
+    session_id: str | None = None
+    session_file: str | None = None
+
+
+def resolve_execution_target(*, context_file=None, execution_id=None, host=None, port=None, user="root", service="vllm"):
+    from vaws_remote_target import SshEndpoint as Endpoint
+    from vaws_task_target import executions_for_service, execution_target, task_client, task_id_of
+
+    if host:
+        ep = Endpoint(host=host, port=int(port or 22), user=user)
+        return ExecutionTarget(mode="endpoint", alias=host, endpoint=ep)
+    client = task_client(context_file)
+    if not execution_id:
+        rows = executions_for_service(client, service)
+        if not rows:
+            raise RuntimeError("pass --execution-id or --host")
+        execution_id = str(rows[-1].get("id") or rows[-1].get("execution_id"))
+    target = execution_target(client, str(execution_id))
+    endpoint = endpoint_from_reply({"target": target})
+    cwd = (target.get("endpoint") or {}).get("cwd") or (target.get("endpoint") or {}).get("root")
+    return ExecutionTarget(
+        mode="execution",
+        alias=str(target.get("container_name") or endpoint.host),
+        endpoint=endpoint,
+        execution_id=str(execution_id),
+        task_id=task_id_of(client),
+        python=target.get("python"),
+        cwd=cwd,
+        session_id=task_id_of(client),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -207,15 +246,18 @@ def call_serve_start(extra_args: list[str]) -> dict[str, Any]:
 
 def call_serve_stop(
     *,
-    session_id: str | None = None,
-    session_file: str | None = None,
+    context_file: str | None = None,
+    execution_id: str | None = None,
+    service: str | None = None,
     force: bool = False,
 ) -> dict[str, Any]:
     cmd = [sys.executable, str(SERVING_SCRIPTS / "serve_stop.py")]
-    if session_file:
-        cmd.extend(["--session-file", session_file])
-    elif session_id:
-        cmd.extend(["--session-id", session_id])
+    if context_file:
+        cmd.extend(["--context-file", context_file])
+    if execution_id:
+        cmd.extend(["--execution-id", execution_id])
+    if service:
+        cmd.extend(["--service", service])
     if force:
         cmd.append("--force")
     return call_json_command(cmd)

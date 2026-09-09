@@ -1,62 +1,40 @@
 ---
 name: vllm-ascend-pd-serving
-description: Plan, start, inspect, smoke-test, and stop a multi-session vLLM Ascend prefill/decode deployment with explicit connector configuration, role ordering, proxy endpoint health, rollback, and KV-transfer request evidence. Use for PD disaggregation with NIXL, Mooncake, or another KV connector. Do not use for one colocated service, generic Ray clusters, correctness matrices, performance regression decisions, or distributed root-cause diagnosis.
+description: Plan, start, inspect, smoke-test, and stop a vLLM Ascend prefill/decode deployment as one coordinator topology execution. Use for PD disaggregation with NIXL, Mooncake, or another KV connector. Do not use for one colocated service, generic Ray clusters, correctness matrices, performance regression decisions, or distributed root-cause diagnosis.
 ---
 
 # vLLM Ascend PD Serving
 
-Operate one prefill/decode deployment across an existing Session Group whose
-members have distinct session IDs. Reuse
-single-node Serving for each vLLM process; this Skill owns only cross-service
-role configuration, ordering, proxy health, rollback, and end-to-end smoke.
+One coordinator `TaskClient.run(topology=...)` admits every PD role. This
+skill owns connector configuration, proxy health, smoke, and reporting.
+It does not allocate NPUs, launch roles one-by-one, or roll back a partial
+group — the package reserves the full group before any role starts.
 
 ## Preconditions
 
-- Every service has its own ready session.
-- `session-management` has grouped those sessions and proved an identical code
-  plus submodule snapshot.
-- Connector type and options are explicit in the config.
-- The proxy or load balancer already has a stable URL. Proxy process lifecycle
-  remains outside this MVP; its health and request path are verified here.
+- Native task context (`--context-file` / `VAWS_CONTEXT_FILE`).
+- A service group from `session_group.py` (`members` are `name=service`).
+- Connector type and options are already in each role's vLLM arguments.
+- Proxy URL is already stable. Proxy process lifecycle is outside this skill.
 
 ## Workflow
 
-1. Run `scripts/pd_serving.py plan` with a PD config and Session Group file.
-2. Review generated commands. Connector options must already be present in each
-   role's vLLM arguments; the controller never invents connector metadata.
-3. Run `start`. Services launch in declared order through the existing
-   single-node Serving entry point.
-4. If any role fails, the controller stops already-started roles in reverse
-   order and returns a failed state.
-5. Run `status` to inspect every member and the proxy health endpoint.
-6. Run `smoke` to send the configured request through the proxy and preserve the
-   response as KV-transfer path evidence.
-7. Run `stop`; roles stop in reverse startup order.
+1. `session_group.py create --group-id pd --member prefill=prefill --member decode=decode`
+2. `pd_serving.py plan --config ... --group-file ...`
+3. `pd_serving.py start` submits **one** topology execution (`service=<group_id>`).
+   Queued / preparing / waiting is a truthful result with the same
+   `execution_id`; do not resubmit.
+4. `status` reads that execution and the proxy health path.
+5. `smoke` posts the configured proxy request.
+6. `stop` / group teardown calls coordinator `observe(stop)` on that execution.
 
 ## Entry point
 
 `scripts/pd_serving.py` provides `plan`, `start`, `status`, `smoke`, and `stop`.
 
-Read only the reference needed for the active phase:
-
-- [Behavior contract](references/behavior.md)
-- [Command recipes](references/command-recipes.md)
-- [Acceptance](references/acceptance.md)
-
-## Boundaries
-
-- Single-node start/status/stop belongs to `vllm-ascend-serving`.
-- Session creation, leases, and group teardown belong to `session-management`.
-- A working PD deployment's accuracy or performance belongs to the corresponding
-  validation workflow.
-- Hangs, rank divergence, endpoint mismatch, or connector diagnosis after a
-  stable reproduction belongs to `vllm-ascend-distributed-debug`.
-
 ## Rules
 
-- Never mix code snapshots inside one deployment.
-- Never start a role outside the declared order.
-- Always rollback already-started roles after a partial failure.
-- Do not report KV transfer as proven from health checks alone; require a proxy
-  request response and retain raw service logs for deeper confirmation.
-- Keep state under `.vaws-local/pd-serving/`.
+- Never sequential `serve_start` per role.
+- Never invent per-role recovery or lease reconstruction.
+- Role commands come from the serving business command builder (`$VAWS_PYTHON`, `$VAWS_SERVICE_PORT`).
+- Code identity is `manifest_code` from the native/package context, not a group snapshot field.

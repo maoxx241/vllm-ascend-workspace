@@ -8,23 +8,21 @@ statistics.
 
 Usage examples:
 
-    # Minimal single run from inside a session worktree (auto-resolved session)
     python3 bench_run.py --model /home/weights/Qwen3.5-35B
 
-    # Explicit session target
-    python3 bench_run.py --session-id pr-123 --model /home/weights/Qwen3.5-35B
+    python3 bench_run.py --execution-id <id> --model /home/weights/Qwen3.5-35B
 
     # Multi-run with warmup (start service once, run 5 times, discard first)
-    python3 bench_run.py --session-id pr-123 --model /home/weights/Qwen3.5-35B \\
+    python3 bench_run.py --model /home/weights/Qwen3.5-35B \\
         --runs 5 --warmup-runs 1 --tp 4
 
     # With explicit serve and bench args
-    python3 bench_run.py --session-id pr-123 --model /home/weights/Qwen3.5-35B \\
+    python3 bench_run.py --model /home/weights/Qwen3.5-35B \\
         --tp 4 --serve-args --async-scheduling --compilation-config '{"cudagraph_mode":"FULL_DECODE_ONLY"}' \\
         --bench-args --num-prompts 128 --max-concurrency 32 --output-len 1500
 
     # Using a nightly config as reference
-    python3 bench_run.py --session-id pr-123 --model /home/weights/Qwen3.5-35B \\
+    python3 bench_run.py --model /home/weights/Qwen3.5-35B \\
         --refer-nightly Qwen3-Next-80B-A3B-Instruct-A2
 
     # Using a named preset (explicit CLI args override preset values)
@@ -76,8 +74,9 @@ def build_parser() -> argparse.ArgumentParser:
         description="Run vllm bench serve benchmarks (single or multi-run).",
         allow_abbrev=False,
     )
-    p.add_argument("--session-id", help="VAWS session id; defaults to the bound session of the current worktree")
-    p.add_argument("--session-file", help="explicit session.json path")
+    p.add_argument("--context-file", help="VAWS task context; defaults to VAWS_CONTEXT_FILE")
+    p.add_argument("--execution-id", help="live service execution; skip a new start when set")
+    p.add_argument("--service", default="vllm", help="task-scoped service name")
     p.add_argument("--model", required=True, help="remote model weight path")
     p.add_argument("--preset",
                    help="named benchmark preset from the skill's presets/ dir "
@@ -97,7 +96,6 @@ def build_parser() -> argparse.ArgumentParser:
                    help="KEY=VALUE env vars for the bench-side remote shell (repeatable)")
     p.add_argument("--refer-nightly", default=None,
                    help="nightly YAML name as configuration reference")
-    p.add_argument("--skip-parity", action="store_true")
     p.add_argument("--runs", type=int, default=1,
                    help="number of benchmark iterations against the same warm service (default: 1)")
     p.add_argument("--warmup-runs", type=int, default=0,
@@ -185,8 +183,9 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         config = assemble_config(
-            session_id=args.session_id,
-            session_file=args.session_file,
+            context_file=args.context_file,
+            execution_id=args.execution_id,
+            service=args.service,
             model=args.model,
             tp=args.tp,
             dp=args.dp,
@@ -200,28 +199,105 @@ def main(argv: list[str] | None = None) -> int:
             bench_env=args.bench_env,
             refer_nightly=args.refer_nightly,
             preset=args.preset,
-            skip_parity=args.skip_parity,
         )
 
-        emit_progress("start", "launching vllm service")
-        start_result = call_serve_start(config)
+        started_service = False
+        if args.execution_id:
+            emit_progress("start", f"using live execution {args.execution_id}")
+            from vaws_task_target import PENDING, execution_target, task_client
+            from vaws_remote_target import ssh_endpoint_from_mapping
 
-        if start_result.get("status") != "ready":
-            cleanup_result = call_serve_stop(config, force=True)
-            print_json({
-                "status": "failed",
-                "phase": "serve_start",
-                "error": start_result.get("error", "service did not become ready"),
-                "serve_result": start_result,
-                "cleanup_result": cleanup_result,
-            })
-            return 1
+            client = task_client(config.context_file)
+            observation = client.observe(str(args.execution_id), "status")
+            state = str(observation.get("state") or "")
+            if state in PENDING:
+                print_json({
+                    "status": "queued",
+                    "phase": "serve_status",
+                    "execution_id": args.execution_id,
+                    "state": state,
+                    "service": config.service,
+                    "running": False,
+                    "ready": False,
+                })
+                return 0
+            serving = ROOT / ".agents" / "skills" / "vllm-ascend-serving" / "scripts"
+            if str(serving) not in sys.path:
+                sys.path.insert(0, str(serving))
+            from serve_start import wait_for_ready as _wait_for_ready
 
-        base_url = start_result["base_url"]
-        served_model = start_result.get("served_model_name", Path(args.model).name)
+            target = execution_target(client, str(args.execution_id))
+            port = target.get("service_port")
+            if not target.get("live") or not port:
+                print_json({
+                    "status": "failed",
+                    "phase": "serve_status",
+                    "error": f"execution {args.execution_id} is not a live service with a port",
+                    "target": target,
+                    "state": state,
+                })
+                return 1
+            endpoint = ssh_endpoint_from_mapping(target.get("endpoint"))
+            served_model = args.served_model_name or Path(args.model).name
+            readiness = _wait_for_ready(
+                endpoint,
+                int(port),
+                config.health_timeout or 300,
+                served_model,
+                still_running=lambda: True,
+                log_text=lambda: "",
+            )
+            if not readiness.get("ready"):
+                print_json({
+                    "status": "incomplete",
+                    "phase": "serve_status",
+                    "execution_id": args.execution_id,
+                    "error": readiness.get("error") or "live service failed business readiness",
+                    "readiness": readiness,
+                })
+                return 1
+            base_url = f"http://{endpoint.host}:{port}"
+            config.execution_id = str(args.execution_id)
+            start_result = {
+                "status": "ready",
+                "base_url": base_url,
+                "execution_id": config.execution_id,
+                "readiness": readiness,
+            }
+        else:
+            emit_progress("start", "launching vllm service")
+            start_result = call_serve_start(config)
+            config.execution_id = start_result.get("execution_id") or config.execution_id
+            if start_result.get("status") == "queued":
+                print_json({
+                    "status": "queued",
+                    "phase": "serve_start",
+                    "execution_id": config.execution_id,
+                    "service": config.service,
+                    "state": start_result.get("state"),
+                    "running": False,
+                    "ready": False,
+                    "serve_result": start_result,
+                })
+                return 0
+            if start_result.get("status") != "ready":
+                if start_result.get("running"):
+                    started_service = True
+                    call_serve_stop(config, force=True)
+                print_json({
+                    "status": "failed",
+                    "phase": "serve_start",
+                    "error": start_result.get("error", "service did not become ready"),
+                    "execution_id": config.execution_id,
+                    "serve_result": start_result,
+                })
+                return 1
+            started_service = True
+            base_url = start_result["base_url"]
+            served_model = start_result.get("served_model_name", Path(args.model).name)
         container_ip, container_port = _get_ssh_endpoint(
-            session_id=config.session_id,
-            session_file=config.session_file,
+            context_file=config.context_file,
+            execution_id=config.execution_id,
         )
 
         all_metrics: list[dict[str, Any]] = []
@@ -238,7 +314,8 @@ def main(argv: list[str] | None = None) -> int:
                 )
             except Exception as e:
                 emit_progress("bench", f"{run_label}: benchmark failed: {e}")
-                call_serve_stop(config, force=True)
+                if started_service:
+                    call_serve_stop(config, force=True)
                 print_json({
                     "status": "failed",
                     "phase": "bench_run",
@@ -258,14 +335,16 @@ def main(argv: list[str] | None = None) -> int:
             throughput = metrics.get("output_throughput", "N/A")
             emit_progress("bench", f"{run_label}{tag}: throughput={throughput}")
 
-        emit_progress("stop", "stopping service")
-        stop_result = call_serve_stop(config)
         cleanup_warning: str | None = None
-        if stop_result.get("status") not in ("stopped", "not_found"):
-            emit_progress("stop", "graceful stop failed, retrying with force")
-            stop_result = call_serve_stop(config, force=True)
+        stop_result = {"status": "left_running"}
+        if started_service:
+            emit_progress("stop", "stopping service")
+            stop_result = call_serve_stop(config)
             if stop_result.get("status") not in ("stopped", "not_found"):
-                cleanup_warning = f"service may still be running: {stop_result}"
+                emit_progress("stop", "graceful stop failed, retrying with force")
+                stop_result = call_serve_stop(config, force=True)
+                if stop_result.get("status") not in ("stopped", "not_found"):
+                    cleanup_warning = f"service may still be running: {stop_result}"
 
         # Benchmark data is valid, but if the service could not be stopped it is
         # still holding NPU memory. Do not report a clean "ok" in that case:
@@ -278,7 +357,8 @@ def main(argv: list[str] | None = None) -> int:
             emit_progress("done", f"benchmark complete, throughput={all_metrics[0].get('output_throughput', 'N/A')}")
             result_json: dict[str, Any] = {
                 "status": final_status,
-                "session_id": config.session_id,
+                "task_id": config.task_id,
+                "execution_id": config.execution_id,
                 "model": args.model,
                 "metrics": all_metrics[0],
                 "config": config.summary_dict(),
@@ -298,7 +378,8 @@ def main(argv: list[str] | None = None) -> int:
             )
             result_json = {
                 "status": final_status,
-                "session_id": config.session_id,
+                "task_id": config.task_id,
+                "execution_id": config.execution_id,
                 "model": args.model,
                 "runs": total_runs,
                 "warmup_runs": warmup_runs,
@@ -318,7 +399,7 @@ def main(argv: list[str] | None = None) -> int:
 
     except Exception as e:
         try:
-            if "config" in locals():
+            if "config" in locals() and locals().get("started_service"):
                 call_serve_stop(config, force=True)
         except Exception:
             pass
