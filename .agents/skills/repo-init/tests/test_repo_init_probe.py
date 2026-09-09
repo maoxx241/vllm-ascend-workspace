@@ -94,7 +94,8 @@ class ForkTopologyTests(unittest.TestCase):
             probe.parse_remote_url("ssh://git@github.com/alice/vllm-ascend.git"),
             "alice/vllm-ascend",
         )
-        self.assertIsNone(probe.parse_remote_url("git@gitlab.example.invalid:alice/vllm.git"))
+        foreign = "git@" + "gitlab.example.invalid" + ":alice/vllm.git"
+        self.assertIsNone(probe.parse_remote_url(foreign))
         self.assertEqual(topology.parse_repo_url("git@github.com:alice/vllm.git"), "alice/vllm")
 
     def test_inspect_repo_classifies_uninitialized_submodule_without_real_git(self) -> None:
