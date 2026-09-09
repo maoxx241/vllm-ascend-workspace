@@ -159,6 +159,32 @@ class ConstructionTests(unittest.TestCase):
         with self.assertRaisesRegex(EnvelopeError, "unknown top-level fields"):
             validate_envelope(envelope)
 
+    def test_unknown_part_and_child_fields_are_rejected(self) -> None:
+        envelope = base_envelope(
+            parts=[make_part(unit="node-0", outcome="success")],
+        )
+        envelope["parts"][0]["evidence"] = {"remote_dev_outcome": "success"}
+        with self.assertRaisesRegex(EnvelopeError, r"parts\[0\] has unknown fields"):
+            validate_envelope(envelope)
+
+        envelope = base_envelope()
+        envelope["children"] = [
+            {
+                "envelope_id": "child-1",
+                "entry_point": ".agents/scripts/envelope_lint.py",
+                "action": "check",
+                "outcome": "success",
+                "layer": None,
+                "reason_code": None,
+                "summary": "ok",
+                "ref": "child.json",
+                "depth": 1,
+                "evidence": {"remote_dev_outcome": "success"},
+            }
+        ]
+        with self.assertRaisesRegex(EnvelopeError, r"children\[0\] has unknown fields"):
+            validate_envelope(envelope)
+
     def test_extensions_is_the_additive_escape_hatch(self) -> None:
         envelope = base_envelope(extensions={"metrics": {"throughput": 1.0}})
         validate_envelope(envelope)

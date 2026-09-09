@@ -235,6 +235,78 @@ TOP_LEVEL_FIELDS = (
 )
 TOP_LEVEL_SET = frozenset(TOP_LEVEL_FIELDS)
 
+#: Objects whose JSON Schema sets ``additionalProperties: false``.
+#: ``validate_envelope`` must reject the same extras; a gap here is how D1
+#: shipped. ``command``, ``preview``, ``evidenceRef``, ``failure.signals``
+#: items, and ``extensions`` omit that constraint and stay open.
+OPERATION_FIELDS = frozenset({"skill", "entry_point", "action", "target"})
+TARGET_FIELDS = frozenset({"kind", "id", "ref"})
+ATTEMPT_FIELDS = frozenset(
+    {"command", "remote_command", "reproduce", "started_at", "duration_ms"}
+)
+REMOTE_COMMAND_FIELDS = frozenset(
+    {
+        "endpoint",
+        "argv",
+        "script_preview",
+        "script_ref",
+        "cwd",
+        "env_keys",
+        "timeout_seconds",
+    }
+)
+ENDPOINT_FIELDS = frozenset({"kind", "ref"})
+FAILURE_FIELDS = frozenset(
+    {
+        "layer",
+        "confidence",
+        "reason_code",
+        "message",
+        "attribution_basis",
+        "ruled_out",
+        "signals",
+        "exception_type",
+    }
+)
+ENVIRONMENT_OBJECT_FIELDS = frozenset(
+    {
+        *ENVIRONMENT_FIELDS,
+        "source",
+        "captured_at",
+        "unknown_fields",
+    }
+)
+EVIDENCE_FIELDS = frozenset(
+    {"run_id", "parent_run_id", "manifest_ref", "refs", "previews"}
+)
+NEXT_STEP_FIELDS = frozenset({"actions", "do_not", "knowledge"})
+NEXT_ACTION_FIELDS = frozenset({"description", "command", "ref"})
+KNOWLEDGE_ITEM_FIELDS = frozenset({"entry_id", "summary", "avoidance", "score"})
+PART_ITEM_FIELDS = frozenset(
+    {"unit", "unit_kind", "outcome", "layer", "reason_code", "summary", "refs"}
+)
+ATTEMPTS_FIELDS = frozenset({"count", "records", "idempotency"})
+ATTEMPT_RECORD_FIELDS = frozenset(
+    {"index", "outcome", "layer", "reason_code", "duration_ms", "note"}
+)
+IDEMPOTENCY_FIELDS = frozenset({"class", "retry_safe", "side_effects"})
+CHILD_ITEM_FIELDS = frozenset(
+    {
+        "envelope_id",
+        "entry_point",
+        "action",
+        "outcome",
+        "layer",
+        "reason_code",
+        "summary",
+        "ref",
+        "depth",
+    }
+)
+
+REMOTE_DEV_OUTCOME_REF_NAME = "remote_dev_outcome"
+REMOTE_DEV_OUTCOME_REF_KIND = "remote-dev.result.v1.outcome"
+
 # ---------------------------------------------------------------------------
 # Bounded output (same head/tail preview shape as .remote-dev/core/preview.py)
 # ---------------------------------------------------------------------------
@@ -1092,35 +1164,60 @@ def remote_dev_mapping_is_lossy(outcome: str, slot: Literal["parts", "children"]
     raise EnvelopeError(f"unsupported conversion slot: {slot!r}")
 
 
-def _remote_dev_evidence(
-    result: Mapping[str, Any],
-    *,
+def remote_dev_outcome_pointer(
     original_outcome: str,
     mapped_outcome: str,
+    *,
     slot: str,
 ) -> dict[str, Any]:
-    """Keep the remote-dev outcome even when the slot mapping is lossy.
+    """Schema-legal ``evidence.refs`` / ``parts[].refs`` pointer.
 
-    Parts and children have no first-class ``evidence`` field in the JSON
-    schema (``additionalProperties: false``). :func:`validate_envelope` does
-    not reject unknown keys on those objects, but a wrapping envelope that
-    later goes through jsonschema would. The original token is therefore
-    stored as a named ``refs`` entry (parts) or folded into the digest
-    ``summary``/``reason_code`` plus a ``refs``-shaped pointer kept under
-    the slot's existing ``ref`` note. Callers that wrap the converted
-    object in a parent envelope should also copy this pointer into
-    ``evidence.refs``.
+    P21's "in evidence" is the envelope root ``evidence`` object, not a
+    per-item key. Parts also have a ``refs`` array of the same shape.
     """
-    return {
-        "name": "remote_dev_outcome",
-        "kind": "remote-dev.result.v1.outcome",
-        "ref": str(original_outcome),
-        "note": (
+    return evidence_ref(
+        name=REMOTE_DEV_OUTCOME_REF_NAME,
+        kind=REMOTE_DEV_OUTCOME_REF_KIND,
+        ref=str(original_outcome),
+        note=(
             f"lossy {slot} mapping: remote-dev {original_outcome!r} → {mapped_outcome!r}"
             if original_outcome != mapped_outcome
             else f"remote-dev outcome {original_outcome!r} mapped onto {slot}"
         ),
-    }
+    )
+
+
+def original_remote_dev_outcome_from_part(part: Mapping[str, Any]) -> str | None:
+    """Recover the remote-dev outcome stored in a part's ``refs``."""
+    for item in part.get("refs") or ():
+        if not isinstance(item, Mapping):
+            continue
+        if item.get("name") != REMOTE_DEV_OUTCOME_REF_NAME:
+            continue
+        token = item.get("ref")
+        if token in REMOTE_DEV_OUTCOMES:
+            return str(token)
+    return None
+
+
+def original_remote_dev_outcome_from_child(child: Mapping[str, Any]) -> str | None:
+    """Recover the remote-dev outcome from a child's ``reason_code`` or ``ref``.
+
+    Children have no ``refs`` array. Do not fall back to ``outcome``: lossy
+    cells map onto a different token (``failed`` → ``failure``,
+    ``needs_input`` → ``blocked``).
+    """
+    reason = child.get("reason_code")
+    if isinstance(reason, str) and reason.startswith("remote_dev_"):
+        token = reason[len("remote_dev_") :]
+        if token in REMOTE_DEV_OUTCOMES:
+            return token
+    ref = child.get("ref")
+    if isinstance(ref, str) and ref.startswith("remote-dev:"):
+        parts = ref.split(":")
+        if len(parts) >= 2 and parts[1] in REMOTE_DEV_OUTCOMES:
+            return parts[1]
+    return None
 
 
 def convert_remote_dev_result(
@@ -1147,10 +1244,12 @@ def convert_remote_dev_result(
     command the agent composed is an operation failure that travelled over
     remote-dev, not a transport failure.
 
-    Lossy outcome mappings keep the original remote-dev outcome in a
-    ``refs`` evidence pointer (parts) or in the digest ``ref`` note plus
-    ``reason_code`` when the caller did not supply one (children). The
-    original token is never dropped.
+    Lossy outcome mappings keep the original remote-dev outcome in
+    schema-legal channels only: ``parts[].refs`` (same shape as root
+    ``evidence.refs``), and for children the digest ``reason_code``
+    (``remote_dev_<original>``) plus ``ref`` (``remote-dev:<original>:…``).
+    Wrappers copy the same pointer into the envelope root ``evidence.refs``.
+    There is no per-item ``evidence`` key — the tracked schema rejects it.
     """
     if not isinstance(result, Mapping):
         raise EnvelopeError("remote-dev result must be an object")
@@ -1175,12 +1274,10 @@ def convert_remote_dev_result(
     if mapped_table is None:
         raise EnvelopeError(f"unsupported conversion slot: {slot!r}")
     mapped = mapped_table[str(original)]
-    lossy = original != mapped
     text = summary if summary is not None else str(result.get("summary") or original)
-    pointer = _remote_dev_evidence(
-        result,
-        original_outcome=str(original),
-        mapped_outcome=mapped,
+    pointer = remote_dev_outcome_pointer(
+        str(original),
+        mapped,
         slot=slot,
     )
     attributed = layer
@@ -1206,7 +1303,7 @@ def convert_remote_dev_result(
                     note=str(result.get("tool") or "remote-dev"),
                 )
             )
-        part = make_part(
+        return make_part(
             unit=str(unit),
             outcome=mapped,
             unit_kind=unit_kind,
@@ -1215,17 +1312,6 @@ def convert_remote_dev_result(
             summary=text,
             refs=refs,
         )
-        # Original remote-dev outcome lives in evidence as well as refs.
-        # validate_envelope permits this extra key on parts; the JSON schema
-        # currently does not (additionalProperties: false) — see the G4 report.
-        part["evidence"] = {
-            "remote_dev_outcome": original,
-            "remote_dev_status": result.get("status"),
-            "invocation_id": result.get("invocation_id"),
-            "tool": result.get("tool"),
-            "lossy": lossy,
-        }
-        return part
 
     if not envelope_id or not str(envelope_id).strip():
         raise EnvelopeError(
@@ -1235,7 +1321,7 @@ def convert_remote_dev_result(
     if not isinstance(depth, int) or depth < 1:
         raise EnvelopeError("children conversion requires depth >= 1 from the caller")
     child_reason = reason_code
-    if child_reason is None and lossy:
+    if child_reason is None:
         child_reason = f"remote_dev_{original}"
     child_ref = ref
     if child_ref is None:
@@ -1255,13 +1341,6 @@ def convert_remote_dev_result(
         "summary": text,
         "ref": child_ref,
         "depth": depth,
-        "evidence": {
-            "remote_dev_outcome": original,
-            "remote_dev_status": result.get("status"),
-            "invocation_id": result.get("invocation_id"),
-            "tool": result.get("tool"),
-            "lossy": lossy,
-        },
     }
 
 
@@ -1465,7 +1544,14 @@ def envelope_from_skill_payload(
                     kind="skill.status",
                     ref=str(status or outcome),
                     note="original skill-layer status preserved in extensions.result",
-                )
+                ),
+                *[
+                    dict(item)
+                    for part in parts
+                    for item in part.get("refs") or ()
+                    if isinstance(item, Mapping)
+                    and item.get("name") == REMOTE_DEV_OUTCOME_REF_NAME
+                ],
             ]
         ),
         extensions={"result": dict(payload)},
@@ -1518,10 +1604,23 @@ def _require_str_list(value: Any, path: str, errors: list[str]) -> None:
         errors.append(f"{path} must be an array of strings")
 
 
+def _reject_unknown_keys(
+    value: Mapping[str, Any],
+    allowed: frozenset[str],
+    path: str,
+    errors: list[str],
+) -> None:
+    """Match the schema's ``additionalProperties: false`` on this object."""
+    unknown = sorted(set(value) - allowed)
+    if unknown:
+        errors.append(f"{path} has unknown fields: {', '.join(unknown)}")
+
+
 def _validate_operation(value: Any, errors: list[str]) -> None:
     if not isinstance(value, Mapping):
         errors.append("operation must be an object")
         return
+    _reject_unknown_keys(value, OPERATION_FIELDS, "operation", errors)
     _require_str(value.get("entry_point"), "operation.entry_point", errors)
     entry_point = value.get("entry_point")
     if isinstance(entry_point, str) and entry_point.startswith("/"):
@@ -1534,6 +1633,7 @@ def _validate_operation(value: Any, errors: list[str]) -> None:
     if not isinstance(target, Mapping):
         errors.append("operation.target must be an object")
         return
+    _reject_unknown_keys(target, TARGET_FIELDS, "operation.target", errors)
     if target.get("kind") not in TARGET_KINDS:
         errors.append(
             "operation.target.kind must be one of: "
@@ -1577,6 +1677,7 @@ def _validate_attempt(value: Any, errors: list[str]) -> None:
     if not isinstance(value, Mapping):
         errors.append("attempt must be an object")
         return
+    _reject_unknown_keys(value, ATTEMPT_FIELDS, "attempt", errors)
     _validate_command(value.get("command"), "attempt.command", errors)
     _require_str(value.get("reproduce"), "attempt.reproduce", errors)
     timestamp = value.get("started_at")
@@ -1591,7 +1692,12 @@ def _validate_attempt(value: Any, errors: list[str]) -> None:
     if not isinstance(remote, Mapping):
         errors.append("attempt.remote_command must be an object or null")
         return
+    _reject_unknown_keys(remote, REMOTE_COMMAND_FIELDS, "attempt.remote_command", errors)
     endpoint = remote.get("endpoint")
+    if isinstance(endpoint, Mapping):
+        _reject_unknown_keys(
+            endpoint, ENDPOINT_FIELDS, "attempt.remote_command.endpoint", errors
+        )
     if not isinstance(endpoint, Mapping) or endpoint.get("kind") not in TARGET_KINDS:
         errors.append("attempt.remote_command.endpoint.kind must be a target kind")
     if remote.get("argv") is None and remote.get("script_preview") is None:
@@ -1613,6 +1719,7 @@ def _validate_failure(value: Any, errors: list[str]) -> None:
     if not isinstance(value, Mapping):
         errors.append("failure must be an object or null")
         return
+    _reject_unknown_keys(value, FAILURE_FIELDS, "failure", errors)
     layer = value.get("layer")
     if layer not in LAYER_SET:
         errors.append("failure.layer must be one of: " + ", ".join(LAYERS))
@@ -1658,6 +1765,7 @@ def _validate_environment(value: Any, errors: list[str]) -> None:
     if not isinstance(value, Mapping):
         errors.append("environment must be an object")
         return
+    _reject_unknown_keys(value, ENVIRONMENT_OBJECT_FIELDS, "environment", errors)
     for field in ENVIRONMENT_FIELDS:
         if field not in value:
             errors.append(
@@ -1691,6 +1799,7 @@ def _validate_evidence(value: Any, errors: list[str]) -> None:
     if not isinstance(value, Mapping):
         errors.append("evidence must be an object")
         return
+    _reject_unknown_keys(value, EVIDENCE_FIELDS, "evidence", errors)
     for field in ("run_id", "parent_run_id", "manifest_ref"):
         _require_opt_str(value.get(field), f"evidence.{field}", errors)
     refs = value.get("refs")
@@ -1716,6 +1825,7 @@ def _validate_next_step(value: Any, errors: list[str]) -> None:
     if not isinstance(value, Mapping):
         errors.append("next_step must be an object")
         return
+    _reject_unknown_keys(value, NEXT_STEP_FIELDS, "next_step", errors)
     actions = value.get("actions")
     if not isinstance(actions, list):
         errors.append("next_step.actions must be an array")
@@ -1725,6 +1835,7 @@ def _validate_next_step(value: Any, errors: list[str]) -> None:
             if not isinstance(action, Mapping):
                 errors.append(f"{path} must be an object")
                 continue
+            _reject_unknown_keys(action, NEXT_ACTION_FIELDS, path, errors)
             _require_str(action.get("description"), f"{path}.description", errors)
             _require_opt_str(action.get("command"), f"{path}.command", errors)
             _require_opt_str(action.get("ref"), f"{path}.ref", errors)
@@ -1738,6 +1849,7 @@ def _validate_next_step(value: Any, errors: list[str]) -> None:
         if not isinstance(item, Mapping):
             errors.append(f"{path} must be an object")
             continue
+        _reject_unknown_keys(item, KNOWLEDGE_ITEM_FIELDS, path, errors)
         _require_str(item.get("entry_id"), f"{path}.entry_id", errors)
         _require_str(item.get("summary"), f"{path}.summary", errors)
 
@@ -1752,6 +1864,7 @@ def _validate_parts(value: Any, errors: list[str]) -> None:
         if not isinstance(part, Mapping):
             errors.append(f"{path} must be an object")
             continue
+        _reject_unknown_keys(part, PART_ITEM_FIELDS, path, errors)
         _require_str(part.get("unit"), f"{path}.unit", errors)
         unit = part.get("unit")
         if isinstance(unit, str):
@@ -1776,18 +1889,26 @@ def _validate_attempts(value: Any, errors: list[str]) -> None:
     if not isinstance(value, Mapping):
         errors.append("attempts must be an object")
         return
+    _reject_unknown_keys(value, ATTEMPTS_FIELDS, "attempts", errors)
     count = value.get("count")
     if not isinstance(count, int) or count < 1:
         errors.append("attempts.count must be an integer >= 1")
     records = value.get("records")
     if not isinstance(records, list):
         errors.append("attempts.records must be an array")
-    elif isinstance(count, int) and len(records) > count:
-        errors.append("attempts.records must not be longer than attempts.count")
+    else:
+        if isinstance(count, int) and len(records) > count:
+            errors.append("attempts.records must not be longer than attempts.count")
+        for index, record in enumerate(records):
+            if isinstance(record, Mapping):
+                _reject_unknown_keys(
+                    record, ATTEMPT_RECORD_FIELDS, f"attempts.records[{index}]", errors
+                )
     idempotency = value.get("idempotency")
     if not isinstance(idempotency, Mapping):
         errors.append("attempts.idempotency must be an object")
         return
+    _reject_unknown_keys(idempotency, IDEMPOTENCY_FIELDS, "attempts.idempotency", errors)
     klass = idempotency.get("class")
     if klass not in IDEMPOTENCY_CLASSES:
         errors.append(
@@ -1816,6 +1937,7 @@ def _validate_children(value: Any, errors: list[str]) -> None:
         if not isinstance(child, Mapping):
             errors.append(f"{path} must be an object")
             continue
+        _reject_unknown_keys(child, CHILD_ITEM_FIELDS, path, errors)
         _require_str(child.get("envelope_id"), f"{path}.envelope_id", errors)
         if child.get("outcome") not in OUTCOMES:
             errors.append(f"{path}.outcome must be an envelope outcome")

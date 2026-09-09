@@ -24,6 +24,7 @@ from vaws_result_envelope import (  # noqa: E402
     LOSSY_REMOTE_DEV_CHILD_OUTCOMES,
     LOSSY_REMOTE_DEV_PART_OUTCOMES,
     PART_TO_REMOTE_DEV_OUTCOME,
+    REMOTE_DEV_OUTCOME_REF_NAME,
     REMOTE_DEV_OUTCOMES,
     REMOTE_DEV_RESULT_SCHEMA_VERSION,
     REMOTE_DEV_TO_CHILD_OUTCOME,
@@ -38,8 +39,11 @@ from vaws_result_envelope import (  # noqa: E402
     make_next_step,
     make_operation,
     new_envelope,
+    original_remote_dev_outcome_from_child,
+    original_remote_dev_outcome_from_part,
     outcome_from_parts,
     remote_dev_mapping_is_lossy,
+    remote_dev_outcome_pointer,
     unknown_failure,
     validate_envelope,
 )
@@ -77,10 +81,27 @@ def _wrap(converted: dict, slot: str) -> dict:
             started_at=NOW,
         ),
         "environment": make_environment(source="unknown"),
-        "evidence": make_evidence(),
         "emitted_at": NOW,
         "envelope_id": f"convert-{slot}-20260909t120000z-abcd1234",
     }
+    if slot == "parts":
+        pointers = [
+            dict(item)
+            for item in converted.get("refs") or ()
+            if item.get("name") == REMOTE_DEV_OUTCOME_REF_NAME
+        ]
+    else:
+        original = original_remote_dev_outcome_from_child(converted)
+        pointers = (
+            [
+                remote_dev_outcome_pointer(
+                    original, str(converted["outcome"]), slot="children"
+                )
+            ]
+            if original
+            else []
+        )
+    kwargs["evidence"] = make_evidence(refs=pointers)
     if slot == "parts":
         outcome = outcome_from_parts([converted])
         kwargs["parts"] = [converted]
@@ -160,22 +181,22 @@ class ConvertCrossProductTests(unittest.TestCase):
                     else REMOTE_DEV_TO_CHILD_OUTCOME[outcome]
                 )
                 self.assertEqual(converted["outcome"], mapped)
+                self.assertNotIn("evidence", converted)
                 lossy = remote_dev_mapping_is_lossy(outcome, slot)
                 self.assertEqual(lossy, outcome != mapped)
-                self.assertEqual(converted["evidence"]["remote_dev_outcome"], outcome)
-                self.assertEqual(converted["evidence"]["lossy"], lossy)
-                if lossy:
-                    self.assertEqual(converted["evidence"]["remote_dev_outcome"], outcome)
-                    self.assertNotEqual(converted["outcome"], outcome)
                 if slot == "parts":
-                    names = {item["name"] for item in converted["refs"]}
-                    self.assertIn("remote_dev_outcome", names)
-                    pointer = next(
-                        item
-                        for item in converted["refs"]
-                        if item["name"] == "remote_dev_outcome"
-                    )
-                    self.assertEqual(pointer["ref"], outcome)
+                    recovered = original_remote_dev_outcome_from_part(converted)
+                else:
+                    recovered = original_remote_dev_outcome_from_child(converted)
+                self.assertEqual(recovered, outcome)
+                root_refs = {
+                    item["ref"]
+                    for item in envelope["evidence"]["refs"]
+                    if item["name"] == REMOTE_DEV_OUTCOME_REF_NAME
+                }
+                self.assertIn(outcome, root_refs)
+                if lossy:
+                    self.assertNotEqual(converted["outcome"], outcome)
                 table.append((outcome, slot, converted["outcome"], lossy))
         self.assertEqual(len(table), 12)
 
@@ -241,9 +262,70 @@ class SkillPayloadConversionTests(unittest.TestCase):
         validate_envelope(envelope)
         self.assertEqual(len(envelope["parts"]), 1)
         self.assertEqual(envelope["parts"][0]["outcome"], "failure")
+        self.assertNotIn("evidence", envelope["parts"][0])
         self.assertEqual(
-            envelope["parts"][0]["evidence"]["remote_dev_outcome"], "timeout"
+            original_remote_dev_outcome_from_part(envelope["parts"][0]), "timeout"
         )
+        self.assertIn(
+            "timeout",
+            {
+                item["ref"]
+                for item in envelope["evidence"]["refs"]
+                if item["name"] == REMOTE_DEV_OUTCOME_REF_NAME
+            },
+        )
+
+
+SCHEMA_PATH = ROOT / ".agents" / "schemas" / "result-envelope-v1.schema.json"
+
+
+def _jsonschema_module():
+    """Dev-group library. Fail — do not skip — when it is missing."""
+    import jsonschema  # noqa: PLC0415
+
+    return jsonschema
+
+
+class TrackedSchemaTests(unittest.TestCase):
+    def test_twelve_cells_pass_the_tracked_json_schema(self) -> None:
+        jsonschema = _jsonschema_module()
+        schema = __import__("json").loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+        for outcome in sorted(REMOTE_DEV_OUTCOMES):
+            for slot in SLOTS:
+                with self.subTest(outcome=outcome, slot=slot):
+                    converted = convert_remote_dev_result(
+                        _remote_result(outcome),
+                        slot=slot,
+                        unit=f"unit-{outcome}",
+                        envelope_id=f"child-{outcome}",
+                        depth=1,
+                        layer="unknown",
+                        entry_point=".agents/lib/vaws_result_envelope.py",
+                        action="convert",
+                    )
+                    envelope = _wrap(converted, slot)
+                    validate_envelope(envelope)
+                    jsonschema.validate(envelope, schema)
+
+    def test_per_item_evidence_is_rejected_by_schema_and_validator(self) -> None:
+        jsonschema = _jsonschema_module()
+        schema = __import__("json").loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+        for slot in SLOTS:
+            with self.subTest(slot=slot):
+                converted = convert_remote_dev_result(
+                    _remote_result("timeout"),
+                    slot=slot,
+                    unit="bash-timeout",
+                    envelope_id="child-timeout",
+                    depth=1,
+                    layer="unknown",
+                )
+                envelope = _wrap(converted, slot)
+                envelope[slot][0]["evidence"] = {"remote_dev_outcome": "timeout"}
+                with self.assertRaisesRegex(EnvelopeError, "unknown fields"):
+                    validate_envelope(envelope)
+                with self.assertRaises(jsonschema.ValidationError):
+                    jsonschema.validate(envelope, schema)
 
 
 if __name__ == "__main__":

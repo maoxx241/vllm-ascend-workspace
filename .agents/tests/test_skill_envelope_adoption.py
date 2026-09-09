@@ -24,6 +24,16 @@ from vaws_result_envelope import SCHEMA_VERSION, validate_envelope  # noqa: E402
 
 import envelope_lint  # noqa: E402
 
+SCHEMA_PATH = ROOT / ".agents" / "schemas" / "result-envelope-v1.schema.json"
+
+
+def _validate_tracked_schema(envelope: dict) -> None:
+    """Fail if jsonschema is missing; do not skip."""
+    import jsonschema  # noqa: PLC0415
+
+    schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+    jsonschema.validate(envelope, schema)
+
 
 def _run(script: Path, *args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
@@ -47,6 +57,7 @@ class LoadBearingSkillEnvelopeTests(unittest.TestCase):
         self.assertTrue(report["valid"], report["findings"])
         payload = json.loads(completed.stdout)
         validate_envelope(payload)
+        _validate_tracked_schema(payload)
         self.assertEqual(payload["schema_version"], SCHEMA_VERSION)
         self.assertEqual(payload["operation"]["skill"], "session-management")
         self.assertNotIn("__VAWS_", completed.stdout)
@@ -58,6 +69,7 @@ class LoadBearingSkillEnvelopeTests(unittest.TestCase):
         self.assertTrue(report["valid"], report["findings"])
         payload = json.loads(completed.stdout)
         validate_envelope(payload)
+        _validate_tracked_schema(payload)
         self.assertEqual(payload["operation"]["skill"], "machine-management")
         self.assertEqual(payload["extensions"]["result"]["status"], "unmanaged")
 
@@ -68,6 +80,7 @@ class LoadBearingSkillEnvelopeTests(unittest.TestCase):
         self.assertTrue(report["valid"], report["findings"])
         payload = json.loads(completed.stdout)
         validate_envelope(payload)
+        _validate_tracked_schema(payload)
         self.assertEqual(payload["operation"]["skill"], "vllm-ascend-serving")
         self.assertEqual(payload["outcome"], "failure")
 
@@ -83,6 +96,7 @@ class LoadBearingSkillEnvelopeTests(unittest.TestCase):
         self.assertTrue(report["valid"], report["findings"])
         payload = json.loads(completed.stdout)
         validate_envelope(payload)
+        _validate_tracked_schema(payload)
         self.assertEqual(payload["operation"]["skill"], "remote-code-parity")
         self.assertIn(payload["outcome"], {"failure", "blocked"})
 
