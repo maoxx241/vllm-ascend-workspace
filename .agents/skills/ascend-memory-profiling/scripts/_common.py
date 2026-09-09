@@ -22,10 +22,10 @@ for _p in (str(LIB_DIR), str(MM_SCRIPTS)):
 
 from vaws_local_state import allocate_run_dir  # noqa: E402
 from vaws_remote_dev import ssh_argv, ssh_exec, ssh_run_bytes  # noqa: E402
+from vaws_result_envelope import progress as envelope_progress  # noqa: E402
 from vaws_remote_target import (  # noqa: E402
     SshEndpoint,
     container_endpoint_from_record,
-    emit_progress as _lib_emit_progress,
 )
 from vaws_session_state import (  # noqa: E402
     load_session_lookup,
@@ -34,7 +34,6 @@ from vaws_session_state import (  # noqa: E402
 )
 
 MEMPROF_STATE_DIR = ROOT / ".vaws-local" / "memory-profiling"
-PROGRESS_SENTINEL = "__VAWS_MEMPROF_PROGRESS__="
 
 ENV_PREAMBLE = (
     "source /usr/local/Ascend/ascend-toolkit/set_env.sh 2>/dev/null; "
@@ -73,8 +72,7 @@ def ssh_bg_exec(
 
 
 def progress(msg: str, **extra: Any) -> None:
-    """Skill progress wrapper: keeps this skill's sentinel, delegates to lib."""
-    _lib_emit_progress("memprof", msg, sentinel=PROGRESS_SENTINEL, **extra)
+    envelope_progress("memprof", msg, **extra)
 
 
 def resolve_execution_target(

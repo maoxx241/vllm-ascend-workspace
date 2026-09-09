@@ -44,6 +44,7 @@ if str(_LIB_DIR) not in sys.path:
     sys.path.insert(0, str(_LIB_DIR))
 
 from vaws_remote_dev import ssh_argv  # noqa: E402
+from vaws_result_envelope import PROGRESS_SENTINEL  # noqa: E402
 
 
 IMAGE_REGISTRY_NJU = "quay.nju.edu.cn/ascend/vllm-ascend"
@@ -91,7 +92,6 @@ DEFAULT_HOST_PORT = 22
 DEFAULT_PORT_RANGE = "46000:46999"
 DEFAULT_KNOWN_HOSTS = pathlib.Path.home() / ".ssh" / "known_hosts"
 SENTINEL = "__VAWS_JSON__="
-PROGRESS_SENTINEL = "__VAWS_PROGRESS__="
 DEFAULT_PASSWORD_ENV = "VAWS_SSH_PASSWORD"
 DEFAULT_PROBE_TIMEOUT_SECONDS = 60
 DEFAULT_BOOTSTRAP_TIMEOUT_SECONDS = 1800

@@ -48,7 +48,7 @@ This skill is **only** about collection: start a profiled service, bracket a wor
   1. any rank's expected analyse output is missing after `analyse()` — the per-rank db in the default `--analyse-export db` mode, `kernel_details.csv` in text/both mode
   2. number of `*_ascend_pt` directories does not match `tp * (dp or 1)`
   3. workload was not real — follow-up request failed or benchmark wave fell below `--benchmark-success-threshold`
-- Progress on `stderr` as `__VAWS_PROFILING_COLLECTION_PROGRESS__=<json>`. Final manifest on `stdout` as one JSON object.
+- Progress on `stderr` as `__VAWS_PROGRESS__=<json>`. Final manifest on `stdout` as one JSON object.
 - Collection is **session-scoped**. Run the entry points from inside a session worktree and they auto-resolve the session by walking up to the nearest `.vaws-local/current-session.json` binding — no target args needed. Pass `--session-id <id>` / `--session-file <path>` explicitly only when running from outside the worktree. Service start/stop and parity stay scoped to that session.
 - Local state lives under `.vaws-local/ascend-profiling-collection/runs/` for collection manifests; serving/parity state lives under the session namespace.
 

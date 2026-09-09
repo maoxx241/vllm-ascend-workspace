@@ -51,7 +51,7 @@ This skill takes structured parameters, handles all SSH escaping and remote exec
 - Managed serving and relaunch require a nonempty live NPU lease matching the session snapshot before touching an existing service. Free cards are never selected as a fallback for an empty lease, and a stale `session.json` is not trusted after its live lease was released.
 - All remote execution goes through the scripts — never construct raw SSH commands for serving.
 - Keep local runtime state under `.vaws-local/sessions/<id>/`.
-- Progress on `stderr` as `__VAWS_SERVING_PROGRESS__=<json>`, final result on `stdout` as JSON.
+- Progress on `stderr` as `__VAWS_PROGRESS__=<json>`, final result on `stdout` as Result Envelope v1.
 - With a unified workspace alias, new runtime directories use `.vaws-runtime/serving/<alias>/<timestamp>/` and the service receives `VAWS_AGENT_ID`, `VAWS_AGENT_ALIAS`, and `VAWS_PROJECT_ALIAS`. Without an alias, preserve the legacy layout.
 
 ## Cross-platform launcher rule

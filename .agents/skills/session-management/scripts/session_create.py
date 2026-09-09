@@ -53,21 +53,22 @@ from vaws_local_state import (  # noqa: E402
 )
 from vaws_remote_dev import ssh_exec  # noqa: E402
 from vaws_remote_target import SshEndpoint  # noqa: E402
+from vaws_result_envelope import emit_skill_json, progress as envelope_progress  # noqa: E402
 from vaws_validate import ValidationError, parse_device_csv  # noqa: E402
 
-PROGRESS_SENTINEL = "__VAWS_SESSION_PROGRESS__="
 PORT_TAIL_RE = re.compile(r"[:.]([0-9]+)$")
 
 
 def emit_progress(phase: str, message: str, **extra: Any) -> None:
-    payload = {"phase": phase, "message": message}
-    payload.update({key: value for key, value in extra.items() if value is not None})
-    sys.stderr.write(PROGRESS_SENTINEL + json.dumps(payload, ensure_ascii=False) + "\n")
-    sys.stderr.flush()
+    envelope_progress(phase, message, **extra)
 
 
 def print_json(data: dict[str, Any]) -> None:
-    print(json.dumps(data, indent=2, ensure_ascii=False))
+    emit_skill_json(
+        data,
+        skill="session-management",
+        entry_point=".agents/skills/session-management/scripts/session_create.py",
+    )
 
 
 def tail_output(value: str | bytes | None, limit: int = 500) -> str:

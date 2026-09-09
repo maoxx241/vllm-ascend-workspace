@@ -30,7 +30,7 @@
 
 ## Progress reporting
 
-- [ ] Progress lines go to stderr as `__VAWS_BENCHMARK_PROGRESS__=<json>`.
+- [ ] Progress lines go to stderr as `__VAWS_PROGRESS__=<json>`.
 - [ ] Final JSON goes to stdout only.
 - [ ] Serving progress lines are forwarded to stderr.
 - [ ] Multi-run mode reports per-run progress with run number and warmup tag.

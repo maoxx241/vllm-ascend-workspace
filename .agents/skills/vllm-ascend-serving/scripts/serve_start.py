@@ -19,8 +19,8 @@ Usage examples:
     # Relaunch with a new env variable
     python3 serve_start.py --session-id pr-123 --relaunch --extra-env VLLM_USE_V1=1
 
-Progress on stderr as __VAWS_SERVING_PROGRESS__=<json>.
-Final result on stdout as a single JSON object.
+Progress on stderr as __VAWS_PROGRESS__=<json>.
+Final result on stdout as a Result Envelope v1 object.
 """
 
 from __future__ import annotations
@@ -68,6 +68,7 @@ from _common import (
 from vaws_session_state import allocate_service_port, file_lock, release_service_port, session_lock_dir, require_session_npu_lease, SessionStateError
 from vaws_local_state import effective_workspace_alias, load_workspace_identity
 from vaws_remote_target import ascend_env_preamble
+from vaws_result_envelope import unwrap_skill_payload
 from vaws_validate import parse_device_csv, require_env_name
 
 RUNTIME_DIR_BASE = ".vaws-runtime/serving"
@@ -108,9 +109,8 @@ def run_parity(session_id: str, session_file: Path | None = None) -> dict[str, A
         assert proc.stderr is not None
         for line in proc.stderr:
             stderr_lines.append(line)
-            if line.startswith("__VAWS_PARITY_PROGRESS__="):
-                sys.stderr.write(line)
-                sys.stderr.flush()
+            sys.stderr.write(line)
+            sys.stderr.flush()
 
     def collect_stdout() -> None:
         assert proc.stdout is not None
@@ -144,7 +144,7 @@ def run_parity(session_id: str, session_file: Path | None = None) -> dict[str, A
             "stderr_tail": stderr[-1000:],
         }
     try:
-        return json.loads(stdout)
+        return unwrap_skill_payload(json.loads(stdout))
     except json.JSONDecodeError:
         return {
             "status": "failed",

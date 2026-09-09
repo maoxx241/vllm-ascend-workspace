@@ -30,18 +30,19 @@ from vaws_session_state import (  # noqa: E402
     session_serving_state_path,
 )
 
-PROGRESS_SENTINEL = "__VAWS_SESSION_PROGRESS__="
+from vaws_result_envelope import emit_skill_json, progress as envelope_progress, unwrap_skill_payload  # noqa: E402
 
 
 def emit_progress(phase: str, message: str, **extra: Any) -> None:
-    payload = {"phase": phase, "message": message}
-    payload.update({key: value for key, value in extra.items() if value is not None})
-    sys.stderr.write(PROGRESS_SENTINEL + json.dumps(payload, ensure_ascii=False) + "\n")
-    sys.stderr.flush()
+    envelope_progress(phase, message, **extra)
 
 
 def print_json(data: dict[str, Any]) -> None:
-    print(json.dumps(data, indent=2, ensure_ascii=False))
+    emit_skill_json(
+        data,
+        skill="session-management",
+        entry_point=".agents/skills/session-management/scripts/session_remove.py",
+    )
 
 
 def run_git(
@@ -102,7 +103,7 @@ def stop_session(session_id: str, *, session_file: Path | None = None, force: bo
     if not result.stdout.strip():
         return {"status": "unknown", "returncode": result.returncode, "stderr_tail": result.stderr[-500:]}
     try:
-        payload = json.loads(result.stdout)
+        payload = unwrap_skill_payload(json.loads(result.stdout))
     except json.JSONDecodeError:
         payload = {"status": "unknown", "stdout_tail": result.stdout[-500:]}
     payload["returncode"] = result.returncode

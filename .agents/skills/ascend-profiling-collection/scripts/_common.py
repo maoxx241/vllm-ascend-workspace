@@ -27,8 +27,11 @@ ROOT = Path(__file__).resolve().parents[4]
 LIB_DIR = ROOT / ".agents" / "lib"
 MM_SCRIPTS = ROOT / ".agents" / "skills" / "machine-management" / "scripts"
 SERVING_SCRIPTS = ROOT / ".agents" / "skills" / "vllm-ascend-serving" / "scripts"
+if str(LIB_DIR) not in sys.path:
+    sys.path.insert(0, str(LIB_DIR))
 
-PROGRESS_SENTINEL = "__VAWS_PROFILING_COLLECTION_PROGRESS__="
+from vaws_result_envelope import progress as envelope_progress  # noqa: E402
+
 COLLECTION_STATE_DIR = ROOT / ".vaws-local" / "ascend-profiling-collection" / "runs"
 
 
@@ -75,10 +78,7 @@ load_serving_state = SERVING.load_serving_state
 # ---------------------------------------------------------------------------
 
 def emit_progress(phase: str, message: str, **extra: Any) -> None:
-    payload: dict[str, Any] = {"phase": phase, "message": message}
-    payload.update({k: v for k, v in extra.items() if v is not None})
-    sys.stderr.write(PROGRESS_SENTINEL + json.dumps(payload, ensure_ascii=False) + "\n")
-    sys.stderr.flush()
+    envelope_progress(phase, message, **extra)
 
 
 def print_json(data: dict[str, Any]) -> None:

@@ -27,13 +27,18 @@ ensure_workspace_interpreter(repo_root=ROOT)
 
 from vaws_remote_dev import ssh_exec  # noqa: E402
 from vaws_remote_target import SshEndpoint  # noqa: E402
+from vaws_result_envelope import emit_skill_json, unwrap_skill_payload  # noqa: E402
 from vaws_session_state import load_index, load_leases, load_session_lookup, release_all_session_leases, session_live_leases  # noqa: E402
 
 REAP_SSH_TIMEOUT_SECONDS = 20
 
 
 def print_json(data: dict[str, Any]) -> None:
-    print(json.dumps(data, indent=2, ensure_ascii=False))
+    emit_skill_json(
+        data,
+        skill="session-management",
+        entry_point=".agents/skills/session-management/scripts/session_gc.py",
+    )
 
 
 def probe_container_alive(host: str, port: int, user: str = "root") -> dict[str, Any]:
@@ -210,7 +215,7 @@ print(json.dumps(result))
         )
         if result.returncode:
             return {"alive": None, "reason": "host confirmation failed", "returncode": result.returncode}
-        payload = json.loads(result.stdout)
+        payload = unwrap_skill_payload(json.loads(result.stdout))
         if not isinstance(payload, dict) or payload.get("alive") not in (True, False, None):
             raise ValueError("invalid host confirmation response")
         return payload

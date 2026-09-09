@@ -54,7 +54,7 @@
 - [ ] On success, stdout JSON contains: `status: "ok"`, `machine`, `remote_profile_root`, `remote_output_dir`, `local_output_dir`, `stage_timings`, `rank_count`, `event_count`, `segment_count`, `layer_count`, `diagnosis_counts`, `report_md`, `report_xlsx`, `report_html`, `html_status`, `elapsed_s`.
 - [ ] On success, stdout JSON contains `analysis_context` with the model/hardware context used by the remote run.
 - [ ] On failure, stdout JSON contains: `status: "failed"`, `phase`, `error`, plus context (`machine`, `remote_profile_root`, `remote_output_dir` where applicable).
-- [ ] Progress lines on stderr are prefixed with `__VAWS_PROFILE_ANALYSIS_PROGRESS__=`.
+- [ ] Progress lines on stderr are prefixed with `__VAWS_PROGRESS__=`.
 - [ ] Final JSON is the only thing written to stdout.
 
 ### Local state

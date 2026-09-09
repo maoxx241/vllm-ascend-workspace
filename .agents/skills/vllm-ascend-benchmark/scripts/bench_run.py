@@ -31,7 +31,7 @@ Usage examples:
     python3 bench_run.py --model /home/weights/DeepSeek-V4-Flash-w4a8-mtp \\
         --preset dsv4-flash --runs 6 --warmup-runs 1
 
-Progress on stderr as __VAWS_BENCHMARK_PROGRESS__=<json>.
+Progress on stderr as __VAWS_PROGRESS__=<json>.
 Final result on stdout as a single JSON object.
 """
 

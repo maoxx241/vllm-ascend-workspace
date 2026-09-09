@@ -33,6 +33,7 @@ from vaws_local_state import (  # noqa: E402
     profile_summary,
     utc_now_iso,
 )
+from vaws_result_envelope import emit_skill_json, progress as envelope_progress  # noqa: E402
 
 Status = Literal[
     "ready",
@@ -63,20 +64,15 @@ class InventoryState:
 
 
 def print_json(data: dict[str, Any]) -> None:
-    print(json.dumps(data, indent=2, ensure_ascii=False))
+    emit_skill_json(
+        data,
+        skill="machine-management",
+        entry_point=".agents/skills/machine-management/scripts/machine_verify.py",
+    )
 
 
 def emit_progress(*, action: str, phase: str, message: str, machine: str | None = None, **extra: Any) -> None:
-    payload: dict[str, Any] = {
-        "action": action,
-        "phase": phase,
-        "message": message,
-    }
-    if machine is not None:
-        payload["machine"] = machine
-    payload.update({key: value for key, value in extra.items() if value is not None})
-    sys.stderr.write(machine_ops.PROGRESS_SENTINEL + json.dumps(payload, ensure_ascii=False) + "\n")
-    sys.stderr.flush()
+    envelope_progress(phase, message, action=action, machine=machine, **extra)
 
 
 def status_payload(

@@ -21,6 +21,7 @@ if str(_LIB_DIR) not in sys.path:
     sys.path.insert(0, str(_LIB_DIR))
 
 from vaws_remote_dev import ssh_argv, ssh_exec as remote_ssh_exec, ssh_run_bytes  # noqa: E402
+from vaws_result_envelope import PROGRESS_SENTINEL, emit_skill_json  # noqa: E402
 
 WORKSPACE_ID_PATTERN = re.compile(r'[^A-Za-z0-9._-]+')
 STATE_SUBDIR = Path('.vaws-local/remote-code-parity')
@@ -47,7 +48,6 @@ DEFAULT_DENYLIST = (
     'Thumbs.db',
 )
 
-PROGRESS_SENTINEL = '__VAWS_PARITY_PROGRESS__='
 STATE_LOCK_SUFFIX = '.lock'
 DEFAULT_STATE_LOCK_TIMEOUT_SECONDS = 15.0
 DEFAULT_STATE_LOCK_POLL_SECONDS = 0.05
@@ -228,6 +228,14 @@ def sanitize_repo_id(relpath: str) -> str:
 
 def json_dump(data: Any) -> str:
     return json.dumps(data, indent=2, sort_keys=True)
+
+
+def print_json(data: dict[str, Any]) -> None:
+    emit_skill_json(
+        data,
+        skill="remote-code-parity",
+        entry_point=".agents/skills/remote-code-parity/scripts/parity_sync.py",
+    )
 
 
 def quoted(script: str) -> str:

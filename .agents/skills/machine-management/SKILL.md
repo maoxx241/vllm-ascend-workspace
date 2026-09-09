@@ -69,7 +69,7 @@ The primary bootstrap path must not depend on `ssh-copy-id`, `expect`, or any ot
 
 ## Public workflow entry points
 
-Use these task-oriented wrappers for normal agent work. They keep the parameter surface narrow and return structured JSON statuses such as `ready`, `needs_input`, `needs_repair`, `blocked`, `removed`, or `unmanaged`. They also stream phase progress on `stderr` as `__VAWS_PROGRESS__=<json>` while reserving `stdout` for one final machine-readable JSON payload.
+Use these task-oriented wrappers for normal agent work. They keep the parameter surface narrow and return Result Envelope v1 on `stdout`, with the original skill status (`ready`, `needs_input`, `needs_repair`, `blocked`, `removed`, or `unmanaged`) in `extensions.result`. They stream phase progress on `stderr` as `__VAWS_PROGRESS__=<json>`.
 
 - `python3 .agents/skills/machine-management/scripts/machine_add.py --host <ip> --image <local-latest|rc|main|stable|custom-ref> [--machine-type <A2|A3|A5|310P>] [--machine-username <letters-or-digits> | --generate-machine-username] [--password-env NAME | --password-stdin | --password ...]`
 - `python3 .agents/skills/machine-management/scripts/machine_verify.py --machine <alias-or-ip>`

@@ -54,7 +54,7 @@ that execution before starting another code revision.
 - Keep container cache / lock / manifest paths isolated by `workspace_id` under a container-local cache root.
 - Preserve runtime-private paths under `/vllm-workspace`, in particular `Mooncake/` (image-provided runtime) and `.vaws-runtime/` (workspace-managed runtime artifacts such as profiler dumps consumed by downstream skills). The exact list lives in `DEFAULT_ROOT_PRESERVE_PATHS` on `vaws_coordinator.parity` (re-exported by the thin `scripts/remote_code_parity.py` CLI).
 - Container locks should record owner metadata and recover stale lock directories after the bounded stale interval; failed mirror hydration should best-effort clean any matching legacy `git-receive-pack` process trees and discard that repo's partial mirror before retry.
-- Keep `stdout` reserved for one final JSON summary and stream phase progress on `stderr` as `__VAWS_PARITY_PROGRESS__=<json>`.
+- Keep `stdout` reserved for one Result Envelope v1 and stream phase progress on `stderr` as `__VAWS_PROGRESS__=<json>`.
 - Prefer incremental Git `receive-pack` directly into the container-local bare
   mirrors. In `auto` mode, fall back to the self-contained full-bundle transfer
   when Git push is unavailable.

@@ -28,7 +28,7 @@ to a stale linked-worktree inventory. Session lookup does not use this loader.
 - In session mode, derive the source worktree and target container from `.vaws-local/sessions/<session-id>/session.json`.
 - Fail closed when parity cannot be proven.
 - Prove the final container-side commit ids instead of trusting command exit status alone.
-- Stream phase progress on `stderr` as `__VAWS_PARITY_PROGRESS__=<json>` and keep one final JSON payload on `stdout`.
+- Stream phase progress on `stderr` as `__VAWS_PROGRESS__=<json>` and keep one final JSON payload on `stdout`.
 - Keep runtime-install phases attributable instead of collapsing them into one opaque step: uninstall, build-compat preflight, `vllm`, `vllm-ascend` requirements, `vllm-ascend`, import verification, and marker write should each surface their own progress event.
 
 ## Apply-mode split
