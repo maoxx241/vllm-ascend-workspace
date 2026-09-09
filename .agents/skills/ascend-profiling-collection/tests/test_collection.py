@@ -162,21 +162,24 @@ def _effective_ssh_config(cmd: list[str], home: str) -> tuple[dict[str, list[str
 class TunnelArgvTests(unittest.TestCase):
     """Assert the ``open_local_forward`` path, not a skill-built argv.
 
-    If collection goes back to ``subprocess.Popen`` + ``ssh_argv``,
-    ``test_open_local_tunnel_uses_unmuxed_keepalive_forward`` fails because
-    the package Popen is never called. If that package argv loses
-    ``ExitOnForwardFailure`` or puts ``-N``/``-L`` after ``--``, the real
-    ``ssh -G`` parse fails the same way the pre-migration hand-rolled
-    command did.
+    ``common.subprocess`` and ``ssh_transport.subprocess`` are the same
+    stdlib module, so two nested ``patch.object(..., "Popen")`` mocks
+    cannot be distinguished — the inner patch shadows the outer. One
+    Popen mock records every spawn. The skill must spawn ssh exactly
+    once, and that argv must be the package forward. A second skill-side
+    ``subprocess.Popen(["ssh", ...])`` makes ``len(calls) == 1`` fail.
+    If the package argv loses ``ExitOnForwardFailure`` or puts
+    ``-N``/``-L`` after ``--``, the real ``ssh -G`` parse fails the same
+    way the pre-migration hand-rolled command did.
     """
 
     def test_open_local_tunnel_uses_unmuxed_keepalive_forward(self) -> None:
         import remote_dev.core.ssh_transport as ssh_transport
 
-        captured: dict[str, list[str]] = {}
+        calls: list[list[str]] = []
 
         def fake_popen(cmd, **_kwargs):
-            captured["cmd"] = list(cmd)
+            calls.append(list(cmd))
             return FakeProcess()
 
         connect_sock = mock.MagicMock()
@@ -184,7 +187,6 @@ class TunnelArgvTests(unittest.TestCase):
         connect_sock.connect.return_value = None
 
         with (
-            mock.patch.object(common.subprocess, "Popen") as skill_popen,
             mock.patch.object(ssh_transport.subprocess, "Popen", side_effect=fake_popen),
             mock.patch.object(ssh_transport.socket, "socket", return_value=connect_sock),
             mock.patch.object(ssh_transport, "_find_free_local_port", return_value=34567),
@@ -194,8 +196,8 @@ class TunnelArgvTests(unittest.TestCase):
                 self.assertEqual(tunnel["local_port"], 34567)
                 self.assertEqual(tunnel["base_url"], "http://127.0.0.1:34567")
 
-        skill_popen.assert_not_called()
-        cmd = captured["cmd"]
+        self.assertEqual(len(calls), 1, calls)
+        cmd = calls[0]
         self.assertEqual(cmd[0], "ssh")
         sep = cmd.index("--")
         self.assertEqual(cmd[sep + 1 :], ["192.0.2.10"])
