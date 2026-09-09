@@ -1382,7 +1382,7 @@ class PhaseBKnowledgeFixtureScopeTests(unittest.TestCase):
         return [item for item in self._scan(text, path) if item.category == category]
 
     def test_declarations_are_exact_paths_and_singleton_categories(self) -> None:
-        self.assertEqual(len(self.policy.entries), 26)
+        self.assertEqual(len(self.policy.entries), 27)
         self.assertNotIn("knowledge-failure-signatures-private-range", self.by_id)
         for case in self.CASES:
             with self.subTest(entry=case["id"]):

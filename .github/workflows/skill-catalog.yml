@@ -59,10 +59,14 @@ jobs:
           uv run python -B -m unittest discover -s .agents/tests -p "test_tracked_path_check.py"
       - name: Run catalog tests
         run: uv run python -B -m unittest discover -s .agents/tests -p "test_*catalog.py"
+      - name: Run repo-init tests
+        run: uv run python -B -m unittest discover -s .agents/skills/repo-init/tests
       - name: Run generated skill projection tests
         run: uv run python -B -m unittest discover -s .agents/tests -p "test_sync_claude_skills.py"
       - name: Check generated Claude shims and ModelScope Trae projection
         run: uv run python -B .agents/scripts/sync_claude_skills.py --check
+      - name: Run modelscope tests
+        run: uv run python -B -m unittest discover -s .agents/skills/modelscope/tests
       - name: Run manifest and knowledge tests
         run: |
           uv run python -B -m unittest discover -s .agents/tests -p "test_run_manifest.py"
@@ -133,6 +137,9 @@ jobs:
 
       - name: Run memory-profiling tests
         run: uv run python -B -m unittest discover -s .agents/skills/ascend-memory-profiling/tests
+
+      - name: Run profiling-collection tests
+        run: uv run python -B -m unittest discover -s .agents/skills/ascend-profiling-collection/tests
 
       - name: Run profiling-analysis tests
         run: |

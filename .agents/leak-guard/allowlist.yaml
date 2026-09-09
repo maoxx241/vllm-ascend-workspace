@@ -126,6 +126,12 @@ allowlist:
     match: git@github.com
     justification: The fixed SSH user of github.com in clone URLs; it is a service account name shared by every GitHub user, not a personal address.
 
+  - id: repo-init-gitlab-example-invalid-ssh-user
+    path_glob: .agents/skills/repo-init/tests/test_repo_init_probe.py
+    categories: [email]
+    match: git@gitlab.example.invalid
+    justification: Fabricated non-GitHub SSH URL in hermetic probe tests; gitlab.example.invalid is an RFC 2606 reserved name and identifies no person or real host.
+
   - id: repo-boundary-check-github-ssh-transport
     path_glob: .agents/scripts/repo_boundary_check.py
     categories: [email]
