@@ -17,6 +17,8 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -82,6 +84,20 @@ class SubmoduleClassificationTests(unittest.TestCase):
         self.assertFalse(summary["all_initialized"])
         self.assertEqual(summary["needs_attention"][0]["error"], "fatal: not a git repository")
 
+    def test_run_keeps_leading_space_on_initialized_clean_first_row(self) -> None:
+        raw = " aaaaaaaa vllm (v0.11.0)\n fedcba90 vllm-ascend (heads/main)\n"
+        completed = SimpleNamespace(returncode=0, stdout=raw, stderr="")
+        with mock.patch.object(probe.subprocess, "run", return_value=completed):
+            rc, out, _err = probe.run(["git", "submodule", "status"])
+            rows = probe.git_submodule_status(Path("/tmp/unused-root"))
+        self.assertEqual(rc, 0)
+        self.assertEqual(out[0], " ")
+        self.assertEqual(
+            [(row["state"], row["path"]) for row in rows],
+            [(" ", "vllm"), (" ", "vllm-ascend")],
+        )
+        self.assertTrue(probe.compact_submodule_summary(rows)["all_initialized"])
+
 
 class ForkTopologyTests(unittest.TestCase):
     def test_parse_remote_url_accepts_ssh_https_and_rejects_other_hosts(self) -> None:
@@ -94,8 +110,7 @@ class ForkTopologyTests(unittest.TestCase):
             probe.parse_remote_url("ssh://git@github.com/alice/vllm-ascend.git"),
             "alice/vllm-ascend",
         )
-        foreign = "git@" + "gitlab.example.invalid" + ":alice/vllm.git"
-        self.assertIsNone(probe.parse_remote_url(foreign))
+        self.assertIsNone(probe.parse_remote_url("git@gitlab.example.invalid:alice/vllm.git"))
         self.assertEqual(topology.parse_repo_url("git@github.com:alice/vllm.git"), "alice/vllm")
 
     def test_inspect_repo_classifies_uninitialized_submodule_without_real_git(self) -> None:
@@ -218,7 +233,7 @@ class RequiredStepReportingTests(unittest.TestCase):
         self.assertNotIn("uv_sync", checkpoint)
         self.assertNotIn("uv sync", json.dumps(checkpoint))
 
-    def test_stub_git_on_path_feeds_submodule_status(self) -> None:
+    def test_stub_git_on_path_feeds_initialized_clean_first_row(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             stub = Path(tmp) / "bin"
             stub.mkdir()
@@ -227,45 +242,30 @@ class RequiredStepReportingTests(unittest.TestCase):
                 "#!/bin/sh\n"
                 'if [ "$1" = "-c" ]; then shift 2; fi\n'
                 'if [ "$1" = "submodule" ]; then\n'
-                # Leading spaces on the first line are stripped by probe.run().
-                # Keep an uninitialized first row so the initialized row
-                # retains its space prefix after strip().
-                "  printf -- '- 0000000 vllm-ascend\\n  abcdef1 vllm (heads/main)\\n'\n"
+                "  printf -- ' aaaaaaaa vllm (v0.11.0)\\n fedcba90 vllm-ascend (heads/main)\\n'\n"
                 "  exit 0\n"
                 "fi\n"
                 "exit 1\n",
                 encoding="utf-8",
             )
             git.chmod(0o755)
-            env = os.environ.copy()
-            env["PATH"] = str(stub)
-            env["HOME"] = tmp
-            original = probe.run
-
-            def isolated_run(cmd: list[str], cwd: Path | None = None):
-                if cmd and cmd[0] == "git":
-                    cmd = ["git", "-c", "safe.directory=*", *cmd[1:]]
-                import subprocess
-
-                proc = subprocess.run(
-                    cmd,
-                    cwd=str(cwd) if cwd else None,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                    env=env,
-                )
-                return proc.returncode, proc.stdout.strip(), proc.stderr.strip()
-
-            probe.run = isolated_run  # type: ignore[method-assign]
+            old_path = os.environ.get("PATH", "")
+            old_home = os.environ.get("HOME")
+            os.environ["PATH"] = f"{stub}{os.pathsep}{old_path}"
+            os.environ["HOME"] = tmp
             try:
                 rows = probe.git_submodule_status(Path(tmp))
             finally:
-                probe.run = original  # type: ignore[method-assign]
-            self.assertEqual([(row["state"], row["path"]) for row in rows], [("-", "vllm-ascend"), (" ", "vllm")])
-            self.assertFalse(probe.compact_submodule_summary(rows)["all_initialized"])
+                os.environ["PATH"] = old_path
+                if old_home is None:
+                    os.environ.pop("HOME", None)
+                else:
+                    os.environ["HOME"] = old_home
+            self.assertEqual(
+                [(row["state"], row["path"]) for row in rows],
+                [(" ", "vllm"), (" ", "vllm-ascend")],
+            )
+            self.assertTrue(probe.compact_submodule_summary(rows)["all_initialized"])
 
 
 if __name__ == "__main__":

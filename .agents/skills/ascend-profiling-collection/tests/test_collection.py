@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Hermetic tests for ascend-profiling-collection tunnel, bracket, and manifest logic.
 
-No SSH, no NPU, no developer HOME. Tunnel construction is inspected through a
-mocked ``Popen``; orchestration is exercised with injected collaborators.
+No network, no NPU, no developer HOME. Tunnel argv is checked with the real
+``ssh -G`` parser (fail if ``ssh`` is missing). Orchestration uses injected
+collaborators.
 """
 
 from __future__ import annotations
@@ -12,7 +13,9 @@ import importlib.util
 import io
 import json
 import os
+import shutil
 import socket
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -122,6 +125,39 @@ class FreePortTests(unittest.TestCase):
             sock.bind(("127.0.0.1", port))
 
 
+def _parse_ssh_g(text: str) -> dict[str, list[str]]:
+    parsed: dict[str, list[str]] = {}
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        key, _, value = line.partition(" ")
+        parsed.setdefault(key.lower(), []).append(value)
+    return parsed
+
+
+def _effective_ssh_config(cmd: list[str], home: str) -> tuple[dict[str, list[str]], str]:
+    ssh = shutil.which("ssh")
+    if ssh is None:
+        raise AssertionError(
+            "ssh binary is required to parse tunnel argv; a skipped parser "
+            "test is how a dead tunnel survives"
+        )
+    result = subprocess.run(
+        [ssh, "-G", "-F", "/dev/null", *cmd[1:]],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env={"HOME": home, "PATH": os.environ.get("PATH", "")},
+        check=False,
+    )
+    if result.returncode != 0:
+        raise AssertionError(
+            f"ssh -G failed (rc={result.returncode}): {(result.stderr or '')[:2000]}"
+        )
+    return _parse_ssh_g(result.stdout), result.stdout
+
+
 class TunnelArgvTests(unittest.TestCase):
     def test_open_local_tunnel_uses_unmuxed_keepalive_forward(self) -> None:
         captured: dict[str, list[str]] = {}
@@ -145,15 +181,23 @@ class TunnelArgvTests(unittest.TestCase):
 
         cmd = captured["cmd"]
         self.assertEqual(cmd[0], "ssh")
-        self.assertIn("ControlMaster=no", cmd)
-        self.assertIn("ControlPath=none", cmd)
-        self.assertIn("ControlPersist=no", cmd)
-        self.assertTrue(any(item.startswith("ServerAliveInterval=") for item in cmd))
-        self.assertTrue(any(item.startswith("ServerAliveCountMax=") for item in cmd))
-        self.assertIn("ExitOnForwardFailure=yes", cmd)
-        self.assertIn("-N", cmd)
-        l_idx = cmd.index("-L")
-        self.assertEqual(cmd[l_idx + 1], "127.0.0.1:34567:127.0.0.1:8000")
+        sep = cmd.index("--")
+        self.assertEqual(cmd[sep + 1 :], ["192.0.2.10"])
+        for token in ("ExitOnForwardFailure=yes", "-N", "-L"):
+            self.assertLess(cmd.index(token), sep, token)
+
+        with tempfile.TemporaryDirectory() as home:
+            cfg, raw = _effective_ssh_config(cmd, home)
+        self.assertEqual(cfg.get("exitonforwardfailure"), ["yes"])
+        forwards = [item.replace("[", "").replace("]", "") for item in cfg.get("localforward") or []]
+        self.assertTrue(
+            any("127.0.0.1:34567" in item and "127.0.0.1:8000" in item for item in forwards),
+            raw,
+        )
+        self.assertEqual(cfg.get("sessiontype"), ["none"])
+        self.assertEqual(cfg.get("controlmaster"), ["false"])
+        self.assertEqual(cfg.get("serveraliveinterval"), ["30"])
+        self.assertEqual(cfg.get("serveralivecountmax"), ["10"])
 
     def test_open_local_tunnel_raises_when_ssh_exits_before_listen(self) -> None:
         def fake_popen(cmd, **_kwargs):

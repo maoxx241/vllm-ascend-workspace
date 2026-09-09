@@ -141,11 +141,14 @@ def open_local_tunnel(ep, remote_port: int):
     and POSTed without round-tripping through SSH heredocs.
     """
     local_port = _find_free_local_port()
+    base = list(ssh_argv(ep, long_stream=True))
+    sep = base.index("--")
     cmd = [
-        *ssh_argv(ep, long_stream=True),
+        *base[:sep],
         "-o", "ExitOnForwardFailure=yes",
         "-N",
         "-L", f"127.0.0.1:{local_port}:127.0.0.1:{remote_port}",
+        *base[sep:],
     ]
     proc = subprocess.Popen(
         cmd,

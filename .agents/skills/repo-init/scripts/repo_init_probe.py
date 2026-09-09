@@ -76,7 +76,10 @@ def run(cmd: List[str], cwd: Optional[pathlib.Path] = None) -> Tuple[int, str, s
         encoding="utf-8",
         errors="replace",
     )
-    return proc.returncode, proc.stdout.strip(), proc.stderr.strip()
+    # Trailing-only trim. ``git submodule status`` marks an initialized-and-clean
+    # row with a leading space; ``str.strip()`` would turn that into the first
+    # hex digit of the SHA and misclassify the first submodule.
+    return proc.returncode, proc.stdout.rstrip(), proc.stderr.rstrip()
 
 
 def which(name: str) -> Optional[str]:
