@@ -57,7 +57,7 @@ from _common import (
 )
 from vaws_session_state import allocate_service_port, file_lock, release_service_port, session_lock_dir, require_session_npu_lease, SessionStateError
 from vaws_local_state import effective_workspace_alias, load_workspace_identity
-from vaws_remote_toolbox import ascend_env_preamble
+from vaws_remote_target import ascend_env_preamble
 from vaws_validate import parse_device_csv, require_env_name
 
 RUNTIME_DIR_BASE = ".vaws-runtime/serving"
@@ -256,7 +256,7 @@ def build_launch_script(
 
     # Ascend environment — source the managed profile that sets PATH,
     # LD_LIBRARY_PATH, CANN, ATB, and the correct Python. Canonical form
-    # lives in vaws_remote_toolbox.ascend_env_preamble ("set -e" is already
+    # lives in vaws_remote_target.ascend_env_preamble ("set -e" is already
     # the first line of this script).
     lines.append(ascend_env_preamble(set_e=False, export_driver_lib=True))
 

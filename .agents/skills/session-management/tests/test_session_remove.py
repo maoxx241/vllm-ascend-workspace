@@ -83,7 +83,8 @@ class SessionRemoveTests(unittest.TestCase):
                 ), mock.patch.object(session_gc.subprocess, "run", return_value=result) as call:
                     self.assertIs(session_gc._probe_session_container(session)["alive"], expected)
                 self.assertIn("22", call.call_args.args[0])
-                self.assertIn("_confirmed_free_probe", call.call_args.args[0][-1])
+                script = call.call_args.kwargs.get("input") or ""
+                self.assertIn("_confirmed_free_probe", script)
 
     def test_remote_cleanup_exception_marks_session_needs_repair(self) -> None:
         lookup = SimpleNamespace(

@@ -41,7 +41,7 @@ if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
 from vaws_remote_dev import ASCEND_RUNTIME_ENV_FILE  # noqa: E402
-from vaws_remote_toolbox import RemoteToolboxError, resolve_remote_target  # noqa: E402
+from vaws_remote_target import RemoteTargetError, resolve_remote_target  # noqa: E402
 
 REPO_ROOT = LIB.parents[1]
 RESOLVER_NAME = "vaws"
@@ -97,7 +97,7 @@ def resolve_vaws(payload: dict[str, Any]) -> dict[str, Any] | None:
     selectors = {field: payload.get(field) for field in FIELDS if payload.get(field)}
     try:
         target = resolve_remote_target(repo_root=REPO_ROOT, **{field: payload.get(field) for field in FIELDS})
-    except RemoteToolboxError as exc:
+    except RemoteTargetError as exc:
         if not selectors:
             # No selector and no worktree binding: this payload is not ours.
             return None

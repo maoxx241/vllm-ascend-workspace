@@ -28,7 +28,7 @@ if str(LIB) not in sys.path:
 import vaws_remote_dev as remote_dev  # noqa: E402
 import vaws_remote_dev_plugin as plugin  # noqa: E402
 import vaws_session_id  # noqa: E402
-from vaws_remote_toolbox import RemoteToolboxError  # noqa: E402
+from vaws_remote_target import RemoteTargetError  # noqa: E402
 
 requires_package = unittest.skipUnless(
     importlib.util.find_spec("remote_dev") is not None,
@@ -135,12 +135,12 @@ class ResolverPluginMappingTests(unittest.TestCase):
         self.assertEqual(payload["alias"], "sess-bound")
 
     def test_no_selector_and_no_binding_declines(self) -> None:
-        with mock.patch.object(plugin, "resolve_remote_target", side_effect=RemoteToolboxError("no binding")):
+        with mock.patch.object(plugin, "resolve_remote_target", side_effect=RemoteTargetError("no binding")):
             self.assertIsNone(plugin.resolve_vaws({}))
             self.assertIsNone(plugin.resolve_vaws({"root": "/vllm-workspace"}))
 
     def test_selector_that_cannot_resolve_raises(self) -> None:
-        with mock.patch.object(plugin, "resolve_remote_target", side_effect=RemoteToolboxError("not found")):
+        with mock.patch.object(plugin, "resolve_remote_target", side_effect=RemoteTargetError("not found")):
             with self.assertRaises(Exception) as ctx:
                 plugin.resolve_vaws({"machine": "ghost"})
         self.assertIn("ghost", str(ctx.exception))
@@ -774,8 +774,22 @@ class ClaudeSkillShimTests(unittest.TestCase):
 class SubstrateIntegrationTests(unittest.TestCase):
     """Real registration through `remote_dev.core.endpoint` in a fresh interpreter."""
 
-    def _run(self, code: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
-        return subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env={**os.environ, **(env or {})}, check=False)
+    def _run(self, code: str, env: dict[str, str] | None = None, cwd: str | None = None) -> subprocess.CompletedProcess:
+        child_env = {
+            key: value
+            for key, value in os.environ.items()
+            if not key.startswith("REMOTE_DEV_")
+        }
+        if env:
+            child_env.update(env)
+        return subprocess.run(
+            [sys.executable, "-c", code],
+            capture_output=True,
+            text=True,
+            env=child_env,
+            cwd=cwd,
+            check=False,
+        )
 
     def test_resolvers_env_registers_the_scaffold_selector_fields(self) -> None:
         code = (
@@ -831,7 +845,7 @@ class SubstrateIntegrationTests(unittest.TestCase):
                 "from remote_dev.core.errors import EndpointError\n"
                 "try:\n    resolve_endpoint({})\nexcept EndpointError as exc:\n    print(str(exc))\n"
             )
-            proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, cwd=tmp, check=False)
+            proc = self._run(code, cwd=tmp)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn("no endpoint target", proc.stdout)
         self.assertIn("registered resolvers: vaws", proc.stdout)

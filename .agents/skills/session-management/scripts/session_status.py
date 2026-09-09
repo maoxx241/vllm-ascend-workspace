@@ -16,7 +16,8 @@ LIB_DIR = ROOT / ".agents" / "lib"
 if str(LIB_DIR) not in sys.path:
     sys.path.insert(0, str(LIB_DIR))
 
-from vaws_ssh import base_ssh_options  # noqa: E402
+from vaws_remote_dev import ssh_exec  # noqa: E402
+from vaws_remote_target import SshEndpoint  # noqa: E402
 from vaws_session_state import (  # noqa: E402
     load_session_lookup,
     session_live_leases,
@@ -39,39 +40,20 @@ def tail_output(value: str | bytes | None, limit: int = 500) -> str:
 
 
 def ssh_check(host: str, port: int, user: str = "root", script: str = "true") -> dict[str, Any]:
-    cmd = [
-        "ssh",
-        *base_ssh_options(),
-        "-p",
-        str(port),
-        f"{user}@{host}",
-        "bash",
-        "-c",
-        shlex.quote(script),
-    ]
-    try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=SSH_CHECK_TIMEOUT_SECONDS,
-        )
-    except subprocess.TimeoutExpired as exc:
-        return {
-            "ok": False,
-            "returncode": None,
-            "timed_out": True,
-            "timeout_seconds": SSH_CHECK_TIMEOUT_SECONDS,
-            "stdout_tail": tail_output(exc.stdout),
-            "stderr_tail": tail_output(exc.stderr),
-        }
+    result = ssh_exec(
+        SshEndpoint(host=host, port=port, user=user),
+        script,
+        check=False,
+        timeout=SSH_CHECK_TIMEOUT_SECONDS,
+    )
+    timed_out = result.returncode == 255 and "timed out" in (result.stderr or "")
     return {
         "ok": result.returncode == 0,
         "returncode": result.returncode,
-        "timed_out": False,
-        "stdout_tail": result.stdout[-500:],
-        "stderr_tail": result.stderr[-500:],
+        "timed_out": timed_out,
+        "timeout_seconds": SSH_CHECK_TIMEOUT_SECONDS if timed_out else None,
+        "stdout_tail": (result.stdout or "")[-500:],
+        "stderr_tail": (result.stderr or "")[-500:],
     }
 
 

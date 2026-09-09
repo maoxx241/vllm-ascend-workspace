@@ -31,12 +31,23 @@ process degenerate roots silently.
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+_ROOT = Path(__file__).resolve().parents[4]
+_LIB = _ROOT / ".agents" / "lib"
+if str(_LIB) not in sys.path:
+    sys.path.insert(0, str(_LIB))
+
+from vaws_venv import ensure_workspace_interpreter  # noqa: E402
+
+ensure_workspace_interpreter(repo_root=_ROOT)
+
 import argparse
 import base64
 import json
 import shlex
 import subprocess
-import sys
 import tempfile
 import time
 import urllib.error
@@ -44,7 +55,6 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path
 from typing import Any
 
 _SCRIPT_DIR = Path(__file__).resolve().parent

@@ -86,21 +86,21 @@
       "responsibility": "mechanics",
       "support_role": "compatibility",
       "target_kind": "self",
-      "note": "managed toolbox artifact manifest; distinct store from extracted remote-dev, left for C3",
+      "note": "thin CLI over vaws-remote-dev artifact-manifest; stdout is remote-dev.result.v1",
       "proposed_target": "vaws remote"
     },
     ".agents/scripts/remote_artifact_pull.py": {
       "responsibility": "mechanics",
       "support_role": "compatibility",
       "target_kind": "self",
-      "note": "managed toolbox artifact pull; distinct store from extracted remote-dev, left for C3",
+      "note": "thin CLI over vaws-remote-dev artifact-pull; stdout is remote-dev.result.v1",
       "proposed_target": "vaws remote"
     },
     ".agents/scripts/remote_artifact_push.py": {
       "responsibility": "mechanics",
       "support_role": "compatibility",
       "target_kind": "self",
-      "note": "managed toolbox artifact push; distinct store from extracted remote-dev, left for C3",
+      "note": "thin CLI over vaws-remote-dev artifact-push; stdout is remote-dev.result.v1",
       "proposed_target": "vaws remote"
     },
     ".agents/scripts/remote_cleanup.py": {
@@ -114,49 +114,49 @@
       "responsibility": "mechanics",
       "support_role": "compatibility",
       "target_kind": "self",
-      "note": "managed-session SSH via vaws_remote_toolbox; not the C1 direct remote.bash path; transports are not unified",
+      "note": "thin CLI over vaws-remote-dev bash; --machine/--session-id become --selector; stdout is remote-dev.result.v1",
       "proposed_target": "vaws remote"
     },
     ".agents/scripts/remote_job_collect.py": {
       "responsibility": "mechanics",
       "support_role": "compatibility",
       "target_kind": "self",
-      "note": "managed toolbox job-directory collect; incompatible with remote-dev job ids (C3)",
+      "note": "no remote-dev job_collect tool; wrapper pulls the job dir via job-status + artifact-pull or fails naming the gap",
       "proposed_target": "vaws remote"
     },
     ".agents/scripts/remote_job_start.py": {
       "responsibility": "mechanics",
       "support_role": "compatibility",
       "target_kind": "self",
-      "note": "managed toolbox job start; incompatible in-flight ids versus extracted remote-dev (C3)",
+      "note": "thin CLI over vaws-remote-dev bash --run-in-background; --job-id is accepted and ignored",
       "proposed_target": "vaws remote"
     },
     ".agents/scripts/remote_job_status.py": {
       "responsibility": "mechanics",
       "support_role": "compatibility",
       "target_kind": "self",
-      "note": "managed toolbox job status against .vaws-local/remote-toolbox/jobs",
+      "note": "thin CLI over vaws-remote-dev job-status",
       "proposed_target": "vaws remote"
     },
     ".agents/scripts/remote_job_stop.py": {
       "responsibility": "mechanics",
       "support_role": "compatibility",
       "target_kind": "self",
-      "note": "managed toolbox job stop; store remains distinct from extracted remote-dev",
+      "note": "thin CLI over vaws-remote-dev job-stop",
       "proposed_target": "vaws remote"
     },
     ".agents/scripts/remote_job_tail.py": {
       "responsibility": "mechanics",
       "support_role": "compatibility",
       "target_kind": "self",
-      "note": "managed toolbox job tail; store remains distinct from extracted remote-dev",
+      "note": "thin CLI over vaws-remote-dev job-tail",
       "proposed_target": "vaws remote"
     },
     ".agents/scripts/remote_probe.py": {
       "responsibility": "mechanics",
       "support_role": "compatibility",
       "target_kind": "self",
-      "note": "managed toolbox probe; C1 direct probe is remote-dev probe",
+      "note": "thin CLI over vaws-remote-dev probe; Ascend-specific probe fields from the old toolbox are not reproduced",
       "proposed_target": "vaws remote"
     },
     ".agents/scripts/remote_service_logs.py": {
@@ -170,7 +170,7 @@
       "responsibility": "mechanics",
       "support_role": "compatibility",
       "target_kind": "local-entry",
-      "note": "toolbox adapter that spawns serve_start.py and re-wraps JSON",
+      "note": "adapter that spawns serve_start.py; remote-dev has no service API",
       "target": ".agents/skills/vllm-ascend-serving/scripts/serve_start.py",
       "proposed_target": "vaws serve"
     },
@@ -178,7 +178,7 @@
       "responsibility": "mechanics",
       "support_role": "compatibility",
       "target_kind": "local-entry",
-      "note": "toolbox adapter that spawns serve_status.py",
+      "note": "adapter that spawns serve_status.py; remote-dev has no service API",
       "target": ".agents/skills/vllm-ascend-serving/scripts/serve_status.py",
       "proposed_target": "vaws serve"
     },
@@ -186,7 +186,7 @@
       "responsibility": "mechanics",
       "support_role": "compatibility",
       "target_kind": "local-entry",
-      "note": "toolbox adapter that spawns serve_stop.py",
+      "note": "adapter that spawns serve_stop.py; remote-dev has no service API",
       "target": ".agents/skills/vllm-ascend-serving/scripts/serve_stop.py",
       "proposed_target": "vaws serve"
     },
@@ -194,7 +194,7 @@
       "responsibility": "mechanics",
       "support_role": "compatibility",
       "target_kind": "local-entry",
-      "note": "toolbox sync_apply shells out to parity_sync.py; C3 still owns the subprocess chain",
+      "note": "adapter that shells out to parity_sync.py; remote-dev has no sync API",
       "target": ".agents/skills/remote-code-parity/scripts/parity_sync.py",
       "proposed_target": "vaws sync"
     },
@@ -202,7 +202,7 @@
       "responsibility": "mechanics",
       "support_role": "compatibility",
       "target_kind": "local-entry",
-      "note": "toolbox sync_plan shells out to parity_sync.py / remote_code_parity.py plan",
+      "note": "adapter that shells out to parity_sync.py / remote_code_parity.py plan; remote-dev has no sync API",
       "target": ".agents/skills/remote-code-parity/scripts/parity_sync.py",
       "proposed_target": "vaws sync"
     },
@@ -210,14 +210,8 @@
       "responsibility": "mechanics",
       "support_role": "compatibility",
       "target_kind": "self",
-      "note": "managed selector resolve; C1 host+port and machine/session resolution live in remote-dev plus vaws_remote_dev_plugin",
+      "note": "VAWS target resolve via vaws_remote_target; remote-dev has no VAWS-shaped target_resolve CLI",
       "proposed_target": "vaws remote"
-    },
-    ".agents/scripts/remote_toolbox_stress.py": {
-      "responsibility": "mechanics",
-      "support_role": "harness",
-      "target_kind": "self",
-      "note": "maturation stress for the managed toolbox; not agent routing"
     },
     ".agents/scripts/repo_boundary_check.py": {
       "responsibility": "mechanics",

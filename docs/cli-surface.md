@@ -44,23 +44,23 @@ are **not** the original 132-entry snapshot and **not** the unimplemented
 
 | Measure | Value |
 |---|---|
-| Entry points (definition in §3) | **119** |
-| Supported agent-facing launchers | 69 |
+| Entry points (definition in §3) | **115** |
+| Supported agent-facing launchers | 67 |
 | Compatibility wrappers | 17 |
 | Internal / diagnostic CLIs | 13 |
 | Generated projections | 4 |
 | Hooks | 3 |
 | Remote payloads | 9 |
-| Test / maturation harnesses | 4 |
-| Responsibility | mechanics 103 · mixed 16 · judgment 0 |
-| Files importing `argparse` (non-test) | 99 |
+| Test / maturation harnesses | 2 |
+| Responsibility | mechanics 99 · mixed 16 · judgment 0 |
+| Files importing `argparse` (non-test) | 105 |
 | Skills that ship at least one entry point | 24 |
-| Parser styles | argparse 97 · delegated 18 · bare 3 · bare-argv 1 |
+| Parser styles | argparse 102 · delegated 8 · bare 4 · bare-argv 1 |
 | Historical snapshot (original #85) | 132 entries; mechanics 81 · judgment 8 · mixed 8 · redundant 35 |
 | Historical proposed surface | **13 nouns**, 75 verbs (unimplemented) |
 
-The 119 roles are non-overlapping: every discovered entry has exactly one
-support role, and the seven role counts sum to 119. Support role is not
+The 115 roles are non-overlapping: every discovered entry has exactly one
+support role, and the seven role counts sum to 115. Support role is not
 inferred from a future `vaws <noun>` label, from a `__main__` guard alone, or
 from the absence of a basename mention.
 
@@ -112,13 +112,13 @@ launchers:
 
 | Role | Meaning | Current count |
 |---|---|---|
-| `supported` | agent-facing launcher or domain command that currently owns the mechanic | 69 |
+| `supported` | agent-facing launcher or domain command that currently owns the mechanic | 67 |
 | `compatibility` | still-present managed toolbox or legacy `--machine` wrapper whose semantics differ from the extracted provider | 17 |
 | `internal` | library or pipeline stage that grew a diagnostic `__main__` | 13 |
 | `generated` | Trae ModelScope projection produced from the canonical package | 4 |
 | `hook` | client or git lifecycle adapter | 3 |
 | `payload` | executable spawned on the container or by another command | 9 |
-| `harness` | maturation / golden / stress tooling | 4 |
+| `harness` | maturation / golden / stress tooling | 2 |
 
 Responsibility (`mechanics` / `judgment` / `mixed`) is independent of support
 role. A mixed script can be currently supported. A compatibility wrapper is
@@ -193,10 +193,11 @@ read/grep/glob reaches the extracted remote-dev owner through
 `remote-dev read` / `grep` / `glob` (or MCP `remote_*`)
 and the scaffold resolver/result adapter
 (`.agents/lib/vaws_remote_dev.py`, `.agents/lib/vaws_remote_dev_plugin.py`).
-MCP `remote_*` names are unchanged. Managed toolbox wrappers
-(`.agents/scripts/remote_exec.py` and the job/artifact family) remain
-compatibility: they still own managed-session SSH and a distinct job/artifact
-store. That is not a claim that every transport or job id has been unified.
+MCP `remote_*` names are unchanged. The `remote_exec.py` / probe / job /
+artifact wrappers are thin CLIs over `vaws-remote-dev` and remain
+compatibility because their stdout is `remote-dev.result.v1`, not the old
+toolbox envelope. Service, sync, cleanup, and target-resolve wrappers stay
+because remote-dev v0.2.0 has no equivalent API.
 
 The six-file Trae ModelScope package is generated from
 `.agents/skills/modelscope` by `.agents/scripts/sync_claude_skills.py`
@@ -207,9 +208,9 @@ their rejection tests stay. Exploratory `bench_compare.py` delta tables are
 not performance-acceptance certificates.
 
 **C3 (parity, long-running identity, in-flight jobs).** Parity still
-path-spawns `parity_sync.py` / `remote_code_parity.py`. Toolbox and extracted
-remote-dev job ids remain incompatible. This inventory does not launch a
-hardware matrix or promise that unification. Accepted glob / Python 3.9
+path-spawns `parity_sync.py` / `remote_code_parity.py`. Job ids now come from
+`vaws-remote-dev`; in-flight toolbox ids are gone with that store. This
+inventory does not launch a hardware matrix. Accepted glob / Python 3.9
 source behavior and the deliberate-interruption mux mitigation are not
 universal cancellation isolation and are not a new hardware replay. Open
 remote-dev issues stay open unless an independent owner closed them.
@@ -407,25 +408,24 @@ option.
 | `.agents/scripts/knowledge_export.py` | argparse | - | 7 | docs:1, routing:2, script:1, skill-doc:3, test:1 | mechanics | supported | .agents/scripts/knowledge_export.py | vaws knowledge |
 | `.agents/scripts/knowledge_query.py` | argparse | - | 9 | docs:1, routing:2, skill-doc:1, test:2 | mechanics | supported | .agents/scripts/knowledge_query.py | vaws knowledge |
 | `.agents/scripts/knowledge_validate.py` | argparse | - | 1 | docs:1, other:1, routing:1, skill-doc:1, test:2 | mechanics | supported | .agents/scripts/knowledge_validate.py | vaws knowledge |
-| `.agents/scripts/remote_artifact_manifest.py` | delegated | - | 4 | policy:1, routing:1 | mechanics | compatibility | .agents/scripts/remote_artifact_manifest.py | vaws remote |
-| `.agents/scripts/remote_artifact_pull.py` | delegated | - | 5 | policy:1, routing:1, skill-doc:1 | mechanics | compatibility | .agents/scripts/remote_artifact_pull.py | vaws remote |
-| `.agents/scripts/remote_artifact_push.py` | delegated | - | 5 | policy:1, routing:1 | mechanics | compatibility | .agents/scripts/remote_artifact_push.py | vaws remote |
-| `.agents/scripts/remote_cleanup.py` | delegated | - | 13 | routing:1 | mechanics | supported | .agents/scripts/remote_cleanup.py | vaws session |
-| `.agents/scripts/remote_exec.py` | delegated | - | 8 | routing:1, test:1 | mechanics | compatibility | .agents/scripts/remote_exec.py | vaws remote |
-| `.agents/scripts/remote_job_collect.py` | delegated | - | 5 | routing:1 | mechanics | compatibility | .agents/scripts/remote_job_collect.py | vaws remote |
-| `.agents/scripts/remote_job_start.py` | delegated | - | 10 | routing:1 | mechanics | compatibility | .agents/scripts/remote_job_start.py | vaws remote |
-| `.agents/scripts/remote_job_status.py` | delegated | - | 4 | policy:1, routing:1 | mechanics | compatibility | .agents/scripts/remote_job_status.py | vaws remote |
-| `.agents/scripts/remote_job_stop.py` | delegated | - | 5 | policy:1, routing:1 | mechanics | compatibility | .agents/scripts/remote_job_stop.py | vaws remote |
-| `.agents/scripts/remote_job_tail.py` | delegated | - | 6 | policy:1, routing:1 | mechanics | compatibility | .agents/scripts/remote_job_tail.py | vaws remote |
-| `.agents/scripts/remote_probe.py` | delegated | - | 4 | docs:1, policy:1, routing:1, test:1 | mechanics | compatibility | .agents/scripts/remote_probe.py | vaws remote |
-| `.agents/scripts/remote_service_logs.py` | delegated | - | 4 | routing:1 | mechanics | supported | .agents/scripts/remote_service_logs.py | vaws serve |
-| `.agents/scripts/remote_service_start.py` | delegated | - | 3 | routing:1 | mechanics | compatibility | .agents/skills/vllm-ascend-serving/scripts/serve_start.py | vaws serve |
-| `.agents/scripts/remote_service_status.py` | delegated | - | 3 | routing:1 | mechanics | compatibility | .agents/skills/vllm-ascend-serving/scripts/serve_status.py | vaws serve |
-| `.agents/scripts/remote_service_stop.py` | delegated | - | 4 | routing:1 | mechanics | compatibility | .agents/skills/vllm-ascend-serving/scripts/serve_stop.py | vaws serve |
-| `.agents/scripts/remote_sync_apply.py` | delegated | - | 6 | routing:1, skill-doc:3 | mechanics | compatibility | .agents/skills/remote-code-parity/scripts/parity_sync.py | vaws sync |
-| `.agents/scripts/remote_sync_plan.py` | delegated | - | 5 | routing:1, skill-doc:3 | mechanics | compatibility | .agents/skills/remote-code-parity/scripts/parity_sync.py | vaws sync |
+| `.agents/scripts/remote_artifact_manifest.py` | argparse | - | 1 | policy:1, routing:1 | mechanics | compatibility | .agents/scripts/remote_artifact_manifest.py | vaws remote |
+| `.agents/scripts/remote_artifact_pull.py` | argparse | - | 2 | policy:1, routing:1, script:1, skill-doc:1 | mechanics | compatibility | .agents/scripts/remote_artifact_pull.py | vaws remote |
+| `.agents/scripts/remote_artifact_push.py` | argparse | - | 2 | policy:1, routing:1 | mechanics | compatibility | .agents/scripts/remote_artifact_push.py | vaws remote |
+| `.agents/scripts/remote_cleanup.py` | delegated | - | 10 | routing:1 | mechanics | supported | .agents/scripts/remote_cleanup.py | vaws session |
+| `.agents/scripts/remote_exec.py` | argparse | - | 5 | docs:1, routing:1, test:1 | mechanics | compatibility | .agents/scripts/remote_exec.py | vaws remote |
+| `.agents/scripts/remote_job_collect.py` | argparse | - | 2 | routing:1 | mechanics | compatibility | .agents/scripts/remote_job_collect.py | vaws remote |
+| `.agents/scripts/remote_job_start.py` | argparse | - | 7 | routing:1 | mechanics | compatibility | .agents/scripts/remote_job_start.py | vaws remote |
+| `.agents/scripts/remote_job_status.py` | argparse | - | 1 | policy:1, routing:1 | mechanics | compatibility | .agents/scripts/remote_job_status.py | vaws remote |
+| `.agents/scripts/remote_job_stop.py` | argparse | - | 2 | policy:1, routing:1 | mechanics | compatibility | .agents/scripts/remote_job_stop.py | vaws remote |
+| `.agents/scripts/remote_job_tail.py` | argparse | - | 3 | policy:1, routing:1 | mechanics | compatibility | .agents/scripts/remote_job_tail.py | vaws remote |
+| `.agents/scripts/remote_probe.py` | argparse | - | 1 | docs:1, policy:1, routing:1, test:1 | mechanics | compatibility | .agents/scripts/remote_probe.py | vaws remote |
+| `.agents/scripts/remote_service_logs.py` | delegated | - | 1 | routing:1 | mechanics | supported | .agents/scripts/remote_service_logs.py | vaws serve |
+| `.agents/scripts/remote_service_start.py` | delegated | - | 0 | routing:1 | mechanics | compatibility | .agents/skills/vllm-ascend-serving/scripts/serve_start.py | vaws serve |
+| `.agents/scripts/remote_service_status.py` | delegated | - | 0 | routing:1 | mechanics | compatibility | .agents/skills/vllm-ascend-serving/scripts/serve_status.py | vaws serve |
+| `.agents/scripts/remote_service_stop.py` | delegated | - | 1 | routing:1 | mechanics | compatibility | .agents/skills/vllm-ascend-serving/scripts/serve_stop.py | vaws serve |
+| `.agents/scripts/remote_sync_apply.py` | delegated | - | 3 | routing:1, skill-doc:3 | mechanics | compatibility | .agents/skills/remote-code-parity/scripts/parity_sync.py | vaws sync |
+| `.agents/scripts/remote_sync_plan.py` | delegated | - | 2 | routing:1, skill-doc:3 | mechanics | compatibility | .agents/skills/remote-code-parity/scripts/parity_sync.py | vaws sync |
 | `.agents/scripts/remote_target_resolve.py` | delegated | - | 3 | routing:1 | mechanics | compatibility | .agents/scripts/remote_target_resolve.py | vaws remote |
-| `.agents/scripts/remote_toolbox_stress.py` | argparse | - | 13 | docs:1, routing:1 | mechanics | harness | .agents/scripts/remote_toolbox_stress.py | - |
 | `.agents/scripts/repo_boundary_check.py` | argparse | - | 6 | docs:2, other:1, policy:3, script:1, test:3 | mechanics | supported | .agents/scripts/repo_boundary_check.py | vaws lint |
 | `.agents/scripts/run_manifest.py` | argparse | init, validate | 11 | docs:3, other:1, policy:2, routing:1, test:2 | mechanics | supported | .agents/scripts/run_manifest.py | vaws manifest |
 | `.agents/scripts/skill_catalog.py` | argparse | - | 2 | other:1, test:2 | mechanics | supported | .agents/scripts/skill_catalog.py | vaws lint |
@@ -507,9 +507,9 @@ option.
 | `.agents/skills/vllm-ascend-pd-serving/scripts/pd_serving.py` | argparse | plan, start, status, smoke, stop | 4 | docs:1, routing:1, skill-doc:2, test:1 | mixed | supported | .agents/skills/vllm-ascend-pd-serving/scripts/pd_serving.py | vaws serve |
 | `.agents/skills/vllm-ascend-performance-regression/scripts/performance_regression.py` | argparse | plan, record, normalize, analyze | 9 | docs:1, routing:1, skill-doc:3, test:1 | mixed | supported | .agents/skills/vllm-ascend-performance-regression/scripts/performance_regression.py | guidance |
 | `.agents/skills/vllm-ascend-serving/scripts/serve_probe_npus.py` | argparse | - | 3 | docs:2, mirror:1, routing:2, skill-doc:6 | mechanics | compatibility | .agents/skills/vllm-ascend-serving/scripts/serve_probe_npus.py | vaws machine |
-| `.agents/skills/vllm-ascend-serving/scripts/serve_start.py` | argparse | - | 16 | docs:1, mirror:1, routing:1, script:4, skill-doc:12, test:2 | mechanics | supported | .agents/skills/vllm-ascend-serving/scripts/serve_start.py | vaws serve |
-| `.agents/skills/vllm-ascend-serving/scripts/serve_status.py` | argparse | - | 2 | docs:1, mirror:1, routing:1, script:1, skill-doc:4 | mechanics | supported | .agents/skills/vllm-ascend-serving/scripts/serve_status.py | vaws serve |
-| `.agents/skills/vllm-ascend-serving/scripts/serve_stop.py` | argparse | - | 3 | docs:1, mirror:1, routing:1, script:4, skill-doc:13, test:1 | mechanics | supported | .agents/skills/vllm-ascend-serving/scripts/serve_stop.py | vaws serve |
+| `.agents/skills/vllm-ascend-serving/scripts/serve_start.py` | argparse | - | 16 | docs:1, mirror:1, routing:1, script:5, skill-doc:12, test:2 | mechanics | supported | .agents/skills/vllm-ascend-serving/scripts/serve_start.py | vaws serve |
+| `.agents/skills/vllm-ascend-serving/scripts/serve_status.py` | argparse | - | 2 | docs:1, mirror:1, routing:1, script:2, skill-doc:4 | mechanics | supported | .agents/skills/vllm-ascend-serving/scripts/serve_status.py | vaws serve |
+| `.agents/skills/vllm-ascend-serving/scripts/serve_stop.py` | argparse | - | 3 | docs:1, mirror:1, routing:1, script:5, skill-doc:13, test:1 | mechanics | supported | .agents/skills/vllm-ascend-serving/scripts/serve_stop.py | vaws serve |
 | `.trae/skills/modelscope/scripts/download_from_modelscope.py` | argparse | - | 12 | mirror:2, routing:1, script:2, skill-doc:1, test:1 | mechanics | generated | .agents/skills/modelscope/scripts/download_from_modelscope.py | - |
 | `.trae/skills/modelscope/scripts/modelscope_auto.py` | argparse | ensure, status, verify, worker | 11 | mirror:1, routing:1, script:1, skill-doc:1, test:1 | mechanics | generated | .agents/skills/modelscope/scripts/modelscope_auto.py | - |
 | `.trae/skills/modelscope/scripts/modelscope_download_status.py` | argparse | - | 3 | mirror:1, routing:1, script:1, skill-doc:1, test:1 | mechanics | generated | .agents/skills/modelscope/scripts/modelscope_download_status.py | - |

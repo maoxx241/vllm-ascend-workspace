@@ -13,7 +13,7 @@ if str(LIB_DIR) not in sys.path:
     sys.path.insert(0, str(LIB_DIR))
 
 from vaws_local_state import resolve_inventory_read_path, shared_inventory_path, shared_workspace_root
-from vaws_remote_toolbox import _load_inventory, RemoteToolboxError
+from vaws_remote_target import load_inventory, RemoteTargetError
 from vaws_session_state import sessions_root
 
 
@@ -53,8 +53,8 @@ class SharedInventoryStateTests(unittest.TestCase):
             resolve_inventory_read_path(preferred, repo_root=self.linked),
             preferred.resolve(),
         )
-        with self.assertRaises(RemoteToolboxError):
-            _load_inventory(self.linked)
+        with self.assertRaises(RemoteTargetError):
+            load_inventory(self.linked)
 
         preferred.parent.mkdir(parents=True)
         preferred.write_text('{"schema_version":1,"machines":[]}\n', encoding="utf-8")
@@ -64,8 +64,8 @@ class SharedInventoryStateTests(unittest.TestCase):
         clone = Path(self.temp.name) / "clone"
         subprocess.run(["git", "clone", str(self.primary), str(clone)], check=True, capture_output=True)
         self.assertEqual(shared_workspace_root(clone), clone.resolve())
-        with self.assertRaises(RemoteToolboxError):
-            _load_inventory(clone)
+        with self.assertRaises(RemoteTargetError):
+            load_inventory(clone)
 
     def test_parity_machine_path_uses_same_shared_inventory(self) -> None:
         import importlib.util
@@ -92,7 +92,7 @@ class SharedInventoryStateTests(unittest.TestCase):
         inventory = {"schema_version": 1, "machines": [{"alias": "a3"}]}
         inventory_path.write_text(json.dumps(inventory), encoding="utf-8")
 
-        loaded, loaded_path = _load_inventory(self.linked)
+        loaded, loaded_path = load_inventory(self.linked)
         self.assertEqual(loaded, inventory)
         self.assertEqual(loaded_path, inventory_path.resolve())
         self.assertNotEqual(sessions_root(self.primary).resolve(), sessions_root(self.linked).resolve())

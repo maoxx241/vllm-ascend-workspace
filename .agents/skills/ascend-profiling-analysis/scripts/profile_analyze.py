@@ -22,13 +22,23 @@ Behavior:
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+_ROOT = Path(__file__).resolve().parents[4]
+_LIB = _ROOT / ".agents" / "lib"
+if str(_LIB) not in sys.path:
+    sys.path.insert(0, str(_LIB))
+
+from vaws_venv import ensure_workspace_interpreter  # noqa: E402
+
+ensure_workspace_interpreter(repo_root=_ROOT)
+
 import argparse
 import json
 import shutil
 import shlex
-import sys
 import time
-from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 try:

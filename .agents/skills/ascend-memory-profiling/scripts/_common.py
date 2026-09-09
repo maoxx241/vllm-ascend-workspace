@@ -21,13 +21,12 @@ for _p in (str(LIB_DIR), str(MM_SCRIPTS)):
         sys.path.insert(0, _p)
 
 from vaws_local_state import allocate_run_dir  # noqa: E402
-from vaws_remote_toolbox import (  # noqa: E402
+from vaws_remote_dev import ssh_argv, ssh_exec, ssh_run_bytes  # noqa: E402
+from vaws_remote_target import (  # noqa: E402
     SshEndpoint,
     container_endpoint_from_record,
     emit_progress as _lib_emit_progress,
-    ssh_exec,
 )
-from vaws_ssh import base_ssh_options  # noqa: E402
 from vaws_session_state import (  # noqa: E402
     load_session_lookup,
     session_record_for_execution,
@@ -46,30 +45,23 @@ ENV_PREAMBLE = (
 )
 
 
-# SshEndpoint and ssh_exec are imported from vaws_remote_toolbox. The local
-# ``_ssh_base_cmd`` stays for the upload / write / background helpers below,
-# which historically ran without a connect timeout.
-
 def _ssh_base_cmd(endpoint: SshEndpoint) -> list[str]:
-    return [
-        "ssh",
-        *base_ssh_options(),
-        "-p", str(endpoint.port),
-        endpoint.destination(),
-    ]
+    return ssh_argv(endpoint)
 
 
 def ssh_upload(endpoint: SshEndpoint, local_path: Path, remote_path: str) -> None:
     """Upload a file to the remote machine via stdin redirect."""
-    cmd = [*_ssh_base_cmd(endpoint), f"cat > {shlex.quote(remote_path)}"]
     with open(local_path, "rb") as f:
-        subprocess.run(cmd, stdin=f, check=True, capture_output=True)
+        result = ssh_run_bytes(endpoint, f"cat > {shlex.quote(remote_path)}", stdin=f.read())
+    if result.returncode != 0:
+        raise RuntimeError(f"ssh_upload failed (rc={result.returncode}): {result.stderr!r}")
 
 
 def ssh_write_text(endpoint: SshEndpoint, content: str, remote_path: str) -> None:
     """Write text content to a remote file via stdin (avoids shell quoting issues)."""
-    cmd = [*_ssh_base_cmd(endpoint), f"cat > {shlex.quote(remote_path)}"]
-    subprocess.run(cmd, input=content.encode(), check=True, capture_output=True)
+    result = ssh_run_bytes(endpoint, f"cat > {shlex.quote(remote_path)}", stdin=content.encode())
+    if result.returncode != 0:
+        raise RuntimeError(f"ssh_write_text failed (rc={result.returncode}): {result.stderr!r}")
 
 
 def ssh_bg_exec(

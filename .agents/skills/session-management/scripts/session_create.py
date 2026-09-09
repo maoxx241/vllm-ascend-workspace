@@ -47,7 +47,8 @@ from vaws_local_state import (  # noqa: E402
     load_workspace_identity,
     utc_now_iso,
 )
-from vaws_ssh import base_ssh_options  # noqa: E402
+from vaws_remote_dev import ssh_exec  # noqa: E402
+from vaws_remote_target import SshEndpoint  # noqa: E402
 from vaws_validate import ValidationError, parse_device_csv  # noqa: E402
 
 PROGRESS_SENTINEL = "__VAWS_SESSION_PROGRESS__="
@@ -207,17 +208,15 @@ def host_port_available(record: dict[str, Any]) -> Any:
 
     def check(port: int) -> bool:
         script = f"! ss -ltnH 2>/dev/null | awk '{{print $4}}' | grep -Eq '[:.]({port})$'"
-        cmd = [
-            "ssh",
-            *base_ssh_options(),
-            "-p",
-            str(host.get("port", 22)),
-            f"{host.get('user', 'root')}@{host['ip']}",
-            "bash",
-            "-c",
-            shlex.quote(script),
-        ]
-        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        result = ssh_exec(
+            SshEndpoint(
+                host=str(host["ip"]),
+                port=int(host.get("port", 22)),
+                user=str(host.get("user", "root")),
+            ),
+            script,
+            check=False,
+        )
         return result.returncode == 0
 
     return check
@@ -243,17 +242,15 @@ else
   exit 42
 fi
 """
-    cmd = [
-        "ssh",
-        *base_ssh_options(),
-        "-p",
-        str(host.get("port", 22)),
-        f"{host.get('user', 'root')}@{host['ip']}",
-        "bash",
-        "-c",
-        shlex.quote(script),
-    ]
-    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    result = ssh_exec(
+        SshEndpoint(
+            host=str(host["ip"]),
+            port=int(host.get("port", 22)),
+            user=str(host.get("user", "root")),
+        ),
+        script,
+        check=False,
+    )
     if result.returncode != 0:
         return None
     return _parse_listening_ports(result.stdout)

@@ -119,6 +119,18 @@
     {
       "prefix": ".agents/skills/remote-toolbox/",
       "why": "docs/target-state.md must name the deleted skill package P13 forbids, distinct from vaws_remote_toolbox.py."
+    },
+    {
+      "prefix": ".agents/lib/vaws_remote_toolbox.py",
+      "why": "docs/target-state.md deletion inventory must name the library G3b removes. The specification is not a routing claim that the file still exists."
+    },
+    {
+      "prefix": ".agents/lib/vaws_ssh.py",
+      "why": "docs/target-state.md deletion inventory must name the SSH helper G3b removes."
+    },
+    {
+      "prefix": ".agents/scripts/remote_toolbox_stress.py",
+      "why": "docs/target-state.md and the frozen CLI historical table name the deleted stress harness."
     }
   ],
   "allow_prefixes_why": "\u002eremote-dev/state/ is deliberately absent: that path is post-migration drift and must fail. Placeholders and untracked state roots are the only silent exceptions.",

@@ -68,7 +68,9 @@ compatibility backend for managed sessions, sync, service adapters, and cleanup.
 - `.agents/tests/knowledge_client_adapter.py` is the tracked protocol adapter for the vaws-knowledge conformance kit shipped with the package.
 - `.agents/lib/vaws_redaction.py` is the scaffold redaction policy (BLOCK/EXPORT and recursive scan) over `vaws_knowledge.redact`. Detection rules and the live profile are declared by that package.
 - `.agents/lib/vaws_session_id.py` and `.agents/lib/vaws_session_state.py` are the shared libraries for session identity, state, locks, and leases.
-- `.agents/lib/vaws_remote_toolbox.py` is the shared library for remote target resolution, SSH execution, job observation, artifact streaming, sync adapters, service adapters, and cleanup.
+- `.agents/lib/vaws_remote_dev.py` injects scaffold environment into the installed `vaws-remote-dev` package and is the only scaffold place that may call its SSH transport.
+- `.agents/lib/vaws_remote_target.py` maps machines and sessions to host/container endpoints. It is not SSH transport.
+- `.agents/lib/vaws_remote_adapters.py` keeps service, sync, and cleanup CLIs that remote-dev v0.2.0 cannot express.
 - `.agents/lib/vaws_validate.py` is the shared validation library for agent-facing ids, environment names, path boundaries, and NPU device lists.
 - `.agents/lib/vaws_coordinator_launch.py` launches the installed vaws-coordinator package (task identity, `vaws_*` tools, runtime pool).
 - `AGENTS.md` carries repository-wide routing rules and mandatory decision gates.
@@ -117,7 +119,6 @@ Current primary helpers:
 - `scripts/remote_artifact_pull.py`
 - `scripts/remote_artifact_push.py`
 - `scripts/remote_cleanup.py`
-- `scripts/remote_toolbox_stress.py`
 - `remote-code-parity/scripts/parity_sync.py`
 - `remote-code-parity/scripts/remote_code_parity.py`
 - `remote-code-parity/scripts/install_consent.py`
@@ -249,13 +250,15 @@ If you change `session-management`, update these together:
 - `.agents/lib/vaws_session_state.py`
 - `AGENTS.md`, `README.md`, and this file when routing or local-state behavior changes
 
-If you change the remote toolbox library, update these together:
+If you change remote transport or target resolution, update these together:
 
 - `.agents/scripts/remote_*.py`
-- `.agents/lib/vaws_remote_toolbox.py`
-- affected wrapper scripts that reuse toolbox primitives
+- `.agents/lib/vaws_remote_dev.py`
+- `.agents/lib/vaws_remote_target.py`
+- `.agents/lib/vaws_remote_adapters.py`
+- affected skill `_common.py` files that call `ssh_exec` / `ssh_stream` / `ssh_argv`
 - `.agents/lib/vaws_validate.py` when changing accepted id, env, path, or device syntax
-- `.agents/tests/test_vaws_scaffold_safety.py` when changing safety validation behavior
+- `.agents/tests/test_vaws_scaffold_safety.py` and `.agents/tests/test_remote_dev_transport.py`
 - `AGENTS.md`, `README.md`, and this file when routing or output contracts change
 
 If you change `vllm-ascend-serving`, update these together:

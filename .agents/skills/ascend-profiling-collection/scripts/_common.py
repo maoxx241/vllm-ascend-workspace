@@ -57,9 +57,9 @@ def _load_serving_common():
 
 SERVING = _load_serving_common()
 # Loading serving common put LIB_DIR on sys.path.
-from vaws_ssh import base_ssh_options  # noqa: E402
 from vaws_local_state import allocate_run_dir, safe_run_token  # noqa: E402
-from vaws_remote_toolbox import ascend_env_preamble  # noqa: E402
+from vaws_remote_dev import ssh_argv  # noqa: E402
+from vaws_remote_target import ascend_env_preamble  # noqa: E402
 
 SshEndpoint = SERVING.SshEndpoint
 ssh_exec = SERVING.ssh_exec
@@ -115,7 +115,7 @@ def unique_collection_run_dir(
 
 
 # ---------------------------------------------------------------------------
-# Ascend env preamble (canonical form lives in vaws_remote_toolbox)
+# Ascend env preamble (canonical form lives in vaws_remote_target)
 # ---------------------------------------------------------------------------
 
 ASCEND_ENV_PREAMBLE = ascend_env_preamble()
@@ -142,16 +142,10 @@ def open_local_tunnel(ep, remote_port: int):
     """
     local_port = _find_free_local_port()
     cmd = [
-        "ssh",
-        # mux=False: the tunnel must own a dedicated long-lived connection.
-        # With ControlMaster the `-N -L` client delegates the forward to the
-        # mux master and exits rc=0 immediately, tearing the tunnel down.
-        *base_ssh_options(mux=False),
+        *ssh_argv(ep, long_stream=True),
         "-o", "ExitOnForwardFailure=yes",
         "-N",
         "-L", f"127.0.0.1:{local_port}:127.0.0.1:{remote_port}",
-        "-p", str(ep.port),
-        ep.destination(),
     ]
     proc = subprocess.Popen(
         cmd,

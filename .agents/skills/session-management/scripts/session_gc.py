@@ -21,7 +21,8 @@ LIB_DIR = ROOT / ".agents" / "lib"
 if str(LIB_DIR) not in sys.path:
     sys.path.insert(0, str(LIB_DIR))
 
-from vaws_ssh import base_ssh_options  # noqa: E402
+from vaws_remote_dev import ssh_exec  # noqa: E402
+from vaws_remote_target import SshEndpoint  # noqa: E402
 from vaws_session_state import load_index, load_leases, load_session_lookup, release_all_session_leases, session_live_leases  # noqa: E402
 
 REAP_SSH_TIMEOUT_SECONDS = 20
@@ -37,25 +38,14 @@ def probe_container_alive(host: str, port: int, user: str = "root") -> dict[str,
     Returns a verdict with ``alive`` True/False/None. ``None`` means the probe
     was inconclusive (timeout / transient), so the caller must NOT reap.
     """
-    cmd = [
-        "ssh",
-        *base_ssh_options(),
-        "-o",
-        f"ConnectTimeout={REAP_SSH_TIMEOUT_SECONDS}",
-        "-p",
-        str(port),
-        f"{user}@{host}",
+    result = ssh_exec(
+        SshEndpoint(host=host, port=port, user=user),
         "true",
-    ]
-    try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=REAP_SSH_TIMEOUT_SECONDS + 10,
-        )
-    except subprocess.TimeoutExpired:
+        check=False,
+        timeout=REAP_SSH_TIMEOUT_SECONDS + 10,
+        connect_timeout=REAP_SSH_TIMEOUT_SECONDS,
+    )
+    if result.returncode == 255 and "timed out" in (result.stderr or ""):
         return {"alive": None, "reason": "ssh probe timed out (inconclusive)"}
     if result.returncode == 0:
         return {"alive": True, "reason": "container ssh reachable"}
@@ -207,9 +197,12 @@ print(json.dumps(result))
     request = {"name": name, "devices": devices if devices is not None else session.get("leases", {}).get("npu_devices", [])}
     command = shlex.join(["python3", "-c", source + "\n" + runner, json.dumps(request)])
     try:
-        result = subprocess.run(
-            ["ssh", *base_ssh_options(), "-o", f"ConnectTimeout={REAP_SSH_TIMEOUT_SECONDS}", "-p", str(port), f"{user}@{host}", command],
-            capture_output=True, text=True, check=False, timeout=60,
+        result = ssh_exec(
+            SshEndpoint(host=host, port=port, user=user),
+            command,
+            check=False,
+            timeout=60,
+            connect_timeout=REAP_SSH_TIMEOUT_SECONDS,
         )
         if result.returncode:
             return {"alive": None, "reason": "host confirmation failed", "returncode": result.returncode}
