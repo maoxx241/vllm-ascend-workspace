@@ -1110,9 +1110,8 @@ def main(argv: list[str] | None = None) -> int:
                     state_repo_root=target.state_repo_root,
                 )
                 release_service_port(
-                    repo_root=target.state_repo_root,
-                    machine_alias=alias,
-                    session_id=target.session_id,
+                    session=target.session,
+                    host_endpoint=target.host_endpoint,
                     port=prev_state.get("port"),
                 )
             else:
@@ -1150,9 +1149,8 @@ def main(argv: list[str] | None = None) -> int:
                         state_repo_root=target.state_repo_root,
                     )
                     release_service_port(
-                        repo_root=target.state_repo_root,
-                        machine_alias=alias,
-                        session_id=target.session_id,
+                        session=target.session,
+                        host_endpoint=target.host_endpoint,
                         port=prev_state.get("port"),
                     )
                 else:
@@ -1252,17 +1250,14 @@ def main(argv: list[str] | None = None) -> int:
         emit_progress("allocate-port", "allocating session service port")
         port_available = remote_port_availability(ep)
         port = allocate_service_port(
-            repo_root=target.state_repo_root,
-            machine_alias=alias,
-            session_id=target.session_id,
+            session=target.session,
+            host_endpoint=target.host_endpoint,
             requested_port=args.port,
-            port_available=port_available,
         )
         if not remote_port_available(ep, port):
             release_service_port(
-                repo_root=target.state_repo_root,
-                machine_alias=alias,
-                session_id=target.session_id,
+                session=target.session,
+                host_endpoint=target.host_endpoint,
                 port=port,
             )
             print_json({
@@ -1296,9 +1291,8 @@ def main(argv: list[str] | None = None) -> int:
         else:
             emit_progress("launch", "starting vllm serve")
         port_release = {
-            "repo_root": target.state_repo_root,
-            "machine_alias": alias,
-            "session_id": target.session_id,
+            "session": target.session,
+            "host_endpoint": target.host_endpoint,
             "port": port,
         }
         try:

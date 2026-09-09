@@ -5,9 +5,13 @@ Status: current
 The remote development substrate used to live in this repository at
 `.remote-dev/`. It is now the public package
 [`vaws-remote-dev`](https://github.com/vllm-ascend-workspace/remote-dev)
-(`v0.3.0`, locked by `uv.lock`). This document is the consumer-side
+(`v0.3.0`, currently locked by `uv.lock`). This document is the consumer-side
 contract. See [target-state.md](target-state.md) for the destination
 this consumption realises.
+
+The closeout candidate requires remote-dev 0.4.0 for separate-channel
+stream callbacks. It is checked with a local candidate package installation;
+the published tag and lock update follow the remaining contract alignment.
 
 ## 1. Why a package
 
@@ -82,6 +86,6 @@ Skills do not construct SSH options. They call `.agents/lib/vaws_remote_dev.py`:
 
 `run_stream`, `open_local_forward`, and `run_interactive` refuse a
 multiplexed endpoint (`RemoteExecutionError`). Do not pass `ssh_mux=True`
-for those calls. If the package is missing or older than v0.3.0,
+for those calls. If the package is missing or older than v0.4.0,
 `require_transport()` fails and names `uv sync` as the remedy. There is no
 fallback to raw `ssh`.

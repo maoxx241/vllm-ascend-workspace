@@ -143,9 +143,8 @@ def main(argv: list[str] | None = None) -> int:
         )
         if status == "stopped":
             release_service_port(
-                repo_root=target.state_repo_root,
-                machine_alias=alias,
-                session_id=target.session_id,
+                session=target.session,
+                host_endpoint=target.host_endpoint,
                 port=state.get("port"),
             )
 

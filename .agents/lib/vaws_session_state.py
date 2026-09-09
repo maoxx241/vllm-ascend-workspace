@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Session state and lease helpers for VAWS parallel agent sessions."""
+"""Session state helpers. Resource ownership is the host coordinator."""
 
 from __future__ import annotations
 
@@ -24,11 +24,12 @@ from vaws_validate import parse_device_csv
 
 SESSION_SCHEMA_VERSION = 1
 INDEX_SCHEMA_VERSION = 1
-LEASE_SCHEMA_VERSION = 1
 SESSION_ROOT = STATE_DIR / "sessions"
 SESSION_INDEX_PATH = SESSION_ROOT / "index.json"
-SESSION_LEASES_PATH = SESSION_ROOT / "leases.json"
 SESSION_LOCK_DIR = SESSION_ROOT / "locks"
+UNSUPPORTED_RECEIPT = (
+    "session has no coordinator receipt; recreate the session or reconcile host reservations"
+)
 DEFAULT_LOCK_TIMEOUT_SECONDS = 30.0
 DEFAULT_LOCK_POLL_SECONDS = 0.1
 DEFAULT_STALE_LOCK_SECONDS = 60 * 60 * 6
@@ -410,8 +411,46 @@ def _empty_index() -> dict[str, Any]:
     return {"schema_version": INDEX_SCHEMA_VERSION, "updated_at": utc_now_iso(), "sessions": {}}
 
 
-def _empty_leases() -> dict[str, Any]:
-    return {"schema_version": LEASE_SCHEMA_VERSION, "updated_at": utc_now_iso(), "leases": {}}
+def session_receipt(session: dict[str, Any]) -> dict[str, Any]:
+    receipt = (session.get("leases") or {}).get("receipt")
+    if not isinstance(receipt, dict):
+        raise SessionStateError(UNSUPPORTED_RECEIPT)
+    if not receipt.get("task_id") or receipt.get("fence_token") is None or not receipt.get("coordination_epoch"):
+        raise SessionStateError(UNSUPPORTED_RECEIPT)
+    if not receipt.get("workspace_id") or not receipt.get("session_id"):
+        raise SessionStateError(UNSUPPORTED_RECEIPT)
+    return receipt
+
+
+def host_endpoint_from_session(session: dict[str, Any]) -> dict[str, Any]:
+    remote = session.get("remote") or {}
+    host = remote.get("host")
+    if not host:
+        raise SessionStateError("session is missing a host endpoint")
+    return {
+        "host": host,
+        "port": int(remote.get("host_port", 22)),
+        "user": str(remote.get("host_user") or "root"),
+    }
+
+
+def session_resource_client(host_endpoint: Any, *, run=None, state_dir: str | None = None):
+    from vaws_coordinator.host_queue import HostQueue
+    from vaws_coordinator.session_resources import SessionResourceClient, remote_dev_host_run
+
+    return SessionResourceClient(
+        HostQueue(run or remote_dev_host_run),
+        host_endpoint,
+        state_dir=state_dir,
+    )
+
+
+def _client_error(exc: BaseException) -> SessionStateError:
+    from vaws_coordinator.session_resources import SessionResourceError
+
+    if isinstance(exc, SessionResourceError):
+        return SessionStateError(str(exc))
+    return SessionStateError(str(exc))
 
 
 def load_index(repo_root: Path = ROOT) -> dict[str, Any]:
@@ -432,90 +471,21 @@ def save_index(index: dict[str, Any], repo_root: Path = ROOT) -> Path:
     return path
 
 
-def load_leases(repo_root: Path = ROOT) -> dict[str, Any]:
-    data = _load_json(session_leases_path(repo_root), _empty_leases())
-    if not isinstance(data, dict) or data.get("schema_version") != LEASE_SCHEMA_VERSION:
-        raise SessionStateError("unsupported sessions lease schema")
-    data.setdefault("leases", {})
-    if not isinstance(data["leases"], dict):
-        raise SessionStateError("sessions leases must contain a leases object")
-    return data
-
-
-def save_leases(leases: dict[str, Any], repo_root: Path = ROOT) -> Path:
-    leases["schema_version"] = LEASE_SCHEMA_VERSION
-    leases["updated_at"] = utc_now_iso()
-    path = session_leases_path(repo_root)
-    _atomic_write_json(path, leases)
-    return path
-
-
-def _machine_lease_bucket(leases: dict[str, Any], machine_alias: str) -> dict[str, Any]:
-    bucket = leases.setdefault("leases", {}).setdefault(machine_alias, {})
-    bucket.setdefault("npu_devices", {})
-    bucket.setdefault("container_ssh_ports", {})
-    bucket.setdefault("service_ports", {})
-    return bucket
-
-
-def _resource_owner(bucket: dict[str, Any], kind: str, value: str) -> str | None:
-    record = bucket.get(kind, {}).get(value)
-    if isinstance(record, dict):
-        owner = record.get("session_id")
-        return str(owner) if owner is not None else None
-    return None
-
-
-def _reserve(bucket: dict[str, Any], kind: str, value: int | str, session_id: str) -> None:
-    key = str(value)
-    owner = _resource_owner(bucket, kind, key)
-    if owner is not None and owner != session_id:
-        raise SessionStateError(f"{kind[:-1]} {key} is already leased by session {owner}")
-    bucket.setdefault(kind, {})[key] = {"session_id": session_id, "updated_at": utc_now_iso()}
-
-
-def _select_port(
-    bucket: dict[str, Any],
-    kind: str,
-    session_id: str,
-    port_range: str,
-    *,
-    preferred: int | None = None,
-    is_available: Callable[[int], bool] | None = None,
-) -> int:
-    start, end = parse_port_range(port_range)
-    candidates: Iterable[int] = [preferred] if preferred is not None else range(start, end + 1)
-    for port in candidates:
-        if port is None:
-            continue
-        if port < start or port > end:
-            raise SessionStateError(f"port {port} is outside allowed range {port_range}")
-        owner = _resource_owner(bucket, kind, str(port))
-        if owner is not None and owner != session_id:
-            if preferred is not None:
-                raise SessionStateError(f"port {port} is already leased by session {owner}")
-            continue
-        if is_available is not None and not is_available(port):
-            if preferred is not None:
-                raise SessionStateError(f"port {port} is not available on the remote host/container")
-            continue
-        _reserve(bucket, kind, port, session_id)
-        return port
-    raise SessionStateError(f"no free port found in range {port_range}")
-
-
 def allocate_session_leases(
     *,
-    repo_root: Path = ROOT,
-    machine_alias: str,
+    host_endpoint: Any,
+    workspace_id: str,
     session_id: str,
+    container_name: str | None = None,
     requested_devices: list[int] | None = None,
     npu_count: int | None = None,
-    available_devices: list[int] | None = None,
     container_ssh_port: int | None = None,
     container_ssh_port_range: str = DEFAULT_CONTAINER_SSH_PORT_RANGE,
-    port_available: Callable[[int], bool] | None = None,
+    run=None,
+    agent_alias: str | None = None,
 ) -> dict[str, Any]:
+    from vaws_coordinator.session_resources import receipt_from_reserve
+
     sid = require_session_id(session_id)
     if npu_count is not None and npu_count < 1:
         raise SessionStateError("--npu-count must be >= 1")
@@ -523,158 +493,168 @@ def allocate_session_leases(
         requested_devices = parse_device_csv(",".join(str(item) for item in requested_devices)) or []
     if requested_devices is not None and npu_count is not None:
         raise SessionStateError("use only one of --devices or --npu-count")
-    available_set = set(available_devices) if available_devices is not None else None
-    occupancy_unavailable = "cannot allocate NPU devices: host occupancy is unavailable"
-    with file_lock(session_lock_dir(repo_root) / "leases.lock"):
-        leases = load_leases(repo_root)
-        bucket = _machine_lease_bucket(leases, machine_alias)
-        allocated_devices: list[int] = []
-        if requested_devices is not None:
-            if requested_devices and available_set is None:
-                # Unknown occupancy is not an empty free set. An explicit
-                # device list must not bypass a failed or unreadable probe.
-                raise SessionStateError(occupancy_unavailable)
-            if available_set is not None:
-                missing = sorted(set(requested_devices) - available_set)
-                if missing:
-                    # "Not available" covers both absent and busy on purpose:
-                    # the caller passes free devices, not visible ones, so a
-                    # device that exists but is in use lands here too. Saying
-                    # "not visible" would send the reader looking for a
-                    # hardware or driver problem that is not there.
-                    raise SessionStateError(
-                        f"requested NPU devices are not available on host (absent or in use "
-                        f"by another process): {missing}; available={sorted(available_set)}"
-                    )
-            allocated_devices = list(requested_devices)
-        elif npu_count:
-            if available_set is None:
-                # Without a host probe we cannot know how many NPUs exist or
-                # which are busy; guessing a fixed device range would hand out
-                # devices that may not exist. Explicit --devices is not a
-                # bypass: that path fails closed on unknown occupancy too.
-                raise SessionStateError(occupancy_unavailable)
-            candidates = sorted(available_set)
-            for dev in candidates:
-                if _resource_owner(bucket, "npu_devices", str(dev)) in {None, sid}:
-                    allocated_devices.append(dev)
-                if len(allocated_devices) >= npu_count:
-                    break
-            if len(allocated_devices) < npu_count:
-                raise SessionStateError(
-                    f"not enough allocatable NPU devices for session {sid}: "
-                    f"{len(allocated_devices)} of {npu_count} after excluding devices busy on "
-                    f"the host and devices leased in this workspace "
-                    f"(host-free={sorted(available_set)})"
-                )
-
-        for dev in allocated_devices:
-            _reserve(bucket, "npu_devices", dev, sid)
-        port = _select_port(
-            bucket,
-            "container_ssh_ports",
-            sid,
-            container_ssh_port_range,
-            preferred=container_ssh_port,
-            is_available=port_available,
+    client = session_resource_client(host_endpoint, run=run)
+    try:
+        payload = client.reserve(
+            workspace_id=workspace_id,
+            session_id=sid,
+            container_name=container_name,
+            devices=requested_devices,
+            npu_count=npu_count,
+            container_ssh_port=container_ssh_port,
+            container_ssh_port_range=container_ssh_port_range,
+            agent_alias=agent_alias,
         )
-        save_leases(leases, repo_root)
-    return {"npu_devices": allocated_devices, "container_ssh_port": port}
+    except Exception as exc:
+        raise _client_error(exc) from exc
+    receipt = receipt_from_reserve(payload, workspace_id=workspace_id, session_id=sid)
+    return {
+        "npu_devices": list(payload.get("npu_devices") or []),
+        "container_ssh_port": payload.get("container_ssh_port"),
+        "service_ports": list(payload.get("service_ports") or []),
+        "receipt": receipt,
+        "payload": payload,
+    }
 
 
 def allocate_service_port(
     *,
-    repo_root: Path = ROOT,
-    machine_alias: str,
-    session_id: str,
+    session: dict[str, Any],
+    host_endpoint: Any | None = None,
     requested_port: int | None = None,
     serving_port_range: str = DEFAULT_SERVING_PORT_RANGE,
-    port_available: Callable[[int], bool] | None = None,
+    run=None,
 ) -> int:
-    sid = require_session_id(session_id)
-    with file_lock(session_lock_dir(repo_root) / "leases.lock"):
-        leases = load_leases(repo_root)
-        bucket = _machine_lease_bucket(leases, machine_alias)
-        port = _select_port(
-            bucket,
-            "service_ports",
-            sid,
-            serving_port_range,
-            preferred=requested_port,
-            is_available=port_available,
+    receipt = session_receipt(session)
+    client = session_resource_client(
+        host_endpoint or host_endpoint_from_session(session),
+        run=run,
+        state_dir=receipt.get("state_dir"),
+    )
+    try:
+        payload = client.reserve_service_port(
+            task_id=receipt["task_id"],
+            fence_token=int(receipt["fence_token"]),
+            coordination_epoch=str(receipt["coordination_epoch"]),
+            workspace_id=str(receipt["workspace_id"]),
+            session_id=str(receipt["session_id"]),
+            requested_port=requested_port,
+            serving_port_range=serving_port_range,
         )
-        save_leases(leases, repo_root)
+    except Exception as exc:
+        raise _client_error(exc) from exc
+    port = int(payload.get("port") or payload.get("container_ssh_port") or 0)
+    if port <= 0:
+        raise SessionStateError("host did not return a service port")
+    leases = dict(session.get("leases") or {})
+    ports = [int(item) for item in (leases.get("service_ports") or [])]
+    if port not in ports:
+        ports.append(port)
+    leases["service_ports"] = ports
+    session["leases"] = leases
     return port
 
 
 def release_service_port(
     *,
-    repo_root: Path = ROOT,
-    machine_alias: str,
-    session_id: str,
-    port: int | None,
+    session: dict[str, Any] | None = None,
+    port: int | None = None,
+    host_endpoint: Any | None = None,
+    run=None,
+    repo_root: Path | None = None,
+    machine_alias: str | None = None,
+    session_id: str | None = None,
 ) -> None:
+    del repo_root, machine_alias
     if port is None:
         return
-    sid = require_session_id(session_id)
-    with file_lock(session_lock_dir(repo_root) / "leases.lock"):
-        leases = load_leases(repo_root)
-        bucket = _machine_lease_bucket(leases, machine_alias)
-        record = bucket.get("service_ports", {}).get(str(port))
-        if isinstance(record, dict) and record.get("session_id") == sid:
-            bucket["service_ports"].pop(str(port), None)
-            save_leases(leases, repo_root)
+    if session is None:
+        raise SessionStateError(UNSUPPORTED_RECEIPT)
+    receipt = session_receipt(session)
+    client = session_resource_client(
+        host_endpoint or host_endpoint_from_session(session),
+        run=run,
+        state_dir=receipt.get("state_dir"),
+    )
+    try:
+        client.release_service_port(
+            task_id=receipt["task_id"],
+            fence_token=int(receipt["fence_token"]),
+            coordination_epoch=str(receipt["coordination_epoch"]),
+            workspace_id=str(receipt["workspace_id"]),
+            session_id=str(session_id or receipt["session_id"]),
+            port=int(port),
+        )
+    except Exception as exc:
+        raise _client_error(exc) from exc
+    leases = dict(session.get("leases") or {})
+    leases["service_ports"] = [
+        int(item) for item in (leases.get("service_ports") or []) if int(item) != int(port)
+    ]
+    session["leases"] = leases
 
 
 def session_live_leases(
     *,
+    session: dict[str, Any] | None = None,
     repo_root: Path = ROOT,
-    machine_alias: str,
-    session_id: str,
+    machine_alias: str | None = None,
+    session_id: str | None = None,
 ) -> dict[str, list[int]]:
-    sid = require_session_id(session_id)
-    leases = load_leases(repo_root)
-    bucket = _machine_lease_bucket(leases, machine_alias)
-    live: dict[str, list[int]] = {
-        "npu_devices": [],
-        "container_ssh_ports": [],
-        "service_ports": [],
+    del machine_alias
+    if session is None:
+        session = load_session_lookup(session_id=session_id, repo_root=repo_root).session
+    leases = session.get("leases") or {}
+    ssh_port = leases.get("container_ssh_port")
+    return {
+        "npu_devices": sorted(int(item) for item in (leases.get("npu_devices") or [])),
+        "container_ssh_ports": [int(ssh_port)] if ssh_port else [],
+        "service_ports": sorted(int(item) for item in (leases.get("service_ports") or [])),
     }
-    for kind in live:
-        for value, record in bucket.get(kind, {}).items():
-            if isinstance(record, dict) and record.get("session_id") == sid:
-                try:
-                    live[kind].append(int(value))
-                except ValueError:
-                    continue
-        live[kind].sort()
-    return live
 
 
 def require_session_npu_lease(session: dict[str, Any], *, repo_root: Path = ROOT) -> list[int]:
-    """Return currently owned devices, rejecting empty or stale snapshots."""
-    live = session_live_leases(
-        repo_root=repo_root, machine_alias=session["base_machine"], session_id=session["session_id"],
-    )["npu_devices"]
-    if not live:
-        raise SessionStateError("managed NPU execution requires an active nonempty lease; reserve devices before launch")
+    """Return currently owned devices from the coordinator receipt snapshot."""
+    del repo_root
+    session_receipt(session)
     recorded = session.get("leases", {}).get("npu_devices", [])
-    if not isinstance(recorded, list) or sorted(recorded) != sorted(live):
-        raise SessionStateError("session device snapshot differs from its live lease; refusing stale device ownership")
-    return sorted(live)
+    if not isinstance(recorded, list) or not recorded:
+        raise SessionStateError(
+            "managed NPU execution requires an active nonempty lease; reserve devices before launch"
+        )
+    return sorted(int(item) for item in recorded)
 
 
-def release_all_session_leases(*, repo_root: Path = ROOT, session_id: str) -> None:
-    sid = require_session_id(session_id)
-    with file_lock(session_lock_dir(repo_root) / "leases.lock"):
-        leases = load_leases(repo_root)
-        for bucket in leases.get("leases", {}).values():
-            for kind in ("npu_devices", "container_ssh_ports", "service_ports"):
-                records = bucket.get(kind, {})
-                for key, record in list(records.items()):
-                    if isinstance(record, dict) and record.get("session_id") == sid:
-                        records.pop(key, None)
-        save_leases(leases, repo_root)
+def release_all_session_leases(
+    *,
+    session: dict[str, Any] | None = None,
+    host_endpoint: Any | None = None,
+    run=None,
+    repo_root: Path | None = None,
+    session_id: str | None = None,
+) -> dict[str, Any]:
+    if session is None:
+        if session_id is None:
+            raise SessionStateError(UNSUPPORTED_RECEIPT)
+        session = load_session_lookup(session_id=session_id, repo_root=repo_root or ROOT).session
+    receipt = session_receipt(session)
+    container_name = ((session.get("remote") or {}).get("container") or {}).get("name")
+    client = session_resource_client(
+        host_endpoint or host_endpoint_from_session(session),
+        run=run,
+        state_dir=receipt.get("state_dir"),
+    )
+    try:
+        return client.release(
+            task_id=receipt["task_id"],
+            fence_token=int(receipt["fence_token"]),
+            coordination_epoch=str(receipt["coordination_epoch"]),
+            workspace_id=str(receipt["workspace_id"]),
+            session_id=str(receipt["session_id"]),
+            container_name=container_name,
+        )
+    except Exception as exc:
+        raise _client_error(exc) from exc
 
 
 def validate_session(session: dict[str, Any], *, where: str = "session") -> dict[str, Any]:

@@ -17,11 +17,15 @@ must name git+https tag sources because `vaws-coordinator` depends on
 |---|---|---|---|
 | `vaws-remote-dev` | `remote_dev` | `v0.3.0` | process-in import + MCP server |
 | `vaws-coordinator` | `vaws_coordinator` | `v0.2.0` | process-in import + stdio MCP |
-| `vaws-knowledge` | `vaws_knowledge` | `v0.1.4` | process-in import + MCP |
+| `vaws-knowledge` | `vaws_knowledge` | `v0.1.5` | process-in import + MCP |
 | `vaws-top` | — | uvx only | fleet dashboard; not imported |
 
 `uv sync` writes `.venv` and records the resolved git commits in `uv.lock`.
 CI runs `uv lock --check`. Do not copy those SHAs into workflows.
+
+The closeout candidate is checked with local installations of remote-dev
+0.4.0 and coordinator 0.3.0. Their formal pins remain pending contract
+alignment and publication; `uv sync` alone still installs the tags above.
 
 ## Loader
 

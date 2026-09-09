@@ -47,6 +47,8 @@ from vaws_venv import ensure_workspace_interpreter  # noqa: E402
 ensure_workspace_interpreter(repo_root=ROOT)
 
 
+from vaws_coordinator.device_inventory import parse_npu_smi_hbm  # noqa: E402
+
 from _common import (
     ENV_PREAMBLE,
     MSPROF_WRAPPER_REMOTE_PATH,
@@ -143,31 +145,7 @@ def collect_npu_smi(ep: SshEndpoint, label: str, local_path: Path) -> dict:
     progress(f"Collecting npu-smi snapshot: {label}")
     r = ssh_exec(ep, f"{ENV_PREAMBLE} npu-smi info", timeout=30)
     (local_path / f"{label}_npu_smi.txt").write_text(r.stdout)
-
-    hbm = {}
-    lines = r.stdout.splitlines()
-    current_npu = None
-    for line in lines:
-        stripped = line.strip().strip("|").strip()
-        if not stripped or stripped.startswith("+") or stripped.startswith("="):
-            continue
-        parts = [p.strip() for p in stripped.split("|")]
-        # Line with NPU ID and name (e.g., "0     910B4")
-        col0 = parts[0].strip() if parts else ""
-        tokens = col0.split()
-        if len(tokens) >= 2 and tokens[0].isdigit() and any(c.isalpha() for c in tokens[1]):
-            current_npu = int(tokens[0])
-            continue
-        # Line with HBM data: look for "XXXX / YYYYY" pattern in last column
-        if current_npu is not None:
-            hbm_match = re.search(r"(\d+)\s*/\s*(\d+)\s*$", stripped)
-            if hbm_match:
-                used = int(hbm_match.group(1))
-                total = int(hbm_match.group(2))
-                if total > 1000:  # HBM is typically > 1000 MB
-                    hbm[current_npu] = {"used_mb": used, "total_mb": total}
-                    current_npu = None
-    return hbm
+    return parse_npu_smi_hbm(r.stdout)
 
 
 def build_serve_command(args: argparse.Namespace, python: str) -> str:
@@ -486,27 +464,7 @@ def _resolve_attach_state(args: argparse.Namespace) -> dict:
 
 def _parse_npu_smi_text(text: str) -> dict:
     """Parse raw npu-smi info output into {npu_id: {used_mb, total_mb}}."""
-    hbm = {}
-    current_npu = None
-    for line in text.splitlines():
-        stripped = line.strip().strip("|").strip()
-        if not stripped or stripped.startswith("+") or stripped.startswith("="):
-            continue
-        parts = [p.strip() for p in stripped.split("|")]
-        col0 = parts[0].strip() if parts else ""
-        tokens = col0.split()
-        if len(tokens) >= 2 and tokens[0].isdigit() and any(c.isalpha() for c in tokens[1]):
-            current_npu = int(tokens[0])
-            continue
-        if current_npu is not None:
-            hbm_match = re.search(r"(\d+)\s*/\s*(\d+)\s*$", stripped)
-            if hbm_match:
-                used = int(hbm_match.group(1))
-                total = int(hbm_match.group(2))
-                if total > 1000:
-                    hbm[current_npu] = {"used_mb": used, "total_mb": total}
-                    current_npu = None
-    return hbm
+    return parse_npu_smi_hbm(text)
 
 
 def _load_baseline_from(baseline_path: str, run_dir: Path) -> dict:
@@ -796,17 +754,22 @@ def _extract_serve_config_from_extra_args(
             i += 1
 
 
+def _standalone_session(args: argparse.Namespace) -> dict:
+    session = getattr(args, "_session", None)
+    if not isinstance(session, dict):
+        raise SystemExit(
+            "session has no coordinator receipt; recreate the session or reconcile host reservations"
+        )
+    return session
+
+
 def _release_standalone_port(args: argparse.Namespace, machine: dict, leased_port: int | None) -> None:
     if leased_port is None:
         return
     from vaws_session_state import release_service_port
 
-    release_service_port(
-        repo_root=getattr(args, "_state_repo_root", Path(__file__).resolve().parents[4]),
-        machine_alias=get_machine_alias(machine),
-        session_id=args.session_id,
-        port=leased_port,
-    )
+    del machine
+    release_service_port(session=_standalone_session(args), port=leased_port)
 
 
 def _main_standalone(
@@ -825,11 +788,7 @@ def _main_standalone(
     else:
         from vaws_session_state import allocate_service_port
 
-        port = allocate_service_port(
-            repo_root=getattr(args, "_state_repo_root", Path(__file__).resolve().parents[4]),
-            machine_alias=get_machine_alias(machine),
-            session_id=args.session_id,
-        )
+        port = allocate_service_port(session=_standalone_session(args))
         leased_port = port
         progress(f"Leased session service port {port} for standalone profiling")
     args.tp = tp

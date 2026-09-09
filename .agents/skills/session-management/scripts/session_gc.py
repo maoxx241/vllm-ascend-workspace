@@ -28,7 +28,15 @@ ensure_workspace_interpreter(repo_root=ROOT)
 from vaws_remote_dev import ssh_exec  # noqa: E402
 from vaws_remote_target import SshEndpoint  # noqa: E402
 from vaws_result_envelope import emit_skill_json, unwrap_skill_payload  # noqa: E402
-from vaws_session_state import load_index, load_leases, load_session_lookup, release_all_session_leases, session_live_leases  # noqa: E402
+from vaws_session_state import (  # noqa: E402
+    SessionStateError,
+    host_endpoint_from_session,
+    load_index,
+    load_session_lookup,
+    release_all_session_leases,
+    session_live_leases,
+    session_receipt,
+)
 
 REAP_SSH_TIMEOUT_SECONDS = 20
 
@@ -92,47 +100,33 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def lease_owner_session_ids(leases: dict[str, Any]) -> set[str]:
-    owners: set[str] = set()
-    for bucket in leases.get("leases", {}).values():
-        if not isinstance(bucket, dict):
-            continue
-        for kind in ("npu_devices", "container_ssh_ports", "service_ports"):
-            records = bucket.get(kind, {})
-            if not isinstance(records, dict):
-                continue
-            for record in records.values():
-                if isinstance(record, dict) and isinstance(record.get("session_id"), str):
-                    owners.add(record["session_id"])
-    return owners
-
-
 def main() -> int:
     args = build_parser().parse_args()
     dry_run = not args.apply
     try:
         index = load_index(ROOT)
-        leases = load_leases(ROOT)
-        lease_owners = lease_owner_session_ids(leases)
         released: list[str] = []
         checked: list[dict[str, Any]] = []
         active: list[str] = []
         reaped_dead: list[str] = []
-        candidates = set(index.get("sessions", {})) | lease_owners
-        for sid in sorted(candidates):
+        receipt_owners: list[str] = []
+        for sid in sorted(index.get("sessions", {})):
             try:
                 lookup = load_session_lookup(session_id=sid, repo_root=ROOT)
                 session = lookup.session
             except Exception as exc:  # noqa: BLE001
-                state = "orphan-lease" if sid not in index.get("sessions", {}) else "missing-state"
-                checked.append({"session_id": sid, "status": state, "error": str(exc)})
+                checked.append({"session_id": sid, "status": "missing-state", "error": str(exc)})
                 active.append(sid)
                 continue
-
-            # Non-removed session. Optionally probe container liveness so a
-            # zombie (ready state but dead container) can release its leases.
-            if args.reap_dead and sid in lease_owners:
-                live = session_live_leases(repo_root=lookup.state_repo_root, machine_alias=session["base_machine"], session_id=sid)
+            try:
+                session_receipt(session)
+                has_receipt = True
+            except SessionStateError:
+                has_receipt = False
+            if has_receipt:
+                receipt_owners.append(sid)
+            if args.reap_dead and has_receipt:
+                live = session_live_leases(session=session)
                 probe = _probe_session_container(session, devices=live["npu_devices"])
                 entry: dict[str, Any] = {
                     "session_id": sid,
@@ -141,7 +135,18 @@ def main() -> int:
                 }
                 if probe.get("alive") is False:
                     if not dry_run:
-                        release_all_session_leases(repo_root=lookup.state_repo_root, session_id=sid)
+                        released_payload = release_all_session_leases(
+                            session=session,
+                            host_endpoint=host_endpoint_from_session(session),
+                        )
+                        entry["release"] = {
+                            "status": released_payload.get("status"),
+                            "reason": released_payload.get("reason"),
+                        }
+                        if released_payload.get("status") != "released":
+                            active.append(sid)
+                            checked.append(entry)
+                            continue
                     released.append(sid)
                     reaped_dead.append(sid)
                     entry["reaped"] = True
@@ -150,14 +155,20 @@ def main() -> int:
                 checked.append(entry)
             else:
                 active.append(sid)
-                checked.append({"session_id": sid, "status": session.get("status")})
+                checked.append(
+                    {
+                        "session_id": sid,
+                        "status": session.get("status"),
+                        "receipt": has_receipt,
+                    }
+                )
         print_json(
             {
                 "status": "ok",
                 "dry_run": dry_run,
                 "reap_dead": args.reap_dead,
                 "checked": checked,
-                "active_session_leases": sorted(set(active) & lease_owners),
+                "active_session_leases": sorted(set(active) & set(receipt_owners)),
                 "released_lease_sessions": [] if dry_run else sorted(set(released)),
                 "would_release_lease_sessions": sorted(set(released)) if dry_run else [],
                 "reaped_dead_containers": sorted(set(reaped_dead)),

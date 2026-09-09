@@ -47,6 +47,7 @@ from vaws_session_state import (  # noqa: E402
 from session_gc import probe_container_alive  # noqa: E402
 from vaws_local_state import (  # noqa: E402
     effective_workspace_alias,
+    ensure_workspace_identity,
     load_profile,
     load_workspace_identity,
     utc_now_iso,
@@ -167,44 +168,31 @@ def parse_host_npu_availability(stdout: str) -> tuple[list[int] | None, dict[str
 
 def probe_host_npu_devices(record: dict[str, Any]) -> tuple[list[int] | None, dict[str, Any]]:
     host = record["host"]
-    target = machine_ops.SshTarget(
-        host=host["ip"],
-        user=host.get("user", "root"),
-        port=host.get("port", 22),
+    result = ssh_exec(
+        SshEndpoint(
+            host=str(host["ip"]),
+            port=int(host.get("port", 22)),
+            user=str(host.get("user", "root")),
+        ),
+        "npu-smi info 2>/dev/null",
+        check=False,
+        timeout=30,
+        connect_timeout=15,
     )
-    cmd = [
-        *machine_ops.ssh_command(target),
-        "bash",
-        "-c",
-        shlex.quote("npu-smi info 2>/dev/null"),
-    ]
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=30)
-    except subprocess.TimeoutExpired as exc:
-        return None, {
-            "status": "timeout",
-            "timeout_seconds": 30,
-            "stdout_tail": tail_output(exc.stdout),
-            "stderr_tail": tail_output(exc.stderr),
-        }
     payload: dict[str, Any] = {
         "returncode": result.returncode,
-        "stderr_tail": result.stderr[-500:],
+        "stderr_tail": (result.stderr or "")[-500:],
     }
     if result.returncode != 0:
-        payload["status"] = "unavailable"
+        payload["status"] = "timeout" if "timed out" in (result.stderr or "") else "unavailable"
         return None, payload
     free, diagnostics = parse_host_npu_availability(result.stdout)
     payload.update(diagnostics)
     payload["devices"] = diagnostics["visible_devices"]
     if free is None:
-        # Availability unknown, not empty. Returning the visible list here is
-        # what allowed a session to be handed a card another process was using.
         payload["status"] = "occupancy_unknown"
         return None, payload
     payload["status"] = "ok" if diagnostics["visible_devices"] else "unparsed"
-    # A successful parse of an empty free set is `[]`, not unknown occupancy.
-    # `free or None` collapsed that case and skipped the allocator's guard.
     return free, payload
 
 
@@ -517,6 +505,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     # The --reuse-existing path (and any failure before allocation) must never
     # release the leases of a pre-existing active session.
     leases_allocated = False
+    reserved_session: dict[str, Any] | None = None
+    host_ep: dict[str, Any] | None = None
     try:
         resolved = resolve_session_id(
             explicit=args.session_id,
@@ -588,6 +578,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 profile.get("machine_username") if profile else None
             )
         workspace_identity = load_workspace_identity()
+        if workspace_identity is None:
+            workspace_identity, _ = ensure_workspace_identity()
 
         image = args.image or base_record["container"]["image"]
         workdir = args.workdir or base_record["container"].get("workdir", "/vllm-workspace")
@@ -645,21 +637,36 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             binding_payload = {"action": "written", "path": str(binding_path)}
 
+        if npu_requested and available_devices is None:
+            raise SessionStateError("cannot allocate NPU devices: host occupancy is unavailable")
+        container_name = session_container_name(namespace, sid)
+        host_ep = {
+            "host": base_record["host"]["ip"],
+            "port": int(base_record["host"].get("port", 22)),
+            "user": str(base_record["host"].get("user", "root")),
+        }
         emit_progress("lease", "allocating session resources", machine=alias)
         leases = allocate_session_leases(
-            repo_root=ROOT,
-            machine_alias=alias,
+            host_endpoint=host_ep,
+            workspace_id=str(workspace_identity["agent_id"]),
             session_id=sid,
+            container_name=container_name,
             requested_devices=requested_devices,
             npu_count=args.npu_count,
-            available_devices=available_devices,
             container_ssh_port=args.container_ssh_port,
             container_ssh_port_range=args.container_ssh_port_range,
-            port_available=host_port_availability(base_record),
         )
         leases_allocated = True
-
-        container_name = session_container_name(namespace, sid)
+        reserved_session = {
+            "session_id": sid,
+            "remote": {
+                "host": host_ep["host"],
+                "host_port": host_ep["port"],
+                "host_user": host_ep["user"],
+                "container": {"name": container_name},
+            },
+            "leases": {"receipt": leases["receipt"]},
+        }
         now = utc_now_iso()
         session = {
             "schema_version": 1,
@@ -699,7 +706,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             "leases": {
                 "npu_devices": leases.get("npu_devices", []),
                 "container_ssh_port": leases["container_ssh_port"],
-                "service_ports": [],
+                "service_ports": leases.get("service_ports") or [],
+                "receipt": leases["receipt"],
             },
             "runtime_profile": {
                 "type": args.runtime_profile,
@@ -852,16 +860,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 0
     except ValidationError as exc:
-        if "sid" in locals() and leases_allocated:
+        if leases_allocated and reserved_session is not None:
             with contextlib.suppress(Exception):
-                release_all_session_leases(repo_root=ROOT, session_id=sid)
+                release_all_session_leases(session=reserved_session, host_endpoint=host_ep)
         print_json({"status": "needs_input", "error": str(exc)})
         return 1
     except Exception as exc:
         if "sid" in locals():
-            if leases_allocated:
+            if leases_allocated and reserved_session is not None:
                 with contextlib.suppress(Exception):
-                    release_all_session_leases(repo_root=ROOT, session_id=sid)
+                    release_all_session_leases(session=reserved_session, host_endpoint=host_ep)
             if session_path is not None:
                 with contextlib.suppress(Exception):
                     failed_session = load_session_lookup(session_file=session_path, repo_root=ROOT).session

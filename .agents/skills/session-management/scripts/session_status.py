@@ -95,11 +95,7 @@ def main() -> int:
         local_root = Path(session["local"]["worktree_root"])
         remote = session["remote"]
         container = remote["container"]
-        live_leases = session_live_leases(
-            repo_root=lookup.state_repo_root,
-            machine_alias=session["base_machine"],
-            session_id=sid,
-        )
+        live_leases = session_live_leases(session=session)
         serving = load_serving(session_serving_state_path(sid, lookup.state_repo_root))
         container_ssh = ssh_check(
             remote["host"],

@@ -25,13 +25,11 @@ from vaws_venv import ensure_workspace_interpreter  # noqa: E402
 
 ensure_workspace_interpreter(repo_root=ROOT)
 
-import queue
 import re
 import shlex
 import shutil
 import subprocess
 import tempfile
-import threading
 import time
 import urllib.error
 import urllib.parse
@@ -43,7 +41,23 @@ _LIB_DIR = pathlib.Path(__file__).resolve().parents[4] / ".agents" / "lib"
 if str(_LIB_DIR) not in sys.path:
     sys.path.insert(0, str(_LIB_DIR))
 
-from vaws_remote_dev import interactive_ssh_command, run_interactive, ssh_argv  # noqa: E402
+from vaws_coordinator import device_inventory as device_inventory_mod  # noqa: E402
+from vaws_coordinator.device_inventory import (  # noqa: E402
+    SOC_TO_MACHINE_TYPE,
+    canonical_soc_from_board_text,
+    detect_machine_type_from_text,
+    machine_type_from_soc,
+    npu_smi_value,
+)
+from vaws_remote_dev import (  # noqa: E402
+    as_endpoint,
+    endpoint_from,
+    interactive_ssh_command,
+    require_transport,
+    run_interactive,
+    ssh_argv,
+    ssh_exec,
+)
 from vaws_result_envelope import PROGRESS_SENTINEL  # noqa: E402
 
 
@@ -109,34 +123,7 @@ IMAGE_SUFFIX_BY_MACHINE_TYPE = {
     "A5": "-a5",
     "310P": "-310p",
 }
-SOC_TO_MACHINE_TYPE = {
-    "910b": "A2",
-    "910c": "A3",
-    "310p": "310P",
-    "ascend910b1": "A2",
-    "ascend910b2": "A2",
-    "ascend910b2c": "A2",
-    "ascend910b3": "A2",
-    "ascend910b4": "A2",
-    "ascend910b4-1": "A2",
-    "ascend910_9391": "A3",
-    "ascend910_9381": "A3",
-    "ascend910_9372": "A3",
-    "ascend910_9392": "A3",
-    "ascend910_9382": "A3",
-    "ascend910_9362": "A3",
-    "ascend310p1": "310P",
-    "ascend310p3": "310P",
-    "ascend310p5": "310P",
-    "ascend310p7": "310P",
-    "ascend310p3vir01": "310P",
-    "ascend310p3vir02": "310P",
-    "ascend310p3vir04": "310P",
-    "ascend310p3vir08": "310P",
-}
 SOC_MATCH_ORDER = sorted(SOC_TO_MACHINE_TYPE, key=len, reverse=True)
-ASCEND_950_SOC_PATTERN = re.compile(r"\bascend950[a-z0-9_-]*", re.IGNORECASE)
-BARE_ASCEND_910_PATTERN = re.compile(r"\bascend910\b", re.IGNORECASE)
 
 
 LOCAL_IMAGE_DISCOVERY_PY = r'''
@@ -268,82 +255,6 @@ def normalize_machine_type(value: str | None) -> str | None:
     raise MachineManagementError(
         f"unsupported machine type {value!r}; expected one of: {', '.join(MACHINE_TYPE_CHOICES)}"
     )
-
-
-def normalize_soc_token(value: str | None) -> str | None:
-    if value is None:
-        return None
-    normalized = value.strip().lower()
-    return normalized or None
-
-
-def npu_smi_value(text: str | None, field: str) -> str | None:
-    """Return one labelled value from npu-smi's colon-delimited output."""
-    if not text:
-        return None
-    pattern = re.compile(
-        rf"^\s*{re.escape(field)}\s*:\s*(.*?)\s*$", re.IGNORECASE | re.MULTILINE
-    )
-    match = pattern.search(text)
-    if match is None:
-        return None
-    value = match.group(1).strip()
-    return value or None
-
-
-def canonical_soc_from_board_text(text: str | None) -> str | None:
-    """Build the full SoC token from a detailed ``npu-smi -t board`` result.
-
-    A2/310P report the architecture prefix in ``Chip Type``. A3 and A5 report
-    the distinguishing part in ``NPU Name``. This mirrors the official CANN
-    query contract and vllm-ascend's setup-time chip detection.
-    """
-    chip_name = npu_smi_value(text, "Chip Name")
-    if not chip_name:
-        return None
-    chip_type = npu_smi_value(text, "Chip Type")
-    npu_name = npu_smi_value(text, "NPU Name")
-    normalized_chip_name = re.sub(r"\s+", "", chip_name)
-    normalized_chip_type = re.sub(r"\s+", "", chip_type or "")
-    normalized_npu_name = re.sub(r"\s+", "", npu_name or "")
-    lowered_chip_name = normalized_chip_name.lower()
-
-    if "310" in lowered_chip_name and normalized_chip_type:
-        return normalize_soc_token(normalized_chip_type + normalized_chip_name)
-    if "910" in lowered_chip_name:
-        if normalized_chip_type:
-            return normalize_soc_token(normalized_chip_type + normalized_chip_name)
-        if normalized_npu_name:
-            return normalize_soc_token(
-                f"{normalized_chip_name}_{normalized_npu_name}"
-            )
-    if "950" in lowered_chip_name and normalized_npu_name:
-        return normalize_soc_token(f"{normalized_chip_name}_{normalized_npu_name}")
-    return normalize_soc_token(normalized_chip_name)
-
-
-def machine_type_from_soc(soc: str | None) -> str | None:
-    normalized = normalize_soc_token(soc)
-    if normalized is None:
-        return None
-    if normalized.startswith("ascend950"):
-        return "A5"
-    return SOC_TO_MACHINE_TYPE.get(normalized)
-
-
-def detect_machine_type_from_text(text: str | None) -> tuple[str | None, str | None]:
-    if not text:
-        return None, None
-    normalized = text.lower()
-    ascend_950_match = ASCEND_950_SOC_PATTERN.search(normalized)
-    if ascend_950_match is not None:
-        return ascend_950_match.group(0).lower(), "A5"
-    for token in SOC_MATCH_ORDER:
-        if token in normalized:
-            return token, SOC_TO_MACHINE_TYPE[token]
-    if BARE_ASCEND_910_PATTERN.search(normalized) is not None:
-        return "ascend910", "A3"
-    return None, None
 
 
 def image_tag_for_machine(base_tag: str, machine_type: str | None) -> str:
@@ -931,6 +842,16 @@ def emit_progress_event(
     sys.stderr.flush()
 
 
+def _script_with_positional_args(script: str, args: Sequence[str]) -> str:
+    if not args:
+        return script
+    quoted = " ".join(shlex.quote(str(item)) for item in args)
+    heredoc = "VAWS_REMOTE_SCRIPT"
+    while heredoc in script:
+        heredoc += "_X"
+    return f"bash -s -- {quoted} <<'{heredoc}'\n{script}\n{heredoc}"
+
+
 def run_remote_script(
     target: SshTarget,
     script: str,
@@ -940,116 +861,47 @@ def run_remote_script(
     timeout_seconds: int | None = None,
     stream_progress: bool = True,
 ) -> RemoteResult:
-    remote_cmd = remote_shell_command(["bash", "-s", "--", *args])
-    cmd = ssh_command(target, batch_mode=batch_mode) + [remote_cmd]
-    try:
-        proc = subprocess.Popen(
-            list(cmd),
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-        )
-    except FileNotFoundError as exc:
+    if not batch_mode:
         raise MachineManagementError(
-            f"required local command not found: {cmd[0]}"
-        ) from exc
-
-    assert proc.stdin is not None
-    proc.stdin.write(script)
-    proc.stdin.close()
-
-    q: queue.Queue[tuple[str, str | None]] = queue.Queue()
+            "interactive SSH is interactive_ssh_command / run_interactive, not ssh_command"
+        )
+    api = require_transport()
+    ep = endpoint_from(target, long_stream=True, connect_timeout_s=10)
     stdout_parts: list[str] = []
     stderr_parts: list[str] = []
     progress_events: list[dict[str, Any]] = []
 
-    def reader(stream_name: str, pipe: Any) -> None:
-        try:
-            for line in pipe:
-                q.put((stream_name, line))
-        finally:
-            q.put((stream_name, None))
-
-    threads = [
-        threading.Thread(target=reader, args=("stdout", proc.stdout), daemon=True),
-        threading.Thread(target=reader, args=("stderr", proc.stderr), daemon=True),
-    ]
-    for thread in threads:
-        thread.start()
-
-    done_streams: set[str] = set()
-    deadline = (
-        time.monotonic() + timeout_seconds if timeout_seconds is not None else None
-    )
-    timed_out = False
-
-    while len(done_streams) < 2 or proc.poll() is None:
-        if (
-            deadline is not None
-            and time.monotonic() >= deadline
-            and proc.poll() is None
-        ):
-            timed_out = True
-            proc.kill()
-            break
-        wait_timeout = 0.2
-        if deadline is not None:
-            wait_timeout = max(0.01, min(wait_timeout, deadline - time.monotonic()))
-        try:
-            stream_name, line = q.get(timeout=wait_timeout)
-        except queue.Empty:
-            continue
-        if line is None:
-            done_streams.add(stream_name)
-            continue
-        if stream_name == "stdout":
-            stdout_parts.append(line)
+    def on_output(channel: str, text: str) -> None:
+        if channel == "stdout":
+            stdout_parts.append(text)
         else:
-            stderr_parts.append(line)
-        event = parse_progress_event(line)
+            stderr_parts.append(text)
+        event = parse_progress_event(text)
         if event is not None:
             progress_events.append(event)
             if stream_progress:
                 emit_progress_event(event, target=target)
 
-    try:
-        proc.wait(timeout=DEFAULT_REMOTE_TIMEOUT_GRACE_SECONDS)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        proc.wait(timeout=DEFAULT_REMOTE_TIMEOUT_GRACE_SECONDS)
-
-    for thread in threads:
-        thread.join(timeout=1)
-
-    while True:
-        try:
-            stream_name, line = q.get_nowait()
-        except queue.Empty:
-            break
-        if line is None:
-            continue
-        if stream_name == "stdout":
-            stdout_parts.append(line)
-        else:
-            stderr_parts.append(line)
-        event = parse_progress_event(line)
-        if event is not None and event not in progress_events:
-            progress_events.append(event)
-            if stream_progress:
-                emit_progress_event(event, target=target)
-
+    timeout_ms = None if timeout_seconds is None else int(timeout_seconds * 1000)
+    completed = api["run_stream"](
+        ep,
+        _script_with_positional_args(script, args),
+        timeout_ms=timeout_ms,
+        merge_stderr=False,
+        on_output=on_output,
+    )
     stdout = "".join(stdout_parts)
     stderr = "".join(stderr_parts)
+    if completed.timed_out and completed.stderr and completed.stderr not in stderr:
+        stderr = f"{stderr}{completed.stderr}" if stderr else completed.stderr
+    returncode = 0 if completed.returncode is None else int(completed.returncode)
     return RemoteResult(
         target=target,
-        returncode=proc.returncode or 0,
+        returncode=returncode,
         stdout=stdout,
         stderr=stderr,
         payload=parse_sentinel(stdout),
-        timed_out=timed_out,
+        timed_out=completed.timed_out,
         timeout_seconds=timeout_seconds,
         progress_events=progress_events,
     )
@@ -1202,14 +1054,24 @@ import shutil
 import socket
 import subprocess
 import sys
+import types
 from typing import Optional
+
+_device_inventory = types.ModuleType("device_inventory")
+exec(compile(__DEVICE_INVENTORY_SOURCE__, "device_inventory.py", "exec"), _device_inventory.__dict__)
+sys.modules["device_inventory"] = _device_inventory
+from device_inventory import (  # noqa: E402
+    canonical_soc_from_board_text,
+    detect_from_text,
+    first_npu_chip_ids,
+    machine_type_from_soc,
+    npu_smi_value,
+)
 
 image_request, port_range, prefix, sourced_scripts = sys.argv[1:5]
 image = json.loads(image_request)
 start_s, end_s = port_range.split(":", 1)
 start, end = int(start_s), int(end_s)
-SOC_TO_MACHINE_TYPE = __SOC_TO_MACHINE_TYPE__
-SOC_MATCH_ORDER = sorted(SOC_TO_MACHINE_TYPE, key=len, reverse=True)
 
 
 def run(cmd: list[str], *, env: Optional[dict[str, str]] = None) -> tuple[int, str, str]:
@@ -1365,72 +1227,6 @@ def probe_command(label: str, cmd: list[str]) -> str:
     return out if rc == 0 else ""
 
 
-def npu_smi_value(text: str, field: str) -> Optional[str]:
-    match = re.search(
-        rf"^\s*{re.escape(field)}\s*:\s*(.*?)\s*$",
-        text,
-        flags=re.IGNORECASE | re.MULTILINE,
-    )
-    if match is None:
-        return None
-    value = match.group(1).strip()
-    return value or None
-
-
-def first_npu_chip_ids(text: str) -> tuple[Optional[int], Optional[int]]:
-    for line in text.splitlines():
-        parts = line.split()
-        if len(parts) < 3 or not parts[0].isdigit() or not parts[1].isdigit():
-            continue
-        if any(part.lower().startswith("ascend") for part in parts[2:]):
-            return int(parts[0]), int(parts[1])
-    return None, None
-
-
-def canonical_soc_from_board_text(text: str) -> Optional[str]:
-    chip_name = npu_smi_value(text, "Chip Name")
-    if not chip_name:
-        return None
-    chip_type = npu_smi_value(text, "Chip Type")
-    npu_name = npu_smi_value(text, "NPU Name")
-    chip_name = re.sub(r"\s+", "", chip_name)
-    chip_type = re.sub(r"\s+", "", chip_type or "")
-    npu_name = re.sub(r"\s+", "", npu_name or "")
-    lowered_chip_name = chip_name.lower()
-    if "310" in lowered_chip_name and chip_type:
-        return (chip_type + chip_name).lower()
-    if "910" in lowered_chip_name:
-        if chip_type:
-            return (chip_type + chip_name).lower()
-        if npu_name:
-            return f"{chip_name}_{npu_name}".lower()
-    if "950" in lowered_chip_name and npu_name:
-        return f"{chip_name}_{npu_name}".lower()
-    return chip_name.lower()
-
-
-def machine_type_from_soc(soc: Optional[str]) -> Optional[str]:
-    if not soc:
-        return None
-    normalized = soc.strip().lower()
-    if normalized.startswith("ascend950"):
-        return "A5"
-    return SOC_TO_MACHINE_TYPE.get(normalized)
-
-
-def detect_from_text(text: str) -> tuple[Optional[str], Optional[str]]:
-    normalized = text.lower()
-    ascend_950_match = re.search(r"\bascend950[a-z0-9_-]*", normalized)
-    if ascend_950_match is not None:
-        return ascend_950_match.group(0), "A5"
-    for token in SOC_MATCH_ORDER:
-        if token in normalized:
-            return token, SOC_TO_MACHINE_TYPE[token]
-    if re.search(r"\bascend910\b", normalized) is not None:
-        return "ascend910", "A3"
-    return None, None
-
-
 probe_command("info", ["npu-smi", "info"])
 info_list = probe_command("info-list", ["npu-smi", "info", "-l"])
 info_map = probe_command("info-map", ["npu-smi", "info", "-m"])
@@ -1556,7 +1352,10 @@ PY
 """
     return (
         template.replace("__SENTINEL__", SENTINEL)
-        .replace("__SOC_TO_MACHINE_TYPE__", json.dumps(SOC_TO_MACHINE_TYPE, ensure_ascii=False))
+        .replace(
+            "__DEVICE_INVENTORY_SOURCE__",
+            json.dumps(pathlib.Path(device_inventory_mod.__file__).read_text(encoding="utf-8")),
+        )
         .replace("__LOCAL_IMAGE_DISCOVERY_PY__", LOCAL_IMAGE_DISCOVERY_PY)
         .replace("__LOCAL_IMAGE_DISCOVERY_POLICY__", IMAGE_POLICY_LOCAL_LATEST)
     )
@@ -2850,22 +2649,28 @@ def check_direct_ssh(
     identity_file: pathlib.Path | None = None,
 ) -> dict[str, Any]:
     try:
-        result = run_local(
-            ssh_command(target, batch_mode=True, identity_file=identity_file)
-            + ["printf", "ok"]
+        ep = as_endpoint(
+            target.host,
+            target.port,
+            target.user,
+            identity_file=str(identity_file) if identity_file is not None else None,
+            connect_timeout_s=10,
         )
-    except MachineManagementError as exc:
+        result = ssh_exec(ep, "printf ok", check=False, timeout=15, connect_timeout=10)
+    except Exception as exc:
         return {
             "ok": False,
             "returncode": None,
             "stdout": "",
             "stderr": str(exc),
         }
+    stdout = result.stdout or ""
+    stderr = result.stderr or ""
     return {
-        "ok": result.returncode == 0 and result.stdout.endswith("ok"),
+        "ok": result.returncode == 0 and stdout.endswith("ok"),
         "returncode": result.returncode,
-        "stdout": result.stdout.strip(),
-        "stderr": result.stderr.strip(),
+        "stdout": stdout.strip(),
+        "stderr": stderr.strip(),
         "identity_file": str(identity_file) if identity_file is not None else None,
     }
 

@@ -56,7 +56,6 @@ flow for advanced control, or the task-facing tools above. Do not create an addi
 the same execution or pass a pool binding id as a legacy session id.
 
 PR #67's shared inventory covers linked worktrees with one Git common-dir.
-It does not turn the legacy local leases below into cross-workspace allocation.
 Independent clones must explicitly connect to the same coordinator service.
 
 The existing managed-session mode described below binds:
@@ -64,7 +63,7 @@ The existing managed-session mode described below binds:
 - one local Git worktree
 - one remote session container
 - one `.vaws-local/sessions/<session-id>/` state namespace
-- local leases for container SSH port, service port, and optional NPU devices
+- host coordinator reservations for container SSH port, service port, and optional NPU devices, with the receipt stored in `session.json`
 
 A session group binds two or more ready sessions with the same
 `code.snapshot_commit` (HEAD when clean, a deterministic dirty snapshot
@@ -138,8 +137,9 @@ python3 .agents/skills/session-management/scripts/npu_coordination.py \
 ```
 
 The coordinator uses `/tmp/vaws-npu-coordinator/v1/coordinator.sqlite3` on the
-bare-metal host. It is advisory, does not alter existing local Session leases,
-and never stops an observed external or human process. It automatically
+bare-metal host. Session NPUs and host SSH/service ports are reserved in that
+same database; `session.json` stores only the receipt. The coordinator is
+advisory and never stops an observed external or human process. It automatically
 publishes the persistent workspace UUID plus configured agent alias;
 `--agent-id` and `--agent-alias` remain explicit overrides.
 
@@ -172,9 +172,8 @@ Session creation defaults to `--verification-mode ssh`: it verifies host SSH and
 Local untracked state lives under `.vaws-local/sessions/`:
 
 - `index.json`
-- `leases.json`
 - `locks/`
-- `<session-id>/session.json`
+- `<session-id>/session.json` (includes the coordinator receipt; the host DB is the resource authority)
 - `<session-id>/serving.json`
 - `<session-id>/benchmark/`
 - `groups/<group-id>/group.json`

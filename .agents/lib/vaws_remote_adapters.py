@@ -31,7 +31,6 @@ from vaws_remote_target import (
     target_from_args,
 )
 from vaws_session_state import (
-    load_leases,
     release_all_session_leases,
     session_serving_state_path,
 )
@@ -462,8 +461,19 @@ def cleanup(
             })
             status = "blocked"
         else:
-            release_all_session_leases(repo_root=target.state_repo_root, session_id=target.session_id)
-            actions.append({"action": "release-leases", "session_id": target.session_id, "released": True})
+            released = release_all_session_leases(
+                session=target.session,
+                host_endpoint=target.host_endpoint,
+            )
+            actions.append({
+                "action": "release-leases",
+                "session_id": target.session_id,
+                "released": released.get("status") == "released",
+                "status": released.get("status"),
+                "reason": released.get("reason"),
+            })
+            if released.get("status") != "released":
+                status = "blocked"
     if known_hosts:
         for endpoint in (target.host_endpoint, target.container_endpoint):
             key = endpoint.known_hosts_key()
@@ -484,9 +494,8 @@ def cleanup(
             "container": known_hosts_status(target.container_endpoint),
         },
     }
-    if target.session_id:
-        with contextlib.suppress(Exception):
-            proof["leases"] = load_leases(target.state_repo_root)
+    if target.session:
+        proof["leases"] = (target.session.get("leases") or {})
     return {
         "status": status,
         "target": target.to_dict(),

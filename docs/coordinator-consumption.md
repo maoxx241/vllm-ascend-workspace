@@ -12,6 +12,10 @@ This document is the consumer-side contract. See
 [dependency-plane.md](dependency-plane.md) for install and capability
 reporting.
 
+The closeout candidate's session resource calls require coordinator 0.3.0.
+They are checked with a local candidate package installation; the published
+tag and lock update follow the remaining contract alignment.
+
 ## 1. Why a package
 
 The coordinator is run as `python -m vaws_coordinator task-server` and
@@ -68,3 +72,9 @@ Configure clients with `python3 .agents/scripts/vaws_client_setup.py`.
 host. `.agents/lib/vaws_host_queue_module.py` is a thin shim over
 `vaws_coordinator.host_queue`. `host_queue_module_path()` returns
 `Path(module.__file__)`.
+
+Session NPUs and host SSH/service ports are reserved through
+`vaws_coordinator.session_resources.SessionResourceClient` over the same host
+database as the pool. The scaffold stores only the coordinator receipt in
+`session.json`. Records without a receipt are unsupported for resource
+actions; they are not auto-adopted.

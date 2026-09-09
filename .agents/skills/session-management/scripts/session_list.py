@@ -19,7 +19,7 @@ from vaws_venv import ensure_workspace_interpreter  # noqa: E402
 ensure_workspace_interpreter(repo_root=ROOT)
 
 from vaws_result_envelope import emit_skill_json  # noqa: E402
-from vaws_session_state import load_index, load_leases, load_session_lookup  # noqa: E402
+from vaws_session_state import load_index, load_session_lookup  # noqa: E402
 
 
 def print_json(data: dict[str, Any]) -> None:
@@ -68,7 +68,6 @@ def main() -> int:
                 "status": "ok",
                 "count": len(sessions),
                 "sessions": sessions,
-                "leases": load_leases(ROOT),
             }
         )
         return 0

@@ -29,7 +29,7 @@ STATE_DIRNAME = "remote-dev-state"
 LOCAL_STATE_DIRNAME = ".vaws-local"
 ASCEND_RUNTIME_ENV_FILE = "/etc/profile.d/vaws-ascend-env.sh"
 SSH_MUX_DIR = "~/.ssh/vaws-mux"
-REQUIRED_TRANSPORT_VERSION = "0.3.0"
+REQUIRED_TRANSPORT_VERSION = "0.4.0"
 
 DEFAULT_ENV = {
     "REMOTE_DEV_RUNTIME_ENV_FILE": ASCEND_RUNTIME_ENV_FILE,
@@ -118,10 +118,10 @@ def require_package(repo_root: Path = ROOT) -> dict[str, Any]:
 
 
 def require_transport(repo_root: Path = ROOT):
-    """Import v0.3.0 stream, forward, and interactive APIs or fail.
+    """Import v0.4.0 stream, forward, and interactive APIs or fail.
 
     Does not catch ``ImportError`` and continue. A missing package or a
-    pre-v0.3.0 install cannot silently fall back to raw ``ssh``.
+    pre-v0.4.0 install cannot silently fall back to raw ``ssh``.
     """
     require_package(repo_root=repo_root)
     apply_consumer_environment(repo_root=repo_root)

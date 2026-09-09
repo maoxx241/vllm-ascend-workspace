@@ -23,9 +23,12 @@ ensure_workspace_interpreter(repo_root=ROOT)
 
 from _workflow_common import remove_container  # noqa: E402
 from vaws_session_state import (  # noqa: E402
+    SessionStateError,
+    host_endpoint_from_session,
     load_session_lookup,
     mark_session_status,
     release_all_session_leases,
+    session_receipt,
     session_record_for_execution,
     session_serving_state_path,
 )
@@ -224,8 +227,24 @@ def main() -> int:
                 print_json({"status": "failed", "session_id": sid, "results": results})
                 return 1
             emit_progress("lease", "releasing session leases", session_id=sid)
-            release_all_session_leases(repo_root=lookup.state_repo_root, session_id=sid)
-            results["leases"] = {"released": True}
+            try:
+                session_receipt(session)
+            except SessionStateError as exc:
+                results["leases"] = {"released": False, "blocked": True, "reason": str(exc)}
+                print_json({"status": "failed", "session_id": sid, "results": results})
+                return 1
+            released = release_all_session_leases(
+                session=session,
+                host_endpoint=host_endpoint_from_session(session),
+            )
+            results["leases"] = {
+                "released": released.get("status") == "released",
+                "status": released.get("status"),
+                "reason": released.get("reason"),
+            }
+            if released.get("status") != "released":
+                print_json({"status": "failed", "session_id": sid, "results": results})
+                return 1
 
         if args.remove_container or args.remove_worktree:
             remove_ok = container_removed
