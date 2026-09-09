@@ -195,8 +195,9 @@ preserve it as an endpoint option rather than flatten it.
 `ascend-profiling-analysis` (44 179 lines, 30 % of the scaffold) is out of
 scope for this round by owner decision; only its `knowledge/` directory moves
 (§8). One property of it does bear on §2: its analysis framework runs *inside
-the remote container* after a tar-over-ssh push of `scripts/ascend_profile/`,
-which is a third code-transport mechanism next to parity and remote-dev
+the remote container* after a tar-over-ssh push of its own
+`ascend_profile` package tree, which is a third code-transport mechanism
+next to parity and remote-dev
 artifacts. When it is in scope, that push becomes a remote-dev artifact push.
 
 Skills with no tests at all: `ascend-profiling-collection` (its two
