@@ -9,8 +9,10 @@ thin client adapter for one host - here, Git's `pre-commit` event.
     python3 .agents/hooks/tracked_leak_precommit.py --status
     python3 .agents/hooks/tracked_leak_precommit.py --uninstall
 
-The check itself fails closed: a policy error, a missing policy file, or an
-unreadable staged diff blocks the commit rather than passing it through.
+The check itself fails closed: a policy error, a missing policy file, an
+unreadable staged diff, or a missing ``vaws-knowledge`` package blocks the
+commit rather than passing it through. The remedy for the package gap is
+``uv sync``.
 """
 
 from __future__ import annotations
@@ -26,6 +28,7 @@ LIB = ROOT / ".agents" / "lib"
 if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
+from vaws_venv import ensure_workspace_interpreter  # noqa: E402
 from vaws_leak_guard import (  # noqa: E402
     DEFAULT_POLICY_PATH,
     LeakGuardError,
@@ -160,6 +163,7 @@ def status(repo_root: Path) -> dict:
 
 
 def check(repo_root: Path, *, policy_path: Path | None, show_matches: bool) -> dict:
+    ensure_workspace_interpreter(repo_root=ROOT)
     policy_path = resolve_policy_path(repo_root, policy_path)
     policy = load_policy(policy_path)
     result: ScanResult = scan_diff(staged_diff(repo_root), policy)

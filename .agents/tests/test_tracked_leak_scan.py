@@ -16,6 +16,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 LIB_DIR = ROOT / ".agents" / "lib"
@@ -86,6 +87,26 @@ class DetectionTests(unittest.TestCase):
         for category in guard.CATEGORIES:
             with self.subTest(category=category):
                 self.assertIn(category, found)
+
+    def test_missing_knowledge_package_refuses_to_scan(self) -> None:
+        saved = guard._knowledge_redact
+        guard._knowledge_redact = None
+        self.addCleanup(setattr, guard, "_knowledge_redact", saved)
+        with mock.patch.dict(
+            sys.modules, {"vaws_knowledge": None, "vaws_knowledge.redact": None}
+        ):
+            with self.assertRaises(guard.LeakGuardError) as caught:
+                guard.require_knowledge_redact()
+        message = str(caught.exception)
+        self.assertIn("vaws_knowledge", message)
+        self.assertIn("uv sync", message)
+        with mock.patch.dict(
+            sys.modules, {"vaws_knowledge": None, "vaws_knowledge.redact": None}
+        ):
+            with self.assertRaises(guard.LeakGuardError):
+                guard.scan_line("token = hunter2", guard.default_policy())
+            with self.assertRaises(guard.LeakGuardError):
+                guard.scan_diff("", guard.default_policy())
 
     def test_clean_fixture_produces_no_findings(self) -> None:
         policy = guard.load_policy(POLICY_PATH)

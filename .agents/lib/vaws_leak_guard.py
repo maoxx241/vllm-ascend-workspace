@@ -34,7 +34,16 @@ if str(LIB) not in sys.path:
 
 # Reuse, rather than restate, the secret-shaped patterns that already gate
 # knowledge candidates. This module only adds the categories they miss.
-import vaws_knowledge.redact as knowledge_redact  # noqa: E402
+# Imported lazily so --install/--status can run before `uv sync`; every scan
+# path calls require_knowledge_redact() and refuses if the package is absent.
+KNOWLEDGE_PACKAGE = "vaws_knowledge"
+KNOWLEDGE_REMEDY = "uv sync"
+KNOWLEDGE_MISSING = (
+    "vaws_knowledge is not importable; the leak scanner requires the "
+    "installed vaws-knowledge package. Install it with `uv sync` "
+    "(or `uv run python3 .agents/scripts/tracked_leak_scan.py`, which syncs first)."
+)
+_knowledge_redact = None
 
 SECRET_KEY_RE = re.compile(
     r"(?:^|_)(?:api_?key|access_?key|auth|credential|pass(?:word)?|secret|token)(?:_|$)",
@@ -73,6 +82,20 @@ CATEGORY_ORDER = {name: index for index, name in enumerate(CATEGORIES)}
 
 class LeakGuardError(RuntimeError):
     """Raised when the policy file or a git invocation cannot be trusted."""
+
+
+def require_knowledge_redact():
+    """Return ``vaws_knowledge.redact``, or refuse. Never scan with fewer rules."""
+
+    global _knowledge_redact
+    if _knowledge_redact is not None:
+        return _knowledge_redact
+    try:
+        import vaws_knowledge.redact as knowledge_redact
+    except ModuleNotFoundError as exc:
+        raise LeakGuardError(KNOWLEDGE_MISSING) from exc
+    _knowledge_redact = knowledge_redact
+    return knowledge_redact
 
 
 # --------------------------------------------------------------------------
@@ -949,6 +972,7 @@ _PACKAGE_SECRET_RULES = frozenset(
 
 
 def _secret_findings(line: str) -> Iterator[tuple[int, int, str, str]]:
+    knowledge_redact = require_knowledge_redact()
     for hit in knowledge_redact.scan_text(line, allow=None, path="<line>"):
         if hit.rule not in _PACKAGE_SECRET_RULES:
             continue
@@ -974,6 +998,7 @@ def _secret_findings(line: str) -> Iterator[tuple[int, int, str, str]]:
 def scan_line(line: str, policy: Policy) -> list[tuple[int, int, str, str, str]]:
     """Return `(start, end, category, rule, text)` spans for one line."""
 
+    require_knowledge_redact()
     raw: list[tuple[int, int, str, str, str]] = []
 
     for match in MAC_RE.finditer(line):
@@ -1050,6 +1075,7 @@ def _dedupe_spans(
 
 
 def scan_document(text: str, *, path: str, policy: Policy) -> list[Finding]:
+    require_knowledge_redact()
     findings: list[Finding] = []
     exclusions = policy.scoped_categories(path)
     for number, line in enumerate(text.splitlines(), start=1):
@@ -1140,6 +1166,7 @@ def scan_files(
     *,
     progress: ProgressFn = _noop,
 ) -> ScanResult:
+    require_knowledge_redact()
     result = ScanResult()
     total = len(paths)
     step = max(1, total // 8)
@@ -1260,6 +1287,7 @@ def scan_diff(diff_text: str, policy: Policy) -> ScanResult:
     is not mistaken for a `+++` path header.
     """
 
+    require_knowledge_redact()
     result = ScanResult()
     path: str | None = None
     line_number = 0

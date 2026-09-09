@@ -24,6 +24,10 @@ LIB = ROOT / ".agents" / "lib"
 if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
+from vaws_venv import ensure_workspace_interpreter  # noqa: E402
+
+ensure_workspace_interpreter(repo_root=ROOT)
+
 from vaws_leak_guard import (  # noqa: E402
     CATEGORIES,
     LeakGuardError,
@@ -37,6 +41,7 @@ from vaws_leak_guard import (  # noqa: E402
     staged_diff,
     tracked_files,
     unused_entry_ids,
+    require_knowledge_redact,
 )
 
 
@@ -116,6 +121,7 @@ def _filter(result: ScanResult, categories: list[str] | None) -> ScanResult:
 
 
 def run(args: argparse.Namespace) -> tuple[dict, int]:
+    require_knowledge_redact()
     repo_root = args.repo_root.resolve()
     if args.no_allowlist:
         policy_path = None
