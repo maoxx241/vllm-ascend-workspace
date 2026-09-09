@@ -9,7 +9,7 @@ Examples:
     python3 .agents/scripts/tracked_leak_scan.py
     python3 .agents/scripts/tracked_leak_scan.py --staged
     python3 .agents/scripts/tracked_leak_scan.py --commit-range origin/main..HEAD
-    python3 .agents/scripts/tracked_leak_scan.py --paths docs/leak-remediation.md
+    python3 .agents/scripts/tracked_leak_scan.py --paths docs/tracked-leak-guard.md
 """
 
 from __future__ import annotations

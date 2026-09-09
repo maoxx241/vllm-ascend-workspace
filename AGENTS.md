@@ -57,7 +57,6 @@ Repo-local skills live under `.agents/skills/`. Each has its own `SKILL.md` with
 | `machine-management` | Add / verify / repair / remove a remote NPU machine |
 | `npu-fleet-monitor` | Deploy, start, inspect, restart, or stop the loopback-only NPU monitoring dashboard from the standalone vaws-top repository |
 | `session-management` | Create / inspect / remove / group isolated agent sessions (local worktree + remote container + leases) |
-| `remote-toolbox` | Compatibility backend for managed VAWS target/probe/exec/job/sync/service/artifact/cleanup tools |
 | `remote-code-parity` | Sync local working tree to remote container before execution |
 | `modelscope` | Download / resume / status-check / SHA256-verify ModelScope model weights under explicit local directories |
 | `vllm-ascend-serving` | Start / check / stop a vLLM Ascend service on a remote container |

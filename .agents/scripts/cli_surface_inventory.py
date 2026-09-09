@@ -292,8 +292,6 @@ def area_of(rel: str) -> str:
         return ".agents/scripts"
     if rel.startswith(".agents/hooks/"):
         return ".agents/hooks"
-    if rel.startswith(".agents/maturation/"):
-        return ".agents/maturation"
     if rel.startswith(".agents/coordinator/"):
         return ".agents/coordinator"
     if rel.startswith(".agents/"):

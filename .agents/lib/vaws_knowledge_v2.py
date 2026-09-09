@@ -46,9 +46,8 @@ from typing import Any, Mapping, Sequence
 
 import vaws_redaction as redaction
 from vaws_knowledge._common import ToolError
-from vaws_knowledge.canonical import canonical_json, content_hash as commons_content_hash
+from vaws_knowledge.canonical import content_hash as commons_content_hash
 from vaws_knowledge.canonical import body_key as commons_body_key
-from vaws_knowledge.canonical import canonical_payload as commons_canonical_object
 from vaws_knowledge.server.capture import schema_validate, validate_entry as commons_validate_entry
 from vaws_knowledge.server.query import searchable_view
 
@@ -334,30 +333,12 @@ def body_key(entry: Mapping[str, Any]) -> str | None:
     return commons_body_key(entry)
 
 
-def canonical_object(entry: Mapping[str, Any]) -> dict[str, Any]:
-    try:
-        return commons_canonical_object(entry)
-    except _CANONICAL_ERRORS as exc:
-        raise KnowledgeV2Error(str(exc)) from exc
-
-
-def canonical_payload(entry: Mapping[str, Any]) -> str:
-    try:
-        return canonical_json(entry)
-    except _CANONICAL_ERRORS as exc:
-        raise KnowledgeV2Error(str(exc)) from exc
-
-
-def content_hash(entry: Mapping[str, Any]) -> str:
-    try:
-        return commons_content_hash(entry)
-    except _CANONICAL_ERRORS as exc:
-        raise KnowledgeV2Error(str(exc)) from exc
-
-
 def with_content_hash(entry: Mapping[str, Any]) -> dict[str, Any]:
     updated = deepcopy(dict(entry))
-    updated["content_hash"] = content_hash(updated)
+    try:
+        updated["content_hash"] = commons_content_hash(updated)
+    except _CANONICAL_ERRORS as exc:
+        raise KnowledgeV2Error(str(exc)) from exc
     return updated
 
 
@@ -1022,8 +1003,8 @@ def validate_entry(
         and isinstance(entry.get(body), Mapping)
     ):
         try:
-            expected = content_hash(entry)
-        except KnowledgeV2Error as exc:
+            expected = commons_content_hash(entry)
+        except _CANONICAL_ERRORS as exc:
             errors.append(f"{path}: {exc}")
             expected = None
         if expected is not None and declared_hash != expected:

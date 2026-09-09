@@ -43,7 +43,7 @@ def load_script_module(name: str, path: Path):
 
 def scan_fixture(name: str, policy: guard.Policy | None = None) -> list[guard.Finding]:
     text = (FIXTURE_DIR / name).read_text(encoding="utf-8")
-    return guard.scan_text(text, path=f"fixture/{name}", policy=policy or guard.default_policy())
+    return guard.scan_document(text, path=f"fixture/{name}", policy=policy or guard.default_policy())
 
 
 def git(repo: Path, *args: str) -> str:
@@ -215,8 +215,8 @@ class PolicyTests(unittest.TestCase):
         self.assertTrue(any(item.covers(relative) for item in policy.scoped_exclusions))
         # The same content outside the fixture directory is still reported.
         text = (FIXTURE_DIR / "dirty.txt").read_text(encoding="utf-8")
-        self.assertTrue(guard.scan_text(text, path="docs/elsewhere.md", policy=policy))
-        self.assertEqual(guard.scan_text(text, path=relative, policy=policy), [])
+        self.assertTrue(guard.scan_document(text, path="docs/elsewhere.md", policy=policy))
+        self.assertEqual(guard.scan_document(text, path=relative, policy=policy), [])
 
     def _write_policy(self, directory: Path, body: str) -> Path:
         path = directory / "allowlist.yaml"
@@ -343,11 +343,11 @@ class PolicyTests(unittest.TestCase):
             )
             policy = guard.load_policy(path)
             line = "host 192.168.240.7"
-            allowed = guard.scan_text(line, path="docs/a.md", policy=policy)
+            allowed = guard.scan_document(line, path="docs/a.md", policy=policy)
             self.assertEqual([item.allowlisted_by for item in allowed], ["docs-only"])
-            elsewhere = guard.scan_text(line, path="src/a.py", policy=policy)
+            elsewhere = guard.scan_document(line, path="src/a.py", policy=policy)
             self.assertEqual([item.allowlisted_by for item in elsewhere], [None])
-            other_value = guard.scan_text("host 192.168.240.8", path="docs/a.md", policy=policy)
+            other_value = guard.scan_document("host 192.168.240.8", path="docs/a.md", policy=policy)
             self.assertEqual([item.allowlisted_by for item in other_value], [None])
 
     def test_yaml_fallback_parser_matches_pyyaml(self) -> None:
@@ -741,14 +741,14 @@ class G1BoundaryTests(unittest.TestCase):
     def test_long_line_is_scanned_past_4096_and_does_not_split_tokens(self) -> None:
         policy = guard.default_policy()
         long_line = ("x" * 4097) + " host " + SYNTHETIC_IPV4
-        findings = guard.scan_text(long_line + "\n", path="notes.md", policy=policy)
+        findings = guard.scan_document(long_line + "\n", path="notes.md", policy=policy)
         self.assertEqual(len(findings), 1)
         self.assertEqual(findings[0].category, "ipv4")
         self.assertEqual(findings[0].line, 1)
         self.assertEqual(findings[0].column, 4104)
         self.assertNotIn("240", findings[0].preview)
         spanning = ("x" * 4090) + SYNTHETIC_IPV4
-        spanning_findings = guard.scan_text(spanning + "\n", path="notes.md", policy=policy)
+        spanning_findings = guard.scan_document(spanning + "\n", path="notes.md", policy=policy)
         self.assertEqual(len(spanning_findings), 1)
         self.assertEqual(spanning_findings[0].column, 4091)
 
@@ -1091,7 +1091,7 @@ class CurrentMainFindingScopeTests(unittest.TestCase):
         self.policy = guard.load_policy(POLICY_PATH)
 
     def _scan(self, text: str, path: str) -> list[guard.Finding]:
-        return guard.scan_text(text, path=path, policy=self.policy)
+        return guard.scan_document(text, path=path, policy=self.policy)
 
     def _unallowlisted(self, findings: list[guard.Finding]) -> list[str]:
         return [
@@ -1355,13 +1355,13 @@ class PhaseBKnowledgeFixtureScopeTests(unittest.TestCase):
         self.by_id = {entry.id: entry for entry in self.policy.entries}
 
     def _scan(self, text: str, path: str) -> list[guard.Finding]:
-        return guard.scan_text(text, path=path, policy=self.policy)
+        return guard.scan_document(text, path=path, policy=self.policy)
 
     def _category_findings(self, text: str, path: str, category: str) -> list[guard.Finding]:
         return [item for item in self._scan(text, path) if item.category == category]
 
     def test_declarations_are_exact_paths_and_singleton_categories(self) -> None:
-        self.assertEqual(len(self.policy.entries), 27)
+        self.assertEqual(len(self.policy.entries), 26)
         self.assertNotIn("knowledge-failure-signatures-private-range", self.by_id)
         for case in self.CASES:
             with self.subTest(entry=case["id"]):

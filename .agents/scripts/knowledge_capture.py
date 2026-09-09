@@ -37,7 +37,7 @@ from vaws_knowledge_service import (  # noqa: E402
     infer_repo_root,
     service_config,
 )
-from vaws_knowledge_v1 import (  # noqa: E402
+from vaws_knowledge_service import (  # noqa: E402
     COORDINATE_DIMENSIONS,
     KnowledgeError,
     knowledge_session_key,

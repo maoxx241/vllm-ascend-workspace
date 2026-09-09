@@ -15,8 +15,7 @@
 
 ## Federated v2
 
-- [ ] `promote` defaults to `<kind>.v2.yaml` and `--schema 1` still writes the
-      legacy v1 envelope.
+- [ ] `promote` writes `<kind>.v2.yaml`.
 - [ ] Every unknown coordinate dimension becomes an unresolved marker; none
       becomes `any` or a plausible value.
 - [ ] A promoted entry is `unverified`, and the result names each dimension a

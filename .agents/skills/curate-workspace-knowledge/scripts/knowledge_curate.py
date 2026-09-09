@@ -1,10 +1,7 @@
 #!/usr/bin/env python3
 """Review and curate verified workspace knowledge candidates.
 
-Two formal generations are curated here. ``promote``/``merge`` default to the
-federated v2 contract (``<kind>.v2.yaml``) because new writes go forward;
-``--schema 1`` keeps the legacy v1 envelope available for an entry that has to
-stay readable to a v1-only consumer.
+Curation writes only the federated v2 contract (``<kind>.v2.yaml``).
 
 A v2 promotion never invents a coordinate. Whatever the candidate recorded as
 ``unknown`` becomes an explicit unresolved marker, which keeps the entry at
@@ -42,22 +39,15 @@ from vaws_knowledge.server.capture import (  # noqa: E402
     validate_entry as commons_validate_entry,
 )
 from vaws_knowledge_service import (  # noqa: E402
-    find_candidate_entry,
-    infer_repo_root,
-    list_candidate_entries,
-    remove_candidate_entry,
-)
-from vaws_knowledge_v1 import (  # noqa: E402
     COORDINATE_DIMENSIONS,
     COORDINATE_UNKNOWN,
-    KNOWLEDGE_FILES,
     KnowledgeError,
+    find_candidate_entry,
     get_knowledge_entry,
-    load_knowledge_file,
-    normalize_fingerprint,
+    infer_repo_root,
+    list_candidate_entries,
     query_knowledge,
-    validate_knowledge_document,
-    write_knowledge_document,
+    remove_candidate_entry,
 )
 
 SAFE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,127}$")
@@ -185,7 +175,7 @@ def possible_matches(
         query=query,
         kinds=[candidate["kind"]],
         limit=limit,
-        include_deprecated=True,
+        include_unverified=True,
     )
 
 
@@ -230,53 +220,6 @@ def _check_promotion_gate(
             )
 
 
-def _entry_fingerprints(entry: Mapping[str, Any]) -> set[str]:
-    rule = entry.get("rule", {})
-    if not isinstance(rule, Mapping):
-        return set()
-    values = rule.get("fingerprints", [])
-    if not isinstance(values, list):
-        return set()
-    return {
-        normalize_fingerprint(value)
-        for value in values
-        if isinstance(value, str)
-    }
-
-
-def _duplicate_fingerprint_entries(
-    candidate: Mapping[str, Any], document: Mapping[str, Any]
-) -> list[str]:
-    candidate_fingerprints = set(candidate["fingerprints"])
-    return [
-        entry["id"]
-        for entry in document["entries"]
-        if candidate_fingerprints & _entry_fingerprints(entry)
-        and entry["status"] != "deprecated"
-    ]
-
-
-def _candidate_rule(candidate: Mapping[str, Any]) -> dict[str, Any]:
-    return {
-        "candidate_id": candidate["candidate_id"],
-        "candidate_ids": [candidate["candidate_id"]],
-        "summary": candidate["summary"],
-        "owner_skill": candidate["owner_skill"],
-        "scope": deepcopy(candidate["scope"]),
-        "fingerprints": list(candidate["fingerprints"]),
-        "symptom": candidate["symptom"],
-        "root_cause": candidate["root_cause"],
-        "resolution": candidate["resolution"],
-        "avoidance": candidate["avoidance"],
-        "verification": deepcopy(candidate["verification"]),
-        "evidence": deepcopy(candidate["evidence"]),
-        "confidence": candidate["confidence"],
-        "occurrence_count": candidate["occurrence_count"],
-        "first_seen_at": candidate["first_seen_at"],
-        "last_verified_at": candidate["last_seen_at"],
-    }
-
-
 def _archive_candidate(
     candidate: Mapping[str, Any],
     *,
@@ -298,245 +241,6 @@ def _archive_candidate(
             now=now,
         )
     raise KnowledgeError("candidate is missing its candidate-layer source")
-
-
-def promote_candidate(
-    candidate_id: str,
-    *,
-    entry_id: str | None,
-    status: str,
-    force_new: bool,
-    candidate_dir: Path,
-    reviewed_dir: Path,
-    knowledge_dir: Path,
-    now: str | None = None,
-) -> dict[str, Any]:
-    timestamp = now or utc_now()
-    loaded = _load_yaml_candidate(
-        candidate_id, candidate_dir=candidate_dir, knowledge_dir=knowledge_dir
-    )
-    candidate = _yaml_as_v1(loaded)
-    _check_promotion_gate(candidate, status, yaml_native=True)
-    formal_id = entry_id or candidate["candidate_id"]
-    if not SAFE_ID_RE.fullmatch(formal_id):
-        raise KnowledgeError("entry id must be a lowercase safe identifier")
-    filename = next(
-        name for name, kind in KNOWLEDGE_FILES.items() if kind == candidate["kind"]
-    )
-    knowledge_path = knowledge_dir / filename
-    document = load_knowledge_file(knowledge_path)
-    validate_knowledge_document(
-        document, expected_kind=candidate["kind"], path=str(knowledge_path)
-    )
-    if any(entry["id"] == formal_id for entry in document["entries"]):
-        raise KnowledgeError(f"formal entry already exists: {formal_id}")
-    duplicates = _duplicate_fingerprint_entries(candidate, document)
-    if duplicates and not force_new:
-        raise KnowledgeError(
-            "matching formal fingerprints already exist; use merge or --force-new: "
-            + ", ".join(duplicates)
-        )
-    stable_uris = [item["uri"] for item in _stable_evidence(candidate)]
-    document["entries"].append(
-        {
-            "id": formal_id,
-            "source": (
-                f"promoted from candidate {candidate_id}; stable evidence: "
-                + ", ".join(stable_uris)
-            ),
-            "applicable_versions": candidate["applicable_versions"],
-            "updated_at": today(timestamp),
-            "status": status,
-            "rule": _candidate_rule(candidate),
-        }
-    )
-    document["entries"].sort(key=lambda entry: entry["id"])
-    document["updated_at"] = today(timestamp)
-    write_knowledge_document(knowledge_path, document)
-    archive_path = _archive_candidate(
-        candidate,
-        reviewed_dir=reviewed_dir,
-        disposition="promoted",
-        entry_id=formal_id,
-        reason=None,
-        now=timestamp,
-    )
-    return {
-        "status": "passed",
-        "action": "promoted",
-        "candidate_id": candidate_id,
-        "entry_id": formal_id,
-        "entry_status": status,
-        "knowledge_path": str(knowledge_path),
-        "archive_path": str(archive_path),
-    }
-
-
-def _unique_values(left: Sequence[Any], right: Sequence[Any]) -> list[Any]:
-    result: list[Any] = []
-    seen: set[str] = set()
-    for item in [*left, *right]:
-        key = json.dumps(item, ensure_ascii=False, sort_keys=True)
-        if key not in seen:
-            seen.add(key)
-            result.append(deepcopy(item))
-    return result
-
-
-def merge_candidate(
-    candidate_id: str,
-    *,
-    entry_id: str,
-    candidate_dir: Path,
-    reviewed_dir: Path,
-    knowledge_dir: Path,
-    now: str | None = None,
-) -> dict[str, Any]:
-    timestamp = now or utc_now()
-    loaded = _load_yaml_candidate(
-        candidate_id, candidate_dir=candidate_dir, knowledge_dir=knowledge_dir
-    )
-    candidate = _yaml_as_v1(loaded)
-    _check_promotion_gate(candidate, "experimental", yaml_native=True)
-    found = get_knowledge_entry(knowledge_dir=knowledge_dir, entry_id=entry_id)
-    if found is None:
-        raise KnowledgeError(f"formal entry does not exist: {entry_id}")
-    if found["kind"] != candidate["kind"]:
-        raise KnowledgeError("candidate and formal entry kinds do not match")
-    knowledge_path = knowledge_dir / found["source_file"]
-    document = load_knowledge_file(knowledge_path)
-    target = next(entry for entry in document["entries"] if entry["id"] == entry_id)
-    rule = target["rule"]
-    if not isinstance(rule, dict):
-        raise KnowledgeError("formal entry rule must be an object")
-    candidate_rule = _candidate_rule(candidate)
-    for field in (
-        "summary",
-        "owner_skill",
-        "scope",
-        "symptom",
-        "root_cause",
-        "resolution",
-        "avoidance",
-        "verification",
-        "confidence",
-        "last_verified_at",
-    ):
-        rule[field] = deepcopy(candidate_rule[field])
-    rule["candidate_ids"] = _unique_values(
-        rule.get("candidate_ids", [rule.get("candidate_id")]),
-        [candidate_id],
-    )
-    rule["candidate_ids"] = [
-        value for value in rule["candidate_ids"] if isinstance(value, str)
-    ]
-    rule.setdefault("candidate_id", rule["candidate_ids"][0])
-    rule["fingerprints"] = _unique_values(
-        rule.get("fingerprints", []), candidate_rule["fingerprints"]
-    )
-    rule["evidence"] = _unique_values(
-        rule.get("evidence", []), candidate_rule["evidence"]
-    )
-    rule["occurrence_count"] = int(rule.get("occurrence_count", 1)) + candidate[
-        "occurrence_count"
-    ]
-    rule.setdefault("first_seen_at", candidate["first_seen_at"])
-    target["applicable_versions"] = candidate["applicable_versions"]
-    target["updated_at"] = today(timestamp)
-    target["source"] = (
-        target["source"] + f"; merged candidate {candidate_id}"
-    )
-    document["updated_at"] = today(timestamp)
-    write_knowledge_document(knowledge_path, document)
-    archive_path = _archive_candidate(
-        candidate,
-        reviewed_dir=reviewed_dir,
-        disposition="merged",
-        entry_id=entry_id,
-        reason=None,
-        now=timestamp,
-    )
-    return {
-        "status": "passed",
-        "action": "merged",
-        "candidate_id": candidate_id,
-        "entry_id": entry_id,
-        "knowledge_path": str(knowledge_path),
-        "archive_path": str(archive_path),
-    }
-
-
-def reject_candidate(
-    candidate_id: str,
-    *,
-    reason: str,
-    candidate_dir: Path,
-    reviewed_dir: Path,
-    knowledge_dir: Path,
-    now: str | None = None,
-) -> dict[str, Any]:
-    if not reason.strip():
-        raise KnowledgeError("rejection reason must be non-empty")
-    timestamp = now or utc_now()
-    loaded = _load_yaml_candidate(
-        candidate_id, candidate_dir=candidate_dir, knowledge_dir=knowledge_dir
-    )
-    candidate = _yaml_as_v1(loaded)
-    archive_path = _archive_candidate(
-        candidate,
-        reviewed_dir=reviewed_dir,
-        disposition="rejected",
-        entry_id=None,
-        reason=reason.strip(),
-        now=timestamp,
-    )
-    return {
-        "status": "passed",
-        "action": "rejected",
-        "candidate_id": candidate_id,
-        "archive_path": str(archive_path),
-    }
-
-
-def deprecate_entry(
-    entry_id: str,
-    *,
-    superseded_by: str | None,
-    reason: str,
-    knowledge_dir: Path,
-    now: str | None = None,
-) -> dict[str, Any]:
-    if not reason.strip():
-        raise KnowledgeError("deprecation reason must be non-empty")
-    found = get_knowledge_entry(knowledge_dir=knowledge_dir, entry_id=entry_id)
-    if found is None:
-        raise KnowledgeError(f"formal entry does not exist: {entry_id}")
-    if superseded_by == entry_id:
-        raise KnowledgeError("an entry cannot supersede itself")
-    if superseded_by and get_knowledge_entry(
-        knowledge_dir=knowledge_dir, entry_id=superseded_by
-    ) is None:
-        raise KnowledgeError(f"superseding entry does not exist: {superseded_by}")
-    timestamp = now or utc_now()
-    knowledge_path = knowledge_dir / found["source_file"]
-    document = load_knowledge_file(knowledge_path)
-    target = next(entry for entry in document["entries"] if entry["id"] == entry_id)
-    target["status"] = "deprecated"
-    target["updated_at"] = today(timestamp)
-    target["rule"]["deprecation"] = {
-        "reason": reason.strip(),
-        "superseded_by": superseded_by,
-        "deprecated_at": today(timestamp),
-    }
-    document["updated_at"] = today(timestamp)
-    write_knowledge_document(knowledge_path, document)
-    return {
-        "status": "passed",
-        "action": "deprecated",
-        "entry_id": entry_id,
-        "superseded_by": superseded_by,
-        "knowledge_path": str(knowledge_path),
-    }
 
 
 # ---------------------------------------------------------------------------
@@ -1147,17 +851,16 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["experimental", "active"],
         default="experimental",
         help=(
-            "v1 entry status; with --schema 2 this only selects the evidence "
-            "gate, because a promoted v2 entry is always 'unverified'"
+            "evidence gate only; a promoted v2 entry is always 'unverified'"
         ),
     )
     promote_parser.add_argument("--force-new", action="store_true")
     promote_parser.add_argument(
         "--schema",
         type=int,
-        choices=[1, 2],
+        choices=[2],
         default=2,
-        help="write the federated v2 entry (default) or the legacy v1 entry",
+        help="write the federated v2 entry",
     )
     promote_parser.add_argument("--origin-repo", default=DEFAULT_ORIGIN_REPO)
     promote_parser.add_argument("--contributor")
@@ -1172,7 +875,7 @@ def build_parser() -> argparse.ArgumentParser:
     deprecate_parser.add_argument("--superseded-by")
     deprecate_parser.add_argument("--reason", required=True)
     deprecate_parser.add_argument(
-        "--schema", type=int, choices=[1, 2], default=2
+        "--schema", type=int, choices=[2], default=2
     )
     resolve_parser = subparsers.add_parser(
         "resolve", help="fill one unresolved v2 coordinate dimension"
@@ -1232,36 +935,19 @@ def main(argv: list[str] | None = None) -> int:
                 ),
             }
         elif args.command == "promote":
-            if args.schema == 2:
-                payload = promote_candidate_v2(
-                    args.candidate_id,
-                    entry_id=args.entry_id,
-                    gate_status=args.status,
-                    force_new=args.force_new,
-                    origin_repo=args.origin_repo,
-                    contributor=args.contributor,
-                    candidate_dir=args.candidate_dir,
-                    reviewed_dir=args.reviewed_dir,
-                    knowledge_dir=args.knowledge_dir,
-                )
-            else:
-                payload = promote_candidate(
-                    args.candidate_id,
-                    entry_id=args.entry_id,
-                    status=args.status,
-                    force_new=args.force_new,
-                    candidate_dir=args.candidate_dir,
-                    reviewed_dir=args.reviewed_dir,
-                    knowledge_dir=args.knowledge_dir,
-                )
-        elif args.command == "merge":
-            payload = merge_candidate(
+            payload = promote_candidate_v2(
                 args.candidate_id,
                 entry_id=args.entry_id,
+                gate_status=args.status,
+                force_new=args.force_new,
+                origin_repo=args.origin_repo,
+                contributor=args.contributor,
                 candidate_dir=args.candidate_dir,
                 reviewed_dir=args.reviewed_dir,
                 knowledge_dir=args.knowledge_dir,
             )
+        elif args.command == "merge":
+            raise KnowledgeError("v1 merge is retired; promote a v2 revision or edit the v2 document")
         elif args.command == "reject":
             payload = reject_candidate(
                 args.candidate_id,
@@ -1291,20 +977,13 @@ def main(argv: list[str] | None = None) -> int:
             )
         elif args.command == "list-unresolved":
             payload = list_unresolved(args.knowledge_dir)
-        elif args.schema == 2:
+        else:
             payload = deprecate_entry_v2(
                 args.entry_id,
                 superseded_by=args.superseded_by,
                 reason=args.reason,
                 knowledge_dir=args.knowledge_dir,
                 reviewed_dir=args.reviewed_dir,
-            )
-        else:
-            payload = deprecate_entry(
-                args.entry_id,
-                superseded_by=args.superseded_by,
-                reason=args.reason,
-                knowledge_dir=args.knowledge_dir,
             )
     except (KnowledgeError, v2.KnowledgeV2Error, OSError) as exc:
         print(json.dumps({"status": "failed", "error": str(exc)}))

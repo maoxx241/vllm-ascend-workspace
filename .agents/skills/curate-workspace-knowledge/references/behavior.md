@@ -86,25 +86,6 @@ v2 has no field for a deprecation reason, so `deprecate` records it in
 `.vaws-local/knowledge/reviewed/<slug>.deprecation.json` and sets only
 `status` and `lifecycle.superseded_by` in the document.
 
-### v1 (`--schema 1`, legacy)
-
-Promotion keeps the existing formal v1 envelope:
-
-```text
-id
-source
-applicable_versions
-updated_at
-status
-rule
-```
-
-The structured candidate fields live inside `rule`, including candidate ids,
-scope, fingerprints, cause, resolution, verification, evidence, confidence,
-occurrences, and verification dates.
-
-`merge` operates on v1 entries only.
-
 ## Verification gate (v2)
 
 `verify` refuses to run unless:

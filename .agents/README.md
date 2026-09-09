@@ -31,7 +31,6 @@ compatibility backend for managed sessions, sync, service adapters, and cleanup.
 - `.agents/skills/machine-management/` is the source-of-truth skill package for remote machine attach, verify, repair, and removal workflows.
 - `.agents/skills/npu-fleet-monitor/` is the local deployment and lifecycle package for the standalone vaws-top repository and its loopback user service.
 - `.agents/skills/session-management/` is the source-of-truth skill package for isolated parallel agent sessions.
-- `.agents/skills/remote-toolbox/` is the compatibility skill package for managed VAWS target/probe/exec/job/sync/service/artifact/cleanup tools.
 - `.agents/skills/remote-code-parity/` is the source-of-truth skill package for remote code parity before remote execution.
 - `.agents/skills/modelscope/` is the source-of-truth skill package for ModelScope weight download, resume, status, and SHA256 verification workflows.
 - `.agents/skills/vllm-ascend-serving/` is the source-of-truth skill package for starting, checking, and stopping vLLM Ascend online services on managed containers.
@@ -55,21 +54,18 @@ compatibility backend for managed sessions, sync, service adapters, and cleanup.
 - `.agents/scripts/workspace_profile.py` is the shared low-level helper for the local workspace machine profile.
 - `.agents/scripts/workspace_identity.py` manages the persistent local UUID4 and optional unified project/agent/resource alias.
 - `.agents/scripts/run_manifest.py` creates and validates shared Run Manifest v1 files.
-- `.agents/scripts/knowledge_validate.py` validates both knowledge generations (v1 and federated v2) and reports the redaction posture of the project layer.
+- `.agents/scripts/knowledge_validate.py` validates project-layer v2 documents and reports the redaction posture of the project layer.
 - `.agents/scripts/knowledge_query.py` is a thin CLI over `vaws_knowledge.server.query`. It prints the commons `QueryResponse` envelope (layer, source_ref, degraded). Agents can call the same engine through the `vaws-knowledge` MCP tools.
 - `.agents/scripts/knowledge_capture.py` records or merges one verified, redacted candidate without loading a Skill, reading the environment coordinate from a Run Manifest, `--env` pairs, or the candidate scope.
-- `.agents/scripts/knowledge_migrate_v2.py` converts v1 documents to `<kind>.v2.yaml` and reports, per entry, which coordinate dimensions still need a human.
 - `.agents/scripts/knowledge_export.py` is the source-side export gate for proposing project knowledge to `vllm-ascend-workspace/vaws-knowledge`.
 - `.agents/hooks/knowledge_session_end.py` flushes only candidates explicitly deferred for the ending Codex session; it never reads the transcript.
-- `.agents/knowledge/` is the project layer: v1 `<kind>.yaml` documents, federated v2 `<kind>.v2.yaml` documents, and the `MIGRATION-v2.md` report.
+- `.agents/knowledge/` is the project layer: federated v2 `<kind>.v2.yaml` documents only.
 - `.agents/schemas/` stores the machine-readable Run Manifest and knowledge contracts, including the project-layer v2 and candidate v2 schemas.
 - `.agents/lib/vaws_local_state.py` is the shared library for untracked local runtime state.
 - `.agents/lib/vaws_run_manifest.py` is the shared Run Manifest v1 library for workflow correlation and artifact links.
-- `.agents/lib/vaws_knowledge_v1.py` is the shared v1 knowledge validation, capture, and query library, and the dual-read entry point for v2 documents.
 - `.agents/lib/vaws_knowledge_v2.py` keeps the project-layer contract (unresolved markers, `layer: project`, document I/O, curation/export). Hashing and query live in the installed `vaws-knowledge` package.
 - `.agents/lib/vaws_knowledge_service.py` builds the scaffold `ServiceConfig` (packaged shared + this repo's project/candidate roots).
 - `.agents/tests/knowledge_client_adapter.py` is the tracked protocol adapter for the vaws-knowledge conformance kit shipped with the package.
-- `.agents/lib/vaws_knowledge_migrate.py` is the mechanical v1 -> v2 conversion library.
 - `.agents/lib/vaws_redaction.py` is the scaffold redaction policy (BLOCK/EXPORT and recursive scan) over `vaws_knowledge.redact`. Detection rules and the live profile are declared by that package.
 - `.agents/lib/vaws_session_id.py` and `.agents/lib/vaws_session_state.py` are the shared libraries for session identity, state, locks, and leases.
 - `.agents/lib/vaws_remote_toolbox.py` is the shared library for remote target resolution, SSH execution, job observation, artifact streaming, sync adapters, service adapters, and cleanup.
@@ -160,7 +156,6 @@ Current primary helpers:
 - `scripts/knowledge_validate.py`
 - `scripts/knowledge_query.py`
 - `scripts/knowledge_capture.py`
-- `scripts/knowledge_migrate_v2.py`
 - `scripts/knowledge_export.py`
 - `scripts/workspace_profile.py`
 - `.agents/tests/test_vaws_scaffold_safety.py`
@@ -254,10 +249,8 @@ If you change `session-management`, update these together:
 - `.agents/lib/vaws_session_state.py`
 - `AGENTS.md`, `README.md`, and this file when routing or local-state behavior changes
 
-If you change `remote-toolbox`, update these together:
+If you change the remote toolbox library, update these together:
 
-- `.agents/skills/remote-toolbox/SKILL.md`
-- `.agents/skills/remote-toolbox/references/`
 - `.agents/scripts/remote_*.py`
 - `.agents/lib/vaws_remote_toolbox.py`
 - affected wrapper scripts that reuse toolbox primitives

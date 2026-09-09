@@ -11,8 +11,132 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any, Mapping
 
+import hashlib
+from datetime import datetime, timezone
+
 from vaws_knowledge.redact import REDACTION_PROFILE
 from vaws_knowledge.server.layers import ServiceConfig, load_config, load_entries
+from vaws_knowledge.server.query import SCOPE_DIMENSIONS, query as commons_query
+
+COORDINATE_DIMENSIONS = SCOPE_DIMENSIONS
+COORDINATE_UNKNOWN = "unknown"
+
+
+class KnowledgeError(ValueError):
+    """Scaffold-facing knowledge error (capture, query, or hook)."""
+
+
+def utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def knowledge_session_key(session_id: str) -> str:
+    if not isinstance(session_id, str) or not session_id.strip():
+        raise KnowledgeError("session id must be a non-empty string")
+    return hashlib.sha256(session_id.strip().encode("utf-8")).hexdigest()[:20]
+
+
+def normalize_coordinate(
+    coordinate: Mapping[str, Any] | None, *, source: str = "unavailable"
+) -> dict[str, str]:
+    del source
+    out: dict[str, str] = {}
+    incoming = coordinate if isinstance(coordinate, Mapping) else {}
+    for name in COORDINATE_DIMENSIONS:
+        value = incoming.get(name)
+        text = str(value).strip() if value is not None else ""
+        out[name] = text or COORDINATE_UNKNOWN
+    return out
+
+
+def unknown_coordinate_dimensions(coordinate: Mapping[str, Any]) -> list[str]:
+    return [
+        name
+        for name in COORDINATE_DIMENSIONS
+        if str(coordinate.get(name) or COORDINATE_UNKNOWN).strip() == COORDINATE_UNKNOWN
+    ]
+
+
+def query_knowledge(
+    *,
+    knowledge_dir: Path,
+    query: str,
+    kinds: list[str] | None = None,
+    bodies: list[str] | None = None,
+    limit: int = 3,
+    include_deprecated: bool = False,
+    min_score: int = 0,
+    include_unverified: bool = True,
+) -> list[dict[str, Any]]:
+    """Project-layer query through the installed engine, shaped for existing callers."""
+
+    del include_deprecated
+    repo = infer_repo_root(knowledge_dir, knowledge_dir.parent)
+    config = service_config(repo, project_root=knowledge_dir)
+    selected = list(kinds) if kinds else [None]
+    matches: list[dict[str, Any]] = []
+    for kind in selected:
+        response = commons_query(
+            config,
+            text=query,
+            kind=kind,
+            bodies=bodies,
+            limit=max(limit, 1),
+            include_unverified=include_unverified,
+        )
+        for result in response.results:
+            payload = result.to_dict()
+            score = float((payload.get("match") or {}).get("score") or result.score or 0)
+            if min_score and score * 10 < min_score:
+                # v1 min_score was integer token overlap; package scores are smaller floats.
+                if score <= 0:
+                    continue
+            matches.append(
+                {
+                    "id": payload.get("slug"),
+                    "uuid": payload.get("uuid"),
+                    "kind": payload.get("kind"),
+                    "status": payload.get("status"),
+                    "body": payload.get("body") or "rule",
+                    "summary": payload.get("summary"),
+                    "score": score,
+                    "source_file": (payload.get("source") or {}).get("file")
+                    if isinstance(payload.get("source"), Mapping)
+                    else payload.get("kind"),
+                    "layer": payload.get("layer") or "project",
+                    "schema_version": 2,
+                    "resolution": payload.get("resolution") or "",
+                }
+            )
+    matches.sort(key=lambda item: (-float(item.get("score") or 0), str(item.get("kind")), str(item.get("id"))))
+    return matches[:limit]
+
+
+def get_knowledge_entry(*, knowledge_dir: Path, entry_id: str) -> dict[str, Any] | None:
+    import vaws_knowledge_v2 as v2
+
+    entries, _problems = v2.load_entries(knowledge_dir, validate=False)
+    for entry in entries:
+        if entry_id in {entry.get("slug"), entry.get("uuid")}:
+            record = {key: value for key, value in entry.items() if not str(key).startswith("_")}
+            return {
+                "kind": entry.get("_kind"),
+                "source_file": entry.get("_source_file"),
+                "entry": record,
+                "layer": "project",
+                "schema_version": 2,
+            }
+    return None
+
+
+def load_json_object(path: Path) -> dict[str, Any]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise KnowledgeError(f"{path} must use JSON-compatible YAML: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise KnowledgeError(f"{path}: document root must be an object")
+    return payload
 
 _SLUG_UNSAFE = re.compile(r"[^a-z0-9]+")
 
@@ -134,8 +258,6 @@ def service_config(
 
 
 def scope_from_coordinate(coordinate: Mapping[str, str]) -> dict[str, Any]:
-    from vaws_knowledge_v1 import COORDINATE_DIMENSIONS, COORDINATE_UNKNOWN
-
     scope: dict[str, Any] = {}
     for name in COORDINATE_DIMENSIONS:
         value = str(coordinate.get(name) or COORDINATE_UNKNOWN).strip() or COORDINATE_UNKNOWN
@@ -320,8 +442,6 @@ def already_promoted_slug(
 ) -> str | None:
     """Return the project slug if this capture is already a formal entry."""
 
-    from vaws_knowledge_v1 import load_knowledge_file, KNOWLEDGE_FILES
-
     import vaws_knowledge_v2 as v2
 
     slug = str(commons_entry(payload, payload.get("environment") or {}).get("slug") or "")
@@ -334,24 +454,5 @@ def already_promoted_slug(
             if not isinstance(entry, Mapping) or entry.get("status") == "deprecated":
                 continue
             if slug and entry.get("slug") == slug:
-                return slug
-    for filename in KNOWLEDGE_FILES:
-        path = knowledge_dir / filename
-        if not path.is_file():
-            continue
-        try:
-            document = load_knowledge_file(path)
-        except Exception:  # noqa: BLE001 - missing or unreadable v1 is not a hit
-            continue
-        for entry in document.get("entries") or []:
-            if not isinstance(entry, Mapping) or entry.get("status") == "deprecated":
-                continue
-            rule = entry.get("rule") if isinstance(entry.get("rule"), Mapping) else {}
-            ids = {entry.get("id")}
-            if isinstance(rule.get("candidate_id"), str):
-                ids.add(rule["candidate_id"])
-            if isinstance(rule.get("candidate_ids"), list):
-                ids.update(item for item in rule["candidate_ids"] if isinstance(item, str))
-            if slug and slug in ids:
                 return slug
     return None

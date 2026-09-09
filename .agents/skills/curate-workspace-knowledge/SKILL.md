@@ -17,9 +17,8 @@ Agents can call `knowledge_query` / `knowledge_explain` / `knowledge_capture`
 on the `vaws-knowledge` MCP server.
 
 New promotions write the federated **v2** contract to
-`.agents/knowledge/<kind>.v2.yaml`. The v1 `<kind>.yaml` documents stay in
-place and stay readable (`--schema 1` still writes them) so existing consumers
-keep working. A v2 entry has exactly one body (`rule` or `measurement`);
+`.agents/knowledge/<kind>.v2.yaml`. The project layer contains only
+`*.v2.yaml`. A v2 entry has exactly one body (`rule` or `measurement`);
 candidate promotion still writes a `rule`. Measurement entries are first-class
 when listing, querying, hashing, or exporting.
 
@@ -51,9 +50,7 @@ when listing, querying, hashing, or exporting.
 
 - `list`: return compact candidate summaries;
 - `inspect`: return one full candidate plus possible formal matches;
-- `promote`: create one v2 entry (default) or a legacy v1 entry
-  (`--schema 1`);
-- `merge`: merge evidence and occurrences into an existing v1 entry;
+- `promote`: create one v2 entry;
 - `reject`: archive a candidate locally without changing formal knowledge;
 - `deprecate`: retain a formal entry while marking it obsolete;
 - `resolve`: fill one unresolved v2 coordinate dimension;
@@ -62,10 +59,9 @@ when listing, querying, hashing, or exporting.
 
 Related shared scripts, outside this Skill:
 
-- `.agents/scripts/knowledge_migrate_v2.py`: convert v1 documents to v2;
 - `.agents/scripts/knowledge_export.py`: the source-side export gate;
-- `.agents/scripts/knowledge_validate.py`: validate both generations and
-  report redaction posture.
+- `.agents/scripts/knowledge_validate.py`: validate the project-layer v2
+  documents and report redaction posture.
 
 Read only the reference needed for the active operation:
 

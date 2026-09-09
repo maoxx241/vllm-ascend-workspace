@@ -8,7 +8,7 @@ The remote development substrate used to live in this repository at
 (`v0.1.0`, locked by `uv.lock`). This document is the consumer-side
 contract.
 
-Phase 1 of the sequenced plan in the dated [2026-09-07 boundary snapshot](audits/repo-boundaries-2026-09-07.md).
+Phase 1 of the sequenced plan recorded in [target-state.md](target-state.md).
 
 ## 1. Why a package
 

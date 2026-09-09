@@ -27,14 +27,6 @@ python3 .agents/skills/curate-workspace-knowledge/scripts/knowledge_curate.py \
 The result lists `needs_human_input`; the entry stays `unverified` and
 non-exportable until those dimensions are resolved.
 
-Promote into the legacy v1 envelope instead:
-
-```bash
-python3 .agents/skills/curate-workspace-knowledge/scripts/knowledge_curate.py \
-  promote --schema 1 --candidate-id <candidate-id> --entry-id <formal-id> \
-  --status experimental
-```
-
 List v2 entries blocked on a human coordinate:
 
 ```bash
@@ -84,8 +76,7 @@ python3 .agents/skills/curate-workspace-knowledge/scripts/knowledge_curate.py \
   reject --candidate-id <candidate-id> --reason "<reason>"
 ```
 
-Deprecate a formal entry without deleting history (add `--schema 1` for a
-legacy v1 entry):
+Deprecate a formal entry without deleting history:
 
 ```bash
 python3 .agents/skills/curate-workspace-knowledge/scripts/knowledge_curate.py \
@@ -110,12 +101,4 @@ MCP tools `knowledge_query` / `knowledge_explain` / `knowledge_capture`):
 
 ```bash
 python3 .agents/scripts/knowledge_query.py --query Ascend910B4 --include-unverified --limit 1
-```
-
-Convert the remaining v1 documents and report what needs human input:
-
-```bash
-python3 .agents/scripts/knowledge_migrate_v2.py \
-  --origin-repo <owner>/vllm-ascend-workspace --contributor <handle> \
-  --report .agents/knowledge/MIGRATION-v2.md --dry-run
 ```

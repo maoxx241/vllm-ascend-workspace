@@ -102,7 +102,7 @@
     },
     {
       "prefix": ".agents/lib/vaws_knowledge.py",
-      "why": "Renamed to vaws_knowledge_v1.py. Dated audits still name the old path."
+      "why": "Historical name of the retired v1 knowledge store. Routing text may still name it."
     }
   ],
   "allow_prefixes_why": "\u002eremote-dev/state/ is deliberately absent: that path is post-migration drift and must fail. Placeholders and untracked state roots are the only silent exceptions.",

@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "doc": "docs/audits/split-reconciliation-2026-09-07.md",
+  "doc": "docs/target-state.md",
   "checker": "retired",
   "generated_on": "2026-09-07",
   "note": "Every item the repository split declared as moving, with the destination that was declared for it and a recorded verification state entered by a named observer who inspected a specific destination commit. 'declared' and 'arrived' are separate facts on purpose: the handoff documents were accurate about what left, and nobody checked what landed. Rules: a row must name a destination repository and checkable evidence, or it is rejected; a recorded 'arrived' or 'missing' must carry the destination commit that was inspected; a recorded 'missing' must name its follow-up; a recorded state that disagrees with what the checker observes is a hard failure until the row is updated, so a fix and its ledger row land together. Nothing rewrites this file from observations.",

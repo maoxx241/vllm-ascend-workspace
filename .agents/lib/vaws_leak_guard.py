@@ -34,7 +34,12 @@ if str(LIB) not in sys.path:
 
 # Reuse, rather than restate, the secret-shaped patterns that already gate
 # knowledge candidates. This module only adds the categories they miss.
-from vaws_knowledge_v1 import SECRET_KEY_RE, SECRET_VALUE_RES  # noqa: E402
+import vaws_knowledge.redact as knowledge_redact  # noqa: E402
+
+SECRET_KEY_RE = re.compile(
+    r"(?:^|_)(?:api_?key|access_?key|auth|credential|pass(?:word)?|secret|token)(?:_|$)",
+    re.IGNORECASE,
+)
 
 SCHEMA_VERSION = 1
 MAX_FILE_BYTES = 2 * 1024 * 1024
@@ -934,8 +939,24 @@ def _hostname_in_scope(line: str, match: re.Match[str]) -> bool:
     return bool(right == ":" and line[match.end() + 1 : match.end() + 2].isdigit())
 
 
+_PACKAGE_SECRET_RULES = frozenset(
+    {
+        "credential-known-format",
+        "credential-url-userinfo",
+        "credential-bearer",
+    }
+)
+
+
 def _secret_findings(line: str) -> Iterator[tuple[int, int, str, str]]:
-    for pattern in (*SECRET_VALUE_RES, *EXTRA_SECRET_VALUE_RES):
+    for hit in knowledge_redact.scan_text(line, allow=None, path="<line>"):
+        if hit.rule not in _PACKAGE_SECRET_RULES:
+            continue
+        start = line.find(hit.value)
+        end = start + len(hit.value) if start >= 0 else 0
+        if start >= 0:
+            yield start, end, "secret-value", hit.rule
+    for pattern in EXTRA_SECRET_VALUE_RES:
         for match in pattern.finditer(line):
             yield match.start(), match.end(), "secret-value", "known-credential-format"
     for match in SECRET_ASSIGNMENT_RE.finditer(line):
@@ -1028,7 +1049,7 @@ def _dedupe_spans(
     return sorted(kept, key=lambda item: item[0])
 
 
-def scan_text(text: str, *, path: str, policy: Policy) -> list[Finding]:
+def scan_document(text: str, *, path: str, policy: Policy) -> list[Finding]:
     findings: list[Finding] = []
     exclusions = policy.scoped_categories(path)
     for number, line in enumerate(text.splitlines(), start=1):
@@ -1139,7 +1160,7 @@ def scan_files(
             result.skipped.append({"path": relative, "reason": "binary"})
             continue
         result.scanned += 1
-        result.record(scan_text(data.decode("utf-8", "replace"), path=relative, policy=policy))
+        result.record(scan_document(data.decode("utf-8", "replace"), path=relative, policy=policy))
         if index % step == 0 or index == total:
             progress(f"scanned {index}/{total} tracked files")
     return result

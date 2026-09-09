@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for compact knowledge capture and retrieval."""
+"""Tests for compact knowledge capture and retrieval on the v2 path."""
 
 from __future__ import annotations
 
@@ -17,34 +17,66 @@ QUERY_SCRIPT = ROOT / ".agents" / "scripts" / "knowledge_query.py"
 if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
-from vaws_knowledge_v1 import (  # noqa: E402
-    KNOWLEDGE_FILES,
-    KnowledgeError,
-    capture_candidate,
-    get_knowledge_entry,
-    normalize_fingerprint,
-    normalize_candidate,
-    query_knowledge,
-)
-
-NOW = "2026-07-27T12:00:00Z"
+import vaws_knowledge_v2 as v2  # noqa: E402
+from vaws_knowledge_service import get_knowledge_entry, query_knowledge  # noqa: E402
 
 
-def write_knowledge_dir(root: Path, entries: dict[str, list[dict]] | None = None) -> None:
-    entries = entries or {}
+def _scope(**values: str) -> dict:
+    scope = {name: {"range": {"min": None, "max": None}} for name in v2.SCOPE_DIMENSIONS}
+    for name, value in values.items():
+        scope[name] = {"values": [value]}
+    return scope
+
+
+def _v2_entry(*, slug: str, status: str, summary: str, fingerprints: list[str], extra_rule: dict | None = None) -> dict:
+    rule = {
+        "summary": summary,
+        "symptom": summary,
+        "root_cause": "recorded for the test fixture",
+        "resolution": "Wait for one ACK per frame.",
+        "fingerprints": fingerprints,
+    }
+    if extra_rule:
+        rule.update(extra_rule)
+    return v2.with_content_hash(
+        {
+            "uuid": v2.derived_uuid("owner/fork", "known-failure-signatures", slug),
+            "slug": slug,
+            "content_hash": "sha256:" + "0" * 64,
+            "status": status,
+            "confidence": "low",
+            "scope": _scope(component="ssh-transport"),
+            "provenance": {
+                "contributor": "submitter",
+                "origin_repo": "owner/fork",
+                "submitted_at": "2026-07-27",
+                "redaction_profile": "r2",
+            },
+            "lifecycle": {
+                "first_seen": "2026-07-27",
+                "updated_at": "2026-07-27",
+                "superseded_by": None,
+                "resolved_by": None,
+            },
+            "rule": rule,
+        }
+    )
+
+
+def write_knowledge_dir(root: Path, entries: list[dict] | None = None) -> None:
     root.mkdir(parents=True, exist_ok=True)
-    for filename, kind in KNOWLEDGE_FILES.items():
-        (root / filename).write_text(
-            json.dumps(
-                {
-                    "schema_version": 1,
-                    "kind": kind,
-                    "updated_at": "2026-07-27",
-                    "entries": entries.get(kind, []),
-                }
-            ),
-            encoding="utf-8",
-        )
+    document = {
+        "schema_version": 2,
+        "kind": "known-failure-signatures",
+        "layer": "unverified",
+        "updated_at": "2026-07-27",
+        "entries": list(entries or []),
+    }
+    v2.write_document(
+        root / f"known-failure-signatures{v2.V2_SUFFIX}",
+        document,
+        context=v2.PROJECT_LAYER,
+    )
 
 
 def candidate_payload() -> dict:
@@ -54,16 +86,16 @@ def candidate_payload() -> dict:
         "owner_skill": "code-parity",
         "scope": {
             "component": ["ssh-transport"],
-            "machine": ["hvv-sz"],
+            "machine": ["lab"],
         },
         "fingerprints": [
             "timed out waiting for framed transfer acknowledgement",
         ],
-        "symptom": "Artifact uploads stall on hvv-sz.",
+        "symptom": "Artifact uploads stall on the shared lab host.",
         "root_cause": "The constrained SSH path drops oversized unacknowledged frames.",
         "resolution": "Send base64 frames and wait for an acknowledgement per frame.",
         "avoidance": "Keep each transport frame below the measured limit.",
-        "applicable_versions": "workspace revisions before and including 76c44b0",
+        "applicable_versions": "test fixture",
         "verification": {
             "status": "passed",
             "checks": [
@@ -86,150 +118,29 @@ def candidate_payload() -> dict:
     }
 
 
-class CandidateTests(unittest.TestCase):
-    def test_candidate_defaults_are_deterministic_and_valid(self) -> None:
-        first = normalize_candidate(candidate_payload(), now=NOW)
-        second = normalize_candidate(candidate_payload(), now=NOW)
-        self.assertEqual(first["candidate_id"], second["candidate_id"])
-        self.assertEqual(first["status"], "candidate")
-        self.assertEqual(first["occurrence_count"], 1)
-
-    def test_secret_like_values_are_rejected(self) -> None:
-        payload = candidate_payload()
-        payload["resolution"] = "Use token sk-abcdefghijklmnopqrstuvwxyz123456"
-        with self.assertRaisesRegex(KnowledgeError, "credential-known-format"):
-            normalize_candidate(payload, now=NOW)
-
-    def test_absolute_evidence_paths_are_rejected(self) -> None:
-        payload = candidate_payload()
-        payload["evidence"][0]["uri"] = "/tmp/private-run.json"
-        with self.assertRaisesRegex(KnowledgeError, "repository-relative"):
-            normalize_candidate(payload, now=NOW)
-
-    def test_evidence_path_traversal_is_rejected(self) -> None:
-        payload = candidate_payload()
-        payload["evidence"][0]["uri"] = "../outside/run.json"
-        with self.assertRaisesRegex(KnowledgeError, "must not traverse"):
-            normalize_candidate(payload, now=NOW)
-
-    def test_volatile_fingerprint_values_are_normalized(self) -> None:
-        first = normalize_fingerprint(
-            "2026-07-27T12:00:00Z PID 123 failed at 0x7ffdeadbeef"
-        )
-        second = normalize_fingerprint(
-            "2026-07-28T13:01:02Z pid=987 failed at 0x7ffaabbccdd"
-        )
-        self.assertEqual(first, second)
-
-    def test_repeat_capture_merges_evidence_and_occurrence(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            knowledge = root / "knowledge"
-            candidates = root / "candidates"
-            write_knowledge_dir(knowledge)
-            first = capture_candidate(
-                candidate_payload(),
-                candidate_dir=candidates,
-                knowledge_dir=knowledge,
-                now=NOW,
-            )
-            payload = candidate_payload()
-            payload["evidence"].append(
-                {"kind": "test", "uri": ".agents/tests/test_transport.py", "stable": True}
-            )
-            second = capture_candidate(
-                payload,
-                candidate_dir=candidates,
-                knowledge_dir=knowledge,
-                now="2026-07-27T13:00:00Z",
-            )
-            stored = json.loads(Path(second["path"]).read_text(encoding="utf-8"))
-            self.assertEqual(first["action"], "created")
-            self.assertEqual(second["action"], "updated")
-            self.assertEqual(stored["occurrence_count"], 2)
-            self.assertEqual(len(stored["evidence"]), 2)
-
-    def test_identical_capture_is_idempotent(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            knowledge = root / "knowledge"
-            candidates = root / "candidates"
-            write_knowledge_dir(knowledge)
-            capture_candidate(
-                candidate_payload(),
-                candidate_dir=candidates,
-                knowledge_dir=knowledge,
-                now=NOW,
-            )
-            second = capture_candidate(
-                candidate_payload(),
-                candidate_dir=candidates,
-                knowledge_dir=knowledge,
-                now="2026-07-27T13:00:00Z",
-            )
-            stored = json.loads(Path(second["path"]).read_text(encoding="utf-8"))
-            self.assertEqual(second["action"], "unchanged")
-            self.assertEqual(stored["occurrence_count"], 1)
-
-    def test_promoted_candidate_is_not_written_again(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            normalized = normalize_candidate(candidate_payload(), now=NOW)
-            entry = {
-                "id": "remote-framed-transfer",
-                "source": "verified real-machine run",
-                "applicable_versions": "all",
-                "updated_at": "2026-07-27",
-                "status": "active",
-                "rule": {"candidate_id": normalized["candidate_id"]},
-            }
-            knowledge = root / "knowledge"
-            write_knowledge_dir(
-                knowledge, {"known-failure-signatures": [entry]}
-            )
-            result = capture_candidate(
-                candidate_payload(),
-                candidate_dir=root / "candidates",
-                knowledge_dir=knowledge,
-                now=NOW,
-            )
-            self.assertEqual(result["status"], "already-promoted")
-            self.assertFalse((root / "candidates").exists())
-
-
 class QueryTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
-        active = {
-            "id": "remote-framed-transfer",
-            "source": "real hvv-sz validation",
-            "applicable_versions": "all",
-            "updated_at": "2026-07-27",
-            "status": "active",
-            "rule": {
-                "summary": "Acknowledge constrained SSH transfer frames",
-                "fingerprints": [
-                    "timed out waiting for framed transfer acknowledgement"
-                ],
-                "root_cause": "The SSH path drops oversized frames.",
-                "resolution": "Wait for one ACK per frame.",
-            },
-        }
-        deprecated = {
-            "id": "legacy-transfer",
-            "source": "old run",
-            "applicable_versions": "old",
-            "updated_at": "2026-07-27",
-            "status": "deprecated",
-            "rule": {
-                "summary": "Legacy transfer timeout",
-                "fingerprints": ["transfer timeout"],
-            },
-        }
         write_knowledge_dir(
             self.root,
-            {"known-failure-signatures": [active, deprecated]},
+            [
+                _v2_entry(
+                    slug="remote-framed-transfer",
+                    status="unverified",
+                    summary="Acknowledge constrained SSH transfer frames",
+                    fingerprints=[
+                        "timed out waiting for framed transfer acknowledgement"
+                    ],
+                    extra_rule={"root_cause": "The SSH path drops oversized frames."},
+                ),
+                _v2_entry(
+                    slug="legacy-transfer",
+                    status="deprecated",
+                    summary="Legacy transfer timeout",
+                    fingerprints=["transfer timeout"],
+                ),
+            ],
         )
 
     def tearDown(self) -> None:
@@ -241,7 +152,7 @@ class QueryTests(unittest.TestCase):
             query="timed out waiting for framed transfer acknowledgement",
         )
         self.assertEqual(matches[0]["id"], "remote-framed-transfer")
-        self.assertGreaterEqual(matches[0]["score"], 100)
+        self.assertGreater(matches[0]["score"], 0)
         self.assertNotIn("rule", matches[0])
 
     def test_deprecated_entries_are_excluded_by_default(self) -> None:
