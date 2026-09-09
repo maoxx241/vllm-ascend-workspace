@@ -13,7 +13,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-ROOT = Path(__file__).resolve().parents[3]
+ROOT = Path(__file__).resolve().parents[4]
 LIB_DIR = ROOT / ".agents" / "lib"
 REPO_INIT_SCRIPTS = ROOT / ".agents" / "skills" / "repo-init" / "scripts"
 for value in (str(LIB_DIR), str(REPO_INIT_SCRIPTS)):
