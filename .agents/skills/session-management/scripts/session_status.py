@@ -22,6 +22,7 @@ ensure_workspace_interpreter(repo_root=ROOT)
 
 from vaws_remote_dev import ssh_exec  # noqa: E402
 from vaws_remote_target import SshEndpoint  # noqa: E402
+from vaws_result_envelope import emit_skill_json  # noqa: E402
 from vaws_session_state import (  # noqa: E402
     load_session_lookup,
     session_live_leases,
@@ -32,7 +33,11 @@ SSH_CHECK_TIMEOUT_SECONDS = 60
 
 
 def print_json(data: dict[str, Any]) -> None:
-    print(json.dumps(data, indent=2, ensure_ascii=False))
+    emit_skill_json(
+        data,
+        skill="session-management",
+        entry_point=".agents/skills/session-management/scripts/session_status.py",
+    )
 
 
 def tail_output(value: str | bytes | None, limit: int = 500) -> str:

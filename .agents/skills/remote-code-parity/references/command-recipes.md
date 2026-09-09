@@ -1,4 +1,4 @@
-All parity helpers stream phase progress on `stderr` as `__VAWS_PARITY_PROGRESS__=<json>` and keep the final summary JSON on `stdout`.
+All parity helpers stream phase progress on `stderr` as `__VAWS_PROGRESS__=<json>` and keep the final summary JSON on `stdout`.
 
 External worktrees: append `--source vllm=/actual/vllm --source
 vllm-ascend=/actual/vllm-ascend` to the wrapper or low-level helper. Do not

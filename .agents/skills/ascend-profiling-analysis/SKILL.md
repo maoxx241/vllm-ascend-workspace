@@ -39,7 +39,7 @@ compatibility backend for managed VAWS sessions.
 - **远端解析**：profiling root 通常几十 GB，禁止全量拉回本地解析。本地只做静态检查、schema 校验、产物 manifest 阅读。真实 analyze 在远端容器里跑，必要时把 `report/` 目录拉回本地。
 - **入口稳定**：agent 调用 `profile_analyze.py` / `profile_sweep.py`，不要绕过去手写 `python3 -m ascend_profile.analyze` 命令。
 - **manifest-aware**：当 `ascend-profiling-collection` 产物可用时，优先把 `--manifest <run_dir>/manifest.json` 喂给 `profile_analyze.py`，让本 skill 自己从 manifest 里读 `remote_profile_root` / `analysis_status`。`analysis_status != "ok"` 直接拒绝，不要静默跳过。
-- **进度协议**：进度走 `stderr`，前缀 `__VAWS_PROFILE_ANALYSIS_PROGRESS__=<json>`。最终结果走 `stdout`，单个 JSON 对象。
+- **进度协议**：进度走 `stderr`，前缀 `__VAWS_PROGRESS__=<json>`。最终结果走 `stdout`，单个 JSON 对象。
 - **本地状态**：本 skill 的本地状态全部放在 `.vaws-local/profiling-analysis/runs/<timestamp>_<tag>/`（untracked）。远端工作目录默认 `/tmp/ascend_profile_framework`。
 - **不在算法里硬编码层数 / 模型语义**：层数不能写成 Python 规则。已知模型的结构字段必须来自 `config.json`（显式提供、Hugging Face、ModelScope 或已登记本地 catalog）或已验证的 profile-visible hint；模糊族名（如 `dsv4` / `qwen3.5`）必须枚举具体 variants 后逐个匹配，不能直接猜层数。量化和数据格式只影响权重大小、dtype 和效率解释，不作为层数/结构变体。
 

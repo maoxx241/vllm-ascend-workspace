@@ -157,7 +157,7 @@ python3 .agents/skills/session-management/scripts/session_group.py teardown \
   [--remove-containers] [--remove-worktrees] [--release-leases] [--force]
 ```
 
-Progress is emitted on `stderr` as `__VAWS_SESSION_PROGRESS__=<json>`. Final output is JSON on `stdout`.
+Progress is emitted on `stderr` as `__VAWS_PROGRESS__=<json>`. Final output is Result Envelope v1 on `stdout`.
 
 `session_create.py` output includes a `next_steps` array that walks the agent through the recommended follow-up: `cd` into the worktree (all skill commands auto-resolve the session from there), run `session_diff.py` to review changes, and — in Cursor — use the cursor-app-control MCP tool `move_agent_to_root` to switch the agent workspace to the worktree. Switching to the worktree with `move_agent_to_root` after creation is recommended (not enforced): it makes every subsequent skill command auto-resolve this session with no target arg.
 

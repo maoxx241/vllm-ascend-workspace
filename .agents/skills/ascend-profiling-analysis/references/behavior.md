@@ -20,7 +20,7 @@ managed VAWS compatibility backend.
 5. **Remote analyze**: run `python3 -m ascend_profile.analyze <ROOT> --output <OUT> --verbose` from inside `<remote-work-dir>`. stdout/stderr is streamed back so the agent can see stage timings live.
 6. **Validate artifacts**: every required artifact must exist, and `segment_manifest.json` must have `hard_errors == 0` and `interior_island_total == 0`.
 7. **Pull artifacts**: mode-dependent. `fast` (default): `report/report.md` + `report/analysis_summary.json` + all `*_manifest.json` + class-level summary CSVs + `diagnosis_findings.json` (17 items). `full`: the previous lightweight set (`report/` incl. `assets/`, manifests, findings, summary CSVs, `step_segments.json`, `layer_segments.json`, `structure_evidence_graph.json`, `evidence_index.csv`). Use `--keep-remote-output` to mirror the entire remote output dir locally.
-8. **Emit JSON** on stdout. Progress lines (`__VAWS_PROFILE_ANALYSIS_PROGRESS__=...`) go to stderr.
+8. **Emit JSON** on stdout. Progress lines (`__VAWS_PROGRESS__=...`) go to stderr.
 
 ## Required artifacts (single-root `analyze`)
 

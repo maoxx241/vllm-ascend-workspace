@@ -39,7 +39,7 @@ Usage:
         --bench-args --dataset-name random --random-input-len 512 \\
             --random-output-len 512 --num-prompts 1 --max-concurrency 1 --ignore-eos
 
-Progress on stderr as __VAWS_BENCHMARK_PROGRESS__=<json>.
+Progress on stderr as __VAWS_PROGRESS__=<json>.
 Final comparison on stdout as a single JSON object.
 """
 

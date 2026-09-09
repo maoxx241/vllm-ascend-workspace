@@ -30,10 +30,14 @@ from vaws_session_state import (
     session_record_for_execution,
     session_serving_state_path,
 )
+from vaws_result_envelope import (  # noqa: E402
+    PROGRESS_SENTINEL,
+    progress as envelope_progress,
+    unwrap_skill_payload,
+)
 from vaws_validate import ValidationError
 
 DEFAULT_REMOTE_TOOLBOX_ROOT = ".vaws-runtime/remote-toolbox"
-PROGRESS_SENTINEL = "__VAWS_REMOTE_TOOLBOX_PROGRESS__="
 TAIL_CHARS = 12000
 
 
@@ -140,14 +144,9 @@ def emit_progress(
     sentinel: str | None = None,
     **extra: Any,
 ) -> None:
-    payload: dict[str, Any] = {"phase": phase, "at": utc_now_iso()}
-    if message is not None:
-        payload["message"] = message
-    payload.update({key: value for key, value in extra.items() if value is not None})
-    sys.stderr.write(
-        (sentinel or PROGRESS_SENTINEL) + json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n"
-    )
-    sys.stderr.flush()
+    if sentinel is not None and sentinel != PROGRESS_SENTINEL:
+        raise ValueError("progress sentinel is owned by vaws_result_envelope")
+    envelope_progress(phase, message or phase, **extra)
 
 
 def now_iso() -> str:
@@ -380,6 +379,8 @@ def run_json_command(cmd: list[str], *, cwd: Path = ROOT, relay_stderr: bool = T
         payload = json.loads(stdout) if stdout.strip() else {}
         if not isinstance(payload, dict):
             payload = {"status": "failed", "error": "subcommand returned non-object JSON", "stdout_tail": tail_text(stdout)}
+        else:
+            payload = unwrap_skill_payload(payload)
     except json.JSONDecodeError:
         payload = {"status": "failed", "error": "subcommand returned non-JSON stdout", "stdout_tail": tail_text(stdout)}
     return result.returncode, payload, stdout, stderr

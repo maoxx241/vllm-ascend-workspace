@@ -43,7 +43,7 @@ These should not trigger `remote-code-parity` unless remote code parity is the o
 - the skill keeps local runtime state only under `.vaws-local/remote-code-parity/`
 - session mode resolves the source worktree and container endpoint from `.vaws-local/sessions/<session-id>/session.json`
 - normal outcomes are reported as compact JSON with `status` equal to `ready`, `blocked`, `failed`, or `dry-run`
-- phase progress is emitted on `stderr` as `__VAWS_PARITY_PROGRESS__=<json>` while the final summary stays on `stdout`
+- phase progress is emitted on `stderr` as `__VAWS_PROGRESS__=<json>` while the final summary stays on `stdout`
 - `remote_sync_plan.py --mode source-only` reports that install/rebuild will not run
 - `remote_sync_apply.py --mode source-only` completes without invoking runtime install phases
 - `remote_sync_plan.py --mode install` reports install/rebuild reasons and current consent state

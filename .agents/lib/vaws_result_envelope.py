@@ -28,7 +28,8 @@ import sys
 import uuid
 from copy import deepcopy
 from datetime import datetime, timezone
-from typing import Any, Iterable, Mapping, MutableMapping, Sequence
+from pathlib import Path
+from typing import Any, Iterable, Literal, Mapping, MutableMapping, Sequence
 
 SCHEMA_VERSION = "vaws.result-envelope.v1"
 SCHEMA_MAJOR = 1
@@ -86,6 +87,92 @@ IDEMPOTENCY_CLASSES = frozenset(
     {"idempotent", "at_most_once", "unsafe_to_retry", "unknown"}
 )
 PART_OUTCOMES = frozenset({"success", "failure", "blocked", "skipped"})
+
+#: Frozen contract owned by ``vaws-remote-dev``. Copied as a constant so this
+#: module can name the conversion without importing the other package at
+#: module load (tests that construct fixtures still import ``remote_dev.result``).
+REMOTE_DEV_RESULT_SCHEMA_VERSION = "remote-dev.result.v1"
+REMOTE_DEV_OUTCOMES = frozenset(
+    {"success", "needs_input", "blocked", "failed", "timeout", "cancelled"}
+)
+
+#: remote-dev → parts. ``failed``/``timeout``/``needs_input``/``cancelled`` are
+#: lossy: the part vocabulary has no matching token.
+REMOTE_DEV_TO_PART_OUTCOME: Mapping[str, str] = {
+    "success": "success",
+    "blocked": "blocked",
+    "failed": "failure",
+    "timeout": "failure",
+    "needs_input": "blocked",
+    "cancelled": "skipped",
+}
+
+#: remote-dev → children. ``failed``/``timeout``/``needs_input`` are lossy.
+#: ``cancelled`` is an envelope outcome, so that cell is not lossy.
+REMOTE_DEV_TO_CHILD_OUTCOME: Mapping[str, str] = {
+    "success": "success",
+    "blocked": "blocked",
+    "cancelled": "cancelled",
+    "failed": "failure",
+    "timeout": "failure",
+    "needs_input": "blocked",
+}
+
+#: Reverse maps, only where a unique reverse exists. ``failure`` does not
+#: reverse uniquely (it could have been ``failed`` or ``timeout``). ``blocked``
+#: does not reverse uniquely on the parts side (``blocked`` or ``needs_input``).
+PART_TO_REMOTE_DEV_OUTCOME: Mapping[str, str | None] = {
+    "success": "success",
+    "blocked": None,
+    "failure": None,
+    "skipped": "cancelled",
+}
+CHILD_TO_REMOTE_DEV_OUTCOME: Mapping[str, str | None] = {
+    "success": "success",
+    "blocked": None,
+    "cancelled": "cancelled",
+    "failure": None,
+    "partial": None,
+}
+
+LOSSY_REMOTE_DEV_PART_OUTCOMES = frozenset(
+    src
+    for src, dest in REMOTE_DEV_TO_PART_OUTCOME.items()
+    if src != dest
+)
+LOSSY_REMOTE_DEV_CHILD_OUTCOMES = frozenset(
+    src
+    for src, dest in REMOTE_DEV_TO_CHILD_OUTCOME.items()
+    if src != dest
+)
+
+#: Skill-layer ``status`` values seen across the four load-bearing skills,
+#: mapped onto envelope outcomes. Original status is always kept in
+#: ``extensions.result``.
+SKILL_STATUS_TO_OUTCOME: Mapping[str, str] = {
+    "ok": "success",
+    "ready": "success",
+    "success": "success",
+    "skipped": "success",
+    "materialized": "success",
+    "source-only": "success",
+    "dry-run": "success",
+    "removed": "success",
+    "unmanaged": "success",
+    "not_found": "success",
+    "planned": "success",
+    "stopped": "success",
+    "alive": "success",
+    "alive_healthy": "success",
+    "updated": "success",
+    "failed": "failure",
+    "timeout": "failure",
+    "error": "failure",
+    "blocked": "blocked",
+    "needs_input": "blocked",
+    "needs_repair": "blocked",
+    "cancelled": "cancelled",
+}
 
 #: Environment identity at the granularity the knowledge base compares on.
 ENVIRONMENT_FIELDS = (
@@ -188,10 +275,13 @@ def text_preview(
 ) -> dict[str, Any]:
     """Bounded text preview with a pointer to the full content.
 
-    Field names intentionally match ``.remote-dev/core/preview.py`` so that a
-    remote-dev result can be lifted into an envelope without reshaping. The
-    added ``ref`` is what makes truncation safe: a truncated preview without
-    a ref is rejected by :func:`validate_envelope`.
+    Field names match remote-dev's preview helper so a preview object can be
+    copied as-is into ``evidence.previews``. A remote-dev *result* still
+    cannot be placed in ``parts`` or ``children`` without
+    :func:`convert_remote_dev_result`: the outcome vocabularies diverge and
+    ``unit`` / ``envelope_id`` / ``depth`` are properties of the operation.
+    A truncated preview without a ``ref`` is rejected by
+    :func:`validate_envelope`.
     """
     byte_count = len(value.encode("utf-8", errors="replace"))
     payload: dict[str, Any] = {
@@ -986,6 +1076,424 @@ def compose_child(
     if validate:
         validate_envelope(composed)
     return composed
+
+
+# ---------------------------------------------------------------------------
+# remote-dev.result.v1 → envelope slots (P21)
+# ---------------------------------------------------------------------------
+
+
+def remote_dev_mapping_is_lossy(outcome: str, slot: Literal["parts", "children"]) -> bool:
+    """True when the remote-dev token is not the same word in ``slot``."""
+    if slot == "parts":
+        return outcome in LOSSY_REMOTE_DEV_PART_OUTCOMES
+    if slot == "children":
+        return outcome in LOSSY_REMOTE_DEV_CHILD_OUTCOMES
+    raise EnvelopeError(f"unsupported conversion slot: {slot!r}")
+
+
+def _remote_dev_evidence(
+    result: Mapping[str, Any],
+    *,
+    original_outcome: str,
+    mapped_outcome: str,
+    slot: str,
+) -> dict[str, Any]:
+    """Keep the remote-dev outcome even when the slot mapping is lossy.
+
+    Parts and children have no first-class ``evidence`` field in the JSON
+    schema (``additionalProperties: false``). :func:`validate_envelope` does
+    not reject unknown keys on those objects, but a wrapping envelope that
+    later goes through jsonschema would. The original token is therefore
+    stored as a named ``refs`` entry (parts) or folded into the digest
+    ``summary``/``reason_code`` plus a ``refs``-shaped pointer kept under
+    the slot's existing ``ref`` note. Callers that wrap the converted
+    object in a parent envelope should also copy this pointer into
+    ``evidence.refs``.
+    """
+    return {
+        "name": "remote_dev_outcome",
+        "kind": "remote-dev.result.v1.outcome",
+        "ref": str(original_outcome),
+        "note": (
+            f"lossy {slot} mapping: remote-dev {original_outcome!r} → {mapped_outcome!r}"
+            if original_outcome != mapped_outcome
+            else f"remote-dev outcome {original_outcome!r} mapped onto {slot}"
+        ),
+    }
+
+
+def convert_remote_dev_result(
+    result: Mapping[str, Any],
+    *,
+    slot: Literal["parts", "children"],
+    unit: str | None = None,
+    unit_kind: str = "remote_call",
+    envelope_id: str | None = None,
+    depth: int = 1,
+    layer: str | None = None,
+    reason_code: str | None = None,
+    entry_point: str | None = None,
+    action: str | None = None,
+    ref: str | None = None,
+    summary: str | None = None,
+) -> dict[str, Any]:
+    """Convert one ``remote-dev.result.v1`` into a ``parts`` or ``children`` slot.
+
+    The caller supplies ``unit`` (parts) or ``envelope_id`` and ``depth``
+    (children): those names describe the *operation's* structure, not the
+    remote call. ``layer`` is also caller-supplied. A remote-dev failure is
+    not attributed to a layer automatically — a non-zero exit from a
+    command the agent composed is an operation failure that travelled over
+    remote-dev, not a transport failure.
+
+    Lossy outcome mappings keep the original remote-dev outcome in a
+    ``refs`` evidence pointer (parts) or in the digest ``ref`` note plus
+    ``reason_code`` when the caller did not supply one (children). The
+    original token is never dropped.
+    """
+    if not isinstance(result, Mapping):
+        raise EnvelopeError("remote-dev result must be an object")
+    schema = result.get("schema_version")
+    if schema != REMOTE_DEV_RESULT_SCHEMA_VERSION:
+        raise EnvelopeError(
+            f"convert_remote_dev_result expects {REMOTE_DEV_RESULT_SCHEMA_VERSION!r}, "
+            f"got {schema!r}"
+        )
+    original = result.get("outcome")
+    if original not in REMOTE_DEV_OUTCOMES:
+        raise EnvelopeError(
+            f"unsupported remote-dev outcome: {original!r}; "
+            f"expected one of {sorted(REMOTE_DEV_OUTCOMES)}"
+        )
+
+    mapped_table = (
+        REMOTE_DEV_TO_PART_OUTCOME if slot == "parts" else REMOTE_DEV_TO_CHILD_OUTCOME
+        if slot == "children"
+        else None
+    )
+    if mapped_table is None:
+        raise EnvelopeError(f"unsupported conversion slot: {slot!r}")
+    mapped = mapped_table[str(original)]
+    lossy = original != mapped
+    text = summary if summary is not None else str(result.get("summary") or original)
+    pointer = _remote_dev_evidence(
+        result,
+        original_outcome=str(original),
+        mapped_outcome=mapped,
+        slot=slot,
+    )
+    attributed = layer
+    if mapped in {"failure", "blocked"} and attributed is None:
+        attributed = "unknown"
+    if attributed is not None and attributed not in LAYER_SET:
+        raise EnvelopeError(f"unsupported layer: {attributed!r}")
+
+    if slot == "parts":
+        if not unit or not str(unit).strip():
+            raise EnvelopeError(
+                "parts conversion requires caller-supplied unit; "
+                "a remote-dev result cannot self-describe as a part"
+            )
+        refs = [pointer]
+        invocation = result.get("invocation_id")
+        if isinstance(invocation, str) and invocation.strip():
+            refs.append(
+                evidence_ref(
+                    name="remote_dev_invocation",
+                    kind="remote-dev.result.v1.invocation",
+                    ref=invocation,
+                    note=str(result.get("tool") or "remote-dev"),
+                )
+            )
+        part = make_part(
+            unit=str(unit),
+            outcome=mapped,
+            unit_kind=unit_kind,
+            layer=attributed,
+            reason_code=reason_code,
+            summary=text,
+            refs=refs,
+        )
+        # Original remote-dev outcome lives in evidence as well as refs.
+        # validate_envelope permits this extra key on parts; the JSON schema
+        # currently does not (additionalProperties: false) — see the G4 report.
+        part["evidence"] = {
+            "remote_dev_outcome": original,
+            "remote_dev_status": result.get("status"),
+            "invocation_id": result.get("invocation_id"),
+            "tool": result.get("tool"),
+            "lossy": lossy,
+        }
+        return part
+
+    if not envelope_id or not str(envelope_id).strip():
+        raise EnvelopeError(
+            "children conversion requires caller-supplied envelope_id; "
+            "a remote-dev result cannot self-describe as a child digest"
+        )
+    if not isinstance(depth, int) or depth < 1:
+        raise EnvelopeError("children conversion requires depth >= 1 from the caller")
+    child_reason = reason_code
+    if child_reason is None and lossy:
+        child_reason = f"remote_dev_{original}"
+    child_ref = ref
+    if child_ref is None:
+        invocation = result.get("invocation_id")
+        child_ref = (
+            f"remote-dev:{original}:{invocation}"
+            if isinstance(invocation, str) and invocation.strip()
+            else f"remote-dev:{original}"
+        )
+    return {
+        "envelope_id": str(envelope_id),
+        "entry_point": entry_point or result.get("tool"),
+        "action": action or str(result.get("status") or original),
+        "outcome": mapped,
+        "layer": attributed,
+        "reason_code": child_reason,
+        "summary": text,
+        "ref": child_ref,
+        "depth": depth,
+        "evidence": {
+            "remote_dev_outcome": original,
+            "remote_dev_status": result.get("status"),
+            "invocation_id": result.get("invocation_id"),
+            "tool": result.get("tool"),
+            "lossy": lossy,
+        },
+    }
+
+
+def skill_outcome_from_payload(payload: Mapping[str, Any]) -> str:
+    """Map a skill-layer ``status`` (or ``outcome``) onto an envelope outcome."""
+    raw = payload.get("outcome")
+    if raw in OUTCOMES:
+        return str(raw)
+    status = payload.get("status")
+    if status in SKILL_STATUS_TO_OUTCOME:
+        return SKILL_STATUS_TO_OUTCOME[str(status)]
+    if payload.get("success") is False:
+        return "failure"
+    return "success"
+
+
+def unwrap_skill_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the skill-layer object from an envelope, or the payload itself.
+
+    Downstream consumers that still switch on ``status`` read
+    ``extensions.result``. This is not a sentinel alias and does not accept
+    the retired progress names.
+    """
+    if payload.get("schema_version") == SCHEMA_VERSION:
+        result = (payload.get("extensions") or {}).get("result")
+        if isinstance(result, Mapping):
+            return dict(result)
+    return dict(payload)
+
+
+def _iter_embedded_remote_dev_results(
+    payload: Mapping[str, Any],
+) -> list[Mapping[str, Any]]:
+    found: list[Mapping[str, Any]] = []
+    if payload.get("schema_version") == REMOTE_DEV_RESULT_SCHEMA_VERSION:
+        found.append(payload)
+    for key in ("remote_dev_result", "remote_result"):
+        value = payload.get(key)
+        if isinstance(value, Mapping) and value.get("schema_version") == REMOTE_DEV_RESULT_SCHEMA_VERSION:
+            found.append(value)
+    bundled = payload.get("remote_dev_results")
+    if isinstance(bundled, list):
+        for item in bundled:
+            if isinstance(item, Mapping) and item.get("schema_version") == REMOTE_DEV_RESULT_SCHEMA_VERSION:
+                found.append(item)
+    return found
+
+
+def _infer_entry_point(argv: Sequence[str] | None, *, fallback: str) -> str:
+    if not argv:
+        return fallback
+    raw = Path(str(argv[0]))
+    text = str(raw)
+    marker = ".agents/"
+    if marker in text:
+        return text[text.index(marker) :]
+    name = raw.name
+    if name and name != "-c":
+        return fallback if fallback.endswith(name) else f"{fallback.rsplit('/', 1)[0]}/{name}" if "/" in fallback else name
+    return fallback
+
+
+def envelope_from_skill_payload(
+    payload: Mapping[str, Any],
+    *,
+    skill: str,
+    entry_point: str,
+    action: str | None = None,
+    argv: Sequence[str] | None = None,
+    target_kind: str = "unknown",
+    target_id: str | None = None,
+    layer: str | None = None,
+    reason_code: str | None = None,
+    exit_code: int | None = None,
+    remote_dev_results: Sequence[Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Wrap one skill-layer JSON object as Result Envelope v1.
+
+    The original payload is preserved in ``extensions.result``. Embedded
+    ``remote-dev.result.v1`` objects are converted through
+    :func:`convert_remote_dev_result` into ``parts``.
+    """
+    argv_list = [str(part) for part in (argv if argv is not None else sys.argv)]
+    resolved_entry = _infer_entry_point(argv_list, fallback=entry_point)
+    if resolved_entry.startswith("/"):
+        resolved_entry = entry_point
+    resolved_action = action or Path(resolved_entry).stem or skill
+    outcome = skill_outcome_from_payload(payload)
+    status = payload.get("status")
+    summary_source = (
+        payload.get("summary")
+        or payload.get("message")
+        or payload.get("error")
+        or payload.get("reason")
+        or (f"{skill} {resolved_action} {status}" if status else f"{skill} {resolved_action} {outcome}")
+    )
+    summary = str(summary_source)
+    if len(summary) > MAX_SUMMARY_CHARS:
+        summary = summary[: MAX_SUMMARY_CHARS - 1] + "…"
+
+    attributed = layer
+    mapped_reason = reason_code
+    if outcome in FAILING_OUTCOMES:
+        if status == "needs_input":
+            attributed = attributed or "caller"
+            mapped_reason = mapped_reason or "missing_target"
+        elif status == "needs_repair":
+            attributed = attributed or "remote_env"
+            mapped_reason = mapped_reason or "path_missing"
+        elif status == "blocked":
+            attributed = attributed or "unknown"
+            mapped_reason = mapped_reason or "unattributed"
+        elif status == "timeout":
+            attributed = attributed or "transport"
+            mapped_reason = mapped_reason or "remote_timeout"
+        else:
+            attributed = attributed or "unknown"
+            mapped_reason = mapped_reason or "unattributed"
+        if attributed == "unknown":
+            failure = unknown_failure(
+                message=summary,
+                reason_code=mapped_reason,
+            )
+        else:
+            failure = make_failure(
+                layer=attributed,
+                reason_code=mapped_reason,
+                message=summary,
+                attribution_basis=[
+                    f"skill {skill} reported status {status!r}"
+                    if status
+                    else f"skill {skill} mapped to outcome {outcome!r}"
+                ],
+                confidence="medium",
+            )
+        next_actions = payload.get("next_actions") or payload.get("next_steps")
+        if isinstance(next_actions, list) and next_actions:
+            actions = [str(item) for item in next_actions]
+        else:
+            actions = [
+                "inspect extensions.result and retry after addressing the reported status"
+            ]
+        next_step = make_next_step(actions=actions)
+    else:
+        failure = None
+        next_step = make_next_step()
+
+    parts: list[dict[str, Any]] = []
+    embedded = list(remote_dev_results or ())
+    embedded.extend(_iter_embedded_remote_dev_results(payload))
+    seen_invocations: set[str] = set()
+    for index, remote in enumerate(embedded):
+        invocation = str(remote.get("invocation_id") or index)
+        if invocation in seen_invocations:
+            invocation = f"{invocation}-{index}"
+        seen_invocations.add(invocation)
+        parts.append(
+            convert_remote_dev_result(
+                remote,
+                slot="parts",
+                unit=f"{remote.get('tool') or 'remote-dev'}:{invocation}",
+                layer=layer,
+            )
+        )
+
+    derived = outcome_from_parts(parts) if parts else outcome
+    if parts and derived != outcome:
+        # Fan-out wins when remote-dev results were incorporated.
+        outcome = derived
+        if outcome in FAILING_OUTCOMES and failure is None:
+            failure = failure_from_parts(parts)
+            next_step = make_next_step(
+                actions=["inspect parts and the original remote-dev outcomes in refs"]
+            )
+        if outcome == "success":
+            failure = None
+
+    command = make_command(argv=argv_list or [resolved_entry], cwd=".")
+    target = payload.get("session_id") or payload.get("machine") or target_id
+    return new_envelope(
+        operation=make_operation(
+            entry_point=resolved_entry,
+            action=resolved_action,
+            skill=skill,
+            target_kind=target_kind,
+            target_id=str(target) if target is not None else None,
+        ),
+        outcome=outcome,
+        summary=summary,
+        attempt=make_attempt(
+            command=command,
+            reproduce=command["display"],
+        ),
+        failure=failure,
+        next_step=next_step,
+        parts=parts,
+        evidence=make_evidence(
+            refs=[
+                evidence_ref(
+                    name="skill_status",
+                    kind="skill.status",
+                    ref=str(status or outcome),
+                    note="original skill-layer status preserved in extensions.result",
+                )
+            ]
+        ),
+        extensions={"result": dict(payload)},
+        exit_code=exit_code,
+        validate=True,
+    )
+
+
+def emit_skill_json(
+    payload: Mapping[str, Any],
+    *,
+    skill: str,
+    entry_point: str,
+    action: str | None = None,
+    argv: Sequence[str] | None = None,
+    stream: Any = None,
+    **kwargs: Any,
+) -> int:
+    """Write one skill payload as a Result Envelope v1 on stdout."""
+    envelope = envelope_from_skill_payload(
+        payload,
+        skill=skill,
+        entry_point=entry_point,
+        action=action,
+        argv=argv,
+        **kwargs,
+    )
+    return emit(envelope, stream=stream)
 
 
 # ---------------------------------------------------------------------------

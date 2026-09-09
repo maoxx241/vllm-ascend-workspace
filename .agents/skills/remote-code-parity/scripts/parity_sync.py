@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from common import WORKSPACE_ID_PATTERN, json_dump, repo_root_from
+from common import WORKSPACE_ID_PATTERN, print_json, repo_root_from
 from install_consent import load_consent_state, resolve_sync_mode
 from remote_code_parity import DEFAULT_CONTAINER_CACHE_ROOT, TRANSFER_MODES
 
@@ -210,45 +210,75 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args = build_parser().parse_args()
-    repo_root = repo_root_from(Path(args.repo_root))
-    derived = build_derived_args(repo_root, args)
-    state_repo_root = repo_root_from(Path(derived['workspace_root']))
-    low_level_cmd = build_low_level_command(derived, args)
+    try:
+        repo_root = repo_root_from(Path(args.repo_root))
+        derived = build_derived_args(repo_root, args)
+        state_repo_root = repo_root_from(Path(derived['workspace_root']))
+        low_level_cmd = build_low_level_command(derived, args)
 
-    if args.print_derived_args:
-        payload = dict(derived)
-        payload['command'] = low_level_cmd
-        print(json_dump(payload))
-        return 0
-
-    if not args.force_reinstall:
-        consent_state = load_consent_state(state_repo_root)
-        mode = resolve_sync_mode(consent_state, derived['server_name'], derived['container_identity'])
-        if mode == 'unset':
-            print(json_dump({
-                'status': 'blocked',
-                'reason': 'sync_mode is unset; choose local sync or image-provided packages before parity',
-                'sync_mode': 'unset',
-                'server_name': derived['server_name'],
-                'container_identity': derived['container_identity'],
-                'next_actions': [
-                    'set sync mode to local and approve first install when the user wants local vllm/vllm-ascend',
-                    'set sync mode to image when the user wants container-provided packages',
-                ],
-            }))
-            return 2
-        if mode == 'image':
-            print(json_dump({
-                'status': 'skipped',
-                'reason': 'sync_mode is image; using container-provided packages',
-                'sync_mode': 'image',
-                'server_name': derived['server_name'],
-                'container_identity': derived['container_identity'],
-            }))
+        if args.print_derived_args:
+            payload = dict(derived)
+            payload['status'] = 'ok'
+            payload['command'] = low_level_cmd
+            print_json(payload)
             return 0
 
-    result = subprocess.run(low_level_cmd)
-    return result.returncode
+        if not args.force_reinstall:
+            consent_state = load_consent_state(state_repo_root)
+            mode = resolve_sync_mode(consent_state, derived['server_name'], derived['container_identity'])
+            if mode == 'unset':
+                print_json({
+                    'status': 'blocked',
+                    'reason': 'sync_mode is unset; choose local sync or image-provided packages before parity',
+                    'sync_mode': 'unset',
+                    'server_name': derived['server_name'],
+                    'container_identity': derived['container_identity'],
+                    'next_actions': [
+                        'set sync mode to local and approve first install when the user wants local vllm/vllm-ascend',
+                        'set sync mode to image when the user wants container-provided packages',
+                    ],
+                })
+                return 2
+            if mode == 'image':
+                print_json({
+                    'status': 'skipped',
+                    'reason': 'sync_mode is image; using container-provided packages',
+                    'sync_mode': 'image',
+                    'server_name': derived['server_name'],
+                    'container_identity': derived['container_identity'],
+                })
+                return 0
+
+        result = subprocess.run(low_level_cmd, capture_output=True, text=True)
+        if result.stderr:
+            sys.stderr.write(result.stderr)
+            if not result.stderr.endswith('\n'):
+                sys.stderr.write('\n')
+        if result.stdout.strip():
+            try:
+                child = json.loads(result.stdout)
+            except json.JSONDecodeError:
+                child = {
+                    'status': 'failed',
+                    'error': 'parity engine returned non-JSON stdout',
+                    'stdout_tail': result.stdout[-500:],
+                }
+            if isinstance(child, dict):
+                print_json(child)
+            else:
+                print_json({'status': 'failed', 'error': 'parity engine returned a non-object'})
+        elif result.returncode != 0:
+            print_json({
+                'status': 'failed',
+                'error': f'parity engine exited {result.returncode} with empty stdout',
+                'stderr_tail': (result.stderr or '')[-500:],
+            })
+        else:
+            print_json({'status': 'ok', 'message': 'parity engine produced no JSON'})
+        return result.returncode
+    except Exception as exc:
+        print_json({'status': 'failed', 'error': str(exc)})
+        return 2
 
 
 if __name__ == '__main__':

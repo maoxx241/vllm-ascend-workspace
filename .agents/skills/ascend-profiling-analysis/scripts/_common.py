@@ -9,7 +9,7 @@ Responsibilities kept minimal on purpose:
     remote work dir
   - read / validate the collection skill's manifest
   - manage local run directories under ``.vaws-local/profiling-analysis/runs/``
-  - emit progress as ``__VAWS_PROFILE_ANALYSIS_PROGRESS__=<json>`` on stderr
+  - emit progress as ``__VAWS_PROGRESS__=<json>`` on stderr
 
 This script intentionally does NOT contain any profiling analysis logic. The
 real pipeline lives next to it under ``scripts/ascend_profile/`` and is run
@@ -34,10 +34,10 @@ if str(LIB_DIR) not in sys.path:
 
 from vaws_local_state import allocate_run_dir  # noqa: E402
 from vaws_remote_dev import ssh_argv, ssh_exec, ssh_stream as remote_ssh_stream  # noqa: E402
+from vaws_result_envelope import PROGRESS_SENTINEL, progress as envelope_progress  # noqa: E402
 from vaws_remote_target import (  # noqa: E402
     SshEndpoint,
     container_endpoint_from_record,
-    emit_progress as _lib_emit_progress,
     print_json as _lib_print_json,
 )
 from vaws_session_state import (  # noqa: E402
@@ -47,7 +47,6 @@ from vaws_session_state import (  # noqa: E402
 )
 
 ANALYSIS_STATE_DIR = ROOT / ".vaws-local" / "profiling-analysis" / "runs"
-PROGRESS_SENTINEL = "__VAWS_PROFILE_ANALYSIS_PROGRESS__="
 
 DEFAULT_REMOTE_WORK_DIR = "/tmp/ascend_profile_framework"
 SSH_CONNECT_TIMEOUT_SECONDS = 15
@@ -247,12 +246,11 @@ def resolve_execution_target(
 
 
 # ---------------------------------------------------------------------------
-# Progress / output (thin wrappers over the lib primitives; they keep this
-# skill's sentinel prefix and historical function names)
+# Progress / output (thin wrappers over the envelope-owned sentinel)
 # ---------------------------------------------------------------------------
 
 def progress(phase: str, message: str, **extra: Any) -> None:
-    _lib_emit_progress(phase, message, sentinel=PROGRESS_SENTINEL, **extra)
+    envelope_progress(phase, message, **extra)
 
 
 def print_json(data: dict[str, Any]) -> None:

@@ -36,10 +36,13 @@ from vaws_remote_target import (  # noqa: E402
     ascend_env_preamble,
     resolve_remote_target,
 )
+from vaws_result_envelope import (  # noqa: E402
+    PROGRESS_SENTINEL,
+    emit_skill_json,
+    progress as envelope_progress,
+)
 from vaws_session_state import session_serving_state_path  # noqa: E402
 from vaws_validate import parse_device_csv  # noqa: E402
-
-PROGRESS_SENTINEL = "__VAWS_SERVING_PROGRESS__="
 
 # Always bound the TCP connect phase: without it a dead host can hang an SSH
 # command for minutes (kernel default). Established connections are unaffected
@@ -324,14 +327,15 @@ def select_devices(
 # ---------------------------------------------------------------------------
 
 def emit_progress(phase: str, message: str, **extra: Any) -> None:
-    payload: dict[str, Any] = {"phase": phase, "message": message}
-    payload.update({k: v for k, v in extra.items() if v is not None})
-    sys.stderr.write(PROGRESS_SENTINEL + json.dumps(payload, ensure_ascii=False) + "\n")
-    sys.stderr.flush()
+    envelope_progress(phase, message, **extra)
 
 
 def print_json(data: dict[str, Any]) -> None:
-    print(json.dumps(data, indent=2, ensure_ascii=False))
+    emit_skill_json(
+        data,
+        skill="vllm-ascend-serving",
+        entry_point=".agents/skills/vllm-ascend-serving/scripts/serve_status.py",
+    )
 
 
 def now_utc() -> str:

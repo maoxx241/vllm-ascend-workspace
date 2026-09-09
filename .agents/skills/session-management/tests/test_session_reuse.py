@@ -52,7 +52,8 @@ def run_main(argv: list[str]) -> tuple[int, dict]:
     stdout = io.StringIO()
     with mock.patch.object(sys, "argv", argv), contextlib.redirect_stdout(stdout):
         returncode = session_create.main()
-    return returncode, json.loads(stdout.getvalue())
+    from vaws_result_envelope import unwrap_skill_payload
+    return returncode, unwrap_skill_payload(json.loads(stdout.getvalue()))
 
 
 class SessionReuseTests(unittest.TestCase):

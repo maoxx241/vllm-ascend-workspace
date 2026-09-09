@@ -20,6 +20,7 @@ if str(LIB_DIR) not in sys.path:
 
 from vaws_remote_dev import ssh_exec  # noqa: E402
 from vaws_remote_target import SshEndpoint, ascend_env_preamble  # noqa: E402
+from vaws_result_envelope import PROGRESS_SENTINEL, progress as envelope_progress, unwrap_skill_payload  # noqa: E402
 from vaws_session_state import load_session_lookup, session_benchmark_dir  # noqa: E402
 from vaws_validate import require_env_name  # noqa: E402
 
@@ -29,7 +30,6 @@ NIGHTLY_CONFIGS_DIR = (
     / "single_node" / "models" / "configs"
 )
 PRESETS_DIR = ROOT / ".agents" / "skills" / "vllm-ascend-benchmark" / "presets"
-PROGRESS_SENTINEL = "__VAWS_BENCHMARK_PROGRESS__="
 
 # Mirrors serve_start.py's DEFAULT_HEALTH_TIMEOUT; used to bound the
 # serve_start subprocess when the config does not pin an explicit timeout.
@@ -44,10 +44,7 @@ _SERVE_START_TIMEOUT_MARGIN = 300
 # ---------------------------------------------------------------------------
 
 def emit_progress(phase: str, message: str, **extra: Any) -> None:
-    payload: dict[str, Any] = {"phase": phase, "message": message}
-    payload.update({k: v for k, v in extra.items() if v is not None})
-    sys.stderr.write(PROGRESS_SENTINEL + json.dumps(payload, ensure_ascii=False) + "\n")
-    sys.stderr.flush()
+    envelope_progress(phase, message, **extra)
 
 
 def print_json(data: dict[str, Any]) -> None:
@@ -153,7 +150,7 @@ def _run_json_command_streaming(
         try:
             parsed = json.loads(stdout)
             if isinstance(parsed, dict):
-                payload = parsed
+                payload = unwrap_skill_payload(parsed)
         except json.JSONDecodeError:
             payload = None
     return returncode, payload, stdout, stderr
@@ -596,7 +593,7 @@ def call_serve_start(config: BenchConfig) -> dict[str, Any]:
     emit_progress("serve_start", f"starting service: {config.model}")
     returncode, data, stdout, stderr = _run_json_command_streaming(
         cmd,
-        progress_markers=("__VAWS_SERVING_PROGRESS__=", "__VAWS_PARITY_PROGRESS__="),
+        progress_markers=(PROGRESS_SENTINEL,),
         timeout=health_timeout + _SERVE_START_TIMEOUT_MARGIN,
     )
 

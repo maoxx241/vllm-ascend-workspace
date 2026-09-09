@@ -18,11 +18,16 @@ from vaws_venv import ensure_workspace_interpreter  # noqa: E402
 
 ensure_workspace_interpreter(repo_root=ROOT)
 
+from vaws_result_envelope import emit_skill_json  # noqa: E402
 from vaws_session_state import load_index, load_leases, load_session_lookup  # noqa: E402
 
 
 def print_json(data: dict[str, Any]) -> None:
-    print(json.dumps(data, indent=2, ensure_ascii=False))
+    emit_skill_json(
+        data,
+        skill="session-management",
+        entry_point=".agents/skills/session-management/scripts/session_list.py",
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:

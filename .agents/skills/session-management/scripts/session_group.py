@@ -24,6 +24,7 @@ ensure_workspace_interpreter(repo_root=ROOT)
 
 
 from vaws_coordinator.code_identity import code_identity  # noqa: E402
+from vaws_result_envelope import emit_skill_json, unwrap_skill_payload  # noqa: E402
 from vaws_session_state import (  # noqa: E402
     SessionStateError,
     load_session_lookup,
@@ -335,7 +336,8 @@ def teardown_group(
             check=False,
         )
         try:
-            payload = json.loads(completed.stdout) if completed.stdout.strip() else {}
+            parsed = json.loads(completed.stdout) if completed.stdout.strip() else {}
+            payload = unwrap_skill_payload(parsed) if parsed else {}
         except json.JSONDecodeError:
             payload = {"stdout_tail": completed.stdout[-500:]}
         results.append(
@@ -410,9 +412,17 @@ def main(argv: list[str] | None = None) -> int:
                 force=args.force,
             )
     except (SessionGroupError, SessionStateError) as exc:
-        print(json.dumps({"status": "failed", "error": str(exc)}, ensure_ascii=False))
+        emit_skill_json(
+            {"status": "failed", "error": str(exc)},
+            skill="session-management",
+            entry_point=".agents/skills/session-management/scripts/session_group.py",
+        )
         return 1
-    print(json.dumps(payload, ensure_ascii=False))
+    emit_skill_json(
+        payload if isinstance(payload, dict) else {"status": "ok", "result": payload},
+        skill="session-management",
+        entry_point=".agents/skills/session-management/scripts/session_group.py",
+    )
     return 0
 
 

@@ -37,8 +37,7 @@ DEFAULT_QUEUE_TTL_SECONDS = _host.DEFAULT_QUEUE_TTL_SECONDS
 DEFAULT_START_TTL_SECONDS = _host.DEFAULT_START_TTL_SECONDS
 DEFAULT_STATE_DIR = _host.DEFAULT_STATE_DIR
 from vaws_local_state import ensure_workspace_identity, load_workspace_identity  # noqa: E402
-
-PROGRESS_SENTINEL = "__VAWS_NPU_COORDINATION_PROGRESS__="
+from vaws_result_envelope import emit_skill_json, progress as envelope_progress, unwrap_skill_payload  # noqa: E402
 
 
 class LocalEndpoint:
@@ -52,13 +51,15 @@ class LocalEndpoint:
 
 
 def print_json(payload: dict[str, Any]) -> None:
-    print(json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=True))
+    emit_skill_json(
+        payload,
+        skill="session-management",
+        entry_point=".agents/skills/session-management/scripts/npu_coordination.py",
+    )
 
 
 def emit_progress(phase: str, message: str, **extra: Any) -> None:
-    payload = {"phase": phase, "message": message, **extra}
-    sys.stderr.write(PROGRESS_SENTINEL + json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")
-    sys.stderr.flush()
+    envelope_progress(phase, message, **extra)
 
 
 def configure_local_ssh_path() -> None:
