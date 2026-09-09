@@ -402,13 +402,8 @@ option.
 | `.agents/hooks/knowledge_session_end.py` | bare | - | 0 | client-config:1, routing:1, test:1 | mechanics | hook | .agents/hooks/knowledge_session_end.py | - |
 | `.agents/hooks/tracked_leak_precommit.py` | argparse | - | 8 | docs:1, policy:1, test:1 | mechanics | hook | .agents/hooks/tracked_leak_precommit.py | - |
 | `.agents/hooks/vaws_session.py` | argparse | - | 4 | docs:1, other:1, policy:1, script:1, test:2 | mechanics | hook | .agents/hooks/vaws_session.py | - |
-<<<<<<< HEAD
 | `.agents/scripts/cli_surface_inventory.py` | argparse | - | 3 | policy:1, test:3 | mechanics | supported | .agents/scripts/cli_surface_inventory.py | vaws lint |
-| `.agents/scripts/envelope_lint.py` | argparse | scan, check, run | 5 | docs:2, test:2 | mechanics | supported | .agents/scripts/envelope_lint.py | vaws lint |
-=======
-| `.agents/scripts/cli_surface_inventory.py` | argparse | - | 3 | policy:1, test:2 | mechanics | supported | .agents/scripts/cli_surface_inventory.py | vaws lint |
 | `.agents/scripts/envelope_lint.py` | argparse | scan, check, run | 5 | docs:2, test:3 | mechanics | supported | .agents/scripts/envelope_lint.py | vaws lint |
->>>>>>> badd8c5 (chore: refresh the CLI surface table after envelope adoption)
 | `.agents/scripts/knowledge_capture.py` | argparse | - | 9 | docs:1, hook:1, routing:2, skill-doc:5, test:4 | mixed | supported | .agents/scripts/knowledge_capture.py | vaws knowledge |
 | `.agents/scripts/knowledge_export.py` | argparse | - | 7 | docs:1, routing:2, script:1, skill-doc:3, test:1 | mechanics | supported | .agents/scripts/knowledge_export.py | vaws knowledge |
 | `.agents/scripts/knowledge_query.py` | argparse | - | 9 | docs:1, routing:2, skill-doc:1, test:3 | mechanics | supported | .agents/scripts/knowledge_query.py | vaws knowledge |
