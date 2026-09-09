@@ -54,9 +54,8 @@ tracked-leak secret-key detector.
 
 ## The baseline
 
-Dated evidence under `docs/audits/` may still name the 2026-09-07 tree.
-Those rows are attributed `historical-evidence`. Three anti-rot properties,
-matching the boundary guard:
+Historical rows, if any remain, are attributed `historical-evidence`.
+Three anti-rot properties, matching the boundary guard:
 
 1. **Nothing new passes.** A hit absent from the baseline fails enforce.
 2. **A fixed hit must delete its row.** A stale baseline row is a hard

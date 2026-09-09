@@ -53,7 +53,6 @@ python3 .agents/skills/npu-fleet-monitor/scripts/manage_monitor.py ensure
 | **machine-management**   | 添加、验证、修复或移除远程昇腾 NPU 服务器及其托管容器                  | 需要配置远程 NPU 开发机时    |
 | **npu-fleet-monitor**    | 从独立 vaws-top 仓库构建、拉起、检查或停止本地 NPU 监控页面            | 需要持续查看设备、主机和历史资源状态时 |
 | **session-management**   | 创建、检查、分组和清理隔离 session：本地 worktree、远端容器、状态目录和资源 lease | 多 agent、多任务或 PD 场景并行远端执行时 |
-| **remote-toolbox**       | 结构化解析/探测/执行/长任务/同步/服务/产物传输/清理远端容器              | Agent 需要像使用本地工具一样操作远端 session container 时 |
 | **remote-code-parity**   | 将本地工作区的完整状态（含未提交的修改）同步到远程容器                    | 在远程机器上运行测试或服务前自动触发 |
 | **modelscope**           | 下载、续传、查看进度并 SHA256 校验 ModelScope 模型权重                  | 需要把模型权重下载到明确目录时 |
 | **vllm-ascend-serving**  | 在远程容器上一键拉起 vLLM Ascend 推理服务，支持 NPU 探测、自动选卡、增量重启 | 需要在远程机器上起推理服务时     |
@@ -61,7 +60,7 @@ python3 .agents/skills/npu-fleet-monitor/scripts/manage_monitor.py ensure
 | **ascend-memory-profiling** | 采集并分析昇腾 NPU 的 HBM 显存占用，按组件拆分并溯源 | 需要分析 vLLM 推理服务的显存占用时 |
 | **ascend-profiling-collection** | 采集 Ascend torch profiler：起服务、控制 profile 窗口、运行 workload、远端 analyse 并写 manifest | 需要采集 kernel_details/trace_view 时 |
 | **ascend-profiling-analysis** | 分析已采集的 profiler root/manifest，生成 step/layer/operator/cross-rank 诊断报告 | 需要分析 profiling 结果或生成报告时 |
-| **curate-workspace-knowledge** | 审核、去重、提升、合并、拒绝或废弃已验证的项目知识候选；补全 v2 坐标维度并把守上游导出 | 显式要求沉淀、整理、维护或上游贡献项目知识时 |
+| **curate-workspace-knowledge** | 审核、去重、提升、拒绝或废弃已验证的项目知识候选；补全 v2 坐标维度并把守上游导出 | 显式要求沉淀、整理、维护或上游贡献项目知识时 |
 | **vllm-ascend-graph-debug** | 定位图编译、捕获、重放及 graph/eager 正确性分歧 | 图模式失败或与 eager 结果不一致时 |
 | **vllm-ascend-correctness-validation** | 对比 baseline/candidate、eager/graph、离线/在线和 AISBench 正确性 | 需要精度验证或输出对拍时 |
 | **vllm-ascend-change-validation** | 根据代码 diff 生成验证计划并汇总证据和 PR 报告 | 验证工作区变更或 PR 时 |
@@ -122,7 +121,6 @@ python3 .agents/skills/npu-fleet-monitor/scripts/manage_monitor.py ensure
 │   │   ├── machine-management/    # 远程机器管理技能
 │   │   ├── npu-fleet-monitor/     # 本地 NPU 监控服务部署技能
 │   │   ├── session-management/    # 并行 Session 隔离技能
-│   │   ├── remote-toolbox/        # 远端结构化工具面
 │   │   ├── remote-code-parity/    # 代码同步技能
 │   │   ├── modelscope/            # ModelScope 权重下载与校验技能
 │   │   ├── vllm-ascend-serving/   # 服务拉起技能

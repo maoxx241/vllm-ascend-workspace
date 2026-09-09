@@ -25,8 +25,7 @@ from vaws_venv import ensure_workspace_interpreter  # noqa: E402
 
 ensure_workspace_interpreter(repo_root=ROOT)
 
-
-from vaws_knowledge_v1 import load_knowledge_file  # noqa: E402
+from vaws_knowledge_service import load_json_object  # noqa: E402
 from vaws_coordinator.run_manifest import (  # noqa: E402
     RunManifestError,
     add_artifact,
@@ -365,7 +364,7 @@ def plan_change(
         raise ChangeValidationError(f"output directory is not empty: {output_dir}")
     if not SAFE_ID_RE.fullmatch(run_id):
         raise ChangeValidationError("run-id must be a lowercase safe identifier")
-    knowledge = load_knowledge_file(knowledge_path)
+    knowledge = load_json_object(knowledge_path)
     diff_summary = parse_diff(diff_text)
     if diff_summary["file_count"] == 0:
         raise ChangeValidationError("diff contains no changed files")

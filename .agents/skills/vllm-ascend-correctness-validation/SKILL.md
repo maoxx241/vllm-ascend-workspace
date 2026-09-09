@@ -22,7 +22,7 @@ Produce traceable correctness evidence instead of treating a successful request 
    - performance-only change: `vllm-ascend-performance-regression` when available;
    - task metric execution: use the bundled AISBench adapter.
 
-Do not run the full execution-mode, parallelism, and feature Cartesian product. Select cases from the code impact and `.agents/knowledge/validation-rules.yaml`; record omitted combinations as risks.
+Do not run the full execution-mode, parallelism, and feature Cartesian product. Select cases from the code impact and `.agents/knowledge/`; record omitted combinations as risks.
 
 ## Determinism
 

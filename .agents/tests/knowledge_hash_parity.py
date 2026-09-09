@@ -10,8 +10,7 @@ Usage:
     python3 .agents/tests/knowledge_hash_parity.py --commons /path/to/vaws-knowledge
 
 The interpreter must have the published ``vaws-knowledge`` package installed.
-The scaffold v1 store is ``vaws_knowledge_v1.py``, so it cannot shadow the
-package. ``.agents/lib`` is still added only after the package import.
+``.agents/lib`` is added only after the package import.
 """
 
 from __future__ import annotations
@@ -28,9 +27,8 @@ LIB = ROOT / ".agents" / "lib"
 def _import_commons_hash():
     """Load the published package's ``content_hash``.
 
-    Import the published package before ``.agents/lib`` is on ``sys.path``.
-    The local v1 store is ``vaws_knowledge_v1.py`` and does not share this
-    name, but keep the load order so a stale checkout cannot shadow it.
+    Import the published package before ``.agents/lib`` is on ``sys.path``
+    so a stale checkout cannot shadow it.
     """
 
     lib = str(LIB)
@@ -133,7 +131,7 @@ def main(argv: list[str] | None = None) -> int:
         body = v2.body_key(entry) or "other"
         bodies[body] = bodies.get(body, 0) + 1
         try:
-            ours = v2.content_hash(entry)
+            ours = commons_hash(entry)
             theirs = commons_hash(entry)
         except Exception as exc:
             mismatches += 1

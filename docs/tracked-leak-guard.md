@@ -7,7 +7,10 @@ files.* Nothing enforced that rule, and an audit of `main` found an internal
 address range, a personal laptop path, and a personal remote path already
 committed to a **public** repository. This package is the enforcement layer.
 
-Three surfaces run the same detector, so they cannot disagree:
+Three surfaces run the same detector against the same installed
+`vaws-knowledge` redaction rules, so they cannot disagree. A checkout
+that has not run `uv sync` refuses to scan; it does not run with fewer
+rules.
 
 | Surface | Entry point | When |
 |---------|-------------|------|
@@ -34,8 +37,11 @@ never overwritten silently: the installer refuses and tells you to rerun with
 `--force`, which backs the old hook up next to it.
 
 The hook fails closed. A finding, a broken policy file, a missing policy file,
-or an unreadable staged diff all block the commit. `git commit --no-verify`
-still bypasses it, which is why CI runs the same scanner.
+an unreadable staged diff, or a missing `vaws-knowledge` package all block
+the commit. The remedy for the package gap is `uv sync` (or
+`uv run python3 .agents/scripts/tracked_leak_scan.py`, which syncs first).
+`git commit --no-verify` still bypasses the hook, which is why CI runs the
+same scanner after `uv sync --locked`.
 
 ## Run the scanner
 
@@ -143,8 +149,10 @@ Deliberate design choices:
 - **The policy file may quote the values it allows.** A finding inside
   `allowlist.yaml` whose text is declared by one of its own entries is
   attributed to `policy-self-reference`; nothing else in that file is exempt.
-- **PyYAML is optional.** The policy is read with PyYAML when importable and
-  with a small built-in parser otherwise, so the hook works on a bare checkout.
+- **PyYAML is optional; `vaws-knowledge` is not.** The policy is read with
+  PyYAML when importable and with a small built-in parser otherwise. The
+  redaction rules come from the installed package. A missing package is a
+  refused scan (`uv sync`), never a reduced rule set that reports `passed`.
 
 ## Adding an entry
 

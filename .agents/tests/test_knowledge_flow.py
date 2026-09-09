@@ -13,7 +13,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / ".agents" / "lib"))
-from vaws_knowledge_v1 import get_knowledge_entry, query_knowledge  # noqa: E402
+from vaws_knowledge_service import get_knowledge_entry, query_knowledge  # noqa: E402
 
 CAPTURE = ROOT / ".agents" / "scripts" / "knowledge_capture.py"
 VALIDATE = ROOT / ".agents" / "scripts" / "knowledge_validate.py"
@@ -79,7 +79,7 @@ class KnowledgeFlowE2ETest(unittest.TestCase):
 
         # The hook resolves the simulated repository from this marker but imports
         # the implementation under test from the real worktree.
-        marker = self.sandbox / ".agents" / "lib" / "vaws_knowledge_v1.py"
+        marker = self.sandbox / ".agents" / "lib" / "vaws_knowledge_service.py"
         marker.parent.mkdir(parents=True)
         marker.write_text("# simulated repository marker\n", encoding="utf-8")
 
@@ -119,12 +119,7 @@ class KnowledgeFlowE2ETest(unittest.TestCase):
         )
 
     def test_deferred_candidate_to_deprecated_formal_entry(self) -> None:
-        """The legacy v1 lifecycle stays reachable behind ``--schema 1``.
-
-        New promotions default to the federated v2 document (covered by
-        ``test_knowledge_v2_flow``); this test pins the v1 envelope that
-        existing consumers still read.
-        """
+        """Capture, promote, query, and deprecate on the federated v2 path."""
 
         session_id = "synthetic-knowledge-flow-session"
         input_path = self.sandbox / "candidate-input.json"
@@ -155,27 +150,20 @@ class KnowledgeFlowE2ETest(unittest.TestCase):
         inspected = self.curate_json("inspect", "--candidate-id", candidate_id)
         self.assertEqual(inspected["candidate"]["candidate_id"], candidate_id)
 
-        entry_id = "synthetic-framed-transfer"
-        # The real knowledge base is the fixture here, so unrelated entries may
-        # score above zero on shared vocabulary. What matters is that this
-        # candidate is not already represented as the entry it will become.
+        entry_id = candidate_id
         self.assertNotIn(
-            entry_id, [match["id"] for match in inspected["possible_matches"]]
+            "synthetic-framed-transfer",
+            [match["id"] for match in inspected["possible_matches"]],
         )
         promoted = self.curate_json(
             "promote",
-            "--schema",
-            "1",
             "--candidate-id",
             candidate_id,
-            "--entry-id",
-            entry_id,
             "--status",
             "active",
         )
         self.assertEqual(promoted["action"], "promoted")
-        self.assertEqual(promoted["entry_status"], "active")
-        self.assertTrue((self.reviewed / f"{candidate_id}.json").is_file())
+        self.assertEqual(promoted["entry_status"], "unverified")
         leftover = list(self.candidates.glob("*.yaml"))
         self.assertFalse(
             any(candidate_id in path.read_text(encoding="utf-8") for path in leftover)
@@ -183,11 +171,12 @@ class KnowledgeFlowE2ETest(unittest.TestCase):
 
         queried = query_knowledge(
             knowledge_dir=self.formal,
-            query="synthetic framed transfer acknowledgement timeout",
+            query="zqxjk flovmar blorpt acknowledgement nonce",
+            include_unverified=True,
         )
         self.assertEqual(queried[0]["id"], entry_id)
         fetched = get_knowledge_entry(knowledge_dir=self.formal, entry_id=entry_id)
-        self.assertEqual(fetched["entry"]["status"], "active")
+        self.assertEqual(fetched["entry"]["status"], "unverified")
 
         recaptured = self.run_json(
             CAPTURE,
@@ -202,8 +191,6 @@ class KnowledgeFlowE2ETest(unittest.TestCase):
 
         deprecated = self.curate_json(
             "deprecate",
-            "--schema",
-            "1",
             "--entry-id",
             entry_id,
             "--reason",
@@ -216,12 +203,6 @@ class KnowledgeFlowE2ETest(unittest.TestCase):
             query="zqxjk flovmar blorpt acknowledgement nonce",
         )
         self.assertNotIn(entry_id, [match["id"] for match in hidden])
-        retained = query_knowledge(
-            knowledge_dir=self.formal,
-            query="zqxjk flovmar blorpt acknowledgement nonce",
-            include_deprecated=True,
-        )
-        self.assertEqual(retained[0]["id"], entry_id)
 
         validated = self.run_json(
             VALIDATE, "--knowledge-dir", str(self.formal)

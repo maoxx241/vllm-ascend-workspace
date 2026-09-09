@@ -3,8 +3,7 @@
 Status: current
 
 This document is the single definition of where the workspace ends up after the
-repository split. It supersedes `repo-boundaries.md` as the direction; that file
-is kept only until its guard summary is folded into §7 here. Every remaining
+repository split. It supersedes the retired `repo-boundaries.md`. Every remaining
 work package derives from this document, and a work package that needs a
 mechanism this document does not name is a signal to amend this document
 first, not to build the mechanism.

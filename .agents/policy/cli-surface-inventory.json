@@ -40,12 +40,6 @@
       "note": "compatibility adapter that execs the coordinator native-session hook from the installed package",
       "external_owner": "vaws-coordinator"
     },
-    ".agents/maturation/run.py": {
-      "responsibility": "mechanics",
-      "support_role": "harness",
-      "target_kind": "self",
-      "note": "deterministic-core maturation harness; --list/--report stay offline; live runs need a separate hardware contract"
-    },
     ".agents/scripts/cli_surface_inventory.py": {
       "responsibility": "mechanics",
       "support_role": "supported",
@@ -72,13 +66,6 @@
       "support_role": "supported",
       "target_kind": "self",
       "note": "source-side export gate: unresolved coordinates, redaction, provenance and content_hash; writes a local proposal bundle",
-      "proposed_target": "vaws knowledge"
-    },
-    ".agents/scripts/knowledge_migrate_v2.py": {
-      "responsibility": "mechanics",
-      "support_role": "supported",
-      "target_kind": "self",
-      "note": "v1 to v2 migration that writes explicit unresolved coordinates and reports what remains unknown",
       "proposed_target": "vaws knowledge"
     },
     ".agents/scripts/knowledge_query.py": {

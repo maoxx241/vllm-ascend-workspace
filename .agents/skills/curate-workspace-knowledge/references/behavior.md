@@ -6,7 +6,7 @@
   knowledge source. It holds both generations — v1 `<kind>.yaml` and federated
   v2 `<kind>.v2.yaml`.
 - `.vaws-local/knowledge/candidate/` is the only untracked candidate store
-  (commons yaml). Capture writes it; curate promote/merge/reject remove the
+  (commons yaml). Capture writes it; curate promote/reject remove the
   entry after a disposition so query cannot keep hitting `layer: candidate`.
 - `.vaws-local/knowledge/reviewed/` is an untracked disposition audit.
 - The `shared` layer is the corpus inside the installed `vaws-knowledge`
@@ -41,8 +41,10 @@ An `active` entry additionally requires either:
 - two verified occurrences; or
 - stable `test`, `regression-test`, or `acceptance-test` evidence.
 
-Use `merge` when cause and applicability match. Use `--force-new` only after
-confirming that an identical fingerprint has a different cause.
+When cause and applicability match an existing entry, edit that v2 document
+or promote a revision that supersedes it. Use `--force-new` only after
+confirming that an identical fingerprint has a different cause. `merge` is
+retired.
 
 ## Formal entry mapping
 
@@ -57,7 +59,7 @@ content_hash    sha256 over the canonicalized scope+body payload
                 (body is `rule` or `measurement`, keyed by its own name)
 status          always 'unverified' on promotion
 confidence      candidate confidence; 'high' downgraded to 'medium'
-scope           12 dimensions, each bounded or explicitly unresolved
+scope           12 dimensions, each bounded or an unbounded range
 provenance      contributor, origin repo, submitted_at, redaction profile
 lifecycle       first_seen, updated_at, superseded_by, resolved_by
 rule            failure-signature body: summary, symptom, root_cause,
@@ -74,8 +76,10 @@ Coordinate mapping from the candidate's captured environment:
 
 - a concrete value becomes `{"values": ["<value>"]}` — the claim holds where
   it was observed, and nowhere else by default;
-- `unknown` becomes `{"unresolved": true, "needs": "<what a human must
-  supply>"}`, which blocks `verified` and blocks export;
+- `unknown` becomes `{"range": {"min": null, "max": null}}`, which the
+  package evaluates as undecidable and which blocks `verified` and export.
+  The curator hint lives in the promote/`list-unresolved` response
+  (`needs_human_input` / `unresolved[].needs`), not inside `scope`;
 - nothing becomes `any`. Independence is a claim, so `resolve --any-basis`
   requires stating what was examined.
 
@@ -85,25 +89,6 @@ is dropped and reported under `dropped_evidence` rather than relabelled.
 v2 has no field for a deprecation reason, so `deprecate` records it in
 `.vaws-local/knowledge/reviewed/<slug>.deprecation.json` and sets only
 `status` and `lifecycle.superseded_by` in the document.
-
-### v1 (`--schema 1`, legacy)
-
-Promotion keeps the existing formal v1 envelope:
-
-```text
-id
-source
-applicable_versions
-updated_at
-status
-rule
-```
-
-The structured candidate fields live inside `rule`, including candidate ids,
-scope, fingerprints, cause, resolution, verification, evidence, confidence,
-occurrences, and verification dates.
-
-`merge` operates on v1 entries only.
 
 ## Verification gate (v2)
 

@@ -19,6 +19,7 @@ if str(LIB) not in sys.path:
 
 import vaws_knowledge_v2 as v2  # noqa: E402
 import vaws_redaction as redaction  # noqa: E402
+from vaws_knowledge.canonical import canonical_json, content_hash  # noqa: E402
 
 
 def main(argv: list[str]) -> int:
@@ -31,10 +32,10 @@ def main(argv: list[str]) -> int:
     operation = argv[0]
     payload = json.load(sys.stdin)
     if operation == "hash":
-        print(v2.content_hash(payload))
+        print(content_hash(payload))
         return 0
     if operation == "payload":
-        print(v2.canonical_payload(payload))
+        print(canonical_json(payload))
         return 0
     if operation == "schema":
         try:

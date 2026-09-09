@@ -14,12 +14,7 @@ LIB = ROOT / ".agents" / "lib"
 if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
-from vaws_knowledge_v1 import (  # noqa: E402
-    KNOWLEDGE_FILES,
-    KnowledgeError,
-    validate_knowledge_dir,
-    validate_knowledge_document,
-)
+import vaws_knowledge_v2 as v2  # noqa: E402
 from vaws_coordinator.run_manifest import (  # noqa: E402
     RunManifestError,
     add_artifact,
@@ -133,59 +128,49 @@ class RunManifestTests(unittest.TestCase):
 
 class KnowledgeValidationTests(unittest.TestCase):
     def test_repository_knowledge_files_are_valid(self) -> None:
-        files = set(validate_knowledge_dir(ROOT / ".agents" / "knowledge"))
-        # Every v1 family must validate; the directory additionally holds the
-        # migrated federated v2 documents, which the same call validates
-        # against the v2 contract.
-        self.assertLessEqual(set(KNOWLEDGE_FILES), files)
-        extra = files - set(KNOWLEDGE_FILES)
-        self.assertTrue(
-            all(name.endswith(".v2.yaml") for name in extra),
-            f"unexpected knowledge documents: {sorted(extra)}",
-        )
+        knowledge_dir = ROOT / ".agents" / "knowledge"
+        names = {path.name for path, _kind in v2.iter_documents(knowledge_dir)}
+        self.assertTrue(names)
+        self.assertTrue(all(name.endswith(".v2.yaml") for name in names))
+        extras = {
+            path.name
+            for path in knowledge_dir.iterdir()
+            if path.is_file() and not path.name.endswith(".v2.yaml")
+        }
+        self.assertEqual(extras, set())
+        entries, problems = v2.load_entries(knowledge_dir)
+        self.assertEqual(problems, [])
+        self.assertGreaterEqual(len(entries), 1)
 
     def test_unknown_support_is_not_implicitly_valid(self) -> None:
-        document = {
-            "schema_version": 1,
-            "kind": "model-capabilities",
-            "updated_at": "2026-07-25",
-            "entries": [
-                {
-                    "id": "bad-entry",
-                    "source": "test",
-                    "applicable_versions": "all",
+        document = v2.new_document("model-capabilities", now="2026-07-25")
+        document["entries"] = [
+            {
+                "uuid": v2.derived_uuid("test", "model-capabilities", "bad-entry"),
+                "slug": "bad-entry",
+                "content_hash": "sha256:" + "0" * 64,
+                "status": "unknown",
+                "confidence": "low",
+                "scope": {},
+                "provenance": {
+                    "contributor": "test",
+                    "origin_repo": "test/test",
+                    "submitted_at": "2026-07-25",
+                    "redaction_profile": "r2",
+                },
+                "lifecycle": {
+                    "first_seen": "2026-07-25",
                     "updated_at": "2026-07-25",
-                    "status": "unknown",
-                    "rule": {},
-                }
-            ],
-        }
-        with self.assertRaises(KnowledgeError):
-            validate_knowledge_document(
-                document, expected_kind="model-capabilities", path="test.yaml"
+                    "superseded_by": None,
+                    "resolved_by": None,
+                },
+                "rule": {"summary": "x", "symptom": "x", "root_cause": "x", "resolution": "x"},
+            }
+        ]
+        with self.assertRaises(v2.KnowledgeV2Error):
+            v2.validate_document(
+                document, expected_kind="model-capabilities", path="test.v2.yaml"
             )
-
-    def test_json_compatible_yaml_requirement_is_enforced(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            for filename, kind in KNOWLEDGE_FILES.items():
-                (root / filename).write_text(
-                    json.dumps(
-                        {
-                            "schema_version": 1,
-                            "kind": kind,
-                            "updated_at": "2026-07-25",
-                            "entries": [],
-                        }
-                    ),
-                    encoding="utf-8",
-                )
-            (root / "model-capabilities.yaml").write_text(
-                "schema_version: 1\nkind: model-capabilities\n",
-                encoding="utf-8",
-            )
-            with self.assertRaisesRegex(KnowledgeError, "JSON-compatible YAML"):
-                validate_knowledge_dir(root)
 
 
 if __name__ == "__main__":

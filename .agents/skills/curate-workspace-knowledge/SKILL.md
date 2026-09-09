@@ -1,6 +1,6 @@
 ---
 name: curate-workspace-knowledge
-description: Review, deduplicate, promote, merge, reject, or deprecate verified vLLM Ascend workspace knowledge candidates, resolve unresolved v2 coordinate dimensions, and gate export to the federated commons. Use only when the user explicitly asks to curate, persist, review, merge, promote, deprecate, or upstream project knowledge (沉淀、整理、复盘、合并、提升、废弃、上游), or explicitly invokes this Skill to review `.vaws-local/knowledge/candidate`. Do not use during normal diagnosis, serving, benchmarking, profiling, remote execution, code review, or candidate capture/query; those workflows call the shared scripts directly without loading this Skill.
+description: Review, deduplicate, promote, reject, or deprecate verified vLLM Ascend workspace knowledge candidates, resolve unresolved v2 coordinate dimensions, and gate export to the federated commons. Use only when the user explicitly asks to curate, persist, review, promote, deprecate, or upstream project knowledge (沉淀、整理、复盘、提升、废弃、上游), or explicitly invokes this Skill to review `.vaws-local/knowledge/candidate`. Do not use during normal diagnosis, serving, benchmarking, profiling, remote execution, code review, or candidate capture/query; those workflows call the shared scripts directly without loading this Skill.
 ---
 
 # Curate Workspace Knowledge
@@ -17,9 +17,8 @@ Agents can call `knowledge_query` / `knowledge_explain` / `knowledge_capture`
 on the `vaws-knowledge` MCP server.
 
 New promotions write the federated **v2** contract to
-`.agents/knowledge/<kind>.v2.yaml`. The v1 `<kind>.yaml` documents stay in
-place and stay readable (`--schema 1` still writes them) so existing consumers
-keep working. A v2 entry has exactly one body (`rule` or `measurement`);
+`.agents/knowledge/<kind>.v2.yaml`. The project layer contains only
+`*.v2.yaml`. A v2 entry has exactly one body (`rule` or `measurement`);
 candidate promotion still writes a `rule`. Measurement entries are first-class
 when listing, querying, hashing, or exporting.
 
@@ -31,7 +30,8 @@ when listing, querying, hashing, or exporting.
    at least one stable test, commit, issue, or PR evidence item exists.
 4. Choose exactly one disposition:
    - `promote` a novel candidate;
-   - `merge` it into an existing entry with the same cause and scope;
+   - edit the existing v2 document (or promote a revision that supersedes it)
+     when cause and applicability already match;
    - `reject` an unsupported, transient, secret-bearing, or duplicate candidate;
    - `deprecate` a stale formal entry.
 5. For a v2 promotion, close the coordinate before claiming anything:
@@ -51,9 +51,7 @@ when listing, querying, hashing, or exporting.
 
 - `list`: return compact candidate summaries;
 - `inspect`: return one full candidate plus possible formal matches;
-- `promote`: create one v2 entry (default) or a legacy v1 entry
-  (`--schema 1`);
-- `merge`: merge evidence and occurrences into an existing v1 entry;
+- `promote`: create one v2 entry;
 - `reject`: archive a candidate locally without changing formal knowledge;
 - `deprecate`: retain a formal entry while marking it obsolete;
 - `resolve`: fill one unresolved v2 coordinate dimension;
@@ -62,10 +60,9 @@ when listing, querying, hashing, or exporting.
 
 Related shared scripts, outside this Skill:
 
-- `.agents/scripts/knowledge_migrate_v2.py`: convert v1 documents to v2;
 - `.agents/scripts/knowledge_export.py`: the source-side export gate;
-- `.agents/scripts/knowledge_validate.py`: validate both generations and
-  report redaction posture.
+- `.agents/scripts/knowledge_validate.py`: validate the project-layer v2
+  documents and report redaction posture.
 
 Read only the reference needed for the active operation:
 
@@ -81,8 +78,8 @@ Read only the reference needed for the active operation:
 - Require a regression test or two verified occurrences before `active`
   (v1) or before promoting with the `active` evidence gate (v2).
 - Never invent a coordinate. A dimension nobody established stays an
-  unresolved marker; `any` is a positive claim of independence and needs a
-  basis describing what was actually examined.
+  unbounded range (`min` and `max` both null); `any` is a positive claim
+  of independence and needs a basis describing what was actually examined.
 - A v2 entry reaches `verified` only with a complete coordinate, followable
   evidence, and a confirming handle that is not the submitter.
 - Never publish upstream from a raw document. Export only through
@@ -91,7 +88,9 @@ Read only the reference needed for the active operation:
   coordinates.
 - Never write a local copy of the shared corpus; the shared layer is the
   installed `vaws-knowledge` package and flows one way, downward.
-- Prefer `merge` over a new entry when cause and applicability match.
+- When cause and applicability match an existing entry, edit that v2
+  document or promote a revision that supersedes it. Do not add a
+  duplicate. `merge` is retired.
 - Use `--force-new` only after reviewing an identical fingerprint with a
   different confirmed cause.
 - Keep deterministic behavior in the owning Skill's scripts and tests; store

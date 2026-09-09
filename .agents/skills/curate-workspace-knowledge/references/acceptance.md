@@ -5,9 +5,10 @@
 - [ ] Formal writes target only one existing `.agents/knowledge/*.yaml` file.
 - [ ] Inconclusive or unstable-only candidates cannot be promoted.
 - [ ] Active promotion requires repeat evidence or a regression test.
-- [ ] Exact fingerprint matches require merge or explicit `--force-new`.
-- [ ] Promotion and merge archive the candidate yaml entry and remove it from
-      the candidate layer so a later query only hits `layer: project`.
+- [ ] Exact fingerprint matches require editing the existing v2 entry,
+      promoting a superseding revision, or explicit `--force-new`.
+- [ ] Promotion and reject archive the candidate yaml entry and remove it from
+      the candidate layer so a later query only hits the project layer.
 - [ ] Rejection does not modify formal knowledge.
 - [ ] Deprecation retains the entry and records reason/replacement.
 - [ ] stdout contains one final JSON document.
@@ -15,10 +16,11 @@
 
 ## Federated v2
 
-- [ ] `promote` defaults to `<kind>.v2.yaml` and `--schema 1` still writes the
-      legacy v1 envelope.
-- [ ] Every unknown coordinate dimension becomes an unresolved marker; none
-      becomes `any` or a plausible value.
+- [ ] `promote` writes `<kind>.v2.yaml`.
+- [ ] Every unknown coordinate dimension becomes an unbounded range
+      (`min` and `max` both null); none becomes `any` or a plausible value.
+      The curator hint is returned as `needs_human_input`, not stored in
+      `scope`.
 - [ ] A promoted entry is `unverified`, and the result names each dimension a
       human must supply.
 - [ ] `resolve` accepts exactly one of `--values`, `--any-basis`, or

@@ -21,6 +21,10 @@ sys.path.insert(0, str(ROOT / ".agents" / "lib"))
 
 import vaws_knowledge_v2 as v2  # noqa: E402
 import vaws_redaction as redaction  # noqa: E402
+from vaws_knowledge._common import ToolError  # noqa: E402
+from vaws_knowledge.canonical import canonical_json  # noqa: E402
+from vaws_knowledge.canonical import canonical_payload as canonical_object  # noqa: E402
+from vaws_knowledge.canonical import content_hash  # noqa: E402
 
 NOW = "2026-09-07T00:00:00Z"
 
@@ -100,7 +104,7 @@ class CanonicalizationTests(unittest.TestCase):
         restated["provenance"]["contributor"] = "someone-else"
         restated["lifecycle"]["updated_at"] = "2026-12-31"
         restated["status"] = "deprecated"
-        self.assertEqual(v2.content_hash(entry), v2.content_hash(restated))
+        self.assertEqual(content_hash(entry), content_hash(restated))
 
     def test_hash_ignores_key_order_and_insignificant_whitespace(self) -> None:
         entry = sample_entry()
@@ -112,31 +116,31 @@ class CanonicalizationTests(unittest.TestCase):
             "symptom": entry["rule"]["symptom"] + "  ",
             "summary": entry["rule"]["summary"],
         }
-        self.assertEqual(v2.content_hash(entry), v2.content_hash(reordered))
+        self.assertEqual(content_hash(entry), content_hash(reordered))
 
     def test_fingerprints_are_order_and_case_insensitive(self) -> None:
         entry = sample_entry()
         entry["rule"]["fingerprints"] = ["alpha signature", "beta signature"]
         other = deepcopy(entry)
         other["rule"]["fingerprints"] = ["BETA   signature", "Alpha signature"]
-        self.assertEqual(v2.content_hash(entry), v2.content_hash(other))
+        self.assertEqual(content_hash(entry), content_hash(other))
 
     def test_hash_changes_when_the_claim_changes(self) -> None:
         entry = sample_entry()
         narrowed = deepcopy(entry)
         narrowed["scope"]["topology"] = {"values": ["tp2"]}
-        self.assertNotEqual(v2.content_hash(entry), v2.content_hash(narrowed))
+        self.assertNotEqual(content_hash(entry), content_hash(narrowed))
 
     def test_canonical_payload_is_deterministic_json(self) -> None:
-        payload = v2.canonical_payload(sample_entry())
+        payload = canonical_json(sample_entry())
         self.assertEqual(set(json.loads(payload)), {"rule", "scope"})
-        self.assertEqual(payload, v2.canonical_payload(sample_entry()))
+        self.assertEqual(payload, canonical_json(sample_entry()))
 
     def test_nbsp_and_ideographic_space_are_preserved(self) -> None:
         entry = sample_entry()
         entry["rule"]["summary"] = "\u00a0" + entry["rule"]["summary"] + "\u3000"
         entry["rule"]["fingerprints"] = ["A\u00a0B"]
-        payload = v2.canonical_object(entry)
+        payload = canonical_object(entry)
         self.assertTrue(payload["rule"]["summary"].startswith("\u00a0"))
         self.assertTrue(payload["rule"]["summary"].endswith("\u3000"))
         self.assertEqual(["a\u00a0b"], payload["rule"]["fingerprints"])
@@ -145,14 +149,14 @@ class CanonicalizationTests(unittest.TestCase):
         entry = sample_entry()
         entry["rule"]["fingerprints"] = ["ABC İ É Σ"]
         self.assertEqual(
-            ["abc İ É Σ"], v2.canonical_object(entry)["rule"]["fingerprints"]
+            ["abc İ É Σ"], canonical_object(entry)["rule"]["fingerprints"]
         )
 
     def test_interior_line_trailing_ascii_whitespace_is_stripped(self) -> None:
         entry = sample_entry()
         entry["rule"]["summary"] = "First line  \nSecond line"
         entry["scope"]["soc"]["values"] = ["Ascend910_93"]
-        payload = v2.canonical_object(entry)
+        payload = canonical_object(entry)
         self.assertEqual("First line\nSecond line", payload["rule"]["summary"])
 
     def test_nested_scope_basis_line_trailing_whitespace_is_stripped(self) -> None:
@@ -161,7 +165,7 @@ class CanonicalizationTests(unittest.TestCase):
             "any": True,
             "basis": "Synthetic first line\t \nsecond line",
         }
-        payload = v2.canonical_object(entry)
+        payload = canonical_object(entry)
         self.assertEqual(
             "Synthetic first line\nsecond line", payload["scope"]["model"]["basis"]
         )
@@ -169,23 +173,23 @@ class CanonicalizationTests(unittest.TestCase):
     def test_numeric_bound_is_rejected_not_stringified(self) -> None:
         entry = sample_entry()
         entry["scope"]["torch"] = {"range": {"min": 2.5, "max": None}}
-        with self.assertRaises(v2.KnowledgeV2Error) as caught:
-            v2.content_hash(entry)
+        with self.assertRaises((ValueError, ToolError)) as caught:
+            content_hash(entry)
         self.assertIn("2.5", str(caught.exception))
         self.assertIn("stringify", str(caught.exception))
 
     def test_non_string_fingerprint_is_rejected_not_stringified(self) -> None:
         entry = sample_entry()
         entry["rule"]["fingerprints"] = [123]
-        with self.assertRaises(v2.KnowledgeV2Error) as caught:
-            v2.content_hash(entry)
+        with self.assertRaises((ValueError, ToolError)) as caught:
+            content_hash(entry)
         self.assertIn("123", str(caught.exception))
 
     def test_non_string_mapping_key_is_rejected_not_stringified(self) -> None:
         entry = sample_entry()
         entry["rule"][1] = "nope"
-        with self.assertRaises(v2.KnowledgeV2Error) as caught:
-            v2.content_hash(entry)
+        with self.assertRaises((ValueError, ToolError)) as caught:
+            content_hash(entry)
         self.assertIn("stringify", str(caught.exception))
 
     def test_derived_uuid_is_stable_and_v4_shaped(self) -> None:
@@ -199,29 +203,34 @@ class CanonicalizationTests(unittest.TestCase):
 class CoordinateContractTests(unittest.TestCase):
     def test_unresolved_marker_blocks_verified_status(self) -> None:
         entry = sample_entry()
-        entry["scope"]["cann"] = v2.unresolved_constraint(
-            "the CANN version of the verification container"
-        )
+        entry["scope"]["cann"] = v2.range_constraint(None, None)
         entry["verification"] = verification()
         entry["status"] = "verified"
         entry = v2.with_content_hash(entry)
         errors = v2.validate_entry(entry, context=v2.PROJECT_LAYER)
         self.assertTrue(any("unresolved dimensions" in error for error in errors))
 
+    def test_retired_unresolved_marker_is_refused_even_in_project_context(self) -> None:
+        entry = sample_entry()
+        entry["scope"]["cann"] = {
+            "unresolved": True,
+            "needs": "the CANN version of the verification container",
+        }
+        entry = v2.with_content_hash(entry)
+        errors = v2.validate_entry(entry, context=v2.PROJECT_LAYER)
+        self.assertTrue(errors)
+        self.assertFalse(any("unresolved, needs" in error for error in errors))
+
     def test_unresolved_marker_is_allowed_while_unverified(self) -> None:
         entry = sample_entry()
-        entry["scope"]["driver"] = v2.unresolved_constraint(
-            "the driver version of the verification host"
-        )
+        entry["scope"]["driver"] = v2.range_constraint(None, None)
         entry = v2.with_content_hash(entry)
         self.assertEqual(v2.validate_entry(entry, context=v2.PROJECT_LAYER), [])
         self.assertEqual(v2.unresolved_dimensions(entry), ["driver"])
 
     def test_unresolved_marker_is_refused_in_export_context(self) -> None:
         entry = sample_entry()
-        entry["scope"]["driver"] = v2.unresolved_constraint(
-            "the driver version of the verification host"
-        )
+        entry["scope"]["driver"] = v2.range_constraint(None, None)
         entry = v2.with_content_hash(entry)
         errors = v2.validate_entry(entry, context="export")
         self.assertTrue(any("unresolved" in error for error in errors))
@@ -298,9 +307,7 @@ class StatusGateTests(unittest.TestCase):
 
     def test_verified_zone_refuses_unresolved_scope(self) -> None:
         entry = sample_entry()
-        entry["scope"]["cann"] = v2.unresolved_constraint(
-            "the CANN version of the verification container"
-        )
+        entry["scope"]["cann"] = v2.range_constraint(None, None)
         entry = v2.with_content_hash(entry)
         errors = v2.validate_entry(entry, context=v2.VERIFIED_CONTEXT)
         self.assertTrue(any("unresolved" in error for error in errors))
@@ -394,11 +401,11 @@ class ExportTests(unittest.TestCase):
         self.assertEqual(
             exported["provenance"]["redaction_profile"], redaction.REDACTION_PROFILE
         )
-        self.assertEqual(exported["content_hash"], v2.content_hash(entry))
+        self.assertEqual(exported["content_hash"], content_hash(entry))
 
     def test_export_refuses_unresolved_dimensions(self) -> None:
         entry = sample_entry()
-        entry["scope"]["cann"] = v2.unresolved_constraint("the verified CANN version")
+        entry["scope"]["cann"] = v2.range_constraint(None, None)
         entry = v2.with_content_hash(entry)
         with self.assertRaisesRegex(v2.KnowledgeV2Error, "unresolved"):
             v2.export_entry(entry, contributor="handle", origin_repo="owner/fork")
@@ -461,7 +468,7 @@ class ExportTests(unittest.TestCase):
 class MatchViewTests(unittest.TestCase):
     def test_scope_summary_states_unknown_dimensions_explicitly(self) -> None:
         entry = sample_entry()
-        entry["scope"]["cann"] = v2.unresolved_constraint("the verified CANN version")
+        entry["scope"]["cann"] = v2.range_constraint(None, None)
         summary = v2.scope_summary(entry["scope"])
         self.assertIn("cann", summary)
         self.assertIn("unresolved", summary.lower())
@@ -609,9 +616,9 @@ class MeasurementBodyTests(unittest.TestCase):
     def test_kit_anchor_hash(self) -> None:
         entry = sample_measurement()
         self.assertEqual(v2.body_key(entry), "measurement")
-        self.assertEqual(v2.content_hash(entry), self.ANCHOR)
-        self.assertEqual(set(json.loads(v2.canonical_payload(entry))), {"measurement", "scope"})
-        self.assertNotIn("rule", json.loads(v2.canonical_payload(entry)))
+        self.assertEqual(content_hash(entry), self.ANCHOR)
+        self.assertEqual(set(json.loads(canonical_json(entry))), {"measurement", "scope"})
+        self.assertNotIn("rule", json.loads(canonical_json(entry)))
 
     def test_key_order_and_whitespace_do_not_change_hash(self) -> None:
         entry = sample_measurement()
@@ -628,17 +635,17 @@ class MeasurementBodyTests(unittest.TestCase):
             "subject": dict(reversed(list(entry["measurement"]["subject"].items()))),
             "summary": "  " + entry["measurement"]["summary"] + "\r\n",
         }
-        self.assertEqual(v2.content_hash(entry), v2.content_hash(scrambled))
+        self.assertEqual(content_hash(entry), content_hash(scrambled))
 
     def test_neither_or_both_bodies_are_refused(self) -> None:
         missing = sample_entry()
         del missing["rule"]
-        with self.assertRaisesRegex(v2.KnowledgeV2Error, "no body"):
-            v2.content_hash(missing)
+        with self.assertRaisesRegex((ValueError, ToolError), "no body"):
+            content_hash(missing)
         both = sample_measurement()
         both["rule"] = sample_entry()["rule"]
-        with self.assertRaisesRegex(v2.KnowledgeV2Error, "both"):
-            v2.content_hash(both)
+        with self.assertRaisesRegex((ValueError, ToolError), "both"):
+            content_hash(both)
 
     def test_valid_measurement_passes_schema(self) -> None:
         entry = sample_measurement()
