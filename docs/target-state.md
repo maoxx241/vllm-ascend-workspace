@@ -123,9 +123,12 @@ nothing here decides who owns an NPU except through the coordinator.
 | `vaws_session_state.py` | binding only: which coordinator session this worktree is attached to |
 | `vaws_session_id.py` | `current-session.json` |
 | `vaws_redaction.py` | BLOCK/EXPORT classification over commons rules |
+| `vaws_knowledge_service.py` | project/candidate configuration and workflow I/O; knowledge rules/query delegated |
 | `vaws_coordinator_launch.py` | start the installed coordinator |
 | `vaws_remote_dev_plugin.py` | endpoint resolver for the scaffold's machines |
 | `vaws_remote_dev.py` | environment injection into remote-dev |
+| `vaws_remote_adapters.py` | agent workflow composition |
+| `vaws_remote_target.py` | selector-to-endpoint/environment binding; machine authority delegated |
 | `vaws_validate.py` | id / env / device CSV validation |
 | `vaws_venv.py` | `.venv` re-exec shim |
 | `vaws_host_queue_module.py` | pure re-export of `vaws_coordinator.host_queue` so remote host-side loaders still receive a real `Path` |
