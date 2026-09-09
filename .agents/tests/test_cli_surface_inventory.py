@@ -310,7 +310,7 @@ class RepositoryCoherenceTests(unittest.TestCase):
         )
         self.assertEqual(
             by_repository["vllm-ascend-workspace/vaws-coordinator"]["commit"],
-            "93208043a26ccde42f54aed6784d9a46325252d2",
+            "74a03d3ab4dad24182e085554f00e457a970220e",
         )
         self.assertIsNone(by_repository["vllm-ascend-workspace/vaws-top"]["commit"])
         self.assertEqual(

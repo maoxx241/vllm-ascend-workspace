@@ -31,11 +31,11 @@ class SpecLockTests(unittest.TestCase):
         self.assertEqual(deps.KNOWN_NAMES, deps.PACKAGE_NAMES)
         self.assertNotIn(deps.VAWS_TOP_NAME, deps.all_packages())
 
-    def test_lock_records_the_v0_1_0_commits(self) -> None:
+    def test_lock_records_the_pinned_tag_commits(self) -> None:
         locked = deps.locked_packages()
         self.assertEqual(
             locked["vaws-coordinator"]["commit"],
-            "93208043a26ccde42f54aed6784d9a46325252d2",
+            "74a03d3ab4dad24182e085554f00e457a970220e",
         )
         self.assertEqual(
             locked["vaws-knowledge"]["commit"],
