@@ -15,7 +15,6 @@ SCRIPTS = ROOT / ".agents" / "scripts"
 if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
-import vaws_build_inputs  # noqa: E402
 import vaws_dependency as deps  # noqa: E402
 
 
@@ -110,15 +109,15 @@ class SpecLockTests(unittest.TestCase):
         self.assertIn("unknown", payload["error"])
 
 
-class BuildInputMirrorTests(unittest.TestCase):
-    def test_scaffold_copy_matches_the_package_file(self) -> None:
+class BuildInputOwnershipTests(unittest.TestCase):
+    def test_build_inputs_live_in_the_coordinator_package(self) -> None:
+        self.assertFalse((ROOT / ".agents/lib/vaws_build_inputs.py").is_file())
         try:
             import vaws_coordinator.build_inputs as packaged
         except ImportError:
             self.skipTest("vaws-coordinator is not installed")
-        left = Path(vaws_build_inputs.__file__).read_bytes()
-        right = Path(packaged.__file__).read_bytes()
-        self.assertEqual(left, right)
+        self.assertTrue(hasattr(packaged, "build_input_fingerprints"))
+        self.assertTrue(hasattr(packaged, "runtime_build_inputs"))
 
 
 if __name__ == "__main__":
