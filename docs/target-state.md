@@ -339,6 +339,7 @@ package names the subset it makes true.
 | P9 | Every tracked `.agents/**/*.py` containing `if __name__ == "__main__"` contains `ensure_workspace_interpreter`; guard test in `.agents/tests`. |
 | P10 | `tracked_path_check.py --mode enforce` passes with an empty baseline. |
 | P11 | `rg -l 'Status: dated' docs` is empty. |
+| P11a | A pull request that touches only `docs/` runs the document guards. Until 2026-09-09 the job holding them was filtered to `.agents/**`, so a docs-only change merged without the anti-rot guard whose subject is tracked documents. |
 | P12 | Fresh clone → `repo-init` → `python3 .agents/scripts/vaws_deps.py doctor` reports `success` with all capabilities available, using the system `python3`. |
 | P13 | `.agents/maturation/` and `.agents/skills/remote-toolbox/` do not exist; `docs/README.md` lists every file under `docs/`. |
 | P14 | Each of the four package CIs has a job that runs `uv build`, installs the wheel into a clean venv, imports the top-level package, and runs the console script with `--help`. |

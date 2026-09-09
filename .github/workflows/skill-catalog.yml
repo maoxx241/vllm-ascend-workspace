@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - ".agents/**"
+      - "docs/**"
       - "AGENTS.md"
       - "README.md"
       - "README.en.md"
@@ -14,6 +15,7 @@ on:
       - main
     paths:
       - ".agents/**"
+      - "docs/**"
       - "AGENTS.md"
       - "README.md"
       - "README.en.md"
