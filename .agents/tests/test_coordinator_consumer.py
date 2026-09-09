@@ -102,14 +102,14 @@ class EnvironmentTests(unittest.TestCase):
         )
 
 
-class BuildInputMirrorTests(unittest.TestCase):
-    def test_scaffold_copy_matches_the_package_file(self) -> None:
+class BuildInputOwnershipTests(unittest.TestCase):
+    def test_scaffold_does_not_keep_a_copy(self) -> None:
+        self.assertFalse((ROOT / ".agents/lib/vaws_build_inputs.py").is_file())
         try:
-            import vaws_build_inputs
             import vaws_coordinator.build_inputs as packaged
         except ImportError:
             self.skipTest("vaws-coordinator is not installed")
-        self.assertEqual(Path(vaws_build_inputs.__file__).read_bytes(), Path(packaged.__file__).read_bytes())
+        self.assertTrue(Path(packaged.__file__).is_file())
 
 
 class LauncherTests(unittest.TestCase):
@@ -784,10 +784,11 @@ class NoInTreeTaskWriterTests(unittest.TestCase):
         )
         self.assertEqual(tracked.stdout.strip(), "", tracked.stdout)
 
-    def test_build_inputs_mirror_remains_for_parity(self) -> None:
-        self.assertTrue((ROOT / ".agents/lib/vaws_build_inputs.py").is_file())
+    def test_build_inputs_live_in_the_coordinator_package(self) -> None:
+        self.assertFalse((ROOT / ".agents/lib/vaws_build_inputs.py").is_file())
         self.assertTrue((ROOT / ".agents/lib/vaws_host_queue_module.py").is_file())
         self.assertFalse((ROOT / ".agents/lib/vaws_run_manifest.py").is_file())
+        import vaws_coordinator.build_inputs  # noqa: F401
         import vaws_coordinator.run_manifest  # noqa: F401
 
 
