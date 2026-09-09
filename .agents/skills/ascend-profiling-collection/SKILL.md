@@ -207,7 +207,7 @@ Both hooks are local, advisory-only views over the workspace knowledge store (`.
 - **Preflight advisories**: before `serve_start`, the orchestrator queries `model-capabilities` / `parallelism-compatibility` / `known-failure-signatures` with `<served-model-name> tp<N> <mode>` (limit 3 per kind). Hits land in the manifest's `knowledge_advisories` array (`{entry_id, kind, summary, score}`) and are printed to stderr progress. Use them as hints (e.g. a model's verified TP/mode or a known container pitfall), not as gates.
 - **Failure-gate enrichment**: when any hard-fail gate trips (service not ready, workload not real, `rank_count_mismatch`, `missing_kernel_details`), the observed error text is queried against `known-failure-signatures` (limit 3). Matches — including each entry's `resolution` — are written to `manifest.error.knowledge_matches`, and `manifest.error` becomes an object `{message, knowledge_matches}` instead of a bare string. The same object is the stdout failure JSON. No match → explicit empty array.
 
-**沉淀提示**: when a collection failure turns into a confirmed new diagnosis (symptom + root cause + verified fix), capture it with `.agents/scripts/knowledge_capture.py` as a local candidate (`.vaws-local/knowledge/candidates/`, untracked); promotion into `.agents/knowledge/` happens only through reviewed project changes.
+**沉淀提示**: when a collection failure turns into a confirmed new diagnosis (symptom + root cause + verified fix), capture it with `.agents/scripts/knowledge_capture.py` as a local candidate (`.vaws-local/knowledge/candidate/`, untracked); promotion into `.agents/knowledge/` happens only through reviewed project changes.
 
 ## Manifest schema
 

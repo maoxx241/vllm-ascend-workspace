@@ -2,10 +2,12 @@
 """Capture one knowledge candidate through the installed commons engine.
 
 Keeps the scaffold coordinate adapter: Run Manifest / ``--env`` / candidate
-scope, missing dimensions recorded as ``unknown``. Writes via
-``vaws_knowledge.server.capture.capture`` after
-``vaws_redaction.require_writable``. ``--defer`` still stages JSON for the
-session-end hook; curate promote still reads that JSON queue.
+scope, missing dimensions recorded as ``unknown``. Writes only the commons
+candidate layer (``.vaws-local/knowledge/candidate/*.yaml``) after
+``vaws_redaction.require_writable``.
+
+A minimal legal ``--input`` payload is
+``.agents/skills/curate-workspace-knowledge/references/capture-candidate.example.json``.
 """
 
 from __future__ import annotations
@@ -29,14 +31,15 @@ ensure_workspace_interpreter(repo_root=ROOT)
 import vaws_redaction as redaction  # noqa: E402
 from vaws_knowledge.server.capture import CaptureRefused, CaptureRejected, capture  # noqa: E402
 from vaws_knowledge_service import (  # noqa: E402
+    already_promoted_slug,
     commons_entry,
+    find_candidate_entry,
     infer_repo_root,
     service_config,
 )
 from vaws_knowledge_v1 import (  # noqa: E402
     COORDINATE_DIMENSIONS,
     KnowledgeError,
-    capture_candidate,
     knowledge_session_key,
     normalize_coordinate,
     unknown_coordinate_dimensions,
@@ -194,16 +197,31 @@ def collect_coordinate(payload: dict[str, Any], args: argparse.Namespace) -> tup
     return collected, coordinate_source
 
 
-def write_commons(payload: Mapping[str, Any], knowledge_dir: Path) -> dict[str, Any]:
+def write_commons(
+    payload: Mapping[str, Any],
+    *,
+    knowledge_dir: Path,
+    candidate_root: Path,
+) -> dict[str, Any]:
     repo_root = infer_repo_root(knowledge_dir.resolve(), knowledge_dir.resolve().parent)
-    commons_root = repo_root / ".vaws-local" / "knowledge" / "candidate"
+    draft = commons_entry(payload, payload["environment"])
+    try:
+        existing = find_candidate_entry(
+            str(draft["slug"]),
+            repo_root,
+            project_root=knowledge_dir.resolve(),
+            candidate_root=candidate_root,
+        )
+        draft["uuid"] = existing.uuid
+    except KeyError:
+        pass
     return capture(
-        commons_entry(payload, payload["environment"]),
+        draft,
         kind=str(payload.get("kind") or "known-failure-signatures"),
         config=service_config(
             repo_root,
             project_root=knowledge_dir.resolve(),
-            candidate_root=commons_root,
+            candidate_root=candidate_root,
         ),
     )
 
@@ -211,19 +229,25 @@ def write_commons(payload: Mapping[str, Any], knowledge_dir: Path) -> dict[str, 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", type=Path, required=True)
-    parser.add_argument("--defer", action="store_true")
+    parser.add_argument(
+        "--defer",
+        action="store_true",
+        help="write the same candidate-layer yaml now; keep a session id on the receipt",
+    )
     parser.add_argument("--session-id")
     parser.add_argument("--run-manifest", type=Path)
     parser.add_argument("--env", action="append", dest="env_pairs")
     parser.add_argument(
         "--candidate-dir",
         type=Path,
-        default=ROOT / ".vaws-local" / "knowledge" / "candidates",
+        default=ROOT / ".vaws-local" / "knowledge" / "candidate",
+        help="commons candidate-layer yaml root",
     )
     parser.add_argument(
         "--pending-dir",
         type=Path,
         default=ROOT / ".vaws-local" / "knowledge" / "pending",
+        help="unused; leftover JSON pending is still flushed by the session-end hook",
     )
     parser.add_argument(
         "--knowledge-dir",
@@ -251,11 +275,12 @@ def main(argv: list[str] | None = None) -> int:
             for finding in redaction.export_findings(redaction.scan(payload, path="payload"))
         ]
 
-        candidate_dir = args.candidate_dir
+        session_id = None
         if args.defer:
-            source = payload.setdefault("source", {})
-            if not isinstance(source, dict):
+            source = payload.get("source")
+            if source is not None and not isinstance(source, dict):
                 raise KnowledgeError("source must be an object")
+            source = payload.setdefault("source", {})
             session_id = (
                 args.session_id
                 or os.environ.get("CODEX_THREAD_ID")
@@ -266,35 +291,49 @@ def main(argv: list[str] | None = None) -> int:
                     "--defer requires --session-id, CODEX_THREAD_ID, or source.session_id"
                 )
             source["session_id"] = session_id
-            candidate_dir = args.pending_dir / knowledge_session_key(session_id)
 
-        queued = capture_candidate(
-            payload,
-            candidate_dir=candidate_dir,
-            knowledge_dir=args.knowledge_dir,
-        )
-        written = None
-        if not args.defer and queued.get("status") != "already-promoted":
-            written = write_commons(payload, args.knowledge_dir)
-        result = {
-            **queued,
-            "coordinate": {
-                "source": coordinate_source,
-                "values": {
-                    name: payload["environment"][name] for name in COORDINATE_DIMENSIONS
-                },
-                "unknown_dimensions": unknown,
-                "complete": not unknown,
+        promoted = already_promoted_slug(payload, args.knowledge_dir.resolve())
+        if promoted:
+            result = {
+                "status": "already-promoted",
+                "schema_version": 2,
+                "candidate_id": promoted,
+                "entry_id": promoted,
+                "path": None,
+            }
+        else:
+            written = write_commons(
+                payload,
+                knowledge_dir=args.knowledge_dir,
+                candidate_root=args.candidate_dir.resolve(),
+            )
+            slug = str(written.get("slug") or written.get("uuid"))
+            result = {
+                "status": "passed",
+                "schema_version": 2,
+                "candidate_id": slug,
+                "uuid": written.get("uuid"),
+                "slug": written.get("slug"),
+                "content_hash": written.get("content_hash"),
+                "action": written.get("action"),
+                "path": written.get("file"),
+                "commons": written,
+            }
+        result["coordinate"] = {
+            "source": coordinate_source,
+            "values": {
+                name: payload["environment"][name] for name in COORDINATE_DIMENSIONS
             },
-            "commons": written,
-            "redaction": {
-                "level": "export" if export_hits else "clear",
-                "findings": export_hits,
-            },
+            "unknown_dimensions": unknown,
+            "complete": not unknown,
+        }
+        result["redaction"] = {
+            "level": "export" if export_hits else "clear",
+            "findings": export_hits,
         }
         if args.defer and result["status"] != "already-promoted":
             result["deferred"] = True
-            result["session_key"] = knowledge_session_key(source["session_id"])
+            result["session_key"] = knowledge_session_key(str(session_id))
     except redaction.RedactionError as exc:
         print(json.dumps({"status": "failed", "error": str(exc), "redaction": {"level": "block"}}))
         return 1

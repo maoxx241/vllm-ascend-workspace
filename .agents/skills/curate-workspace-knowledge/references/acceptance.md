@@ -6,7 +6,8 @@
 - [ ] Inconclusive or unstable-only candidates cannot be promoted.
 - [ ] Active promotion requires repeat evidence or a regression test.
 - [ ] Exact fingerprint matches require merge or explicit `--force-new`.
-- [ ] Promotion and merge archive the candidate only after formal validation.
+- [ ] Promotion and merge archive the candidate yaml entry and remove it from
+      the candidate layer so a later query only hits `layer: project`.
 - [ ] Rejection does not modify formal knowledge.
 - [ ] Deprecation retains the entry and records reason/replacement.
 - [ ] stdout contains one final JSON document.

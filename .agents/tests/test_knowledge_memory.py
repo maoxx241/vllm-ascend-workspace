@@ -335,7 +335,8 @@ class CliTests(unittest.TestCase):
             result = json.loads(captured.stdout)
             self.assertEqual(captured.returncode, 0, captured.stderr)
             self.assertTrue(result["deferred"])
-            self.assertIn(result["session_key"], result["path"])
+            self.assertTrue(Path(result["path"]).is_file())
+            self.assertIn("session_key", result)
 
 
 if __name__ == "__main__":

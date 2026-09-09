@@ -228,11 +228,11 @@ class ClientSetupTests(unittest.TestCase):
         servers = json.loads(
             self.setup.configuration("claude", self.project, task_only=True)[self.project / ".mcp.json"]
         )["mcpServers"]
-        self.assertEqual(set(servers), {"vaws-task", "vaws-knowledge"})
+        self.assertEqual(set(servers), {"vaws-task"})
         grok = tomllib.loads(
             self.setup.configuration("grok", self.project, task_only=True)[self.project / ".grok/config.toml"]
         )
-        self.assertEqual(set(grok["mcp_servers"]), {"vaws_task", "vaws_knowledge"})
+        self.assertEqual(set(grok["mcp_servers"]), {"vaws_task"})
 
     def test_json_preserves_hand_managed_remote_dev_command_args_type(self) -> None:
         path = self.project / ".mcp.json"
@@ -262,6 +262,45 @@ class ClientSetupTests(unittest.TestCase):
         self.assertEqual(data["mcpServers"]["other"], {"command": "other-command"})
         self.assertIn("vaws-task", data["mcpServers"])
         self.assertTrue(any(note.get("reason") == "existing-named-server" for note in plan["notes"]))
+
+    def test_json_rewrites_stale_checkout_paths(self) -> None:
+        gone = self.project / ".agents" / "scripts" / "remote_dev.py"
+        path = self.project / ".mcp.json"
+        path.write_text(json.dumps({
+            "mcpServers": {
+                "remote-dev": {
+                    "command": "python3",
+                    "args": [str(gone), "server"],
+                    "type": "stdio",
+                }
+            }
+        }))
+        plan = self.setup.build_plan("claude", self.project)
+        data = json.loads(plan["files"][path])
+        entry = data["mcpServers"]["remote-dev"]
+        self.assertEqual(entry["args"], ["-m", "remote_dev.mcp.server"])
+        self.assertTrue(
+            any(note.get("action") == "rewritten-stale" for note in plan["notes"])
+        )
+
+    def test_toml_rewrites_stale_checkout_paths(self) -> None:
+        gone = self.project / ".agents" / "scripts" / "remote_dev.py"
+        config = self.project / ".codex" / "config.toml"
+        config.parent.mkdir()
+        config.write_text(
+            "[mcp_servers.remote_dev]\n"
+            'command = "python3"\n'
+            f'args = ["{gone}", "server"]\n'
+        )
+        plan = self.setup.build_plan("codex", self.project)
+        data = tomllib.loads(plan["files"][config])
+        self.assertEqual(
+            data["mcp_servers"]["remote_dev"]["args"],
+            ["-m", "remote_dev.mcp.server"],
+        )
+        self.assertTrue(
+            any(note.get("action") == "rewritten-stale" for note in plan["notes"])
+        )
 
     def test_json_setup_is_idempotent_on_fixtures(self) -> None:
         first = self.setup.configuration("claude", self.project)

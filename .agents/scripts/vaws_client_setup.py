@@ -15,14 +15,15 @@ Three logical providers are written when needed:
 * `vaws-knowledge` -> `python -m vaws_knowledge.server.mcp_server`, which
   serves `knowledge_query` / `knowledge_explain` / `knowledge_capture`.
 
-`--task-only` skips the remote-dev entry.
+`--task-only` writes only the vaws-task entry; it skips remote-dev and
+vaws-knowledge.
 
 Preservation: existing user-managed servers and unknown fields are kept.
-JSON merge does **not** rewrite `command` / `args` / `type` of a same-name
-provider that already has them (the coordinator helper does, and that is not
-accepted as a migration). TOML already preserves named servers. Stale
-`mcp__remote-dev__vaws_*` permission rules are reported, never silently
-rewritten.
+JSON merge does **not** rewrite `command` / `args` / `type` of a living
+same-name provider. A same-name entry whose command/args point at a path
+inside this checkout that no longer exists is rewritten (`rewritten-stale`).
+TOML follows the same rule. Stale `mcp__remote-dev__vaws_*` permission
+rules are reported, never silently rewritten.
 """
 from __future__ import annotations
 
@@ -33,7 +34,6 @@ import os
 import shlex
 import sys
 import time
-import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -41,6 +41,8 @@ sys.path.insert(0, str(ROOT / ".agents/lib"))
 from vaws_venv import ensure_workspace_interpreter
 
 ensure_workspace_interpreter(repo_root=ROOT)
+
+import tomllib  # noqa: E402
 
 from vaws_coordinator_launch import coordinator_environment
 from vaws_knowledge_service import knowledge_server_env
@@ -151,13 +153,14 @@ def desired_mcp_servers(*, task_only=False):
         "timeout": 600000,
         "env": task_server_env(),
     }
-    servers[KNOWLEDGE_SERVER_NAME] = {
-        "command": sys.executable,
-        "args": knowledge_server_args(),
-        "type": "stdio",
-        "timeout": 600000,
-        "env": knowledge_server_env(ROOT),
-    }
+    if not task_only:
+        servers[KNOWLEDGE_SERVER_NAME] = {
+            "command": sys.executable,
+            "args": knowledge_server_args(),
+            "type": "stdio",
+            "timeout": 600000,
+            "env": knowledge_server_env(ROOT),
+        }
     return servers
 
 
@@ -340,11 +343,56 @@ def merge_hook_event(existing, desired, client, project):
     return result
 
 
-def merge_server_entry(existing, desired):
-    """Fill missing keys from `desired`; never overwrite user command/args/type.
+def _looks_like_path(value):
+    if not isinstance(value, str) or not value or value.startswith("-"):
+        return False
+    return value.startswith("/") or value.startswith(".") or "/" in value or value.endswith(".py")
 
-    User env keys win over defaults. Unknown fields on the existing entry stay.
+
+def checkout_missing_refs(entry, checkout):
+    """Paths inside ``checkout`` that the entry names but that no longer exist."""
+
+    root = Path(checkout).expanduser().resolve()
+    missing = []
+    values = [entry.get("command"), *(entry.get("args") or [])]
+    for value in values:
+        if not _looks_like_path(value):
+            continue
+        path = Path(value).expanduser()
+        if not path.is_absolute():
+            path = root / path
+        try:
+            resolved = path.resolve()
+            resolved.relative_to(root)
+        except (OSError, ValueError):
+            continue
+        if not path.exists() and not resolved.exists():
+            missing.append(str(value))
+    return missing
+
+
+def is_stale_scaffold_entry(existing, checkout):
+    return bool(checkout_missing_refs(existing, checkout))
+
+
+def merge_server_entry(existing, desired, *, checkout=None):
+    """Fill missing keys from `desired`; keep a living user command/args/type.
+
+    A same-name entry whose command/args point at a path inside this checkout
+    that no longer exists is a leftover scaffold row, not a hand-written
+    server, and is rewritten.
     """
+    checkout = ROOT if checkout is None else checkout
+    if is_stale_scaffold_entry(existing, checkout):
+        merged = dict(desired)
+        for key, value in existing.items():
+            if key not in {"command", "args", "type", "env"}:
+                merged.setdefault(key, value)
+        desired_env = dict(desired.get("env") or {})
+        existing_env = dict(existing.get("env") or {})
+        if desired_env or existing_env:
+            merged["env"] = {**desired_env, **existing_env}
+        return merged, "rewritten-stale"
     merged = {**desired, **existing}
     desired_env = dict(desired.get("env") or {})
     existing_env = dict(existing.get("env") or {})
@@ -354,7 +402,7 @@ def merge_server_entry(existing, desired):
         key in existing and existing.get(key) != desired.get(key)
         for key in ("command", "args", "type")
     )
-    return merged, preserved
+    return merged, "preserved" if preserved else None
 
 
 def stale_prefix_hits(text):
@@ -377,15 +425,25 @@ def merge_json(path, *, hooks=None, mcp=None, notes=None, client=None, project=N
             if existing is None:
                 servers[name] = dict(desired)
                 continue
-            merged, preserved = merge_server_entry(existing, desired)
+            merged, action = merge_server_entry(
+                existing, desired, checkout=project or ROOT
+            )
             servers[name] = merged
-            if preserved:
+            if action == "preserved":
                 notes.append({
                     "path": str(path),
                     "server": name,
                     "action": "preserved",
                     "fields": ["command", "args", "type"],
                     "reason": "existing-named-server",
+                })
+            elif action == "rewritten-stale":
+                notes.append({
+                    "path": str(path),
+                    "server": name,
+                    "action": "rewritten-stale",
+                    "fields": ["command", "args", "type"],
+                    "reason": "stale-checkout-path",
                 })
     text = json.dumps(value, indent=2, ensure_ascii=False) + "\n"
     for marker in stale_prefix_hits(text):
@@ -434,7 +492,7 @@ def build_plan(client, project, *, kimi_config=None, task_only=False):
             "cursor": ".cursor/mcp.json",
             "kimi": ".kimi-code/mcp.json",
         }[client]
-        files[path] = merge_json(path, mcp=servers, notes=notes)
+        files[path] = merge_json(path, mcp=servers, notes=notes, project=project)
     if client in {"codex", "grok"}:
         path = project / ("." + client) / "config.toml"
         original = tomllib.loads(path.read_text()) if path.exists() else {}
@@ -444,6 +502,21 @@ def build_plan(client, project, *, kimi_config=None, task_only=False):
         for name, entry in servers.items():
             key = name.replace("-", "_")
             if any(candidate in existing for candidate in (key, name)):
+                current = existing.get(key) or existing.get(name) or {}
+                if is_stale_scaffold_entry(current, project):
+                    text = managed_toml_text(
+                        drop_toml_server_tables(text, key),
+                        name,
+                        toml_server_body(key, entry),
+                    )
+                    notes.append({
+                        "path": str(path),
+                        "server": name,
+                        "action": "rewritten-stale",
+                        "reason": "stale-checkout-path",
+                    })
+                    changed = True
+                    continue
                 notes.append({
                     "path": str(path),
                     "server": name,
@@ -480,6 +553,23 @@ def build_plan(client, project, *, kimi_config=None, task_only=False):
     }
 
 
+def drop_toml_server_tables(original, key):
+    """Remove ``[mcp_servers.<key>]`` and its dotted child tables."""
+
+    prefix = f"[mcp_servers.{key}"
+    kept = []
+    skipping = False
+    for line in original.splitlines(keepends=True):
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            skipping = stripped.startswith(prefix) and (
+                stripped == prefix + "]" or stripped.startswith(prefix + ".")
+            )
+        if not skipping:
+            kept.append(line)
+    return "".join(kept)
+
+
 def managed_toml_text(original, name, text):
     begin, end = f"# BEGIN VAWS {name}\n", f"# END VAWS {name}\n"
     if begin in original:
@@ -496,7 +586,11 @@ def main():
     parser.add_argument("--client", choices=sorted(CLIENTS), required=True)
     parser.add_argument("--project", type=Path, default=Path.cwd())
     parser.add_argument("--kimi-config", type=Path, help="Kimi's actual user config if launched with --config-file")
-    parser.add_argument("--task-only", action="store_true", help="Write only the vaws-task entry; skip remote-dev")
+    parser.add_argument(
+        "--task-only",
+        action="store_true",
+        help="Write only the vaws-task entry; skip remote-dev and vaws-knowledge",
+    )
     parser.add_argument("--apply", action="store_true", help="Write with private backups; default is preview")
     args = parser.parse_args()
     plan = build_plan(args.client, args.project, kimi_config=args.kimi_config, task_only=args.task_only)
@@ -529,6 +623,9 @@ def main():
         ],
         "preserved_servers": [
             note for note in plan["notes"] if note.get("reason") == "existing-named-server"
+        ],
+        "rewritten_servers": [
+            note for note in plan["notes"] if note.get("action") == "rewritten-stale"
         ],
         "trust_granted": False,
         "connected": False,

@@ -143,15 +143,18 @@ class SessionEndHookTests(unittest.TestCase):
             self.payload(session_id), repo_root=self.root
         )
         self.assertEqual(result["status"], "passed")
-        self.assertEqual(result["processed"][0]["candidate_id"], candidate_id)
-        self.assertTrue(
+        self.assertTrue(result["processed"][0]["candidate_id"])
+        self.assertNotEqual(result["processed"][0]["candidate_id"], candidate_id)
+        yaml_root = self.root / ".vaws-local" / "knowledge" / "candidate"
+        self.assertTrue(any(yaml_root.glob("*.yaml")))
+        self.assertFalse(
             (
                 self.root
                 / ".vaws-local"
                 / "knowledge"
                 / "candidates"
                 / f"{candidate_id}.json"
-            ).is_file()
+            ).exists()
         )
         self.assertFalse(
             (
@@ -194,8 +197,9 @@ class SessionEndHookTests(unittest.TestCase):
         self.assertEqual(len(result["errors"]), 2)
         self.assertTrue((pending / "linked.json").is_symlink())
         self.assertTrue((pending / "oversize.json").is_file())
-        candidate_dir = self.root / ".vaws-local" / "knowledge" / "candidates"
-        self.assertFalse(candidate_dir.exists())
+        self.assertFalse(
+            (self.root / ".vaws-local" / "knowledge" / "candidate").exists()
+        )
 
     def test_repeated_finalization_is_idempotent(self) -> None:
         session_id = "thread-repeat"
@@ -206,19 +210,13 @@ class SessionEndHookTests(unittest.TestCase):
         second = hook.process_session_end(
             self.payload(session_id), repo_root=self.root
         )
-        self.assertEqual(first["processed"][0]["candidate_id"], candidate_id)
+        self.assertTrue(first["processed"][0]["candidate_id"])
         self.assertIsNone(second)
-        candidate_path = (
-            self.root
-            / ".vaws-local"
-            / "knowledge"
-            / "candidates"
-            / f"{candidate_id}.json"
+        yaml_files = list(
+            (self.root / ".vaws-local" / "knowledge" / "candidate").glob("*.yaml")
         )
-        self.assertEqual(
-            json.loads(candidate_path.read_text(encoding="utf-8"))["occurrence_count"],
-            1,
-        )
+        self.assertEqual(len(yaml_files), 1)
+        self.assertIn(first["processed"][0]["candidate_id"], yaml_files[0].read_text())
 
     def test_other_session_pending_candidate_is_untouched(self) -> None:
         other = "other-thread"

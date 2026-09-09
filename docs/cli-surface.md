@@ -398,13 +398,13 @@ option.
 <!-- current-cli-surface-table -->
 | Entry point | Style | Verbs | Options | Refs | Responsibility | Support role | Current target | Proposed |
 |---|---|---|---|---|---|---|---|---|
-| `.agents/hooks/knowledge_session_end.py` | bare | - | 0 | client-config:1, routing:1, test:2 | mechanics | hook | .agents/hooks/knowledge_session_end.py | - |
+| `.agents/hooks/knowledge_session_end.py` | bare | - | 0 | client-config:1, routing:1, test:1 | mechanics | hook | .agents/hooks/knowledge_session_end.py | - |
 | `.agents/hooks/tracked_leak_precommit.py` | argparse | - | 8 | docs:1, policy:1, test:1 | mechanics | hook | .agents/hooks/tracked_leak_precommit.py | - |
 | `.agents/hooks/vaws_session.py` | argparse | - | 4 | docs:2, other:1, policy:1, script:1, test:2 | mechanics | hook | .agents/hooks/vaws_session.py | - |
 | `.agents/maturation/run.py` | argparse | - | 23 | docs:4, other:1, routing:1, script:3, skill-doc:11, test:5 | mechanics | harness | .agents/maturation/run.py | - |
 | `.agents/scripts/cli_surface_inventory.py` | argparse | - | 3 | policy:1, test:2 | mechanics | supported | .agents/scripts/cli_surface_inventory.py | vaws lint |
 | `.agents/scripts/envelope_lint.py` | argparse | scan, check, run | 5 | docs:1, test:2 | mechanics | supported | .agents/scripts/envelope_lint.py | vaws lint |
-| `.agents/scripts/knowledge_capture.py` | argparse | - | 9 | docs:2, other:2, routing:2, script:2, skill-doc:4, test:3 | mixed | supported | .agents/scripts/knowledge_capture.py | vaws knowledge |
+| `.agents/scripts/knowledge_capture.py` | argparse | - | 9 | docs:2, hook:1, other:2, routing:2, script:2, skill-doc:5, test:4 | mixed | supported | .agents/scripts/knowledge_capture.py | vaws knowledge |
 | `.agents/scripts/knowledge_export.py` | argparse | - | 7 | other:2, routing:2, script:1, skill-doc:3, test:1 | mechanics | supported | .agents/scripts/knowledge_export.py | vaws knowledge |
 | `.agents/scripts/knowledge_migrate_v2.py` | argparse | - | 7 | routing:1, skill-doc:2, test:1 | mechanics | supported | .agents/scripts/knowledge_migrate_v2.py | vaws knowledge |
 | `.agents/scripts/knowledge_query.py` | argparse | - | 9 | docs:1, routing:2, skill-doc:1, test:2 | mechanics | supported | .agents/scripts/knowledge_query.py | vaws knowledge |
@@ -467,7 +467,7 @@ option.
 | `.agents/skills/ascend-triton-kernel-validation/scripts/validate_triton_impl.py` | argparse | - | 1 | docs:1, skill-doc:1, test:1 | mechanics | supported | .agents/skills/ascend-triton-kernel-validation/scripts/validate_triton_impl.py | vaws lint |
 | `.agents/skills/ascend-triton-operator-development/scripts/triton_development.py` | argparse | plan, finalize | 6 | docs:1, routing:1, skill-doc:2, test:1 | mixed | supported | .agents/skills/ascend-triton-operator-development/scripts/triton_development.py | guidance |
 | `.agents/skills/ascend-triton-workflow/scripts/triton_workflow.py` | argparse | plan, link, finalize | 4 | docs:1, routing:1, skill-doc:2, test:1 | mixed | supported | .agents/skills/ascend-triton-workflow/scripts/triton_workflow.py | guidance |
-| `.agents/skills/curate-workspace-knowledge/scripts/knowledge_curate.py` | argparse | list, inspect, promote, merge, reject, deprecate, resolve, verify, list-unresolved | 21 | other:2, policy:1, routing:1, skill-doc:2, test:4 | mixed | supported | .agents/skills/curate-workspace-knowledge/scripts/knowledge_curate.py | vaws knowledge |
+| `.agents/skills/curate-workspace-knowledge/scripts/knowledge_curate.py` | argparse | list, inspect, promote, merge, reject, deprecate, resolve, verify, list-unresolved | 21 | other:2, policy:1, routing:1, skill-doc:2, test:5 | mixed | supported | .agents/skills/curate-workspace-knowledge/scripts/knowledge_curate.py | vaws knowledge |
 | `.agents/skills/machine-management/scripts/inventory.py` | argparse | summary, get, put, upsert, remove | 15 | docs:2, policy:1, routing:1, script:4, skill-doc:4, test:2 | mechanics | internal | .agents/skills/machine-management/scripts/machine_add.py | vaws machine |
 | `.agents/skills/machine-management/scripts/machine_add.py` | argparse | - | 13 | docs:1, policy:1, routing:1, script:3, skill-doc:4 | mechanics | supported | .agents/skills/machine-management/scripts/machine_add.py | vaws machine |
 | `.agents/skills/machine-management/scripts/machine_remove.py` | argparse | - | 1 | docs:1, policy:1, routing:1, script:1, skill-doc:4 | mechanics | supported | .agents/skills/machine-management/scripts/machine_remove.py | vaws machine |

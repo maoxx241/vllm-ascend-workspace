@@ -586,7 +586,9 @@ class KnowledgeTests(unittest.TestCase):
             result = knowledge.capture_candidate(candidate, extra_args=["--candidate-dir", str(Path(tmp) / "candidates"), "--knowledge-dir", str(ROOT / ".agents" / "knowledge")])
             self.assertEqual(result.get("status"), "passed", result)
             self.assertEqual(result.get("action"), "created")
-            written = json.loads(Path(result["path"]).read_text(encoding="utf-8"))
+            import yaml
+
+            written = yaml.safe_load(Path(result["path"]).read_text(encoding="utf-8"))
             self.assertNotRegex(json.dumps(written), IPV4)
             # Same signature again merges instead of duplicating.
             again = knowledge.capture_candidate(candidate, extra_args=["--candidate-dir", str(Path(tmp) / "candidates"), "--knowledge-dir", str(ROOT / ".agents" / "knowledge")])

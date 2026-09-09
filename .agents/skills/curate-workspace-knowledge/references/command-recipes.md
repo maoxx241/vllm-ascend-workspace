@@ -1,5 +1,8 @@
 # Command recipes
 
+A minimal legal capture `--input` file is
+`references/capture-candidate.example.json`.
+
 List compact candidates:
 
 ```bash

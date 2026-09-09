@@ -192,7 +192,7 @@ Untracked workspace-local state lives under `.vaws-local/`:
 - `.vaws-local/memory-profiling/`
 - `.vaws-local/ascend-profiling-collection/runs/`
 - `.vaws-local/profiling-analysis/runs/`
-- `.vaws-local/knowledge/candidates/`
+- `.vaws-local/knowledge/candidate/`
 - `.vaws-local/knowledge/pending/<session-key>/`
 - `.vaws-local/knowledge/session-end/`
 - `.vaws-local/knowledge/reviewed/`

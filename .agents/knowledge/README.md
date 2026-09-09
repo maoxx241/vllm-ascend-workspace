@@ -6,7 +6,7 @@ This directory is the **project layer** of a three-layer knowledge model:
 |-------|----------|-------|------------|
 | `shared` | corpus inside the installed `vaws-knowledge` package (`vaws_knowledge.corpus`) | reviewed by the commons; each entry carries its own `status` | shipped with the package; this repo does not copy or cache it |
 | `project` | this directory | reviewed in this repo | `curate-workspace-knowledge` |
-| `candidate` | `.vaws-local/knowledge/candidate/` (untracked yaml) plus the v1 review queue `.vaws-local/knowledge/candidates/` | one unreviewed observation | `knowledge_capture.py` writes both; curate promote still reads the JSON queue |
+| `candidate` | `.vaws-local/knowledge/candidate/` (untracked yaml) | one unreviewed observation | `knowledge_capture.py` writes this layer only; `knowledge_curate.py` promote reads it and removes the entry |
 
 ## Two generations, side by side
 
@@ -64,6 +64,9 @@ python3 .agents/skills/curate-workspace-knowledge/scripts/knowledge_curate.py \
 Query and capture run on the installed `vaws-knowledge` engine. The scripts
 are thin CLIs; agents can also call the `vaws-knowledge` MCP tools
 `knowledge_query`, `knowledge_explain`, and `knowledge_capture`.
+
+A minimal legal capture `--input` payload lives at
+`.agents/skills/curate-workspace-knowledge/references/capture-candidate.example.json`.
 
 The client adapter is `.agents/tests/knowledge_client_adapter.py`. The
 conformance kit ships inside the `vaws-knowledge` package. Optionally set

@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Flush only explicitly deferred knowledge candidates for one Codex session."""
+"""Flush leftover deferred JSON candidates into the commons candidate layer.
+
+New ``knowledge_capture.py --defer`` writes the candidate-layer yaml immediately.
+This hook only migrates a leftover ``pending/*.json`` queue from earlier
+captures, writing the same yaml shape, then deletes the JSON.
+"""
 
 from __future__ import annotations
 
@@ -26,7 +31,6 @@ from vaws_knowledge_service import commons_entry, infer_repo_root, service_confi
 from vaws_knowledge_v1 import (  # noqa: E402
     MAX_CANDIDATE_BYTES,
     KnowledgeError,
-    capture_candidate,
     knowledge_session_key,
     load_candidate,
 )
@@ -63,14 +67,13 @@ def _resolve_repo_root(payload: Mapping[str, Any]) -> Path:
     return ROOT
 
 
-def _write_commons(candidate: Mapping[str, Any], knowledge_dir: Path) -> None:
+def _write_commons(candidate: Mapping[str, Any], knowledge_dir: Path, repo_root: Path) -> dict[str, Any]:
     redaction.require_writable(candidate, path="payload")
-    repo_root = infer_repo_root(knowledge_dir.resolve(), knowledge_dir.resolve().parent)
-    capture(
+    return capture(
         commons_entry(candidate, candidate.get("environment") or {}),
         kind=str(candidate.get("kind") or "known-failure-signatures"),
         config=service_config(
-            repo_root,
+            infer_repo_root(knowledge_dir.resolve(), repo_root),
             project_root=knowledge_dir.resolve(),
             candidate_root=repo_root / ".vaws-local" / "knowledge" / "candidate",
         ),
@@ -108,7 +111,6 @@ def process_session_end(
         )
         pending_paths = pending_paths[:MAX_PENDING_PER_SESSION]
 
-    candidate_dir = root / ".vaws-local" / "knowledge" / "candidates"
     knowledge_dir = root / ".agents" / "knowledge"
     for path in pending_paths:
         try:
@@ -121,21 +123,14 @@ def process_session_end(
             candidate = load_candidate(path)
             if candidate["source"].get("session_id") != session_id:
                 raise KnowledgeError("pending candidate session does not match hook session")
-            result = capture_candidate(
-                candidate,
-                candidate_dir=candidate_dir,
-                knowledge_dir=knowledge_dir,
-            )
-            if result["status"] not in {"passed", "already-promoted"}:
-                raise KnowledgeError(f"unexpected capture status: {result['status']}")
-            if result["status"] != "already-promoted":
-                _write_commons(candidate, knowledge_dir)
+            written = _write_commons(candidate, knowledge_dir, root)
             path.unlink()
             processed.append(
                 {
-                    "candidate_id": candidate["candidate_id"],
-                    "capture_status": result["status"],
-                    "action": result.get("action"),
+                    "candidate_id": written.get("slug") or candidate["candidate_id"],
+                    "uuid": written.get("uuid"),
+                    "capture_status": "passed",
+                    "action": written.get("action"),
                 }
             )
         except (KnowledgeError, OSError, CaptureRefused, CaptureRejected, redaction.RedactionError) as exc:

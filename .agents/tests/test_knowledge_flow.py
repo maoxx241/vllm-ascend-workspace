@@ -17,7 +17,6 @@ from vaws_knowledge_v1 import get_knowledge_entry, query_knowledge  # noqa: E402
 
 CAPTURE = ROOT / ".agents" / "scripts" / "knowledge_capture.py"
 VALIDATE = ROOT / ".agents" / "scripts" / "knowledge_validate.py"
-HOOK = ROOT / ".agents" / "hooks" / "knowledge_session_end.py"
 CURATE = (
     ROOT
     / ".agents"
@@ -73,10 +72,8 @@ class KnowledgeFlowE2ETest(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.sandbox = Path(self.temp.name)
         self.formal = self.sandbox / ".agents" / "knowledge"
-        self.candidates = self.sandbox / ".vaws-local" / "knowledge" / "candidates"
-        self.pending = self.sandbox / ".vaws-local" / "knowledge" / "pending"
+        self.candidates = self.sandbox / ".vaws-local" / "knowledge" / "candidate"
         self.reviewed = self.sandbox / ".vaws-local" / "knowledge" / "reviewed"
-        self.session_end = self.sandbox / ".vaws-local" / "knowledge" / "session-end"
         self.formal.parent.mkdir(parents=True)
         shutil.copytree(ROOT / ".agents" / "knowledge", self.formal)
 
@@ -142,38 +139,14 @@ class KnowledgeFlowE2ETest(unittest.TestCase):
             "--defer",
             "--session-id",
             session_id,
-            "--pending-dir",
-            str(self.pending),
+            "--candidate-dir",
+            str(self.candidates),
             "--knowledge-dir",
             str(self.formal),
         )
         candidate_id = deferred["candidate_id"]
         self.assertTrue(deferred["deferred"])
         self.assertTrue(Path(deferred["path"]).is_file())
-
-        hook_input = {
-            "session_id": session_id,
-            "transcript_path": "/not/read/by/the/hook.jsonl",
-            "cwd": str(self.sandbox),
-            "hook_event_name": "SessionEnd",
-            "reason": "other",
-        }
-        hook = subprocess.run(
-            [sys.executable, str(HOOK)],
-            input=json.dumps(hook_input),
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        self.assertEqual(hook.returncode, 0)
-        self.assertEqual(hook.stdout, "")
-        self.assertEqual(hook.stderr, "")
-        self.assertTrue((self.candidates / f"{candidate_id}.json").is_file())
-        receipts = list(self.session_end.glob("*.json"))
-        self.assertEqual(len(receipts), 1)
-        self.assertEqual(
-            json.loads(receipts[0].read_text(encoding="utf-8"))["status"], "passed"
-        )
 
         listed = self.curate_json("list")
         self.assertEqual(
@@ -202,8 +175,11 @@ class KnowledgeFlowE2ETest(unittest.TestCase):
         )
         self.assertEqual(promoted["action"], "promoted")
         self.assertEqual(promoted["entry_status"], "active")
-        self.assertFalse((self.candidates / f"{candidate_id}.json").exists())
         self.assertTrue((self.reviewed / f"{candidate_id}.json").is_file())
+        leftover = list(self.candidates.glob("*.yaml"))
+        self.assertFalse(
+            any(candidate_id in path.read_text(encoding="utf-8") for path in leftover)
+        )
 
         queried = query_knowledge(
             knowledge_dir=self.formal,
@@ -223,7 +199,6 @@ class KnowledgeFlowE2ETest(unittest.TestCase):
             str(self.formal),
         )
         self.assertEqual(recaptured["status"], "already-promoted")
-        self.assertEqual(list(self.candidates.glob("*.json")), [])
 
         deprecated = self.curate_json(
             "deprecate",

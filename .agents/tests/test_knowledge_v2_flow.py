@@ -122,7 +122,7 @@ class V2FlowBase(unittest.TestCase):
         return self.run_script(
             CURATE,
             "--candidate-dir",
-            str(self.candidates),
+            str(self.commons_candidates),
             "--reviewed-dir",
             str(self.reviewed),
             "--knowledge-dir",
@@ -147,7 +147,7 @@ class V2FlowBase(unittest.TestCase):
             "--input",
             str(self.input),
             "--candidate-dir",
-            str(self.candidates),
+            str(self.commons_candidates),
             "--knowledge-dir",
             str(self.knowledge),
             *arguments,
@@ -170,14 +170,10 @@ class KnowledgeV2LifecycleTest(V2FlowBase):
             captured["coordinate"]["unknown_dimensions"],
             ["model", "topology", "execution_mode"],
         )
-        candidate = json.loads(
-            (self.candidates / f"{captured['candidate_id']}.json").read_text(
-                encoding="utf-8"
-            )
-        )
-        self.assertEqual(candidate["environment"]["cann"], "8.2.RC1")
+        self.assertTrue(Path(captured["path"]).is_file())
+        self.assertEqual(captured["coordinate"]["values"]["cann"], "8.2.RC1")
         # Nothing is invented for a dimension nobody established.
-        self.assertEqual(candidate["environment"]["model"], "unknown")
+        self.assertEqual(captured["coordinate"]["values"]["model"], "unknown")
 
     def test_capture_without_a_run_context_falls_back_to_candidate_scope(self) -> None:
         captured = self.capture()
@@ -547,6 +543,40 @@ class ThreeLayerQueryTest(V2FlowBase):
         )
         self.assertEqual(
             {match["layer"] for match in payload["results"]}, {"candidate"}
+        )
+
+    def test_promote_removes_the_candidate_layer_entry(self) -> None:
+        captured = self.capture(*self.env_arguments())
+        before = self.query(
+            "--query", FINGERPRINT, "--layer", "candidate", "--include-unverified"
+        )
+        self.assertEqual(
+            {match["layer"] for match in before["results"]}, {"candidate"}
+        )
+        self.curate(
+            "promote",
+            "--candidate-id",
+            captured["candidate_id"],
+            "--entry-id",
+            "synthetic-ack-gate",
+            "--origin-repo",
+            "owner/fork",
+        )
+        leftover = self.query(
+            "--query", FINGERPRINT, "--layer", "candidate", "--include-unverified"
+        )
+        self.assertEqual(leftover["results"], [])
+        project = self.query("--query", FINGERPRINT, "--include-unverified")
+        match = next(
+            item for item in project["results"] if item["slug"] == "synthetic-ack-gate"
+        )
+        self.assertEqual(match["layer"], "project")
+        self.assertFalse(
+            list(self.commons_candidates.glob("*.yaml"))
+            and any(
+                captured["candidate_id"] in path.read_text(encoding="utf-8")
+                for path in self.commons_candidates.glob("*.yaml")
+            )
         )
 
     def test_v1_entries_stay_queryable_through_v1_reader(self) -> None:

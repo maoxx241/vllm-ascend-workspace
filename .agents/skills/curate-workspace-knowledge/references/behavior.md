@@ -5,7 +5,9 @@
 - `.agents/knowledge/` is the project layer: the only formal, tracked project
   knowledge source. It holds both generations — v1 `<kind>.yaml` and federated
   v2 `<kind>.v2.yaml`.
-- `.vaws-local/knowledge/candidates/` is an untracked review queue.
+- `.vaws-local/knowledge/candidate/` is the only untracked candidate store
+  (commons yaml). Capture writes it; curate promote/merge/reject remove the
+  entry after a disposition so query cannot keep hitting `layer: candidate`.
 - `.vaws-local/knowledge/reviewed/` is an untracked disposition audit.
 - The `shared` layer is the corpus inside the installed `vaws-knowledge`
   package. Never written by this repo.
