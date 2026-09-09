@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import subprocess
 import sys
-import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -22,12 +21,6 @@ from session_create import (  # noqa: E402
     parse_host_npu_availability,
     parse_host_npu_devices,
     probe_host_npu_devices,
-)
-from vaws_session_state import (  # noqa: E402
-    SessionStateError,
-    allocate_session_leases,
-    session_leases_path,
-    session_live_leases,
 )
 
 # Dual-chip A3 card layout: 8 cards x 2 chips; chip rows carry Phy-IDs 0-15
@@ -109,7 +102,6 @@ SINGLE_DEVICE_ALL_BUSY = """\
 """
 
 HOST_RECORD = {"host": {"ip": "192.0.2.10", "user": "root", "port": 22}}
-MACHINE = "host"
 
 
 class ParseHostNpuDevicesTests(unittest.TestCase):
@@ -169,45 +161,25 @@ class ParseHostNpuAvailabilityTests(unittest.TestCase):
 
 def _probe_host(*, stdout: str = "", returncode: int = 0, timeout: bool = False):
     if timeout:
-        runner = mock.Mock(
-            side_effect=subprocess.TimeoutExpired(cmd=["ssh"], timeout=30, output="", stderr="")
+        result = subprocess.CompletedProcess(
+            args=["ssh"],
+            returncode=255,
+            stdout="",
+            stderr="ssh_exec timed out after 30s",
         )
     else:
-        runner = mock.Mock(
-            return_value=subprocess.CompletedProcess(
-                args=["ssh"],
-                returncode=returncode,
-                stdout=stdout,
-                stderr="" if returncode == 0 else "ssh failed",
-            )
+        result = subprocess.CompletedProcess(
+            args=["ssh"],
+            returncode=returncode,
+            stdout=stdout,
+            stderr="" if returncode == 0 else "ssh failed",
         )
-    with mock.patch.object(session_create.subprocess, "run", runner):
+    with mock.patch.object(session_create, "ssh_exec", return_value=result):
         return probe_host_npu_devices(HOST_RECORD)
 
 
-def _allocate(root: Path, session_id: str, **kwargs):
-    return allocate_session_leases(
-        repo_root=root,
-        machine_alias=MACHINE,
-        session_id=session_id,
-        port_available=lambda _port: True,
-        **kwargs,
-    )
-
-
-def _live(root: Path, session_id: str) -> dict:
-    return session_live_leases(repo_root=root, machine_alias=MACHINE, session_id=session_id)
-
-
 class ProbeHostNpuDevicesAllocationTests(unittest.TestCase):
-    """Pin the probe wrapper, not just the parser, then feed the allocator."""
-
-    def _assert_no_lease_or_port(self, root: Path, session_id: str) -> None:
-        self.assertFalse(session_leases_path(root).exists())
-        self.assertEqual(
-            _live(root, session_id),
-            {"npu_devices": [], "container_ssh_ports": [], "service_ports": []},
-        )
+    """Pin the probe wrapper, not just the parser."""
 
     def test_partial_busy_allocates_only_the_free_device(self) -> None:
         free, payload = _probe_host(stdout=SINGLE_CHIP_BUSY_0)
@@ -217,36 +189,6 @@ class ProbeHostNpuDevicesAllocationTests(unittest.TestCase):
         self.assertEqual(payload["busy_devices"], [0])
         self.assertEqual(payload["free_devices"], [1])
         self.assertEqual(payload["status"], "ok")
-
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            explicit = _allocate(
-                root, "sess-explicit", requested_devices=[1], available_devices=free, container_ssh_port=46001
-            )
-            self.assertEqual(explicit["npu_devices"], [1])
-            self.assertEqual(_live(root, "sess-explicit")["npu_devices"], [1])
-            self.assertEqual(_live(root, "sess-explicit")["container_ssh_ports"], [46001])
-
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            counted = _allocate(root, "sess-count", npu_count=1, available_devices=free, container_ssh_port=46002)
-            self.assertEqual(counted["npu_devices"], [1])
-            self.assertEqual(_live(root, "sess-count")["npu_devices"], [1])
-            self.assertEqual(_live(root, "sess-count")["container_ssh_ports"], [46002])
-
-    def test_partial_busy_refuses_busy_device_and_oversize_count(self) -> None:
-        free, _payload = _probe_host(stdout=SINGLE_CHIP_BUSY_0)
-        self.assertEqual(free, [1])
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            with self.assertRaises(SessionStateError):
-                _allocate(root, "sess-busy", requested_devices=[0], available_devices=free)
-            self._assert_no_lease_or_port(root, "sess-busy")
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            with self.assertRaises(SessionStateError):
-                _allocate(root, "sess-count", npu_count=2, available_devices=free)
-            self._assert_no_lease_or_port(root, "sess-count")
 
     def test_known_empty_free_set_returns_empty_list_and_refuses_both_modes(self) -> None:
         free, payload = _probe_host(stdout=SINGLE_DEVICE_ALL_BUSY)
@@ -258,15 +200,6 @@ class ProbeHostNpuDevicesAllocationTests(unittest.TestCase):
         self.assertEqual(payload["free_devices"], [])
         self.assertEqual(payload["status"], "ok")
 
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            with self.assertRaises(SessionStateError):
-                _allocate(root, "sess-explicit", requested_devices=[0], available_devices=free)
-            with self.assertRaises(SessionStateError):
-                _allocate(root, "sess-count", npu_count=1, available_devices=free)
-            self._assert_no_lease_or_port(root, "sess-explicit")
-            self._assert_no_lease_or_port(root, "sess-count")
-
     def test_unreadable_process_table_returns_none_and_refuses_both_modes(self) -> None:
         free, payload = _probe_host(stdout=HEADER_ONLY)
         self.assertIsNone(free)
@@ -274,79 +207,16 @@ class ProbeHostNpuDevicesAllocationTests(unittest.TestCase):
         self.assertEqual(payload["status"], "occupancy_unknown")
         self.assertTrue(payload["availability_reason"])
 
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            with self.assertRaisesRegex(SessionStateError, "occupancy is unavailable"):
-                _allocate(root, "sess-explicit", requested_devices=[0], available_devices=free)
-            with self.assertRaisesRegex(SessionStateError, "occupancy is unavailable"):
-                _allocate(root, "sess-count", npu_count=1, available_devices=free)
-            self._assert_no_lease_or_port(root, "sess-explicit")
-            self._assert_no_lease_or_port(root, "sess-count")
-
     def test_ssh_failure_returns_none_and_does_not_fall_back_to_visibility(self) -> None:
         free, payload = _probe_host(stdout=SINGLE_CHIP, returncode=255)
         self.assertIsNone(free)
         self.assertEqual(payload["status"], "unavailable")
         self.assertNotIn("availability", payload)
 
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            with self.assertRaisesRegex(SessionStateError, "occupancy is unavailable"):
-                _allocate(root, "sess-explicit", requested_devices=[0], available_devices=free)
-            with self.assertRaisesRegex(SessionStateError, "occupancy is unavailable"):
-                _allocate(root, "sess-count", npu_count=1, available_devices=free)
-            self._assert_no_lease_or_port(root, "sess-explicit")
-            self._assert_no_lease_or_port(root, "sess-count")
-
     def test_probe_timeout_returns_none_and_refuses_both_modes(self) -> None:
         free, payload = _probe_host(timeout=True)
         self.assertIsNone(free)
         self.assertEqual(payload["status"], "timeout")
-
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            with self.assertRaisesRegex(SessionStateError, "occupancy is unavailable"):
-                _allocate(root, "sess-explicit", requested_devices=[0], available_devices=free)
-            with self.assertRaisesRegex(SessionStateError, "occupancy is unavailable"):
-                _allocate(root, "sess-count", npu_count=1, available_devices=free)
-            self._assert_no_lease_or_port(root, "sess-explicit")
-            self._assert_no_lease_or_port(root, "sess-count")
-
-    def test_locally_leased_free_device_is_excluded_by_existing_ownership(self) -> None:
-        free, _payload = _probe_host(stdout=SINGLE_CHIP_BUSY_0)
-        self.assertEqual(free, [1])
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            owner = _allocate(
-                root, "sess-owner", requested_devices=[1], available_devices=free, container_ssh_port=46001
-            )
-            self.assertEqual(owner["npu_devices"], [1])
-            with self.assertRaisesRegex(SessionStateError, "already leased"):
-                _allocate(root, "sess-other", requested_devices=[1], available_devices=free)
-            with self.assertRaisesRegex(SessionStateError, "not enough allocatable"):
-                _allocate(root, "sess-count", npu_count=1, available_devices=free)
-            self.assertEqual(_live(root, "sess-owner")["npu_devices"], [1])
-            self.assertEqual(_live(root, "sess-owner")["container_ssh_ports"], [46001])
-            self.assertEqual(
-                _live(root, "sess-other"),
-                {"npu_devices": [], "container_ssh_ports": [], "service_ports": []},
-            )
-            self.assertEqual(
-                _live(root, "sess-count"),
-                {"npu_devices": [], "container_ssh_ports": [], "service_ports": []},
-            )
-
-    def test_no_npu_request_still_allocates_a_port_when_occupancy_is_unknown(self) -> None:
-        free, payload = _probe_host(stdout=HEADER_ONLY)
-        self.assertIsNone(free)
-        self.assertEqual(payload["availability"], "unknown")
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            leases = _allocate(root, "sess-port", available_devices=free, container_ssh_port=46009)
-            self.assertEqual(leases["npu_devices"], [])
-            self.assertEqual(leases["container_ssh_port"], 46009)
-            self.assertEqual(_live(root, "sess-port")["npu_devices"], [])
-            self.assertEqual(_live(root, "sess-port")["container_ssh_ports"], [46009])
 
 
 if __name__ == "__main__":

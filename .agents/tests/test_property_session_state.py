@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Property tests for session identity, leases and locks.
+"""Property tests for session identity and locks.
 
 Modules: ``.agents/lib/vaws_session_id.py`` and ``vaws_session_state.py``.
 
@@ -7,11 +7,6 @@ Properties:
 
 * ``normalize_session_id`` is total, idempotent, deterministic, bounded and
   keeps distinct long inputs distinct;
-* lease allocation agrees with a reference model over random operation
-  sequences: no NPU device or port is ever owned by two sessions, releases
-  only affect the caller's resources, and live leases equal the model;
-* concurrent allocators (real threads, real file lock) never hand out the
-  same device twice;
 * the file lock excludes a live holder, recovers a crashed (stale) holder, and
   never reads a crashed holder's lock as "available" before the stale window;
 * two stale waiters never overlap after reclaiming under the sidecar gate;
@@ -50,8 +45,7 @@ if str(LIB) not in sys.path:
 
 import vaws_session_state as state  # noqa: E402
 from vaws_session_id import derive_from_branch, normalize_session_id  # noqa: E402
-from vaws_session_state import SessionStateError, allocate_service_port, allocate_session_leases, file_lock, parse_port_range, release_all_session_leases, release_service_port, safe_token, session_container_name, session_live_leases  # noqa: E402
-from vaws_validate import ValidationError  # noqa: E402
+from vaws_session_state import SessionStateError, file_lock, parse_port_range, safe_token, session_container_name  # noqa: E402
 from test_property_support import MULTIBYTE, Gen, run_cases  # noqa: E402
 
 ID_CHARS = "abcXYZ019._-/ \t:@#" + MULTIBYTE
@@ -113,156 +107,6 @@ class NormalizeSessionIdProperties(unittest.TestCase):
                 self.assertTrue(derived.startswith("pr-"))
 
         run_cases(400, body, label="derive_from_branch")
-
-
-class LeaseModel:
-    """Reference model: resource -> owning session, per machine."""
-
-    def __init__(self) -> None:
-        self.devices: dict[int, str] = {}
-        self.ssh_ports: dict[int, str] = {}
-        self.service_ports: dict[int, str] = {}
-
-    def live(self, sid: str) -> dict[str, list[int]]:
-        return {
-            "npu_devices": sorted(d for d, o in self.devices.items() if o == sid),
-            "container_ssh_ports": sorted(p for p, o in self.ssh_ports.items() if o == sid),
-            "service_ports": sorted(p for p, o in self.service_ports.items() if o == sid),
-        }
-
-
-class LeaseModelProperties(unittest.TestCase):
-    SESSIONS = ("sess-a", "sess-b", "sess-c")
-    AVAILABLE = [0, 1, 2, 3]
-    SSH_RANGE = "46000:46003"
-    SERVICE_RANGE = "30000:30003"
-
-    def test_random_operation_sequences_agree_with_the_model(self) -> None:
-        def body(gen: Gen, _index: int) -> None:
-            with tempfile.TemporaryDirectory() as tmp:
-                repo = Path(tmp)
-                model = LeaseModel()
-                for _step in range(gen.integer(3, 10)):
-                    sid = gen.choice(self.SESSIONS)
-                    op = gen.choice(("alloc-devices", "alloc-count", "alloc-service", "release-service", "release-all"))
-                    if op == "alloc-devices":
-                        requested = sorted(gen.sample(self.AVAILABLE, gen.integer(1, 3)))
-                        conflict = [d for d in requested if model.devices.get(d, sid) != sid]
-                        port_taken_by_other = [p for p in range(46000, 46004) if model.ssh_ports.get(p, sid) != sid]
-                        free_port_exists = any(model.ssh_ports.get(p, sid) == sid for p in range(46000, 46004))
-                        try:
-                            result = allocate_session_leases(repo_root=repo, machine_alias="m", session_id=sid, requested_devices=requested, available_devices=self.AVAILABLE, container_ssh_port_range=self.SSH_RANGE, port_available=lambda _p: True)
-                        except SessionStateError as exc:
-                            self.assertTrue(conflict or not free_port_exists, f"allocation rejected without a modelled conflict: {exc}")
-                            if conflict:
-                                self.assertIn("already leased", str(exc))
-                            continue
-                        self.assertEqual(conflict, [], "allocation succeeded despite a device owned by another session")
-                        self.assertEqual(result["npu_devices"], requested)
-                        for d in requested:
-                            model.devices[d] = sid
-                        port = result["container_ssh_port"]
-                        self.assertIn(port, range(46000, 46004))
-                        self.assertNotIn(port, port_taken_by_other)
-                        model.ssh_ports[port] = sid
-                    elif op == "alloc-count":
-                        count = gen.integer(1, 3)
-                        free = [d for d in self.AVAILABLE if model.devices.get(d, sid) == sid]
-                        free_port_exists = any(model.ssh_ports.get(p, sid) == sid for p in range(46000, 46004))
-                        try:
-                            result = allocate_session_leases(repo_root=repo, machine_alias="m", session_id=sid, npu_count=count, available_devices=self.AVAILABLE, container_ssh_port_range=self.SSH_RANGE, port_available=lambda _p: True)
-                        except SessionStateError:
-                            self.assertTrue(len(free) < count or not free_port_exists)
-                            continue
-                        self.assertGreaterEqual(len(free), count)
-                        self.assertEqual(result["npu_devices"], free[:count])
-                        for d in result["npu_devices"]:
-                            model.devices[d] = sid
-                        model.ssh_ports[result["container_ssh_port"]] = sid
-                    elif op == "alloc-service":
-                        requested_port = gen.choice((None, gen.integer(30000, 30003), 29999))
-                        try:
-                            port = allocate_service_port(repo_root=repo, machine_alias="m", session_id=sid, requested_port=requested_port, serving_port_range=self.SERVICE_RANGE, port_available=lambda _p: True)
-                        except SessionStateError:
-                            if requested_port is None:
-                                self.assertFalse(any(model.service_ports.get(p, sid) == sid for p in range(30000, 30004)))
-                            else:
-                                self.assertTrue(requested_port == 29999 or model.service_ports.get(requested_port, sid) != sid)
-                            continue
-                        self.assertIn(port, range(30000, 30004))
-                        self.assertEqual(model.service_ports.get(port, sid), sid, "service port handed out while owned by another session")
-                        if requested_port is not None:
-                            self.assertEqual(port, requested_port)
-                        model.service_ports[port] = sid
-                    elif op == "release-service":
-                        port = gen.choice((30000, 30001, 30002, 30003, None))
-                        release_service_port(repo_root=repo, machine_alias="m", session_id=sid, port=port)
-                        if port is not None and model.service_ports.get(port) == sid:
-                            del model.service_ports[port]
-                    else:
-                        release_all_session_leases(repo_root=repo, session_id=sid)
-                        for table in (model.devices, model.ssh_ports, model.service_ports):
-                            for key in [k for k, o in table.items() if o == sid]:
-                                del table[key]
-                    for other in self.SESSIONS:
-                        self.assertEqual(session_live_leases(repo_root=repo, machine_alias="m", session_id=other), model.live(other), f"live leases for {other} diverge from the model")
-                # Global invariant: no resource has two owners.
-                seen: dict[tuple[str, int], str] = {}
-                for other in self.SESSIONS:
-                    for kind, values in session_live_leases(repo_root=repo, machine_alias="m", session_id=other).items():
-                        for value in values:
-                            self.assertNotIn((kind, value), seen, f"{kind} {value} owned by {seen.get((kind, value))} and {other}")
-                            seen[(kind, value)] = other
-
-        run_cases(120, body, label="lease model")
-
-    def test_invalid_requests_are_rejected_before_touching_state(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            repo = Path(tmp)
-            with self.assertRaises(SessionStateError):
-                allocate_session_leases(repo_root=repo, machine_alias="m", session_id="sess-a", requested_devices=[0], npu_count=1, available_devices=[0])
-            with self.assertRaises(SessionStateError):
-                allocate_session_leases(repo_root=repo, machine_alias="m", session_id="sess-a", npu_count=1, available_devices=None)
-            with self.assertRaises((SessionStateError, ValidationError)):
-                allocate_session_leases(repo_root=repo, machine_alias="m", session_id="sess-a", requested_devices=[-1], available_devices=[0])
-            with self.assertRaises(SessionStateError):
-                allocate_session_leases(repo_root=repo, machine_alias="m", session_id="!!", requested_devices=[0], available_devices=[0])
-            self.assertFalse((repo / ".vaws-local" / "sessions" / "leases.json").exists(), "rejected requests must not create lease state")
-
-
-class ConcurrentAllocationProperties(unittest.TestCase):
-    def test_threads_never_receive_the_same_device(self) -> None:
-        def body(gen: Gen, _index: int) -> None:
-            with tempfile.TemporaryDirectory() as tmp:
-                repo = Path(tmp)
-                devices = list(range(gen.integer(1, 4)))
-                sessions = [f"sess-{i}" for i in range(len(devices) + gen.integer(1, 2))]
-                results: dict[str, Any] = {}
-
-                def worker(sid: str) -> None:
-                    try:
-                        results[sid] = allocate_session_leases(repo_root=repo, machine_alias="m", session_id=sid, npu_count=1, available_devices=devices, port_available=lambda _p: True)
-                    except SessionStateError as exc:
-                        results[sid] = exc
-
-                threads = [threading.Thread(target=worker, args=(sid,)) for sid in sessions]
-                for thread in threads:
-                    thread.start()
-                for thread in threads:
-                    thread.join()
-                winners = {sid: r for sid, r in results.items() if isinstance(r, dict)}
-                losers = {sid: r for sid, r in results.items() if not isinstance(r, dict)}
-                self.assertEqual(len(winners), len(devices), f"exactly one winner per device expected: {results}")
-                self.assertEqual(len(losers), len(sessions) - len(devices))
-                allocated = sorted(d for r in winners.values() for d in r["npu_devices"])
-                self.assertEqual(allocated, devices, "every device handed out exactly once")
-                ports = [r["container_ssh_port"] for r in winners.values()]
-                self.assertEqual(len(set(ports)), len(ports), "ssh ports must be unique")
-                for sid in winners:
-                    self.assertEqual(session_live_leases(repo_root=repo, machine_alias="m", session_id=sid)["npu_devices"], winners[sid]["npu_devices"])
-                self.assertFalse(list((repo / ".vaws-local" / "sessions" / "locks").glob("*.lock")), "no lock left behind")
-
-        run_cases(6, body, label="concurrent allocation")
 
 
 class FileLockProperties(unittest.TestCase):

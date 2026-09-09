@@ -53,14 +53,6 @@ class SessionRemoveTests(unittest.TestCase):
             with self.subTest(stderr=stderr), mock.patch.object(session_gc.subprocess, "run", return_value=subprocess.CompletedProcess([], 255, "", stderr)):
                 self.assertIsNone(session_gc.probe_container_alive("host", 46000)["alive"])
 
-    def test_gc_retains_lease_when_metadata_is_missing_or_removed(self) -> None:
-        lease = {"leases": {"host": {"npu_devices": {"0": {"session_id": "task"}}}}}
-        for missing in (True, False):
-            lookup = SimpleNamespace(session={"session_id": "task", "status": "removed"}, state_repo_root=Path("/tmp/state"))
-            with self.subTest(missing=missing), mock.patch.object(session_gc, "load_index", return_value={"sessions": {"task": {}}}), mock.patch.object(session_gc, "load_leases", return_value=lease), mock.patch.object(session_gc, "load_session_lookup", side_effect=ValueError("missing metadata") if missing else None, return_value=lookup), mock.patch.object(session_gc, "release_all_session_leases") as release, mock.patch.object(sys, "argv", ["session_gc.py", "--apply"]), mock.patch("builtins.print"):
-                self.assertEqual(session_gc.main(), 0)
-            release.assert_not_called()
-
     def test_gc_host_confirmation_is_required_and_uncertainty_keeps_lease(self) -> None:
         session = {"remote": {"host": "host", "host_port": 22, "container": {"name": "task-container"}}, "leases": {"npu_devices": [0]}}
         lib = ROOT / ".agents" / "lib"

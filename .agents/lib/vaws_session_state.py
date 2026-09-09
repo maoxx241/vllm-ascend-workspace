@@ -339,10 +339,6 @@ def session_index_path(repo_root: Path = ROOT) -> Path:
     return sessions_root(repo_root) / "index.json"
 
 
-def session_leases_path(repo_root: Path = ROOT) -> Path:
-    return sessions_root(repo_root) / "leases.json"
-
-
 def session_lock_dir(repo_root: Path = ROOT) -> Path:
     return sessions_root(repo_root) / "locks"
 

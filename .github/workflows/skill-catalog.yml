@@ -1,26 +1,10 @@
-name: Skill catalog
+name: CI
 
 on:
   pull_request:
-    paths:
-      - ".agents/**"
-      - "docs/**"
-      - "AGENTS.md"
-      - "README.md"
-      - "README.en.md"
-      - ".trae/skills/modelscope/**"
-      - ".github/workflows/skill-catalog.yml"
   push:
     branches:
       - main
-    paths:
-      - ".agents/**"
-      - "docs/**"
-      - "AGENTS.md"
-      - "README.md"
-      - "README.en.md"
-      - ".trae/skills/modelscope/**"
-      - ".github/workflows/skill-catalog.yml"
 
 permissions:
   contents: read
@@ -62,6 +46,10 @@ jobs:
         run: uv run python -B .agents/scripts/repo_boundary_check.py --mode enforce
       - name: Check tracked in-tree paths
         run: uv run python -B .agents/scripts/tracked_path_check.py --mode enforce
+      - name: Scan tracked files for leaks
+        run: uv run python -B .agents/scripts/tracked_leak_scan.py --format json
+      - name: Launcher status
+        run: uv run python -B .agents/scripts/vaws.py status
       - name: Run repo-init tests
         run: uv run python -B -m unittest discover -s .agents/skills/repo-init/tests
       - name: Check generated Claude shims and ModelScope Trae projection
@@ -136,7 +124,3 @@ jobs:
         run: |
           uv pip install -r .agents/skills/ascend-profiling-analysis/requirements.txt
           uv run python -B -m pytest .agents/skills/ascend-profiling-analysis/tests -q
-
-  # In-tree `.agents/coordinator/` is gone. Scaffold-side consumer contracts
-  # live in coordinator.yml. Linux subreaper and HTTP manager tests live in
-  # the vaws-coordinator repository.
