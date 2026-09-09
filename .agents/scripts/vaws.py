@@ -6,9 +6,8 @@ scaffold environment the package needs:
 
     VAWS_AGENT_SESSIONS_DIR   the single local task registry
     VAWS_HOST_QUEUE_MODULE    override only; coordinator defaults to its bundled host queue
-    VAWS_MACHINE_INVENTORY    shared inventory JSON
-    VAWS_PARITY_SCRIPT        scaffold ``remote_code_parity.py``
-    VAWS_PARITY_WORKSPACE_ROOT
+    VAWS_COORDINATOR_STATE_DIR
+                              optional override for the coordinator-owned store
 
 There is no default manager ``--state-dir``. Requesting remote execution without
 a manager is blocked/unavailable; this process never fabricates readiness.
@@ -115,9 +114,7 @@ def cmd_env(args: argparse.Namespace) -> int:
     env = coordinator_environment()
     keys = [
         "VAWS_AGENT_SESSIONS_DIR",
-        "VAWS_MACHINE_INVENTORY",
-        "VAWS_PARITY_SCRIPT",
-        "VAWS_PARITY_WORKSPACE_ROOT",
+        "VAWS_COORDINATOR_STATE_DIR",
     ]
     payload = {key: env[key] for key in keys if key in env}
     if args.json:

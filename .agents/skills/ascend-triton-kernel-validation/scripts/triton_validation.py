@@ -19,12 +19,17 @@ ROOT = Path(__file__).resolve().parents[4]
 LIB = ROOT / ".agents" / "lib"
 if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
+
+from vaws_venv import ensure_workspace_interpreter  # noqa: E402
+
+ensure_workspace_interpreter(repo_root=ROOT)
+
 if str(Path(__file__).resolve().parent) not in sys.path:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from validate_triton_impl import analyze_file  # noqa: E402
-from vaws_code_identity import manifest_code  # noqa: E402
-from vaws_run_manifest import (  # noqa: E402
+from vaws_coordinator.code_identity import manifest_code  # noqa: E402
+from vaws_coordinator.run_manifest import (  # noqa: E402
     RunManifestError,
     add_artifact,
     load_manifest,

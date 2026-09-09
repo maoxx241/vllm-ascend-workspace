@@ -2389,7 +2389,7 @@ def run_gc(args: argparse.Namespace) -> int:
     lib = Path(__file__).resolve().parents[3] / 'lib'
     if str(lib) not in sys.path:
         sys.path.insert(0, str(lib))
-    from vaws_code_identity import gc_parity_refs
+    from vaws_coordinator.code_identity import gc_parity_refs
 
     result = gc_parity_refs(
         Path(args.workspace_root),

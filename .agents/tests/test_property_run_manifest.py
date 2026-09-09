@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Property tests for Run Manifest v1 (``.agents/lib/vaws_run_manifest.py``).
+"""Property tests for Run Manifest v1 (``vaws_coordinator.run_manifest``).
 
 Properties:
 
@@ -28,8 +28,8 @@ LIB = ROOT / ".agents" / "lib"
 if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
-import vaws_run_manifest as rm  # noqa: E402
-from vaws_run_manifest import RunManifestError, add_artifact, generate_run_id, load_manifest, new_manifest, transition_status, validate_manifest, write_manifest  # noqa: E402
+import vaws_coordinator.run_manifest as rm  # noqa: E402
+from vaws_coordinator.run_manifest import RunManifestError, add_artifact, generate_run_id, load_manifest, new_manifest, transition_status, validate_manifest, write_manifest  # noqa: E402
 from test_property_support import Gen, run_cases  # noqa: E402
 
 SCHEMA = json.loads((ROOT / ".agents" / "schemas" / "run-manifest-v1.schema.json").read_text(encoding="utf-8"))

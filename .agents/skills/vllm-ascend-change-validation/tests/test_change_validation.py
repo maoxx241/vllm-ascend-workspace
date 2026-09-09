@@ -17,7 +17,7 @@ LIB = ROOT / ".agents" / "lib"
 if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
-from vaws_run_manifest import (  # noqa: E402
+from vaws_coordinator.run_manifest import (  # noqa: E402
     add_artifact,
     new_manifest,
     transition_status,

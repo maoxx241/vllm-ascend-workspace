@@ -243,7 +243,7 @@
       "responsibility": "mechanics",
       "support_role": "supported",
       "target_kind": "self",
-      "note": "Run Manifest v1 init/validate; shared owner with vaws_run_manifest.py lifecycle APIs",
+      "note": "Run Manifest v1 init/validate; thin CLI over vaws_coordinator.run_manifest",
       "proposed_target": "vaws manifest"
     },
     ".agents/scripts/skill_catalog.py": {

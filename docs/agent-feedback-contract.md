@@ -106,7 +106,7 @@ manifest, declared by the caller, or cached.
 `evidence.refs[]` are locators (`name`, `kind`, `ref`, optional `bytes` and
 `sha256`), never inlined content. `evidence.run_id` /
 `evidence.parent_run_id` / `evidence.manifest_ref` correlate the envelope with
-Run Manifest v1 (`.agents/lib/vaws_run_manifest.py`,
+Run Manifest v1 (`vaws_coordinator.run_manifest`,
 `.agents/schemas/run-manifest-v1.schema.json`) so one envelope can be joined
 to the whole experiment it belonged to.
 

@@ -97,9 +97,7 @@ def task_server_env():
     env = coordinator_environment()
     keys = (
         "VAWS_AGENT_SESSIONS_DIR",
-        "VAWS_PARITY_SCRIPT",
-        "VAWS_PARITY_WORKSPACE_ROOT",
-        "VAWS_MACHINE_INVENTORY",
+        "VAWS_COORDINATOR_STATE_DIR",
     )
     return {key: env[key] for key in keys if key in env}
 

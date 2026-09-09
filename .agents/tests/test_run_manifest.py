@@ -20,7 +20,7 @@ from vaws_knowledge_v1 import (  # noqa: E402
     validate_knowledge_dir,
     validate_knowledge_document,
 )
-from vaws_run_manifest import (  # noqa: E402
+from vaws_coordinator.run_manifest import (  # noqa: E402
     RunManifestError,
     add_artifact,
     load_manifest,

@@ -98,7 +98,9 @@ _EVIDENCE_RE = re.compile(
 _NEXT_STEP_RE = re.compile(
     r"make_next_step|[\"']next_step[\"']|[\"']next_actions[\"']|[\"']do_not[\"']"
 )
-_RUN_ID_RE = re.compile(r"vaws_run_manifest|[\"']run_id[\"']|[\"']parent_run_id[\"']")
+_RUN_ID_RE = re.compile(
+    r"vaws_coordinator\.run_manifest|vaws_run_manifest|[\"']run_id[\"']|[\"']parent_run_id[\"']"
+)
 
 
 def repo_relative(path: Path) -> str:

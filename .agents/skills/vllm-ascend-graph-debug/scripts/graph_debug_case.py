@@ -20,6 +20,11 @@ LIB = ROOT / ".agents" / "lib"
 if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
+from vaws_venv import ensure_workspace_interpreter  # noqa: E402
+
+ensure_workspace_interpreter(repo_root=ROOT)
+
+
 from vaws_comparability import (  # noqa: E402
     GRAPH_MUST_OBSERVE,
     ComparabilityError,
@@ -30,8 +35,8 @@ from vaws_comparability import (  # noqa: E402
     issue_certificate,
     merge_identities,
 )
-from vaws_code_identity import manifest_code  # noqa: E402
-from vaws_run_manifest import (  # noqa: E402
+from vaws_coordinator.code_identity import manifest_code  # noqa: E402
+from vaws_coordinator.run_manifest import (  # noqa: E402
     RunManifestError,
     add_artifact,
     load_manifest,

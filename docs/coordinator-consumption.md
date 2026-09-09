@@ -5,7 +5,7 @@ Status: current
 The shared runtime pool, local task registry and four `vaws_*` tools live in
 the public package
 [`vaws-coordinator`](https://github.com/vllm-ascend-workspace/vaws-coordinator)
-(`v0.1.0`, locked by `uv.lock`). This scaffold imports that package. It does
+(`v0.2.0`, locked by `uv.lock`). This scaffold imports that package. It does
 not clone a checkout and does not read a former checkout-root environment variable.
 
 This document is the consumer-side contract. See
@@ -42,9 +42,7 @@ python3 .agents/scripts/vaws.py env --json
 |---|---|---|
 | `VAWS_AGENT_SESSIONS_DIR` | `<shared workspace>/.vaws-local/agent-sessions` | One local task registry. |
 | `VAWS_HOST_QUEUE_MODULE` | unset by this scaffold | Host NPU authority is the package's `vaws_coordinator.host.vaws_npu_coordination`. The env var is an override. |
-| `VAWS_MACHINE_INVENTORY` | the shared inventory JSON | Optional alias registration for the HTTP manager. |
-| `VAWS_PARITY_SCRIPT` | `remote_code_parity.py` | Parity owns materialization. |
-| `VAWS_PARITY_WORKSPACE_ROOT` | the scaffold root | Workspace the parity script reads. |
+| `VAWS_COORDINATOR_STATE_DIR` | unset by this scaffold; defaults to `<shared workspace>/.vaws-local/coordinator` | Coordinator-owned pool state and machine directory. The launch layer may seed `machines.json` from the shared inventory document. |
 
 The package does not read former checkout-root environment variables.
 

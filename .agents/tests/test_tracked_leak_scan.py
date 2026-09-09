@@ -1081,7 +1081,7 @@ class CurrentMainFindingScopeTests(unittest.TestCase):
     ENVELOPE_SRC = ".agents/lib/vaws_result_envelope.py"
     FEEDBACK_DOC = "docs/agent-feedback-contract.md"
     ENVELOPE_TEST = ".agents/tests/test_result_envelope.py"
-    OTHER_SRC = ".agents/lib/vaws_run_manifest.py"
+    OTHER_SRC = ".agents/lib/vaws_local_state.py"
     VERSION_LINE = 'torch_npu="2.7.1.dev20260801"'
     HOME_LINE = "/home/example-user/work/run.py"
     TOKEN_LINE = 'extensions={"env": {"HF_TOKEN": "hf_realsecretvaluegoeshere"}}'
@@ -1268,7 +1268,7 @@ class CurrentMainFindingScopeTests(unittest.TestCase):
 class PhaseBKnowledgeFixtureScopeTests(unittest.TestCase):
     """Nine Phase B fixture/version allowances suppress only their path/category/value."""
 
-    OTHER_SRC = ".agents/lib/vaws_run_manifest.py"
+    OTHER_SRC = ".agents/lib/vaws_local_state.py"
     UNRELATED_LINE = 'token = "still-a-credential-shaped-value"'
     CASES = (
         {

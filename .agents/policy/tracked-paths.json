@@ -103,6 +103,14 @@
     {
       "prefix": ".agents/lib/vaws_knowledge.py",
       "why": "Renamed to vaws_knowledge_v1.py. Dated audits still name the old path."
+    },
+    {
+      "prefix": ".agents/lib/vaws_run_manifest.py",
+      "why": "Moved to vaws_coordinator.run_manifest. P6 and dated audits still name the old path as absent."
+    },
+    {
+      "prefix": ".agents/lib/vaws_code_identity.py",
+      "why": "Moved to vaws_coordinator.code_identity. Dated docs may still name the old path."
     }
   ],
   "allow_prefixes_why": "\u002eremote-dev/state/ is deliberately absent: that path is post-migration drift and must fail. Placeholders and untracked state roots are the only silent exceptions.",
