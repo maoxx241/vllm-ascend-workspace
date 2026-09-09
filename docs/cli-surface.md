@@ -484,7 +484,7 @@ option.
 | `.agents/skills/remote-code-parity/scripts/remote_code_parity.py` | bare | - | 0 | docs:2, routing:1, script:2, skill-doc:3 | mechanics | supported | .agents/skills/remote-code-parity/scripts/remote_code_parity.py | vaws sync |
 | `.agents/skills/remote-code-parity/scripts/transport_benchmark.py` | argparse | - | 4 | skill-doc:2 | mechanics | harness | .agents/skills/remote-code-parity/scripts/transport_benchmark.py | - |
 | `.agents/skills/repo-init/scripts/install_gh_user.py` | bare | - | 0 | script:1 | mechanics | supported | .agents/skills/repo-init/scripts/install_gh_user.py | vaws workspace |
-| `.agents/skills/repo-init/scripts/repo_init_probe.py` | argparse | - | 1 | mirror:1, routing:1, skill-doc:4 | mechanics | supported | .agents/skills/repo-init/scripts/repo_init_probe.py | vaws workspace |
+| `.agents/skills/repo-init/scripts/repo_init_probe.py` | argparse | - | 1 | mirror:1, policy:1, routing:1, skill-doc:4 | mechanics | supported | .agents/skills/repo-init/scripts/repo_init_probe.py | vaws workspace |
 | `.agents/skills/repo-init/scripts/repo_init_profile.py` | argparse | plan, apply, apply-alias | 3 | routing:1, skill-doc:4 | mechanics | supported | .agents/skills/repo-init/scripts/repo_init_profile.py | vaws workspace |
 | `.agents/skills/repo-init/scripts/repo_topology.py` | argparse | compare-main, configure, ensure-main | 8 | routing:1, skill-doc:4 | mechanics | supported | .agents/skills/repo-init/scripts/repo_topology.py | vaws workspace |
 | `.agents/skills/repo-init/scripts/resolve_vllm_ci_pin.py` | argparse | - | 1 | skill-doc:4 | mechanics | supported | .agents/skills/repo-init/scripts/resolve_vllm_ci_pin.py | vaws workspace |
