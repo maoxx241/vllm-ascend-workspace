@@ -17,6 +17,10 @@ for _p in (str(LIB_DIR), str(MM_SCRIPTS)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
+from vaws_venv import ensure_workspace_interpreter  # noqa: E402
+
+ensure_workspace_interpreter(repo_root=ROOT)
+
 from _workflow_common import remove_container  # noqa: E402
 from vaws_session_state import (  # noqa: E402
     load_session_lookup,

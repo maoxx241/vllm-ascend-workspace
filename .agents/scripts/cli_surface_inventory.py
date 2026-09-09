@@ -51,6 +51,16 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Iterable
 
+ROOT = Path(__file__).resolve().parents[2]
+LIB = ROOT / ".agents" / "lib"
+if str(LIB) not in sys.path:
+    sys.path.insert(0, str(LIB))
+
+from vaws_venv import ensure_workspace_interpreter  # noqa: E402
+
+ensure_workspace_interpreter(repo_root=ROOT)
+
+
 SUBMODULES = ("vllm", "vllm-ascend")
 IGNORED_PREFIXES = (".git/", ".vaws-local/", ".remote-dev/state/")
 TEST_FILE_RE = re.compile(r"^(test_.*|.*_test|selftest_.*|conftest)\.py$")

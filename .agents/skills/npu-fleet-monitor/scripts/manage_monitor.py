@@ -31,6 +31,10 @@ LIB_DIR = REPO_ROOT / ".agents" / "lib"
 if str(LIB_DIR) not in sys.path:
     sys.path.insert(0, str(LIB_DIR))
 
+from vaws_venv import ensure_workspace_interpreter  # noqa: E402
+
+ensure_workspace_interpreter(repo_root=REPO_ROOT)
+
 from vaws_local_state import STATE_DIRNAME, shared_inventory_path, shared_workspace_root  # noqa: E402
 
 VAWS_TOP_REPO = "vllm-ascend-workspace/vaws-top"

@@ -39,8 +39,18 @@ from __future__ import annotations
 
 import argparse
 import sys
-import traceback
 from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[4]
+LIB = ROOT / ".agents" / "lib"
+if str(LIB) not in sys.path:
+    sys.path.insert(0, str(LIB))
+
+from vaws_venv import ensure_workspace_interpreter  # noqa: E402
+
+ensure_workspace_interpreter(repo_root=ROOT)
+
+import traceback
 from typing import Any
 
 _SCRIPT_DIR = Path(__file__).resolve().parent

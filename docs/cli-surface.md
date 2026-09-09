@@ -45,12 +45,12 @@ are **not** the original 132-entry snapshot and **not** the unimplemented
 | Measure | Value |
 |---|---|
 | Entry points (definition in §3) | **115** |
-| Supported agent-facing launchers | 67 |
+| Supported agent-facing launchers | 68 |
 | Compatibility wrappers | 17 |
 | Internal / diagnostic CLIs | 13 |
-| Generated projections | 4 |
+| Generated projections | 2 |
 | Hooks | 3 |
-| Remote payloads | 9 |
+| Remote payloads | 10 |
 | Test / maturation harnesses | 2 |
 | Responsibility | mechanics 99 · mixed 16 · judgment 0 |
 | Files importing `argparse` (non-test) | 105 |
@@ -112,12 +112,12 @@ launchers:
 
 | Role | Meaning | Current count |
 |---|---|---|
-| `supported` | agent-facing launcher or domain command that currently owns the mechanic | 67 |
+| `supported` | agent-facing launcher or domain command that currently owns the mechanic | 68 |
 | `compatibility` | still-present managed toolbox or legacy `--machine` wrapper whose semantics differ from the extracted provider | 17 |
 | `internal` | library or pipeline stage that grew a diagnostic `__main__` | 13 |
-| `generated` | Trae ModelScope projection produced from the canonical package | 4 |
+| `generated` | Trae ModelScope projection produced from the canonical package | 2 |
 | `hook` | client or git lifecycle adapter | 3 |
-| `payload` | executable spawned on the container or by another command | 9 |
+| `payload` | executable copied onto the NPU container and run without `.venv` / `.agents/lib` | 10 |
 | `harness` | maturation / golden / stress tooling | 2 |
 
 Responsibility (`mechanics` / `judgment` / `mixed`) is independent of support
@@ -402,11 +402,11 @@ option.
 | `.agents/hooks/knowledge_session_end.py` | bare | - | 0 | client-config:1, routing:1, test:1 | mechanics | hook | .agents/hooks/knowledge_session_end.py | - |
 | `.agents/hooks/tracked_leak_precommit.py` | argparse | - | 8 | docs:1, policy:1, test:1 | mechanics | hook | .agents/hooks/tracked_leak_precommit.py | - |
 | `.agents/hooks/vaws_session.py` | argparse | - | 4 | docs:1, other:1, policy:1, script:1, test:2 | mechanics | hook | .agents/hooks/vaws_session.py | - |
-| `.agents/scripts/cli_surface_inventory.py` | argparse | - | 3 | policy:1, test:2 | mechanics | supported | .agents/scripts/cli_surface_inventory.py | vaws lint |
+| `.agents/scripts/cli_surface_inventory.py` | argparse | - | 3 | policy:1, test:3 | mechanics | supported | .agents/scripts/cli_surface_inventory.py | vaws lint |
 | `.agents/scripts/envelope_lint.py` | argparse | scan, check, run | 5 | docs:2, test:2 | mechanics | supported | .agents/scripts/envelope_lint.py | vaws lint |
 | `.agents/scripts/knowledge_capture.py` | argparse | - | 9 | docs:1, hook:1, routing:2, skill-doc:5, test:4 | mixed | supported | .agents/scripts/knowledge_capture.py | vaws knowledge |
 | `.agents/scripts/knowledge_export.py` | argparse | - | 7 | docs:1, routing:2, script:1, skill-doc:3, test:1 | mechanics | supported | .agents/scripts/knowledge_export.py | vaws knowledge |
-| `.agents/scripts/knowledge_query.py` | argparse | - | 9 | docs:1, routing:2, skill-doc:1, test:2 | mechanics | supported | .agents/scripts/knowledge_query.py | vaws knowledge |
+| `.agents/scripts/knowledge_query.py` | argparse | - | 9 | docs:1, routing:2, skill-doc:1, test:3 | mechanics | supported | .agents/scripts/knowledge_query.py | vaws knowledge |
 | `.agents/scripts/knowledge_validate.py` | argparse | - | 1 | docs:1, other:1, routing:1, skill-doc:1, test:2 | mechanics | supported | .agents/scripts/knowledge_validate.py | vaws knowledge |
 | `.agents/scripts/remote_artifact_manifest.py` | argparse | - | 1 | policy:1, routing:1 | mechanics | compatibility | .agents/scripts/remote_artifact_manifest.py | vaws remote |
 | `.agents/scripts/remote_artifact_pull.py` | argparse | - | 2 | policy:1, routing:1, script:1, skill-doc:1 | mechanics | compatibility | .agents/scripts/remote_artifact_pull.py | vaws remote |
@@ -466,7 +466,7 @@ option.
 | `.agents/skills/ascend-triton-operator-development/scripts/triton_development.py` | argparse | plan, finalize | 6 | routing:1, skill-doc:2, test:1 | mixed | supported | .agents/skills/ascend-triton-operator-development/scripts/triton_development.py | guidance |
 | `.agents/skills/ascend-triton-workflow/scripts/triton_workflow.py` | argparse | plan, link, finalize | 4 | routing:1, skill-doc:2, test:1 | mixed | supported | .agents/skills/ascend-triton-workflow/scripts/triton_workflow.py | guidance |
 | `.agents/skills/curate-workspace-knowledge/scripts/knowledge_curate.py` | argparse | list, inspect, promote, merge, reject, deprecate, resolve, verify, list-unresolved | 21 | policy:1, routing:1, skill-doc:2, test:5 | mixed | supported | .agents/skills/curate-workspace-knowledge/scripts/knowledge_curate.py | vaws knowledge |
-| `.agents/skills/machine-management/scripts/inventory.py` | argparse | summary, get, put, upsert, remove | 15 | docs:1, policy:1, routing:1, script:4, skill-doc:4, test:2 | mechanics | internal | .agents/skills/machine-management/scripts/machine_add.py | vaws machine |
+| `.agents/skills/machine-management/scripts/inventory.py` | argparse | summary, get, put, upsert, remove | 15 | docs:1, policy:1, routing:1, script:4, skill-doc:4, test:3 | mechanics | internal | .agents/skills/machine-management/scripts/machine_add.py | vaws machine |
 | `.agents/skills/machine-management/scripts/machine_add.py` | argparse | - | 13 | routing:1, script:3, skill-doc:4 | mechanics | supported | .agents/skills/machine-management/scripts/machine_add.py | vaws machine |
 | `.agents/skills/machine-management/scripts/machine_remove.py` | argparse | - | 1 | routing:1, script:1, skill-doc:4 | mechanics | supported | .agents/skills/machine-management/scripts/machine_remove.py | vaws machine |
 | `.agents/skills/machine-management/scripts/machine_repair.py` | argparse | - | 8 | routing:1, script:1, skill-doc:4 | mechanics | supported | .agents/skills/machine-management/scripts/machine_repair.py | vaws machine |
@@ -481,7 +481,7 @@ option.
 | `.agents/skills/remote-code-parity/scripts/install_consent.py` | argparse | resolve, set, batch-set, resolve-sync-mode, set-sync-mode | 7 | routing:1, skill-doc:5 | mechanics | supported | .agents/skills/remote-code-parity/scripts/install_consent.py | vaws sync |
 | `.agents/skills/remote-code-parity/scripts/parity_sync.py` | argparse | - | 17 | docs:1, mirror:1, routing:2, script:4, skill-doc:10, test:2 | mechanics | supported | .agents/skills/remote-code-parity/scripts/parity_sync.py | vaws sync |
 | `.agents/skills/remote-code-parity/scripts/parity_watch.py` | argparse | - | 2 | script:1, skill-doc:3, test:1 | mechanics | supported | .agents/skills/remote-code-parity/scripts/parity_watch.py | vaws sync |
-| `.agents/skills/remote-code-parity/scripts/remote_code_parity.py` | bare | - | 0 | docs:2, routing:1, script:2, skill-doc:3 | mechanics | payload | .agents/skills/remote-code-parity/scripts/remote_code_parity.py | - |
+| `.agents/skills/remote-code-parity/scripts/remote_code_parity.py` | bare | - | 0 | docs:2, routing:1, script:2, skill-doc:3 | mechanics | supported | .agents/skills/remote-code-parity/scripts/remote_code_parity.py | vaws sync |
 | `.agents/skills/remote-code-parity/scripts/transport_benchmark.py` | argparse | - | 4 | skill-doc:2 | mechanics | harness | .agents/skills/remote-code-parity/scripts/transport_benchmark.py | - |
 | `.agents/skills/repo-init/scripts/install_gh_user.py` | bare | - | 0 | script:1 | mechanics | supported | .agents/skills/repo-init/scripts/install_gh_user.py | vaws workspace |
 | `.agents/skills/repo-init/scripts/repo_init_probe.py` | argparse | - | 1 | mirror:1, routing:1, skill-doc:4 | mechanics | supported | .agents/skills/repo-init/scripts/repo_init_probe.py | vaws workspace |
@@ -510,10 +510,10 @@ option.
 | `.agents/skills/vllm-ascend-serving/scripts/serve_start.py` | argparse | - | 16 | docs:1, mirror:1, routing:1, script:5, skill-doc:12, test:2 | mechanics | supported | .agents/skills/vllm-ascend-serving/scripts/serve_start.py | vaws serve |
 | `.agents/skills/vllm-ascend-serving/scripts/serve_status.py` | argparse | - | 2 | docs:1, mirror:1, routing:1, script:2, skill-doc:4 | mechanics | supported | .agents/skills/vllm-ascend-serving/scripts/serve_status.py | vaws serve |
 | `.agents/skills/vllm-ascend-serving/scripts/serve_stop.py` | argparse | - | 3 | docs:1, mirror:1, routing:1, script:5, skill-doc:13, test:1 | mechanics | supported | .agents/skills/vllm-ascend-serving/scripts/serve_stop.py | vaws serve |
-| `.trae/skills/modelscope/scripts/download_from_modelscope.py` | argparse | - | 12 | mirror:2, routing:1, script:2, skill-doc:1, test:1 | mechanics | generated | .agents/skills/modelscope/scripts/download_from_modelscope.py | - |
+| `.trae/skills/modelscope/scripts/download_from_modelscope.py` | argparse | - | 12 | mirror:2, routing:1, script:2, skill-doc:1, test:1 | mechanics | payload | .agents/skills/modelscope/scripts/download_from_modelscope.py | - |
 | `.trae/skills/modelscope/scripts/modelscope_auto.py` | argparse | ensure, status, verify, worker | 11 | mirror:1, routing:1, script:1, skill-doc:1, test:1 | mechanics | generated | .agents/skills/modelscope/scripts/modelscope_auto.py | - |
 | `.trae/skills/modelscope/scripts/modelscope_download_status.py` | argparse | - | 3 | mirror:1, routing:1, script:1, skill-doc:1, test:1 | mechanics | generated | .agents/skills/modelscope/scripts/modelscope_download_status.py | - |
-| `.trae/skills/modelscope/scripts/verify_modelscope_sha256.py` | argparse | - | 8 | mirror:2, routing:1, script:2, skill-doc:1, test:1 | mechanics | generated | .agents/skills/modelscope/scripts/verify_modelscope_sha256.py | - |
+| `.trae/skills/modelscope/scripts/verify_modelscope_sha256.py` | argparse | - | 8 | mirror:2, routing:1, script:2, skill-doc:1, test:1 | mechanics | payload | .agents/skills/modelscope/scripts/verify_modelscope_sha256.py | - |
 <!-- /current-cli-surface-table -->
 
 ## 11. Measurement limitations

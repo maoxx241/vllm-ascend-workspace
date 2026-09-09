@@ -1,10 +1,22 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import sys
+
 import argparse
 import json
 from pathlib import Path
 from typing import Any
+
+ROOT = Path(__file__).resolve().parents[4]
+LIB = ROOT / ".agents" / "lib"
+if str(LIB) not in sys.path:
+    sys.path.insert(0, str(LIB))
+
+from vaws_venv import ensure_workspace_interpreter  # noqa: E402
+
+ensure_workspace_interpreter(repo_root=ROOT)
+
 
 from common import SshEndpoint, json_dump, quoted, ssh_exec
 from remote_code_parity import DEFAULT_CONTAINER_CACHE_ROOT, cache_workspace_root

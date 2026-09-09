@@ -110,8 +110,10 @@
       "layer": 30,
       "summary": "The domain layer that stays: 24 skills, shared libraries, helper scripts. May depend on every extracted subsystem; none of them may depend on it.",
       "roots": [
-        ".agents"
+        ".agents",
+        ".trae/skills/modelscope"
       ],
+      "roots_note": "The ModelScope Trae projection is a byte-identical twin of `.agents/skills/modelscope`. Local facades carry `ensure_workspace_interpreter` and therefore name `.agents/lib`; they are the same skill, not a workspace-root consumer of scaffold internals.",
       "public_paths": [],
       "public_paths_note": "Deliberately empty. The scaffold publishes nothing downward: a lower layer that needs scaffold data must receive it through an interface the lower layer owns, not read it.",
       "private_paths": [

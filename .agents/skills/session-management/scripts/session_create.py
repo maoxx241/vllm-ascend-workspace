@@ -22,6 +22,10 @@ for _p in (str(LIB_DIR), str(MM_SCRIPTS), str(_SELF_DIR)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
+from vaws_venv import ensure_workspace_interpreter  # noqa: E402
+
+ensure_workspace_interpreter(repo_root=ROOT)
+
 import inventory as inventory_store  # noqa: E402
 import manage_machine as machine_ops  # noqa: E402
 from _workflow_common import bootstrap_container, host_target, verify_machine  # noqa: E402

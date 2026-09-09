@@ -208,30 +208,38 @@ than a `tests/` directory). `modelscope` is referenced by no other skill.
 ### 4.4 Entry points
 
 Tracked Python under `.agents/` divides into two populations, and they get
-opposite treatment. 202 files carry `if __name__ == "__main__"`; 34 carry the
-shim today.
+opposite treatment. The CLI-surface inventory is the authority for which
+files are entry points. Test files (`tests/` directories, `test_*.py`,
+`selftest_*.py`, `*_test.py`, `conftest.py`) are not entry points: pytest
+does not go through `__main__`, and they do not receive the shim. A
+`__main__` file that is neither a test nor in the inventory is a
+classification gap the guard flags, not a file to shim by default.
 
-**Local entry points** — anything an agent or a hook runs on the workstation
-— carry `ensure_workspace_interpreter`, so that `python3 path/to/script.py`
-works from a shell that never activated `.venv`. A guard test enforces this,
-and CI runs the entry-point smoke under the system interpreter as well as
-`uv run`, because the two disagreeing is exactly the failure CI was not
-catching.
+**Local entry points** — inventoried files the inventory does **not**
+classify as `payload` — carry `ensure_workspace_interpreter`, so that
+`python3 path/to/script.py` works from a shell that never activated
+`.venv`. A guard test enforces this, and CI runs the entry-point smoke
+under the system interpreter as well as `uv run`, because the two
+disagreeing is exactly the failure CI was not catching.
 
-**Remote payloads** must not carry it. These are files whose `__main__` runs
-on the NPU container, reached by copying the source over and invoking the
-container's interpreter: `weight_inspector.py` is read and written to
-`/tmp/_vaws_weight_inspector.py`, and the tensor-dump assets are imported
-inside the vLLM process. There is no `.venv` and no scaffold checkout at the
-far end, so the shim would add an import that cannot resolve. Their contract
-is the opposite one: stdlib-only, no scaffold imports, runnable by a bare
-`python3`.
+**Remote payloads** must not carry it. These are inventoried files whose
+`__main__` runs on the NPU container, reached by copying the source over
+and invoking the container's interpreter: `weight_inspector.py` is read
+and written to `/tmp/_vaws_weight_inspector.py`, and the tensor-dump
+assets are imported inside the vLLM process. There is no `.venv` and no
+`.agents/lib` at the far end, so the shim would add an import that cannot
+resolve. Their contract is the opposite one: they import nothing from
+`.agents/lib`. Generated Trae byte-copies of those payloads inherit the
+same `payload` classification so the shim stays out of both sides of a
+byte-identical pair.
 
-The line between the two populations is not a new list to maintain. The CLI
-surface inventory already classifies nine entry points as `payload`
-("executable spawned on the container or by another command"), and that
-classification is the input to the guard. A file that changes population has
-to change its inventory row in the same commit, which is the point.
+The line between the two populations is not a new list to maintain. The
+inventory's `payload` class is the input to the guard. A file that
+changes population has to change its inventory row in the same commit,
+which is the point. Overlay `payload` means "runs without the workspace
+interpreter", not merely "spawned by another command": a workstation
+helper that another script launches (for example `remote_code_parity.py`)
+is `supported`, not `payload`.
 
 ### 4.5 Local state
 
@@ -333,25 +341,21 @@ twelve scope dimensions. Commons implements the evaluation
 `ASSUMED_ANY`) and `query()` accepts a `reader_coordinate`.
 
 The MCP path is already wired: the tool schema in the locked
-`vaws-knowledge` v0.1.3 declares `reader_coordinate` on both query tools and
-forwards it to `query()`. An agent speaking MCP can ask "does this apply to
-my container" today. This corrects an earlier draft of this section, which
-said no entry point could pass a coordinate; that was true of `main` before
-the knowledge engine moved into the package and is no longer true.
+`vaws-knowledge` package declares `reader_coordinate` on both query tools
+and forwards it to `query()`. An agent speaking MCP can ask "does this
+apply to my container" today.
 
-Two gaps remain, and they are the whole of the work here:
-
-- Neither CLI exposes coordinate arguments, so every script and hook that
-  shells out gets unscoped answers with an empty `reader_coordinate` in the
-  response.
-- Nothing fills the coordinate automatically. The agent has to restate
-  twelve dimensions that the Run Manifest and the machine profile already
-  know. An axiom the caller must retype by hand is an axiom that gets
-  skipped.
-
-The target state exposes the arguments on both CLIs and has the scaffold
-populate what it can derive, leaving the agent to override rather than
-originate. Building a second MCP surface is not part of it.
+Both CLIs expose the same twelve scope dimensions (`--soc` … `--component`),
+a `--reader-coordinate` JSON object, and `--run-manifest`. A query that
+names a `soc` an entry's scope excludes does not return that entry. The
+response's `reader_coordinate` is populated. A caller inside a run does
+not retype what the Run Manifest v1 already recorded:
+`vaws_coordinator.run_manifest.load_manifest` fills the derivable
+dimensions; anything not derivable stays absent and is reported as
+`unknown` / unsupplied. Neither CLI invents a version to fill a hole. A
+missing or too-old `vaws-knowledge` (before the coordinate flags) fails
+with cause and `uv sync` as the remedy; there is no silent unscoped
+fallback. Building a second MCP surface is not part of it.
 
 ### 5.5 Redaction
 
@@ -411,7 +415,7 @@ package names the subset it makes true.
 | P6 | `import vaws_coordinator.run_manifest` succeeds; `.agents/lib/vaws_run_manifest.py` and the coordinator's `vendor/` are absent; a manifest written by `vaws_coordinator.ready_runtime` passes `vaws_coordinator.run_manifest.validate_manifest`. |
 | P7 | `rg 'VAWS_PARITY_SCRIPT\|VAWS_MACHINE_INVENTORY'` across the coordinator source is empty. |
 | P8 | `.agents/knowledge/` contains only `*.v2.yaml`; `vaws-knowledge validate .agents/knowledge` exits 0. |
-| P9 | Every tracked `.agents/**/*.py` with `if __name__ == "__main__"` that the inventory does **not** classify as `payload` contains `ensure_workspace_interpreter`; every `payload` one imports nothing from `.agents/lib`. One guard test asserts both halves against the inventory. |
+| P9 | Every inventoried CLI-surface entry that is **not** classified `payload` contains `ensure_workspace_interpreter`; every inventoried `payload` entry imports nothing from `.agents/lib`. Test files are not entry points and do not receive the shim. A `__main__` file that is neither a test nor in the inventory is a classification gap the guard flags. One guard test asserts those three facts against the inventory. |
 | P10 | `tracked_path_check.py --mode enforce` passes with an empty baseline. |
 | P11 | `rg -l 'Status: dated' docs` is empty. |
 | P11a | A pull request that touches only `docs/` runs the document guards. Until 2026-09-09 the job holding them was filtered to `.agents/**`, so a docs-only change merged without the anti-rot guard whose subject is tracked documents. |
@@ -473,4 +477,4 @@ package names the subset it makes true.
 | 2026-09-09 | Skills adopt Result Envelope v1 rather than the envelope being deleted | it currently has zero producers and eleven competing sentinels; a contract with no producers is not a contract, and the attribution/evidence structure is what agents need |
 | 2026-09-09 | Unmultiplexed SSH stays an endpoint option | long-stream `mux=False` is a recorded failure signature, not an accident |
 | 2026-09-09 | Reader coordinates become reachable from both CLIs and are auto-filled where derivable | the MCP tool in v0.1.3 already accepts them; the gap is CLI exposure plus population from the Run Manifest and machine profile. No second MCP surface |
-| 2026-09-09 | The interpreter shim applies to local entry points only, keyed off the inventory's `payload` class | remote payloads run on the container with no `.venv` and no scaffold checkout; 202 files carry `__main__` and nine are already classified as payloads |
+| 2026-09-09 | The interpreter shim applies to inventoried non-`payload` entry points only; tests are not entries; unclassified `__main__` files are classification gaps | remote payloads run on the container with no `.venv` and no `.agents/lib`; putting the shim in every tracked `__main__` would re-exec 80+ pytest files the spec did not intend |

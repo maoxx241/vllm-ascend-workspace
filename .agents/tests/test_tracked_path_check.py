@@ -222,6 +222,45 @@ class DetectionTests(unittest.TestCase):
         self.assertEqual((code, payload["status"]), (0, "reported"))
         self.assertEqual(payload["counts"]["new"], 1)
 
+    def test_untracked_leftover_does_not_satisfy_existence(self) -> None:
+        write(self.repo.root / "docs" / "guide.md", "See `.agents/skills/missing/SKILL.md`.\n")
+        self.repo._git_add()
+        leftover = self.repo.root / ".agents" / "skills" / "missing" / "SKILL.md"
+        leftover.parent.mkdir(parents=True, exist_ok=True)
+        leftover.write_text("# leftover\n", encoding="utf-8")
+        self.assertTrue(leftover.exists())
+        self.assertFalse(guard.path_exists(self.repo.root, ".agents/skills/missing/SKILL.md"))
+        # Do not git-add the leftover; SyntheticRepo.run() would.
+        code, payload = invoke("--repo-root", str(self.repo.root), "--mode", "enforce")
+        self.assertEqual((code, payload["status"]), (1, "failed"))
+        self.assertEqual(payload["counts"]["new"], 1)
+        self.assertEqual(
+            payload["new_violations"][0]["resolved"],
+            ".agents/skills/missing/SKILL.md",
+        )
+
+    def test_untracked_leftover_does_not_stale_a_baseline_row(self) -> None:
+        write(self.repo.root / "docs" / "guide.md", "See `.agents/skills/missing/SKILL.md`.\n")
+        self.repo.accept(
+            {
+                "rule": "missing-path",
+                "path": "docs/guide.md",
+                "named_path": ".agents/skills/missing/SKILL.md",
+            }
+        )
+        leftover = self.repo.root / ".agents" / "skills" / "missing" / "SKILL.md"
+        leftover.parent.mkdir(parents=True, exist_ok=True)
+        leftover.write_text("# leftover\n", encoding="utf-8")
+        self.assertTrue(leftover.exists())
+        code, payload = invoke("--repo-root", str(self.repo.root), "--mode", "enforce")
+        self.assertEqual(
+            (code, payload["status"]),
+            (0, "passed"),
+            payload.get("new_violations") or payload.get("stale_baseline") or payload,
+        )
+        self.assertEqual(payload["counts"]["accepted"], 1)
+        self.assertEqual(payload["baseline"]["stale_count"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()
