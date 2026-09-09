@@ -43,7 +43,7 @@ _LIB_DIR = pathlib.Path(__file__).resolve().parents[4] / ".agents" / "lib"
 if str(_LIB_DIR) not in sys.path:
     sys.path.insert(0, str(_LIB_DIR))
 
-from vaws_remote_dev import ssh_argv  # noqa: E402
+from vaws_remote_dev import interactive_ssh_command, run_interactive, ssh_argv  # noqa: E402
 from vaws_result_envelope import PROGRESS_SENTINEL  # noqa: E402
 
 
@@ -771,26 +771,9 @@ def ssh_command(
     identity_file: pathlib.Path | None = None,
 ) -> list[str]:
     if not batch_mode:
-        # remote-dev always uses BatchMode=yes. Interactive password bootstrap
-        # has no package equivalent; keep a local interactive argv and do not
-        # attach it to a ControlMaster.
-        command = [
-            "ssh",
-            "-o",
-            "BatchMode=no",
-            "-o",
-            "StrictHostKeyChecking=accept-new",
-            "-o",
-            "LogLevel=ERROR",
-            "-o",
-            "ConnectTimeout=10",
-        ]
-        if identity_file is not None:
-            command.extend(["-i", str(identity_file), "-o", "IdentitiesOnly=yes"])
-        for option in extra_options:
-            command.extend(["-o", option])
-        command.extend(["-p", str(target.port), f"{target.user}@{target.host}"])
-        return command
+        raise MachineManagementError(
+            "interactive SSH is interactive_ssh_command / run_interactive, not ssh_command"
+        )
     command = ssh_argv(
         target,
         connect_timeout_s=10,
@@ -2895,15 +2878,11 @@ def build_bootstrap_host_key_command(
 ) -> tuple[str, list[str]]:
     del key_path
     remote_cmd = build_authorized_keys_remote_command(public_key)
-    command = ssh_command(
+    command = interactive_ssh_command(
         target,
-        batch_mode=False,
-        extra_options=(
-            "PreferredAuthentications=password,keyboard-interactive",
-            "PubkeyAuthentication=no",
-            "NumberOfPasswordPrompts=1",
-        ),
-    ) + ["sh", "-c", remote_cmd]
+        ["sh", "-c", remote_cmd],
+        connect_timeout_s=10,
+    )
     return "ssh", command
 
 
@@ -2973,7 +2952,16 @@ def cmd_bootstrap_host_key(args: argparse.Namespace) -> int:
         print_json(payload)
         return 0
 
-    returncode = run_local_interactive(command)
+    try:
+        returncode = run_interactive(
+            target,
+            ["sh", "-c", build_authorized_keys_remote_command(public_key)],
+            connect_timeout_s=10,
+        )
+    except Exception as exc:
+        if "not found" in str(exc).lower():
+            raise MachineManagementError("required local command not found: ssh") from exc
+        raise
     after = check_direct_ssh(target, identity_file=private_key)
     payload.update(
         {

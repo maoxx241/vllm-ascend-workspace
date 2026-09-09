@@ -12,7 +12,8 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Mapping, TextIO
+from collections.abc import Mapping, Sequence
+from typing import Any, TextIO
 
 ROOT = Path(__file__).resolve().parents[2]
 LIB = ROOT / ".agents" / "lib"
@@ -28,7 +29,7 @@ STATE_DIRNAME = "remote-dev-state"
 LOCAL_STATE_DIRNAME = ".vaws-local"
 ASCEND_RUNTIME_ENV_FILE = "/etc/profile.d/vaws-ascend-env.sh"
 SSH_MUX_DIR = "~/.ssh/vaws-mux"
-REQUIRED_TRANSPORT_VERSION = "0.2.0"
+REQUIRED_TRANSPORT_VERSION = "0.3.0"
 
 DEFAULT_ENV = {
     "REMOTE_DEV_RUNTIME_ENV_FILE": ASCEND_RUNTIME_ENV_FILE,
@@ -117,10 +118,10 @@ def require_package(repo_root: Path = ROOT) -> dict[str, Any]:
 
 
 def require_transport(repo_root: Path = ROOT):
-    """Import v0.2.0 stream APIs or fail with the cause and remedy.
+    """Import v0.3.0 stream, forward, and interactive APIs or fail.
 
     Does not catch ``ImportError`` and continue. A missing package or a
-    pre-v0.2.0 install cannot silently fall back to raw ``ssh``.
+    pre-v0.3.0 install cannot silently fall back to raw ``ssh``.
     """
     require_package(repo_root=repo_root)
     apply_consumer_environment(repo_root=repo_root)
@@ -128,7 +129,11 @@ def require_transport(repo_root: Path = ROOT):
         from remote_dev.core.endpoint import Endpoint
         from remote_dev.core.errors import RemoteExecutionError
         from remote_dev.core.ssh_transport import (
+            interactive_ssh_command,
+            local_forward_ssh_command,
+            open_local_forward,
             run_bytes,
+            run_interactive,
             run_script,
             run_stream,
             ssh_base_cmd,
@@ -148,7 +153,11 @@ def require_transport(repo_root: Path = ROOT):
     return {
         "Endpoint": Endpoint,
         "RemoteExecutionError": RemoteExecutionError,
+        "interactive_ssh_command": interactive_ssh_command,
+        "local_forward_ssh_command": local_forward_ssh_command,
+        "open_local_forward": open_local_forward,
         "run_bytes": run_bytes,
+        "run_interactive": run_interactive,
         "run_script": run_script,
         "run_stream": run_stream,
         "ssh_base_cmd": ssh_base_cmd,
@@ -331,6 +340,77 @@ def ssh_run_bytes(
     ep = endpoint_from(endpoint, connect_timeout_s=connect_timeout)
     timeout_ms = None if timeout is None else int(timeout * 1000)
     return api["run_bytes"](ep, remote_command, stdin=stdin, timeout_ms=timeout_ms)
+
+
+def local_forward_ssh_command(
+    endpoint: Any,
+    *,
+    local_host: str,
+    local_port: int,
+    remote_host: str,
+    remote_port: int,
+    connect_timeout_s: int | None = None,
+) -> list[str]:
+    """Argv for ``ssh -N -L``. Refuses a multiplexed endpoint."""
+    api = require_transport()
+    ep = endpoint_from(endpoint, long_stream=True, connect_timeout_s=connect_timeout_s)
+    return list(
+        api["local_forward_ssh_command"](
+            ep,
+            local_host=local_host,
+            local_port=local_port,
+            remote_host=remote_host,
+            remote_port=remote_port,
+        )
+    )
+
+
+def open_local_forward(
+    endpoint: Any,
+    remote_port: int,
+    *,
+    remote_host: str = "127.0.0.1",
+    local_host: str = "127.0.0.1",
+    local_port: int | None = None,
+    ready_timeout_s: float | None = 15.0,
+    connect_timeout_s: int | None = None,
+):
+    """Open a local→remote forward via the package. Skills do not Popen ``ssh``."""
+    api = require_transport()
+    ep = endpoint_from(endpoint, long_stream=True, connect_timeout_s=connect_timeout_s)
+    return api["open_local_forward"](
+        ep,
+        remote_port,
+        remote_host=remote_host,
+        local_host=local_host,
+        local_port=local_port,
+        ready_timeout_s=ready_timeout_s,
+    )
+
+
+def interactive_ssh_command(
+    endpoint: Any,
+    remote_command: Sequence[str] = (),
+    *,
+    connect_timeout_s: int = 10,
+) -> list[str]:
+    """Argv for one-off password bootstrap. Refuses a multiplexed endpoint."""
+    api = require_transport()
+    ep = endpoint_from(endpoint, ssh_mux=False, connect_timeout_s=connect_timeout_s)
+    return list(api["interactive_ssh_command"](ep, remote_command))
+
+
+def run_interactive(
+    endpoint: Any,
+    remote_command: Sequence[str] | str = (),
+    *,
+    env: Mapping[str, str] | None = None,
+    connect_timeout_s: int = 10,
+) -> int:
+    """One-off interactive SSH inheriting the local TTY. Returns ssh's rc."""
+    api = require_transport()
+    ep = endpoint_from(endpoint, ssh_mux=False, connect_timeout_s=connect_timeout_s)
+    return int(api["run_interactive"](ep, remote_command, env=env))
 
 
 def run_cli_tool(tool: str, argv: list[str] | None = None) -> int:

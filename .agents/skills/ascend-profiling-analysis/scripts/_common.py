@@ -18,10 +18,13 @@ remotely.
 
 from __future__ import annotations
 
+import fnmatch
+import io
 import json
 import shlex
 import subprocess
 import sys
+import tarfile
 import time
 from pathlib import Path
 from typing import Any, Iterable
@@ -33,7 +36,7 @@ if str(LIB_DIR) not in sys.path:
     sys.path.insert(0, str(LIB_DIR))
 
 from vaws_local_state import allocate_run_dir  # noqa: E402
-from vaws_remote_dev import ssh_argv, ssh_exec, ssh_stream as remote_ssh_stream  # noqa: E402
+from vaws_remote_dev import ssh_argv, ssh_exec, ssh_run_bytes, ssh_stream as remote_ssh_stream  # noqa: E402
 from vaws_result_envelope import PROGRESS_SENTINEL, progress as envelope_progress  # noqa: E402
 from vaws_remote_target import (  # noqa: E402
     SshEndpoint,
@@ -291,12 +294,47 @@ def ssh_stream(
 
 
 # ---------------------------------------------------------------------------
-# tar-over-ssh sync helpers (rsync is not always installed in Ascend containers)
+# Directory sync helpers (rsync is not always installed in Ascend containers).
+# Local packing/unpacking uses stdlib tarfile so this module never spawns
+# ``tar`` or ``ssh``. Remote unpack/pack still uses the remote ``tar`` binary
+# through ``ssh_run_bytes``.
 # ---------------------------------------------------------------------------
 
-def _ssh_pipe_cmd(endpoint: SshEndpoint, remote_cmd: str) -> list[str]:
-    """SSH command that runs a remote shell snippet, suitable for tar piping."""
-    return [*ssh_argv(endpoint), remote_cmd]
+def _tar_name_excluded(name: str, patterns: tuple[str, ...]) -> bool:
+    normalized = name.replace("\\", "/").lstrip("./")
+    if not normalized or normalized == ".":
+        return False
+    candidates = (normalized, Path(normalized).name, *Path(normalized).parts)
+    return any(
+        fnmatch.fnmatch(candidate, pattern)
+        for candidate in candidates
+        for pattern in patterns
+    )
+
+
+def _tar_bytes_from_directory(local_path: Path, extra_excludes: Iterable[str]) -> bytes:
+    patterns = tuple(extra_excludes)
+    buf = io.BytesIO()
+
+    def _filter(info: tarfile.TarInfo) -> tarfile.TarInfo | None:
+        if _tar_name_excluded(info.name, patterns):
+            return None
+        return info
+
+    with tarfile.open(fileobj=buf, mode="w:gz") as tf:
+        tf.add(str(local_path), arcname=".", filter=_filter)
+    return buf.getvalue()
+
+
+def _extract_tar_bytes(data: bytes, local_path: Path) -> None:
+    local_path.mkdir(parents=True, exist_ok=True)
+    if not data:
+        return
+    kwargs: dict[str, Any] = {}
+    if hasattr(tarfile, "data_filter"):
+        kwargs["filter"] = "data"
+    with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tf:
+        tf.extractall(local_path, **kwargs)
 
 
 def sync_to_remote(
@@ -306,7 +344,7 @@ def sync_to_remote(
     *,
     extra_excludes: Iterable[str] = ("__pycache__", "*.pyc"),
 ) -> None:
-    """Mirror ``local_path/`` into ``remote_path/`` using ``tar | ssh tar -x``.
+    """Mirror ``local_path/`` into ``remote_path/`` via in-memory tar + ``run_bytes``.
 
     Implements --delete by clearing ``remote_path`` first, then unpacking the
     tarball. Lightweight on purpose: callers pick the smallest subtree they
@@ -327,34 +365,17 @@ def sync_to_remote(
         timeout=120,
     )
 
-    tar_args = ["tar", "-cz"]
-    for pattern in extra_excludes:
-        tar_args.extend(["--exclude", pattern])
-    tar_args.extend(["-C", str(local_path), "."])
-    remote_unpack = f"tar -xz -C {shlex.quote(remote_path)}"
-
-    tar_proc = subprocess.Popen(tar_args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    ssh_proc = subprocess.Popen(
-        _ssh_pipe_cmd(endpoint, remote_unpack),
-        stdin=tar_proc.stdout,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+    archive = _tar_bytes_from_directory(local_path, extra_excludes)
+    result = ssh_run_bytes(
+        endpoint,
+        f"tar -xz -C {shlex.quote(remote_path)}",
+        stdin=archive,
     )
-    if tar_proc.stdout is not None:
-        tar_proc.stdout.close()  # let ssh_proc receive EOF when tar exits
-    ssh_out, ssh_err = ssh_proc.communicate()
-    tar_err = tar_proc.stderr.read() if tar_proc.stderr else b""
-    tar_proc.wait()
-    if tar_proc.returncode != 0:
-        raise RuntimeError(
-            "local tar failed (rc={rc}): {err}".format(
-                rc=tar_proc.returncode, err=tar_err.decode("utf-8", "replace")[:1000]
-            )
-        )
-    if ssh_proc.returncode != 0:
+    if result.returncode != 0:
+        err = (result.stderr or b"").decode("utf-8", "replace")
         raise RuntimeError(
             "remote tar -x failed (rc={rc}): {err}".format(
-                rc=ssh_proc.returncode, err=ssh_err.decode("utf-8", "replace")[:1000]
+                rc=result.returncode, err=err[:1000]
             )
         )
 
@@ -366,7 +387,7 @@ def sync_from_remote(
     *,
     include_paths: Iterable[str] | None = None,
 ) -> None:
-    """Mirror ``remote_path/`` into ``local_path/`` using ``ssh tar -c | tar -x``.
+    """Mirror ``remote_path/`` into ``local_path/`` via ``run_bytes`` + tarfile.
 
     When ``include_paths`` is provided, only those relative paths are tarred
     on the remote side. Missing paths are silently skipped (some sweep roots
@@ -394,36 +415,18 @@ def sync_from_remote(
             f"tar -cz \"${{present[@]}}\""
         )
 
-    ssh_proc = subprocess.Popen(
-        _ssh_pipe_cmd(endpoint, remote_pack),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    tar_proc = subprocess.Popen(
-        ["tar", "-xz", "-C", str(local_path)],
-        stdin=ssh_proc.stdout,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    if ssh_proc.stdout is not None:
-        ssh_proc.stdout.close()
-    tar_out, tar_err = tar_proc.communicate()
-    ssh_err = ssh_proc.stderr.read() if ssh_proc.stderr else b""
-    ssh_proc.wait()
-    if ssh_proc.returncode != 0:
+    result = ssh_run_bytes(endpoint, remote_pack)
+    if result.returncode != 0:
+        err = (result.stderr or b"").decode("utf-8", "replace")
         raise RuntimeError(
             "remote tar -c failed (rc={rc}): {err}".format(
-                rc=ssh_proc.returncode, err=ssh_err.decode("utf-8", "replace")[:1000]
+                rc=result.returncode, err=err[:1000]
             )
         )
-    # tar -x can exit 0 with empty stdin (no requested paths existed); only
-    # bail out on a real non-zero local tar exit.
-    if tar_proc.returncode not in (0,):
-        raise RuntimeError(
-            "local tar -x failed (rc={rc}): {err}".format(
-                rc=tar_proc.returncode, err=tar_err.decode("utf-8", "replace")[:1000]
-            )
-        )
+    try:
+        _extract_tar_bytes(result.stdout or b"", local_path)
+    except tarfile.TarError as exc:
+        raise RuntimeError(f"local tarfile extract failed: {exc}") from exc
 
 
 # ---------------------------------------------------------------------------

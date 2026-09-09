@@ -14,7 +14,6 @@ import io
 import json
 import os
 import shutil
-import socket
 import subprocess
 import sys
 import tempfile
@@ -48,12 +47,21 @@ def _load(name: str, filename: str):
     return module
 
 
-# Collection ``_common`` must win over any other skill's module of the same name.
+# Collection ``_common`` must win over any other skill's module of the same name
+# while siblings load. Drop the generic alias afterwards so a later skill
+# suite in the same pytest process can import its own ``_common``.
 sys.modules.pop("_common", None)
 common = _load("vaws_profcoll_common_under_test", "_common.py")
 sys.modules["_common"] = common
 profile_control = _load("vaws_profcoll_profile_control_under_test", "profile_control.py")
 collect = _load("vaws_profcoll_collect_under_test", "collect_torch_profile_case.py")
+if sys.modules.get("_common") is common:
+    del sys.modules["_common"]
+# collect / profile_control insert this skill's scripts/ onto sys.path.
+# Leave it there and later suites import the wrong ``_common``.
+_scripts = str(SCRIPTS)
+while _scripts in sys.path:
+    sys.path.remove(_scripts)
 
 
 class FakeProcess:
@@ -62,6 +70,7 @@ class FakeProcess:
         self.stderr = io.StringIO(stderr)
         self.terminated = False
         self.killed = False
+        self.pid = 1_000_001
 
     def poll(self) -> int | None:
         return self.returncode
@@ -117,16 +126,6 @@ def collect_argv(tmp: str, **overrides: object) -> list[str]:
     return argv
 
 
-class FreePortTests(unittest.TestCase):
-    def test_find_free_local_port_binds_loopback_ephemeral(self) -> None:
-        port = common._find_free_local_port()
-        self.assertIsInstance(port, int)
-        self.assertGreater(port, 0)
-        self.assertLess(port, 65536)
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-            sock.bind(("127.0.0.1", port))
-
-
 def _parse_ssh_g(text: str) -> dict[str, list[str]]:
     parsed: dict[str, list[str]] = {}
     for line in text.splitlines():
@@ -161,7 +160,19 @@ def _effective_ssh_config(cmd: list[str], home: str) -> tuple[dict[str, list[str
 
 
 class TunnelArgvTests(unittest.TestCase):
+    """Assert the ``open_local_forward`` path, not a skill-built argv.
+
+    If collection goes back to ``subprocess.Popen`` + ``ssh_argv``,
+    ``test_open_local_tunnel_uses_unmuxed_keepalive_forward`` fails because
+    the package Popen is never called. If that package argv loses
+    ``ExitOnForwardFailure`` or puts ``-N``/``-L`` after ``--``, the real
+    ``ssh -G`` parse fails the same way the pre-migration hand-rolled
+    command did.
+    """
+
     def test_open_local_tunnel_uses_unmuxed_keepalive_forward(self) -> None:
+        import remote_dev.core.ssh_transport as ssh_transport
+
         captured: dict[str, list[str]] = {}
 
         def fake_popen(cmd, **_kwargs):
@@ -173,14 +184,17 @@ class TunnelArgvTests(unittest.TestCase):
         connect_sock.connect.return_value = None
 
         with (
-            mock.patch.object(common.subprocess, "Popen", side_effect=fake_popen),
-            mock.patch.object(common.socket, "socket", return_value=connect_sock),
-            mock.patch.object(common, "_find_free_local_port", return_value=34567),
+            mock.patch.object(common.subprocess, "Popen") as skill_popen,
+            mock.patch.object(ssh_transport.subprocess, "Popen", side_effect=fake_popen),
+            mock.patch.object(ssh_transport.socket, "socket", return_value=connect_sock),
+            mock.patch.object(ssh_transport, "_find_free_local_port", return_value=34567),
+            mock.patch.object(ssh_transport.os, "killpg", side_effect=ProcessLookupError),
         ):
             with common.open_local_tunnel(fake_endpoint(), 8000) as tunnel:
                 self.assertEqual(tunnel["local_port"], 34567)
                 self.assertEqual(tunnel["base_url"], "http://127.0.0.1:34567")
 
+        skill_popen.assert_not_called()
         cmd = captured["cmd"]
         self.assertEqual(cmd[0], "ssh")
         sep = cmd.index("--")
@@ -202,11 +216,13 @@ class TunnelArgvTests(unittest.TestCase):
         self.assertEqual(cfg.get("serveralivecountmax"), ["10"])
 
     def test_open_local_tunnel_raises_when_ssh_exits_before_listen(self) -> None:
+        import remote_dev.core.ssh_transport as ssh_transport
+
         def fake_popen(cmd, **_kwargs):
             return FakeProcess(returncode=255, stderr="bind: Address already in use")
 
-        with mock.patch.object(common.subprocess, "Popen", side_effect=fake_popen):
-            with self.assertRaisesRegex(RuntimeError, r"ssh tunnel exited early \(rc=255\)"):
+        with mock.patch.object(ssh_transport.subprocess, "Popen", side_effect=fake_popen):
+            with self.assertRaisesRegex(RuntimeError, r"exited early"):
                 with common.open_local_tunnel(fake_endpoint(), 8000):
                     self.fail("context must not yield after the tunnel dies")
 
@@ -373,6 +389,17 @@ class WorkloadGateTests(unittest.TestCase):
         self.assertEqual(
             collect._evaluate_workload(mixed, _ok_request(2), 0.8)["status"],
             "benchmark_below_threshold",
+        )
+
+
+class CommonImportIsolationTests(unittest.TestCase):
+    def test_generic_common_alias_is_not_left_in_sys_modules(self) -> None:
+        cached = sys.modules.get("_common")
+        self.assertIsNot(
+            cached,
+            common,
+            "collection tests must not leave their helper as sys.modules['_common']; "
+            "that poisons later skill suites in the same pytest process",
         )
 
 

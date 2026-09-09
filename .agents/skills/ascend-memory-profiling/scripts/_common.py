@@ -6,7 +6,6 @@ from __future__ import annotations
 import json
 import os
 import shlex
-import subprocess
 import sys
 import uuid
 from pathlib import Path
@@ -21,7 +20,7 @@ for _p in (str(LIB_DIR), str(MM_SCRIPTS)):
         sys.path.insert(0, _p)
 
 from vaws_local_state import allocate_run_dir  # noqa: E402
-from vaws_remote_dev import ssh_argv, ssh_exec, ssh_run_bytes  # noqa: E402
+from vaws_remote_dev import ssh_exec, ssh_run_bytes  # noqa: E402
 from vaws_result_envelope import progress as envelope_progress  # noqa: E402
 from vaws_remote_target import (  # noqa: E402
     SshEndpoint,
@@ -44,10 +43,6 @@ ENV_PREAMBLE = (
 )
 
 
-def _ssh_base_cmd(endpoint: SshEndpoint) -> list[str]:
-    return ssh_argv(endpoint)
-
-
 def ssh_upload(endpoint: SshEndpoint, local_path: Path, remote_path: str) -> None:
     """Upload a file to the remote machine via stdin redirect."""
     with open(local_path, "rb") as f:
@@ -61,14 +56,6 @@ def ssh_write_text(endpoint: SshEndpoint, content: str, remote_path: str) -> Non
     result = ssh_run_bytes(endpoint, f"cat > {shlex.quote(remote_path)}", stdin=content.encode())
     if result.returncode != 0:
         raise RuntimeError(f"ssh_write_text failed (rc={result.returncode}): {result.stderr!r}")
-
-
-def ssh_bg_exec(
-    endpoint: SshEndpoint,
-    script: str,
-) -> subprocess.Popen:
-    cmd = [*_ssh_base_cmd(endpoint), "bash", "-c", shlex.quote(script)]
-    return subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
 
 def progress(msg: str, **extra: Any) -> None:

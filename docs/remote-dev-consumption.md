@@ -5,7 +5,7 @@ Status: current
 The remote development substrate used to live in this repository at
 `.remote-dev/`. It is now the public package
 [`vaws-remote-dev`](https://github.com/vllm-ascend-workspace/remote-dev)
-(`v0.2.0`, locked by `uv.lock`). This document is the consumer-side
+(`v0.3.0`, locked by `uv.lock`). This document is the consumer-side
 contract.
 
 Phase 1 of the sequenced plan recorded in [target-state.md](target-state.md).
@@ -76,9 +76,13 @@ Skills do not construct SSH options. They call `.agents/lib/vaws_remote_dev.py`:
 |---|---|---|
 | Short command | `ssh_exec` → `run_script` | Default multiplexed connection |
 | Long-lived stream | `ssh_stream` → `Endpoint.for_long_stream()` + `run_stream` | Independent connection (`ControlMaster=no`) plus keepalives |
-| Composed argv only | `ssh_argv(..., long_stream=True)` | Same independent options; used when a skill must append `-N -L` |
+| Local port forward | `open_local_forward` → `ssh -N -L` | `for_long_stream` plus `ExitOnForwardFailure=yes`; refuses mux |
+| Interactive bootstrap | `run_interactive` / `interactive_ssh_command` | `BatchMode=no`, password/keyboard-interactive only; refuses mux |
+| Binary stdin/stdout | `ssh_run_bytes` → `run_bytes` | Default multiplexed connection |
+| Composed argv only | `ssh_argv(...)` | Package-built options; skills do not append `-N` / `-L` / extra `-o` |
 
-`run_stream` refuses a multiplexed endpoint (`RemoteExecutionError`). Do not
-pass `ssh_mux=True` for a stream. If the package is missing or older than
-v0.2.0, `require_transport()` fails and names `uv sync` as the remedy. There
-is no fallback to raw `ssh`.
+`run_stream`, `open_local_forward`, and `run_interactive` refuse a
+multiplexed endpoint (`RemoteExecutionError`). Do not pass `ssh_mux=True`
+for those calls. If the package is missing or older than v0.3.0,
+`require_transport()` fails and names `uv sync` as the remedy. There is no
+fallback to raw `ssh`.

@@ -197,7 +197,7 @@ MCP `remote_*` names are unchanged. The `remote_exec.py` / probe / job /
 artifact wrappers are thin CLIs over `vaws-remote-dev` and remain
 compatibility because their stdout is `remote-dev.result.v1`, not the old
 toolbox envelope. Service, sync, cleanup, and target-resolve wrappers stay
-because remote-dev v0.2.0 has no equivalent API.
+because remote-dev v0.3.0 has no equivalent API.
 
 The six-file Trae ModelScope package is generated from
 `.agents/skills/modelscope` by `.agents/scripts/sync_claude_skills.py`
