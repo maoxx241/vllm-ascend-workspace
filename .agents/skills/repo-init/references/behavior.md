@@ -127,6 +127,15 @@ Rules:
 
 ### Stage 6: topology
 
+Knowledge initialization after package installation uses
+`python3 .agents/scripts/knowledge_setup.py`. It reuses GitHub CLI authentication
+and creates/reuses the user's fork of the public knowledge-content repository.
+The package owns its dedicated clone and background contribution/release state;
+business repository remotes are not changed. A read-only client can pass
+`--read-only`. Then refresh the selected native clients with the existing setup
+script so MCP receives the service config and supported final-summary hooks.
+Human reviewers merge knowledge PRs. Grok is not enabled in this batch.
+
 Use `repo_topology.py configure` for remote mutations.
 
 **Prerequisite**: Stage 5 (submodule init) must be complete before configuring submodule remotes. `repo_topology.py` will refuse to operate on a path whose git root resolves to a different directory (e.g. an uninitialized submodule falling through to the parent workspace).

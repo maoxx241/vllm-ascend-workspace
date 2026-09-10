@@ -9,7 +9,7 @@ is the archive for dated evidence.
 ## Current contracts
 
 - [README.md](README.md) — this index.
-- [agent-first-openviking-spec.md](agent-first-openviking-spec.md) — next implementation direction: permissive Agent workflows, OpenViking-backed local knowledge, automated contributions and prebuilt distribution. Target behavior; implementation batches are explicitly marked planned.
+- [agent-first-openviking-spec.md](agent-first-openviking-spec.md) — target behavior and implementation status for permissive Agent workflows, local knowledge, public contributions and prebuilt distribution; Grok review is deferred.
 - [agent-feedback-contract.md](agent-feedback-contract.md) — Result Envelope v1: the JSON stdout contract for agent-facing commands.
 - [cli-surface.md](cli-surface.md) — current CLI inventory and the unimplemented historical thirteen-command proposal.
 - [comparability-certificate.md](comparability-certificate.md) — observational comparability certificate for paired measurements.

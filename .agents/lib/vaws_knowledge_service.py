@@ -180,12 +180,16 @@ def knowledge_server_env(repo_root: Path) -> dict[str, str]:
     """Relative env paths, matching tracked mcp.json style."""
 
     identity = knowledge_identity(repo_root)
-    return {
+    result = {
         "VAWS_KNOWLEDGE_PROJECT_ROOTS": PROJECT_ROOT_RELATIVE,
         "VAWS_KNOWLEDGE_CANDIDATE_ROOT": CANDIDATE_ROOT_RELATIVE,
         "VAWS_KNOWLEDGE_ORIGIN_REPO": identity["origin_repo"],
         "VAWS_KNOWLEDGE_REDACTION_PROFILE": identity["redaction_profile"],
     }
+    config_path = repo_root / ".vaws-local/knowledge/service.json"
+    if config_path.is_file():
+        result["VAWS_KNOWLEDGE_CONFIG"] = str(config_path)
+    return result
 
 
 def probe_shared() -> dict[str, Any]:
@@ -235,6 +239,7 @@ def service_config(
 ) -> ServiceConfig:
     project = project_root or (repo_root / PROJECT_ROOT_RELATIVE)
     candidate = candidate_root or (repo_root / CANDIDATE_ROOT_RELATIVE)
+    config_path = repo_root / ".vaws-local/knowledge/service.json"
     return load_config(
         {
             "backend": os.environ.get("VAWS_KNOWLEDGE_BACKEND", "openviking"),
@@ -245,6 +250,7 @@ def service_config(
             "identity": knowledge_identity(repo_root),
         },
         env={},
+        path=config_path if config_path.is_file() else None,
         base_dir=repo_root,
     )
 

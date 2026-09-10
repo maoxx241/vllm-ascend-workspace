@@ -86,6 +86,12 @@ A successful run should satisfy all applicable items below.
 
 ### External dependencies
 
+- knowledge setup reuses authentication, creates/reuses a matching corpus fork and keeps configuration in `.vaws-local/knowledge/service.json`
+- a read-only setup enables shared sync without requiring a fork
+- supported final-response hooks save the existing summary without reading a complete transcript or starting a second summarization model
+- repeated setup preserves foreign MCP/hook configuration and does not bypass native hook trust
+- knowledge PRs use human review; no Grok credential or automatic merge is required
+
 - offers `uv sync` (or `python3 .agents/scripts/vaws_deps.py sync`) as a required step for package-dependent work
 - skipping `uv sync` still completes `repo-init` for local documentation and Git work
 - the three in-process packages are public git+https installs; `uv.lock` is the only pin

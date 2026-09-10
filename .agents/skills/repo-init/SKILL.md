@@ -87,6 +87,14 @@ Required package plane (do not re-derive capabilities; use `doctor`'s report):
 - `python3 .agents/scripts/vaws_deps.py doctor`
 - `python3 .agents/scripts/vaws_deps.py sync`
 
+Knowledge contribution and release updates:
+
+- `python3 .agents/scripts/knowledge_setup.py` — reuse/create the personal corpus fork, enable background PR submission and shared Release sync; credentials stay in `gh`, configuration stays in `.vaws-local/knowledge/service.json`.
+- `python3 .agents/scripts/knowledge_setup.py --read-only` — consume public releases without creating a fork.
+- After setup, run the existing `vaws_client_setup.py --client <client> --project <path> --apply` entry to propagate the config and final-response hooks. Native hook trust remains the client's responsibility; do not bypass it.
+
+Authorized broad initialization includes the default knowledge setup. A narrow knowledge setup does not require machine-profile or NPU configuration. Knowledge PRs currently use human review and merge; Grok review is deferred. Offline/authentication failure leaves local knowledge usable and can be retried.
+
 Reference files:
 
 - `.agents/skills/repo-init/references/behavior.md`

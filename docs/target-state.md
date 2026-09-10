@@ -208,7 +208,7 @@ Query returns local experience and public knowledge together as reference;
 review status is a label, not an admission or ranking filter. OpenViking
 supplies storage/search and native OVPack primitives; the knowledge
 package owns integration and synchronization. This development workspace pins
-the 0.3.0 capability commit directly; older YAML query/capture contracts are
+the 0.3.1 contribution/distribution commit directly; older YAML query/capture contracts are
 not preserved. The implementation spec distinguishes available modules from
 the public workflow and platform checks still to be completed.
 

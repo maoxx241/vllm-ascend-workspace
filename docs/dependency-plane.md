@@ -17,7 +17,7 @@ must name git+https tag sources because `vaws-coordinator` depends on
 |---|---|---|---|
 | `vaws-remote-dev` | `remote_dev` | `0.5.0` at `d0f963c` | process-in import + MCP server |
 | `vaws-coordinator` | `vaws_coordinator` | `0.3.1` at `aed3ee9` | process-in import + stdio MCP |
-| `vaws-knowledge` | `vaws_knowledge` | `0.3.0` at `fd6405f` | process-in import + MCP |
+| `vaws-knowledge` | `vaws_knowledge` | `0.3.1` at `32eee59` | process-in import + MCP |
 | `vaws-top` | — | uvx only | fleet dashboard; not imported |
 
 `uv sync` writes `.venv` and records the resolved git commits in `uv.lock`.
@@ -98,10 +98,20 @@ release wheel.
 
 ## Shared knowledge corpus
 
-The knowledge **engine** and its **corpus** both ship in the installed
-`vaws-knowledge` package. After `uv sync`, `shared_knowledge` is available
-and query reads `vaws_knowledge.corpus`. The remedy for a missing corpus is
-`uv sync`. Do not clone the commons or import YAML by hand.
+The installed `vaws-knowledge` package provides the engine and a bootstrap
+corpus. Run `python3 .agents/scripts/knowledge_setup.py` after `uv sync` to enable
+the public Markdown corpus, a personal contribution fork and background Release
+updates. `--read-only` enables downloads without GitHub authentication or a fork.
+Then refresh selected clients with `vaws_client_setup.py --apply` so MCP receives
+`.vaws-local/knowledge/service.json` and supported final-response hooks.
+
+While MCP is alive, the package submits redacted public copies and consumes
+GitHub Releases from `vllm-ascend-workspace/vaws-knowledge-corpus`. Shared updates
+verify the exact Git identity, model files and dense OVPack before switching;
+project and candidate knowledge stay local. Knowledge PRs currently require
+human review and merge. Grok review and automatic merging are deferred.
+Use `vaws-knowledge publishing status --config PATH` to inspect retries and the
+active sync result. Native hook trust remains managed by each client.
 
 ## What was removed
 

@@ -287,6 +287,29 @@ class ClientSetupTests(unittest.TestCase):
         )
         self.assertEqual(set(grok["mcp_servers"]), {"vaws_task"})
 
+    def test_summary_hook_setup_preserves_foreign_stop_and_is_idempotent(self) -> None:
+        path = self.project / ".codex/hooks.json"
+        path.parent.mkdir()
+        path.write_text(json.dumps({"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "foreign-hook"}]}]}}))
+        first = self.setup.configuration("codex", self.project)[path]
+        path.write_text(first)
+        second = self.setup.configuration("codex", self.project)[path]
+        self.assertEqual(first, second)
+        handlers = [entry for group in json.loads(second)["hooks"]["Stop"] for entry in group["hooks"]]
+        self.assertEqual(len(handlers), 2)
+        self.assertEqual(handlers[0]["command"], "foreign-hook")
+        self.assertIn("knowledge_summary.py", handlers[1]["command"])
+
+    def test_toml_knowledge_environment_adds_config_without_replacing_user_fields(self) -> None:
+        source = '[mcp_servers.vaws_knowledge]\ncommand = "custom-python"\nargs = []\nenabled = true\n[mcp_servers.vaws_knowledge.env]\nCUSTOM = "keep"\n'
+        entry = tomllib.loads(source)["mcp_servers"]["vaws_knowledge"]
+        desired = {"env": {"VAWS_KNOWLEDGE_CONFIG": "workspace-config.json", "CUSTOM": "replace"}}
+        text = self.setup.fill_toml_server_env(source, "vaws_knowledge", entry, desired)
+        result = tomllib.loads(text)["mcp_servers"]["vaws_knowledge"]
+        self.assertEqual(result["command"], "custom-python")
+        self.assertTrue(result["enabled"])
+        self.assertEqual(result["env"], {"CUSTOM": "keep", "VAWS_KNOWLEDGE_CONFIG": "workspace-config.json"})
+
     def test_json_preserves_hand_managed_remote_dev_command_args_type(self) -> None:
         path = self.project / ".mcp.json"
         old = {
