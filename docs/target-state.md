@@ -207,9 +207,10 @@ distributed from the knowledge repository, project content stays in
 Query returns local experience and public knowledge together as reference;
 review status is a label, not an admission or ranking filter. OpenViking
 supplies storage/search and native OVPack primitives; the knowledge
-package owns integration and synchronization. The currently pinned v2 package
-is the migration baseline, not the target format. The implementation spec
-defines the staged package/client transition.
+package owns integration and synchronization. This development workspace pins
+the 0.3.0 capability commit directly; older YAML query/capture contracts are
+not preserved. The implementation spec distinguishes available modules from
+the public workflow and platform checks still to be completed.
 
 ### 5.5 Endpoints
 

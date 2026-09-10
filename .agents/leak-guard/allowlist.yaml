@@ -60,6 +60,12 @@ settings:
     - noreply.github.com
 
 allowlist:
+  - id: lockfile-brotlicffi-version
+    path_glob: uv.lock
+    categories: [ipv4]
+    match_regex: ^1\.2\.0\.2$
+    justification: Public PyPI brotlicffi version and distribution filenames in the lockfile; this value is a package version, not a network endpoint.
+
   # ---------------------------------------------------------------- addresses
   - id: skill-docs-private-example-host
     path_glob: .agents/skills/**
@@ -172,12 +178,6 @@ allowlist:
 
   - id: knowledge-v2-test-torch-npu-dev-version
     path_glob: .agents/tests/test_knowledge_v2.py
-    categories: [internal-identifier]
-    match_regex: ^dev20250724$
-    justification: Legitimate torch_npu development version used as a fixed synthetic test coordinate; it is a date suffix, not a person's identifier.
-
-  - id: knowledge-flow-test-torch-npu-dev-version
-    path_glob: .agents/tests/test_knowledge_v2_flow.py
     categories: [internal-identifier]
     match_regex: ^dev20250724$
     justification: Legitimate torch_npu development version used as a fixed synthetic test coordinate; it is a date suffix, not a person's identifier.

@@ -16,9 +16,10 @@ presentation is defined in
 [agent-first-openviking-spec.md](agent-first-openviking-spec.md): tools retain
 the complete record and default to a compact view with a readback reference.
 That view is a presentation projection, not a complete Envelope or a new
-execution state model. Current commands still emit the full JSON until their
-presentation paths are migrated; callers needing the full record retain an
-explicit full-output path. Agents do not author these records manually.
+execution state model. Doctor now defaults to that compact projection with
+`record_ref`; `--full` returns the complete record. Other commands retain the
+full JSON until their presentation paths are migrated. Agents do not author
+these records manually.
 
 ## 1. Why this exists
 

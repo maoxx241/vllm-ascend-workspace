@@ -1317,12 +1317,12 @@ class PhaseBKnowledgeFixtureScopeTests(unittest.TestCase):
             "nearby": ("dev20250725",),
         },
         {
-            "id": "knowledge-flow-test-torch-npu-dev-version",
-            "path": ".agents/tests/test_knowledge_v2_flow.py",
-            "category": "internal-identifier",
-            "regex": r"^dev20250724$",
-            "values": ("dev20250724",),
-            "nearby": ("dev20250725",),
+            "id": "lockfile-brotlicffi-version",
+            "path": "uv.lock",
+            "category": "ipv4",
+            "regex": r"^1\.2\.0\.2$",
+            "values": ("1.2.0.2",),
+            "nearby": ("1.2.0.3",),
         },
         {
             "id": "knowledge-redaction-test-private-address",

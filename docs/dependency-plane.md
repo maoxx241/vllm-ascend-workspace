@@ -15,9 +15,9 @@ must name git+https tag sources because `vaws-coordinator` depends on
 
 | Package | Module | Source tag | Role |
 |---|---|---|---|
-| `vaws-remote-dev` | `remote_dev` | `v0.5.0` | process-in import + MCP server |
+| `vaws-remote-dev` | `remote_dev` | `0.5.0` at `d0f963c` | process-in import + MCP server |
 | `vaws-coordinator` | `vaws_coordinator` | `v0.3.1` | process-in import + stdio MCP |
-| `vaws-knowledge` | `vaws_knowledge` | `v0.2.0` | process-in import + MCP |
+| `vaws-knowledge` | `vaws_knowledge` | `0.3.0` at `222402b` | process-in import + MCP |
 | `vaws-top` | — | uvx only | fleet dashboard; not imported |
 
 `uv sync` writes `.venv` and records the resolved git commits in `uv.lock`.

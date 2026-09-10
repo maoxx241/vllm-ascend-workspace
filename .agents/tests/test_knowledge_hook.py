@@ -5,11 +5,13 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 import tempfile
 import tomllib
 import unittest
+from unittest import mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -75,6 +77,9 @@ def candidate_payload(session_id: str) -> dict:
 
 class SessionEndHookTests(unittest.TestCase):
     def setUp(self) -> None:
+        backend = mock.patch.dict(os.environ, {"VAWS_KNOWLEDGE_BACKEND": "memory"})
+        backend.start()
+        self.addCleanup(backend.stop)
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
         write_knowledge(self.root / ".agents" / "knowledge")
