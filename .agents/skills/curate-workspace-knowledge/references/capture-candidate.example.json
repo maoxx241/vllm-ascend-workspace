@@ -1,11 +1,4 @@
 {
-  "slug": "example-minimal-capture-candidate",
-  "kind": "known-failure-signatures",
-  "summary": "Minimal legal capture payload for agents to copy",
-  "symptom": "A just-captured candidate is missing from later query results.",
-  "root_cause": "The capture input contract was reconstructed by trial and error.",
-  "resolution": "Copy this file, replace the narrative fields, and pass it to knowledge_capture.py --input.",
-  "fingerprints": [
-    "example-minimal-capture-candidate"
-  ]
+  "title": "Minimal legal capture payload for agents to copy",
+  "content": "A just-captured candidate should remain queryable after save. Copy this file, replace the title and body, and pass it to knowledge_capture.py --input."
 }

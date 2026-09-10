@@ -29,7 +29,7 @@ compatibility backend for managed VAWS sessions.
 
 ## Critical rules
 
-- Benchmark parameters are assembled by the agent based on user intent and executed through the scripts below. The agent must not construct raw `vllm bench serve` commands and run them directly on the remote.
+- Prefer the scripts and presets below for ordinary benchmarks. Custom commands may use the normal coordinator `vaws_run` / managed execution entry; do not block a new vLLM flag on a framework change. Unparseable output is kept as original text with unknown status — never treat it as passed.
 - **User intent takes priority** over nightly configs. Nightly YAML files under `vllm-ascend/tests/e2e/nightly/single_node/models/configs/` are a **reference source** for discovering how to configure a given model or feature (MTP, graph mode, TP count, etc.), not an execution template to run verbatim.
 - Nightly configs are used as a **fallback** only when the user specifies a model but provides no other parameters.
 - Task identity is `--context-file` / `VAWS_CONTEXT_FILE`. Never guess from cwd. A live service is addressed by `--execution-id` / `--service`; that does not allocate the same NPUs again. A queued or preparing serve is reported as `queued` with the same execution id; do not force-stop or resubmit it. Stop only a service this benchmark started. Live `--execution-id` still requires health/models/first-token evidence.

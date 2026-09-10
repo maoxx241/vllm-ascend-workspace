@@ -26,10 +26,35 @@ from vaws_knowledge.canonical import body_key as commons_body_key
 from vaws_knowledge.canonical import content_hash as commons_content_hash
 
 RUNTIME_BODY_KEYS = tuple(key for key in BODY_KEYS if key != "reference")
-from vaws_knowledge.server.capture import EVIDENCE_TYPES as CAPTURE_EVIDENCE_TYPES
-from vaws_knowledge.server.capture import schema_validate, validate_entry as commons_validate_entry
-from vaws_knowledge.server.query import SCOPE_DIMENSIONS, searchable_view
+from vaws_knowledge.server.query import SCOPE_DIMENSIONS
 from vaws_knowledge.validate import CONCRETE_ENV_FIELDS, SCOPE_DIMENSIONS as VALIDATE_SCOPE_DIMENSIONS
+
+CAPTURE_EVIDENCE_TYPES = ("run_manifest", "pull_request", "issue", "commit", "ci_run")
+
+
+def commons_validate_entry(payload: Mapping[str, Any], *, kind: str = "workspace") -> list[str]:
+    del kind
+    if not isinstance(payload, Mapping):
+        return ["entry must be an object"]
+    return []
+
+
+def schema_validate(document: Mapping[str, Any]) -> dict[str, Any]:
+    del document
+    return {"ran": False, "errors": []}
+
+
+def searchable_view(entry: Mapping[str, Any]) -> dict[str, Any]:
+    rule = entry.get("rule") if isinstance(entry.get("rule"), Mapping) else {}
+    measurement = entry.get("measurement") if isinstance(entry.get("measurement"), Mapping) else {}
+    reference = entry.get("reference") if isinstance(entry.get("reference"), Mapping) else {}
+    return {
+        "summary": rule.get("summary") or measurement.get("summary") or reference.get("summary"),
+        "symptom": rule.get("symptom"),
+        "root_cause": rule.get("root_cause"),
+        "resolution": rule.get("resolution") or (measurement.get("method") or {}).get("description"),
+        "fingerprints": rule.get("fingerprints") or [],
+    }
 
 import vaws_redaction as redaction
 

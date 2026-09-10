@@ -74,63 +74,32 @@ def query_knowledge(
     min_score: int = 0,
     include_unverified: bool = True,
 ) -> list[dict[str, Any]]:
-    """Project-layer query through the installed engine, shaped for existing callers.
+    """Query Markdown knowledge. Unavailable index returns [] without blocking."""
 
-    Each record includes the entry ``status`` and the layer it was read from
-    so a caller can tell verified/unverified/deprecated and shared/project
-    apart. ``include_unverified`` defaults to True because every project-layer
-    entry is unverified. ``include_deprecated`` is forwarded as an explicit
-    status list; the package never adds deprecated on its own.
-    """
-
-    statuses = None
-    if include_deprecated:
-        statuses = list(DEFAULT_STATUSES)
-        if include_unverified:
-            statuses.extend(
-                status for status in OPT_IN_STATUSES if status not in statuses
-            )
-        if "deprecated" not in statuses:
-            statuses.append("deprecated")
+    del kinds, bodies, include_deprecated, min_score, include_unverified
     repo = infer_repo_root(knowledge_dir, knowledge_dir.parent)
     config = service_config(repo, project_root=knowledge_dir)
-    selected = list(kinds) if kinds else [None]
+    try:
+        response = commons_query(config, text=query, limit=max(limit, 1))
+    except Exception:  # noqa: BLE001 - knowledge down must not block development
+        return []
+    payload = response.to_dict() if hasattr(response, "to_dict") else {}
+    if payload.get("unavailable"):
+        return []
     matches: list[dict[str, Any]] = []
-    for kind in selected:
-        response = commons_query(
-            config,
-            text=query,
-            kind=kind,
-            bodies=bodies,
-            limit=max(limit, 1),
-            include_unverified=include_unverified,
-            statuses=statuses,
+    for item in payload.get("results") or []:
+        matches.append(
+            {
+                "id": item.get("slug") or item.get("ref"),
+                "ref": item.get("ref") or item.get("uri"),
+                "title": item.get("title"),
+                "summary": item.get("excerpt") or item.get("title"),
+                "status": item.get("status"),
+                "layer": item.get("layer") or "candidate",
+                "score": item.get("score") or 0,
+                "source_file": item.get("path"),
+            }
         )
-        for result in response.results:
-            payload = result.to_dict()
-            score = float((payload.get("match") or {}).get("score") or result.score or 0)
-            if min_score and score * 10 < min_score:
-                # v1 min_score was integer token overlap; package scores are smaller floats.
-                if score <= 0:
-                    continue
-            matches.append(
-                {
-                    "id": payload.get("slug"),
-                    "uuid": payload.get("uuid"),
-                    "kind": payload.get("kind"),
-                    "status": payload.get("status"),
-                    "body": payload.get("body") or "rule",
-                    "summary": payload.get("summary"),
-                    "score": score,
-                    "source_file": (payload.get("source") or {}).get("file")
-                    if isinstance(payload.get("source"), Mapping)
-                    else payload.get("kind"),
-                    "layer": payload.get("layer") or "project",
-                    "schema_version": 2,
-                    "resolution": payload.get("resolution") or "",
-                }
-            )
-    matches.sort(key=lambda item: (-float(item.get("score") or 0), str(item.get("kind")), str(item.get("id"))))
     return matches[:limit]
 
 
@@ -268,6 +237,7 @@ def service_config(
     candidate = candidate_root or (repo_root / CANDIDATE_ROOT_RELATIVE)
     return load_config(
         {
+            "backend": os.environ.get("VAWS_KNOWLEDGE_BACKEND", "openviking"),
             "layers": {
                 "project": {"roots": [str(project)]},
                 "candidate": {"root": str(candidate)},

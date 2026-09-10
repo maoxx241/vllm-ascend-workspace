@@ -25,6 +25,7 @@ for candidate in (LIB, SCRIPTS):
 
 import envelope_lint  # noqa: E402
 from vaws_result_envelope import (  # noqa: E402
+    COMPACT_SCHEMA_VERSION,
     ENVIRONMENT_FIELDS,
     LAYERS,
     REDACTED_HOME,
@@ -35,10 +36,12 @@ from vaws_result_envelope import (  # noqa: E402
     EnvelopeRedactionError,
     assert_publishable,
     child_digest,
+    compact_view,
     compose_child,
     default_exit_code,
     dumps_publishable,
     emit,
+    emit_agent_view,
     escalate_child_layer,
     evidence_ref,
     failure_from_parts,
@@ -1144,6 +1147,30 @@ class EmissionTests(unittest.TestCase):
         self.assertTrue(line.startswith("__VAWS_PROGRESS__="))
         payload = json.loads(line.split("=", 1)[1])
         self.assertEqual(payload["port"], 8000)
+
+    def test_compact_view_is_not_a_complete_envelope(self) -> None:
+        envelope = base_envelope()
+        view = compact_view(envelope, record_ref="/tmp/record.json")
+        self.assertEqual(view["schema_version"], COMPACT_SCHEMA_VERSION)
+        self.assertEqual(view["outcome"], "success")
+        self.assertEqual(view["record_ref"], "/tmp/record.json")
+        self.assertNotIn("attempt", view)
+        self.assertNotIn("environment", view)
+
+    def test_emit_agent_view_writes_full_record(self) -> None:
+        envelope = base_envelope()
+        stream = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmp:
+            code = emit_agent_view(
+                envelope, stream=stream, record_dir=Path(tmp), full=False
+            )
+            self.assertEqual(code, 0)
+            view = json.loads(stream.getvalue())
+            self.assertEqual(view["schema_version"], COMPACT_SCHEMA_VERSION)
+            record = Path(view["record_ref"])
+            self.assertTrue(record.is_file())
+            stored = json.loads(record.read_text(encoding="utf-8"))
+            self.assertEqual(stored["schema_version"], SCHEMA_VERSION)
 
 
 class LintTests(unittest.TestCase):

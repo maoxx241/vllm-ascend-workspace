@@ -5,7 +5,7 @@ This file defines the durable behavior of `repo-init`.
 ## Core contract
 
 - Probe first.
-- Ask before each mutation category.
+- After authorized init, reuse existing config and ask only for missing choices that affect the result.
 - Preserve user choices and extra remotes.
 - Keep user-specific topology and machine profile state local, not tracked.
 - Prefer helper scripts to raw shell.
@@ -55,18 +55,14 @@ Use `repo_init_probe.py` to collect:
 The probe may only mutate untracked local state by creating a missing
 `workspace-identity.json` UUID4. It must not silently choose an alias.
 
-### Stage 2: mandatory decision checkpoint
+### Stage 2: missing-choice checkpoint
 
-Before mutating a broad init or any topology-changing task, stop once and ask a grouped question.
-
-That question must cover:
+Before mutating, ask only for choices that are still missing and affect the result:
 
 - unified workspace alias choice when its decision is pending
 - machine username choice when the profile is missing
-- repo topology mode: keep current, recommended fork mode, or community-only
-- whether to initialize submodules now
-- whether to run `uv sync` now (required for package-dependent work; skipping leaves those capabilities unavailable)
-- vllm submodule version alignment (CI-pinned / upstream main / keep current) — always include this when the probe shows submodules are uninitialized, because all questions are asked in one batch and you cannot wait for the submodule-init answer first; ignore the answer if the user later declines submodule init
+
+Authorized broad init defaults: keep current remotes if present, initialize submodules, run `uv sync`, CI-pinned vllm alignment. Topology / skip-sync / keep-current remain available as overrides, not as required confirmations.
 
 For the machine username branch, use the fixed three-option model from `repo_init_profile.py plan`:
 

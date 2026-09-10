@@ -28,7 +28,7 @@ This skill is optional. Do not treat it as a prerequisite for unrelated work.
 ## Critical rules
 
 - Probe first.
-- Ask before every mutation category.
+- After the user has authorized init, run the default path once: reuse existing profile, remotes, and identity. Ask only for choices that are actually missing and affect the result (missing machine username, pending alias, unset remotes).
 - Preserve extra remotes such as `upstream2`.
 - Never write secrets or user-specific remotes into tracked files.
 - Keep local runtime state only under `.vaws-local/`.
@@ -93,38 +93,33 @@ Reference files:
 - `.agents/skills/repo-init/references/command-recipes.md`
 - `.agents/skills/repo-init/references/acceptance.md`
 
-## Mandatory decision checkpoint
+## Decision checkpoint (missing choices only)
 
-After the probe and before any mutation, stop once and ask a grouped question whenever the task is broad init or remote topology changes are in scope.
+After the probe, reuse what already exists. Do not re-ask mutation categories the user already authorized.
 
-That checkpoint must cover:
+Ask only when the answer is missing and changes the result:
 
-1. unified workspace alias choice when the identity decision is still pending
+1. unified workspace alias when the identity decision is still pending
    - use the selected/existing machine username (recommended)
    - custom alias
    - no alias
    - custom mode requires one follow-up question for the literal alias
-2. machine username choice when `.vaws-local/machine-profile.json` is missing
+2. machine username when `.vaws-local/machine-profile.json` is missing
    - ask exactly these three options: `git-username`, `random`, `custom`
    - allowed usernames are English letters and digits only
    - normalize usernames to lowercase
    - reject spaces and symbols
    - random mode means `agent#####`
    - custom mode is not complete until the user provides the literal username in a second question
-3. repo topology choice
-   - keep current remotes
-   - recommended fork mode
-   - community-only mode
-4. whether to initialize submodules now
-5. whether to run `uv sync` now — **required for remote-dev / coordinator / knowledge work**. The three in-process packages are public git+https installs locked by `uv.lock`. Skipping this step leaves those capabilities unavailable. `uvx vaws-top` is separate and is not part of `uv sync`.
-6. vllm submodule version alignment — **always include this question in the grouped checkpoint when the probe shows submodules are not yet initialized**. Since all questions are asked in a single batch, you cannot wait for the answer to question 4 before deciding whether to include question 6. If the user later chooses not to initialize submodules, simply ignore their version-alignment answer. Options:
-   - **CI-pinned** (default): check out `vllm/` at the commit CI actually tests against — resolve it with `resolve_vllm_ci_pin.py`, which prefers `vllm-ascend/.github/vllm-main-verified.commit` and falls back to older workflow/docs sources
-   - **upstream main**: both submodules track their respective upstream `main` HEAD
-   - **keep current**: leave `vllm/` at whatever commit it is already on
 
-Skip question 4 (and question 6) only when the probe shows submodules are already initialized (nothing to init or align). Question 5 stays in the grouped checkpoint for broad init even when submodules are already present.
+Authorized broad init defaults, unless the user overrides them:
 
-If the user only asked for a narrow GitHub auth / `gh` task, skip the machine-profile and version-alignment questions.
+- keep current remotes when they already exist; otherwise recommended fork mode
+- initialize submodules now
+- run `uv sync` now — **required for remote-dev / coordinator / knowledge work**
+- CI-pinned vllm alignment after submodule init
+
+If the user only asked for a narrow GitHub auth / `gh` task, skip the machine-profile and version-alignment questions. Advanced topology / skip-sync / keep-current overrides remain available.
 
 ## Recommended topology
 
@@ -168,11 +163,11 @@ The probe silently ensures the UUID. If the alias decision is pending, use the
 `alias_question` payload and persist the approved choice with `apply-alias`.
 Choosing `none` is a durable decision and must not be asked again on each init.
 
-### 3. Stop for the decision checkpoint
+### 3. Ask only for missing choices, then apply defaults
 
-Do not mutate in the same step as the first probe summary for broad init.
+Do not mutate in the same step as the first probe summary when a required choice is still missing (username, alias).
 
-If the request was just “初始化仓库” or similarly broad, do not silently assume a generated username or the recommended remotes.
+If the request was “初始化仓库” and the profile/remotes already exist, reuse them and run the default submodule + `uv sync` path without a second round of category confirmations.
 
 ### 3a. Align vllm submodule version after submodule init
 

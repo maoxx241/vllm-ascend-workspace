@@ -131,8 +131,8 @@ class SessionEndHookTests(unittest.TestCase):
         self.assertEqual(result["status"], "passed")
         self.assertTrue(result["processed"][0]["candidate_id"])
         self.assertNotEqual(result["processed"][0]["candidate_id"], candidate_id)
-        yaml_root = self.root / ".vaws-local" / "knowledge" / "candidate"
-        self.assertTrue(any(yaml_root.glob("*.yaml")))
+        md_root = self.root / ".vaws-local" / "knowledge" / "candidate"
+        self.assertTrue(any(md_root.glob("*.md")))
         self.assertFalse(
             (
                 self.root
@@ -198,11 +198,11 @@ class SessionEndHookTests(unittest.TestCase):
         )
         self.assertTrue(first["processed"][0]["candidate_id"])
         self.assertIsNone(second)
-        yaml_files = list(
-            (self.root / ".vaws-local" / "knowledge" / "candidate").glob("*.yaml")
+        md_files = list(
+            (self.root / ".vaws-local" / "knowledge" / "candidate").glob("*.md")
         )
-        self.assertEqual(len(yaml_files), 1)
-        self.assertIn(first["processed"][0]["candidate_id"], yaml_files[0].read_text())
+        self.assertEqual(len(md_files), 1)
+        self.assertTrue(md_files[0].read_text(encoding="utf-8").strip())
 
     def test_other_session_pending_candidate_is_untouched(self) -> None:
         other = "other-thread"

@@ -624,7 +624,9 @@ def compact_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         },
         "forks": compact_fork_summary(payload.get("forks") or {}),
         "decision_checkpoint": {
-            "required_for_broad_init": True,
+            "required_for_broad_init": bool(
+                profile.get("choice_required") or identity.get("alias_choice_required")
+            ),
             "machine_username": {
                 "required": bool(profile.get("choice_required")),
                 "username_rules": profile.get("username_rules"),
@@ -641,12 +643,18 @@ def compact_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
                     profile.get("machine_username")
                 ),
             },
+            "defaults": {
+                "repo_topology": "keep-current",
+                "submodules": True,
+                "uv_sync": True,
+                "vllm_alignment": "ci-pinned",
+            },
             "repo_topology": {
-                "required": True,
+                "required": False,
                 "options": ["keep-current", "recommended-fork-mode", "community-only"],
             },
             "submodules": {
-                "required": True,
+                "required": False,
                 "initialized": compact_submodules.get("all_initialized"),
             },
         },

@@ -26,7 +26,16 @@ REMEDY = "uv sync"
 
 
 def workspace_venv_python(repo_root: Path) -> Path:
-    return Path(repo_root) / ".venv" / "bin" / "python"
+    root = Path(repo_root) / ".venv"
+    if os.name == "nt":
+        windows = root / "Scripts" / "python.exe"
+        if windows.is_file():
+            return windows
+        return windows
+    posix = root / "bin" / "python"
+    if posix.is_file():
+        return posix
+    return posix
 
 
 def _packages_importable() -> bool:
@@ -48,7 +57,7 @@ def ensure_workspace_interpreter(*, repo_root: Path) -> None:
         executable = os.fsdecode(venv_python)
         os.execve(executable, [executable, *sys.argv], env)
     sys.stderr.write(
-        "workspace packages are not importable and .venv/bin/python is missing; "
+        "workspace packages are not importable and the workspace venv python is missing; "
         f"install them with `{REMEDY}` "
         "(or `uv run python3 .agents/scripts/<entry>.py`, which syncs first).\n"
     )

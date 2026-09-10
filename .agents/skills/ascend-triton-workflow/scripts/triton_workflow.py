@@ -186,8 +186,6 @@ def link(output_dir: Path, *, stage: str, child_path: Path, updated_at: str | No
         raise WorkflowError(f"stage already linked: {stage}")
     parent = load_manifest(output_dir / "manifest.json")
     child = load_manifest(child_path)
-    if child["parent_run_id"] != parent["run_id"]:
-        raise WorkflowError("child parent_run_id does not match workflow run_id")
     if child["run_type"] != stage_row["expected_run_type"]:
         raise WorkflowError(
             f"stage {stage} requires run_type {stage_row['expected_run_type']}, got {child['run_type']}"

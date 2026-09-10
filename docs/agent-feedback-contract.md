@@ -2,13 +2,23 @@
 
 Status: current
 
-Whatever an agent runs in this workspace must come back with enough
-structured information to locate a failure **without re-running it**.
+VAWS business tools retain enough structured information to locate a failure
+**without re-running it**. Ordinary native file, shell and Git operations do
+not require the Agent to construct an Envelope.
 
 This document is the contract. The library is
 `.agents/lib/vaws_result_envelope.py`, the machine-readable schema is
 `.agents/schemas/result-envelope-v1.schema.json`, and conformance is
 checkable with `.agents/scripts/envelope_lint.py`.
+
+This remains the complete machine-record contract. The next Agent-facing
+presentation is defined in
+[agent-first-openviking-spec.md](agent-first-openviking-spec.md): tools retain
+the complete record and default to a compact view with a readback reference.
+That view is a presentation projection, not a complete Envelope or a new
+execution state model. Current commands still emit the full JSON until their
+presentation paths are migrated; callers needing the full record retain an
+explicit full-output path. Agents do not author these records manually.
 
 ## 1. Why this exists
 

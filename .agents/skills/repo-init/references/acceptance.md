@@ -28,7 +28,7 @@ A successful run should satisfy all applicable items below.
 ### Universal
 
 - probes first before mutating
-- asks before each mutation category
+- asks only for missing choices that affect the result; reuses existing config after authorized init
 - allows partial completion
 - never writes personal remotes, secrets, or machine profile state into tracked files
 - preserves extra remotes
@@ -36,13 +36,10 @@ A successful run should satisfy all applicable items below.
 
 ### Decision checkpoint
 
-- for broad init, the skill stops after the first probe summary and asks for:
+- for broad init, the skill stops after the first probe summary only for missing choices:
   - unified alias choice if the identity decision is pending
   - machine username choice if the profile is missing
-  - repo topology choice
-  - submodule-init choice
-  - required `uv sync` choice (skipping leaves package capabilities unavailable)
-  - vllm version alignment choice (when the probe shows submodules are uninitialized)
+- authorized init defaults to keep-current remotes, submodule init, `uv sync`, and CI-pinned vllm alignment unless the user overrides them
 - the machine-username branch uses exactly three options:
   - `git-username`
   - `random`

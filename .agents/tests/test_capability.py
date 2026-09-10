@@ -87,9 +87,24 @@ class DoctorEnvelopeTests(unittest.TestCase):
             cwd=str(ROOT),
         )
         payload = json.loads(proc.stdout)
-        self.assertEqual(payload["schema_version"], "vaws.result-envelope.v1")
+        self.assertEqual(payload["schema_version"], "vaws.result-compact.v1")
+        self.assertIn("record_ref", payload)
         self.assertIn("collecting workspace capability report", proc.stderr)
         self.assertIn(payload["outcome"], {"success", "partial", "failure", "blocked"})
+
+    def test_doctor_cli_full_prints_complete_envelope(self) -> None:
+        env = {key: value for key, value in os.environ.items()}
+        env["HOME"] = tempfile.mkdtemp()
+        proc = subprocess.run(
+            [sys.executable, str(SCRIPTS / "vaws_deps.py"), "doctor", "--full"],
+            capture_output=True,
+            text=True,
+            env=env,
+            check=False,
+            cwd=str(ROOT),
+        )
+        payload = json.loads(proc.stdout)
+        self.assertEqual(payload["schema_version"], "vaws.result-envelope.v1")
 
 
 class ResolverDegradationTests(unittest.TestCase):

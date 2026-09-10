@@ -29,7 +29,6 @@ import vaws_redaction as redaction  # noqa: E402
 from vaws_knowledge.server.capture import CaptureRefused, CaptureRejected, capture  # noqa: E402
 from vaws_knowledge_service import (  # noqa: E402
     KnowledgeError,
-    commons_entry,
     infer_repo_root,
     knowledge_session_key,
     load_json_object,
@@ -72,9 +71,21 @@ def _resolve_repo_root(payload: Mapping[str, Any]) -> Path:
 
 def _write_commons(candidate: Mapping[str, Any], knowledge_dir: Path, repo_root: Path) -> dict[str, Any]:
     redaction.require_writable(candidate, path="payload")
+    title = str(candidate.get("title") or candidate.get("summary") or "").strip()
+    content = str(candidate.get("content") or "").strip()
+    if not content:
+        parts = [
+            str(candidate[key]).strip()
+            for key in ("symptom", "root_cause", "resolution", "avoidance")
+            if str(candidate.get(key) or "").strip()
+        ]
+        content = "\n\n".join(parts)
     return capture(
-        commons_entry(candidate, candidate.get("environment") or {}),
-        kind=str(candidate.get("kind") or "known-failure-signatures"),
+        title=title,
+        content=content,
+        source=candidate.get("source") if isinstance(candidate.get("source"), Mapping) else None,
+        conditions=candidate.get("environment") if isinstance(candidate.get("environment"), Mapping) else None,
+        evidence=candidate.get("evidence"),
         config=service_config(
             infer_repo_root(knowledge_dir.resolve(), repo_root),
             project_root=knowledge_dir.resolve(),

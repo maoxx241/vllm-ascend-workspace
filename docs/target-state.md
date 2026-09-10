@@ -10,6 +10,14 @@ or kept request/recovery/interpreter/queue logic in `.agents/`.
 A mechanism this document does not name is a signal to amend this document
 first, not to build the mechanism here.
 
+The next implementation direction is specified in
+[agent-first-openviking-spec.md](agent-first-openviking-spec.md): permissive
+Agent workflows, automatic execution records, and OpenViking-backed local
+knowledge. This document defines the target; package pins and that spec's
+implementation status distinguish shipped behavior from planned changes.
+Existing YAML and workflow restrictions are migration work, not requirements
+to retain in the new design.
+
 ## 1. Axioms
 
 1. **Four components, one consumer workspace.** remote-dev, vaws-coordinator,
@@ -30,9 +38,14 @@ first, not to build the mechanism here.
    and tests. Do not deprecate.
 6. **Local only.** MCP servers run on the user's machine. Knowledge reaches
    the shared corpus only through pull requests.
-7. **Code identity is Git.** Knowledge `content_hash` is the only sanctioned
-   non-Git hash, owned by `vaws_knowledge.canonical`.
+7. **Code identity is Git.** Capture dirty edits as source evidence when
+   needed. Model and distribution-artifact checksums are integrity metadata,
+   not an alternative code identity or workspace handshake protocol.
 8. **Simplest mechanism that satisfies the axioms.** Fewer files win.
+9. **Trust Agent judgment; automate bookkeeping.** Ordinary work does not
+   require a predeclared plan, hand-written manifest, repeated confirmation,
+   or a second summary. Tools record facts and enforce resource ownership
+   and public redaction. Missing knowledge does not block development.
 
 ## 2. Ownership
 
@@ -40,7 +53,7 @@ first, not to build the mechanism here.
 |---|---|---|---|
 | Explicit remote read/edit/bash/search/patch/job/artifact/monitor; generic process control | **remote-dev** | client MCP wiring; skills may pass ordinary `host`/`port`/`user`/`cwd` | VAWS resolver plugin; global Ascend env injection; skill-built SSH; a second job supervisor |
 | Persistent user container, environment recipes, task isolation, NPU/port leases, queued execution, recovery | **vaws-coordinator** | native `context_file` passthrough; project environment recipes as data; thin CLI that calls the package | request-id ledger; interpreter discovery; pool tick; session container allocator; machine bootstrap engine; `SessionResourceClient` wrappers |
-| Knowledge contract, query, capture, redaction rules | **vaws-knowledge** | `.agents/knowledge/*.v2.yaml`; thin CLIs; curate workflow | a workspace knowledge engine |
+| Knowledge storage/search integration, capture, redaction, contribution and distribution | **vaws-knowledge** | project Markdown in `.agents/knowledge/`; thin CLIs and client hooks | a workspace knowledge engine; a second vector index |
 | Fleet observation | **vaws-top** | `npu-fleet-monitor` uvx skill | a second dashboard |
 | Result Envelope v1 (business operation report) | **this workspace** | `vaws_result_envelope.py` and conversion from remote-dev results | an execution state model; per-skill progress sentinels |
 | Client configuration | **this workspace** | `vaws_client_setup.py` writing ordinary package MCP/hook entries | injecting consumer resolvers or coordinator internals into remote-dev |
@@ -52,6 +65,7 @@ Dependency direction:
 ```
 workspace ──► vaws-coordinator ──► vaws-remote-dev
 workspace ──► vaws-knowledge
+                 └──► OpenViking + local CPU embedding
 workspace ──uvx──► vaws-top
 ```
 
@@ -95,8 +109,17 @@ wait for business health once a live target+port exists.
 
 ### 3.3 vaws-knowledge
 
-Queryable facts and sourced reference knowledge. A degraded answer is never
-an authoritative "no". Knowledge does not schedule work.
+Local Markdown knowledge, indexed through OpenViking. Capture accepts a title
+and non-empty content; source and applicability details are retained when
+available, not mandatory author fields. Public contribution is locally
+redacted and reviewed through a separate knowledge-content repository.
+Accepted Markdown/Git is authoritative; indexes are rebuildable.
+
+The package owns local instance lifecycle, candidate submission, review/build
+commands, and prebuilt OVPack synchronization. Knowledge CI runs those package
+commands. OpenViking is an internal dependency, not a fifth runtime owner.
+A degraded answer is never an authoritative "no" and cannot block unrelated
+development. See the implementation spec for the staged migration from v2.
 
 ### 3.4 vaws-top
 
@@ -107,7 +130,7 @@ Unchanged observation. It does not allocate.
 Three kinds of content only:
 
 1. **Project materials** — vLLM / vLLM-Ascend checkouts, dependency pins,
-   default config, environment recipes as data, project knowledge YAML.
+   default config, environment recipes as data, project knowledge Markdown.
 2. **Install and client wiring** — `uv sync`, `vaws_client_setup.py`,
    passing the native `context_file` / `VAWS_CONTEXT_FILE` into the
    coordinator client. Tool protocol adapters belong to their packages.
@@ -148,6 +171,13 @@ may wait for business health. Stop/finish is coordinator `execution` /
 `finish`. A benchmark against a live service uses that service's
 authoritative reference and must not acquire the same NPUs again.
 
+Skills are convenient business paths, not a compulsory plan/record/link/finalize
+sequence for ordinary experiments. Custom commands use the normal execution
+owner. Existing evidence may be referenced after the run when its actual
+source, environment, inputs and results support the conclusion; a missing
+planning parent is not itself grounds for rejection. Do not rewrite original
+execution facts or infer access to another task's resources.
+
 ## 5. Cross-repository contracts
 
 ### 5.1 Version is the contract
@@ -158,17 +188,28 @@ warns on pin drift and continues.
 ### 5.2 Run Manifest v1
 
 Exactly `vaws_coordinator.run_manifest`. Git identity in `code`.
+The implementation produces the record; the Agent does not fill it manually.
 
 ### 5.3 Two result contracts
 
 `remote-dev.result.v1` is one remote tool call. Result Envelope v1 is one
-agent-facing **business** operation. Skills convert; they do not invent a
-third execution state machine. The conversion is named and tested.
+**business** operation's complete machine record. Skills convert; they do not
+invent a third execution state machine. The conversion is named and tested.
+The target default Agent view is a compact projection with a reference to
+the full record. A projection is not passed off as a complete Envelope.
 
 ### 5.4 Knowledge
 
-Schema v2 as shipped by `vaws-knowledge`. Project layer
-`.agents/knowledge/*.v2.yaml`. Candidate layer under `.vaws-local/`.
+Target: Markdown title and body, with local redaction before public export;
+no mandatory author-supplied runtime-coordinate schema. Shared content is
+distributed from the knowledge repository, project content stays in
+`.agents/knowledge/`, and local candidates/state stay under `.vaws-local/`.
+Query returns local experience and public knowledge together as reference;
+review status is a label, not an admission or ranking filter. OpenViking
+supplies storage/search and native OVPack primitives; the knowledge
+package owns integration and synchronization. The currently pinned v2 package
+is the migration baseline, not the target format. The implementation spec
+defines the staged package/client transition.
 
 ### 5.5 Endpoints
 
@@ -204,3 +245,6 @@ these for a bound execution. remote-dev never learns VAWS object names.
 | 2026-09-10 | One `vaws-<user>` container per host; coordinator owns bootstrap and execution |
 | 2026-09-10 | remote-dev stays independently usable with explicit host/port |
 | 2026-09-10 | Skills do not store a recovery ledger; coordinator owns run association |
+| 2026-09-10 | Trust Agent judgment; make ordinary development independent of planning and knowledge bookkeeping |
+| 2026-09-10 | Adopt OpenViking inside vaws-knowledge; Markdown/Git remains content authority |
+| 2026-09-10 | Separate knowledge content from runtime code; automate redacted PRs and prebuilt local distribution |

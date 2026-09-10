@@ -18,7 +18,7 @@
 ## Evidence
 
 - [ ] Each linked run has a valid Run Manifest.
-- [ ] Each linked run was created with this plan's `run_id` as its `parent_run_id`.
+- [ ] Each linked run has artifacts that support the conclusion; a missing planning parent is recorded as post-hoc, not rejected.
 - [ ] Each passed linked run carries artifacts that a reviewer can open.
 - [ ] Each link names the plan item IDs it covers.
 - [ ] A linked child's `run_type` matches the check-domain prefix of every `correctness:*` or `performance:*` item it covers.

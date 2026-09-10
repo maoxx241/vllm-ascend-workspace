@@ -1,13 +1,9 @@
 #!/usr/bin/env python3
 """Capture one knowledge candidate through the installed commons engine.
 
-Keeps the scaffold coordinate adapter: Run Manifest / ``--env`` / candidate
-scope, missing dimensions recorded as ``unknown``. Writes only the commons
-candidate layer (``.vaws-local/knowledge/candidate/*.yaml``) after
-``vaws_redaction.require_writable``.
-
-A minimal legal ``--input`` payload is
-``.agents/skills/curate-workspace-knowledge/references/capture-candidate.example.json``.
+Required fields are title and non-empty content. Known source, conditions,
+and evidence are kept when present. Writes Markdown under
+``.vaws-local/knowledge/candidate/``.
 """
 
 from __future__ import annotations
@@ -197,6 +193,19 @@ def collect_coordinate(payload: dict[str, Any], args: argparse.Namespace) -> tup
     return collected, coordinate_source
 
 
+def _title_and_content(payload: Mapping[str, Any]) -> tuple[str, str]:
+    title = str(payload.get("title") or payload.get("summary") or "").strip()
+    content = str(payload.get("content") or "").strip()
+    if not content:
+        parts = [
+            str(payload[key]).strip()
+            for key in ("symptom", "root_cause", "resolution", "avoidance")
+            if str(payload.get(key) or "").strip()
+        ]
+        content = "\n\n".join(parts)
+    return title, content
+
+
 def write_commons(
     payload: Mapping[str, Any],
     *,
@@ -204,31 +213,30 @@ def write_commons(
     candidate_root: Path,
 ) -> dict[str, Any]:
     repo_root = infer_repo_root(knowledge_dir.resolve(), knowledge_dir.resolve().parent)
-    draft = commons_entry(payload, payload["environment"])
-    try:
-        existing = find_candidate_entry(
-            str(draft["slug"]),
-            repo_root,
-            project_root=knowledge_dir.resolve(),
-            candidate_root=candidate_root,
-        )
-        draft["uuid"] = existing.uuid
-    except KeyError:
-        pass
+    title, content = _title_and_content(payload)
+    config = service_config(
+        repo_root,
+        project_root=knowledge_dir.resolve(),
+        candidate_root=candidate_root,
+    )
+    conditions = payload.get("conditions")
+    if not isinstance(conditions, Mapping):
+        conditions = payload.get("environment") if isinstance(payload.get("environment"), Mapping) else None
     return capture(
-        draft,
-        kind=str(payload.get("kind") or "known-failure-signatures"),
-        config=service_config(
-            repo_root,
-            project_root=knowledge_dir.resolve(),
-            candidate_root=candidate_root,
-        ),
+        title=title,
+        content=content,
+        source=payload.get("source") if isinstance(payload.get("source"), Mapping) else None,
+        conditions=conditions,
+        evidence=payload.get("evidence"),
+        config=config,
     )
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--input", type=Path, required=True)
+    parser.add_argument("--input", type=Path)
+    parser.add_argument("--title", default="")
+    parser.add_argument("--content", default="")
     parser.add_argument(
         "--defer",
         action="store_true",
@@ -259,15 +267,29 @@ def main(argv: list[str] | None = None) -> int:
     global _PROGRESS
     _PROGRESS = bool(args.progress)
     try:
-        payload = json.loads(args.input.read_text(encoding="utf-8"))
-        if not isinstance(payload, dict):
-            raise KnowledgeError("input root must be an object")
+        if args.input is None and not (args.title and args.content):
+            raise KnowledgeError("provide --title and --content, or --input JSON")
+        if args.input is not None:
+            payload = json.loads(args.input.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict):
+                raise KnowledgeError("input root must be an object")
+        else:
+            payload = {"title": args.title, "content": args.content}
+        if args.title:
+            payload["title"] = args.title
+        if args.content:
+            payload["content"] = args.content
 
         collected, coordinate_source = collect_coordinate(payload, args)
-        payload["environment"] = normalize_coordinate(collected, source=coordinate_source)
-        unknown = unknown_coordinate_dimensions(payload["environment"])
+        known = {
+            name: value
+            for name, value in collected.items()
+            if str(value).strip() and str(value).strip().lower() != "unknown"
+        }
+        payload["environment"] = known
+        unknown = [name for name in COORDINATE_DIMENSIONS if name not in known]
         if unknown:
-            emit_progress("coordinate", "recorded as unknown (never guessed): " + ", ".join(unknown))
+            emit_progress("coordinate", "omitted unknown dimensions: " + ", ".join(unknown))
 
         redaction.require_writable(payload, path="payload")
         export_hits = [
@@ -292,11 +314,13 @@ def main(argv: list[str] | None = None) -> int:
                 )
             source["session_id"] = session_id
 
-        promoted = already_promoted_slug(payload, args.knowledge_dir.resolve())
+        try:
+            promoted = already_promoted_slug(payload, args.knowledge_dir.resolve())
+        except Exception:  # noqa: BLE001 - promotion check is optional
+            promoted = None
         if promoted:
             result = {
                 "status": "already-promoted",
-                "schema_version": 2,
                 "candidate_id": promoted,
                 "entry_id": promoted,
                 "path": None,
@@ -307,23 +331,19 @@ def main(argv: list[str] | None = None) -> int:
                 knowledge_dir=args.knowledge_dir,
                 candidate_root=args.candidate_dir.resolve(),
             )
-            slug = str(written.get("slug") or written.get("uuid"))
+            slug = str(written.get("slug") or written.get("uri"))
             result = {
                 "status": "passed",
-                "schema_version": 2,
                 "candidate_id": slug,
-                "uuid": written.get("uuid"),
                 "slug": written.get("slug"),
-                "content_hash": written.get("content_hash"),
-                "action": written.get("action"),
-                "path": written.get("file"),
+                "uri": written.get("uri"),
+                "ref": written.get("ref") or written.get("uri"),
+                "path": written.get("path") or written.get("file"),
                 "commons": written,
             }
         result["coordinate"] = {
             "source": coordinate_source,
-            "values": {
-                name: payload["environment"][name] for name in COORDINATE_DIMENSIONS
-            },
+            "values": dict(payload.get("environment") or {}),
             "unknown_dimensions": unknown,
             "complete": not unknown,
         }
