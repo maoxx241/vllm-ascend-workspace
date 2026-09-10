@@ -404,6 +404,7 @@ committed external contract). "Proposed" is the unimplemented original #85
 option.
 
 <!-- current-cli-surface-table -->
+
 | Entry point | Style | Verbs | Options | Refs | Responsibility | Support role | Current target | Proposed |
 |---|---|---|---|---|---|---|---|---|
 | `.agents/hooks/knowledge_session_end.py` | bare | - | 0 | client-config:1, routing:1, test:1 | mechanics | hook | .agents/hooks/knowledge_session_end.py | - |
@@ -411,10 +412,10 @@ option.
 | `.agents/hooks/vaws_session.py` | argparse | - | 4 | policy:1, script:1, test:2 | mechanics | hook | .agents/hooks/vaws_session.py | - |
 | `.agents/scripts/cli_surface_inventory.py` | argparse | - | 3 | policy:1, test:3 | mechanics | supported | .agents/scripts/cli_surface_inventory.py | vaws lint |
 | `.agents/scripts/envelope_lint.py` | argparse | scan, check, run | 5 | docs:1, test:3 | mechanics | supported | .agents/scripts/envelope_lint.py | vaws lint |
-| `.agents/scripts/knowledge_capture.py` | argparse | - | 9 | hook:1, routing:2, skill-doc:5, test:4 | mixed | supported | .agents/scripts/knowledge_capture.py | vaws knowledge |
-| `.agents/scripts/knowledge_export.py` | argparse | - | 7 | routing:2, script:1, skill-doc:3, test:1 | mechanics | supported | .agents/scripts/knowledge_export.py | vaws knowledge |
+| `.agents/scripts/knowledge_capture.py` | argparse | - | 11 | hook:1, routing:1, skill-doc:4, test:4 | mixed | supported | .agents/scripts/knowledge_capture.py | vaws knowledge |
+| `.agents/scripts/knowledge_export.py` | argparse | - | 7 | routing:2, skill-doc:1 | mechanics | supported | .agents/scripts/knowledge_export.py | vaws knowledge |
 | `.agents/scripts/knowledge_query.py` | argparse | - | 9 | routing:2, skill-doc:1, test:3 | mechanics | supported | .agents/scripts/knowledge_query.py | vaws knowledge |
-| `.agents/scripts/knowledge_validate.py` | argparse | - | 1 | other:1, routing:1, skill-doc:1, test:2 | mechanics | supported | .agents/scripts/knowledge_validate.py | vaws knowledge |
+| `.agents/scripts/knowledge_validate.py` | argparse | - | 1 | other:1, routing:1, skill-doc:1 | mechanics | supported | .agents/scripts/knowledge_validate.py | vaws knowledge |
 | `.agents/scripts/remote_artifact_manifest.py` | argparse | - | 1 | policy:1, routing:1 | mechanics | compatibility | .agents/scripts/remote_artifact_manifest.py | vaws remote |
 | `.agents/scripts/remote_artifact_pull.py` | argparse | - | 2 | policy:1, routing:1, script:1, skill-doc:1 | mechanics | compatibility | .agents/scripts/remote_artifact_pull.py | vaws remote |
 | `.agents/scripts/remote_artifact_push.py` | argparse | - | 2 | policy:1, routing:1 | mechanics | compatibility | .agents/scripts/remote_artifact_push.py | vaws remote |
@@ -441,7 +442,7 @@ option.
 | `.agents/scripts/tracked_path_check.py` | argparse | - | 6 | docs:1, other:1, policy:1, test:2 | mechanics | supported | .agents/scripts/tracked_path_check.py | vaws lint |
 | `.agents/scripts/vaws.py` | argparse | status, env, hook, task-server | 1 | docs:1, other:1, policy:1, skill-doc:2, test:3 | mechanics | supported | .agents/scripts/vaws.py | vaws task |
 | `.agents/scripts/vaws_client_setup.py` | argparse | - | 5 | docs:3, policy:1, script:1, test:2 | mechanics | supported | .agents/scripts/vaws_client_setup.py | vaws workspace |
-| `.agents/scripts/vaws_deps.py` | argparse | status, doctor, sync | 0 | docs:3, other:1, policy:1, routing:3, script:1, skill-doc:4, test:2 | mechanics | supported | .agents/scripts/vaws_deps.py | vaws workspace |
+| `.agents/scripts/vaws_deps.py` | argparse | status, doctor, sync | 1 | docs:3, other:1, policy:1, routing:3, script:1, skill-doc:4, test:2 | mechanics | supported | .agents/scripts/vaws_deps.py | vaws workspace |
 | `.agents/scripts/workspace_identity.py` | argparse | summary, ensure, validate-alias, set-alias, decline-alias | 1 | routing:1, skill-doc:2 | mechanics | supported | .agents/scripts/workspace_identity.py | vaws workspace |
 | `.agents/scripts/workspace_profile.py` | argparse | summary, validate, ensure | 4 | routing:2, script:1, skill-doc:4 | mechanics | supported | .agents/scripts/workspace_profile.py | vaws workspace |
 | `.agents/skills/ascend-memory-profiling/scripts/mem_analyze.py` | argparse | - | 1 | routing:1, skill-doc:1 | mixed | supported | .agents/skills/ascend-memory-profiling/scripts/mem_analyze.py | vaws profile |
@@ -472,7 +473,7 @@ option.
 | `.agents/skills/ascend-triton-kernel-validation/scripts/validate_triton_impl.py` | argparse | - | 1 | skill-doc:1, test:1 | mechanics | supported | .agents/skills/ascend-triton-kernel-validation/scripts/validate_triton_impl.py | vaws lint |
 | `.agents/skills/ascend-triton-operator-development/scripts/triton_development.py` | argparse | plan, finalize | 6 | routing:1, skill-doc:2, test:1 | mixed | supported | .agents/skills/ascend-triton-operator-development/scripts/triton_development.py | guidance |
 | `.agents/skills/ascend-triton-workflow/scripts/triton_workflow.py` | argparse | plan, link, finalize | 4 | routing:1, skill-doc:2, test:1 | mixed | supported | .agents/skills/ascend-triton-workflow/scripts/triton_workflow.py | guidance |
-| `.agents/skills/curate-workspace-knowledge/scripts/knowledge_curate.py` | argparse | list, inspect, promote, merge, reject, deprecate, resolve, verify, list-unresolved | 21 | policy:1, routing:1, skill-doc:2, test:5 | mixed | supported | .agents/skills/curate-workspace-knowledge/scripts/knowledge_curate.py | vaws knowledge |
+| `.agents/skills/curate-workspace-knowledge/scripts/knowledge_curate.py` | bare | - | 0 | routing:2, skill-doc:2, test:2 | mechanics | supported | .agents/skills/curate-workspace-knowledge/scripts/knowledge_curate.py | - |
 | `.agents/skills/machine-management/scripts/machine_add.py` | argparse | - | 2 | routing:1, skill-doc:3, test:1 | mechanics | supported | .agents/skills/machine-management/scripts/machine_add.py | vaws machine |
 | `.agents/skills/machine-management/scripts/machine_verify.py` | argparse | - | 0 | mirror:1, routing:1, skill-doc:3, test:2 | mechanics | supported | .agents/skills/machine-management/scripts/machine_verify.py | vaws machine |
 | `.agents/skills/modelscope/scripts/download_from_modelscope.py` | argparse | - | 12 | mirror:2, routing:1, script:2, skill-doc:1, test:2 | mechanics | payload | .agents/skills/modelscope/scripts/download_from_modelscope.py | - |
@@ -497,10 +498,10 @@ option.
 | `.agents/skills/vllm-ascend-benchmark/scripts/bench_run.py` | argparse | - | 16 | docs:1, routing:1, skill-doc:2, test:1 | mechanics | supported | .agents/skills/vllm-ascend-benchmark/scripts/bench_run.py | vaws bench |
 | `.agents/skills/vllm-ascend-change-validation/scripts/change_validation.py` | argparse | plan, link, finalize | 11 | docs:2, routing:1, skill-doc:6, test:1 | mixed | supported | .agents/skills/vllm-ascend-change-validation/scripts/change_validation.py | guidance |
 | `.agents/skills/vllm-ascend-correctness-validation/scripts/aisbench_adapter.py` | argparse | prepare, normalize | 20 | script:1, skill-doc:2, test:1 | mechanics | supported | .agents/skills/vllm-ascend-correctness-validation/scripts/aisbench_adapter.py | vaws bench |
-| `.agents/skills/vllm-ascend-correctness-validation/scripts/correctness_run.py` | argparse | init, compare | 15 | docs:1, routing:1, script:1, skill-doc:5, test:1 | mixed | supported | .agents/skills/vllm-ascend-correctness-validation/scripts/correctness_run.py | vaws bench |
+| `.agents/skills/vllm-ascend-correctness-validation/scripts/correctness_run.py` | argparse | init, compare | 15 | docs:1, routing:1, skill-doc:4, test:1 | mixed | supported | .agents/skills/vllm-ascend-correctness-validation/scripts/correctness_run.py | vaws bench |
 | `.agents/skills/vllm-ascend-correctness-validation/scripts/remote_correctness_harness.py` | argparse | - | 2 | script:1, skill-doc:2, test:1 | mechanics | payload | .agents/skills/vllm-ascend-correctness-validation/scripts/remote_correctness_harness.py | - |
 | `.agents/skills/vllm-ascend-distributed-debug/scripts/distributed_debug.py` | argparse | init, ingest, analyze | 3 | docs:1, routing:1, skill-doc:2, test:1 | mixed | supported | .agents/skills/vllm-ascend-distributed-debug/scripts/distributed_debug.py | guidance |
-| `.agents/skills/vllm-ascend-graph-debug/scripts/graph_debug_case.py` | argparse | init, record, compare, finalize | 31 | docs:1, routing:1, script:1, skill-doc:4, test:1 | mixed | supported | .agents/skills/vllm-ascend-graph-debug/scripts/graph_debug_case.py | guidance |
+| `.agents/skills/vllm-ascend-graph-debug/scripts/graph_debug_case.py` | argparse | init, record, compare, finalize | 31 | docs:1, routing:1, skill-doc:3, test:1 | mixed | supported | .agents/skills/vllm-ascend-graph-debug/scripts/graph_debug_case.py | guidance |
 | `.agents/skills/vllm-ascend-pd-serving/scripts/pd_serving.py` | argparse | plan, start, status, smoke, stop | 5 | docs:1, routing:1, skill-doc:2, test:2 | mixed | supported | .agents/skills/vllm-ascend-pd-serving/scripts/pd_serving.py | vaws serve |
 | `.agents/skills/vllm-ascend-performance-regression/scripts/performance_regression.py` | argparse | plan, record, normalize, analyze | 9 | docs:1, routing:1, skill-doc:2, test:1 | mixed | supported | .agents/skills/vllm-ascend-performance-regression/scripts/performance_regression.py | guidance |
 | `.agents/skills/vllm-ascend-serving/scripts/serve_probe_npus.py` | argparse | - | 5 | docs:1, mirror:1, routing:1, skill-doc:3 | mechanics | compatibility | .agents/skills/vllm-ascend-serving/scripts/serve_probe_npus.py | vaws machine |
@@ -511,6 +512,7 @@ option.
 | `.trae/skills/modelscope/scripts/modelscope_auto.py` | argparse | ensure, status, verify, worker | 11 | mirror:1, routing:1, script:1, skill-doc:1, test:2 | mechanics | generated | .agents/skills/modelscope/scripts/modelscope_auto.py | - |
 | `.trae/skills/modelscope/scripts/modelscope_download_status.py` | argparse | - | 3 | mirror:1, routing:1, script:1, skill-doc:1, test:2 | mechanics | generated | .agents/skills/modelscope/scripts/modelscope_download_status.py | - |
 | `.trae/skills/modelscope/scripts/verify_modelscope_sha256.py` | argparse | - | 8 | mirror:2, routing:1, script:2, skill-doc:1, test:2 | mechanics | payload | .agents/skills/modelscope/scripts/verify_modelscope_sha256.py | - |
+
 <!-- /current-cli-surface-table -->
 
 ## 11. Measurement limitations

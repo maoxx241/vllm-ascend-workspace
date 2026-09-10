@@ -482,11 +482,11 @@
       "proposed_target": "guidance"
     },
     ".agents/skills/curate-workspace-knowledge/scripts/knowledge_curate.py": {
-      "responsibility": "mixed",
+      "responsibility": "mechanics",
       "support_role": "supported",
-      "target_kind": "self",
-      "note": "list/inspect/promote/merge/reject/deprecate/resolve/verify file moves are mechanics; which verb applies is the review",
-      "proposed_target": "vaws knowledge"
+      "target_kind": "external",
+      "external_owner": "vaws-knowledge",
+      "note": "delegates Markdown public-copy preparation and contribution review to the installed package"
     },
 
     ".agents/skills/machine-management/scripts/machine_add.py": {

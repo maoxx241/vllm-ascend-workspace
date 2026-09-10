@@ -220,18 +220,17 @@ class RequiredStepReportingTests(unittest.TestCase):
             probe.fixed_machine_username_question = original_question  # type: ignore[method-assign]
         checkpoint = compact["decision_checkpoint"]
         self.assertTrue(checkpoint["required_for_broad_init"])
-        self.assertTrue(checkpoint["repo_topology"]["required"])
+        self.assertFalse(checkpoint["repo_topology"]["required"])
         self.assertEqual(
             checkpoint["repo_topology"]["options"],
             ["keep-current", "recommended-fork-mode", "community-only"],
         )
-        self.assertTrue(checkpoint["submodules"]["required"])
+        self.assertFalse(checkpoint["submodules"]["required"])
         self.assertFalse(checkpoint["submodules"]["initialized"])
         self.assertTrue(checkpoint["machine_username"]["required"])
         self.assertTrue(checkpoint["workspace_alias"]["required"])
-        # uv sync is a SKILL.md checkpoint, not a probe field.
-        self.assertNotIn("uv_sync", checkpoint)
-        self.assertNotIn("uv sync", json.dumps(checkpoint))
+        self.assertEqual(checkpoint["defaults"]["uv_sync"], True)
+        self.assertEqual(checkpoint["defaults"]["vllm_alignment"], "ci-pinned")
 
     def test_stub_git_on_path_feeds_initialized_clean_first_row(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

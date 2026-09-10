@@ -1,21 +1,7 @@
-"""Tests for the wrapper-side workspace knowledge enrichment.
+"""Markdown findings references preserve model config and never infer layer counts.
 
-``profile_analyze._enrich_analysis_summary_with_knowledge`` fills the
-``knowledge_refs`` placeholders of the findings rollup groups and backfills
-``layer_validation.expected_layers`` from the workspace knowledge store
-(``.agents/knowledge/``). All tests run against a temporary knowledge dir
-with synthetic entries; no remote access, no real knowledge files.
-
-Covered:
-  * rollup group attaches knowledge_refs (entry_id/kind/summary/resolution/
-    applicable_versions/score) when a failure-signature entry matches;
-  * no match -> refs stay an explicit empty array;
-  * empty knowledge base / missing dir / invalid document -> no error, refs
-    all empty;
-  * layer backfill fires only when expected_layers is null, prefers the
-    explicit model id, marks expected_source=knowledge:<entry_id>, recomputes
-    layers_match, flips status ok->degraded on mismatch, writes layers_note;
-  * entries without a layer-count field (config-driven models) are skipped.
+Uses the installed memory backend with temporary Markdown files. Real
+OpenViking indexing is exercised separately by the package integration.
 """
 from __future__ import annotations
 
@@ -32,89 +18,29 @@ LIB = ROOT / ".agents" / "lib"
 if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
-import vaws_knowledge_v2 as v2  # noqa: E402
+import pytest
 
-KIND_FILES = {
-    "known-failure-signatures.v2.yaml": "known-failure-signatures",
-    "model-capabilities.v2.yaml": "model-capabilities",
+
+@pytest.fixture(autouse=True)
+def isolated_knowledge_backend(monkeypatch):
+    monkeypatch.setenv("VAWS_KNOWLEDGE_BACKEND", "memory")
+
+
+FAILURE_ENTRY = {
+    "slug": "demo-gloo-hostname",
+    "title": "Gloo hostname resolution failure",
+    "content": "gloo makeDeviceForHostname: name or service not known for the container hostname. Check the hostname mapping in /etc/hosts before serving.",
 }
-
-
-def _scope(**values: str) -> dict:
-    scope = {name: {"range": {"min": None, "max": None}} for name in v2.SCOPE_DIMENSIONS}
-    for name, value in values.items():
-        scope[name] = {"values": [value]}
-    return scope
-
-
-def _v2_entry(*, kind: str, slug: str, summary: str, fingerprints: list[str], resolution: str) -> dict:
-    return v2.with_content_hash(
-        {
-            "uuid": v2.derived_uuid("owner/fork", kind, slug),
-            "slug": slug,
-            "content_hash": "sha256:" + "0" * 64,
-            "status": "unverified",
-            "confidence": "low",
-            "scope": _scope(component="profiling"),
-            "provenance": {
-                "contributor": "submitter",
-                "origin_repo": "owner/fork",
-                "submitted_at": "2026-09-03",
-                "redaction_profile": "r2",
-            },
-            "lifecycle": {
-                "first_seen": "2026-09-03",
-                "updated_at": "2026-09-03",
-                "superseded_by": None,
-                "resolved_by": None,
-            },
-            "rule": {
-                "summary": summary,
-                "symptom": summary,
-                "root_cause": "recorded for the test fixture",
-                "resolution": resolution,
-                "fingerprints": fingerprints,
-            },
-        }
-    )
-
-
-FAILURE_ENTRY = _v2_entry(
-    kind="known-failure-signatures",
-    slug="demo-gloo-hostname",
-    summary="gloo init fails when the container hostname is missing from /etc/hosts",
-    fingerprints=["gloo makedeviceforhostname", "name or service not known hostname"],
-    resolution="add 127.0.0.1 <hostname> to /etc/hosts before serve_start",
-)
-
-MODEL_ENTRY = _v2_entry(
-    kind="model-capabilities",
-    slug="model-demomodel-7b",
-    summary="DemoModel-7B: 40-layer test model",
-    fingerprints=["demomodel-7b"],
-    resolution="Layer count is no longer a structured v2 field.",
-)
-
-MODEL_ENTRY_NO_LAYERS = _v2_entry(
-    kind="model-capabilities",
-    slug="model-configdriven-13b",
-    summary="ConfigDriven-13B: layer count is config-driven, no verified value",
-    fingerprints=["configdriven-13b"],
-    resolution="No verified layer count.",
-)
+MODEL_ENTRY = {"slug": "model-demomodel-7b", "title": "DemoModel-7B", "content": "A report mentions 40 layers. Inspect the actual model config before applying this observation."}
+MODEL_ENTRY_NO_LAYERS = {"slug": "model-configdriven-13b", "title": "ConfigDriven-13B", "content": "Layer count is config-driven; no measured value is recorded."}
 
 
 def _write_knowledge_dir(root: Path, entries_by_kind: dict[str, list[dict]]) -> Path:
     root.mkdir(parents=True, exist_ok=True)
-    for filename, kind in KIND_FILES.items():
-        document = {
-            "schema_version": 2,
-            "kind": kind,
-            "layer": "unverified",
-            "updated_at": "2026-09-03",
-            "entries": entries_by_kind.get(kind, []),
-        }
-        v2.write_document(root / filename, document, context=v2.PROJECT_LAYER)
+    for entries in entries_by_kind.values():
+        for entry in entries:
+            (root / (entry['slug'] + '.md')).write_text(
+                '# ' + entry['title'] + '\n\n' + entry['content'] + '\n', encoding='utf-8')
     return root
 
 
@@ -180,11 +106,12 @@ def test_finding_group_attaches_knowledge_refs(tmp_path: Path) -> None:
         summary, knowledge_dir=knowledge_dir
     )
     refs = out["findings"][0]["knowledge_refs"]
-    assert [ref["entry_id"] for ref in refs] == ["demo-gloo-hostname"]
+    assert len(refs) == 1
+    assert refs[0]["ref"].endswith("demo-gloo-hostname.md")
     ref = refs[0]
-    assert ref["kind"] == "known-failure-signatures"
-    assert ref["summary"] == FAILURE_ENTRY["rule"]["summary"]
-    assert ref["resolution"] == FAILURE_ENTRY["rule"]["resolution"]
+    assert ref["title"] == FAILURE_ENTRY["title"]
+    assert "makeDeviceForHostname" in ref["excerpt"]
+    assert ref["layer"] == "project"
     assert ref["score"] > 0
     # No token overlap -> explicit empty array, not a missing key.
     assert out["findings"][1]["knowledge_refs"] == []
@@ -262,7 +189,7 @@ def test_layer_backfill_from_candidate_names(tmp_path: Path) -> None:
         summary, knowledge_dir=knowledge_dir
     )
     lv = out["layer_validation"]
-    # v2 rule bodies have no expected_layers field; backfill is retired.
+    # Reference prose does not establish the actual model layer count.
     assert lv["expected_layers"] is None
     assert lv["expected_source"] == "unknown"
 

@@ -436,12 +436,6 @@ def plan_change(
     }
 
 
-PARENT_RUN_ID_HINT = (
-    "create downstream runs for this plan with "
-    "`correctness_run.py init --parent-run-id`, "
-    "`graph_debug_case.py init --parent-run-id`, or the `parent_run_id` key of "
-    "the performance-regression / distributed-debug config"
-)
 CHECK_PREFIX_RUN_TYPES = {
     "correctness": "correctness",
     "performance": "performance",
@@ -455,30 +449,31 @@ def required_run_type_for_check(check: str) -> str | None:
     return CHECK_PREFIX_RUN_TYPES.get(prefix)
 
 
-def check_child_evidence(child: Mapping[str, Any], *, parent_run_id: str) -> None:
-    """Reject a child manifest that cannot serve as evidence for this plan.
+def check_child_evidence(child: Mapping[str, Any], *, parent_run_id: str) -> dict[str, Any]:
+    """Check that a child can cover a plan item.
 
-    The child must have been created for this plan (its `parent_run_id` names
-    this run), and a `passed` child must carry at least one artifact: a passed
-    manifest with nothing attached is a verdict without evidence.
+    A missing or different ``parent_run_id`` is recorded as a post-hoc link.
+    It is not itself grounds for rejection. A ``passed`` child still needs
+    artifacts: a passed string without evidence cannot cover a requirement.
+    The child manifest is never rewritten.
     """
+    notes: list[str] = []
     child_parent = child.get("parent_run_id")
+    association = "planned"
     if child_parent is None:
-        raise ChangeValidationError(
-            f"child run {child['run_id']!r} has no parent_run_id; it was not "
-            f"created as evidence for {parent_run_id!r} and cannot be linked. "
-            + PARENT_RUN_ID_HINT
-        )
-    if child_parent != parent_run_id:
-        raise ChangeValidationError(
-            f"child run {child['run_id']!r} belongs to parent {child_parent!r}, "
-            f"not {parent_run_id!r}"
+        association = "post-hoc"
+        notes.append("linked after the fact; child has no parent_run_id")
+    elif child_parent != parent_run_id:
+        association = "post-hoc"
+        notes.append(
+            f"child parent_run_id is {child_parent!r}, not this plan; linked by actual evidence"
         )
     if child["status"] == "passed" and not child.get("artifacts"):
         raise ChangeValidationError(
             f"child run {child['run_id']!r} is passed but links no artifacts; "
             "a passed manifest without evidence cannot cover a plan item"
         )
+    return {"association": association, "notes": notes}
 
 
 def check_cover_run_types(
@@ -527,7 +522,7 @@ def link_run(
         raise ChangeValidationError("at least one --covers item is required")
     child = load_manifest(child_manifest_path)
     parent = load_manifest(output_dir / "manifest.json")
-    check_child_evidence(child, parent_run_id=parent["run_id"])
+    evidence_meta = check_child_evidence(child, parent_run_id=parent["run_id"])
     check_cover_run_types(child, covers=covers, plan_items=plan["items"])
     links = _load_json(output_dir / "linked-runs.json", "linked runs")
     if any(link["run_id"] == child["run_id"] for link in links["runs"]):
@@ -540,6 +535,8 @@ def link_run(
         "manifest": str(child_manifest_path.resolve()),
         "covers": sorted(set(covers)),
         "linked_at": timestamp,
+        "association": evidence_meta["association"],
+        "notes": evidence_meta["notes"],
     }
     links["runs"].append(link)
     links["runs"].sort(key=lambda row: row["run_id"])

@@ -11,10 +11,10 @@ description: Diagnose vLLM Ascend cudagraph and ACL Graph compile, capture, repl
 
 从仓库根目录使用 `scripts/graph_debug_case.py`：
 
-1. `init` 创建 `.vaws-local/graph-debug/<case-id>/case.json` 和 Run Manifest v1；作为 PR 证据时传 `--parent-run-id`。
-2. 每轮单变量实验后立即用 `record` 追加假设、预期、观测、结论和下一步。
+1. `init` 创建 `.vaws-local/graph-debug/<case-id>/case.json` 和 Run Manifest v1；作为 PR 证据时传 `--parent-run-id`。`init`/`record`/`finalize` 按任务需要使用，不是每次实验的强制账本。
+2. 需要结构化记录时，用 `record` 追加假设、预期、观测、结论和下一步。普通调试笔记和实际输出可以直接作为证据。
 3. 需要中间状态对拍时，用 `compare` 对齐 eager/graph JSONL snapshot 并找到首个分叉。`compare` 会先消费一份观测式可比性凭证（`{stem}.identity.json`）；对不上的两次 snapshot 不会被当成一对。
-4. 修复后用 `finalize` 同时记录最小复现、原始复现和 instrumentation 清理状态；每个 `pass` 都必须附上对应的重跑输出（`--minimal-evidence` / `--original-evidence`），且至少有一条 `record`。没有证据的 `pass` 会被拒绝，manifest 不会进入 `passed`。
+4. 修复后用 `finalize` 记录最小复现、原始复现和 instrumentation 清理状态。每个 `pass` 都必须附上对应的重跑输出（`--minimal-evidence` / `--original-evidence`）。没有重跑输出的 `pass` 会被拒绝；`record` 记账本身不是通过条件。
 
 按需读取：
 
@@ -33,7 +33,7 @@ description: Diagnose vLLM Ascend cudagraph and ACL Graph compile, capture, repl
 
 ## 记录要求
 
-不要使用散落的临时笔记作为唯一事实来源。以 case 目录中的 `case.json` 为结构化记录；issue 或 PR comment 可以引用它的摘要。每次实验完成后立即运行 `record`，并保持“已知事实 / 已排除 / 当前嫌疑 / 下一步”与 case 内容一致。
+结构化记录有助于复盘，但普通调试笔记和实际输出可以直接使用。需要 PR 证据时再整理 `case.json`。不要只凭一个 `pass` 字符串结案。
 
 ## 总流程
 

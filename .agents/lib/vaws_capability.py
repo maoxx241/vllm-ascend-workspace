@@ -492,6 +492,17 @@ def dumps_doctor(envelope: Mapping[str, Any]) -> str:
     return dumps(dict(envelope))
 
 
+def dumps_doctor_view(envelope: Mapping[str, Any], *, full: bool = False, record_dir: Path | None = None) -> str:
+    from vaws_result_envelope import compact_view, write_full_record
+
+    if full:
+        return dumps(dict(envelope))
+    record_ref = envelope.get("envelope_id")
+    if record_dir is not None:
+        record_ref = str(write_full_record(envelope, record_dir))
+    return json.dumps(compact_view(envelope, record_ref=record_ref), ensure_ascii=False, indent=2)
+
+
 def checkout_usable(name: str, env: Mapping[str, str] | None = None) -> bool:
     del env
     return inspect(name)["state"] in USABLE_STATES

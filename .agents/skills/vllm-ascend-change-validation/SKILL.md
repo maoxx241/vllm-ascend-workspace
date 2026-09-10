@@ -10,9 +10,9 @@ Use this Skill as the validation planner and evidence aggregator for a code chan
 ## Workflow
 
 1. Obtain the exact baseline and candidate diff, including relevant untracked files.
-2. Run `scripts/change_validation.py plan`.
-3. Review `impact-analysis.json` and `validation-plan.json`; correct false-positive or missing mappings before consuming NPU resources.
-4. Execute required items with the owning Skill, creating every downstream run with this plan's run ID as its `parent_run_id` (`--parent-run-id` on `init`, or the `parent_run_id` config key). `link` refuses runs that were not created for this plan:
+2. Run `scripts/change_validation.py plan` when you want a structured plan. Ordinary experiments can run first; `plan` is optional bookkeeping.
+3. Review `impact-analysis.json` and `validation-plan.json` when they exist; correct false-positive or missing mappings before consuming NPU resources.
+4. Execute required items with the owning Skill. Existing results may be linked after the fact when their code, environment, inputs, and artifacts support the conclusion. A missing `parent_run_id` is recorded as post-hoc; it is not itself a rejection:
    - correctness evidence: `vllm-ascend-correctness-validation`;
    - eager-pass/graph-fail diagnosis: `vllm-ascend-graph-debug`;
    - service lifecycle: `vllm-ascend-serving`;
@@ -48,7 +48,7 @@ Read:
 - Distinguish `required` and `recommended`; resource constraints do not silently downgrade required evidence.
 - Treat child `failed` as failed, child non-terminal/inconclusive or missing required coverage as inconclusive.
 - A passed parent requires every required item to be covered by at least one passed child run.
-- Only link runs whose `parent_run_id` is this plan and whose `passed` state carries artifacts; never edit a child manifest to make it linkable.
+- Link runs whose actual artifacts support the conclusion. A `passed` child still needs artifacts; never treat a passed string as evidence, and never edit a child manifest to make it linkable.
 - Record unsupported, unknown, and intentionally omitted combinations under known limitations.
 - Do not duplicate Serving, correctness, Benchmark, Profiling, graph-debug, distributed-debug, or operator-debug implementation.
 - Keep run state under `.vaws-local/change-validation/`.

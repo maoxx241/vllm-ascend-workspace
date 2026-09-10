@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -26,7 +27,8 @@ from vaws_venv import ensure_workspace_interpreter  # noqa: E402
 
 ensure_workspace_interpreter(repo_root=ROOT)
 
-from vaws_capability import build_doctor_envelope, dumps_doctor  # noqa: E402
+from vaws_capability import build_doctor_envelope, dumps_doctor, dumps_doctor_view  # noqa: E402
+from vaws_result_envelope import default_record_dir  # noqa: E402
 from vaws_dependency import (  # noqa: E402
     DependencyError,
     KNOWN_NAMES,
@@ -80,7 +82,18 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     except DependencyError as exc:
         progress(f"invalid spec: {exc}")
         envelope = build_doctor_envelope(argv=argv, pin_error=exc)
-    sys.stdout.write(dumps_doctor(envelope) + "\n")
+    full = bool(getattr(args, "full", False)) or os.environ.get("VAWS_FULL_ENVELOPE") == "1"
+    if full:
+        sys.stdout.write(dumps_doctor(envelope) + "\n")
+    else:
+        sys.stdout.write(
+            dumps_doctor_view(
+                envelope,
+                full=False,
+                record_dir=default_record_dir(ROOT),
+            )
+            + "\n"
+        )
     sys.stdout.flush()
     code = envelope.get("exit_code")
     return code if isinstance(code, int) else 1
@@ -124,7 +137,8 @@ def build_parser() -> argparse.ArgumentParser:
     status.add_argument("names", nargs="*", help="package names (default: all)")
     status.set_defaults(func=cmd_status)
 
-    doctor = sub.add_parser("doctor", help="emit a Result Envelope v1 capability report")
+    doctor = sub.add_parser("doctor", help="emit a compact capability view; --full for the envelope")
+    doctor.add_argument("--full", action="store_true", help="print the complete Result Envelope")
     doctor.add_argument("passthrough", nargs=argparse.REMAINDER, help=argparse.SUPPRESS)
     doctor.set_defaults(func=cmd_doctor)
 

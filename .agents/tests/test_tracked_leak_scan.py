@@ -1287,27 +1287,11 @@ class CurrentMainFindingScopeTests(unittest.TestCase):
 
 
 class PhaseBKnowledgeFixtureScopeTests(unittest.TestCase):
-    """Nine Phase B fixture/version allowances suppress only their path/category/value."""
+    """Phase B fixture/version allowances suppress only their path/category/value."""
 
     OTHER_SRC = ".agents/lib/vaws_local_state.py"
     UNRELATED_LINE = 'token = "still-a-credential-shaped-value"'
     CASES = (
-        {
-            "id": "knowledge-recipes-torch-npu-dev-version",
-            "path": ".agents/skills/curate-workspace-knowledge/references/command-recipes.md",
-            "category": "internal-identifier",
-            "regex": r"^dev20250724$",
-            "values": ("dev20250724",),
-            "nearby": ("dev20250725",),
-        },
-        {
-            "id": "knowledge-curate-test-torch-npu-dev-version",
-            "path": ".agents/skills/curate-workspace-knowledge/tests/test_knowledge_curate.py",
-            "category": "internal-identifier",
-            "regex": r"^dev20250724$",
-            "values": ("dev20250724",),
-            "nearby": ("dev20250725",),
-        },
         {
             "id": "knowledge-v2-test-torch-npu-dev-version",
             "path": ".agents/tests/test_knowledge_v2.py",
@@ -1317,12 +1301,12 @@ class PhaseBKnowledgeFixtureScopeTests(unittest.TestCase):
             "nearby": ("dev20250725",),
         },
         {
-            "id": "knowledge-flow-test-torch-npu-dev-version",
-            "path": ".agents/tests/test_knowledge_v2_flow.py",
-            "category": "internal-identifier",
-            "regex": r"^dev20250724$",
-            "values": ("dev20250724",),
-            "nearby": ("dev20250725",),
+            "id": "lockfile-brotlicffi-version",
+            "path": "uv.lock",
+            "category": "ipv4",
+            "regex": r"^1\.2\.0\.2$",
+            "values": ("1.2.0.2",),
+            "nearby": ("1.2.0.3",),
         },
         {
             "id": "knowledge-redaction-test-private-address",
@@ -1382,7 +1366,7 @@ class PhaseBKnowledgeFixtureScopeTests(unittest.TestCase):
         return [item for item in self._scan(text, path) if item.category == category]
 
     def test_declarations_are_exact_paths_and_singleton_categories(self) -> None:
-        self.assertEqual(len(self.policy.entries), 25)
+        self.assertEqual(len(self.policy.entries), 23)
         self.assertNotIn("knowledge-failure-signatures-private-range", self.by_id)
         for case in self.CASES:
             with self.subTest(entry=case["id"]):

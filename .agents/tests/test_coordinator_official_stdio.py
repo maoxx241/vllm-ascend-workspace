@@ -41,11 +41,11 @@ except Exception:  # noqa: BLE001 - skipUnless needs a boolean
 
 
 def have_sdk() -> bool:
-    return ClientSession is not None and SDK_VERSION == "2.1.1"
+    return ClientSession is not None and SDK_VERSION == "1.30.0"
 
 
 @unittest.skipUnless(PACKAGE_PRESENT, "vaws-coordinator is not installed; run `uv sync`")
-@unittest.skipUnless(have_sdk(), "official MCP SDK 2.1.1 is not installed")
+@unittest.skipUnless(have_sdk(), "official MCP SDK 1.30.0 is not installed")
 class OfficialStdioTests(unittest.TestCase):
     def test_local_only_task_lifecycle(self) -> None:
         asyncio.run(self._run())

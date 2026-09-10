@@ -11,7 +11,7 @@ Coordinate the lifecycle without duplicating the implementation owned by the sta
 
 1. Freeze the source, operator contract, target SoC, software versions, case set, and requested performance objective.
 2. Query `.agents/knowledge/` for relevant capability, validation, and failure-signature facts. Treat missing facts as unknown.
-3. Run `scripts/triton_workflow.py plan` to create the stage plan and parent Run Manifest.
+3. Run `scripts/triton_workflow.py plan` when you need a stored stage plan. Ordinary experiments can run first and be linked afterwards.
 4. Execute required stages with their owners:
    - first correct kernel or GPU migration: `ascend-triton-operator-development`;
    - compile and full-case correctness gate: `ascend-triton-kernel-validation`;

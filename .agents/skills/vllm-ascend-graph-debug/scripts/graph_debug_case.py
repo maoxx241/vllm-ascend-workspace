@@ -629,12 +629,6 @@ def missing_resolution_evidence(
             problem = _check_evidence_file(evidence, flag=flag)
             if problem:
                 missing.append(problem)
-    claims_resolution = minimal_result == "pass" and original_result == "pass"
-    if claims_resolution and not case["experiments"]:
-        missing.append(
-            "no controlled experiment recorded (run `record` at least once "
-            "before claiming resolution)"
-        )
     return missing
 
 

@@ -28,7 +28,7 @@ Do not mark a graph-debug case resolved until every required item passes.
 ## Resolution
 
 - [ ] Root cause and fix are recorded.
-- [ ] At least one controlled experiment is recorded in `case.json`.
+- [ ] Actual rerun output backs each `pass`; `record` bookkeeping is optional when that evidence exists.
 - [ ] The minimal reproduction passes after the fix, and its rerun output is attached with `--minimal-evidence`.
 - [ ] The original reproduction passes after the fix, and its rerun output is attached with `--original-evidence`.
 - [ ] Temporary buffers, logging, synchronization, deterministic overrides, and workarounds are removed or intentionally disabled.

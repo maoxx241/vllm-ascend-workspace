@@ -169,45 +169,39 @@ class AggregationTests(unittest.TestCase):
             report = (output / "pr-validation-report.md").read_text(encoding="utf-8")
             self.assertIn("child-1", report)
 
-    def test_child_without_parent_run_id_is_rejected(self) -> None:
-        """Regression: a null parent_run_id used to satisfy the parent check."""
+    def test_child_without_parent_run_id_can_be_linked_post_hoc(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             output = root / "change"
             required_ids = plan_graph_change(output)
             child_path = root / "orphan.json"
             passed_child(child_path, parent_run_id=None)
-            with self.assertRaisesRegex(
-                change_validation.ChangeValidationError,
-                "has no parent_run_id.*--parent-run-id",
-            ):
-                change_validation.link_run(
-                    output,
-                    child_manifest_path=child_path,
-                    covers=required_ids,
-                    updated_at=NOW,
-                )
+            change_validation.link_run(
+                output,
+                child_manifest_path=child_path,
+                covers=required_ids,
+                updated_at=NOW,
+            )
             links = json.loads((output / "linked-runs.json").read_text(encoding="utf-8"))
-            self.assertEqual(links["runs"], [])
+            self.assertEqual(links["runs"][0]["association"], "post-hoc")
             result = change_validation.finalize(output, updated_at=NOW)
-            self.assertEqual(result["status"], "inconclusive")
+            self.assertEqual(result["status"], "passed")
 
-    def test_child_of_another_parent_is_rejected(self) -> None:
+    def test_child_of_another_parent_can_be_linked_post_hoc(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             output = root / "change"
             required_ids = plan_graph_change(output)
             child_path = root / "foreign.json"
             passed_child(child_path, parent_run_id="change-validation-other")
-            with self.assertRaisesRegex(
-                change_validation.ChangeValidationError, "belongs to parent"
-            ):
-                change_validation.link_run(
-                    output,
-                    child_manifest_path=child_path,
-                    covers=required_ids,
-                    updated_at=NOW,
-                )
+            change_validation.link_run(
+                output,
+                child_manifest_path=child_path,
+                covers=required_ids,
+                updated_at=NOW,
+            )
+            links = json.loads((output / "linked-runs.json").read_text(encoding="utf-8"))
+            self.assertEqual(links["runs"][0]["association"], "post-hoc")
 
     def test_passed_child_without_artifacts_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

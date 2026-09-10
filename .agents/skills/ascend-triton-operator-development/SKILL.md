@@ -11,8 +11,8 @@ Produce a traceable candidate and prove its correctness through the validation S
 
 1. Record the exact source, reference, target SoC, CANN/Triton-Ascend versions, supported shapes, dtypes, layouts, strides, scalar options, tolerances, and side effects.
 2. Query `.agents/knowledge/` for target capability and known failure signatures. Treat absent facts as unknown.
-3. Run `scripts/triton_development.py plan` to create the task contract and development Run Manifest.
-4. Complete the generated semantic report before changing code. For GPU Triton input, audit every load, store, mask, index, grid dimension, reduction identity, atomic, and alias.
+3. Run `scripts/triton_development.py plan` when the task needs a stored contract. Ordinary experiments can start from notes and actual outputs.
+4. For a full GPU-to-NPU migration, complete the generated semantic report before changing code. For GPU Triton input, audit every load, store, mask, index, grid dimension, reduction identity, atomic, and alias. Small repairs may reuse existing notes.
 5. Write one hardware-aware sketch: logical work, physical-core mapping, tile sizes, estimated UB live set, padding semantics, and specialization boundaries.
 6. Implement the smallest correct candidate. Keep the host wrapper limited to allocation, metadata extraction, dispatch, and launch; keep core computation in `@triton.jit`.
 7. Use `ascend-triton-kernel-validation` on a managed remote NPU. Do not run `torch_npu` locally.

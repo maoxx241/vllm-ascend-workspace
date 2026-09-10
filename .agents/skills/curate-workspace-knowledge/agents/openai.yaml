@@ -1,7 +1,7 @@
 interface:
   display_name: "Curate Workspace Knowledge"
-  short_description: "Review, promote, resolve and upstream workspace knowledge"
-  default_prompt: "Use $curate-workspace-knowledge to review, deduplicate, and promote verified knowledge candidates, resolve unresolved v2 coordinate dimensions, and gate export to the federated commons."
+  short_description: "Review Markdown candidates and prepare public contributions"
+  default_prompt: "Use $curate-workspace-knowledge to review related Markdown, preserve evidence and uncertainty, and prepare an authorized redacted contribution through the installed knowledge package."
 
 policy:
   allow_implicit_invocation: false

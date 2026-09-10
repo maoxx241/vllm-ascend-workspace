@@ -23,26 +23,26 @@ class SpecLockTests(unittest.TestCase):
         versions = deps.required_versions()
         self.assertEqual(versions["vaws-remote-dev"], "0.5.0")
         self.assertEqual(versions["vaws-coordinator"], "0.3.1")
-        self.assertEqual(versions["vaws-knowledge"], "0.2.0")
+        self.assertEqual(versions["vaws-knowledge"], "0.3.0")
         self.assertNotIn(deps.VAWS_TOP_NAME, versions)
 
     def test_status_tracks_only_the_three_packages(self) -> None:
         self.assertEqual(deps.KNOWN_NAMES, deps.PACKAGE_NAMES)
         self.assertNotIn(deps.VAWS_TOP_NAME, deps.all_packages())
 
-    def test_lock_records_the_pinned_tag_commits(self) -> None:
+    def test_lock_records_the_pinned_commits(self) -> None:
         locked = deps.locked_packages()
         self.assertEqual(
             locked["vaws-coordinator"]["commit"],
-            "2419fe09b64cba310108d1a16a8c5c1b38574140",
+            "aed3ee9e4a17b6478eab16dece196fdcb37da331",
         )
         self.assertEqual(
             locked["vaws-knowledge"]["commit"],
-            "ae7bfc54175872f30870814d46c9fb8a6a6098e0",
+            "fd6405fe89eab7299cf76bb33eb29c2d6f36e8b1",
         )
         self.assertEqual(
             locked["vaws-remote-dev"]["commit"],
-            "b70793492a5fbb8b0b4c0dd074965d43eae8533f",
+            "d0f963c9c10eaee8664f0f467745be4116f881d5",
         )
         expected_versions = deps.required_versions()
         for name in deps.PACKAGE_NAMES:

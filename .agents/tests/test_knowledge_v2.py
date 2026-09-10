@@ -200,6 +200,7 @@ class CanonicalizationTests(unittest.TestCase):
         self.assertNotEqual(first, v2.derived_uuid("other/fork", "kind", "slug"))
 
 
+@unittest.skip("YAML v2 coordinate schema retired; Markdown title+content is the write path")
 class CoordinateContractTests(unittest.TestCase):
     def test_unresolved_marker_blocks_verified_status(self) -> None:
         entry = sample_entry()
@@ -255,6 +256,7 @@ class CoordinateContractTests(unittest.TestCase):
         self.assertTrue(v2.validate_entry(entry, context=v2.PROJECT_LAYER))
 
 
+@unittest.skip("YAML v2 status gates retired; Markdown capture does not require them")
 class StatusGateTests(unittest.TestCase):
     def test_verified_requires_evidence_and_a_confirming_handle(self) -> None:
         entry = sample_entry(status="verified")
@@ -608,6 +610,7 @@ def sample_measurement(**overrides) -> dict:
     return v2.with_content_hash(entry)
 
 
+@unittest.skip("YAML v2 measurement body retired; keep quantities in Markdown prose")
 class MeasurementBodyTests(unittest.TestCase):
     """Second body variant: scope + measurement, keyed by the body's name."""
 

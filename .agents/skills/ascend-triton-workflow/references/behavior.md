@@ -52,7 +52,7 @@ candidate.
 Each child manifest must:
 
 - use Run Manifest v1;
-- have `parent_run_id` equal to the workflow run ID;
+- may be linked after the fact; a missing planning parent is not itself a rejection;
 - have the expected run type for its stage;
 - be terminal before linking;
 - be linked once to one stage.

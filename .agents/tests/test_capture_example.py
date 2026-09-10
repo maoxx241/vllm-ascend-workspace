@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -29,6 +30,9 @@ class CaptureExampleTests(unittest.TestCase):
             root = Path(tmp)
             knowledge = root / "knowledge"
             knowledge.mkdir()
+            env = os.environ.copy()
+            env["VAWS_KNOWLEDGE_BACKEND"] = "memory"
+            env["VAWS_SKIP_VENV_REEXEC"] = "1"
             completed = subprocess.run(
                 [
                     sys.executable,
@@ -39,12 +43,12 @@ class CaptureExampleTests(unittest.TestCase):
                     str(root / "candidate"),
                     "--knowledge-dir",
                     str(knowledge),
-                    "--env",
-                    "soc=unknown",
                 ],
                 check=False,
                 capture_output=True,
                 text=True,
+                env=env,
+                cwd=str(ROOT),
             )
             self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
             payload = json.loads(completed.stdout)

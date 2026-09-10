@@ -22,6 +22,7 @@ Two serialization modes exist on purpose:
 from __future__ import annotations
 
 import json
+import os
 import re
 import shlex
 import sys
@@ -2074,6 +2075,57 @@ def read_envelope(
 # ---------------------------------------------------------------------------
 
 
+COMPACT_SCHEMA_VERSION = "vaws.result-compact.v1"
+
+
+def compact_view(
+    envelope: Mapping[str, Any],
+    *,
+    record_ref: str | None = None,
+) -> dict[str, Any]:
+    """Agent-facing projection. Not a complete Envelope and not a new state model."""
+
+    operation = envelope.get("operation") if isinstance(envelope.get("operation"), Mapping) else {}
+    failure = envelope.get("failure") if isinstance(envelope.get("failure"), Mapping) else None
+    compact_failure = None
+    if failure:
+        compact_failure = {
+            "layer": failure.get("layer"),
+            "reason_code": failure.get("reason_code"),
+            "message": failure.get("message"),
+        }
+    evidence = envelope.get("evidence") if isinstance(envelope.get("evidence"), Mapping) else {}
+    preview = None
+    previews = evidence.get("previews") if isinstance(evidence, Mapping) else None
+    if isinstance(previews, Mapping) and previews:
+        preview = next(iter(previews.values()))
+    return {
+        "schema_version": COMPACT_SCHEMA_VERSION,
+        "outcome": envelope.get("outcome"),
+        "exit_code": envelope.get("exit_code"),
+        "summary": envelope.get("summary"),
+        "operation": operation.get("entry_point") or operation.get("skill") or operation.get("action"),
+        "target": operation.get("target"),
+        "failure": compact_failure,
+        "preview": preview,
+        "record_ref": record_ref or envelope.get("envelope_id"),
+        "warnings": list(envelope.get("warnings") or []),
+    }
+
+
+def default_record_dir(repo_root: Path | None = None) -> Path:
+    root = Path(repo_root) if repo_root is not None else Path.cwd()
+    return root / ".vaws-local" / "results"
+
+
+def write_full_record(envelope: Mapping[str, Any], directory: Path) -> Path:
+    directory.mkdir(parents=True, exist_ok=True)
+    ident = str(envelope.get("envelope_id") or "envelope")
+    path = directory / f"{ident}.json"
+    path.write_text(dumps(envelope) + "\n", encoding="utf-8")
+    return path
+
+
 def dumps(envelope: Mapping[str, Any]) -> str:
     """Full-fidelity JSON. Safe only for untracked ``.vaws-local/`` writes."""
     return json.dumps(dict(envelope), ensure_ascii=False, indent=2, sort_keys=True)
@@ -2105,11 +2157,44 @@ def emit(
     stream: Any = None,
     validate: bool = True,
 ) -> int:
-    """Write exactly one envelope on ``stdout`` and return its exit code."""
+    """Write the complete envelope on ``stdout``. Prefer :func:`emit_agent_view` for agents."""
     if validate:
         validate_envelope(envelope)
     target = stream if stream is not None else sys.stdout
     target.write(dumps(envelope) + "\n")
+    target.flush()
+    code = envelope.get("exit_code")
+    return code if isinstance(code, int) else default_exit_code(
+        str(envelope.get("outcome"))
+    )
+
+
+def emit_agent_view(
+    envelope: Mapping[str, Any],
+    *,
+    stream: Any = None,
+    record_dir: Path | None = None,
+    full: bool | None = None,
+    validate: bool = True,
+) -> int:
+    """Default compact stdout; full record is written under ``.vaws-local/``."""
+
+    want_full = full
+    if want_full is None:
+        want_full = os.environ.get("VAWS_FULL_ENVELOPE") == "1"
+    if want_full:
+        return emit(envelope, stream=stream, validate=validate)
+    if validate:
+        validate_envelope(envelope)
+    record_path = None
+    if record_dir is not None:
+        record_path = write_full_record(envelope, record_dir)
+    view = compact_view(
+        envelope,
+        record_ref=str(record_path) if record_path is not None else envelope.get("envelope_id"),
+    )
+    target = stream if stream is not None else sys.stdout
+    target.write(json.dumps(view, ensure_ascii=False, indent=2) + "\n")
     target.flush()
     code = envelope.get("exit_code")
     return code if isinstance(code, int) else default_exit_code(

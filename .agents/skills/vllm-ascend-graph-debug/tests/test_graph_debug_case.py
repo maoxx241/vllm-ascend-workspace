@@ -124,7 +124,7 @@ class GraphDebugCaseTests(unittest.TestCase):
             init_case(case_dir, stage="unknown")
             with self.assertRaisesRegex(
                 graph_debug.GraphDebugError,
-                r"--minimal-evidence.*--original-evidence.*no controlled experiment",
+                r"--minimal-evidence.*--original-evidence",
             ):
                 graph_debug.finalize_case(
                     case_dir,
@@ -140,25 +140,23 @@ class GraphDebugCaseTests(unittest.TestCase):
             case = json.loads((case_dir / "case.json").read_text(encoding="utf-8"))
             self.assertEqual(case["status"], "active")
 
-    def test_pass_claim_without_experiments_is_rejected_even_with_evidence(self) -> None:
+    def test_pass_with_rerun_evidence_does_not_require_record_bookkeeping(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             case_dir = Path(tmp) / "case"
             init_case(case_dir)
             minimal, original = write_evidence(Path(tmp))
-            with self.assertRaisesRegex(
-                graph_debug.GraphDebugError, "no controlled experiment recorded"
-            ):
-                graph_debug.finalize_case(
-                    case_dir,
-                    root_cause="x",
-                    fix="y",
-                    minimal_result="pass",
-                    original_result="pass",
-                    cleanup_status="removed",
-                    minimal_evidence=minimal,
-                    original_evidence=original,
-                    updated_at=NOW,
-                )
+            case = graph_debug.finalize_case(
+                case_dir,
+                root_cause="x",
+                fix="y",
+                minimal_result="pass",
+                original_result="pass",
+                cleanup_status="removed",
+                minimal_evidence=minimal,
+                original_evidence=original,
+                updated_at=NOW,
+            )
+            self.assertEqual(case["status"], "resolved")
 
     def test_empty_evidence_file_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

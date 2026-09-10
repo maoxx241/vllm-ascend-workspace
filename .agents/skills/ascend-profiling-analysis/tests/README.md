@@ -33,9 +33,7 @@ without any Ascend NPU hardware, GPU, or remote SSH:
   hooks (`profile_analyze._enrich_analysis_summary_with_knowledge`): findings
   rollup groups get `knowledge_refs` from a temporary synthetic knowledge dir
   (hit / miss / empty store / missing dir / invalid document), and
-  `layer_validation.expected_layers` backfill fires only when the pipeline
-  left it null (source marked `knowledge:<entry_id>`, `layers_match`
-  recomputed, ok→degraded on mismatch, config-driven entries skipped).
+  model configuration remains unchanged when reference prose mentions a layer count.
 - `test_kernel_signatures.py` — pins the contract between Python's
   `categories_and_roles` rule list and `knowledge/kernel_signatures.yaml`:
   the YAML parses, its categories are valid per

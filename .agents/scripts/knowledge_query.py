@@ -24,11 +24,11 @@ from vaws_venv import ensure_workspace_interpreter  # noqa: E402
 
 ensure_workspace_interpreter(repo_root=ROOT)
 
-from vaws_knowledge.server.layers import LAYERS, load_entries  # noqa: E402
+from vaws_knowledge.server.layers import LAYERS  # noqa: E402
 from vaws_knowledge.server.query import explain, query  # noqa: E402
 from vaws_knowledge_service import infer_repo_root, service_config  # noqa: E402
 
-REQUIRED_KNOWLEDGE = "0.1.4"
+REQUIRED_KNOWLEDGE = "0.3.0"
 
 
 def _version_core(raw: str) -> tuple[int, ...]:
@@ -74,11 +74,6 @@ def require_knowledge_reader_cli() -> None:
 
 
 def _explain(config, ident: str, layers: list[str] | None) -> dict:
-    wanted = layers or list(LAYERS)
-    report = load_entries(config, wanted)
-    for loaded in report.entries:
-        if loaded.uuid == ident or str(loaded.entry.get("slug") or "") == ident:
-            return explain(config, loaded.uuid, layers=layers)
     return explain(config, ident, layers=layers)
 
 
