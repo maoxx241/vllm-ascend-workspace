@@ -34,7 +34,7 @@ class SpecLockTests(unittest.TestCase):
         locked = deps.locked_packages()
         self.assertEqual(
             locked["vaws-coordinator"]["commit"],
-            "2419fe09b64cba310108d1a16a8c5c1b38574140",
+            "7962b44daffe8245e6e326365c7bdeaeb0812cf5",
         )
         self.assertEqual(
             locked["vaws-knowledge"]["commit"],
