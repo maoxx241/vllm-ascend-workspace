@@ -52,30 +52,6 @@ def _lint(stdout: str) -> dict:
 
 
 class LoadBearingSkillEnvelopeTests(unittest.TestCase):
-    def test_session_group_list_emits_envelope(self) -> None:
-        script = ROOT / ".agents/skills/session-management/scripts/session_group.py"
-        completed = _run(script, "list")
-        report = _lint(completed.stdout)
-        self.assertTrue(report["valid"], report["findings"])
-        payload = json.loads(completed.stdout)
-        validate_envelope(payload)
-        _validate_tracked_schema(payload)
-        self.assertEqual(payload["schema_version"], SCHEMA_VERSION)
-        self.assertEqual(payload["operation"]["skill"], "session-management")
-        self.assertNotIn("__VAWS_", completed.stdout)
-
-    def test_machine_verify_emits_envelope(self) -> None:
-        script = ROOT / ".agents/skills/machine-management/scripts/machine_verify.py"
-        completed = _run(script)
-        report = _lint(completed.stdout)
-        self.assertTrue(report["valid"], report["findings"])
-        payload = json.loads(completed.stdout)
-        validate_envelope(payload)
-        _validate_tracked_schema(payload)
-        self.assertEqual(payload["operation"]["skill"], "machine-management")
-        inner = payload.get("extensions", {}).get("result") or payload
-        self.assertIn(inner.get("status"), {"ok", "failed"})
-
     def test_serve_status_missing_context_emits_envelope(self) -> None:
         script = ROOT / ".agents/skills/vllm-ascend-serving/scripts/serve_status.py"
         completed = _run(script)
@@ -86,18 +62,6 @@ class LoadBearingSkillEnvelopeTests(unittest.TestCase):
         _validate_tracked_schema(payload)
         self.assertEqual(payload["operation"]["skill"], "vllm-ascend-serving")
         self.assertEqual(payload["outcome"], "failure")
-
-    def test_parity_sync_missing_host_emits_envelope(self) -> None:
-        script = ROOT / ".agents/skills/remote-code-parity/scripts/parity_sync.py"
-        completed = _run(script, "--print-derived-args")
-        report = _lint(completed.stdout)
-        self.assertTrue(report["valid"], report["findings"])
-        payload = json.loads(completed.stdout)
-        validate_envelope(payload)
-        _validate_tracked_schema(payload)
-        self.assertEqual(payload["operation"]["skill"], "remote-code-parity")
-        self.assertIn(payload["outcome"], {"failure", "blocked"})
-
 
 if __name__ == "__main__":
     unittest.main()

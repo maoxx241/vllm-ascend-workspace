@@ -2,7 +2,7 @@
 """Manage the local workspace machine profile.
 
 The profile is untracked local state used to derive container names and other
-collision-sensitive identifiers for machine-management. The summary command
+collision-sensitive identifiers during workspace initialization. The summary command
 also reports shared local-state roots such as the session namespace.
 """
 

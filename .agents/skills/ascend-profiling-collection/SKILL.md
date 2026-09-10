@@ -26,14 +26,14 @@ This skill is **only** about collection: start a profiled service, bracket a wor
 - the task is performance benchmarking only — use `vllm-ascend-benchmark`
 - the task is HBM / memory analysis — use `ascend-memory-profiling`
 - the task is analysing an already-collected profiling root (no need to re-collect)
-- the machine is not yet ready in inventory — use `machine-management`
+- the request is machine provisioning — use coordinator provision
 
 ## Boundary with other skills
 
 | Skill | Owns | This skill uses it for |
 | --- | --- | --- |
 | `vllm-ascend-serving` | Service lifecycle, `--profiler-config` passthrough | `serve_start.py` / `serve_stop.py` only; serving is **agnostic** to the profiler window |
-| `remote-code-parity` | Local-to-container code sync | Implicit — invoked by `serve_start.py` |
+| `vaws-coordinator` | Managed sources and environment preparation | Owned by the single service run |
 | `vllm-ascend-benchmark` | `vllm bench serve` performance numbers | Not used; benchmark skill must not learn the profiler control plane |
 | `ascend-memory-profiling` | HBM attribution via msprof | Independent; not invoked |
 

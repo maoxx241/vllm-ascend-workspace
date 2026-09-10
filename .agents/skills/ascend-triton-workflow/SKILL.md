@@ -16,7 +16,7 @@ Coordinate the lifecycle without duplicating the implementation owned by the sta
    - first correct kernel or GPU migration: `ascend-triton-operator-development`;
    - compile and full-case correctness gate: `ascend-triton-kernel-validation`;
    - single-kernel profiling and performance iteration: `ascend-triton-kernel-optimization`.
-5. Before remote execution, establish `remote-code-parity`; run `torch_npu` and Triton only in a managed Ascend environment.
+5. Bind the actual source worktree; coordinator prepares it for managed execution; run `torch_npu` and Triton only in a managed Ascend environment.
 6. Link every child Run Manifest to its planned stage with `link`.
 7. Run `finalize` and deliver the workflow report with missing, failed, and untested coverage explicit.
 

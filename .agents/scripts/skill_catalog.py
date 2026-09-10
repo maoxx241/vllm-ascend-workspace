@@ -20,14 +20,12 @@ from vaws_venv import ensure_workspace_interpreter  # noqa: E402
 
 ensure_workspace_interpreter(repo_root=ROOT)
 
+import yaml  # noqa: E402
+
 
 SKILL_NAME_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 MARKDOWN_LINK_RE = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
 README_SKILL_RE = re.compile(r"^\|\s*\*\*([a-z0-9-]+)\*\*\s*\|", re.MULTILINE)
-AGENTS_SKILL_RE = re.compile(r"^\|\s*`([a-z0-9-]+)`\s*\|", re.MULTILINE)
-AGENTS_README_SKILL_RE = re.compile(
-    r"^-\s+`\.agents/skills/([a-z0-9-]+)/`", re.MULTILINE
-)
 
 
 @dataclass(frozen=True)
@@ -50,13 +48,6 @@ class CatalogError(RuntimeError):
     """Raised when a SKILL.md cannot be parsed."""
 
 
-def _parse_scalar(raw: str) -> str:
-    value = raw.strip()
-    if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
-        return value[1:-1]
-    return value
-
-
 def parse_skill(skill_file: Path, repo_root: Path) -> SkillRecord:
     text = skill_file.read_text(encoding="utf-8")
     lines = text.splitlines()
@@ -67,14 +58,15 @@ def parse_skill(skill_file: Path, repo_root: Path) -> SkillRecord:
     except StopIteration as exc:
         raise CatalogError("missing closing YAML frontmatter delimiter") from exc
 
-    metadata: dict[str, str] = {}
-    for line in lines[1:end]:
-        if not line.strip() or line.lstrip().startswith("#"):
-            continue
-        if ":" not in line:
-            raise CatalogError(f"invalid frontmatter line: {line!r}")
-        key, value = line.split(":", 1)
-        metadata[key.strip()] = _parse_scalar(value)
+    try:
+        metadata = yaml.safe_load("\n".join(lines[1:end]))
+    except yaml.YAMLError as exc:
+        raise CatalogError(f"invalid YAML frontmatter: {exc}") from exc
+    if not isinstance(metadata, dict) or not all(
+        isinstance(key, str) and isinstance(value, str)
+        for key, value in metadata.items()
+    ):
+        raise CatalogError("frontmatter must map field names to strings")
 
     unsupported = sorted(set(metadata) - {"name", "description"})
     if unsupported:
@@ -211,11 +203,10 @@ def validate_document_catalogs(
     repo_root: Path, records: Iterable[SkillRecord]
 ) -> list[Finding]:
     expected = {record.name for record in records}
+    # Full catalogs are for human browsing. Agent routing may list only relevant entries.
     documents = (
         ("README.md", README_SKILL_RE),
         ("README.en.md", README_SKILL_RE),
-        ("AGENTS.md", AGENTS_SKILL_RE),
-        (".agents/README.md", AGENTS_README_SKILL_RE),
     )
     findings: list[Finding] = []
     for relative, pattern in documents:

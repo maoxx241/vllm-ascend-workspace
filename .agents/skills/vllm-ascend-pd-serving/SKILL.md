@@ -13,20 +13,21 @@ group — the package reserves the full group before any role starts.
 ## Preconditions
 
 - Native task context (`--context-file` / `VAWS_CONTEXT_FILE`).
-- A service group from `session_group.py` (`members` are `name=service`).
+- One PD config with a task-scoped business `group_id` and the complete role list.
 - Connector type and options are already in each role's vLLM arguments.
 - Proxy URL is already stable. Proxy process lifecycle is outside this skill.
 
 ## Workflow
 
-1. `session_group.py create --group-id pd --member prefill=prefill --member decode=decode`
-2. `pd_serving.py plan --config ... --group-file ...`
-3. `pd_serving.py start` submits **one** topology execution (`service=<group_id>`).
+1. `pd_serving.py plan --config ...` validates the business config and records its topology.
+2. `pd_serving.py start` submits **one** topology execution (`service=<group_id>`).
    Queued / preparing / waiting is a truthful result with the same
    `execution_id`; do not resubmit.
-4. `status` reads that execution and the proxy health path.
-5. `smoke` posts the configured proxy request.
-6. `stop` / group teardown calls coordinator `observe(stop)` on that execution.
+3. `status` reads that execution and the proxy health path.
+4. `smoke` posts the configured proxy request.
+5. `stop` calls coordinator `observe(stop)` on that execution.
+
+Read [command recipes](references/command-recipes.md) for the config shape.
 
 ## Entry point
 

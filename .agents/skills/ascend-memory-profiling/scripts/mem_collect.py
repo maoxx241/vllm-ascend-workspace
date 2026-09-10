@@ -92,16 +92,10 @@ def _emit_env_recovery_hint(log_text: str, session_id: str | None = None) -> Non
         return
     if not any(pat in log_text for pat in _ENV_ERROR_PATTERNS):
         return
-    target_arg = ""
-    recovery_cmd = (
-        "python3 .agents/skills/remote-code-parity/scripts/parity_sync.py "
-        f"{target_arg} --force-reinstall".replace("  ", " ")
-    )
     progress(
-        "ENV_ERROR_DETECTED: Remote Python environment is broken. "
-        f"Recovery: run `{recovery_cmd}`. "
-        "Do NOT run bare `pip install` inside the container — "
-        "parity sync has the correct install flags."
+        "ENV_ERROR_DETECTED: inspect this execution's coordinator preparation "
+        "logs and environment recipe. Coordinator prepares managed Python and "
+        "sources; do not synchronize or reinstall into a live execution root."
     )
 
 

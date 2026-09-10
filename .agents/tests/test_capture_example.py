@@ -12,14 +12,7 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-EXAMPLE = (
-    ROOT
-    / ".agents"
-    / "skills"
-    / "curate-workspace-knowledge"
-    / "references"
-    / "capture-candidate.example.json"
-)
+EXAMPLE = ROOT / ".agents/tests/fixtures/capture-candidate.example.json"
 CAPTURE = ROOT / ".agents" / "scripts" / "knowledge_capture.py"
 
 

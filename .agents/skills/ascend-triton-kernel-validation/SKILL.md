@@ -12,7 +12,7 @@ Turn a candidate into explicit compile and correctness evidence. A successful pr
 1. Freeze the candidate hash, trusted reference, predeclared tolerances, target environment, and explicit case matrix.
 2. Query `.agents/knowledge/` with any observed compile, runtime, or numerical signature before repeating diagnosis.
 3. Run `scripts/triton_validation.py plan`. It invokes `validate_triton_impl.py` and rejects missing Triton kernels, a `ModelNew.forward` path that does not launch them, or reachable PyTorch tensor computation fallback.
-4. Before remote execution, establish `remote-code-parity`. Run every planned case on a managed Ascend NPU; do not run `torch_npu` locally.
+4. Bind the actual source worktree; coordinator prepares it for managed execution. Run every planned case on a managed Ascend NPU; do not run `torch_npu` locally.
 5. Compare shape and dtype first, then NaN/Inf behavior and numeric values. Preserve raw stdout, stderr, stack, and comparison artifacts.
 6. Normalize one result per case and run `record`. Do not overwrite evidence.
 7. Run `analyze`. Only `passed_cases == total_cases > 0` produces a passed manifest.

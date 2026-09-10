@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import re
 import subprocess
 import sys
 import time
@@ -122,19 +124,33 @@ def service_logs(args: Any, *, lines: int = 120) -> dict[str, Any]:
     }
 
 
-def _parity_selector_args(args: Any) -> list[str]:
-    flags: list[str] = []
-    if getattr(args, "execution_id", None):
-        flags.extend(["--execution-id", str(args.execution_id)])
-    if getattr(args, "context_file", None):
-        flags.extend(["--context-file", str(args.context_file)])
-    if getattr(args, "host", None):
-        flags.extend(["--host", str(args.host)])
-        if getattr(args, "port", None):
-            flags.extend(["--port", str(args.port)])
-    if not flags:
-        raise RemoteTargetError("parity requires --execution-id or --host")
-    return flags
+def _parity_command(args: Any, *, dry_run: bool = False) -> list[str]:
+    """Project defaults for the package's explicit-endpoint source-only CLI."""
+    if not getattr(args, "host", None):
+        raise RemoteTargetError("direct source publication requires --host")
+    source_root = Path(getattr(args, "repo_root", None) or ROOT).resolve()
+    runtime_root = str(getattr(args, "runtime_root", None) or "/vllm-workspace")
+    host = str(args.host)
+    # This is a source-cache namespace, never a native task or execution id.
+    label = re.sub(r"[^a-zA-Z0-9_.-]+", "-", source_root.name.lower()).strip(".-") or "workspace"
+    workspace_id = f"{label}-{hashlib.sha1(str(source_root).encode()).hexdigest()[:8]}"
+    command = [
+        sys.executable, "-m", "vaws_coordinator.parity", "sync",
+        "--workspace-root", str(source_root),
+        "--workspace-id", workspace_id,
+        "--server-name", host,
+        "--runtime-root", runtime_root,
+        "--container-identity", f"{host}@{runtime_root}",
+        "--container-host", host,
+        "--container-port", str(getattr(args, "port", None) or 22),
+        "--container-user", str(getattr(args, "user", None) or "root"),
+        "--apply-mode", "source-only",
+    ]
+    for source in getattr(args, "source", None) or []:
+        command.extend(["--source", str(source)])
+    if dry_run:
+        command.append("--dry-run")
+    return command
 
 
 def sync_plan(args: Any, *, mode: str, force_reinstall: bool = False) -> dict[str, Any]:
@@ -152,12 +168,9 @@ def sync_plan(args: Any, *, mode: str, force_reinstall: bool = False) -> dict[st
             ),
             "logs": {},
         }
-    script = ROOT / ".agents" / "skills" / "remote-code-parity" / "scripts" / "parity_sync.py"
-    cmd = [sys.executable, str(script), "--print-derived-args"]
-    cmd.extend(_parity_selector_args(args))
-    rc, payload, stdout, stderr = run_json_command(cmd, relay_stderr=True)
+    cmd = _parity_command(args)
     return {
-        "status": "ok" if rc == 0 else "failed",
+        "status": "ok",
         "target": {"host": getattr(args, "host", None)},
         "started_at": started_at,
         "duration_ms": duration_ms(start),
@@ -165,9 +178,7 @@ def sync_plan(args: Any, *, mode: str, force_reinstall: bool = False) -> dict[st
         "action": "source inspection only; managed preparation belongs to coordinator",
         "will_materialize": False,
         "will_install": False,
-        "derived": payload,
-        "stdout_tail": tail_text(stdout),
-        "stderr_tail": tail_text(stderr),
+        "command": cmd,
         "logs": {},
     }
 
@@ -193,12 +204,7 @@ def sync_apply(
             ),
             "logs": {},
         }
-    script = ROOT / ".agents" / "skills" / "remote-code-parity" / "scripts" / "parity_sync.py"
-    cmd = [sys.executable, str(script)]
-    cmd.extend(_parity_selector_args(args))
-    if dry_run:
-        cmd.append("--dry-run")
-    cmd.extend(["--apply-mode", "source-only" if mode == "auto" else mode])
+    cmd = _parity_command(args, dry_run=dry_run)
     rc, payload, stdout, stderr = run_json_command(cmd, relay_stderr=True)
     status = payload.get("status", "failed")
     if rc != 0 and status not in {"blocked", "needs_input", "needs_repair", "timeout", "failed"}:
@@ -270,24 +276,31 @@ def cleanup(
     }
 
 
+def _add_source_args(parser: argparse.ArgumentParser) -> None:
+    add_target_args(parser)
+    parser.add_argument("--repo-root", type=Path, default=ROOT, help="local source workspace")
+    parser.add_argument("--runtime-root", default="/vllm-workspace", help="prepared direct target root")
+    parser.add_argument("--source", action="append", default=[], help="actual business worktree, NAME=PATH")
+    parser.add_argument("--mode", choices=("auto", "source-only"), default="source-only")
+
+
 def cli_sync_plan(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Plan remote code sync without mutating runtime.", allow_abbrev=False)
-    add_target_args(parser)
-    parser.add_argument("--mode", choices=("auto", "source-only"), default="source-only")
+    _add_source_args(parser)
     args = parser.parse_args(argv)
     started_at = now_iso()
     start = time.monotonic()
     try:
-        print_json(sync_plan(args, mode="source-only"))
-        return 0
+        payload = sync_plan(args, mode="source-only")
+        print_json(payload)
+        return 0 if payload["status"] == "ok" else 1
     except Exception as exc:  # noqa: BLE001
         return cli_error(exc, started_at=started_at, start=start)
 
 
 def cli_sync_apply(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Apply remote code sync in a selected mode.", allow_abbrev=False)
-    add_target_args(parser)
-    parser.add_argument("--mode", choices=("auto", "source-only"), default="source-only")
+    _add_source_args(parser)
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
     started_at = now_iso()

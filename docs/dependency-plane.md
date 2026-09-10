@@ -120,3 +120,10 @@ active sync result. Native hook trust remains managed by each client.
 - former checkout-root environment variables and the off-pin override
 - the `bootstrap` subcommand
 - the local launcher that shadowed the `remote_dev` package name
+
+## Optional package skill
+
+`uv run python -m vaws_knowledge skill` reads the installed curation skill
+without starting OpenViking. `--install-dir <client-skill-directory>` installs
+that same packaged resource for native discovery. Workspace does not keep a
+second canonical copy or require curation for ordinary capture.

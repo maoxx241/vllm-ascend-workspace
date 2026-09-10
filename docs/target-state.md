@@ -161,6 +161,19 @@ shims used as allocators.
 
 ### 4.2 Skills
 
+Workspace infrastructure guidance is limited to `repo-init` and the thin
+`npu-fleet-monitor` launcher. Username configuration belongs to initialization;
+task binding/execution use coordinator tools directly; direct source-only
+publication uses the existing package CLI. These are not separate management
+skills or required steps before business work.
+
+Explicit knowledge editing uses the optional `curate-knowledge` skill shipped
+inside `vaws-knowledge`, readable with `python -m vaws_knowledge skill` and
+installable into a chosen native client skill directory. Workspace routing
+points to that package resource rather than maintaining a copy. Everyday
+query/capture and configured background publishing do not load a curation skill.
+
+
 A skill script may call `vaws_coordinator.task_client.TaskClient`,
 `remote_dev` explicit-endpoint tools, and `vaws_knowledge` query/capture.
 It may not allocate leases, invent request ids, pick Python/CANN, tick the

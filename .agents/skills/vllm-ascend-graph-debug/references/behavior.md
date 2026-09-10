@@ -115,4 +115,4 @@ The script manages evidence and comparison; it does not:
 - decide task-level accuracy acceptance;
 - diagnose eager failures.
 
-Use `remote-code-parity` before remote execution and the appropriate Serving or distributed-debug workflow for runtime control.
+Bind actual sources and let coordinator prepare the managed run; use the appropriate serving or distributed-debug workflow for business checks.

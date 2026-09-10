@@ -98,9 +98,9 @@ The orchestrator sleeps `POST_STOP_FLUSH_SECONDS` (5s) between `/stop_profile` r
 
 One directory per invocation. Nothing else is ever written here. The remote profiling root (`<runtime_dir>/<torch_profiler_dir>`) lives on the container and is referenced from the manifest via `remote_profile_root`.
 
-## Interaction with `remote-code-parity`
+## Managed source preparation
 
-Code parity is enforced transitively through `serve_start.py`. The collection skill must not call parity itself. The `.vaws-runtime` preserve carve-out and pip-only HuaweiCloud runtime install path are owned by the parity skill; see `.agents/skills/remote-code-parity/SKILL.md`.
+Coordinator prepares the bound sources and environment for the single service run. Collection does not synchronize, install or rebuild into a live execution root. See `docs/coordinator-consumption.md` for the package entry points.
 
 `serve_start.py`, `profile_control.py`, and `serve_stop.py` address a named `--service` or `--execution-id`. Two collections on the same host must use distinct service names so they do not stop each other.
 

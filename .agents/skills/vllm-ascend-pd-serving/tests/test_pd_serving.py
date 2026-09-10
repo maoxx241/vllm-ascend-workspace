@@ -32,19 +32,6 @@ NOW = "2026-07-25T12:00:00Z"
 CODE = {"source_head": "a" * 40, "snapshot_commit": "b" * 40, "dirty": False}
 
 
-def group() -> dict:
-    return {
-        "schema_version": 1,
-        "group_id": "pd-group",
-        "status": "ready",
-        "context_file": "/tmp/ctx.json",
-        "members": [
-            {"name": "prefill-member", "service": "prefill"},
-            {"name": "decode-member", "service": "decode"},
-        ],
-    }
-
-
 def config() -> dict:
     return {
         "schema_version": 1,
@@ -54,7 +41,6 @@ def config() -> dict:
         "services": [
             {
                 "name": "decode",
-                "member": "decode-member",
                 "role": "decode",
                 "model": "/models/example",
                 "tp": 1,
@@ -62,7 +48,6 @@ def config() -> dict:
             },
             {
                 "name": "prefill",
-                "member": "prefill-member",
                 "role": "prefill",
                 "model": "/models/example",
                 "tp": 1,
@@ -82,20 +67,20 @@ def config() -> dict:
 
 
 class PdServingTests(unittest.TestCase):
-    def test_group_create_output_is_accepted(self) -> None:
-        pd.validate_config(config(), group())
+    def test_config_is_self_contained(self) -> None:
+        pd.validate_config(config())
 
-    def test_rejects_members_that_alias_one_service(self) -> None:
-        invalid_group = group()
-        invalid_group["members"][1]["service"] = invalid_group["members"][0]["service"]
-        with self.assertRaisesRegex(pd.PdServingError, "service is duplicated"):
-            pd.validate_config(config(), invalid_group)
+    def test_rejects_duplicate_service_names(self) -> None:
+        invalid = config()
+        invalid["services"][1]["name"] = invalid["services"][0]["name"]
+        with self.assertRaisesRegex(pd.PdServingError, "service name is duplicated"):
+            pd.validate_config(invalid)
 
     def test_requires_both_roles(self) -> None:
         invalid = config()
         invalid["services"][1]["role"] = "decode"
         with self.assertRaisesRegex(pd.PdServingError, "both prefill and decode"):
-            pd.validate_config(invalid, group())
+            pd.validate_config(invalid)
 
     def test_topology_contains_every_role_command(self) -> None:
         topology = pd.topology_from_config(config())
@@ -115,22 +100,20 @@ class PdServingTests(unittest.TestCase):
         self.assertNotIn("export HCCL_BUFFSIZE", decode["command"])
         self.assertNotIn('"1024$"', decode["command"])
 
-    def test_plan_from_group_create_shape(self) -> None:
+    def test_plan_needs_only_business_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             config_path = root / "config.json"
-            group_path = root / "group.json"
             config_path.write_text(json.dumps(config()), encoding="utf-8")
-            group_path.write_text(json.dumps(group()), encoding="utf-8")
             output = root / "run"
             result = pd.plan(
                 output,
                 config_path=config_path,
-                group_path=group_path,
                 created_at=NOW,
                 code=CODE,
             )
             self.assertEqual(result["startup_order"], ["decode", "prefill"])
+            self.assertFalse((output / "session-group.json").exists())
             lifecycle = json.loads((output / "lifecycle.json").read_text(encoding="utf-8"))
             self.assertEqual(len(lifecycle["topology"]["roles"]), 2)
 
@@ -138,14 +121,11 @@ class PdServingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             config_path = root / "config.json"
-            group_path = root / "group.json"
             config_path.write_text(json.dumps(config()), encoding="utf-8")
-            group_path.write_text(json.dumps(group()), encoding="utf-8")
             output = root / "run"
             pd.plan(
                 output,
                 config_path=config_path,
-                group_path=group_path,
                 created_at=NOW,
                 code=CODE,
             )
@@ -178,14 +158,11 @@ class PdServingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             config_path = root / "config.json"
-            group_path = root / "group.json"
             config_path.write_text(json.dumps(config()), encoding="utf-8")
-            group_path.write_text(json.dumps(group()), encoding="utf-8")
             output = root / "run"
             pd.plan(
                 output,
                 config_path=config_path,
-                group_path=group_path,
                 created_at=NOW,
                 code=CODE,
             )
@@ -220,14 +197,11 @@ class PdServingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             config_path = root / "config.json"
-            group_path = root / "group.json"
             config_path.write_text(json.dumps(config()), encoding="utf-8")
-            group_path.write_text(json.dumps(group()), encoding="utf-8")
             output = root / "run"
             pd.plan(
                 output,
                 config_path=config_path,
-                group_path=group_path,
                 created_at=NOW,
                 code=CODE,
             )

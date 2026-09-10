@@ -35,8 +35,7 @@
     ],
     "fixture_paths_note": "This guard's own tests have to name cross-boundary paths as string fixtures to prove the guard detects them. Nothing else belongs here: a file that genuinely needs an exemption needs a baseline row instead, where it is dated and attributed to an extraction.",
     "module_search_paths": [
-      ".agents/lib",
-      ".agents/skills/remote-code-parity/scripts"
+      ".agents/lib"
     ],
     "module_search_paths_note": "Directories that some entry point actually places on sys.path. Ownership of a derived module name is resolved from the owning file's path, so moving a file between subsystems moves its module with it. `.remote-dev` and `.agents/coordinator` are absent because both left this tree and are consumed as installed packages."
   },
@@ -108,7 +107,7 @@
       "id": "scaffold-domain",
       "repo": "vllm-ascend-workspace",
       "layer": 30,
-      "summary": "The domain layer that stays: 24 skills, shared libraries, helper scripts. May depend on every extracted subsystem; none of them may depend on it.",
+      "summary": "The domain layer that stays: business skills, shared libraries, helper scripts. May depend on every extracted subsystem; none of them may depend on it.",
       "roots": [
         ".agents",
         ".trae/skills/modelscope"

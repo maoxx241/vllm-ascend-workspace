@@ -14,6 +14,7 @@ from __future__ import annotations
 import sys
 
 import argparse
+import json
 import shutil
 from pathlib import Path
 
@@ -25,6 +26,8 @@ if str(LIB) not in sys.path:
 from vaws_venv import ensure_workspace_interpreter  # noqa: E402
 
 ensure_workspace_interpreter(repo_root=ROOT)
+
+import yaml  # noqa: E402
 
 AGENTS_SKILLS = ROOT / ".agents" / "skills"
 CLAUDE_SKILLS = ROOT / ".claude" / "skills"
@@ -45,15 +48,8 @@ def parse_frontmatter(source: Path) -> dict[str, str]:
     lines = source.read_text(encoding="utf-8").splitlines()
     if not lines or lines[0] != "---":
         return {}
-    data: dict[str, str] = {}
-    for line in lines[1:]:
-        if line == "---":
-            break
-        if ":" not in line:
-            continue
-        key, value = line.split(":", 1)
-        data[key.strip()] = value.strip()
-    return data
+    end = lines.index("---", 1)
+    return yaml.safe_load("\n".join(lines[1:end]))
 
 
 def first_markdown_heading(source: Path, default: str) -> str:
@@ -69,24 +65,17 @@ def expected_skill_body(skill_dir: Path) -> str:
     name = frontmatter.get("name") or skill_dir.name
     description = frontmatter.get("description") or first_markdown_heading(source, skill_dir.name)
     title = first_markdown_heading(source, name)
-    return f"""<!-- Generated Claude Code shim from .agents/skills/{skill_dir.name}/SKILL.md. Do not edit. -->
+    return f"""---
+name: {json.dumps(name, ensure_ascii=False)}
+description: {json.dumps(description, ensure_ascii=False)}
 ---
-name: {name}
-description: {description}
----
+
+<!-- Generated from .agents/skills/{skill_dir.name}/SKILL.md. Do not edit. -->
 
 # {title}
 
-Canonical skill source:
-
-`.agents/skills/{skill_dir.name}/SKILL.md`
-
-Before using this skill:
-
-1. Read the canonical skill file above.
-2. Follow its routing rules, entrypoints, guardrails, and acceptance criteria.
-3. Use the remote-dev companion tools (`remote_*` MCP tools; CLI fallback `remote-dev <hyphen-tool> ...` or `uv run remote-dev <hyphen-tool> ...`) for ordinary remote endpoint read/edit/bash/search/patch work.
-4. Use this Claude project skill only for the domain workflow described by the canonical source.
+Read `.agents/skills/{skill_dir.name}/SKILL.md` and only the references needed
+for the current task. The canonical skill owns the workflow.
 """
 
 
