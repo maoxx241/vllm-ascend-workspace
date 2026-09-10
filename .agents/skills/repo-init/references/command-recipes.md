@@ -143,3 +143,11 @@ python3 .agents/skills/repo-init/scripts/repo_topology.py configure   --repo vll
 ```bash
 python3 .agents/skills/repo-init/scripts/repo_topology.py ensure-main   --repo vllm-ascend   --remote origin
 ```
+# Knowledge fork and background updates
+
+After `uv sync`, run `python3 .agents/scripts/knowledge_setup.py` (Windows:
+`py -3 .agents/scripts/knowledge_setup.py`). For download-only use, add
+`--read-only`. Reuse the user's `gh` login; no token belongs in tracked files.
+Refresh the selected clients with `vaws_client_setup.py --apply` afterward.
+The package MCP service performs retries and shared Release synchronization
+while alive. Knowledge PR review and merge remain manual.

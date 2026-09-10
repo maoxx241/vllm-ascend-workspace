@@ -37,7 +37,7 @@ entry points.
 | Measurement | AST `__main__` / `__main__.py` discovery of tracked (and untracked-unignored) Python outside `vllm/` and `vllm-ascend/`; overlay and owner selectors from `.agents/policy/cli-surface-inventory.json`; `pyproject.toml` / `uv.lock`; no import, fetch, `--help`, NPU or SSH |
 
 The census is the AST of the inspected files plus those committed package owners. The
-105-entry overlay and four owner-selector records live in
+107-entry overlay and four owner-selector records live in
 `.agents/policy/cli-surface-inventory.json` (metadata only; not executable).
 Re-run the generator after this overlay changes. Do not paste a future commit
 SHA into this file as if it were an input.
@@ -50,23 +50,23 @@ are **not** the original 132-entry snapshot and **not** the unimplemented
 
 | Measure | Value |
 |---|---|
-| Entry points (definition in §3) | **105** |
-| Supported agent-facing launchers | 60 |
+| Entry points (definition in §3) | **107** |
+| Supported agent-facing launchers | 61 |
 | Compatibility wrappers | 17 |
 | Internal / diagnostic CLIs | 11 |
 | Generated projections | 2 |
-| Hooks | 3 |
+| Hooks | 4 |
 | Remote payloads | 10 |
 | Test / maturation harnesses | 2 |
-| Responsibility | mechanics 89 · mixed 16 · judgment 0 |
-| Files importing `argparse` (non-test) | 96 |
+| Responsibility | mechanics 92 · mixed 15 · judgment 0 |
+| Files importing `argparse` (non-test) | 97 |
 | Skills that ship at least one entry point | 24 |
-| Parser styles | argparse 93 · delegated 7 · bare 4 · bare-argv 1 |
+| Parser styles | argparse 94 · delegated 7 · bare 5 · bare-argv 1 |
 | Historical snapshot (original #85) | 132 entries; mechanics 81 · judgment 8 · mixed 8 · redundant 35 |
 | Historical proposed surface | **13 nouns**, 75 verbs (unimplemented) |
 
-The 105 roles are non-overlapping: every discovered entry has exactly one
-support role, and the seven role counts sum to 105. Support role is not
+The 107 roles are non-overlapping: every discovered entry has exactly one
+support role, and the seven role counts sum to 107. Support role is not
 inferred from a future `vaws <noun>` label, from a `__main__` guard alone, or
 from the absence of a basename mention.
 
@@ -118,11 +118,11 @@ launchers:
 
 | Role | Meaning | Current count |
 |---|---|---|
-| `supported` | agent-facing launcher or domain command that currently owns the mechanic | 60 |
+| `supported` | agent-facing launcher or domain command that currently owns the mechanic | 61 |
 | `compatibility` | still-present managed toolbox or legacy `--machine` wrapper whose semantics differ from the extracted provider | 17 |
 | `internal` | library or pipeline stage that grew a diagnostic `__main__` | 11 |
 | `generated` | Trae ModelScope projection produced from the canonical package | 2 |
-| `hook` | client or git lifecycle adapter | 3 |
+| `hook` | client or git lifecycle adapter | 4 |
 | `payload` | executable copied onto the NPU container and run without `.venv` / `.agents/lib` | 10 |
 | `harness` | maturation / golden / stress tooling | 2 |
 
@@ -408,6 +408,7 @@ option.
 | Entry point | Style | Verbs | Options | Refs | Responsibility | Support role | Current target | Proposed |
 |---|---|---|---|---|---|---|---|---|
 | `.agents/hooks/knowledge_session_end.py` | bare | - | 0 | client-config:1, routing:1, test:1 | mechanics | hook | .agents/hooks/knowledge_session_end.py | - |
+| `.agents/hooks/knowledge_summary.py` | argparse | - | 2 | script:1, test:1 | mechanics | hook | .agents/hooks/knowledge_summary.py | - |
 | `.agents/hooks/tracked_leak_precommit.py` | argparse | - | 8 | docs:1, policy:1, test:1 | mechanics | hook | .agents/hooks/tracked_leak_precommit.py | - |
 | `.agents/hooks/vaws_session.py` | argparse | - | 4 | policy:1, script:1, test:2 | mechanics | hook | .agents/hooks/vaws_session.py | - |
 | `.agents/scripts/cli_surface_inventory.py` | argparse | - | 3 | policy:1, test:3 | mechanics | supported | .agents/scripts/cli_surface_inventory.py | vaws lint |
@@ -415,6 +416,7 @@ option.
 | `.agents/scripts/knowledge_capture.py` | argparse | - | 11 | hook:1, routing:1, skill-doc:4, test:4 | mixed | supported | .agents/scripts/knowledge_capture.py | vaws knowledge |
 | `.agents/scripts/knowledge_export.py` | argparse | - | 7 | routing:2, skill-doc:1 | mechanics | supported | .agents/scripts/knowledge_export.py | vaws knowledge |
 | `.agents/scripts/knowledge_query.py` | argparse | - | 9 | routing:2, skill-doc:1, test:3 | mechanics | supported | .agents/scripts/knowledge_query.py | vaws knowledge |
+| `.agents/scripts/knowledge_setup.py` | argparse | - | 2 | docs:1, routing:1, skill-doc:3 | mechanics | supported | .agents/scripts/knowledge_setup.py | - |
 | `.agents/scripts/knowledge_validate.py` | argparse | - | 1 | other:1, routing:1, skill-doc:1 | mechanics | supported | .agents/scripts/knowledge_validate.py | vaws knowledge |
 | `.agents/scripts/remote_artifact_manifest.py` | argparse | - | 1 | policy:1, routing:1 | mechanics | compatibility | .agents/scripts/remote_artifact_manifest.py | vaws remote |
 | `.agents/scripts/remote_artifact_pull.py` | argparse | - | 2 | policy:1, routing:1, script:1, skill-doc:1 | mechanics | compatibility | .agents/scripts/remote_artifact_pull.py | vaws remote |
@@ -441,7 +443,7 @@ option.
 | `.agents/scripts/tracked_leak_scan.py` | argparse | - | 10 | docs:1, hook:1, other:1, policy:1, script:1, test:3 | mechanics | supported | .agents/scripts/tracked_leak_scan.py | vaws lint |
 | `.agents/scripts/tracked_path_check.py` | argparse | - | 6 | docs:1, other:1, policy:1, test:2 | mechanics | supported | .agents/scripts/tracked_path_check.py | vaws lint |
 | `.agents/scripts/vaws.py` | argparse | status, env, hook, task-server | 1 | docs:1, other:1, policy:1, skill-doc:2, test:3 | mechanics | supported | .agents/scripts/vaws.py | vaws task |
-| `.agents/scripts/vaws_client_setup.py` | argparse | - | 5 | docs:3, policy:1, script:1, test:2 | mechanics | supported | .agents/scripts/vaws_client_setup.py | vaws workspace |
+| `.agents/scripts/vaws_client_setup.py` | argparse | - | 5 | docs:4, policy:1, script:1, skill-doc:2, test:2 | mechanics | supported | .agents/scripts/vaws_client_setup.py | vaws workspace |
 | `.agents/scripts/vaws_deps.py` | argparse | status, doctor, sync | 1 | docs:3, other:1, policy:1, routing:3, script:1, skill-doc:4, test:2 | mechanics | supported | .agents/scripts/vaws_deps.py | vaws workspace |
 | `.agents/scripts/workspace_identity.py` | argparse | summary, ensure, validate-alias, set-alias, decline-alias | 1 | routing:1, skill-doc:2 | mechanics | supported | .agents/scripts/workspace_identity.py | vaws workspace |
 | `.agents/scripts/workspace_profile.py` | argparse | summary, validate, ensure | 4 | routing:2, script:1, skill-doc:4 | mechanics | supported | .agents/scripts/workspace_profile.py | vaws workspace |

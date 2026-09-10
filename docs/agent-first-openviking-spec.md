@@ -220,7 +220,7 @@ GitHub Actions 是临时构建/审核环境，Release 是分发入口；无需�
 
 ## 8. 实施批次与验收
 
-2026-09-11 提交状态：A 与 B 的当前本地能力已实现；D/E 的贡献审核、构建与本地版本切换模块已实现，公共网络与自动生命周期仍待接线。ARM64 macOS 当前链路已验证；Windows、五客户端真实远端与 NPU 业务验收后续完成。以下表格保留各批次的完整目标，不将模块测试等同于整套公共发布闭环完成。
+2026-09-11 实现状态：D/E 的公共贡献与 Release 分发已接通，真实 fork PR、人工合并、CI 构建发布、MCP 后台更新与重启后查询均已验证。知识 PR 先由人工审核合并，Grok bot、自动去重和自动合并暂缓；第 6 节保留后续自动审核的目标。A/B 已有本地能力，五客户端真实远端和基础 NPU 运算已完成；模型服务/benchmark 等完整业务验收及 Windows 仍后续进行。公共链路证据见 [corpus PR #1](https://github.com/vllm-ascend-workspace/vaws-knowledge-corpus/pull/1) 与 [Release 构建](https://github.com/vllm-ascend-workspace/vaws-knowledge-corpus/actions/runs/34523521667)；摘要适配器已做客户端事件 payload 回放，原生 hook 信任仍由各客户端管理。
 
 | 批次 | 交付物 | 完成依据 |
 |---|---|---|

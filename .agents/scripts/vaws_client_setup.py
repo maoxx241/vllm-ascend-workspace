@@ -233,14 +233,17 @@ def executed_hook_script(argv):
     return program
 
 
-def owned_hook_script(path):
+def owned_hook_script(path, expected=None):
     try:
-        return Path(path).expanduser().resolve() == OWNED_HOOK_SCRIPT.resolve()
+        wanted = Path(expected) if expected else OWNED_HOOK_SCRIPT
+        if wanted.resolve() not in {OWNED_HOOK_SCRIPT.resolve(), (ROOT / ".agents/hooks/knowledge_summary.py").resolve()}:
+            return False
+        return Path(path).expanduser().resolve() == wanted.resolve()
     except OSError:
         return False
 
 
-def owned_hook_command(command, client, project):
+def owned_hook_command(command, client, project, expected=None):
     """True when `command` execs this checkout's hook for this client and project.
 
     Old generated commands (client/project only) and new ones (explicit
@@ -252,7 +255,7 @@ def owned_hook_command(command, client, project):
     except ValueError:
         return False
     script = executed_hook_script(argv)
-    if not script or not owned_hook_script(script):
+    if not script or not owned_hook_script(script, expected=expected):
         return False
     parsed_client = None
     parsed_project = None
@@ -297,6 +300,7 @@ def _desired_hook_command(groups):
 def merge_hook_event(existing, desired, client, project):
     """Replace one owned hook entry; keep siblings and group metadata."""
     desired_command = _desired_hook_command(desired)
+    expected = executed_hook_script(shlex.split(desired_command)) if desired_command else None
     replaced = False
     result = []
     for group in existing:
@@ -306,13 +310,13 @@ def merge_hook_event(existing, desired, client, project):
         if "hooks" in group:
             entries = []
             for entry in group.get("hooks") or []:
-                if owned_hook_command(entry.get("command", ""), client, project):
+                if owned_hook_command(entry.get("command", ""), client, project, expected=expected):
                     if replaced:
                         continue
                     updated = dict(entry)
                     updated["command"] = desired_command
                     updated.setdefault("type", "command")
-                    updated["timeout"] = HOOK_TIMEOUT_SECONDS
+                    updated["timeout"] = desired[0]["hooks"][0].get("timeout", HOOK_TIMEOUT_SECONDS)
                     entries.append(updated)
                     replaced = True
                 else:
@@ -323,7 +327,7 @@ def merge_hook_event(existing, desired, client, project):
                 result.append(updated_group)
             continue
         command = group.get("command", "")
-        if owned_hook_command(command, client, project):
+        if owned_hook_command(command, client, project, expected=expected):
             if replaced:
                 continue
             updated = dict(group)
@@ -483,6 +487,29 @@ def toml_server_body(key, entry):
     return body
 
 
+def fill_toml_server_env(text, key, existing, desired):
+    """Add missing defaults to an ordinary env table; preserve user values/text."""
+    missing = {name: value for name, value in (desired.get("env") or {}).items()
+               if name not in (existing.get("env") or {})}
+    if not missing:
+        return text
+    additions = "".join(json.dumps(name) + " = " + json.dumps(value) + "\n"
+                        for name, value in missing.items())
+    headers = {f"[mcp_servers.{key}.env]", f"[mcp_servers.{json.dumps(key)}.env]"}
+    lines = text.splitlines(keepends=True)
+    for index, line in enumerate(lines):
+        if line.strip() in headers:
+            lines.insert(index + 1, additions)
+            result = "".join(lines)
+            tomllib.loads(result)
+            return result
+    if "env" not in existing:
+        result = text.rstrip() + f"\n\n[mcp_servers.{json.dumps(key)}.env]\n" + additions
+        tomllib.loads(result)
+        return result
+    return text  # a hand-written inline env remains user-owned
+
+
 def configuration(client, project, *, kimi_config=None, task_only=False):
     return build_plan(client, project, kimi_config=kimi_config, task_only=task_only)["files"]
 
@@ -491,6 +518,15 @@ def build_plan(client, project, *, kimi_config=None, task_only=False):
     project = project.expanduser().resolve(strict=True)
     env = launch_env(client, project, kimi_config=kimi_config)
     groups = hook_groups(client, project, env)
+    if not task_only and client in {"codex", "claude", "cursor"}:
+        summary_command = shlex.join([
+            sys.executable, str(ROOT / ".agents/hooks/knowledge_summary.py"),
+            "--client", client, "--project", str(project),
+        ])
+        if client == "cursor":
+            groups["afterAgentResponse"] = [{"command": summary_command}]
+        else:
+            groups["Stop"] = [{"hooks": [{"type": "command", "command": summary_command, "timeout": 5}]}]
     servers = desired_mcp_servers(task_only=task_only)
     files = {}
     notes = []
@@ -535,6 +571,10 @@ def build_plan(client, project, *, kimi_config=None, task_only=False):
                     })
                     changed = True
                     continue
+                if name == KNOWLEDGE_SERVER_NAME:
+                    updated_text = fill_toml_server_env(text, matching[0], existing[matching[0]], entry)
+                    changed = changed or updated_text != text
+                    text = updated_text
                 notes.append({
                     "path": str(path),
                     "server": name,
