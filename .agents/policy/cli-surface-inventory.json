@@ -27,6 +27,13 @@
       "target_kind": "self",
       "note": "session-end flush of deferred knowledge candidates; stdin/client hook, not an agent CLI"
     },
+    ".agents/hooks/knowledge_summary.py": {
+      "responsibility": "mechanics",
+      "support_role": "hook",
+      "target_kind": "self",
+      "note": "thin final-response adapter over the installed knowledge capture path; observes client-provided text only",
+      "external_owner": "vaws-knowledge"
+    },
     ".agents/hooks/tracked_leak_precommit.py": {
       "responsibility": "mechanics",
       "support_role": "hook",
@@ -74,6 +81,13 @@
       "target_kind": "self",
       "note": "thin CLI over vaws_knowledge.server.query; prints the commons QueryResponse envelope",
       "proposed_target": "vaws knowledge"
+    },
+    ".agents/scripts/knowledge_setup.py": {
+      "responsibility": "mechanics",
+      "support_role": "supported",
+      "target_kind": "self",
+      "note": "configure corpus fork and background Release sync through the installed package",
+      "external_owner": "vaws-knowledge"
     },
     ".agents/scripts/knowledge_validate.py": {
       "responsibility": "mechanics",
@@ -488,7 +502,6 @@
       "external_owner": "vaws-knowledge",
       "note": "delegates Markdown public-copy preparation and contribution review to the installed package"
     },
-
     ".agents/skills/machine-management/scripts/machine_add.py": {
       "responsibility": "mechanics",
       "support_role": "supported",
@@ -503,7 +516,6 @@
       "note": "read-only local username document; host/container proof is coordinator-owned",
       "proposed_target": "vaws machine"
     },
-
     ".agents/skills/modelscope/scripts/download_from_modelscope.py": {
       "responsibility": "mechanics",
       "support_role": "payload",
@@ -607,7 +619,6 @@
       "note": "parses the vllm-ascend CI pin",
       "proposed_target": "vaws workspace"
     },
-
     ".agents/skills/session-management/scripts/session_diff.py": {
       "responsibility": "mechanics",
       "support_role": "supported",
@@ -629,7 +640,6 @@
       "note": "create/status/list/teardown of named service groups",
       "proposed_target": "vaws session"
     },
-
     ".agents/skills/vllm-ascend-benchmark/scripts/bench_compare.py": {
       "responsibility": "mixed",
       "support_role": "supported",
