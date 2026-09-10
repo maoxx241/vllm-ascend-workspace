@@ -38,7 +38,7 @@ Rules:
 
 ### Stage 0: applicability
 
-Use `repo-init` only for workspace setup, GitHub auth / CLI setup, recursive submodules, required `uv sync`, fork / remote topology, and the local machine profile during broad init.
+Use `repo-init` for workspace initialization or repair of its configuration and client wiring. Narrow Git/auth/dependency requests do not imply the full initialization workflow.
 
 ### Stage 1: probe plus identity bootstrap
 
@@ -64,7 +64,7 @@ Before mutating, ask only for choices that are still missing and affect the resu
 
 Authorized broad init defaults: keep current remotes if present, initialize submodules, run `uv sync`, CI-pinned vllm alignment. Topology / skip-sync / keep-current remain available as overrides, not as required confirmations.
 
-For the machine username branch, use the fixed three-option model from `repo_init_profile.py plan`:
+If a username was not provided and a choice is needed, `repo_init_profile.py plan` offers:
 
 - `git-username`
 - `random`
@@ -75,7 +75,7 @@ Rules:
 - do not silently generate a username when the user only asked for generic init
 - do not silently rewire remotes when the user only asked for generic init
 - do not treat `custom` as permission to reuse the detected Git username
-- if the user selects `custom`, stop again and ask for the literal username before any mutation
+- for `custom`, reuse a supplied literal; ask only if the literal is missing
 
 ### Stage 3: ensure local machine profile when relevant
 
@@ -84,7 +84,7 @@ During broad workspace init:
 - inspect the profile first with `repo_init_profile.py plan`
 - if missing and the user chose `git-username`, call `repo_init_profile.py apply --choice git-username`
 - if missing and the user explicitly accepted the default/random option, call `repo_init_profile.py apply --choice random`
-- if missing and the user chose `custom`, first ask for the literal username, then call `repo_init_profile.py apply --choice custom --custom-username ...`
+- if missing and the user chose `custom`, call `repo_init_profile.py apply --choice custom --custom-username ...` with the supplied literal; ask only if it is absent
 - do not change an existing profile unless the user explicitly asked to change it
 
 For narrow Git-only tasks, skip this stage.
@@ -185,11 +185,11 @@ gh repo sync USER/REPO --source OWNER/REPO
 A successful run usually ends with:
 
 - the local machine profile present when broad init asked for it
-- the machine-profile branch used one of the fixed choices: `git-username`, `random`, or `custom`
+- the machine profile reused a supplied/existing username, or resolved a missing choice
 - `gh` installed or a fallback provided
 - GitHub auth valid
-- recursive submodules initialized when the user approved it
+- recursive submodules initialized for authorized broad init or the requested submodule setup
 - remotes matching the user's selected topology
 - local `main` tracking the selected working remote where the user approved branch movement
-- package install (`uv sync`) offered and, if accepted, reported from `vaws_deps.py`; a skipped install leaves package capabilities unavailable
+- package installation (`uv sync`) completed for authorized package-dependent setup; an explicitly skipped install leaves those capabilities unavailable
 - finish names capabilities from `vaws_deps.py doctor`, not from a re-derived list

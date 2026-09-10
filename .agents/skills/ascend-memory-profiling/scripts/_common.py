@@ -13,9 +13,8 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[4]
 LIB_DIR = ROOT / ".agents" / "lib"
-MM_SCRIPTS = ROOT / ".agents" / "skills" / "machine-management" / "scripts"
 
-for _p in (str(LIB_DIR), str(MM_SCRIPTS)):
+for _p in (str(LIB_DIR),):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 

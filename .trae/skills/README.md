@@ -1,3 +1,10 @@
-# Trae skill projections
+# Trae skill entry points
 
-Trae projections are generated per-skill, not hand-written for the full catalog. The only generic generator in this repository is `python3 .agents/scripts/sync_claude_skills.py`, and it is ModelScope-specific: it copies `.agents/skills/modelscope` byte-for-byte onto `.trae/skills/modelscope`. The other four Trae packages (`machine-management`, `remote-code-parity`, `repo-init`, `vllm-ascend-serving`) are hand-maintained routing stubs. Do not invent the missing 19 projections here; agents should follow `.agents/skills/<name>/SKILL.md`.
+The retained repo-init and serving stubs read their canonical packages under
+`.agents/skills/`. ModelScope is a generated projection of its canonical skill.
+Use `python3 .agents/scripts/sync_claude_skills.py` after editing ModelScope.
+
+Task binding and managed execution use coordinator tools directly. For explicit
+knowledge editing, read the installed skill with
+`uv run python -m vaws_knowledge skill` or install it into the native client's
+skill directory with `--install-dir`.

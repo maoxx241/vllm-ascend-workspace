@@ -67,4 +67,6 @@ python3 .agents/skills/npu-fleet-monitor/scripts/manage_monitor.py stop
 
 JSON 结果里的 `cli_prefix` 即上面的 `uvx` 命令前缀，`mcp_command` 是对应的 stdio MCP 命令（`… vaws-top mcp`，通过 `VAWS_TOP_URL` 指向 `http://127.0.0.1:8788`）。完整的 CLI/MCP 参数、`observation` 信封和高级选机指引见独立仓库 pinned tag 下的 [Agent CLI 与 MCP 文档](https://github.com/vllm-ascend-workspace/vaws-top/blob/v0.1.1/docs/agent-access.md) 与 [vaws-top Agent Skill](https://github.com/vllm-ascend-workspace/vaws-top/blob/v0.1.1/.agents/skills/vaws-top/SKILL.md)。
 
-需要新增或准备远程用户容器时使用 `python -m vaws_coordinator provision`；`machine-management` 只记录项目用户名。监控服务本身不创建远程容器、不启动任务，也不占用 NPU lease。
+需要新增或准备远程用户容器时使用 `python -m vaws_coordinator provision`；项目用户名由 repo-init / workspace_profile 配置。监控服务本身不创建远程容器、不启动任务，也不占用 NPU lease。
+
+Host-key bootstrap 仅通过 `--bootstrap-command` 或 `NFM_BOOTSTRAP_COMMAND` 显式配置；工作区不注入机器管理脚本。返回的 `skill_url` 随实际 monitor ref 指向包内指引。

@@ -147,7 +147,7 @@ python3 .agents/skills/ascend-profiling-analysis/scripts/profile_sweep.py \
    - 优先 `--manifest`（来自 collection skill）。如果 `manifest.analysis_status == "missing_kernel_details"` 立即停止，把这个状态原样回给用户，不试图分析空 root。
    - 其次 `--remote-profile-root`，要求是远端绝对路径。
 2. **远端就绪**
-   - 通过 `machine-management` 确认机器 ready；本 skill 不重复实现完整 machine-ready 检查。
+   - 使用明确的 SSH endpoint，或读取 coordinator 返回的运行目标；环境准备属于 coordinator。
    - 远端 Python 必须能导入 `PyYAML`；wrapper 在同步/分析前 fail-closed 预检。缺失时按本 skill 的 `requirements.txt` 准备 runtime，不在分析过程中临时改环境。
    - tar-sync 只 `scripts/ascend_profile/` 这一个子目录到 `<remote-work-dir>/ascend_profile/`，避免污染 `.vaws-runtime`。
 3. **执行分析**
@@ -339,7 +339,7 @@ XLSX 包新增 sheet：`step_anatomy`、`step_class_summary`、`layer_class_summ
 - **layer_validation**：知识文本不自动回填模型层数。预期层数继续来自实际 config.json 或显式模型配置；未知时保持未知。
 - **容错**：知识目录或索引不可用时，主分析继续，知识引用不作为完整排查结论。
 
-**沉淀提示**：分析形成有用结论后，用 `.agents/scripts/knowledge_capture.py` 保存标题和正文，可附实际来源、条件与证据。新候选是 Markdown；显式贡献请求使用 `curate-workspace-knowledge` 准备独立的脱敏公共副本。
+**沉淀提示**：分析形成有用结论后，用 `.agents/scripts/knowledge_capture.py` 保存标题和正文，可附实际来源、条件与证据。新候选是 Markdown；显式知识整理可读取 `uv run python -m vaws_knowledge skill`；公共贡献使用包内脱敏入口。
 
 ## Failure policy
 
@@ -361,8 +361,8 @@ XLSX 包新增 sheet：`step_anatomy`、`step_class_summary`、`layer_class_summ
 
 | Skill | 互动 |
 |-------|------|
-| `machine-management` | 提供 SSH endpoint；本 skill 只读 inventory，不改 inventory |
-| `remote-code-parity` | 本 skill 不依赖 parity skill；用自带的 tar-over-ssh 同步 `scripts/ascend_profile/`，不动 `.vaws-runtime` |
+| `vaws-coordinator` / 显式 endpoint | 提供运行目标；本 skill 不管理机器和资源 |
+| 分析脚本传输 | 使用本 skill 自带的 tar-over-ssh，仅同步 `scripts/ascend_profile/`；不改变托管执行源码 |
 | `ascend-profiling-collection` | 上游：消费它的 `manifest.json`（`analysis_status`、`remote_profile_root`） |
 | `ascend-memory-profiling` | 不交叉，专管 HBM |
 | `vllm-ascend-serving` / `vllm-ascend-benchmark` | 不交叉，本 skill 不启停服务 |

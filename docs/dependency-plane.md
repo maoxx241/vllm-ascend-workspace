@@ -16,8 +16,8 @@ must name git+https tag sources because `vaws-coordinator` depends on
 | Package | Module | Source tag | Role |
 |---|---|---|---|
 | `vaws-remote-dev` | `remote_dev` | `0.5.0` at `d0f963c` | process-in import + MCP server |
-| `vaws-coordinator` | `vaws_coordinator` | `0.3.1` at `aed3ee9` | process-in import + stdio MCP |
-| `vaws-knowledge` | `vaws_knowledge` | `0.3.1` at `41cc8b4` | process-in import + MCP |
+| `vaws-coordinator` | `vaws_coordinator` | `0.3.1` at `a6a2841` | process-in import + stdio MCP |
+| `vaws-knowledge` | `vaws_knowledge` | `0.3.2` at `41363d3` | process-in import + MCP |
 | `vaws-top` | — | uvx only | fleet dashboard; not imported |
 
 `uv sync` writes `.venv` and records the resolved git commits in `uv.lock`.
@@ -120,3 +120,10 @@ active sync result. Native hook trust remains managed by each client.
 - former checkout-root environment variables and the off-pin override
 - the `bootstrap` subcommand
 - the local launcher that shadowed the `remote_dev` package name
+
+## Optional package skill
+
+`uv run python -m vaws_knowledge skill` reads the installed curation skill
+without starting OpenViking. `--install-dir <client-skill-directory>` installs
+that same packaged resource for native discovery. Workspace does not keep a
+second canonical copy or require curation for ordinary capture.

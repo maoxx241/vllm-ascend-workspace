@@ -207,18 +207,18 @@
     ".agents/scripts/remote_sync_apply.py": {
       "responsibility": "mechanics",
       "support_role": "compatibility",
-      "target_kind": "local-entry",
-      "note": "adapter that shells out to parity_sync.py; remote-dev has no sync API",
-      "target": ".agents/skills/remote-code-parity/scripts/parity_sync.py",
-      "proposed_target": "vaws sync"
+      "target_kind": "external",
+      "note": "explicit-endpoint source-only adapter over python -m vaws_coordinator.parity; managed execution sync belongs to coordinator run preparation",
+      "proposed_target": "vaws sync",
+      "external_owner": "vaws-coordinator"
     },
     ".agents/scripts/remote_sync_plan.py": {
       "responsibility": "mechanics",
       "support_role": "compatibility",
-      "target_kind": "local-entry",
-      "note": "adapter that shells out to parity_sync.py / remote_code_parity.py plan; remote-dev has no sync API",
-      "target": ".agents/skills/remote-code-parity/scripts/parity_sync.py",
-      "proposed_target": "vaws sync"
+      "target_kind": "external",
+      "note": "explicit-endpoint source-only adapter over python -m vaws_coordinator.parity; managed execution sync belongs to coordinator run preparation",
+      "proposed_target": "vaws sync",
+      "external_owner": "vaws-coordinator"
     },
     ".agents/scripts/remote_target_resolve.py": {
       "responsibility": "mechanics",
@@ -495,27 +495,6 @@
       "note": "plan is judgment; link/finalize reject unplanned stages, wrong parent/run type and nonterminal children",
       "proposed_target": "guidance"
     },
-    ".agents/skills/curate-workspace-knowledge/scripts/knowledge_curate.py": {
-      "responsibility": "mechanics",
-      "support_role": "supported",
-      "target_kind": "external",
-      "external_owner": "vaws-knowledge",
-      "note": "delegates Markdown public-copy preparation and contribution review to the installed package"
-    },
-    ".agents/skills/machine-management/scripts/machine_add.py": {
-      "responsibility": "mechanics",
-      "support_role": "supported",
-      "target_kind": "self",
-      "note": "local username document for vaws-<user>; container prepare is python -m vaws_coordinator provision",
-      "proposed_target": "vaws machine"
-    },
-    ".agents/skills/machine-management/scripts/machine_verify.py": {
-      "responsibility": "mechanics",
-      "support_role": "supported",
-      "target_kind": "self",
-      "note": "read-only local username document; host/container proof is coordinator-owned",
-      "proposed_target": "vaws machine"
-    },
     ".agents/skills/modelscope/scripts/download_from_modelscope.py": {
       "responsibility": "mechanics",
       "support_role": "payload",
@@ -549,40 +528,6 @@
       "note": "deploy/start/status/restart/stop of the loopback dashboard as a local uvx process pinned to a vaws-top tag; does not count provider CLIs",
       "proposed_target": "vaws machine",
       "external_owner": "vaws-top"
-    },
-    ".agents/skills/remote-code-parity/scripts/gc_runtime_cache.py": {
-      "responsibility": "mechanics",
-      "support_role": "supported",
-      "target_kind": "self",
-      "note": "prunes the container cache root",
-      "proposed_target": "vaws sync"
-    },
-    ".agents/skills/remote-code-parity/scripts/parity_sync.py": {
-      "responsibility": "mechanics",
-      "support_role": "supported",
-      "target_kind": "self",
-      "note": "canonical local-to-container snapshot sync; C3 still owns long-running code identity",
-      "proposed_target": "vaws sync"
-    },
-    ".agents/skills/remote-code-parity/scripts/parity_watch.py": {
-      "responsibility": "mechanics",
-      "support_role": "supported",
-      "target_kind": "self",
-      "note": "watcher that re-publishes snapshots",
-      "proposed_target": "vaws sync"
-    },
-    ".agents/skills/remote-code-parity/scripts/remote_code_parity.py": {
-      "responsibility": "mechanics",
-      "support_role": "supported",
-      "target_kind": "self",
-      "note": "thin local CLI over vaws_coordinator.parity; spawned by parity_sync and the coordinator on the workstation, not on the NPU container",
-      "proposed_target": "vaws sync"
-    },
-    ".agents/skills/remote-code-parity/scripts/transport_benchmark.py": {
-      "responsibility": "mechanics",
-      "support_role": "harness",
-      "target_kind": "self",
-      "note": "bundle vs receive-pack transport micro-benchmark"
     },
     ".agents/skills/repo-init/scripts/install_gh_user.py": {
       "responsibility": "mechanics",
@@ -618,27 +563,6 @@
       "target_kind": "self",
       "note": "parses the vllm-ascend CI pin",
       "proposed_target": "vaws workspace"
-    },
-    ".agents/skills/session-management/scripts/session_diff.py": {
-      "responsibility": "mechanics",
-      "support_role": "supported",
-      "target_kind": "self",
-      "note": "git diff of worktree + submodules",
-      "proposed_target": "vaws session"
-    },
-    ".agents/skills/session-management/scripts/session_gc.py": {
-      "responsibility": "mechanics",
-      "support_role": "supported",
-      "target_kind": "self",
-      "note": "reports unresolved coordinator executions; never auto-releases",
-      "proposed_target": "vaws session"
-    },
-    ".agents/skills/session-management/scripts/session_group.py": {
-      "responsibility": "mechanics",
-      "support_role": "supported",
-      "target_kind": "self",
-      "note": "create/status/list/teardown of named service groups",
-      "proposed_target": "vaws session"
     },
     ".agents/skills/vllm-ascend-benchmark/scripts/bench_compare.py": {
       "responsibility": "mixed",

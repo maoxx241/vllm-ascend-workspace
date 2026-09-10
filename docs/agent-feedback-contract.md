@@ -422,9 +422,8 @@ Migration is per-script and mechanical once the shared helpers land.
 Add `envelope_*` helpers next to the existing `print_json` / `emit_progress`
 in `vaws_remote_target`, `vllm-ascend-serving/scripts/_common.py`,
 `vllm-ascend-benchmark/scripts/_common.py`,
-`ascend-profiling-collection/scripts/_common.py` and
-`remote-code-parity/scripts/common.py`. Keep both emitters; nothing switches
-yet.
+`ascend-profiling-collection/scripts/_common.py`. Source publication now calls
+the coordinator package; it has no workspace skill emitter to migrate.
 
 **Wave 1 — the shared exec and probe path.**
 `remote_exec.py` / `remote_probe.py` (thin over vaws-remote-dev) and adapter `cli_error`, plus the
@@ -446,7 +445,7 @@ inside the container"), and give it the ability to return `unknown`. Attribute
 device-lease refusals to `device` rather than `blocked`-with-a-string.
 
 **Wave 3 — nested callers.**
-`bench_run.py`, `parity_sync.py`, `collect_torch_profile_case.py`,
+`bench_run.py`, `collect_torch_profile_case.py`,
 `run_remote_analyse.py`, `pd_serving.py`, `change_validation.py`. Replace
 `call_json_command`'s `RuntimeError(...)` string flattening with
 `compose_child`, and re-express `bench_run`'s invented `cleanup_failed` as
@@ -454,7 +453,7 @@ device-lease refusals to `device` rather than `blocked`-with-a-string.
 
 **Wave 4 — fan-out and local state.**
 `pd_serving.py` and any multi-host operation move to `parts[]`.
-`session_*`, `machine_*`, `modelscope_*`, `npu-fleet-monitor` follow; these
+`modelscope_*` and `npu-fleet-monitor` follow; these
 are mostly `caller` / `tool` / local-state faults and are cheap.
 
 **Wave 5 — enforce.**

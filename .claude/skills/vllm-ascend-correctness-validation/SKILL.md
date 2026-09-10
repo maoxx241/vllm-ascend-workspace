@@ -1,18 +1,11 @@
-<!-- Generated Claude Code shim from .agents/skills/vllm-ascend-correctness-validation/SKILL.md. Do not edit. -->
 ---
-name: vllm-ascend-correctness-validation
-description: Plan, execute, normalize, and compare vLLM Ascend inference correctness across baseline and candidate code states, eager and graph modes, offline generate or chat, online chat completions, and AISBench task metrics. Use for accuracy validation, token-output comparison, graph-versus-eager checks, deterministic regression testing, or failure classification. Do not use to root-cause an already reproduced graph-only or isolated-operator failure, or for throughput benchmarking, HBM attribution, or profiling-only analysis.
+name: "vllm-ascend-correctness-validation"
+description: "Plan, execute, normalize, and compare vLLM Ascend inference correctness across baseline and candidate code states, eager and graph modes, offline generate or chat, online chat completions, and AISBench task metrics. Use for accuracy validation, token-output comparison, graph-versus-eager checks, deterministic regression testing, or failure classification. Do not use to root-cause an already reproduced graph-only or isolated-operator failure, or for throughput benchmarking, HBM attribution, or profiling-only analysis."
 ---
+
+<!-- Generated from .agents/skills/vllm-ascend-correctness-validation/SKILL.md. Do not edit. -->
 
 # vLLM Ascend Correctness Validation
 
-Canonical skill source:
-
-`.agents/skills/vllm-ascend-correctness-validation/SKILL.md`
-
-Before using this skill:
-
-1. Read the canonical skill file above.
-2. Follow its routing rules, entrypoints, guardrails, and acceptance criteria.
-3. Use the remote-dev companion tools (`remote_*` MCP tools; CLI fallback `remote-dev <hyphen-tool> ...` or `uv run remote-dev <hyphen-tool> ...`) for ordinary remote endpoint read/edit/bash/search/patch work.
-4. Use this Claude project skill only for the domain workflow described by the canonical source.
+Read `.agents/skills/vllm-ascend-correctness-validation/SKILL.md` and only the references needed
+for the current task. The canonical skill owns the workflow.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Operate a Session Group as a vLLM Ascend prefill/decode deployment."""
+"""Operate one vLLM Ascend prefill/decode topology from its business config."""
 
 from __future__ import annotations
 
@@ -91,48 +91,18 @@ def _load_json(path: Path, label: str) -> dict[str, Any]:
     return payload
 
 
-def validate_config(config: Mapping[str, Any], group: Mapping[str, Any]) -> None:
+def validate_config(config: Mapping[str, Any]) -> None:
     errors: list[str] = []
     if config.get("schema_version") != SCHEMA_VERSION:
         errors.append(f"schema_version must be {SCHEMA_VERSION}")
     for field in ("run_id", "group_id"):
         if not isinstance(config.get(field), str) or not config[field]:
             errors.append(f"{field} must be a non-empty string")
-    if config.get("group_id") != group.get("group_id"):
-        errors.append("config group_id does not match Session Group")
-    if group.get("status") != "ready":
-        errors.append(f"Session Group must be ready, got {group.get('status')}")
-    raw_group_members = group.get("members")
-    group_members: dict[str, Mapping[str, Any]] = {}
-    service_names: set[str] = set()
-    if not isinstance(raw_group_members, list) or not raw_group_members:
-        errors.append("Session Group members must be a non-empty array")
-        raw_group_members = []
-    for index, member in enumerate(raw_group_members):
-        path = f"Session Group members[{index}]"
-        if not isinstance(member, Mapping):
-            errors.append(f"{path} must be an object")
-            continue
-        name = member.get("name")
-        if not isinstance(name, str) or not name:
-            errors.append(f"{path}.name must be a non-empty string")
-        elif name in group_members:
-            errors.append(f"Session Group member name is duplicated: {name}")
-        else:
-            group_members[name] = member
-        service_name = member.get("service") or name
-        if not isinstance(service_name, str) or not service_name:
-            errors.append(f"{path}.service must be a non-empty business name")
-        elif service_name in service_names:
-            errors.append(f"Session Group service is duplicated: {service_name}")
-        else:
-            service_names.add(service_name)
     services = config.get("services")
     if not isinstance(services, list) or len(services) < 2:
         errors.append("services must contain at least one prefill and one decode")
         services = []
     names: set[str] = set()
-    members: set[str] = set()
     roles: set[str] = set()
     for index, service in enumerate(services):
         path = f"services[{index}]"
@@ -140,7 +110,6 @@ def validate_config(config: Mapping[str, Any], group: Mapping[str, Any]) -> None
             errors.append(f"{path} must be an object")
             continue
         name = service.get("name")
-        member = service.get("member")
         role = service.get("role")
         if not isinstance(name, str) or not name:
             errors.append(f"{path}.name must be a non-empty string")
@@ -148,12 +117,6 @@ def validate_config(config: Mapping[str, Any], group: Mapping[str, Any]) -> None
             errors.append(f"service name is duplicated: {name}")
         else:
             names.add(name)
-        if not isinstance(member, str) or member not in group_members:
-            errors.append(f"{path}.member must name a Session Group member")
-        elif member in members:
-            errors.append(f"Session Group member is reused by multiple services: {member}")
-        else:
-            members.add(member)
         if role not in ROLES:
             errors.append(f"{path}.role must be prefill or decode")
         else:
@@ -249,7 +212,6 @@ def plan(
     output_dir: Path,
     *,
     config_path: Path,
-    group_path: Path,
     created_at: str | None = None,
     code: Mapping[str, Any] | None = None,
     workspace_root: Path | None = None,
@@ -257,9 +219,7 @@ def plan(
     if output_dir.exists() and any(output_dir.iterdir()):
         raise PdServingError(f"output directory is not empty: {output_dir}")
     config = _load_json(config_path, "PD config")
-    group = _load_json(group_path, "Session Group")
-    validate_config(config, group)
-    members = {member["name"]: member for member in group["members"]}
+    validate_config(config)
     services = {service["name"]: service for service in config["services"]}
     topology = topology_from_config(config)
     lifecycle = []
@@ -269,14 +229,11 @@ def plan(
             {
                 "name": name,
                 "role": service["role"],
-                "member": service["member"],
-                "service": members[service["member"]].get("service") or members[service["member"]]["name"],
             }
         )
     timestamp = created_at or utc_now()
     output_dir.mkdir(parents=True, exist_ok=True)
     _atomic_write(output_dir / "pd-config.json", config)
-    _atomic_write(output_dir / "session-group.json", group)
     _atomic_write(
         output_dir / "lifecycle.json",
         {
@@ -303,13 +260,12 @@ def plan(
         workspace_root=workspace_root or ROOT,
         workspace_snapshot=code or manifest_code(workspace_root or ROOT),
         topology={
-            "session_group": group["group_id"],
+            "service": config["group_id"],
             "roles": topology["roles"],
             "services": [
                 {
                     "name": service["name"],
                     "role": service["role"],
-                    "member": service["member"],
                 }
                 for service in config["services"]
             ],
@@ -319,7 +275,6 @@ def plan(
     )
     for name, kind, uri in (
         ("pd-config", "pd-config", "pd-config.json"),
-        ("session-group", "session-group", "session-group.json"),
         ("lifecycle", "lifecycle", "lifecycle.json"),
         ("state", "state", "state.json"),
     ):
@@ -344,7 +299,6 @@ def start(
     restart: bool = False,
 ) -> dict[str, Any]:
     config = _load_json(output_dir / "pd-config.json", "PD config")
-    group = _load_json(output_dir / "session-group.json", "Session Group")
     state = _load_json(output_dir / "state.json", "PD state")
     if state["status"] not in {"planned", "queued"}:
         raise PdServingError(f"deployment must be planned or queued, got {state['status']}")
@@ -352,7 +306,7 @@ def start(
     roles = topology["roles"]
     if not roles:
         raise PdServingError("PD topology has no roles")
-    client = client or task_client(context_file or group.get("context_file"))
+    client = client or task_client(context_file)
     environment = named_environment(extra=config.get("environment"))
     reply = run_command(
         client,
@@ -360,7 +314,7 @@ def start(
         environment=environment,
         topology=topology,
         timeout_seconds=None,
-        service=str(group["group_id"]),
+        service=str(config["group_id"]),
         restart=restart,
     )
     timestamp = updated_at or utc_now()
@@ -379,7 +333,7 @@ def start(
             "status": status,
             "execution_id": execution_id,
             "task_id": task_id_of(client),
-            "service": group["group_id"],
+            "service": config["group_id"],
             "state": run_state,
             "assignment": reply.get("assignment"),
             "roles": reply.get("roles"),
@@ -398,7 +352,7 @@ def start(
         "status": status,
         "execution_id": execution_id,
         "state": run_state,
-        "service": group["group_id"],
+        "service": config["group_id"],
         "running": status == "running",
         "ready": False,
         "result": reply,
@@ -413,12 +367,11 @@ def status(
     urlopen: Callable[..., Any] = urllib.request.urlopen,
 ) -> dict[str, Any]:
     config = _load_json(output_dir / "pd-config.json", "PD config")
-    group = _load_json(output_dir / "session-group.json", "Session Group")
     state = _load_json(output_dir / "state.json", "PD state")
     execution_id = state.get("execution_id")
     if not execution_id:
         return {"status": "not_found", "error": "no coordinator execution for this PD run"}
-    client = client or task_client(context_file or group.get("context_file"))
+    client = client or task_client(context_file)
     observation = client.observe(str(execution_id), "status")
     run_state = str(observation.get("state") or "")
     if run_state in PENDING:
@@ -513,23 +466,23 @@ def stop(
     context_file: str | None = None,
     updated_at: str | None = None,
 ) -> dict[str, Any]:
-    group = _load_json(output_dir / "session-group.json", "Session Group")
     state = _load_json(output_dir / "state.json", "PD state")
     execution_id = state.get("execution_id")
     if not execution_id:
         return {"status": "not_found", "container_preserved": True}
-    client = client or task_client(context_file or group.get("context_file"))
+    client = client or task_client(context_file)
     result = client.observe(str(execution_id), "stop", force)
     run_state = str(result.get("state") or "")
     success = run_state in DONE
+    releasing = run_state in {"stopping", "releasing"}
     timestamp = updated_at or utc_now()
-    state["status"] = "stopped" if success else "needs_repair"
+    state["status"] = "stopped" if success else "stopping" if releasing else "needs_repair"
     state["state"] = run_state
     state["stop_result"] = result
     state["updated_at"] = timestamp
     _atomic_write(output_dir / "state.json", state)
     manifest = load_manifest(output_dir / "manifest.json")
-    if manifest["status"] == "running":
+    if manifest["status"] == "running" and not releasing:
         manifest = transition_status(
             manifest, "passed" if success else "inconclusive", updated_at=timestamp
         )
@@ -549,7 +502,6 @@ def build_parser() -> argparse.ArgumentParser:
     plan_parser = subparsers.add_parser("plan")
     plan_parser.add_argument("--output-dir", required=True, type=Path)
     plan_parser.add_argument("--config", required=True, type=Path)
-    plan_parser.add_argument("--group-file", required=True, type=Path)
     plan_parser.add_argument("--context-file")
     for name in ("start", "status", "smoke"):
         subparser = subparsers.add_parser(name)
@@ -569,7 +521,6 @@ def main(argv: list[str] | None = None) -> int:
             payload = plan(
                 args.output_dir,
                 config_path=args.config,
-                group_path=args.group_file,
                 code=manifest_code(ROOT),
             )
         elif args.action == "start":

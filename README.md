@@ -46,21 +46,21 @@ python3 .agents/skills/npu-fleet-monitor/scripts/manage_monitor.py ensure
 
 ## 内置技能
 
+普通任务直接使用 remote-dev、coordinator 与 knowledge 工具。项目用户名并入初始化；知识整理由安装包提供，可用 `uv run python -m vaws_knowledge skill` 按需读取。
+
+
+
 
 | 技能                       | 用途                                             | 何时使用               |
 | ------------------------ | ---------------------------------------------- | ------------------ |
 | **repo-init**            | 安装 GitHub CLI、登录 GitHub、初始化子模块、运行 `uv sync`、配置 Fork 和远程仓库拓扑 | 首次 clone 后初始化工作区   |
-| **machine-management**   | 记录项目用户名 `vaws-<user>`；容器准备由 `vaws-coordinator provision` 负责 | 需要配置远程 NPU 开发机用户名时 |
 | **npu-fleet-monitor**    | 从独立 vaws-top 仓库构建、拉起、检查或停止本地 NPU 监控页面            | 需要持续查看设备、主机和历史资源状态时 |
-| **session-management**   | 创建、检查、分组和清理隔离 session：本地 worktree、远端容器、状态目录和资源 lease | 多 agent、多任务或 PD 场景并行远端执行时 |
-| **remote-code-parity**   | 将本地工作区的完整状态（含未提交的修改）同步到远程容器                    | 在远程机器上运行测试或服务前自动触发 |
 | **modelscope**           | 下载、续传、查看进度并 SHA256 校验 ModelScope 模型权重                  | 需要把模型权重下载到明确目录时 |
 | **vllm-ascend-serving**  | 在远程容器上一键拉起 vLLM Ascend 推理服务，支持 NPU 探测、自动选卡、增量重启 | 需要在远程机器上起推理服务时     |
 | **vllm-ascend-benchmark** | 在远程容器上运行 `vllm bench serve` 性能基准测试，支持多轮预热和统计聚合     | 需要跑吞吐/延迟基准测试或性能回归对比时 |
 | **ascend-memory-profiling** | 采集并分析昇腾 NPU 的 HBM 显存占用，按组件拆分并溯源 | 需要分析 vLLM 推理服务的显存占用时 |
 | **ascend-profiling-collection** | 采集 Ascend torch profiler：起服务、控制 profile 窗口、运行 workload、远端 analyse 并写 manifest | 需要采集 kernel_details/trace_view 时 |
 | **ascend-profiling-analysis** | 分析已采集的 profiler root/manifest，生成 step/layer/operator/cross-rank 诊断报告 | 需要分析 profiling 结果或生成报告时 |
-| **curate-workspace-knowledge** | 审核、去重、提升、拒绝或废弃已验证的项目知识候选；补全 v2 坐标维度并把守上游导出 | 显式要求沉淀、整理、维护或上游贡献项目知识时 |
 | **vllm-ascend-graph-debug** | 定位图编译、捕获、重放及 graph/eager 正确性分歧 | 图模式失败或与 eager 结果不一致时 |
 | **vllm-ascend-correctness-validation** | 对比 baseline/candidate、eager/graph、离线/在线和 AISBench 正确性 | 需要精度验证或输出对拍时 |
 | **vllm-ascend-change-validation** | 根据代码 diff 生成验证计划并汇总证据和 PR 报告 | 验证工作区变更或 PR 时 |
@@ -118,17 +118,13 @@ python3 .agents/skills/npu-fleet-monitor/scripts/manage_monitor.py ensure
 ├── .agents/
 │   ├── skills/
 │   │   ├── repo-init/             # 工作区初始化技能
-│   │   ├── machine-management/    # 远程机器管理技能
 │   │   ├── npu-fleet-monitor/     # 本地 NPU 监控服务部署技能
-│   │   ├── session-management/    # 并行 Session 隔离技能
-│   │   ├── remote-code-parity/    # 代码同步技能
 │   │   ├── modelscope/            # ModelScope 权重下载与校验技能
 │   │   ├── vllm-ascend-serving/   # 服务拉起技能
 │   │   ├── vllm-ascend-benchmark/ # 性能基准测试技能
 │   │   ├── ascend-memory-profiling/ # 显存 profiling 技能
 │   │   ├── ascend-profiling-collection/ # torch profiler 采集技能
 │   │   ├── ascend-profiling-analysis/ # profiling 分析报告技能
-│   │   └── curate-workspace-knowledge/ # 显式知识整理技能
 │   ├── lib/               # 共享本地状态库
 │   └── scripts/           # 共享辅助脚本
 ├── .cursor/rules/         # Cursor IDE 专用规则
@@ -181,9 +177,7 @@ python3 .agents/skills/npu-fleet-monitor/scripts/manage_monitor.py ensure
 ### 已完成
 
 - [x] **repo-init** — 工作区初始化：GitHub CLI 安装、认证、子模块、Fork 与远程仓库拓扑配置
-- [x] **machine-management** — 项目用户名配置：`vaws-<user>` 文档；容器准备由 coordinator provision 负责
 - [x] **npu-fleet-monitor** — 独立 vaws-top 仓库监控服务：自动构建、systemd 用户服务拉起和回环健康检查
-- [x] **remote-code-parity** — 代码同步：将本地完整工作区状态（含未提交修改）同步到远程容器
 - [x] **vllm-ascend-serving** — 服务拉起：支持空闲 NPU 检测、空闲端口检测，一键拉起 vLLM Ascend 推理服务
 - [x] **vllm-ascend-benchmark** — 在线性能基准测试：支持单轮/多轮（warm-service）模式、预热轮剔除、统计聚合，多状态回归对比由 Agent 编排
 - [x] **ascend-memory-profiling** — 显存 profiling：采集并分析 HBM 显存占用，按固定开销、模型权重、KV cache、HCCL、激活、runtime 拆分，支持 msprof 组件级归因

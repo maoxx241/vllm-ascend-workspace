@@ -1,7 +1,0 @@
-interface:
-  display_name: "Curate Workspace Knowledge"
-  short_description: "Review Markdown candidates and prepare public contributions"
-  default_prompt: "Use $curate-workspace-knowledge to review related Markdown, preserve evidence and uncertainty, and prepare an authorized redacted contribution through the installed knowledge package."
-
-policy:
-  allow_implicit_invocation: false

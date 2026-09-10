@@ -50,17 +50,13 @@ After deployment, open <http://127.0.0.1:8788>. The dashboard shows NPU/AICore, 
 | Skill                  | Purpose                                                                                      | When to use                                                |
 | ---------------------- | -------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
 | **repo-init**          | Install GitHub CLI, authenticate, initialize submodules, run `uv sync`, configure forks and remote topology | After first clone                                          |
-| **machine-management** | Record the project username for `vaws-<user>`; container prepare is `vaws-coordinator provision` | When configuring the remote NPU username                   |
 | **npu-fleet-monitor**  | Build, start, inspect, or stop the local NPU dashboard from the standalone vaws-top repository | When continuously monitoring fleet resources and history  |
-| **session-management** | Create, inspect, group, and clean isolated sessions: local worktree, remote container, state namespace, and resource leases | For parallel remote work, multiple agents, or PD deployments |
-| **remote-code-parity** | Sync the full local workspace state (including uncommitted changes) to a remote container    | Triggered automatically before remote test or service runs |
 | **modelscope**       | Download, resume, status-check, and SHA256-verify ModelScope model weights                  | When model weights need to be downloaded into an explicit local directory |
 | **vllm-ascend-serving** | Launch a vLLM Ascend inference service on a remote container, with NPU probing, auto card selection, and incremental restart | When you need an inference service on a remote machine |
 | **vllm-ascend-benchmark** | Run `vllm bench serve` performance benchmarks on a remote container, with multi-run warmup and statistical aggregation | When you need throughput/latency benchmarks or performance regression checks |
 | **ascend-memory-profiling** | Profile and attribute HBM memory usage on Ascend NPU, with per-component breakdown and evidence chains | When you need to analyze memory consumption of a vLLM serving workload |
 | **ascend-profiling-collection** | Collect Ascend torch-profiler data: start service, bracket profile window, run workload, remote analyse, and write a manifest | When you need kernel_details/trace_view captures |
 | **ascend-profiling-analysis** | Analyze collected profiler roots/manifests and generate step/layer/operator/cross-rank reports | When you need to analyze profiling output |
-| **curate-workspace-knowledge** | Review, deduplicate, promote, reject, or deprecate verified project knowledge candidates | When explicitly curating or maintaining project knowledge |
 | **vllm-ascend-graph-debug** | Diagnose graph compile, capture, replay, and graph/eager correctness divergence | When graph mode fails or diverges from eager mode |
 | **vllm-ascend-correctness-validation** | Compare baseline/candidate, eager/graph, offline/online, and AISBench correctness | When validating accuracy or normalized outputs |
 | **vllm-ascend-change-validation** | Derive validation plans from code diffs and aggregate PR evidence | When validating a workspace change or PR |
@@ -117,17 +113,13 @@ When talking to an Agent:
 ├── .agents/
 │   ├── skills/
 │   │   ├── repo-init/         # Workspace initialization skill
-│   │   ├── machine-management/    # Remote machine management skill
 │   │   ├── npu-fleet-monitor/     # Local NPU monitor deployment skill
-│   │   ├── session-management/    # Parallel session isolation skill
-│   │   ├── remote-code-parity/    # Code synchronization skill
 │   │   ├── modelscope/            # ModelScope weight download and verification skill
 │   │   ├── vllm-ascend-serving/   # Inference serving skill
 │   │   ├── vllm-ascend-benchmark/ # Performance benchmarking skill
 │   │   ├── ascend-memory-profiling/ # Memory profiling skill
 │   │   ├── ascend-profiling-collection/ # Torch profiler collection skill
 │   │   ├── ascend-profiling-analysis/ # Profiling analysis/report skill
-│   │   └── curate-workspace-knowledge/ # Explicit knowledge curation skill
 │   ├── lib/               # Shared local-state library
 │   └── scripts/           # Shared helper scripts
 ├── .cursor/rules/         # Cursor IDE specific rules
@@ -178,9 +170,7 @@ This repository supports mainstream AI coding tools:
 ### Done
 
 - **repo-init** — Workspace initialization: GitHub CLI install, auth, submodules, fork & remote topology
-- **machine-management** — Project username config for `vaws-<user>`; container prepare is coordinator provision
 - **npu-fleet-monitor** — Standalone vaws-top repository monitoring service with automatic build, user-systemd startup, and loopback health checks
-- **remote-code-parity** — Code sync: push full local workspace state (including uncommitted changes) to remote containers
 - **vllm-ascend-serving** — Service launch: idle NPU detection, idle port detection, one-click vLLM Ascend inference serving
 - **vllm-ascend-benchmark** — Online performance benchmarking: single-run / multi-run (warm-service) mode, warmup exclusion, statistical aggregation; multi-state regression comparisons orchestrated by the Agent
 - **ascend-memory-profiling** — Memory profiling: collect and analyze HBM usage, per-component breakdown (fixed overhead, weights, KV cache, HCCL, activations, runtime), with msprof component-level attribution

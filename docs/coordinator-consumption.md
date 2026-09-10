@@ -98,3 +98,30 @@ and returns per-role `target` / `tail` on `observe(..., role=...)` and on
 `roles[]`. Unmatched environment constraints stay `waiting_for_runtime`. CLI:
 `python3 .agents/scripts/vaws.py session|run|execution|finish`. MCP:
 `python -m vaws_coordinator task-server`.
+
+## 5. Source publication to an explicit endpoint
+
+Managed `run` prepares its bound sources. It needs neither a session-management
+skill nor a separate parity invocation. Use native Git to inspect local worktrees.
+
+For a prepared direct endpoint outside a managed execution, the optional thin
+adapters only construct/call `python -m vaws_coordinator.parity sync` in
+`source-only` mode:
+
+```bash
+python3 .agents/scripts/remote_sync_plan.py --host <container-host> --port <ssh-port> \
+  --runtime-root <prepared-root> --source vllm=<actual-vllm-worktree> \
+  --source vllm-ascend=<actual-ascend-worktree>
+python3 .agents/scripts/remote_sync_apply.py --host <container-host> --port <ssh-port> \
+  --runtime-root <prepared-root> --source vllm=<actual-vllm-worktree> \
+  --source vllm-ascend=<actual-ascend-worktree> --dry-run
+```
+
+The plan prints the exact package command without remote I/O. Drop `--dry-run`
+only for the requested source publication. The adapters refuse an execution ID;
+source-only publication does not materialize, install or repair a managed
+runtime. Package help is the authority for advanced parity operations.
+
+PD business input contains its service name and complete roles in one config.
+`pd_serving.py plan --config ...` no longer creates or consumes a separate
+Session Group registry; start still submits one coordinator topology run.

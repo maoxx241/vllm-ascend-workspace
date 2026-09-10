@@ -218,6 +218,105 @@
       "removed_by": "historical-evidence",
       "accepted_on": "2026-09-08",
       "why": "dated #85 CLI snapshot pinned by test_cli_surface_inventory.py; paths describe the pre-extraction tree"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/cli-surface.md",
+      "named_path": "\u002eagents/skills/curate-workspace-knowledge/scripts/knowledge_curate.py",
+      "resolved": "\u002eagents/skills/curate-workspace-knowledge/scripts/knowledge_curate.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-11",
+      "why": "dated #85 CLI snapshot; management skills retired in favor of installed package APIs"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/cli-surface.md",
+      "named_path": "\u002eagents/skills/machine-management/scripts/machine_add.py",
+      "resolved": "\u002eagents/skills/machine-management/scripts/machine_add.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-11",
+      "why": "dated #85 CLI snapshot; management skills retired in favor of installed package APIs"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/cli-surface.md",
+      "named_path": "\u002eagents/skills/machine-management/scripts/machine_verify.py",
+      "resolved": "\u002eagents/skills/machine-management/scripts/machine_verify.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-11",
+      "why": "dated #85 CLI snapshot; management skills retired in favor of installed package APIs"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/cli-surface.md",
+      "named_path": "\u002eagents/skills/remote-code-parity/scripts/gc_runtime_cache.py",
+      "resolved": "\u002eagents/skills/remote-code-parity/scripts/gc_runtime_cache.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-11",
+      "why": "dated #85 CLI snapshot; management skills retired in favor of installed package APIs"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/cli-surface.md",
+      "named_path": "\u002eagents/skills/remote-code-parity/scripts/parity_sync.py",
+      "resolved": "\u002eagents/skills/remote-code-parity/scripts/parity_sync.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-11",
+      "why": "dated #85 CLI snapshot; management skills retired in favor of installed package APIs"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/cli-surface.md",
+      "named_path": "\u002eagents/skills/remote-code-parity/scripts/parity_watch.py",
+      "resolved": "\u002eagents/skills/remote-code-parity/scripts/parity_watch.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-11",
+      "why": "dated #85 CLI snapshot; management skills retired in favor of installed package APIs"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/cli-surface.md",
+      "named_path": "\u002eagents/skills/remote-code-parity/scripts/remote_code_parity.py",
+      "resolved": "\u002eagents/skills/remote-code-parity/scripts/remote_code_parity.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-11",
+      "why": "dated #85 CLI snapshot; management skills retired in favor of installed package APIs"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/cli-surface.md",
+      "named_path": "\u002eagents/skills/remote-code-parity/scripts/transport_benchmark.py",
+      "resolved": "\u002eagents/skills/remote-code-parity/scripts/transport_benchmark.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-11",
+      "why": "dated #85 CLI snapshot; management skills retired in favor of installed package APIs"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/cli-surface.md",
+      "named_path": "\u002eagents/skills/session-management/scripts/session_diff.py",
+      "resolved": "\u002eagents/skills/session-management/scripts/session_diff.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-11",
+      "why": "dated #85 CLI snapshot; management skills retired in favor of installed package APIs"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/cli-surface.md",
+      "named_path": "\u002eagents/skills/session-management/scripts/session_gc.py",
+      "resolved": "\u002eagents/skills/session-management/scripts/session_gc.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-11",
+      "why": "dated #85 CLI snapshot; management skills retired in favor of installed package APIs"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/cli-surface.md",
+      "named_path": "\u002eagents/skills/session-management/scripts/session_group.py",
+      "resolved": "\u002eagents/skills/session-management/scripts/session_group.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-11",
+      "why": "dated #85 CLI snapshot; management skills retired in favor of installed package APIs"
     }
   ],
   "accepted_counts_by_attribution": {

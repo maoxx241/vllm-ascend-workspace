@@ -1,310 +1,43 @@
-# Repo-local skills
+# Workspace skills and client wiring
 
-This directory contains the repository-local skill layer for Codex, Claude Code, and similar agents.
+The workspace keeps project materials, installation/client wiring and business
+skills. Runtime behavior belongs to the four installed components; see
+[AGENTS.md](../AGENTS.md) and [target-state.md](../docs/target-state.md).
 
-The canonical scaffold repository is `vllm-ascend-workspace/vllm-ascend-workspace`.
-Current clone, fork, and remote-topology guidance lives in the `repo-init`
-skill; matching personal forks are local remote candidates, not community upstreams.
+- `skills/repo-init/` initializes or repairs workspace configuration and clients.
+- `skills/npu-fleet-monitor/` starts, checks or stops the local uvx monitor.
+- Other `skills/` directories add vLLM-Ascend business methods such as serving,
+  measurements, profiling and debugging. Their `SKILL.md` files are the source
+  of truth; the client skill catalog provides discovery.
+- `scripts/vaws.py` forwards session/run/execution/finish to coordinator.
+  Bind actual worktrees through session; use native Git for source inspection.
+- `scripts/workspace_profile.py` and repo-init manage the local username
+  document. Provisioning and runtime ownership remain in coordinator.
+- `scripts/remote_sync_plan.py` and `remote_sync_apply.py` are optional direct
+  source-only adapters over coordinator parity. Managed runs prepare sources
+  themselves and do not use a separate sync step.
+- `scripts/knowledge_query.py` and `knowledge_capture.py` are thin package CLIs.
+  Knowledge setup is `scripts/knowledge_setup.py`. Legacy YAML export and
+  validation remain maintenance tools for existing records only.
 
-Remote development is the installed `vaws-remote-dev` package. Use native
-local tools for local work, and use remote-dev companion tools for remote
-endpoint work:
+For explicit knowledge editing, run `uv run python -m vaws_knowledge skill`.
+The optional `curate-knowledge` skill is shipped by that package, not maintained
+in this workspace. Native clients can install it into a chosen skill directory
+with the package command's `--install-dir` option. Ordinary lookup, capture and
+task completion require no curation skill.
 
-- `remote.read`
-- `remote.write`
-- `remote.edit`
-- `remote.multi_edit`
-- `remote.bash`
-- `remote.glob`
-- `remote.grep`
-- `remote.ls`
-- `remote.monitor`
-- `remote.apply_patch`
+## Maintaining skills
 
-The `.agents` skills remain the domain workflow layer. They should consume the
-remote-dev substrate and keep the older VAWS remote-toolbox wrappers as
-compatibility backend for managed sessions, sync, service adapters, and cleanup.
+Keep names/descriptions specific enough for discovery. Put task decisions and
+common entry points in SKILL.md; put detailed formats and conditional procedures
+in linked references. Do not duplicate package APIs or add a compulsory
+management workflow before business work.
 
-## Layout
+`.claude/skills/` contains generated routing shims. ModelScope's Trae package is
+also generated; remaining Trae stubs link to their canonical skill. Regenerate
+with `python3 .agents/scripts/sync_claude_skills.py` and verify with `--check`.
+`python3 .agents/scripts/skill_catalog.py --help` lists catalog checks.
 
-- `.agents/skills/repo-init/` is the source-of-truth skill package for repository initialization.
-- `.agents/skills/machine-management/` is the source-of-truth skill package for remote machine attach, verify, repair, and removal workflows.
-- `.agents/skills/npu-fleet-monitor/` is the local deployment and lifecycle package for the standalone vaws-top repository and its loopback user service.
-- `.agents/skills/session-management/` is the source-of-truth skill package for isolated parallel agent sessions.
-- `.agents/skills/remote-code-parity/` is the source-of-truth skill package for remote code parity before remote execution.
-- `.agents/skills/modelscope/` is the source-of-truth skill package for ModelScope weight download, resume, status, and SHA256 verification workflows.
-- `.agents/skills/vllm-ascend-serving/` is the source-of-truth skill package for starting, checking, and stopping vLLM Ascend online services on managed containers.
-- `.agents/skills/vllm-ascend-benchmark/` is the source-of-truth skill package for running `vllm bench serve` performance benchmarks on managed containers.
-- `.agents/skills/ascend-memory-profiling/` is the source-of-truth skill package for profiling and attributing HBM memory usage on Ascend NPU for vLLM serving scenarios.
-- `.agents/skills/ascend-profiling-collection/` is the source-of-truth skill package for collecting Ascend torch-profiler traces and verified manifests.
-- `.agents/skills/ascend-profiling-analysis/` is the source-of-truth skill package for analyzing collected profiler roots/manifests and generating reports.
-- `.agents/skills/curate-workspace-knowledge/` is the explicit-only package for reviewing and promoting verified candidates into formal knowledge files, resolving unresolved v2 coordinate dimensions, and gating upstream export.
-- `.agents/skills/vllm-ascend-graph-debug/` diagnoses graph compile, capture, replay, and graph/eager divergence.
-- `.agents/skills/vllm-ascend-correctness-validation/` compares normalized baseline/candidate and eager/graph correctness.
-- `.agents/skills/vllm-ascend-change-validation/` plans diff-driven validation and aggregates evidence.
-- `.agents/skills/vllm-ascend-performance-regression/` runs controlled alternating performance experiments.
-- `.agents/skills/vllm-ascend-distributed-debug/` records topology and per-rank distributed evidence.
-- `.agents/skills/ascend-tensor-dump/` captures bounded intermediate tensor dumps and locates the first divergent stage.
-- `.agents/skills/ascend-operator-debug/` builds isolated Ascend operator case matrices.
-- `.agents/skills/ascend-triton-operator-development/` develops a first correct Ascend Triton candidate.
-- `.agents/skills/ascend-triton-kernel-validation/` gates fallback and correctness.
-- `.agents/skills/ascend-triton-kernel-optimization/` records profiler-driven tuning decisions.
-- `.agents/skills/ascend-triton-workflow/` links the Triton lifecycle through Run Manifest evidence.
-- `.agents/skills/vllm-ascend-pd-serving/` orchestrates grouped prefill/decode serving.
-- `.agents/scripts/workspace_profile.py` is the shared low-level helper for the local workspace machine profile.
-- `.agents/scripts/workspace_identity.py` manages the persistent local UUID4 and optional unified project/agent/resource alias.
-- `.agents/scripts/run_manifest.py` creates and validates shared Run Manifest v1 files.
-- `.agents/scripts/knowledge_validate.py` validates project-layer v2 documents and reports the redaction posture of the project layer.
-- `.agents/scripts/knowledge_query.py` is a thin CLI over `vaws_knowledge.server.query`. It prints the commons `QueryResponse` envelope (layer, source_ref, degraded). Agents can call the same engine through the `vaws-knowledge` MCP tools.
-- `.agents/scripts/knowledge_capture.py` records or merges one verified, redacted candidate without loading a Skill, reading the environment coordinate from a Run Manifest, `--env` pairs, or the candidate scope.
-- `.agents/scripts/knowledge_export.py` is the source-side export gate for proposing project knowledge to `vllm-ascend-workspace/vaws-knowledge`.
-- `.agents/hooks/knowledge_session_end.py` flushes only candidates explicitly deferred for the ending Codex session; it never reads the transcript.
-- `.agents/knowledge/` is the project layer: federated v2 `<kind>.v2.yaml` documents only.
-- `.agents/schemas/` stores the machine-readable Run Manifest and knowledge contracts, including the project-layer v2 and candidate v2 schemas.
-- `.agents/lib/vaws_local_state.py` is the shared library for untracked local runtime state.
-- `vaws_coordinator.run_manifest` is the shared Run Manifest v1 library for workflow correlation and artifact links.
-- `.agents/lib/vaws_knowledge_v2.py` is project I/O and curation over the installed `vaws-knowledge` engine (schema, hash, redaction, export, contradiction).
-- `.agents/lib/vaws_knowledge_service.py` builds the scaffold `ServiceConfig` (packaged shared + this repo's project/candidate roots).
-- `.agents/tests/knowledge_client_adapter.py` is the tracked protocol adapter for the vaws-knowledge conformance kit shipped with the package.
-- `.agents/lib/vaws_redaction.py` is the scaffold redaction policy (BLOCK/EXPORT and recursive scan) over `vaws_knowledge.redact`. Detection rules and the live profile are declared by that package.
-- `.agents/lib/vaws_session_id.py` and `.agents/lib/vaws_session_state.py` are local identity/business-report helpers. Resource ownership is coordinator.
-- `.agents/lib/vaws_remote_dev.py` injects scaffold environment into the installed `vaws-remote-dev` package and is the only scaffold place that may call its SSH transport.
-- `.agents/lib/vaws_remote_target.py` maps ordinary host/port or coordinator execution endpoints. It is not SSH transport.
-- `.agents/lib/vaws_remote_adapters.py` is a thin wrapper over serving and source-only parity.
-- `.agents/lib/vaws_validate.py` is the shared validation library for agent-facing ids, environment names, path boundaries, and NPU device lists.
-- `.agents/lib/vaws_coordinator_launch.py` launches the installed vaws-coordinator package (task identity, `vaws_*` tools, runtime pool).
-- `AGENTS.md` carries repository-wide routing rules and mandatory decision gates.
-
-## Script-first convention
-
-When a workflow has deterministic shell, SSH, Git, or local-state mechanics, prefer the helper script instead of rebuilding the command inline in the conversation.
-
-Wrapper-style helpers should stream bounded phase progress on `stderr` and keep one final machine-readable JSON payload on `stdout`.
-
-For machine-management specifically, this skill only stores the project username. Container prepare, image selection, repair, and deletion belong to `python -m vaws_coordinator provision --host ... --image ... --user ...`. `--image` is `local-latest`, `rc`, `main`, `stable`, or a concrete image reference. Do not silently fall back to `auto`, `latest`, or another moving tag.
-
-When you add or revise a helper script, keep the CLI alias-tolerant and give safe defaults for metadata that can be inferred. The goal is to reduce agent parameter brittleness, not to force one exact flag spelling.
-
-Current primary helpers:
-
-- `repo-init/scripts/repo_init_probe.py`
-- `repo-init/scripts/repo_init_profile.py`
-- `repo-init/scripts/repo_topology.py`
-- `machine-management/scripts/machine_add.py`
-- `machine-management/scripts/machine_verify.py`
-- `npu-fleet-monitor/scripts/manage_monitor.py`
-- `session-management/scripts/session_diff.py`
-- `session-management/scripts/session_group.py`
-- `session-management/scripts/session_gc.py`
-- `scripts/remote_target_resolve.py`
-- `scripts/remote_probe.py`
-- `scripts/remote_exec.py`
-- `scripts/remote_job_start.py`
-- `scripts/remote_job_status.py`
-- `scripts/remote_job_tail.py`
-- `scripts/remote_job_stop.py`
-- `scripts/remote_job_collect.py`
-- `scripts/remote_sync_plan.py`
-- `scripts/remote_sync_apply.py`
-- `scripts/remote_service_start.py`
-- `scripts/remote_service_status.py`
-- `scripts/remote_service_logs.py`
-- `scripts/remote_service_stop.py`
-- `scripts/remote_artifact_manifest.py`
-- `scripts/remote_artifact_pull.py`
-- `scripts/remote_artifact_push.py`
-- `scripts/remote_cleanup.py`
-- `remote-code-parity/scripts/parity_sync.py`
-- `remote-code-parity/scripts/remote_code_parity.py`
-- `remote-code-parity/scripts/gc_runtime_cache.py`
-- `modelscope/scripts/modelscope_auto.py`
-- `modelscope/scripts/download_from_modelscope.py`
-- `modelscope/scripts/modelscope_download_status.py`
-- `modelscope/scripts/verify_modelscope_sha256.py`
-- `vllm-ascend-serving/scripts/serve_start.py`
-- `vllm-ascend-serving/scripts/serve_status.py`
-- `vllm-ascend-serving/scripts/serve_stop.py`
-- `vllm-ascend-serving/scripts/serve_probe_npus.py`
-- `vllm-ascend-benchmark/scripts/bench_run.py`
-- `ascend-memory-profiling/scripts/mem_collect.py`
-- `ascend-memory-profiling/scripts/mem_analyze.py`
-- `ascend-memory-profiling/scripts/weight_inspector.py`
-- `ascend-profiling-collection/scripts/collect_torch_profile_case.py`
-- `ascend-profiling-collection/scripts/profile_control.py`
-- `ascend-profiling-collection/scripts/run_remote_analyse.py`
-- `ascend-profiling-analysis/scripts/profile_analyze.py`
-- `ascend-profiling-analysis/scripts/profile_sweep.py`
-- `curate-workspace-knowledge/scripts/knowledge_curate.py`
-- `vllm-ascend-graph-debug/scripts/graph_debug_case.py`
-- `vllm-ascend-correctness-validation/scripts/correctness_run.py`
-- `vllm-ascend-change-validation/scripts/change_validation.py`
-- `vllm-ascend-performance-regression/scripts/performance_regression.py`
-- `vllm-ascend-distributed-debug/scripts/distributed_debug.py`
-- `ascend-tensor-dump/scripts/dump_compare.py`
-- `ascend-operator-debug/scripts/operator_debug.py`
-- `ascend-triton-operator-development/scripts/triton_development.py`
-- `ascend-triton-kernel-validation/scripts/triton_validation.py`
-- `ascend-triton-kernel-optimization/scripts/triton_optimization.py`
-- `ascend-triton-workflow/scripts/triton_workflow.py`
-- `vllm-ascend-pd-serving/scripts/pd_serving.py`
-- `scripts/run_manifest.py`
-- `scripts/knowledge_validate.py`
-- `scripts/knowledge_query.py`
-- `scripts/knowledge_capture.py`
-- `scripts/knowledge_export.py`
-- `scripts/workspace_profile.py`
-- `.agents/tests/test_vaws_scaffold_safety.py`
-
-Deleted machine-management helpers (do not call): `inventory.py`,
-`manage_machine.py`, `machine_repair.py`, `machine_remove.py`. Container
-prepare is `python -m vaws_coordinator provision`.
-
-Reference files under `references/` are fallback detail, not the default execution path.
-
-## Local runtime state
-
-Untracked workspace-local state lives under `.vaws-local/`:
-
-- `.vaws-local/workspace-identity.json`
-- `.vaws-local/machine-profile.json`
-- `<primary-worktree>/.vaws-local/machine-inventory.json` (shared by linked Git worktrees)
-- `.vaws-local/remote-code-parity/install-consents.json`
-- `.vaws-local/remote-code-parity/runtime-state.json`
-- `.vaws-local/serving/<machine-alias>.json`
-- `.vaws-local/remote-toolbox/logs/`
-- `.vaws-local/remote-toolbox/jobs/`
-- `.vaws-local/remote-toolbox/artifacts/`
-- `.vaws-local/sessions/<session-id>/session.json`
-- `.vaws-local/sessions/<session-id>/serving.json`
-- `.vaws-local/sessions/leases.json`
-- `.vaws-local/benchmark/`
-- `.vaws-local/memory-profiling/`
-- `.vaws-local/ascend-profiling-collection/runs/`
-- `.vaws-local/profiling-analysis/runs/`
-- `.vaws-local/knowledge/candidate/`
-- `.vaws-local/knowledge/pending/<session-key>/`
-- `.vaws-local/knowledge/session-end/`
-- `.vaws-local/knowledge/reviewed/`
-- `.vaws-local/knowledge/export/` (upstream proposal bundles and export ledger)
-
-Parallel remote work should use `session-management` first. A session owns a local worktree, a dedicated remote container, session-scoped serving/benchmark/profiling state, and resource leases. Existing `--machine` commands remain legacy-compatible for single-tenant workflows.
-
-Independent agents with separate workspace-local lease files may optionally use
-`session-management/scripts/npu_coordination.py`. The protocol module it ships
-is the coordinator-owned `vaws_coordinator.host.vaws_npu_coordination` from
-the installed package. It keeps an ephemeral, host-shared SQLite queue under
-`/tmp/vaws-npu-coordinator/v1/`, defers to actual host NPU occupancy and
-manual holds, and never becomes a mandatory execution gate.
-
-The remote-dev substrate is the preferred agent-facing surface once an endpoint
-exists. It resolves host/port direct endpoints by default, mirrors native
-read/edit/bash/search/patch semantics, records local refs under
-`.vaws-local/remote-dev-state/`, and exposes an MCP server plus CLI fallbacks.
-
-The remote toolbox remains the managed VAWS backend. It resolves host and
-container endpoints, probes actual runtime facts, runs bounded remote shell
-commands with local logs, tracks long jobs, splits source-only/materialize/install
-sync modes, wraps service lifecycle entrypoints, transfers artifacts with SSH
-streaming plus hash manifests, and performs dry-run-capable cleanup.
-
-Remote-code-parity transport is container-only after machine attach: use machine inventory to resolve the target, then push synthetic refs directly into the container-local cache root. Synthetic mirrors should also publish an advertised branch ref for the current snapshot so nested repos can be materialized without brittle submodule fetch behavior. Runtime installs should use the single A3-tested HuaweiCloud pip index, stream progress for long package steps, and keep consent/runtime-state writes atomic.
-
-The legacy repo-root `.machine-inventory.json` and any pre-existing linked-worktree `.vaws-local/machine-inventory.json` are compatibility inputs only. New writes use the primary worktree inventory; session, serving, benchmark, profiling, log, and artifact state stays isolated under the current worktree's `.vaws-local/`.
-
-Key guardrail:
-
-- broad init silently creates the persistent workspace UUID4, but must ask once before setting or declining a unified alias
-- on a missing machine profile, `workspace_profile.py ensure` now requires either `--username` or `--generate`
-- broad init should normally go through `repo-init/scripts/repo_init_profile.py`, which narrows the machine-username choice to: detected Git username, random `agent#####`, or custom
-- this prevents silent default usernames during broad init or first machine attach
-
-## Maintenance rule
-
-If you change `repo-init`, update these together:
-
-- `.agents/skills/repo-init/SKILL.md`
-- `.agents/skills/repo-init/references/`
-- `.agents/skills/repo-init/scripts/`
-- shared helpers when the workflow depends on local profile state
-
-If you change `machine-management`, update these together:
-
-- `.agents/skills/machine-management/SKILL.md`
-- `.agents/skills/machine-management/references/`
-- `.agents/skills/machine-management/scripts/`
-- shared helpers when the workflow depends on local profile or inventory state
-
-If you change `session-management`, update these together:
-
-- `.agents/skills/session-management/SKILL.md`
-- `.agents/skills/session-management/references/`
-- `.agents/skills/session-management/scripts/`
-- `.agents/lib/vaws_session_id.py`
-- `.agents/lib/vaws_session_state.py`
-- `AGENTS.md`, `README.md`, and this file when routing or local-state behavior changes
-
-If you change remote transport or target resolution, update these together:
-
-- `.agents/scripts/remote_*.py`
-- `.agents/lib/vaws_remote_dev.py`
-- `.agents/lib/vaws_remote_target.py`
-- `.agents/lib/vaws_remote_adapters.py`
-- affected skill `_common.py` files that call `ssh_exec` / `ssh_stream` / `ssh_argv`
-- `.agents/lib/vaws_validate.py` when changing accepted id, env, path, or device syntax
-- `.agents/tests/test_vaws_scaffold_safety.py` and `.agents/tests/test_remote_dev_transport.py`
-- `AGENTS.md`, `README.md`, and this file when routing or output contracts change
-
-If you change `vllm-ascend-serving`, update these together:
-
-- `.agents/skills/vllm-ascend-serving/SKILL.md`
-- `.agents/skills/vllm-ascend-serving/references/`
-- `.agents/skills/vllm-ascend-serving/scripts/`
-- `AGENTS.md` and this file when routing or local-state behavior changes
-
-If you change `vllm-ascend-benchmark`, update these together:
-
-- `.agents/skills/vllm-ascend-benchmark/SKILL.md`
-- `.agents/skills/vllm-ascend-benchmark/references/`
-- `.agents/skills/vllm-ascend-benchmark/scripts/`
-- `AGENTS.md` and this file when routing or output contract changes
-
-If you change `ascend-memory-profiling`, update these together:
-
-- `.agents/skills/ascend-memory-profiling/SKILL.md`
-- `.agents/skills/ascend-memory-profiling/scripts/`
-- `AGENTS.md` and this file when routing, output contract, or local-state behavior changes
-
-If you change `ascend-profiling-collection`, update these together:
-
-- `.agents/skills/ascend-profiling-collection/SKILL.md`
-- `.agents/skills/ascend-profiling-collection/references/`
-- `.agents/skills/ascend-profiling-collection/scripts/`
-- `AGENTS.md` and this file when routing, output contract, or local-state behavior changes
-
-If you change `ascend-profiling-analysis`, update these together:
-
-- `.agents/skills/ascend-profiling-analysis/SKILL.md`
-- `.agents/skills/ascend-profiling-analysis/references/`
-- `.agents/skills/ascend-profiling-analysis/scripts/`
-- `AGENTS.md` and this file when routing, output contract, or local-state behavior changes
-
-If you change `remote-code-parity`, update these together:
-
-- `.agents/skills/remote-code-parity/SKILL.md`
-- `.agents/skills/remote-code-parity/references/`
-- `.agents/skills/remote-code-parity/scripts/`
-- `AGENTS.md`, `README.md`, and this file when routing, transport model, or local-state behavior changes
-
-If you change `modelscope`, update these together:
-
-- `.agents/skills/modelscope/SKILL.md`
-- `.agents/skills/modelscope/scripts/`
-- `.agents/skills/modelscope/agents/`
-- `.trae/skills/modelscope` via `python3 .agents/scripts/sync_claude_skills.py`
-- `AGENTS.md`, `README.md`, and this file when routing or output contract changes
-
-Keep the files under `.agents/skills/` as the canonical supporting files for repo-local skills.
-
-## Cursor IDE integration
-
-Cursor IDE users: see `.cursor/rules/` for IDE-specific glob-activated rules that complement `AGENTS.md`. These rules are a thin pointer layer — they do not duplicate skill or routing content, and are designed to remain stable across submodule version switches.
+Local control-plane tests belong in `.agents/tests/` or the owning business
+skill. Preserve caller coverage when moving code out of a retired skill; device
+execution and model tests still require remote Ascend hardware.

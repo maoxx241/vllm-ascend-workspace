@@ -225,9 +225,8 @@ CANN Runtime                   |      125.3 |      0.122 |   0.4% | msprof npu_m
 | Skill | Interaction |
 |-------|-------------|
 | `vllm-ascend-serving` | **Service lifecycle**: Use `serve_start.py` / `serve_stop.py`. Attach mode uses `--execution-id` / `--service`. |
-| `session-management` | Bind actual worktrees. Remote runtime belongs to coordinator. |
-| `machine-management` | **Base machine registry**: Sessions are created on top of registered machines; this skill itself only targets sessions. |
-| `remote-code-parity` | **Automatic via serving**: The serving skill calls parity sync before service start. |
+| `vaws_session` | Bind actual worktrees through native task context. |
+| `vaws-coordinator` | Own managed environments, device allocation and source preparation. |
 
 ## Critical rules
 

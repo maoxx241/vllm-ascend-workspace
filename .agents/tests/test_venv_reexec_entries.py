@@ -74,8 +74,7 @@ class VenvReexecEntryTests(unittest.TestCase):
         interpreter = _system_python()
         entries = packaged_entries()
         self.assertTrue(entries)
-        curate = ROOT / ".agents" / "skills" / "curate-workspace-knowledge" / "scripts" / "knowledge_curate.py"
-        self.assertIn(curate, entries)
+        self.assertIn(ROOT / ".agents/scripts/knowledge_capture.py", entries)
         env = os.environ.copy()
         env.pop("VIRTUAL_ENV", None)
         env.pop("PYTHONPATH", None)

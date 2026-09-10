@@ -1,25 +1,26 @@
 # PD Serving acceptance
 
-## Preconditions
+## Business input
 
-- [ ] Session Group is ready and all members share one code/submodule snapshot.
-- [ ] Missing member names, session IDs, or snapshots fail validation before lifecycle files are created.
-- [ ] Distinct group members cannot alias the same session ID.
-- [ ] Every service uses a unique group member.
-- [ ] Prefill and decode roles both exist.
-- [ ] Connector type, options, role-specific CLI JSON, endpoints, and ports are explicit.
+- The config alone defines unique service names, both prefill/decode roles,
+  model/parallelism, connector arguments and proxy request. No group file is
+  required and no task context is inferred from saved config.
+- Invalid or duplicate roles/names fail before lifecycle files are created.
+- The role list contains every service once. Actual code identity is recorded
+  through the coordinator contract.
 
-## Lifecycle
+## Managed execution
 
-- [ ] Startup follows the declared order.
-- [ ] Partial startup failure rolls back started roles in reverse.
-- [ ] Status covers every vLLM service and the proxy health endpoint.
-- [ ] Stop covers every role in reverse startup order.
-- [ ] State and Run Manifest retain all lifecycle results.
+- Start submits one topology run containing every role and its exact command,
+  environment and resource requirements. Coordinator owns admission, startup
+  failure handling and resource release.
+- Queued/preparing is not running. Status and stop address the same owned
+  execution; proxy health is only checked for a running deployment.
+- State and Run Manifest retain actual results. The workspace does not create
+  another registry or per-role allocation/rollback loop.
 
 ## Smoke
 
-- [ ] Request enters through the proxy rather than a role's direct endpoint.
-- [ ] HTTP status and response body are preserved.
-- [ ] Service logs or connector metrics corroborate KV transfer before making that claim.
-- [ ] Correctness and performance conclusions are produced by their own workflows.
+- The request goes through the proxy, and its response is preserved.
+- Service logs or connector metrics corroborate KV transfer before that claim.
+- Correctness and performance conclusions require their own business evidence.

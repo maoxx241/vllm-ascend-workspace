@@ -87,7 +87,6 @@ class ConstantsTests(unittest.TestCase):
         text = SCRIPT.read_text(encoding="utf-8")
         for forbidden in ("vaws_dep", "agents/deps", "systemctl", "system" "d", "git clone", "user-service", "npm"):
             self.assertNotIn(forbidden, text)
-        self.assertNotIn("vaws_dep", " ".join(sys.modules))
 
     def test_runtime_dir_lives_under_untracked_local_state(self) -> None:
         with tempfile.TemporaryDirectory() as root:
@@ -113,9 +112,7 @@ class EnvironmentTests(unittest.TestCase):
             env = MODULE.consumer_env(namespace(), repo_root=repo, inherited={})
             self.assertEqual(env["NFM_INVENTORY_FILES"], str(MODULE.shared_inventory_path(repo)))
             self.assertNotIn("NFM_HOST_POOL_FILES", env)
-            self.assertIn("bootstrap-host-key", env["NFM_BOOTSTRAP_COMMAND"])
-            self.assertIn("--password-stdin", env["NFM_BOOTSTRAP_COMMAND"])
-            self.assertNotIn("{password}", env["NFM_BOOTSTRAP_COMMAND"])
+            self.assertNotIn("NFM_BOOTSTRAP_COMMAND", env)
             (repo / "hosts.txt").write_text("192.0.2.10\n", encoding="utf-8")
             env = MODULE.consumer_env(namespace(), repo_root=repo, inherited={})
             self.assertEqual(env["NFM_HOST_POOL_FILES"], str(repo.resolve() / "hosts.txt"))

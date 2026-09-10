@@ -11,7 +11,7 @@ Produce traceable correctness evidence instead of treating a successful request 
 
 1. Define cases and the smallest affected validation matrix.
 2. Create independent baseline and candidate code states or eager and graph states.
-3. Before remote execution, use `remote-code-parity` for each state.
+3. Bind each actual source state with `vaws_session(sources=...)`; coordinator prepares it for the managed run.
 4. For offline cases, run `scripts/remote_correctness_harness.py` inside the remote NPU container. The harness prioritizes the materialized `vllm/` and `vllm-ascend/` source roots and propagates them through `PYTHONPATH`, so launching from `/vllm-workspace` or spawning a `python -m` child cannot resolve the outer repository directory as a false `vllm` namespace package.
 5. For online cases, use `vllm-ascend-serving`, then run the same harness in `online-chat` mode.
 6. Use `scripts/correctness_run.py init` to create the run directory and Run Manifest v1. Pass `--parent-run-id` for PR evidence, and declare any intentional non-code difference between the two states with `--allowed-difference KEY` (for example `engine_args.enforce_eager` for eager versus graph).

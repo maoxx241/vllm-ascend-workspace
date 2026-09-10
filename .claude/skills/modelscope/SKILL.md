@@ -1,18 +1,11 @@
-<!-- Generated Claude Code shim from .agents/skills/modelscope/SKILL.md. Do not edit. -->
 ---
-name: modelscope
+name: "modelscope"
 description: "Download, resume, status-check, and SHA256-verify ModelScope model weights. Use for $modelscope download/status/verify/check, Chinese requests to 下载/续传/补全/查看进度/校验 ModelScope 权重, and tasks that need durable background ModelScope downloads under explicit local directories."
 ---
 
+<!-- Generated from .agents/skills/modelscope/SKILL.md. Do not edit. -->
+
 # ModelScope
 
-Canonical skill source:
-
-`.agents/skills/modelscope/SKILL.md`
-
-Before using this skill:
-
-1. Read the canonical skill file above.
-2. Follow its routing rules, entrypoints, guardrails, and acceptance criteria.
-3. Use the remote-dev companion tools (`remote_*` MCP tools; CLI fallback `remote-dev <hyphen-tool> ...` or `uv run remote-dev <hyphen-tool> ...`) for ordinary remote endpoint read/edit/bash/search/patch work.
-4. Use this Claude project skill only for the domain workflow described by the canonical source.
+Read `.agents/skills/modelscope/SKILL.md` and only the references needed
+for the current task. The canonical skill owns the workflow.

@@ -2,7 +2,7 @@
 """Shared machine-username choice helpers for repo-init.
 
 This module keeps the repo-init machine-profile question narrow and stable.
-The public repo-init flow should present exactly three options:
+When a value is missing, the helper suggests these choices:
 - use the detected Git / GitHub username
 - generate a random ``agent#####`` username
 - let the user provide a custom username
@@ -170,8 +170,8 @@ def fixed_machine_username_question(cwd: pathlib.Path | None = None) -> dict[str
         "question": "你希望这台开发机使用哪个机器用户名？",
         "mode": "single-choice",
         "rules": "3-32 chars, lowercase English letters and digits only",
-        "fixed_options_only": True,
-        "followup_required_for": ["custom"],
+        "fixed_options_only": False,
+        "followup_required_when": "custom literal is missing",
         "followup_question": "请输入你想使用的机器用户名（仅限英文和数字，3-32 位）",
         "options": [
             {
@@ -196,9 +196,9 @@ def fixed_machine_username_question(cwd: pathlib.Path | None = None) -> dict[str
             {
                 "id": "custom",
                 "label": "自定义",
-                "description": "用户输入什么就用什么；仅接受英文字母和数字。选择此项后必须再问一次具体用户名。",
+                "description": "用户输入什么就用什么；仅接受英文字母和数字。只有尚未给出具体用户名时才追问。",
                 "available": True,
-                "requires_followup_text": True,
+                "requires_followup_text_if_missing": True,
             },
         ],
     }
@@ -212,8 +212,8 @@ def fixed_workspace_alias_question(machine_username: str | None = None) -> dict[
         "question": "是否为项目、agent、新启动的容器和服务目录设置一个统一别名？",
         "mode": "single-choice",
         "rules": "3-32 chars, lowercase English letters and digits only",
-        "fixed_options_only": True,
-        "followup_required_for": ["custom"],
+        "fixed_options_only": False,
+        "followup_required_when": "custom literal is missing",
         "followup_question": "请输入统一别名（仅限英文和数字，3-32 位）",
         "options": [
             {
@@ -225,9 +225,9 @@ def fixed_workspace_alias_question(machine_username: str | None = None) -> dict[
             {
                 "id": "custom",
                 "label": "自定义统一别名",
-                "description": "选择后需再输入具体别名；不会重命名已有资源。",
+                "description": "尚未给出具体别名时再询问；不会重命名已有资源。",
                 "available": True,
-                "requires_followup_text": True,
+                "requires_followup_text_if_missing": True,
             },
             {
                 "id": "none",

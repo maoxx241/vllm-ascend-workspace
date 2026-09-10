@@ -92,7 +92,7 @@ def needs_choice_payload(cwd: pathlib.Path | None = None) -> dict[str, Any]:
         "needs_input",
         success=False,
         action="choose-machine-username",
-        message="local machine profile is missing; ask exactly one fixed-choice question before continuing broad init",
+        message="local machine profile is missing; reuse a supplied username or ask for the missing choice",
         profile=summary,
         question=fixed_machine_username_question(cwd),
         alias_question=fixed_workspace_alias_question(),

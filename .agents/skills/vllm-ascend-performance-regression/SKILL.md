@@ -9,11 +9,11 @@ Wrap `vllm-ascend-benchmark` with a controlled two-state experiment.
 
 ## Workflow
 
-1. Create independent baseline and candidate worktrees and `session-management` sessions.
+1. Create independent baseline and candidate worktrees and bind the actual sources through coordinator task context.
 2. Use the same machine allocation policy, NPU count, model and weight hash, environment, topology, Serving arguments, Benchmark arguments, dataset, request rate, and concurrency.
 3. Put all non-code conditions in the experiment `shared` object. `plan` requires `machine`, `npu_devices`, `model`, `environment`, `topology` (with `tp` and `dp`), `serve_args`, `bench_args`, `dataset`, `max_concurrency`, and `request_rate`; a `shared` object without them cannot produce a parity certificate.
 4. Run `scripts/performance_regression.py plan`; set `parent_run_id` in the config when the experiment is evidence for a change-validation plan.
-5. Follow `schedule.json` exactly. Before each state executes, establish `remote-code-parity`, start or confirm its service, then call `vllm-ascend-benchmark`.
+5. Follow `schedule.json` exactly. For each state, let coordinator prepare its bound sources, start or confirm its service, then call `vllm-ascend-benchmark`.
 6. Normalize each raw Benchmark result with `normalize`, then call `record`.
 7. Run `analyze` only after the schedule is complete.
 8. If the result is failed or inconclusive and operator timing is needed, recommend profiling collection; do not collect heavy profiles automatically.

@@ -40,15 +40,15 @@ A successful run should satisfy all applicable items below.
   - unified alias choice if the identity decision is pending
   - machine username choice if the profile is missing
 - authorized init defaults to keep-current remotes, submodule init, `uv sync`, and CI-pinned vllm alignment unless the user overrides them
-- the machine-username branch uses exactly three options:
+- when a machine username is missing, the helper suggests three options:
   - `git-username`
   - `random`
   - `custom`
 - the skill does not silently assume a generated username for broad init
 - the skill does not silently apply the recommended topology when the user only asked for generic init
-- if the user picks `custom`, the skill asks one follow-up text question for the literal username before mutating
+- if the user picks `custom` without a literal username, the skill asks for the missing value; an already supplied value is used directly
 - the skill does not silently replace `custom` with the detected Git username
-- alias choices are `machine-username`, `custom`, and `none`; `custom` requires literal follow-up text
+- alias choices are `machine-username`, `custom`, and `none`; `custom` requires a literal value, asking only if missing
 - choosing `none` persists `alias_decision=declined` and prevents repeated prompts
 
 ### Local machine profile
@@ -57,7 +57,7 @@ A successful run should satisfy all applicable items below.
 - machine usernames accept English letters and digits only
 - profile creation normalizes usernames to lowercase
 - random/default creation uses the `agent#####` format
-- `repo_init_profile.py plan` returns the fixed-choice question when the profile is missing
+- `repo_init_profile.py plan` returns suggested choices when the profile is missing
 - `repo_init_profile.py apply --choice custom` without `--custom-username` returns `needs_input`
 - narrow Git-only tasks do not force profile creation
 - repeated identity initialization preserves the same UUID4
@@ -71,7 +71,7 @@ A successful run should satisfy all applicable items below.
 
 ### Submodules and topology
 
-- initializes submodules recursively when the user approved it
+- initializes submodules recursively for authorized broad initialization or an explicit submodule request
 - resolves CI-pinned vLLM alignment with `resolve_vllm_ci_pin.py`, preferring `vllm-ascend/.github/vllm-main-verified.commit` over older workflow/docs fallbacks
 - completes submodule init before configuring submodule remotes
 - `repo_topology.py configure --repo <submodule>` errors out when the submodule is not initialized (git root mismatch)

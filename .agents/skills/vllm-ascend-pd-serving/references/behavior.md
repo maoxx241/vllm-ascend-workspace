@@ -2,14 +2,14 @@
 
 ## Config
 
-The deployment references one service group whose members are `name` plus
-task-scoped `service` names. Code identity comes from the native task /
-`manifest_code`, not a per-member snapshot field.
+The deployment config contains a task-scoped `group_id` (the business name
+of the one coordinator execution) and its services. No separate group registry
+or group file is required. Code identity comes from the native task /
+`manifest_code`; the config does not grant a task identity.
 
 Each service declares:
 
 - stable name and `prefill` or `decode` role;
-- group member;
 - model, TP/DP, optional port, host, and health timeout;
 - environment and exact vLLM arguments (connector JSON included).
 
@@ -27,7 +27,7 @@ through that URL. It does not own the proxy process.
 
 ## Lifecycle
 
-- `plan`: config, group, topology roles, state, Run Manifest
+- `plan`: config, topology roles, state, Run Manifest
 - `start`: one `TaskClient.run(topology=..., service=<group_id>, timeout_seconds=None)`
 - queued / preparing / waiting is a truthful status with the same `execution_id`
 - `status`: that execution plus proxy health; `observation.roles[]` carries per-role target/tail

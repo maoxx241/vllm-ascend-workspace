@@ -18,4 +18,4 @@ python3 .agents/skills/vllm-ascend-serving/scripts/serve_probe_npus.py --host 10
 
 `--relaunch` submits `restart=True`. Queued starts keep the same execution
 id; do not resubmit. Managed sources are prepared by coordinator; do not
-call `parity_sync.py --execution-id` against a live root.
+publish sources directly against a live execution root.

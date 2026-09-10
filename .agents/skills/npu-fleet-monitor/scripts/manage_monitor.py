@@ -38,6 +38,7 @@ ensure_workspace_interpreter(repo_root=REPO_ROOT)
 from vaws_local_state import STATE_DIRNAME, shared_inventory_path, shared_workspace_root  # noqa: E402
 
 VAWS_TOP_REPO = "vllm-ascend-workspace/vaws-top"
+VAWS_TOP_SKILL_PATH = ".agents/skills/vaws-top/SKILL.md"
 # Single version constant: the release tag. The wheel filename below is derived
 # from it so the tag and the wheel version cannot drift apart.
 VAWS_TOP_REF = "v0.1.1"
@@ -76,27 +77,6 @@ def runtime_dir(repo_root: Path | None = None) -> Path:
     return root / STATE_DIRNAME / RUNTIME_DIRNAME
 
 
-def default_bootstrap_command(repo_root: Path | None = None) -> str:
-    repo_root = REPO_ROOT if repo_root is None else repo_root
-    script = repo_root / ".agents" / "skills" / "machine-management" / "scripts" / "manage_machine.py"
-    return " ".join(
-        [
-            "{python}",
-            shlex.quote(str(script)),
-            "bootstrap-host-key",
-            "--host",
-            "{host}",
-            "--host-port",
-            "{port}",
-            "--user",
-            "{user}",
-            "--public-key-file",
-            "{public_key_file}",
-            "--password-stdin",
-        ]
-    )
-
-
 def _path_list_value(raw: str, *, label: str) -> str:
     if "\n" in raw or "\r" in raw:
         raise MonitorError(f"{label} contains a newline and will not be passed to the monitor")
@@ -117,7 +97,7 @@ def consumer_env(
     defaults = {
         "NFM_INVENTORY_FILES": str(shared_inventory_path(repo_root)),
         "NFM_HOST_POOL_FILES": str(host_pool) if host_pool.is_file() else "",
-        "NFM_BOOTSTRAP_COMMAND": default_bootstrap_command(repo_root),
+        "NFM_BOOTSTRAP_COMMAND": "",
     }
     explicit = {
         "NFM_INVENTORY_FILES": args.inventory_files,
@@ -387,6 +367,7 @@ def payload_for(action: str, base: Path, port: int, spec: str, extra: dict[str, 
         "log": str(base / LOG_NAME),
         "cli_prefix": prefix,
         "mcp_command": [*prefix, "mcp"],
+        "skill_url": f"https://github.com/{VAWS_TOP_REPO}/blob/{VAWS_TOP_REF}/{VAWS_TOP_SKILL_PATH}",
     }
     payload.update(extra)
     return payload

@@ -1,6 +1,6 @@
 """Local task identity, actual worktree binding and client hook contracts.
 
-Run alongside the session-management suite in the remote CPU test environment.
+Run with the local workspace control-plane tests.
 These tests do not stand in for native-client acceptance.
 """
 from __future__ import annotations
@@ -16,7 +16,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest import mock
 
-ROOT = Path(__file__).resolve().parents[4]
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / ".agents/lib"))
 
 PACKAGE_PRESENT = importlib.util.find_spec("vaws_coordinator") is not None

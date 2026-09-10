@@ -24,7 +24,6 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[4]
 LIB_DIR = ROOT / ".agents" / "lib"
-MM_SCRIPTS = ROOT / ".agents" / "skills" / "machine-management" / "scripts"
 SERVING_SCRIPTS = ROOT / ".agents" / "skills" / "vllm-ascend-serving" / "scripts"
 if str(LIB_DIR) not in sys.path:
     sys.path.insert(0, str(LIB_DIR))
