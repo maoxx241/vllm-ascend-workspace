@@ -426,14 +426,8 @@ def _archive_remote_output(
 # of report/analysis_summary.json with matches from the workspace knowledge
 # store (.agents/knowledge/):
 #
-#   * every findings rollup group gets its ``knowledge_refs`` placeholder
-#     filled with the top-3 known-failure-signature / validation-rule entries
-#     matching ``finding_type + summary`` (resolution included);
-#   * when ``layer_validation.expected_layers`` is null (no config.json, no
-#     fingerprint-catalog layer count) the model identity (``--model-id`` or
-#     identity.model.candidate_names) is looked up in model-capabilities and a
-#     hit with a layer count backfills ``expected_layers`` with
-#     ``expected_source = "knowledge:<entry_id>"``.
+# Findings get up to three related Markdown references. Model layer counts
+# continue to come from actual configuration, never inferred from prose.
 #
 # The remote artifacts and the remote manifest are never touched: enrichment
 # is a local view layer. A missing/invalid knowledge dir degrades to empty
@@ -441,150 +435,40 @@ def _archive_remote_output(
 # ---------------------------------------------------------------------------
 
 KNOWLEDGE_DIR = common.ROOT / ".agents" / "knowledge"
-KNOWLEDGE_FINDING_KINDS = ("known-failure-signatures", "validation-rules")
-KNOWLEDGE_MODEL_KINDS = ("model-capabilities",)
 KNOWLEDGE_QUERY_LIMIT = 3
-# Matches below this score are treated as noise (weak single-token overlaps
-# e.g. an entry id fragment); real matches score >= 12 from fingerprint tokens.
-KNOWLEDGE_MIN_SCORE = 5
 
 
-def _knowledge_api() -> tuple[Any, Any, Any] | None:
-    """Lazily import the workspace knowledge API; None when unavailable.
-
-    ``_common`` already put ``.agents/lib`` on sys.path. The import stays
-    lazy so a broken/missing lib can never break the analysis wrapper.
-    """
+def _knowledge_api() -> Any:
+    """Load the Markdown query consumer without making knowledge mandatory."""
     try:
-        from vaws_knowledge_service import (  # type: ignore[import-not-found]
-            KnowledgeError,
-            get_knowledge_entry,
-            query_knowledge,
-        )
+        from vaws_knowledge_service import query_knowledge
     except ImportError:
         return None
-    return KnowledgeError, query_knowledge, get_knowledge_entry
+    return query_knowledge
 
 
 def _knowledge_refs_for_finding(
     knowledge_dir: Path,
-    api: tuple[Any, Any, Any],
+    query_knowledge: Any,
     finding_type: str,
     summary: str,
 ) -> list[dict[str, Any]]:
-    """Top-3 knowledge refs for one findings rollup group.
-
-    Only score > 0 matches come back from ``query_knowledge``; each ref is
-    completed with the entry's ``resolution`` via ``get_knowledge_entry``.
-    """
-    _, query_knowledge, get_knowledge_entry = api
-    query = f"{finding_type} {summary}".strip()
-    if not query:
+    """Attach references for inspection; do not turn prose into runtime facts."""
+    text = f"{finding_type} {summary}".strip()
+    if not text:
         return []
-    refs: list[dict[str, Any]] = []
-    for match in query_knowledge(
-        knowledge_dir=knowledge_dir,
-        query=query,
-        kinds=list(KNOWLEDGE_FINDING_KINDS),
-        limit=KNOWLEDGE_QUERY_LIMIT,
-        min_score=KNOWLEDGE_MIN_SCORE,
-    ):
-        resolution = ""
-        full = get_knowledge_entry(knowledge_dir=knowledge_dir, entry_id=match["id"])
-        if full:
-            rule = full.get("entry", {}).get("rule", {})
-            if isinstance(rule, Mapping):
-                resolution = str(rule.get("resolution") or "")
-        refs.append(
-            {
-                "entry_id": match["id"],
-                "kind": match["kind"],
-                "summary": match["summary"],
-                "resolution": resolution,
-                "applicable_versions": match.get("applicable_versions", ""),
-                "score": match["score"],
-            }
+    return [
+        {
+            "ref": match["ref"],
+            "title": match.get("title") or "",
+            "excerpt": match.get("summary") or "",
+            "layer": match.get("layer"),
+            "score": match.get("score", 0),
+        }
+        for match in query_knowledge(
+            knowledge_dir=knowledge_dir, query=text, limit=KNOWLEDGE_QUERY_LIMIT,
         )
-    return refs
-
-
-def _backfill_layer_validation_from_knowledge(
-    summary: dict[str, Any],
-    knowledge_dir: Path,
-    api: tuple[Any, Any, Any],
-    model_id: str | None,
-) -> str | None:
-    """Backfill ``layer_validation.expected_layers`` from model-capabilities.
-
-    Only fires when the pipeline itself found no expected layer count (no
-    user config.json, no fingerprint-catalog entry). Returns the knowledge
-    entry id used for the backfill, or None.
-    """
-    lv = summary.get("layer_validation")
-    if not isinstance(lv, dict) or lv.get("expected_layers") is not None:
-        return None
-    identity = summary.get("identity") or {}
-    model = identity.get("model") or {}
-    names: list[str] = []
-    if model_id:
-        names.append(str(model_id))
-    for name in model.get("candidate_names") or []:
-        text = str(name or "").strip()
-        if text and text not in names:
-            names.append(text)
-    if not names:
-        return None
-
-    _, query_knowledge, get_knowledge_entry = api
-    for name in names:
-        matches = query_knowledge(
-            knowledge_dir=knowledge_dir,
-            query=name,
-            kinds=list(KNOWLEDGE_MODEL_KINDS),
-            limit=KNOWLEDGE_QUERY_LIMIT,
-            min_score=KNOWLEDGE_MIN_SCORE,
-        )
-        for match in matches:
-            full = get_knowledge_entry(knowledge_dir=knowledge_dir, entry_id=match["id"])
-            rule = (full or {}).get("entry", {}).get("rule", {})
-            layers = rule.get("expected_layers") if isinstance(rule, Mapping) else None
-            if isinstance(layers, bool) or not isinstance(layers, int) or layers <= 0:
-                continue
-            entry_id = str(match["id"])
-            lv["expected_layers"] = layers
-            lv["expected_source"] = f"knowledge:{entry_id}"
-
-            # Recompute layers_match against the already-detected layer
-            # counts. The summary carries min/max plus full inventories only
-            # for per-rank outliers, so membership is exact for the outliers
-            # and boundary-based for the modal inventory.
-            detected = lv.get("detected_layers") or {}
-            d_min = detected.get("min")
-            d_max = detected.get("max")
-            if d_min is None and d_max is None:
-                lv["layers_match"] = None
-            else:
-                outlier_inventories = [
-                    outlier.get("layer_count_inventory") or []
-                    for outlier in detected.get("per_rank_outliers") or []
-                    if isinstance(outlier, Mapping)
-                ]
-                lv["layers_match"] = bool(
-                    layers == d_min
-                    or layers == d_max
-                    or any(layers in inventory for inventory in outlier_inventories)
-                )
-            if lv["layers_match"] is False and lv.get("status") == "ok":
-                lv["status"] = "degraded"
-            lv["layers_note"] = (
-                f"expected_layers backfilled from workspace knowledge entry "
-                f"'{entry_id}' (matched model name {name!r}); neither "
-                "config.json nor the fingerprint catalog provided a layer "
-                "count. layers_match was recomputed against detected min/max "
-                "and per-rank outlier inventories."
-            )
-            return entry_id
-    return None
+    ]
 
 
 def _enrich_analysis_summary_with_knowledge(
@@ -625,9 +509,6 @@ def _enrich_analysis_summary_with_knowledge(
             )
             group["knowledge_refs"] = refs
             attached += bool(refs)
-        backfill_entry = _backfill_layer_validation_from_knowledge(
-            summary, knowledge_dir, api, model_id
-        )
     except Exception as exc:  # noqa: BLE001 - knowledge must never break analysis
         common.progress(
             "knowledge",
@@ -641,7 +522,6 @@ def _enrich_analysis_summary_with_knowledge(
         "knowledge",
         "knowledge enrichment done",
         finding_groups_with_refs=attached,
-        layer_backfill=backfill_entry,
     )
     return summary
 
@@ -1065,7 +945,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     else:
         # Local view-layer enrichment from the workspace knowledge store
-        # (findings knowledge_refs + layer backfill). The remote artifacts
+        # (findings Markdown references). The remote artifacts
         # and manifest stay untouched; the enriched summary is written back
         # over the local pulled copy so the file on disk and the stdout
         # embedding agree. With --no-pull there is no local copy to update.

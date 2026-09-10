@@ -1,4 +1,11 @@
 {
-  "title": "Minimal legal capture payload for agents to copy",
-  "content": "A just-captured candidate should remain queryable after save. Copy this file, replace the title and body, and pass it to knowledge_capture.py --input."
+  "title": "Interactive input EOF follows the accepted payload",
+  "content": "Close stdin only after the entire input payload has been accepted. A partial write remains retryable.",
+  "source": {
+    "kind": "test",
+    "title": "Interactive input regression"
+  },
+  "evidence": [
+    "tests/test_process_worker.py"
+  ]
 }

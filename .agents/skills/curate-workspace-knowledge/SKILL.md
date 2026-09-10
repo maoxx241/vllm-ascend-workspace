@@ -1,102 +1,49 @@
 ---
 name: curate-workspace-knowledge
-description: Review, deduplicate, promote, reject, or deprecate verified vLLM Ascend workspace knowledge candidates, resolve unresolved v2 coordinate dimensions, and gate export to the federated commons. Use only when the user explicitly asks to curate, persist, review, promote, deprecate, or upstream project knowledge (沉淀、整理、复盘、提升、废弃、上游), or explicitly invokes this Skill to review `.vaws-local/knowledge/candidate`. Do not use during normal diagnosis, serving, benchmarking, profiling, remote execution, code review, or candidate capture/query; those workflows call the shared scripts directly without loading this Skill.
+description: Review and deduplicate Markdown knowledge candidates and prepare redacted contributions through the installed knowledge package. Use only for explicit knowledge review, curation, or upstream contribution requests. Normal capture and query use the shared entry points directly.
 ---
 
 # Curate Workspace Knowledge
 
-Keep `.agents/knowledge/` as the project layer: the only formal, tracked
-knowledge this repo owns. Treat `.vaws-local/knowledge/candidate/` as the
-only untracked candidate store (commons yaml). Promote reads those yaml
-entries and must remove the promoted item so query no longer hits
-`layer: candidate`. The `shared` layer is the corpus inside the installed
-`vaws-knowledge` package and is never edited here. Query, capture, hash,
-and schema checks run on that installed engine; the scripts here are thin
-CLIs and curation policy.
-Agents can call `knowledge_query` / `knowledge_explain` / `knowledge_capture`
-on the `vaws-knowledge` MCP server.
-
-New promotions write the federated **v2** contract to
-`.agents/knowledge/<kind>.v2.yaml`. The project layer contains only
-`*.v2.yaml`. A v2 entry has exactly one body (`rule`, `measurement`, or
-`reference`). Candidate promotion still writes a `rule`. Runtime bodies
-require a coordinate; a sourced reference hashes the reference body only
-and must not invent runtime coordinates. Schema, hash, redaction, and
-export belong to the installed `vaws-knowledge` package.
+Knowledge is Markdown reference material. Review the explanation, conditions,
+source and evidence that are actually present. Preserve uncertainty; a public
+review decision does not establish a hardware fact. Do not require v2 status,
+UUID, type or a complete runtime coordinate to keep a useful observation.
 
 ## Workflow
 
-1. Run `scripts/knowledge_curate.py list`.
-2. Inspect one candidate and its possible formal matches.
-3. Check that the root cause is confirmed, the original symptom was rerun, and
-   at least one stable test, commit, issue, or PR evidence item exists.
-4. Choose exactly one disposition:
-   - `promote` a novel candidate;
-   - edit the existing v2 document (or promote a revision that supersedes it)
-     when cause and applicability already match;
-   - `reject` an unsupported, transient, secret-bearing, or duplicate candidate;
-   - `deprecate` a stale formal entry.
-5. For a v2 promotion, close the coordinate before claiming anything:
-   - `list-unresolved` reports every dimension still waiting on a human;
-   - `resolve` fills one dimension from a real run (`--values`), a stated
-     independence basis (`--any-basis`), or a bound (`--min` / `--max`);
-   - `verify` attaches followable evidence plus a non-submitter confirmation
-     and moves the entry to `status: verified`.
-6. Only then, if the fact belongs upstream, run
-   `.agents/scripts/knowledge_export.py` and open the PR it points at.
-7. Run `.agents/scripts/knowledge_validate.py` and the owning Skill's tests.
-8. Commit the formal knowledge change together with any regression protection.
+1. Inspect candidate Markdown in `.vaws-local/knowledge/candidate/` and query
+   related material with `.agents/scripts/knowledge_query.py`.
+2. Read relevant matches. Edit or combine duplicate local Markdown when the
+   evidence supports it. Keep differing conditions and conflicting evidence
+   visible. Do not overwrite shared release files.
+3. For an authorized upstream contribution, run `knowledge_curate.py prepare`.
+   The installed package writes a redacted public copy and a pending record;
+   it leaves the source candidate unchanged.
+4. Submit only the prepared public copy using the package `submit` command
+   with the intended fork, upstream and local Git checkout. Keep pending
+   records on transport failure.
+5. Use package `review`, `ci`, `resolve` and `merge` for public review. These
+   require the real configured recall/classifier and GitHub transport.
+   Missing recall or stale Git evidence must not authorize a merge.
 
 ## Entry point
 
-`scripts/knowledge_curate.py` provides:
+`scripts/knowledge_curate.py` delegates directly to
+`python -m vaws_knowledge contribution`. Run `--help` or a command's `--help`
+for current arguments. The package owns redaction, pending state, review,
+conflict handling and Git identity checks; workspace adds no second engine.
 
-- `list`: return compact candidate summaries;
-- `inspect`: return one full candidate plus possible formal matches;
-- `promote`: create one v2 entry;
-- `reject`: archive a candidate locally without changing formal knowledge;
-- `deprecate`: retain a formal entry while marking it obsolete;
-- `resolve`: fill one unresolved v2 coordinate dimension;
-- `verify`: record independent confirmation for a v2 entry;
-- `list-unresolved`: report v2 entries blocked on a human coordinate.
+The old `promote`, `verify`, `list-unresolved`, and coordinate-editing verbs
+are retired. `.agents/scripts/knowledge_validate.py` and
+`.agents/scripts/knowledge_export.py` remain maintenance tools for existing
+v2 YAML records only; they do not process new Markdown candidates.
 
-Related shared scripts, outside this Skill:
-
-- `.agents/scripts/knowledge_export.py`: the source-side export gate;
-- `.agents/scripts/knowledge_validate.py`: validate the project-layer v2
-  documents and report redaction posture.
-
-Read only the reference needed for the active operation:
+Read the applicable reference:
 
 - [Behavior contract](references/behavior.md)
 - [Command recipes](references/command-recipes.md)
 - [Acceptance](references/acceptance.md)
 
-## Rules
-
-- Never parse or persist a full transcript.
-- Never promote `inconclusive` verification.
-- Never promote knowledge supported only by untracked or unstable evidence.
-- Require a regression test or two verified occurrences before `active`
-  (v1) or before promoting with the `active` evidence gate (v2).
-- Never invent a coordinate. A dimension nobody established stays an
-  unbounded range (`min` and `max` both null); `any` is a positive claim
-  of independence and needs a basis describing what was actually examined.
-- A v2 entry reaches `verified` only with a complete coordinate, followable
-  evidence, and a confirming handle that is not the submitter.
-- Never publish upstream from a raw document. Export only through
-  `.agents/scripts/knowledge_export.py`, which strips internal addresses,
-  user paths, hostnames, container names and mounts, and refuses unresolved
-  coordinates.
-- Never write a local copy of the shared corpus; the shared layer is the
-  installed `vaws-knowledge` package and flows one way, downward.
-- When cause and applicability match an existing entry, edit that v2
-  document or promote a revision that supersedes it. Do not add a
-  duplicate. `merge` is retired.
-- Use `--force-new` only after reviewing an identical fingerprint with a
-  different confirmed cause.
-- Keep deterministic behavior in the owning Skill's scripts and tests; store
-  only the cross-session explanation, scope, fingerprints, and evidence here.
-- Do not copy upstream model-adapter lessons or profiler-local counterexamples
-  into workspace knowledge unless the new record adds workspace-specific scope
-  and references the upstream source.
+Never parse or persist a full transcript. Never publish a raw local candidate.
+Keep internal addresses, user paths and credentials out of public copies.

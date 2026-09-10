@@ -1,121 +1,12 @@
 # Behavior contract
 
-## Source boundaries
+The workspace command delegates to `vaws_knowledge.contribution.__main__.main`.
+It preserves the package arguments, JSON result and exit status. It neither
+implements review rules nor translates new candidates to legacy YAML.
 
-- `.agents/knowledge/` is the project layer: the only formal, tracked project
-  knowledge source. It holds both generations — v1 `<kind>.yaml` and federated
-  v2 `<kind>.v2.yaml`.
-- `.vaws-local/knowledge/candidate/` is the only untracked candidate store
-  (commons yaml). Capture writes it; curate promote/reject remove the
-  entry after a disposition so query cannot keep hitting `layer: candidate`.
-- `.vaws-local/knowledge/reviewed/` is an untracked disposition audit.
-- The `shared` layer is the corpus inside the installed `vaws-knowledge`
-  package. Never written by this repo.
-- `.vaws-local/knowledge/export/` holds proposal bundles plus the export
-  ledger used for upstream idempotency.
-- Codex local Memories remain personal generated state and never override formal
-  workspace knowledge.
+Local candidate Markdown remains unchanged during `prepare`. The package
+writes a separate public copy and durable pending state. Repeating preparation
+of unchanged content reuses its content identity. A blocked copy stays blocked.
 
-## Layer trust
-
-| Layer | Trust | Written by |
-|-------|-------|------------|
-| `shared` | reviewed by the commons | upstream only, pulled down |
-| `project` | reviewed in this repo | this Skill |
-| `candidate` | one unreviewed observation | capture |
-
-A query answer names the layer it came from. A missing layer is reported, not
-silently skipped, and an empty result means *unknown* — never *supported*.
-
-## Promotion gates
-
-An `experimental` entry requires:
-
-- verification status `passed`;
-- a confirmed root cause and resolution;
-- at least one stable evidence item;
-- no unresolved exact-fingerprint duplicate.
-
-An `active` entry additionally requires either:
-
-- two verified occurrences; or
-- stable `test`, `regression-test`, or `acceptance-test` evidence.
-
-When cause and applicability match an existing entry, edit that v2 document
-or promote a revision that supersedes it. Use `--force-new` only after
-confirming that an identical fingerprint has a different cause. `merge` is
-retired.
-
-## Formal entry mapping
-
-### v2 (default)
-
-`promote` writes `.agents/knowledge/<kind>.v2.yaml`:
-
-```text
-uuid            derived from origin repo + kind + slug (stable across reruns)
-slug            the entry id
-content_hash    sha256 over the canonicalized scope+body payload
-                (body is `rule` or `measurement`, keyed by its own name)
-status          always 'unverified' on promotion
-confidence      candidate confidence; 'high' downgraded to 'medium'
-scope           12 dimensions, each bounded or an unbounded range
-provenance      contributor, origin repo, submitted_at, redaction profile
-lifecycle       first_seen, updated_at, superseded_by, resolved_by
-rule            failure-signature body: summary, symptom, root_cause,
-                resolution, avoidance, fingerprints
-measurement     quantity body: summary, subject, method, quantities,
-                notes. A number has no symptom. Candidate `promote`
-                still writes a `rule`; measurement entries arrive
-                from the shared corpus or an explicit body.
-verification    only when evidence is followable *and* the captured
-                environment covers every concrete dimension
-```
-
-Coordinate mapping from the candidate's captured environment:
-
-- a concrete value becomes `{"values": ["<value>"]}` — the claim holds where
-  it was observed, and nowhere else by default;
-- `unknown` becomes `{"range": {"min": null, "max": null}}`, which the
-  package evaluates as undecidable and which blocks `verified` and export.
-  The curator hint lives in the promote/`list-unresolved` response
-  (`needs_human_input` / `unresolved[].needs`), not inside `scope`;
-- nothing becomes `any`. Independence is a claim, so `resolve --any-basis`
-  requires stating what was examined.
-
-Evidence that no reviewer can follow (a local log path, a scratch directory)
-is dropped and reported under `dropped_evidence` rather than relabelled.
-
-v2 has no field for a deprecation reason, so `deprecate` records it in
-`.vaws-local/knowledge/reviewed/<slug>.deprecation.json` and sets only
-`status` and `lifecycle.superseded_by` in the document.
-
-## Verification gate (v2)
-
-`verify` refuses to run unless:
-
-- every coordinate dimension is resolved;
-- at least one evidence reference has a v2 type (`run_manifest`,
-  `pull_request`, `issue`, `commit`, `ci_run`);
-- at least one `verified_by` handle is present and it is not only the
-  submitter;
-- `verified_against` carries concrete values for soc, cann, driver, torch,
-  torch_npu, vllm and vllm_ascend.
-
-## Export gate
-
-`.agents/scripts/knowledge_export.py` is the only path upstream. It refuses
-unresolved coordinates, re-stamps provenance, recomputes `content_hash`,
-validates against the v2 egress whitelist, and applies the full redaction
-ruleset including `export`-severity findings (internal mounts, container
-instance names, ticket ids) that are legal in the project layer. Re-exporting
-an unchanged `uuid` + `content_hash` is a reported no-op, so one fact does not
-become two upstream PRs.
-
-## Failure behavior
-
-- Validate before writing.
-- Write formal documents and review archives atomically.
-- Archive a candidate only after the formal write succeeds.
-- Return one JSON document on stdout.
-- Return validation failures as JSON with a nonzero exit status.
+Public submission and review need configured transports. A completed local
+prepare is not an uploaded PR, a merge, or independent runtime validation.

@@ -412,8 +412,8 @@ option.
 | `.agents/hooks/vaws_session.py` | argparse | - | 4 | policy:1, script:1, test:2 | mechanics | hook | .agents/hooks/vaws_session.py | - |
 | `.agents/scripts/cli_surface_inventory.py` | argparse | - | 3 | policy:1, test:3 | mechanics | supported | .agents/scripts/cli_surface_inventory.py | vaws lint |
 | `.agents/scripts/envelope_lint.py` | argparse | scan, check, run | 5 | docs:1, test:3 | mechanics | supported | .agents/scripts/envelope_lint.py | vaws lint |
-| `.agents/scripts/knowledge_capture.py` | argparse | - | 11 | hook:1, routing:1, skill-doc:5, test:3 | mixed | supported | .agents/scripts/knowledge_capture.py | vaws knowledge |
-| `.agents/scripts/knowledge_export.py` | argparse | - | 7 | routing:2, script:1, skill-doc:3 | mechanics | supported | .agents/scripts/knowledge_export.py | vaws knowledge |
+| `.agents/scripts/knowledge_capture.py` | argparse | - | 11 | hook:1, routing:1, skill-doc:4, test:4 | mixed | supported | .agents/scripts/knowledge_capture.py | vaws knowledge |
+| `.agents/scripts/knowledge_export.py` | argparse | - | 7 | routing:2, skill-doc:1 | mechanics | supported | .agents/scripts/knowledge_export.py | vaws knowledge |
 | `.agents/scripts/knowledge_query.py` | argparse | - | 9 | routing:2, skill-doc:1, test:3 | mechanics | supported | .agents/scripts/knowledge_query.py | vaws knowledge |
 | `.agents/scripts/knowledge_validate.py` | argparse | - | 1 | other:1, routing:1, skill-doc:1 | mechanics | supported | .agents/scripts/knowledge_validate.py | vaws knowledge |
 | `.agents/scripts/remote_artifact_manifest.py` | argparse | - | 1 | policy:1, routing:1 | mechanics | compatibility | .agents/scripts/remote_artifact_manifest.py | vaws remote |
@@ -473,7 +473,7 @@ option.
 | `.agents/skills/ascend-triton-kernel-validation/scripts/validate_triton_impl.py` | argparse | - | 1 | skill-doc:1, test:1 | mechanics | supported | .agents/skills/ascend-triton-kernel-validation/scripts/validate_triton_impl.py | vaws lint |
 | `.agents/skills/ascend-triton-operator-development/scripts/triton_development.py` | argparse | plan, finalize | 6 | routing:1, skill-doc:2, test:1 | mixed | supported | .agents/skills/ascend-triton-operator-development/scripts/triton_development.py | guidance |
 | `.agents/skills/ascend-triton-workflow/scripts/triton_workflow.py` | argparse | plan, link, finalize | 4 | routing:1, skill-doc:2, test:1 | mixed | supported | .agents/skills/ascend-triton-workflow/scripts/triton_workflow.py | guidance |
-| `.agents/skills/curate-workspace-knowledge/scripts/knowledge_curate.py` | argparse | list, inspect, promote, merge, reject, deprecate, resolve, verify, list-unresolved | 21 | policy:1, routing:1, skill-doc:2, test:3 | mixed | supported | .agents/skills/curate-workspace-knowledge/scripts/knowledge_curate.py | vaws knowledge |
+| `.agents/skills/curate-workspace-knowledge/scripts/knowledge_curate.py` | bare | - | 0 | routing:2, skill-doc:2, test:2 | mechanics | supported | .agents/skills/curate-workspace-knowledge/scripts/knowledge_curate.py | - |
 | `.agents/skills/machine-management/scripts/machine_add.py` | argparse | - | 2 | routing:1, skill-doc:3, test:1 | mechanics | supported | .agents/skills/machine-management/scripts/machine_add.py | vaws machine |
 | `.agents/skills/machine-management/scripts/machine_verify.py` | argparse | - | 0 | mirror:1, routing:1, skill-doc:3, test:2 | mechanics | supported | .agents/skills/machine-management/scripts/machine_verify.py | vaws machine |
 | `.agents/skills/modelscope/scripts/download_from_modelscope.py` | argparse | - | 12 | mirror:2, routing:1, script:2, skill-doc:1, test:2 | mechanics | payload | .agents/skills/modelscope/scripts/download_from_modelscope.py | - |

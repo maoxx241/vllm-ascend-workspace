@@ -240,7 +240,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--defer",
         action="store_true",
-        help="write the same candidate-layer yaml now; keep a session id on the receipt",
+        help="write the same candidate-layer Markdown now; keep a session id on the receipt",
     )
     parser.add_argument("--session-id")
     parser.add_argument("--run-manifest", type=Path)
@@ -249,7 +249,7 @@ def main(argv: list[str] | None = None) -> int:
         "--candidate-dir",
         type=Path,
         default=ROOT / ".vaws-local" / "knowledge" / "candidate",
-        help="commons candidate-layer yaml root",
+        help="commons candidate-layer Markdown root",
     )
     parser.add_argument(
         "--pending-dir",

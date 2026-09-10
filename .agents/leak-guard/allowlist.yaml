@@ -164,17 +164,7 @@ allowlist:
     justification: Literal used by a test that asserts secret-shaped fields are rejected; the value is the assertion, not a credential.
 
   # --------------------------------- knowledge Phase B fixture/version
-  - id: knowledge-recipes-torch-npu-dev-version
-    path_glob: .agents/skills/curate-workspace-knowledge/references/command-recipes.md
-    categories: [internal-identifier]
-    match_regex: ^dev20250724$
-    justification: Legitimate torch_npu development version in a fixed recipe coordinate; it is a date suffix, not a person's identifier.
 
-  - id: knowledge-curate-test-torch-npu-dev-version
-    path_glob: .agents/skills/curate-workspace-knowledge/tests/test_knowledge_curate.py
-    categories: [internal-identifier]
-    match_regex: ^dev20250724$
-    justification: Legitimate torch_npu development version used as a fixed synthetic test coordinate; it is a date suffix, not a person's identifier.
 
   - id: knowledge-v2-test-torch-npu-dev-version
     path_glob: .agents/tests/test_knowledge_v2.py
