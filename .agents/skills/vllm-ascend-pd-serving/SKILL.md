@@ -26,6 +26,8 @@ group — the package reserves the full group before any role starts.
 3. `status` reads that execution and the proxy health path.
 4. `smoke` posts the configured proxy request.
 5. `stop` calls coordinator `observe(stop)` on that execution.
+   A `stopping` result means release is still in progress; repeat `stop`
+   on the same run until `stopped`. The manifest remains open during release.
 
 Read [command recipes](references/command-recipes.md) for the config shape.
 

@@ -55,6 +55,8 @@ Inspect both role logs before claiming connector-level KV transfer.
 
 ```bash
 python -B .agents/skills/vllm-ascend-pd-serving/scripts/pd_serving.py stop \
-  --output-dir .vaws-local/pd-serving/case-001 \
-  --force
+  --output-dir .vaws-local/pd-serving/case-001
 ```
+
+If the result is `stopping`, release is asynchronous. Repeat the same
+command until `stopped`; the manifest is completed only after release.

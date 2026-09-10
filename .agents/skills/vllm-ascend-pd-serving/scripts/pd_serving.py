@@ -474,14 +474,15 @@ def stop(
     result = client.observe(str(execution_id), "stop", force)
     run_state = str(result.get("state") or "")
     success = run_state in DONE
+    releasing = run_state in {"stopping", "releasing"}
     timestamp = updated_at or utc_now()
-    state["status"] = "stopped" if success else "needs_repair"
+    state["status"] = "stopped" if success else "stopping" if releasing else "needs_repair"
     state["state"] = run_state
     state["stop_result"] = result
     state["updated_at"] = timestamp
     _atomic_write(output_dir / "state.json", state)
     manifest = load_manifest(output_dir / "manifest.json")
-    if manifest["status"] == "running":
+    if manifest["status"] == "running" and not releasing:
         manifest = transition_status(
             manifest, "passed" if success else "inconclusive", updated_at=timestamp
         )

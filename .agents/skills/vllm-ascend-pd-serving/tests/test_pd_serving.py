@@ -216,6 +216,27 @@ class PdServingTests(unittest.TestCase):
             self.assertEqual(result["status"], "stopped")
             self.assertTrue(result["container_preserved"])
 
+    def test_stop_waits_for_release_before_completing_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config_path = root / "config.json"
+            config_path.write_text(json.dumps(config()), encoding="utf-8")
+            output = root / "run"
+            pd.plan(output, config_path=config_path, created_at=NOW, code=CODE)
+            observations = iter(["releasing", "cancelled"])
+            client = SimpleNamespace(
+                context={"session": {"id": "task-1"}},
+                run=lambda *a, **k: {"execution_id": "exec-1", "state": "running"},
+                observe=lambda *a, **k: {"state": next(observations), "execution_id": "exec-1"},
+            )
+            pd.start(output, client=client, updated_at=NOW)
+            pending = pd.stop(output, force=False, client=client, updated_at=NOW)
+            self.assertEqual(pending["status"], "stopping")
+            self.assertEqual(pd.load_manifest(output / "manifest.json")["status"], "running")
+            stopped = pd.stop(output, force=False, client=client, updated_at=NOW)
+            self.assertEqual(stopped["status"], "stopped")
+            self.assertEqual(pd.load_manifest(output / "manifest.json")["status"], "passed")
+
 
 if __name__ == "__main__":
     unittest.main()
