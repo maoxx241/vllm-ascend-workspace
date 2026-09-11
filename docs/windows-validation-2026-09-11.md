@@ -75,7 +75,10 @@ not an attribution to DNS, a server or the client.
    the client OS.
 6. **Unicode output depended on the Windows code page.** CLI protocols, local Git
    subprocesses, configuration reads and diagnostics specify UTF-8. Real Chinese
-   worktree snapshots and contribution Git output were exercised.
+   worktree snapshots and contribution Git output were exercised. PR validation
+   on an English Windows runner additionally exposed leak-scanner and Git-hook
+   output failures; both now preserve Unicode JSON and diagnostics even with
+   `PYTHONIOENCODING=cp1252` in the starting environment.
 7. **Coordinator assumed Unix sockets and flock.** Windows uses a byte-range lock
    and token-authenticated IPv4 loopback IPC. Startup is serialized; marker
    publication is atomic; stale markers recover; startup failures show daemon
@@ -111,10 +114,13 @@ branch and pinned by full commit in `pyproject.toml` and `uv.lock`:
 
 Native Windows CI was added to the workspace, coordinator and knowledge;
 remote-dev's portability job now runs the complete client suite. These jobs are
-authored and locally exercised; no hosted GitHub Actions result is claimed.
-These results describe the validation cutoff before PR submission. Runtime-owner
-PRs must land before the workspace consumer PR; commit pins keep the tested code
-identifiable throughout that sequence.
+authored and locally exercised. The table above describes the local validation
+cutoff before PR submission. Hosted CI and landing status are recorded in
+[the cross-repository tracking issue](https://github.com/vllm-ascend-workspace/.github/issues/5).
+Runtime-owner PRs must land before the workspace consumer PR; commit pins keep
+the tested code identifiable throughout that sequence. CI follow-ups select a
+working Git Bash for local Linux-peer fixtures and keep POSIX-only grep fixtures
+on Linux/macOS while preserving native Windows search coverage.
 
 ## Experience and efficiency notes for discussion
 

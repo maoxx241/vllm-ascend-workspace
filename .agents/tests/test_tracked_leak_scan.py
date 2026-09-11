@@ -69,10 +69,16 @@ def write_minimal_policy(repo: Path, body: str = MINIMAL_POLICY) -> Path:
 
 
 def invoke_cli(script: Path, *args: str, cwd: Path | None = None) -> tuple[int, dict, str]:
+    env = os.environ.copy()
+    if os.name == "nt":
+        # English Windows must also report paths outside its ANSI code page.
+        env["PYTHONIOENCODING"] = "cp1252"
     result = subprocess.run(
         [sys.executable, "-B", str(script), *args],
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        env=env,
         cwd=str(cwd or ROOT),
     )
     payload = json.loads(result.stdout.strip())
@@ -885,6 +891,14 @@ class G1BoundaryTests(unittest.TestCase):
             self.assertEqual(code, 1)
             self.assertEqual(payload["finding_count"], len(names))
             self.assertEqual({item["path"] for item in payload["findings"]}, set(names))
+            hook_code, hook_payload, hook_stderr = invoke_cli(
+                HOOK, "--repo-root", str(repo), "--check"
+            )
+            self.assertEqual(hook_code, 1)
+            self.assertEqual({item["path"] for item in hook_payload["findings"]}, set(names))
+            self.assertNotIn("Traceback", hook_stderr)
+            for name in names:
+                self.assertIn(name, hook_stderr)
             git(repo, "commit", "-qm", "special names")
             tree_code, tree_payload, _ = invoke_cli(
                 SCANNER,
