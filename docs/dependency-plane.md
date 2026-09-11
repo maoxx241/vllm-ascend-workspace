@@ -10,21 +10,23 @@ import.
 ## Packages
 
 `pyproject.toml` declares the three in-process packages. `[tool.uv.sources]`
-must name git+https tag sources because `vaws-coordinator` depends on
+names public git+https sources because `vaws-coordinator` depends on
 `vaws-remote-dev`, which is not on PyPI.
 
-| Package | Module | Source tag | Role |
+| Package | Module | Required version | Role |
 |---|---|---|---|
-| `vaws-remote-dev` | `remote_dev` | `0.5.1` at `c24a64a` | process-in import + MCP server |
-| `vaws-coordinator` | `vaws_coordinator` | `0.3.2` at `8e67391` | process-in import + stdio MCP |
-| `vaws-knowledge` | `vaws_knowledge` | `0.3.2` at `41363d3` | process-in import + MCP |
+| `vaws-remote-dev` | `remote_dev` | from `pyproject.toml` | process-in import + MCP server |
+| `vaws-coordinator` | `vaws_coordinator` | from `pyproject.toml` | process-in import + stdio MCP |
+| `vaws-knowledge` | `vaws_knowledge` | from `pyproject.toml` | process-in import + MCP |
 | `vaws-top` | — | uvx only | fleet dashboard; not imported |
 
 `uv sync` writes `.venv` and records the resolved git commits in `uv.lock`.
 CI runs `uv lock --check`. Do not copy those SHAs into workflows.
 
-The workspace consumes these release tags through the lockfile. Acceptance
-uses the installed packages, including their public APIs and packaged data.
+Sources may select release tags or validated commit revisions; `uv.lock`
+records their resolved commits. Read exact installed/locked identities through
+`vaws_deps.py status` instead of maintaining a second SHA table. Acceptance
+uses installed packages, including their public APIs and packaged data.
 
 ## Loader
 
@@ -75,8 +77,19 @@ Equivalent form that creates the environment first:
 uv run python3 .agents/scripts/vaws_deps.py doctor
 ```
 
+On Windows PowerShell, use `uv run python` or the environment directly:
+
+```powershell
+& .\.venv\Scripts\python.exe .agents/scripts/vaws_deps.py doctor
+```
+
+The [Windows installation guide](windows-installation.md) includes a
+same-filesystem cache and a verified offline transfer recipe. It preserves
+the full default package set.
+
 System `python3` cannot see `.venv`. Entry scripts re-exec
-`.venv/bin/python` when a sentinel package is missing and the venv exists.
+`.venv/bin/python` (POSIX) or `.venv/Scripts/python.exe` (Windows) when a
+sentinel package is missing and the venv exists.
 `VAWS_SKIP_VENV_REEXEC=1` disables the hop. A missing `.venv` is an error
 whose remedy is `uv sync`.
 

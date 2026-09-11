@@ -8,6 +8,7 @@ is the archive for dated evidence.
 
 ## Current contracts
 
+- [windows-installation.md](windows-installation.md) — PowerShell setup, same-filesystem uv cache and verified offline transfer.
 - [local-tests.md](local-tests.md) — local test progress, subprocess lifetime, retained evidence and validated retries.
 - [runtime-feedback-design.md](runtime-feedback-design.md) — real-machine progress, loaded runtime identity, state projection, compact output and connection diagnostics.
 - [README.md](README.md) — this index.
@@ -26,6 +27,7 @@ is the archive for dated evidence.
 
 ## Dated validation evidence
 
+- [installation-feedback-2026-09-11.md](installation-feedback-2026-09-11.md) — fresh/cached Windows installation timings, cache relocation and dependency extras decision.
 - [observation-feedback-2026-09-11.md](observation-feedback-2026-09-11.md) — SSH batching/timing evidence and status freshness behavior.
 - [cli-feedback-2026-09-11.md](cli-feedback-2026-09-11.md) — paired Windows CLI startup measurements and parser side-effect checks.
 - [windows-validation-2026-09-11.md](windows-validation-2026-09-11.md) — completed Windows non-NPU validation, repairs, limits and a proposed experience-optimization sequence.

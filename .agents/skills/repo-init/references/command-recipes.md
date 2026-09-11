@@ -108,6 +108,20 @@ python3 .agents/scripts/vaws_deps.py sync
 is a separate service. See
 [docs/dependency-plane.md](../../../../docs/dependency-plane.md).
 
+Windows PowerShell, using a cache on the workspace filesystem:
+
+```powershell
+$cachePath = Join-Path (Get-Location).Path '.vaws-local\uv-cache'
+uv sync --locked --group dev --cache-dir $cachePath --link-mode hardlink
+if ($LASTEXITCODE -ne 0) { throw 'Dependency installation failed' }
+& .\.venv\Scripts\python.exe .agents/scripts/vaws_deps.py doctor
+```
+
+For offline preparation, exact tool/lock checks and restoring a transferred
+cache, use [Windows installation](../../../../docs/windows-installation.md).
+Keep the default knowledge package installed; cache placement does not require
+changing machine identity, forks or native client settings.
+
 ## Quiet main comparison
 
 ```bash
