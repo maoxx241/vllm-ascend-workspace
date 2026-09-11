@@ -38,7 +38,9 @@ installed package commands can use `uv run python` on either platform.
 3. Configure missing or explicitly requested forks/remotes with
    `repo_topology.py`. Do not rewrite established fetch/push settings.
 4. Run `uv sync` for package-dependent work and inspect capabilities with
-   `python3 .agents/scripts/vaws_deps.py doctor`.
+   `python3 .agents/scripts/vaws_deps.py doctor`. For Windows cache placement
+   or offline transfer, follow the linked installation recipe in
+   [Command recipes](references/command-recipes.md).
 5. For authorized broad init, run `.agents/scripts/knowledge_setup.py` and the
    selected client's `.agents/scripts/vaws_client_setup.py --apply` entry.
    A read-only knowledge setup can use `--read-only`; it does not require NPU

@@ -446,7 +446,7 @@ option.
 | `.agents/scripts/tracked_path_check.py` | argparse | - | 6 | docs:1, other:1, policy:1, test:2 | mechanics | supported | .agents/scripts/tracked_path_check.py | vaws lint |
 | `.agents/scripts/vaws.py` | argparse | status, env, hook, task-server | 1 | docs:2, other:1, policy:1, routing:1, test:4 | mechanics | supported | .agents/scripts/vaws.py | vaws task |
 | `.agents/scripts/vaws_client_setup.py` | argparse | - | 5 | docs:4, policy:1, script:1, skill-doc:2, test:3 | mechanics | supported | .agents/scripts/vaws_client_setup.py | vaws workspace |
-| `.agents/scripts/vaws_deps.py` | argparse | status, doctor, sync | 1 | docs:3, other:1, policy:1, routing:3, script:1, skill-doc:4, test:2 | mechanics | supported | .agents/scripts/vaws_deps.py | vaws workspace |
+| `.agents/scripts/vaws_deps.py` | argparse | status, doctor, sync | 1 | docs:4, other:1, policy:1, routing:3, script:1, skill-doc:4, test:2 | mechanics | supported | .agents/scripts/vaws_deps.py | vaws workspace |
 | `.agents/scripts/workspace_identity.py` | argparse | summary, ensure, validate-alias, set-alias, decline-alias | 1 | skill-doc:1 | mechanics | supported | .agents/scripts/workspace_identity.py | vaws workspace |
 | `.agents/scripts/workspace_profile.py` | argparse | summary, validate, ensure | 4 | routing:1, script:1, skill-doc:4 | mechanics | supported | .agents/scripts/workspace_profile.py | vaws workspace |
 | `.agents/skills/ascend-memory-profiling/scripts/mem_analyze.py` | argparse | - | 1 | skill-doc:1 | mixed | supported | .agents/skills/ascend-memory-profiling/scripts/mem_analyze.py | vaws profile |
