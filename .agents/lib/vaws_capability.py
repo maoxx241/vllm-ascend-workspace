@@ -197,7 +197,6 @@ def evaluate_capabilities(
     repo_root: Path = ROOT,
     env: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
-    del env  # interpreter state is the source of truth; env is kept for envelope shape
     deps = all_packages(repo_root)
     capabilities: dict[str, Any] = {}
 
@@ -322,6 +321,7 @@ def evaluate_capabilities(
         flat.extend(capabilities[name]["degradation"])
     return {
         "deps": deps,
+        "runtime": runtime_observation(repo_root, env),
         "capabilities": capabilities,
         "degraded": any(capabilities[name]["degraded"] for name in CAPABILITY_ORDER),
         "degradation": flat,
@@ -329,6 +329,23 @@ def evaluate_capabilities(
         "acknowledged_drift": [],
         "recent_hook_degradations": [],
     }
+
+
+def runtime_observation(repo_root: Path, env: Mapping[str, str] | None = None) -> dict[str, Any]:
+    """Read the existing daemon only. Package installation does not reload a process."""
+    from vaws_coordinator_launch import coordinator_environment
+    try:
+        from vaws_coordinator.service import CoordinatorClient, socket_path
+        settings = coordinator_environment(env, repo_root=repo_root)
+        state = Path(settings.get("VAWS_COORDINATOR_STATE_DIR") or
+                     str(Path(settings["VAWS_AGENT_SESSIONS_DIR"]).parent / "coordinator"))
+        if not socket_path(state).exists():
+            return {"daemon": {"status": "not_running"}, "mcp": {"status": "reported_by_each_tool_response"}}
+        reply = CoordinatorClient(state, timeout=2).call("ping") or {}
+        return {"daemon": reply if reply.get("runtime") else {"status": "unknown", "reason": "daemon does not report loaded identity"},
+                "mcp": {"status": "reported_by_each_tool_response"}}
+    except (ImportError, OSError, RuntimeError, TypeError) as exc:
+        return {"daemon": {"status": "unavailable", "error": str(exc)}}
 
 
 def _sync_actions(report: Mapping[str, Any]) -> list[dict[str, str | None]]:
@@ -500,7 +517,9 @@ def dumps_doctor_view(envelope: Mapping[str, Any], *, full: bool = False, record
     record_ref = envelope.get("envelope_id")
     if record_dir is not None:
         record_ref = str(write_full_record(envelope, record_dir))
-    return json.dumps(compact_view(envelope, record_ref=record_ref), ensure_ascii=False, indent=2)
+    view = compact_view(envelope, record_ref=record_ref)
+    view["runtime"] = ((envelope.get("extensions") or {}).get("capability_report") or {}).get("runtime")
+    return json.dumps(view, ensure_ascii=False, indent=2)
 
 
 def checkout_usable(name: str, env: Mapping[str, str] | None = None) -> bool:

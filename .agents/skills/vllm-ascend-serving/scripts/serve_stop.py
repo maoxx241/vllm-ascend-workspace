@@ -21,6 +21,7 @@ if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 
 from _common import SERVICE_NAME, emit_progress, print_json  # noqa: E402
+from vaws_coordinator.presentation import execution_summary
 from vaws_task_target import DONE, executions_for_service, task_client, task_id_of  # noqa: E402
 
 
@@ -61,16 +62,16 @@ def main(argv: list[str] | None = None) -> int:
         emit_progress("stop", f"stopping execution {execution_id}")
         result = client.observe(execution_id, "stop", args.force)
         state = str(result.get("state") or "")
-        terminal = state in DONE
+        terminal = state in DONE and result.get("resources_released") is True
         print_json({
-            "status": "stopped" if terminal else "incomplete",
+            "status": "stopped" if terminal else "stopping",
             "task_id": task_id,
             "service": args.service,
             "execution_id": execution_id,
             "state": state,
             "container_preserved": True,
-            "result": result,
-            **({} if terminal else {"error": result.get("error") or "stop did not confirm a terminal state"}),
+            **execution_summary(result),
+            **({} if terminal else {"error": result.get("error") or "waiting for execution termination and resource release"}),
         })
         return 0 if terminal else 1
     except Exception as exc:

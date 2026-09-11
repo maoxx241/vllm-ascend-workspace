@@ -16,7 +16,7 @@
   failure handling and resource release.
 - Queued/preparing is not running. Status and stop address the same owned
   execution; proxy health is only checked for a running deployment.
-- State and Run Manifest retain actual results. The workspace does not create
+- One start followed by status advances State and Run Manifest. The workspace does not create
   another registry or per-role allocation/rollback loop.
 
 ## Smoke
@@ -24,3 +24,8 @@
 - The request goes through the proxy, and its response is preserved.
 - Service logs or connector metrics corroborate KV transfer before that claim.
 - Correctness and performance conclusions require their own business evidence.
+
+- Stale observations cannot reopen terminal manifests. No health probe occurs after termination.
+- `resources_released` is required before stop completes; stop alone does not prove inference passed.
+- Actual remote CLI parser rejects invalid arguments before any role receives an NPU lease.
+- Default output excludes duplicated full observations and environment/preamble data.

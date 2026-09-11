@@ -60,3 +60,5 @@ python -B .agents/skills/vllm-ascend-pd-serving/scripts/pd_serving.py stop \
 
 If the result is `stopping`, release is asynchronous. Repeat the same
 command until `stopped`; the manifest is completed only after release.
+
+`proxy.proxy_mode` accepts `direct` (default) or `environment`. After one `start`, use `status` to observe initialization and manifest advancement. Do not repeat start to move a queued manifest.

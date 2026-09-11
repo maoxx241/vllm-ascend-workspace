@@ -23,11 +23,10 @@ group — the package reserves the full group before any role starts.
 2. `pd_serving.py start` submits **one** topology execution (`service=<group_id>`).
    Queued / preparing / waiting is a truthful result with the same
    `execution_id`; do not resubmit.
-3. `status` reads that execution and the proxy health path.
+3. `status` reads that execution, advances the business state and manifest, and probes proxy health only while running. Readiness is `starting`, `ready`, or `unhealthy`; it is separate from process state.
 4. `smoke` posts the configured proxy request.
 5. `stop` calls coordinator `observe(stop)` on that execution.
-   A `stopping` result means release is still in progress; repeat `stop`
-   on the same run until `stopped`. The manifest remains open during release.
+   A `stopping` result means release is still in progress; `status` observes completion. The manifest remains open until coordinator reports `resources_released`. A passed smoke plus release completes it as `passed`; release without passed smoke is `inconclusive`.
 
 Read [command recipes](references/command-recipes.md) for the config shape.
 
@@ -41,3 +40,5 @@ Read [command recipes](references/command-recipes.md) for the config shape.
 - Never invent per-role recovery or lease reconstruction.
 - Role commands come from the serving business command builder (`$VAWS_PYTHON`, `$VAWS_SERVICE_PORT`).
 - Code identity is `manifest_code` from the native/package context, not a group snapshot field.
+
+Each role passes its current vLLM arguments through the selected remote parser before NPU allocation. Proxy requests use direct HTTP by default; set `proxy.proxy_mode: environment` when that URL requires the environment proxy.

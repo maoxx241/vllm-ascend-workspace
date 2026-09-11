@@ -23,19 +23,20 @@ if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 
 from _common import SERVICE_NAME, emit_progress, endpoint_from_reply, print_json, service_port_of, ssh_exec  # noqa: E402
+from vaws_coordinator.presentation import execution_summary
 from vaws_task_target import DONE, PENDING, RUNNING, executions_for_service, task_client, task_id_of  # noqa: E402
 
 
 def check_health(ep, port: int) -> bool:
     script = (
-        f"curl -s -o /dev/null -w '%{{http_code}}' --connect-timeout 3 --max-time 5"
+        f"curl --noproxy '*' -s -o /dev/null -w '%{{http_code}}' --connect-timeout 3 --max-time 5"
         f" http://127.0.0.1:{port}/health 2>/dev/null || echo 000"
     )
     return ssh_exec(ep, script, check=False).stdout.strip() == "200"
 
 
 def check_models(ep, port: int) -> dict[str, Any] | None:
-    script = f"curl -s --connect-timeout 3 --max-time 5 http://127.0.0.1:{port}/v1/models 2>/dev/null || true"
+    script = f"curl --noproxy '*' -s --connect-timeout 3 --max-time 5 http://127.0.0.1:{port}/v1/models 2>/dev/null || true"
     text = ssh_exec(ep, script, check=False).stdout.strip()
     if not text:
         return None
@@ -99,7 +100,7 @@ def main(argv: list[str] | None = None) -> int:
             "service": args.service,
             "execution_id": execution_id,
             "state": state,
-            "observation": observation,
+            **execution_summary(observation),
             "running": kind == "running",
             "ready": False,
         }

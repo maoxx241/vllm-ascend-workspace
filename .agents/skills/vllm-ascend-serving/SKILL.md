@@ -42,3 +42,5 @@ python3 .agents/skills/vllm-ascend-serving/scripts/serve_stop.py [--service vllm
 ```
 
 `--relaunch` merges the last business config (model/tp/args). A new start after a live service is coordinator-owned association, not a workspace request-id retry.
+
+The submitted run includes a parse-only preflight using the selected remote vLLM CLI parser, before NPU allocation. Health requests bypass environment HTTP proxies explicitly. Status/stop return compact execution facts, including progress, role errors and resource-release state; the full record remains coordinator-owned. Stop is complete only after `resources_released` is true.

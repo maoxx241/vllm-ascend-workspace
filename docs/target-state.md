@@ -49,6 +49,11 @@ to retain in the new design.
 
 ## 2. Ownership
 
+Runtime feedback follows [runtime-feedback-design.md](runtime-feedback-design.md):
+owners record progress, errors and loaded package identity; task outputs offer
+compact views with full-record references. Business observations update reports
+without creating another execution state machine.
+
 | Concern | Owner | This workspace keeps | This workspace must not keep |
 |---|---|---|---|
 | Explicit remote read/edit/bash/search/patch/job/artifact/monitor; generic process control | **remote-dev** | client MCP wiring; skills may pass ordinary `host`/`port`/`user`/`cwd` | VAWS resolver plugin; global Ascend env injection; skill-built SSH; a second job supervisor |

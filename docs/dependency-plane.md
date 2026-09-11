@@ -15,8 +15,8 @@ must name git+https tag sources because `vaws-coordinator` depends on
 
 | Package | Module | Source tag | Role |
 |---|---|---|---|
-| `vaws-remote-dev` | `remote_dev` | `0.5.0` at `d0f963c` | process-in import + MCP server |
-| `vaws-coordinator` | `vaws_coordinator` | `0.3.1` at `a6a2841` | process-in import + stdio MCP |
+| `vaws-remote-dev` | `remote_dev` | `0.5.1` at `c24a64a` | process-in import + MCP server |
+| `vaws-coordinator` | `vaws_coordinator` | `0.3.2` at `8e67391` | process-in import + stdio MCP |
 | `vaws-knowledge` | `vaws_knowledge` | `0.3.2` at `41363d3` | process-in import + MCP |
 | `vaws-top` | — | uvx only | fleet dashboard; not imported |
 
@@ -127,3 +127,5 @@ active sync result. Native hook trust remains managed by each client.
 without starting OpenViking. `--install-dir <client-skill-directory>` installs
 that same packaged resource for native discovery. Workspace does not keep a
 second canonical copy or require curation for ordinary capture.
+
+Doctor also reads the running coordinator identity without launching a daemon. Its loaded version/commit can differ from the installed package after sync; use `vaws-coordinator daemon --action restart-if-idle` after owned executions and leases finish. Task MCP responses carry their own startup identity; refresh their native-client process separately when stale. Missing loaded identity remains unknown.
