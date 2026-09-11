@@ -69,7 +69,7 @@ class DevelopmentTests(unittest.TestCase):
             config_path = root / "config.json"
             config_path.write_text(json.dumps(config()), encoding="utf-8")
             output = root / "development"
-            development.plan(output, config_path=config_path, created_at=NOW)
+            development._prepare_report(output, config_path=config_path, created_at=NOW)
             kernel = root / "kernel.py"
             kernel.write_text("import triton\n", encoding="utf-8")
             validation = new_manifest(
@@ -105,10 +105,14 @@ class DevelopmentTests(unittest.TestCase):
                 updated_at=NOW,
             )
             validation = transition_status(validation, "running", updated_at=NOW)
+            analysis_path = root / "analysis.json"
+            analysis_path.write_text(json.dumps({"status": "passed", "results": [
+                {"case_id": "case-1", "status": "passed"}]}), encoding="utf-8")
+            validation = add_artifact(validation, name="analysis", kind="analysis", uri=str(analysis_path), updated_at=NOW)
             validation = transition_status(validation, "passed", updated_at=NOW)
             validation_path = root / "validation.json"
             write_manifest(validation_path, validation)
-            result = development.finalize(
+            result = development._finalize_report(
                 output,
                 kernel=kernel,
                 semantic_report=output / "semantic-report.md",

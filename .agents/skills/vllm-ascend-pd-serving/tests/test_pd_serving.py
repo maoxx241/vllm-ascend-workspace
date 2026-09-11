@@ -102,197 +102,63 @@ class PdServingTests(unittest.TestCase):
         self.assertNotIn("export HCCL_BUFFSIZE", decode["command"])
         self.assertNotIn('"1024$"', decode["command"])
 
-    def test_plan_needs_only_business_config(self) -> None:
+    def test_start_submits_topology_without_management_records(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            config_path = root / "config.json"
-            config_path.write_text(json.dumps(config()), encoding="utf-8")
-            output = root / "run"
-            result = pd.plan(
-                output,
-                config_path=config_path,
-                created_at=NOW,
-                code=CODE,
-            )
-            self.assertEqual(result["startup_order"], ["decode", "prefill"])
-            self.assertFalse((output / "session-group.json").exists())
-            lifecycle = json.loads((output / "lifecycle.json").read_text(encoding="utf-8"))
-            self.assertEqual(len(lifecycle["topology"]["roles"]), 2)
-
-    def test_start_submits_one_topology_run(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            config_path = root / "config.json"
-            config_path.write_text(json.dumps(config()), encoding="utf-8")
-            output = root / "run"
-            pd.plan(
-                output,
-                config_path=config_path,
-                created_at=NOW,
-                code=CODE,
-            )
-            captured: dict = {}
-
-            def fake_run(command, **kwargs):
-                captured["command"] = command
-                captured.update(kwargs)
-                return {
-                    "execution_id": "exec-1",
-                    "state": "queued",
-                    "service": "pd-group",
-                }
-
-            client = SimpleNamespace(
-                context={"session": {"id": "task-1"}},
-                run=fake_run,
-            )
-            result = pd.start(output, client=client, updated_at=NOW)
-            self.assertEqual(result["status"], "queued")
-            self.assertEqual(result["execution_id"], "exec-1")
-            self.assertIn("topology", captured)
-            self.assertEqual(len(captured["topology"]["roles"]), 2)
-            self.assertEqual(captured["service"], "pd-group")
-            self.assertIsNone(captured["timeout_seconds"])
-            self.assertNotIn("npu_count", captured)
-
-    def test_preparing_is_queued_with_the_same_execution(self) -> None:
-        self.assertIn("preparing", pd.PENDING)
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            config_path = root / "config.json"
-            config_path.write_text(json.dumps(config()), encoding="utf-8")
-            output = root / "run"
-            pd.plan(
-                output,
-                config_path=config_path,
-                created_at=NOW,
-                code=CODE,
-            )
-            client = SimpleNamespace(
-                context={"session": {"id": "task-1"}},
-                run=lambda command, **kwargs: {
-                    "execution_id": "exec-prep",
-                    "state": "preparing",
-                    "service": "pd-group",
-                },
-                observe=lambda eid, action="status", force=False, role=None: {
-                    "state": "preparing",
-                    "execution_id": eid,
-                    "roles": [
-                        {"name": "decode", "state": "preparing"},
-                        {"name": "prefill", "state": "preparing"},
-                    ],
-                },
-            )
-            started = pd.start(output, client=client, updated_at=NOW)
-            self.assertEqual(started["status"], "queued")
-            self.assertEqual(started["execution_id"], "exec-prep")
-            self.assertEqual(started["state"], "preparing")
-            self.assertFalse(started["running"])
-            result = pd.status(output, client=client)
-            self.assertEqual(result["status"], "queued")
-            self.assertEqual(result["execution_id"], "exec-prep")
+            cfg = Path(tmp) / "config.json"
+            document = config()
+            for field in ("run_id", "schema_version", "startup_order"):
+                document.pop(field)
+            cfg.write_text(json.dumps(document), encoding="utf-8")
+            owner = mock.Mock()
+            owner.run.return_value = {"execution_id": "exec-1", "state": "preparing", "service": "pd-group"}
+            result = pd.start(cfg, client=owner)
             self.assertEqual(result["state"], "preparing")
-            self.assertFalse(result["running"])
-
-    def test_stop_uses_the_same_execution(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            config_path = root / "config.json"
-            config_path.write_text(json.dumps(config()), encoding="utf-8")
-            output = root / "run"
-            pd.plan(
-                output,
-                config_path=config_path,
-                created_at=NOW,
-                code=CODE,
-            )
-            client = SimpleNamespace(
-                context={"session": {"id": "task-1"}},
-                run=lambda *a, **k: {"execution_id": "exec-1", "state": "running", "service": "pd-group"},
-                observe=lambda eid, action="status", force=False: {"state": "cancelled", "execution_id": eid, "resources_released": True},
-            )
-            pd.start(output, client=client, updated_at=NOW)
-            result = pd.stop(output, force=True, client=client, updated_at=NOW)
             self.assertEqual(result["execution_id"], "exec-1")
-            self.assertEqual(result["status"], "stopped")
-            self.assertTrue(result["container_preserved"])
+            self.assertEqual(len(owner.run.call_args.kwargs["topology"]["roles"]), 2)
+            self.assertIsNone(owner.run.call_args.kwargs["timeout_seconds"])
+            self.assertEqual(list(Path(tmp).iterdir()), [cfg])
 
-    def test_stop_waits_for_release_before_completing_manifest(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            config_path = root / "config.json"
-            config_path.write_text(json.dumps(config()), encoding="utf-8")
-            output = root / "run"
-            pd.plan(output, config_path=config_path, created_at=NOW, code=CODE)
-            observations = iter([{ "state": "releasing", "resources_released": False}, {"state": "cancelled", "resources_released": True}])
-            client = SimpleNamespace(
-                context={"session": {"id": "task-1"}},
-                run=lambda *a, **k: {"execution_id": "exec-1", "state": "running"},
-                observe=lambda *a, **k: {**next(observations), "execution_id": "exec-1"},
-            )
-            pd.start(output, client=client, updated_at=NOW)
-            pending = pd.stop(output, force=False, client=client, updated_at=NOW)
-            self.assertEqual(pending["status"], "stopping")
-            self.assertEqual(pd.load_manifest(output / "manifest.json")["status"], "running")
-            stopped = pd.stop(output, force=False, client=client, updated_at=NOW)
-            self.assertEqual(stopped["status"], "stopped")
-            self.assertEqual(pd.load_manifest(output / "manifest.json")["status"], "inconclusive")
+    def test_status_and_stop_need_only_owner_reference(self):
+        owner = mock.Mock()
+        owner.observe.return_value = {"execution_id": "exec-1", "state": "stopping", "resources_released": False}
+        pending = pd.stop(service="pd-group", client=owner, force=True)
+        self.assertEqual(pending["state"], "stopping")
+        self.assertFalse(pending["resources_released"])
+        owner.observe.assert_called_once_with(None, "stop", True, service="pd-group")
+        owner.observe.return_value = {"execution_id": "exec-1", "state": "cancelled", "resources_released": True}
+        result = pd.status(execution_id="exec-1", client=owner)
+        self.assertEqual(result["state"], "cancelled")
+        self.assertTrue(result["resources_released"])
+        owner.run.assert_not_called()
 
-    def test_status_advances_manifest_after_one_start_and_never_probes_terminal(self):
+    def test_health_preserves_lifecycle_and_does_not_probe_terminal(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            cfg = root / "config.json"
-            cfg.write_text(json.dumps(config()))
-            output = root / "run"
-            pd.plan(output, config_path=cfg, created_at=NOW, code=CODE)
-            observation = {"execution_id": "exec-1", "state": "preparing", "resources_released": False}
-            client = SimpleNamespace(context={"session": {"id": "task-1"}},
-                                     run=mock.Mock(return_value=observation),
-                                     observe=lambda *a, **k: dict(observation))
-            pd.start(output, client=client, updated_at=NOW)
-            observation["state"] = "running"
+            cfg = Path(tmp) / "config.json"
+            cfg.write_text(json.dumps(config()), encoding="utf-8")
+            owner = mock.Mock()
+            owner.observe.return_value = {"execution_id": "exec-1", "state": "running"}
+            opener = mock.Mock(side_effect=urllib.error.HTTPError("http://proxy:9000/health", 502, "bad gateway", {}, None))
+            result = pd.status(service="pd-group", config_path=cfg, client=owner, urlopen=opener)
+            self.assertEqual(result["state"], "running")
+            self.assertEqual(result["readiness"], "unhealthy")
+            self.assertEqual(result["proxy"]["failure"], {"kind": "http_status", "status_code": 502})
+            owner.observe.return_value = {"execution_id": "exec-1", "state": "cancelled"}
+            opener.reset_mock()
+            result = pd.status(service="pd-group", config_path=cfg, client=owner, urlopen=opener)
+            opener.assert_not_called()
+            self.assertNotIn("readiness", result)
+
+    def test_smoke_records_only_observed_http_fact(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = Path(tmp) / "config.json"
+            cfg.write_text(json.dumps(config()), encoding="utf-8")
             response = mock.MagicMock()
             response.__enter__.return_value.status = 200
             response.__enter__.return_value.read.return_value = b'{"choices":[{"text":"ok"}]}'
-            opener = mock.Mock(return_value=response)
-            result = pd.status(output, client=client, urlopen=opener)
-            self.assertEqual(result["readiness"], "ready")
-            self.assertEqual(pd.load_manifest(output / "manifest.json")["status"], "running")
-            self.assertEqual(json.loads((output / "state.json").read_text(encoding="utf-8"))["status"], "running")
-            self.assertNotIn("result", json.loads((output / "state.json").read_text(encoding="utf-8")))
-            client.run.assert_called_once()
-            pd.smoke(output, urlopen=opener)
-            observation.update(state="stopping")
-            pd.stop(output, client=client, force=False)
-            observation.update(state="cancelled", resources_released=True)
-            forbidden = mock.Mock(side_effect=AssertionError("terminal execution must not probe HTTP"))
-            result = pd.status(output, client=client, urlopen=forbidden)
-            self.assertEqual(result["status"], "stopped")
-            self.assertEqual(pd.load_manifest(output / "manifest.json")["status"], "passed")
-            # A stale lifecycle observation cannot reopen the terminal manifest.
-            observation.update(state="queued", resources_released=False)
-            pd.status(output, client=client, urlopen=forbidden)
-            self.assertEqual(pd.load_manifest(output / "manifest.json")["status"], "passed")
-            forbidden.assert_not_called()
-
-    def test_not_listening_is_starting_and_proxy_502_retains_transport_fact(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            cfg = root / "config.json"
-            cfg.write_text(json.dumps(config()))
-            output = root / "run"
-            pd.plan(output, config_path=cfg, created_at=NOW, code=CODE)
-            observation = {"execution_id": "exec-1", "state": "running"}
-            client = SimpleNamespace(context={"session": {"id": "task-1"}},
-                                     run=lambda *a, **k: observation, observe=lambda *a: observation)
-            pd.start(output, client=client, updated_at=NOW)
-            opener = mock.Mock(side_effect=urllib.error.HTTPError("http://proxy:9000/health", 502, "bad gateway", {}, None))
-            result = pd.status(output, client=client, urlopen=opener)
-            self.assertEqual(result["readiness"], "starting")
-            self.assertEqual(result["proxy"]["proxy_mode"], "direct")
-            self.assertEqual(result["proxy"]["failure"], {"kind": "http_status", "status_code": 502})
-            self.assertNotIn("model", result["proxy"]["failure"])
+            result = pd.smoke(cfg, urlopen=mock.Mock(return_value=response), output_dir=Path(tmp)/"report")
+            self.assertEqual(result["status"], "passed")
+            self.assertIn("inspect service logs", result["claim"])
+            self.assertEqual(json.loads((Path(tmp)/"report/smoke.json").read_text())["status"], "passed")
 
 
 if __name__ == "__main__":

@@ -5,7 +5,7 @@ description: "Run vLLM online-serving benchmarks on a workspace-managed remote c
 
 <!-- Generated from .agents/skills/vllm-ascend-benchmark/SKILL.md. Do not edit. -->
 
-# vLLM Ascend Benchmark
+# vllm-ascend-benchmark
 
 Read `.agents/skills/vllm-ascend-benchmark/SKILL.md` and only the references needed
 for the current task. The canonical skill owns the workflow.

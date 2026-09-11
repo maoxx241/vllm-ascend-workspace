@@ -3,42 +3,27 @@ name: ascend-triton-workflow
 description: Orchestrate an end-to-end Ascend Triton operator effort across task definition, GPU-to-NPU migration or direct development, explicit correctness validation, profiler-driven optimization, and evidence aggregation with Run Manifest v1. Use when the request spans two or more lifecycle stages or asks for a complete operator delivery. Do not use for only implementing, validating, or optimizing an already-scoped kernel; route those to the owning stage Skill.
 ---
 
-# Ascend Triton Workflow
+# ascend-triton-workflow
 
-Coordinate the lifecycle without duplicating the implementation owned by the stage Skills.
+Carry an operator through development, validation and optimization when the request spans those stages.
 
-## Workflow
+Choose the stages required by the requested outcome. Reuse relevant existing evidence. Development owns implementation, validation owns the correctness matrix, and optimization owns measured tuning decisions.
 
-1. Freeze the source, operator contract, target SoC, software versions, case set, and requested performance objective.
-2. Query `.agents/knowledge/` for relevant capability, validation, and failure-signature facts. Treat missing facts as unknown.
-3. Run `scripts/triton_workflow.py plan` when you need a stored stage plan. Ordinary experiments can run first and be linked afterwards.
-4. Execute required stages with their owners:
-   - first correct kernel or GPU migration: `ascend-triton-operator-development`;
-   - compile and full-case correctness gate: `ascend-triton-kernel-validation`;
-   - single-kernel profiling and performance iteration: `ascend-triton-kernel-optimization`.
-5. Bind the actual source worktree; coordinator prepares it for managed execution; run `torch_npu` and Triton only in a managed Ascend environment.
-6. Link every child Run Manifest to its planned stage with `link`.
-7. Run `finalize` and deliver the workflow report with missing, failed, and untested coverage explicit.
+## Agent entry
 
-## Entry point
+Run from the repository root using the platform's Python launcher. The workspace
+selects its installed platform environment automatically.
 
-`scripts/triton_workflow.py` provides:
+```text
+python .agents/skills/ascend-triton-workflow/scripts/triton_workflow.py --config operator.json --development development/manifest.json --validation validation/manifest.json --optimization optimization/manifest.json
+```
 
-- `plan`: validate the workflow config, create ordered stage items, and initialize a parent Run Manifest;
-- `link`: bind one terminal child Run Manifest to one stage without overwriting prior evidence;
-- `finalize`: aggregate required-stage evidence and produce `workflow-report.md`.
+The config contains op_name, source, target, cases and required_stages. One report call verifies stage scope, actual artifacts, passing cases and kernel identity. Missing or unrelated evidence cannot complete the workflow. Stage identifiers and linking are internal.
 
-Read:
+For only one stage, use its owning skill directly.
 
-- [Behavior contract](references/behavior.md) for config, stage, link, and status semantics.
-- [Command recipes](references/command-recipes.md) for the complete lifecycle.
-- [Acceptance](references/acceptance.md) before claiming an operator workflow complete.
+Read the relevant detail only when needed:
 
-## Rules
+- [behavior](references/behavior.md)
 
-- Keep stage ownership strict; do not implement migration, validation, or optimization inside this Skill.
-- Never let performance evidence substitute for correctness evidence.
-- A passed workflow requires every required stage to have a passed terminal child manifest.
-- A failed child makes the workflow failed; missing, unsupported, cancelled, or inconclusive required evidence makes it inconclusive.
-- Record GPU timing only as cross-platform context; use a comparable NPU baseline for NPU optimization acceptance.
-- Keep orchestration state under `.vaws-local/ascend-triton/workflows/`.
+- [Business input example](references/inputs.md)

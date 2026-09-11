@@ -1,67 +1,14 @@
-# Change validation command recipes
+# Agent call
 
-## Current worktree
+From the repository root:
 
-```bash
-python -B .agents/skills/vllm-ascend-change-validation/scripts/change_validation.py plan \
-  --output-dir .vaws-local/change-validation/change-001 \
-  --run-id change-validation-001 \
-  --baseline HEAD \
-  --candidate WORKTREE \
-  --repo-root . \
-  --target-repository vllm-ascend \
-  --goal "Fix DCP metadata propagation"
+```text
+python .agents/skills/vllm-ascend-change-validation/scripts/change_validation.py --baseline BASE --candidate HEAD --repo-root source --evidence correctness/manifest.json performance/manifest.json
 ```
 
-## Commit range
+Use --diff-file for an already captured diff. The report classifies affected components, derives supported coverage from actual evidence and exact code identities, and lists missing checks. Agents do not enter coverage labels or lifecycle records.
 
-```bash
-python -B .agents/skills/vllm-ascend-change-validation/scripts/change_validation.py plan \
-  --output-dir .vaws-local/change-validation/change-002 \
-  --run-id change-validation-002 \
-  --baseline origin/main \
-  --candidate feature-branch \
-  --repo-root . \
-  --target-repository vllm \
-  --target-repository vllm-ascend
-```
-
-## Imported cross-repository diff
-
-```bash
-python -B .agents/skills/vllm-ascend-change-validation/scripts/change_validation.py plan \
-  --output-dir .vaws-local/change-validation/change-003 \
-  --run-id change-validation-003 \
-  --baseline recorded-baselines \
-  --candidate workspace-snapshots \
-  --diff-file /path/to/combined.diff \
-  --target-repository vllm \
-  --target-repository vllm-ascend
-```
-
-## Link evidence
-
-Create every downstream run with this plan's run ID as its parent, for example
-`correctness_run.py init --parent-run-id change-validation-001`, then read
-`validation-plan.json` and link the exact plan IDs:
-
-```bash
-python -B .agents/skills/vllm-ascend-change-validation/scripts/change_validation.py link \
-  --output-dir .vaws-local/change-validation/change-001 \
-  --run-manifest .vaws-local/correctness/change-001/manifest.json \
-  --covers correctness-multi-rank-metadata-consistency \
-  --covers correctness-eager
-```
-
-`link` exits 1 when the child manifest has no `parent_run_id`, names another
-parent, or is `passed` with no artifacts. The error says which; fix the
-downstream run rather than editing its manifest.
-
-## Finalize
-
-```bash
-python -B .agents/skills/vllm-ascend-change-validation/scripts/change_validation.py finalize \
-  --output-dir .vaws-local/change-validation/change-001
-```
-
-An inconclusive result is expected until every required item is covered by passed evidence.
+Use `--help` for exact argument details. Report output directories are optional
+where supported; the script creates a fresh directory under `.vaws-local/`.
+Schema versions and report identifiers are generated internally. Input files
+describe business cases or contain observed results, rather than task ownership.

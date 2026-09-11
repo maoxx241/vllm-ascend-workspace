@@ -20,7 +20,10 @@ names public git+https sources because `vaws-coordinator` depends on
 | `vaws-knowledge` | `vaws_knowledge` | from `pyproject.toml` | process-in import + MCP |
 | `vaws-top` | — | uvx only | fleet dashboard; not imported |
 
-`uv sync` writes `.venv` and records the resolved git commits in `uv.lock`.
+`python .agents/scripts/vaws_deps.py sync` runs uv with an automatically selected
+environment under `.vaws-local/venvs/<sys.platform>`. Windows uses `win32` and WSL
+uses `linux`, so a shared checkout retains both installations. `uv.lock` records
+the resolved commits.
 CI runs `uv lock --check`. Do not copy those SHAs into workflows.
 
 Sources may select release tags or validated commit revisions; `uv.lock`
@@ -50,7 +53,7 @@ git.
 
 `off_spec` warns but does not block execution. `missing` makes capabilities
 that depend on the package unavailable. The remedy for every package gap is
-`uv sync`.
+`python .agents/scripts/vaws_deps.py sync`.
 
 ## Commands
 
@@ -69,29 +72,21 @@ envelope is not `remote-dev.result.v1`. A missing `uvx` degrades
 `fleet_observation`; the remedy is
 `python3 .agents/skills/npu-fleet-monitor/scripts/manage_monitor.py deploy`.
 
-`sync` wraps `uv sync`. It never runs automatically from an entry script.
+`sync` is the bootstrap and works before packages are installed. It forwards uv
+options such as `--locked`, `--group dev`, cache placement and offline mode. It
+sets `UV_PROJECT_ENVIRONMENT` itself. An ordinary command never installs packages
+as a side effect.
 
-Equivalent form that creates the environment first:
+Entry scripts select the platform environment when their packages are missing.
+An explicitly supplied interpreter with usable packages is respected. Interpreter
+flags and `-m` module calls survive re-execution; native Windows launches use UTF-8
+and retain child-process ownership. A missing installation returns the bootstrap
+command as its remedy. Client setup writes the selected interpreter's full path
+into native MCP/hook configuration.
 
-```bash
-uv run python3 .agents/scripts/vaws_deps.py doctor
-```
-
-On Windows PowerShell, use `uv run python` or the environment directly:
-
-```powershell
-& .\.venv\Scripts\python.exe .agents/scripts/vaws_deps.py doctor
-```
-
-The [Windows installation guide](windows-installation.md) includes a
-same-filesystem cache and a verified offline transfer recipe. It preserves
-the full default package set.
-
-System `python3` cannot see `.venv`. Entry scripts re-exec
-`.venv/bin/python` (POSIX) or `.venv/Scripts/python.exe` (Windows) when a
-sentinel package is missing and the venv exists.
-`VAWS_SKIP_VENV_REEXEC=1` disables the hop. A missing `.venv` is an error
-whose remedy is `uv sync`.
+Use the platform Python launcher (`py -3` on Windows, `python3` on WSL) for the
+bootstrap or workspace entry scripts. The [Windows installation guide](windows-installation.md)
+also covers same-filesystem caching and offline transfer.
 
 ## Capabilities
 
@@ -112,7 +107,7 @@ release wheel.
 ## Shared knowledge corpus
 
 The installed `vaws-knowledge` package provides the engine and a bootstrap
-corpus. Run `python3 .agents/scripts/knowledge_setup.py` after `uv sync` to enable
+corpus. Run `python3 .agents/scripts/knowledge_setup.py` after `python .agents/scripts/vaws_deps.py sync` to enable
 the public Markdown corpus, a personal contribution fork and background Release
 updates. `--read-only` enables downloads without GitHub authentication or a fork.
 Then refresh selected clients with `vaws_client_setup.py --apply` so MCP receives
@@ -136,7 +131,7 @@ active sync result. Native hook trust remains managed by each client.
 
 ## Optional package skill
 
-`uv run python -m vaws_knowledge skill` reads the installed curation skill
+`knowledge` package skill through its configured interpreter (`python -m vaws_knowledge skill`) reads the installed curation skill
 without starting OpenViking. `--install-dir <client-skill-directory>` installs
 that same packaged resource for native discovery. Workspace does not keep a
 second canonical copy or require curation for ordinary capture.

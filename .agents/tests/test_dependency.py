@@ -22,7 +22,7 @@ import vaws_dependency as deps  # noqa: E402
 class SpecLockTests(unittest.TestCase):
     def test_pyproject_requires_the_three_packages(self) -> None:
         versions = deps.required_versions()
-        self.assertEqual(set(versions), {"vaws-remote-dev", "vaws-coordinator", "vaws-knowledge"})
+        self.assertEqual(set(versions), {"vaws-remote-dev", "vaws-coordinator", "vaws-knowledge", "pillow"})
         self.assertNotIn(deps.VAWS_TOP_NAME, versions)
 
     def test_status_tracks_only_the_three_packages(self) -> None:
@@ -50,17 +50,17 @@ class SpecLockTests(unittest.TestCase):
             if info["state"] == "ready":
                 self.assertEqual(info["installed_version"], deps.locked_packages()[name]["version"])
                 self.assertEqual(info["installed_commit"], deps.locked_packages()[name]["commit"])
-                self.assertEqual(info["remedy"], "uv sync")
+                self.assertEqual(info["remedy"], "python .agents/scripts/vaws_deps.py sync")
 
     def test_missing_pyproject_is_missing_not_an_execution_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             info = deps.inspect("vaws-coordinator", repo_root=Path(tmp))
             self.assertEqual(info["state"], "missing")
             self.assertTrue(info["problems"])
-            self.assertEqual(info["remedy"], "uv sync")
+            self.assertEqual(info["remedy"], "python .agents/scripts/vaws_deps.py sync")
             with self.assertRaises(deps.DependencyUnavailable) as ctx:
                 deps.require_package("vaws-coordinator", repo_root=Path(tmp))
-            self.assertIn("uv sync", str(ctx.exception))
+            self.assertIn("python .agents/scripts/vaws_deps.py sync", str(ctx.exception))
 
     def test_status_exit_code_is_nonzero_unless_ready(self) -> None:
         self.assertEqual(deps.status_exit_code({"vaws-coordinator": "ready"}), 0)

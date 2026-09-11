@@ -11,7 +11,7 @@ and knowledge setup. A narrow request changes only the relevant part.
 
 Start with `scripts/repo_init_probe.py --compact` to inspect the current state.
 Use `python3` on POSIX or `py -3` on Windows before the environment exists;
-installed package commands can use `uv run python` on either platform.
+the bootstrap selects a separate environment for Windows and WSL in the same checkout.
 
 ## Decisions that matter
 
@@ -37,7 +37,7 @@ installed package commands can use `uv run python` on either platform.
    submodule to enforce a default.
 3. Configure missing or explicitly requested forks/remotes with
    `repo_topology.py`. Do not rewrite established fetch/push settings.
-4. Run `uv sync` for package-dependent work and inspect capabilities with
+4. Run `python .agents/scripts/vaws_deps.py sync` for package-dependent work and inspect capabilities with
    `python3 .agents/scripts/vaws_deps.py doctor`. For Windows cache placement
    or offline transfer, follow the linked installation recipe in
    [Command recipes](references/command-recipes.md).

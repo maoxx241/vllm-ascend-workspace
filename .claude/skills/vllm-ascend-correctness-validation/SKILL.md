@@ -5,7 +5,7 @@ description: "Plan, execute, normalize, and compare vLLM Ascend inference correc
 
 <!-- Generated from .agents/skills/vllm-ascend-correctness-validation/SKILL.md. Do not edit. -->
 
-# vLLM Ascend Correctness Validation
+# vllm-ascend-correctness-validation
 
 Read `.agents/skills/vllm-ascend-correctness-validation/SKILL.md` and only the references needed
 for the current task. The canonical skill owns the workflow.

@@ -1,4 +1,5 @@
 interface:
-  display_name: "vLLM Ascend Graph Debug"
-  short_description: "Diagnose Ascend graph capture and replay failures"
-  default_prompt: "Use $vllm-ascend-graph-debug to classify and diagnose this graph-mode failure with a structured evidence trail."
+  display_name: vLLM Ascend Graph Debug
+  short_description: Diagnose Ascend graph capture and replay failures
+  default_prompt: Use $vllm-ascend-graph-debug to locate the first divergence between
+    eager and graph executions or investigate graph compile, capture and replay failures.

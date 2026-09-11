@@ -112,7 +112,7 @@ class PlanningTests(unittest.TestCase):
 
 
 def plan_graph_change(output: Path, run_id: str = "change-validation-1") -> list[str]:
-    change_validation.plan_change(
+    change_validation._prepare_report(
         output,
         run_id=run_id,
         baseline="base",
@@ -143,6 +143,7 @@ def passed_child(
     )
     child = transition_status(child, "running", updated_at=NOW)
     if with_artifact:
+        (path.parent / "comparison.json").write_text(json.dumps({"status": "passed"}), encoding="utf-8")
         child = add_artifact(
             child, name="comparison", kind="comparison", uri="comparison.json", updated_at=NOW
         )
@@ -151,6 +152,26 @@ def passed_child(
 
 
 class AggregationTests(unittest.TestCase):
+    def test_one_call_does_not_assign_bare_report_to_unrelated_checks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            child_path = root / "child.json"
+            passed_child(child_path, parent_run_id=None)
+            result = change_validation.build_report(diff_text=unified_diff("graph_mode.py"),
+                         baseline="base", candidate="candidate", evidence=[child_path], output_dir=root / "report")
+            self.assertEqual(result["status"], "inconclusive")
+            self.assertTrue(result["missing_required"])
+
+    def test_missing_artifact_file_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            child_path = root / "child.json"
+            passed_child(child_path, parent_run_id=None)
+            (root / "comparison.json").unlink()
+            with self.assertRaisesRegex(change_validation.ChangeValidationError, "cannot read comparison"):
+                change_validation.build_report(diff_text=unified_diff("graph_mode.py"), baseline="base",
+                       candidate="candidate", evidence=[child_path], output_dir=root / "report")
+
     def test_passed_child_can_complete_required_plan(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -158,13 +179,13 @@ class AggregationTests(unittest.TestCase):
             required_ids = plan_graph_change(output)
             child_path = root / "child-manifest.json"
             passed_child(child_path, parent_run_id="change-validation-1")
-            change_validation.link_run(
+            change_validation._link_evidence(
                 output,
                 child_manifest_path=child_path,
                 covers=required_ids,
                 updated_at=NOW,
             )
-            result = change_validation.finalize(output, updated_at=NOW)
+            result = change_validation._finalize_report(output, updated_at=NOW)
             self.assertEqual(result["status"], "passed")
             report = (output / "pr-validation-report.md").read_text(encoding="utf-8")
             self.assertIn("child-1", report)
@@ -176,7 +197,7 @@ class AggregationTests(unittest.TestCase):
             required_ids = plan_graph_change(output)
             child_path = root / "orphan.json"
             passed_child(child_path, parent_run_id=None)
-            change_validation.link_run(
+            change_validation._link_evidence(
                 output,
                 child_manifest_path=child_path,
                 covers=required_ids,
@@ -184,7 +205,7 @@ class AggregationTests(unittest.TestCase):
             )
             links = json.loads((output / "linked-runs.json").read_text(encoding="utf-8"))
             self.assertEqual(links["runs"][0]["association"], "post-hoc")
-            result = change_validation.finalize(output, updated_at=NOW)
+            result = change_validation._finalize_report(output, updated_at=NOW)
             self.assertEqual(result["status"], "passed")
 
     def test_child_of_another_parent_can_be_linked_post_hoc(self) -> None:
@@ -194,7 +215,7 @@ class AggregationTests(unittest.TestCase):
             required_ids = plan_graph_change(output)
             child_path = root / "foreign.json"
             passed_child(child_path, parent_run_id="change-validation-other")
-            change_validation.link_run(
+            change_validation._link_evidence(
                 output,
                 child_manifest_path=child_path,
                 covers=required_ids,
@@ -215,7 +236,7 @@ class AggregationTests(unittest.TestCase):
             with self.assertRaisesRegex(
                 change_validation.ChangeValidationError, "links no artifacts"
             ):
-                change_validation.link_run(
+                change_validation._link_evidence(
                     output,
                     child_manifest_path=child_path,
                     covers=required_ids,
@@ -237,7 +258,7 @@ class AggregationTests(unittest.TestCase):
                 change_validation.ChangeValidationError,
                 r"run_type 'debug'.*requires run_type 'correctness'",
             ):
-                change_validation.link_run(
+                change_validation._link_evidence(
                     output,
                     child_manifest_path=child_path,
                     covers=required_ids,
@@ -249,7 +270,7 @@ class AggregationTests(unittest.TestCase):
     def test_missing_required_evidence_is_inconclusive(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             output = Path(tmp) / "change"
-            change_validation.plan_change(
+            change_validation._prepare_report(
                 output,
                 run_id="change-validation-2",
                 baseline="base",
@@ -260,7 +281,7 @@ class AggregationTests(unittest.TestCase):
                 knowledge_path=KNOWLEDGE,
                 created_at=NOW,
             )
-            result = change_validation.finalize(output, updated_at=NOW)
+            result = change_validation._finalize_report(output, updated_at=NOW)
             self.assertEqual(result["status"], "inconclusive")
             self.assertTrue(result["missing_required"])
 

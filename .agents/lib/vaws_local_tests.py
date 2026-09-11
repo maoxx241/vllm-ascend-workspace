@@ -235,7 +235,7 @@ def run(root: Path, cases: list[str], *, jobs: int = 1, timeout: float = 600,
             while pending and len(active) < jobs and not interrupted:
                 row = pending.pop(0)
                 row["status"] = "running"
-                command = [sys.executable, "-m", "pytest", row["case"], "-q", *pytest_args,
+                command = [sys.executable, "-X", "utf8", "-m", "pytest", row["case"], "-q", *pytest_args,
                            "--junitxml=" + row["junit"]]
                 log = Path(row["log"]).open("wb")
                 context = owned_process(command, cwd=root, stdin=subprocess.DEVNULL,

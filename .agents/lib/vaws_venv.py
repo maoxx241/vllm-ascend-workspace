@@ -1,19 +1,9 @@
-"""Re-exec scaffold entry points under the workspace ``.venv`` interpreter.
+"""Select the platform-specific workspace environment when packages are missing.
 
-System ``python3`` cannot see packages installed by ``uv sync``. Entry scripts
-already put ``.agents/lib`` on ``sys.path``; call
-:func:`ensure_workspace_interpreter` immediately after that insert.
-
-If a sentinel package cannot be imported and the workspace venv exists, this
-module launches the same script under that interpreter. POSIX uses execve;
-Windows waits in a job object that owns the child tree. ``VAWS_VENV_REEXEC``
-prevents recursion. ``VAWS_SKIP_VENV_REEXEC=1`` disables the hop.
-Native Windows entry points also initialize stdout/stderr as UTF-8 so JSON and
-diagnostics do not depend on the user's ANSI code page.
-
-This module never runs ``uv sync``. A missing ``.venv`` is an error whose
-remedy is ``uv sync``. ``uv run python3 .agents/scripts/<entry>.py`` is the
-equivalent form that creates the environment first.
+The bootstrap command is ``python .agents/scripts/vaws_deps.py sync``. Windows
+and WSL environments coexist below .vaws-local/venvs. Original interpreter
+flags and module entry points survive the hop. Native Windows owns the child
+process tree and emits UTF-8 JSON independently of the terminal code page.
 """
 from __future__ import annotations
 
@@ -25,19 +15,20 @@ from pathlib import Path
 REEXEC_ENV = "VAWS_VENV_REEXEC"
 SKIP_ENV = "VAWS_SKIP_VENV_REEXEC"
 SENTINEL_PACKAGES = ("remote_dev", "vaws_coordinator", "vaws_knowledge")
-REMEDY = "uv sync"
+REMEDY = "python .agents/scripts/vaws_deps.py sync"
+
+
+def workspace_venv_root(repo_root: Path) -> Path:
+    """Keep native Windows and WSL interpreters separate in a shared checkout."""
+    return Path(repo_root) / ".vaws-local" / "venvs" / sys.platform
 
 
 def workspace_venv_python(repo_root: Path) -> Path:
-    root = Path(repo_root) / ".venv"
+    root = workspace_venv_root(repo_root)
     if os.name == "nt":
         windows = root / "Scripts" / "python.exe"
-        if windows.is_file():
-            return windows
         return windows
     posix = root / "bin" / "python"
-    if posix.is_file():
-        return posix
     return posix
 
 
@@ -54,27 +45,39 @@ def configure_windows_stdio() -> None:
 
 
 def ensure_workspace_interpreter(*, repo_root: Path) -> None:
-    """Switch to ``.venv/bin/python`` when workspace packages are not importable."""
+    """Select this platform's managed environment when it has been installed."""
     configure_windows_stdio()
     if os.environ.get(SKIP_ENV) == "1":
         return
     if os.environ.get(REEXEC_ENV) == "1":
         return
-    if _packages_importable():
+    available = _packages_importable()
+    needs_utf8 = os.name == "nt" and not sys.flags.utf8_mode
+    if available:
         return
     venv_python = workspace_venv_python(repo_root)
+    if Path(sys.executable).absolute() == venv_python.absolute() and not needs_utf8:
+        return
     if venv_python.is_file():
         env = os.environ.copy()
         env[REEXEC_ENV] = "1"
         executable = os.fsdecode(venv_python)
+        original = getattr(sys, "orig_argv", None)
+        if original is None:
+            # Bootstrap launchers can predate the workspace's Python minimum.
+            main_spec = getattr(sys.modules.get("__main__"), "__spec__", None)
+            arguments = ["-m", main_spec.name, *sys.argv[1:]] if main_spec else list(sys.argv)
+        else:
+            arguments = original[1:]
+        argv = [executable, *(["-X", "utf8"] if needs_utf8 else []), *arguments]
         if os.name == "nt":
             from vaws_windows import run_owned
 
-            raise SystemExit(run_owned([executable, *sys.argv], env=env))
-        os.execve(executable, [executable, *sys.argv], env)
+            raise SystemExit(run_owned(argv, env=env))
+        os.execve(executable, argv, env)
     sys.stderr.write(
         "workspace packages are not importable and the workspace venv python is missing; "
         f"install them with `{REMEDY}` "
-        "(or `uv run python3 .agents/scripts/<entry>.py`, which syncs first).\n"
+        "before running the entry again.\n"
     )
     raise SystemExit(2)

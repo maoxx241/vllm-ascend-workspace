@@ -244,10 +244,9 @@ def prepare(
 def validate_execution(execution: Any) -> dict[str, Any]:
     """Require the execution identity the comparator needs to attribute results.
 
-    AISBench never sees the engine, so the operator must declare which service
-    produced the summary: at least `served_model` and the `engine_args` it was
-    started with (an empty object is allowed only when nothing non-default was
-    passed). The comparator diffs this block between baseline and candidate.
+    AISBench does not expose the engine. The CLI derives this block from the
+    coordinator-owned service launch and preserves that observation beside
+    the metrics. The comparator checks both inputs and recorded runtime facts.
     """
     if not isinstance(execution, Mapping):
         raise AisbenchAdapterError("execution must be a JSON object")
@@ -269,6 +268,7 @@ def normalize_summary(
     *,
     label: str,
     execution: Mapping[str, Any],
+    observation: Mapping[str, Any] | None = None,
     model_column: str = MODEL_ABBR,
 ) -> dict[str, Any]:
     execution_block = validate_execution(execution)
@@ -333,6 +333,7 @@ def normalize_summary(
         "schema_version": SCHEMA_VERSION,
         "label": label,
         "execution": execution_block,
+        **({"observation": dict(observation)} if observation else {}),
         "adapter": {
             "name": "aisbench",
             "summary_csv": str(summary_csv.resolve()),
@@ -366,15 +367,9 @@ def build_parser() -> argparse.ArgumentParser:
     normalize.add_argument("--summary-csv", required=True, type=Path)
     normalize.add_argument("--label", required=True)
     normalize.add_argument("--model-column", default=MODEL_ABBR)
-    normalize.add_argument(
-        "--execution",
-        required=True,
-        help=(
-            "JSON object naming the benchmarked service: served_model, engine_args "
-            "it was started with, and optionally base_url; the comparator refuses "
-            "undeclared baseline/candidate differences in this block"
-        ),
-    )
+    normalize.add_argument("--context-file")
+    normalize.add_argument("--execution-id", help="Owned service execution that produced the metrics")
+    normalize.add_argument("--service", default="vllm")
     normalize.add_argument("--output", required=True, type=Path)
     return parser
 
@@ -413,10 +408,20 @@ def main(argv: list[str] | None = None) -> int:
             )
         else:
             emit_progress("normalize-aisbench", summary=str(args.summary_csv))
+            from vaws_task_target import task_client
+            from vaws_serving_observation import serving_observation
+            client = task_client(args.context_file)
+            execution_id = client.resolve_execution(args.execution_id, service=None if args.execution_id else args.service)
+            if execution_id is None:
+                raise AisbenchAdapterError("the native task has no matching service execution")
+            observation, execution = serving_observation(client.target(execution_id))
+            if execution is None:
+                raise AisbenchAdapterError("the service has no recorded vLLM launch configuration")
             normalized = normalize_summary(
                 args.summary_csv,
                 label=args.label,
-                execution=_json_object(args.execution, "execution"),
+                execution=execution,
+                observation=observation,
                 model_column=args.model_column,
             )
             _atomic_write(
@@ -432,7 +437,7 @@ def main(argv: list[str] | None = None) -> int:
                     case["status"] == "error" for case in normalized["cases"]
                 ),
             }
-    except AisbenchAdapterError as exc:
+    except (AisbenchAdapterError, OSError, ValueError) as exc:
         print(json.dumps({"status": "failed", "error": str(exc)}, ensure_ascii=False))
         return 1
     print(json.dumps(payload, ensure_ascii=False))

@@ -1,32 +1,8 @@
-# Change validation acceptance
+# Maintainer verification
 
-## Diff and impact
+Run the affected tests in `../tests/` with the local test runner. Exercise the
+public call with business inputs and actual result fixtures, including incomplete
+or mismatched evidence. Verify that conclusions do not exceed the observed scope.
+These checks belong to implementation maintenance, not a per-task Agent checklist.
 
-- [ ] Baseline, candidate, target repositories, and user goal are recorded.
-- [ ] The diff includes relevant staged, unstaged, and untracked changes.
-- [ ] Cross-repository changes use a combined diff or equivalent complete evidence.
-- [ ] Every matched impact links to a versioned Skill-owned rule or an explicit reviewed knowledge override.
-- [ ] Unclassified changes are manually reviewed.
-
-## Plan
-
-- [ ] Every item records priority, rationale, and source.
-- [ ] Required items have not been silently downgraded for resource reasons.
-- [ ] The plan was reviewed before expensive NPU execution.
-- [ ] Omitted combinations are listed as limitations.
-
-## Evidence
-
-- [ ] Each linked run has a valid Run Manifest.
-- [ ] Each linked run has artifacts that support the conclusion; a missing planning parent is recorded as post-hoc, not rejected.
-- [ ] Each passed linked run carries artifacts that a reviewer can open.
-- [ ] Each link names the plan item IDs it covers.
-- [ ] A linked child's `run_type` matches the check-domain prefix of every `correctness:*` or `performance:*` item it covers.
-- [ ] Failed, inconclusive, cancelled, running, and planned children are not treated as passing.
-- [ ] Correctness, performance, graph, distributed, operator, and profiling evidence use their owning workflows.
-
-## Delivery
-
-- [ ] Every required plan item has passed evidence before parent status is passed.
-- [ ] `pr-validation-report.md` contains change summary, impact, validation matrix, results, limitations, reproduction, and artifact locations.
-- [ ] Parent Run Manifest validates and links all child manifests.
+Use --diff-file for an already captured diff. The report classifies affected components, derives supported coverage from actual evidence and exact code identities, and lists missing checks. Agents do not enter coverage labels or lifecycle records.

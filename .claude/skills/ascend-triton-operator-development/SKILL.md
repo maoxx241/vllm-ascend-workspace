@@ -5,7 +5,7 @@ description: "Develop a first correct Ascend Triton operator from a PyTorch refe
 
 <!-- Generated from .agents/skills/ascend-triton-operator-development/SKILL.md. Do not edit. -->
 
-# Ascend Triton Operator Development
+# ascend-triton-operator-development
 
 Read `.agents/skills/ascend-triton-operator-development/SKILL.md` and only the references needed
 for the current task. The canonical skill owns the workflow.

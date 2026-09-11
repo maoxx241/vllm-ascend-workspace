@@ -3,40 +3,28 @@ name: ascend-triton-kernel-validation
 description: Validate one Ascend Triton kernel against a trusted reference across an explicit shape, dtype, layout, stride, scalar-option, and execution-mode case matrix, with static detection of missing kernel launches and PyTorch computation fallback plus Run Manifest evidence. Use before any performance claim, after migration or implementation changes, or for shape-dependent compile/runtime/numerical failures in a Triton candidate. Do not use to generate the kernel, optimize an already-correct kernel, diagnose a non-Triton torch_npu or ACLNN call, or localize a whole-model graph failure.
 ---
 
-# Ascend Triton Kernel Validation
+# ascend-triton-kernel-validation
 
-Turn a candidate into explicit compile and correctness evidence. A successful process exit or benchmark run is not correctness proof.
+Validate one Ascend Triton kernel against its reference over the cases needed by its consumers.
 
-## Workflow
+Select shapes, dtype, layout, strides, scalar options and execution modes from the operator contract and affected callers. Include boundary and non-contiguous cases where semantics require them. Numerical agreement must come from the launched candidate kernel.
 
-1. Freeze the candidate hash, trusted reference, predeclared tolerances, target environment, and explicit case matrix.
-2. Query `.agents/knowledge/` with any observed compile, runtime, or numerical signature before repeating diagnosis.
-3. Run `scripts/triton_validation.py plan`. It invokes `validate_triton_impl.py` and rejects missing Triton kernels, a `ModelNew.forward` path that does not launch them, or reachable PyTorch tensor computation fallback.
-4. Bind the actual source worktree; coordinator prepares it for managed execution. Run every planned case on a managed Ascend NPU; do not run `torch_npu` locally.
-5. Compare shape and dtype first, then NaN/Inf behavior and numeric values. Preserve raw stdout, stderr, stack, and comparison artifacts.
-6. Normalize one result per case and run `record`. Do not overwrite evidence.
-7. Run `analyze`. Only `passed_cases == total_cases > 0` produces a passed manifest.
-8. Hand the passed manifest to development or optimization. Do not benchmark a failed or inconclusive candidate.
+## Agent entry
 
-## Entry points
+Run from the repository root using the platform's Python launcher. The workspace
+selects its installed platform environment automatically.
 
-- `scripts/validate_triton_impl.py`: AST-only fallback and launch gate.
-- `scripts/triton_validation.py`:
-  - `plan`: validate config and candidate, create case matrix and Run Manifest v1;
-  - `record`: accept one normalized case result;
-  - `analyze`: classify the full matrix and generate the report.
+```text
+python .agents/skills/ascend-triton-kernel-validation/scripts/triton_validation.py --config validation.json --kernel kernel.py --results case-results.json
+```
 
-Read:
+The config contains op_name, reference, target, cases and tolerances. The tool checks kernel source for missing launches and computation fallback, combines observed case results, and emits coverage, analysis and a manifest automatically.
 
-- [Behavior contract](references/behavior.md) for config, result, and status schemas.
-- [Case design](references/case-design.md) before choosing the matrix and tolerances.
-- [Command recipes](references/command-recipes.md) for the lifecycle.
-- [Acceptance](references/acceptance.md) before declaring correctness.
+A failing candidate returns to ascend-triton-operator-development. A fully passing matrix can proceed to ascend-triton-kernel-optimization.
 
-## Rules
+Read the relevant detail only when needed:
 
-- Keep compile error, runtime error, numerical mismatch, unsupported, and missing evidence distinct.
-- Never silently cast, make inputs contiguous, remove difficult shapes, or relax tolerance to pass.
-- Load masks protect readable input addresses; store masks protect writable output positions.
-- Treat tail blocks, fully masked blocks, non-power-of-two shapes, and dynamic specialization boundaries as first-class cases.
-- Keep run state under `.vaws-local/ascend-triton/validation/`.
+- [behavior](references/behavior.md)
+- [case design](references/case-design.md)
+
+- [Business input example](references/inputs.md)

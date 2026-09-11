@@ -1,30 +1,8 @@
-# Performance regression acceptance
+# Maintainer verification
 
-## Parity
+Run the affected tests in `../tests/` with the local test runner. Exercise the
+public call with business inputs and actual result fixtures, including incomplete
+or mismatched evidence. Verify that conclusions do not exceed the observed scope.
+These checks belong to implementation maintenance, not a per-task Agent checklist.
 
-- [ ] Baseline and candidate use distinct worktrees and sessions.
-- [ ] Machine policy, devices, model and weight hash, environment, topology (`tp` and `dp`), Serving arguments, Benchmark arguments, dataset, request rate, and concurrency are written into `shared`; `plan` refuses a config missing any of them.
-- [ ] `parity-check.json` was read including its `not_checked` list; it certifies the declaration, not the observed runtime.
-- [ ] Each measure-phase result recorded its own `observation`; `analyze` consumed a comparable observational certificate. Empty, null, declared-only, or partially observed identity cannot pass.
-- [ ] Every measurement inlines the planned `shared` object.
-
-## Execution
-
-- [ ] Warmups ran for both states and are excluded.
-- [ ] Measurements followed the alternating schedule exactly.
-- [ ] Raw Benchmark output was normalized by the controller rather than manually rewritten.
-- [ ] Each result links to its raw Benchmark artifact.
-- [ ] Temperature, background load, and cache drift were considered.
-
-## Analysis
-
-- [ ] Every threshold declares higher-is-better or lower-is-better.
-- [ ] Raw values, mean, sample deviation, CV, and outlier indices are reported.
-- [ ] Outlier exclusion policy was fixed before analysis.
-- [ ] No metric exceeds `max_cv` for a pass or fail conclusion.
-- [ ] Missing or insufficient values yield inconclusive.
-
-## Delivery
-
-- [ ] Config, parity check, schedule, measurements, comparison, report, reproduction, and Run Manifest exist.
-- [ ] A profiling recommendation is explicit and does not imply profiling was already collected.
+The business config names baseline.sources and candidate.sources (actual vllm and vllm-ascend worktrees), benchmark options, runs, warmups and thresholds. The collector binds each source, waits for its managed service, warms each launch, alternates A/B order, records runtime observations, and releases owned executions. --results accepts existing measurement files for report-only use. Missing runtime evidence yields an inconclusive report.

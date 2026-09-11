@@ -5,7 +5,7 @@ description: "Reduce an Ascend model-level failure to one torch_npu, ACLNN, or c
 
 <!-- Generated from .agents/skills/ascend-operator-debug/SKILL.md. Do not edit. -->
 
-# Ascend Operator Debug
+# ascend-operator-debug
 
 Read `.agents/skills/ascend-operator-debug/SKILL.md` and only the references needed
 for the current task. The canonical skill owns the workflow.

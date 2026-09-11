@@ -6,7 +6,7 @@ does not walk checkout trees. Status is one of ``missing``, ``off_spec``, or
 
 ``off_spec`` warns but does not block execution. ``missing`` makes capabilities
 that depend on the package unavailable. The remedy for every package gap is
-``uv sync``. CI uses ``uv lock --check`` to keep the lockfile aligned with
+``python .agents/scripts/vaws_deps.py sync``. CI uses ``uv lock --check`` to keep the lockfile aligned with
 ``pyproject.toml``.
 """
 from __future__ import annotations
@@ -25,7 +25,7 @@ from vaws_validate import ValidationError
 ROOT = Path(__file__).resolve().parents[2]
 PYPROJECT_PATH = ROOT / "pyproject.toml"
 LOCK_PATH = ROOT / "uv.lock"
-REMEDY = "uv sync"
+REMEDY = "python .agents/scripts/vaws_deps.py sync"
 STATES = ("missing", "off_spec", "ready")
 USABLE_STATES = frozenset({"ready", "off_spec"})
 PACKAGE_NAMES = (

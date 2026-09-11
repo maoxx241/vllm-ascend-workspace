@@ -83,17 +83,16 @@ class ExecutionTarget:
 
 def resolve_execution_target(*, context_file=None, execution_id=None, host=None, port=None, user="root", service="vllm"):
     from vaws_remote_target import SshEndpoint as Endpoint
-    from vaws_task_target import executions_for_service, execution_target, task_client, task_id_of
+    from vaws_task_target import execution_target, task_client, task_id_of
 
     if host:
         ep = Endpoint(host=host, port=int(port or 22), user=user)
         return ExecutionTarget(mode="endpoint", alias=host, endpoint=ep)
     client = task_client(context_file)
     if not execution_id:
-        rows = executions_for_service(client, service)
-        if not rows:
+        execution_id = client.resolve_execution(service=service)
+        if not execution_id:
             raise RuntimeError("pass --execution-id or --host")
-        execution_id = str(rows[-1].get("id") or rows[-1].get("execution_id"))
     target = execution_target(client, str(execution_id))
     endpoint = endpoint_from_reply({"target": target})
     cwd = (target.get("endpoint") or {}).get("cwd") or (target.get("endpoint") or {}).get("root")
@@ -239,7 +238,7 @@ def call_json_command(cmd: list[str], *, cwd: Path | None = None) -> dict[str, A
 # ---------------------------------------------------------------------------
 
 def call_serve_start(extra_args: list[str]) -> dict[str, Any]:
-    cmd = [sys.executable, str(SERVING_SCRIPTS / "serve_start.py"), *extra_args]
+    cmd = [sys.executable, str(SERVING_SCRIPTS / "serving.py"), "start", *extra_args]
     return call_json_command(cmd)
 
 
@@ -250,7 +249,7 @@ def call_serve_stop(
     service: str | None = None,
     force: bool = False,
 ) -> dict[str, Any]:
-    cmd = [sys.executable, str(SERVING_SCRIPTS / "serve_stop.py")]
+    cmd = [sys.executable, str(SERVING_SCRIPTS / "serving.py"), "stop"]
     if context_file:
         cmd.extend(["--context-file", context_file])
     if execution_id:

@@ -227,7 +227,7 @@ def resolve_execution_target(
 ) -> dict[str, Any]:
     """Ordinary endpoint for remote analysis I/O. No cwd session resolver."""
     from vaws_remote_target import SshEndpoint, ssh_endpoint_from_mapping
-    from vaws_task_target import executions_for_service, task_client, task_id_of
+    from vaws_task_target import task_client, task_id_of
 
     if host:
         endpoint = SshEndpoint(host=host, port=int(port or 22), user=user)
@@ -244,10 +244,9 @@ def resolve_execution_target(
     if not execution_id:
         if not service:
             raise SessionStateError("analysis needs --execution-id, --service, or --host")
-        rows = executions_for_service(client, service)
-        if not rows:
+        execution_id = client.resolve_execution(service=service)
+        if not execution_id:
             raise SessionStateError(f"coordinator has no execution named {service!r}")
-        execution_id = str(rows[-1].get("id") or rows[-1].get("execution_id"))
     observation = client.observe(str(execution_id), "status")
     target = observation.get("target") or {}
     endpoint = ssh_endpoint_from_mapping(target.get("endpoint") or observation.get("endpoint"))

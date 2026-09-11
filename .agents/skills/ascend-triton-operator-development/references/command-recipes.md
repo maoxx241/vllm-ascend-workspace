@@ -1,28 +1,14 @@
-# Ascend Triton development command recipes
+# Agent call
 
-## Plan
+From the repository root:
 
-```bash
-python -B .agents/skills/ascend-triton-operator-development/scripts/triton_development.py plan \
-  --output-dir .vaws-local/ascend-triton/development/softmax-001 \
-  --config /path/to/development-config.json
+```text
+python .agents/skills/ascend-triton-operator-development/scripts/triton_development.py --config operator.json --kernel kernel.py --validation-manifest validation/manifest.json
 ```
 
-Complete `semantic-report.md` and `sketch.md`, then place candidates under the
-generated `candidates/` directory.
+The business config contains op_name, mode, source, reference, target, cases and tolerances. The report consumes the actual kernel and validation manifest, checking kernel identity and passing case coverage. Optional --semantic-report and --sketch attach useful design artifacts.
 
-## Validate remotely
-
-Use `ascend-triton-kernel-validation` with the same cases and tolerances. Set the
-validation run's `parent_run_id` to this development run or the shared workflow.
-
-## Finalize
-
-```bash
-python -B .agents/skills/ascend-triton-operator-development/scripts/triton_development.py finalize \
-  --output-dir .vaws-local/ascend-triton/development/softmax-001 \
-  --kernel /path/to/softmax_ascend.py \
-  --semantic-report .vaws-local/ascend-triton/development/softmax-001/semantic-report.md \
-  --sketch .vaws-local/ascend-triton/development/softmax-001/sketch.md \
-  --validation-manifest /path/to/validation/manifest.json
-```
+Use `--help` for exact argument details. Report output directories are optional
+where supported; the script creates a fresh directory under `.vaws-local/`.
+Schema versions and report identifiers are generated internally. Input files
+describe business cases or contain observed results, rather than task ownership.

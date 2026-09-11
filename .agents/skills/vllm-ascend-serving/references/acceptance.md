@@ -1,16 +1,8 @@
-# Acceptance Criteria
+# Maintainer verification
 
-- Task identity is `--context-file` / `VAWS_CONTEXT_FILE`.
-- Start submits one `TaskClient.run` with `resources` (`npu_count` or
-  `devices`, plus `service_port`) and `restart` for `--relaunch`.
-- Queued / preparing / waiting is `status=queued` with the same `execution_id`. Health
-  probes do not run until the execution is live with a port.
-- Status and stop use exact `--service` or `--execution-id`. They do not
-  guess another live execution.
-- Reserved env `VAWS_PYTHON`, `VAWS_SERVICE_PORT`, and
-  `ASCEND_RT_VISIBLE_DEVICES` cannot be set via `--extra-env`.
-- Stop preserves the user container.
-- Environment constraints (`recipe`, `python_abi`, `cann`, `soc`,
-  `machine_type`) are forwarded even when recipe is omitted.
+Run the affected tests in `../tests/` with the local test runner. Exercise the
+public call with business inputs and actual result fixtures, including incomplete
+or mismatched evidence. Verify that conclusions do not exceed the observed scope.
+These checks belong to implementation maintenance, not a per-task Agent checklist.
 
-The submitted run includes a parse-only preflight using the selected remote vLLM CLI parser, before NPU allocation. Health requests bypass environment HTTP proxies explicitly. Status/stop return compact execution facts, including progress, role errors and resource-release state; the full record remains coordinator-owned. Stop is complete only after `resources_released` is true.
+Use serving.py status or serving.py stop with --execution-id or --service. A service reference is resolved by coordinator within the current task. Pending states retain their execution reference. Restart or release follows the requested lifecycle; no separate allocation, parity command or status ledger is needed.

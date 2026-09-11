@@ -3,44 +3,25 @@ name: vllm-ascend-serving
 description: Start, check, or stop a single-node vLLM Ascend service through coordinator TaskClient. Use for 拉服务 / 看服务状态 / 停掉服务. Do not use for machine bootstrap or generic remote I/O.
 ---
 
-# vLLM Ascend Serving
+# vllm-ascend-serving
 
-Start, inspect, and stop one colocated `vllm serve` process as a **managed coordinator execution**. This skill owns model/preset/TP/PP/env args and health/first-token checks. It does not allocate NPUs, pick Python, or recover admission.
+Start, inspect or stop one managed single-node vLLM Ascend service.
 
-## Use this skill when
+Reuse the native task context and actual business source bindings. Choose model, parallelism and serving options from the request. Resource state and HTTP/models/first-token readiness are separate observations.
 
-- the user asks to start, relaunch, check, or stop a vLLM-Ascend HTTP service
+## Agent entry
 
-## Do not use when
+Run from the repository root using the platform's Python launcher. The workspace
+selects its installed platform environment automatically.
 
-- attaching a machine (coordinator owns `vaws-<user>` containers)
-- generic remote file/shell work (remote-dev explicit host/port)
-- benchmarks (use `vllm-ascend-benchmark`, which reuses this service's reference)
-
-## Critical rules
-
-- Task identity is `--context-file` / `VAWS_CONTEXT_FILE`. Never guess from cwd.
-- One `TaskClient.run(command=..., resources=..., timeout_seconds=None, service=..., restart=...)` submits the service. Coordinator injects `VAWS_PYTHON`, `VAWS_SERVICE_PORT`, and `ASCEND_RT_VISIBLE_DEVICES`.
-- `resources` holds `npu_count` or `devices`, plus `service_port` (`0` = first free declared port). Do not pass those as top-level run kwargs.
-- `--relaunch` submits `restart=True` so the package stops the old named service and launches the new spec, including when only code changed.
-- The launch command uses `"$VAWS_PYTHON"` and `"$VAWS_SERVICE_PORT"` and fails if they are unset. Do not pass a skill-selected interpreter. Generic container hostname `/etc/hosts` repair belongs to coordinator environment preparation, not this command.
-- Queued / preparing / waiting / starting / uncertain are reported as `queued`, not as a failed launch and not as running. Health probes run only when the package returns a live endpoint and port.
-- A bounded readiness timeout returns `incomplete` without asking the skill to discard ownership.
-- Status/stop query coordinator facts by exact `--service` or `--execution-id`. They do not fall back to some other live execution on the task. Local JSON is a business config report for `--relaunch`, not a recovery ledger.
-- Do not set reserved env `VAWS_PYTHON`, `VAWS_SERVICE_PORT`, or `ASCEND_RT_VISIBLE_DEVICES` via `--extra-env`.
-
-## Entry points
-
-```bash
-python3 .agents/skills/vllm-ascend-serving/scripts/serve_start.py \
-  --model <remote-weight-path> \
-  [--preset <name>] [--tp N] [--dp N] [--devices 0,1] \
-  [--extra-env KEY=VALUE] [--port N] [--health-timeout S] \
-  [--service vllm] [-- -- extra vllm args]
-python3 .agents/skills/vllm-ascend-serving/scripts/serve_status.py [--service vllm] [--execution-id ID]
-python3 .agents/skills/vllm-ascend-serving/scripts/serve_stop.py [--service vllm] [--execution-id ID] [--force]
+```text
+python .agents/skills/vllm-ascend-serving/scripts/serving.py start --model /models/example --tp 1
 ```
 
-`--relaunch` merges the last business config (model/tp/args). A new start after a live service is coordinator-owned association, not a workspace request-id retry.
+Use serving.py status or serving.py stop with --execution-id or --service. A service reference is resolved by coordinator within the current task. Pending states retain their execution reference. Restart or release follows the requested lifecycle; no separate allocation, parity command or status ledger is needed.
 
-The submitted run includes a parse-only preflight using the selected remote vLLM CLI parser, before NPU allocation. Health requests bypass environment HTTP proxies explicitly. Status/stop return compact execution facts, including progress, role errors and resource-release state; the full record remains coordinator-owned. Stop is complete only after `resources_released` is true.
+Use pd-serving for prefill/decode topology, benchmark for measurement, and profiling-collection for profiler-window control.
+
+Read the relevant detail only when needed:
+
+- [behavior](references/behavior.md)

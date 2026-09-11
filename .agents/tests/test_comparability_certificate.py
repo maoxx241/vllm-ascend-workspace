@@ -74,6 +74,7 @@ def observed(
         "max_concurrency": max_concurrency,
         "request_rate": "inf",
         "npu_devices": [0, 1],
+        "machine": "recorded-machine",
     }
     if extra:
         payload.update(extra)

@@ -25,7 +25,6 @@ if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
 import vaws_remote_dev as remote_dev  # noqa: E402
-from vaws_remote_target import RemoteTargetError  # noqa: E402
 
 requires_package = unittest.skipUnless(
     importlib.util.find_spec("remote_dev") is not None,
@@ -79,7 +78,7 @@ class PackageWiringTests(unittest.TestCase):
         status = remote_dev.package_status()
         self.assertEqual(status["name"], "vaws-remote-dev")
         self.assertIn(status["state"], {"missing", "off_spec", "ready"})
-        self.assertEqual(status["remedy"], "uv sync")
+        self.assertEqual(status["remedy"], "python .agents/scripts/vaws_deps.py sync")
         self.assertNotIn("resolver", status)
 
 
@@ -235,6 +234,8 @@ class NoInTreeSubstrateTests(unittest.TestCase):
             # existed; that prose is history, not a path anything reads.
             ".agents/policy/repo-boundaries.json",
             ".agents/policy/repo-boundaries-baseline.json",
+            # Dated missing-path evidence for the frozen historical CLI table.
+            ".agents/policy/tracked-paths-baseline.json",
             # Historical CLI census names deleted substrate paths as inventory.
             ".agents/scripts/cli_surface_inventory.py",
             ".agents/tests/fixtures/cli-surface-inventory.json",
@@ -342,7 +343,7 @@ class NoInTreeSubstrateTests(unittest.TestCase):
         payload = json.loads(proc.stdout)["result"]
         self.assertEqual((payload["tool"], payload["outcome"], payload["status"]), ("vaws.session", "blocked", "unavailable"))
         self.assertIn("vaws-coordinator", payload["summary"] + json.dumps(payload))
-        self.assertIn("uv sync", payload["summary"] + json.dumps(payload) + proc.stderr)
+        self.assertIn("vaws_deps.py sync", payload["summary"] + json.dumps(payload) + proc.stderr)
 
     def test_vaws_cli_help_matrix(self) -> None:
         for args in (["--help"], ["attach", "--help"], ["session", "--help"], ["run", "--help"], ["execution", "--help"], ["finish", "--help"]):

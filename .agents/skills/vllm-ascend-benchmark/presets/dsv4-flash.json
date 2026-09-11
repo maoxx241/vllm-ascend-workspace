@@ -1,17 +1,12 @@
 {
-  "description": "DeepSeek-V4-Flash W4A8 MTP fixed benchmark configuration. Replaces the deleted dsv4_flash_benchmark.py helper; keep these values stable across baseline/PR states so comparisons are attributable to code only. The model weight path is machine-specific and stays a required CLI arg. Env values are verified on A3 nightly CANN 9.1 / vllm 0.26.0 images (2026-08-29 E2E on an A3 host); override them per image via --extra-env/--bench-env on other generations.",
+  "description": "DeepSeek-V4-Flash W4A8 MTP serving and benchmark options. Runtime paths and source identity come from the coordinator environment. Hardware-specific options retain their A3 CANN 9.1 provenance; select options for the requested runtime.",
   "tp": 8,
   "dp": 1,
   "port": 30001,
   "devices": "0,1,2,3,4,5,6,7",
   "served_model_name": "dsv4-w4a8",
   "health_timeout": 1200,
-  "vllm_ref": "967c5c3bc38891f4465d3f4e99917ed837bb3833",
-  "runs": 6,
-  "warmup_runs": 1,
   "env": {
-    "PYTHONPATH": "/vllm-workspace/vllm:/vllm-workspace/vllm-ascend:/usr/local/Ascend/cann-9.1.0/python/site-packages:/usr/local/Ascend/cann-9.1.0/opp/built-in/op_impl/ai_core/tbe",
-    "VLLM_VERSION": "0.26.0",
     "OMP_PROC_BIND": "false",
     "OMP_NUM_THREADS": "10",
     "PYTORCH_NPU_ALLOC_CONF": "expandable_segments:True",
@@ -21,10 +16,7 @@
     "TASK_QUEUE_ENABLE": "1",
     "HCCL_OP_EXPANSION_MODE": "AIV"
   },
-  "bench_env": {
-    "PYTHONPATH": "/vllm-workspace/vllm:/vllm-workspace/vllm-ascend:/usr/local/Ascend/cann-9.1.0/python/site-packages:/usr/local/Ascend/cann-9.1.0/opp/built-in/op_impl/ai_core/tbe",
-    "VLLM_VERSION": "0.26.0"
-  },
+  "bench_env": {},
   "serve_args": [
     "--max-model-len",
     "3072",
@@ -71,11 +63,5 @@
     "1",
     "--max-concurrency",
     "1"
-  ],
-  "fixed_request_dataset": {
-    "input_len": 512,
-    "output_len": 512,
-    "path": "/tmp/vaws_dsv4_fixed_requests_512x512.jsonl"
-  },
-  "bench_request_counts": [1]
+  ]
 }

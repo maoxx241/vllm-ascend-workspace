@@ -115,6 +115,12 @@ def _require_validation_coverage(
     validated_ids = {row.get("id") for row in rows}
     if validated_ids != case_ids:
         raise OptimizationError("validation case set does not match the optimization case set")
+    analysis = _load_json(_artifact_path(manifest_path, _artifact(manifest, "analysis")), "validation analysis")
+    results = analysis.get("results", [])
+    if (analysis.get("status") != "passed" or len(results) != len(case_ids)
+            or {row.get("case_id") for row in results} != case_ids
+            or any(row.get("status") != "passed" for row in results)):
+        raise OptimizationError("validation needs passing results for every optimization case")
 
 
 def _finite_positive(value: Any) -> bool:
@@ -195,7 +201,7 @@ def validate_config(config: Mapping[str, Any]) -> None:
     _measurement_map(config.get("baseline"), case_ids, "baseline")
 
 
-def plan(
+def _prepare_report(
     output_dir: Path,
     *,
     config_path: Path,
@@ -278,7 +284,7 @@ def _weighted_improvement(current: Mapping[str, Mapping[str, Any]], candidate: M
     return improvement, worst_regression
 
 
-def record(output_dir: Path, *, result_path: Path, recorded_at: str | None = None) -> dict[str, Any]:
+def _record_result(output_dir: Path, *, result_path: Path, recorded_at: str | None = None) -> dict[str, Any]:
     config = _load_json(output_dir / "optimization-config.json", "optimization config")
     state = _load_json(output_dir / "state.json", "optimization state")
     rounds = _load_json(output_dir / "rounds.json", "rounds")
@@ -307,9 +313,6 @@ def record(output_dir: Path, *, result_path: Path, recorded_at: str | None = Non
     verification_manifest = load_manifest(Path(verification["manifest"]))
     if verification_manifest["run_type"] != "correctness":
         raise OptimizationError("round verification must use run_type correctness")
-    valid_parents = {config["run_id"], config.get("parent_run_id")} - {None}
-    if verification_manifest["parent_run_id"] not in valid_parents:
-        raise OptimizationError("round validation parent_run_id must identify this run or its parent workflow")
     case_ids = {case["id"] for case in config["cases"]}
     _require_validation_coverage(
         Path(verification["manifest"]),
@@ -374,7 +377,7 @@ def record(output_dir: Path, *, result_path: Path, recorded_at: str | None = Non
     }
 
 
-def analyze(output_dir: Path, *, updated_at: str | None = None) -> dict[str, Any]:
+def _analyze_report(output_dir: Path, *, updated_at: str | None = None) -> dict[str, Any]:
     config = _load_json(output_dir / "optimization-config.json", "optimization config")
     state = _load_json(output_dir / "state.json", "optimization state")
     rounds = _load_json(output_dir / "rounds.json", "rounds")
@@ -423,32 +426,30 @@ def analyze(output_dir: Path, *, updated_at: str | None = None) -> dict[str, Any
     return {"status": status, "target_met": state["target_met"], "best_kernel_sha256": state["current_best_sha256"], "analysis": str((output_dir / "analysis.json").resolve())}
 
 
+def build_report(config_path: Path, result_paths: list[Path], *, output_dir: Path | None = None, workspace_root: Path = ROOT) -> dict[str, Any]:
+    from vaws_report import report_config, report_directory
+    output = report_directory(workspace_root, "ascend-triton-kernel-optimization", output_dir)
+    with report_config(config_path, root=workspace_root, prefix="report") as config:
+        _prepare_report(output, config_path=config, workspace_root=workspace_root)
+    for path in result_paths:
+        _record_result(output, result_path=path)
+    result = _analyze_report(output)
+    return {**result, "manifest_ref": str(output / "manifest.json")}
+
+
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
-    subparsers = parser.add_subparsers(dest="action", required=True)
-    plan_parser = subparsers.add_parser("plan")
-    plan_parser.add_argument("--output-dir", required=True, type=Path)
-    plan_parser.add_argument("--config", required=True, type=Path)
-    record_parser = subparsers.add_parser("record")
-    record_parser.add_argument("--output-dir", required=True, type=Path)
-    record_parser.add_argument("--result", required=True, type=Path)
-    analyze_parser = subparsers.add_parser("analyze")
-    analyze_parser.add_argument("--output-dir", required=True, type=Path)
+    parser = argparse.ArgumentParser(description="Analyze collected ascend-triton-kernel-optimization evidence and write the report in one call.")
+    parser.add_argument("--config", required=True, type=Path, help="Business cases and tolerances")
+    parser.add_argument("--results", nargs="*", default=[], type=Path, help="Observed case/round result files")
+    parser.add_argument("--output-dir", type=Path, help="Defaults to a new local report directory")
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
-        if args.action == "plan":
-            payload = plan(
-                args.output_dir, config_path=args.config, code=manifest_code(ROOT)
-            )
-        elif args.action == "record":
-            payload = record(args.output_dir, result_path=args.result)
-        else:
-            payload = analyze(args.output_dir)
-    except (OptimizationError, RunManifestError) as exc:
+        payload = build_report(args.config, args.results, output_dir=args.output_dir)
+    except (OptimizationError, RunManifestError, OSError, ValueError) as exc:
         print(json.dumps({"status": "failed", "error": str(exc)}, ensure_ascii=False))
         return 1
     print(json.dumps(payload, ensure_ascii=False))

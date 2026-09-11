@@ -87,6 +87,23 @@ def result(case_id: str, status: str = "passed") -> dict:
 
 
 class OperatorDebugTests(unittest.TestCase):
+    def test_one_call_with_business_inputs_keeps_failed_case(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cfg = config()
+            cfg.pop("schema_version")
+            cfg.pop("run_id")
+            config_path = root / "operator.json"
+            config_path.write_text(json.dumps(cfg), encoding="utf-8")
+            paths = []
+            for case_id, status in (("fp16-eager", "passed"), ("fp16-graph", "crash")):
+                path = root / (case_id + ".json")
+                path.write_text(json.dumps(result(case_id, status)), encoding="utf-8")
+                paths.append(path)
+            report = operator.build_report(config_path, paths, output_dir=root / "report")
+            self.assertEqual(report["status"], "diagnosed")
+            self.assertTrue(Path(report["manifest_ref"]).is_file())
+
     def test_duplicate_case_ids_are_rejected(self) -> None:
         invalid = config()
         invalid["cases"][1]["id"] = invalid["cases"][0]["id"]
@@ -134,18 +151,18 @@ class OperatorDebugTests(unittest.TestCase):
             config_path = root / "config.json"
             config_path.write_text(json.dumps(config()), encoding="utf-8")
             output = root / "case"
-            operator.plan(output, config_path=config_path, created_at=NOW)
+            operator._prepare_report(output, config_path=config_path, created_at=NOW)
             for case_id in ("fp16-eager", "fp16-graph"):
                 result_path = root / f"{case_id}.json"
                 result_path.write_text(
                     json.dumps(result(case_id)), encoding="utf-8"
                 )
-                operator.record(output, result_path=result_path, recorded_at=NOW)
+                operator._record_result(output, result_path=result_path, recorded_at=NOW)
                 with self.assertRaisesRegex(operator.OperatorDebugError, "already"):
-                    operator.record(
+                    operator._record_result(
                         output, result_path=result_path, recorded_at=NOW
                     )
-            analyzed = operator.analyze(output, updated_at=NOW)
+            analyzed = operator._analyze_report(output, updated_at=NOW)
             self.assertEqual(analyzed["status"], "passed")
             self.assertTrue((output / "report.md").is_file())
 

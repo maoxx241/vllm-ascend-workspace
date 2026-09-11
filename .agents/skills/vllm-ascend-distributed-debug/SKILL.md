@@ -3,62 +3,27 @@ name: vllm-ascend-distributed-debug
 description: Diagnose vLLM Ascend multi-rank and multi-node startup, rank mapping, process-group, collective, HCCL, Ray, scheduler, connector, and distributed hang failures from structured topology and per-rank evidence. Use when a failure depends on rank count, parallel topology, nodes, collectives, or distributed endpoints. Do not use for graph-only divergence, isolated operator failures, performance benchmarking, or profiler analysis.
 ---
 
-# vLLM Ascend Distributed Debug
+# vllm-ascend-distributed-debug
 
-Build a falsifiable diagnosis from rank-aware evidence. Never infer a distributed
-root cause from one rank's log alone.
+Diagnose failures whose behavior depends on ranks, nodes, process groups, collectives or distributed endpoints.
 
-## Workflow
+Start from the failing topology and per-rank timeline. Distinguish missing rank startup, rendezvous, collective ordering and asymmetric workloads. Reduce topology only when the reduced case still reproduces the signature.
 
-1. Create a case with `scripts/distributed_debug.py init`.
-2. Capture the exact failing topology, environment, process tree, endpoints, and
-   reproduction command before changing parallelism.
-3. Add structured per-rank events with `ingest`. Keep raw rank logs and stack
-   dumps in the case directories created by `init`.
-4. Run `analyze` to check rank identity, group membership, endpoint collisions,
-   collective order, missing participants, entered-without-exit stalls, and
-   cross-rank phase divergence.
-5. Form one or more falsifiable hypotheses from the report.
-6. Reduce one parallel dimension at a time. Record each reduced case separately.
-7. After a fix, rerun both the smallest reproducer and the original topology
-   with event collection. Each rank must emit `rank_complete` as its last
-   event; `analyze` marks the manifest `passed` only when every rank completed
-   and no finding was raised. Set `parent_run_id` in the case config when the
-   case is evidence for a change-validation plan.
+## Agent entry
 
-## Entry point
+Run from the repository root using the platform's Python launcher. The workspace
+selects its installed platform environment automatically.
 
-`scripts/distributed_debug.py` provides:
+```text
+python .agents/skills/vllm-ascend-distributed-debug/scripts/distributed_debug.py --config topology.json --events rank-events.jsonl
+```
 
-- `init`: validate the topology contract and create the complete evidence layout;
-- `ingest`: validate and append normalized rank events;
-- `analyze`: produce deterministic findings, per-rank last progress, and a Run
-  Manifest-linked report; the manifest becomes `failed` on a confirmed finding,
-  `passed` only when every rank ended with `rank_complete` and nothing was
-  found, and `inconclusive` otherwise.
+The config supplies expected_world_size, ranks and optional groups/endpoints. Event files supply observed facts. The report validates mappings and event order and generates its evidence automatically; no case initialization or event-registration steps are required.
 
-Read only the reference needed for the current phase:
+Use graph-debug when eager passes and graph fails independent of topology. Performance imbalance with a successful run belongs to profiling-analysis.
 
-- [Behavior contract](references/behavior.md)
-- [Command recipes](references/command-recipes.md)
-- [Acceptance](references/acceptance.md)
+Read the relevant detail only when needed:
 
-## Boundaries
+- [behavior](references/behavior.md)
 
-- This skill owns failures whose explanation requires comparing ranks, groups,
-  nodes, or distributed endpoints.
-- Correct outputs in eager mode with graph-only failure belong to
-  `vllm-ascend-graph-debug`.
-- A failure reduced to one operator call belongs to `ascend-operator-debug`.
-- Kernel timing, throughput, and imbalance quantification belong to profiling or
-  performance skills; do not load them until the distributed failure is stable
-  and the user asks for that evidence.
-
-## Rules
-
-- Preserve raw evidence; normalize into new files rather than rewriting logs.
-- Treat missing ranks as missing evidence, not proof that those ranks crashed.
-- Treat a collective mismatch as confirmed only when group, sequence, operation,
-  and participating ranks are explicit.
-- Redact secrets before storing environment snapshots.
-- Keep cases under `.vaws-local/distributed-debug/`.
+- [Business input example](references/inputs.md)

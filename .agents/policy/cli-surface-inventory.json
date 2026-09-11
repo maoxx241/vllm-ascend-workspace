@@ -27,12 +27,6 @@
       "target_kind": "self",
       "note": "local pytest file/suite subprocesses with progress, bounded lifetime and validated failed-only reruns"
     },
-    ".agents/hooks/knowledge_session_end.py": {
-      "responsibility": "mechanics",
-      "support_role": "hook",
-      "target_kind": "self",
-      "note": "session-end flush of deferred knowledge candidates; stdin/client hook, not an agent CLI"
-    },
     ".agents/hooks/knowledge_summary.py": {
       "responsibility": "mechanics",
       "support_role": "hook",
@@ -50,43 +44,22 @@
       "responsibility": "mechanics",
       "support_role": "hook",
       "target_kind": "self",
-      "note": "compatibility adapter that execs the coordinator native-session hook from the installed package",
+      "note": "native client adapter that execs the coordinator native-session hook from the installed package",
       "external_owner": "vaws-coordinator"
     },
     ".agents/scripts/cli_surface_inventory.py": {
       "responsibility": "mechanics",
-      "support_role": "supported",
+      "support_role": "harness",
       "target_kind": "self",
       "note": "this tool; AST inventory and overlay coherence check",
       "proposed_target": "vaws lint"
     },
     ".agents/scripts/envelope_lint.py": {
       "responsibility": "mechanics",
-      "support_role": "supported",
+      "support_role": "harness",
       "target_kind": "self",
       "note": "Result Envelope v1 scan/check/run; schema owner remains vaws_result_envelope.py",
       "proposed_target": "vaws lint"
-    },
-    ".agents/scripts/knowledge_capture.py": {
-      "responsibility": "mixed",
-      "support_role": "supported",
-      "target_kind": "self",
-      "note": "redaction, coordinate capture and atomic write are mechanics; verified/unverified is supplied by the caller",
-      "proposed_target": "vaws knowledge"
-    },
-    ".agents/scripts/knowledge_export.py": {
-      "responsibility": "mechanics",
-      "support_role": "supported",
-      "target_kind": "self",
-      "note": "source-side export gate: unresolved coordinates, redaction, provenance and content_hash; writes a local proposal bundle",
-      "proposed_target": "vaws knowledge"
-    },
-    ".agents/scripts/knowledge_query.py": {
-      "responsibility": "mechanics",
-      "support_role": "supported",
-      "target_kind": "self",
-      "note": "thin CLI over vaws_knowledge.server.query; prints the commons QueryResponse envelope",
-      "proposed_target": "vaws knowledge"
     },
     ".agents/scripts/knowledge_setup.py": {
       "responsibility": "mechanics",
@@ -95,157 +68,12 @@
       "note": "configure corpus fork and background Release sync through the installed package",
       "external_owner": "vaws-knowledge"
     },
-    ".agents/scripts/knowledge_validate.py": {
-      "responsibility": "mechanics",
-      "support_role": "supported",
-      "target_kind": "self",
-      "note": "schema validation of knowledge documents",
-      "proposed_target": "vaws knowledge"
-    },
-    ".agents/scripts/remote_artifact_manifest.py": {
-      "responsibility": "mechanics",
-      "support_role": "compatibility",
-      "target_kind": "self",
-      "note": "thin CLI over vaws-remote-dev artifact-manifest; stdout is remote-dev.result.v1",
-      "proposed_target": "vaws remote"
-    },
-    ".agents/scripts/remote_artifact_pull.py": {
-      "responsibility": "mechanics",
-      "support_role": "compatibility",
-      "target_kind": "self",
-      "note": "thin CLI over vaws-remote-dev artifact-pull; stdout is remote-dev.result.v1",
-      "proposed_target": "vaws remote"
-    },
-    ".agents/scripts/remote_artifact_push.py": {
-      "responsibility": "mechanics",
-      "support_role": "compatibility",
-      "target_kind": "self",
-      "note": "thin CLI over vaws-remote-dev artifact-push; stdout is remote-dev.result.v1",
-      "proposed_target": "vaws remote"
-    },
-    ".agents/scripts/remote_cleanup.py": {
-      "responsibility": "mechanics",
-      "support_role": "supported",
-      "target_kind": "self",
-      "note": "dry-run-capable cleanup of jobs/services/leases/known-hosts/temp",
-      "proposed_target": "vaws session"
-    },
-    ".agents/scripts/remote_exec.py": {
-      "responsibility": "mechanics",
-      "support_role": "compatibility",
-      "target_kind": "self",
-      "note": "thin CLI over vaws-remote-dev bash; --machine/--session-id become --selector; stdout is remote-dev.result.v1",
-      "proposed_target": "vaws remote"
-    },
-    ".agents/scripts/remote_job_collect.py": {
-      "responsibility": "mechanics",
-      "support_role": "compatibility",
-      "target_kind": "self",
-      "note": "no remote-dev job_collect tool; wrapper pulls the job dir via job-status + artifact-pull or fails naming the gap",
-      "proposed_target": "vaws remote"
-    },
-    ".agents/scripts/remote_job_start.py": {
-      "responsibility": "mechanics",
-      "support_role": "compatibility",
-      "target_kind": "self",
-      "note": "thin CLI over vaws-remote-dev bash --run-in-background; --job-id is accepted and ignored",
-      "proposed_target": "vaws remote"
-    },
-    ".agents/scripts/remote_job_status.py": {
-      "responsibility": "mechanics",
-      "support_role": "compatibility",
-      "target_kind": "self",
-      "note": "thin CLI over vaws-remote-dev job-status",
-      "proposed_target": "vaws remote"
-    },
-    ".agents/scripts/remote_job_stop.py": {
-      "responsibility": "mechanics",
-      "support_role": "compatibility",
-      "target_kind": "self",
-      "note": "thin CLI over vaws-remote-dev job-stop",
-      "proposed_target": "vaws remote"
-    },
-    ".agents/scripts/remote_job_tail.py": {
-      "responsibility": "mechanics",
-      "support_role": "compatibility",
-      "target_kind": "self",
-      "note": "thin CLI over vaws-remote-dev job-tail",
-      "proposed_target": "vaws remote"
-    },
-    ".agents/scripts/remote_probe.py": {
-      "responsibility": "mechanics",
-      "support_role": "compatibility",
-      "target_kind": "self",
-      "note": "thin CLI over vaws-remote-dev probe; Ascend-specific probe fields from the old toolbox are not reproduced",
-      "proposed_target": "vaws remote"
-    },
-    ".agents/scripts/remote_service_logs.py": {
-      "responsibility": "mechanics",
-      "support_role": "supported",
-      "target_kind": "self",
-      "note": "current service log tailer; optional --role selects observe(action='tail', role=...)",
-      "proposed_target": "vaws serve"
-    },
-    ".agents/scripts/remote_service_start.py": {
-      "responsibility": "mechanics",
-      "support_role": "compatibility",
-      "target_kind": "local-entry",
-      "note": "adapter that spawns serve_start.py; remote-dev has no service API",
-      "target": ".agents/skills/vllm-ascend-serving/scripts/serve_start.py",
-      "proposed_target": "vaws serve"
-    },
-    ".agents/scripts/remote_service_status.py": {
-      "responsibility": "mechanics",
-      "support_role": "compatibility",
-      "target_kind": "local-entry",
-      "note": "adapter that spawns serve_status.py; remote-dev has no service API",
-      "target": ".agents/skills/vllm-ascend-serving/scripts/serve_status.py",
-      "proposed_target": "vaws serve"
-    },
-    ".agents/scripts/remote_service_stop.py": {
-      "responsibility": "mechanics",
-      "support_role": "compatibility",
-      "target_kind": "local-entry",
-      "note": "adapter that spawns serve_stop.py; remote-dev has no service API",
-      "target": ".agents/skills/vllm-ascend-serving/scripts/serve_stop.py",
-      "proposed_target": "vaws serve"
-    },
-    ".agents/scripts/remote_sync_apply.py": {
-      "responsibility": "mechanics",
-      "support_role": "compatibility",
-      "target_kind": "external",
-      "note": "explicit-endpoint source-only adapter over python -m vaws_coordinator.parity; managed execution sync belongs to coordinator run preparation",
-      "proposed_target": "vaws sync",
-      "external_owner": "vaws-coordinator"
-    },
-    ".agents/scripts/remote_sync_plan.py": {
-      "responsibility": "mechanics",
-      "support_role": "compatibility",
-      "target_kind": "external",
-      "note": "explicit-endpoint source-only adapter over python -m vaws_coordinator.parity; managed execution sync belongs to coordinator run preparation",
-      "proposed_target": "vaws sync",
-      "external_owner": "vaws-coordinator"
-    },
-    ".agents/scripts/remote_target_resolve.py": {
-      "responsibility": "mechanics",
-      "support_role": "compatibility",
-      "target_kind": "self",
-      "note": "VAWS target resolve via vaws_remote_target; remote-dev has no VAWS-shaped target_resolve CLI",
-      "proposed_target": "vaws remote"
-    },
     ".agents/scripts/repo_boundary_check.py": {
       "responsibility": "mechanics",
       "support_role": "supported",
       "target_kind": "self",
       "note": "AST boundary scan against .agents/policy/repo-boundaries.json and its dated baseline",
       "proposed_target": "vaws lint"
-    },
-    ".agents/scripts/run_manifest.py": {
-      "responsibility": "mechanics",
-      "support_role": "supported",
-      "target_kind": "self",
-      "note": "Run Manifest v1 init/validate; thin CLI over vaws_coordinator.run_manifest",
-      "proposed_target": "vaws manifest"
     },
     ".agents/scripts/skill_catalog.py": {
       "responsibility": "mechanics",
@@ -335,7 +163,7 @@
       "responsibility": "mixed",
       "support_role": "supported",
       "target_kind": "self",
-      "note": "plan selects the case matrix (judgment); record/analyze keep schema and status-count mechanics; keep rejection tests",
+      "note": "one-call business evidence analysis; report metadata and artifact assembly are internal",
       "proposed_target": "guidance"
     },
     ".agents/skills/ascend-profiling-analysis/scripts/ascend_profile/analyze.py": {
@@ -470,14 +298,14 @@
       "responsibility": "mixed",
       "support_role": "supported",
       "target_kind": "self",
-      "note": "plan/thresholds are judgment; record/analyze consume measurements, artifacts and Run Manifests; keep rejection tests",
+      "note": "one-call business evidence analysis; report metadata and artifact assembly are internal",
       "proposed_target": "guidance"
     },
     ".agents/skills/ascend-triton-kernel-validation/scripts/triton_validation.py": {
       "responsibility": "mixed",
       "support_role": "supported",
       "target_kind": "self",
-      "note": "plan selects cases; record/analyze keep schema/status mechanics around validate_triton_impl",
+      "note": "one-call business evidence analysis; report metadata and artifact assembly are internal",
       "proposed_target": "guidance"
     },
     ".agents/skills/ascend-triton-kernel-validation/scripts/validate_triton_impl.py": {
@@ -491,14 +319,14 @@
       "responsibility": "mixed",
       "support_role": "supported",
       "target_kind": "self",
-      "note": "plan is judgment; finalize checks candidate hash/parent/case coverage on shared manifests",
+      "note": "one-call business evidence analysis; report metadata and artifact assembly are internal",
       "proposed_target": "guidance"
     },
     ".agents/skills/ascend-triton-workflow/scripts/triton_workflow.py": {
       "responsibility": "mixed",
       "support_role": "supported",
       "target_kind": "self",
-      "note": "plan is judgment; link/finalize reject unplanned stages, wrong parent/run type and nonterminal children",
+      "note": "one-call business evidence analysis; report metadata and artifact assembly are internal",
       "proposed_target": "guidance"
     },
     ".agents/skills/modelscope/scripts/download_from_modelscope.py": {
@@ -570,13 +398,6 @@
       "note": "parses the vllm-ascend CI pin",
       "proposed_target": "vaws workspace"
     },
-    ".agents/skills/vllm-ascend-benchmark/scripts/bench_compare.py": {
-      "responsibility": "mixed",
-      "support_role": "supported",
-      "target_kind": "self",
-      "note": "multi-state checkout+serve+bench loop is mechanics; exploratory delta table is not a comparability certificate",
-      "proposed_target": "vaws bench"
-    },
     ".agents/skills/vllm-ascend-benchmark/scripts/bench_run.py": {
       "responsibility": "mechanics",
       "support_role": "supported",
@@ -588,7 +409,7 @@
       "responsibility": "mixed",
       "support_role": "supported",
       "target_kind": "self",
-      "note": "plan maps diffs by regex (judgment); link/finalize enforce child manifests, run-type coverage and artifacts",
+      "note": "one-call business evidence analysis; report metadata and artifact assembly are internal",
       "proposed_target": "guidance"
     },
     ".agents/skills/vllm-ascend-correctness-validation/scripts/aisbench_adapter.py": {
@@ -602,7 +423,7 @@
       "responsibility": "mixed",
       "support_role": "supported",
       "target_kind": "self",
-      "note": "init/compare plus execution-block identity and shared certificate consume; whether a class is acceptable is judgment",
+      "note": "one-call business evidence analysis; report metadata and artifact assembly are internal",
       "proposed_target": "vaws bench"
     },
     ".agents/skills/vllm-ascend-correctness-validation/scripts/remote_correctness_harness.py": {
@@ -615,14 +436,14 @@
       "responsibility": "mixed",
       "support_role": "supported",
       "target_kind": "self",
-      "note": "init/ingest/analyze over agent-normalized events; completed-without-mismatch stays distinct from two-state certificates",
+      "note": "one-call business evidence analysis; report metadata and artifact assembly are internal",
       "proposed_target": "guidance"
     },
     ".agents/skills/vllm-ascend-graph-debug/scripts/graph_debug_case.py": {
       "responsibility": "mixed",
       "support_role": "supported",
       "target_kind": "self",
-      "note": "compare is a JSONL numeric diff with snapshot-sidecar identity; init/record/finalize are the hypothesis ledger",
+      "note": "one-call business evidence analysis; report metadata and artifact assembly are internal",
       "proposed_target": "guidance"
     },
     ".agents/skills/vllm-ascend-pd-serving/scripts/pd_serving.py": {
@@ -636,36 +457,8 @@
       "responsibility": "mixed",
       "support_role": "supported",
       "target_kind": "self",
-      "note": "normalize rejects non-finite/order/identity errors; analyze consumes per-measurement observations and shared certificates; thresholds stay judgment",
+      "note": "one-call business evidence analysis; report metadata and artifact assembly are internal",
       "proposed_target": "guidance"
-    },
-    ".agents/skills/vllm-ascend-serving/scripts/serve_probe_npus.py": {
-      "responsibility": "mechanics",
-      "support_role": "compatibility",
-      "target_kind": "self",
-      "note": "legacy --machine npu-smi probe still named in AGENTS.md; not deleted in this inventory turn",
-      "proposed_target": "vaws machine"
-    },
-    ".agents/skills/vllm-ascend-serving/scripts/serve_start.py": {
-      "responsibility": "mechanics",
-      "support_role": "supported",
-      "target_kind": "self",
-      "note": "canonical vllm serve start; still path-spawns parity_sync (C3)",
-      "proposed_target": "vaws serve"
-    },
-    ".agents/skills/vllm-ascend-serving/scripts/serve_status.py": {
-      "responsibility": "mechanics",
-      "support_role": "supported",
-      "target_kind": "self",
-      "note": "health probe of the tracked service",
-      "proposed_target": "vaws serve"
-    },
-    ".agents/skills/vllm-ascend-serving/scripts/serve_stop.py": {
-      "responsibility": "mechanics",
-      "support_role": "supported",
-      "target_kind": "self",
-      "note": "stop the tracked service (--force)",
-      "proposed_target": "vaws serve"
     },
     ".trae/skills/modelscope/scripts/download_from_modelscope.py": {
       "responsibility": "mechanics",
@@ -694,6 +487,12 @@
       "target_kind": "local-entry",
       "note": "Trae byte-copy of the canonical payload verify script; inherits payload (no shim, no .agents/lib)",
       "target": ".agents/skills/modelscope/scripts/verify_modelscope_sha256.py"
+    },
+    ".agents/skills/vllm-ascend-serving/scripts/serving.py": {
+      "responsibility": "mixed",
+      "support_role": "supported",
+      "target_kind": "self",
+      "note": "single business entry for start, status and stop over coordinator execution ownership"
     }
   }
 }

@@ -5,7 +5,7 @@ description: "Profile and attribute HBM memory usage on Ascend NPU for vLLM serv
 
 <!-- Generated from .agents/skills/ascend-memory-profiling/SKILL.md. Do not edit. -->
 
-# Ascend Memory Profiling
+# ascend-memory-profiling
 
 Read `.agents/skills/ascend-memory-profiling/SKILL.md` and only the references needed
 for the current task. The canonical skill owns the workflow.

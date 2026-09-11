@@ -1,8 +1,8 @@
-# Acceptance
+# Maintainer verification
 
-- Task identity is `--context-file` / `VAWS_CONTEXT_FILE`.
-- Queued or preparing serve is `status=queued` with the same execution id and
-  is not force-stopped.
-- A supplied `--execution-id` is not stopped on error.
-- Live `--execution-id` requires business readiness, not `target.live` alone.
-- Results land under `.vaws-local/tasks/<task-id>/benchmark/runs/`.
+Run the affected tests in `../tests/` with the local test runner. Exercise the
+public call with business inputs and actual result fixtures, including incomplete
+or mismatched evidence. Verify that conclusions do not exceed the observed scope.
+These checks belong to implementation maintenance, not a per-task Agent checklist.
+
+Use --execution-id to measure an existing service, or let the workflow start and clean up its own service. --serve-args and --bench-args forward business options; --preset supplies reusable defaults. The managed interpreter and actual launch observations are recorded with measurements.

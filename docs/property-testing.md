@@ -37,7 +37,7 @@ The three `#90` `SubstrateIntegrationTests` live in
 `.agents/tests/test_remote_dev_consumer.py`. From this scaffold root:
 
 ```bash
-uv sync
+python .agents/scripts/vaws_deps.py sync
 python3 -m unittest discover -s .agents/tests -p test_remote_dev_consumer.py
 ```
 
@@ -47,7 +47,7 @@ That file's substrate-backed cases import the installed `remote_dev` package:
 - `SubstrateIntegrationTests.test_machine_selector_resolves_from_a_fake_inventory_with_runtime_env_file`
 - `SubstrateIntegrationTests.test_empty_payload_without_binding_yields_the_substrate_error`
 
-Without `uv sync` those three skip. They are not a substitute for the
+Without `python .agents/scripts/vaws_deps.py sync` those three skip. They are not a substitute for the
 remote-dev property suites.
 
 `hypothesis` is not a dependency. Each repository's `test_property_support.py`

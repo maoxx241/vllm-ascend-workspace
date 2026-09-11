@@ -26,16 +26,6 @@ ensure_workspace_interpreter(repo_root=ROOT)
 
 from remote_dev.diagnostics import open_http, http_connection, http_failure
 from vaws_coordinator.presentation import execution_summary
-from vaws_coordinator.code_identity import manifest_code  # noqa: E402
-from vaws_coordinator.run_manifest import (  # noqa: E402
-    RunManifestError,
-    add_artifact,
-    load_manifest,
-    new_manifest,
-    transition_status,
-    TERMINAL_STATUSES,
-    write_manifest,
-)
 from vaws_task_target import (  # noqa: E402
     DONE,
     PENDING,
@@ -50,7 +40,7 @@ from vaws_task_target import (  # noqa: E402
 SERVING_SCRIPTS = ROOT / ".agents" / "skills" / "vllm-ascend-serving" / "scripts"
 if str(SERVING_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SERVING_SCRIPTS))
-from serve_start import build_serve_command  # noqa: E402
+from _serving_start import build_serve_command  # noqa: E402
 
 SCHEMA_VERSION = 1
 ROLES = {"prefill", "decode"}
@@ -96,11 +86,6 @@ def _load_json(path: Path, label: str) -> dict[str, Any]:
 
 def validate_config(config: Mapping[str, Any]) -> None:
     errors: list[str] = []
-    if config.get("schema_version") != SCHEMA_VERSION:
-        errors.append(f"schema_version must be {SCHEMA_VERSION}")
-    for field in ("run_id", "group_id"):
-        if not isinstance(config.get(field), str) or not config[field]:
-            errors.append(f"{field} must be a non-empty string")
     services = config.get("services")
     if not isinstance(services, list) or len(services) < 2:
         errors.append("services must contain at least one prefill and one decode")
@@ -140,7 +125,7 @@ def validate_config(config: Mapping[str, Any]) -> None:
             errors.append(f"{path}.args must be an array of strings")
     if roles != ROLES:
         errors.append("services must include both prefill and decode roles")
-    order = config.get("startup_order")
+    order = config.get("startup_order", [item["name"] for item in services if isinstance(item, Mapping) and "name" in item])
     if (
         not isinstance(order, list)
         or any(not isinstance(value, str) for value in order)
@@ -196,7 +181,7 @@ def role_shell_command(service: Mapping[str, Any], *, preflight_only=False) -> s
 
 def topology_from_config(config: Mapping[str, Any]) -> dict[str, Any]:
     roles = []
-    for name in config["startup_order"]:
+    for name in config.get("startup_order", [item["name"] for item in config["services"]]):
         service = next(item for item in config["services"] if item["name"] == name)
         npu_count = int(service.get("tp") or 1) * int(service.get("dp") or 1)
         role: dict[str, Any] = {
@@ -215,166 +200,32 @@ def topology_from_config(config: Mapping[str, Any]) -> dict[str, Any]:
     return {"roles": roles}
 
 
-def plan(
-    output_dir: Path,
-    *,
-    config_path: Path,
-    created_at: str | None = None,
-    code: Mapping[str, Any] | None = None,
-    workspace_root: Path | None = None,
-) -> dict[str, Any]:
-    if output_dir.exists() and any(output_dir.iterdir()):
-        raise PdServingError(f"output directory is not empty: {output_dir}")
+def _view(observation):
+    return execution_summary(observation)
+
+
+def start(config_path: Path, *, client=None, context_file=None, restart=False):
     config = _load_json(config_path, "PD config")
     validate_config(config)
-    services = {service["name"]: service for service in config["services"]}
     topology = topology_from_config(config)
-    lifecycle = []
-    for name in config["startup_order"]:
-        service = services[name]
-        lifecycle.append(
-            {
-                "name": name,
-                "role": service["role"],
-            }
-        )
-    timestamp = created_at or utc_now()
-    output_dir.mkdir(parents=True, exist_ok=True)
-    _atomic_write(output_dir / "pd-config.json", config)
-    _atomic_write(
-        output_dir / "lifecycle.json",
-        {
-            "schema_version": SCHEMA_VERSION,
-            "startup": lifecycle,
-            "shutdown": list(reversed([row["name"] for row in lifecycle])),
-            "topology": topology,
-        },
-    )
-    _atomic_write(
-        output_dir / "state.json",
-        {
-            "schema_version": SCHEMA_VERSION,
-            "run_id": config["run_id"],
-            "status": "planned",
-            "started": [],
-            "updated_at": timestamp,
-        },
-    )
-    manifest = new_manifest(
-        run_type="debug",
-        run_id=config["run_id"],
-        code=code or manifest_code(workspace_root or ROOT),
-        workspace_root=workspace_root or ROOT,
-        workspace_snapshot=code or manifest_code(workspace_root or ROOT),
-        topology={
-            "service": config["group_id"],
-            "roles": topology["roles"],
-            "services": [
-                {
-                    "name": service["name"],
-                    "role": service["role"],
-                }
-                for service in config["services"]
-            ],
-        },
-        model={"paths": sorted({service["model"] for service in config["services"]})},
-        created_at=timestamp,
-    )
-    for name, kind, uri in (
-        ("pd-config", "pd-config", "pd-config.json"),
-        ("lifecycle", "lifecycle", "lifecycle.json"),
-        ("state", "state", "state.json"),
-    ):
-        manifest = add_artifact(
-            manifest, name=name, kind=kind, uri=uri, updated_at=timestamp
-        )
-    write_manifest(output_dir / "manifest.json", manifest)
-    return {
-        "status": "planned",
-        "run_id": config["run_id"],
-        "service_count": len(config["services"]),
-        "startup_order": config["startup_order"],
-    }
-
-
-def start(
-    output_dir: Path,
-    *,
-    client: Any | None = None,
-    context_file: str | None = None,
-    updated_at: str | None = None,
-    restart: bool = False,
-) -> dict[str, Any]:
-    config = _load_json(output_dir / "pd-config.json", "PD config")
-    state = _load_json(output_dir / "state.json", "PD state")
-    if state["status"] not in {"planned", "queued"}:
-        raise PdServingError(f"deployment must be planned or queued, got {state['status']}")
-    topology = topology_from_config(config)
-    roles = topology["roles"]
-    if not roles:
-        raise PdServingError("PD topology has no roles")
     client = client or task_client(context_file)
-    environment = named_environment(extra=config.get("environment"))
     reply = run_command(
-        client,
-        roles[0]["command"],
-        environment=environment,
-        topology=topology,
-        timeout_seconds=None,
-        service=str(config["group_id"]),
-        restart=restart,
+        client, topology["roles"][0]["command"],
+        environment=named_environment(extra=config.get("environment")),
+        topology=topology, timeout_seconds=None,
+        service=str(config.get("group_id") or "pd"), restart=restart,
     )
-    state.update(execution_id=reply["execution_id"], task_id=task_id_of(client), service=config["group_id"])
-    return _observe(output_dir, state, reply, updated_at=updated_at)
+    return _view(reply)
 
 
-def _observe(output_dir, state, observation, *, updated_at=None, readiness="unknown"):
-    """Project execution facts into the business record and manifest once per observation."""
-    timestamp = updated_at or utc_now()
-    run_state = observation["state"]
-    stopped = bool(state.get("stop_requested"))
-    released = observation.get("resources_released") is True
-    lifecycle = ("stopped" if released else "stopping") if stopped else (
-        "running" if run_state in RUNNING else "failed" if run_state in DONE else "queued")
-    # Terminal evidence never regresses after a late/stale status observation.
-    manifest = load_manifest(output_dir / "manifest.json")
-    if state["status"] != "stopped" and (manifest["status"] not in TERMINAL_STATUSES or stopped or run_state in DONE):
-        state.update(status=lifecycle, state=run_state, updated_at=timestamp, readiness=readiness)
-        _atomic_write(output_dir / "state.json", state)
-    if manifest["status"] not in TERMINAL_STATUSES:
-        desired = "running" if run_state in RUNNING else None
-        if stopped and released:
-            smoke_path = output_dir / "smoke.json"
-            passed = smoke_path.exists() and _load_json(smoke_path, "PD smoke")["status"] == "passed"
-            desired = "passed" if passed else "inconclusive"
-            if desired == "passed" and manifest["status"] == "planned":
-                manifest = transition_status(manifest, "running", updated_at=timestamp)
-        elif run_state in DONE and not stopped:
-            desired = "failed"
-        if desired and desired != manifest["status"]:
-            manifest = transition_status(manifest, desired, updated_at=timestamp)
-            write_manifest(output_dir / "manifest.json", manifest)
-    return {**execution_summary(observation), "status": state["status"],
-            "running": run_state in RUNNING, "ready": readiness == "ready",
-            "readiness": readiness, "manifest_ref": str(output_dir / "manifest.json")}
-
-
-def status(
-    output_dir: Path,
-    *,
-    client: Any | None = None,
-    context_file: str | None = None,
-    urlopen: Callable[..., Any] | None = None,
-) -> dict[str, Any]:
-    config = _load_json(output_dir / "pd-config.json", "PD config")
-    state = _load_json(output_dir / "state.json", "PD state")
-    execution_id = state.get("execution_id")
-    if not execution_id:
-        return {"status": "not_found", "error": "no coordinator execution for this PD run"}
+def status(*, service="pd", execution_id=None, config_path=None, client=None, context_file=None, urlopen=None):
     client = client or task_client(context_file)
-    observation = client.observe(str(execution_id), "status")
-    if observation["state"] not in RUNNING or state.get("stop_requested") or state["status"] in {"stopped", "failed"}:
-        return _observe(output_dir, state, observation)
+    observation = client.observe(execution_id, "status", service=None if execution_id else service)
+    result = _view(observation)
+    if observation["state"] not in RUNNING or config_path is None:
+        return result
+    config = _load_json(config_path, "PD config")
+    validate_config(config)
     health_url = config["proxy"]["base_url"].rstrip("/") + "/" + config["proxy"].get("health_path", "/health").lstrip("/")
     mode = config["proxy"].get("proxy_mode", "direct")
     proxy = http_connection(health_url, proxy_mode=mode)
@@ -384,17 +235,23 @@ def status(
             proxy.update(ok=200 <= response.status < 300, status_code=response.status)
     except (OSError, urllib.error.URLError) as exc:
         proxy.update(ok=False, failure=http_failure(exc))
-    readiness = "ready" if proxy["ok"] else "unhealthy" if state.get("readiness") in {"ready", "unhealthy"} else "starting"
-    return {**_observe(output_dir, state, observation, readiness=readiness), "proxy": proxy}
+    return {**result, "readiness": "ready" if proxy["ok"] else "unhealthy", "proxy": proxy}
+
+
+def stop(*, service="pd", execution_id=None, force=False, client=None, context_file=None):
+    client = client or task_client(context_file)
+    return _view(client.observe(execution_id, "stop", force, service=None if execution_id else service))
 
 
 def smoke(
-    output_dir: Path,
+    config_path: Path,
     *,
     urlopen: Callable[..., Any] | None = None,
     updated_at: str | None = None,
+    output_dir: Path | None = None,
 ) -> dict[str, Any]:
-    config = _load_json(output_dir / "pd-config.json", "PD config")
+    config = _load_json(config_path, "PD config")
+    validate_config(config)
     url = (
         config["proxy"]["base_url"].rstrip("/")
         + "/"
@@ -416,7 +273,8 @@ def smoke(
             status_code = response.status
     except (OSError, urllib.error.URLError) as exc:
         result = {"status": "failed", "connection": connection, "failure": http_failure(exc), "completed_at": updated_at or utc_now()}
-        _atomic_write(output_dir / "smoke.json", result)
+        if output_dir is not None:
+            _atomic_write(output_dir / "smoke.json", result)
         return result
     try:
         payload = json.loads(body)
@@ -430,77 +288,51 @@ def smoke(
         "completed_at": updated_at or utc_now(),
         "claim": "proxy request path passed; inspect service logs to confirm connector-level KV transfer",
     }
-    _atomic_write(output_dir / "smoke.json", result)
-    manifest = load_manifest(output_dir / "manifest.json")
-    manifest = add_artifact(
-        manifest,
-        name="smoke",
-        kind="pd-smoke",
-        uri="smoke.json",
-        updated_at=result["completed_at"],
-    )
-    write_manifest(output_dir / "manifest.json", manifest)
+    if output_dir is not None:
+        _atomic_write(output_dir / "smoke.json", result)
     return result
 
-
-def stop(
-    output_dir: Path,
-    *,
-    force: bool,
-    client: Any | None = None,
-    context_file: str | None = None,
-    updated_at: str | None = None,
-) -> dict[str, Any]:
-    state = _load_json(output_dir / "state.json", "PD state")
-    execution_id = state.get("execution_id")
-    if not execution_id:
-        return {"status": "not_found", "container_preserved": True}
-    client = client or task_client(context_file)
-    result = client.observe(str(execution_id), "stop", force)
-    state["stop_requested"] = True
-    return {**_observe(output_dir, state, result, updated_at=updated_at), "container_preserved": True}
-
-
-def build_parser() -> argparse.ArgumentParser:
+def build_parser():
     parser = argparse.ArgumentParser(description=__doc__)
-    subparsers = parser.add_subparsers(dest="action", required=True)
-    plan_parser = subparsers.add_parser("plan")
-    plan_parser.add_argument("--output-dir", required=True, type=Path)
-    plan_parser.add_argument("--config", required=True, type=Path)
-    plan_parser.add_argument("--context-file")
-    for name in ("start", "status", "smoke"):
-        subparser = subparsers.add_parser(name)
-        subparser.add_argument("--output-dir", required=True, type=Path)
-        subparser.add_argument("--context-file")
-    stop_parser = subparsers.add_parser("stop")
-    stop_parser.add_argument("--output-dir", required=True, type=Path)
-    stop_parser.add_argument("--force", action="store_true")
-    stop_parser.add_argument("--context-file")
+    commands = parser.add_subparsers(dest="action", required=True)
+    start_parser = commands.add_parser("start")
+    start_parser.add_argument("--config", required=True, type=Path)
+    start_parser.add_argument("--restart", action="store_true")
+    start_parser.add_argument("--context-file")
+    for action in ("status", "stop"):
+        command = commands.add_parser(action)
+        reference = command.add_mutually_exclusive_group()
+        reference.add_argument("--execution-id")
+        reference.add_argument("--service", default="pd")
+        command.add_argument("--context-file")
+        if action == "status":
+            command.add_argument("--config", type=Path, help="Optional proxy health configuration")
+        else:
+            command.add_argument("--force", action="store_true")
+    smoke_parser = commands.add_parser("smoke")
+    smoke_parser.add_argument("--config", required=True, type=Path)
+    smoke_parser.add_argument("--output-dir", type=Path)
     return parser
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv=None):
     args = build_parser().parse_args(argv)
     try:
-        if args.action == "plan":
-            payload = plan(
-                args.output_dir,
-                config_path=args.config,
-                code=manifest_code(ROOT),
-            )
-        elif args.action == "start":
-            payload = start(args.output_dir, context_file=args.context_file)
+        if args.action == "start":
+            result = start(args.config, context_file=args.context_file, restart=args.restart)
         elif args.action == "status":
-            payload = status(args.output_dir, context_file=args.context_file)
-        elif args.action == "smoke":
-            payload = smoke(args.output_dir)
+            result = status(service=args.service, execution_id=args.execution_id,
+                            config_path=args.config, context_file=args.context_file)
+        elif args.action == "stop":
+            result = stop(service=args.service, execution_id=args.execution_id,
+                          force=args.force, context_file=args.context_file)
         else:
-            payload = stop(args.output_dir, force=args.force, context_file=args.context_file)
-    except (PdServingError, RunManifestError) as exc:
+            result = smoke(args.config, output_dir=args.output_dir)
+    except Exception as exc:
         print(json.dumps({"status": "failed", "error": str(exc)}, ensure_ascii=False))
         return 1
-    print(json.dumps(payload, ensure_ascii=False))
-    return 0
+    print(json.dumps(result, ensure_ascii=False))
+    return 1 if result.get("status", result.get("state")) in {"failed", "timeout"} else 0
 
 
 if __name__ == "__main__":

@@ -106,7 +106,7 @@ class DetectionTests(unittest.TestCase):
                 guard.require_knowledge_redact()
         message = str(caught.exception)
         self.assertIn("vaws_knowledge", message)
-        self.assertIn("uv sync", message)
+        self.assertIn("python .agents/scripts/vaws_deps.py sync", message)
         with mock.patch.dict(
             sys.modules, {"vaws_knowledge": None, "vaws_knowledge.redact": None}
         ):
@@ -1165,7 +1165,7 @@ class CurrentMainFindingScopeTests(unittest.TestCase):
         self.assertNotIn("/home/cache", self.policy.allowed_path_prefixes)
         self.assertNotIn("/home/shared", self.policy.allowed_path_prefixes)
 
-    def test_shared_root_literals_are_allowed_only_in_the_two_owning_files(self) -> None:
+    def test_shared_root_literals_are_allowed_only_in_the_owning_source(self) -> None:
         envelope = self._scan(self.SHARED_ROOTS, self.ENVELOPE_SRC)
         feedback = self._scan(self.SHARED_ROOTS, self.FEEDBACK_DOC)
         elsewhere = self._scan(self.SHARED_ROOTS, self.OTHER_SRC)
@@ -1175,7 +1175,7 @@ class CurrentMainFindingScopeTests(unittest.TestCase):
         )
         self.assertEqual(
             [item.allowlisted_by for item in feedback],
-            ["agent-feedback-safe-home-prefixes"] * 4,
+            [None] * 4,
         )
         self.assertEqual(
             [(item.category, item.match, item.allowlisted_by) for item in elsewhere],
@@ -1310,14 +1310,6 @@ class PhaseBKnowledgeFixtureScopeTests(unittest.TestCase):
     UNRELATED_LINE = 'token = "still-a-credential-shaped-value"'
     CASES = (
         {
-            "id": "knowledge-v2-test-torch-npu-dev-version",
-            "path": ".agents/tests/test_knowledge_v2.py",
-            "category": "internal-identifier",
-            "regex": r"^dev20250724$",
-            "values": ("dev20250724",),
-            "nearby": ("dev20250725",),
-        },
-        {
             "id": "lockfile-brotlicffi-version",
             "path": "uv.lock",
             "category": "ipv4",
@@ -1328,14 +1320,6 @@ class PhaseBKnowledgeFixtureScopeTests(unittest.TestCase):
         {
             "id": "knowledge-redaction-test-private-address",
             "path": ".agents/tests/test_knowledge_redaction.py",
-            "category": "ipv4",
-            "regex": r"^10\.198\.51\.100$",
-            "values": ("10.198.51.100",),
-            "nearby": ("10.198.51.101",),
-        },
-        {
-            "id": "knowledge-v2-test-private-address",
-            "path": ".agents/tests/test_knowledge_v2.py",
             "category": "ipv4",
             "regex": r"^10\.198\.51\.100$",
             "values": ("10.198.51.100",),
@@ -1362,14 +1346,6 @@ class PhaseBKnowledgeFixtureScopeTests(unittest.TestCase):
                 "synthetic-reviewer@github.company",
             ),
         },
-        {
-            "id": "knowledge-v2-test-github-email",
-            "path": ".agents/tests/test_knowledge_v2.py",
-            "category": "email",
-            "regex": r"^synthetic-reviewer@github\.com$",
-            "values": ("synthetic-reviewer@github.com",),
-            "nearby": ("other-reviewer@github.com", "synthetic-reviewer@github.company"),
-        },
     )
 
     def setUp(self) -> None:
@@ -1383,7 +1359,7 @@ class PhaseBKnowledgeFixtureScopeTests(unittest.TestCase):
         return [item for item in self._scan(text, path) if item.category == category]
 
     def test_declarations_are_exact_paths_and_singleton_categories(self) -> None:
-        self.assertEqual(len(self.policy.entries), 23)
+        self.assertEqual(len(self.policy.entries), 18)
         self.assertNotIn("knowledge-failure-signatures-private-range", self.by_id)
         for case in self.CASES:
             with self.subTest(entry=case["id"]):

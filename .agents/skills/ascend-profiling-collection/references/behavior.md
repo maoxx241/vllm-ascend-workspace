@@ -86,7 +86,7 @@ failure.
 
 ## Post-stop flush window
 
-The orchestrator sleeps `POST_STOP_FLUSH_SECONDS` (5s) between `/stop_profile` returning and `serve_stop.py` being called. `/stop_profile` should already block until profiler threads quiesce, but historical traces show flush latency on some CANN versions. The window is short enough not to bother humans and long enough to cover known races.
+The orchestrator sleeps `POST_STOP_FLUSH_SECONDS` (5s) between `/stop_profile` returning and `serving.py stop` being called. `/stop_profile` should already block until profiler threads quiesce, but historical traces show flush latency on some CANN versions. This delay is internal to collection; callers do not schedule flush or teardown steps.
 
 ## Local state layout
 
@@ -102,7 +102,7 @@ One directory per invocation. Nothing else is ever written here. The remote prof
 
 Coordinator prepares the bound sources and environment for the single service run. Collection does not synchronize, install or rebuild into a live execution root. See `docs/coordinator-consumption.md` for the package entry points.
 
-`serve_start.py`, `profile_control.py`, and `serve_stop.py` address a named `--service` or `--execution-id`. Two collections on the same host must use distinct service names so they do not stop each other.
+`serving.py start`, `profile_control.py`, and `serving.py stop` address a named `--service` or `--execution-id`. Two collections on the same host must use distinct service names so they do not stop each other.
 
 ## Manifest schema versioning
 

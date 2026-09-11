@@ -1,13 +1,13 @@
 {
   "version": 1,
-  "generated_on": "2026-09-08",
+  "generated_on": "2026-09-11",
   "note": "Accepted missing-path hits as of 2026-09-08. After the post-migration routing fix, only dated audit snapshots and the frozen CLI historical table remain. Every row is attributed historical-evidence. A row whose violation no longer exists is a hard failure in --mode enforce. Regenerating with --write-baseline preserves removed_by and why and leaves new rows as unassigned (also a hard failure).",
   "accepted": [
     {
       "rule": "missing-path",
       "path": "docs/cli-surface.md",
-      "named_path": "\u002eremote-dev/core/managed_jobs.py",
-      "resolved": "\u002eremote-dev/core/managed_jobs.py",
+      "named_path": ".remote-dev/core/managed_jobs.py",
+      "resolved": ".remote-dev/core/managed_jobs.py",
       "removed_by": "historical-evidence",
       "accepted_on": "2026-09-08",
       "why": "dated #85 CLI snapshot pinned by test_cli_surface_inventory.py; paths describe the pre-extraction tree"
@@ -15,8 +15,8 @@
     {
       "rule": "missing-path",
       "path": "docs/cli-surface.md",
-      "named_path": "\u002eremote-dev/hooks/claude_remote_guard.py",
-      "resolved": "\u002eremote-dev/hooks/claude_remote_guard.py",
+      "named_path": ".remote-dev/hooks/claude_remote_guard.py",
+      "resolved": ".remote-dev/hooks/claude_remote_guard.py",
       "removed_by": "historical-evidence",
       "accepted_on": "2026-09-08",
       "why": "dated #85 CLI snapshot pinned by test_cli_surface_inventory.py; paths describe the pre-extraction tree"
@@ -24,8 +24,8 @@
     {
       "rule": "missing-path",
       "path": "docs/cli-surface.md",
-      "named_path": "\u002eremote-dev/hooks/codex_remote_guard.py",
-      "resolved": "\u002eremote-dev/hooks/codex_remote_guard.py",
+      "named_path": ".remote-dev/hooks/codex_remote_guard.py",
+      "resolved": ".remote-dev/hooks/codex_remote_guard.py",
       "removed_by": "historical-evidence",
       "accepted_on": "2026-09-08",
       "why": "dated #85 CLI snapshot pinned by test_cli_surface_inventory.py; paths describe the pre-extraction tree"
@@ -33,8 +33,8 @@
     {
       "rule": "missing-path",
       "path": "docs/cli-surface.md",
-      "named_path": "\u002eremote-dev/mcp/server.py",
-      "resolved": "\u002eremote-dev/mcp/server.py",
+      "named_path": ".remote-dev/mcp/server.py",
+      "resolved": ".remote-dev/mcp/server.py",
       "removed_by": "historical-evidence",
       "accepted_on": "2026-09-08",
       "why": "dated #85 CLI snapshot pinned by test_cli_surface_inventory.py; paths describe the pre-extraction tree"
@@ -42,8 +42,8 @@
     {
       "rule": "missing-path",
       "path": "docs/cli-surface.md",
-      "named_path": "\u002eremote-dev/tools/remote_apply_patch.py",
-      "resolved": "\u002eremote-dev/tools/remote_apply_patch.py",
+      "named_path": ".remote-dev/tools/remote_apply_patch.py",
+      "resolved": ".remote-dev/tools/remote_apply_patch.py",
       "removed_by": "historical-evidence",
       "accepted_on": "2026-09-08",
       "why": "dated #85 CLI snapshot pinned by test_cli_surface_inventory.py; paths describe the pre-extraction tree"
@@ -51,8 +51,8 @@
     {
       "rule": "missing-path",
       "path": "docs/cli-surface.md",
-      "named_path": "\u002eremote-dev/tools/remote_artifact_manifest.py",
-      "resolved": "\u002eremote-dev/tools/remote_artifact_manifest.py",
+      "named_path": ".remote-dev/tools/remote_artifact_manifest.py",
+      "resolved": ".remote-dev/tools/remote_artifact_manifest.py",
       "removed_by": "historical-evidence",
       "accepted_on": "2026-09-08",
       "why": "dated #85 CLI snapshot pinned by test_cli_surface_inventory.py; paths describe the pre-extraction tree"
@@ -60,8 +60,8 @@
     {
       "rule": "missing-path",
       "path": "docs/cli-surface.md",
-      "named_path": "\u002eremote-dev/tools/remote_artifact_pull.py",
-      "resolved": "\u002eremote-dev/tools/remote_artifact_pull.py",
+      "named_path": ".remote-dev/tools/remote_artifact_pull.py",
+      "resolved": ".remote-dev/tools/remote_artifact_pull.py",
       "removed_by": "historical-evidence",
       "accepted_on": "2026-09-08",
       "why": "dated #85 CLI snapshot pinned by test_cli_surface_inventory.py; paths describe the pre-extraction tree"
@@ -69,8 +69,8 @@
     {
       "rule": "missing-path",
       "path": "docs/cli-surface.md",
-      "named_path": "\u002eremote-dev/tools/remote_artifact_push.py",
-      "resolved": "\u002eremote-dev/tools/remote_artifact_push.py",
+      "named_path": ".remote-dev/tools/remote_artifact_push.py",
+      "resolved": ".remote-dev/tools/remote_artifact_push.py",
       "removed_by": "historical-evidence",
       "accepted_on": "2026-09-08",
       "why": "dated #85 CLI snapshot pinned by test_cli_surface_inventory.py; paths describe the pre-extraction tree"
@@ -78,8 +78,8 @@
     {
       "rule": "missing-path",
       "path": "docs/cli-surface.md",
-      "named_path": "\u002eremote-dev/tools/remote_bash.py",
-      "resolved": "\u002eremote-dev/tools/remote_bash.py",
+      "named_path": ".remote-dev/tools/remote_bash.py",
+      "resolved": ".remote-dev/tools/remote_bash.py",
       "removed_by": "historical-evidence",
       "accepted_on": "2026-09-08",
       "why": "dated #85 CLI snapshot pinned by test_cli_surface_inventory.py; paths describe the pre-extraction tree"
@@ -87,8 +87,8 @@
     {
       "rule": "missing-path",
       "path": "docs/cli-surface.md",
-      "named_path": "\u002eremote-dev/tools/remote_context_snapshot.py",
-      "resolved": "\u002eremote-dev/tools/remote_context_snapshot.py",
+      "named_path": ".remote-dev/tools/remote_context_snapshot.py",
+      "resolved": ".remote-dev/tools/remote_context_snapshot.py",
       "removed_by": "historical-evidence",
       "accepted_on": "2026-09-08",
       "why": "dated #85 CLI snapshot pinned by test_cli_surface_inventory.py; paths describe the pre-extraction tree"
@@ -96,8 +96,8 @@
     {
       "rule": "missing-path",
       "path": "docs/cli-surface.md",
-      "named_path": "\u002eremote-dev/tools/remote_edit.py",
-      "resolved": "\u002eremote-dev/tools/remote_edit.py",
+      "named_path": ".remote-dev/tools/remote_edit.py",
+      "resolved": ".remote-dev/tools/remote_edit.py",
       "removed_by": "historical-evidence",
       "accepted_on": "2026-09-08",
       "why": "dated #85 CLI snapshot pinned by test_cli_surface_inventory.py; paths describe the pre-extraction tree"
@@ -105,8 +105,8 @@
     {
       "rule": "missing-path",
       "path": "docs/cli-surface.md",
-      "named_path": "\u002eremote-dev/tools/remote_glob.py",
-      "resolved": "\u002eremote-dev/tools/remote_glob.py",
+      "named_path": ".remote-dev/tools/remote_glob.py",
+      "resolved": ".remote-dev/tools/remote_glob.py",
       "removed_by": "historical-evidence",
       "accepted_on": "2026-09-08",
       "why": "dated #85 CLI snapshot pinned by test_cli_surface_inventory.py; paths describe the pre-extraction tree"
@@ -114,8 +114,8 @@
     {
       "rule": "missing-path",
       "path": "docs/cli-surface.md",
-      "named_path": "\u002eremote-dev/tools/remote_grep.py",
-      "resolved": "\u002eremote-dev/tools/remote_grep.py",
+      "named_path": ".remote-dev/tools/remote_grep.py",
+      "resolved": ".remote-dev/tools/remote_grep.py",
       "removed_by": "historical-evidence",
       "accepted_on": "2026-09-08",
       "why": "dated #85 CLI snapshot pinned by test_cli_surface_inventory.py; paths describe the pre-extraction tree"
@@ -123,8 +123,8 @@
     {
       "rule": "missing-path",
       "path": "docs/cli-surface.md",
-      "named_path": "\u002eremote-dev/tools/remote_job_status.py",
-      "resolved": "\u002eremote-dev/tools/remote_job_status.py",
+      "named_path": ".remote-dev/tools/remote_job_status.py",
+      "resolved": ".remote-dev/tools/remote_job_status.py",
       "removed_by": "historical-evidence",
       "accepted_on": "2026-09-08",
       "why": "dated #85 CLI snapshot pinned by test_cli_surface_inventory.py; paths describe the pre-extraction tree"
@@ -132,8 +132,8 @@
     {
       "rule": "missing-path",
       "path": "docs/cli-surface.md",
-      "named_path": "\u002eremote-dev/tools/remote_job_stop.py",
-      "resolved": "\u002eremote-dev/tools/remote_job_stop.py",
+      "named_path": ".remote-dev/tools/remote_job_stop.py",
+      "resolved": ".remote-dev/tools/remote_job_stop.py",
       "removed_by": "historical-evidence",
       "accepted_on": "2026-09-08",
       "why": "dated #85 CLI snapshot pinned by test_cli_surface_inventory.py; paths describe the pre-extraction tree"
@@ -141,8 +141,8 @@
     {
       "rule": "missing-path",
       "path": "docs/cli-surface.md",
-      "named_path": "\u002eremote-dev/tools/remote_job_tail.py",
-      "resolved": "\u002eremote-dev/tools/remote_job_tail.py",
+      "named_path": ".remote-dev/tools/remote_job_tail.py",
+      "resolved": ".remote-dev/tools/remote_job_tail.py",
       "removed_by": "historical-evidence",
       "accepted_on": "2026-09-08",
       "why": "dated #85 CLI snapshot pinned by test_cli_surface_inventory.py; paths describe the pre-extraction tree"
@@ -150,8 +150,8 @@
     {
       "rule": "missing-path",
       "path": "docs/cli-surface.md",
-      "named_path": "\u002eremote-dev/tools/remote_ls.py",
-      "resolved": "\u002eremote-dev/tools/remote_ls.py",
+      "named_path": ".remote-dev/tools/remote_ls.py",
+      "resolved": ".remote-dev/tools/remote_ls.py",
       "removed_by": "historical-evidence",
       "accepted_on": "2026-09-08",
       "why": "dated #85 CLI snapshot pinned by test_cli_surface_inventory.py; paths describe the pre-extraction tree"
@@ -159,8 +159,8 @@
     {
       "rule": "missing-path",
       "path": "docs/cli-surface.md",
-      "named_path": "\u002eremote-dev/tools/remote_monitor.py",
-      "resolved": "\u002eremote-dev/tools/remote_monitor.py",
+      "named_path": ".remote-dev/tools/remote_monitor.py",
+      "resolved": ".remote-dev/tools/remote_monitor.py",
       "removed_by": "historical-evidence",
       "accepted_on": "2026-09-08",
       "why": "dated #85 CLI snapshot pinned by test_cli_surface_inventory.py; paths describe the pre-extraction tree"
@@ -168,8 +168,8 @@
     {
       "rule": "missing-path",
       "path": "docs/cli-surface.md",
-      "named_path": "\u002eremote-dev/tools/remote_multi_edit.py",
-      "resolved": "\u002eremote-dev/tools/remote_multi_edit.py",
+      "named_path": ".remote-dev/tools/remote_multi_edit.py",
+      "resolved": ".remote-dev/tools/remote_multi_edit.py",
       "removed_by": "historical-evidence",
       "accepted_on": "2026-09-08",
       "why": "dated #85 CLI snapshot pinned by test_cli_surface_inventory.py; paths describe the pre-extraction tree"
@@ -177,8 +177,8 @@
     {
       "rule": "missing-path",
       "path": "docs/cli-surface.md",
-      "named_path": "\u002eremote-dev/tools/remote_probe.py",
-      "resolved": "\u002eremote-dev/tools/remote_probe.py",
+      "named_path": ".remote-dev/tools/remote_probe.py",
+      "resolved": ".remote-dev/tools/remote_probe.py",
       "removed_by": "historical-evidence",
       "accepted_on": "2026-09-08",
       "why": "dated #85 CLI snapshot pinned by test_cli_surface_inventory.py; paths describe the pre-extraction tree"
@@ -186,8 +186,8 @@
     {
       "rule": "missing-path",
       "path": "docs/cli-surface.md",
-      "named_path": "\u002eremote-dev/tools/remote_read.py",
-      "resolved": "\u002eremote-dev/tools/remote_read.py",
+      "named_path": ".remote-dev/tools/remote_read.py",
+      "resolved": ".remote-dev/tools/remote_read.py",
       "removed_by": "historical-evidence",
       "accepted_on": "2026-09-08",
       "why": "dated #85 CLI snapshot pinned by test_cli_surface_inventory.py; paths describe the pre-extraction tree"
@@ -195,8 +195,8 @@
     {
       "rule": "missing-path",
       "path": "docs/cli-surface.md",
-      "named_path": "\u002eremote-dev/tools/remote_write.py",
-      "resolved": "\u002eremote-dev/tools/remote_write.py",
+      "named_path": ".remote-dev/tools/remote_write.py",
+      "resolved": ".remote-dev/tools/remote_write.py",
       "removed_by": "historical-evidence",
       "accepted_on": "2026-09-08",
       "why": "dated #85 CLI snapshot pinned by test_cli_surface_inventory.py; paths describe the pre-extraction tree"
@@ -204,8 +204,8 @@
     {
       "rule": "missing-path",
       "path": "docs/cli-surface.md",
-      "named_path": "\u002eremote-dev/tools/sync_claude_skills.py",
-      "resolved": "\u002eremote-dev/tools/sync_claude_skills.py",
+      "named_path": ".remote-dev/tools/sync_claude_skills.py",
+      "resolved": ".remote-dev/tools/sync_claude_skills.py",
       "removed_by": "historical-evidence",
       "accepted_on": "2026-09-08",
       "why": "dated #85 CLI snapshot pinned by test_cli_surface_inventory.py; paths describe the pre-extraction tree"
@@ -213,8 +213,8 @@
     {
       "rule": "missing-path",
       "path": "docs/cli-surface.md",
-      "named_path": "\u002eremote-dev/tools/validate_remote_dev_scaffold.py",
-      "resolved": "\u002eremote-dev/tools/validate_remote_dev_scaffold.py",
+      "named_path": ".remote-dev/tools/validate_remote_dev_scaffold.py",
+      "resolved": ".remote-dev/tools/validate_remote_dev_scaffold.py",
       "removed_by": "historical-evidence",
       "accepted_on": "2026-09-08",
       "why": "dated #85 CLI snapshot pinned by test_cli_surface_inventory.py; paths describe the pre-extraction tree"
@@ -222,8 +222,8 @@
     {
       "rule": "missing-path",
       "path": "docs/cli-surface.md",
-      "named_path": "\u002eagents/skills/curate-workspace-knowledge/scripts/knowledge_curate.py",
-      "resolved": "\u002eagents/skills/curate-workspace-knowledge/scripts/knowledge_curate.py",
+      "named_path": ".agents/skills/curate-workspace-knowledge/scripts/knowledge_curate.py",
+      "resolved": ".agents/skills/curate-workspace-knowledge/scripts/knowledge_curate.py",
       "removed_by": "historical-evidence",
       "accepted_on": "2026-09-11",
       "why": "dated #85 CLI snapshot; management skills retired in favor of installed package APIs"
@@ -231,8 +231,8 @@
     {
       "rule": "missing-path",
       "path": "docs/cli-surface.md",
-      "named_path": "\u002eagents/skills/machine-management/scripts/machine_add.py",
-      "resolved": "\u002eagents/skills/machine-management/scripts/machine_add.py",
+      "named_path": ".agents/skills/machine-management/scripts/machine_add.py",
+      "resolved": ".agents/skills/machine-management/scripts/machine_add.py",
       "removed_by": "historical-evidence",
       "accepted_on": "2026-09-11",
       "why": "dated #85 CLI snapshot; management skills retired in favor of installed package APIs"
@@ -240,8 +240,8 @@
     {
       "rule": "missing-path",
       "path": "docs/cli-surface.md",
-      "named_path": "\u002eagents/skills/machine-management/scripts/machine_verify.py",
-      "resolved": "\u002eagents/skills/machine-management/scripts/machine_verify.py",
+      "named_path": ".agents/skills/machine-management/scripts/machine_verify.py",
+      "resolved": ".agents/skills/machine-management/scripts/machine_verify.py",
       "removed_by": "historical-evidence",
       "accepted_on": "2026-09-11",
       "why": "dated #85 CLI snapshot; management skills retired in favor of installed package APIs"
@@ -249,8 +249,8 @@
     {
       "rule": "missing-path",
       "path": "docs/cli-surface.md",
-      "named_path": "\u002eagents/skills/remote-code-parity/scripts/gc_runtime_cache.py",
-      "resolved": "\u002eagents/skills/remote-code-parity/scripts/gc_runtime_cache.py",
+      "named_path": ".agents/skills/remote-code-parity/scripts/gc_runtime_cache.py",
+      "resolved": ".agents/skills/remote-code-parity/scripts/gc_runtime_cache.py",
       "removed_by": "historical-evidence",
       "accepted_on": "2026-09-11",
       "why": "dated #85 CLI snapshot; management skills retired in favor of installed package APIs"
@@ -258,8 +258,8 @@
     {
       "rule": "missing-path",
       "path": "docs/cli-surface.md",
-      "named_path": "\u002eagents/skills/remote-code-parity/scripts/parity_sync.py",
-      "resolved": "\u002eagents/skills/remote-code-parity/scripts/parity_sync.py",
+      "named_path": ".agents/skills/remote-code-parity/scripts/parity_sync.py",
+      "resolved": ".agents/skills/remote-code-parity/scripts/parity_sync.py",
       "removed_by": "historical-evidence",
       "accepted_on": "2026-09-11",
       "why": "dated #85 CLI snapshot; management skills retired in favor of installed package APIs"
@@ -267,8 +267,8 @@
     {
       "rule": "missing-path",
       "path": "docs/cli-surface.md",
-      "named_path": "\u002eagents/skills/remote-code-parity/scripts/parity_watch.py",
-      "resolved": "\u002eagents/skills/remote-code-parity/scripts/parity_watch.py",
+      "named_path": ".agents/skills/remote-code-parity/scripts/parity_watch.py",
+      "resolved": ".agents/skills/remote-code-parity/scripts/parity_watch.py",
       "removed_by": "historical-evidence",
       "accepted_on": "2026-09-11",
       "why": "dated #85 CLI snapshot; management skills retired in favor of installed package APIs"
@@ -276,8 +276,8 @@
     {
       "rule": "missing-path",
       "path": "docs/cli-surface.md",
-      "named_path": "\u002eagents/skills/remote-code-parity/scripts/remote_code_parity.py",
-      "resolved": "\u002eagents/skills/remote-code-parity/scripts/remote_code_parity.py",
+      "named_path": ".agents/skills/remote-code-parity/scripts/remote_code_parity.py",
+      "resolved": ".agents/skills/remote-code-parity/scripts/remote_code_parity.py",
       "removed_by": "historical-evidence",
       "accepted_on": "2026-09-11",
       "why": "dated #85 CLI snapshot; management skills retired in favor of installed package APIs"
@@ -285,8 +285,8 @@
     {
       "rule": "missing-path",
       "path": "docs/cli-surface.md",
-      "named_path": "\u002eagents/skills/remote-code-parity/scripts/transport_benchmark.py",
-      "resolved": "\u002eagents/skills/remote-code-parity/scripts/transport_benchmark.py",
+      "named_path": ".agents/skills/remote-code-parity/scripts/transport_benchmark.py",
+      "resolved": ".agents/skills/remote-code-parity/scripts/transport_benchmark.py",
       "removed_by": "historical-evidence",
       "accepted_on": "2026-09-11",
       "why": "dated #85 CLI snapshot; management skills retired in favor of installed package APIs"
@@ -294,8 +294,8 @@
     {
       "rule": "missing-path",
       "path": "docs/cli-surface.md",
-      "named_path": "\u002eagents/skills/session-management/scripts/session_diff.py",
-      "resolved": "\u002eagents/skills/session-management/scripts/session_diff.py",
+      "named_path": ".agents/skills/session-management/scripts/session_diff.py",
+      "resolved": ".agents/skills/session-management/scripts/session_diff.py",
       "removed_by": "historical-evidence",
       "accepted_on": "2026-09-11",
       "why": "dated #85 CLI snapshot; management skills retired in favor of installed package APIs"
@@ -303,8 +303,8 @@
     {
       "rule": "missing-path",
       "path": "docs/cli-surface.md",
-      "named_path": "\u002eagents/skills/session-management/scripts/session_gc.py",
-      "resolved": "\u002eagents/skills/session-management/scripts/session_gc.py",
+      "named_path": ".agents/skills/session-management/scripts/session_gc.py",
+      "resolved": ".agents/skills/session-management/scripts/session_gc.py",
       "removed_by": "historical-evidence",
       "accepted_on": "2026-09-11",
       "why": "dated #85 CLI snapshot; management skills retired in favor of installed package APIs"
@@ -312,11 +312,263 @@
     {
       "rule": "missing-path",
       "path": "docs/cli-surface.md",
-      "named_path": "\u002eagents/skills/session-management/scripts/session_group.py",
-      "resolved": "\u002eagents/skills/session-management/scripts/session_group.py",
+      "named_path": ".agents/skills/session-management/scripts/session_group.py",
+      "resolved": ".agents/skills/session-management/scripts/session_group.py",
       "removed_by": "historical-evidence",
       "accepted_on": "2026-09-11",
       "why": "dated #85 CLI snapshot; management skills retired in favor of installed package APIs"
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/cli-surface.md",
+      "named_path": ".agents/hooks/knowledge_session_end.py",
+      "resolved": ".agents/hooks/knowledge_session_end.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-11",
+      "why": "Frozen original PR 85 table: this path describes the pre-extraction tree. Agent-only migration removed the current entry; current routing is checked separately."
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/cli-surface.md",
+      "named_path": ".agents/scripts/knowledge_capture.py",
+      "resolved": ".agents/scripts/knowledge_capture.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-11",
+      "why": "Frozen original PR 85 table: this path describes the pre-extraction tree. Agent-only migration removed the current entry; current routing is checked separately."
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/cli-surface.md",
+      "named_path": ".agents/scripts/knowledge_query.py",
+      "resolved": ".agents/scripts/knowledge_query.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-11",
+      "why": "Frozen original PR 85 table: this path describes the pre-extraction tree. Agent-only migration removed the current entry; current routing is checked separately."
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/cli-surface.md",
+      "named_path": ".agents/scripts/knowledge_validate.py",
+      "resolved": ".agents/scripts/knowledge_validate.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-11",
+      "why": "Frozen original PR 85 table: this path describes the pre-extraction tree. Agent-only migration removed the current entry; current routing is checked separately."
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/cli-surface.md",
+      "named_path": ".agents/scripts/remote_artifact_manifest.py",
+      "resolved": ".agents/scripts/remote_artifact_manifest.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-11",
+      "why": "Frozen original PR 85 table: this path describes the pre-extraction tree. Agent-only migration removed the current entry; current routing is checked separately."
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/cli-surface.md",
+      "named_path": ".agents/scripts/remote_artifact_pull.py",
+      "resolved": ".agents/scripts/remote_artifact_pull.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-11",
+      "why": "Frozen original PR 85 table: this path describes the pre-extraction tree. Agent-only migration removed the current entry; current routing is checked separately."
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/cli-surface.md",
+      "named_path": ".agents/scripts/remote_artifact_push.py",
+      "resolved": ".agents/scripts/remote_artifact_push.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-11",
+      "why": "Frozen original PR 85 table: this path describes the pre-extraction tree. Agent-only migration removed the current entry; current routing is checked separately."
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/cli-surface.md",
+      "named_path": ".agents/scripts/remote_cleanup.py",
+      "resolved": ".agents/scripts/remote_cleanup.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-11",
+      "why": "Frozen original PR 85 table: this path describes the pre-extraction tree. Agent-only migration removed the current entry; current routing is checked separately."
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/cli-surface.md",
+      "named_path": ".agents/scripts/remote_exec.py",
+      "resolved": ".agents/scripts/remote_exec.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-11",
+      "why": "Frozen original PR 85 table: this path describes the pre-extraction tree. Agent-only migration removed the current entry; current routing is checked separately."
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/cli-surface.md",
+      "named_path": ".agents/scripts/remote_job_collect.py",
+      "resolved": ".agents/scripts/remote_job_collect.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-11",
+      "why": "Frozen original PR 85 table: this path describes the pre-extraction tree. Agent-only migration removed the current entry; current routing is checked separately."
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/cli-surface.md",
+      "named_path": ".agents/scripts/remote_job_start.py",
+      "resolved": ".agents/scripts/remote_job_start.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-11",
+      "why": "Frozen original PR 85 table: this path describes the pre-extraction tree. Agent-only migration removed the current entry; current routing is checked separately."
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/cli-surface.md",
+      "named_path": ".agents/scripts/remote_job_status.py",
+      "resolved": ".agents/scripts/remote_job_status.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-11",
+      "why": "Frozen original PR 85 table: this path describes the pre-extraction tree. Agent-only migration removed the current entry; current routing is checked separately."
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/cli-surface.md",
+      "named_path": ".agents/scripts/remote_job_stop.py",
+      "resolved": ".agents/scripts/remote_job_stop.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-11",
+      "why": "Frozen original PR 85 table: this path describes the pre-extraction tree. Agent-only migration removed the current entry; current routing is checked separately."
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/cli-surface.md",
+      "named_path": ".agents/scripts/remote_job_tail.py",
+      "resolved": ".agents/scripts/remote_job_tail.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-11",
+      "why": "Frozen original PR 85 table: this path describes the pre-extraction tree. Agent-only migration removed the current entry; current routing is checked separately."
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/cli-surface.md",
+      "named_path": ".agents/scripts/remote_probe.py",
+      "resolved": ".agents/scripts/remote_probe.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-11",
+      "why": "Frozen original PR 85 table: this path describes the pre-extraction tree. Agent-only migration removed the current entry; current routing is checked separately."
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/cli-surface.md",
+      "named_path": ".agents/scripts/remote_service_logs.py",
+      "resolved": ".agents/scripts/remote_service_logs.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-11",
+      "why": "Frozen original PR 85 table: this path describes the pre-extraction tree. Agent-only migration removed the current entry; current routing is checked separately."
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/cli-surface.md",
+      "named_path": ".agents/scripts/remote_service_start.py",
+      "resolved": ".agents/scripts/remote_service_start.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-11",
+      "why": "Frozen original PR 85 table: this path describes the pre-extraction tree. Agent-only migration removed the current entry; current routing is checked separately."
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/cli-surface.md",
+      "named_path": ".agents/scripts/remote_service_status.py",
+      "resolved": ".agents/scripts/remote_service_status.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-11",
+      "why": "Frozen original PR 85 table: this path describes the pre-extraction tree. Agent-only migration removed the current entry; current routing is checked separately."
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/cli-surface.md",
+      "named_path": ".agents/scripts/remote_service_stop.py",
+      "resolved": ".agents/scripts/remote_service_stop.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-11",
+      "why": "Frozen original PR 85 table: this path describes the pre-extraction tree. Agent-only migration removed the current entry; current routing is checked separately."
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/cli-surface.md",
+      "named_path": ".agents/scripts/remote_sync_apply.py",
+      "resolved": ".agents/scripts/remote_sync_apply.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-11",
+      "why": "Frozen original PR 85 table: this path describes the pre-extraction tree. Agent-only migration removed the current entry; current routing is checked separately."
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/cli-surface.md",
+      "named_path": ".agents/scripts/remote_sync_plan.py",
+      "resolved": ".agents/scripts/remote_sync_plan.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-11",
+      "why": "Frozen original PR 85 table: this path describes the pre-extraction tree. Agent-only migration removed the current entry; current routing is checked separately."
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/cli-surface.md",
+      "named_path": ".agents/scripts/remote_target_resolve.py",
+      "resolved": ".agents/scripts/remote_target_resolve.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-11",
+      "why": "Frozen original PR 85 table: this path describes the pre-extraction tree. Agent-only migration removed the current entry; current routing is checked separately."
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/cli-surface.md",
+      "named_path": ".agents/scripts/run_manifest.py",
+      "resolved": ".agents/scripts/run_manifest.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-11",
+      "why": "Frozen original PR 85 table: this path describes the pre-extraction tree. Agent-only migration removed the current entry; current routing is checked separately."
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/cli-surface.md",
+      "named_path": ".agents/skills/vllm-ascend-benchmark/scripts/bench_compare.py",
+      "resolved": ".agents/skills/vllm-ascend-benchmark/scripts/bench_compare.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-11",
+      "why": "Frozen original PR 85 table: this path describes the pre-extraction tree. Agent-only migration removed the current entry; current routing is checked separately."
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/cli-surface.md",
+      "named_path": ".agents/skills/vllm-ascend-serving/scripts/serve_probe_npus.py",
+      "resolved": ".agents/skills/vllm-ascend-serving/scripts/serve_probe_npus.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-11",
+      "why": "Frozen original PR 85 table: this path describes the pre-extraction tree. Agent-only migration removed the current entry; current routing is checked separately."
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/cli-surface.md",
+      "named_path": ".agents/skills/vllm-ascend-serving/scripts/serve_start.py",
+      "resolved": ".agents/skills/vllm-ascend-serving/scripts/serve_start.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-11",
+      "why": "Frozen original PR 85 table: this path describes the pre-extraction tree. Agent-only migration removed the current entry; current routing is checked separately."
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/cli-surface.md",
+      "named_path": ".agents/skills/vllm-ascend-serving/scripts/serve_status.py",
+      "resolved": ".agents/skills/vllm-ascend-serving/scripts/serve_status.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-11",
+      "why": "Frozen original PR 85 table: this path describes the pre-extraction tree. Agent-only migration removed the current entry; current routing is checked separately."
+    },
+    {
+      "rule": "missing-path",
+      "path": "docs/cli-surface.md",
+      "named_path": ".agents/skills/vllm-ascend-serving/scripts/serve_stop.py",
+      "resolved": ".agents/skills/vllm-ascend-serving/scripts/serve_stop.py",
+      "removed_by": "historical-evidence",
+      "accepted_on": "2026-09-11",
+      "why": "Frozen original PR 85 table: this path describes the pre-extraction tree. Agent-only migration removed the current entry; current routing is checked separately."
     }
   ],
   "accepted_counts_by_attribution": {

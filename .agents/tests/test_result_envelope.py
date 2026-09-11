@@ -76,7 +76,7 @@ def base_command(*extra: str) -> dict:
     return make_command(
         argv=[
             "python3",
-            ".agents/skills/vllm-ascend-serving/scripts/serve_start.py",
+            ".agents/skills/vllm-ascend-serving/scripts/serving.py",
             *extra,
         ],
         cwd=".",
@@ -89,7 +89,7 @@ def base_envelope(**overrides) -> dict:
     command = overrides.pop("command", base_command("--session-id", "demo-1"))
     payload = {
         "operation": make_operation(
-            entry_point=".agents/skills/vllm-ascend-serving/scripts/serve_start.py",
+            entry_point=".agents/skills/vllm-ascend-serving/scripts/serving.py",
             action="serve_start",
             skill="vllm-ascend-serving",
             target_kind="session",

@@ -3,11 +3,11 @@
 # explicit, invocation-scoped approvals for the exact tools they will use.
 #
 # remote-dev and vaws-coordinator are installed workspace packages
-# (`uv sync`). The MCP servers run as `python -m ...` under `.venv`.
+# (`python .agents/scripts/vaws_deps.py sync`). The MCP servers run as `python -m ...` under `.venv`.
 approval_policy = "on-request"
 
 [mcp_servers.remote_dev]
-command = "/absolute/path/to/vllm-ascend-workspace/.venv/bin/python"
+command = "/absolute/path/to/vllm-ascend-workspace/.vaws-local/venvs/linux/bin/python"
 args = ["-m", "remote_dev.mcp.server"]
 cwd = "/absolute/path/to/vllm-ascend-workspace"
 startup_timeout_sec = 20
@@ -20,7 +20,7 @@ REMOTE_DEV_STATE_DIR = "/absolute/path/to/vllm-ascend-workspace/.vaws-local/remo
 REMOTE_DEV_SSH_MUX_DIR = "~/.ssh/vaws-mux"
 
 [mcp_servers.vaws_task]
-command = "/absolute/path/to/vllm-ascend-workspace/.venv/bin/python"
+command = "/absolute/path/to/vllm-ascend-workspace/.vaws-local/venvs/linux/bin/python"
 args = ["-m", "vaws_coordinator", "task-server"]
 cwd = "/absolute/path/to/vllm-ascend-workspace"
 startup_timeout_sec = 20
@@ -31,7 +31,7 @@ enabled = true
 VAWS_AGENT_SESSIONS_DIR = "/absolute/path/to/vllm-ascend-workspace/.vaws-local/agent-sessions"
 
 [mcp_servers.vaws_knowledge]
-command = "/absolute/path/to/vllm-ascend-workspace/.venv/bin/python"
+command = "/absolute/path/to/vllm-ascend-workspace/.vaws-local/venvs/linux/bin/python"
 args = ["-m", "vaws_knowledge.server.mcp_server"]
 cwd = "/absolute/path/to/vllm-ascend-workspace"
 startup_timeout_sec = 20
@@ -52,13 +52,6 @@ matcher = "^Bash$|^apply_patch$|^mcp__(remote-dev|remote_dev)__.*"
 
 [[hooks.PreToolUse.hooks]]
 type = "command"
-command = '/absolute/path/to/vllm-ascend-workspace/.venv/bin/python -m remote_dev.hooks.codex_remote_guard'
+command = '/absolute/path/to/vllm-ascend-workspace/.vaws-local/venvs/linux/bin/python -m remote_dev.hooks.codex_remote_guard'
 timeout = 30
 statusMessage = "Checking remote development policy"
-
-[[hooks.SessionEnd]]
-
-[[hooks.SessionEnd.hooks]]
-type = "command"
-command = 'python3 "$(git rev-parse --show-toplevel)/.agents/hooks/knowledge_session_end.py"'
-timeout = 3

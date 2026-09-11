@@ -693,7 +693,7 @@ def _main_standalone(args: argparse.Namespace) -> None:
     serving = ROOT / ".agents" / "skills" / "vllm-ascend-serving" / "scripts"
     cmd = [
         sys.executable,
-        str(serving / "serve_start.py"),
+        str(serving / "serving.py"), "start",
         "--model", args.model,
         "--service", args.service or "vllm-memprof",
     ]
@@ -772,7 +772,7 @@ def _main_standalone(args: argparse.Namespace) -> None:
         manifest["after_infer_hbm"] = collect_npu_smi(ep, "after_infer", run_dir)
         stop_cmd = [
             sys.executable,
-            str(serving / "serve_stop.py"),
+            str(serving / "serving.py"), "stop",
             "--service", args.service or "vllm-memprof",
             "--force",
         ]
@@ -794,7 +794,7 @@ def _main_standalone(args: argparse.Namespace) -> None:
     except Exception:
         stop_cmd = [
             sys.executable,
-            str(serving / "serve_stop.py"),
+            str(serving / "serving.py"), "stop",
             "--service", args.service or "vllm-memprof",
             "--force",
         ]

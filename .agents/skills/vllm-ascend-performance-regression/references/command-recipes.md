@@ -1,40 +1,14 @@
-# Performance regression command recipes
+# Agent call
 
-## Plan
+From the repository root:
 
-```bash
-python -B .agents/skills/vllm-ascend-performance-regression/scripts/performance_regression.py plan \
-  --output-dir .vaws-local/performance-regression/change-001 \
-  --config /path/to/experiment-config.json
+```text
+python .agents/skills/vllm-ascend-performance-regression/scripts/performance_regression.py --config experiment.json
 ```
 
-Read the returned `shared` object and `schedule.json`.
+The business config names baseline.sources and candidate.sources (actual vllm and vllm-ascend worktrees), benchmark options, runs, warmups and thresholds. The collector binds each source, waits for its managed service, warms each launch, alternates A/B order, records runtime observations, and releases owned executions. --results accepts existing measurement files for report-only use. Missing runtime evidence yields an inconclusive report.
 
-## Normalize and record
-
-After executing the next scheduled Benchmark:
-
-```bash
-python -B .agents/skills/vllm-ascend-performance-regression/scripts/performance_regression.py normalize \
-  --result /path/to/raw-benchmark-result.json \
-  --output /path/to/normalized-measurement.json \
-  --state baseline \
-  --phase measure \
-  --ordinal 1 \
-  --shared '{"machine":"example"}'
-
-python -B .agents/skills/vllm-ascend-performance-regression/scripts/performance_regression.py record \
-  --output-dir .vaws-local/performance-regression/change-001 \
-  --result /path/to/normalized-measurement.json
-```
-
-Do not skip ahead. The script returns the remaining entry count.
-
-## Analyze
-
-```bash
-python -B .agents/skills/vllm-ascend-performance-regression/scripts/performance_regression.py analyze \
-  --output-dir .vaws-local/performance-regression/change-001
-```
-
-Inspect `report.md`, then use the linked raw Benchmark results for deeper review.
+Use `--help` for exact argument details. Report output directories are optional
+where supported; the script creates a fresh directory under `.vaws-local/`.
+Schema versions and report identifiers are generated internally. Input files
+describe business cases or contain observed results, rather than task ownership.

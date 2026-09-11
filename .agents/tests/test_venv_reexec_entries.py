@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SKIP_ENV = "VAWS_SKIP_VENV_REEXEC"
 REEXEC_ENV = "VAWS_VENV_REEXEC"
 SENTINEL = ("vaws_knowledge", "remote_dev", "vaws_coordinator")
-WRAPPERS = ("vaws_knowledge_v2", "vaws_knowledge_service")
+WRAPPERS = ("vaws_knowledge_service",)
 IMPORT_RE = re.compile(
     r"^\s*(?:import|from)\s+("
     + "|".join(re.escape(name) for name in (*SENTINEL, *WRAPPERS))
@@ -79,7 +79,7 @@ class VenvReexecEntryTests(unittest.TestCase):
         interpreter = _system_python()
         entries = packaged_entries()
         self.assertTrue(entries)
-        self.assertIn(ROOT / ".agents/scripts/knowledge_capture.py", entries)
+        self.assertIn(ROOT / ".agents/scripts/knowledge_setup.py", entries)
         env = os.environ.copy()
         env.pop("VIRTUAL_ENV", None)
         env.pop("PYTHONPATH", None)

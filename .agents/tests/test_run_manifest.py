@@ -14,7 +14,6 @@ LIB = ROOT / ".agents" / "lib"
 if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
-import vaws_knowledge_v2 as v2  # noqa: E402
 from vaws_coordinator.run_manifest import (  # noqa: E402
     RunManifestError,
     add_artifact,
@@ -47,25 +46,6 @@ class RunManifestTests(unittest.TestCase):
         self.assertNotEqual(manifest["code"]["source_head"], "0" * 40)
         self.assertRegex(manifest["code"]["snapshot_commit"], r"^[0-9a-f]{40}$")
         self.assertNotEqual(manifest["code"]["snapshot_commit"], "0" * 40)
-
-    def test_cli_workspace_root_defaults_to_cwd(self) -> None:
-        import importlib.util
-
-        scripts = ROOT / ".agents" / "scripts"
-        spec = importlib.util.spec_from_file_location(
-            "run_manifest_cli", scripts / "run_manifest.py"
-        )
-        assert spec is not None and spec.loader is not None
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        parser = module.build_parser()
-        init_help = parser._subparsers._group_actions[0].choices["init"].format_help()
-        self.assertIn("current working directory", init_help)
-        self.assertIn("--workspace-root", init_help)
-        args = parser.parse_args(
-            ["init", "--run-type", "debug", "--output", "manifest.json"]
-        )
-        self.assertEqual(args.workspace_root, Path.cwd())
 
     def test_round_trip_and_status_transition(self) -> None:
         manifest = new_manifest(
@@ -125,52 +105,6 @@ class RunManifestTests(unittest.TestCase):
                 updated_at=NOW,
             )
 
-
-class KnowledgeValidationTests(unittest.TestCase):
-    def test_repository_knowledge_files_are_valid(self) -> None:
-        knowledge_dir = ROOT / ".agents" / "knowledge"
-        names = {path.name for path, _kind in v2.iter_documents(knowledge_dir)}
-        self.assertTrue(names)
-        self.assertTrue(all(name.endswith(".v2.yaml") for name in names))
-        extras = {
-            path.name
-            for path in knowledge_dir.iterdir()
-            if path.is_file() and not path.name.endswith(".v2.yaml")
-        }
-        self.assertEqual(extras, set())
-        entries, problems = v2.load_entries(knowledge_dir)
-        self.assertEqual(problems, [])
-        self.assertGreaterEqual(len(entries), 1)
-
-    def test_unknown_support_is_not_implicitly_valid(self) -> None:
-        document = v2.new_document("model-capabilities", now="2026-07-25")
-        document["entries"] = [
-            {
-                "uuid": v2.derived_uuid("test", "model-capabilities", "bad-entry"),
-                "slug": "bad-entry",
-                "content_hash": "sha256:" + "0" * 64,
-                "status": "unknown",
-                "confidence": "low",
-                "scope": {},
-                "provenance": {
-                    "contributor": "test",
-                    "origin_repo": "test/test",
-                    "submitted_at": "2026-07-25",
-                    "redaction_profile": "r2",
-                },
-                "lifecycle": {
-                    "first_seen": "2026-07-25",
-                    "updated_at": "2026-07-25",
-                    "superseded_by": None,
-                    "resolved_by": None,
-                },
-                "rule": {"summary": "x", "symptom": "x", "root_cause": "x", "resolution": "x"},
-            }
-        ]
-        with self.assertRaises(v2.KnowledgeV2Error):
-            v2.validate_document(
-                document, expected_kind="model-capabilities", path="test.v2.yaml"
-            )
 
 
 if __name__ == "__main__":

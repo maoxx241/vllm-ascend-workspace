@@ -5,7 +5,7 @@ Status: current
 Run the workspace's local Python tests with visible progress and retained evidence:
 
 ```powershell
-uv sync --locked --group dev
+python .agents/scripts/vaws_deps.py sync --locked --group dev
 uv run python .agents/scripts/local_tests.py --jobs 2 --timeout 600
 ```
 

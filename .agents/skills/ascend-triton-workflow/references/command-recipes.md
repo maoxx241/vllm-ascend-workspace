@@ -1,33 +1,14 @@
-# Ascend Triton workflow command recipes
+# Agent call
 
-## Plan
+From the repository root:
 
-```bash
-python -B .agents/skills/ascend-triton-workflow/scripts/triton_workflow.py plan \
-  --output-dir .vaws-local/ascend-triton/workflows/softmax-001 \
-  --config /path/to/workflow-config.json
+```text
+python .agents/skills/ascend-triton-workflow/scripts/triton_workflow.py --config operator.json --development development/manifest.json --validation validation/manifest.json --optimization optimization/manifest.json
 ```
 
-Read `stage-plan.json` and execute only the next stage with its owning Skill.
+The config contains op_name, source, target, cases and required_stages. One report call verifies stage scope, actual artifacts, passing cases and kernel identity. Missing or unrelated evidence cannot complete the workflow. Stage identifiers and linking are internal.
 
-## Link one child
-
-```bash
-python -B .agents/skills/ascend-triton-workflow/scripts/triton_workflow.py link \
-  --output-dir .vaws-local/ascend-triton/workflows/softmax-001 \
-  --stage validation \
-  --manifest /path/to/validation/manifest.json
-```
-
-The child manifest must already be terminal and must name this workflow as its
-parent.
-
-## Finalize
-
-```bash
-python -B .agents/skills/ascend-triton-workflow/scripts/triton_workflow.py finalize \
-  --output-dir .vaws-local/ascend-triton/workflows/softmax-001
-```
-
-Inspect `workflow-summary.json` and `workflow-report.md`. Do not infer completion
-from console output alone.
+Use `--help` for exact argument details. Report output directories are optional
+where supported; the script creates a fresh directory under `.vaws-local/`.
+Schema versions and report identifiers are generated internally. Input files
+describe business cases or contain observed results, rather than task ownership.

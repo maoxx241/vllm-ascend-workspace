@@ -73,7 +73,7 @@ class WorkflowLockRefTests(unittest.TestCase):
             if path.suffix in {".yml", ".yaml"}:
                 texts.append(path.read_text(encoding="utf-8"))
         blob = "\n".join(texts)
-        self.assertIn("uv sync --locked", blob)
+        self.assertIn("vaws_deps.py sync --locked", blob)
 
 
 if __name__ == "__main__":

@@ -114,114 +114,24 @@ VL_DEFAULT_IMAGE = (
 # Workspace knowledge hooks (advisory only, never blocking)
 # ---------------------------------------------------------------------------
 
-def _knowledge_api() -> tuple[Any, Any, Any] | None:
-    """Lazily import the workspace knowledge API; None when unavailable.
-
-    Importing this skill's ``_common`` already put ``.agents/lib`` on
-    sys.path (via the serving skill's common). The import stays lazy so a
-    broken/missing lib can never block collection.
-    """
+def _knowledge_lookup(text: str, knowledge_dir: Path | None) -> dict[str, Any]:
     try:
-        from vaws_knowledge_service import (  # type: ignore[import-not-found]
-            KnowledgeError,
-            get_knowledge_entry,
-            query_knowledge,
-        )
-    except ImportError:
-        return None
-    return KnowledgeError, query_knowledge, get_knowledge_entry
+        from vaws_knowledge_service import query_knowledge
+        result = query_knowledge(knowledge_dir=knowledge_dir or KNOWLEDGE_DIR,
+                                 query=text, limit=KNOWLEDGE_QUERY_LIMIT)
+    except Exception as exc:
+        result = {"results": [], "unavailable": True, "degraded": True, "index_detail": str(exc)}
+    if result.get("unavailable"):
+        emit_progress("knowledge", "lookup unavailable", detail=result.get("index_detail"))
+    return result
 
 
-def knowledge_preflight_advisories(
-    model_name: str,
-    tp: int,
-    mode: str,
-    *,
-    knowledge_dir: Path | None = None,
-) -> list[dict[str, Any]]:
-    """Query the knowledge store with "<model> tp<N> <mode>" before collecting.
-
-    Returns one advisory per hit (entry_id/kind/summary/score) across
-    model-capabilities, parallelism-compatibility and known-failure-signatures
-    (limit 3 per kind). Empty array on no hits, empty store, or any
-    knowledge-side failure.
-    """
-    knowledge_dir = knowledge_dir or KNOWLEDGE_DIR
-    api = _knowledge_api()
-    if api is None:
-        emit_progress("knowledge", "vaws_knowledge not importable; preflight advisory skipped")
-        return []
-    KnowledgeError, query_knowledge, _ = api
-    query = f"{model_name} tp{tp} {mode}"
-    advisories: list[dict[str, Any]] = []
-    try:
-        for kind in KNOWLEDGE_ADVISORY_KINDS:
-            for match in query_knowledge(
-                knowledge_dir=knowledge_dir,
-                query=query,
-                kinds=[kind],
-                limit=KNOWLEDGE_QUERY_LIMIT,
-            min_score=KNOWLEDGE_MIN_SCORE,
-            ):
-                advisories.append(
-                    {
-                        "entry_id": match["id"],
-                        "kind": match["kind"],
-                        "summary": match["summary"],
-                        "score": match["score"],
-                    }
-                )
-    except Exception as exc:  # noqa: BLE001 - advisories must never block collection
-        emit_progress("knowledge", f"preflight advisory skipped: {exc}")
-        return []
-    return advisories
+def knowledge_preflight_advisories(model_name: str, tp: int, mode: str, *, knowledge_dir=None):
+    return _knowledge_lookup(f"{model_name} tp{tp} {mode}", knowledge_dir)
 
 
-def knowledge_failure_matches(
-    signature_text: str,
-    *,
-    knowledge_dir: Path | None = None,
-) -> list[dict[str, Any]]:
-    """Match an observed failure signature against known-failure-signatures.
-
-    Returns the top-3 matches (entry_id/kind/summary/resolution/score);
-    explicit empty array when nothing matches or the store is unusable.
-    """
-    knowledge_dir = knowledge_dir or KNOWLEDGE_DIR
-    api = _knowledge_api()
-    if api is None:
-        emit_progress("knowledge", "vaws_knowledge not importable; failure-signature lookup skipped")
-        return []
-    KnowledgeError, query_knowledge, get_knowledge_entry = api
-    try:
-        matches = query_knowledge(
-            knowledge_dir=knowledge_dir,
-            query=signature_text,
-            kinds=["known-failure-signatures"],
-            limit=KNOWLEDGE_QUERY_LIMIT,
-            min_score=KNOWLEDGE_MIN_SCORE,
-        )
-        out: list[dict[str, Any]] = []
-        for match in matches:
-            resolution = ""
-            full = get_knowledge_entry(knowledge_dir=knowledge_dir, entry_id=match["id"])
-            if full:
-                rule = full.get("entry", {}).get("rule", {})
-                if isinstance(rule, dict):
-                    resolution = str(rule.get("resolution") or "")
-            out.append(
-                {
-                    "entry_id": match["id"],
-                    "kind": match["kind"],
-                    "summary": match["summary"],
-                    "resolution": resolution,
-                    "score": match["score"],
-                }
-            )
-    except Exception as exc:  # noqa: BLE001 - failure reporting must not recurse
-        emit_progress("knowledge", f"failure-signature lookup skipped: {exc}")
-        return []
-    return out
+def knowledge_failure_matches(signature_text: str, *, knowledge_dir=None):
+    return _knowledge_lookup(signature_text, knowledge_dir)
 
 
 def _failure_payload(message: str) -> dict[str, Any]:
@@ -258,63 +168,21 @@ def _post_json(url: str, payload: dict[str, Any], timeout: int) -> tuple[int, by
         return resp.status, resp.read()
 
 
-def _parse_sips_dimensions(path: Path) -> tuple[int, int]:
-    result = subprocess.run(
-        ["sips", "-g", "pixelWidth", "-g", "pixelHeight", str(path)],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(f"failed to inspect image via sips: {result.stderr[:500]}")
-    width = height = None
-    for line in result.stdout.splitlines():
-        line = line.strip()
-        if line.startswith("pixelWidth:"):
-            width = int(line.split(":", 1)[1].strip())
-        elif line.startswith("pixelHeight:"):
-            height = int(line.split(":", 1)[1].strip())
-    if width is None or height is None:
-        raise RuntimeError(f"unexpected sips output: {result.stdout}")
-    return width, height
-
-
 def _build_image_data_url(image_path: Path, target_height: int) -> tuple[str, dict[str, Any]]:
-    src_w, src_h = _parse_sips_dimensions(image_path)
-    if src_h != target_height:
-        target_w = max(1, round(src_w * target_height / src_h))
-        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
-            resized_path = Path(tmp.name)
-        result = subprocess.run(
-            [
-                "sips",
-                "--resampleHeightWidth", str(target_height), str(target_w),
-                str(image_path),
-                "--out", str(resized_path),
-            ],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if result.returncode != 0:
-            raise RuntimeError(f"failed to resize image via sips: {result.stderr[:500]}")
-        use_path = resized_path
-        final_w, final_h = _parse_sips_dimensions(use_path)
-    else:
-        use_path = image_path
-        final_w, final_h = src_w, src_h
-
-    raw = use_path.read_bytes()
-    data_url = "data:image/png;base64," + base64.b64encode(raw).decode("ascii")
-    meta = {
-        "source_path": str(image_path),
-        "encoded_path": str(use_path),
-        "source_width": src_w,
-        "source_height": src_h,
-        "encoded_width": final_w,
-        "encoded_height": final_h,
-    }
-    return data_url, meta
+    from io import BytesIO
+    from PIL import Image, ImageOps
+    if target_height < 1:
+        raise ValueError("image height must be positive")
+    with Image.open(image_path) as source:
+        corrected = ImageOps.exif_transpose(source)
+        src_w, src_h = corrected.size
+        final_w = max(1, round(src_w * target_height / src_h))
+        encoded = corrected.convert("RGB").resize((final_w, target_height), Image.Resampling.LANCZOS)
+        buffer = BytesIO()
+        encoded.save(buffer, format="PNG")
+    data_url = "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode("ascii")
+    return data_url, {"source_path": str(image_path), "source_width": src_w, "source_height": src_h,
+                      "encoded_width": final_w, "encoded_height": target_height, "encoding": "PNG"}
 
 
 def _build_long_text(token_count: int, *, prefix: str, request_index: int) -> str:
@@ -897,8 +765,8 @@ def main(argv: list[str] | None = None) -> int:
         manifest["knowledge_advisories"] = advisories
         emit_progress(
             "knowledge",
-            f"preflight advisories: {len(advisories)} knowledge entrie(s) matched",
-            advisories=[item["entry_id"] for item in advisories] or None,
+            f"preflight advisories: {len(advisories.get('results', []))} knowledge entrie(s) matched",
+            advisories=[item.get("ref") or item.get("uri") for item in advisories.get("results", [])] or None,
         )
 
         started_service = False

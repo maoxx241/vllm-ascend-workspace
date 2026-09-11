@@ -145,7 +145,7 @@ class DistributedDebugTests(unittest.TestCase):
             config_path = root / "config.json"
             config_path.write_text(json.dumps(config()), encoding="utf-8")
             output = root / "case"
-            distributed.init_case(output, config_path=config_path, created_at=NOW)
+            distributed._prepare_report(output, config_path=config_path, created_at=NOW)
             events_path = root / "events.jsonl"
             rows = []
             for kind in ("collective_enter", "collective_exit"):
@@ -154,10 +154,10 @@ class DistributedDebugTests(unittest.TestCase):
                 "".join(json.dumps(row) + "\n" for row in rows),
                 encoding="utf-8",
             )
-            distributed.ingest_events(
+            distributed._ingest_events(
                 output, events_path=events_path, updated_at=NOW
             )
-            result = distributed.analyze_case(output, updated_at=NOW)
+            result = distributed._analyze_report(output, updated_at=NOW)
             self.assertEqual(result["status"], "no-mismatch-detected")
             self.assertEqual(result["incomplete_ranks"], [0, 1])
             self.assertTrue((output / "report.md").is_file())
@@ -175,7 +175,7 @@ class DistributedDebugTests(unittest.TestCase):
             config_path = root / "config.json"
             config_path.write_text(json.dumps(case), encoding="utf-8")
             output = root / "case"
-            distributed.init_case(output, config_path=config_path, created_at=NOW)
+            distributed._prepare_report(output, config_path=config_path, created_at=NOW)
             rows = []
             for kind in ("collective_enter", "collective_exit"):
                 rows.extend([event(0, kind), event(1, kind)])
@@ -192,8 +192,8 @@ class DistributedDebugTests(unittest.TestCase):
             events_path.write_text(
                 "".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8"
             )
-            distributed.ingest_events(output, events_path=events_path, updated_at=NOW)
-            result = distributed.analyze_case(output, updated_at=NOW)
+            distributed._ingest_events(output, events_path=events_path, updated_at=NOW)
+            result = distributed._analyze_report(output, updated_at=NOW)
             self.assertEqual(result["status"], "completed-without-mismatch")
             self.assertEqual(result["manifest_status"], "passed")
             manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))

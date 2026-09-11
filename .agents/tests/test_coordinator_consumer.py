@@ -121,7 +121,7 @@ class LauncherTests(unittest.TestCase):
         payload = json.loads(proc.stdout)
         self.assertEqual(payload["name"], "vaws-coordinator")
         self.assertIn(payload["state"], {"missing", "off_spec", "ready"})
-        self.assertEqual(payload["remedy"], "uv sync")
+        self.assertEqual(payload["remedy"], "python .agents/scripts/vaws_deps.py sync")
         self.assertIsNone(payload["manager_state_dir_default"])
 
     def test_status_without_package_reports_missing(self) -> None:
@@ -132,7 +132,7 @@ class LauncherTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 1, proc.stderr)
         payload = json.loads(proc.stdout)
         self.assertEqual(payload["state"], "missing")
-        self.assertEqual(payload["remedy"], "uv sync")
+        self.assertEqual(payload["remedy"], "python .agents/scripts/vaws_deps.py sync")
 
     def test_task_server_and_task_ops_without_package_fail_closed(self) -> None:
         env = isolated_env()
@@ -142,7 +142,7 @@ class LauncherTests(unittest.TestCase):
             capture_output=True, text=True, env=env, check=False,
         )
         self.assertEqual(proc.returncode, 2, proc.stderr)
-        self.assertIn("uv sync", proc.stderr)
+        self.assertIn("python .agents/scripts/vaws_deps.py sync", proc.stderr)
         for operation in ("attach", "session", "run", "execution", "finish"):
             argv = [python, str(SCRIPTS / "vaws.py"), operation]
             if operation == "attach":
@@ -160,7 +160,7 @@ class LauncherTests(unittest.TestCase):
             self.assertEqual(payload["outcome"], "blocked")
             self.assertEqual(payload["status"], "unavailable")
             self.assertIn("vaws-coordinator", payload["summary"] + json.dumps(payload))
-            self.assertIn("uv sync", payload["summary"] + json.dumps(payload) + child.stderr)
+            self.assertIn("python .agents/scripts/vaws_deps.py sync", payload["summary"] + json.dumps(payload) + child.stderr)
 
     def test_hook_without_package_does_not_write_a_registry(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -172,7 +172,7 @@ class LauncherTests(unittest.TestCase):
             )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(proc.stdout.strip(), "")
-        self.assertIn("uv sync", proc.stderr)
+        self.assertIn("python .agents/scripts/vaws_deps.py sync", proc.stderr)
         self.assertFalse(list(Path(tmp).rglob("sessions.sqlite3")))
 
     def test_env_json_lists_owned_keys(self) -> None:

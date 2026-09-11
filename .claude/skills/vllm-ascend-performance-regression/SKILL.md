@@ -5,7 +5,7 @@ description: "Plan, record, and analyze controlled baseline-versus-candidate vLL
 
 <!-- Generated from .agents/skills/vllm-ascend-performance-regression/SKILL.md. Do not edit. -->
 
-# vLLM Ascend Performance Regression
+# vllm-ascend-performance-regression
 
 Read `.agents/skills/vllm-ascend-performance-regression/SKILL.md` and only the references needed
 for the current task. The canonical skill owns the workflow.

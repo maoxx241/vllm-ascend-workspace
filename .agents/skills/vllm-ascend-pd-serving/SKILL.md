@@ -3,42 +3,27 @@ name: vllm-ascend-pd-serving
 description: Plan, start, inspect, smoke-test, and stop a vLLM Ascend prefill/decode deployment as one coordinator topology execution. Use for PD disaggregation with NIXL, Mooncake, or another KV connector. Do not use for one colocated service, generic Ray clusters, correctness matrices, performance regression decisions, or distributed root-cause diagnosis.
 ---
 
-# vLLM Ascend PD Serving
+# vllm-ascend-pd-serving
 
-One coordinator `TaskClient.run(topology=...)` admits every PD role. This
-skill owns connector configuration, proxy health, smoke, and reporting.
-It does not allocate NPUs, launch roles one-by-one, or roll back a partial
-group — the package reserves the full group before any role starts.
+Start and inspect a prefill/decode deployment as one coordinator-owned topology.
 
-## Preconditions
+Choose prefill/decode roles, parallelism, connector options and proxy routing from the deployment requirement. A successful HTTP response proves request handling; KV transfer needs connector-specific evidence.
 
-- Native task context (`--context-file` / `VAWS_CONTEXT_FILE`).
-- One PD config with a task-scoped business `group_id` and the complete role list.
-- Connector type and options are already in each role's vLLM arguments.
-- Proxy URL is already stable. Proxy process lifecycle is outside this skill.
+## Agent entry
 
-## Workflow
+Run from the repository root using the platform's Python launcher. The workspace
+selects its installed platform environment automatically.
 
-1. `pd_serving.py plan --config ...` validates the business config and records its topology.
-2. `pd_serving.py start` submits **one** topology execution (`service=<group_id>`).
-   Queued / preparing / waiting is a truthful result with the same
-   `execution_id`; do not resubmit.
-3. `status` reads that execution, advances the business state and manifest, and probes proxy health only while running. Readiness is `starting`, `ready`, or `unhealthy`; it is separate from process state.
-4. `smoke` posts the configured proxy request.
-5. `stop` calls coordinator `observe(stop)` on that execution.
-   A `stopping` result means release is still in progress; `status` observes completion. The manifest remains open until coordinator reports `resources_released`. A passed smoke plus release completes it as `passed`; release without passed smoke is `inconclusive`.
+```text
+python .agents/skills/vllm-ascend-pd-serving/scripts/pd_serving.py start --config topology.json
+```
 
-Read [command recipes](references/command-recipes.md) for the config shape.
+The business config contains services, connector, proxy and smoke workload; group_id and startup_order are optional. status and stop accept --service or --execution-id without a local lifecycle file. status may take --config for proxy health; smoke takes --config. Coordinator owns resource state and teardown.
 
-## Entry point
+Use ordinary serving for a colocated service. Route rank/connector hangs to distributed-debug.
 
-`scripts/pd_serving.py` provides `plan`, `start`, `status`, `smoke`, and `stop`.
+Read the relevant detail only when needed:
 
-## Rules
+- [behavior](references/behavior.md)
 
-- Never sequential `serve_start` per role.
-- Never invent per-role recovery or lease reconstruction.
-- Role commands come from the serving business command builder (`$VAWS_PYTHON`, `$VAWS_SERVICE_PORT`).
-- Code identity is `manifest_code` from the native/package context, not a group snapshot field.
-
-Each role passes its current vLLM arguments through the selected remote parser before NPU allocation. Proxy requests use direct HTTP by default; set `proxy.proxy_mode: environment` when that URL requires the environment proxy.
+- [Business input example](references/inputs.md)

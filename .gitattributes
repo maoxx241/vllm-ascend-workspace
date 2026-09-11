@@ -1,0 +1,3 @@
+# The same checkout is consumed by native Windows and WSL Git.
+# Normalize text consistently; retain Git's binary-file detection.
+* text=auto eol=lf

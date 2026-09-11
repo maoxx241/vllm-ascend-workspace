@@ -23,7 +23,7 @@ PENDING = frozenset({
     "blocked",
 })
 RUNNING = frozenset({"running", "active"})
-RESERVED_LAUNCH_ENV = frozenset({"VAWS_SERVICE_PORT", "ASCEND_RT_VISIBLE_DEVICES", "VAWS_PYTHON"})
+RESERVED_LAUNCH_ENV = frozenset({"VAWS_SERVICE_PORT", "ASCEND_RT_VISIBLE_DEVICES", "VAWS_PYTHON", "VAWS_EXECUTION_OBSERVATION"})
 
 
 class TaskTargetError(RuntimeError):
@@ -139,16 +139,6 @@ def named_environment(
 def run_command(client: Any, command: str, **kwargs: Any) -> dict[str, Any]:
     """Submit one managed command. Association and recovery stay in the package."""
     return client.run(command, **kwargs)
-
-
-def executions_for_service(client: Any, service: str) -> list[dict[str, Any]]:
-    status = client.status()
-    rows = []
-    for row in status.get("executions") or []:
-        spec = row.get("spec") or {}
-        if spec.get("service") == service or row.get("service") == service:
-            rows.append(row)
-    return rows
 
 
 def execution_target(client: Any, execution_id: str) -> dict[str, Any]:
