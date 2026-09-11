@@ -234,6 +234,8 @@ class NoInTreeSubstrateTests(unittest.TestCase):
             # existed; that prose is history, not a path anything reads.
             ".agents/policy/repo-boundaries.json",
             ".agents/policy/repo-boundaries-baseline.json",
+            # Dated missing-path evidence for the frozen historical CLI table.
+            ".agents/policy/tracked-paths-baseline.json",
             # Historical CLI census names deleted substrate paths as inventory.
             ".agents/scripts/cli_surface_inventory.py",
             ".agents/tests/fixtures/cli-surface-inventory.json",

@@ -49,7 +49,7 @@ class KnowledgeFlowTests(unittest.TestCase):
             self.assertTrue(document.title)
             self.assertTrue(document.content)
             self.assertIn("unverified", document.content)
-            self.assertIn("Recorded conditions", document.content)
+            self.assertIn("historical", document.content)
 
 
 if __name__ == "__main__":
