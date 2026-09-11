@@ -7,8 +7,10 @@ this consumer workspace. It supersedes earlier split notes that treated the
 workspace as a fifth runtime layer, injected a VAWS resolver into remote-dev,
 or kept request/recovery/interpreter/queue logic in `.agents/`.
 
-A mechanism this document does not name is a signal to amend this document
-first, not to build the mechanism here.
+The Agent-only principles below govern future implementation decisions.
+Existing wrappers, workflows and schemas are migration inputs, not reasons to
+preserve their burden. Changes to ownership or public semantics update this
+contract; ordinary implementation choices need no new design or approval step.
 
 The next implementation direction is specified in
 [agent-first-openviking-spec.md](agent-first-openviking-spec.md): permissive
@@ -25,8 +27,8 @@ to retain in the new design.
    the vLLM-Ascend project that installs and uses them. It is not a fifth
    scheduler, allocator, or execution state machine. "Scaffold" is only the
    historical name of this tree.
-2. **Everything packageable is packaged.** The four components are Python
-   packages or uvx apps pinned by `uv.lock`. This workspace is a
+2. **Runtime behaviour belongs to its component.** The runtime owners are
+   installed Python packages or the separately distributed uvx app. This workspace is a
    `package = false` uv project: project materials, client wiring, and
    business skills. `repo-init` runs `uv sync`.
 3. **The package version is the contract.** No `service-api.json`, no
@@ -34,18 +36,80 @@ to retain in the new design.
 4. **One concern, one owner.** A second implementation, vendored copy, or
    "thin layer" that re-implements package behaviour is a defect. A pure
    re-export that adds no behaviour is not a second implementation.
-5. **Unreleased, so breaking is allowed.** Delete superseded code, flags,
-   and tests. Do not deprecate.
+5. **Unreleased, so use breaking changes.** Replace superseded interfaces and
+   delete their code, flags, aliases and obsolete tests. Update callers,
+   client wiring and package pins together; do not add a compatibility phase.
 6. **Local only.** MCP servers run on the user's machine. Knowledge reaches
    the shared corpus only through pull requests.
 7. **Code identity is Git.** Capture dirty edits as source evidence when
    needed. Model and distribution-artifact checksums are integrity metadata,
    not an alternative code identity or workspace handshake protocol.
-8. **Simplest mechanism that satisfies the axioms.** Fewer files win.
+8. **Reduce the consuming Agent's work.** Prefer fewer decisions, required
+   reads, tool round trips and repeated inputs. File or command counts alone
+   are not a measure of simplicity.
 9. **Trust Agent judgment; automate bookkeeping.** Ordinary work does not
    require a predeclared plan, hand-written manifest, repeated confirmation,
    or a second summary. Tools record facts and enforce resource ownership
    and public redaction. Missing knowledge does not block development.
+
+### 1.1 Agent-only design principles
+
+**The consuming Agent is the sole operator of code and commands.** Humans
+express intent and make substantive choices; a human-operated CLI is not a
+product requirement. Each capability has one authoritative semantic interface
+owned by its component. MCP and native-process adapters may expose that same
+interface for different clients; they do not create parallel workflows.
+Remove duplicate entry points and obsolete wrappers with their callers.
+Internal hooks, payloads and maintenance helpers need not be discoverable in
+ordinary business work. Do not replace them with a new umbrella runtime.
+
+**Closed-world problems belong in components.** When explicit inputs and
+observable state are sufficient to decide correct behaviour, the owner
+implements and tests it: resource ownership, process cleanup, dependency and
+argument validation, retry bounds, persistence and evidence integrity. The
+Agent must not reproduce those checks or follow a prose recovery protocol.
+Business comparisons may still need an intentional experimental difference;
+the component obtains available facts and asks only for the actual choice.
+
+**Open-world lessons belong in knowledge.** Context-dependent diagnoses,
+experimental approaches and applicability judgments are retrieved when useful,
+with their conditions, source evidence, alternatives and uncertainty intact.
+A past incident is not a universal prohibition. Skills provide concise task
+routing and business guidance; they are neither incident archives nor a
+second implementation of component guarantees. Missing knowledge remains
+unknown and does not block independent work.
+
+**Complex implementation must be self-contained.** An operation's owner
+advances its lifecycle and performs the required validation and recording.
+The Agent supplies business inputs and follows an authoritative execution or
+result reference. It does not initialize management records, reconcile
+execution/manifest/business states, normalize intermediate records, or link
+and finalize them just to complete ordinary work. Preserve meaningful
+business results and raw evidence without creating another execution authority.
+Compact output alone does not satisfy this principle if the call sequence is
+still exposed.
+
+**Reduce burden across the whole task.** Reuse native context, explicit source
+bindings, configuration and observations. Obtain machine facts within the
+owning component and retain completed work after failure. Default feedback
+explains the result or current activity, relevant progress, the reason for a
+wait/failure, whether it will advance automatically, and any necessary Agent
+action; details remain readable by reference. Unknown facts stay unknown.
+Do not re-run business work solely to populate a management field.
+
+**Keep component boundaries; remove consumption overhead.** Cross-repository
+development and release coordination are accepted costs of independent
+owners. Simplify their integration without merging their responsibilities or
+introducing a workspace scheduler. During this unreleased phase, replacement
+and deletion happen together rather than maintaining old and new paths.
+This authorizes source/interface cleanup, not destruction of user data,
+unrelated worktrees or live resources.
+
+Use these principles when choosing implementations and reviewing changes.
+Representative tasks and existing evidence can show whether required reads,
+decisions, calls, repeated input, waiting and rework decrease while correctness
+is preserved. They do not require a new Agent checklist, mandatory plan,
+measurement service or approval gate for every task.
 
 ## 2. Ownership
 
@@ -86,7 +150,7 @@ endpoint (`host`, `port`, `user`, `root`, `cwd`) plus operation parameters.
 It does not parse VAWS identity, create tasks, or allocate NPUs. Generic
 process `prepare` / `go` / `status` / `tail` / `stop` lives here.
 
-Users who already know IP and port use remote-dev directly.
+Agents with an explicit endpoint use remote-dev directly.
 
 ### 3.2 vaws-coordinator
 
@@ -267,3 +331,7 @@ these for a bound execution. remote-dev never learns VAWS object names.
 | 2026-09-10 | Trust Agent judgment; make ordinary development independent of planning and knowledge bookkeeping |
 | 2026-09-10 | Adopt OpenViking inside vaws-knowledge; Markdown/Git remains content authority |
 | 2026-09-10 | Separate knowledge content from runtime code; automate redacted PRs and prebuilt local distribution |
+| 2026-09-11 | Agent-only consumption; one semantic interface per capability, no human-operated command workflow requirement |
+| 2026-09-11 | Closed-world guarantees live in component code/tests; open-world lessons live in contextual knowledge |
+| 2026-09-11 | Owners internalize lifecycle, checks and records; reduce total Agent effort, not only output size |
+| 2026-09-11 | Preserve component boundaries and accept release coordination costs; use breaking replacement without compatibility layers before release |

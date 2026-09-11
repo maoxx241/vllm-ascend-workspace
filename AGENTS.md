@@ -4,6 +4,12 @@ This is the vLLM-Ascend consumer workspace: project materials, client wiring
 and business skills. Runtime owners are remote-dev, vaws-coordinator,
 vaws-knowledge and vaws-top. See [docs/target-state.md](docs/target-state.md).
 
+All design and implementation decisions follow its Agent-only principles.
+Commands are consumed by Agents. Put deterministic guarantees in component
+code/tests and contextual lessons in knowledge; internalize lifecycle and
+recordkeeping. Remove replaced interfaces and migrate callers together without
+compatibility layers. These principles add no per-task checklist or gate.
+
 The canonical repository is `vllm-ascend-workspace/vllm-ascend-workspace`.
 `vllm/` and `vllm-ascend/` are Git submodules; keep `.gitmodules` on
 `vllm-project/vllm` and `vllm-project/vllm-ascend`. Personal forks are development
