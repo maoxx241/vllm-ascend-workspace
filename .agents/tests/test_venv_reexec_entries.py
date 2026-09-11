@@ -93,6 +93,7 @@ class VenvReexecEntryTests(unittest.TestCase):
                 check=False,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
                 input="",
                 timeout=30,
                 env=env,

@@ -29,7 +29,7 @@ LIB = ROOT / ".agents" / "lib"
 if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
-from vaws_venv import ensure_workspace_interpreter  # noqa: E402
+from vaws_venv import configure_windows_stdio, ensure_workspace_interpreter  # noqa: E402
 from vaws_leak_guard import (  # noqa: E402
     DEFAULT_POLICY_PATH,
     LeakGuardError,
@@ -249,10 +249,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    if sys.platform == "win32":
-        for stream in (sys.stdout, sys.stderr):
-            if hasattr(stream, "reconfigure"):
-                stream.reconfigure(encoding="utf-8")
+    configure_windows_stdio()
     args = build_parser().parse_args(argv)
     repo_root = args.repo_root.resolve()
     try:

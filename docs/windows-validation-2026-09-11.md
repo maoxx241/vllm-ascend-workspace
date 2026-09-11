@@ -76,9 +76,10 @@ not an attribution to DNS, a server or the client.
 6. **Unicode output depended on the Windows code page.** CLI protocols, local Git
    subprocesses, configuration reads and diagnostics specify UTF-8. Real Chinese
    worktree snapshots and contribution Git output were exercised. PR validation
-   on an English Windows runner additionally exposed leak-scanner and Git-hook
-   output failures; both now preserve Unicode JSON and diagnostics even with
-   `PYTHONIOENCODING=cp1252` in the starting environment.
+   on an English Windows runner additionally exposed leak-scanner, Git-hook and
+   skill-catalog output failures. Shared CLI bootstrap now initializes UTF-8
+   output, including when the interpreter hop is skipped. Native tests preserve
+   Chinese paths and emoji with either cp1252 or cp936 in the starting environment.
 7. **Coordinator assumed Unix sockets and flock.** Windows uses a byte-range lock
    and token-authenticated IPv4 loopback IPC. Startup is serialized; marker
    publication is atomic; stale markers recover; startup failures show daemon
