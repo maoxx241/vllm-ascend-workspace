@@ -26,9 +26,24 @@ def alive(pid):
         os.kill(pid, 0)
     except ProcessLookupError:
         return False
-    # An already-reaped command can leave a briefly visible zombie on Linux CI.
-    status = Path(f"/proc/{pid}/stat")
-    return not status.exists() or status.read_text().split(") ", 1)[1][0] != "Z"
+    # Linux may expose a zombie before reaping it, or remove its proc entry
+    # between kill(0) and read_text(). Neither state is a surviving child.
+    if sys.platform == "linux":
+        try:
+            status = Path(f"/proc/{pid}/stat").read_text()
+        except (FileNotFoundError, ProcessLookupError):
+            return False
+        return status.rsplit(") ", 1)[1][0] != "Z"
+    return True
+
+
+class ProcessObservationTests(unittest.TestCase):
+    @unittest.skipUnless(sys.platform == "linux", "Linux proc observation")
+    def test_reaped_between_signal_probe_and_proc_read_is_dead(self):
+        for error in (FileNotFoundError, ProcessLookupError):
+            with self.subTest(error=error.__name__):
+                with patch.object(os, "kill"), patch.object(Path, "read_text", side_effect=error):
+                    self.assertFalse(alive(12345))
 
 
 class LocalTestRunnerTests(unittest.TestCase):
