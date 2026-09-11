@@ -18,7 +18,7 @@
       "mcp__remote-dev__remote_glob",
       "mcp__remote-dev__remote_grep",
       "mcp__remote-dev__remote_ls",
-      "mcp__remote-dev__remote_monitor",
+      "mcp__remote-dev__remote_job_stdin",
       "mcp__remote-dev__remote_job_status",
       "mcp__remote-dev__remote_job_tail",
       "mcp__remote-dev__remote_job_stop",
