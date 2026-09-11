@@ -84,7 +84,7 @@ class SkillCatalogTests(unittest.TestCase):
                         payload = json.loads(result.stdout.decode("utf-8"))
                         self.assertEqual(payload["status"], "passed")
                         self.assertEqual(payload["skills"][0]["description"], description)
-                        self.assertEqual(Path(payload["repo_root"]), root)
+                        self.assertEqual(Path(payload["repo_root"]), root.resolve())
 
     def test_current_repository_catalog_is_complete(self) -> None:
         records, findings = catalog.validate_repo(ROOT)
