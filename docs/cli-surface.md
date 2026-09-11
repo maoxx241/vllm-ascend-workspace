@@ -38,7 +38,7 @@ entry points.
 | Measurement | AST `__main__` / `__main__.py` discovery of tracked (and untracked-unignored) Python outside `vllm/` and `vllm-ascend/`; overlay and owner selectors from `.agents/policy/cli-surface-inventory.json`; `pyproject.toml` / `uv.lock`; no import, fetch, `--help`, NPU or SSH |
 
 The census is the AST of the inspected files plus those committed package owners. The
-96-entry overlay and four owner-selector records live in
+97-entry overlay and four owner-selector records live in
 `.agents/policy/cli-surface-inventory.json` (metadata only; not executable).
 Re-run the generator after this overlay changes. Do not paste a future commit
 SHA into this file as if it were an input.
@@ -51,23 +51,23 @@ are **not** the original 132-entry snapshot and **not** the unimplemented
 
 | Measure | Value |
 |---|---|
-| Entry points (definition in §3) | **96** |
+| Entry points (definition in §3) | **97** |
 | Supported agent-facing launchers | 51 |
 | Compatibility wrappers | 17 |
 | Internal / diagnostic CLIs | 11 |
 | Generated projections | 2 |
 | Hooks | 4 |
 | Remote payloads | 10 |
-| Test / maturation harnesses | 1 |
-| Responsibility | mechanics 81 · mixed 15 · judgment 0 |
-| Files importing `argparse` (non-test) | 88 |
+| Test / maturation harnesses | 2 |
+| Responsibility | mechanics 82 · mixed 15 · judgment 0 |
+| Files importing `argparse` (non-test) | 90 |
 | Skills that ship at least one entry point | 20 |
-| Parser styles | argparse 85 · delegated 7 · bare 3 · bare-argv 1 |
+| Parser styles | argparse 86 · delegated 8 · bare 2 · bare-argv 1 |
 | Historical snapshot (original #85) | 132 entries; mechanics 81 · judgment 8 · mixed 8 · redundant 35 |
 | Historical proposed surface | **13 nouns**, 75 verbs (unimplemented) |
 
-The 96 roles are non-overlapping: every discovered entry has exactly one
-support role, and the seven role counts sum to 96. Support role is not
+The 97 roles are non-overlapping: every discovered entry has exactly one
+support role, and the seven role counts sum to 97. Support role is not
 inferred from a future `vaws <noun>` label, from a `__main__` guard alone, or
 from the absence of a basename mention.
 
@@ -419,6 +419,7 @@ option.
 | `.agents/scripts/knowledge_query.py` | argparse | - | 9 | routing:1, test:3 | mechanics | supported | .agents/scripts/knowledge_query.py | vaws knowledge |
 | `.agents/scripts/knowledge_setup.py` | argparse | - | 2 | docs:1, routing:2, skill-doc:3 | mechanics | supported | .agents/scripts/knowledge_setup.py | - |
 | `.agents/scripts/knowledge_validate.py` | argparse | - | 1 | other:1 | mechanics | supported | .agents/scripts/knowledge_validate.py | vaws knowledge |
+| `.agents/scripts/local_tests.py` | delegated | - | 6 | docs:1, other:1 | mechanics | harness | .agents/scripts/local_tests.py | - |
 | `.agents/scripts/remote_artifact_manifest.py` | argparse | - | 1 | policy:1 | mechanics | compatibility | .agents/scripts/remote_artifact_manifest.py | vaws remote |
 | `.agents/scripts/remote_artifact_pull.py` | argparse | - | 2 | policy:1, script:1, skill-doc:1 | mechanics | compatibility | .agents/scripts/remote_artifact_pull.py | vaws remote |
 | `.agents/scripts/remote_artifact_push.py` | argparse | - | 2 | policy:1 | mechanics | compatibility | .agents/scripts/remote_artifact_push.py | vaws remote |
