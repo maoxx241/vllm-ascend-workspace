@@ -20,6 +20,13 @@ python .agents/skills/vllm-ascend-serving/scripts/serving.py start --model /mode
 
 Use serving.py status or serving.py stop with --execution-id or --service. A service reference is resolved by coordinator within the current task. Pending states retain their execution reference. Restart or release follows the requested lifecycle; no separate allocation, parity command or status ledger is needed.
 
+Start follows preparation and HTTP/models/first-token readiness within
+--health-timeout. Use --no-wait when an immediate execution receipt is wanted.
+After a bounded wait, continue with the same reference. Codex local commands
+can resolve their actual native thread identity through the coordinator when
+the hook has not exported VAWS_CONTEXT_FILE; other clients supply their native
+context explicitly.
+
 Use pd-serving for prefill/decode topology, benchmark for measurement, and profiling-collection for profiler-window control.
 
 Read the relevant detail only when needed:

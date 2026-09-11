@@ -47,7 +47,7 @@ Agent 按任务选择工具或技能；执行引用、状态推进和报告由�
 | **ascend-profiling-analysis** | 分析已采集的 profiler root/manifest，生成 step/layer/operator/cross-rank 诊断报告 | 需要分析 profiling 结果或生成报告时 |
 | **vllm-ascend-graph-debug** | 定位图编译、捕获、重放及 graph/eager 正确性分歧 | 图模式失败或与 eager 结果不一致时 |
 | **vllm-ascend-correctness-validation** | 对比 baseline/candidate、eager/graph、离线/在线和 AISBench 正确性 | 需要精度验证或输出对拍时 |
-| **vllm-ascend-change-validation** | 根据代码 diff 生成验证计划并汇总证据和 PR 报告 | 验证工作区变更或 PR 时 |
+| **vllm-ascend-change-validation** | 对照代码 diff 汇总已执行的验证证据和报告 | 需要实验验证或正式验证报告时；普通 PR 阅读和 review 直接使用原生工具 |
 | **vllm-ascend-performance-regression** | 运行交替 A/B 实验并分析波动和回退阈值 | 判断吞吐或延迟是否回退时 |
 | **vllm-ascend-distributed-debug** | 从拓扑、端点、collective 和逐 rank 事件诊断分布式故障 | 故障依赖多卡、多机或 rank 时 |
 | **ascend-tensor-dump** | 有界采集中间张量并定位首个数值分叉的 stage，覆盖 eager 与图模式 | 输出错误或两个配置结果不一致，需要定位到层、stage 或单算子时 |

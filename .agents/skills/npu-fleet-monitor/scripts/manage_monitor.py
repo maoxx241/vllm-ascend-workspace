@@ -41,7 +41,7 @@ VAWS_TOP_REPO = "vllm-ascend-workspace/vaws-top"
 VAWS_TOP_SKILL_PATH = ".agents/skills/vaws-top/SKILL.md"
 # Single version constant: the release tag. The wheel filename below is derived
 # from it so the tag and the wheel version cannot drift apart.
-VAWS_TOP_REF = "v0.1.1"
+VAWS_TOP_REF = "v0.1.2"
 VAWS_TOP_VERSION = VAWS_TOP_REF.removeprefix("v")
 # The console script is named after the repository and the import package uses
 # underscores; derive both so the only literal naming the extracted project is
@@ -94,8 +94,14 @@ def consumer_env(
     inherited = dict(os.environ) if inherited is None else inherited
     shared_root = shared_workspace_root(repo_root)
     host_pool = shared_root / "hosts.txt"
+    from vaws_coordinator.machine_directory import MACHINES_FILENAME
+    from vaws_coordinator.state_paths import agent_sessions_root, coordinator_state_dir
+
+    coordinator_inventory = coordinator_state_dir(agent_sessions_root(repo_root)) / MACHINES_FILENAME
+    default_inventory = (coordinator_inventory if coordinator_inventory.is_file()
+                         else shared_inventory_path(repo_root))
     defaults = {
-        "NFM_INVENTORY_FILES": str(shared_inventory_path(repo_root)),
+        "NFM_INVENTORY_FILES": str(default_inventory),
         "NFM_HOST_POOL_FILES": str(host_pool) if host_pool.is_file() else "",
         "NFM_BOOTSTRAP_COMMAND": "",
     }

@@ -1,11 +1,16 @@
 ---
 name: vllm-ascend-change-validation
-description: Analyze vLLM and vllm-ascend diffs, map affected components to the minimum sufficient correctness, build, performance, graph, operator, distributed, and profiling evidence, link downstream Run Manifest results, and produce a PR-ready validation report. Use for PR validation, workspace-diff risk analysis, deciding what tests a change requires, or documenting untested combinations. Do not use as a replacement for the downstream execution skills or for a change with no accessible diff.
+description: Consolidate executed vLLM or vllm-ascend change validation into a report tied to an accessible diff and Run Manifest evidence. Use when asked to validate a change experimentally or produce a formal validation report. Ordinary PR reading, code review, diff explanation, and test suggestions use native code and Git tools.
 ---
 
 # vllm-ascend-change-validation
 
 Map an accessible diff to the minimum evidence needed for a reviewable validation conclusion.
+
+Use this workflow when the requested result needs experiment evidence or a
+formal validation report. A request to read or review a PR, explain a change,
+or suggest tests can be completed directly without this workflow. A report
+alone requires no runtime, task allocation or new experiment.
 
 Read the changed behavior and affected callers before choosing tests. Build, numerical, graph, distributed and performance evidence cover different failure modes. Existing evidence is reusable when its observed code states and scope match the diff.
 

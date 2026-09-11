@@ -40,7 +40,7 @@ by tests rather than repeated as instructions in every task.
 | `.agents/scripts/sync_claude_skills.py` | argparse | - | 1 | mirror:2, other:1, policy:1, routing:1, skill-doc:1, test:2 | mechanics | supported | .agents/scripts/sync_claude_skills.py | vaws lint |
 | `.agents/scripts/tracked_leak_scan.py` | argparse | - | 10 | docs:1, hook:1, other:1, policy:1, script:1, test:3 | mechanics | supported | .agents/scripts/tracked_leak_scan.py | vaws lint |
 | `.agents/scripts/tracked_path_check.py` | argparse | - | 6 | docs:1, other:1, policy:1, test:2 | mechanics | supported | .agents/scripts/tracked_path_check.py | vaws lint |
-| `.agents/scripts/vaws.py` | argparse | status, env, hook, task-server | 1 | docs:2, other:1, policy:1, routing:1, test:4 | mechanics | supported | .agents/scripts/vaws.py | vaws task |
+| `.agents/scripts/vaws.py` | argparse | status, env, hook, task-server | 1 | docs:1, other:1, policy:1, routing:1, test:4 | mechanics | supported | .agents/scripts/vaws.py | vaws task |
 | `.agents/scripts/vaws_client_setup.py` | argparse | - | 5 | docs:4, policy:1, script:1, skill-doc:2, test:3 | mechanics | supported | .agents/scripts/vaws_client_setup.py | vaws workspace |
 | `.agents/scripts/vaws_deps.py` | argparse | status, doctor, sync | 1 | client-config:1, docs:8, other:1, policy:1, routing:1, script:4, skill-doc:4, test:7 | mechanics | supported | .agents/scripts/vaws_deps.py | vaws workspace |
 | `.agents/scripts/workspace_identity.py` | argparse | summary, ensure, validate-alias, set-alias, decline-alias | 1 | skill-doc:1 | mechanics | supported | .agents/scripts/workspace_identity.py | vaws workspace |

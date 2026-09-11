@@ -125,6 +125,17 @@ class EnvironmentTests(unittest.TestCase):
         self.assertEqual(env["NFM_INVENTORY_FILES"], "/flag/a.json")
         self.assertEqual(env["NFM_BOOTSTRAP_COMMAND"], "env-cmd {host}")
 
+    def test_consumer_env_reuses_registered_coordinator_inventory(self) -> None:
+        from vaws_coordinator.machine_directory import MACHINES_FILENAME
+        from vaws_coordinator.state_paths import agent_sessions_root, coordinator_state_dir
+        with tempfile.TemporaryDirectory() as root:
+            repo = Path(root)
+            inventory = coordinator_state_dir(agent_sessions_root(repo)) / MACHINES_FILENAME
+            inventory.parent.mkdir(parents=True)
+            inventory.write_text('{"machines": []}', encoding="utf-8")
+            env = MODULE.consumer_env(namespace(), repo_root=repo, inherited={})
+            self.assertEqual(env["NFM_INVENTORY_FILES"], str(inventory))
+
     def test_consumer_env_normalizes_path_lists_and_rejects_newlines(self) -> None:
         with tempfile.TemporaryDirectory() as root:
             repo = Path(root)

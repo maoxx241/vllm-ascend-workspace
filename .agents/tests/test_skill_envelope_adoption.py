@@ -36,7 +36,8 @@ def _validate_tracked_schema(envelope: dict) -> None:
 
 
 def _run(script: Path, *args: str) -> subprocess.CompletedProcess[str]:
-    env = {key: value for key, value in os.environ.items() if key != "VAWS_CONTEXT_FILE"}
+    env = {key: value for key, value in os.environ.items()
+           if key not in {"VAWS_CONTEXT_FILE", "CODEX_THREAD_ID", "CODEX_SESSION_ID"}}
     return subprocess.run(
         [sys.executable, str(script), "status", *args],
         capture_output=True,

@@ -5,8 +5,6 @@ This is not a request ledger, allocator, or recovery manager.
 from __future__ import annotations
 
 import argparse
-import os
-from pathlib import Path
 from typing import Any
 
 DONE = frozenset({"succeeded", "failed", "timeout", "cancelled", "inconclusive"})
@@ -31,13 +29,12 @@ class TaskTargetError(RuntimeError):
 
 
 def resolve_context_file(explicit: str | None = None) -> str:
-    filename = (explicit or os.environ.get("VAWS_CONTEXT_FILE") or "").strip()
-    if not filename:
-        raise TaskTargetError(
-            "VAWS context is required; pass --context-file or set VAWS_CONTEXT_FILE "
-            "from the native session hook. Do not guess the task from cwd or history."
-        )
-    return str(Path(filename).expanduser().resolve())
+    from vaws_coordinator.agent_session import load_context
+
+    try:
+        return load_context(explicit or "")["context_file"]
+    except ValueError as exc:
+        raise TaskTargetError(str(exc)) from exc
 
 
 def task_client(context_file: str | None = None, **kwargs: Any) -> Any:

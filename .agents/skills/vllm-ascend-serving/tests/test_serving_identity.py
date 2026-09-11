@@ -72,6 +72,50 @@ class ServeCommandTests(unittest.TestCase):
 
 
 class QueuedStatusTests(unittest.TestCase):
+    def test_rejected_start_keeps_previous_business_settings(self):
+        client = SimpleNamespace(run=mock.Mock(side_effect=ValueError("service has different options")))
+        with mock.patch.object(serve_start, "task_client", return_value=client), mock.patch.object(serve_start, "task_id_of", return_value="task-1"), mock.patch.object(serve_start, "load_serving_state", return_value=None), mock.patch.object(serve_start, "save_serving_state") as save, mock.patch.object(serve_start, "load_workspace_identity", return_value=None), mock.patch.object(serve_start, "effective_workspace_alias", return_value=None), mock.patch.object(serve_start, "print_json"):
+            rc = serve_start.main(["--model", "/data/m", "--service", "one"])
+        self.assertEqual(rc, 2)
+        save.assert_not_called()
+
+    def test_terminal_start_reports_the_import_cause_without_http_probe(self):
+        client = SimpleNamespace(
+            run=mock.Mock(return_value={"state": "failed", "execution_id": "one", "resources_released": True}),
+            observe=mock.Mock(return_value={"stdout": "ModuleNotFoundError: No module named 'vllm.example'",
+                                           "stderr": "RuntimeError: Engine core initialization failed"}),
+        )
+        with mock.patch.object(serve_start, "task_client", return_value=client), mock.patch.object(serve_start, "task_id_of", return_value="task-1"), mock.patch.object(serve_start, "load_serving_state", return_value=None), mock.patch.object(serve_start, "save_serving_state"), mock.patch.object(serve_start, "load_workspace_identity", return_value=None), mock.patch.object(serve_start, "effective_workspace_alias", return_value=None), mock.patch.object(serve_start, "wait_for_ready") as probe, mock.patch.object(serve_start, "print_json") as printed:
+            rc = serve_start.main(["--model", "/data/m"])
+        self.assertEqual(rc, 1)
+        self.assertIn("No module named 'vllm.example'", printed.call_args.args[0]["error"])
+        self.assertTrue(printed.call_args.args[0]["resources_released"])
+        client.observe.assert_called_once_with("one", "tail")
+        probe.assert_not_called()
+
+    def test_launch_wait_follows_the_same_execution_until_running(self):
+        client = SimpleNamespace(wait=mock.Mock(side_effect=[
+            {"state": "preparing", "execution_id": "one", "wait_timed_out": True},
+            {"state": "running", "execution_id": "one", "service_port": 8001},
+        ]))
+        with mock.patch.object(serve_start.time, "monotonic", return_value=10):
+            result = serve_start.wait_for_launch(client, {"state": "queued", "execution_id": "one"}, 30)
+        self.assertEqual(result["state"], "running")
+        self.assertEqual(client.wait.call_count, 2)
+        self.assertTrue(all(call.args == ("one",) for call in client.wait.call_args_list))
+
+    def test_launch_wait_returns_terminal_failure_or_bounded_pending(self):
+        client = SimpleNamespace(wait=mock.Mock(return_value={"state": "failed", "execution_id": "one"}))
+        with mock.patch.object(serve_start.time, "monotonic", return_value=10):
+            failed = serve_start.wait_for_launch(client, {"state": "preparing", "execution_id": "one"}, 30)
+        self.assertEqual(failed["state"], "failed")
+        client.wait.reset_mock()
+        with mock.patch.object(serve_start.time, "monotonic", return_value=30):
+            pending = serve_start.wait_for_launch(client, {"state": "queued", "execution_id": "one"}, 30)
+        self.assertTrue(pending["wait_timed_out"])
+        self.assertEqual(pending["execution_id"], "one")
+        client.wait.assert_not_called()
+
     def test_start_preserves_pending_phase_without_port_probe(self):
         captured: dict = {}
 
@@ -85,7 +129,7 @@ class QueuedStatusTests(unittest.TestCase):
             observe=mock.Mock(side_effect=AssertionError("must not probe queued work")),
         )
         with tempfile.TemporaryDirectory() as tmp, mock.patch.object(serve_start, "task_client", return_value=client), mock.patch.object(serve_start, "task_id_of", return_value="task-1"), mock.patch.object(serve_start, "load_serving_state", return_value=None), mock.patch.object(serve_start, "save_serving_state"), mock.patch.object(serve_start, "load_workspace_identity", return_value=None), mock.patch.object(serve_start, "effective_workspace_alias", return_value=None), mock.patch.object(serve_start, "print_json") as printed:
-            rc = serve_start.main(["--model", "/data/m"])
+            rc = serve_start.main(["--model", "/data/m", "--no-wait"])
         self.assertEqual(rc, 0)
         payload = printed.call_args[0][0]
         self.assertEqual(payload["status"], "waiting_for_runtime")
@@ -119,7 +163,7 @@ class QueuedStatusTests(unittest.TestCase):
             "extra_args": [],
         }
         with mock.patch.object(serve_start, "task_client", return_value=client), mock.patch.object(serve_start, "task_id_of", return_value="task-1"), mock.patch.object(serve_start, "load_serving_state", return_value=previous), mock.patch.object(serve_start, "save_serving_state"), mock.patch.object(serve_start, "load_workspace_identity", return_value=None), mock.patch.object(serve_start, "effective_workspace_alias", return_value=None), mock.patch.object(serve_start, "print_json"):
-            rc = serve_start.main(["--relaunch"])
+            rc = serve_start.main(["--relaunch", "--no-wait"])
         self.assertEqual(rc, 0)
         self.assertTrue(captured["restart"])
         self.assertEqual(captured["resources"]["npu_count"], 2)
@@ -150,7 +194,7 @@ class QueuedStatusTests(unittest.TestCase):
             observe=mock.Mock(side_effect=AssertionError("must not probe preparing work")),
         )
         with tempfile.TemporaryDirectory() as tmp, mock.patch.object(serve_start, "task_client", return_value=client), mock.patch.object(serve_start, "task_id_of", return_value="task-1"), mock.patch.object(serve_start, "load_serving_state", return_value=None), mock.patch.object(serve_start, "save_serving_state"), mock.patch.object(serve_start, "load_workspace_identity", return_value=None), mock.patch.object(serve_start, "effective_workspace_alias", return_value=None), mock.patch.object(serve_start, "print_json") as printed:
-            rc = serve_start.main(["--model", "/data/m"])
+            rc = serve_start.main(["--model", "/data/m", "--no-wait"])
         self.assertEqual(rc, 0)
         payload = printed.call_args[0][0]
         self.assertEqual(payload["status"], "preparing")

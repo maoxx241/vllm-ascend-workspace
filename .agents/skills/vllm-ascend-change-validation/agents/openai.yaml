@@ -1,5 +1,5 @@
 interface:
   display_name: vLLM Ascend Change Validation
-  short_description: Map code changes to evidence-backed validation plans
-  default_prompt: Use $vllm-ascend-change-validation to map an accessible diff to
-    the minimum evidence needed for a reviewable validation conclusion.
+  short_description: Consolidate experimental evidence for a code change
+  default_prompt: Use $vllm-ascend-change-validation to produce a validation
+    report from an accessible diff and relevant experiment evidence.

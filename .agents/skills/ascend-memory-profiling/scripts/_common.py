@@ -103,11 +103,11 @@ def selected_python(target: dict[str, Any]) -> str:
 def load_serving_state(
     task_id: str,
     *,
+    service: str = "vllm",
     state_repo_root: Path = ROOT,
 ) -> dict[str, Any] | None:
     """Read the serving skill's persisted receipt for a task."""
-    del state_repo_root
-    return load_task_serving_state(task_id)
+    return load_task_serving_state(task_id, service=service, repo_root=state_repo_root)
 
 
 def get_machine_alias(machine: dict[str, Any]) -> str:
