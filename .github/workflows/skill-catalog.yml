@@ -113,9 +113,8 @@ jobs:
         run: uv run python -B -m unittest discover -s .agents/skills/ascend-profiling-collection/tests
 
       - name: Run profiling-analysis tests
-        run: |
-          uv pip install -r .agents/skills/ascend-profiling-analysis/requirements.txt
-          uv run python -B -m pytest .agents/skills/ascend-profiling-analysis/tests -q
+        # The locked dev group already supplies PyYAML and pytest.
+        run: uv run python -B -m pytest .agents/skills/ascend-profiling-analysis/tests -q
 
   windows:
     name: Native Windows (Python 3.13)
