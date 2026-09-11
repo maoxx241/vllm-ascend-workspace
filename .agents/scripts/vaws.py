@@ -126,31 +126,28 @@ def cmd_env(args: argparse.Namespace) -> int:
 
 def cmd_hook(args: argparse.Namespace) -> int:
     try:
-        require_package()
+        return exec_module("vaws_coordinator.hooks.vaws_session", list(args.args))
     except CoordinatorUnavailable as exc:
         sys.stdin.read()
         progress(f"vaws-coordinator hook skipped: {exc}")
         print("")
         return 0
-    return exec_module("vaws_coordinator.hooks.vaws_session", list(args.args))
 
 
 def cmd_task_server(_args: argparse.Namespace) -> int:
     try:
-        require_package()
+        return exec_module("vaws_coordinator", ["task-server"])
     except CoordinatorUnavailable as exc:
         progress(f"vaws-task MCP server cannot start: {exc}")
         return 2
-    return exec_module("vaws_coordinator", ["task-server"])
 
 
 def exec_task_cli(argv: list[str]) -> int:
     operation = argv[0] if argv else "session"
     try:
-        require_package()
+        return exec_module("vaws_coordinator.vaws", argv)
     except CoordinatorUnavailable:
         return unavailable(operation)
-    return exec_module("vaws_coordinator.vaws", argv)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -178,7 +175,7 @@ def main(argv: list[str] | None = None) -> int:
     if argv and argv[0] in TASK_OPS:
         if any(item in {"-h", "--help"} for item in argv):
             try:
-                require_package()
+                return exec_module("vaws_coordinator.vaws", argv, prepare_environment=False)
             except CoordinatorUnavailable:
                 print(
                     f"usage: vaws.py {argv[0]} ...\n"

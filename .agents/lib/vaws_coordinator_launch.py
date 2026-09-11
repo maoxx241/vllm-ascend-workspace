@@ -21,10 +21,6 @@ from vaws_dependency import (  # noqa: E402
     USABLE_STATES,
     inspect,
 )
-from vaws_local_state import (  # noqa: E402
-    agent_sessions_root,
-    shared_workspace_root,
-)
 
 PACKAGE = "vaws-coordinator"
 LOCAL_STATE_DIRNAME = ".vaws-local"
@@ -43,8 +39,11 @@ def _absolute_path(value: str, repo_root: Path) -> str:
 
 def coordinator_environment(base: Mapping[str, str] | None = None, *, repo_root: Path = ROOT) -> dict[str, str]:
     """Environment for a coordinator process (task server, CLI, hook)."""
+    from vaws_local_state import agent_sessions_root, shared_workspace_root
+
     env = dict(os.environ if base is None else base)
-    env.setdefault("VAWS_AGENT_SESSIONS_DIR", str(agent_sessions_root(repo_root)))
+    if "VAWS_AGENT_SESSIONS_DIR" not in env:
+        env["VAWS_AGENT_SESSIONS_DIR"] = str(agent_sessions_root(repo_root))
     sessions = Path(env["VAWS_AGENT_SESSIONS_DIR"]).expanduser()
     if not sessions.is_absolute():
         sessions = shared_workspace_root(repo_root) / sessions
@@ -57,11 +56,15 @@ def coordinator_environment(base: Mapping[str, str] | None = None, *, repo_root:
 
 def historical_manager_state_dir(repo_root: Path = ROOT) -> Path:
     """Path the pre-extraction manager used as its default ``--state-dir``."""
+    from vaws_local_state import shared_workspace_root
+
     return shared_workspace_root(repo_root) / LOCAL_STATE_DIRNAME / "coordinator"
 
 
 def package_status(repo_root: Path = ROOT) -> dict[str, Any]:
     """Describe the installed coordinator package."""
+    from vaws_local_state import agent_sessions_root
+
     info = inspect(PACKAGE, repo_root=repo_root)
     return {
         "name": PACKAGE,
@@ -88,14 +91,16 @@ def require_package(repo_root: Path = ROOT) -> dict[str, Any]:
     return info
 
 
-def exec_module(module: str, args: list[str], *, repo_root: Path = ROOT) -> int:
+def exec_module(module: str, args: list[str], *, repo_root: Path = ROOT, prepare_environment: bool = True) -> int:
     """Replace this process with ``python -m <module> ...`` under scaffold env.
 
     Regular launch must not write the coordinator-owned machine store. Host
     import uses ``python -m vaws_coordinator provision``.
+    Explicit parser help can skip workspace environment discovery because it
+    exits before reading task state or launching a service.
     """
     require_package(repo_root)
-    env = coordinator_environment(repo_root=repo_root)
+    env = coordinator_environment(repo_root=repo_root) if prepare_environment else dict(os.environ)
     command = [sys.executable, "-m", module, *args]
     if os.name == "nt":
         # Windows execve spawns a replacement which outlives the MCP parent's

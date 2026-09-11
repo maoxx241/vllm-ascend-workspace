@@ -25,4 +25,5 @@ is the archive for dated evidence.
 
 ## Dated validation evidence
 
+- [cli-feedback-2026-09-11.md](cli-feedback-2026-09-11.md) — paired Windows CLI startup measurements and parser side-effect checks.
 - [windows-validation-2026-09-11.md](windows-validation-2026-09-11.md) — completed Windows non-NPU validation, repairs, limits and a proposed experience-optimization sequence.
