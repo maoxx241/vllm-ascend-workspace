@@ -18,6 +18,9 @@ python3 .agents/skills/npu-fleet-monitor/scripts/manage_monitor.py stop
 `deploy` verifies the released wheel's frontend. `start` reuses a running
 instance and checks health. The helper owns its local process record; preserve
 its untracked `.vaws-local/npu-fleet-monitor/` state across upgrades.
+On Windows, use `uv run python` for these commands. Background launch hides
+the console; status uses a read-only process handle and stop terminates the
+owned process tree with `taskkill`.
 
 The result provides the URL, logs, `cli_prefix`, `mcp_command` and `skill_url`.
 Use the package's linked skill for fleet-query methods and interpretation;

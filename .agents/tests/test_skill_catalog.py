@@ -4,6 +4,9 @@
 from __future__ import annotations
 
 import importlib.util
+import json
+import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -54,6 +57,35 @@ def write_minimal_repo(root: Path, *, docs_include: str = "example-skill") -> No
 
 
 class SkillCatalogTests(unittest.TestCase):
+    @unittest.skipUnless(os.name == "nt", "native Windows stream contract")
+    def test_cli_unicode_output_ignores_initial_windows_code_page(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "中文目录"
+            write_minimal_repo(root)
+            skill = root / ".agents/skills/example-skill/SKILL.md"
+            description = "中文说明与 emoji 🧪"
+            skill.write_text(
+                skill.read_text(encoding="utf-8").replace(
+                    "Use for deterministic catalog tests.", description
+                ),
+                encoding="utf-8",
+            )
+            for encoding in ("cp1252", "cp936"):
+                for skip_hop in ("0", "1"):
+                    with self.subTest(encoding=encoding, skip_hop=skip_hop):
+                        env = os.environ.copy()
+                        env["PYTHONIOENCODING"] = encoding
+                        env["VAWS_SKIP_VENV_REEXEC"] = skip_hop
+                        result = subprocess.run(
+                            [sys.executable, str(SCRIPT), "--repo-root", str(root)],
+                            capture_output=True, env=env, timeout=30,
+                        )
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        payload = json.loads(result.stdout.decode("utf-8"))
+                        self.assertEqual(payload["status"], "passed")
+                        self.assertEqual(payload["skills"][0]["description"], description)
+                        self.assertEqual(Path(payload["repo_root"]), root.resolve())
+
     def test_current_repository_catalog_is_complete(self) -> None:
         records, findings = catalog.validate_repo(ROOT)
         self.assertGreater(len(records), 0)

@@ -192,6 +192,8 @@ def download_with_retry(args: argparse.Namespace) -> Path:
 
 
 def main() -> int:
+    from _modelscope_common import configure_stdio
+    configure_stdio()
     args = parse_args()
     configure_environment(args)
     ensure_modelscope(auto_install=args.auto_install)

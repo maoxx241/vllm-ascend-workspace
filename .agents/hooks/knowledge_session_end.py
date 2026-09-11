@@ -9,6 +9,7 @@ captures, writing the same yaml shape, then deletes the JSON.
 from __future__ import annotations
 
 import json
+import argparse
 import os
 import sys
 import tempfile
@@ -174,6 +175,7 @@ def process_session_end(
 
 
 def main() -> int:
+    argparse.ArgumentParser(description=__doc__).parse_args()
     try:
         payload = json.load(sys.stdin)
         if not isinstance(payload, dict):

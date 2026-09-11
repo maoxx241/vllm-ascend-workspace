@@ -22,7 +22,7 @@ _SCRIPT_DIR = Path(__file__).resolve().parent
 if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 
-from _common import SERVICE_NAME, emit_progress, endpoint_from_reply, print_json, service_port_of, ssh_exec  # noqa: E402
+from _serving_common import SERVICE_NAME, emit_progress, endpoint_from_reply, print_json, service_port_of, ssh_exec  # noqa: E402
 from vaws_coordinator.presentation import execution_summary
 from vaws_task_target import DONE, PENDING, RUNNING, executions_for_service, task_client, task_id_of  # noqa: E402
 

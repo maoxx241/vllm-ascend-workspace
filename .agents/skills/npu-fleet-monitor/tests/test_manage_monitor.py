@@ -295,7 +295,7 @@ class StopAndStatusTests(unittest.TestCase):
                     result = MODULE.do_stop(base, timeout=5)
                 self.assertFalse((base / MODULE.PIDFILE_NAME).exists())
         finally:
-            MODULE._signal_group(pid, MODULE.signal.SIGKILL)
+            MODULE._stop_group(pid, force=True)
         self.assertTrue(result["ok"])
         self.assertTrue(result["stopped"])
         self.assertEqual(result["pid"], pid)
@@ -329,7 +329,7 @@ class PayloadAndMainTests(unittest.TestCase):
         self.assertEqual(payload["default_spec"], spec)
         self.assertEqual(payload["cli_prefix"], MODULE.uvx_prefix(spec))
         self.assertEqual(payload["mcp_command"], [*MODULE.uvx_prefix(spec), "mcp"])
-        self.assertEqual(payload["state_dir"], "/tmp/x/data")
+        self.assertEqual(payload["state_dir"], str(Path("/tmp/x/data")))
         # A running instance's recorded spec wins over the resolved one.
         payload = MODULE.payload_for("status", Path("/tmp/x"), 8788, spec, {"ok": True, "spec": "RUNNING"})
         self.assertEqual(payload["spec"], "RUNNING")

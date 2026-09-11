@@ -191,6 +191,9 @@ def read_pidfile(path: Path) -> dict[str, Any] | None:
 def pid_alive(pid: int) -> bool:
     if pid <= 0:
         return False
+    if os.name == "nt":
+        from vaws_windows import pid_alive as windows_pid_alive
+        return windows_pid_alive(pid)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -207,6 +210,10 @@ def log_tail(path: Path, lines: int = 20) -> str:
 
 
 def start_process(command: list[str], *, env: dict[str, str], cwd: Path, log_path: Path) -> subprocess.Popen[bytes]:
+    options = (
+        {"creationflags": subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP}
+        if os.name == "nt" else {"start_new_session": True}
+    )
     with log_path.open("ab") as log:
         return subprocess.Popen(
             command,
@@ -215,7 +222,7 @@ def start_process(command: list[str], *, env: dict[str, str], cwd: Path, log_pat
             stdin=subprocess.DEVNULL,
             stdout=log,
             stderr=subprocess.STDOUT,
-            start_new_session=True,
+            **options,
         )
 
 
@@ -311,12 +318,12 @@ def do_stop(base: Path, *, timeout: float = 15) -> dict[str, Any]:
         pidfile.unlink(missing_ok=True)
         return {"ok": True, "stopped": False, "pid": pid, "port": port, "detail": "stale pidfile removed"}
     progress(f"Stopping monitor process group {pid}")
-    _signal_group(pid, signal.SIGTERM)
+    _stop_group(pid, force=False)
     deadline = time.monotonic() + timeout
     while pid_alive(pid) and time.monotonic() < deadline:
         time.sleep(0.2)
     if pid_alive(pid):
-        _signal_group(pid, signal.SIGKILL)
+        _stop_group(pid, force=True)
         time.sleep(0.5)
     stopped = not pid_alive(pid)
     if stopped:
@@ -324,7 +331,15 @@ def do_stop(base: Path, *, timeout: float = 15) -> dict[str, Any]:
     return {"ok": stopped, "stopped": stopped, "pid": pid, "port": port}
 
 
-def _signal_group(pid: int, sig: signal.Signals) -> None:
+def _stop_group(pid: int, *, force: bool) -> None:
+    if os.name == "nt":
+        command = ["taskkill", "/PID", str(pid), "/T"]
+        if force:
+            command.append("/F")
+        subprocess.run(command, capture_output=True, timeout=10, check=False,
+                       creationflags=subprocess.CREATE_NO_WINDOW)
+        return
+    sig = signal.SIGKILL if force else signal.SIGTERM
     try:
         os.killpg(pid, sig)
     except (ProcessLookupError, PermissionError, OSError):

@@ -32,11 +32,14 @@ TEST_FILE_RE = re.compile(r"^(test_.*|.*_test|selftest_.*|conftest)\.py$")
 
 def _system_python() -> str:
     here = Path(sys.executable).resolve()
+    base = Path(sys.base_prefix) / ("python.exe" if os.name == "nt" else "bin/python3")
+    if base.is_file() and base.resolve() != here:
+        return str(base)
     for candidate in ("/usr/bin/python3", "/bin/python3"):
         path = Path(candidate)
         if path.is_file() and path.resolve() != here:
             return candidate
-    return "/usr/bin/python3"
+    raise unittest.SkipTest("no system interpreter outside the workspace venv")
 
 
 def _entry_roots() -> list[Path]:
@@ -64,6 +67,8 @@ def packaged_entries() -> list[Path]:
         if not root.is_dir():
             continue
         for path in sorted(root.glob("*.py")):
+            if TEST_FILE_RE.match(path.name):
+                continue  # Test runners execute cases; they are not --help CLIs.
             if _is_entry(path) and _imports_installed_package(path):
                 found.append(path)
     return found
@@ -88,12 +93,15 @@ class VenvReexecEntryTests(unittest.TestCase):
                 check=False,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                input="",
+                timeout=30,
                 env=env,
                 cwd=str(ROOT),
             )
             blob = completed.stdout + completed.stderr
-            if "ModuleNotFoundError" in blob:
-                failures.append(f"{path.relative_to(ROOT)}: {blob.strip().splitlines()[-1]}")
+            if completed.returncode != 0 or "ModuleNotFoundError" in blob:
+                failures.append(f"{path.relative_to(ROOT)}: exit={completed.returncode} {blob[-1000:]}")
         self.assertEqual(failures, [])
 
 

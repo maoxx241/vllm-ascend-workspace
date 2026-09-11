@@ -23,6 +23,10 @@ def audit(event, args):
     if event in ("socket.connect", "socket.bind"):
         address = args[1] if len(args) > 1 else None
         if isinstance(address, (tuple, list)):
+            # Native Windows coordinator IPC is authenticated loopback TCP.
+            # Keep DNS and every non-loopback address denied.
+            if os.name == "nt" and address[0] == "127.0.0.1":
+                return
             events.append({"kind": "network_attempt", "event": event})
             raise RuntimeError("local-only acceptance forbids network")
 

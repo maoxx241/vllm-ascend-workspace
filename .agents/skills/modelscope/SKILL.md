@@ -5,7 +5,9 @@ description: "Download, resume, status-check, and SHA256-verify ModelScope model
 
 # ModelScope
 
-Use the bundled scripts from this skill directory. Prefer the compact manager first:
+Use the bundled scripts from this skill directory. On Windows, invoke them with
+`uv run python`; the manager launches a hidden worker, observes it without sending
+a signal, and uses UTF-8 for redirected command output. Prefer the compact manager first:
 
 - `scripts/modelscope_auto.py` - status, auto-resume, background download, and post-download verification
 - `scripts/download_from_modelscope.py` - low-level single-model downloader

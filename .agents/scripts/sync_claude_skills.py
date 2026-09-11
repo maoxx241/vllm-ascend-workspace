@@ -37,6 +37,7 @@ MODELSCOPE_SKILL = "modelscope"
 MODELSCOPE_TRAE_PATHS = (
     "SKILL.md",
     "agents/openai.yaml",
+    "scripts/_modelscope_common.py",
     "scripts/download_from_modelscope.py",
     "scripts/modelscope_auto.py",
     "scripts/modelscope_download_status.py",
@@ -171,7 +172,7 @@ def sync_shims() -> None:
         target_dir = CLAUDE_SKILLS / skill_dir.name
         target_dir.mkdir(parents=True, exist_ok=True)
         target = target_dir / "SKILL.md"
-        target.write_text(expected_skill_body(skill_dir), encoding="utf-8")
+        target.write_text(expected_skill_body(skill_dir), encoding="utf-8", newline="\n")
     for existing in CLAUDE_SKILLS.iterdir():
         if existing.is_dir() and not (AGENTS_SKILLS / existing.name / "SKILL.md").exists():
             shutil.rmtree(existing)

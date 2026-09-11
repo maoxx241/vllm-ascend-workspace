@@ -46,7 +46,7 @@ def _load_serving_common():
     module_name = "vaws_profcoll_serving_common"
     if module_name in sys.modules:
         return sys.modules[module_name]
-    src = SERVING_SCRIPTS / "_common.py"
+    src = SERVING_SCRIPTS / "_serving_common.py"
     spec = importlib.util.spec_from_file_location(module_name, src)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"failed to load serving common helpers from {src}")

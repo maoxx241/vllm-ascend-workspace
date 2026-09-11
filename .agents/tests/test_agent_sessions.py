@@ -267,7 +267,7 @@ class ScaffoldSetupTests(unittest.TestCase):
         import tomllib
         result = tomllib.loads(setup.configuration("kimi", self.root, kimi_config=kimi)[kimi])
         self.assertEqual(result["default_model"], "existing")
-        self.assertTrue(all("--project" in item["command"] for item in result["hooks"]))
+        self.assertTrue(all("--project" in setup.hook_argv(item["command"]) for item in result["hooks"]))
 
     def test_hook_timeout_covers_the_hook_git_calls(self):
         groups = setup.hook_groups("claude", self.root)

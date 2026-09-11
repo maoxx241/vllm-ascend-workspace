@@ -67,7 +67,7 @@ _SCRIPT_DIR = Path(__file__).resolve().parent
 if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 
-from _common import (  # noqa: E402
+from _benchmark_common import (  # noqa: E402
     BenchConfig,
     apply_remote_patch,
     assemble_config,

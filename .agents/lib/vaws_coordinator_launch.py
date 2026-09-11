@@ -97,5 +97,14 @@ def exec_module(module: str, args: list[str], *, repo_root: Path = ROOT) -> int:
     require_package(repo_root)
     env = coordinator_environment(repo_root=repo_root)
     command = [sys.executable, "-m", module, *args]
+    if os.name == "nt":
+        # Windows execve spawns a replacement which outlives the MCP parent's
+        # process handle. Keep stdio and termination owned by this process.
+        import runpy
+
+        os.environ.update(env)
+        sys.argv = [module, *args]
+        runpy.run_module(module, run_name="__main__", alter_sys=True)
+        return 0
     os.execve(sys.executable, command, env)
     return 0  # pragma: no cover - execve does not return

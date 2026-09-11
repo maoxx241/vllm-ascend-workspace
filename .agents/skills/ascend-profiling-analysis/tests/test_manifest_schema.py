@@ -55,7 +55,7 @@ def test_manifest_has_scalar_health_fields(tmp_path: Path) -> None:
     out = tmp_path / "segment_manifest.json"
     out.write_text(json.dumps(manifest), encoding="utf-8")
 
-    loaded = json.loads(out.read_text())
+    loaded = json.loads(out.read_text(encoding="utf-8"))
     assert isinstance(loaded["hard_error_count"], int), "hard_error_count must be int"
     assert loaded["hard_error_count"] == 0
     assert isinstance(loaded["interior_island_total"], int), "interior_island_total must be int"

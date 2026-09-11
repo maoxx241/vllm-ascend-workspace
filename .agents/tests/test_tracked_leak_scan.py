@@ -11,6 +11,7 @@ import contextlib
 import importlib.util
 import io
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -68,10 +69,16 @@ def write_minimal_policy(repo: Path, body: str = MINIMAL_POLICY) -> Path:
 
 
 def invoke_cli(script: Path, *args: str, cwd: Path | None = None) -> tuple[int, dict, str]:
+    env = os.environ.copy()
+    if os.name == "nt":
+        # English Windows must also report paths outside its ANSI code page.
+        env["PYTHONIOENCODING"] = "cp1252"
     result = subprocess.run(
         [sys.executable, "-B", str(script), *args],
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        env=env,
         cwd=str(cwd or ROOT),
     )
     payload = json.loads(result.stdout.strip())
@@ -659,7 +666,7 @@ class HookTests(unittest.TestCase):
             self.assertEqual((payload["status"], payload["action"]), ("passed", "installed"))
             hook_path = Path(payload["hook_path"])
             self.assertTrue(hook_path.exists())
-            self.assertTrue(hook_path.stat().st_mode & 0o111)
+            self.assertTrue(os.name == "nt" or hook_path.stat().st_mode & 0o111)
             self.assertEqual(self.hook.status(repo)["installed"], True)
             self.assertEqual(self.hook.install(repo, force=False)["action"], "reinstalled")
             self.assertEqual(self.hook.uninstall(repo)["action"], "removed")
@@ -853,6 +860,8 @@ class G1BoundaryTests(unittest.TestCase):
             "new\nline.md",
             "utf8文件.md",
         ]
+        if os.name == "nt":
+            names = ["space name.md", "quote’file.md", "utf8文件.md"]
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
             policy_path = self._policy_repo(repo)
@@ -882,6 +891,14 @@ class G1BoundaryTests(unittest.TestCase):
             self.assertEqual(code, 1)
             self.assertEqual(payload["finding_count"], len(names))
             self.assertEqual({item["path"] for item in payload["findings"]}, set(names))
+            hook_code, hook_payload, hook_stderr = invoke_cli(
+                HOOK, "--repo-root", str(repo), "--check"
+            )
+            self.assertEqual(hook_code, 1)
+            self.assertEqual({item["path"] for item in hook_payload["findings"]}, set(names))
+            self.assertNotIn("Traceback", hook_stderr)
+            for name in names:
+                self.assertIn(name, hook_stderr)
             git(repo, "commit", "-qm", "special names")
             tree_code, tree_payload, _ = invoke_cli(
                 SCANNER,

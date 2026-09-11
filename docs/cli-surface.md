@@ -206,7 +206,7 @@ compatibility because their stdout is `remote-dev.result.v1`, not the old
 toolbox envelope. Service, sync, cleanup, and target-resolve wrappers consume
 coordinator's task APIs and retain workspace business checks and result formatting.
 
-The six-file Trae ModelScope package is generated from
+The Trae ModelScope package is generated from
 `.agents/skills/modelscope` by `.agents/scripts/sync_claude_skills.py`
 (`--check` detects drift). Canonical scripts remain the editable source.
 
@@ -408,7 +408,7 @@ option.
 
 | Entry point | Style | Verbs | Options | Refs | Responsibility | Support role | Current target | Proposed |
 |---|---|---|---|---|---|---|---|---|
-| `.agents/hooks/knowledge_session_end.py` | bare | - | 0 | client-config:1, test:1 | mechanics | hook | .agents/hooks/knowledge_session_end.py | - |
+| `.agents/hooks/knowledge_session_end.py` | argparse | - | 0 | client-config:1, test:1 | mechanics | hook | .agents/hooks/knowledge_session_end.py | - |
 | `.agents/hooks/knowledge_summary.py` | argparse | - | 2 | script:1, test:1 | mechanics | hook | .agents/hooks/knowledge_summary.py | - |
 | `.agents/hooks/tracked_leak_precommit.py` | argparse | - | 8 | docs:1, policy:1, test:1 | mechanics | hook | .agents/hooks/tracked_leak_precommit.py | - |
 | `.agents/hooks/vaws_session.py` | argparse | - | 4 | policy:1, script:1, test:2 | mechanics | hook | .agents/hooks/vaws_session.py | - |
@@ -444,7 +444,7 @@ option.
 | `.agents/scripts/tracked_leak_scan.py` | argparse | - | 10 | docs:1, hook:1, other:1, policy:1, script:1, test:3 | mechanics | supported | .agents/scripts/tracked_leak_scan.py | vaws lint |
 | `.agents/scripts/tracked_path_check.py` | argparse | - | 6 | docs:1, other:1, policy:1, test:2 | mechanics | supported | .agents/scripts/tracked_path_check.py | vaws lint |
 | `.agents/scripts/vaws.py` | argparse | status, env, hook, task-server | 1 | docs:1, other:1, policy:1, routing:1, test:3 | mechanics | supported | .agents/scripts/vaws.py | vaws task |
-| `.agents/scripts/vaws_client_setup.py` | argparse | - | 5 | docs:4, policy:1, script:1, skill-doc:2, test:2 | mechanics | supported | .agents/scripts/vaws_client_setup.py | vaws workspace |
+| `.agents/scripts/vaws_client_setup.py` | argparse | - | 5 | docs:4, policy:1, script:1, skill-doc:2, test:3 | mechanics | supported | .agents/scripts/vaws_client_setup.py | vaws workspace |
 | `.agents/scripts/vaws_deps.py` | argparse | status, doctor, sync | 1 | docs:3, other:1, policy:1, routing:3, script:1, skill-doc:4, test:2 | mechanics | supported | .agents/scripts/vaws_deps.py | vaws workspace |
 | `.agents/scripts/workspace_identity.py` | argparse | summary, ensure, validate-alias, set-alias, decline-alias | 1 | skill-doc:1 | mechanics | supported | .agents/scripts/workspace_identity.py | vaws workspace |
 | `.agents/scripts/workspace_profile.py` | argparse | summary, validate, ensure | 4 | routing:1, script:1, skill-doc:4 | mechanics | supported | .agents/scripts/workspace_profile.py | vaws workspace |
@@ -477,7 +477,7 @@ option.
 | `.agents/skills/ascend-triton-operator-development/scripts/triton_development.py` | argparse | plan, finalize | 6 | skill-doc:2, test:1 | mixed | supported | .agents/skills/ascend-triton-operator-development/scripts/triton_development.py | guidance |
 | `.agents/skills/ascend-triton-workflow/scripts/triton_workflow.py` | argparse | plan, link, finalize | 4 | skill-doc:2, test:1 | mixed | supported | .agents/skills/ascend-triton-workflow/scripts/triton_workflow.py | guidance |
 | `.agents/skills/modelscope/scripts/download_from_modelscope.py` | argparse | - | 12 | mirror:2, script:2, skill-doc:1, test:2 | mechanics | payload | .agents/skills/modelscope/scripts/download_from_modelscope.py | - |
-| `.agents/skills/modelscope/scripts/modelscope_auto.py` | argparse | ensure, status, verify, worker | 11 | mirror:1, script:1, skill-doc:1, test:2 | mechanics | supported | .agents/skills/modelscope/scripts/modelscope_auto.py | vaws model |
+| `.agents/skills/modelscope/scripts/modelscope_auto.py` | argparse | ensure, status, verify, worker | 11 | mirror:1, script:1, skill-doc:1, test:3 | mechanics | supported | .agents/skills/modelscope/scripts/modelscope_auto.py | vaws model |
 | `.agents/skills/modelscope/scripts/modelscope_download_status.py` | argparse | - | 3 | mirror:1, script:1, skill-doc:1, test:2 | mechanics | internal | .agents/skills/modelscope/scripts/modelscope_auto.py | - |
 | `.agents/skills/modelscope/scripts/verify_modelscope_sha256.py` | argparse | - | 8 | mirror:2, script:2, skill-doc:1, test:2 | mechanics | payload | .agents/skills/modelscope/scripts/verify_modelscope_sha256.py | - |
 | `.agents/skills/npu-fleet-monitor/scripts/manage_monitor.py` | argparse | deploy, start, status, restart, stop | 6 | docs:2, policy:1, routing:2, script:1, skill-doc:1, test:3 | mechanics | supported | .agents/skills/npu-fleet-monitor/scripts/manage_monitor.py | vaws machine |
@@ -501,7 +501,7 @@ option.
 | `.agents/skills/vllm-ascend-serving/scripts/serve_status.py` | argparse | - | 3 | docs:1, script:3, skill-doc:2, test:2 | mechanics | supported | .agents/skills/vllm-ascend-serving/scripts/serve_status.py | vaws serve |
 | `.agents/skills/vllm-ascend-serving/scripts/serve_stop.py` | argparse | - | 4 | docs:1, script:5, skill-doc:7 | mechanics | supported | .agents/skills/vllm-ascend-serving/scripts/serve_stop.py | vaws serve |
 | `.trae/skills/modelscope/scripts/download_from_modelscope.py` | argparse | - | 12 | mirror:2, script:2, skill-doc:1, test:2 | mechanics | payload | .agents/skills/modelscope/scripts/download_from_modelscope.py | - |
-| `.trae/skills/modelscope/scripts/modelscope_auto.py` | argparse | ensure, status, verify, worker | 11 | mirror:1, script:1, skill-doc:1, test:2 | mechanics | generated | .agents/skills/modelscope/scripts/modelscope_auto.py | - |
+| `.trae/skills/modelscope/scripts/modelscope_auto.py` | argparse | ensure, status, verify, worker | 11 | mirror:1, script:1, skill-doc:1, test:3 | mechanics | generated | .agents/skills/modelscope/scripts/modelscope_auto.py | - |
 | `.trae/skills/modelscope/scripts/modelscope_download_status.py` | argparse | - | 3 | mirror:1, script:1, skill-doc:1, test:2 | mechanics | generated | .agents/skills/modelscope/scripts/modelscope_download_status.py | - |
 | `.trae/skills/modelscope/scripts/verify_modelscope_sha256.py` | argparse | - | 8 | mirror:2, script:2, skill-doc:1, test:2 | mechanics | payload | .agents/skills/modelscope/scripts/verify_modelscope_sha256.py | - |
 

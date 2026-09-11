@@ -21,6 +21,7 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[4]
 SCRIPTS = ROOT / ".agents" / "skills" / "modelscope" / "scripts"
+sys.path.insert(0, str(SCRIPTS))
 
 # The skill scripts import ``requests`` at module load. Tests never call it;
 # inject a stub so the suite stays hermetic without that extra package.

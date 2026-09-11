@@ -360,7 +360,7 @@ def collect_model_config(ep: SshEndpoint, model_path: str, local_path: Path) -> 
 def collect_weight_manifest(ep: SshEndpoint, python: str, model_path: str, local_path: Path) -> dict:
     """Run weight_inspector.py on remote to extract safetensors tensor metadata."""
     progress("Inspecting model weight files (safetensors headers)...")
-    inspector_src = (Path(__file__).parent / "weight_inspector.py").read_text()
+    inspector_src = (Path(__file__).parent / "weight_inspector.py").read_text(encoding="utf-8")
 
     remote_script = "/tmp/_vaws_weight_inspector.py"
     ssh_write_text(ep, inspector_src, remote_script)
@@ -412,14 +412,14 @@ def _load_baseline_from(baseline_path: str, run_dir: Path) -> dict:
     if p.is_file():
         import shutil
         shutil.copy2(p, run_dir / "baseline_npu_smi.txt")
-        return _parse_npu_smi_text(p.read_text())
+        return _parse_npu_smi_text(p.read_text(encoding="utf-8"))
 
     # Otherwise treat as a run directory
     src = p / "baseline_npu_smi.txt"
     if not src.exists():
         manifest_path = p / "manifest.json"
         if manifest_path.exists():
-            m = json.loads(manifest_path.read_text())
+            m = json.loads(manifest_path.read_text(encoding="utf-8"))
             return m.get("baseline_hbm", {})
         return {}
 
@@ -428,7 +428,7 @@ def _load_baseline_from(baseline_path: str, run_dir: Path) -> dict:
 
     manifest_path = p / "manifest.json"
     if manifest_path.exists():
-        m = json.loads(manifest_path.read_text())
+        m = json.loads(manifest_path.read_text(encoding="utf-8"))
         return m.get("baseline_hbm", {})
     return {}
 
@@ -629,7 +629,7 @@ def _main_attach(
     # contribute to a single complete run.
     existing_manifest_path = run_dir / "manifest.json"
     if args.resume_run and existing_manifest_path.exists():
-        existing = json.loads(existing_manifest_path.read_text())
+        existing = json.loads(existing_manifest_path.read_text(encoding="utf-8"))
         for key, val in manifest.items():
             if val in (None, {}, [], "", False, 0) and existing.get(key) not in (None, {}, [], "", False, 0):
                 continue

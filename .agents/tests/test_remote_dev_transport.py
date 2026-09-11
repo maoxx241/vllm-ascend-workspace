@@ -34,13 +34,15 @@ def _require_openssh() -> str:
 
 def _effective_ssh_config(argv: list[str], home: str) -> dict[str, str]:
     ssh = _require_openssh()
+    config = Path(home) / "empty-ssh-config"
+    config.write_text("", encoding="utf-8")
     proc = subprocess.run(
-        [ssh, "-G", "-F", "/dev/null", *argv[1:]],
+        [ssh, "-G", "-F", str(config), *argv[1:]],
         capture_output=True,
         text=True,
         encoding="utf-8",
         errors="replace",
-        env={"HOME": home, "PATH": os.environ.get("PATH", "")},
+        env={**os.environ, "HOME": home},
         check=False,
     )
     if proc.returncode != 0:
@@ -72,9 +74,13 @@ class TransportArgvTests(unittest.TestCase):
         self.assertIn("-p", argv)
         self.assertIn(str(PORT), argv)
         self.assertIn(HOST, argv)
-        self.assertIn("ControlMaster=auto", joined)
-        self.assertNotIn("ControlMaster=no", joined)
-        self.assertNotIn("ControlPath=none", joined)
+        if os.name == "nt":
+            self.assertIn("ControlMaster=no", joined)
+            self.assertIn("ControlPath=none", joined)
+        else:
+            self.assertIn("ControlMaster=auto", joined)
+            self.assertNotIn("ControlMaster=no", joined)
+            self.assertNotIn("ControlPath=none", joined)
         self.assertNotIn("ServerAliveInterval=", joined)
 
     def test_long_stream_argv_disables_mux_and_enables_keepalive(self) -> None:
