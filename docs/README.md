@@ -27,6 +27,7 @@ is the archive for dated evidence.
 
 ## Dated validation evidence
 
+- [agent-only-validation-2026-09-11.md](agent-only-validation-2026-09-11.md) — Agent-only entry consolidation and Windows PowerShell/WSL acceptance, including corrections and hardware limits.
 - [installation-feedback-2026-09-11.md](installation-feedback-2026-09-11.md) — fresh/cached Windows installation timings, cache relocation and dependency extras decision.
 - [observation-feedback-2026-09-11.md](observation-feedback-2026-09-11.md) — SSH batching/timing evidence and status freshness behavior.
 - [cli-feedback-2026-09-11.md](cli-feedback-2026-09-11.md) — paired Windows CLI startup measurements and parser side-effect checks.

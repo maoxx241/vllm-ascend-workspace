@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -54,3 +55,19 @@ def test_bootstrap_does_not_need_installed_packages(monkeypatch):
     command, kwargs = calls[0]
     assert command == ["uv", "sync", "--locked", "--group", "dev"]
     assert Path(kwargs["env"]["UV_PROJECT_ENVIRONMENT"]) == ROOT / ".vaws-local/venvs" / sys.platform
+
+
+def test_shared_checkout_text_identity_does_not_depend_on_git_autocrlf(tmp_path):
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    shutil.copyfile(ROOT / ".gitattributes", tmp_path / ".gitattributes")
+    source = tmp_path / "entry.py"
+    identities = set()
+    for line_ending in (b"\n", b"\r\n"):
+        source.write_bytes(b"print('platform independent')" + line_ending)
+        for autocrlf in ("true", "false", "input"):
+            result = subprocess.run(
+                ["git", "-c", f"core.autocrlf={autocrlf}", "hash-object", "--path=entry.py", "entry.py"],
+                cwd=tmp_path, capture_output=True, text=True, check=True,
+            )
+            identities.add(result.stdout.strip())
+    assert len(identities) == 1
