@@ -30,9 +30,13 @@ through that URL. It does not own the proxy process.
 - `plan`: config, topology roles, state, Run Manifest
 - `start`: one `TaskClient.run(topology=..., service=<group_id>, timeout_seconds=None)`
 - queued / preparing / waiting is a truthful status with the same `execution_id`
-- `status`: that execution plus proxy health; `observation.roles[]` carries per-role target/tail
+- `status`: synchronizes queued/running/terminal execution facts into state and manifest; `roles[]` is a compact role summary, and target/tail remain available through coordinator execution tools.
 - `smoke`: one configured proxy request
 - `stop`: `observe(execution_id, "stop")` for that same execution
 
 A successful proxy request proves the routed request path. Connector-level KV
 transfer requires corroborating service logs.
+
+Readiness is independent of lifecycle. Not-yet-listening is `starting`; a service that was ready and loses health is `unhealthy`. Terminal and stopping executions do not probe HTTP. Proxy mode defaults to `direct`; `environment` explicitly uses process proxy settings, with HTTP status and connection failure classification in the response.
+
+State stores business references and readiness, not full coordinator responses, assignments, or duplicated role targets. A completed manifest never regresses. Stopping requires coordinator `resources_released`; `passed` additionally requires a passed smoke.

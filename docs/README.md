@@ -8,6 +8,7 @@ is the archive for dated evidence.
 
 ## Current contracts
 
+- [runtime-feedback-design.md](runtime-feedback-design.md) — real-machine progress, loaded runtime identity, state projection, compact output and connection diagnostics.
 - [README.md](README.md) — this index.
 - [agent-first-openviking-spec.md](agent-first-openviking-spec.md) — target behavior and implementation status for permissive Agent workflows, local knowledge, public contributions and prebuilt distribution; Grok review is deferred.
 - [agent-feedback-contract.md](agent-feedback-contract.md) — Result Envelope v1: the JSON stdout contract for agent-facing commands.

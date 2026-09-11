@@ -39,6 +39,7 @@ from _common import (  # noqa: E402
 )
 from vaws_local_state import effective_workspace_alias, load_workspace_identity  # noqa: E402
 from vaws_session_state import load_serving_state, save_serving_state  # noqa: E402
+from vaws_coordinator.presentation import execution_summary
 from vaws_task_target import (  # noqa: E402
     DONE,
     PENDING,
@@ -122,6 +123,7 @@ def build_serve_command(
     extra_args: list[str],
     wrap_script: str = "",
     expected_vllm: str = "",
+    preflight_only: bool = False,
 ) -> str:
     argv = [
         '"$VAWS_PYTHON"',
@@ -159,6 +161,18 @@ def build_serve_command(
             f'if [ -n "$actual" ] && [ "$actual" != {shlex.quote(expected_vllm)} ]; then '
             f'echo "preset expects vllm {expected_vllm}, selected interpreter has $actual" >&2; exit 1; fi'
         )
+    if preflight_only:
+        parse_only = "\n".join([
+            "import sys",
+            "from vllm.entrypoints.cli.serve import cmd_init",
+            "from vllm.utils.argparse_utils import FlexibleArgumentParser",
+            "parser = FlexibleArgumentParser(prog='vllm')",
+            "subparsers = parser.add_subparsers(dest='subparser')",
+            "for command in cmd_init(): command.subparser_init(subparsers)",
+            "parser.parse_args(sys.argv[1:])",
+        ])
+        lines.append('"$VAWS_PYTHON" -c ' + shlex.quote(parse_only) + " " + " ".join(argv[3:]))
+        return "\n".join(lines)
     if wrap_script:
         lines.append("runtime_dir=$(mktemp -d /tmp/vaws-serve.XXXXXX)")
         lines.append("cat > \"$runtime_dir/_serve.sh\" << 'VAWS_SERVE_EOF'")
@@ -183,11 +197,11 @@ def classify_stage(text: str) -> str | None:
 
 def probe_ready_once(ep: SshEndpoint, port: int, *, log_text: str = "") -> dict[str, Any]:
     script = (
-        f"code=$(curl -s -o /dev/null -w '%{{http_code}}' --connect-timeout 3 --max-time 5 "
+        f"code=$(curl --noproxy '*' -s -o /dev/null -w '%{{http_code}}' --connect-timeout 3 --max-time 5 "
         f"http://127.0.0.1:{port}/health 2>/dev/null || echo 000); "
         'echo "__HEALTH__=$code"; '
         'if [ "$code" = "200" ]; then echo __MODELS_BEGIN__; '
-        f"curl -s --connect-timeout 3 --max-time 5 http://127.0.0.1:{port}/v1/models 2>/dev/null; "
+        f"curl --noproxy '*' -s --connect-timeout 3 --max-time 5 http://127.0.0.1:{port}/v1/models 2>/dev/null; "
         "echo; echo __MODELS_END__; fi"
     )
     result = ssh_exec(ep, script, check=False)
@@ -503,6 +517,10 @@ def main(argv: list[str] | None = None) -> int:
         reply = run_command(
             client,
             command,
+            preflight=build_serve_command(
+                model=model, served_model_name=served_model_name, tp=tp, dp=dp,
+                extra_args=launch_extra_args, preflight_only=True,
+                expected_vllm=str((preset or {}).get("vllm_version") or "")),
             env=launch_env,
             environment=environment,
             resources=resources,
@@ -523,7 +541,7 @@ def main(argv: list[str] | None = None) -> int:
             "tp": tp,
             "dp": dp,
             "devices": devices,
-            "result": reply,
+            **execution_summary(reply),
         }
         if kind == "pending":
             output["status"] = "queued"

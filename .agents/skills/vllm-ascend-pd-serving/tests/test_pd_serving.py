@@ -8,6 +8,8 @@ import json
 import sys
 import tempfile
 import unittest
+import urllib.error
+from unittest import mock
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -208,7 +210,7 @@ class PdServingTests(unittest.TestCase):
             client = SimpleNamespace(
                 context={"session": {"id": "task-1"}},
                 run=lambda *a, **k: {"execution_id": "exec-1", "state": "running", "service": "pd-group"},
-                observe=lambda eid, action="status", force=False: {"state": "cancelled", "execution_id": eid},
+                observe=lambda eid, action="status", force=False: {"state": "cancelled", "execution_id": eid, "resources_released": True},
             )
             pd.start(output, client=client, updated_at=NOW)
             result = pd.stop(output, force=True, client=client, updated_at=NOW)
@@ -223,11 +225,11 @@ class PdServingTests(unittest.TestCase):
             config_path.write_text(json.dumps(config()), encoding="utf-8")
             output = root / "run"
             pd.plan(output, config_path=config_path, created_at=NOW, code=CODE)
-            observations = iter(["releasing", "cancelled"])
+            observations = iter([{ "state": "releasing", "resources_released": False}, {"state": "cancelled", "resources_released": True}])
             client = SimpleNamespace(
                 context={"session": {"id": "task-1"}},
                 run=lambda *a, **k: {"execution_id": "exec-1", "state": "running"},
-                observe=lambda *a, **k: {"state": next(observations), "execution_id": "exec-1"},
+                observe=lambda *a, **k: {**next(observations), "execution_id": "exec-1"},
             )
             pd.start(output, client=client, updated_at=NOW)
             pending = pd.stop(output, force=False, client=client, updated_at=NOW)
@@ -235,7 +237,62 @@ class PdServingTests(unittest.TestCase):
             self.assertEqual(pd.load_manifest(output / "manifest.json")["status"], "running")
             stopped = pd.stop(output, force=False, client=client, updated_at=NOW)
             self.assertEqual(stopped["status"], "stopped")
+            self.assertEqual(pd.load_manifest(output / "manifest.json")["status"], "inconclusive")
+
+    def test_status_advances_manifest_after_one_start_and_never_probes_terminal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cfg = root / "config.json"
+            cfg.write_text(json.dumps(config()))
+            output = root / "run"
+            pd.plan(output, config_path=cfg, created_at=NOW, code=CODE)
+            observation = {"execution_id": "exec-1", "state": "preparing", "resources_released": False}
+            client = SimpleNamespace(context={"session": {"id": "task-1"}},
+                                     run=mock.Mock(return_value=observation),
+                                     observe=lambda *a, **k: dict(observation))
+            pd.start(output, client=client, updated_at=NOW)
+            observation["state"] = "running"
+            response = mock.MagicMock()
+            response.__enter__.return_value.status = 200
+            response.__enter__.return_value.read.return_value = b'{"choices":[{"text":"ok"}]}'
+            opener = mock.Mock(return_value=response)
+            result = pd.status(output, client=client, urlopen=opener)
+            self.assertEqual(result["readiness"], "ready")
+            self.assertEqual(pd.load_manifest(output / "manifest.json")["status"], "running")
+            self.assertEqual(json.loads((output / "state.json").read_text())["status"], "running")
+            self.assertNotIn("result", json.loads((output / "state.json").read_text()))
+            client.run.assert_called_once()
+            pd.smoke(output, urlopen=opener)
+            observation.update(state="stopping")
+            pd.stop(output, client=client, force=False)
+            observation.update(state="cancelled", resources_released=True)
+            forbidden = mock.Mock(side_effect=AssertionError("terminal execution must not probe HTTP"))
+            result = pd.status(output, client=client, urlopen=forbidden)
+            self.assertEqual(result["status"], "stopped")
             self.assertEqual(pd.load_manifest(output / "manifest.json")["status"], "passed")
+            # A stale lifecycle observation cannot reopen the terminal manifest.
+            observation.update(state="queued", resources_released=False)
+            pd.status(output, client=client, urlopen=forbidden)
+            self.assertEqual(pd.load_manifest(output / "manifest.json")["status"], "passed")
+            forbidden.assert_not_called()
+
+    def test_not_listening_is_starting_and_proxy_502_retains_transport_fact(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cfg = root / "config.json"
+            cfg.write_text(json.dumps(config()))
+            output = root / "run"
+            pd.plan(output, config_path=cfg, created_at=NOW, code=CODE)
+            observation = {"execution_id": "exec-1", "state": "running"}
+            client = SimpleNamespace(context={"session": {"id": "task-1"}},
+                                     run=lambda *a, **k: observation, observe=lambda *a: observation)
+            pd.start(output, client=client, updated_at=NOW)
+            opener = mock.Mock(side_effect=urllib.error.HTTPError("http://proxy:9000/health", 502, "bad gateway", {}, None))
+            result = pd.status(output, client=client, urlopen=opener)
+            self.assertEqual(result["readiness"], "starting")
+            self.assertEqual(result["proxy"]["proxy_mode"], "direct")
+            self.assertEqual(result["proxy"]["failure"], {"kind": "http_status", "status_code": 502})
+            self.assertNotIn("model", result["proxy"]["failure"])
 
 
 if __name__ == "__main__":

@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -21,9 +22,7 @@ import vaws_dependency as deps  # noqa: E402
 class SpecLockTests(unittest.TestCase):
     def test_pyproject_requires_the_three_packages(self) -> None:
         versions = deps.required_versions()
-        self.assertEqual(versions["vaws-remote-dev"], "0.5.0")
-        self.assertEqual(versions["vaws-coordinator"], "0.3.1")
-        self.assertEqual(versions["vaws-knowledge"], "0.3.2")
+        self.assertEqual(set(versions), {"vaws-remote-dev", "vaws-coordinator", "vaws-knowledge"})
         self.assertNotIn(deps.VAWS_TOP_NAME, versions)
 
     def test_status_tracks_only_the_three_packages(self) -> None:
@@ -32,18 +31,9 @@ class SpecLockTests(unittest.TestCase):
 
     def test_lock_records_the_pinned_commits(self) -> None:
         locked = deps.locked_packages()
-        self.assertEqual(
-            locked["vaws-coordinator"]["commit"],
-            "a6a2841d7fcc4a0251564709330bcfdbce281fb0",
-        )
-        self.assertEqual(
-            locked["vaws-knowledge"]["commit"],
-            "41363d3641bfac47f202e77ce845aad68e6dc58c",
-        )
-        self.assertEqual(
-            locked["vaws-remote-dev"]["commit"],
-            "d0f963c9c10eaee8664f0f467745be4116f881d5",
-        )
+        sources = tomllib.loads((ROOT / "pyproject.toml").read_text())["tool"]["uv"]["sources"]
+        for name in deps.PACKAGE_NAMES:
+            self.assertEqual(locked[name]["commit"], sources[name]["rev"], name)
         expected_versions = deps.required_versions()
         for name in deps.PACKAGE_NAMES:
             self.assertEqual(locked[name]["version"], expected_versions[name], name)

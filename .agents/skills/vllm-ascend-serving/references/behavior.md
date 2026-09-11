@@ -25,3 +25,5 @@ execution on the task. Stop leaves the user container in place.
 
 `serve_probe_npus.py` is a host occupancy diagnostic. Pass `--host` or
 `--execution-id`. It is not allocation authority.
+
+The submitted run includes a parse-only preflight using the selected remote vLLM CLI parser, before NPU allocation. Health requests bypass environment HTTP proxies explicitly. Status/stop return compact execution facts, including progress, role errors and resource-release state; the full record remains coordinator-owned. Stop is complete only after `resources_released` is true.

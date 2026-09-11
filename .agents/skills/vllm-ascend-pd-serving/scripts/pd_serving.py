@@ -24,6 +24,8 @@ from vaws_venv import ensure_workspace_interpreter  # noqa: E402
 ensure_workspace_interpreter(repo_root=ROOT)
 
 
+from remote_dev.diagnostics import open_http, http_connection, http_failure
+from vaws_coordinator.presentation import execution_summary
 from vaws_coordinator.code_identity import manifest_code  # noqa: E402
 from vaws_coordinator.run_manifest import (  # noqa: E402
     RunManifestError,
@@ -31,6 +33,7 @@ from vaws_coordinator.run_manifest import (  # noqa: E402
     load_manifest,
     new_manifest,
     transition_status,
+    TERMINAL_STATUSES,
     write_manifest,
 )
 from vaws_task_target import (  # noqa: E402
@@ -161,6 +164,8 @@ def validate_config(config: Mapping[str, Any]) -> None:
             errors.append("proxy.base_url must be a non-empty string")
         if not isinstance(proxy.get("health_path", "/health"), str):
             errors.append("proxy.health_path must be a string")
+        if proxy.get("proxy_mode", "direct") not in {"direct", "environment"}:
+            errors.append("proxy.proxy_mode must be direct or environment")
     smoke = config.get("smoke")
     if not isinstance(smoke, Mapping):
         errors.append("smoke must be an object")
@@ -177,7 +182,7 @@ def role_env(service: Mapping[str, Any]) -> dict[str, str]:
     return reject_reserved_env({str(k): str(v) for k, v in dict(service.get("env") or {}).items()})
 
 
-def role_shell_command(service: Mapping[str, Any]) -> str:
+def role_shell_command(service: Mapping[str, Any], *, preflight_only=False) -> str:
     extra = [str(item) for item in service.get("args") or []]
     return build_serve_command(
         model=str(service["model"]),
@@ -185,6 +190,7 @@ def role_shell_command(service: Mapping[str, Any]) -> str:
         tp=service.get("tp"),
         dp=service.get("dp"),
         extra_args=extra,
+        preflight_only=preflight_only,
     )
 
 
@@ -197,6 +203,7 @@ def topology_from_config(config: Mapping[str, Any]) -> dict[str, Any]:
             "name": str(service["name"]),
             "npu_count": npu_count,
             "command": role_shell_command(service),
+            "preflight": role_shell_command(service, preflight_only=True),
             "service_port": int(service["port"]) if service.get("port") is not None else 0,
         }
         env = role_env(service)
@@ -317,46 +324,39 @@ def start(
         service=str(config["group_id"]),
         restart=restart,
     )
+    state.update(execution_id=reply["execution_id"], task_id=task_id_of(client), service=config["group_id"])
+    return _observe(output_dir, state, reply, updated_at=updated_at)
+
+
+def _observe(output_dir, state, observation, *, updated_at=None, readiness="unknown"):
+    """Project execution facts into the business record and manifest once per observation."""
     timestamp = updated_at or utc_now()
-    execution_id = reply.get("execution_id")
-    run_state = str(reply.get("state") or "")
-    if run_state in PENDING:
-        status = "queued"
-    elif run_state in RUNNING:
-        status = "running"
-    elif run_state in DONE:
-        status = "failed"
-    else:
-        status = "queued"
-    state.update(
-        {
-            "status": status,
-            "execution_id": execution_id,
-            "task_id": task_id_of(client),
-            "service": config["group_id"],
-            "state": run_state,
-            "assignment": reply.get("assignment"),
-            "roles": reply.get("roles"),
-            "result": reply,
-            "updated_at": timestamp,
-        }
-    )
-    _atomic_write(output_dir / "state.json", state)
+    run_state = observation["state"]
+    stopped = bool(state.get("stop_requested"))
+    released = observation.get("resources_released") is True
+    lifecycle = ("stopped" if released else "stopping") if stopped else (
+        "running" if run_state in RUNNING else "failed" if run_state in DONE else "queued")
+    # Terminal evidence never regresses after a late/stale status observation.
     manifest = load_manifest(output_dir / "manifest.json")
-    if status == "running":
-        manifest = transition_status(manifest, "running", updated_at=timestamp)
-    elif status == "failed":
-        manifest = transition_status(manifest, "failed", updated_at=timestamp)
-    write_manifest(output_dir / "manifest.json", manifest)
-    return {
-        "status": status,
-        "execution_id": execution_id,
-        "state": run_state,
-        "service": config["group_id"],
-        "running": status == "running",
-        "ready": False,
-        "result": reply,
-    }
+    if state["status"] != "stopped" and (manifest["status"] not in TERMINAL_STATUSES or stopped or run_state in DONE):
+        state.update(status=lifecycle, state=run_state, updated_at=timestamp, readiness=readiness)
+        _atomic_write(output_dir / "state.json", state)
+    if manifest["status"] not in TERMINAL_STATUSES:
+        desired = "running" if run_state in RUNNING else None
+        if stopped and released:
+            smoke_path = output_dir / "smoke.json"
+            passed = smoke_path.exists() and _load_json(smoke_path, "PD smoke")["status"] == "passed"
+            desired = "passed" if passed else "inconclusive"
+            if desired == "passed" and manifest["status"] == "planned":
+                manifest = transition_status(manifest, "running", updated_at=timestamp)
+        elif run_state in DONE and not stopped:
+            desired = "failed"
+        if desired and desired != manifest["status"]:
+            manifest = transition_status(manifest, desired, updated_at=timestamp)
+            write_manifest(output_dir / "manifest.json", manifest)
+    return {**execution_summary(observation), "status": state["status"],
+            "running": run_state in RUNNING, "ready": readiness == "ready",
+            "readiness": readiness, "manifest_ref": str(output_dir / "manifest.json")}
 
 
 def status(
@@ -364,7 +364,7 @@ def status(
     *,
     client: Any | None = None,
     context_file: str | None = None,
-    urlopen: Callable[..., Any] = urllib.request.urlopen,
+    urlopen: Callable[..., Any] | None = None,
 ) -> dict[str, Any]:
     config = _load_json(output_dir / "pd-config.json", "PD config")
     state = _load_json(output_dir / "state.json", "PD state")
@@ -373,43 +373,25 @@ def status(
         return {"status": "not_found", "error": "no coordinator execution for this PD run"}
     client = client or task_client(context_file)
     observation = client.observe(str(execution_id), "status")
-    run_state = str(observation.get("state") or "")
-    if run_state in PENDING:
-        return {
-            "status": "queued",
-            "execution_id": execution_id,
-            "state": run_state,
-            "running": False,
-            "ready": False,
-            "observation": observation,
-        }
-    health_url = (
-        config["proxy"]["base_url"].rstrip("/")
-        + "/"
-        + config["proxy"].get("health_path", "/health").lstrip("/")
-    )
-    proxy: dict[str, Any]
+    if observation["state"] not in RUNNING or state.get("stop_requested") or state["status"] in {"stopped", "failed"}:
+        return _observe(output_dir, state, observation)
+    health_url = config["proxy"]["base_url"].rstrip("/") + "/" + config["proxy"].get("health_path", "/health").lstrip("/")
+    mode = config["proxy"].get("proxy_mode", "direct")
+    proxy = http_connection(health_url, proxy_mode=mode)
     try:
-        with urlopen(health_url, timeout=5) as response:
-            proxy = {"ok": 200 <= response.status < 300, "status_code": response.status}
+        opener = urlopen or (lambda request, **kw: open_http(request, proxy_mode=mode, **kw))
+        with opener(health_url, timeout=5) as response:
+            proxy.update(ok=200 <= response.status < 300, status_code=response.status)
     except (OSError, urllib.error.URLError) as exc:
-        proxy = {"ok": False, "error": str(exc)}
-    ready = run_state in RUNNING and proxy["ok"]
-    return {
-        "status": "ready" if ready else "needs_repair",
-        "execution_id": execution_id,
-        "state": run_state,
-        "running": run_state in RUNNING,
-        "ready": ready,
-        "observation": observation,
-        "proxy": {"url": health_url, **proxy},
-    }
+        proxy.update(ok=False, failure=http_failure(exc))
+    readiness = "ready" if proxy["ok"] else "unhealthy" if state.get("readiness") in {"ready", "unhealthy"} else "starting"
+    return {**_observe(output_dir, state, observation, readiness=readiness), "proxy": proxy}
 
 
 def smoke(
     output_dir: Path,
     *,
-    urlopen: Callable[..., Any] = urllib.request.urlopen,
+    urlopen: Callable[..., Any] | None = None,
     updated_at: str | None = None,
 ) -> dict[str, Any]:
     config = _load_json(output_dir / "pd-config.json", "PD config")
@@ -425,12 +407,15 @@ def smoke(
         headers={"Content-Type": "application/json"},
         method="POST",
     )
+    mode = config["proxy"].get("proxy_mode", "direct")
+    connection = http_connection(request, proxy_mode=mode)
     try:
-        with urlopen(request, timeout=config["smoke"].get("timeout", 120)) as response:
+        opener = urlopen or (lambda request, **kw: open_http(request, proxy_mode=mode, **kw))
+        with opener(request, timeout=config["smoke"].get("timeout", 120)) as response:
             body = response.read().decode("utf-8", errors="replace")
             status_code = response.status
     except (OSError, urllib.error.URLError) as exc:
-        result = {"status": "failed", "url": url, "error": str(exc)}
+        result = {"status": "failed", "connection": connection, "failure": http_failure(exc), "completed_at": updated_at or utc_now()}
         _atomic_write(output_dir / "smoke.json", result)
         return result
     try:
@@ -439,7 +424,7 @@ def smoke(
         payload = {"raw_body": body[:4000]}
     result = {
         "status": "passed" if 200 <= status_code < 300 else "failed",
-        "url": url,
+        "connection": connection,
         "status_code": status_code,
         "response": payload,
         "completed_at": updated_at or utc_now(),
@@ -472,28 +457,8 @@ def stop(
         return {"status": "not_found", "container_preserved": True}
     client = client or task_client(context_file)
     result = client.observe(str(execution_id), "stop", force)
-    run_state = str(result.get("state") or "")
-    success = run_state in DONE
-    releasing = run_state in {"stopping", "releasing"}
-    timestamp = updated_at or utc_now()
-    state["status"] = "stopped" if success else "stopping" if releasing else "needs_repair"
-    state["state"] = run_state
-    state["stop_result"] = result
-    state["updated_at"] = timestamp
-    _atomic_write(output_dir / "state.json", state)
-    manifest = load_manifest(output_dir / "manifest.json")
-    if manifest["status"] == "running" and not releasing:
-        manifest = transition_status(
-            manifest, "passed" if success else "inconclusive", updated_at=timestamp
-        )
-        write_manifest(output_dir / "manifest.json", manifest)
-    return {
-        "status": state["status"],
-        "execution_id": execution_id,
-        "state": run_state,
-        "container_preserved": True,
-        "result": result,
-    }
+    state["stop_requested"] = True
+    return {**_observe(output_dir, state, result, updated_at=updated_at), "container_preserved": True}
 
 
 def build_parser() -> argparse.ArgumentParser:
