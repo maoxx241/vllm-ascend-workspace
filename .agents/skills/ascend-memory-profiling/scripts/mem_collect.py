@@ -385,7 +385,7 @@ def collect_weight_manifest(ep: SshEndpoint, python: str, model_path: str, local
 
 def _resolve_attach_state(args: argparse.Namespace, target: dict) -> dict:
     """Merge coordinator facts with optional local business launch config."""
-    report = load_serving_state(args.session_id) or {}
+    report = load_serving_state(args.session_id, service=args.service) or {}
     live = bool(target.get("live"))
     return {
         **report,

@@ -300,7 +300,28 @@ def diagnose_env_failure(stderr_tail: str) -> dict[str, Any] | None:
     matched = [tag for pattern, tag in _ENV_ERROR_PATTERNS if pattern in stderr_tail or re.search(pattern, stderr_tail)]
     if not matched:
         return None
-    return {"error_tags": sorted(set(matched)), "cause": "remote Python package version mismatch"}
+    return {"error_tags": sorted(set(matched)), "cause": "remote Python import or runtime initialization failed"}
+
+
+def startup_failure_details(client, execution_id: str | None) -> dict[str, Any]:
+    if not execution_id:
+        return {}
+    try:
+        tail = client.observe(execution_id, "tail")
+    except Exception:
+        return {}
+    text = "\n".join(str(tail.get(key) or "") for key in ("stdout", "stderr"))
+    if not text.strip():
+        text = str(tail.get("tail") or "")
+    errors = re.findall(r"\b[A-Z]\w*(?:Error|Exception):[^\r\n]+", text)
+    imports = [line for line in errors if line.startswith(("ModuleNotFoundError:", "ImportError:"))]
+    details: dict[str, Any] = {}
+    if errors:
+        details["log_error"] = (imports or errors)[-1][-1000:]
+    diagnosis = diagnose_env_failure(text)
+    if diagnosis:
+        details["env_diagnosis"] = diagnosis
+    return details
 
 
 def merge_with_previous(previous: dict[str, Any], **overrides: Any) -> dict[str, Any]:
@@ -343,6 +364,25 @@ def classify_run_state(state: str) -> str:
     return "pending"
 
 
+def wait_for_launch(client, reply: dict[str, Any], deadline: float) -> dict[str, Any]:
+    """Follow the submitted execution through preparation using its owner."""
+    execution_id = reply.get("execution_id")
+    last_progress = None
+    while execution_id and classify_run_state(str(reply.get("state") or "")) == "pending":
+        state = reply.get("state")
+        step = (reply.get("progress") or {}).get("step")
+        current = (state, step)
+        if current != last_progress:
+            emit_progress("prepare", str(step or state), state=state, execution_id=execution_id)
+            last_progress = current
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return {**reply, "wait_timed_out": True}
+        reply = client.wait(execution_id, until="running",
+                            timeout_seconds=min(15, remaining), poll_interval=2)
+    return reply
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter, allow_abbrev=False)
     parser.add_argument("--context-file")
@@ -359,6 +399,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--relaunch", action="store_true", help="replace a live named service (TaskClient restart=True)")
     parser.add_argument("--port", type=int)
     parser.add_argument("--health-timeout", type=int, default=DEFAULT_HEALTH_TIMEOUT)
+    parser.add_argument("--no-wait", action="store_true",
+                        help="return the execution receipt without waiting for launch or HTTP readiness")
     parser.add_argument("--wrap-script", default="")
     parser.add_argument("--npu-count", type=int)
     parser.add_argument("--recipe", help="named coordinator environment recipe")
@@ -420,7 +462,7 @@ def main(argv: list[str] | None = None) -> int:
             })
         client = task_client(args.context_file)
         task_id = task_id_of(client)
-        previous = load_serving_state(task_id)
+        previous = load_serving_state(task_id, service=args.service)
         if args.relaunch:
             if previous is None:
                 print_json({"status": "needs_input", "error": "no previous business config to relaunch"})
@@ -480,7 +522,7 @@ def main(argv: list[str] | None = None) -> int:
             wrap_script=wrap_script,
             expected_vllm=str((preset or {}).get("vllm_version") or ""),
         )
-        write_business_report(task_id, {
+        business_report = {
             "model": model,
             "served_model_name": served_model_name,
             "tp": tp,
@@ -493,7 +535,7 @@ def main(argv: list[str] | None = None) -> int:
             "recipe": args.recipe,
             "python_abi": args.python_abi,
             "cann": args.cann,
-        })
+        }
         if device_list and args.npu_count is not None:
             print_json({
                 "status": "needs_input",
@@ -514,6 +556,7 @@ def main(argv: list[str] | None = None) -> int:
             preset=preset,
         )
         emit_progress("launch", "submitting managed vLLM execution")
+        deadline = time.monotonic() + args.health_timeout
         reply = run_command(
             client,
             command,
@@ -528,6 +571,9 @@ def main(argv: list[str] | None = None) -> int:
             service=args.service,
             restart=bool(args.relaunch),
         )
+        write_business_report(task_id, business_report)
+        if not args.no_wait:
+            reply = wait_for_launch(client, reply, deadline)
         state = str(reply.get("state") or "")
         kind = classify_run_state(state)
         execution_id = reply.get("execution_id")
@@ -543,15 +589,19 @@ def main(argv: list[str] | None = None) -> int:
             "devices": devices,
             **execution_summary(reply),
         }
-        if kind == "pending":
+        if kind == "pending" or (args.no_wait and kind == "running"):
             output["status"] = state
-            output["running"] = False
+            output["running"] = kind == "running"
             output["ready"] = False
+            if reply.get("wait_timed_out"):
+                output["wait_timed_out"] = True
+                output["error"] = "startup wait timed out; use status with the same service or execution reference"
             print_json(output)
             return 0
         if kind == "terminal":
             output["status"] = "failed"
-            output["error"] = reply.get("reason") or reply.get("error") or f"execution ended in {state}"
+            output.update(startup_failure_details(client, execution_id))
+            output["error"] = reply.get("reason") or reply.get("error") or output.get("log_error") or f"execution ended in {state}"
             print_json(output)
             return 1
         port = service_port_of(reply)
@@ -578,7 +628,7 @@ def main(argv: list[str] | None = None) -> int:
 
         emit_progress("probe", f"waiting for ready (timeout={args.health_timeout}s)")
         readiness = wait_for_ready(
-            endpoint, port, args.health_timeout, served_model_name,
+            endpoint, port, max(0, deadline - time.monotonic()), served_model_name,
             still_running=still_running, log_text=log_text,
         )
         output["port"] = port

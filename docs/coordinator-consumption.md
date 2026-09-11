@@ -10,14 +10,13 @@ own request association, and does not tick the pool.
 
 See [target-state.md](target-state.md) and [dependency-plane.md](dependency-plane.md).
 
-The closeout candidate is checked with a local editable package. The
-published tag and lock update are parent-owned.
-
 ## 1. Public actions
 
 Configure clients with `python3 .agents/scripts/vaws_client_setup.py`.
 The native hook supplies `context_file`; never guess the task from cwd or
-history.
+history. For local Codex commands, the package can also resolve the actual
+`CODEX_THREAD_ID` when the hook did not export `VAWS_CONTEXT_FILE`. Conflicting
+native IDs fail explicitly. MCP callers still supply their attachment context.
 
 | Tool | Meaning |
 |---|---|
@@ -27,7 +26,7 @@ history.
 | `vaws_finish` | Close admission; stop owned executions; keep container, roots, evidence |
 
 Task MCP/CLI status may reuse a snapshot for two seconds. Use `refresh: true`
-or `vaws.py execution --refresh` for a new observation. Compact results retain
+or `python -m vaws_coordinator.vaws execution --refresh` for a new observation. Compact results retain
 `observation_freshness` (snapshot completion time, age, source and deferred
 refresh) plus per-role sampling times. Busy executions return immediately
 with the cached observation and mark refresh as deferred. Python
@@ -35,8 +34,8 @@ with the cached observation and mark refresh as deferred. Python
 These observations do not grant resource access. Tail, target and stop keep
 their existing behavior.
 
-CLI: `python3 .agents/scripts/vaws.py session|run|execution|finish` execs
-`python -m vaws_coordinator.vaws`. MCP: `python -m vaws_coordinator task-server`.
+Package CLI: `python -m vaws_coordinator.vaws session|run|execution|finish`.
+MCP: `python -m vaws_coordinator task-server`.
 
 A long-running service uses `timeout_seconds=None`, `resources.service_port=0`
 (or an explicit port), and a task-scoped business name (`service`). The same
@@ -44,6 +43,8 @@ spec reconnects; a changed spec without `restart=True` is an error. `--relaunch`
 is `restart=True`. Status reads package facts. Health/first-token are skill
 business checks against the returned endpoint and port once the execution is
 actually running.
+The serving entry follows preparation and readiness within one
+`--health-timeout`; `--no-wait` returns the execution receipt immediately.
 
 Container hostname `/etc/hosts` repair is coordinator environment preparation,
 not a per-model launch snippet.
@@ -106,7 +107,7 @@ A multi-role PD launch uses `topology={"roles": [{"name", "command",
 is literal data. The package reserves the full group before any role starts
 and returns per-role `target` / `tail` on `observe(..., role=...)` and on
 `roles[]`. Unmatched environment constraints stay `waiting_for_runtime`. CLI:
-`python3 .agents/scripts/vaws.py session|run|execution|finish`. MCP:
+`python -m vaws_coordinator.vaws session|run|execution|finish`. MCP:
 `python -m vaws_coordinator task-server`.
 
 ## 5. Source publication to an explicit endpoint

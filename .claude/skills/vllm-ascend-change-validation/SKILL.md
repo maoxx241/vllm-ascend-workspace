@@ -1,6 +1,6 @@
 ---
 name: "vllm-ascend-change-validation"
-description: "Analyze vLLM and vllm-ascend diffs, map affected components to the minimum sufficient correctness, build, performance, graph, operator, distributed, and profiling evidence, link downstream Run Manifest results, and produce a PR-ready validation report. Use for PR validation, workspace-diff risk analysis, deciding what tests a change requires, or documenting untested combinations. Do not use as a replacement for the downstream execution skills or for a change with no accessible diff."
+description: "Consolidate executed vLLM or vllm-ascend change validation into a report tied to an accessible diff and Run Manifest evidence. Use when asked to validate a change experimentally or produce a formal validation report. Ordinary PR reading, code review, diff explanation, and test suggestions use native code and Git tools."
 ---
 
 <!-- Generated from .agents/skills/vllm-ascend-change-validation/SKILL.md. Do not edit. -->

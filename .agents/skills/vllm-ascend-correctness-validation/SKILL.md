@@ -1,6 +1,6 @@
 ---
 name: vllm-ascend-correctness-validation
-description: Plan, execute, normalize, and compare vLLM Ascend inference correctness across baseline and candidate code states, eager and graph modes, offline generate or chat, online chat completions, and AISBench task metrics. Use for accuracy validation, token-output comparison, graph-versus-eager checks, deterministic regression testing, or failure classification. Do not use to root-cause an already reproduced graph-only or isolated-operator failure, or for throughput benchmarking, HBM attribution, or profiling-only analysis.
+description: Run and compare vLLM Ascend inference outputs or accuracy metrics across code states, eager/graph modes, or serving configurations. Use for token comparison, numerical regression checks, and AISBench accuracy evaluation. An already reproduced graph, operator or distributed failure uses its debug workflow; ordinary unit tests and code review use native tools.
 ---
 
 # vllm-ascend-correctness-validation

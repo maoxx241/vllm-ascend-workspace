@@ -1,6 +1,6 @@
 ---
 name: vllm-ascend-benchmark
-description: Run vLLM online-serving benchmarks on a workspace-managed remote container. Use for requests like "跑个 benchmark", "对比性能", "压测一下", "测下吞吐", or "看下有没有性能回退". Do not use for accuracy tests, nightly CI matrix runs, offline inference, or service-only lifecycle.
+description: Measure throughput and latency of a vLLM online service with a specified workload, including request-rate and concurrency sweeps. Use for 跑 benchmark, 压测, or 测吞吐. Code baseline-versus-candidate comparisons and performance regression decisions use vllm-ascend-performance-regression; accuracy and service lifecycle have separate workflows.
 ---
 
 # vllm-ascend-benchmark

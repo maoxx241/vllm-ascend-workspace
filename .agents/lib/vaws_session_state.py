@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import os
 import re
@@ -52,8 +53,11 @@ def task_dir(task_id: str, repo_root: Path = ROOT) -> Path:
     return task_state_root(repo_root) / require_task_id(task_id)
 
 
-def serving_state_path(task_id: str, repo_root: Path = ROOT) -> Path:
-    return task_dir(task_id, repo_root) / "serving.json"
+def serving_state_path(task_id: str, repo_root: Path = ROOT, *, service: str = "vllm") -> Path:
+    if not isinstance(service, str) or not service.strip():
+        raise SessionStateError("service must be a nonempty string")
+    digest = hashlib.sha256(service.encode("utf-8")).hexdigest()
+    return task_dir(task_id, repo_root) / "serving" / f"{digest}.json"
 
 
 def benchmark_dir(task_id: str, repo_root: Path = ROOT) -> Path:
@@ -81,13 +85,16 @@ def load_json_object(path: Path) -> dict[str, Any]:
     return data
 
 
-def load_serving_state(task_id: str, *, repo_root: Path = ROOT) -> dict[str, Any] | None:
+def load_serving_state(task_id: str, *, service: str = "vllm", repo_root: Path = ROOT) -> dict[str, Any] | None:
     """Human business launch config. Not an execution recovery receipt."""
-    path = serving_state_path(task_id, repo_root)
+    path = serving_state_path(task_id, repo_root, service=service)
     if not path.exists():
-        return None
+        path = task_dir(task_id, repo_root) / "serving.json"
+        if not path.exists():
+            return None
     try:
-        return load_json_object(path)
+        data = load_json_object(path)
+        return data if data.get("service", "vllm") == service else None
     except SessionStateError as exc:
         raise SessionStateError(
             f"serving report is unreadable: {path} ({exc}); inspect the running "
@@ -96,7 +103,7 @@ def load_serving_state(task_id: str, *, repo_root: Path = ROOT) -> dict[str, Any
 
 
 def save_serving_state(task_id: str, data: dict[str, Any], *, repo_root: Path = ROOT) -> Path:
-    path = serving_state_path(task_id, repo_root)
+    path = serving_state_path(task_id, repo_root, service=data.get("service", "vllm"))
     _atomic_write_json(path, data)
     return path
 
