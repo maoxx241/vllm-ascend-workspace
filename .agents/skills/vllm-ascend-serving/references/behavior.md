@@ -1,29 +1,14 @@
-# Behavior Reference
+# Behavior
 
-Use remote-dev companion tools for ad hoc remote read/edit/bash. This skill
-owns one colocated `vllm serve` as a coordinator execution.
+Start, inspect or stop one managed single-node vLLM Ascend service.
 
-## Launch
+Use serving.py status or serving.py stop with --execution-id or --service. A service reference is resolved by coordinator within the current task. Pending states retain their execution reference. Restart or release follows the requested lifecycle; no separate allocation, parity command or status ledger is needed.
 
-1. Native task context (`--context-file` / `VAWS_CONTEXT_FILE`).
-2. One `TaskClient.run(command, resources=..., environment=..., timeout_seconds=None, service=..., restart=...)`.
-3. Coordinator injects `VAWS_PYTHON`, `VAWS_SERVICE_PORT`, and
-   `ASCEND_RT_VISIBLE_DEVICES`. Hostname `/etc/hosts` repair is coordinator
-   environment setup, not this command.
-4. Queued / preparing / waiting / starting / uncertain is reported as `queued`. Health,
-   models, and first-token run only when the package returns a live endpoint
-   and port.
-5. `--relaunch` is `restart=True`. Local serving JSON is a business config
-   report, not a recovery ledger.
+Reuse the native task context and actual business source bindings. Choose model, parallelism and serving options from the request. Resource state and HTTP/models/first-token readiness are separate observations.
 
-## Status and stop
+Use pd-serving for prefill/decode topology, benchmark for measurement, and profiling-collection for profiler-window control.
 
-Exact `--service` or `--execution-id` only. No fallback to some other live
-execution on the task. Stop leaves the user container in place.
-
-## Probe
-
-`serve_probe_npus.py` is a host occupancy diagnostic. Pass `--host` or
-`--execution-id`. It is not allocation authority.
-
-The submitted run includes a parse-only preflight using the selected remote vLLM CLI parser, before NPU allocation. Health requests bypass environment HTTP proxies explicitly. Status/stop return compact execution facts, including progress, role errors and resource-release state; the full record remains coordinator-owned. Stop is complete only after `resources_released` is true.
+Progress is written to stderr; stdout contains the structured result. Remote
+device execution uses coordinator ownership. Local report construction does not
+allocate devices or alter an execution. Reports describe the supplied evidence;
+missing evidence is not a passing result.

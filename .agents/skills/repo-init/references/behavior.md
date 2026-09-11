@@ -62,7 +62,7 @@ Before mutating, ask only for choices that are still missing and affect the resu
 - unified workspace alias choice when its decision is pending
 - machine username choice when the profile is missing
 
-Authorized broad init defaults: keep current remotes if present, initialize submodules, run `uv sync`, CI-pinned vllm alignment. Topology / skip-sync / keep-current remain available as overrides, not as required confirmations.
+Authorized broad init defaults: keep current remotes if present, initialize submodules, run `python .agents/scripts/vaws_deps.py sync`, CI-pinned vllm alignment. Topology / skip-sync / keep-current remain available as overrides, not as required confirmations.
 
 If a username was not provided and a choice is needed, `repo_init_profile.py plan` offers:
 
@@ -113,7 +113,7 @@ The three in-process packages are not submodules. After the approved
 submodule work, run:
 
 ```
-uv sync
+python .agents/scripts/vaws_deps.py sync
 ```
 
 or `python3 .agents/scripts/vaws_deps.py sync`.
@@ -122,7 +122,7 @@ Rules:
 
 - this step is required for remote-dev / coordinator / knowledge work
 - the packages are public git+https installs; `uv.lock` is the only pin
-- `uvx vaws-top` is a separate service and is not part of `uv sync`
+- `uvx vaws-top` is a separate service and is not part of `python .agents/scripts/vaws_deps.py sync`
 - do not reimplement capability logic; after install or skip, run `python3 .agents/scripts/vaws_deps.py doctor` and name available / unavailable capabilities from that report
 
 ### Stage 6: topology
@@ -191,5 +191,5 @@ A successful run usually ends with:
 - recursive submodules initialized for authorized broad init or the requested submodule setup
 - remotes matching the user's selected topology
 - local `main` tracking the selected working remote where the user approved branch movement
-- package installation (`uv sync`) completed for authorized package-dependent setup; an explicitly skipped install leaves those capabilities unavailable
+- package installation (`python .agents/scripts/vaws_deps.py sync`) completed for authorized package-dependent setup; an explicitly skipped install leaves those capabilities unavailable
 - finish names capabilities from `vaws_deps.py doctor`, not from a re-derived list

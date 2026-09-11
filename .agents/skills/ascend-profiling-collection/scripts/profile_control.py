@@ -46,7 +46,7 @@ if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 
 from _common import emit_progress, endpoint_from_reply, print_json, service_port_of, ssh_exec  # noqa: E402
-from vaws_task_target import executions_for_service, task_client  # noqa: E402
+from vaws_task_target import task_client  # noqa: E402
 
 DEFAULT_TIMEOUT_SECONDS = 600
 ALLOWED_ACTIONS = ("start_profile", "stop_profile")
@@ -132,14 +132,10 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         client = task_client(args.context_file)
-        if args.execution_id:
-            observation = client.observe(args.execution_id, "status")
-        else:
-            rows = executions_for_service(client, args.service)
-            if not rows:
-                print_json({"status": "not_found", "action": args.action, "message": "no service execution"})
-                return 2
-            observation = client.observe(str(rows[-1].get("id") or rows[-1].get("execution_id")), "status")
+        observation = client.observe(args.execution_id, service=None if args.execution_id else args.service)
+        if observation.get("state") == "not_found":
+            print_json({"status": "not_found", "action": args.action, "message": "no service execution"})
+            return 2
         port = service_port_of(observation)
         if not port:
             print_json({"status": "not_found", "action": args.action, "message": "execution has no service port"})

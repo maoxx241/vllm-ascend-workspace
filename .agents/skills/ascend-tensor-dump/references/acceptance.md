@@ -44,7 +44,7 @@
 23. 所有 `capture`、`capture_inputs`、`capture_graph`、`graph_slot` 调用已删除，不是仅关闭环境变量。
 24. 删除插桩后重跑过最小复现和原始复现。
 25. dump 路径作为证据引用进 `vllm-ascend-graph-debug` 的 case 或 `ascend-operator-debug` 的矩阵。这个 skill 不新建 Run Manifest。
-26. 新根因经过验证后，用 `.agents/scripts/knowledge_capture.py` 记了候选。
+26. 新根因经过验证后，由正常任务总结捕获；需要共享时使用包生成的脱敏副本。
 
 ## 不需要做的事
 

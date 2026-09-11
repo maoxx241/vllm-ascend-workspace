@@ -49,6 +49,7 @@ CORRECTNESS_MUST_OBSERVE = (
 )
 PERFORMANCE_MUST_OBSERVE = (
     *IDENTITY_GROUPS,
+    "machine",
     "serve_args",
     "bench_args",
     "dataset",

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Control and analyze alternating vLLM Ascend A/B performance experiments."""
+"""Run or analyze a complete alternating vLLM Ascend performance comparison."""
 
 from __future__ import annotations
 
@@ -51,7 +51,7 @@ DEFAULT_BENCHMARK_METRICS = {
     "ttft": "mean_ttft_ms",
     "tpot": "mean_tpot_ms",
     "itl": "mean_itl_ms",
-    "acceptance_rate": "acceptance_rate",
+    "acceptance_rate": "spec_decode_acceptance_rate",
 }
 # Every non-code condition the parity certificate claims to hold constant.
 # Record the shared object itself and compare it by structure, not a hash.
@@ -176,6 +176,8 @@ def normalize_benchmark_result(
         "metrics": normalized_metrics,
         "source": source,
     }
+    if isinstance(benchmark.get("observation"), Mapping):
+        measurement["observation"] = dict(benchmark["observation"])
     validate_measurement(measurement)
     return measurement
 
@@ -390,7 +392,7 @@ def build_parity_check(config: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def plan(
+def _prepare_report(
     output_dir: Path,
     *,
     config_path: Path,
@@ -434,9 +436,8 @@ def plan(
     _atomic_write(
         output_dir / "reproduction.md",
         "# Performance regression reproduction\n\n"
-        "Follow `schedule.json` in order. For every entry, establish code parity for "
-        "the named state, run the shared Serving and Benchmark configuration, and "
-        "record a normalized result with the same `shared` object.\n",
+        "The collector follows `schedule.json` automatically. Raw measurements retain "
+        "the source, runtime and invocation observations used for comparison.\n",
     )
     manifest = new_manifest(
         run_type="performance",
@@ -504,7 +505,7 @@ def validate_measurement(measurement: Mapping[str, Any]) -> None:
         raise PerformanceRegressionError("; ".join(errors))
 
 
-def record(
+def _record_result(
     output_dir: Path,
     *,
     result_path: Path,
@@ -761,6 +762,7 @@ def _declared_state_identity(
             "max_concurrency": shared["max_concurrency"],
             "request_rate": shared["request_rate"],
             "npu_devices": shared["npu_devices"],
+            "machine": shared["machine"],
         },
         origin="declared",
     )
@@ -870,9 +872,9 @@ def build_comparability_certificate(
 ) -> dict[str, Any]:
     run_id = str(config["run_id"])
     rows = list(measurements.get("measurements", []))
-    vary = config.get("allowed_differences") or [
+    vary = config.get("allowed_differences", [
         "workspace_snapshot.vllm_ascend_commit"
-    ]
+    ])
     return issue_certificate(
         _state_identity(
             config,
@@ -893,7 +895,7 @@ def build_comparability_certificate(
     )
 
 
-def analyze(output_dir: Path, *, updated_at: str | None = None) -> dict[str, Any]:
+def _analyze_report(output_dir: Path, *, updated_at: str | None = None) -> dict[str, Any]:
     state = _load_json(output_dir / "run.json", "run state")
     if state["status"] != "running":
         raise PerformanceRegressionError(f"run must be running, got {state['status']}")
@@ -940,81 +942,109 @@ def analyze(output_dir: Path, *, updated_at: str | None = None) -> dict[str, Any
     }
 
 
-def build_parser() -> argparse.ArgumentParser:
+def _inconclusive_report(output, reason):
+    timestamp = utc_now()
+    comparison = {"status": "inconclusive", "reason": reason}
+    _write_json(output / "comparison.json", comparison)
+    _atomic_write(output / "report.md", "# Performance comparison\n\nStatus: **inconclusive**\n\n" + reason + "\n")
+    manifest = load_manifest(output / "manifest.json")
+    if manifest["status"] == "planned":
+        manifest = transition_status(manifest, "running", updated_at=timestamp)
+    for name in ("comparison", "report"):
+        manifest = add_artifact(manifest, name=name, kind=name, uri=f"{name}.{'json' if name == 'comparison' else 'md'}")
+    manifest = transition_status(manifest, "inconclusive", updated_at=timestamp)
+    write_manifest(output / "manifest.json", manifest)
+    return {**comparison, "report": str(output / "report.md"), "manifest": str(output / "manifest.json")}
+
+
+def build_report(config_path: Path, result_paths: list[Path], *, output_dir=None, workspace_root=ROOT, collection_error=None):
+    from uuid import uuid4
+    from vaws_report import report_directory
+    output = report_directory(workspace_root, "vllm-ascend-performance-regression", output_dir)
+    config = _load_json(config_path, "comparison config")
+    config["schema_version"] = SCHEMA_VERSION
+    config.setdefault("run_id", f"performance-{uuid4().hex[:12]}")
+    rows = [_load_json(path, "measurement") for path in result_paths]
+    if "allowed_differences" not in config and all(config.get(state, {}).get("sources") for state in STATES):
+        # The business input explicitly compares two code worktrees. Source
+        # revisions and their compiled artifacts are the intended variables;
+        # runtime/workload changes must still be detected as confounders.
+        keys = set()
+        for row in rows:
+            identity = identity_from_recorded_observation("measurement", row.get("observation") or {})
+            keys.update(key for key in identity.leaves
+                        if key.startswith("workspace_snapshot.") and key.endswith("_commit")
+                        or key == "native_digest" or key.startswith("native_digest."))
+        config["allowed_differences"] = sorted(keys)
+    first = next((row.get("observation") for row in rows if row.get("observation")), {})
+    config.setdefault("shared", {key: first[key] for key in REQUIRED_SHARED_KEYS if key in first})
+    for state in STATES:
+        sample = next((row for row in rows if row.get("state") == state and row.get("observation")), {})
+        observed_code = sample.get("observation", {}).get("workspace_snapshot", {}).get("vllm_ascend_commit")
+        config[state] = dict(config.get(state, {}))
+        config[state].setdefault("label", state)
+        config[state].setdefault("service", f"report-{state}")
+        config[state].setdefault("code_snapshot", observed_code or "unknown")
+    config.setdefault("warmups", 1)
+    config.setdefault("runs", 3)
+    try:
+        validate_config(config)
+    except PerformanceRegressionError as exc:
+        if output.exists() and any(output.iterdir()):
+            raise PerformanceRegressionError(f"output directory is not empty: {output}")
+        output.mkdir(parents=True, exist_ok=True)
+        write_manifest(output / "manifest.json", new_manifest(run_type="performance", run_id=config["run_id"], workspace_root=workspace_root))
+        _write_json(output / "input-results.json", {"results": rows, "sources": [str(p.resolve()) for p in result_paths]})
+        return _inconclusive_report(output, str(exc))
+    # Format IDs and normalized copies are report internals, not Agent inputs.
+    with tempfile.TemporaryDirectory() as temporary:
+        prepared = Path(temporary) / "config.json"
+        _write_json(prepared, config)
+        _prepare_report(output, config_path=prepared, workspace_root=workspace_root)
+        for index, (row, source) in enumerate(zip(rows, result_paths)):
+            if row.get("status") == "ok":
+                row = normalize_benchmark_result(row, state=row["state"], phase=row["phase"], ordinal=row["ordinal"],
+                                                  shared=config["shared"], source=str(source.resolve()))
+            else:
+                row = {**row, "schema_version": 1, "shared": row.get("shared", config["shared"]), "source": str(source.resolve())}
+            normalized = Path(temporary) / f"result-{index}.json"
+            _write_json(normalized, row)
+            _record_result(output, result_path=normalized)
+    if collection_error:
+        return _inconclusive_report(output, collection_error)
+    try:
+        result = _analyze_report(output)
+    except PerformanceRegressionError as exc:
+        return _inconclusive_report(output, str(exc))
+    return {**result, "manifest": str(output / "manifest.json")}
+
+
+def run_experiment(config_path: Path, *, output_dir=None, context_file=None):
+    scripts = str(Path(__file__).parent)
+    if scripts not in sys.path:
+        sys.path.insert(0, scripts)
+    from _performance_collect import collect_experiment
+    return collect_experiment(config_path, output_dir=output_dir, context_file=context_file)
+
+
+def build_parser():
     parser = argparse.ArgumentParser(description=__doc__)
-    subparsers = parser.add_subparsers(dest="action", required=True)
-    plan_parser = subparsers.add_parser("plan", help="validate and schedule an experiment")
-    plan_parser.add_argument("--output-dir", required=True, type=Path)
-    plan_parser.add_argument("--config", required=True, type=Path)
-    record_parser = subparsers.add_parser("record", help="record the next measurement")
-    record_parser.add_argument("--output-dir", required=True, type=Path)
-    record_parser.add_argument("--result", required=True, type=Path)
-    normalize_parser = subparsers.add_parser(
-        "normalize", help="normalize one Benchmark result"
-    )
-    normalize_parser.add_argument("--result", required=True, type=Path)
-    normalize_parser.add_argument("--output", required=True, type=Path)
-    normalize_parser.add_argument("--state", required=True, choices=STATES)
-    normalize_parser.add_argument("--phase", required=True, choices=PHASES)
-    normalize_parser.add_argument("--ordinal", required=True, type=int)
-    normalize_parser.add_argument(
-        "--shared",
-        required=True,
-        help="JSON object of the planned shared configuration",
-    )
-    normalize_parser.add_argument(
-        "--metric-map",
-        action="append",
-        default=[],
-        metavar="TARGET=SOURCE",
-        help="add or override a Benchmark-to-measurement metric mapping",
-    )
-    analyze_parser = subparsers.add_parser("analyze", help="analyze completed measurements")
-    analyze_parser.add_argument("--output-dir", required=True, type=Path)
+    parser.add_argument("--config", required=True, type=Path, help="Business workload, source worktrees and regression thresholds")
+    parser.add_argument("--results", nargs="+", type=Path, help="Analyze already collected measurements")
+    parser.add_argument("--output-dir", type=Path)
+    parser.add_argument("--context-file", help="Native task context for a new collection")
     return parser
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv=None):
     args = build_parser().parse_args(argv)
     try:
-        if args.action == "plan":
-            emit_progress("plan", output_dir=str(args.output_dir))
-            payload = plan(
-                args.output_dir,
-                config_path=args.config,
-                code=manifest_code(ROOT),
-            )
-        elif args.action == "normalize":
-            emit_progress("normalize", result=str(args.result))
-            benchmark = _load_json(args.result, "Benchmark result")
-            shared = json.loads(args.shared)
-            if not isinstance(shared, dict):
-                raise PerformanceRegressionError("--shared must be a JSON object")
-            normalized = normalize_benchmark_result(
-                benchmark,
-                state=args.state,
-                phase=args.phase,
-                ordinal=args.ordinal,
-                shared=shared,
-                source=str(args.result.resolve()),
-                metric_map=parse_metric_maps(args.metric_map),
-            )
-            _write_json(args.output, normalized)
-            payload = {
-                "status": "normalized",
-                "output": str(args.output.resolve()),
-                "metrics": sorted(normalized["metrics"]),
-            }
-        elif args.action == "record":
-            emit_progress("record", result=str(args.result))
-            payload = record(args.output_dir, result_path=args.result)
-        else:
-            emit_progress("analyze", output_dir=str(args.output_dir))
-            payload = analyze(args.output_dir)
-    except (PerformanceRegressionError, RunManifestError) as exc:
+        result = build_report(args.config, args.results, output_dir=args.output_dir) if args.results else run_experiment(
+            args.config, output_dir=args.output_dir, context_file=args.context_file)
+    except (PerformanceRegressionError, RunManifestError, OSError, ValueError) as exc:
         print(json.dumps({"status": "failed", "error": str(exc)}, ensure_ascii=False))
         return 1
-    print(json.dumps(payload, ensure_ascii=False))
+    print(json.dumps(result, ensure_ascii=False))
     return 0
 
 

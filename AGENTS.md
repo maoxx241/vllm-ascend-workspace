@@ -50,7 +50,7 @@ current task. Ordinary coding, docs and Git operations need no management skill.
 Detailed tool arguments belong to package help and the linked documentation.
 
 For explicit knowledge editing, read the installed package's skill with
-`uv run python -m vaws_knowledge skill`. Normal capture and lookup need no
+`knowledge` package skill through its configured interpreter (`python -m vaws_knowledge skill`). Normal capture and lookup need no
 curation workflow. Knowledge is Markdown: shared releases are read-only,
 project material lives in `.agents/knowledge/`, and candidates in
 `.vaws-local/knowledge/candidate/`. Preserve known conditions and uncertainty.
@@ -69,7 +69,7 @@ human. Native client hook trust is not granted by setup.
 ## Verification and maintenance
 
 Use `python3 .agents/scripts/vaws_deps.py doctor` to inspect installed
-capabilities; `uv sync` consumes `pyproject.toml` and `uv.lock`. vaws-top is a
+capabilities; `python .agents/scripts/vaws_deps.py sync` consumes `pyproject.toml` and `uv.lock`. vaws-top is a
 separate uvx service. Pin drift is reported, not a new execution gate.
 
 Pure Python control-plane, configuration and documentation checks run locally.

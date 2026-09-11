@@ -64,6 +64,27 @@ while _scripts in sys.path:
     sys.path.remove(_scripts)
 
 
+class ImageEncodingTests(unittest.TestCase):
+    def test_image_encoding_handles_unicode_path_and_preserves_source(self):
+        import base64
+        from PIL import Image
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "图片 source.png"
+            Image.new("RGBA", (8, 4), (200, 30, 20, 128)).save(path)
+            before = path.read_bytes()
+            url, metadata = collect._build_image_data_url(path, 12)
+            with Image.open(io.BytesIO(base64.b64decode(url.split(",", 1)[1]))) as encoded:
+                self.assertEqual(encoded.size, (24, 12))
+                self.assertEqual(encoded.mode, "RGB")
+            self.assertEqual(metadata["source_width"], 8)
+            self.assertEqual(path.read_bytes(), before)
+            self.assertEqual(list(Path(temp).iterdir()), [path])
+
+    def test_nonpositive_height_is_rejected_before_reading_image(self):
+        with self.assertRaisesRegex(ValueError, "positive"):
+            collect._build_image_data_url(Path("missing.png"), 0)
+
+
 class FakeProcess:
     def __init__(self, returncode: int | None = None, stderr: str = "") -> None:
         self.returncode = returncode
@@ -267,8 +288,8 @@ def _patch_collection(run_dir: Path, **overrides: object):
     patches = {
         "resolve_execution_target": mock.Mock(return_value=fake_target()),
         "unique_collection_run_dir": mock.Mock(return_value=run_dir),
-        "knowledge_preflight_advisories": mock.Mock(return_value=[]),
-        "knowledge_failure_matches": mock.Mock(return_value=[]),
+        "knowledge_preflight_advisories": mock.Mock(return_value={"results": [], "unavailable": False}),
+        "knowledge_failure_matches": mock.Mock(return_value={"results": [], "unavailable": False}),
         "call_serve_start": mock.Mock(
             return_value={"status": "ready", "runtime_dir": "/tmp/runtime", "port": 8000}
         ),

@@ -2,7 +2,7 @@ Status: current
 
 # Windows installation and offline transfer
 
-Run these PowerShell commands from the workspace root. Install Windows x64
+These are Agent execution recipes for PowerShell in the workspace root. Prepare Windows x64
 Python, uv and Git first. The validated combination is Python 3.13.12 and uv
 0.10.7; the project supports other Python versions, but a prepared cache must
 be validated again for another platform, interpreter or uv version. See the
@@ -13,14 +13,14 @@ be validated again for another platform, interpreter or uv version. See the
 ```powershell
 $workspaceRoot = (Get-Location).Path
 $cachePath = Join-Path $workspaceRoot '.vaws-local\uv-cache'
-uv sync --locked --group dev --python 3.13 --no-python-downloads --cache-dir $cachePath --link-mode hardlink
+python .agents/scripts/vaws_deps.py sync --locked --group dev --python 3.13 --no-python-downloads --cache-dir $cachePath --link-mode hardlink
 if ($LASTEXITCODE -ne 0) { throw 'Dependency installation failed' }
-& .\.venv\Scripts\python.exe .agents/scripts/vaws_deps.py doctor
+& .\.vaws-local\venvs\win32\Scripts\python.exe .agents/scripts/vaws_deps.py doctor
 if ($LASTEXITCODE -ne 0) { throw 'Dependency inspection failed' }
 ```
 
 `--cache-dir` applies to this command. Keep using the same cache path on later
-syncs. A local cache on the same filesystem as `.venv` permits hardlinks;
+syncs. A local cache on the same filesystem as the platform environment permits hardlinks;
 cross-filesystem installations fall back to copying. This matters when the
 workspace is on a different drive from the default user cache. A junction or
 mounted directory can still cross filesystems despite sharing a drive letter.
@@ -46,7 +46,7 @@ $bundlePath = Join-Path $workspaceRoot ('.vaws-local\offline-bundle-' + (Get-Dat
 if (Test-Path -LiteralPath $bundlePath) { throw 'Choose a new bundle directory' }
 New-Item -ItemType Directory -Path $bundlePath -ErrorAction Stop | Out-Null
 Copy-Item -LiteralPath $cachePath -Destination (Join-Path $bundlePath 'uv-cache') -Recurse -Force -ErrorAction Stop
-$pythonIdentity = & .\.venv\Scripts\python.exe -c 'import platform, sysconfig; print(platform.python_version(), sysconfig.get_platform())'
+$pythonIdentity = & .\.vaws-local\venvs\win32\Scripts\python.exe -c 'import platform, sysconfig; print(platform.python_version(), sysconfig.get_platform())'
 if ($LASTEXITCODE -ne 0) { throw 'Cannot read Python identity' }
 $manifest = [ordered]@{
     uv = (uv --version)
@@ -60,7 +60,7 @@ $bundlePath
 
 Transfer that bundle and the matching workspace checkout separately. Prepare
 the Python/uv/Git installers while online if the destination lacks them. Do not
-copy `.venv` as the installation: recreate it from the lock and cache. The
+copy a prepared virtual environment as the installation: recreate it from the lock and cache. The
 bundle does not include model weights, remote containers, shared knowledge
 Release downloads or the separate vaws-top service. Those have their own
 preparation and storage requirements. Native client configuration belongs to
@@ -68,14 +68,14 @@ the destination machine; see [repo-init](../.agents/skills/repo-init/SKILL.md).
 
 ## Recreate the environment offline
 
-Open PowerShell at the matching destination checkout and set the bundle path
-to the directory you transferred. The following checks prevent accidentally
+Run from the matching destination checkout with the bundle path resolved from
+the transfer operation. The following checks prevent accidentally
 using a bundle prepared for a different lock or interpreter. Use a new local
 cache directory instead of merging files into an active uv cache.
 
 ```powershell
 $workspaceRoot = (Get-Location).Path
-$bundlePath = Read-Host 'Path to the transferred offline bundle'
+# $bundlePath is the actual transferred bundle directory selected by the Agent.
 $manifest = Get-Content -LiteralPath (Join-Path $bundlePath 'manifest.json') -Raw -ErrorAction Stop | ConvertFrom-Json
 if ((uv --version) -ne $manifest.uv) { throw 'Install the uv version recorded in manifest.json' }
 $pythonIdentity = py -3.13 -c 'import platform, sysconfig; print(platform.python_version(), sysconfig.get_platform())'
@@ -87,9 +87,9 @@ $cachePath = Join-Path $workspaceRoot ('.vaws-local\offline-cache-' + (Get-Date 
 if (Test-Path -LiteralPath $cachePath) { throw 'Choose a new cache directory' }
 New-Item -ItemType Directory -Path (Split-Path -Parent $cachePath) -Force -ErrorAction Stop | Out-Null
 Copy-Item -LiteralPath (Join-Path $bundlePath 'uv-cache') -Destination $cachePath -Recurse -Force -ErrorAction Stop
-uv sync --locked --group dev --python 3.13 --offline --no-python-downloads --cache-dir $cachePath --link-mode hardlink
+python .agents/scripts/vaws_deps.py sync --locked --group dev --python 3.13 --offline --no-python-downloads --cache-dir $cachePath --link-mode hardlink
 if ($LASTEXITCODE -ne 0) { throw 'Offline sync failed; retain the output and prepare the missing cache entries online' }
-& .\.venv\Scripts\python.exe .agents/scripts/vaws_deps.py doctor
+& .\.vaws-local\venvs\win32\Scripts\python.exe .agents/scripts/vaws_deps.py doctor
 if ($LASTEXITCODE -ne 0) { throw 'Dependency inspection failed' }
 ```
 

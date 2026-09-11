@@ -153,7 +153,7 @@ def validate_config(config: Mapping[str, Any]) -> None:
         raise DevelopmentError("; ".join(errors))
 
 
-def plan(
+def _prepare_report(
     output_dir: Path,
     *,
     config_path: Path,
@@ -235,24 +235,22 @@ def _artifact_path(manifest_path: Path, artifact: Mapping[str, Any]) -> Path:
     return path if path.is_absolute() else manifest_path.parent / path
 
 
-def finalize(
+def _finalize_report(
     output_dir: Path,
     *,
     kernel: Path,
-    semantic_report: Path,
-    sketch: Path,
     validation_manifest: Path,
+    semantic_report: Path | None = None,
+    sketch: Path | None = None,
     updated_at: str | None = None,
 ) -> dict[str, Any]:
     for path, label in ((kernel, "kernel"), (semantic_report, "semantic report"), (sketch, "sketch")):
-        _require_nonempty(path, label)
+        if path is not None:
+            _require_nonempty(path, label)
     manifest = load_manifest(output_dir / "manifest.json")
     validation = load_manifest(validation_manifest)
     if validation["run_type"] != "correctness":
         raise DevelopmentError("validation manifest must use run_type correctness")
-    valid_parents = {manifest["run_id"], manifest["parent_run_id"]} - {None}
-    if validation["parent_run_id"] not in valid_parents:
-        raise DevelopmentError("validation parent_run_id must identify this run or its parent workflow")
     if validation["status"] not in TERMINAL_STATUSES:
         raise DevelopmentError("validation manifest must be terminal")
     kernel_hash = sha256_file(kernel)
@@ -269,6 +267,13 @@ def finalize(
         raise DevelopmentError("validation case matrix cases must be an array of objects")
     if {case.get("id") for case in matrix_cases} != expected_cases:
         raise DevelopmentError("validation case set does not match the development case set")
+    if validation["status"] == "passed":
+        analysis = _load_json(_artifact_path(validation_manifest, _artifact(validation, "analysis")), "validation analysis")
+        results = analysis.get("results", [])
+        if (analysis.get("status") != "passed" or len(results) != len(expected_cases)
+                or {row.get("case_id") for row in results} != expected_cases
+                or any(row.get("status") != "passed" for row in results)):
+            raise DevelopmentError("passed validation needs passing results for every development case")
     terminal = {
         "passed": "passed",
         "failed": "failed",
@@ -280,8 +285,8 @@ def finalize(
         "schema_version": SCHEMA_VERSION,
         "status": terminal,
         "kernel": {"path": str(kernel.resolve()), "sha256": kernel_hash},
-        "semantic_report": {"path": str(semantic_report.resolve()), "sha256": sha256_file(semantic_report)},
-        "sketch": {"path": str(sketch.resolve()), "sha256": sha256_file(sketch)},
+        "semantic_report": {"path": str(semantic_report.resolve()), "sha256": sha256_file(semantic_report)} if semantic_report else None,
+        "sketch": {"path": str(sketch.resolve()), "sha256": sha256_file(sketch)} if sketch else None,
         "validation": {
             "run_id": validation["run_id"],
             "status": validation["status"],
@@ -293,11 +298,12 @@ def finalize(
         manifest = transition_status(manifest, "running", updated_at=timestamp)
     artifacts = (
         ("kernel", "triton-kernel", str(kernel.resolve())),
-        ("semantic-report", "semantic-report", str(semantic_report.resolve())),
-        ("sketch", "kernel-sketch", str(sketch.resolve())),
         ("development-result", "result", "development-result.json"),
         ("validation-manifest", "run-manifest", str(validation_manifest.resolve())),
     )
+    for name, path in (("semantic-report", semantic_report), ("sketch", sketch)):
+        if path is not None:
+            artifacts += ((name, name, str(path.resolve())),)
     for name, kind, uri in artifacts:
         manifest = add_artifact(manifest, name=name, kind=kind, uri=uri, updated_at=timestamp)
     report = (
@@ -320,40 +326,35 @@ def finalize(
     return {"status": terminal, "kernel_sha256": result["kernel"]["sha256"], "result": str((output_dir / "development-result.json").resolve())}
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
-    subparsers = parser.add_subparsers(dest="action", required=True)
-    plan_parser = subparsers.add_parser("plan")
-    plan_parser.add_argument("--output-dir", required=True, type=Path)
-    plan_parser.add_argument("--config", required=True, type=Path)
-    finalize_parser = subparsers.add_parser("finalize")
-    finalize_parser.add_argument("--output-dir", required=True, type=Path)
-    finalize_parser.add_argument("--kernel", required=True, type=Path)
-    finalize_parser.add_argument("--semantic-report", required=True, type=Path)
-    finalize_parser.add_argument("--sketch", required=True, type=Path)
-    finalize_parser.add_argument("--validation-manifest", required=True, type=Path)
+def build_report(config_path: Path, *, kernel: Path, validation_manifest: Path, output_dir=None,
+                 semantic_report=None, sketch=None, workspace_root=ROOT):
+    from vaws_report import report_config, report_directory
+    output = report_directory(workspace_root, "ascend-triton-operator-development", output_dir)
+    with report_config(config_path, root=workspace_root, prefix="development") as config:
+        _prepare_report(output, config_path=config, workspace_root=workspace_root)
+    result = _finalize_report(output, kernel=kernel, validation_manifest=validation_manifest,
+                              semantic_report=semantic_report, sketch=sketch)
+    return {**result, "manifest_ref": str(output / "manifest.json")}
+
+
+def build_parser():
+    parser = argparse.ArgumentParser(description="Package a kernel with its matching validation evidence.")
+    for field in ("config", "kernel", "validation-manifest"):
+        parser.add_argument("--" + field, required=True, type=Path)
+    for field in ("semantic-report", "sketch", "output-dir"):
+        parser.add_argument("--" + field, type=Path)
     return parser
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv=None):
     args = build_parser().parse_args(argv)
     try:
-        if args.action == "plan":
-            payload = plan(
-                args.output_dir, config_path=args.config, code=manifest_code(ROOT)
-            )
-        else:
-            payload = finalize(
-                args.output_dir,
-                kernel=args.kernel,
-                semantic_report=args.semantic_report,
-                sketch=args.sketch,
-                validation_manifest=args.validation_manifest,
-            )
-    except (DevelopmentError, RunManifestError) as exc:
+        result = build_report(args.config, kernel=args.kernel, validation_manifest=args.validation_manifest,
+                              semantic_report=args.semantic_report, sketch=args.sketch, output_dir=args.output_dir)
+    except (DevelopmentError, RunManifestError, OSError, ValueError) as exc:
         print(json.dumps({"status": "failed", "error": str(exc)}, ensure_ascii=False))
         return 1
-    print(json.dumps(payload, ensure_ascii=False))
+    print(json.dumps(result, ensure_ascii=False))
     return 0
 
 

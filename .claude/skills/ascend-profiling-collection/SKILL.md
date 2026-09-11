@@ -5,7 +5,7 @@ description: "Collect one Ascend torch-profiler case end-to-end on a workspace-m
 
 <!-- Generated from .agents/skills/ascend-profiling-collection/SKILL.md. Do not edit. -->
 
-# Ascend Profiling Collection
+# ascend-profiling-collection
 
 Read `.agents/skills/ascend-profiling-collection/SKILL.md` and only the references needed
 for the current task. The canonical skill owns the workflow.

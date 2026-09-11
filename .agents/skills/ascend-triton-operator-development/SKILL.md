@@ -3,41 +3,29 @@ name: ascend-triton-operator-development
 description: Develop a first correct Ascend Triton operator from a PyTorch reference or migrate an existing GPU Triton kernel to Ascend, including semantic audit, explicit task contracts, hardware-aware grid and tiling design, implementation, and handoff to correctness validation. Use for new kernel implementation, CUDA/GPU Triton migration, or repairing a candidate that has not yet passed correctness. Do not use for a kernel that already passes all planned cases and only needs performance tuning, for isolated torch_npu or ACLNN debugging, or for model-level graph failures.
 ---
 
-# Ascend Triton Operator Development
+# ascend-triton-operator-development
 
-Produce a traceable candidate and prove its correctness through the validation Skill before claiming success.
+Implement a first correct Ascend Triton operator or migrate an existing GPU Triton kernel.
 
-## Workflow
+Resolve semantics from the reference and callers before selecting a grid or tile. Separate logical shape from physical layout and reductions. GPU launch assumptions need an Ascend-specific design; choose a simple correct candidate before tuning.
 
-1. Record the exact source, reference, target SoC, CANN/Triton-Ascend versions, supported shapes, dtypes, layouts, strides, scalar options, tolerances, and side effects.
-2. Query `.agents/knowledge/` for target capability and known failure signatures. Treat absent facts as unknown.
-3. Run `scripts/triton_development.py plan` when the task needs a stored contract. Ordinary experiments can start from notes and actual outputs.
-4. For a full GPU-to-NPU migration, complete the generated semantic report before changing code. For GPU Triton input, audit every load, store, mask, index, grid dimension, reduction identity, atomic, and alias. Small repairs may reuse existing notes.
-5. Write one hardware-aware sketch: logical work, physical-core mapping, tile sizes, estimated UB live set, padding semantics, and specialization boundaries.
-6. Implement the smallest correct candidate. Keep the host wrapper limited to allocation, metadata extraction, dispatch, and launch; keep core computation in `@triton.jit`.
-7. Use `ascend-triton-kernel-validation` on a managed remote NPU. Do not run `torch_npu` locally.
-8. Run `finalize` with the candidate, completed audit, sketch, and terminal validation manifest.
+## Agent entry
 
-## Entry point
+Run from the repository root using the platform's Python launcher. The workspace
+selects its installed platform environment automatically.
 
-`scripts/triton_development.py` provides:
+```text
+python .agents/skills/ascend-triton-operator-development/scripts/triton_development.py --config operator.json --kernel kernel.py --validation-manifest validation/manifest.json
+```
 
-- `plan`: validate the task config and create audit/sketch templates plus Run Manifest v1;
-- `finalize`: hash and register the candidate artifacts, consume terminal correctness evidence, and generate the development report.
+The business config contains op_name, mode, source, reference, target, cases and tolerances. The report consumes the actual kernel and validation manifest, checking kernel identity and passing case coverage. Optional --semantic-report and --sketch attach useful design artifacts.
 
-Read:
+Run ascend-triton-kernel-validation for the candidate. Continue to optimization only after the planned correctness cases pass.
 
-- [Behavior contract](references/behavior.md) for task and finalization semantics.
-- [Semantic review](references/semantic-review.md) before migrating or implementing.
-- [Architecture and code generation](references/architecture-and-codegen.md) while designing the kernel.
-- [Command recipes](references/command-recipes.md) for controller usage.
-- [Acceptance](references/acceptance.md) before claiming the first correct kernel exists.
+Read the relevant detail only when needed:
 
-## Rules
+- [behavior](references/behavior.md)
+- [semantic review](references/semantic-review.md)
+- [architecture and codegen](references/architecture-and-codegen.md)
 
-- Preserve the reference semantics; do not optimize away masks, padding, dtype width, or side effects without proof.
-- Do not hard-code core count, UB capacity, alignment, or compiler capability across SoCs and versions.
-- Keep all planned cases; never reduce a multi-shape task to the easiest case.
-- Do not use GPU latency as the NPU acceptance baseline.
-- A development run passes only when its linked validation manifest passes.
-- Keep run state under `.vaws-local/ascend-triton/development/`.
+- [Business input example](references/inputs.md)

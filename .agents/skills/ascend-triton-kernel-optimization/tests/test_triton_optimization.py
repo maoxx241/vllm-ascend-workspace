@@ -42,6 +42,9 @@ def passed_manifest(path: Path, run_id: str, parent: str, kernel: Path, case_ids
     }
     matrix_path = path.parent / f"{path.stem}-case-matrix.json"
     matrix_path.write_text(json.dumps(matrix), encoding="utf-8")
+    analysis_path = path.parent / f"{path.stem}-analysis.json"
+    analysis_path.write_text(json.dumps({"status": "passed", "results": [
+        {"case_id": case_id, "status": "passed"} for case_id in case_ids]}), encoding="utf-8")
     manifest = new_manifest(
         run_type="correctness",
         run_id=run_id,
@@ -64,6 +67,7 @@ def passed_manifest(path: Path, run_id: str, parent: str, kernel: Path, case_ids
         updated_at=NOW,
     )
     manifest = transition_status(manifest, "running", updated_at=NOW)
+    manifest = add_artifact(manifest, name="analysis", kind="analysis", uri=str(analysis_path), updated_at=NOW)
     manifest = transition_status(manifest, "passed", updated_at=NOW)
     write_manifest(path, manifest)
 
@@ -93,7 +97,7 @@ class OptimizationTests(unittest.TestCase):
             config_path = root / "config.json"
             config_path.write_text(json.dumps(config), encoding="utf-8")
             output = root / "optimization"
-            planned = optimization.plan(output, config_path=config_path, created_at=NOW)
+            planned = optimization._prepare_report(output, config_path=config_path, created_at=NOW)
             candidate = root / "candidate.py"
             candidate.write_text("candidate", encoding="utf-8")
             round_validation = root / "round-validation.json"
@@ -110,10 +114,10 @@ class OptimizationTests(unittest.TestCase):
             }
             round_path = root / "round.json"
             round_path.write_text(json.dumps(round_result), encoding="utf-8")
-            recorded = optimization.record(output, result_path=round_path, recorded_at=NOW)
+            recorded = optimization._record_result(output, result_path=round_path, recorded_at=NOW)
             self.assertEqual(recorded["decision"], "KEEP")
             self.assertTrue(recorded["target_met"])
-            analyzed = optimization.analyze(output, updated_at=NOW)
+            analyzed = optimization._analyze_report(output, updated_at=NOW)
             self.assertEqual(analyzed["status"], "passed")
 
     def test_parent_hash_mismatch_rejected(self) -> None:
@@ -133,7 +137,7 @@ class OptimizationTests(unittest.TestCase):
             config_path = root / "config.json"
             config_path.write_text(json.dumps(config), encoding="utf-8")
             output = root / "optimization"
-            optimization.plan(output, config_path=config_path, created_at=NOW)
+            optimization._prepare_report(output, config_path=config_path, created_at=NOW)
             candidate = root / "candidate.py"
             candidate.write_text("candidate", encoding="utf-8")
             round_validation = root / "round-validation.json"
@@ -142,7 +146,7 @@ class OptimizationTests(unittest.TestCase):
             result_path = root / "round.json"
             result_path.write_text(json.dumps(result), encoding="utf-8")
             with self.assertRaisesRegex(optimization.OptimizationError, "current best"):
-                optimization.record(output, result_path=result_path, recorded_at=NOW)
+                optimization._record_result(output, result_path=result_path, recorded_at=NOW)
 
 
 if __name__ == "__main__":

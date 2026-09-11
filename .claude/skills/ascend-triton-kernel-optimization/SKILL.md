@@ -5,7 +5,7 @@ description: "Profile and iteratively optimize a correctness-passed Ascend Trito
 
 <!-- Generated from .agents/skills/ascend-triton-kernel-optimization/SKILL.md. Do not edit. -->
 
-# Ascend Triton Kernel Optimization
+# ascend-triton-kernel-optimization
 
 Read `.agents/skills/ascend-triton-kernel-optimization/SKILL.md` and only the references needed
 for the current task. The canonical skill owns the workflow.

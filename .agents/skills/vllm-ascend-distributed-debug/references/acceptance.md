@@ -1,25 +1,8 @@
-# Distributed debug acceptance
+# Maintainer verification
 
-## Evidence
+Run the affected tests in `../tests/` with the local test runner. Exercise the
+public call with business inputs and actual result fixtures, including incomplete
+or mismatched evidence. Verify that conclusions do not exceed the observed scope.
+These checks belong to implementation maintenance, not a per-task Agent checklist.
 
-- [ ] Original world size and every parallel rank coordinate are recorded.
-- [ ] Rank-to-node and rank-to-device mappings are explicit.
-- [ ] Process groups list exact members.
-- [ ] Environment, process tree, endpoints, and reproduction command are saved.
-- [ ] Raw rank logs and stack dumps are preserved.
-- [ ] Every missing rank is reported as an evidence gap.
-
-## Diagnosis
-
-- [ ] Collective findings name group, sequence, operation, and ranks.
-- [ ] Confirmed findings are separated from candidates and evidence gaps.
-- [ ] Each experiment changes one topology or runtime variable.
-- [ ] The smallest reproducer retains the failure signature.
-
-## Fix validation
-
-- [ ] A regression test covers the proved invariant when practical.
-- [ ] The smallest reproducer passes after the fix.
-- [ ] The original topology passes after the fix, and its case analyzes to `completed-without-mismatch` (every rank ends with `rank_complete`, no findings).
-- [ ] A `passed` manifest rests on that analysis, not on an assertion.
-- [ ] Temporary debug instrumentation is removed or explicitly retained.
+The config supplies expected_world_size, ranks and optional groups/endpoints. Event files supply observed facts. The report validates mappings and event order and generates its evidence automatically; no case initialization or event-registration steps are required.

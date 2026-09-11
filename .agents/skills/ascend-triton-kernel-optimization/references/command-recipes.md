@@ -1,30 +1,14 @@
-# Ascend Triton optimization command recipes
+# Agent call
 
-## Plan
+From the repository root:
 
-```bash
-python -B .agents/skills/ascend-triton-kernel-optimization/scripts/triton_optimization.py plan \
-  --output-dir .vaws-local/ascend-triton/optimization/softmax-001 \
-  --config /path/to/optimization-config.json
+```text
+python .agents/skills/ascend-triton-kernel-optimization/scripts/triton_optimization.py --config optimization.json --results round-results.json
 ```
 
-## Record one round
+The config contains op_name, kernel and its validation evidence, target, cases, baseline measurements and objective. Round results carry candidate measurements and validation. The report computes KEEP/DISCARD and verifies kernel lineage and case coverage.
 
-```bash
-python -B .agents/skills/ascend-triton-kernel-optimization/scripts/triton_optimization.py record \
-  --output-dir .vaws-local/ascend-triton/optimization/softmax-001 \
-  --result /path/to/normalized-round-result.json
-```
-
-Read the returned decision and `needs_diagnosis`; do not manually promote a
-discarded candidate.
-
-## Analyze
-
-```bash
-python -B .agents/skills/ascend-triton-kernel-optimization/scripts/triton_optimization.py analyze \
-  --output-dir .vaws-local/ascend-triton/optimization/softmax-001
-```
-
-Run `analyze` when the objective is met, the round budget is exhausted, or the
-workflow intentionally stops and an inconclusive terminal record is desired.
+Use `--help` for exact argument details. Report output directories are optional
+where supported; the script creates a fresh directory under `.vaws-local/`.
+Schema versions and report identifiers are generated internally. Input files
+describe business cases or contain observed results, rather than task ownership.

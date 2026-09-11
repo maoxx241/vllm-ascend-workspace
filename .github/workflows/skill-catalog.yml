@@ -12,6 +12,8 @@ permissions:
 jobs:
   validate:
     runs-on: ubuntu-latest
+    env:
+      UV_PROJECT_ENVIRONMENT: .vaws-local/venvs/linux
     steps:
       - uses: actions/checkout@v4
         with:
@@ -20,7 +22,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install locked workspace packages
-        run: uv sync --locked --group dev
+        run: python .agents/scripts/vaws_deps.py sync --locked --group dev
       - name: Doctor via system python3
         run: |
           python3 .agents/scripts/vaws_deps.py doctor > "${RUNNER_TEMP}/doctor.json"
@@ -36,8 +38,6 @@ jobs:
         run: uv run python -B -m pytest .agents/tests -q
       - name: Validate catalog
         run: uv run python -B .agents/scripts/skill_catalog.py
-      - name: Validate shared knowledge
-        run: uv run python -B .agents/scripts/knowledge_validate.py
       - name: Check repository boundaries
         # Enforce mode fails on a violation the dated baseline does not
         # already record, and on a baseline row whose violation is gone.
@@ -120,6 +120,8 @@ jobs:
   windows:
     name: Native Windows (Python 3.13)
     runs-on: windows-latest
+    env:
+      UV_PROJECT_ENVIRONMENT: .vaws-local/venvs/win32
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -129,7 +131,7 @@ jobs:
         with:
           python-version: "3.13"
       - name: Install locked workspace packages
-        run: uv sync --locked --group dev
+        run: python .agents/scripts/vaws_deps.py sync --locked --group dev
       - name: Check package capabilities and lock
         run: |
           uv run python .agents/scripts/vaws_deps.py doctor

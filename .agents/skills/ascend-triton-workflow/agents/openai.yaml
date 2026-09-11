@@ -1,4 +1,5 @@
 interface:
-  display_name: "Ascend Triton Workflow"
-  short_description: "Orchestrate traceable Ascend Triton operator development"
-  default_prompt: "Use $ascend-triton-workflow to plan and coordinate this Ascend Triton operator workflow."
+  display_name: Ascend Triton Workflow
+  short_description: Orchestrate traceable Ascend Triton operator development
+  default_prompt: Use $ascend-triton-workflow to carry an operator through development,
+    validation and optimization when the request spans those stages.

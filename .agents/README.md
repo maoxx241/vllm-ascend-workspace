@@ -13,14 +13,13 @@ skills. Runtime behavior belongs to the four installed components; see
   Bind actual worktrees through session; use native Git for source inspection.
 - `scripts/workspace_profile.py` and repo-init manage the local username
   document. Provisioning and runtime ownership remain in coordinator.
-- `scripts/remote_sync_plan.py` and `remote_sync_apply.py` are optional direct
-  source-only adapters over coordinator parity. Managed runs prepare sources
-  themselves and do not use a separate sync step.
-- `scripts/knowledge_query.py` and `knowledge_capture.py` are thin package CLIs.
-  Knowledge setup is `scripts/knowledge_setup.py`. Legacy YAML export and
-  validation remain maintenance tools for existing records only.
+- Direct remote I/O and optional source publication use their installed owner
+  APIs. Managed runs prepare their bound sources internally.
+- Knowledge lookup and capture use the package tools. `scripts/knowledge_setup.py`
+  configures project Markdown, candidate storage and client wiring.
 
-For explicit knowledge editing, run `uv run python -m vaws_knowledge skill`.
+For explicit knowledge editing, read the installed package skill through its
+configured interpreter with `python -m vaws_knowledge skill`.
 The optional `curate-knowledge` skill is shipped by that package, not maintained
 in this workspace. Native clients can install it into a chosen skill directory
 with the package command's `--install-dir` option. Ordinary lookup, capture and

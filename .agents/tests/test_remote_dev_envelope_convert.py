@@ -254,9 +254,9 @@ class SkillPayloadConversionTests(unittest.TestCase):
                 "remote_dev_result": remote,
             },
             skill="vllm-ascend-serving",
-            entry_point=".agents/skills/vllm-ascend-serving/scripts/serve_status.py",
+            entry_point=".agents/skills/vllm-ascend-serving/scripts/serving.py",
             action="serve_status",
-            argv=["python3", ".agents/skills/vllm-ascend-serving/scripts/serve_status.py"],
+            argv=["python3", ".agents/skills/vllm-ascend-serving/scripts/serving.py"],
             layer="transport",
         )
         validate_envelope(envelope)

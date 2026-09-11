@@ -43,7 +43,9 @@ def _prioritize_workspace_python_packages(
     workspace_root: Path | None = None,
 ) -> None:
     """Keep outer repository directories from shadowing editable packages."""
-    root = workspace_root or Path(__file__).resolve().parents[4]
+    root = workspace_root or Path.cwd()
+    if workspace_root is None and not (root / "vllm").is_dir() and len(Path(__file__).resolve().parents) > 4:
+        root = Path(__file__).resolve().parents[4]
     source_roots = (root / "vllm", root / "vllm-ascend")
     source_values = [str(path) for path in source_roots if path.is_dir()]
     for source_root in reversed(source_roots):
@@ -72,7 +74,7 @@ def load_config(path: Path) -> dict[str, Any]:
         raise HarnessError(f"cannot read harness config {path}: {exc}") from exc
     if not isinstance(payload, dict):
         raise HarnessError("harness config root must be an object")
-    if payload.get("schema_version") != SCHEMA_VERSION:
+    if payload.get("schema_version", SCHEMA_VERSION) != SCHEMA_VERSION:
         raise HarnessError(f"schema_version must be {SCHEMA_VERSION}")
     if not isinstance(payload.get("cases"), list) or not payload["cases"]:
         raise HarnessError("cases must be a non-empty array")
@@ -267,12 +269,24 @@ def execute_config(config: Mapping[str, Any]) -> dict[str, Any]:
                     "metrics": {},
                 }
             )
-    return {
-        "schema_version": SCHEMA_VERSION,
-        "label": label,
-        "execution": execution,
-        "cases": results,
-    }
+    document = {"schema_version": SCHEMA_VERSION, "label": label, "execution": execution, "cases": results}
+    # The owner injects this after source/native attestation at managed launch.
+    # An online client's own runtime cannot establish the server's identity.
+    if offline_cases and len(offline_cases) == len(config["cases"]):
+        try:
+            receipt = json.loads(os.environ.get("VAWS_EXECUTION_OBSERVATION", "{}"))
+        except json.JSONDecodeError:
+            receipt = {}
+        if isinstance(receipt, dict) and receipt:
+            observation = {key: receipt[key] for key in ("workspace_snapshot", "environment", "native_digest", "machine", "npu_devices") if key in receipt}
+            if engine is not None:
+                args = dict(config.get("engine_args", {}))
+                observation["engine_args"] = args
+                observation["model"] = {"path": config["model"]}
+                observation["topology"] = {"tp": args.get("tensor_parallel_size", 1), "dp": args.get("data_parallel_size", 1)}
+            document["observation"] = observation
+            document["observation_scope"] = receipt.get("scope")
+    return document
 
 
 def main(argv: list[str] | None = None) -> int:

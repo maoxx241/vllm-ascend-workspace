@@ -9,7 +9,7 @@ committed to a **public** repository. This package is the enforcement layer.
 
 Three surfaces run the same detector against the same installed
 `vaws-knowledge` redaction rules, so they cannot disagree. A checkout
-that has not run `uv sync` refuses to scan; it does not run with fewer
+that has not run `python .agents/scripts/vaws_deps.py sync` refuses to scan; it does not run with fewer
 rules.
 
 | Surface | Entry point | When |
@@ -38,10 +38,10 @@ never overwritten silently: the installer refuses and tells you to rerun with
 
 The hook fails closed. A finding, a broken policy file, a missing policy file,
 an unreadable staged diff, or a missing `vaws-knowledge` package all block
-the commit. The remedy for the package gap is `uv sync` (or
+the commit. The remedy for the package gap is `python .agents/scripts/vaws_deps.py sync` (or
 `uv run python3 .agents/scripts/tracked_leak_scan.py`, which syncs first).
 `git commit --no-verify` still bypasses the hook, which is why CI runs the
-same scanner after `uv sync --locked`.
+same scanner after `python .agents/scripts/vaws_deps.py sync --locked`.
 
 ## Run the scanner
 
@@ -152,7 +152,7 @@ Deliberate design choices:
 - **PyYAML is optional; `vaws-knowledge` is not.** The policy is read with
   PyYAML when importable and with a small built-in parser otherwise. The
   redaction rules come from the installed package. A missing package is a
-  refused scan (`uv sync`), never a reduced rule set that reports `passed`.
+  refused scan (`python .agents/scripts/vaws_deps.py sync`), never a reduced rule set that reports `passed`.
 
 ## Adding an entry
 

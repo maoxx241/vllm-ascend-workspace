@@ -245,7 +245,7 @@ def validate_event(event: Mapping[str, Any], known_ranks: set[int]) -> None:
         raise DistributedDebugError("; ".join(errors))
 
 
-def init_case(
+def _prepare_report(
     output_dir: Path,
     *,
     config_path: Path,
@@ -314,7 +314,7 @@ def init_case(
     }
 
 
-def ingest_events(
+def _ingest_events(
     output_dir: Path, *, events_path: Path, updated_at: str | None = None
 ) -> dict[str, Any]:
     topology = _load_json(output_dir / "topology.json", "topology")
@@ -553,7 +553,7 @@ def render_report(analysis: Mapping[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def analyze_case(
+def _analyze_report(
     output_dir: Path, *, updated_at: str | None = None
 ) -> dict[str, Any]:
     topology = _load_json(output_dir / "topology.json", "topology")
@@ -591,35 +591,33 @@ def analyze_case(
     }
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
-    subparsers = parser.add_subparsers(dest="action", required=True)
-    init_parser = subparsers.add_parser("init", help="create a debug case")
-    init_parser.add_argument("--output-dir", required=True, type=Path)
-    init_parser.add_argument("--config", required=True, type=Path)
-    ingest_parser = subparsers.add_parser("ingest", help="append normalized events")
-    ingest_parser.add_argument("--output-dir", required=True, type=Path)
-    ingest_parser.add_argument("--events", required=True, type=Path)
-    analyze_parser = subparsers.add_parser("analyze", help="analyze case evidence")
-    analyze_parser.add_argument("--output-dir", required=True, type=Path)
+def build_report(config_path: Path, event_paths: list[Path], *, output_dir=None, workspace_root=ROOT):
+    from vaws_report import report_config, report_directory
+    output = report_directory(workspace_root, "vllm-ascend-distributed-debug", output_dir)
+    with report_config(config_path, root=workspace_root, prefix="distributed") as config:
+        _prepare_report(output, config_path=config, workspace_root=workspace_root)
+    for path in event_paths:
+        _ingest_events(output, events_path=path)
+    result = _analyze_report(output)
+    return {**result, "manifest_ref": str(output / "manifest.json")}
+
+
+def build_parser():
+    parser = argparse.ArgumentParser(description="Analyze topology and collected rank events in one call.")
+    parser.add_argument("--config", required=True, type=Path)
+    parser.add_argument("--events", nargs="*", default=[], type=Path)
+    parser.add_argument("--output-dir", type=Path)
     return parser
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv=None):
     args = build_parser().parse_args(argv)
     try:
-        if args.action == "init":
-            payload = init_case(
-                args.output_dir, config_path=args.config, code=manifest_code(ROOT)
-            )
-        elif args.action == "ingest":
-            payload = ingest_events(args.output_dir, events_path=args.events)
-        else:
-            payload = analyze_case(args.output_dir)
-    except (DistributedDebugError, RunManifestError) as exc:
+        result = build_report(args.config, args.events, output_dir=args.output_dir)
+    except (DistributedDebugError, RunManifestError, OSError, ValueError) as exc:
         print(json.dumps({"status": "failed", "error": str(exc)}, ensure_ascii=False))
         return 1
-    print(json.dumps(payload, ensure_ascii=False))
+    print(json.dumps(result, ensure_ascii=False))
     return 0
 
 

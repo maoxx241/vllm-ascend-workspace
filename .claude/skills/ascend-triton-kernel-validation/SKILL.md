@@ -5,7 +5,7 @@ description: "Validate one Ascend Triton kernel against a trusted reference acro
 
 <!-- Generated from .agents/skills/ascend-triton-kernel-validation/SKILL.md. Do not edit. -->
 
-# Ascend Triton Kernel Validation
+# ascend-triton-kernel-validation
 
 Read `.agents/skills/ascend-triton-kernel-validation/SKILL.md` and only the references needed
 for the current task. The canonical skill owns the workflow.

@@ -1,4 +1,5 @@
 interface:
-  display_name: "vLLM Ascend PD Serving"
-  short_description: "Orchestrate prefill/decode services and KV-transfer smoke"
-  default_prompt: "Use $vllm-ascend-pd-serving to plan and operate this single-execution prefill/decode deployment; start once, use status for manifest/readiness progress, and require smoke plus resource-release evidence."
+  display_name: vLLM Ascend PD Serving
+  short_description: Orchestrate prefill/decode services and KV-transfer smoke
+  default_prompt: Use $vllm-ascend-pd-serving to start and inspect a prefill/decode
+    deployment as one coordinator-owned topology.

@@ -95,11 +95,11 @@ workflow `vllm_version` or docs `main_vllm_commit` value.
 
 ## External dependency plane
 
-The three in-process packages are not submodules. Install them with `uv sync`.
+The three in-process packages are not submodules. Install them with `python .agents/scripts/vaws_deps.py sync`.
 Name capabilities from `doctor`; do not re-derive them.
 
 ```bash
-uv sync
+python .agents/scripts/vaws_deps.py sync
 python3 .agents/scripts/vaws_deps.py doctor
 python3 .agents/scripts/vaws_deps.py sync
 ```
@@ -112,9 +112,9 @@ Windows PowerShell, using a cache on the workspace filesystem:
 
 ```powershell
 $cachePath = Join-Path (Get-Location).Path '.vaws-local\uv-cache'
-uv sync --locked --group dev --cache-dir $cachePath --link-mode hardlink
+python .agents/scripts/vaws_deps.py sync --locked --group dev --cache-dir $cachePath --link-mode hardlink
 if ($LASTEXITCODE -ne 0) { throw 'Dependency installation failed' }
-& .\.venv\Scripts\python.exe .agents/scripts/vaws_deps.py doctor
+& .\.vaws-local\venvs\win32\Scripts\python.exe .agents/scripts/vaws_deps.py doctor
 ```
 
 For offline preparation, exact tool/lock checks and restoring a transferred
@@ -159,7 +159,7 @@ python3 .agents/skills/repo-init/scripts/repo_topology.py ensure-main   --repo v
 ```
 # Knowledge fork and background updates
 
-After `uv sync`, run `python3 .agents/scripts/knowledge_setup.py` (Windows:
+After `python .agents/scripts/vaws_deps.py sync`, run `python3 .agents/scripts/knowledge_setup.py` (Windows:
 `py -3 .agents/scripts/knowledge_setup.py`). For download-only use, add
 `--read-only`. Reuse the user's `gh` login; no token belongs in tracked files.
 Refresh the selected clients with `vaws_client_setup.py --apply` afterward.

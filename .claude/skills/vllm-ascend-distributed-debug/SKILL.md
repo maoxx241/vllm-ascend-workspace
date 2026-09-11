@@ -5,7 +5,7 @@ description: "Diagnose vLLM Ascend multi-rank and multi-node startup, rank mappi
 
 <!-- Generated from .agents/skills/vllm-ascend-distributed-debug/SKILL.md. Do not edit. -->
 
-# vLLM Ascend Distributed Debug
+# vllm-ascend-distributed-debug
 
 Read `.agents/skills/vllm-ascend-distributed-debug/SKILL.md` and only the references needed
 for the current task. The canonical skill owns the workflow.

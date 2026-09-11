@@ -11,11 +11,11 @@ configuration. remote-dev stays independently usable with explicit
 ## 1. Installing
 
 ```bash
-uv sync
-.venv/bin/python -c "import remote_dev.result, remote_dev.core.endpoint; print('ok')"
+python .agents/scripts/vaws_deps.py sync
+.vaws-local/venvs/linux/bin/python -c "import remote_dev.result, remote_dev.core.endpoint; print('ok')"
 ```
 
-MCP: `.venv/bin/python -m remote_dev.mcp.server`.
+MCP: `.vaws-local/venvs/linux/bin/python -m remote_dev.mcp.server`.
 
 ## 2. What this workspace may inject
 

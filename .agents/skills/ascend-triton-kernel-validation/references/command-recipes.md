@@ -1,29 +1,14 @@
-# Ascend Triton validation command recipes
+# Agent call
 
-## Plan and static gate
+From the repository root:
 
-```bash
-python -B .agents/skills/ascend-triton-kernel-validation/scripts/triton_validation.py plan \
-  --output-dir .vaws-local/ascend-triton/validation/softmax-001 \
-  --config /path/to/validation-config.json \
-  --kernel /path/to/softmax_ascend.py
+```text
+python .agents/skills/ascend-triton-kernel-validation/scripts/triton_validation.py --config validation.json --kernel kernel.py --results case-results.json
 ```
 
-Inspect `static-check.json` before remote execution.
+The config contains op_name, reference, target, cases and tolerances. The tool checks kernel source for missing launches and computation fallback, combines observed case results, and emits coverage, analysis and a manifest automatically.
 
-## Record one remote result
-
-```bash
-python -B .agents/skills/ascend-triton-kernel-validation/scripts/triton_validation.py record \
-  --output-dir .vaws-local/ascend-triton/validation/softmax-001 \
-  --result /path/to/normalized-case-result.json
-```
-
-## Analyze
-
-```bash
-python -B .agents/skills/ascend-triton-kernel-validation/scripts/triton_validation.py analyze \
-  --output-dir .vaws-local/ascend-triton/validation/softmax-001
-```
-
-Consume `analysis.json` and `manifest.json`, not mixed runtime stdout.
+Use `--help` for exact argument details. Report output directories are optional
+where supported; the script creates a fresh directory under `.vaws-local/`.
+Schema versions and report identifiers are generated internally. Input files
+describe business cases or contain observed results, rather than task ownership.

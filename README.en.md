@@ -2,57 +2,45 @@
 
 **[中文](README.md)** | **English**
 
-A composable local development scaffold for working on [vLLM](https://github.com/vllm-project/vllm) and [vLLM Ascend Plugin](https://github.com/vllm-project/vllm-ascend) in a single workspace, with built-in AI Agent skills for automated environment setup, remote NPU machine management, and code synchronization.
+An Agent-only workspace for developing [vLLM](https://github.com/vllm-project/vllm) and [vLLM Ascend](https://github.com/vllm-project/vllm-ascend). People express goals and make substantive choices; the Agent edits code, prepares environments, runs experiments and reports evidence.
 
-## What problem does this solve
+## Start with a task
 
-Developing vLLM Ascend typically involves editing code locally, running tests on remote Ascend NPU servers, and tracking upstream vLLM changes — all of which require repetitive Git, SSH, and environment configuration.
+Open this checkout in an Agent client and ask:
 
-`vllm-ascend-workspace` wraps these operations into a set of AI Agent skills. You can ask an Agent to handle them in natural language, or ignore the skills entirely and use it as a plain multi-repo workspace.
+> Initialize this workspace for vLLM Ascend development.
 
-## Quick start
+The `repo-init` skill reuses existing configuration, installs locked packages and configures the selected client. Windows PowerShell and WSL can share the checkout: bootstrap selects separate platform environments automatically. Agent installation recipes are in [dependency-plane.md](docs/dependency-plane.md) and [windows-installation.md](docs/windows-installation.md).
 
-```bash
-# Clone the repository
-git clone https://github.com/vllm-ascend-workspace/vllm-ascend-workspace.git
-cd vllm-ascend-workspace
+For daily work, describe the outcome and the inputs that matter:
 
-# Initialize submodules
-git submodule update --init --recursive
+- Start a four-card inference service with these model weights and engine options.
+- Compare throughput between these baseline and candidate worktrees.
+- Collect a profile for this workload and identify the slow operators.
+- Locate the first stage where graph and eager outputs diverge.
+- Start the local fleet dashboard.
 
-# Required: install the three in-process packages (`uv.lock` is the only pin)
-uv sync
-python3 .agents/scripts/vaws_deps.py doctor
-```
+The Agent selects the relevant tool or skill. Tools generate execution references, state transitions and reports from actual results. Missing evidence remains unknown or inconclusive.
 
-Package dependencies, `uv.lock`, and capability boundaries are in [dependency-plane.md](docs/dependency-plane.md).
-`uv run python3 .agents/scripts/vaws_deps.py doctor` syncs the environment first and is equivalent.
+## Ownership and design
 
-If you use an Agent-capable IDE (Cursor, Windsurf, etc.) or terminal tool (Claude Code, Codex CLI, etc.), you can complete the rest of the setup in natural language:
+[Core design principles](docs/target-state.md#11-agent-only-design-principles) govern subsequent changes:
 
-> "Initialize this workspace and set me up for vLLM Ascend development."
+- Agent consumption is the design target for every code and command entry.
+- Deterministic failures belong in component code and regression tests; contextual lessons belong in knowledge with their conditions and uncertainty.
+- Each runtime owner handles its own lifecycle, validation and records. Business calls accept business inputs and evidence.
+- Simplification is measured across the whole task. Unreleased APIs may change directly; retired interfaces have no compatibility aliases.
 
-The Agent will detect your environment, install required tools, and configure Git remotes and forks.
+The workspace owns project materials, client wiring and business skills. `remote-dev` owns explicit endpoint I/O; `vaws-coordinator` owns managed sources, environments, NPUs and execution; `vaws-knowledge` owns Markdown lookup and capture; `vaws-top` owns fleet observation. Observation does not allocate devices. Native attachments establish task identity. Existing containers and unrelated worktrees are preserved.
 
-## Local NPU fleet monitoring
-
-The `npu-fleet-monitor` Skill deploys a persistent NPU fleet monitoring service. The application is maintained in the standalone `vllm-ascend-workspace/vaws-top` repository and runs as `uvx vaws-top`:
-
-```bash
-python3 .agents/skills/npu-fleet-monitor/scripts/manage_monitor.py ensure
-```
-
-After deployment, open <http://127.0.0.1:8788>. The dashboard shows NPU/AICore, HBM, CPU, system memory, disk, mount, and Docker status with historical trends and heatmaps. Active browsers can request 1, 5, 10, or 30-second updates; the collector returns to its low-frequency cadence when no page is active. See [Local NPU Fleet Monitor deployment](docs/npu-fleet-monitor.md) for installation, operations, and data-directory details.
-
-## Built-in skills
-
+## Business skills
 
 | Skill                  | Purpose                                                                                      | When to use                                                |
 | ---------------------- | -------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
-| **repo-init**          | Install GitHub CLI, authenticate, initialize submodules, run `uv sync`, configure forks and remote topology | After first clone                                          |
+| **repo-init**          | Install GitHub CLI, authenticate, initialize submodules, install locked platform dependencies, configure forks and remote topology | After first clone                                          |
 | **npu-fleet-monitor**  | Build, start, inspect, or stop the local NPU dashboard from the standalone vaws-top repository | When continuously monitoring fleet resources and history  |
 | **modelscope**       | Download, resume, status-check, and SHA256-verify ModelScope model weights                  | When model weights need to be downloaded into an explicit local directory |
-| **vllm-ascend-serving** | Launch a vLLM Ascend inference service on a remote container, with NPU probing, auto card selection, and incremental restart | When you need an inference service on a remote machine |
+| **vllm-ascend-serving** | Launch a vLLM Ascend inference service on a remote container, through coordinator-owned execution | When you need an inference service on a remote machine |
 | **vllm-ascend-benchmark** | Run `vllm bench serve` performance benchmarks on a remote container, with multi-run warmup and statistical aggregation | When you need throughput/latency benchmarks or performance regression checks |
 | **ascend-memory-profiling** | Profile and attribute HBM memory usage on Ascend NPU, with per-component breakdown and evidence chains | When you need to analyze memory consumption of a vLLM serving workload |
 | **ascend-profiling-collection** | Collect Ascend torch-profiler data: start service, bracket profile window, run workload, remote analyse, and write a manifest | When you need kernel_details/trace_view captures |
@@ -68,121 +56,14 @@ After deployment, open <http://127.0.0.1:8788>. The dashboard shows NPU/AICore, 
 | **ascend-triton-kernel-validation** | Detect PyTorch fallback and execute an explicit correctness matrix | When validating an Ascend Triton candidate |
 | **ascend-triton-kernel-optimization** | Run profiler-driven optimization after correctness gates pass | When tuning a correct Ascend Triton kernel |
 | **ascend-triton-workflow** | Orchestrate development, validation, optimization, and Run Manifest evidence | When delivering an end-to-end Triton operator workflow |
-| **vllm-ascend-pd-serving** | Orchestrate grouped prefill/decode roles, connectors, rollback, and KV smoke | When deploying disaggregated PD serving |
+| **vllm-ascend-pd-serving** | Start and observe one prefill/decode topology with HTTP smoke checks | When deploying disaggregated PD serving |
 
+Skill selection follows the task. Detailed inputs and procedures live beside the relevant `SKILL.md`; ordinary local files and Git use native tools. [AGENTS.md](AGENTS.md) is the client entry and [the documentation index](docs/README.md) separates current contracts from dated evidence.
 
-All skills are **optional**. Use any subset, or none at all.
+## Repository and local state
 
-## Usage examples
+The canonical repository is `vllm-ascend-workspace/vllm-ascend-workspace`. Git submodules `vllm/` and `vllm-ascend/` remain on their community upstreams. Personal forks are development remotes; setup preserves established remote choices.
 
-When talking to an Agent:
+`.agents/skills/` contains business skills, `.agents/lib/` contains shared consumer code, and `.agents/scripts/` contains client wiring and maintenance tools. Client projections route to canonical skills. Runtime state and private configuration stay under untracked `.vaws-local/`; credentials are never committed. Public knowledge uses only package-prepared redacted copies.
 
-```
-# Initialization
-"Help me initialize this repo"
-"Help me set up this repo"
-
-# Machine management
-"Add these two servers, IPs are x.x.x.1 and x.x.x.2, password is xxxx"
-"Set up this server for me, IP is x.x.x.x, password is xxxx"
-"Remove the x.x.x.x server"
-
-# Code sync
-"Sync my code to the server and rebuild"
-
-# Model weight download
-"Download Qwen/Qwen3-32B from ModelScope to /root/Qwen/Qwen3-32B and show progress"
-"Verify the ModelScope weights under /root/Qwen/Qwen3-32B"
-
-# Serving (--model must point to weights already present on the remote container)
-"Launch a 4-card inference service on x.x.x.x using /home/weights/Qwen3-32B-W8A8 with W8A8 quantization"
-"Check the service status on x.x.x.x"
-"Stop the service on x.x.x.x"
-
-# Benchmarking
-"Run a benchmark on x.x.x.x with Qwen3.5-35B, 4 cards, 5 runs keep last 4"
-"Compare throughput between main and this PR"
-```
-
-## Repository layout
-
-```
-.
-├── vllm/                  # Upstream vLLM (Git submodule)
-├── vllm-ascend/           # vLLM Ascend Plugin (Git submodule)
-├── .agents/
-│   ├── skills/
-│   │   ├── repo-init/         # Workspace initialization skill
-│   │   ├── npu-fleet-monitor/     # Local NPU monitor deployment skill
-│   │   ├── modelscope/            # ModelScope weight download and verification skill
-│   │   ├── vllm-ascend-serving/   # Inference serving skill
-│   │   ├── vllm-ascend-benchmark/ # Performance benchmarking skill
-│   │   ├── ascend-memory-profiling/ # Memory profiling skill
-│   │   ├── ascend-profiling-collection/ # Torch profiler collection skill
-│   │   ├── ascend-profiling-analysis/ # Profiling analysis/report skill
-│   ├── lib/               # Shared local-state library
-│   └── scripts/           # Shared helper scripts
-├── .cursor/rules/         # Cursor IDE specific rules
-├── .trae/                 # TRAE IDE specific rules and skills
-├── AGENTS.md              # Cross-tool Agent instructions (Agents read this)
-├── CLAUDE.md              # Claude Code instruction entry point
-└── README.md              # Chinese README (default)
-```
-
-## Design principles
-
-- **Nothing is mandatory** — All skills are optional. Developers choose what to use.
-- **Local state stays untracked** — User-specific remotes, auth, and machine config live only in the untracked `.vaws-local/` directory.
-- **Parallel tasks stay isolated** — Remote parallel work should use sessions: each task gets its own local worktree, remote container, state namespace, and resource leases.
-- **Remote operations are structured** — Agents should prefer the remote toolbox for JSON results, observable logs, resumable artifact manifests, and cleanup-capable state.
-- **Submodules point to community** — `.gitmodules` always targets `vllm-project` official repos. Personal forks are local remote candidates, not submodule URLs, and are not selected merely because they exist.
-- **Agent-driven, not Agent-dependent** — Everything can be done manually. Agent skills just make it more convenient.
-
-## Recommended remote topology
-
-Skills recommend the following topology, but never enforce it:
-
-
-| Repository    | `origin`             | `upstream`                       |
-| ------------- | -------------------- | -------------------------------- |
-| workspace     | Your fork (optional) | `vllm-ascend-workspace/vllm-ascend-workspace` |
-| `vllm`        | Your fork (optional) | `vllm-project/vllm`              |
-| `vllm-ascend` | Your fork            | `vllm-project/vllm-ascend`       |
-
-The canonical scaffold is `vllm-ascend-workspace/vllm-ascend-workspace` (public, non-fork). The current personal development forks are `maoxx241/vllm` and `maoxx241/vllm-ascend`, outside the organization and not replacement upstreams. Established fetch/push/protocol/`pushurl`/extra remotes stay as configured; `configure` is for explicit fresh setup only.
-
-
-## Multi-tool support
-
-This repository supports mainstream AI coding tools:
-
-
-| File             | Tools covered                                     |
-| ---------------- | ------------------------------------------------- |
-| `AGENTS.md`      | Codex CLI, GitHub Copilot, Cursor, TRAE, OpenCode |
-| `CLAUDE.md`      | Claude Code                                       |
-| `.cursor/rules/` | Cursor                                            |
-| `.trae/`         | TRAE                                              |
-
-
-## Roadmap
-
-### Done
-
-- **repo-init** — Workspace initialization: GitHub CLI install, auth, submodules, fork & remote topology
-- **npu-fleet-monitor** — Standalone vaws-top repository monitoring service with automatic build, user-systemd startup, and loopback health checks
-- **vllm-ascend-serving** — Service launch: idle NPU detection, idle port detection, one-click vLLM Ascend inference serving
-- **vllm-ascend-benchmark** — Online performance benchmarking: single-run / multi-run (warm-service) mode, warmup exclusion, statistical aggregation; multi-state regression comparisons orchestrated by the Agent
-- **ascend-memory-profiling** — Memory profiling: collect and analyze HBM usage, per-component breakdown (fixed overhead, weights, KV cache, HCCL, activations, runtime), with msprof component-level attribution
-
-### Planned
-
-- **Accuracy testing & aisbench integration** — Automated evaluation based on aisbench, with HTML report analysis, system scheduling assessment, and DP balance analysis
-- **Performance profiling** — Automatic operator latency breakdown, hot operator AIC/AIV/MTE2 ratio analysis, AICPU operator identification, host bound detection and diagnosis
-- **Sync-break optimization** — Provide async copy overlap strategies for specific cases to reduce synchronization overhead
-- **Compute graph analysis** — Build model compute graphs, generate theoretical performance evaluation reports and optimization recommendations
-- **External knowledge base** — Integrate external knowledge sources to extend Agent capabilities
-
-## License
-
-This scaffold repository is licensed independently from its submodules. `vllm/` and `vllm-ascend/` each follow their respective upstream licenses.
+The workspace license is independent of the submodules, which retain their upstream licenses.

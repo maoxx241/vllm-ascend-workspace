@@ -2,62 +2,46 @@
 
 **中文** | **[English](README.en.md)**
 
-一个可组合的本地开发脚手架，让你在同一个工作区里同时开发 [vLLM](https://github.com/vllm-project/vllm) 和 [vLLM Ascend 插件](https://github.com/vllm-project/vllm-ascend)，并通过内置的 AI Agent 技能自动完成环境初始化、远程 NPU 机器管理、代码同步和服务拉起。
+完全面向 Agent 的 [vLLM](https://github.com/vllm-project/vllm) 与 [vLLM Ascend](https://github.com/vllm-project/vllm-ascend) 开发工作区。人表达目标、决定实质取舍；Agent 完成代码修改、环境准备、实验执行和证据整理。
 
-## 这个项目解决什么问题
+## 从任务开始
 
-vLLM Ascend 的开发通常需要在本地编辑代码、在远程昇腾 NPU 服务器上运行测试，同时还要跟踪上游 vLLM 的变化。手动维护这套工作流涉及大量重复的 Git、SSH 和环境配置操作。
+在 Agent 客户端中打开工作区，直接提出：
 
-`vllm-ascend-workspace` 把这些操作封装成一组 AI Agent 技能，你可以用自然语言让 Agent 代劳，也可以完全忽略这些技能、只把它当作一个普通的多仓库工作区。
+> 初始化这个工作区，配好 vLLM Ascend 的开发环境。
 
-## 快速开始
+`repo-init` 技能复用已有配置，安装锁定依赖并接通所选客户端。Windows PowerShell 与 WSL 可以共享同一个检出目录，启动入口自动选择各自的平台环境。Agent 使用的安装方法见 [dependency-plane.md](docs/dependency-plane.md) 和 [windows-installation.md](docs/windows-installation.md)。
 
-```bash
-# 克隆仓库
-git clone https://github.com/vllm-ascend-workspace/vllm-ascend-workspace.git
-cd vllm-ascend-workspace
+日常工作只需说明目标和影响结果的输入，例如：
 
-# 初始化子模块
-git submodule update --init --recursive
+- 用这份模型权重和启动参数拉一个四卡推理服务。
+- 比较这两个 baseline/candidate 工作树的吞吐。
+- 为这个 workload 采集 profiling，分析耗时算子。
+- 找出 graph 与 eager 输出首次分歧的位置。
+- 拉起本地 NPU 集群监控页面。
 
-# 必做：安装三个进程内外部包（uv.lock 是唯一 pin）
-uv sync
-python3 .agents/scripts/vaws_deps.py doctor
-```
+Agent 按任务选择工具或技能；执行引用、状态推进和报告由工具根据实际结果生成。缺失证据保留为未知或无法下结论。
 
-包依赖、`uv.lock` 和能力边界见 [dependency-plane.md](docs/dependency-plane.md)。
-`uv run python3 .agents/scripts/vaws_deps.py doctor` 会先同步环境，与上面等价。
+## 设计与职责
 
-如果你使用支持 Agent 的 IDE（Cursor、Windsurf 等）或终端工具（Claude Code、Codex CLI 等），可以直接用自然语言完成后续配置：
+后续变更以[核心设计原则](docs/target-state.md#11-agent-only-design-principles)为依据：
 
-> "初始化这个工作区，帮我配好 vLLM Ascend 的开发环境。"
+- 代码与命令入口完全围绕 Agent 使用设计。
+- 封闭世界故障进入所属组件代码与回归测试；依赖具体环境的经验进入知识库，保留条件和不确定性。
+- 生命周期、校验和记录在各 owner 内部完成；业务入口接收业务输入和真实证据。
+- 从完整任务衡量简化效果。未正式发布的接口直接替换，删除旧入口与兼容别名。
 
-Agent 会自动检测你的环境、安装所需工具、配置 Git 远程仓库和 Fork。
+工作区负责项目材料、客户端接线和业务技能。`remote-dev` 负责明确 endpoint 的远程 I/O，`vaws-coordinator` 负责托管源码、环境、NPU 与执行，`vaws-knowledge` 负责 Markdown 知识查询和捕获，`vaws-top` 负责集群观察。观察不分配设备；任务身份来自原生客户端关联。已有容器和无关工作树继续保留。
 
-## 本地 NPU 集群监控
-
-仓库提供 `npu-fleet-monitor` Skill，用于部署持续运行的 NPU 集群监控服务。监控应用维护在独立仓库 `vllm-ascend-workspace/vaws-top`，以 `uvx vaws-top` 运行：
-
-```bash
-python3 .agents/skills/npu-fleet-monitor/scripts/manage_monitor.py ensure
-```
-
-部署完成后访问 <http://127.0.0.1:8788>。页面集中展示 NPU/AICore、HBM、CPU、系统内存、磁盘、挂载点和 Docker 状态，并保存历史趋势与热力图。浏览器活跃时可选择 1、5、10 或 30 秒刷新；没有活跃页面时自动恢复低频采集。完整安装、运维和数据目录说明见 [NPU Fleet Monitor 本地部署](docs/npu-fleet-monitor.md)。
-
-## 内置技能
-
-普通任务直接使用 remote-dev、coordinator 与 knowledge 工具。项目用户名并入初始化；知识整理由安装包提供，可用 `uv run python -m vaws_knowledge skill` 按需读取。
-
-
-
+## 业务技能
 
 | 技能                       | 用途                                             | 何时使用               |
 | ------------------------ | ---------------------------------------------- | ------------------ |
-| **repo-init**            | 安装 GitHub CLI、登录 GitHub、初始化子模块、运行 `uv sync`、配置 Fork 和远程仓库拓扑 | 首次 clone 后初始化工作区   |
+| **repo-init**            | 安装 GitHub CLI、登录 GitHub、初始化子模块、安装锁定的平台依赖、配置 Fork 和远程仓库拓扑 | 首次 clone 后初始化工作区   |
 | **npu-fleet-monitor**    | 从独立 vaws-top 仓库构建、拉起、检查或停止本地 NPU 监控页面            | 需要持续查看设备、主机和历史资源状态时 |
 | **modelscope**           | 下载、续传、查看进度并 SHA256 校验 ModelScope 模型权重                  | 需要把模型权重下载到明确目录时 |
-| **vllm-ascend-serving**  | 在远程容器上一键拉起 vLLM Ascend 推理服务，支持 NPU 探测、自动选卡、增量重启 | 需要在远程机器上起推理服务时     |
-| **vllm-ascend-benchmark** | 在远程容器上运行 `vllm bench serve` 性能基准测试，支持多轮预热和统计聚合     | 需要跑吞吐/延迟基准测试或性能回归对比时 |
+| **vllm-ascend-serving**  | 在远程容器上一键拉起 vLLM Ascend 推理服务，由 coordinator 管理执行和资源 | 需要在远程机器上起推理服务时     |
+| **vllm-ascend-benchmark** | 在远程容器上运行 `vllm bench serve` 性能基准测试，支持多轮预热和统计聚合     | 需要测量吞吐或延迟时 |
 | **ascend-memory-profiling** | 采集并分析昇腾 NPU 的 HBM 显存占用，按组件拆分并溯源 | 需要分析 vLLM 推理服务的显存占用时 |
 | **ascend-profiling-collection** | 采集 Ascend torch profiler：起服务、控制 profile 窗口、运行 workload、远端 analyse 并写 manifest | 需要采集 kernel_details/trace_view 时 |
 | **ascend-profiling-analysis** | 分析已采集的 profiler root/manifest，生成 step/layer/operator/cross-rank 诊断报告 | 需要分析 profiling 结果或生成报告时 |
@@ -72,124 +56,14 @@ python3 .agents/skills/npu-fleet-monitor/scripts/manage_monitor.py ensure
 | **ascend-triton-kernel-validation** | 检测 PyTorch fallback 并执行显式正确性矩阵 | 验证 Triton 候选实现时 |
 | **ascend-triton-kernel-optimization** | 在正确性门禁后执行 profiler 驱动的优化实验 | 优化已正确的 Triton kernel 时 |
 | **ascend-triton-workflow** | 编排开发、验证、优化和 Run Manifest 证据 | 交付完整 Triton 算子生命周期时 |
-| **vllm-ascend-pd-serving** | 编排 Session Group 上的 prefill/decode、connector、回滚和 KV smoke | 部署 PD 分离服务时 |
+| **vllm-ascend-pd-serving** | 启动和观察一个 prefill/decode 拓扑，并做 HTTP smoke | 部署 PD 分离服务时 |
 
+技能按任务选用。详细输入和方法位于对应 `SKILL.md` 的参考资料；普通本地文件与 Git 操作使用原生工具。[AGENTS.md](AGENTS.md) 是客户端入口，[文档索引](docs/README.md) 区分当前契约和历史验收证据。
 
-所有技能都是**可选的**。你可以只用其中的一部分，也可以完全不用。
+## 仓库与本地状态
 
-## 使用示例
+规范仓库是 `vllm-ascend-workspace/vllm-ascend-workspace`。`vllm/`、`vllm-ascend/` 是指向社区上游的 Git 子模块；个人 Fork 作为开发 remote，初始化保留已有远程配置。
 
-与 Agent 对话时，可以这样说：
+`.agents/skills/` 保存业务技能，`.agents/lib/` 保存共享消费代码，`.agents/scripts/` 保存客户端接线和维护工具。客户端投影统一指向规范技能。运行状态和私人配置放在未跟踪的 `.vaws-local/`，凭据不入库。公开知识只使用包生成的脱敏副本。
 
-```
-# 初始化
-"帮我初始化一下这个仓库"
-"帮我配置一下这个仓库"
-
-# 机器管理
-"帮我添加一下这两台服务器，ip 是 x.x.x.1 和 x.x.x.2，密码是 xxxx"
-"帮我配置一下这台服务器，ip 是 x.x.x.x，密码是 xxxx"
-"帮我删除 x.x.x.x 服务器"
-
-# 代码同步
-"帮我同步代码到服务器上并重新编译"
-
-# 模型权重下载
-"帮我把 Qwen/Qwen3-32B 从 ModelScope 下载到 /root/Qwen/Qwen3-32B，并查看进度"
-"校验一下 /root/Qwen/Qwen3-32B 的 ModelScope 权重"
-
-# 服务拉起（--model 需要指定远程容器上已存在的权重路径，不支持自动下载）
-"在 x.x.x.x 上用 /home/weights/Qwen3-32B-W8A8 拉一个 4 卡的推理服务，开 W8A8 量化"
-"帮我重启一下 x.x.x.x 的服务，把 max-model-len 改成 8192"
-"看下 x.x.x.x 上的服务状态"
-"停掉 x.x.x.x 上的服务"
-
-# 性能基准测试
-"在 x.x.x.x 上用 Qwen3.5-35B 跑个 benchmark，4 卡，跑 5 组取后 4 组"
-"对比一下 main 和这个 PR 的吞吐差异"
-```
-
-## 仓库结构
-
-```
-.
-├── vllm/                  # vLLM 上游（Git 子模块）
-├── vllm-ascend/           # vLLM Ascend 插件（Git 子模块）
-├── .agents/
-│   ├── skills/
-│   │   ├── repo-init/             # 工作区初始化技能
-│   │   ├── npu-fleet-monitor/     # 本地 NPU 监控服务部署技能
-│   │   ├── modelscope/            # ModelScope 权重下载与校验技能
-│   │   ├── vllm-ascend-serving/   # 服务拉起技能
-│   │   ├── vllm-ascend-benchmark/ # 性能基准测试技能
-│   │   ├── ascend-memory-profiling/ # 显存 profiling 技能
-│   │   ├── ascend-profiling-collection/ # torch profiler 采集技能
-│   │   ├── ascend-profiling-analysis/ # profiling 分析报告技能
-│   ├── lib/               # 共享本地状态库
-│   └── scripts/           # 共享辅助脚本
-├── .cursor/rules/         # Cursor IDE 专用规则
-├── .trae/                 # TRAE IDE 专用规则与技能
-├── AGENTS.md              # 跨工具 Agent 指令（AI Agent 读这个）
-├── CLAUDE.md              # Claude Code 指令入口
-└── README.md              # 你正在看的这个文件
-```
-
-## 设计原则
-
-- **不强制任何流程** — 所有技能都可选，开发者自由选择使用哪些部分。
-- **本地状态不入库** — 用户特定的远程仓库、认证信息、机器配置等只存在于本地未跟踪的 `.vaws-local/` 目录中。
-- **统一 Agent 身份** — 项目初始化会静默持久化 UUID4，并可由用户选择统一别名；新容器、服务目录和服务环境使用该别名，已有资源不被重命名。
-- **并行任务隔离** — 远端并行执行优先使用 session：每个任务有独立本地 worktree、远端容器、状态目录和资源 lease。
-- **可选资源协调** — 独立 Agent 可通过宿主机 `/tmp` 中的共享 SQLite 队列发布 NPU 意向、排队和人工占用窗口；该协议只做君子协作，不强制拦截既有任务流程。
-- **远端操作结构化** — Agent 面向远端容器优先使用 remote toolbox，产出 JSON、可观测日志、可恢复 artifact manifest 和可清理状态。
-- **子模块指向社区** — `.gitmodules` 始终指向 `vllm-project` 的官方仓库。个人 Fork 是本地远程候选，不是子模块 URL，也不会仅因存在就被选中。
-- **Agent 驱动，但不依赖 Agent** — 所有操作都可以手动完成，Agent 只是让流程更方便。
-
-## 推荐的远程仓库拓扑
-
-技能会推荐以下拓扑结构，但不强制要求：
-
-
-| 仓库            | `origin`    | `upstream`                       |
-| ------------- | ----------- | -------------------------------- |
-| workspace     | 你的 Fork（可选） | `vllm-ascend-workspace/vllm-ascend-workspace` |
-| `vllm`        | 你的 Fork（可选） | `vllm-project/vllm`              |
-| `vllm-ascend` | 你的 Fork     | `vllm-project/vllm-ascend`       |
-
-规范脚手架仓库是组织下的 `vllm-ascend-workspace/vllm-ascend-workspace`（公开、非 fork）。当前个人开发 fork 是组织外的 `maoxx241/vllm` 与 `maoxx241/vllm-ascend`，不是替换上游。已有远程的 fetch/push/协议/`pushurl`/额外 remote 保持原样；`configure` 只用于明确的全新配置。
-
-
-## 多工具支持
-
-本仓库支持主流 AI 编程工具：
-
-
-| 文件               | 覆盖工具                                    |
-| ---------------- | ---------------------------------------- |
-| `AGENTS.md`      | Codex CLI、GitHub Copilot、Cursor、TRAE、OpenCode |
-| `CLAUDE.md`      | Claude Code                              |
-| `.cursor/rules/` | Cursor                                   |
-| `.trae/`         | TRAE                                     |
-
-
-## Roadmap
-
-### 已完成
-
-- [x] **repo-init** — 工作区初始化：GitHub CLI 安装、认证、子模块、Fork 与远程仓库拓扑配置
-- [x] **npu-fleet-monitor** — 独立 vaws-top 仓库监控服务：自动构建、systemd 用户服务拉起和回环健康检查
-- [x] **vllm-ascend-serving** — 服务拉起：支持空闲 NPU 检测、空闲端口检测，一键拉起 vLLM Ascend 推理服务
-- [x] **vllm-ascend-benchmark** — 在线性能基准测试：支持单轮/多轮（warm-service）模式、预热轮剔除、统计聚合，多状态回归对比由 Agent 编排
-- [x] **ascend-memory-profiling** — 显存 profiling：采集并分析 HBM 显存占用，按固定开销、模型权重、KV cache、HCCL、激活、runtime 拆分，支持 msprof 组件级归因
-
-### 计划中
-
-- [ ] **精度测试与 aisbench 集成** — 基于 aisbench 的自动化评测，支持 HTML 报告自动分析、系统调度评估及 DP 均衡度分析
-- [ ] **性能 Profiling 分析** — 自动分析模型主要算子耗时，热点算子 AIC/AIV/MTE2 ratio 分析，AICPU 算子识别，host bound 识别与诊断
-- [ ] **同步打断优化** — 针对具体 case 提供异步拷贝掩盖方案，减少同步等待开销
-- [ ] **计算图分析** — 构建模型计算图，提供基于计算图的理论性能评估报告及优化方案
-- [ ] **外置知识库接入** — 接入外部知识库，扩展 Agent 的能力边界
-
-## 许可证
-
-本脚手架仓库的许可证独立于子模块。`vllm/` 和 `vllm-ascend/` 各自遵循其上游项目的许可证。
+工作区许可证独立于子模块；两个子模块分别遵循其上游许可证。

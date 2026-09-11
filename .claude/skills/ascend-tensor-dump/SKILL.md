@@ -5,7 +5,7 @@ description: "Capture and compare bounded intermediate tensor dumps on Ascend NP
 
 <!-- Generated from .agents/skills/ascend-tensor-dump/SKILL.md. Do not edit. -->
 
-# Ascend Tensor Dump
+# Ascend tensor dump
 
 Read `.agents/skills/ascend-tensor-dump/SKILL.md` and only the references needed
 for the current task. The canonical skill owns the workflow.

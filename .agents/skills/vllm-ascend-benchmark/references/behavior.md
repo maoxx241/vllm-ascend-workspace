@@ -1,11 +1,14 @@
 # Behavior
 
-Custom commands are allowed through coordinator `vaws_run`. Scripts and presets remain the convenient path. Unparseable results stay original text with unknown status.
+Measure a vLLM service with one or several benchmark iterations and return raw and normalized metrics.
 
-1. Resolve the native task from `--context-file` / `VAWS_CONTEXT_FILE`.
-2. A live service is `--execution-id` or `--service`.
-3. A new start uses serving `serve_start.py`. Queued / preparing is reported
-   as `queued` with the same execution id; do not force-stop or resubmit.
-4. Live `--execution-id` still requires health/models/first-token evidence.
-5. Stop only a service this benchmark started.
-6. Persist results under `.vaws-local/tasks/<task-id>/benchmark/runs/`.
+Use --execution-id to measure an existing service, or let the workflow start and clean up its own service. --serve-args and --bench-args forward business options; --preset supplies reusable defaults. The managed interpreter and actual launch observations are recorded with measurements.
+
+Choose input/output lengths, concurrency, request rate and endpoint for the intended workload. User choices override presets and nightly examples. Report variance and failures alongside throughput and latency.
+
+Use performance-regression for code comparisons: it binds actual local worktrees and handles alternating runs. Use correctness-validation for accuracy claims.
+
+Progress is written to stderr; stdout contains the structured result. Remote
+device execution uses coordinator ownership. Local report construction does not
+allocate devices or alter an execution. Reports describe the supplied evidence;
+missing evidence is not a passing result.

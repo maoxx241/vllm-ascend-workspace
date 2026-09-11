@@ -5,7 +5,7 @@ description: "Start, check, or stop a single-node vLLM Ascend service through co
 
 <!-- Generated from .agents/skills/vllm-ascend-serving/SKILL.md. Do not edit. -->
 
-# vLLM Ascend Serving
+# vllm-ascend-serving
 
 Read `.agents/skills/vllm-ascend-serving/SKILL.md` and only the references needed
 for the current task. The canonical skill owns the workflow.

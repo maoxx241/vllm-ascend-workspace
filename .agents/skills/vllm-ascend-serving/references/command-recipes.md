@@ -1,21 +1,14 @@
-# Command Recipes
+# Agent call
 
-```bash
-python3 .agents/skills/vllm-ascend-serving/scripts/serve_start.py \
-  --model /data/models/Qwen3-32B \
-  --tp 4 \
-  --service vllm
+From the repository root:
 
-python3 .agents/skills/vllm-ascend-serving/scripts/serve_start.py \
-  --relaunch \
-  --service vllm
-
-python3 .agents/skills/vllm-ascend-serving/scripts/serve_status.py --service vllm
-python3 .agents/skills/vllm-ascend-serving/scripts/serve_status.py --execution-id <id>
-python3 .agents/skills/vllm-ascend-serving/scripts/serve_stop.py --service vllm
-python3 .agents/skills/vllm-ascend-serving/scripts/serve_probe_npus.py --host 10.0.0.1
+```text
+python .agents/skills/vllm-ascend-serving/scripts/serving.py start --model /models/example --tp 1
 ```
 
-`--relaunch` submits `restart=True`. Queued starts keep the same execution
-id; do not resubmit. Managed sources are prepared by coordinator; do not
-publish sources directly against a live execution root.
+Use serving.py status or serving.py stop with --execution-id or --service. A service reference is resolved by coordinator within the current task. Pending states retain their execution reference. Restart or release follows the requested lifecycle; no separate allocation, parity command or status ledger is needed.
+
+Use `--help` for exact argument details. Report output directories are optional
+where supported; the script creates a fresh directory under `.vaws-local/`.
+Schema versions and report identifiers are generated internally. Input files
+describe business cases or contain observed results, rather than task ownership.

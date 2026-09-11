@@ -57,6 +57,22 @@ def config() -> dict:
 
 
 class ValidationTests(unittest.TestCase):
+    def test_one_call_with_business_config_retains_missing_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cfg = config()
+            for key in ("schema_version", "run_id", "parent_run_id"):
+                cfg.pop(key, None)
+            config_path = root / "config.json"
+            config_path.write_text(json.dumps(cfg), encoding="utf-8")
+            kernel = root / "kernel.py"
+            kernel.write_text(kernel_source(), encoding="utf-8")
+            result = validation.build_report(config_path, [], kernel=kernel, output_dir=root / "report")
+            self.assertEqual(result["status"], "inconclusive")
+            manifest = json.loads(Path(result["manifest_ref"]).read_text(encoding="utf-8"))
+            self.assertEqual(manifest["status"], "inconclusive")
+            self.assertEqual(list((root / ".vaws-local/report-inputs").glob("*.json")), [])
+
     def test_static_gate_detects_fallback(self) -> None:
         tree = __import__("ast").parse(kernel_source(fallback=True))
         result = static.analyze_tree(tree)
@@ -71,11 +87,11 @@ class ValidationTests(unittest.TestCase):
             config_path = root / "config.json"
             config_path.write_text(json.dumps(config()), encoding="utf-8")
             output = root / "validation"
-            validation.plan(output, config_path=config_path, kernel=kernel, created_at=NOW)
+            validation._prepare_report(output, config_path=config_path, kernel=kernel, created_at=NOW)
             result_path = root / "result.json"
             result_path.write_text(json.dumps({"schema_version": 1, "case_id": "case-1", "status": "passed", "comparisons": [{"output": "out", "max_abs": 0.0, "max_rel": 0.0, "cosine": 1.0}]}), encoding="utf-8")
-            validation.record(output, result_path=result_path, recorded_at=NOW)
-            result = validation.analyze(output, updated_at=NOW)
+            validation._record_result(output, result_path=result_path, recorded_at=NOW)
+            result = validation._analyze_report(output, updated_at=NOW)
             self.assertEqual(result["status"], "passed")
             self.assertEqual(result["passed_cases"], 1)
 
@@ -87,8 +103,8 @@ class ValidationTests(unittest.TestCase):
             config_path = root / "config.json"
             config_path.write_text(json.dumps(config()), encoding="utf-8")
             output = root / "validation"
-            validation.plan(output, config_path=config_path, kernel=kernel, created_at=NOW)
-            result = validation.analyze(output, updated_at=NOW)
+            validation._prepare_report(output, config_path=config_path, kernel=kernel, created_at=NOW)
+            result = validation._analyze_report(output, updated_at=NOW)
             self.assertEqual(result["status"], "inconclusive")
 
 

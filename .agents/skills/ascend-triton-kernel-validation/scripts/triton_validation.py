@@ -182,7 +182,7 @@ def validate_result(result: Mapping[str, Any], planned_ids: set[str]) -> None:
         raise ValidationError("; ".join(errors))
 
 
-def plan(
+def _prepare_report(
     output_dir: Path,
     *,
     config_path: Path,
@@ -234,7 +234,7 @@ def plan(
     return {"status": "planned", "run_id": config["run_id"], "case_count": len(config["cases"]), "kernel_sha256": sha256_file(kernel)}
 
 
-def record(output_dir: Path, *, result_path: Path, recorded_at: str | None = None) -> dict[str, Any]:
+def _record_result(output_dir: Path, *, result_path: Path, recorded_at: str | None = None) -> dict[str, Any]:
     matrix = _load_json(output_dir / "case-matrix.json", "case matrix")
     results = _load_json(output_dir / "results.json", "results")
     planned_ids = {case["id"] for case in matrix["cases"]}
@@ -256,7 +256,7 @@ def record(output_dir: Path, *, result_path: Path, recorded_at: str | None = Non
     return {"status": "recorded", "case_id": result["case_id"], "remaining": sum(row["status"] == "pending" for row in matrix["cases"])}
 
 
-def analyze(output_dir: Path, *, updated_at: str | None = None) -> dict[str, Any]:
+def _analyze_report(output_dir: Path, *, updated_at: str | None = None) -> dict[str, Any]:
     config = _load_json(output_dir / "validation-config.json", "validation config")
     matrix = _load_json(output_dir / "case-matrix.json", "case matrix")
     results = _load_json(output_dir / "results.json", "results")
@@ -307,36 +307,31 @@ def analyze(output_dir: Path, *, updated_at: str | None = None) -> dict[str, Any
     return {"status": status, "passed_cases": len(passed), "total_cases": len(matrix["cases"]), "analysis": str((output_dir / "analysis.json").resolve())}
 
 
+def build_report(config_path: Path, result_paths: list[Path], *, output_dir: Path | None = None, kernel: Path, workspace_root: Path = ROOT) -> dict[str, Any]:
+    from vaws_report import report_config, report_directory
+    output = report_directory(workspace_root, "ascend-triton-kernel-validation", output_dir)
+    with report_config(config_path, root=workspace_root, prefix="report") as config:
+        _prepare_report(output, config_path=config, workspace_root=workspace_root, kernel=kernel)
+    for path in result_paths:
+        _record_result(output, result_path=path)
+    result = _analyze_report(output)
+    return {**result, "manifest_ref": str(output / "manifest.json")}
+
+
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
-    subparsers = parser.add_subparsers(dest="action", required=True)
-    plan_parser = subparsers.add_parser("plan")
-    plan_parser.add_argument("--output-dir", required=True, type=Path)
-    plan_parser.add_argument("--config", required=True, type=Path)
-    plan_parser.add_argument("--kernel", required=True, type=Path)
-    record_parser = subparsers.add_parser("record")
-    record_parser.add_argument("--output-dir", required=True, type=Path)
-    record_parser.add_argument("--result", required=True, type=Path)
-    analyze_parser = subparsers.add_parser("analyze")
-    analyze_parser.add_argument("--output-dir", required=True, type=Path)
+    parser = argparse.ArgumentParser(description="Analyze collected ascend-triton-kernel-validation evidence and write the report in one call.")
+    parser.add_argument("--config", required=True, type=Path, help="Business cases and tolerances")
+    parser.add_argument("--results", nargs="*", default=[], type=Path, help="Observed case/round result files")
+    parser.add_argument("--output-dir", type=Path, help="Defaults to a new local report directory")
+    parser.add_argument("--kernel", required=True, type=Path)
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
-        if args.action == "plan":
-            payload = plan(
-                args.output_dir,
-                config_path=args.config,
-                kernel=args.kernel,
-                code=manifest_code(ROOT),
-            )
-        elif args.action == "record":
-            payload = record(args.output_dir, result_path=args.result)
-        else:
-            payload = analyze(args.output_dir)
-    except (ValidationError, RunManifestError) as exc:
+        payload = build_report(args.config, args.results, output_dir=args.output_dir, kernel=args.kernel)
+    except (ValidationError, RunManifestError, OSError, ValueError) as exc:
         print(json.dumps({"status": "failed", "error": str(exc)}, ensure_ascii=False))
         return 1
     print(json.dumps(payload, ensure_ascii=False))

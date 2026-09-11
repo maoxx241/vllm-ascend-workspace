@@ -1,22 +1,8 @@
-# Ascend Triton validation acceptance
+# Maintainer verification
 
-## Static integrity
+Run the affected tests in `../tests/` with the local test runner. Exercise the
+public call with business inputs and actual result fixtures, including incomplete
+or mismatched evidence. Verify that conclusions do not exceed the observed scope.
+These checks belong to implementation maintenance, not a per-task Agent checklist.
 
-- [ ] Candidate hash is recorded.
-- [ ] At least one Triton kernel exists and is reachable from `ModelNew.forward`.
-- [ ] Reachable wrapper code has no PyTorch computation fallback.
-- [ ] Manual review covers dynamic calls the AST gate cannot prove.
-
-## Matrix and execution
-
-- [ ] Reference, tolerance, environment, and every case are explicit.
-- [ ] Boundary shapes, tails, dtypes, layouts, strides, and scalar branches are covered.
-- [ ] Every case ran on the same intended Ascend environment.
-- [ ] No implicit cast, contiguous copy, or case deletion changed the contract.
-
-## Result integrity
-
-- [ ] Output structure, shape, dtype, NaN/Inf behavior, and values were compared.
-- [ ] Raw evidence links exist for every failure.
-- [ ] Passed count comes from validation, not benchmark process success.
-- [ ] `passed_cases == total_cases > 0` before any performance workflow begins.
+The config contains op_name, reference, target, cases and tolerances. The tool checks kernel source for missing launches and computation fallback, combines observed case results, and emits coverage, analysis and a manifest automatically.

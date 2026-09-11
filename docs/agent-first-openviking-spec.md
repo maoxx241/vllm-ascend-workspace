@@ -4,9 +4,9 @@ Status: current
 
 日期：2026-09-11。本文是下一阶段的实施方向与目标行为，**不表示这些能力已经实现**。用户已确定“宽松、先信任、不增加 Agent 负担”的原则，并认可精简现有流程。当前安装版本仍由 `pyproject.toml` 和 `uv.lock` 描述；实现进度见本文末尾的工作批次。
 
-客户端平台范围：**ARM64 macOS（Apple Silicon）与 x86-64 Windows，CPU-only**。当前批次以 macOS 主链路为提交基线；Windows 环境由用户后续准备，再用原生 PowerShell 5.1/7 验证，不阻塞本批 PR。Intel Mac 不在本阶段范围。
+客户端平台范围：**x86-64 Windows 原生 PowerShell 5.1/7、同一检出目录下的 WSL Linux，以及 ARM64 macOS，CPU-only**。当前 Agent-only 改造必须完成 Windows 和 WSL 验收；macOS 沿用既有支持范围，本次本地验收不代表重新验证了 macOS。Windows 与 WSL 自动选择各自的平台环境，互不覆盖。
 
-发布策略：先快速具备当前能力，允许破坏性接口和格式变更，不为旧版本添加兼容层。正式发布阶段再确定兼容性承诺和 Windows 验证要求。
+发布策略：先快速具备当前能力，允许破坏性接口和格式变更，不为旧版本添加兼容层。正式发布阶段再确定版本兼容性承诺。
 
 本文细化 [target-state.md](target-state.md) 中的目标架构。开发体验、知识格式和后续实施范围以这两份文档为准；现有脚本中的旧限制是待改造项，不是新设计需要保留的条件。修改每条实现路径时，同步更新对应 skill、脚本、参考文档和受影响检查。
 
@@ -31,7 +31,7 @@ VAWS 要减少 vllm-ascend 开发中的环境准备、重复排查和证据整�
 ```mermaid
 flowchart TB
     A["Agent：判断、改代码、运行实验、给出结论"]
-    subgraph Local["用户电脑：x86-64 Windows / ARM64 macOS，CPU"]
+    subgraph Local["用户电脑：Windows / WSL Linux / ARM64 macOS，CPU"]
         W["Workspace：项目材料、初始化、MCP 接线、业务 Skills"]
         Native["客户端原生文件 / Shell / Git 工具"]
         R["remote-dev：普通远程 I/O、命令、日志"]

@@ -5,7 +5,7 @@ description: "Analyze Ascend NPU torch profiler output (kernel_details.csv / tra
 
 <!-- Generated from .agents/skills/ascend-profiling-analysis/SKILL.md. Do not edit. -->
 
-# Ascend Profiling Analysis
+# ascend-profiling-analysis
 
 Read `.agents/skills/ascend-profiling-analysis/SKILL.md` and only the references needed
 for the current task. The canonical skill owns the workflow.

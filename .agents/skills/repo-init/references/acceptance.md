@@ -39,7 +39,7 @@ A successful run should satisfy all applicable items below.
 - for broad init, the skill stops after the first probe summary only for missing choices:
   - unified alias choice if the identity decision is pending
   - machine username choice if the profile is missing
-- authorized init defaults to keep-current remotes, submodule init, `uv sync`, and CI-pinned vllm alignment unless the user overrides them
+- authorized init defaults to keep-current remotes, submodule init, `python .agents/scripts/vaws_deps.py sync`, and CI-pinned vllm alignment unless the user overrides them
 - when a machine username is missing, the helper suggests three options:
   - `git-username`
   - `random`
@@ -92,8 +92,8 @@ A successful run should satisfy all applicable items below.
 - repeated setup preserves foreign MCP/hook configuration and does not bypass native hook trust
 - knowledge PRs use human review; no Grok credential or automatic merge is required
 
-- offers `uv sync` (or `python3 .agents/scripts/vaws_deps.py sync`) as a required step for package-dependent work
-- skipping `uv sync` still completes `repo-init` for local documentation and Git work
+- offers `python .agents/scripts/vaws_deps.py sync` (or `python3 .agents/scripts/vaws_deps.py sync`) as a required step for package-dependent work
+- skipping `python .agents/scripts/vaws_deps.py sync` still completes `repo-init` for local documentation and Git work
 - the three in-process packages are public git+https installs; `uv.lock` is the only pin
 - after install or skip, runs `python3 .agents/scripts/vaws_deps.py doctor`
 - the finish summary names available and unavailable capabilities from `doctor`'s report, without re-deriving them

@@ -43,7 +43,7 @@ class DoctorEnvelopeTests(unittest.TestCase):
         for entry in report["degradation"]:
             self.assertTrue(str(entry.get("remedy") or "").strip(), entry)
         commands = [item.get("command") or "" for item in envelope["next_step"]["actions"]]
-        self.assertTrue(any("uv sync" in command for command in commands), commands)
+        self.assertTrue(any("python .agents/scripts/vaws_deps.py sync" in command for command in commands), commands)
 
     def test_envelope_lint_accepts_doctor_stdout(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -119,7 +119,7 @@ class ResolverDegradationTests(unittest.TestCase):
         self.assertFalse(cap["available"])
         self.assertTrue(cap["degraded"])
         self.assertEqual(cap["depends_on"], ["vaws-coordinator"])
-        self.assertTrue(any("uv sync" in (item.get("remedy") or "") for item in cap["degradation"]))
+        self.assertTrue(any("python .agents/scripts/vaws_deps.py sync" in (item.get("remedy") or "") for item in cap["degradation"]))
 
     def test_capability_deps_use_distribution_names(self) -> None:
         self.assertEqual(CAPABILITY_DEPS["remote_endpoints"], ("vaws-remote-dev",))

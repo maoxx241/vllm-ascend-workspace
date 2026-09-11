@@ -76,6 +76,7 @@ def config() -> dict:
 def recorded_observation(*, commit: str = "abc") -> dict:
     return {
         "workspace_snapshot": {"vllm_ascend_commit": commit},
+        "machine": "host",
         "environment": {"cann": "test"},
         "model": {"path": "/models/example"},
         "topology": {"tp": 2, "dp": 1},
@@ -184,7 +185,7 @@ class PerformanceRegressionTests(unittest.TestCase):
             config_path = root / "config.json"
             config_path.write_text(json.dumps(invalid), encoding="utf-8")
             with self.assertRaises(performance.PerformanceRegressionError):
-                performance.plan(root / "run", config_path=config_path, created_at=NOW)
+                performance._prepare_report(root / "run", config_path=config_path, created_at=NOW)
             self.assertFalse((root / "run" / "parity-check.json").exists())
 
     def test_topology_without_data_parallel_degree_is_rejected(self) -> None:
@@ -211,7 +212,7 @@ class PerformanceRegressionTests(unittest.TestCase):
             experiment["parent_run_id"] = "change-validation-1"
             config_path.write_text(json.dumps(experiment), encoding="utf-8")
             output = root / "run"
-            performance.plan(output, config_path=config_path, created_at=NOW)
+            performance._prepare_report(output, config_path=config_path, created_at=NOW)
             parity = json.loads((output / "parity-check.json").read_text(encoding="utf-8"))
             self.assertEqual(parity["basis"], "declared-configuration")
             checks = {row["check"]: row for row in parity["checks"]}
@@ -298,7 +299,7 @@ class PerformanceRegressionTests(unittest.TestCase):
             config_path = root / "config.json"
             config_path.write_text(json.dumps(config()), encoding="utf-8")
             output = root / "run"
-            planned = performance.plan(output, config_path=config_path, created_at=NOW)
+            planned = performance._prepare_report(output, config_path=config_path, created_at=NOW)
             schedule = json.loads(
                 (output / "schedule.json").read_text(encoding="utf-8")
             )
@@ -318,8 +319,8 @@ class PerformanceRegressionTests(unittest.TestCase):
                     ),
                     encoding="utf-8",
                 )
-                performance.record(output, result_path=result_path, recorded_at=NOW)
-            result = performance.analyze(output, updated_at=NOW)
+                performance._record_result(output, result_path=result_path, recorded_at=NOW)
+            result = performance._analyze_report(output, updated_at=NOW)
             self.assertEqual(result["status"], "passed")
             self.assertTrue((output / "report.md").is_file())
             certificate = json.loads(
@@ -333,7 +334,7 @@ class PerformanceRegressionTests(unittest.TestCase):
             config_path = root / "config.json"
             config_path.write_text(json.dumps(config()), encoding="utf-8")
             output = root / "run"
-            planned = performance.plan(output, config_path=config_path, created_at=NOW)
+            planned = performance._prepare_report(output, config_path=config_path, created_at=NOW)
             schedule = json.loads((output / "schedule.json").read_text(encoding="utf-8"))
             for entry in schedule["entries"]:
                 result_path = root / f"{entry['id']}.json"
@@ -348,12 +349,12 @@ class PerformanceRegressionTests(unittest.TestCase):
                     ),
                     encoding="utf-8",
                 )
-                performance.record(output, result_path=result_path, recorded_at=NOW)
+                performance._record_result(output, result_path=result_path, recorded_at=NOW)
             with self.assertRaisesRegex(
                 performance.PerformanceRegressionError,
                 r"missing a nonempty observation",
             ):
-                performance.analyze(output, updated_at=NOW)
+                performance._analyze_report(output, updated_at=NOW)
             manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
             self.assertEqual(manifest["status"], "running")
             self.assertFalse((output / "comparison.json").exists())
@@ -364,7 +365,7 @@ class PerformanceRegressionTests(unittest.TestCase):
             config_path = root / "config.json"
             config_path.write_text(json.dumps(config()), encoding="utf-8")
             output = root / "run"
-            performance.plan(output, config_path=config_path, created_at=NOW)
+            performance._prepare_report(output, config_path=config_path, created_at=NOW)
             entry = json.loads(
                 (output / "schedule.json").read_text(encoding="utf-8")
             )["entries"][0]
@@ -377,7 +378,7 @@ class PerformanceRegressionTests(unittest.TestCase):
             with self.assertRaisesRegex(
                 performance.PerformanceRegressionError, "shared"
             ):
-                performance.record(output, result_path=result_path, recorded_at=NOW)
+                performance._record_result(output, result_path=result_path, recorded_at=NOW)
 
     def test_partial_measurement_observations_cannot_pass(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -385,7 +386,7 @@ class PerformanceRegressionTests(unittest.TestCase):
             config_path = root / "config.json"
             config_path.write_text(json.dumps(config()), encoding="utf-8")
             output = root / "run"
-            planned = performance.plan(output, config_path=config_path, created_at=NOW)
+            planned = performance._prepare_report(output, config_path=config_path, created_at=NOW)
             schedule = json.loads((output / "schedule.json").read_text(encoding="utf-8"))
             observed_count = 0
             measure_count = 0
@@ -411,14 +412,14 @@ class PerformanceRegressionTests(unittest.TestCase):
                     ),
                     encoding="utf-8",
                 )
-                performance.record(output, result_path=result_path, recorded_at=NOW)
+                performance._record_result(output, result_path=result_path, recorded_at=NOW)
             self.assertEqual(measure_count, 6)
             self.assertEqual(observed_count, 2)
             with self.assertRaisesRegex(
                 performance.PerformanceRegressionError,
                 r"baseline-measure-2|measure\+2",
             ):
-                performance.analyze(output, updated_at=NOW)
+                performance._analyze_report(output, updated_at=NOW)
             manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
             self.assertNotEqual(manifest["status"], "passed")
             self.assertEqual(manifest["status"], "running")
@@ -439,7 +440,7 @@ class PerformanceRegressionTests(unittest.TestCase):
             config_path = root / "config.json"
             config_path.write_text(json.dumps(config()), encoding="utf-8")
             output = root / "run"
-            planned = performance.plan(output, config_path=config_path, created_at=NOW)
+            planned = performance._prepare_report(output, config_path=config_path, created_at=NOW)
             schedule = json.loads((output / "schedule.json").read_text(encoding="utf-8"))
             for entry in schedule["entries"]:
                 observation = None
@@ -463,11 +464,11 @@ class PerformanceRegressionTests(unittest.TestCase):
                     ),
                     encoding="utf-8",
                 )
-                performance.record(output, result_path=result_path, recorded_at=NOW)
+                performance._record_result(output, result_path=result_path, recorded_at=NOW)
             with self.assertRaisesRegex(
                 performance.PerformanceRegressionError, "inconsistent observations"
             ):
-                performance.analyze(output, updated_at=NOW)
+                performance._analyze_report(output, updated_at=NOW)
             manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
             self.assertEqual(manifest["status"], "running")
             self.assertFalse((output / "comparison.json").exists())
@@ -480,7 +481,7 @@ class PerformanceRegressionTests(unittest.TestCase):
             config_path = root / "config.json"
             config_path.write_text(json.dumps(experiment), encoding="utf-8")
             output = root / "run"
-            planned = performance.plan(output, config_path=config_path, created_at=NOW)
+            planned = performance._prepare_report(output, config_path=config_path, created_at=NOW)
             schedule = json.loads((output / "schedule.json").read_text(encoding="utf-8"))
             for entry in schedule["entries"]:
                 observation = None
@@ -501,12 +502,12 @@ class PerformanceRegressionTests(unittest.TestCase):
                     ),
                     encoding="utf-8",
                 )
-                performance.record(output, result_path=result_path, recorded_at=NOW)
+                performance._record_result(output, result_path=result_path, recorded_at=NOW)
             with self.assertRaisesRegex(
                 performance.PerformanceRegressionError,
                 "declaration/observation mismatch",
             ):
-                performance.analyze(output, updated_at=NOW)
+                performance._analyze_report(output, updated_at=NOW)
             manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
             self.assertEqual(manifest["status"], "running")
             self.assertFalse((output / "comparison.json").exists())
@@ -522,7 +523,7 @@ class PerformanceRegressionTests(unittest.TestCase):
             config_path = root / "config.json"
             config_path.write_text(json.dumps(config()), encoding="utf-8")
             output = root / "run"
-            planned = performance.plan(output, config_path=config_path, created_at=NOW)
+            planned = performance._prepare_report(output, config_path=config_path, created_at=NOW)
             schedule = json.loads((output / "schedule.json").read_text(encoding="utf-8"))
             for entry in schedule["entries"]:
                 observation = None
@@ -543,7 +544,7 @@ class PerformanceRegressionTests(unittest.TestCase):
                     ),
                     encoding="utf-8",
                 )
-                performance.record(output, result_path=result_path, recorded_at=NOW)
+                performance._record_result(output, result_path=result_path, recorded_at=NOW)
             measurements = json.loads(
                 (output / "measurements.json").read_text(encoding="utf-8")
             )
@@ -558,7 +559,7 @@ class PerformanceRegressionTests(unittest.TestCase):
             with self.assertRaisesRegex(
                 performance.PerformanceRegressionError, "candidate-measure-3"
             ):
-                performance.analyze(output, updated_at=NOW)
+                performance._analyze_report(output, updated_at=NOW)
             manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
             self.assertEqual(manifest["status"], "running")
             self.assertFalse((output / "comparison.json").exists())

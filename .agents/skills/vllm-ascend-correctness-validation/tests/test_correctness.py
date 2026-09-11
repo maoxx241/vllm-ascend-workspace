@@ -114,7 +114,7 @@ def init_run(root: Path, **overrides) -> Path:
         "created_at": NOW,
     }
     arguments.update(overrides)
-    correctness.init_run(run_dir, **arguments)
+    correctness._prepare_report(run_dir, **arguments)
     return run_dir
 
 
@@ -220,7 +220,7 @@ class ComparisonTests(unittest.TestCase):
                 root / "candidate.json",
                 result_document("candidate", cases, execution_block=execution()),
             )
-            comparison = correctness.compare_run(
+            comparison = correctness._compare_report(
                 run_dir,
                 baseline_path=baseline,
                 candidate_path=candidate,
@@ -270,7 +270,7 @@ class ComparisonTests(unittest.TestCase):
                 root / "candidate.json",
                 result_document("candidate", cases, execution_block=execution()),
             )
-            comparison = correctness.compare_run(
+            comparison = correctness._compare_report(
                 run_dir,
                 baseline_path=baseline,
                 candidate_path=candidate,
@@ -307,7 +307,7 @@ class ComparisonTests(unittest.TestCase):
             with self.assertRaisesRegex(
                 correctness.CorrectnessError, "not-comparable"
             ):
-                correctness.compare_run(
+                correctness._compare_report(
                     run_dir,
                     baseline_path=baseline,
                     candidate_path=candidate,
@@ -333,7 +333,7 @@ class ComparisonTests(unittest.TestCase):
             with self.assertRaisesRegex(
                 correctness.CorrectnessError, "declaration/observation mismatch"
             ):
-                correctness.compare_run(
+                correctness._compare_report(
                     run_dir,
                     baseline_path=baseline,
                     candidate_path=candidate,
@@ -383,7 +383,7 @@ class ComparisonTests(unittest.TestCase):
             with self.assertRaisesRegex(
                 correctness.CorrectnessError, "not-comparable"
             ):
-                correctness.compare_run(
+                correctness._compare_report(
                     run_dir,
                     baseline_path=baseline,
                     candidate_path=candidate,
@@ -430,7 +430,7 @@ class ExecutionIdentityTests(unittest.TestCase):
                 correctness.CorrectnessError,
                 r"undeclared fields: engine_args\.enforce_eager.*--allowed-difference",
             ):
-                correctness.compare_run(
+                correctness._compare_report(
                     run_dir, baseline_path=baseline, candidate_path=candidate, updated_at=NOW
                 )
             manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
@@ -457,7 +457,7 @@ class ExecutionIdentityTests(unittest.TestCase):
                     execution_block=execution(enforce_eager=False),
                 ),
             )
-            comparison = correctness.compare_run(
+            comparison = correctness._compare_report(
                 run_dir, baseline_path=baseline, candidate_path=candidate, updated_at=NOW
             )
             self.assertEqual(comparison["status"], "failed")
@@ -488,7 +488,7 @@ class ExecutionIdentityTests(unittest.TestCase):
             with self.assertRaisesRegex(
                 correctness.CorrectnessError, "baseline result has no execution block"
             ):
-                correctness.compare_run(
+                correctness._compare_report(
                     run_dir, baseline_path=baseline, candidate_path=candidate, updated_at=NOW
                 )
 
@@ -505,7 +505,7 @@ class ExecutionIdentityTests(unittest.TestCase):
             with self.assertRaisesRegex(
                 correctness.CorrectnessError, "candidate result label is 'base'"
             ):
-                correctness.compare_run(
+                correctness._compare_report(
                     run_dir, baseline_path=same, candidate_path=same, updated_at=NOW
                 )
 
@@ -526,7 +526,7 @@ class ExecutionIdentityTests(unittest.TestCase):
             with self.assertRaisesRegex(
                 correctness.CorrectnessError, "undeclared fields: engine_args.enforce_eager"
             ):
-                correctness.compare_run(
+                correctness._compare_report(
                     run_dir, baseline_path=baseline, candidate_path=candidate, updated_at=NOW
                 )
 

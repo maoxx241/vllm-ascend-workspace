@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Plan and aggregate evidence for vLLM Ascend code changes."""
+"""Analyze a code diff and aggregate its actual validation evidence in one call."""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ from vaws_venv import ensure_workspace_interpreter  # noqa: E402
 
 ensure_workspace_interpreter(repo_root=ROOT)
 
-from vaws_knowledge_service import load_json_object  # noqa: E402
+from vaws_session_state import load_json_object  # noqa: E402
 from vaws_coordinator.run_manifest import (  # noqa: E402
     RunManifestError,
     add_artifact,
@@ -346,7 +346,7 @@ def render_report(
     return "\n".join(lines) + "\n"
 
 
-def plan_change(
+def _prepare_report(
     output_dir: Path,
     *,
     run_id: str,
@@ -506,7 +506,7 @@ def check_cover_run_types(
             )
 
 
-def link_run(
+def _link_evidence(
     output_dir: Path,
     *,
     child_manifest_path: Path,
@@ -518,12 +518,18 @@ def link_run(
     unknown = sorted(set(covers) - valid_ids)
     if unknown:
         raise ChangeValidationError(f"unknown plan item ids: {', '.join(unknown)}")
-    if not covers:
-        raise ChangeValidationError("at least one --covers item is required")
     child = load_manifest(child_manifest_path)
     parent = load_manifest(output_dir / "manifest.json")
     evidence_meta = check_child_evidence(child, parent_run_id=parent["run_id"])
     check_cover_run_types(child, covers=covers, plan_items=plan["items"])
+    for artifact in child.get("artifacts", []):
+        path = Path(artifact["uri"])
+        if not path.is_absolute():
+            path = child_manifest_path.parent / path
+        if not path.exists():
+            raise ChangeValidationError(f"evidence artifact is unavailable: {artifact['name']}")
+    if child["status"] not in {"passed", "failed", "inconclusive", "cancelled"}:
+        raise ChangeValidationError("evidence must be a completed run")
     links = _load_json(output_dir / "linked-runs.json", "linked runs")
     if any(link["run_id"] == child["run_id"] for link in links["runs"]):
         raise ChangeValidationError(f"child run is already linked: {child['run_id']}")
@@ -552,7 +558,7 @@ def link_run(
     return link
 
 
-def finalize(
+def _finalize_report(
     output_dir: Path, *, updated_at: str | None = None
 ) -> dict[str, Any]:
     run_state = _load_json(output_dir / "run.json", "run state")
@@ -617,79 +623,100 @@ def finalize(
     }
 
 
-def build_parser() -> argparse.ArgumentParser:
+def _evidence_checks(path: Path, *, baseline: str, candidate: str) -> set[str]:
+    """Infer only checks whose scope the producing report actually records."""
+    from vaws_comparability import consume_certificate, ComparabilityError
+    child = load_manifest(path)
+    artifacts = {row["name"]: row for row in child.get("artifacts", [])}
+    def document(name):
+        if name not in artifacts:
+            return {}
+        target = Path(artifacts[name]["uri"])
+        return _load_json(target if target.is_absolute() else path.parent / target, name)
+    comparison = document("comparison")
+    certificate = document("comparability-certificate")
+    if not comparison or not certificate:
+        return set()
+    try:
+        certificate = consume_certificate(certificate)
+    except ComparabilityError:
+        return set()
+    for side, revision in (("baseline", baseline), ("candidate", candidate)):
+        observed = [row["value"] for key, row in certificate[side]["identity"].items()
+                    if key.startswith("workspace_snapshot.") and row.get("origin") == "observed"]
+        # Arbitrary labels, a report's own workspace commit, and a parent run ID
+        # cannot establish that the requested code revisions were measured.
+        if revision not in observed:
+            return set()
+    if comparison.get("status") != child["status"]:
+        raise ChangeValidationError("comparison status disagrees with its manifest")
+    checks = set()
+    if child["run_type"] == "performance":
+        checks.add("performance:online-serving")
+    if child["run_type"] == "correctness":
+        cases = document("cases").get("cases", [])
+        if not cases or not comparison.get("cases"):
+            return set()
+        modes = {row.get("mode") for row in cases}
+        if modes == {"online-chat"}:
+            checks.add("correctness:online-chat")
+        identity = certificate["candidate"]["identity"]
+        eager = identity.get("engine_args.enforce_eager", {})
+        if eager.get("origin") == "observed":
+            if eager.get("value") == "true":
+                checks.add("correctness:eager")
+            elif eager.get("value") == "false":
+                checks.add("correctness:graph")
+    return checks
+
+
+def build_report(*, diff_text: str, baseline: str, candidate: str, evidence=(),
+                 goal="", target_repositories=(), output_dir=None, workspace_root=ROOT,
+                 rules_path=DEFAULT_VALIDATION_RULES):
+    from uuid import uuid4
+    from vaws_report import report_directory
+    output = report_directory(workspace_root, "vllm-ascend-change-validation", output_dir)
+    _prepare_report(output, run_id=f"change-{uuid4().hex[:12]}", baseline=baseline,
+                    candidate=candidate, goal=goal, target_repositories=target_repositories,
+                    diff_text=diff_text, knowledge_path=rules_path, workspace_root=workspace_root)
+    items = _load_json(output / "validation-plan.json", "validation plan")["items"]
+    for path in evidence:
+        checks = _evidence_checks(path, baseline=baseline, candidate=candidate)
+        _link_evidence(output, child_manifest_path=path,
+                       covers=[row["id"] for row in items if row["check"] in checks])
+    return {**_finalize_report(output), "manifest": str((output / "manifest.json").resolve())}
+
+
+def build_parser():
     parser = argparse.ArgumentParser(description=__doc__)
-    subparsers = parser.add_subparsers(dest="action", required=True)
-    plan_parser = subparsers.add_parser("plan", help="analyze a diff and create a plan")
-    plan_parser.add_argument("--output-dir", required=True, type=Path)
-    plan_parser.add_argument("--run-id", required=True)
-    plan_parser.add_argument("--baseline", required=True)
-    plan_parser.add_argument("--candidate", default="WORKTREE")
-    plan_parser.add_argument("--goal", default="")
-    plan_parser.add_argument("--target-repository", action="append", default=[])
-    source = plan_parser.add_mutually_exclusive_group(required=True)
+    parser.add_argument("--baseline", required=True)
+    parser.add_argument("--candidate", default="HEAD")
+    parser.add_argument("--goal", default="")
+    parser.add_argument("--target-repository", action="append", default=[])
+    source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--diff-file", type=Path)
     source.add_argument("--repo-root", type=Path)
-    plan_parser.add_argument(
-        "--knowledge",
-        type=Path,
-        default=DEFAULT_VALIDATION_RULES,
-    )
-
-    link_parser = subparsers.add_parser("link", help="link a downstream run")
-    link_parser.add_argument("--output-dir", required=True, type=Path)
-    link_parser.add_argument("--run-manifest", required=True, type=Path)
-    link_parser.add_argument("--covers", action="append", required=True)
-
-    finalize_parser = subparsers.add_parser("finalize", help="finalize coverage and report")
-    finalize_parser.add_argument("--output-dir", required=True, type=Path)
+    parser.add_argument("--evidence", nargs="*", type=Path, default=[])
+    parser.add_argument("--output-dir", type=Path)
     return parser
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv=None):
     args = build_parser().parse_args(argv)
     try:
-        if args.action == "plan":
-            emit_progress("collect-diff", baseline=args.baseline, candidate=args.candidate)
-            if args.diff_file is not None:
-                diff_text = args.diff_file.read_text(encoding="utf-8")
-            else:
-                diff_text = collect_git_diff(
-                    args.repo_root.resolve(),
-                    baseline=args.baseline,
-                    candidate=args.candidate,
-                )
-            workspace = (
-                args.repo_root.resolve()
-                if args.repo_root is not None
-                else ROOT
-            )
-            payload = plan_change(
-                args.output_dir,
-                run_id=args.run_id,
-                baseline=args.baseline,
-                candidate=args.candidate,
-                goal=args.goal,
-                target_repositories=args.target_repository,
-                diff_text=diff_text,
-                knowledge_path=args.knowledge,
-                workspace_root=workspace,
-            )
-        elif args.action == "link":
-            emit_progress("link-run", manifest=str(args.run_manifest))
-            link = link_run(
-                args.output_dir,
-                child_manifest_path=args.run_manifest,
-                covers=args.covers,
-            )
-            payload = {"status": "linked", "run": link}
-        else:
-            emit_progress("finalize", output_dir=str(args.output_dir))
-            payload = finalize(args.output_dir)
-    except (ChangeValidationError, RunManifestError, OSError) as exc:
+        workspace = args.repo_root.resolve() if args.repo_root else ROOT
+        diff = args.diff_file.read_text(encoding="utf-8") if args.diff_file else collect_git_diff(
+            workspace, baseline=args.baseline, candidate=args.candidate)
+        revisions = [args.baseline, args.candidate]
+        if args.repo_root:
+            revisions = [subprocess.check_output(["git", "-C", str(workspace), "rev-parse", "--verify", f"{ref}^{{commit}}"], text=True).strip() for ref in revisions]
+        result = build_report(diff_text=diff, baseline=revisions[0], candidate=revisions[1],
+                              evidence=args.evidence, goal=args.goal, target_repositories=args.target_repository,
+                              output_dir=args.output_dir, workspace_root=workspace)
+    except (ChangeValidationError, RunManifestError, OSError, ValueError, subprocess.CalledProcessError) as exc:
         print(json.dumps({"status": "failed", "error": str(exc)}, ensure_ascii=False))
         return 1
-    print(json.dumps(payload, ensure_ascii=False))
+    print(json.dumps(result, ensure_ascii=False))
     return 0
 
 

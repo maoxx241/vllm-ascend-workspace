@@ -50,6 +50,7 @@ ensure_workspace_interpreter(repo_root=ROOT)
 
 import traceback
 from typing import Any
+from vaws_task_target import PENDING
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
 if str(_SCRIPT_DIR) not in sys.path:
@@ -204,7 +205,7 @@ def main(argv: list[str] | None = None) -> int:
         started_service = False
         if args.execution_id:
             emit_progress("start", f"using live execution {args.execution_id}")
-            from vaws_task_target import PENDING, execution_target, task_client
+            from vaws_task_target import execution_target, task_client
             from vaws_remote_target import ssh_endpoint_from_mapping
 
             client = task_client(config.context_file)
@@ -212,7 +213,7 @@ def main(argv: list[str] | None = None) -> int:
             state = str(observation.get("state") or "")
             if state in PENDING:
                 print_json({
-                    "status": "queued",
+                    "status": state,
                     "phase": "serve_status",
                     "execution_id": args.execution_id,
                     "state": state,
@@ -224,7 +225,7 @@ def main(argv: list[str] | None = None) -> int:
             serving = ROOT / ".agents" / "skills" / "vllm-ascend-serving" / "scripts"
             if str(serving) not in sys.path:
                 sys.path.insert(0, str(serving))
-            from serve_start import wait_for_ready as _wait_for_ready
+            from _serving_start import wait_for_ready as _wait_for_ready
 
             target = execution_target(client, str(args.execution_id))
             port = target.get("service_port")
@@ -268,9 +269,9 @@ def main(argv: list[str] | None = None) -> int:
             emit_progress("start", "launching vllm service")
             start_result = call_serve_start(config)
             config.execution_id = start_result.get("execution_id") or config.execution_id
-            if start_result.get("status") == "queued":
+            if start_result.get("state") in PENDING or start_result.get("status") in PENDING:
                 print_json({
-                    "status": "queued",
+                    "status": start_result.get("state") or start_result.get("status"),
                     "phase": "serve_start",
                     "execution_id": config.execution_id,
                     "service": config.service,
@@ -363,6 +364,7 @@ def main(argv: list[str] | None = None) -> int:
                 "metrics": all_metrics[0],
                 "config": config.summary_dict(),
                 "raw_result": all_raw[0],
+                "observation": all_raw[0].get("observation", {}),
                 "timestamp": now_utc(),
             }
             if cleanup_warning:
@@ -385,7 +387,7 @@ def main(argv: list[str] | None = None) -> int:
                 "warmup_runs": warmup_runs,
                 "aggregated": aggregated,
                 "per_run": [
-                    {"run": j + 1, "warmup": j < warmup_runs, "metrics": m}
+                    {"run": j + 1, "warmup": j < warmup_runs, "metrics": m, "observation": all_raw[j].get("observation", {})}
                     for j, m in enumerate(all_metrics)
                 ],
                 "config": config.summary_dict(),

@@ -1,40 +1,14 @@
-# Distributed debug command recipes
+# Agent call
 
-## Initialize
+From the repository root:
 
-```bash
-python -B .agents/skills/vllm-ascend-distributed-debug/scripts/distributed_debug.py init \
-  --output-dir .vaws-local/distributed-debug/case-001 \
-  --config /path/to/distributed-case.json
+```text
+python .agents/skills/vllm-ascend-distributed-debug/scripts/distributed_debug.py --config topology.json --events rank-events.jsonl
 ```
 
-Capture raw logs, stack dumps, and metadata samples without rewriting them.
+The config supplies expected_world_size, ranks and optional groups/endpoints. Event files supply observed facts. The report validates mappings and event order and generates its evidence automatically; no case initialization or event-registration steps are required.
 
-## Ingest normalized events
-
-```bash
-python -B .agents/skills/vllm-ascend-distributed-debug/scripts/distributed_debug.py ingest \
-  --output-dir .vaws-local/distributed-debug/case-001 \
-  --events /path/to/rank-events.jsonl
-```
-
-Append events for all ranks. Keep sequences scoped to their named process group.
-
-## Analyze
-
-```bash
-python -B .agents/skills/vllm-ascend-distributed-debug/scripts/distributed_debug.py analyze \
-  --output-dir .vaws-local/distributed-debug/case-001
-```
-
-Use `analysis.json` to select one controlled topology reduction. Do not change
-multiple parallel dimensions in the same experiment.
-
-## Verify a fix
-
-Rerun the original topology with event collection, make every rank emit
-`rank_complete` as its last event, ingest all events, then analyze. The manifest
-becomes `passed` only for `completed-without-mismatch`: no findings and a
-completion marker from every rank. If `incomplete_ranks` is non-empty the result
-stays `inconclusive`; collect the missing ranks' events rather than asserting
-success by hand.
+Use `--help` for exact argument details. Report output directories are optional
+where supported; the script creates a fresh directory under `.vaws-local/`.
+Schema versions and report identifiers are generated internally. Input files
+describe business cases or contain observed results, rather than task ownership.

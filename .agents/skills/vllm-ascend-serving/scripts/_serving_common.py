@@ -59,7 +59,7 @@ def print_json(data: dict[str, Any]) -> None:
     emit_skill_json(
         data,
         skill="vllm-ascend-serving",
-        entry_point=".agents/skills/vllm-ascend-serving/scripts/serve_status.py",
+        entry_point=".agents/skills/vllm-ascend-serving/scripts/serving.py",
     )
 
 

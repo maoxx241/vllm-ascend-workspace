@@ -5,7 +5,7 @@ description: "Plan, start, inspect, smoke-test, and stop a vLLM Ascend prefill/d
 
 <!-- Generated from .agents/skills/vllm-ascend-pd-serving/SKILL.md. Do not edit. -->
 
-# vLLM Ascend PD Serving
+# vllm-ascend-pd-serving
 
 Read `.agents/skills/vllm-ascend-pd-serving/SKILL.md` and only the references needed
 for the current task. The canonical skill owns the workflow.

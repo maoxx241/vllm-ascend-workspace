@@ -1,23 +1,8 @@
-# Ascend Triton development acceptance
+# Maintainer verification
 
-## Contract and audit
+Run the affected tests in `../tests/` with the local test runner. Exercise the
+public call with business inputs and actual result fixtures, including incomplete
+or mismatched evidence. Verify that conclusions do not exceed the observed scope.
+These checks belong to implementation maintenance, not a per-task Agent checklist.
 
-- [ ] Source, reference, target environment, cases, and tolerances are explicit.
-- [ ] Every load, store, mask, index, grid dimension, and side effect is audited.
-- [ ] Multi-shape and non-aligned cases were not discarded.
-- [ ] Unknown target capabilities are marked unknown.
-
-## Design and implementation
-
-- [ ] Sketch records grid mapping, tiling, UB live-set estimate, padding, and specialization.
-- [ ] Core computation is in Triton rather than a PyTorch fallback.
-- [ ] First candidate preserves correct padding and numerical identities.
-- [ ] Candidate source, audit, and sketch are non-empty and hashed.
-
-## Evidence
-
-- [ ] Static fallback check passed.
-- [ ] Every planned correctness case passed on a managed Ascend NPU.
-- [ ] Validation used the same reference, cases, and predeclared tolerances.
-- [ ] Validation manifest is linked and terminal.
-- [ ] No performance claim is made by this Skill.
+The business config contains op_name, mode, source, reference, target, cases and tolerances. The report consumes the actual kernel and validation manifest, checking kernel identity and passing case coverage. Optional --semantic-report and --sketch attach useful design artifacts.

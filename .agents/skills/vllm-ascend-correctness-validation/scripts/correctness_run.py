@@ -195,7 +195,7 @@ def validate_result_document(document: Mapping[str, Any], *, label: str) -> None
         raise CorrectnessError("; ".join(errors))
 
 
-def init_run(
+def _prepare_report(
     run_dir: Path,
     *,
     run_id: str,
@@ -691,7 +691,7 @@ def check_run_identity(
             "baseline and candidate executions differ in undeclared fields: "
             + ", ".join(undeclared)
             + "; a divergence could not be attributed to code. If the difference "
-            "is the variable under test, declare it at init with "
+            "is the variable under test, declare it with "
             "--allowed-difference KEY; otherwise rerun the states identically"
         )
     return {
@@ -812,7 +812,7 @@ def render_identity_section(identity: Mapping[str, Any]) -> list[str]:
     return lines
 
 
-def compare_run(
+def _compare_report(
     run_dir: Path,
     *,
     baseline_path: Path,
@@ -901,93 +901,60 @@ def _json_object(raw: str, label: str) -> dict[str, Any]:
     return payload
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
-    subparsers = parser.add_subparsers(dest="action", required=True)
-    init = subparsers.add_parser("init", help="initialize a correctness run")
-    init.add_argument("--run-dir", required=True, type=Path)
-    init.add_argument("--run-id", required=True)
-    init.add_argument("--cases", required=True, type=Path)
-    init.add_argument("--baseline-label", required=True)
-    init.add_argument("--candidate-label", required=True)
-    init.add_argument("--workspace-snapshot", default="{}")
-    init.add_argument("--environment", default="{}")
-    init.add_argument("--model", default="{}")
-    init.add_argument("--topology", default="{}")
-    init.add_argument("--baseline-command", action="append", default=[])
-    init.add_argument("--candidate-command", action="append", default=[])
-    init.add_argument(
-        "--allowed-difference",
-        action="append",
-        default=[],
-        metavar="KEY",
-        help=(
-            "execution identity key the two states are meant to differ in, e.g. "
-            "engine_args.enforce_eager for an eager-versus-graph comparison; "
-            "compare refuses any undeclared difference"
-        ),
-    )
-    init.add_argument(
-        "--parent-run-id",
-        default=None,
-        help="run_id of the change-validation plan this run is evidence for",
-    )
+def build_report(cases_path: Path, *, baseline_path: Path, candidate_path: Path,
+                 output_dir=None, allowed_differences=None, workspace_root=ROOT):
+    from uuid import uuid4
+    from vaws_report import report_config, report_directory
+    output = report_directory(workspace_root, "vllm-ascend-correctness-validation", output_dir)
+    baseline = _load_json(baseline_path, "baseline result")
+    candidate = _load_json(candidate_path, "candidate result")
+    with report_config(cases_path, root=workspace_root, prefix="correctness") as cases:
+        _prepare_report(output, run_id="correctness-" + uuid4().hex[:12], cases_path=cases,
+                        baseline_label=baseline.get("label", "baseline"),
+                        candidate_label=candidate.get("label", "candidate"),
+                        allowed_differences=allowed_differences, workspace_root=workspace_root)
+    try:
+        comparison = _compare_report(output, baseline_path=baseline_path, candidate_path=candidate_path)
+    except (CorrectnessError, ComparabilityError) as exc:
+        comparison = {"status": "inconclusive", "reason": str(exc), "cases": []}
+        _atomic_write_json(output / "comparison.json", comparison)
+        _atomic_write_text(output / "report.md", "# Correctness comparison\n\nStatus: **inconclusive**\n\n" + str(exc) + "\n")
+        raw = output / "raw_outputs"
+        raw.mkdir(exist_ok=True)
+        shutil.copy2(baseline_path, raw / "baseline.json")
+        shutil.copy2(candidate_path, raw / "candidate.json")
+        manifest = load_manifest(output / "manifest.json")
+        for name, uri in (("comparison", "comparison.json"), ("report", "report.md"),
+                          ("baseline-output", "raw_outputs/baseline.json"), ("candidate-output", "raw_outputs/candidate.json")):
+            manifest = add_artifact(manifest, name=name, kind=name, uri=uri)
+        manifest = transition_status(transition_status(manifest, "running"), "inconclusive")
+        write_manifest(output / "manifest.json", manifest)
+        return {**comparison, "report": str(output / "report.md"), "manifest_ref": str(output / "manifest.json")}
+    return {"status": comparison["status"], "primary_classification": comparison["primary_classification"],
+            "observed_differences": [row["key"] for row in comparison["execution"]["observed_differences"]],
+            "comparison": str(output / "comparison.json"), "report": str(output / "report.md"),
+            "manifest_ref": str(output / "manifest.json")}
 
-    compare = subparsers.add_parser("compare", help="compare normalized outputs")
-    compare.add_argument("--run-dir", required=True, type=Path)
-    compare.add_argument("--baseline", required=True, type=Path)
-    compare.add_argument("--candidate", required=True, type=Path)
+
+def build_parser():
+    parser = argparse.ArgumentParser(description="Compare collected baseline/candidate outputs and write their evidence report.")
+    for field in ("cases", "baseline", "candidate"):
+        parser.add_argument("--" + field, required=True, type=Path)
+    parser.add_argument("--output-dir", type=Path)
+    parser.add_argument("--allowed-difference", action="append", default=[], metavar="KEY",
+                        help="Observed identity field intentionally varied by the experiment")
     return parser
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv=None):
     args = build_parser().parse_args(argv)
     try:
-        if args.action == "init":
-            emit_progress("initialize", run_dir=str(args.run_dir))
-            run_state = init_run(
-                args.run_dir,
-                run_id=args.run_id,
-                cases_path=args.cases,
-                baseline_label=args.baseline_label,
-                candidate_label=args.candidate_label,
-                workspace_snapshot=_json_object(
-                    args.workspace_snapshot, "workspace-snapshot"
-                ),
-                environment=_json_object(args.environment, "environment"),
-                model=_json_object(args.model, "model"),
-                topology=_json_object(args.topology, "topology"),
-                baseline_command=args.baseline_command,
-                candidate_command=args.candidate_command,
-                allowed_differences=args.allowed_difference,
-                parent_run_id=args.parent_run_id,
-                code=manifest_code(ROOT),
-            )
-            payload = {
-                "status": "created",
-                "run_id": run_state["run_id"],
-                "run_dir": str(args.run_dir.resolve()),
-                "allowed_differences": run_state["allowed_differences"],
-            }
-        else:
-            comparison = compare_run(
-                args.run_dir,
-                baseline_path=args.baseline,
-                candidate_path=args.candidate,
-            )
-            payload = {
-                "status": comparison["status"],
-                "primary_classification": comparison["primary_classification"],
-                "observed_differences": [
-                    row["key"] for row in comparison["execution"]["observed_differences"]
-                ],
-                "comparison": str((args.run_dir / "comparison.json").resolve()),
-                "report": str((args.run_dir / "report.md").resolve()),
-            }
-    except (CorrectnessError, RunManifestError) as exc:
+        result = build_report(args.cases, baseline_path=args.baseline, candidate_path=args.candidate,
+                              output_dir=args.output_dir, allowed_differences=args.allowed_difference)
+    except (CorrectnessError, RunManifestError, OSError, ValueError) as exc:
         print(json.dumps({"status": "failed", "error": str(exc)}, ensure_ascii=False))
         return 1
-    print(json.dumps(payload, ensure_ascii=False))
+    print(json.dumps(result, ensure_ascii=False))
     return 0
 
 

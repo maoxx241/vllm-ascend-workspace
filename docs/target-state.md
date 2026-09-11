@@ -30,7 +30,7 @@ to retain in the new design.
 2. **Runtime behaviour belongs to its component.** The runtime owners are
    installed Python packages or the separately distributed uvx app. This workspace is a
    `package = false` uv project: project materials, client wiring, and
-   business skills. `repo-init` runs `uv sync`.
+   business skills. `repo-init` runs `python .agents/scripts/vaws_deps.py sync`.
 3. **The package version is the contract.** No `service-api.json`, no
    consumer handshake file. A breaking change is a version bump.
 4. **One concern, one owner.** A second implementation, vendored copy, or
@@ -200,7 +200,7 @@ Three kinds of content only:
 
 1. **Project materials** — vLLM / vLLM-Ascend checkouts, dependency pins,
    default config, environment recipes as data, project knowledge Markdown.
-2. **Install and client wiring** — `uv sync`, `vaws_client_setup.py`,
+2. **Install and client wiring** — `python .agents/scripts/vaws_deps.py sync`, `vaws_client_setup.py`,
    passing the native `context_file` / `VAWS_CONTEXT_FILE` into the
    coordinator client. Tool protocol adapters belong to their packages.
 3. **Business skills** — model arguments, parallelism, PD roles, readiness

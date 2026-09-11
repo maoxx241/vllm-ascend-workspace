@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Plan, link, and finalize an Ascend Triton operator workflow."""
+"""Aggregate actual stage evidence for one Ascend Triton operator."""
 
 from __future__ import annotations
 
@@ -121,7 +121,7 @@ def validate_config(config: Mapping[str, Any]) -> None:
         raise WorkflowError("; ".join(errors))
 
 
-def plan(
+def _prepare_report(
     output_dir: Path,
     *,
     config_path: Path,
@@ -176,7 +176,7 @@ def plan(
     return {"status": "planned", "run_id": config["run_id"], "stages": config["required_stages"]}
 
 
-def link(output_dir: Path, *, stage: str, child_path: Path, updated_at: str | None = None) -> dict[str, Any]:
+def _link_evidence(output_dir: Path, *, stage: str, child_path: Path, updated_at: str | None = None) -> dict[str, Any]:
     plan_doc = _load_json(output_dir / "stage-plan.json", "stage plan")
     links = _load_json(output_dir / "evidence-links.json", "evidence links")
     stage_row = next((row for row in plan_doc["stages"] if row["id"] == stage), None)
@@ -192,10 +192,12 @@ def link(output_dir: Path, *, stage: str, child_path: Path, updated_at: str | No
         )
     if child["status"] not in TERMINAL_STATUSES:
         raise WorkflowError("child manifest must be terminal before linking")
+    scope = _check_stage_evidence(output_dir, stage, child_path, child)
     timestamp = updated_at or utc_now()
     links["links"].append(
         {
             "stage": stage,
+            "scope": scope,
             "run_id": child["run_id"],
             "run_type": child["run_type"],
             "status": child["status"],
@@ -211,6 +213,61 @@ def link(output_dir: Path, *, stage: str, child_path: Path, updated_at: str | No
         parent = transition_status(parent, "running", updated_at=timestamp)
         write_manifest(output_dir / "manifest.json", parent)
     return {"status": "linked", "stage": stage, "child_status": child["status"]}
+
+
+def _artifact_document(manifest_path: Path, manifest: Mapping[str, Any], name: str) -> dict[str, Any]:
+    matches = [row for row in manifest.get("artifacts", []) if row.get("name") == name]
+    if len(matches) != 1:
+        raise WorkflowError(f"stage evidence requires exactly one {name} artifact")
+    path = Path(matches[0]["uri"])
+    if not path.is_absolute():
+        path = manifest_path.parent / path
+    return _load_json(path, name)
+
+
+def _check_stage_evidence(output_dir, stage, path, manifest):
+    workflow = _load_json(output_dir / "workflow-config.json", "workflow config")
+    config_name = {"development": "task-config", "validation": "validation-config", "optimization": "optimization-config"}[stage]
+    config = _artifact_document(path, manifest, config_name)
+    for field in ("op_name", "target"):
+        if config.get(field) != workflow[field]:
+            raise WorkflowError(f"{stage} {field} does not match workflow")
+    cases = config.get("cases")
+    if not isinstance(cases, list) or not cases:
+        raise WorkflowError(f"{stage} has no case scope")
+    case_ids = sorted(row["id"] for row in cases)
+    if workflow.get("cases") and case_ids != sorted(row["id"] for row in workflow["cases"]):
+        raise WorkflowError(f"{stage} case scope does not match workflow")
+    result = _artifact_document(path, manifest, "development-result" if stage == "development" else "analysis")
+    if result.get("status") != manifest["status"]:
+        raise WorkflowError(f"{stage} result status does not match manifest")
+    scope = {"cases": case_ids}
+    if stage == "development":
+        scope["kernel"] = result.get("kernel", {}).get("sha256")
+    elif stage == "validation":
+        matrix = _artifact_document(path, manifest, "case-matrix")
+        scope["kernel"] = matrix.get("kernel", {}).get("sha256")
+        if sorted(row["id"] for row in matrix.get("cases", [])) != case_ids:
+            raise WorkflowError("validation result case scope differs from config")
+        rows = result.get("results", [])
+        if manifest["status"] == "passed" and (
+            sorted(row.get("case_id", "") for row in rows) != case_ids
+            or any(row.get("status") != "passed" for row in rows)
+        ):
+            raise WorkflowError("passed validation requires passing results for every case")
+    else:
+        scope["kernel"] = result.get("best_kernel", {}).get("sha256")
+        if manifest["status"] == "passed" and not result.get("rounds"):
+            raise WorkflowError("passed optimization has no measured rounds")
+    if not scope.get("kernel"):
+        raise WorkflowError(f"{stage} has no kernel identity")
+    previous = _load_json(output_dir / "evidence-links.json", "evidence links")["links"]
+    for row in previous:
+        if row["scope"]["cases"] != case_ids:
+            raise WorkflowError("stage case scopes do not match")
+        if {stage, row["stage"]} == {"development", "validation"} and row["scope"]["kernel"] != scope["kernel"]:
+            raise WorkflowError("development and validation kernel identities do not match")
+    return scope
 
 
 def _render_report(summary: Mapping[str, Any]) -> str:
@@ -233,7 +290,7 @@ def _render_report(summary: Mapping[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def finalize(output_dir: Path, *, updated_at: str | None = None) -> dict[str, Any]:
+def _finalize_report(output_dir: Path, *, updated_at: str | None = None) -> dict[str, Any]:
     config = _load_json(output_dir / "workflow-config.json", "workflow config")
     plan_doc = _load_json(output_dir / "stage-plan.json", "stage plan")
     links = _load_json(output_dir / "evidence-links.json", "evidence links")
@@ -277,36 +334,35 @@ def finalize(output_dir: Path, *, updated_at: str | None = None) -> dict[str, An
     return {"status": status, "summary": str((output_dir / "workflow-summary.json").resolve()), "report": str((output_dir / "workflow-report.md").resolve())}
 
 
-def build_parser() -> argparse.ArgumentParser:
+def build_report(config_path: Path, manifests: Mapping[str, Path], *, output_dir=None, workspace_root=ROOT):
+    from vaws_report import report_config, report_directory
+    output = report_directory(workspace_root, "ascend-triton-workflow", output_dir)
+    with report_config(config_path, root=workspace_root, prefix="triton-workflow") as prepared:
+        _prepare_report(output, config_path=prepared, workspace_root=workspace_root)
+    for stage in STAGES:
+        if stage in manifests:
+            _link_evidence(output, stage=stage, child_path=manifests[stage])
+    result = _finalize_report(output)
+    return {**result, "manifest": str((output / "manifest.json").resolve())}
+
+
+def build_parser():
     parser = argparse.ArgumentParser(description=__doc__)
-    subparsers = parser.add_subparsers(dest="action", required=True)
-    plan_parser = subparsers.add_parser("plan")
-    plan_parser.add_argument("--output-dir", required=True, type=Path)
-    plan_parser.add_argument("--config", required=True, type=Path)
-    link_parser = subparsers.add_parser("link")
-    link_parser.add_argument("--output-dir", required=True, type=Path)
-    link_parser.add_argument("--stage", required=True, choices=STAGES)
-    link_parser.add_argument("--manifest", required=True, type=Path)
-    finalize_parser = subparsers.add_parser("finalize")
-    finalize_parser.add_argument("--output-dir", required=True, type=Path)
+    parser.add_argument("--config", required=True, type=Path)
+    for stage in STAGES:
+        parser.add_argument(f"--{stage}", type=Path, help="Actual stage manifest")
+    parser.add_argument("--output-dir", type=Path)
     return parser
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv=None):
     args = build_parser().parse_args(argv)
     try:
-        if args.action == "plan":
-            payload = plan(
-                args.output_dir, config_path=args.config, code=manifest_code(ROOT)
-            )
-        elif args.action == "link":
-            payload = link(args.output_dir, stage=args.stage, child_path=args.manifest)
-        else:
-            payload = finalize(args.output_dir)
-    except (WorkflowError, RunManifestError) as exc:
+        result = build_report(args.config, {stage: getattr(args, stage) for stage in STAGES if getattr(args, stage)}, output_dir=args.output_dir)
+    except (WorkflowError, RunManifestError, OSError, ValueError) as exc:
         print(json.dumps({"status": "failed", "error": str(exc)}, ensure_ascii=False))
         return 1
-    print(json.dumps(payload, ensure_ascii=False))
+    print(json.dumps(result, ensure_ascii=False))
     return 0
 
 

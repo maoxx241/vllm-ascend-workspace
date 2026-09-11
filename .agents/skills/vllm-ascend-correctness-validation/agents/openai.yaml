@@ -1,4 +1,6 @@
 interface:
-  display_name: "vLLM Ascend Correctness Validation"
-  short_description: "Compare Ascend inference correctness across revisions"
-  default_prompt: "Use $vllm-ascend-correctness-validation to plan and compare baseline and candidate correctness results."
+  display_name: vLLM Ascend Correctness Validation
+  short_description: Compare Ascend inference correctness across revisions
+  default_prompt: Use $vllm-ascend-correctness-validation to compare inference outputs
+    across code or execution configurations with explicit comparability and numerical
+    criteria.

@@ -5,7 +5,7 @@ description: "Analyze vLLM and vllm-ascend diffs, map affected components to the
 
 <!-- Generated from .agents/skills/vllm-ascend-change-validation/SKILL.md. Do not edit. -->
 
-# vLLM Ascend Change Validation
+# vllm-ascend-change-validation
 
 Read `.agents/skills/vllm-ascend-change-validation/SKILL.md` and only the references needed
 for the current task. The canonical skill owns the workflow.

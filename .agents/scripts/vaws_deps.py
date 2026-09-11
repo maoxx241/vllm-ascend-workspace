@@ -23,20 +23,7 @@ LIB = ROOT / ".agents" / "lib"
 if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
-from vaws_venv import ensure_workspace_interpreter  # noqa: E402
-
-ensure_workspace_interpreter(repo_root=ROOT)
-
-from vaws_capability import build_doctor_envelope, dumps_doctor, dumps_doctor_view  # noqa: E402
-from vaws_result_envelope import default_record_dir  # noqa: E402
-from vaws_dependency import (  # noqa: E402
-    DependencyError,
-    KNOWN_NAMES,
-    REMEDY,
-    all_packages,
-    inspect,
-    status_exit_code,
-)
+from vaws_venv import REMEDY, configure_windows_stdio, ensure_workspace_interpreter, workspace_venv_root
 
 
 def progress(message: str) -> None:
@@ -48,6 +35,7 @@ def _print(payload: object) -> None:
 
 
 def _names(requested: list[str] | None) -> list[str]:
+    from vaws_dependency import DependencyError, KNOWN_NAMES
     known = list(KNOWN_NAMES)
     if not requested:
         return known
@@ -61,6 +49,7 @@ def _names(requested: list[str] | None) -> list[str]:
 
 
 def cmd_status(args: argparse.Namespace) -> int:
+    from vaws_dependency import DependencyError, inspect, status_exit_code
     try:
         names = _names(list(args.names or []))
     except DependencyError as exc:
@@ -75,6 +64,9 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 
 def cmd_doctor(args: argparse.Namespace) -> int:
+    from vaws_capability import build_doctor_envelope, dumps_doctor, dumps_doctor_view
+    from vaws_dependency import DependencyError
+    from vaws_result_envelope import default_record_dir
     argv = ["python3", ".agents/scripts/vaws_deps.py", "doctor", *list(args.passthrough or [])]
     progress("collecting workspace capability report")
     try:
@@ -102,12 +94,16 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 def cmd_sync(args: argparse.Namespace) -> int:
     extra = list(args.passthrough or [])
     command = ["uv", "sync", *extra]
+    environment = os.environ.copy()
+    environment["UV_PROJECT_ENVIRONMENT"] = str(workspace_venv_root(ROOT))
     progress(f"running {' '.join(command)}")
     try:
         proc = subprocess.run(
             command,
             cwd=str(ROOT),
+            env=environment,
             check=False,
+            stdout=sys.stderr,
         )
     except FileNotFoundError:
         payload = {
@@ -122,7 +118,7 @@ def cmd_sync(args: argparse.Namespace) -> int:
         "ok": proc.returncode == 0,
         "command": command,
         "returncode": proc.returncode,
-        "packages": all_packages() if proc.returncode == 0 else None,
+        "environment": str(workspace_venv_root(ROOT)),
         "remedy": None if proc.returncode == 0 else REMEDY,
     }
     _print(payload)
@@ -149,7 +145,15 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    configure_windows_stdio()
+    parser = build_parser()
+    args, extra = parser.parse_known_args(argv)
+    if args.command == "sync":
+        args.passthrough = extra + list(args.passthrough or [])
+    elif extra:
+        parser.error(f"unrecognized arguments: {' '.join(extra)}")
+    if args.command != "sync":
+        ensure_workspace_interpreter(repo_root=ROOT)
     return args.func(args)
 
 

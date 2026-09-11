@@ -452,23 +452,21 @@ def _knowledge_refs_for_finding(
     query_knowledge: Any,
     finding_type: str,
     summary: str,
-) -> list[dict[str, Any]]:
+) -> dict[str, Any]:
     """Attach references for inspection; do not turn prose into runtime facts."""
     text = f"{finding_type} {summary}".strip()
     if not text:
-        return []
-    return [
-        {
-            "ref": match["ref"],
-            "title": match.get("title") or "",
-            "excerpt": match.get("summary") or "",
-            "layer": match.get("layer"),
-            "score": match.get("score", 0),
-        }
-        for match in query_knowledge(
-            knowledge_dir=knowledge_dir, query=text, limit=KNOWLEDGE_QUERY_LIMIT,
-        )
-    ]
+        return {"unavailable": False, "degraded": False, "detail": "empty query", "refs": []}
+    response = query_knowledge(knowledge_dir=knowledge_dir, query=text, limit=KNOWLEDGE_QUERY_LIMIT)
+    return {
+        "unavailable": bool(response.get("unavailable")),
+        "degraded": bool(response.get("degraded")),
+        "detail": response.get("index_detail", ""),
+        "refs": [{"ref": match.get("ref") or match.get("uri"),
+                  "title": match.get("title", ""), "excerpt": match.get("excerpt", ""),
+                  "layer": match.get("layer"), "score": match.get("score", 0)}
+                 for match in response.get("results", [])],
+    }
 
 
 def _enrich_analysis_summary_with_knowledge(
@@ -488,6 +486,7 @@ def _enrich_analysis_summary_with_knowledge(
         return summary
     api = _knowledge_api()
     if api is None:
+        summary["knowledge_lookup"] = {"unavailable": True}
         common.progress(
             "knowledge",
             "vaws_knowledge not importable; knowledge enrichment skipped (refs stay empty)",
@@ -507,9 +506,11 @@ def _enrich_analysis_summary_with_knowledge(
                 str(group.get("finding_type") or ""),
                 str(group.get("summary") or ""),
             )
-            group["knowledge_refs"] = refs
-            attached += bool(refs)
+            group["knowledge_refs"] = refs.pop("refs")
+            group["knowledge_lookup"] = refs
+            attached += bool(group["knowledge_refs"])
     except Exception as exc:  # noqa: BLE001 - knowledge must never break analysis
+        summary["knowledge_lookup"] = {"unavailable": True, "detail": str(exc)}
         common.progress(
             "knowledge",
             f"knowledge enrichment skipped: {exc}",

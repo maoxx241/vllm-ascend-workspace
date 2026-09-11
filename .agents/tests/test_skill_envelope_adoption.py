@@ -38,7 +38,7 @@ def _validate_tracked_schema(envelope: dict) -> None:
 def _run(script: Path, *args: str) -> subprocess.CompletedProcess[str]:
     env = {key: value for key, value in os.environ.items() if key != "VAWS_CONTEXT_FILE"}
     return subprocess.run(
-        [sys.executable, str(script), *args],
+        [sys.executable, str(script), "status", *args],
         capture_output=True,
         text=True,
         check=False,
@@ -53,7 +53,7 @@ def _lint(stdout: str) -> dict:
 
 class LoadBearingSkillEnvelopeTests(unittest.TestCase):
     def test_serve_status_missing_context_emits_envelope(self) -> None:
-        script = ROOT / ".agents/skills/vllm-ascend-serving/scripts/serve_status.py"
+        script = ROOT / ".agents/skills/vllm-ascend-serving/scripts/serving.py"
         completed = _run(script)
         report = _lint(completed.stdout)
         self.assertTrue(report["valid"], report["findings"])

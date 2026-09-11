@@ -1,23 +1,8 @@
-# Ascend operator debug acceptance
+# Maintainer verification
 
-## Reproduction
+Run the affected tests in `../tests/` with the local test runner. Exercise the
+public call with business inputs and actual result fixtures, including incomplete
+or mismatched evidence. Verify that conclusions do not exceed the observed scope.
+These checks belong to implementation maintenance, not a per-task Agent checklist.
 
-- [ ] The failure reproduces with one operator invocation.
-- [ ] Input shape, stride, dtype, layout, device, and attributes are explicit.
-- [ ] The reference implementation is independent enough to detect the defect.
-- [ ] Tolerances were fixed before examining candidate output.
-
-## Matrix
-
-- [ ] Each case changes one meaningful dimension.
-- [ ] Eager, compile, or graph mode is explicit.
-- [ ] Unsupported cases are not counted as product failures.
-- [ ] Crash signatures and numerical comparisons retain raw evidence links.
-
-## Fix validation
-
-- [ ] The smallest failing case becomes a regression test when practical.
-- [ ] The isolated case passes after the fix.
-- [ ] Nearby dtype, shape, and layout cases still pass.
-- [ ] The original model integration passes after the fix.
-- [ ] Temporary tensor dumps and instrumentation are removed or documented.
+The config contains operator identity, tolerance and cases. Result files contain observed case metrics or failures. The report computes coverage and classification; absent cases remain inconclusive.

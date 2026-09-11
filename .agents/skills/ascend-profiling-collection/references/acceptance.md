@@ -22,7 +22,7 @@ A collection run is "good" when **all** of the following hold. The agent should 
 
 If `service_result.status` is anything else (`failed`, `needs_input`, ...) the run did not actually capture anything; the manifest will already be `status=failed` but verify this is the cause before retrying.
 
-In session mode, `service_result.session_id` should match the requested session, and cleanup must call `serve_stop.py` for that same session.
+In session mode, `service_result.session_id` should match the requested session, and cleanup must call `serving.py stop` for that same session.
 
 ## 3. Profile window opened and closed cleanly
 
@@ -94,7 +94,7 @@ The orchestrator passes `--expected-ranks = tp * (dp or 1)` to `run_remote_analy
 "stop_result": { "status": "stopped", ... }
 ```
 
-If `stop_result.status` is `failed`, an orphan vLLM process may still be holding NPUs. Stop the same `--service` / `--execution-id` this collection owns (`serve_stop.py --force`) and re-check `serve_probe_npus.py --host` before launching the next collection.
+If `stop_result.status` is `failed`, an orphan vLLM process may still be holding NPUs. Stop the same `--service` / `--execution-id` this collection owns (`serving.py stop --force`) and read coordinator-confirmed resource release before launching the next collection.
 
 ## When you need to re-collect (not re-analyse)
 

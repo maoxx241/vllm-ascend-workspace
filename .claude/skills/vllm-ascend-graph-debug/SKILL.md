@@ -5,7 +5,7 @@ description: "Diagnose vLLM Ascend cudagraph and ACL Graph compile, capture, rep
 
 <!-- Generated from .agents/skills/vllm-ascend-graph-debug/SKILL.md. Do not edit. -->
 
-# NPU Graph Debug
+# vllm-ascend-graph-debug
 
 Read `.agents/skills/vllm-ascend-graph-debug/SKILL.md` and only the references needed
 for the current task. The canonical skill owns the workflow.

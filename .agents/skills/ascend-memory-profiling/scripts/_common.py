@@ -23,7 +23,7 @@ from vaws_remote_dev import ssh_exec, ssh_run_bytes  # noqa: E402
 from vaws_result_envelope import progress as envelope_progress  # noqa: E402
 from vaws_remote_target import SshEndpoint, ssh_endpoint_from_mapping  # noqa: E402
 from vaws_session_state import load_serving_state as load_task_serving_state  # noqa: E402
-from vaws_task_target import executions_for_service, execution_target, task_client, task_id_of  # noqa: E402
+from vaws_task_target import execution_target, task_client, task_id_of  # noqa: E402
 
 MEMPROF_STATE_DIR = ROOT / ".vaws-local" / "memory-profiling"
 
@@ -65,10 +65,9 @@ def resolve_execution_target(
     client = task_client(context_file)
     task_id = task_id_of(client)
     if not execution_id:
-        rows = executions_for_service(client, service)
-        if not rows:
+        execution_id = client.resolve_execution(service=service)
+        if not execution_id:
             raise RuntimeError("memory profiling needs --execution-id or a live named service")
-        execution_id = str(rows[-1].get("id") or rows[-1].get("execution_id"))
     target = execution_target(client, str(execution_id))
     endpoint = ssh_endpoint_from_mapping(target.get("endpoint"))
     return {

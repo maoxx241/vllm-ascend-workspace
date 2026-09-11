@@ -98,7 +98,8 @@ client.finish()
 ```
 
 `preparing` is observable pending state during long environment setup. Skills
-report it as `queued` with the same `execution_id`; they do not poll or retry.
+retain that phase and the same `execution_id`. Workflows that need a running
+service wait through the owner API instead of resubmitting.
 
 A multi-role PD launch uses `topology={"roles": [{"name", "command",
 "npu_count"|"devices", "service_port", "host"?, "env"?}, ...]}`. Role `env`
@@ -113,24 +114,32 @@ and returns per-role `target` / `tail` on `observe(..., role=...)` and on
 Managed `run` prepares its bound sources. It needs neither a session-management
 skill nor a separate parity invocation. Use native Git to inspect local worktrees.
 
-For a prepared direct endpoint outside a managed execution, the optional thin
-adapters only construct/call `python -m vaws_coordinator.parity sync` in
-`source-only` mode:
+For a prepared direct endpoint outside a managed execution, use the installed
+package's `python -m vaws_coordinator.parity sync` API in `source-only` mode.
+Package help owns its arguments. This operation publishes source to an explicit
+endpoint; it does not allocate, install or repair a managed runtime.
 
-```bash
-python3 .agents/scripts/remote_sync_plan.py --host <container-host> --port <ssh-port> \
-  --runtime-root <prepared-root> --source vllm=<actual-vllm-worktree> \
-  --source vllm-ascend=<actual-ascend-worktree>
-python3 .agents/scripts/remote_sync_apply.py --host <container-host> --port <ssh-port> \
-  --runtime-root <prepared-root> --source vllm=<actual-vllm-worktree> \
-  --source vllm-ascend=<actual-ascend-worktree> --dry-run
-```
+## 6. Owned references and observations
 
-The plan prints the exact package command without remote I/O. Drop `--dry-run`
-only for the requested source publication. The adapters refuse an execution ID;
-source-only publication does not materialize, install or repair a managed
-runtime. Package help is the authority for advanced parity operations.
+`client.resolve_execution(service="vllm")` resolves within the attached task;
+`client.observe(service="vllm")` reads the same authoritative execution. A missing
+service returns `not_found`, and multiple live matches require an explicit ID.
+Neither lookup allocates devices or starts a service. `client.wait(execution_id,
+until="running")` ends at running or a terminal failure; `until="released"`
+requires terminal state and confirmed resource release. Timeouts retain the last
+observed facts.
 
-PD business input contains its service name and complete roles in one config.
-`pd_serving.py plan --config ...` no longer creates or consumes a separate
-Session Group registry; start still submits one coordinator topology run.
+Binding a different business worktree automatically returns idle runtime bindings.
+Live jobs or unreleased leases still prevent the change. Containers and unrelated
+worktrees are preserved.
+
+After successful preflight, coordinator records an immutable `launch_observation`
+with source commits, environment profile and environment digest, native build key,
+machine, devices and launch command. The target API retains that receipt after
+stop; it does not reconstruct it from a subsequently changed binding. Managed
+payloads receive it in reserved `VAWS_EXECUTION_OBSERVATION`. It describes the
+attested launch and does not claim to detect later runtime mutations.
+
+PD starts directly with `pd_serving.py start --config topology.json`. Its status
+and stop operations consume a service or execution reference. Local smoke and
+report artifacts record business evidence; coordinator owns topology lifecycle.

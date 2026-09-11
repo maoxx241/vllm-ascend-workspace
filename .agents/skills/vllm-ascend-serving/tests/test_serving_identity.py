@@ -18,9 +18,9 @@ for path in (str(SCRIPTS), str(LIB)):
     if path not in sys.path:
         sys.path.insert(0, path)
 
-import serve_start
-import serve_status
-import serve_stop
+import _serving_start as serve_start
+import _serving_status as serve_status
+import _serving_stop as serve_stop
 from vaws_task_target import reject_reserved_env, TaskTargetError
 
 
@@ -72,7 +72,7 @@ class ServeCommandTests(unittest.TestCase):
 
 
 class QueuedStatusTests(unittest.TestCase):
-    def test_start_reports_queued_without_port_probe(self):
+    def test_start_preserves_pending_phase_without_port_probe(self):
         captured: dict = {}
 
         def fake_run(*_args, **kwargs):
@@ -88,7 +88,7 @@ class QueuedStatusTests(unittest.TestCase):
             rc = serve_start.main(["--model", "/data/m"])
         self.assertEqual(rc, 0)
         payload = printed.call_args[0][0]
-        self.assertEqual(payload["status"], "queued")
+        self.assertEqual(payload["status"], "waiting_for_runtime")
         self.assertFalse(payload["running"])
         client.observe.assert_not_called()
         self.assertEqual(captured["resources"]["service_port"], 0)
@@ -124,7 +124,7 @@ class QueuedStatusTests(unittest.TestCase):
         self.assertTrue(captured["restart"])
         self.assertEqual(captured["resources"]["npu_count"], 2)
 
-    def test_status_labels_pending_as_queued(self):
+    def test_status_preserves_pending_phase(self):
         client = SimpleNamespace(
             context={"session": {"id": "task-1"}},
             observe=lambda *a, **k: {"state": "queued", "execution_id": "abc"},
@@ -133,10 +133,10 @@ class QueuedStatusTests(unittest.TestCase):
             rc = serve_status.main([])
         self.assertEqual(rc, 0)
         payload = printed.call_args[0][0]
-        self.assertEqual(payload["status"], "queued")
+        self.assertEqual(payload["status"], "waiting_for_runtime")
         self.assertFalse(payload["running"])
 
-    def test_preparing_is_queued_with_the_same_execution(self):
+    def test_preparing_keeps_the_same_phase_and_execution(self):
         from vaws_task_target import PENDING
 
         self.assertIn("preparing", PENDING)
@@ -153,7 +153,7 @@ class QueuedStatusTests(unittest.TestCase):
             rc = serve_start.main(["--model", "/data/m"])
         self.assertEqual(rc, 0)
         payload = printed.call_args[0][0]
-        self.assertEqual(payload["status"], "queued")
+        self.assertEqual(payload["status"], "preparing")
         self.assertEqual(payload["execution_id"], "exec-prep")
         self.assertEqual(payload["state"], "preparing")
         self.assertFalse(payload["running"])
@@ -167,7 +167,7 @@ class QueuedStatusTests(unittest.TestCase):
             rc = serve_status.main([])
         self.assertEqual(rc, 0)
         status_payload = printed.call_args[0][0]
-        self.assertEqual(status_payload["status"], "queued")
+        self.assertEqual(status_payload["status"], "preparing")
         self.assertEqual(status_payload["execution_id"], "exec-prep")
         self.assertEqual(status_payload["state"], "preparing")
         self.assertFalse(status_payload["running"])
@@ -177,18 +177,19 @@ class NamedLookupTests(unittest.TestCase):
     def test_status_does_not_guess_an_unrelated_live_execution(self) -> None:
         client = SimpleNamespace(
             context={"session": {"id": "task-1"}},
-            status=lambda: {"executions": [{"id": "other", "phase": "running", "service": "bench"}]},
-            observe=lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not observe a guessed execution")),
+            observe=mock.Mock(return_value={"state": "not_found", "service": "vllm"}),
         )
         observation = serve_status.pick_execution(client, "vllm", None)
         self.assertIsNone(observation)
+        client.observe.assert_called_once_with(service="vllm")
 
     def test_stop_does_not_guess_an_unrelated_live_execution(self) -> None:
         client = SimpleNamespace(
             context={"session": {"id": "task-1"}},
-            status=lambda: {"executions": [{"id": "other", "phase": "running", "service": "bench"}]},
+            resolve_execution=mock.Mock(return_value=None),
         )
         self.assertIsNone(serve_stop.pick_id(client, "vllm", None))
+        client.resolve_execution.assert_called_once_with(None, service="vllm")
 
     def test_environment_without_recipe_still_forwards_constraints(self) -> None:
         from vaws_task_target import named_environment

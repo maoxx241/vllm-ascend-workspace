@@ -5,7 +5,7 @@ description: "Orchestrate an end-to-end Ascend Triton operator effort across tas
 
 <!-- Generated from .agents/skills/ascend-triton-workflow/SKILL.md. Do not edit. -->
 
-# Ascend Triton Workflow
+# ascend-triton-workflow
 
 Read `.agents/skills/ascend-triton-workflow/SKILL.md` and only the references needed
 for the current task. The canonical skill owns the workflow.

@@ -22,7 +22,7 @@ from vaws_remote_dev import ssh_exec  # noqa: E402
 from vaws_remote_target import SshEndpoint, ascend_env_preamble  # noqa: E402
 from vaws_result_envelope import PROGRESS_SENTINEL, progress as envelope_progress, unwrap_skill_payload  # noqa: E402
 from vaws_session_state import benchmark_dir  # noqa: E402
-from vaws_task_target import task_client, task_id_of  # noqa: E402
+from vaws_task_target import execution_target, task_client, task_id_of  # noqa: E402
 from vaws_validate import require_env_name  # noqa: E402
 
 SERVING_SCRIPTS = ROOT / ".agents" / "skills" / "vllm-ascend-serving" / "scripts"
@@ -32,7 +32,7 @@ NIGHTLY_CONFIGS_DIR = (
 )
 PRESETS_DIR = ROOT / ".agents" / "skills" / "vllm-ascend-benchmark" / "presets"
 
-# Mirrors serve_start.py's DEFAULT_HEALTH_TIMEOUT; used to bound the
+# Mirrors serving.py start's DEFAULT_HEALTH_TIMEOUT; used to bound the
 # serve_start subprocess when the config does not pin an explicit timeout.
 _SERVE_START_DEFAULT_HEALTH_TIMEOUT = 300
 # Subprocess budget beyond the readiness wait: covers parity sync, remote
@@ -308,13 +308,12 @@ class BenchConfig:
     bench_args: list[str] = field(default_factory=list)
     env: dict[str, str] = field(default_factory=dict)
     bench_env: dict[str, str] = field(default_factory=dict)
-    skip_parity: bool = False
     nightly_ref: NightlyReference | None = None
     preset_name: str | None = None
     preset: dict[str, Any] | None = None
 
     def to_serve_start_args(self) -> list[str]:
-        """Build CLI args for serve_start.py."""
+        """Build CLI args for serving.py start."""
         args = ["--model", self.model]
         if self.context_file:
             args.extend(["--context-file", self.context_file])
@@ -375,6 +374,12 @@ class BenchConfig:
             args.extend(["--max-concurrency", "16"])
 
         args.extend(self.bench_args)
+        if not any(a == "--seed" or a.startswith("--seed=") for a in args):
+            args.extend(["--seed", "0"])
+        if not any(a == "--dataset-name" or a.startswith("--dataset-name=") for a in args):
+            args.extend(["--dataset-name", "random"])
+        if not any(a.startswith("--request-rate") or a.startswith("--ramp-up") for a in args):
+            args.extend(["--request-rate", "inf"])
         return args
 
     def summary_dict(self) -> dict[str, Any]:
@@ -566,15 +571,15 @@ def assemble_config(
 # ---------------------------------------------------------------------------
 
 def call_serve_start(config: BenchConfig) -> dict[str, Any]:
-    """Call serve_start.py and return its JSON output.
+    """Call serving.py start and return its JSON output.
 
     The subprocess is bounded by the effective health timeout (config value,
-    else serve_start.py's default) plus ``_SERVE_START_TIMEOUT_MARGIN`` for
+    else serving.py start's default) plus ``_SERVE_START_TIMEOUT_MARGIN`` for
     parity sync, remote spawn and the final state write; on timeout the
     raised error carries the watchdog note from ``_run_json_command_streaming``.
     """
-    script = str(SERVING_SCRIPTS / "serve_start.py")
-    cmd = [sys.executable, script] + config.to_serve_start_args()
+    script = str(SERVING_SCRIPTS / "serving.py")
+    cmd = [sys.executable, script, "start"] + config.to_serve_start_args()
 
     health_timeout = (
         config.health_timeout
@@ -590,21 +595,21 @@ def call_serve_start(config: BenchConfig) -> dict[str, Any]:
 
     if not stdout.strip():
         raise RuntimeError(
-            f"serve_start.py produced no output (rc={returncode}):\n"
+            f"serving.py start produced no output (rc={returncode}):\n"
             f"{stderr[:2000]}"
         )
     if data is None:
         raise RuntimeError(
-            f"serve_start.py output is not JSON (rc={returncode}):\n"
+            f"serving.py start output is not JSON (rc={returncode}):\n"
             f"stdout: {stdout[:1000]}\nstderr: {stderr[:1000]}"
         )
     return data
 
 
 def call_serve_stop(config: BenchConfig, force: bool = False) -> dict[str, Any]:
-    """Call serve_stop.py and return its JSON output."""
-    script = str(SERVING_SCRIPTS / "serve_stop.py")
-    cmd = [sys.executable, script]
+    """Call serving.py stop and return its JSON output."""
+    script = str(SERVING_SCRIPTS / "serving.py")
+    cmd = [sys.executable, script, "stop"]
     if config.context_file:
         cmd.extend(["--context-file", config.context_file])
     if config.execution_id:
@@ -664,81 +669,8 @@ def ssh_run_script(
     )
 
 
-def _git_ref_fetch_checkout(repo_dir: str, ref: str, branch: str) -> str:
-    """Build a bash snippet that fetches (if needed) and checks out ``ref``.
-
-    Supports ``pr:NNNN`` / ``#NNNN`` (GitHub PR head) and plain commit/branch
-    refs. Source-only alignment: it resets and checks out, it never rebuilds
-    custom ops (that stays the caller's / parity's decision).
-    """
-    import re as _re
-    import shlex as _shlex
-
-    lines = [
-        f"cd {_shlex.quote(repo_dir)}",
-        "git reset --hard >/dev/null 2>&1 || true",
-    ]
-    pr_match = _re.fullmatch(r"(?:pr:|#)?(\d+)", ref.strip())
-    if pr_match:
-        pr = pr_match.group(1)
-        local_ref = f"refs/remotes/origin/pr-{pr}-head"
-        lines.append(
-            f"git fetch origin {_shlex.quote(f'pull/{pr}/head:{local_ref}')}"
-        )
-        checkout_ref = local_ref
-    else:
-        # Try a fetch so remote-only commits resolve, but tolerate offline.
-        lines.append("git fetch origin --quiet || true")
-        checkout_ref = ref
-    lines.append(f"git rev-parse --verify {_shlex.quote(checkout_ref)} >/dev/null")
-    lines.append(
-        f"git checkout -B {_shlex.quote(branch)} {_shlex.quote(checkout_ref)} >/dev/null 2>&1"
-    )
-    lines.append("git rev-parse HEAD")
-    return "\n".join(lines)
 
 
-def remote_align_source(
-    container_ip: str,
-    container_port: int,
-    *,
-    vllm_ascend_ref: str | None = None,
-    vllm_ref: str | None = None,
-    vllm_ascend_dir: str = "/vllm-workspace/vllm-ascend",
-    vllm_dir: str = "/vllm-workspace/vllm",
-    timeout: int = 360,
-) -> dict[str, Any]:
-    """Align in-container vllm / vllm-ascend checkouts to given git refs.
-
-    Source-only (no recompile), matching the common "对齐版本配套但不重编算子"
-    workflow. Returns the resolved HEAD of each repo it touched.
-    """
-    blocks: list[str] = ["set -euo pipefail"]
-    if vllm_ref:
-        blocks.append('printf "vllm_head="')
-        blocks.append(_git_ref_fetch_checkout(vllm_dir, vllm_ref, "vaws-bench-vllm"))
-    if vllm_ascend_ref:
-        blocks.append('printf "vllm_ascend_head="')
-        blocks.append(
-            _git_ref_fetch_checkout(vllm_ascend_dir, vllm_ascend_ref, "vaws-bench-vllm-ascend")
-        )
-    if len(blocks) == 1:
-        return {"status": "ok", "message": "no refs requested"}
-    proc = ssh_run_script(container_ip, container_port, "\n".join(blocks), timeout=timeout)
-    heads: dict[str, str] = {}
-    for line in (proc.stdout or "").splitlines():
-        for key in ("vllm_head=", "vllm_ascend_head="):
-            if line.startswith(key):
-                heads[key.rstrip("=")] = line.split("=", 1)[1].strip()
-    return {
-        "status": "ok" if proc.returncode == 0 else "failed",
-        "returncode": proc.returncode,
-        "heads": heads,
-        "vllm_ascend_ref": vllm_ascend_ref,
-        "vllm_ref": vllm_ref,
-        "stdout_tail": (proc.stdout or "")[-800:],
-        "stderr_tail": (proc.stderr or "")[-800:],
-    }
 
 
 def _ascend_env_preamble() -> str:
@@ -762,7 +694,15 @@ def run_bench_on_remote(
     """Run vllm bench serve on the remote container via SSH."""
     import shlex
 
+    client = task_client(config.context_file)
+    if not config.execution_id:
+        raise ValueError("benchmark requires an owned running execution")
+    target = execution_target(client, config.execution_id)
+    if not target.get("live") or not target.get("python"):
+        raise ValueError("benchmark execution has no live managed interpreter")
     bench_cmd_parts = config.to_bench_serve_args(base_url, served_model_name)
+    invocation = list(bench_cmd_parts)
+    bench_cmd_parts[:1] = [target["python"], "-m", "vllm.entrypoints.cli.main"]
     target_token = safe_token(config.task_id or "benchmark")
     result_filename = (
         f"result_bench_{target_token}_{now_utc().replace(':', '-')}_"
@@ -780,7 +720,7 @@ def run_bench_on_remote(
     )
 
     remote_script = (
-        _ascend_env_preamble()
+        "set -e\n" + target.get("launch_preamble", "") + "\n"
         + env_exports
         + f"cd /tmp && {bench_cmd} 2>&1 && cat /tmp/{result_filename}"
     )
@@ -819,96 +759,33 @@ def run_bench_on_remote(
             f"cannot parse bench result JSON: {e}\n{stdout[json_start:json_start+500]}"
         )
 
+    result_data["observation"] = benchmark_observation(target, invocation)
+    result_data["invocation"] = invocation
+    result_data["observation_scope"] = (target.get("launch_observation") or {}).get("scope")
     return result_data
+
+
+def benchmark_observation(target, invocation):
+    """Combine the owner's attestation with the invocation actually executed."""
+    from vaws_serving_observation import option as _option, serving_observation, workload_args
+    result, _execution = serving_observation(target)
+    result["bench_args"] = workload_args(invocation)
+    result["max_concurrency"] = int(_option(invocation, "--max-concurrency", "16"))
+    rate = _option(invocation, "--request-rate")
+    if rate is not None:
+        result["request_rate"] = rate
+    dataset = _option(invocation, "--dataset-name")
+    if dataset == "random" and not _option(invocation, "--dataset-path"):
+        result["dataset"] = "random:seed=" + str(_option(invocation, "--seed"))
+    return result
 
 
 # ---------------------------------------------------------------------------
 # Remote inspection / patching / dataset / probe helpers
 # ---------------------------------------------------------------------------
 
-def remote_native_input_digest(
-    container_ip: str,
-    container_port: int,
-    repo_dir: str = "/vllm-workspace/vllm-ascend",
-) -> dict[str, Any]:
-    """Fingerprint the in-container vllm-ascend native-build inputs.
-
-    Source alignment never rebuilds custom ops, so when csrc/cmake/
-    requirements change between states the compiled artifacts are stale.
-    The digest covers ``csrc``, ``cmake``, ``CMakeLists.txt``,
-    ``pyproject.toml`` and the requirements files — both tracked files and
-    untracked-but-not-ignored ones (``git ls-files --others
-    --exclude-standard``), so an uncommitted new source file still changes
-    the fingerprint while ignored build artifacts (``build/`` etc.) stay
-    excluded. Missing paths are tolerated: the digest is the sha256 of an
-    empty file list only when there are genuinely no native inputs.
-    """
-    import shlex
-
-    native_paths = "csrc cmake CMakeLists.txt pyproject.toml requirements.txt requirements"
-    remote_script = "\n".join([
-        "set -uo pipefail",
-        f"cd {shlex.quote(repo_dir)} || exit 1",
-        f"digest=$({{ git ls-files -z -- {native_paths};"
-        f" git ls-files -z --others --exclude-standard -- {native_paths}; }}"
-        " 2>/dev/null | sort -z"
-        " | xargs -0 -r sha256sum 2>/dev/null | sha256sum | awk '{print $1}')",
-        "head=$(git rev-parse HEAD 2>/dev/null || true)",
-        'printf "digest=%s\\nhead=%s\\n" "${digest:-}" "${head:-}"',
-    ])
-    proc = ssh_run_script(container_ip, container_port, remote_script, timeout=120)
-    digest = ""
-    head = ""
-    for line in (proc.stdout or "").splitlines():
-        if line.startswith("digest="):
-            digest = line.split("=", 1)[1].strip()
-        elif line.startswith("head="):
-            head = line.split("=", 1)[1].strip()
-    return {
-        "status": "ok" if proc.returncode == 0 else "failed",
-        "digest": digest,
-        "head": head,
-        "returncode": proc.returncode,
-        "stderr_tail": (proc.stderr or "")[-400:],
-    }
 
 
-def apply_remote_patch(
-    container_ip: str,
-    container_port: int,
-    patch_file: Path,
-    repo_dir: str = "/vllm-workspace/vllm-ascend",
-) -> dict[str, Any]:
-    """git-apply a local patch file inside the remote repo checkout.
-
-    The patch is base64-transferred through the SSH channel, applied with
-    ``git apply``, and the resulting ``git status --short`` is returned for
-    traceability.
-    """
-    import base64
-    import shlex
-
-    patch_b64 = base64.b64encode(Path(patch_file).read_bytes()).decode("ascii")
-    remote_script = (
-        "set -euo pipefail\n"
-        "python3 - <<'PY'\n"
-        "import base64\n"
-        f"data = {patch_b64!r}\n"
-        "open('/tmp/vaws_bench_remote_patch.diff', 'wb').write(base64.b64decode(data))\n"
-        "PY\n"
-        f"cd {shlex.quote(repo_dir)}\n"
-        "git apply /tmp/vaws_bench_remote_patch.diff\n"
-        "git status --short\n"
-    )
-    proc = ssh_run_script(container_ip, container_port, remote_script, timeout=120)
-    return {
-        "status": "ok" if proc.returncode == 0 else "failed",
-        "returncode": proc.returncode,
-        "repo_dir": repo_dir,
-        "patch_file": str(patch_file),
-        "stdout_tail": (proc.stdout or "")[-2000:],
-        "stderr_tail": (proc.stderr or "")[-2000:],
-    }
 
 
 _FIXED_DATASET_REMOTE_PY = r'''
@@ -988,6 +865,7 @@ print(json.dumps({
     "prompt_token_len": actual_len,
     "output_len": output_len,
     "prompt_sha256": __import__("hashlib").sha256(prompt.encode("utf-8")).hexdigest(),
+    "dataset_sha256": __import__("hashlib").sha256(dataset_path.read_bytes()).hexdigest(),
 }, ensure_ascii=False))
 '''.strip()
 
@@ -1004,6 +882,7 @@ def prepare_fixed_request_dataset(
     num_rows: int,
     prompt: str | None = None,
     env_preamble: str = "",
+    python: str = "python3",
 ) -> dict[str, Any]:
     """Generate a custom JSONL dataset of identical fixed-length requests.
 
@@ -1033,7 +912,7 @@ def prepare_fixed_request_dataset(
         _ascend_env_preamble()
         + (env_preamble or "")
         + "; ".join(exports)
-        + "; python3 - <<'PY'\n"
+        + "; " + shlex.quote(python) + " - <<'PY'\n"
         + _FIXED_DATASET_REMOTE_PY
         + "\nPY\n"
     )
@@ -1187,95 +1066,58 @@ def extract_metrics(raw_result: dict[str, Any]) -> dict[str, Any]:
 
     return metrics
 
+_DATASET_VALUE_OPTS = (
+    "--dataset-name",
+    "--dataset-path",
+    "--random-input-len",
+    "--random-output-len",
+    "--random-range-ratio",
+    "--custom-output-len",
+    "--custom-input-len",
+    "--sonnet-input-len",
+    "--sonnet-output-len",
+    "--sharegpt-output-len",
+)
+_DATASET_BARE_OPTS = (
+    "--ignore-eos",
+    "--disable-shuffle",
+    "--skip-chat-template",
+)
 
-# ---------------------------------------------------------------------------
-# Safe stale-process cleanup
-# ---------------------------------------------------------------------------
 
-# Regex (POSIX ERE) for the vLLM runtime child process *comm* names that are
-# safe to reap. Deliberately narrow: only vLLM's own worker/engine helper
-# processes. NEVER match sshd, bash, the session shell, or PID 1.
-_VLLM_STALE_COMM_RE = r"^(VLLM::EngineCor|VLLM::Worker|VLLMWorker|VLLM::Core)"
-
-
-def safe_stale_cleanup(
-    container_ip: str,
-    container_port: int,
+def fixed_dataset_bench_args(
+    base: list[str],
     *,
-    dry_run: bool = False,
-) -> dict[str, Any]:
-    """Kill orphaned vLLM EngineCore/Worker processes inside a session container.
+    dataset_path: str,
+    output_len: int,
+) -> list[str]:
+    """Switch bench args to the generated fixed custom dataset.
 
-    This is the SAFE replacement for the ad-hoc cleanup that once SIGTERM'd a
-    session's dedicated sshd (``Exiting on signal 15``), dropping the container
-    SSH port and forcing a rebuild. Hard safety rules enforced remotely:
-
-      * skip PID 1 (container init);
-      * only match vLLM runtime child *comm* names (``VLLM::EngineCore`` /
-        ``VLLM::Worker`` / ``VLLMWorker``) -- never sshd/bash/session shells;
-      * additionally exclude any pid whose full cmdline mentions ``sshd`` or
-        ``vaws`` (dedicated session sshd, remote-dev helpers);
-      * kill only explicit pids (never a process group / negative pid), so a
-        signal can never fan out to the session sshd.
-
-    Returns a summary with the pids matched and (unless ``dry_run``) reaped.
+    Dataset-selecting flags in ``base`` are stripped, then the custom dataset
+    flags are appended: ``--dataset-name custom --dataset-path <path>
+    --custom-output-len <n> --skip-chat-template --disable-shuffle
+    --ignore-eos``.
     """
-    import shlex
-
-    action = "echo DRY_RUN_SKIP_KILL" if dry_run else "kill_pids"
-    remote_script = r'''
-set +e
-match_re='%s'
-mapfile -t pids < <(ps -eo pid=,comm=,args= | awk -v re="$match_re" '
-  $1 == 1 {next}
-  {
-    comm=$2
-    if (comm ~ re) {
-      # exclude anything that is (or wraps) sshd / vaws helpers
-      if ($0 ~ /sshd/ || $0 ~ /vaws/) next
-      print $1
-    }
-  }
-')
-printf "matched_pids=%%s\n" "${pids[*]:-}"
-kill_pids() {
-  [ ${#pids[@]} -eq 0 ] && return 0
-  kill -TERM "${pids[@]}" 2>/dev/null || true
-  sleep 3
-  # re-check and SIGKILL survivors (still only explicit pids)
-  survivors=()
-  for p in "${pids[@]}"; do
-    if kill -0 "$p" 2>/dev/null; then survivors+=("$p"); fi
-  done
-  if [ ${#survivors[@]} -gt 0 ]; then
-    kill -KILL "${survivors[@]}" 2>/dev/null || true
-  fi
-}
-%s
-sleep 1
-printf "remaining=%%s\n" "$(ps -eo pid=,comm= | awk -v re="$match_re" '$1!=1 && $2 ~ re {print $1}' | tr "\n" " ")"
-exit 0
-''' % (_VLLM_STALE_COMM_RE, action)
-
-    proc = ssh_exec(
-        SshEndpoint(host=container_ip, port=container_port, user="root"),
-        remote_script,
-        check=False,
-        timeout=120,
-    )
-    out = proc.stdout or ""
-    matched = ""
-    remaining = ""
-    for line in out.splitlines():
-        if line.startswith("matched_pids="):
-            matched = line.split("=", 1)[1].strip()
-        elif line.startswith("remaining="):
-            remaining = line.split("=", 1)[1].strip()
-    return {
-        "status": "ok" if proc.returncode == 0 else "failed",
-        "dry_run": dry_run,
-        "matched_pids": matched.split() if matched else [],
-        "remaining_pids": remaining.split() if remaining else [],
-        "returncode": proc.returncode,
-        "stderr_tail": (proc.stderr or "")[-400:],
-    }
+    out: list[str] = []
+    skip_next = False
+    for token in base:
+        if skip_next:
+            skip_next = False
+            continue
+        if token in _DATASET_VALUE_OPTS:
+            skip_next = True
+            continue
+        if token in _DATASET_BARE_OPTS:
+            continue
+        if any(token.startswith(f"{opt}=") for opt in _DATASET_VALUE_OPTS):
+            continue
+        out.append(token)
+    out.extend([
+        "--dataset-name", "custom",
+        "--dataset-path", dataset_path,
+        "--custom-output-len", str(output_len),
+        "--skip-chat-template",
+        "--disable-shuffle",
+        "--ignore-eos",
+    ])
+    return out
