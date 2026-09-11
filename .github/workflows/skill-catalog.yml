@@ -135,17 +135,8 @@ jobs:
           uv run python .agents/scripts/vaws_deps.py doctor
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           uv lock --check
-      - name: Native client, hooks, bootstrap and knowledge contracts
-        run: uv run python -B -m pytest .agents/tests -q --junitxml=windows-workspace.xml
-      - name: Every skill's local tests
-        run: |
-          foreach ($suite in Get-ChildItem .agents/skills -Directory) {
-            $tests = Join-Path $suite.FullName 'tests'
-            if (Test-Path -LiteralPath $tests) {
-              uv run python -B -m pytest $tests -q
-              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-            }
-          }
+      - name: All local workspace and skill tests with progress
+        run: uv run python -B .agents/scripts/local_tests.py --jobs 2 --timeout 600 > windows-workspace.json
       - name: Generated projections and repository guards
         run: |
           uv run python .agents/scripts/sync_claude_skills.py --check
@@ -161,4 +152,7 @@ jobs:
         if: always()
         with:
           name: windows-workspace-results
-          path: windows-workspace.xml
+          path: |
+            windows-workspace.json
+            .vaws-local/test-runs/
+          include-hidden-files: true

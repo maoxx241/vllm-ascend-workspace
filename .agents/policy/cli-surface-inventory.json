@@ -21,6 +21,12 @@
     }
   ],
   "classification": {
+    ".agents/scripts/local_tests.py": {
+      "responsibility": "mechanics",
+      "support_role": "harness",
+      "target_kind": "self",
+      "note": "local pytest file/suite subprocesses with progress, bounded lifetime and validated failed-only reruns"
+    },
     ".agents/hooks/knowledge_session_end.py": {
       "responsibility": "mechanics",
       "support_role": "hook",

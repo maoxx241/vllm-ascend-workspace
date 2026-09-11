@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import ctypes
 from ctypes import wintypes
+from contextlib import contextmanager
 import subprocess
 import sys
 
@@ -27,12 +28,14 @@ def pid_alive(pid: int) -> bool:
         kernel.CloseHandle(handle)
 
 
-def run_owned(command: list[str], *, env: dict[str, str]) -> int:
-    """Wait for a child; abrupt launcher termination closes its whole job tree.
+@contextmanager
+def owned_process(command: list[str], *, release_on_exit: bool = False, **kwargs):
+    """Own a child tree, including children of the Windows venv redirector.
 
     Start suspended so even the Windows venv redirector cannot launch children
     outside the job. All Win32 declarations preserve 64-bit process handles.
-    Only used before the installed workspace packages can be imported.
+    Closing the context kills descendants unless a caller explicitly releases
+    them after a normal exit. The job also closes on abrupt parent termination.
     """
     size_t = ctypes.c_size_t
 
@@ -84,7 +87,7 @@ def run_owned(command: list[str], *, env: dict[str, str]) -> int:
         limits = ExtendedLimits()
         limits.basic.flags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
         check(set_limits(job, 9, ctypes.byref(limits), ctypes.sizeof(limits)))
-        process = subprocess.Popen(command, env=env, stdin=sys.stdin, stdout=sys.stdout, stderr=sys.stderr,
+        process = subprocess.Popen(command, **kwargs,
                                    creationflags=subprocess.CREATE_NO_WINDOW | 0x00000004)  # CREATE_SUSPENDED
         handle = check(open_process(0x0101, False, process.pid))  # SET_QUOTA | TERMINATE
         try:
@@ -110,16 +113,23 @@ def run_owned(command: list[str], *, env: dict[str, str]) -> int:
                 close(thread)
         finally:
             close(threads)
-        result = process.wait()
+        yield process
         # A normal CLI exit must preserve package-owned detached services
         # (coordinator, knowledge, monitor). Abrupt parent termination skips
         # this step and the kernel closes every still-owned descendant.
-        limits.basic.flags = 0
-        check(set_limits(job, 9, ctypes.byref(limits), ctypes.sizeof(limits)))
-        return result
+        if release_on_exit and process.poll() is not None:
+            limits.basic.flags = 0
+            check(set_limits(job, 9, ctypes.byref(limits), ctypes.sizeof(limits)))
     finally:
         close(job)
         if process is not None:
             if process.poll() is None:
                 process.kill()  # Also covers assignment failure before resume.
             process.wait(timeout=5)
+
+
+def run_owned(command: list[str], *, env: dict[str, str]) -> int:
+    """Bootstrap a package CLI, preserving services on a normal CLI exit."""
+    with owned_process(command, env=env, stdin=sys.stdin, stdout=sys.stdout,
+                       stderr=sys.stderr, release_on_exit=True) as process:
+        return process.wait()

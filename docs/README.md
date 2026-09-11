@@ -8,6 +8,7 @@ is the archive for dated evidence.
 
 ## Current contracts
 
+- [local-tests.md](local-tests.md) — local test progress, subprocess lifetime, retained evidence and validated retries.
 - [runtime-feedback-design.md](runtime-feedback-design.md) — real-machine progress, loaded runtime identity, state projection, compact output and connection diagnostics.
 - [README.md](README.md) — this index.
 - [agent-first-openviking-spec.md](agent-first-openviking-spec.md) — target behavior and implementation status for permissive Agent workflows, local knowledge, public contributions and prebuilt distribution; Grok review is deferred.
