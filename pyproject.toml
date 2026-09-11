@@ -21,7 +21,7 @@ package = false
 
 [tool.uv.sources]
 vaws-remote-dev = { git = "https://github.com/vllm-ascend-workspace/remote-dev", rev = "c24a64a55e877904c9d539de4544ade0cc76cbac" }
-vaws-coordinator = { git = "https://github.com/vllm-ascend-workspace/vaws-coordinator", rev = "d34f376678e96333f1ef088f4adb54e95053f9b5" }
+vaws-coordinator = { git = "https://github.com/vllm-ascend-workspace/vaws-coordinator", rev = "8e6739173dbf4385b15b430866685a0a58d61159" }
 vaws-knowledge = { git = "https://github.com/vllm-ascend-workspace/vaws-knowledge", rev = "41363d3641bfac47f202e77ce845aad68e6dc58c" }
 
 [tool.pytest.ini_options]

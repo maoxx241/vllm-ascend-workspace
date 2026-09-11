@@ -16,7 +16,7 @@ must name git+https tag sources because `vaws-coordinator` depends on
 | Package | Module | Source tag | Role |
 |---|---|---|---|
 | `vaws-remote-dev` | `remote_dev` | `0.5.1` at `c24a64a` | process-in import + MCP server |
-| `vaws-coordinator` | `vaws_coordinator` | `0.3.2` at `d34f376` | process-in import + stdio MCP |
+| `vaws-coordinator` | `vaws_coordinator` | `0.3.2` at `8e67391` | process-in import + stdio MCP |
 | `vaws-knowledge` | `vaws_knowledge` | `0.3.2` at `41363d3` | process-in import + MCP |
 | `vaws-top` | — | uvx only | fleet dashboard; not imported |
 
