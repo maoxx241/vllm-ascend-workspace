@@ -22,3 +22,7 @@ is the archive for dated evidence.
 - [target-state.md](target-state.md) — the single definition of the post-split end state: axioms, ownership matrix, and cross-repository contracts.
 - [tracked-leak-guard.md](tracked-leak-guard.md) — tracked-file leak scanner, hook, and CI.
 - [tracked-path-guard.md](tracked-path-guard.md) — anti-rot guard against dead in-tree paths in tracked docs.
+
+## Dated validation evidence
+
+- [windows-validation-2026-09-11.md](windows-validation-2026-09-11.md) — completed Windows non-NPU validation, repairs, limits and a proposed experience-optimization sequence.

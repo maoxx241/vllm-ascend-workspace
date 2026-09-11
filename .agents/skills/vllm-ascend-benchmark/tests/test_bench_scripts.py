@@ -21,7 +21,7 @@ FIXTURES = ROOT / ".agents/skills/vllm-ascend-benchmark/tests/fixtures"
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
-import _common  # noqa: E402
+import _benchmark_common as _common  # noqa: E402
 import bench_compare  # noqa: E402
 import bench_run  # noqa: E402
 

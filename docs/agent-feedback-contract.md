@@ -420,8 +420,8 @@ Migration is per-script and mechanical once the shared helpers land.
 
 **Wave 0 — shared helpers (one change, no behaviour change).**
 Add `envelope_*` helpers next to the existing `print_json` / `emit_progress`
-in `vaws_remote_target`, `vllm-ascend-serving/scripts/_common.py`,
-`vllm-ascend-benchmark/scripts/_common.py`,
+in `vaws_remote_target`, `vllm-ascend-serving/scripts/_serving_common.py`,
+`vllm-ascend-benchmark/scripts/_benchmark_common.py`,
 `ascend-profiling-collection/scripts/_common.py`. Source publication now calls
 the coordinator package; it has no workspace skill emitter to migrate.
 

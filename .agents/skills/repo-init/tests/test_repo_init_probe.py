@@ -232,34 +232,26 @@ class RequiredStepReportingTests(unittest.TestCase):
         self.assertEqual(checkpoint["defaults"]["uv_sync"], True)
         self.assertEqual(checkpoint["defaults"]["vllm_alignment"], "ci-pinned")
 
-    def test_stub_git_on_path_feeds_initialized_clean_first_row(self) -> None:
+    def test_real_git_feeds_initialized_clean_first_row(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            stub = Path(tmp) / "bin"
-            stub.mkdir()
-            git = stub / "git"
-            git.write_text(
-                "#!/bin/sh\n"
-                'if [ "$1" = "-c" ]; then shift 2; fi\n'
-                'if [ "$1" = "submodule" ]; then\n'
-                "  printf -- ' aaaaaaaa vllm (v0.11.0)\\n fedcba90 vllm-ascend (heads/main)\\n'\n"
-                "  exit 0\n"
-                "fi\n"
-                "exit 1\n",
-                encoding="utf-8",
-            )
-            git.chmod(0o755)
-            old_path = os.environ.get("PATH", "")
-            old_home = os.environ.get("HOME")
-            os.environ["PATH"] = f"{stub}{os.pathsep}{old_path}"
-            os.environ["HOME"] = tmp
-            try:
-                rows = probe.git_submodule_status(Path(tmp))
-            finally:
-                os.environ["PATH"] = old_path
-                if old_home is None:
-                    os.environ.pop("HOME", None)
-                else:
-                    os.environ["HOME"] = old_home
+            import subprocess
+
+            root = Path(tmp) / "workspace"
+            source = Path(tmp) / "module source"
+            def git(path, *args):
+                subprocess.run(
+                    ["git", "-c", "protocol.file.allow=always", "-c", "user.name=Probe Test",
+                     "-c", "user.email=probe@example.invalid", "-c", "core.hooksPath=/dev/null",
+                     "-C", str(path), *args],
+                    capture_output=True, check=True,
+                )
+            for path in (root, source):
+                path.mkdir()
+                git(path, "init")
+                git(path, "commit", "--allow-empty", "-m", "fixture")
+            for name in ("vllm", "vllm-ascend"):
+                git(root, "submodule", "add", str(source), name)
+            rows = probe.git_submodule_status(root)
             self.assertEqual(
                 [(row["state"], row["path"]) for row in rows],
                 [(" ", "vllm"), (" ", "vllm-ascend")],

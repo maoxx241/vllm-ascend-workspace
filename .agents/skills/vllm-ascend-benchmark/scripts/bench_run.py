@@ -55,7 +55,7 @@ _SCRIPT_DIR = Path(__file__).resolve().parent
 if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 
-from _common import (
+from _benchmark_common import (
     assemble_config,
     call_serve_start,
     call_serve_stop,

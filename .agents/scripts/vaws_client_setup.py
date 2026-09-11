@@ -28,10 +28,12 @@ rules are reported, never silently rewritten.
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
 import os
 import shlex
+import re
 import sys
 import time
 from pathlib import Path
@@ -108,7 +110,7 @@ def existing_task_env(client, project, *, kimi_config=None):
         }[client]
         if path.is_file():
             try:
-                servers = json.loads(path.read_text()).get("mcpServers") or {}
+                servers = json.loads(path.read_text(encoding="utf-8")).get("mcpServers") or {}
             except json.JSONDecodeError:
                 return {}
             return dict((servers.get(TASK_SERVER_NAME) or {}).get("env") or {})
@@ -116,7 +118,7 @@ def existing_task_env(client, project, *, kimi_config=None):
         path = project / ("." + client) / "config.toml"
         if path.is_file():
             try:
-                servers = (tomllib.loads(path.read_text()) or {}).get("mcp_servers") or {}
+                servers = (tomllib.loads(path.read_text(encoding="utf-8")) or {}).get("mcp_servers") or {}
             except tomllib.TOMLDecodeError:
                 return {}
             entry = servers.get("vaws_task") or servers.get("vaws-task") or {}
@@ -168,7 +170,40 @@ def hook_command(client, project, env=None):
         "--project", str(project),
         "--agent-sessions-dir", env["VAWS_AGENT_SESSIONS_DIR"],
     ]
-    return shlex.join(argv)
+    return local_hook_command(argv)
+
+
+def local_hook_command(argv):
+    if os.name != "nt":
+        return shlex.join(argv)
+    # One portable launcher for clients which execute command strings through
+    # cmd, PowerShell or a shell configured by the user. Paths stay literal,
+    # including spaces, apostrophes, dollar signs and non-ASCII characters.
+    literals = " ".join("'" + str(arg).replace("'", "''") + "'" for arg in argv)
+    script = ("[Console]::InputEncoding = [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new(); "
+              "$OutputEncoding = [Console]::OutputEncoding; $env:PYTHONIOENCODING='utf-8'; & ") + literals + "; exit $LASTEXITCODE"
+    encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
+    return "powershell.exe -NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand " + encoded
+
+
+def hook_argv(command):
+    prefix = "powershell.exe -NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand "
+    if not command.startswith(prefix):
+        return shlex.split(command)
+    try:
+        script = base64.b64decode(command[len(prefix):], validate=True).decode("utf-16-le")
+    except (ValueError, UnicodeError) as exc:
+        raise ValueError("invalid generated hook command") from exc
+    begin = ("[Console]::InputEncoding = [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new(); "
+             "$OutputEncoding = [Console]::OutputEncoding; $env:PYTHONIOENCODING='utf-8'; & ")
+    end = "; exit $LASTEXITCODE"
+    if not script.startswith(begin) or not script.endswith(end):
+        raise ValueError("not an owned hook launcher")
+    body = script[len(begin):-len(end)]
+    tokens = re.findall(r"'(?:[^']|'')*'", body)
+    if " ".join(tokens) != body:
+        raise ValueError("invalid literal hook arguments")
+    return [token[1:-1].replace("''", "'") for token in tokens]
 
 
 def hook_groups(client, project, env=None):
@@ -251,7 +286,7 @@ def owned_hook_command(command, client, project, expected=None):
     or worktree does not.
     """
     try:
-        argv = shlex.split(command)
+        argv = hook_argv(command)
     except ValueError:
         return False
     script = executed_hook_script(argv)
@@ -300,7 +335,7 @@ def _desired_hook_command(groups):
 def merge_hook_event(existing, desired, client, project):
     """Replace one owned hook entry; keep siblings and group metadata."""
     desired_command = _desired_hook_command(desired)
-    expected = executed_hook_script(shlex.split(desired_command)) if desired_command else None
+    expected = executed_hook_script(hook_argv(desired_command)) if desired_command else None
     replaced = False
     result = []
     for group in existing:
@@ -417,7 +452,7 @@ def mcp_server_aliases(name):
 
 
 def merge_json(path, *, hooks=None, mcp=None, notes=None, client=None, project=None):
-    value = json.loads(path.read_text()) if path.exists() else {}
+    value = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
     notes = [] if notes is None else notes
     if hooks:
         target = value.setdefault("hooks", {})
@@ -519,7 +554,7 @@ def build_plan(client, project, *, kimi_config=None, task_only=False):
     env = launch_env(client, project, kimi_config=kimi_config)
     groups = hook_groups(client, project, env)
     if not task_only and client in {"codex", "claude", "cursor"}:
-        summary_command = shlex.join([
+        summary_command = local_hook_command([
             sys.executable, str(ROOT / ".agents/hooks/knowledge_summary.py"),
             "--client", client, "--project", str(project),
         ])
@@ -548,9 +583,9 @@ def build_plan(client, project, *, kimi_config=None, task_only=False):
         files[path] = merge_json(path, mcp=servers, notes=notes, project=project)
     if client in {"codex", "grok"}:
         path = project / ("." + client) / "config.toml"
-        original = tomllib.loads(path.read_text()) if path.exists() else {}
+        original = tomllib.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
         existing = original.get("mcp_servers", {})
-        text = path.read_text() if path.exists() else ""
+        text = path.read_text(encoding="utf-8") if path.exists() else ""
         changed = False
         for name, entry in servers.items():
             key = name.replace("-", "_")
@@ -586,7 +621,7 @@ def build_plan(client, project, *, kimi_config=None, task_only=False):
             changed = True
         if changed:
             files[path] = text
-        for marker in stale_prefix_hits(text or (path.read_text() if path.exists() else "")):
+        for marker in stale_prefix_hits(text or (path.read_text(encoding="utf-8") if path.exists() else "")):
             notes.append({
                 "path": str(path),
                 "action": "reported",
@@ -602,7 +637,7 @@ def build_plan(client, project, *, kimi_config=None, task_only=False):
             for event in EVENTS
         )
         project_key = hashlib.sha256(str(project).encode()).hexdigest()[:16]
-        files[path] = managed_toml_text(path.read_text() if path.exists() else "", "session-" + project_key, body)
+        files[path] = managed_toml_text(path.read_text(encoding="utf-8") if path.exists() else "", "session-" + project_key, body)
     return {
         "files": files,
         "mcp_servers": {name: entry["args"] for name, entry in servers.items()},
@@ -659,7 +694,7 @@ def main():
     plan = build_plan(args.client, args.project, kimi_config=args.kimi_config, task_only=args.task_only)
     changed = []
     for path, content in plan["files"].items():
-        if path.exists() and path.read_text() == content:
+        if path.exists() and path.read_text(encoding="utf-8") == content:
             continue
         item = {"path": str(path), "sha256": hashlib.sha256(content.encode()).hexdigest()}
         if args.apply:

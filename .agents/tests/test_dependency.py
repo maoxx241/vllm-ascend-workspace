@@ -31,7 +31,7 @@ class SpecLockTests(unittest.TestCase):
 
     def test_lock_records_the_pinned_commits(self) -> None:
         locked = deps.locked_packages()
-        sources = tomllib.loads((ROOT / "pyproject.toml").read_text())["tool"]["uv"]["sources"]
+        sources = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["tool"]["uv"]["sources"]
         for name in deps.PACKAGE_NAMES:
             self.assertEqual(locked[name]["commit"], sources[name]["rev"], name)
         expected_versions = deps.required_versions()

@@ -39,7 +39,7 @@ SEMCONV_PATH = KNOWLEDGE_DIR / "semantic_conventions.yaml"
 
 
 def _load_yaml(path: Path) -> dict:
-    return YAML.safe_load(path.read_text())
+    return YAML.safe_load(path.read_text(encoding="utf-8"))
 
 
 @pytest.fixture(scope="module")

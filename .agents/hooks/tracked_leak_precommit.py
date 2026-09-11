@@ -21,6 +21,7 @@ import argparse
 import json
 import stat
 import sys
+import shlex
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -47,7 +48,7 @@ SHIM = """#!/bin/sh
 # {marker}: installed by .agents/hooks/tracked_leak_precommit.py
 # Blocks commits that add addresses, home paths, e-mails, internal names, or
 # credential-shaped strings to tracked files. See docs/tracked-leak-guard.md.
-exec {python} "{hook}" --check
+exec {python} {hook} --check
 """
 
 
@@ -118,10 +119,11 @@ def install(repo_root: Path, *, force: bool) -> dict:
     hook_path.write_text(
         SHIM.format(
             marker=MARKER,
-            python=sys.executable or "python3",
-            hook=Path(__file__).resolve(),
+            python=shlex.quote(Path(sys.executable).as_posix() if sys.executable else "python3"),
+            hook=shlex.quote(Path(__file__).resolve().as_posix()),
         ),
         encoding="utf-8",
+        newline="\n",
     )
     hook_path.chmod(hook_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     return {

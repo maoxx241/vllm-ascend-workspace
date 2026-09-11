@@ -4,8 +4,9 @@ System ``python3`` cannot see packages installed by ``uv sync``. Entry scripts
 already put ``.agents/lib`` on ``sys.path``; call
 :func:`ensure_workspace_interpreter` immediately after that insert.
 
-If a sentinel package cannot be imported and ``.venv/bin/python`` exists, this
-module ``execve``s the same script under that interpreter. ``VAWS_VENV_REEXEC``
+If a sentinel package cannot be imported and the workspace venv exists, this
+module launches the same script under that interpreter. POSIX uses execve;
+Windows waits in a job object that owns the child tree. ``VAWS_VENV_REEXEC``
 prevents recursion. ``VAWS_SKIP_VENV_REEXEC=1`` disables the hop.
 
 This module never runs ``uv sync``. A missing ``.venv`` is an error whose
@@ -55,6 +56,10 @@ def ensure_workspace_interpreter(*, repo_root: Path) -> None:
         env = os.environ.copy()
         env[REEXEC_ENV] = "1"
         executable = os.fsdecode(venv_python)
+        if os.name == "nt":
+            from vaws_windows import run_owned
+
+            raise SystemExit(run_owned([executable, *sys.argv], env=env))
         os.execve(executable, [executable, *sys.argv], env)
     sys.stderr.write(
         "workspace packages are not importable and the workspace venv python is missing; "

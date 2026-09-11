@@ -9,6 +9,7 @@ clone can be used. The kit checkout is not SHA-locked.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import shlex
 import subprocess
@@ -137,6 +138,8 @@ def build_client_kit_argv(
     adapter = repo_root / ".agents" / "tests" / "knowledge_client_adapter.py"
 
     def command(operation: str) -> str:
+        if os.name == "nt":
+            return json.dumps([interpreter, str(adapter), operation])
         return shlex.join([interpreter, str(adapter), operation])
 
     argv = [
@@ -177,6 +180,8 @@ def run_client_kit(
         check=False,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        env={**os.environ, "PYTHONIOENCODING": "utf-8"},
         cwd=str(kit_root),
         timeout=timeout,
     )

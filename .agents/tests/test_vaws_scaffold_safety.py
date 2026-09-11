@@ -112,7 +112,7 @@ class RunStateIsolationTests(unittest.TestCase):
     def test_benchmark_results_are_written_under_task_state(self) -> None:
         module = load_script_module(
             "_vaws_benchmark_common_test",
-            ROOT / ".agents" / "skills" / "vllm-ascend-benchmark" / "scripts" / "_common.py",
+            ROOT / ".agents" / "skills" / "vllm-ascend-benchmark" / "scripts" / "_benchmark_common.py",
         )
         original_root = module.ROOT
         try:

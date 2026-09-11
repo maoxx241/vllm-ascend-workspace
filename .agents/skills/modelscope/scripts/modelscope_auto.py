@@ -126,10 +126,15 @@ def local_size_for_files(root: Path, files: list[dict[str, Any]]) -> int:
 
 
 def pid_is_active(pid: int | None) -> bool:
-    if not pid:
+    if not pid or pid <= 0:
         return False
+    if os.name == "nt":
+        from vaws_windows import pid_alive
+        return pid_alive(pid)
     try:
         os.kill(pid, 0)
+    except PermissionError:
+        return True
     except OSError:
         return False
     return True
@@ -223,9 +228,6 @@ def launch_worker(
     verify_only: bool,
 ) -> int:
     spec.local_dir.mkdir(parents=True, exist_ok=True)
-    launch_log = (spec.local_dir / "download.launch.log").open(
-        "ab", buffering=0
-    )
     cmd = [
         sys.executable,
         str(Path(__file__).resolve()),
@@ -252,14 +254,17 @@ def launch_worker(
     elif args.proxy:
         cmd.extend(["--proxy", args.proxy])
 
-    proc = subprocess.Popen(
-        cmd,
-        stdin=subprocess.DEVNULL,
-        stdout=launch_log,
-        stderr=subprocess.STDOUT,
-        start_new_session=True,
-        env=build_worker_env(args),
-    )
+    options = ({"creationflags": subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP}
+               if os.name == "nt" else {"start_new_session": True})
+    with (spec.local_dir / "download.launch.log").open("ab", buffering=0) as launch_log:
+        proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.DEVNULL,
+            stdout=launch_log,
+            stderr=subprocess.STDOUT,
+            env=build_worker_env(args),
+            **options,
+        )
     (spec.local_dir / "download.pid").write_text(f"{proc.pid}\n", encoding="utf-8")
     return proc.pid
 
@@ -422,6 +427,8 @@ def command_verify(args: argparse.Namespace) -> int:
 
 
 def main() -> int:
+    from _modelscope_common import configure_stdio
+    configure_stdio()
     args = parse_args()
     if args.command == "worker":
         return run_worker(args)

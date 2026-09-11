@@ -199,7 +199,7 @@ class OfficialStdioTests(unittest.TestCase):
                         self.assertFalse(finished["isError"], terminal)
                         self.assertEqual(terminal["status"], "finished")
                         self.assertTrue(terminal["data"]["worktrees_preserved"])
-                        self.assertTrue(marker.read_text().startswith("test-owned"))
+                        self.assertTrue(marker.read_text(encoding="utf-8").startswith("test-owned"))
                         _, neighbor = await call("vaws_session", separate["context_file"])
                         self.assertEqual(neighbor["status"], "open")
                         reopened = attach("acceptance-native-a")
@@ -207,7 +207,7 @@ class OfficialStdioTests(unittest.TestCase):
                         self.assertEqual(reopened["session"]["state"], "open")
 
             for path in reports:
-                payload = json.loads(path.read_text())
+                payload = json.loads(path.read_text(encoding="utf-8"))
                 self.assertEqual(payload["events"], [], path)
 
 

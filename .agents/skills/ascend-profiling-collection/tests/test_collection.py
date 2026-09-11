@@ -145,12 +145,12 @@ def _effective_ssh_config(cmd: list[str], home: str) -> tuple[dict[str, list[str
             "test is how a dead tunnel survives"
         )
     result = subprocess.run(
-        [ssh, "-G", "-F", "/dev/null", *cmd[1:]],
+        [ssh, "-G", "-F", os.devnull, *cmd[1:]],
         capture_output=True,
         text=True,
         encoding="utf-8",
         errors="replace",
-        env={"HOME": home, "PATH": os.environ.get("PATH", "")},
+        env={**os.environ, "HOME": home},
         check=False,
     )
     if result.returncode != 0:
@@ -191,7 +191,8 @@ class TunnelArgvTests(unittest.TestCase):
             mock.patch.object(ssh_transport.subprocess, "Popen", side_effect=fake_popen),
             mock.patch.object(ssh_transport.socket, "socket", return_value=connect_sock),
             mock.patch.object(ssh_transport, "_find_free_local_port", return_value=34567),
-            mock.patch.object(ssh_transport.os, "killpg", side_effect=ProcessLookupError),
+            mock.patch.object(ssh_transport.os, "killpg", side_effect=ProcessLookupError, create=True),
+            mock.patch.object(ssh_transport, "_kill_windows_tree"),
         ):
             with common.open_local_tunnel(fake_endpoint(), 8000) as tunnel:
                 self.assertEqual(tunnel["local_port"], 34567)

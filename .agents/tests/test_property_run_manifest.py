@@ -33,7 +33,10 @@ from vaws_coordinator.run_manifest import RunManifestError, add_artifact, genera
 
 def new_manifest(**kwargs):
     if "code" not in kwargs and "workspace_root" not in kwargs:
-        kwargs["workspace_root"] = ROOT
+        # These properties exercise the schema/status contract. Real Git
+        # identity is covered by test_code_identity; hundreds of workspace
+        # snapshots here obscure failures and make Windows runs take minutes.
+        kwargs["code"] = {"source_head": "a" * 40, "snapshot_commit": "b" * 40, "dirty": False}
     return _new_manifest(**kwargs)
 from test_property_support import Gen, run_cases  # noqa: E402
 

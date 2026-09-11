@@ -170,6 +170,7 @@ class ModelScopeTraeProjectionTests(unittest.TestCase):
             (
                 "SKILL.md",
                 "agents/openai.yaml",
+                "scripts/_modelscope_common.py",
                 "scripts/download_from_modelscope.py",
                 "scripts/modelscope_auto.py",
                 "scripts/modelscope_download_status.py",
@@ -293,8 +294,8 @@ class CurrentTreeProjectionTests(unittest.TestCase):
             target = ROOT / ".claude/skills" / source.name / "SKILL.md"
             with self.subTest(skill=source.name):
                 import yaml
-                expected = yaml.safe_load(frontmatter_yaml((source / "SKILL.md").read_text()))
-                actual = yaml.safe_load(frontmatter_yaml(target.read_text()))
+                expected = yaml.safe_load(frontmatter_yaml((source / "SKILL.md").read_text(encoding="utf-8")))
+                actual = yaml.safe_load(frontmatter_yaml(target.read_text(encoding="utf-8")))
                 self.assertEqual(actual, expected)
 
     def test_skill_frontmatter_parses_through_catalog(self) -> None:

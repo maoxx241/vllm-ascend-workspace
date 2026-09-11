@@ -346,7 +346,7 @@ class DetectionTests(unittest.TestCase):
         self.repo.set_policy(policy)
         cases = {
             "shell_branch": "import subprocess\nsubprocess.run('git worktree add /tmp/monitor vaws-top', shell=True)\n",
-            "local_skill": "from pathlib import Path\nPath('.agents/skills/vaws-top/SKILL.md').read_text()\n",
+            "local_skill": "from pathlib import Path\nPath('.agents/skills/vaws-top/SKILL.md').read_text(encoding='utf-8')\n",
             "wrong_host": "ORIGIN = 'https://github.example.invalid/org/vaws-top.git'\n",
             "file_url": "ORIGIN = 'file:///tmp/vaws-top'\n",
             "mixed_literal": (
@@ -381,9 +381,9 @@ class DetectionTests(unittest.TestCase):
         self.repo.set_policy(policy)
         sources = (
             "from pathlib import Path\nROOT = Path(__file__).resolve().parents[4]\n"
-            "(ROOT / '.agents/skills/vaws-top/SKILL.md').read_text()\n",
+            "(ROOT / '.agents/skills/vaws-top/SKILL.md').read_text(encoding='utf-8')\n",
             "from pathlib import Path\n"
-            "(Path(__file__).resolve().parents[4] / '.agents/skills/vaws-top/SKILL.md').read_text()\n",
+            "(Path(__file__).resolve().parents[4] / '.agents/skills/vaws-top/SKILL.md').read_text(encoding='utf-8')\n",
             "from pathlib import Path\nROOT = Path(__file__).resolve().parents[4]\n"
             "open(ROOT / '.agents/skills/vaws-top/SKILL.md')\n",
             "from pathlib import Path\nROOT = Path(__file__).resolve().parents[4]\n"
@@ -412,9 +412,9 @@ class DetectionTests(unittest.TestCase):
             "(ROOT / {p}).read_bytes()",
             "ROOT.joinpath({p}).exists()",
             "open(ROOT / {p}).read()",
-            "Path(ROOT, {p}).read_text()",
+            "Path(ROOT, {p}).read_text(encoding='utf-8')",
             'ROOT.joinpath("subdir", {p}).is_file()',
-            '(ROOT / "subdir" / {p}).read_text()',
+            '(ROOT / "subdir" / {p}).read_text(encoding="utf-8")',
             'ROOT.joinpath("subdir").joinpath({p}).stat()',
         )
         for root in roots:
@@ -440,7 +440,7 @@ class DetectionTests(unittest.TestCase):
         sources = (
             "DESCRIPTOR = " + skill + "\n",
             'DESCRIPTOR = {"agent_skill": ' + skill + "}\n",
-            "clone = locate_clone()\n(clone / " + skill + ").read_text()\n",
+            "clone = locate_clone()\n(clone / " + skill + ").read_text(encoding='utf-8')\n",
             "clone = locate_clone()\nclone.joinpath(" + skill + ").exists()\n",
         )
         for source in sources:

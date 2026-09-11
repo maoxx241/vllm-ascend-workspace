@@ -223,7 +223,7 @@ def main() -> int:
     )
     logs_ok = all(
         (Path(d) / PARALLEL_LOG_NAME).is_file()
-        and f"stub analyse of {d}" in (Path(d) / PARALLEL_LOG_NAME).read_text()
+        and f"stub analyse of {d}" in (Path(d) / PARALLEL_LOG_NAME).read_text(encoding="utf-8")
         for d in dirs1
     )
     check("case_ok: per-rank analyse_parallel.log captured stdout", logs_ok)
@@ -249,7 +249,7 @@ def main() -> int:
     )
     fail_log = Path(fail_dir[0]) / PARALLEL_LOG_NAME
     check("case_fail: failing rank still wrote its log",
-          fail_log.is_file() and "stub analyse of" in fail_log.read_text())
+          fail_log.is_file() and "stub analyse of" in fail_log.read_text(encoding="utf-8"))
 
     # -- Case 3: timeout kills a stuck rank (real timeout(1) only) -----------
     if real_timeout:

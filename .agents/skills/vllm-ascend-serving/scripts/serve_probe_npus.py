@@ -20,7 +20,7 @@ _SCRIPT_DIR = Path(__file__).resolve().parent
 if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 
-from _common import print_json, ssh_exec  # noqa: E402
+from _serving_common import print_json, ssh_exec  # noqa: E402
 from vaws_remote_target import SshEndpoint, ssh_endpoint_from_mapping  # noqa: E402
 from vaws_task_target import task_client  # noqa: E402
 

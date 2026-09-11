@@ -11,6 +11,7 @@ import contextlib
 import importlib.util
 import io
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -659,7 +660,7 @@ class HookTests(unittest.TestCase):
             self.assertEqual((payload["status"], payload["action"]), ("passed", "installed"))
             hook_path = Path(payload["hook_path"])
             self.assertTrue(hook_path.exists())
-            self.assertTrue(hook_path.stat().st_mode & 0o111)
+            self.assertTrue(os.name == "nt" or hook_path.stat().st_mode & 0o111)
             self.assertEqual(self.hook.status(repo)["installed"], True)
             self.assertEqual(self.hook.install(repo, force=False)["action"], "reinstalled")
             self.assertEqual(self.hook.uninstall(repo)["action"], "removed")
@@ -853,6 +854,8 @@ class G1BoundaryTests(unittest.TestCase):
             "new\nline.md",
             "utf8文件.md",
         ]
+        if os.name == "nt":
+            names = ["space name.md", "quote’file.md", "utf8文件.md"]
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
             policy_path = self._policy_repo(repo)

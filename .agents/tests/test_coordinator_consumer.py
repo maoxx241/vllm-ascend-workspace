@@ -50,7 +50,7 @@ def load_script(name: str):
 
 def isolated_python():
     """Return a 3.11+ interpreter that does not see the workspace ``.venv``."""
-    base = Path(sys.base_prefix) / "bin" / "python3"
+    base = Path(sys.base_prefix) / ("python.exe" if os.name == "nt" else "bin/python3")
     if base.is_file() and base.resolve() != Path(sys.executable).resolve():
         return str(base)
     for candidate in ("/opt/homebrew/bin/python3", "/usr/bin/python3"):
@@ -90,7 +90,7 @@ class EnvironmentTests(unittest.TestCase):
             "VAWS_AGENT_SESSIONS_DIR": "/tmp/explicit-registry",
             "VAWS_HOST_QUEUE_MODULE": "/tmp/host.py",
         })
-        self.assertEqual(env["VAWS_AGENT_SESSIONS_DIR"], "/tmp/explicit-registry")
+        self.assertEqual(env["VAWS_AGENT_SESSIONS_DIR"], str(Path("/tmp/explicit-registry").resolve()))
         self.assertNotIn("VAWS_HOST_QUEUE_MODULE", env)
 
     def test_relative_registry_path_uses_the_shared_workspace(self) -> None:
@@ -212,6 +212,9 @@ class LauncherTests(unittest.TestCase):
                 captured["command"] = list(command)
                 raise SystemExit(0)
 
+            def fake_run_module(module, **kwargs):
+                return fake_execve(sys.executable, [sys.executable, "-m", *sys.argv], os.environ)
+
             isolated = {
                 key: value
                 for key, value in os.environ.items()
@@ -221,6 +224,8 @@ class LauncherTests(unittest.TestCase):
             isolated["VAWS_AGENT_SESSIONS_DIR"] = str(sessions)
             with mock.patch.object(coordinator, "require_package", return_value={"state": "ready"}), mock.patch.object(
                 coordinator.os, "execve", side_effect=fake_execve
+            ), mock.patch("runpy.run_module", side_effect=fake_run_module), mock.patch.object(
+                sys, "argv", list(sys.argv)
             ), mock.patch.dict(os.environ, isolated, clear=True):
                 with self.assertRaises(SystemExit):
                     coordinator.exec_module("vaws_coordinator", ["status"], repo_root=repo)
@@ -274,8 +279,8 @@ class ClientSetupTests(unittest.TestCase):
         self.assertNotIn("VAWS_HOST_QUEUE_MODULE", servers["vaws-task"]["env"])
         self.assertNotIn(_GONE_COORDINATOR_ROOT, servers["vaws-task"]["env"])
         hook = json.loads(files[self.project / ".claude/settings.local.json"])["hooks"]["SessionStart"][0]["hooks"][0]["command"]
-        self.assertIn("--agent-sessions-dir", hook)
-        self.assertNotIn("--coordinator-root", hook)
+        self.assertIn("--agent-sessions-dir", self.setup.hook_argv(hook))
+        self.assertNotIn("--coordinator-root", self.setup.hook_argv(hook))
 
     def test_task_only_skips_remote_dev(self) -> None:
         servers = json.loads(
@@ -298,7 +303,7 @@ class ClientSetupTests(unittest.TestCase):
         handlers = [entry for group in json.loads(second)["hooks"]["Stop"] for entry in group["hooks"]]
         self.assertEqual(len(handlers), 2)
         self.assertEqual(handlers[0]["command"], "foreign-hook")
-        self.assertIn("knowledge_summary.py", handlers[1]["command"])
+        self.assertTrue(any(Path(arg).name == "knowledge_summary.py" for arg in self.setup.hook_argv(handlers[1]["command"])))
 
     def test_toml_knowledge_environment_adds_config_without_replacing_user_fields(self) -> None:
         source = '[mcp_servers.vaws_knowledge]\ncommand = "custom-python"\nargs = []\nenabled = true\n[mcp_servers.vaws_knowledge.env]\nCUSTOM = "keep"\n'
@@ -377,7 +382,7 @@ class ClientSetupTests(unittest.TestCase):
             ),
             payload,
         )
-        text = config.read_text()
+        text = config.read_text(encoding="utf-8")
         self.assertNotIn(f"[mcp_servers.{stale_table}]", text)
         self.assertEqual(self._remote_tables(text), ["remote_dev"])
         self.assertIn("unrelated-external", self._mcp_tables(text))
@@ -424,7 +429,7 @@ class ClientSetupTests(unittest.TestCase):
             any(note.get("action") == "rewritten-stale" for note in payload["rewritten_servers"]),
             payload,
         )
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8"))
         self.assertNotIn("remote_dev", data["mcpServers"])
         self.assertEqual(data["mcpServers"]["remote-dev"]["args"], _PACKAGED_REMOTE_ARGS)
         self.assertEqual(data["mcpServers"]["unrelated-external"]["command"], "/usr/bin/true")
@@ -436,7 +441,7 @@ class ClientSetupTests(unittest.TestCase):
         config.write_text(
             "[mcp_servers.remote_dev]\n"
             'command = "python3"\n'
-            f'args = ["{gone}", "server"]\n'
+            f'args = {json.dumps([str(gone), "server"])}\n'
         )
         plan = self.setup.build_plan("codex", self.project)
         text = plan["files"][config]
@@ -465,7 +470,7 @@ class ClientSetupTests(unittest.TestCase):
                 config = self._write_stale_toml(project, client, "remote_dev")
                 payload = self._apply_client(client, project)
                 self._assert_stale_remote_rewritten(payload, config, "remote-dev")
-                text = config.read_text()
+                text = config.read_text(encoding="utf-8")
                 self.assertEqual(text.count("[mcp_servers.remote_dev]"), 1)
 
     def test_toml_apply_repairs_hyphen_and_underscore_duplicate(self) -> None:
@@ -484,7 +489,7 @@ class ClientSetupTests(unittest.TestCase):
             any(note.get("action") == "rewritten-stale" for note in payload["rewritten_servers"]),
             payload,
         )
-        text = config.read_text()
+        text = config.read_text(encoding="utf-8")
         self.assertNotIn("[mcp_servers.remote-dev]", text)
         self.assertEqual(self._remote_tables(text), ["remote_dev"])
         data = tomllib.loads(text)
@@ -515,7 +520,7 @@ class ClientSetupTests(unittest.TestCase):
             any(note.get("server") == "remote-dev" for note in payload["rewritten_servers"]),
             payload,
         )
-        hyphen_text = hyphen_config.read_text()
+        hyphen_text = hyphen_config.read_text(encoding="utf-8")
         self.assertIn("[mcp_servers.remote-dev]", hyphen_text)
         self.assertNotIn("[mcp_servers.remote_dev]", hyphen_text)
         self.assertIn("unrelated-external", self._mcp_tables(hyphen_text))
@@ -534,7 +539,7 @@ class ClientSetupTests(unittest.TestCase):
         living_config.write_text(
             "[mcp_servers.remote_dev]\n"
             'command = "python3"\n'
-            f'args = ["{kept}", "server"]\n'
+            f'args = {json.dumps([str(kept), "server"])}\n'
         )
         payload = self._apply_client("codex", living)
         self.assertTrue(
@@ -548,7 +553,7 @@ class ClientSetupTests(unittest.TestCase):
             any(note.get("server") == "remote-dev" for note in payload["rewritten_servers"]),
             payload,
         )
-        living_text = living_config.read_text()
+        living_text = living_config.read_text(encoding="utf-8")
         self.assertIn("[mcp_servers.remote_dev]", living_text)
         self.assertNotIn("[mcp_servers.remote-dev]", living_text)
         self.assertEqual(
@@ -634,7 +639,7 @@ class ClientSetupTests(unittest.TestCase):
         self.assertNotIn(_GONE_COORDINATOR_ROOT, server["env"])
         self.assertEqual(server["env"]["VAWS_AGENT_SESSIONS_DIR"], str(registry))
         hook = json.loads(plan["files"][self.project / ".claude/settings.local.json"])["hooks"]["SessionStart"][0]["hooks"][0]["command"]
-        argv = shlex.split(hook)
+        argv = self.setup.hook_argv(hook)
         self.assertNotIn("--coordinator-root", argv)
         self.assertEqual(argv[argv.index("--agent-sessions-dir") + 1], str(registry))
 
@@ -655,7 +660,7 @@ class ClientSetupTests(unittest.TestCase):
         self.assertEqual(server["env"]["VAWS_AGENT_SESSIONS_DIR"], "/user/managed/registry")
         self.assertEqual(server["user_field"], 1)
         hook = json.loads(plan["files"][self.project / ".claude/settings.local.json"])["hooks"]["SessionStart"][0]["hooks"][0]["command"]
-        argv = shlex.split(hook)
+        argv = self.setup.hook_argv(hook)
         self.assertNotIn("--coordinator-root", argv)
         self.assertEqual(argv[argv.index("--agent-sessions-dir") + 1], "/user/managed/registry")
 
@@ -677,10 +682,10 @@ class ClientSetupTests(unittest.TestCase):
             groups = json.loads(first["files"][settings])["hooks"]["SessionStart"]
             commands = [entry.get("command", "") for group in groups for entry in group.get("hooks", [group])]
             self.assertEqual(commands.count("my-hook"), 1)
-            owned = [item for item in commands if "vaws_session.py" in item]
+            owned = [item for item in commands if any(Path(arg).name == "vaws_session.py" for arg in self.setup.hook_argv(item))]
             self.assertEqual(len(owned), 1)
-            self.assertNotIn("--coordinator-root", owned[0])
-            self.assertIn("--agent-sessions-dir", owned[0])
+            self.assertNotIn("--coordinator-root", self.setup.hook_argv(owned[0]))
+            self.assertIn("--agent-sessions-dir", self.setup.hook_argv(owned[0]))
             self.assertNotEqual(owned[0], old)
             settings.write_text(first["files"][settings])
             second = self.setup.build_plan("claude", self.project)
@@ -809,7 +814,7 @@ class ClientSetupTests(unittest.TestCase):
                     plan = self.setup.build_plan(client, self.project, kimi_config=self.project / "kimi.toml")
                     blob = "\n".join(plan["files"].values())
                     self.assertNotIn(_GONE_COORDINATOR_ROOT, blob)
-                    self.assertIn(registry, blob)
+                    self.assertIn(registry, self.setup.hook_argv(self.setup.hook_command(client, self.project)))
 
 
 class HookAdapterTests(unittest.TestCase):

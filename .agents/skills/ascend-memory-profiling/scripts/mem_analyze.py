@@ -866,11 +866,11 @@ def main() -> None:
         print(f"ERROR: {manifest_path} not found", file=sys.stderr)
         sys.exit(1)
 
-    manifest = json.loads(manifest_path.read_text())
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 
     # Parse vLLM logs
     log_path = run_dir / "vllm_serve.log"
-    vllm_info = parse_vllm_logs(log_path.read_text()) if log_path.exists() else {}
+    vllm_info = parse_vllm_logs(log_path.read_text(encoding="utf-8")) if log_path.exists() else {}
 
     # Parse msprof data — build per-device component dicts.
     # The manifest's __prof_device_map__ maps CSV filenames to device IDs,
@@ -906,7 +906,7 @@ def main() -> None:
     weight_manifest_path = run_dir / "weight_manifest.json"
     weight_manifest = {}
     if weight_manifest_path.exists():
-        weight_manifest = json.loads(weight_manifest_path.read_text())
+        weight_manifest = json.loads(weight_manifest_path.read_text(encoding="utf-8"))
 
     mc = manifest.get("model_config", {})
     has_experts = bool(
@@ -921,7 +921,7 @@ def main() -> None:
     if not model_config:
         cfg_path = run_dir / "model_config.json"
         if cfg_path.exists():
-            model_config = json.loads(cfg_path.read_text())
+            model_config = json.loads(cfg_path.read_text(encoding="utf-8"))
     weight_theory = estimate_weight_size(model_config, tp, dp) if model_config else {}
 
     # Parse npu-smi data

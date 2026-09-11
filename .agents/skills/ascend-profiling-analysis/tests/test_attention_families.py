@@ -44,8 +44,8 @@ def test_family_resolver_yaml_stays_inside_attention_family_enum():
     can emit must be declared in semantic_conventions.yaml's
     ``attention_family`` enum (and the overlay suffix must be documented)."""
     yaml = pytest.importorskip("yaml", reason="pyyaml not installed")
-    fam_doc = yaml.safe_load((KNOWLEDGE_DIR / "attention_families.yaml").read_text())
-    sem_doc = yaml.safe_load((KNOWLEDGE_DIR / "semantic_conventions.yaml").read_text())
+    fam_doc = yaml.safe_load((KNOWLEDGE_DIR / "attention_families.yaml").read_text(encoding="utf-8"))
+    sem_doc = yaml.safe_load((KNOWLEDGE_DIR / "semantic_conventions.yaml").read_text(encoding="utf-8"))
     enum = set(sem_doc["attributes"]["attention_family"]["values"])
     suffixes = set(sem_doc["attributes"]["attention_family"].get("suffix") or {})
     for step in fam_doc["cheat_sheet"]["resolver"]:

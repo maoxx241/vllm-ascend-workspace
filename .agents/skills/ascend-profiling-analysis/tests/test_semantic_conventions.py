@@ -32,7 +32,7 @@ SEMCONV_PATH = KNOWLEDGE_DIR / "semantic_conventions.yaml"
 
 
 def _load_enum(name: str) -> set[str]:
-    doc = YAML.safe_load(SEMCONV_PATH.read_text())
+    doc = YAML.safe_load(SEMCONV_PATH.read_text(encoding="utf-8"))
     return set(doc["attributes"][name]["values"])
 
 
@@ -41,7 +41,7 @@ def test_semantic_conventions_file_exists():
         "knowledge/semantic_conventions.yaml is the agent-facing enum "
         "contract; do not delete it"
     )
-    doc = YAML.safe_load(SEMCONV_PATH.read_text())
+    doc = YAML.safe_load(SEMCONV_PATH.read_text(encoding="utf-8"))
     assert doc.get("version") == 1
     assert "attributes" in doc
 
@@ -72,12 +72,12 @@ def test_finding_type_enum_matches_diagnostics():
         / "scripts"
         / "ascend_profile"
         / "diagnostics.py"
-    ).read_text()
+    ).read_text(encoding="utf-8")
     python_values = set(re.findall(r"finding_type\s*=\s*[\"']([^\"']+)[\"']", src))
     # ``finding_type=finding_type`` is a parameter pass-through; drop it.
     python_values.discard("finding_type")
     rules_doc = YAML.safe_load(
-        (KNOWLEDGE_DIR / "diagnosis_rules.yaml").read_text()
+        (KNOWLEDGE_DIR / "diagnosis_rules.yaml").read_text(encoding="utf-8")
     )
     yaml_finding_types = set((rules_doc.get("findings") or {}).keys())
     yaml_values = _load_enum("finding_type")
@@ -101,7 +101,7 @@ def test_alignment_method_enum_matches_cross_rank():
         / "scripts"
         / "ascend_profile"
         / "cross_rank.py"
-    ).read_text()
+    ).read_text(encoding="utf-8")
     python_values = set(
         re.findall(r"_ALIGNMENT_METHOD\s*=\s*[\"']([^\"']+)[\"']", src)
     )
@@ -120,7 +120,7 @@ def test_html_status_and_report_mode_enums():
         / "scripts"
         / "ascend_profile"
         / "report.py"
-    ).read_text()
+    ).read_text(encoding="utf-8")
     html_status_values = set(
         re.findall(r"html_status[\"']?\s*[:=]\s*[\"']([a-z_]+)[\"']", src)
     )
@@ -154,7 +154,7 @@ def test_anomaly_tag_enum_matches_summarize():
         / "scripts"
         / "ascend_profile"
         / "summarize.py"
-    ).read_text()
+    ).read_text(encoding="utf-8")
     python_values = set(re.findall(r"tags\.append\(\s*[\"']([A-Z_]+)[\"']", src))
     yaml_values = _load_enum("anomaly_tag")
     missing = python_values - yaml_values
@@ -174,7 +174,7 @@ def test_soft_root_cause_label_enum_matches_host_trace():
         / "scripts"
         / "ascend_profile"
         / "host_trace.py"
-    ).read_text()
+    ).read_text(encoding="utf-8")
     python_values = set(
         re.findall(r"[\"'](possible_[a-z_]+|insufficient_evidence)[\"']", src)
     )

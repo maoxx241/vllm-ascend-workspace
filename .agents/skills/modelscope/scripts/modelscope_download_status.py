@@ -119,6 +119,8 @@ def fetch_official_files(model_id: str, revision: str) -> list[dict[str, Any]]:
 
 
 def main() -> int:
+    from _modelscope_common import configure_stdio
+    configure_stdio()
     args = parse_args()
     ignore_official = set(args.ignore_official)
     for spec in args.model:

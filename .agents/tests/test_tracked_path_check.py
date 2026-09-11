@@ -125,7 +125,7 @@ class RealTreeTests(unittest.TestCase):
         self.assertEqual(policy.fixture_paths, frozenset({".agents/tests/test_tracked_path_check.py"}))
 
     def test_shipped_policy_forbids_remote_dev_state(self) -> None:
-        prefixes = [item["prefix"] if isinstance(item, dict) else item for item in json.loads(POLICY.read_text())["allow_prefixes"]]
+        prefixes = [item["prefix"] if isinstance(item, dict) else item for item in json.loads(POLICY.read_text(encoding="utf-8"))["allow_prefixes"]]
         forbidden = _OLD_SUBSTRATE + "/state"
         self.assertNotIn(forbidden + "/", prefixes)
         self.assertFalse(any(item.startswith(forbidden) for item in prefixes))

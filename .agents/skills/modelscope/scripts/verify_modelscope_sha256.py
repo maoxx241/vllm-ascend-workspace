@@ -310,6 +310,8 @@ def write_model_sha256sums(checks: list[FileCheck]) -> None:
 
 
 def main() -> int:
+    from _modelscope_common import configure_stdio
+    configure_stdio()
     args = parse_args()
     all_checks: list[FileCheck] = []
     summaries: list[dict[str, Any]] = []
