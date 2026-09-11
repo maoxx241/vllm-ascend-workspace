@@ -26,6 +26,15 @@ history.
 | `vaws_execution` | Status, tail, stop, or read the ordinary endpoint of one owned execution |
 | `vaws_finish` | Close admission; stop owned executions; keep container, roots, evidence |
 
+Task MCP/CLI status may reuse a snapshot for two seconds. Use `refresh: true`
+or `vaws.py execution --refresh` for a new observation. Compact results retain
+`observation_freshness` (snapshot completion time, age, source and deferred
+refresh) plus per-role sampling times. Busy executions return immediately
+with the cached observation and mark refresh as deferred. Python
+`TaskClient.observe()` remains fresh by default; `refresh=False` permits caching.
+These observations do not grant resource access. Tail, target and stop keep
+their existing behavior.
+
 CLI: `python3 .agents/scripts/vaws.py session|run|execution|finish` execs
 `python -m vaws_coordinator.vaws`. MCP: `python -m vaws_coordinator task-server`.
 
