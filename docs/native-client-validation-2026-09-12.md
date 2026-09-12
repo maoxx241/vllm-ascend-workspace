@@ -380,6 +380,17 @@ checkout retained the same native ID, VAWS task, cwd and HEAD. The raw
 Initialization reports this capability only when the selected binary matches
 the installed, accepted artifact; a version string alone is insufficient.
 
+The final September 13 apply also handled a real cross-client conflict:
+Grok imported Cursor's generated MCP entries under their hyphenated names,
+alongside its working native underscore providers. Cursor's workspace
+substitution is unavailable in Grok. Initialization now adds only verified
+duplicate VAWS names to Grok's native user-level disabled list, preserving
+Cursor configuration, custom entries and other imports. All 48 affected
+configuration tests passed. After application, another logged-in bare startup
+and exact-ID resume passed with no MCP initialization failures, the same
+cwd/HEAD/task on resume, and no remote executions. Evidence is the local
+`grok-native-live/all-config-start-resume-summary.json` and its raw streams.
+
 Read-only native-code inspection also found that Codex's default Worktree
 creation can use an old local main or cached origin/main without fetching the
 canonical upstream. The consumer now recognizes a detached local-default-tip
