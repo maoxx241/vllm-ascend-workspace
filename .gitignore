@@ -18,6 +18,7 @@ docs/superpowers/
 .codex/*
 !.codex/
 !.codex/config.example.toml
+.kimi-code/mcp.json
 .grok/*
 !.grok/
 !.grok/config.example.toml

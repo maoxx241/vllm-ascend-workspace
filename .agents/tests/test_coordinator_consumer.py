@@ -260,11 +260,16 @@ class LauncherTests(unittest.TestCase):
 class ClientSetupTests(unittest.TestCase):
     def setUp(self) -> None:
         self.setup = load_script("vaws_client_setup")
+        # These preservation fixtures use the current platform's temporary
+        # directory. The mounted-drive WSL bridge has its own integration test.
+        owner = mock.patch.object(self.setup, "managed_python", return_value=sys.executable)
+        owner.start()
+        self.addCleanup(owner.stop)
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.project = Path(self.temp.name).resolve() / "project"
         self.project.mkdir()
-        patcher = mock.patch.dict(os.environ, {_GONE_COORDINATOR_ROOT: ""})
+        patcher = mock.patch.dict(os.environ, {_GONE_COORDINATOR_ROOT: "", "WSL_DISTRO_NAME": ""})
         patcher.start()
         self.addCleanup(patcher.stop)
 
@@ -818,30 +823,31 @@ class ClientSetupTests(unittest.TestCase):
 
 
 class HookAdapterTests(unittest.TestCase):
-    def test_explicit_registry_flag_is_forwarded_and_root_is_ignored(self) -> None:
+    def test_explicit_registry_flag_attaches_native_event_in_selected_registry(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             registry = Path(tmp) / "registry with spaces"
             registry.mkdir()
             env = {key: value for key, value in os.environ.items()}
-            # Package is installed in the test interpreter; --coordinator-root must be accepted and ignored.
             proc = subprocess.run(
                 [
                     sys.executable,
                     str(ROOT / ".agents/hooks/vaws_session.py"),
                     "--client", "claude",
                     "--project", tmp,
-                    "--coordinator-root", str(Path(tmp) / "ignored-root"),
                     "--agent-sessions-dir", str(registry),
                 ],
-                input='{"hook_event_name":"SessionStart","session_id":"n1","cwd":"%s"}' % tmp,
+                input=json.dumps({"hook_event_name":"SessionStart","session_id":"n1","cwd":tmp}),
                 capture_output=True,
                 text=True,
                 env=env,
                 check=False,
             )
-        self.assertIn(proc.returncode, {0, 1}, proc.stderr)
-        self.assertNotIn("Traceback", proc.stderr)
-        self.assertNotIn(_GONE_COORDINATOR_ROOT, proc.stderr)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertEqual(len(list((registry / "contexts").glob("*.json"))), 1, proc.stderr)
+            hint = json.loads(proc.stdout)["hookSpecificOutput"]["additionalContext"]
+            context_file = Path(hint.splitlines()[1])
+            self.assertTrue(context_file.is_file())
+            self.assertEqual(context_file.parent.parent.resolve(), registry.resolve())
 
 
 class NoInTreeTaskWriterTests(unittest.TestCase):

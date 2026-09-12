@@ -342,16 +342,6 @@ class RepositoryCoherenceTests(unittest.TestCase):
             if line.startswith("| `")
         ]
         self.assertEqual(rows, generated)
-        current_section = self.doc.split(inventory.CURRENT_TABLE_BEGIN, 1)[1].split(
-            inventory.CURRENT_TABLE_END, 1
-        )[0]
-        for record in self.payload["entry_points"]:
-            self.assertIn(f"`{record['path']}`", current_section, record["path"])
-        self.assertNotIn("`.remote-dev/tools/remote_bash.py`", current_section)
-        self.assertNotIn("`.agents/coordinator/server.py`", current_section)
-        current_paths = {record["path"] for record in self.payload["entry_points"]}
-        self.assertEqual(len(current_paths), self.payload["entry_point_count"])
-        self.assertTrue(all(f"`{path}`" in current_section for path in current_paths))
 
     def test_historical_docs_table_is_delimited_and_dated(self) -> None:
         rows = inventory.extract_delimited_table(

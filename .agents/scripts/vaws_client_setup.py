@@ -19,8 +19,8 @@ Three logical providers are written when needed:
 vaws-knowledge.
 
 Preservation: existing user-managed servers and unknown fields are kept.
-JSON merge does **not** rewrite `command` / `args` / `type` of a living
-same-name provider. A same-name entry whose command/args point at a path
+Generated task servers in this checkout move to the shared native owner when
+needed; user-managed launchers remain unchanged. A same-name entry whose command/args point at a path
 inside this checkout that no longer exists is rewritten (`rewritten-stale`).
 TOML follows the same rule. Stale `mcp__remote-dev__vaws_*` permission
 rules are reported, never silently rewritten.
@@ -31,7 +31,9 @@ import argparse
 import base64
 import hashlib
 import json
+import ntpath
 import os
+import posixpath
 import shlex
 import re
 import sys
@@ -78,6 +80,16 @@ def knowledge_server_args():
     return ["-m", "vaws_knowledge.server.mcp_server"]
 
 
+def kimi_home():
+    return Path(os.environ.get("KIMI_CODE_HOME", str(Path.home() / ".kimi-code"))).expanduser()
+
+
+def kimi_launch_arguments(project, *, config=None):
+    """Use Kimi Code; legacy kimi-cli has different configuration contracts."""
+    executable = kimi_home() / "bin" / ("kimi.exe" if os.name == "nt" else "kimi")
+    return [str(executable) if executable.is_file() else "kimi"]
+
+
 def remote_dev_env():
     """Environment the remote-dev MCP server needs; the launcher fills the same defaults."""
     return {
@@ -90,6 +102,26 @@ def _resolved_path(value):
     return str(Path(value).expanduser().resolve())
 
 
+def managed_python():
+    """A shared Windows worktree has one Windows coordinator, including from WSL."""
+    candidate = ROOT / ".vaws-local/venvs/win32/Scripts/python.exe"
+    if os.name != "nt" and os.environ.get("WSL_DISTRO_NAME") and candidate.is_file():
+        return str(candidate)
+    return sys.executable
+
+
+def managed_path(value):
+    """Arguments to a Windows Python process use its native mounted-drive paths."""
+    if managed_python() == sys.executable:
+        return str(value)
+    if re.fullmatch(r"[a-zA-Z]:[\\/].*", str(value)):
+        return str(value)
+    match = re.fullmatch(r"/mnt/([a-zA-Z])(?:/(.*))?", str(value))
+    if not match:
+        raise ValueError("Windows-backed WSL coordinator paths must be on a mounted Windows drive")
+    return match[1].upper() + ":\\" + (match[2] or "").replace("/", "\\")
+
+
 def task_server_env():
     """Environment the task server needs so it shares this workspace's registry."""
     env = coordinator_environment()
@@ -97,7 +129,19 @@ def task_server_env():
         "VAWS_AGENT_SESSIONS_DIR",
         "VAWS_COORDINATOR_STATE_DIR",
     )
-    return {key: env[key] for key in keys if key in env}
+    result = {key: managed_path(env[key]) for key in keys if key in env}
+    return windows_interop_env(result) if os.name != "nt" and managed_python() != sys.executable else result
+
+
+def windows_interop_env(environment):
+    """Forward explicit MCP env to a Windows child started through WSL."""
+    environment = dict(environment)
+    entries = [part for part in environment.get("WSLENV", "").split(":") if part]
+    present = {part.split("/", 1)[0] for part in entries}
+    entries.extend(key + "/w" for key in sorted(environment) if key != "WSLENV" and key not in present)
+    if entries:
+        environment["WSLENV"] = ":".join(entries)
+    return environment
 
 
 def existing_task_env(client, project, *, kimi_config=None):
@@ -113,7 +157,8 @@ def existing_task_env(client, project, *, kimi_config=None):
                 servers = json.loads(path.read_text(encoding="utf-8")).get("mcpServers") or {}
             except json.JSONDecodeError:
                 return {}
-            return dict((servers.get(TASK_SERVER_NAME) or {}).get("env") or {})
+            entry = servers.get(TASK_SERVER_NAME) or servers.get("vaws_task") or {}
+            return dict(entry.get("env") or {})
     if client in {"codex", "grok"}:
         path = project / ("." + client) / "config.toml"
         if path.is_file():
@@ -143,7 +188,7 @@ def desired_mcp_servers(*, task_only=False):
             "env": remote_dev_env(),
         }
     servers[TASK_SERVER_NAME] = {
-        "command": sys.executable,
+        "command": managed_python(),
         "args": task_server_args(),
         "type": "stdio",
         "timeout": 600000,
@@ -160,14 +205,44 @@ def desired_mcp_servers(*, task_only=False):
     return servers
 
 
+def shared_kimi_servers(servers, project):
+    """One mounted-drive Kimi config can launch from native Windows and WSL.
+
+    Kimi starts project MCP servers in the project cwd. WSL can execute the
+    Windows interpreter directly; a project-relative command works in both.
+    Other clients keep their platform-native remote-dev/knowledge interpreters.
+    """
+    candidate = ROOT / ".vaws-local/venvs/win32/Scripts/python.exe"
+    if not candidate.is_file():
+        return servers
+
+    def native(value):
+        value = str(value)
+        mounted = re.fullmatch(r"/mnt/([a-zA-Z])(?:/(.*))?", value)
+        if mounted:
+            return mounted[1].upper() + ":\\" + (mounted[2] or "").replace("/", "\\")
+        return value if re.fullmatch(r"[a-zA-Z]:[\\/].*", value) else None
+
+    executable, cwd = native(candidate), native(project)
+    if not executable or not cwd or ntpath.splitdrive(executable)[0].casefold() != ntpath.splitdrive(cwd)[0].casefold():
+        return servers
+    command = "./" + ntpath.relpath(executable, cwd).replace("\\", "/")
+    path_keys = {"VAWS_AGENT_SESSIONS_DIR", "VAWS_COORDINATOR_STATE_DIR", "REMOTE_DEV_STATE_DIR",
+                 "VAWS_KNOWLEDGE_CONFIG"}
+    return {name: {**entry, "command": command,
+                   "env": windows_interop_env({key: (native(value) or value) if key in path_keys else value
+                           for key, value in entry.get("env", {}).items()})}
+            for name, entry in servers.items()}
+
+
 def hook_command(client, project, env=None):
     """Self-contained hook command; a GUI client must not inherit setup's shell."""
     env = task_server_env() if env is None else env
     argv = [
-        sys.executable,
-        str(ROOT / ".agents/hooks/vaws_session.py"),
+        managed_python(),
+        managed_path(ROOT / ".agents/hooks/vaws_session.py"),
         "--client", client,
-        "--project", str(project),
+        "--project", managed_path(project),
         "--agent-sessions-dir", env["VAWS_AGENT_SESSIONS_DIR"],
     ]
     return local_hook_command(argv)
@@ -223,7 +298,7 @@ OWNED_HOOK_SCRIPT = ROOT / ".agents/hooks/vaws_session.py"
 
 
 def _is_python_interpreter(program):
-    name = Path(program).name.lower()
+    name = str(program).replace("\\", "/").rsplit("/", 1)[-1].lower()
     if name.endswith(".exe"):
         name = name[:-4]
     return name == "python" or name.startswith("python3")
@@ -270,12 +345,24 @@ def executed_hook_script(argv):
 
 def owned_hook_script(path, expected=None):
     try:
-        wanted = Path(expected) if expected else OWNED_HOOK_SCRIPT
-        if wanted.resolve() not in {OWNED_HOOK_SCRIPT.resolve(), (ROOT / ".agents/hooks/knowledge_summary.py").resolve()}:
+        wanted = expected if expected else OWNED_HOOK_SCRIPT
+        allowed = {hook_path_identity(OWNED_HOOK_SCRIPT), hook_path_identity(ROOT / ".agents/hooks/knowledge_summary.py")}
+        if hook_path_identity(wanted) not in allowed:
             return False
-        return Path(path).expanduser().resolve() == wanted.resolve()
+        return hook_path_identity(path) == hook_path_identity(wanted)
     except OSError:
         return False
+
+
+def hook_path_identity(value):
+    """Compare an owned hook's native and WSL mounted-drive spellings."""
+    value = str(value)
+    mounted = re.fullmatch(r"/mnt/([a-zA-Z])(?:/(.*))?", value)
+    if mounted:
+        value = mounted[1] + ":/" + (mounted[2] or "")
+    if re.fullmatch(r"[a-zA-Z]:[\\/].*", value):
+        return value.replace("\\", "/").rstrip("/").casefold()
+    return str(Path(value).expanduser().resolve())
 
 
 def owned_hook_command(command, client, project, expected=None):
@@ -317,7 +404,7 @@ def owned_hook_command(command, client, project, expected=None):
     if parsed_client != client or not parsed_project:
         return False
     try:
-        return Path(parsed_project).expanduser().resolve() == Path(project).expanduser().resolve()
+        return hook_path_identity(parsed_project) == hook_path_identity(project)
     except OSError:
         return parsed_project == str(project)
 
@@ -408,6 +495,56 @@ def is_stale_scaffold_entry(existing, checkout):
     return bool(checkout_missing_refs(existing, checkout))
 
 
+def server_command_identity(command, checkout):
+    """Resolve generated commands against their configuration project, not cwd."""
+    command = str(command).replace("\\", "/")
+    if not re.match(r"(?:[a-zA-Z]:/|/)", command):
+        command = hook_path_identity(checkout) + "/" + command
+    return hook_path_identity(posixpath.normpath(command))
+
+
+def owned_workspace_interpreter(command, checkout):
+    commands = {hook_path_identity(ROOT / suffix) for suffix in (
+        ".vaws-local/venvs/linux/bin/python", ".vaws-local/venvs/win32/Scripts/python.exe",
+        ".venv/bin/python", ".venv/Scripts/python.exe")}
+    return server_command_identity(command, checkout) in commands
+
+
+def managed_task_command_change(existing, desired, *, checkout=None):
+    """Move this checkout's generated task server to its current native owner."""
+    checkout = ROOT if checkout is None else checkout
+    return (existing.get("args") == desired.get("args") == task_server_args()
+            and owned_workspace_interpreter(existing.get("command", ""), checkout)
+            and existing["command"] != desired["command"])
+
+
+def shared_kimi_command_change(existing, desired, checkout):
+    """Migrate only known workspace interpreters to the shared Kimi launcher."""
+    if not str(desired.get("command", "")).startswith("./"):
+        return False
+    modules = (task_server_args(), remote_dev_server_args(), knowledge_server_args())
+    if existing.get("args") != desired.get("args") or desired.get("args") not in modules:
+        return False
+    return (owned_workspace_interpreter(existing.get("command", ""), checkout)
+            and existing["command"] != desired["command"])
+
+
+def update_toml_server_command(text, key, command):
+    headers = {f"[mcp_servers.{key}]", f"[mcp_servers.{json.dumps(key)}]"}
+    lines = text.splitlines(keepends=True)
+    inside = False
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith("["):
+            inside = stripped in headers
+        elif inside and re.match(r"^command\s*=", stripped):
+            lines[index] = "command = " + json.dumps(command) + "\n"
+            updated = "".join(lines)
+            tomllib.loads(updated)
+            return updated
+    return text
+
+
 def merge_server_entry(existing, desired, *, checkout=None):
     """Fill missing keys from `desired`; keep a living user command/args/type.
 
@@ -416,6 +553,22 @@ def merge_server_entry(existing, desired, *, checkout=None):
     server, and is rewritten.
     """
     checkout = ROOT if checkout is None else checkout
+    if shared_kimi_command_change(existing, desired, checkout):
+        existing_env = dict(existing.get("env") or {})
+        # Preserve custom values; rewrite only another spelling of a generated
+        # default path so the shared Windows process receives a native path.
+        for key, value in desired.get("env", {}).items():
+            if key in existing_env and hook_path_identity(existing_env[key]) == hook_path_identity(value):
+                existing_env[key] = value
+        merged_env = {**desired.get("env", {}), **existing_env}
+        if "WSLENV" in desired.get("env", {}):
+            merged_env = windows_interop_env(merged_env)
+        return {**desired, **existing, "command": desired["command"], "env": merged_env}, "updated-managed"
+    if managed_task_command_change(existing, desired, checkout=checkout):
+        merged_env = {**desired.get("env", {}), **existing.get("env", {})}
+        if "WSLENV" in desired.get("env", {}):
+            merged_env = windows_interop_env(merged_env)
+        return {**desired, **existing, "command": desired["command"], "env": merged_env}, "updated-managed"
     if is_stale_scaffold_entry(existing, checkout):
         merged = dict(desired)
         for key, value in existing.items():
@@ -425,12 +578,16 @@ def merge_server_entry(existing, desired, *, checkout=None):
         existing_env = dict(existing.get("env") or {})
         if desired_env or existing_env:
             merged["env"] = {**desired_env, **existing_env}
+            if "WSLENV" in desired_env:
+                merged["env"] = windows_interop_env(merged["env"])
         return merged, "rewritten-stale"
     merged = {**desired, **existing}
     desired_env = dict(desired.get("env") or {})
     existing_env = dict(existing.get("env") or {})
     if desired_env or existing_env:
         merged["env"] = {**desired_env, **existing_env}
+        if "WSLENV" in desired_env:
+            merged["env"] = windows_interop_env(merged["env"])
     preserved = any(
         key in existing and existing.get(key) != desired.get(key)
         for key in ("command", "args", "type")
@@ -493,13 +650,13 @@ def merge_json(path, *, hooks=None, mcp=None, notes=None, client=None, project=N
                 servers[source_key], desired, checkout=checkout
             )
             servers[source_key] = merged
-            if action == "preserved":
+            if action in {"preserved", "updated-managed"}:
                 notes.append({
                     "path": str(path),
                     "server": name,
-                    "action": "preserved",
+                    "action": action,
                     "fields": ["command", "args", "type"],
-                    "reason": "existing-named-server",
+                    "reason": "shared-native-owner" if action == "updated-managed" else "existing-named-server",
                 })
     text = json.dumps(value, indent=2, ensure_ascii=False) + "\n"
     for marker in stale_prefix_hits(text):
@@ -524,7 +681,21 @@ def toml_server_body(key, entry):
 
 def fill_toml_server_env(text, key, existing, desired):
     """Add missing defaults to an ordinary env table; preserve user values/text."""
-    missing = {name: value for name, value in (desired.get("env") or {}).items()
+    desired_env = dict(desired.get("env") or {})
+    if "WSLENV" in desired_env:
+        desired_env["WSLENV"] = windows_interop_env({**desired_env, **existing.get("env", {})})["WSLENV"]
+        headers = {f"[mcp_servers.{key}.env]", f"[mcp_servers.{json.dumps(key)}.env]"}
+        lines = text.splitlines(keepends=True)
+        inside = False
+        for index, line in enumerate(lines):
+            if line.strip().startswith("["):
+                inside = line.strip() in headers
+            elif inside:
+                assignment = re.match(r'^(\s*(?:WSLENV|"WSLENV")\s*=\s*)', line)
+                if assignment:
+                    lines[index] = assignment[1] + json.dumps(desired_env["WSLENV"]) + ("\n" if line.endswith("\n") else "")
+        text = "".join(lines)
+    missing = {name: value for name, value in desired_env.items()
                if name not in (existing.get("env") or {})}
     if not missing:
         return text
@@ -563,6 +734,11 @@ def build_plan(client, project, *, kimi_config=None, task_only=False):
         else:
             groups["Stop"] = [{"hooks": [{"type": "command", "command": summary_command, "timeout": 5}]}]
     servers = desired_mcp_servers(task_only=task_only)
+    if client == "kimi":
+        servers = shared_kimi_servers(servers, project)
+        servers = {name: {**{key: value for key, value in entry.items() if key not in {"type", "timeout"}},
+                          "toolTimeoutMs": 600000}
+                   for name, entry in servers.items()}
     files = {}
     notes = []
     if client in {"claude", "cursor", "codex", "grok"}:
@@ -592,6 +768,17 @@ def build_plan(client, project, *, kimi_config=None, task_only=False):
             aliases = mcp_server_aliases(name)
             matching = [alias for alias in aliases if alias in existing]
             if matching:
+                generated = next((alias for alias in matching if managed_task_command_change(existing[alias], entry, checkout=project)), None)
+                if generated is not None:
+                    updated = update_toml_server_command(text, generated, entry["command"])
+                    if "WSLENV" in entry.get("env", {}):
+                        updated = fill_toml_server_env(updated, generated, existing[generated], entry)
+                    if updated != text:
+                        text = updated
+                        changed = True
+                        notes.append({"path": str(path), "server": name, "action": "updated-managed",
+                                      "reason": "shared-native-owner"})
+                        continue
                 if any(is_stale_scaffold_entry(existing[alias], project) for alias in matching):
                     text = managed_toml_text(
                         drop_toml_server_tables(text, *aliases),
@@ -606,7 +793,8 @@ def build_plan(client, project, *, kimi_config=None, task_only=False):
                     })
                     changed = True
                     continue
-                if name == KNOWLEDGE_SERVER_NAME:
+                if name == KNOWLEDGE_SERVER_NAME or (name == TASK_SERVER_NAME and "WSLENV" in entry.get("env", {})
+                        and server_command_identity(existing[matching[0]].get("command", ""), project) == server_command_identity(entry["command"], project)):
                     updated_text = fill_toml_server_env(text, matching[0], existing[matching[0]], entry)
                     changed = changed or updated_text != text
                     text = updated_text
@@ -629,7 +817,7 @@ def build_plan(client, project, *, kimi_config=None, task_only=False):
                 "reason": "stale-tool-prefix-permission",
             })
     if client == "kimi":
-        path = kimi_config or Path(os.environ.get("KIMI_CODE_HOME", str(Path.home() / ".kimi-code"))) / "config.toml"
+        path = kimi_config or kimi_home() / "config.toml"
         command = groups["SessionStart"][0]["hooks"][0]["command"]
         body = "\n".join(
             "[[hooks]]\nevent = " + json.dumps(event) + "\ncommand = " + json.dumps(command)
@@ -643,6 +831,8 @@ def build_plan(client, project, *, kimi_config=None, task_only=False):
         "mcp_servers": {name: entry["args"] for name, entry in servers.items()},
         "notes": notes,
         "task_registry": str(agent_sessions_root()),
+        "launch_argv": kimi_launch_arguments(project, config=kimi_config) if client == "kimi" else None,
+        "launch_cwd": str(project),
     }
 
 
@@ -683,7 +873,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--client", choices=sorted(CLIENTS), required=True)
     parser.add_argument("--project", type=Path, default=Path.cwd())
-    parser.add_argument("--kimi-config", type=Path, help="Kimi's actual user config if launched with --config-file")
+    parser.add_argument("--kimi-config", type=Path, help="Explicit Kimi Code configuration file to edit for scoped session hooks")
     parser.add_argument(
         "--task-only",
         action="store_true",
@@ -716,6 +906,8 @@ def main():
         "files": changed,
         "mcp_servers": plan["mcp_servers"],
         "notes": plan["notes"],
+        "launch_argv": plan["launch_argv"],
+        "launch_cwd": plan["launch_cwd"],
         "stale_tool_prefix_permissions": [
             note for note in plan["notes"] if note.get("reason") == "stale-tool-prefix-permission"
         ],

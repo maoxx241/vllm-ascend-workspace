@@ -229,6 +229,9 @@ class ScaffoldSetupTests(unittest.TestCase):
     """Hook wrapper and client-setup contracts that stay in this repository."""
 
     def setUp(self):
+        owner = mock.patch.object(setup, "managed_python", return_value=sys.executable)
+        owner.start()
+        self.addCleanup(owner.stop)
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name).resolve()
 

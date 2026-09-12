@@ -74,6 +74,8 @@ class OfficialStdioTests(unittest.TestCase):
                 if not key.startswith("VAWS_") and key != "PYTHONPATH"
             }
             environment["VAWS_AGENT_SESSIONS_DIR"] = str(temp / "registry")
+            environment["VAWS_COORDINATOR_STATE_DIR"] = str(temp / "coordinator")
+            environment["ACCEPTANCE_FORBID_COORDINATOR_SERVICE"] = "1"
             sitecustomize = temp / "sitecustomize.py"
             sitecustomize.write_text((TESTS / "guarded_local_entry.py").read_text(encoding="utf-8"), encoding="utf-8")
             environment["PYTHONPATH"] = str(temp)
@@ -155,12 +157,11 @@ class OfficialStdioTests(unittest.TestCase):
                         ran, run_state = await call(
                             "vaws_run",
                             first["context_file"],
-                            command="true",
+                            command=" ",
                         )
                         self.assertTrue(ran["isError"])
                         self.assertEqual((run_state["outcome"], run_state["status"]), ("blocked", "unavailable"))
-                        self.assertIn("vllm", run_state["summary"])
-                        self.assertIn("vllm-ascend", run_state["summary"])
+                        self.assertIn("command is required", run_state["summary"])
                         _, after_run = await call("vaws_session", first["context_file"])
                         self.assertEqual(after_run["data"]["executions"], [])
 
@@ -205,6 +206,9 @@ class OfficialStdioTests(unittest.TestCase):
                         reopened = attach("acceptance-native-a")
                         self.assertEqual(reopened["session"]["id"], task_a)
                         self.assertEqual(reopened["session"]["state"], "open")
+
+            self.assertFalse((temp / "coordinator/coordinator.ipc").exists())
+            self.assertFalse((temp / "coordinator/daemon.log").exists())
 
             for path in reports:
                 payload = json.loads(path.read_text(encoding="utf-8"))

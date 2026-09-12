@@ -42,3 +42,12 @@ user. They do not resolve `session_id` / `machine` through a consumer plugin.
 `python3 .agents/scripts/vaws_client_setup.py` writes the `remote-dev` MCP
 entry as `python -m remote_dev.mcp.server` with the env above. It must not
 point the server at a workspace resolver.
+
+Clients normally use their native platform interpreter. Kimi Code shares
+`.kimi-code/mcp.json` between Windows and WSL in a mounted Windows project, so
+setup uses the same project-relative Windows workspace Python for remote-dev,
+coordinator and knowledge. Start Kimi in that project directory; WSL launches
+the Windows executable through its normal interoperability support. Generated
+state paths use Windows spelling, and custom server commands and environment
+values remain intact. A generated `WSLENV` list forwards these values to the
+Windows process. Grok in WSL continues to use native Linux remote-dev.

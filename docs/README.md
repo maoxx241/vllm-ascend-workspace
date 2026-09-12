@@ -3,11 +3,18 @@
 Status: current
 
 Every file under `docs/` is listed here. `Status: current` is a
-contract. A dated Status line is evidence and is never a direction; Git
-is the archive for dated evidence.
+contract. Dated validation evidence is never a direction; Git is its archive.
+`Status: proposed target design` identifies a future replacement design, not
+implemented behavior or a new runtime requirement for current clients.
+
+## Proposed target designs
+
+- [native-workspace-isolation.md](native-workspace-isolation.md) — native cwd and Git worktree ownership, current attachment/source fixes, and the remaining immutable local environment proposal.
+- [vaws-core-redesign.md](vaws-core-redesign.md) — breaking redesign direction; fixed execution inputs and scoped reuse are implemented in coordinator 0.4, while remaining proposals are distinguished from the current API.
 
 ## Current contracts
 
+- [design-principles.md](design-principles.md) — nine governing principles; total Agent task cost takes priority, tools stay bounded, knowledge is advisory, and valid work is reused.
 - [windows-installation.md](windows-installation.md) — PowerShell setup, same-filesystem uv cache and verified offline transfer.
 - [local-tests.md](local-tests.md) — local test progress, subprocess lifetime, retained evidence and validated retries.
 - [runtime-feedback-design.md](runtime-feedback-design.md) — real-machine progress, loaded runtime identity, state projection, compact output and connection diagnostics.
@@ -21,12 +28,13 @@ is the archive for dated evidence.
 - [npu-fleet-monitor.md](npu-fleet-monitor.md) — local deploy and lifecycle of the standalone vaws-top fleet monitor.
 - [property-testing.md](property-testing.md) — property-based tests for the deterministic cores.
 - [remote-dev-consumption.md](remote-dev-consumption.md) — how this scaffold consumes the installed vaws-remote-dev package.
-- [target-state.md](target-state.md) — the single definition of the post-split end state: axioms, ownership matrix, and cross-repository contracts.
+- [target-state.md](target-state.md) — current component ownership and runtime contracts, distinguished from the proposed breaking redesign.
 - [tracked-leak-guard.md](tracked-leak-guard.md) — tracked-file leak scanner, hook, and CI.
 - [tracked-path-guard.md](tracked-path-guard.md) — anti-rot guard against dead in-tree paths in tracked docs.
 
 ## Dated validation evidence
 
+- [core-workflow-validation-2026-09-12.md](core-workflow-validation-2026-09-12.md) — fixed execution inputs, native rebuild/reuse/switchback, Windows/WSL clients and real-host validation, with explicit scope limits.
 - [workflow-usability-validation-2026-09-11.md](workflow-usability-validation-2026-09-11.md) — skill boundary audit, bounded service startup, source reuse and real four-host fleet lifecycle observations.
 - [agent-only-validation-2026-09-11.md](agent-only-validation-2026-09-11.md) — Agent-only entry consolidation and Windows PowerShell/WSL acceptance, including corrections and hardware limits.
 - [installation-feedback-2026-09-11.md](installation-feedback-2026-09-11.md) — fresh/cached Windows installation timings, cache relocation and dependency extras decision.
