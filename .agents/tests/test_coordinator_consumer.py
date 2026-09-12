@@ -113,6 +113,19 @@ class EnvironmentTests(unittest.TestCase):
             str(shared_workspace_root(ROOT) / ".vaws-local" / "agent-sessions"),
         )
 
+    def test_identity_snapshot_is_forwarded_without_reading_credentials(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.assertNotIn("VAWS_GITHUB_IDENTITY_FILE", coordinator.coordinator_environment({}, repo_root=root))
+            snapshot = root / ".vaws-local/github.json"
+            snapshot.parent.mkdir()
+            snapshot.write_text('{"schema":"vaws.github.v1","login":"alice","github_user_id":1}')
+            env = coordinator.coordinator_environment({}, repo_root=root)
+            self.assertEqual(env["VAWS_GITHUB_IDENTITY_FILE"], str(snapshot.resolve()))
+            explicit = coordinator.coordinator_environment(
+                {"VAWS_GITHUB_IDENTITY_FILE": "another-user.json"}, repo_root=root)
+            self.assertEqual(explicit["VAWS_GITHUB_IDENTITY_FILE"], str(root / "another-user.json"))
+
 
 class BuildInputOwnershipTests(unittest.TestCase):
     def test_scaffold_does_not_keep_a_copy(self) -> None:

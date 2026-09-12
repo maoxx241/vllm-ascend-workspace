@@ -26,6 +26,10 @@ _pin, _ = _bootstrap.parse_known_args()
 if _pin.environment_receipt:
     os.environ[PIN_ENV] = _pin.environment_receipt
 
+from vaws_workspace_entry import report_workspace_entry
+# Hook stderr is not guaranteed visible. AGENTS.md and the CLI own first-use
+# prompting; this hook only starts already-configured background preparation.
+report_workspace_entry(ROOT, announce=False)
 ensure_workspace_interpreter(repo_root=ROOT)
 
 from vaws_coordinator_launch import CoordinatorUnavailable, exec_module  # noqa: E402
@@ -38,9 +42,12 @@ def main() -> int:
     parser.add_argument("--project", type=Path)
     parser.add_argument("--agent-sessions-dir", default="")
     parser.add_argument("--environment-receipt", help=argparse.SUPPRESS)
+    parser.add_argument("--github-identity-file", help=argparse.SUPPRESS)
     args = parser.parse_args()
     if args.agent_sessions_dir.strip():
         os.environ["VAWS_AGENT_SESSIONS_DIR"] = str(Path(args.agent_sessions_dir).expanduser())
+    if args.github_identity_file:
+        os.environ["VAWS_GITHUB_IDENTITY_FILE"] = str(Path(args.github_identity_file).expanduser())
     forwarded = ["--client", args.client]
     if args.project is not None:
         forwarded += ["--project", str(args.project)]

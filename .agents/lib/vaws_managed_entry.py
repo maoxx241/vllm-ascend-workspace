@@ -16,6 +16,7 @@ from vaws_local_owner import managed_path, managed_python, windows_interop_env, 
 
 PATH_ENV = frozenset({
     "VAWS_AGENT_SESSIONS_DIR", "VAWS_COORDINATOR_STATE_DIR", "VAWS_CONTEXT_FILE",
+    "VAWS_GITHUB_IDENTITY_FILE",
     "VAWS_PARENT_CONTEXT", "VAWS_ATTACH_CONTEXT", "REMOTE_DEV_STATE_DIR",
 })
 IDENTITY_ENV = frozenset({"CODEX_THREAD_ID", "CODEX_SESSION_ID"})

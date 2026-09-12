@@ -80,7 +80,7 @@ def test_new_client_clears_parent_pins_and_selects_current_native_and_owner(tmp_
     spec.loader.exec_module(client)
     monkeypatch.setattr(client, 'ROOT', checkout)
     monkeypatch.setattr(client, 'resolve_client', lambda name: ['native-client'])
-    monkeypatch.setattr(client, 'prepare_workspace', lambda *args: {'state': 'reused', 'workspace': str(copy)})
+    monkeypatch.setattr(client, 'prepare_workspace', lambda *args, **kwargs: {'state': 'reused', 'workspace': str(copy)})
     monkeypatch.setenv(envs.PIN_ENV, old_native['receipt'])
     monkeypatch.setenv(envs.MANAGED_PIN_ENV, old_owner['receipt'])
     def enter_native(**kwargs):

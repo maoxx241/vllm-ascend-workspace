@@ -133,7 +133,7 @@ class OfficialStdioTests(unittest.TestCase):
                         self.assertIn("host_protocol_schema_version", capability)
                         self.assertIsInstance(capability["version"], str)
                         names = [tool.name for tool in (await client.list_tools()).tools]
-                        self.assertEqual(set(names), {"vaws_session", "vaws_run", "vaws_execution", "vaws_finish"})
+                        self.assertEqual(set(names), {"vaws_session", "vaws_run", "vaws_execution", "vaws_finish", "vaws_message"})
 
                         async def call(name, context=None, **arguments):
                             if context:

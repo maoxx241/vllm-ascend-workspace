@@ -100,6 +100,14 @@ class SubmoduleClassificationTests(unittest.TestCase):
 
 
 class ForkTopologyTests(unittest.TestCase):
+    def test_low_level_configure_cannot_bypass_verified_fork_setup(self) -> None:
+        args = SimpleNamespace(repo=".", origin_url="https://github.com/an-org/vllm.git", upstream_url=None)
+        with mock.patch.object(topology, "resolve_repo", return_value=Path("/unused")), \
+             mock.patch.object(topology, "mutate_remote") as mutate:
+            with self.assertRaisesRegex(topology.RepoTopologyError, "workspace_forks.py"):
+                topology.cmd_configure(args)
+            mutate.assert_not_called()
+
     def test_parse_remote_url_accepts_ssh_https_and_rejects_other_hosts(self) -> None:
         self.assertEqual(probe.parse_remote_url("git@github.com:alice/vllm.git"), "alice/vllm")
         self.assertEqual(
@@ -170,12 +178,25 @@ class ForkTopologyTests(unittest.TestCase):
                 "full_name": "alice/vllm",
                 "redirected": False,
                 "is_fork": True,
+                "owner_login": "alice",
+                "owner_type": "User",
                 "parent_full_name": "vllm-project/vllm",
             },
             "alice",
         )
         self.assertTrue(personal["personal_fork"])
         self.assertEqual(personal["classification"], "user-fork")
+
+    def test_personal_fork_requires_personal_owner_and_official_network(self) -> None:
+        valid = {"exists": True, "full_name": "alice/vllm", "is_fork": True,
+                 "owner_login": "alice", "owner_type": "User",
+                 "parent_full_name": "vllm-project/vllm"}
+        for changed in ({"is_fork": False}, {"owner_type": "Organization"},
+                        {"parent_full_name": "unrelated/vllm"}, {"owner_login": "another-user"}):
+            with self.subTest(changed=changed):
+                result = probe.personal_fork_record("vllm", {**valid, **changed}, "alice")
+                self.assertFalse(result["personal_fork"])
+                self.assertIn("policy_error", result)
 
 
 class ProbeSummaryTests(unittest.TestCase):

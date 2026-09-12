@@ -27,7 +27,7 @@ from vaws_venv import ensure_workspace_interpreter
 
 CLIENT_COMMANDS = {"codex": "codex", "grok": "grok", "kimi": "kimi", "claude": "claude", "cursor": "cursor-agent"}
 NATIVE_IDENTITY_ENV = {"VAWS_CONTEXT_FILE", "VAWS_PARENT_CONTEXT", "VAWS_ATTACH_CONTEXT",
-                       "CODEX_THREAD_ID", "CODEX_SESSION_ID"}
+                       "CODEX_THREAD_ID", "CODEX_SESSION_ID", "VAWS_RELEASE_LAUNCH"}
 
 
 def resolve_client(client: str) -> list[str]:
@@ -93,16 +93,58 @@ def main(argv=None) -> int:
     native_args = values[split + 1:]
     try:
         command = resolve_client(args.client)
+        from vaws_workspace_entry import copy_workspace_identity, report_workspace_entry
+        release_launch = os.environ.get("VAWS_RELEASE_LAUNCH") == "1"
+        if not release_launch:
+            report_workspace_entry(ROOT)
         from vaws_environment import MANAGED_PIN_ENV, PIN_ENV, native_ready, select_environment
         # Starting a new native client selects the current lock. Already running
         # hooks/MCP processes continue honoring their own immutable pin.
         os.environ.pop(PIN_ENV, None)
         os.environ.pop(MANAGED_PIN_ENV, None)
-        ensure_workspace_interpreter(repo_root=ROOT)
-        receipt = prepare_workspace(args.client, args.workspace)
+        from vaws_workspace_update import prepared_source
+        source = ROOT
+        if args.workspace is None and not release_launch:
+            try:
+                source = prepared_source(ROOT) or ROOT
+            except (OSError, RuntimeError, ValueError, TypeError) as exc:
+                print(json.dumps({"workspace_updates": {"state": "release_source_pending", "error": str(exc)}},
+                                 ensure_ascii=False), file=sys.stderr, flush=True)
+        if source != ROOT:
+            # Run the release's own client wiring as well as its dependencies.
+            # The existing checkout remains unchanged for any active GUI task.
+            try:
+                launcher = source / ".agents/scripts/vaws_client.py"
+                if not launcher.is_file():
+                    raise WorkspaceCopyError("prepared release has no native client launcher")
+                prepared = native_ready(source)
+                from vaws_local_owner import windows_mounted_workspace
+                if windows_mounted_workspace(source):
+                    # A Windows-owned watcher prepares Windows packages. A WSL
+                    # CLI also needs its already-prepared native Linux receipt.
+                    from vaws_environment import windows_ready
+                    windows_ready(source)
+                copy_workspace_identity(ROOT, source, disable_updates=True)
+                environment = dict(os.environ)
+                environment["VAWS_RELEASE_LAUNCH"] = "1"
+                for name in ("VAWS_VENV_REEXEC", "VAWS_SKIP_VENV_REEXEC", "VIRTUAL_ENV", "PYTHONHOME", "PYTHONPATH"):
+                    environment.pop(name, None)
+                os.execvpe(prepared["python"], [prepared["python"], str(launcher), *values], environment)
+            except (OSError, RuntimeError, ValueError) as exc:
+                print(json.dumps({"workspace_updates": {"state": "release_launch_pending", "error": str(exc)}},
+                                 ensure_ascii=False), file=sys.stderr, flush=True)
+                source = ROOT
+        ensure_workspace_interpreter(repo_root=source)
+        receipt = prepare_workspace(args.client, args.workspace, source=source)
         target = Path(receipt["workspace"])
+        if receipt.get("state") == "ready":
+            try:
+                copy_workspace_identity(source, target)
+            except (OSError, RuntimeError, ValueError) as exc:
+                print(json.dumps({"workspace_updates": {"state": "identity_copy_pending", "error": str(exc)}},
+                                 ensure_ascii=False), file=sys.stderr, flush=True)
         from vaws_local_owner import managed_receipt, windows_mounted_workspace
-        native = native_ready(ROOT)
+        native = native_ready(source)
         select_environment(target, native)
         managed = native if native["platform"] == "win32" else (
             managed_receipt(ROOT) if windows_mounted_workspace(ROOT) else None)
@@ -117,7 +159,7 @@ def main(argv=None) -> int:
         environment = activated_client_environment(native)
         provider = vaws_client_setup.launch_env(args.client, target)
         from vaws_local_owner import accessible_windows_path
-        for key in ("VAWS_AGENT_SESSIONS_DIR", "VAWS_COORDINATOR_STATE_DIR"):
+        for key in ("VAWS_AGENT_SESSIONS_DIR", "VAWS_COORDINATOR_STATE_DIR", "VAWS_GITHUB_IDENTITY_FILE"):
             if key in provider:
                 environment[key] = accessible_windows_path(provider[key])
         return run_client([*command, *native_args], target, environment=environment)

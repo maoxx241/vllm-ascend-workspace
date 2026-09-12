@@ -32,6 +32,8 @@ import shutil
 import subprocess
 from typing import Any, Dict, List, Optional, Tuple
 
+from vaws_github import ForkPolicyError, validate_personal_fork
+
 COMMUNITY = {
     "workspace": "vllm-ascend-workspace/vllm-ascend-workspace",
     "vllm": "vllm-project/vllm",
@@ -225,6 +227,7 @@ def classify_remote(
     full_name: Optional[str],
     user_login: Optional[str],
 ) -> str:
+    """Describe URL spelling only; personal_fork_record verifies GitHub ownership."""
     if not full_name:
         return "missing"
     if full_name == COMMUNITY[repo_role]:
@@ -322,6 +325,8 @@ def gh_repo_lookup(full_name: str) -> Dict[str, Any]:
         }
 
     parent = payload.get("parent") or {}
+    owner = payload.get("owner") or {}
+    source = payload.get("source") or {}
     resolved = payload.get("full_name")
     redirected = bool(isinstance(resolved, str) and resolved.lower() != requested.lower())
     return {
@@ -332,6 +337,9 @@ def gh_repo_lookup(full_name: str) -> Dict[str, Any]:
         "redirected": redirected,
         "is_fork": bool(payload.get("fork")),
         "parent_full_name": parent.get("full_name"),
+        "source_full_name": source.get("full_name"),
+        "owner_login": owner.get("login"),
+        "owner_type": owner.get("type"),
         "default_branch": payload.get("default_branch"),
         "ssh_url": payload.get("ssh_url"),
         "clone_url": payload.get("clone_url"),
@@ -353,14 +361,17 @@ def personal_fork_record(
         return result
 
     identity_kind = classify_remote(repo_role, resolved, user_login)
-    basename = COMMUNITY[repo_role].split("/", 1)[1]
-    expected_personal = f"{user_login}/{basename}"
-    is_personal = (
-        resolved is not None
-        and resolved.lower() == expected_personal.lower()
-        and not redirected
-        and identity_kind != "community"
-    )
+    try:
+        validate_personal_fork({
+            "full_name": resolved, "fork": lookup.get("is_fork"),
+            "owner": {"login": lookup.get("owner_login"), "type": lookup.get("owner_type")},
+            "parent": {"full_name": lookup.get("parent_full_name")},
+            "source": {"full_name": lookup.get("source_full_name")},
+        }, user_login, COMMUNITY[repo_role])
+        is_personal = not redirected
+    except ForkPolicyError as exc:
+        is_personal = False
+        result["policy_error"] = str(exc)
     if is_personal:
         result["classification"] = "user-fork"
         result["personal_fork"] = True
@@ -555,6 +566,7 @@ def compact_fork_summary(forks: Dict[str, Any]) -> Dict[str, Any]:
             "redirected",
             "classification",
             "personal_fork",
+            "policy_error",
             "id",
         ):
             if key in info:

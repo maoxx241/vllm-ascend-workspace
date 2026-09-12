@@ -21,6 +21,7 @@ if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
 from vaws_venv import ensure_workspace_interpreter  # noqa: E402
+from vaws_github import REPOSITORIES  # noqa: E402
 
 ensure_workspace_interpreter(repo_root=ROOT)
 
@@ -203,6 +204,14 @@ def mutate_remote(repo: pathlib.Path, name: str, desired_url: str) -> list[dict[
 def cmd_configure(args: argparse.Namespace) -> int:
     repo = resolve_repo(args.repo)
     actions: list[dict[str, Any]] = []
+
+    official = {item["upstream"].casefold() for item in REPOSITORIES.values()}
+    for url in (args.origin_url, args.upstream_url):
+        if url and (parse_repo_url(url) or "").casefold() not in official:
+            raise RepoTopologyError(
+                "Personal forks require verified ownership; use .agents/scripts/workspace_forks.py "
+                "--github-user USER --apply. Low-level configure accepts official upstream URLs only."
+            )
 
     if args.origin_url:
         actions.extend(mutate_remote(repo, "origin", args.origin_url))

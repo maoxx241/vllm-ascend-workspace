@@ -1,0 +1,47 @@
+name: Publish workspace release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: workspace-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: github.repository == 'vllm-ascend-workspace/vllm-ascend-workspace'
+    uses: ./.github/workflows/skill-catalog.yml
+
+  publish:
+    needs: validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: false
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: '3.13'
+          activate-environment: false
+      - name: Check stable tag and canonical history
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          python -c 'import os,re; assert re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", os.environ["RELEASE_TAG"]), "stable tags must be vMAJOR.MINOR.PATCH"'
+          git merge-base --is-ancestor HEAD origin/main
+      - name: Prepare locked components and released monitor wheel
+        run: |
+          uv run --no-project python .agents/scripts/vaws_deps.py sync --packages-only --locked
+          uv run --no-project python .agents/skills/npu-fleet-monitor/scripts/manage_monitor.py deploy
+      - name: Publish tested source and its locked component combination
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: gh release create "$RELEASE_TAG" --verify-tag --generate-notes --latest

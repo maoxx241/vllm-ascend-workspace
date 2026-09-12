@@ -9,7 +9,8 @@ client configuration from tests.
 Three logical providers are written when needed:
 
 * `vaws-task` -> `python -m vaws_coordinator task-server`, which serves
-  `vaws_session` / `vaws_run` / `vaws_execution` / `vaws_finish`. Local
+  `vaws_session` / `vaws_run` / `vaws_execution` / `vaws_finish` and optional
+  `vaws_message`. Local
   attach/finish need no manager.
 * `remote-dev` -> `python -m remote_dev.mcp.server`, which serves `remote_*`.
 * `vaws-knowledge` -> `python -m vaws_knowledge.server.mcp_server`, which
@@ -114,6 +115,7 @@ def task_server_env():
     keys = (
         "VAWS_AGENT_SESSIONS_DIR",
         "VAWS_COORDINATOR_STATE_DIR",
+        "VAWS_GITHUB_IDENTITY_FILE",
     )
     result = {key: managed_path(env[key]) for key in keys if key in env}
     result[PIN_ENV] = managed_receipt(ROOT)["receipt"]
@@ -212,7 +214,7 @@ def shared_kimi_servers(servers, project):
     if not executable or not cwd or ntpath.splitdrive(executable)[0].casefold() != ntpath.splitdrive(cwd)[0].casefold():
         return servers
     command = "./" + ntpath.relpath(executable, cwd).replace("\\", "/")
-    path_keys = {"VAWS_AGENT_SESSIONS_DIR", "VAWS_COORDINATOR_STATE_DIR", "REMOTE_DEV_STATE_DIR",
+    path_keys = {"VAWS_AGENT_SESSIONS_DIR", "VAWS_COORDINATOR_STATE_DIR", "VAWS_GITHUB_IDENTITY_FILE", "REMOTE_DEV_STATE_DIR",
                  "VAWS_KNOWLEDGE_CONFIG", "VAWS_KNOWLEDGE_PROJECT_ROOTS", "VAWS_KNOWLEDGE_CANDIDATE_ROOT", "VAWS_KNOWLEDGE_STATE", PIN_ENV}
     return {name: {**entry, "command": command,
                    "env": windows_interop_env({**{key: (native(value) or value) if key in path_keys else value
@@ -231,6 +233,8 @@ def hook_command(client, project, env=None):
         "--agent-sessions-dir", env["VAWS_AGENT_SESSIONS_DIR"],
         "--environment-receipt", managed_receipt(ROOT)["receipt"],
     ]
+    if env.get("VAWS_GITHUB_IDENTITY_FILE"):
+        argv += ["--github-identity-file", env["VAWS_GITHUB_IDENTITY_FILE"]]
     return local_hook_command(argv)
 
 

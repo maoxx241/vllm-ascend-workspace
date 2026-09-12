@@ -70,25 +70,33 @@ uv run --no-project python .agents/skills/repo-init/scripts/repo_topology.py com
 
 ## Remote configuration
 
-Use `configure` only for **explicit fresh setup** after the user selected a topology. Do not use it to migrate established remotes: it unifies fetch and push URLs for the specified `origin` and `upstream`, flattening an explicit `pushurl` or protocol split. Other remotes such as `upstream2` are preserved. For an already-configured clone, choose keep-current and leave fetch/push/protocol/pushurl/extra remotes intact.
-
-Fresh workspace setup example:
+Personal fork setup has a general entry that does not depend on this skill:
 
 ```bash
-uv run --no-project python .agents/skills/repo-init/scripts/repo_topology.py configure   --repo .   --origin-url git@github.com:USER/vllm-ascend-workspace.git   --upstream-url git@github.com:vllm-ascend-workspace/vllm-ascend-workspace.git
+uv run --no-project python .agents/scripts/workspace_forks.py --github-user USER --apply
 ```
 
-Fresh `vllm-ascend` setup example (community upstream; personal fork is `origin` when the user selected one):
+Without `--apply` this prints the plan. A missing first-use ID returns
+`needs_github_user` and the authenticated login as a suggestion. Input must match
+the authenticated personal User account; confirmed login and GitHub's numeric
+user ID are stored only in `.vaws-local/github.json` and reused. The stable ID
+keeps a renamed account associated with its prior confirmation. This file is
+client configuration, not server authentication.
 
-```bash
-uv run --no-project python .agents/skills/repo-init/scripts/repo_topology.py configure   --repo vllm-ascend   --origin-url git@github.com:USER/vllm-ascend.git   --upstream-url git@github.com:vllm-project/vllm-ascend.git
-```
+Default scope is workspace, `vllm` and `vllm-ascend`; `--repo workspace` limits
+it to the scaffold. Missing forks are created under the authenticated user,
+then checked again for exact identity, personal ownership, `fork=true` and the
+official parent/source network. Organization forks, URL redirects and unrelated
+same-name repositories are rejected. Missing submodules initialize at the
+recorded gitlinks. Initialized checkouts retain their branches, commits and files.
 
-Optionally set `gh repo set-default` during configure:
-
-```bash
-uv run --no-project python .agents/skills/repo-init/scripts/repo_topology.py configure   --repo vllm-ascend   --origin-url git@github.com:USER/vllm-ascend.git   --upstream-url git@github.com:vllm-project/vllm-ascend.git   --gh-default upstream
-```
+The command sets personal `origin` and official `upstream`, preserving other
+remotes and already correct fetch/push protocol splits. Multiple URLs and
+conflicting explicit push URLs stop before mutation; after reviewing the plan,
+`--replace-primary-remotes` explicitly replaces those primary URLs and records
+their prior values under `.vaws-local/fork-setup-backups/`. `.gitmodules` stays
+on community URLs. The low-level `repo_topology.py configure` is reserved for
+official upstream URLs; personal-fork configuration uses the verified entry.
 
 ## Branch tracking
 

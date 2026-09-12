@@ -126,6 +126,21 @@ planning parent is not itself grounds for rejection.
 
 ## 5. Shared contracts
 
+Workspace install/client wiring owns the bounded personal-fork and release
+consumption operations in [forks and updates](forks-and-updates.md). GitHub
+configuration is distinct from native task identity and shared root login. Background
+preparation reuses component pins without changing active checkouts/processes.
+The [identity and coordination implementation](identity-and-agent-coordination.md)
+uses shared root access and fixed per-user container names. Packages consume the
+initialized user and handle container binding, notifications and routine reuse
+internally, with no per-task Agent identity or bookkeeping steps. Attribution
+and existing task ownership prevent accidental misuse through managed calls;
+they do not isolate arbitrary root commands. Reuse on shared
+development servers covers existing operator builds, weights and compatible
+environments regardless of creator. Tools check conditions relevant to each
+artifact; no personal/public classification, sharing ACL or publication flow
+is required for this server-local reuse.
+
 ### 5.1 Dependencies and runtime identity
 
 `pyproject.toml` declares dependencies and `uv.lock` fixes their source.

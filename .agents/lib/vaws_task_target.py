@@ -42,7 +42,11 @@ def resolve_context_file(explicit: str | None = None) -> str:
 
 def task_client(context_file: str | None = None, **kwargs: Any) -> Any:
     from vaws_coordinator.task_client import TaskClient
+    from vaws_coordinator_launch import coordinator_environment
 
+    identity = coordinator_environment().get("VAWS_GITHUB_IDENTITY_FILE")
+    if identity:
+        kwargs.setdefault("identity_file", identity)
     return TaskClient(resolve_context_file(context_file), **kwargs)
 
 

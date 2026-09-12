@@ -33,6 +33,13 @@ records their resolved commits. Read exact installed/locked identities through
 `vaws_deps.py status` instead of maintaining a second SHA table. Acceptance
 uses installed packages, including their public APIs and packaged data.
 
+The [workspace release updater](forks-and-updates.md) consumes this exact
+combination from an official stable release. It invokes the release's sync
+entry in an isolated checkout and prepares its pinned vaws-top wheel.
+Preparation happens independently of native task startup; existing clients
+and services keep their pins. Component releases do not trigger unrelated
+per-component upgrades.
+
 ## Loader
 
 `.agents/lib/vaws_dependency.py` answers three questions. It does not run

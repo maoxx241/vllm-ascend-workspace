@@ -3,7 +3,7 @@
 Status: current
 
 The local task registry, environment/runtime pool, NPU and port leases, and
-the four `vaws_*` tools live in
+the `vaws_*` tools live in
 [`vaws-coordinator`](https://github.com/vllm-ascend-workspace/vaws-coordinator).
 This workspace imports that package. It does not clone a checkout, does not
 own request association, and does not tick the pool.
@@ -29,6 +29,7 @@ contract and is not the Kimi Code client supported by this setup.
 | `vaws_run` | Submit `command` plus optional `sources` / `env` / `environment` / `resources` / `topology` / `timeout_seconds` / `service` / `restart`. Skills do not pass `request_id` / `profile_key` / `runtime_id` / a Python path |
 | `vaws_execution` | Status, tail, stop, or read the ordinary endpoint of one owned execution |
 | `vaws_finish` | Close admission; stop owned executions; keep container, roots, evidence |
+| `vaws_message` | Send text to a returned coordination reference or reply_reference; sender and delivery bookkeeping are automatic |
 
 Task MCP/CLI status may reuse a snapshot for two seconds. Use `refresh: true`
 or `python -m vaws_coordinator.vaws execution --refresh` for a new observation. Compact results retain
@@ -82,6 +83,7 @@ not a per-model launch snippet.
 |---|---|---|
 | `VAWS_AGENT_SESSIONS_DIR` | `<shared workspace>/.vaws-local/agent-sessions` | One local task registry directory for the package |
 | `VAWS_COORDINATOR_STATE_DIR` | unset; package default under `.vaws-local/coordinator` | Coordinator-owned pool and machine directory |
+| `VAWS_GITHUB_IDENTITY_FILE` | confirmed `.vaws-local/github.json` when present | Bind the initialized user without per-call identity arguments |
 
 There is no workspace `leases.json` and no `session.json` resource authority.
 
@@ -101,7 +103,8 @@ a state directory already owned through Windows IPC.
 
 ## 3. User container
 
-Each host has one persistent user container.
+Each host has one persistent container per user, named `vaws-<github-login>`
+by default. Initialization supplies the user automatically; SSH still uses root.
 Bootstrap, recipe execution, and runtime registration belong to the
 coordinator (`python -m vaws_coordinator provision --host ... --image ...
 --user ...`). Container-user configuration belongs to coordinator provisioning;
