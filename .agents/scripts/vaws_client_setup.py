@@ -875,12 +875,13 @@ def apply_plan(plan):
     changed = []
     for path, content in plan["files"].items():
         mode = 0o700 if path in plan.get("executable_files", []) else 0o600
-        if path.exists() and path.read_text(encoding="utf-8") == content:
-            if mode == 0o700 and path.stat().st_mode & 0o777 != mode:
+        payload = content.encode("utf-8")
+        if path.exists() and path.read_bytes() == payload:
+            if os.name != "nt" and mode == 0o700 and path.stat().st_mode & 0o777 != mode:
                 path.chmod(mode)
                 changed.append({"path": str(path), "action": "executable-mode-repaired"})
             continue
-        item = {"path": str(path), "sha256": hashlib.sha256(content.encode()).hexdigest()}
+        item = {"path": str(path), "sha256": hashlib.sha256(payload).hexdigest()}
         path.parent.mkdir(parents=True, exist_ok=True)
         if path.exists():
             BACKUP_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -889,7 +890,9 @@ def apply_plan(plan):
             backup.chmod(0o600)
             item["backup"] = str(backup)
         temporary = path.with_name(path.name + ".vaws-" + str(time.time_ns()))
-        temporary.write_text(content, encoding="utf-8")
+        # Match the planned bytes on every OS. CRLF translation breaks Git's
+        # shell hooks and makes the reported content hash differ on Windows.
+        temporary.write_bytes(payload)
         temporary.chmod(mode)
         os.replace(temporary, path)
         changed.append(item)
@@ -941,7 +944,7 @@ def setup_installed_clients(args):
                 current_path = str(path)
                 if args.apply:
                     row["files"].extend(apply_plan({**plan, "files": {path: content}}))
-                elif not path.exists() or path.read_text(encoding="utf-8") != content:
+                elif not path.exists() or path.read_bytes() != content.encode("utf-8"):
                     row["files"].append({"path": str(path), "sha256": hashlib.sha256(content.encode()).hexdigest()})
             row["state"] = "configured" if args.apply else "preview"
             native = {"status": "wiring_configured" if args.apply else "wiring_planned", "missing_action": None}

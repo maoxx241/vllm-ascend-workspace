@@ -70,6 +70,8 @@ def test_repair_after_native_writer_removed_markers_keeps_one_callback(tmp_path,
     events = [entry["event"] for entry in hooks]
     assert events.count("SessionSetup") == 1
     assert len(events) == len(set(events)) == len(tomllib.loads(original)["hooks"])
-    assert all("vaws_kimi_session_setup.py" in entry["command"] for entry in hooks)
+    expected = ["uv", "run", "--no-project", "python",
+                str(client_setup.ROOT / ".agents/scripts/vaws_kimi_session_setup.py"), "--project", str(project)]
+    assert all(client_setup.hook_argv(entry["command"]) == expected for entry in hooks)
     config.write_text(repaired)
     assert client_setup.build_plan("kimi", project, kimi_config=config, task_only=True)["files"][config] == repaired

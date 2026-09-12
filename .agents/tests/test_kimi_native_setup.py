@@ -89,14 +89,18 @@ def test_native_extension_is_opt_in_and_repair_preserves_each_project_choice(tmp
     hooks = client_setup.tomllib.loads(text)["hooks"]
     assert hooks[0]["event"] == "SessionSetup"
     assert hooks[0]["timeout"] <= 600
-    assert all("vaws_kimi_session_setup.py" in hook["command"] for hook in hooks)
+    expected = ["uv", "run", "--no-project", "python",
+                str(ROOT / ".agents/scripts/vaws_kimi_session_setup.py"), "--project", str(project)]
+    assert all(client_setup.hook_argv(hook["command"]) == expected for hook in hooks)
     config.write_text(text)
     repaired = client_setup.build_plan("kimi", project, kimi_config=config, task_only=True)
     assert repaired["files"][config] == text
     separate = client_setup.build_plan("kimi", other, kimi_config=config, task_only=True)
     separate_hooks = client_setup.tomllib.loads(separate["files"][config])["hooks"]
     assert sum(hook["event"] == "SessionSetup" for hook in separate_hooks) == 1
-    assert "vaws_session.py" in separate_hooks[-1]["command"]
+    separate_argv = client_setup.hook_argv(separate_hooks[-1]["command"])
+    assert Path(separate_argv[1]) == ROOT / ".agents/hooks/vaws_session.py"
+    assert separate_argv[separate_argv.index("--project") + 1] == str(other)
     assert client_setup.tomllib.loads(separate["files"][config])["provider"] == {"name": "kept"}
 
 

@@ -117,6 +117,10 @@ def client_fixture(tmp_path, monkeypatch):
         build_plan=lambda *a: {}, apply_plan=lambda *a: {}, launch_env=lambda *a: {}, existing_task_env=lambda *a: {}))
     launches = []
     monkeypatch.setattr(client, "run_client", lambda command, cwd, environment: launches.append((command, cwd, environment)) or 0)
+    # Unit cases intercept the handoff on either platform. The real subprocess
+    # case below exercises the native Windows owner and POSIX exec separately.
+    monkeypatch.setattr("vaws_windows.run_owned",
+                        lambda command, *, env: client.os.execvpe(command[0], command, env))
     return client, root, stage, receipt, launches
 
 
@@ -152,6 +156,19 @@ def test_optional_release_exec_failure_continues_original_workspace(client_fixtu
     assert client.main(["codex"]) == 0
     assert len(launches) == 1
     assert "fixture exec unavailable" in capsys.readouterr().err
+
+
+def test_windows_release_handoff_uses_owned_interpreter_and_returns_its_exit_code(client_fixture, monkeypatch):
+    client, root, stage, receipt, launches = client_fixture
+    monkeypatch.setattr(client, "os", types.SimpleNamespace(**{**vars(os), "name": "nt"}))
+    monkeypatch.setattr(client.os, "execvpe", lambda *a: pytest.fail("Windows must use its interpreter owner"))
+    calls = []
+    monkeypatch.setattr("vaws_windows.run_owned", lambda command, *, env: calls.append((command, env)) or 7)
+    assert client.main(["codex", "--", "literal 中文", "$(not-shell)"]) == 7
+    command, environment = calls[0]
+    assert command == [receipt["python"], str(stage / ".agents/scripts/vaws_client.py"),
+                       "codex", "--", "literal 中文", "$(not-shell)"]
+    assert environment["VAWS_RELEASE_LAUNCH"] == "1" and not launches
 
 
 def test_release_handoff_does_not_loop_and_marker_stays_out_of_native_env(client_fixture, monkeypatch):

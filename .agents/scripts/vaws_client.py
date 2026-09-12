@@ -138,7 +138,11 @@ def main(argv=None) -> int:
                 environment["VAWS_RELEASE_LAUNCH"] = "1"
                 for name in ("VAWS_VENV_REEXEC", "VAWS_SKIP_VENV_REEXEC", "VIRTUAL_ENV", "PYTHONHOME", "PYTHONPATH"):
                     environment.pop(name, None)
-                os.execvpe(prepared["python"], [prepared["python"], str(launcher), *values], environment)
+                arguments = [prepared["python"], str(launcher), *values]
+                if os.name == "nt":
+                    from vaws_windows import run_owned
+                    return run_owned(arguments, env=environment)
+                os.execvpe(prepared["python"], arguments, environment)
             except (OSError, RuntimeError, ValueError) as exc:
                 print(json.dumps({"workspace_updates": {"state": "update_launch_pending", "error": str(exc)}},
                                  ensure_ascii=False), file=sys.stderr, flush=True)

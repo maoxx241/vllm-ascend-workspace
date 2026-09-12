@@ -97,8 +97,9 @@ def update_lock(root: Path):
         try:
             if os.name == "nt":
                 import msvcrt
-                handle.seek(0)
-                if not handle.read(1):
+                # Windows byte locks also block reads through another handle.
+                # Inspect size without touching the byte the first updater owns.
+                if os.fstat(handle.fileno()).st_size == 0:
                     handle.write(b"0")
                     handle.flush()
                 handle.seek(0)
