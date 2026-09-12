@@ -174,8 +174,10 @@ redacted contribution PR rather than writing a release.
 Optional `experience_feedback(ref, vote)` records `+1` when a published case
 helped or `-1` when it misled the work. No reason or extra summary is required.
 The package reuses configured GitHub sharing and one feedback Issue per public
-experience, with reactions per GitHub account. Repeated votes do not accumulate;
-switching the vote replaces that account's previous reaction. Feedback neither
+experience, with a minimal comment for each usage event. Both `+1` and `-1` can
+accumulate repeatedly from the same account and never remove earlier events.
+Omit optional `request_id` for new feedback; reuse a failed call's returned ID
+only to retry that event without adding another count. Feedback neither
 changes the case text nor certifies correctness, freshness or current applicability.
 It is not a task completion step.
 
