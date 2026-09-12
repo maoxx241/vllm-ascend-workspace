@@ -133,6 +133,17 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await provider.close()
 
+    async def test_kimi_catalog_requires_the_existing_native_context(self):
+        for kind in ("task", "remote", "knowledge"):
+            provider = runtime.Provider(kind, self.root, {"VAWS_MCP_CLIENT": "kimi"})
+            try:
+                with patch.object(runtime, "selection", return_value=self.selections["new"]):
+                    tools = await provider.list_tools()
+                self.assertIn("context_file", tools[0].inputSchema["required"])
+                self.assertIn("native hook", tools[0].inputSchema["properties"]["context_file"]["description"])
+            finally:
+                await provider.close()
+
     async def test_missing_backend_returns_failure_without_hidden_fallback(self):
         provider = runtime.Provider("task", self.root)
         try:

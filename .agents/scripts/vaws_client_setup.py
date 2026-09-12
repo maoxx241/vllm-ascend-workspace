@@ -55,7 +55,7 @@ from vaws_local_owner import managed_path as _managed_path, managed_python as _m
 from vaws_environment import PIN_ENV, native_ready, windows_ready, read_receipt
 from vaws_local_state import agent_sessions_root
 from vaws_native_task_env import user_task_env
-from vaws_claude_config import provider_kind
+from vaws_claude_config import provider_kind, wrapped_hook_kind
 from vaws_remote_dev import state_dir
 
 CLIENTS = {"claude", "grok", "kimi", "codex", "cursor"}
@@ -66,6 +66,7 @@ REMOTE_DEV_SERVER_NAME = "remote-dev"
 KNOWLEDGE_SERVER_NAME = "vaws-knowledge"
 HOOK_TIMEOUT_SECONDS = 12
 TASK_TOOL_MATCHER = r"(?:^|:|__)vaws_(?:session|run|execution|finish|message)$"
+LEGACY_CONTEXT_MATCHERS = frozenset({TASK_TOOL_MATCHER, r"(?:^|:|__)vaws_(session|run|execution|finish|message)$"})
 COMPANION_TOOL_MATCHER = r"^(?:MCP:)?(?:mcp__)?(?:vaws[-_]knowledge__knowledge_(?:query|explain|capture)|remote[-_]dev__remote_[a-z_]+)$"
 CONTEXT_TOOL_MATCHER = "(?:" + TASK_TOOL_MATCHER + "|" + COMPANION_TOOL_MATCHER + ")"
 CURSOR_CONTEXT_TOOL_MATCHER = "(?:" + CONTEXT_TOOL_MATCHER + r"|^MCP:(?:knowledge_(?:query|explain|capture)|remote_[a-z_]+)$)"
@@ -384,6 +385,11 @@ def owned_hook_command(command, client, project, expected=None):
     except ValueError:
         return False
     script = executed_hook_script(argv)
+    if client == "claude" and len(argv) >= 2 and script == argv[1] and _is_python_interpreter(argv[0]):
+        kind = wrapped_hook_kind(argv, ROOT)
+        if kind is not None:
+            direct = ROOT / ".agents/hooks" / ("vaws_session.py" if kind == "session" else "knowledge_summary.py")
+            return owned_hook_script(direct, expected=expected)
     if not script or not owned_hook_script(script, expected=expected):
         return False
     parsed_client = None
@@ -453,13 +459,20 @@ def merge_hook_event(existing, desired, client, project):
             if entries:
                 updated_group = dict(group)
                 updated_group["hooks"] = entries
-                # Older generated groups ran for every tool. Narrow only an
-                # entirely owned group; user matchers and mixed groups retain
-                # their existing scope.
-                if ("matcher" not in group and desired[0].get("matcher")
-                        and all(owned_hook_command(entry.get("command", ""), client, project, expected=expected)
-                                for entry in entries)):
-                    updated_group["matcher"] = desired[0]["matcher"]
+                matcher = desired[0].get("matcher")
+                owned = [entry for entry in entries if owned_hook_command(
+                    entry.get("command", ""), client, project, expected=expected)]
+                if matcher and owned and group.get("matcher") in LEGACY_CONTEXT_MATCHERS:
+                    custom = [entry for entry in entries if entry not in owned]
+                    if custom:
+                        # Expanding a VAWS matcher must not expand a sibling's
+                        # user-selected scope. Keep that group and move ours.
+                        result.append({**updated_group, "hooks": custom})
+                        result.append({"matcher": matcher, "hooks": owned})
+                        continue
+                    updated_group["matcher"] = matcher
+                elif "matcher" not in group and matcher and len(owned) == len(entries):
+                    updated_group["matcher"] = matcher
                 result.append(updated_group)
             continue
         command = group.get("command", "")
@@ -469,7 +482,8 @@ def merge_hook_event(existing, desired, client, project):
             updated = dict(group)
             updated["command"] = desired_command
             if desired[0].get("matcher"):
-                updated.setdefault("matcher", desired[0]["matcher"])
+                if "matcher" not in updated or updated["matcher"] in LEGACY_CONTEXT_MATCHERS:
+                    updated["matcher"] = desired[0]["matcher"]
             result.append(updated)
             replaced = True
         else:
@@ -754,9 +768,8 @@ def build_plan(client, project, *, kimi_config=None, task_only=False, kimi_sessi
     project = project.expanduser().resolve(strict=True)
     env = launch_env(client, project, kimi_config=kimi_config)
     groups = hook_groups(client, project, env)
-    # Kimi Code's Stop event supplies no final text; it keeps MCP access and
-    # session hooks without installing a summary hook that cannot capture.
-    if not task_only and client in {"codex", "claude", "cursor", "grok"}:
+    # Kimi's adapter reads only the known session's final completed wire step.
+    if not task_only:
         summary_command = local_hook_command([
             knowledge_owner_python(ROOT), knowledge_owner_path(ROOT, ROOT / ".agents/hooks/knowledge_summary.py"),
             "--client", client, "--project", knowledge_owner_path(ROOT, project),
@@ -764,12 +777,14 @@ def build_plan(client, project, *, kimi_config=None, task_only=False, kimi_sessi
         ])
         if client == "cursor":
             groups["afterAgentResponse"] = [{"command": summary_command}]
+            groups.setdefault("sessionEnd", []).append({"command": summary_command})
         else:
             groups["Stop"] = [{"hooks": [{"type": "command", "command": summary_command, "timeout": 5}]}]
     servers = desired_mcp_servers(task_only=task_only)
     if client == "kimi":
         servers = shared_kimi_servers(servers, project)
         servers = {name: {**{key: value for key, value in entry.items() if key not in {"type", "timeout"}},
+                          "env": {**entry.get("env", {}), "VAWS_MCP_CLIENT": "kimi"},
                           "toolTimeoutMs": 600000}
                    for name, entry in servers.items()}
     files = {}
@@ -845,11 +860,13 @@ def build_plan(client, project, *, kimi_config=None, task_only=False, kimi_sessi
                                       "--project", str(project)]) if extended else groups["SessionStart"][0]["hooks"][0]["command"]
         events = [*( ["SessionSetup"] if extended else []), *groups]
         body = "\n".join(
-            "[[hooks]]\nevent = " + json.dumps(event) + "\ncommand = " + json.dumps(command)
+            "[[hooks]]\nevent = " + json.dumps(event) + "\ncommand = " + json.dumps(
+                groups[event][0]["hooks"][0]["command"] if event == "Stop" else command)
             + "\ntimeout = " + str(600 if event == "SessionSetup" else HOOK_TIMEOUT_SECONDS) + "\n"
             for event in events
         )
-        original = remove_owned_kimi_hooks(original, project, ROOT, parse_command=hook_argv)
+        original = remove_owned_kimi_hooks(original, project, ROOT, parse_command=hook_argv,
+                                           include_summary=not task_only)
         files[path] = managed_toml_text(original, "session-" + project_key, body)
         add_kimi_user_mcp(files, notes, project, ROOT, path.parent,
                           owned_server=owned_environment_server)

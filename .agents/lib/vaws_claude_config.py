@@ -48,6 +48,16 @@ def provider_kind(arguments, root: Path) -> str | None:
     return None
 
 
+def wrapped_hook_kind(argv: list[str], root: Path) -> str | None:
+    """Recognize only the command forms emitted by Claude setup."""
+    if (len(argv) not in {3, 5} or not owned_entry(argv[1], root, "vaws_claude_entry.py")
+            or argv[2] not in {"session", "summary"}):
+        return None
+    if len(argv) == 5 and (argv[3] != "--agent-sessions-dir" or not argv[4]):
+        return None
+    return argv[2]
+
+
 def add_claude_setup(files: dict, notes: list, project: Path, root: Path, *,
                      shell_command, parse_command, owned_server) -> None:
     """Adapt the already-merged plan, including old generated configurations."""

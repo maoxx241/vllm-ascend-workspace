@@ -230,6 +230,12 @@ class Provider:
             schema = copy.deepcopy(item.inputSchema)
             schema.setdefault("properties", {}).setdefault("context_file", {
                 "type": "string", "description": "Existing VAWS context; native hooks normally supply it."})
+            if self.environment.get("VAWS_MCP_CLIENT") == "kimi":
+                schema["properties"]["context_file"] = {
+                    "type": "string", "description": "Copy context_file supplied by this session's native hook or vaws_start result."}
+                required = schema.setdefault("required", [])
+                if "context_file" not in required:
+                    required.append("context_file")
             item.inputSchema = schema
             tools.append(item)
         return tools

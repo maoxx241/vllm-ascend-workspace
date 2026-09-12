@@ -15,9 +15,11 @@ DERIVED_ENV = {PIN_ENV, "REMOTE_DEV_STATE_DIR", "VAWS_KNOWLEDGE_CONFIG",
                "VAWS_KNOWLEDGE_PROJECT_ROOTS", "VAWS_KNOWLEDGE_CANDIDATE_ROOT", "VAWS_KNOWLEDGE_STATE"}
 
 
-def _hook_kind(hook, project, root, parse_command):
+def _hook_kind(hook, project, root, parse_command, include_summary=False):
     events = {"SessionSetup", "SessionStart", "SessionEnd", "SubagentStart", "SubagentStop",
               "PreToolUse", "UserPromptSubmit"}
+    if include_summary:
+        events.add("Stop")
     if not isinstance(hook, dict) or set(hook) - {"event", "command", "timeout"} or hook.get("event") not in events:
         return None
     try:
@@ -29,7 +31,10 @@ def _hook_kind(hook, project, root, parse_command):
         if len(argv) < 6:
             return None
         entry = Path(argv[1])
-        if not (entry.name == "vaws_session.py" and entry.parent.name == "hooks"
+        names = {"vaws_session.py"}
+        if include_summary and hook.get("event") == "Stop":
+            names.add("knowledge_summary.py")
+        if not (entry.name in names and entry.parent.name == "hooks"
                 and entry.parent.parent.name == ".agents" and same_repository(entry.parents[2], root)):
             return None
         options = argv[2:]
@@ -50,7 +55,8 @@ def _hook_kind(hook, project, root, parse_command):
     return None
 
 
-def remove_owned_kimi_hooks(text: str, project: Path, root: Path, *, parse_command) -> str:
+def remove_owned_kimi_hooks(text: str, project: Path, root: Path, *, parse_command,
+                            include_summary=False) -> str:
     """Remove this family's generated callbacks, retaining custom hooks verbatim.
 
     The replacement uses official events unless initialization explicitly asks
@@ -66,7 +72,7 @@ def remove_owned_kimi_hooks(text: str, project: Path, root: Path, *, parse_comma
             return match[0]
         entries = parsed.get("hooks", [])
         if (set(parsed) == {"hooks"} and len(entries) == 1
-                and _hook_kind(entries[0], project, root, parse_command)):
+                and _hook_kind(entries[0], project, root, parse_command, include_summary)):
             return ""
         return match[0]
 

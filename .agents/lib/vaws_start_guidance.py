@@ -17,13 +17,13 @@ def guidance(client: str | None = None) -> str:
     selection = (" Replace CLIENT with your native client: codex, cursor, claude, grok or kimi."
                  if client is None else "")
     return (
-        "On first use, complete AGENTS.md's First use, forks and updates setup before "
-        "this new-session step.\n\n"
-        "For a new native session, use an independent native worktree when startup supplied "
-        "its selected environment. Otherwise make the first repository action "
+        "For a new native session, make the first repository action "
         f"`uv run --no-project python .agents/scripts/vaws_start.py --client {name}`."
         + selection + " Add `--context-file PATH` when the native hook supplied that context "
-        "and the command cannot obtain it from the client environment (official Kimi needs it).\n\n"
+        "and the command cannot obtain it from the client environment (official Kimi needs it). "
+        "The command checks saved initialization itself and reports missing first-use setup; "
+        "no configuration inspection is needed beforehand. If the native hook explicitly "
+        "reports a prepared workspace W and selected environment, use them directly.\n\n"
         "Use the returned `workspace` as W: shell tools use W as cwd (or `cd W && ...`), "
         "and file, search and patch tools use absolute paths under W. Sources and the selected "
         "environment are already bound; do not repeat session setup. Official Kimi calls to "

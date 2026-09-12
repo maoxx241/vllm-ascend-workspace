@@ -20,6 +20,9 @@ setup 是可复用的优化，不是所有客户端都必须具备的前置能�
 在母仓外的同级位置准备独立编辑目录，选择 canonical main 的精确提交及其锁定
 组件环境，显式绑定 sources，并返回 `workspace`、`head`、`environment` 和
 `context_file`。同一 task 重复调用复用已保存结果，不再次 fetch、安装或换目录。
+初始化状态由命令在本地读取；只有缺少首次配置时才返回 setup 提示，不让 Agent
+每次检查身份文件。多个会话同时准备时，命令显示并等待仓库更新锁，超时才返回
+等待时长和锁文件证据。
 它不是通用客户端 launcher，也不解析客户端的 resume 参数。
 
 后续 shell 使用返回目录作为 cwd，或者在命令中使用 `cd W && ...`；文件、搜索
@@ -78,6 +81,7 @@ context。Cursor 的已观测 MCP:toolName 形式也用于固定的 knowledge �
 remote 工具。官方 Kimi 没有同等的透明 native metadata，调用三个 VAWS provider
 时带已有 `context_file`。其他客户端若工具报告缺少 context，复用已有值即可，
 不用事先检查每次是否注入。gateway 会在转发非 task 工具前去掉这个路由字段。
+Kimi 的工具 schema 将此字段声明为必填，避免先失败一次才补入上下文。
 
 shell 与 MCP 的身份传递各自独立。shell 优先读取 VAWS_CONTEXT_FILE 或客户端
 提供的原生 ID；官方 Kimi 使用 hook 返回的显式 context。Bash 的一次 cd 不被
@@ -95,6 +99,9 @@ shell 与 MCP 的身份传递各自独立。shell 优先读取 VAWS_CONTEXT_FILE
 索引；模型下载复用知识包缓存。新工作树不另建一套知识库。共享知识内容可由
 知识包维护更新，但 task 使用的组件版本保持固定。查询和捕获按需使用，不要求
 额外维护命令、轮询或重复总结。用户选择的知识挂载和发布设置保留。
+原生回复事件自动保存已有最终文本。Kimi Stop 和 Cursor 命令行 SessionEnd
+不直接携带这段文本时，适配器只读取该事件明确对应的会话记录尾部，提取已完成
+的最终回复；不扫描其它会话，也不要求 Agent 再总结。
 
 来源优先级为本次 run 显式 sources、task 显式默认值、attachment 自动来源。
 更新 attachment 的实际 cwd 不覆盖 task 的显式工作树，也不改变已接纳的执行。

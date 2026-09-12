@@ -184,3 +184,15 @@ def test_failed_update_returns_evidence_without_binding_or_creating(workspace, m
     assert json.loads(Path(result["evidence"]).read_text())["details"]["log"] == "/raw/updater-log.json"
     assert store.context(context["attachment"]["id"])["source_defaults"]["origin"] != "explicit"
     assert not (project.parent / (project.name + "-" + context["session"]["id"])).exists()
+
+
+def test_first_use_returns_setup_before_dependency_or_native_context_checks(workspace, monkeypatch, capsys):
+    project = workspace[0]
+    monkeypatch.setattr(start, "ROOT", project)
+    monkeypatch.setattr(start, "ensure_workspace_interpreter", lambda **kwargs: pytest.fail("first use bootstrapped dependencies"))
+    monkeypatch.setattr(start, "resolve_context_file", lambda *_: pytest.fail("first use required a native attachment"))
+    assert start.main(["--client", "grok"]) == 1
+    result = json.loads(capsys.readouterr().out)
+    assert result["status"] == "needs_setup" and result["phase"] == "initialization"
+    assert "ask once" in result["next"]
+    assert not (project / ".vaws-local/updates/onboarding-notice.json").exists()

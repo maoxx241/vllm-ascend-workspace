@@ -104,3 +104,70 @@ def test_context_hook_covers_each_native_companion_name(client, name, configured
     assert not re.search(matcher, "user_provider__query")
     if client != "cursor":
         assert not re.search(matcher, "MCP:knowledge_query")
+
+
+LEGACY_TASK_MATCHER = r"(?:^|:|__)vaws_(session|run|execution|finish|message)$"
+
+
+def old_context_hook(client, project, *, wrapped=False):
+    event = "preToolUse" if client == "cursor" else "PreToolUse"
+    group = setup.hook_groups(client, project)[event][0]
+    group["matcher"] = LEGACY_TASK_MATCHER
+    if wrapped:
+        group["hooks"][0]["command"] = setup.local_hook_command([
+            sys.executable, str(project / ".agents/scripts/vaws_claude_entry.py"),
+            "session", "--agent-sessions-dir", str(project / ".vaws-local/agent-sessions")])
+    return event, group
+
+
+@pytest.mark.parametrize("client", ["claude", "cursor", "grok", "codex"])
+def test_existing_generated_task_only_matcher_upgrades_companion_context(client, configured_project):
+    project, _, _ = configured_project
+    event, old = old_context_hook(client, project, wrapped=client == "claude")
+    relative = {"claude": ".claude/settings.local.json", "cursor": ".cursor/hooks.json",
+                "grok": ".grok/hooks/vaws-session.json", "codex": ".codex/hooks.json"}[client]
+    path = project / relative
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"hooks": {event: [old]}}))
+    plan = setup.build_plan(client, project)
+    groups = json.loads(plan["files"][path])["hooks"][event]
+    assert len(groups) == 1
+    assert re.search(groups[0]["matcher"], "mcp__vaws-knowledge__knowledge_query")
+    assert re.search(groups[0]["matcher"], "remote_dev__remote_read")
+    if client == "cursor":
+        assert re.search(groups[0]["matcher"], "MCP:knowledge_query")
+    for output, content in plan["files"].items():
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_bytes(content.encode())
+    assert setup.build_plan(client, project)["files"][path] == plan["files"][path]
+
+
+def test_claude_mixed_legacy_group_keeps_user_scope_when_owned_context_expands(configured_project):
+    project, _, _ = configured_project
+    event, old = old_context_hook("claude", project, wrapped=True)
+    user = {"type": "command", "command": "user-audit-hook", "timeout": 37}
+    old["hooks"].append(user)
+    old["custom_metadata"] = "retained"
+    path = project / ".claude/settings.local.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"hooks": {event: [old]}}))
+    plan = setup.build_plan("claude", project)
+    groups = json.loads(plan["files"][path])["hooks"][event]
+    assert groups[0] == {**old, "hooks": [user]}
+    assert len(groups) == 2
+    assert re.search(groups[1]["matcher"], "mcp__vaws-knowledge__knowledge_capture")
+    assert len(groups[1]["hooks"]) == 1
+    path.write_text(plan["files"][path])
+    assert setup.build_plan("claude", project)["files"][path] == plan["files"][path]
+
+
+def test_claude_custom_wrapper_scope_is_preserved(configured_project):
+    project, _, _ = configured_project
+    event, old = old_context_hook("claude", project, wrapped=True)
+    old["matcher"] = "Bash"
+    path = project / ".claude/settings.local.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"hooks": {event: [old]}}))
+    groups = json.loads(setup.build_plan("claude", project)["files"][path])["hooks"][event]
+    assert len(groups) == 1
+    assert groups[0]["matcher"] == "Bash"

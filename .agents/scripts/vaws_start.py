@@ -18,7 +18,7 @@ from vaws_native_workspace import create_workspace
 from vaws_session_state import task_dir, write_json
 from vaws_task_target import resolve_context_file
 from vaws_venv import configure_windows_stdio, ensure_workspace_interpreter
-from vaws_workspace_entry import copy_workspace_identity
+from vaws_workspace_entry import copy_workspace_identity, workspace_entry
 from vaws_workspace_update import WorkspaceUpdater, common_dir, git, redact, update_lock
 from vaws_worktree_setup import configure_target, prepare_selected_knowledge, unpinned_environment
 
@@ -80,10 +80,11 @@ def start(client: str, project: Path = ROOT, context_file: str | None = None) ->
             raise ValueError("--client differs from the existing native attachment")
         project = shared_workspace_root(project.resolve())
         record = task_dir(context["session"]["id"], project) / "start.json"
-        phase = "reuse"
+        phase = "preparation_lock"
         # The repository lock also serializes two callers preparing one task.
         # Nothing in the completed path checks upstream or changes task sources.
-        with update_lock(project):
+        with update_lock(project, wait_seconds=180):
+            phase = "reuse"
             if record.is_file():
                 previous = json.loads(record.read_text(encoding="utf-8"))
                 workspace = Path(previous["workspace"])
@@ -146,6 +147,16 @@ def main(argv=None) -> int:
     parser.add_argument("--client", choices=CLIENTS, required=True)
     parser.add_argument("--context-file", help="existing native context, when the shell cannot provide it")
     args = parser.parse_args(argv)
+    setup = workspace_entry(shared_workspace_root(ROOT), announce=False)
+    if setup["state"] != "configured":
+        first_use = setup["state"] in {"identity_pending", "needs_github_user"}
+        next_step = ("Follow AGENTS.md First use, forks and updates. Reuse an already supplied personal "
+                     "GitHub username, or ask once; workspace_forks.py prepares the personal forks. "
+                     "Then prepare dependencies and client wiring as described there." if first_use else
+                     "Inspect the reported local initialization state; no identity, update preference or task was changed.")
+        print(json.dumps({"status": "needs_setup" if first_use else "failed", "phase": "initialization",
+                          "setup": setup, "next": next_step}, ensure_ascii=False))
+        return 1
     ensure_workspace_interpreter(repo_root=ROOT)
     result = start(args.client, ROOT, args.context_file)
     print(json.dumps(result, ensure_ascii=False), flush=True)

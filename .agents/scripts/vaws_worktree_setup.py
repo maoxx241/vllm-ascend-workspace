@@ -159,7 +159,7 @@ def prepare_canonical(source: Path, baseline: dict | None = None) -> tuple[dict,
     result = workspace_entry(source)
     if result["state"] != "configured":
         return result, None
-    with update_lock(source):
+    with update_lock(source, wait_seconds=180):
         updater = WorkspaceUpdater(source)
         result = updater.step(apply=True, activate=False)
         if result.get("status") not in {"ready", "current"}:

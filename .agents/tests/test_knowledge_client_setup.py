@@ -38,14 +38,19 @@ def test_all_clients_receive_knowledge_access_and_only_supported_summary_events(
     if client == "kimi":
         hooks = setup.tomllib.loads(plan["files"][tmp_path / "kimi-config.toml"])["hooks"]
         assert "SessionStart" in {entry["event"] for entry in hooks}
-        assert "Stop" not in {entry["event"] for entry in hooks}
-        assert all(Path(argument).name != "knowledge_summary.py"
-                   for entry in hooks for argument in setup.hook_argv(entry["command"]))
+        stop = next(entry for entry in hooks if entry["event"] == "Stop")
+        assert any(Path(argument).name == "knowledge_summary.py"
+                   for argument in setup.hook_argv(stop["command"]))
         return
     payload = json.loads(plan["files"][tmp_path / HOOK_FILES[client]])
     event = "afterAgentResponse" if client == "cursor" else "Stop"
     group = payload["hooks"][event][0]
     command = group["command"] if client == "cursor" else group["hooks"][0]["command"]
+    if client == "cursor":
+        ended = payload["hooks"]["sessionEnd"]
+        assert len(ended) == 2
+        assert any("vaws_session.py" in entry["command"] for entry in ended)
+        assert sum(entry["command"] == command for entry in ended) == 1
     arguments = setup.hook_argv(command)
     if client == "claude":
         assert arguments[1:3] == [str(tmp_path / ".agents/scripts/vaws_claude_entry.py"), "summary"]

@@ -1,7 +1,5 @@
 <!-- BEGIN VAWS session-start -->
-On first use, complete AGENTS.md's First use, forks and updates setup before this new-session step.
-
-For a new native session, use an independent native worktree when startup supplied its selected environment. Otherwise make the first repository action `uv run --no-project python .agents/scripts/vaws_start.py --client CLIENT`. Replace CLIENT with your native client: codex, cursor, claude, grok or kimi. Add `--context-file PATH` when the native hook supplied that context and the command cannot obtain it from the client environment (official Kimi needs it).
+For a new native session, make the first repository action `uv run --no-project python .agents/scripts/vaws_start.py --client CLIENT`. Replace CLIENT with your native client: codex, cursor, claude, grok or kimi. Add `--context-file PATH` when the native hook supplied that context and the command cannot obtain it from the client environment (official Kimi needs it). The command checks saved initialization itself and reports missing first-use setup; no configuration inspection is needed beforehand. If the native hook explicitly reports a prepared workspace W and selected environment, use them directly.
 
 Use the returned `workspace` as W: shell tools use W as cwd (or `cd W && ...`), and file, search and patch tools use absolute paths under W. Sources and the selected environment are already bound; do not repeat session setup. Official Kimi calls to the task, remote-dev and knowledge MCP providers also carry the returned `context_file`. Other clients receive context through hooks; if a tool reports missing context, pass the existing `context_file`. Use configured knowledge tools when useful.
 
@@ -28,9 +26,11 @@ remotes, not replacements for community upstreams.
 
 ## First use, forks and updates
 
-This applies without invoking a Skill. On first use, if no confirmed
-`.vaws-local/github.json` exists, inspect `.agents/scripts/workspace_forks.py`
-and ask once for the user's personal GitHub username, explaining that setup
+This applies without invoking a Skill. The new-session entry checks the saved
+initialization itself. A `vaws.github.v1` snapshot in `.vaws-local/github.json`
+is the confirmed setup result; there is no separate `confirmed` field and no
+per-session identity inspection. If the entry reports missing first-use setup,
+inspect `.agents/scripts/workspace_forks.py` and ask once for the user's personal GitHub username, explaining that setup
 creates personal development forks and configures the installed native clients
 once for upstream updates and worktree sessions. The current
 authenticated login is a suggestion, not consent. Reuse an explicit answer;
