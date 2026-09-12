@@ -140,7 +140,9 @@ class OfficialStdioTests(unittest.TestCase):
                                 arguments["context_file"] = context
                             result = (await client.call_tool(name, arguments)).model_dump(by_alias=True)
                             structured = result["structuredContent"]
-                            self.assertEqual(result["content"][0]["text"], structured["summary"])
+                            self.assertEqual(json.loads(result["content"][0]["text"]), structured)
+                            self.assertEqual(structured["schema_version"], "remote-dev.result.v1")
+                            self.assertTrue(structured["summary"])
                             return result, structured
 
                         opened, state = await call(

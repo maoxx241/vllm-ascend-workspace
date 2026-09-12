@@ -292,6 +292,9 @@ class ClientSetupTests(unittest.TestCase):
         owner = mock.patch.object(self.setup, "managed_python", return_value=sys.executable)
         owner.start()
         self.addCleanup(owner.stop)
+        native = mock.patch("vaws_local_owner.windows_mounted_workspace", return_value=False)
+        native.start()
+        self.addCleanup(native.stop)
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.project = Path(self.temp.name).resolve() / "project"
@@ -300,12 +303,19 @@ class ClientSetupTests(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
+    def is_claude_session_command(self, command):
+        return self.setup.hook_argv(command)[:3] == [
+            sys.executable, str(ROOT / ".agents/scripts/vaws_claude_entry.py"), "session",
+        ]
+
     def test_fresh_json_emits_both_launchers(self) -> None:
         files = self.setup.configuration("claude", self.project)
         servers = json.loads(files[self.project / ".mcp.json"])["mcpServers"]
         self.assertEqual(set(servers), {"remote-dev", "vaws-task", "vaws-knowledge"})
-        self.assertEqual(servers["remote-dev"]["args"], ["-m", "remote_dev.mcp.server"])
-        self.assertEqual(servers["vaws-task"]["args"], ["-m", "vaws_coordinator", "task-server"])
+        entry = str(ROOT / ".agents/scripts/vaws_claude_entry.py")
+        self.assertEqual(servers["remote-dev"]["args"], [entry, "remote"])
+        self.assertEqual(servers["vaws-task"]["args"], [entry, "task"])
+        self.assertNotIn("VAWS_ENV_RECEIPT", servers["vaws-task"]["env"])
         self.assertEqual(servers["vaws-task"]["type"], "stdio")
         self.assertIn("VAWS_AGENT_SESSIONS_DIR", servers["vaws-task"]["env"])
         self.assertNotIn("VAWS_HOST_QUEUE_MODULE", servers["vaws-task"]["env"])
@@ -558,7 +568,7 @@ class ClientSetupTests(unittest.TestCase):
             groups = json.loads(first["files"][settings])["hooks"]["SessionStart"]
             commands = [entry.get("command", "") for group in groups for entry in group.get("hooks", [group])]
             self.assertEqual(commands.count("my-hook"), 1)
-            owned = [item for item in commands if any(Path(arg).name == "vaws_session.py" for arg in self.setup.hook_argv(item))]
+            owned = [item for item in commands if self.is_claude_session_command(item)]
             self.assertEqual(len(owned), 1)
             self.assertNotIn("--coordinator-root", self.setup.hook_argv(owned[0]))
             self.assertIn("--agent-sessions-dir", self.setup.hook_argv(owned[0]))
@@ -593,7 +603,7 @@ class ClientSetupTests(unittest.TestCase):
         self.assertIn(user, group["hooks"])
         owned = [
             entry for item in after["hooks"]["SessionStart"] for entry in item["hooks"]
-            if self.setup.owned_hook_command(entry.get("command", ""), "claude", self.project)
+            if self.is_claude_session_command(entry.get("command", ""))
         ]
         self.assertEqual(len(owned), 1)
         self.assertNotEqual(owned[0]["command"], foreign)
@@ -626,7 +636,7 @@ class ClientSetupTests(unittest.TestCase):
             self.assertIn(user, group["hooks"])
             owned = [
                 entry for entry in group["hooks"]
-                if self.setup.owned_hook_command(entry.get("command", ""), "claude", self.project)
+                if self.is_claude_session_command(entry.get("command", ""))
             ]
             self.assertEqual(len(owned), 1)
             self.assertNotIn("--coordinator-root", owned[0]["command"])
@@ -652,7 +662,7 @@ class ClientSetupTests(unittest.TestCase):
         self.assertIn(user, group["hooks"])
         owned = [
             entry for item in after["hooks"]["SessionStart"] for entry in item.get("hooks", [item])
-            if self.setup.owned_hook_command(entry.get("command", ""), "claude", self.project)
+            if self.is_claude_session_command(entry.get("command", ""))
         ]
         self.assertEqual(len(owned), 1)
 

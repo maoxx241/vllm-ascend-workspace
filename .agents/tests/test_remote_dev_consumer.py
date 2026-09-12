@@ -43,6 +43,17 @@ def load_script(name: str):
     return module
 
 
+def selected_client_runtime(monkeypatch, setup, project):
+    receipt = selected_runtime(monkeypatch, setup, project)
+    # Generated servers must look owned to the late Claude entry adapter.
+    # Mounted-drive owner routing is covered by its dedicated integration tests.
+    monkeypatch.setattr(setup, "read_receipt", lambda _: receipt)
+    monkeypatch.setattr("vaws_local_owner.windows_mounted_workspace", lambda _: False)
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: project / "home"))
+    monkeypatch.setenv("CODEX_HOME", str(project / "home/.codex"))
+    return receipt
+
+
 class PackageWiringTests(unittest.TestCase):
     def test_substrate_environment_strips_resolvers(self) -> None:
         env = remote_dev.substrate_environment({
@@ -71,7 +82,7 @@ class ClientConfigurationTests(unittest.TestCase):
         setup = load_script("vaws_client_setup")
         with tempfile.TemporaryDirectory() as tmp, pytest.MonkeyPatch.context() as runtime:
             project = Path(tmp).resolve()
-            receipt = selected_runtime(runtime, setup, project)
+            receipt = selected_client_runtime(runtime, setup, project)
             for client, config_path, hook_path in (
                 ("claude", ".mcp.json", ".claude/settings.local.json"),
                 ("cursor", ".cursor/mcp.json", ".cursor/hooks.json"),
@@ -87,9 +98,16 @@ class ClientConfigurationTests(unittest.TestCase):
                         servers = json.loads(files[project / config_path])["mcpServers"]
                         entry, task = servers["remote-dev"], servers["vaws-task"]
                     self.assertEqual(entry["command"], sys.executable)
-                    self.assertEqual(entry["args"], self.SERVER_ARGS)
-                    self.assertEqual(task["args"], self.TASK_ARGS)
-                    self.assertEqual(entry["env"]["VAWS_ENV_RECEIPT"], receipt["receipt"])
+                    if client == "claude":
+                        adapter = str(ROOT / ".agents/scripts/vaws_claude_entry.py")
+                        self.assertEqual(entry["args"], [adapter, "remote"])
+                        self.assertEqual(task["args"], [adapter, "task"])
+                        self.assertNotIn("VAWS_ENV_RECEIPT", entry["env"])
+                        self.assertNotIn("VAWS_ENV_RECEIPT", task["env"])
+                    else:
+                        self.assertEqual(entry["args"], self.SERVER_ARGS)
+                        self.assertEqual(task["args"], self.TASK_ARGS)
+                        self.assertEqual(entry["env"]["VAWS_ENV_RECEIPT"], receipt["receipt"])
                     for key in self.REQUIRED_ENV:
                         self.assertIn(key, entry["env"])
                     for key in self.FORBIDDEN_ENV:
@@ -99,21 +117,27 @@ class ClientConfigurationTests(unittest.TestCase):
                     command = first["command"] if client == "cursor" else first["hooks"][0]["command"]
                     arguments = setup.hook_argv(command)
                     self.assertEqual(arguments[0], sys.executable)
-                    self.assertEqual(Path(arguments[1]), ROOT / ".agents/hooks/vaws_session.py")
-                    self.assertEqual(arguments[arguments.index("--client") + 1], client)
-                    self.assertEqual(arguments[arguments.index("--environment-receipt") + 1], receipt["receipt"])
+                    if client == "claude":
+                        self.assertEqual(arguments[1:3], [adapter, "session"])
+                        self.assertIn("--agent-sessions-dir", arguments)
+                        self.assertNotIn("--environment-receipt", arguments)
+                    else:
+                        self.assertEqual(Path(arguments[1]), ROOT / ".agents/hooks/vaws_session.py")
+                        self.assertEqual(arguments[arguments.index("--client") + 1], client)
+                        self.assertEqual(arguments[arguments.index("--environment-receipt") + 1], receipt["receipt"])
 
     def test_client_setup_emits_package_entry_with_environment(self) -> None:
         setup = load_script("vaws_client_setup")
         with tempfile.TemporaryDirectory() as tmp, pytest.MonkeyPatch.context() as runtime:
             project = Path(tmp).resolve()
-            selected_runtime(runtime, setup, project)
+            selected_client_runtime(runtime, setup, project)
             files = setup.configuration("claude", project)
             servers = json.loads(files[project / ".mcp.json"])["mcpServers"]
             mcp = servers["remote-dev"]
             self.assertEqual(set(servers), {"remote-dev", "vaws-task", "vaws-knowledge"})
-            self.assertEqual(mcp["args"], self.SERVER_ARGS)
-            self.assertEqual(servers["vaws-task"]["args"], self.TASK_ARGS)
+            adapter = str(ROOT / ".agents/scripts/vaws_claude_entry.py")
+            self.assertEqual(mcp["args"], [adapter, "remote"])
+            self.assertEqual(servers["vaws-task"]["args"], [adapter, "task"])
             for key in self.REQUIRED_ENV:
                 self.assertIn(key, mcp["env"])
             codex = tomllib.loads(setup.configuration("codex", project)[project / ".codex/config.toml"])
@@ -127,7 +151,7 @@ class ClientConfigurationTests(unittest.TestCase):
         setup = load_script("vaws_client_setup")
         with tempfile.TemporaryDirectory() as tmp, pytest.MonkeyPatch.context() as runtime:
             project = Path(tmp).resolve()
-            selected_runtime(runtime, setup, project)
+            selected_client_runtime(runtime, setup, project)
             (project / ".mcp.json").write_text(json.dumps({"mcpServers": {"remote-dev": {"env": {"REMOTE_DEV_RUNTIME_ENV_FILE": "/etc/profile.d/custom.sh"}}}}))
             mcp = json.loads(setup.configuration("claude", project)[project / ".mcp.json"])["mcpServers"]["remote-dev"]
             self.assertNotIn("REMOTE_DEV_RESOLVERS", mcp["env"])

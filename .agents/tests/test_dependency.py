@@ -35,9 +35,18 @@ class SpecLockTests(unittest.TestCase):
         for name in deps.PACKAGE_NAMES:
             self.assertEqual(locked[name]["commit"], sources[name]["rev"], name)
         expected_versions = deps.required_versions()
+        repositories = {
+            "vaws-remote-dev": {"https://github.com/vllm-ascend-workspace/remote-dev"},
+            "vaws-coordinator": {
+                "https://github.com/vllm-ascend-workspace/vaws-coordinator",
+                "https://github.com/maoxx241/vaws-coordinator",
+            },
+            "vaws-knowledge": {"https://github.com/vllm-ascend-workspace/vaws-knowledge"},
+        }
         for name in deps.PACKAGE_NAMES:
             self.assertEqual(locked[name]["version"], expected_versions[name], name)
-            self.assertIn("github.com/vllm-ascend-workspace", locked[name]["url"] or "")
+            self.assertIn(sources[name]["git"], repositories[name], name)
+            self.assertEqual((locked[name]["url"] or "").split("?")[0], sources[name]["git"], name)
 
     def test_inspect_ready_when_installed_matches_lock(self) -> None:
         installed = {name: deps.installed_spec(name) for name in deps.PACKAGE_NAMES}
