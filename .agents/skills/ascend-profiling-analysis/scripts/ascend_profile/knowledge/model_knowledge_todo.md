@@ -1,8 +1,9 @@
-# Model Knowledge TODO
+# Model observations to investigate
 
-The segmenter now consumes catalog-backed model context before statistical
-fallbacks.  Unknown or unverified model facts must be collected here first, then
-moved into `model_fingerprints.json` only after a profile-backed validation.
+These are open questions from earlier analysis, not a collection checklist.
+Consult the relevant item when it helps the current task. Runtime model
+fingerprints need supporting configuration or profile evidence; recording an
+observation here is optional and does not promote it into an analyzer rule.
 
 ## Profile-Visible Main Body Lengths
 

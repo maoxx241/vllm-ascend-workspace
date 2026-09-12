@@ -165,7 +165,7 @@ def status(repo_root: Path) -> dict:
 
 
 def check(repo_root: Path, *, policy_path: Path | None, show_matches: bool) -> dict:
-    ensure_workspace_interpreter(repo_root=ROOT)
+    ensure_workspace_interpreter(repo_root=ROOT, packages=("vaws_knowledge",))
     policy_path = resolve_policy_path(repo_root, policy_path)
     policy = load_policy(policy_path)
     result: ScanResult = scan_diff(staged_diff(repo_root), policy)

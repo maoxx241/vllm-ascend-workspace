@@ -38,18 +38,27 @@ the bootstrap selects a separate environment for Windows and WSL in the same che
 3. Configure missing or explicitly requested forks/remotes with
    `repo_topology.py`. Do not rewrite established fetch/push settings.
 4. Run `python .agents/scripts/vaws_deps.py sync` for package-dependent work and inspect capabilities with
-   `python3 .agents/scripts/vaws_deps.py doctor`. For Windows cache placement
+   `python3 .agents/scripts/vaws_deps.py doctor`. Successful installation also
+   prepares the knowledge model and index. The result reports knowledge readiness
+   separately; pending preparation leaves ordinary tools usable. For Windows cache placement
    or offline transfer, follow the linked installation recipe in
    [Command recipes](references/command-recipes.md).
-5. For authorized broad init, run `.agents/scripts/knowledge_setup.py` and the
-   selected client's `.agents/scripts/vaws_client_setup.py --apply` entry.
-   A read-only knowledge setup can use `--read-only`; it does not require NPU
-   or machine configuration. Setup preserves unrelated client settings and
-   does not bypass native hook trust.
+5. Run the selected client's `.agents/scripts/vaws_client_setup.py --apply` entry.
+   Knowledge MCP maintains its model, index and shared updates while alive.
+   `.agents/scripts/knowledge_setup.py` is available for an explicit preparation
+   retry or configuration change. Default setup is local with shared downloads;
+   `--contribute` explicitly enables public contribution and its fork. Existing
+   sharing choices and unrelated client settings are preserved, and setup does
+   not bypass native hook trust.
 
 Known choices and existing authorization are reused throughout. Auth/offline
-failures leave independent local work usable. Do not make an optional fleet
-monitor or public knowledge review a prerequisite for ordinary development.
+failures leave independent local work usable. Knowledge is optional reference:
+ordinary development needs no lookup, capture, publishing or review step.
+Configured summary hooks reuse existing text without another summary. The
+optional fleet monitor also adds no prerequisite for ordinary development.
+Windows and WSL clients of the same Windows-mounted workspace use its Windows
+knowledge process. If that interpreter is missing, preparation stays pending;
+an independent Linux workspace uses its own Linux environment.
 
 Report the configuration changes, source/version combination when changed,
 capabilities from doctor, and any unresolved setup choice. No second summary

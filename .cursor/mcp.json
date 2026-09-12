@@ -25,8 +25,7 @@
       "env": {
         "VAWS_KNOWLEDGE_PROJECT_ROOTS": ".agents/knowledge",
         "VAWS_KNOWLEDGE_CANDIDATE_ROOT": ".vaws-local/knowledge/candidate",
-        "VAWS_KNOWLEDGE_ORIGIN_REPO": "vllm-ascend-workspace/vllm-ascend-workspace",
-        "VAWS_KNOWLEDGE_REDACTION_PROFILE": "r2"
+        "VAWS_KNOWLEDGE_ORIGIN_REPO": "vllm-ascend-workspace/vllm-ascend-workspace"
       }
     }
   }

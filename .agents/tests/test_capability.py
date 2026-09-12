@@ -125,7 +125,6 @@ class ResolverDegradationTests(unittest.TestCase):
         self.assertEqual(CAPABILITY_DEPS["remote_endpoints"], ("vaws-remote-dev",))
         self.assertEqual(CAPABILITY_DEPS["task_pool"], ("vaws-coordinator",))
         self.assertEqual(CAPABILITY_DEPS["shared_knowledge"], ("vaws-knowledge",))
-        self.assertEqual(CAPABILITY_DEPS["conformance_kit"], ("vaws-knowledge",))
         self.assertEqual(CAPABILITY_DEPS["fleet_observation"], ("uvx", "vaws-top"))
 
     def test_fleet_observation_without_uvx_uses_deploy_remedy(self) -> None:

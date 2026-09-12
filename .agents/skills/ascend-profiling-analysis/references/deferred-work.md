@@ -106,25 +106,19 @@ catalogue (`op_type`, `op_roles`, `op_categories`, `bound_family`,
 `tests/test_kernel_signatures.py` keep the emitted values and the YAML in
 sync (including the full set of categories/roles the matcher can emit).
 
-Remaining in this area: `moe_families.yaml` is still a document-level
-contract (its cheat-sheet has no production consumer; only
-`tests/test_moe_families.py` mirrors it), and the finding thresholds /
+`moe_families.yaml` remains an optional reference table with no production
+consumer; `tests/test_moe_families.py` covers the corresponding behavior.
+The finding thresholds /
 wording moved to `knowledge/diagnosis_rules.yaml` while the finding
 *conditions* intentionally stay in `diagnostics.py`.
 
-## 5b. Segmentation strategy externalization
+## 5b. Segmentation strategy
 
-`segment.py` is the most safety-critical module in the framework; we
-have not externalized its rules. The follow-up PR should add
-`knowledge/segmentation_strategy.yaml` with these parameter blocks:
-
-* `anchor_priority` (role / category ordering)
-* `boundary_markers` (block_head, normalization, selection)
-* `residual_policy` (head/tail allow vs hard_fail, interior policies)
-* `repair_rules` (toggleable rule names, no algorithm changes)
-
-Acceptance for that follow-up: golden segmentation fixtures must keep
-passing (see §8).
+Segmentation strategy stays in `segment.py`; the implemented layer-anchor
+configuration lives in `knowledge/segmentation_rules.yaml`. The earlier
+proposal for another strategy YAML is retired. A new data format is useful
+only if a concrete code change needs it; reference knowledge does not need
+externalization or a rule language.
 
 ## 6. Stage resume from interrupted run
 
@@ -249,13 +243,12 @@ maintained.
 - `verify_outputs` remote/local are parallel implementations (shell vs
   pathlib) kept in sync by selftest; consider converging.
 
-## 12. Knowledge scorer noise
+## 12. Related knowledge references
 
-`vaws_knowledge._entry_score` is pure token overlap; finding-type queries
-can pull in low-score off-topic entries (e.g. gloo vs ssh-mux at
-score ~15-67). knowledge_refs are score-sorted and capped at 3, but a
-threshold or field-weighted scoring would cut noise. Deferred because
-`.agents/lib/` changes need their own review cycle.
+Retrieval belongs to the installed knowledge package and is used on demand by
+the Agent. Report generation preserves existing reference links but does not
+perform queries or start an index. There is no local scorer, automatic knowledge
+enrichment or knowledge-maintenance workflow for this analyzer.
 
 ## 13. Wrapper convergence leftovers
 

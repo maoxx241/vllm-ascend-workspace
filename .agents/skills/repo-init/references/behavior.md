@@ -125,16 +125,30 @@ Rules:
 - `uvx vaws-top` is a separate service and is not part of `python .agents/scripts/vaws_deps.py sync`
 - do not reimplement capability logic; after install or skip, run `python3 .agents/scripts/vaws_deps.py doctor` and name available / unavailable capabilities from that report
 
-### Stage 6: topology
+After a successful install, `sync` calls the installed knowledge package's
+`prepare --project ROOT` entry. It prepares the local model and index and reports
+`knowledge.ready` independently from dependency installation. A pending model,
+index or shared update does not turn a successful package install into a failure.
+MCP starts internal maintenance while alive; ordinary Agent work does not call
+prepare or sequence index and shared-update operations.
 
-Knowledge initialization after package installation uses
-`python3 .agents/scripts/knowledge_setup.py`. It reuses GitHub CLI authentication
-and creates/reuses the user's fork of the public knowledge-content repository.
-The package owns its dedicated clone and background contribution/release state;
-business repository remotes are not changed. A read-only client can pass
-`--read-only`. Then refresh the selected native clients with the existing setup
-script so MCP receives the service config and supported final-summary hooks.
-Human reviewers merge knowledge PRs. Grok is not enabled in this batch.
+`python3 .agents/scripts/knowledge_setup.py` retries preparation when requested.
+It preserves existing publishing choices; a new configuration enables local
+knowledge and shared downloads without a fork or GitHub login. Explicit
+`--contribute` configures public contribution, while `--read-only` disables it.
+The package owns configuration, contribution and release state. Refresh selected
+native clients to receive the service config and supported summary hooks. Hooks
+reuse existing summary text; no additional Agent summary, lookup or capture is
+required. Public PRs receive human review and merge.
+
+A Windows-mounted workspace has one Windows knowledge process for Windows and
+WSL clients. Preparation stays pending if its Windows interpreter is absent;
+WSL does not create a second database process in the same directory. Independent
+Linux workspaces keep their native Linux environment.
+An unavailable knowledge service or public fork does not prevent independent
+development. See the [current knowledge contract](../../../../docs/target-state.md#54-knowledge).
+
+### Stage 6: topology
 
 Use `repo_topology.py configure` for remote mutations.
 

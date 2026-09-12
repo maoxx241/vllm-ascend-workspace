@@ -4,13 +4,11 @@ Status: historical, unverified. Confidence: low.
 
 Imported from the project note dated 2026-09-07. The source did not provide a complete reproducible evidence chain. Claims of verification in the historical description are not current support guarantees.
 
-Known conditions and unknown dimensions are preserved below. Recheck actual code, model configuration and runtime facts before applying this note.
-
 ## Avoidance
 
 Do not retry a long-lived stream/tunnel on the mux hoping for a different result; check whether that command actually passes mux=False. Do not flip serving ssh_exec or parity stdin-upload helpers to mux=False — those are short round-trips and should keep the mux. Treat instant 'timeout' from MCP remote_bash as a tool-service fault signature, not a remote command fault.
 
-## Fingerprints
+## Search terms
 
 - ssh_stream instant timeout controlmaster
 - remote_bash instant timeout any command
@@ -28,83 +26,12 @@ The shared ControlMaster mux channel does not reliably carry long-lived stream s
 
 Long-lived SSH streaming commands (service logs, analyse progress, tunnels) die or hang immediately / return early when issued over the shared ControlMaster connection; MCP remote_bash separately reported instant 'timeout' for any command while remote_probe/remote_ls kept working.
 
-## Recorded conditions
+## Recorded context
 
-{
-  "soc": {
-    "range": {
-      "min": null,
-      "max": null
-    }
-  },
-  "cann": {
-    "range": {
-      "min": null,
-      "max": null
-    }
-  },
-  "driver": {
-    "range": {
-      "min": null,
-      "max": null
-    }
-  },
-  "python_abi": {
-    "range": {
-      "min": null,
-      "max": null
-    }
-  },
-  "torch": {
-    "range": {
-      "min": null,
-      "max": null
-    }
-  },
-  "torch_npu": {
-    "range": {
-      "min": null,
-      "max": null
-    }
-  },
-  "vllm": {
-    "range": {
-      "min": null,
-      "max": null
-    }
-  },
-  "vllm_ascend": {
-    "range": {
-      "min": null,
-      "max": null
-    }
-  },
-  "model": {
-    "range": {
-      "min": null,
-      "max": null
-    }
-  },
-  "topology": {
-    "range": {
-      "min": null,
-      "max": null
-    }
-  },
-  "execution_mode": {
-    "range": {
-      "min": null,
-      "max": null
-    }
-  },
-  "component": {
-    "values": [
-      "ssh-transport",
-      "controlmaster-mux"
-    ]
-  }
-}
+- component: ssh-transport, controlmaster-mux.
 
-## Provenance
+Other environment and version details were not recorded.
+
+## Source
 
 Source: vllm-ascend-workspace/vllm-ascend-workspace; legacy identifier: ssh-stream-over-shared-controlmaster-mux-dies-early; first observed: 2026-09-03.

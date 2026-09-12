@@ -4,13 +4,11 @@ Status: historical, unverified. Confidence: low.
 
 Imported from the project note dated 2026-09-07. The source did not provide a complete reproducible evidence chain. Claims of verification in the historical description are not current support guarantees.
 
-Known conditions and unknown dimensions are preserved below. Recheck actual code, model configuration and runtime facts before applying this note.
-
 ## Avoidance
 
 For any suspected cache, block-table or state-reuse defect, compare storage pointers, offsets and strides before comparing max_abs. A conclusion of the form 'layer N is numerically off' is not a root cause; 'writer, address, victim reader' is.
 
-## Fingerprints
+## Search terms
 
 - different stride shared storage kv group
 - contiguous cpu dump loses stride pointer
@@ -28,81 +26,14 @@ The defect is structural rather than arithmetic: two consumers share one device 
 
 Numerical comparison shows a layer producing wrong values but no comparison explains why, because every dumped tensor is a clean contiguous array. Investigation stalls on 'this layer is numerically off' without reaching a cause.
 
-## Recorded conditions
+## Recorded context
 
-{
-  "soc": {
-    "values": [
-      "A3"
-    ]
-  },
-  "cann": {
-    "range": {
-      "min": null,
-      "max": null
-    }
-  },
-  "driver": {
-    "range": {
-      "min": null,
-      "max": null
-    }
-  },
-  "python_abi": {
-    "range": {
-      "min": null,
-      "max": null
-    }
-  },
-  "torch": {
-    "range": {
-      "min": null,
-      "max": null
-    }
-  },
-  "torch_npu": {
-    "range": {
-      "min": null,
-      "max": null
-    }
-  },
-  "vllm": {
-    "range": {
-      "min": null,
-      "max": null
-    }
-  },
-  "vllm_ascend": {
-    "range": {
-      "min": null,
-      "max": null
-    }
-  },
-  "model": {
-    "range": {
-      "min": null,
-      "max": null
-    }
-  },
-  "topology": {
-    "values": [
-      "multinode"
-    ]
-  },
-  "execution_mode": {
-    "range": {
-      "min": null,
-      "max": null
-    }
-  },
-  "component": {
-    "values": [
-      "tensor-dump-instrumentation",
-      "dump-metadata"
-    ]
-  }
-}
+- soc: A3.
+- topology: multinode.
+- component: tensor-dump-instrumentation, dump-metadata.
 
-## Provenance
+Other environment and version details were not recorded.
+
+## Source
 
 Source: vllm-ascend-workspace/vllm-ascend-workspace; legacy identifier: contiguous-cpu-save-erases-storage-aliasing-evidence; first observed: 2026-09-07.

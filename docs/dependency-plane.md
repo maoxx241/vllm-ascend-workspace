@@ -78,6 +78,12 @@ options such as `--locked`, `--group dev`, cache placement and offline mode. It
 sets `UV_PROJECT_ENVIRONMENT` itself. An ordinary command never installs packages
 as a side effect.
 
+After a successful install, `sync` runs the installed knowledge package's
+`prepare --project ROOT` command. This prepares the model and local index before
+normal use. The JSON retains the dependency install result and reports
+`knowledge.status` and `knowledge.ready` separately. Pending knowledge does not
+change a successful dependency install's exit code or block ordinary tools.
+
 Entry scripts select the platform environment when their packages are missing.
 An explicitly supplied interpreter with usable packages is respected. Interpreter
 flags and `-m` module calls survive re-execution; native Windows launches use UTF-8
@@ -109,24 +115,48 @@ release wheel.
 | `host_npu_authority` | `vaws-coordinator` |
 | `fleet_observation` | `uvx`, `vaws-top` |
 | `shared_knowledge` | `vaws-knowledge` (importable, with packaged corpus) |
-| `conformance_kit` | `vaws-knowledge` |
 
 ## Shared knowledge corpus
 
 The installed `vaws-knowledge` package provides the engine and a bootstrap
-corpus. Run `python3 .agents/scripts/knowledge_setup.py` after `python .agents/scripts/vaws_deps.py sync` to enable
-the public Markdown corpus, a personal contribution fork and background Release
-updates. `--read-only` enables downloads without GitHub authentication or a fork.
+corpus. Dependency installation prepares the local model and index. For an
+explicit retry or configuration change, `python3 .agents/scripts/knowledge_setup.py`
+uses the same package preparation entry. New setup enables local knowledge and
+shared downloads; it does not create a fork or enable public contribution.
+Existing publishing configuration is preserved. `--contribute` explicitly enables
+authorized contribution; `--read-only` disables contribution while keeping shared
+downloads. A repository change alone preserves the existing contribution choice.
 Then refresh selected clients with `vaws_client_setup.py --apply` so MCP receives
 `.vaws-local/knowledge/service.json` and supported final-response hooks.
 
-While MCP is alive, the package submits redacted public copies and consumes
+Knowledge MCP starts its internal model/index maintenance while alive, independent
+of public contribution. Shared synchronization is enabled by default and consumes
 GitHub Releases from `vllm-ascend-workspace/vaws-knowledge-corpus`. Shared updates
 verify the exact Git identity, model files and dense OVPack before switching;
 project and candidate knowledge stay local. Knowledge PRs currently require
-human review and merge. Grok review and automatic merging are deferred.
+human review and merge.
+Only configured, authorized public contribution submits redacted public copies.
 Use `vaws-knowledge publishing status --config PATH` to inspect retries and the
 active sync result. Native hook trust remains managed by each client.
+
+The [knowledge contract](target-state.md#54-knowledge) keeps lookup and capture
+optional and uses ordinary Markdown. This setup is not a prerequisite or a
+maintenance sequence for ordinary tasks; a knowledge outage does not block
+independent development.
+
+For one Windows-mounted workspace, knowledge MCP, preparation and summary hooks
+use its Windows interpreter and native paths from both Windows and WSL. A missing
+Windows interpreter leaves preparation pending instead of starting another
+Linux database process in the shared state directory. An independent Linux
+workspace uses its Linux environment. Existing generated knowledge launchers
+migrate to this owner; custom launchers and storage choices are preserved.
+
+All five clients use the knowledge MCP tools. Configured Codex, Claude Code,
+Cursor and Grok adapters reuse their native final-response text. Kimi Code
+currently supplies no final text in `Stop`, so it receives MCP/session wiring
+without automatic summary capture. No client needs a second summary or transcript
+scan to complete a task; the package's publishing documentation records the
+event fields and native sources.
 
 ## What was removed
 
@@ -138,7 +168,7 @@ active sync result. Native hook trust remains managed by each client.
 
 ## Optional package skill
 
-`knowledge` package skill through its configured interpreter (`python -m vaws_knowledge skill`) reads the installed curation skill
+`python -m vaws_knowledge skill` through the configured interpreter reads the optional maintenance skill
 without starting OpenViking. `--install-dir <client-skill-directory>` installs
 that same packaged resource for native discovery. Workspace does not keep a
 second canonical copy or require curation for ordinary capture.

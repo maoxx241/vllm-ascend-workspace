@@ -26,7 +26,7 @@ if str(LIB) not in sys.path:
 
 from vaws_venv import ensure_workspace_interpreter  # noqa: E402
 
-ensure_workspace_interpreter(repo_root=ROOT)
+ensure_workspace_interpreter(repo_root=ROOT, packages=("vaws_knowledge",))
 
 from vaws_leak_guard import (  # noqa: E402
     CATEGORIES,

@@ -4,13 +4,11 @@ Status: historical, unverified. Confidence: low.
 
 Imported from the project note dated 2026-09-07. The source did not provide a complete reproducible evidence chain. Claims of verification in the historical description are not current support guarantees.
 
-Known conditions and unknown dimensions are preserved below. Recheck actual code, model configuration and runtime facts before applying this note.
-
 ## Avoidance
 
 Never compare an eager dump against a graph dump on stage-count alone, and never gate a graph capture on a runtime armed() check: the copy node is fixed at capture time. Treat a graph-mode manifest whose record count is far below the eager one as missing data, not as agreement.
 
-## Fingerprints
+## Search terms
 
 - graph mode dump manifest far fewer records than eager
 - aclgraph replay python capture not executed
@@ -28,78 +26,17 @@ Graph replay executes the recorded device kernels without re-entering Python, so
 
 The same instrumentation that produces a full manifest in eager mode produces a nearly empty one under aclgraph. Only capture points outside the captured region survive. Nothing errors, and the manifest still looks structurally valid.
 
-## Recorded conditions
+## Recorded context
 
-{
-  "soc": {
-    "values": [
-      "A3"
-    ]
-  },
-  "cann": {
-    "range": {
-      "min": null,
-      "max": null
-    }
-  },
-  "driver": {
-    "range": {
-      "min": null,
-      "max": null
-    }
-  },
-  "python_abi": {
-    "range": {
-      "min": null,
-      "max": null
-    }
-  },
-  "torch": {
-    "values": [
-      "2.10.0"
-    ]
-  },
-  "torch_npu": {
-    "values": [
-      "2.10.0.post4"
-    ]
-  },
-  "vllm": {
-    "range": {
-      "min": null,
-      "max": null
-    }
-  },
-  "vllm_ascend": {
-    "values": [
-      "0.19.1rc2"
-    ]
-  },
-  "model": {
-    "range": {
-      "min": null,
-      "max": null
-    }
-  },
-  "topology": {
-    "range": {
-      "min": null,
-      "max": null
-    }
-  },
-  "execution_mode": {
-    "values": [
-      "aclgraph"
-    ]
-  },
-  "component": {
-    "values": [
-      "tensor-dump-instrumentation",
-      "in-forward-capture-points"
-    ]
-  }
-}
+- soc: A3.
+- torch: 2.10.0.
+- torch npu: 2.10.0.post4.
+- vllm ascend: 0.19.1rc2.
+- execution mode: aclgraph.
+- component: tensor-dump-instrumentation, in-forward-capture-points.
 
-## Provenance
+Other environment and version details were not recorded.
+
+## Source
 
 Source: vllm-ascend-workspace/vllm-ascend-workspace; legacy identifier: aclgraph-replay-skips-in-forward-python-dump-calls; first observed: 2026-09-07.

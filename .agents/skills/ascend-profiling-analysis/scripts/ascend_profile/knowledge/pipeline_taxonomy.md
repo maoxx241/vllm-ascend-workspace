@@ -1,9 +1,10 @@
 # Ascend NPU Pipeline Taxonomy (Atlas A2 / A3)
 
-This file is the contract every analysis stage in this repo uses when it
-talks about "pipeline time", "compute vs MTE", or "Cube vs Vector". It
-intentionally mirrors the CANN profiling field names so every aggregate
-metric stays one-to-one with raw evidence in `kernel_details.csv`.
+This reference explains the analyzer's "pipeline time", "compute vs MTE",
+and "Cube vs Vector" fields. It mirrors CANN profiling field names so
+aggregate metrics can be traced to raw evidence in `kernel_details.csv`.
+Consult it when interpreting those fields; current trace data and the
+corresponding CANN version take precedence over this description.
 
 Sources: CANN community edition msprof reference (CANN ≥ 7.0); MindStudio
 profiler "AICore Performance" panel; Atlas A2/A3 architecture spec.

@@ -1143,11 +1143,15 @@ function renderFindings(route) {
       html += '<div class="card" style="margin-top:12px"><h3 style="margin-top:0">组明细 · <code>' + esc(g.finding_type) + '</code> · ' +
         members.length + ' 条</h3>';
       (g.knowledge_refs && g.knowledge_refs.length) && (
-        html += '<div style="margin-bottom:8px"><b>Knowledge refs</b><ul style="margin:4px 0 0 18px">' +
+        html += '<div style="margin-bottom:8px"><b>相关参考</b><div class="muted">供对照当前证据，适用条件以原文为准。</div><ul style="margin:4px 0 0 18px">' +
           g.knowledge_refs.map(function (r) {
-            var label = (r && (r.title || r.id)) || String(r);
+            var label = (r && (r.title || r.ref || r.id)) || String(r);
             var url = r && r.url;
-            return '<li>' + esc(label) + (url ? ' <a href="' + esc(url) + '" target="_blank" rel="noreferrer">链接</a>' : "") + '</li>';
+            var path = r && (r.ref || r.uri);
+            var excerpt = r && r.excerpt;
+            return '<li>' + esc(label) + (url ? ' <a href="' + esc(url) + '" target="_blank" rel="noreferrer">链接</a>' : "") +
+              (path ? ' <code>' + esc(path) + '</code>' : "") +
+              (excerpt ? '<div class="muted">' + esc(excerpt) + '</div>' : "") + '</li>';
           }).join("") + '</ul></div>');
       html += findingsDetailHTML(members, data);
       html += '</div>';

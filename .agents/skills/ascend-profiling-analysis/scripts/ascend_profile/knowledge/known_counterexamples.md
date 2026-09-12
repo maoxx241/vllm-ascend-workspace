@@ -1,5 +1,10 @@
 # Known Counterexamples
 
+Historical cases for investigating similar traces. Their conditions and
+limitations matter; current evidence determines whether they apply. Runtime
+regressions are covered by analyzer tests, with no separate case-registration
+step required for ordinary analysis or fixes.
+
 ## Salvaged anomaly rules (provenance note)
 
 The edge-gap / recurrence / capture-boundary / host-attribution rules in

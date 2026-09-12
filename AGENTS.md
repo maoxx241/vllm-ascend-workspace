@@ -53,16 +53,16 @@ workflows. Read the selected `SKILL.md` and only the references needed for the
 current task. Ordinary coding, docs and Git operations need no management skill.
 Detailed tool arguments belong to package help and the linked documentation.
 
-For explicit knowledge editing, read the installed package's skill with
-`knowledge` package skill through its configured interpreter (`python -m vaws_knowledge skill`). Normal capture and lookup need no
-curation workflow. Knowledge is Markdown: shared releases are read-only,
-project material lives in `.agents/knowledge/`, and candidates in
-`.vaws-local/knowledge/candidate/`. Preserve known conditions and uncertainty.
-
-Query relevant knowledge before repeating a failed diagnosis when the failure
-signature is useful. Missing or unavailable knowledge is unknown and does not
-block independent work. Reuse the normal task summary: configured client hooks
-capture it; other clients can call capture once with a title and body.
+Knowledge is optional reference. Query when experience could help; lookup and
+capture are not task prerequisites or completion steps. Use current evidence and
+judgment. Missing or unavailable knowledge does not block work; a search miss
+does not prove absence. A Markdown title and body are enough: keep known
+conditions, evidence and uncertainty in the text without a schema. Configured
+hooks reuse the normal summary; manual capture can reuse useful existing text.
+No second summary or publishing follow-up is required. Storage and maintenance
+details are in the [knowledge contract](docs/target-state.md#54-knowledge).
+For explicit knowledge maintenance, the optional package skill is available
+through its configured interpreter with `python -m vaws_knowledge skill`.
 
 Only a package-prepared redacted copy may be contributed publicly. Internal
 addresses, user paths, hostnames, container identifiers and credentials must

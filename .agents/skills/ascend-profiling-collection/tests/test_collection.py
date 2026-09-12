@@ -288,8 +288,6 @@ def _patch_collection(run_dir: Path, **overrides: object):
     patches = {
         "resolve_execution_target": mock.Mock(return_value=fake_target()),
         "unique_collection_run_dir": mock.Mock(return_value=run_dir),
-        "knowledge_preflight_advisories": mock.Mock(return_value={"results": [], "unavailable": False}),
-        "knowledge_failure_matches": mock.Mock(return_value={"results": [], "unavailable": False}),
         "call_serve_start": mock.Mock(
             return_value={"status": "ready", "runtime_dir": "/tmp/runtime", "port": 8000}
         ),

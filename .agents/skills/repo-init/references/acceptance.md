@@ -86,11 +86,15 @@ A successful run should satisfy all applicable items below.
 
 ### External dependencies
 
-- knowledge setup reuses authentication, creates/reuses a matching corpus fork and keeps configuration in `.vaws-local/knowledge/service.json`
-- a read-only setup enables shared sync without requiring a fork
+- successful dependency sync invokes installed knowledge preparation and reports model/index readiness separately from package installation
+- default knowledge setup is local with shared downloads; existing publishing configuration is preserved and only explicit `--contribute` enables a corpus fork
+- a read-only setup disables contribution while keeping shared sync, without requiring a fork
+- MCP maintains knowledge while alive without an Agent maintenance sequence
+- Windows/WSL clients of one Windows-mounted workspace share its Windows knowledge process; a missing Windows interpreter is pending, and an independent Linux workspace remains native
 - supported final-response hooks save the existing summary without reading a complete transcript or starting a second summarization model
 - repeated setup preserves foreign MCP/hook configuration and does not bypass native hook trust
-- knowledge PRs use human review; no Grok credential or automatic merge is required
+- knowledge PRs use human review and merge; ordinary development requires no fork or publishing follow-up
+- lookup and capture remain optional; unavailable knowledge does not block independent work, and authors use ordinary Markdown without a required schema
 
 - offers `python .agents/scripts/vaws_deps.py sync` (or `python3 .agents/scripts/vaws_deps.py sync`) as a required step for package-dependent work
 - skipping `python .agents/scripts/vaws_deps.py sync` still completes `repo-init` for local documentation and Git work
