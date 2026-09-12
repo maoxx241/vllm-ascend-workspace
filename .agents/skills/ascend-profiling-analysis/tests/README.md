@@ -29,11 +29,6 @@ without any Ascend NPU hardware, GPU, or remote SSH:
   `peak_flops_per_second`) and the derived operator-efficiency rows.
 - `test_html_diagnosis_key.py` — regression for the HTML report reading
   the `diagnosis_findings` key (not `findings`).
-- `test_knowledge_enrichment.py` — pins the wrapper-side workspace knowledge
-  hooks (`profile_analyze._enrich_analysis_summary_with_knowledge`): findings
-  rollup groups get `knowledge_refs` from a temporary synthetic knowledge dir
-  (hit / miss / empty store / missing dir / invalid document), and
-  model configuration remains unchanged when reference prose mentions a layer count.
 - `test_kernel_signatures.py` — pins the contract between Python's
   `categories_and_roles` rule list and `knowledge/kernel_signatures.yaml`:
   the YAML parses, its categories are valid per
@@ -70,7 +65,7 @@ without any Ascend NPU hardware, GPU, or remote SSH:
   tables).
 
 `pytest` is the only test dependency beyond the runtime requirements in
-`../requirements.txt` (some knowledge-contract tests additionally need
+`../requirements.txt` (some analyzer-data tests additionally need
 PyYAML and skip themselves when it is missing).
 
 Run from the repo root:

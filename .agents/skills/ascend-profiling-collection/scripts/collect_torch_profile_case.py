@@ -85,61 +85,14 @@ DEFAULT_PROFILE_CONTROL_TIMEOUT = 600
 DEFAULT_REQUEST_TIMEOUT = 900
 POST_STOP_FLUSH_SECONDS = 5
 
-# Workspace knowledge hooks (local, best-effort):
-#   * before collection starts, ``knowledge_preflight_advisories`` queries the
-#     workspace knowledge store with "<model> tp<N> <mode>" and records hits in
-#     the manifest's ``knowledge_advisories`` field (advisory only);
-#   * when a hard-fail gate trips, ``knowledge_failure_matches`` queries
-#     known-failure-signatures with the observed error text and attaches the
-#     matches (with resolution) to ``manifest.error.knowledge_matches``.
-# A missing/invalid knowledge dir degrades both hooks to explicit empty
-# arrays with a progress note; collection itself is never blocked.
-KNOWLEDGE_DIR = ROOT / ".agents" / "knowledge"
-KNOWLEDGE_ADVISORY_KINDS = (
-    "model-capabilities",
-    "parallelism-compatibility",
-    "known-failure-signatures",
-)
-KNOWLEDGE_QUERY_LIMIT = 3
-# Matches below this score are treated as noise (weak single-token overlaps
-# e.g. an entry id fragment); real matches score >= 12 from fingerprint tokens.
-KNOWLEDGE_MIN_SCORE = 5
-
 VL_DEFAULT_IMAGE = (
     ROOT / "vllm-ascend" / "tests" / "e2e" / "310p" / "data" / "qwen.png"
 )
 
 
-# ---------------------------------------------------------------------------
-# Workspace knowledge hooks (advisory only, never blocking)
-# ---------------------------------------------------------------------------
-
-def _knowledge_lookup(text: str, knowledge_dir: Path | None) -> dict[str, Any]:
-    try:
-        from vaws_knowledge_service import query_knowledge
-        result = query_knowledge(knowledge_dir=knowledge_dir or KNOWLEDGE_DIR,
-                                 query=text, limit=KNOWLEDGE_QUERY_LIMIT)
-    except Exception as exc:
-        result = {"results": [], "unavailable": True, "degraded": True, "index_detail": str(exc)}
-    if result.get("unavailable"):
-        emit_progress("knowledge", "lookup unavailable", detail=result.get("index_detail"))
-    return result
-
-
-def knowledge_preflight_advisories(model_name: str, tp: int, mode: str, *, knowledge_dir=None):
-    return _knowledge_lookup(f"{model_name} tp{tp} {mode}", knowledge_dir)
-
-
-def knowledge_failure_matches(signature_text: str, *, knowledge_dir=None):
-    return _knowledge_lookup(signature_text, knowledge_dir)
-
-
 def _failure_payload(message: str) -> dict[str, Any]:
-    """Manifest ``error`` object: message + knowledge matches for the text."""
-    return {
-        "message": message,
-        "knowledge_matches": knowledge_failure_matches(message),
-    }
+    """Keep the observed error available without starting another service."""
+    return {"message": message}
 
 
 # ---------------------------------------------------------------------------
@@ -756,19 +709,6 @@ def main(argv: list[str] | None = None) -> int:
     stop_result: dict[str, Any] | None = None
     started_service = False
     try:
-        # Preflight knowledge advisory: known capabilities/compatibility/
-        # failure signatures for this exact "<model> tp<N> <mode>" shape.
-        # Advisory only -- recorded in the manifest, never blocks collection.
-        advisories = knowledge_preflight_advisories(
-            args.served_model_name, args.tp, args.mode
-        )
-        manifest["knowledge_advisories"] = advisories
-        emit_progress(
-            "knowledge",
-            f"preflight advisories: {len(advisories.get('results', []))} knowledge entrie(s) matched",
-            advisories=[item.get("ref") or item.get("uri") for item in advisories.get("results", [])] or None,
-        )
-
         started_service = False
         if args.execution_id:
             emit_progress("serve_start", f"using live execution {args.execution_id}")

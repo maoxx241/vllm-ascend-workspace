@@ -12,6 +12,13 @@ backend.
 
 `/start_profile` and `/stop_profile` only exist because vLLM has a built-in torch profiler. Moving the control client into `vllm-ascend-serving` would force serving to grow profiling-specific knobs (multi-rank long timeout, multi-api-server quirks). The serving skill stays simple by treating `--profiler-config` as an opaque blob it forwards to `vllm serve`. Anything that flips, waits on, or interprets the profiler window belongs here.
 
+## Knowledge use
+
+Collection and its failure reporting use the actual workload, rank outputs and
+errors. They do not query knowledge or start an embedding service. Related notes
+are optional context available through the knowledge MCP tools when useful;
+they add no preflight or completion step to this workflow.
+
 ## Mode → vLLM flag mapping
 
 | `--mode` | Forwarded to `vllm serve` |

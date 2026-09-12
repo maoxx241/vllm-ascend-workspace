@@ -6,9 +6,9 @@ version: 1
 # (``kernel_signatures.yaml:match_rules`` via ``rules.categories_and_roles``,
 # ``classify.py:decompose_layer_into_blocks``,
 # ``cross_rank.py``, ``diagnostics.py``, ``summarize.py:anomaly_tags``,
-# ``host_trace.py``). This YAML is the *contract* layer:
-# adding a new value here is the first step before extending Python so that
-# downstream readers (HTML report, schema tests, agent prompts) all agree.
+# ``host_trace.py``). This YAML is a test fixture for the emitted values;
+# update it alongside code changes that affect the output enums. It is not
+# a knowledge-entry format or an instruction for analysis tasks.
 #
 # Test ``tests/test_semantic_conventions.py`` verifies that any value
 # emitted by the pipeline is listed here.

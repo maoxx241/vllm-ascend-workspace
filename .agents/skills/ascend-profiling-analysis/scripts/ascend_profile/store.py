@@ -28,9 +28,8 @@ TOOL_VERSION = "ascend-profile-analysis-0.1"
 SPREADSHEET_COLUMN_BASE = 26
 csv.field_size_limit(1024 * 1024 * 1024)
 
-# Knowledge files shipped inside the package (synced to the remote
-# container together with the code). Single definition; the stage modules
-# import it from here instead of recomputing the path.
+# Analyzer data shipped with the code. The historical directory name also
+# contains optional prose references; it is separate from workspace knowledge.
 KNOWLEDGE_DIR = Path(__file__).resolve().parent / "knowledge"
 
 

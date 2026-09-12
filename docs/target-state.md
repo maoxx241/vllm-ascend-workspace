@@ -18,12 +18,11 @@ Existing wrappers, workflows and schemas are migration inputs, not reasons to
 preserve their burden. Changes to ownership or public semantics update this
 contract; ordinary implementation choices need no new design or approval step.
 
-The earlier [Agent/OpenViking spec](agent-first-openviking-spec.md) records
-permissive workflows, execution records and local knowledge work. Its execution
-architecture direction is superseded by the proposed redesign linked above.
-Package pins and implementation evidence distinguish shipped behavior from
-planned changes. Existing workflows and component packaging are revisable
-design choices, not principles that override total Agent task cost.
+The earlier [Agent/OpenViking spec](agent-first-openviking-spec.md) is historical
+design evidence. Its implementation batches and proposed knowledge mechanisms
+are not current requirements; the knowledge contract is in section 5.4 below.
+Package pins and validation records identify shipped behavior. Existing workflows
+and component packaging remain revisable against total Agent task cost.
 
 ## 1. Current architecture conventions
 
@@ -150,17 +149,15 @@ wait for business health once a live target+port exists.
 
 ### 3.3 vaws-knowledge
 
-Local Markdown knowledge, indexed through OpenViking. Capture accepts a title
-and non-empty content; source and applicability details are retained when
-available, not mandatory author fields. Public contribution is locally
-redacted and reviewed through a separate knowledge-content repository.
-Accepted Markdown/Git is authoritative; indexes are rebuildable.
+Optional reference material stored as Markdown and indexed through OpenViking.
+The Agent decides whether it helps the task. Markdown/Git stores the original
+content; a search index, review or release does not make a claim authoritative.
+The minimal author and lookup conventions are in section 5.4.
 
-The package owns local instance lifecycle, candidate submission, review/build
-commands, and prebuilt OVPack synchronization. Knowledge CI runs those package
-commands. OpenViking is an internal dependency, not a fifth runtime owner.
-A degraded answer is never an authoritative "no" and cannot block unrelated
-development. See the implementation spec for the staged migration from v2.
+The package owns local instance lifecycle, configured candidate submission,
+public redaction, release builds and prebuilt OVPack synchronization.
+These internal operations do not require Agent orchestration during ordinary
+work. OpenViking is an internal dependency, not a fifth runtime owner.
 
 ### 3.4 vaws-top
 
@@ -208,11 +205,11 @@ task binding/execution use coordinator tools directly; direct source-only
 publication uses the existing package CLI. These are not separate management
 skills or required steps before business work.
 
-Explicit knowledge editing uses the optional `curate-knowledge` skill shipped
+For explicit knowledge maintenance, the optional `curate-knowledge` skill ships
 inside `vaws-knowledge`, readable with `python -m vaws_knowledge skill` and
 installable into a chosen native client skill directory. Workspace routing
-points to that package resource rather than maintaining a copy. Everyday
-query/capture and configured background publishing do not load a curation skill.
+points to that resource rather than maintaining a copy. Everyday query/capture,
+plain Markdown edits and configured background publishing need no curation workflow.
 
 
 A skill script may call `vaws_coordinator.task_client.TaskClient`,
@@ -254,17 +251,47 @@ the full record. A projection is not passed off as a complete Envelope.
 
 ### 5.4 Knowledge
 
-Target: Markdown title and body, with local redaction before public export;
-no mandatory author-supplied runtime-coordinate schema. Shared content is
-distributed from the knowledge repository, project content stays in
-`.agents/knowledge/`, and local candidates/state stay under `.vaws-local/`.
-Query returns local experience and public knowledge together as reference;
-review status is a label, not an admission or ranking filter. OpenViking
-supplies storage/search and native OVPack primitives; the knowledge
-package owns integration and synchronization. This development workspace pins
-the 0.3.1 contribution/distribution commit directly; older YAML query/capture contracts are
-not preserved. The implementation spec distinguishes available modules from
-the public workflow and platform checks still to be completed.
+Knowledge helps the Agent reuse experience. Query when it may answer a real
+question; capture when findings are worth retaining. Neither is mandatory before
+execution, after failure or at task completion. Missing, unavailable or empty
+knowledge never blocks independent work. An empty search is not proof that no
+relevant experience exists.
+
+The ordinary surface is `knowledge_query(text)`, `knowledge_explain(ref)` and
+`knowledge_capture(title, content)`. A title and non-empty Markdown body are
+enough. There are no required frontmatter, headings, labels, runtime coordinates,
+evidence forms or task associations. Keep known conditions, versions, observed
+results, evidence references and uncertainty in the text; do not invent missing
+details or generalize a single observation into a rule. Context already available
+to tools can be retained automatically.
+
+Local and shared results are references, not instructions, approvals or current
+environment facts. The Agent judges relevance and applicability against the
+current task; review and publication confer no decision authority or trust tier.
+Existing evidence can be reused with checks proportional to change and impact.
+
+Shared releases are read-only. Project Markdown lives in `.agents/knowledge/`;
+local captures and package state stay under `.vaws-local/knowledge/`. These are
+storage locations, not an Agent-managed promotion workflow. Bundled or mounted
+Markdown is usable without a prior release build; shared query references can be
+read back as original Markdown. The package handles indexing. Configured hooks
+reuse the normal task summary. A useful manual capture can reuse existing text
+once; no extra summary, schema completion or publication follow-up is needed.
+
+Dependency installation prepares the knowledge model and index through the
+installed package. MCP maintains readiness and shared updates internally while
+alive, even when public contribution is disabled. Pending knowledge is reported
+separately from package installation and leaves ordinary tools usable. Windows
+and WSL clients of one Windows-mounted workspace share its Windows knowledge
+process; an independent Linux workspace uses its native environment.
+
+Public sharing follows the existing authorization and configuration, using only
+a package-prepared redacted copy. Public PRs receive human review and merge.
+The package handles configured submission and shared Release synchronization;
+ordinary development does not require a fork or wait for publishing. Failed
+redaction blocks that export only; local work and knowledge remain available.
+OpenViking indexing and distribution details belong to the package, not task
+instructions. Installed behavior is identified by `pyproject.toml` and `uv.lock`.
 
 ### 5.5 Endpoints
 

@@ -4,13 +4,11 @@ Status: historical, unverified. Confidence: low.
 
 Imported from the project note dated 2026-09-07. The source did not provide a complete reproducible evidence chain. Claims of verification in the historical description are not current support guarantees.
 
-Known conditions and unknown dimensions are preserved below. Recheck actual code, model configuration and runtime facts before applying this note.
-
 ## Avoidance
 
 Read the one-sided stage lists before the metrics. Non-empty lists usually mean the two runs did not execute the same instrumented code, and no numeric conclusion holds until the paths are aligned.
 
-## Fingerprints
+## Search terms
 
 - dump diff aligned but only_in_left non-empty
 - tensor comparison pass with zero compared items
@@ -28,83 +26,13 @@ Divergence is only defined over the intersection of stage keys, so shrinking the
 
 Comparing an eager dump against a graph dump returns an aligned verdict and exit code 0 while listing over a hundred stages as present on only one side. A tensor comparison with zero comparable pairs likewise reports a pass.
 
-## Recorded conditions
+## Recorded context
 
-{
-  "soc": {
-    "range": {
-      "min": null,
-      "max": null
-    }
-  },
-  "cann": {
-    "range": {
-      "min": null,
-      "max": null
-    }
-  },
-  "driver": {
-    "range": {
-      "min": null,
-      "max": null
-    }
-  },
-  "python_abi": {
-    "range": {
-      "min": null,
-      "max": null
-    }
-  },
-  "torch": {
-    "range": {
-      "min": null,
-      "max": null
-    }
-  },
-  "torch_npu": {
-    "range": {
-      "min": null,
-      "max": null
-    }
-  },
-  "vllm": {
-    "range": {
-      "min": null,
-      "max": null
-    }
-  },
-  "vllm_ascend": {
-    "range": {
-      "min": null,
-      "max": null
-    }
-  },
-  "model": {
-    "range": {
-      "min": null,
-      "max": null
-    }
-  },
-  "topology": {
-    "range": {
-      "min": null,
-      "max": null
-    }
-  },
-  "execution_mode": {
-    "values": [
-      "eager",
-      "aclgraph"
-    ]
-  },
-  "component": {
-    "values": [
-      "dump-comparison",
-      "comparison-verdict"
-    ]
-  }
-}
+- execution mode: eager, aclgraph.
+- component: dump-comparison, comparison-verdict.
 
-## Provenance
+Other environment and version details were not recorded.
+
+## Source
 
 Source: vllm-ascend-workspace/vllm-ascend-workspace; legacy identifier: dump-comparison-reports-aligned-despite-one-sided-coverage; first observed: 2026-09-07.

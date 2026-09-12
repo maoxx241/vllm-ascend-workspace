@@ -14,7 +14,7 @@ from pathlib import Path
 
 REEXEC_ENV = "VAWS_VENV_REEXEC"
 SKIP_ENV = "VAWS_SKIP_VENV_REEXEC"
-SENTINEL_PACKAGES = ("remote_dev", "vaws_coordinator", "vaws_knowledge")
+SENTINEL_PACKAGES = ("remote_dev", "vaws_coordinator")
 REMEDY = "python .agents/scripts/vaws_deps.py sync"
 
 
@@ -32,8 +32,8 @@ def workspace_venv_python(repo_root: Path) -> Path:
     return posix
 
 
-def _packages_importable() -> bool:
-    return all(importlib.util.find_spec(name) is not None for name in SENTINEL_PACKAGES)
+def _packages_importable(packages: tuple[str, ...] = SENTINEL_PACKAGES) -> bool:
+    return all(importlib.util.find_spec(name) is not None for name in packages)
 
 
 def configure_windows_stdio() -> None:
@@ -44,14 +44,16 @@ def configure_windows_stdio() -> None:
                 stream.reconfigure(encoding="utf-8")
 
 
-def ensure_workspace_interpreter(*, repo_root: Path) -> None:
+def ensure_workspace_interpreter(
+    *, repo_root: Path, packages: tuple[str, ...] = SENTINEL_PACKAGES,
+) -> None:
     """Select this platform's managed environment when it has been installed."""
     configure_windows_stdio()
     if os.environ.get(SKIP_ENV) == "1":
         return
     if os.environ.get(REEXEC_ENV) == "1":
         return
-    available = _packages_importable()
+    available = _packages_importable(packages)
     needs_utf8 = os.name == "nt" and not sys.flags.utf8_mode
     if available:
         return

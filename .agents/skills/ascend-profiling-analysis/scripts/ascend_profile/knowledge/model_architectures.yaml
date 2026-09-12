@@ -3,51 +3,12 @@ version: 1
 # ----------------------------------------------------------------------------
 # Model architectures — HuggingFace arch → (attention family, FFN family)
 # ----------------------------------------------------------------------------
-# This file is a *report-time annotation layer*, NOT an analysis input.
-# The analyser does NOT use it to drive segmentation or detection — those
-# go through kernel/family signatures only (see attention_families.yaml
-# and moe_families.yaml).
-#
-# IMPORTANT — what this skill CAN and CANNOT see:
-#
-#   The skill's input is a torch_npu profiling directory (``ascend_pt/``
-#   — kernel_details.csv, step_trace_time.csv, op_summary, trace_view.json,
-#   communication.json, etc.). **It does not have access to the
-#   HuggingFace ``config.json`` of the served model.** Top-level
-#   architectural fields like ``hidden_size``, ``num_hidden_layers``,
-#   ``num_experts``, ``kv_lora_rank``, ``qk_rope_head_dim`` etc. are
-#   never directly available.
-#
-#   However, ``kernel_details.csv`` does record per-event tensor shapes
-#   in the ``Input Shapes`` cell (when not wiped by aclgraph compile).
-#   That lets the skill extract a few derived signals on a best-effort
-#   basis — most importantly the Q / K head counts on FIA /
-#   UnpadFlashAttention events, which feed the shape-refinement step
-#   that upgrades ``gqa_or_mha`` to ``mha`` / ``gqa`` / ``mqa`` (see
-#   ``rules.refine_dense_attention_from_shapes`` and
-#   ``attention_families.yaml:gqa_or_mha.sub_kinds``).
-#
-#   That means:
-#     * The skill CANNOT pin a profile to a specific HF arch by
-#       reading its config. The strongest signal it has is the
-#       *kernel signature set* observed in the profile (see
-#       attention_families.yaml) plus best-effort Input Shapes.
-#     * The skill CAN, when shapes are present and pass sanity checks,
-#       narrow ``gqa_or_mha`` to ``mha`` / ``gqa`` / ``mqa``. The
-#       refinement is a heuristic, not a contract — when shapes are
-#       missing the umbrella label stays.
-#
-# Use cases for this file:
-#   - **Human-readable lookup table.** A user reading the YAML sees what
-#     attention / FFN family a given HF arch maps to. Useful as
-#     reference, not as runtime input.
-#   - **Skill-author documentation.** ``hf_config_signals`` and ``notes``
-#     describe what *would* identify each arch *if* the consumer (e.g.
-#     a serving-side caller) reads the HF config separately. The
-#     analyser ignores those fields.
-#   - **Future external-tool integration.** If a different tool (not
-#     this skill) joins the profile to HF config, it can consume this
-#     table to provide a finer label. Out of scope here.
+# Optional architecture reference table; no production analyzer stage loads it.
+# Actual model dimensions come from a supplied/resolved config.json or validated
+# profile-visible evidence. Profiling Input Shapes can refine attention-family
+# labels when present, but missing or ambiguous shapes leave the broader label.
+# The entries below are candidates to compare with current evidence, not model
+# facts established by a name match. New knowledge notes need no YAML format.
 #
 # References:
 #   - vllm/vllm/model_executor/models/registry.py (_VLLM_MODELS)

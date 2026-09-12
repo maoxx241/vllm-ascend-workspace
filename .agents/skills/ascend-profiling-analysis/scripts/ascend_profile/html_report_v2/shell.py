@@ -387,16 +387,11 @@ def _findings_panel(ov: dict) -> str:
             f"<td>{_esc((g.get('summary') or '')[:120])}</td>"
             "</tr>"
         )
-    loaded = ov.get("analysis_summary_loaded")
-    refs_note = (
-        "knowledge_refs 来自 analysis_summary.json（未加载 — 本次渲染时该文件尚不存在，区块隐藏）。"
-        if not loaded else "knowledge_refs 来自 analysis_summary.json；为空的组不显示该区。"
-    )
     return (
         '<div class="card" style="margin-top:14px"><h3 style="margin-top:0">Findings · rollup 分组</h3>'
         '<div class="muted" style="font-size:11.5px;margin-bottom:6px">'
         '按 (type, severity, summary) 分组；点击行查看该组全部 finding 与 evidence 链接（按需加载 findings.json.gz）。'
-        + refs_note + '</div>'
+        '</div>'
         '<div class="scroll-x"><table><thead><tr><th>Type</th><th>Severity</th>'
         '<th class="num">Occurrences</th><th>Summary</th></tr></thead>'
         f'<tbody>{"".join(rows)}</tbody></table></div></div>'
@@ -410,14 +405,20 @@ def _knowledge_refs_section(ov: dict) -> str:
     items = []
     for ref in refs[:50]:
         if isinstance(ref, dict):
-            label = ref.get("title") or ref.get("id") or json.dumps(ref, ensure_ascii=False)[:120]
+            label = ref.get("title") or ref.get("ref") or ref.get("id") or "参考记录"
             url = ref.get("url") or ""
+            path = ref.get("ref") or ref.get("uri") or ""
+            excerpt = ref.get("excerpt") or ""
         else:
             label, url = str(ref), ""
+            path, excerpt = "", ""
         link = f' <a href="{_esc(url)}" target="_blank" rel="noreferrer">链接</a>' if url else ""
-        items.append(f"<li>{_esc(label)}{link}</li>")
+        location = f" <code>{_esc(path)}</code>" if path else ""
+        note = f'<div class="muted">{_esc(excerpt)}</div>' if excerpt else ""
+        items.append(f"<li>{_esc(label)}{link}{location}{note}</li>")
     return (
-        '<div class="card" style="margin-top:14px"><h3 style="margin-top:0">Knowledge refs</h3>'
+        '<div class="card" style="margin-top:14px"><h3 style="margin-top:0">相关参考</h3>'
+        '<div class="muted">供对照当前证据，适用条件以原文为准。</div>'
         f'<ul style="margin:4px 0 0 18px">{"".join(items)}</ul></div>'
     )
 

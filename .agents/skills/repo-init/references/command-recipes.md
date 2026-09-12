@@ -105,7 +105,9 @@ python3 .agents/scripts/vaws_deps.py sync
 ```
 
 `uv.lock` is the only pin. The packages are public git+https. `uvx vaws-top`
-is a separate service. See
+is a separate service. Successful `sync` also prepares the knowledge model and
+index through the installed package. Its JSON reports `knowledge.ready` separately
+from package installation; pending knowledge does not block ordinary tools. See
 [docs/dependency-plane.md](../../../../docs/dependency-plane.md).
 
 Windows PowerShell, using a cache on the workspace filesystem:
@@ -157,11 +159,19 @@ python3 .agents/skills/repo-init/scripts/repo_topology.py configure   --repo vll
 ```bash
 python3 .agents/skills/repo-init/scripts/repo_topology.py ensure-main   --repo vllm-ascend   --remote origin
 ```
-# Knowledge fork and background updates
+# Knowledge setup and background updates
 
-After `python .agents/scripts/vaws_deps.py sync`, run `python3 .agents/scripts/knowledge_setup.py` (Windows:
-`py -3 .agents/scripts/knowledge_setup.py`). For download-only use, add
-`--read-only`. Reuse the user's `gh` login; no token belongs in tracked files.
+For an explicit knowledge preparation retry or configuration change, run
+`python3 .agents/scripts/knowledge_setup.py` (Windows:
+`py -3 .agents/scripts/knowledge_setup.py`). Default setup prepares local knowledge
+and shared downloads, preserving existing publishing choices. Add `--contribute`
+only to enable authorized public contribution; `--read-only` disables contribution
+while keeping shared downloads. `--repository OWNER/REPO` changes the shared
+corpus without enabling contribution. Only contribution setup needs a GitHub
+login and fork; no token belongs in tracked files.
 Refresh the selected clients with `vaws_client_setup.py --apply` afterward.
-The package MCP service performs retries and shared Release synchronization
-while alive. Knowledge PR review and merge remain manual.
+The package MCP service maintains the model, index and shared releases while
+alive. Windows and WSL use the Windows knowledge owner for the same mounted
+workspace; a missing Windows interpreter is reported as pending. Independent
+Linux workspaces use their own environment. Knowledge PR review and merge remain
+manual. Ordinary development requires no maintenance commands.

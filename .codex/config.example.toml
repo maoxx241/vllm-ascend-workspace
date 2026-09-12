@@ -41,10 +41,9 @@ tool_timeout_sec = 600
 enabled = true
 
 [mcp_servers.vaws_knowledge.env]
-VAWS_KNOWLEDGE_PROJECT_ROOTS = ".agents/knowledge"
-VAWS_KNOWLEDGE_CANDIDATE_ROOT = ".vaws-local/knowledge/candidate"
+VAWS_KNOWLEDGE_PROJECT_ROOTS = "/absolute/path/to/vllm-ascend-workspace/.agents/knowledge"
+VAWS_KNOWLEDGE_CANDIDATE_ROOT = "/absolute/path/to/vllm-ascend-workspace/.vaws-local/knowledge/candidate"
 VAWS_KNOWLEDGE_ORIGIN_REPO = "vllm-ascend-workspace/vllm-ascend-workspace"
-VAWS_KNOWLEDGE_REDACTION_PROFILE = "r2"
 
 [features]
 hooks = true

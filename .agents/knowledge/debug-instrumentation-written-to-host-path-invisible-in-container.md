@@ -4,13 +4,11 @@ Status: historical, unverified. Confidence: low.
 
 Imported from the project note dated 2026-09-07. The source did not provide a complete reproducible evidence chain. Claims of verification in the historical description are not current support guarantees.
 
-Known conditions and unknown dimensions are preserved below. Recheck actual code, model configuration and runtime facts before applying this note.
-
 ## Avoidance
 
 Treat 'no probe output at all' as a delivery problem first and a logic problem second. Do not add more instrumentation until the resolved import path has been confirmed.
 
-## Fingerprints
+## Search terms
 
 - probe file written but never executed
 - sync success but no dump output
@@ -28,83 +26,12 @@ The service imports the package from a different tree than the one that was writ
 
 Parity or file write reports success and the file exists, but the probe produces no output, no log line and no dump directory. Time is then spent debugging the probe logic itself.
 
-## Recorded conditions
+## Recorded context
 
-{
-  "soc": {
-    "range": {
-      "min": null,
-      "max": null
-    }
-  },
-  "cann": {
-    "range": {
-      "min": null,
-      "max": null
-    }
-  },
-  "driver": {
-    "range": {
-      "min": null,
-      "max": null
-    }
-  },
-  "python_abi": {
-    "range": {
-      "min": null,
-      "max": null
-    }
-  },
-  "torch": {
-    "range": {
-      "min": null,
-      "max": null
-    }
-  },
-  "torch_npu": {
-    "range": {
-      "min": null,
-      "max": null
-    }
-  },
-  "vllm": {
-    "range": {
-      "min": null,
-      "max": null
-    }
-  },
-  "vllm_ascend": {
-    "range": {
-      "min": null,
-      "max": null
-    }
-  },
-  "model": {
-    "range": {
-      "min": null,
-      "max": null
-    }
-  },
-  "topology": {
-    "range": {
-      "min": null,
-      "max": null
-    }
-  },
-  "execution_mode": {
-    "range": {
-      "min": null,
-      "max": null
-    }
-  },
-  "component": {
-    "values": [
-      "remote-instrumentation-delivery",
-      "source-tree-resolution"
-    ]
-  }
-}
+- component: remote-instrumentation-delivery, source-tree-resolution.
 
-## Provenance
+Other environment and version details were not recorded.
+
+## Source
 
 Source: vllm-ascend-workspace/vllm-ascend-workspace; legacy identifier: debug-instrumentation-written-to-host-path-invisible-in-container; first observed: 2026-09-07.

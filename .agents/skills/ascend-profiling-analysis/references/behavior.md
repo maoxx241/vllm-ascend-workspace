@@ -178,7 +178,7 @@ capped at `medium` confidence; only an exact catalog-name match can report
 not plausible `org/name` repo ids, so family display names never turn into
 real Hugging Face / ModelScope requests.
 
-The early resolver has two fast knowledge paths before any statistical
+The early resolver has two catalog-based paths before any statistical
 fallback:
 
 - Explicit user context: exact model ids, fuzzy family names, and structure
@@ -278,3 +278,17 @@ If a claim cannot be backed at row level, the agent must surface it as a `limita
 - Attribute HBM / 显存. Use `ascend-memory-profiling`.
 - Edit submodule code or push commits.
 - Rewrite single-rank step boundaries from cross-rank evidence (the analysis framework intentionally forbids this).
+
+## Related knowledge
+
+Reports preserve existing reference links for optional reading. The wrapper
+performs no knowledge queries, starts no retrieval service and does not rewrite
+the pulled summary to enrich it. The Agent may use the knowledge MCP tools when
+related experience helps interpret a finding. References do not alter measured
+findings, layer validation or analysis status.
+
+The analyzer's bundled YAML/JSON files under
+`scripts/ascend_profile/knowledge/` are implementation data. Their schemas
+serve code and tests and do not prescribe a format for workspace notes.
+See the [data and reference index](../scripts/ascend_profile/knowledge/index.md)
+when changing the corresponding analyzer behavior.

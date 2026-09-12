@@ -5,11 +5,9 @@ catalogue. It does not load any profiling data; it only verifies that
 the values Python is wired to emit are present in the YAML, and that
 the YAML doesn't list values nothing in Python emits.
 
-Today the source of truth for these enums is still Python. The YAML is
-the agent-facing contract layer; downstream agents and the HTML report
-read it to know which values are legal. If you add a new enum value in
-Python without updating the YAML, this test fails — the failure message
-points at the file you must edit.
+The YAML is a test fixture for the emitting code's output enums. Code changes
+that affect these values update the fixture in the same change. This is not
+a knowledge format or a reading requirement for analysis tasks.
 """
 
 from __future__ import annotations
@@ -38,8 +36,7 @@ def _load_enum(name: str) -> set[str]:
 
 def test_semantic_conventions_file_exists():
     assert SEMCONV_PATH.exists(), (
-        "knowledge/semantic_conventions.yaml is the agent-facing enum "
-        "contract; do not delete it"
+        "knowledge/semantic_conventions.yaml is the analyzer's enum test fixture"
     )
     doc = YAML.safe_load(SEMCONV_PATH.read_text(encoding="utf-8"))
     assert doc.get("version") == 1
