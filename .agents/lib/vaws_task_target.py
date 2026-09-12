@@ -5,6 +5,7 @@ This is not a request ledger, allocator, or recovery manager.
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 from typing import Any
 
@@ -32,9 +33,14 @@ class TaskTargetError(RuntimeError):
 def resolve_context_file(explicit: str | None = None) -> str:
     from vaws_managed_entry import require_managed_owner
     from vaws_coordinator.agent_session import load_context
+    from vaws_coordinator_launch import coordinator_environment
 
     try:
         require_managed_owner(Path(__file__).resolve().parents[2])
+        # A shell can cd into a source submodule or another local directory.
+        # Keep the registry selected by this workspace's native hook; the
+        # package still resolves identity solely from the native id/context.
+        os.environ["VAWS_AGENT_SESSIONS_DIR"] = coordinator_environment()["VAWS_AGENT_SESSIONS_DIR"]
         return load_context(explicit or "")["context_file"]
     except (ValueError, RuntimeError) as exc:
         raise TaskTargetError(str(exc)) from exc
@@ -42,7 +48,11 @@ def resolve_context_file(explicit: str | None = None) -> str:
 
 def task_client(context_file: str | None = None, **kwargs: Any) -> Any:
     from vaws_coordinator.task_client import TaskClient
+    from vaws_coordinator_launch import coordinator_environment
 
+    identity = coordinator_environment().get("VAWS_GITHUB_IDENTITY_FILE")
+    if identity:
+        kwargs.setdefault("identity_file", identity)
     return TaskClient(resolve_context_file(context_file), **kwargs)
 
 

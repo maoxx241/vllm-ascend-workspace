@@ -133,14 +133,16 @@ class OfficialStdioTests(unittest.TestCase):
                         self.assertIn("host_protocol_schema_version", capability)
                         self.assertIsInstance(capability["version"], str)
                         names = [tool.name for tool in (await client.list_tools()).tools]
-                        self.assertEqual(set(names), {"vaws_session", "vaws_run", "vaws_execution", "vaws_finish"})
+                        self.assertEqual(set(names), {"vaws_session", "vaws_run", "vaws_execution", "vaws_finish", "vaws_message"})
 
                         async def call(name, context=None, **arguments):
                             if context:
                                 arguments["context_file"] = context
                             result = (await client.call_tool(name, arguments)).model_dump(by_alias=True)
                             structured = result["structuredContent"]
-                            self.assertEqual(result["content"][0]["text"], structured["summary"])
+                            self.assertEqual(json.loads(result["content"][0]["text"]), structured)
+                            self.assertEqual(structured["schema_version"], "remote-dev.result.v1")
+                            self.assertTrue(structured["summary"])
                             return result, structured
 
                         opened, state = await call(

@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+import subprocess
 import sys
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -73,7 +74,7 @@ def test_normalization_keeps_runtime_observation():
     assert result["observation"] == observation
 
 
-def test_collector_runs_abba_and_restores_original_sources(tmp_path):
+def test_collector_runs_abba_without_rebinding_task_sources(tmp_path):
     client = Mock(context={"session": {"sources": {"vllm": {"path": "original-vllm"}, "vllm-ascend": {"path": "original-ascend"}}}})
     settings = {"benchmark": {"model": "/models/example"}, "runs": 2, "warmups": 1,
                 "thresholds": config()["thresholds"],
@@ -88,8 +89,58 @@ def test_collector_runs_abba_and_restores_original_sources(tmp_path):
         result = collector.collect_experiment(write(tmp_path / "input.json", settings), output_dir=tmp_path / "collection", context_file="native-context")
     assert [state for phase, state, _ in seen if phase == "measure"] == ["baseline", "candidate", "candidate", "baseline"]
     assert all(sources == settings[state]["sources"] for _, state, sources in seen)
-    client.sources.assert_called_once_with({"vllm": "original-vllm", "vllm-ascend": "original-ascend"})
+    client.sources.assert_not_called()
     assert result["status"] == "passed"
+
+
+@pytest.mark.parametrize("source_mode", ["automatic", "explicit-empty", "explicit"])
+def test_experiment_preserves_native_and_explicit_source_defaults(tmp_path, source_mode):
+    from vaws_coordinator.agent_session import AgentSessions, source_defaults
+    from vaws_coordinator.task_client import TaskClient
+
+    def repository(name):
+        path = tmp_path / name
+        subprocess.run(["git", "init", "-q", str(path)], check=True)
+        subprocess.run(["git", "-C", str(path), "-c", "user.name=Fixture",
+                        "-c", "user.email=fixture@example.invalid", "commit", "-qm", "fixture", "--allow-empty"], check=True)
+        return str(path)
+
+    native, baseline, candidate = map(repository, ("native", "baseline", "candidate"))
+    store = AgentSessions(tmp_path / "sessions")
+    context = store.bind_native_sources(store.attach("codex", "native-thread", native))
+    if source_mode != "automatic":
+        context = store.bind_sources(context, {} if source_mode == "explicit-empty" else {"custom": native})
+    before = source_defaults(context["session"], context["attachment"])
+    client = TaskClient(context["context_file"], user="fixture", service=Mock())
+    client.target = Mock(return_value={"live": True, "service_port": 8000, "python": "/managed/python",
+                                      "endpoint": {"host": "example.invalid", "port": 22}})
+    client.observe = Mock()
+    client.wait = Mock(return_value={"state": "succeeded", "resources_released": True})
+    settings = {"benchmark": {"model": "/models/example"}, "runs": 2, "warmups": 1,
+                "thresholds": config()["thresholds"],
+                "baseline": {"sources": {"vllm": baseline, "vllm-ascend": baseline}},
+                "candidate": {"sources": {"vllm": candidate, "vllm-ascend": candidate}}}
+    submitted = []
+
+    def submit(_config, *, sources=None):
+        current = store.context(context["attachment"]["id"])
+        effective = sources if sources is not None else {
+            name: ref["path"] for name, ref in source_defaults(current["session"], current["attachment"])["sources"].items()
+        }
+        submitted.append(effective)
+        return {"execution_id": f"owned-{len(submitted)}", "state": "running"}
+
+    raw = {"output_throughput": 100, "mean_ttft_ms": 10, "observation": recorded_observation()}
+    with patch.object(collector, "task_client", return_value=client), \
+         patch.object(collector, "call_serve_start", side_effect=submit), \
+         patch.object(collector, "wait_for_ready", return_value={"ready": True}), \
+         patch.object(collector, "run_bench_on_remote", return_value=raw):
+        collector.collect_experiment(write(tmp_path / "input.json", settings), output_dir=tmp_path / "collection",
+                                     context_file=context["context_file"])
+
+    after = store.context(context["attachment"]["id"])
+    assert source_defaults(after["session"], after["attachment"]) == before
+    assert submitted == [settings[entry["state"]]["sources"] for entry in performance.build_schedule(warmups=1, runs=2)]
 
 
 def test_benchmark_failure_stops_only_created_execution():

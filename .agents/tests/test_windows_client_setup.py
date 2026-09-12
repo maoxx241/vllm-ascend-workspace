@@ -255,7 +255,8 @@ def test_setup_updates_owned_task_entry_and_preserves_configuration(client, rela
               else setup.tomllib.loads(rendered)["mcp_servers"])
     migrated = parsed["vaws_task"]
     assert migrated["command"] == desired["command"]
-    assert migrated["args"] == existing["args"]
+    assert migrated["args"] == ([str(workspace / ".agents/scripts/vaws_claude_entry.py"), "task"]
+                                if client == "claude" else existing["args"])
     assert migrated["enabled_tools"] == existing["enabled_tools"]
     assert {key: migrated["env"][key] for key in existing["env"]} == existing["env"]
     assert migrated["env"]["DEFAULT"] == "added"
@@ -349,13 +350,21 @@ def test_generated_provider_and_hooks_move_to_new_pin_preserving_user_fields(cli
     plan = setup.build_plan(client, workspace)
     rendered = plan["files"][path]
     servers = json.loads(rendered)["mcpServers"] if client == "claude" else setup.tomllib.loads(rendered)["mcp_servers"]
-    assert servers[key] == {**existing, "command": new_command, "env": {setup.PIN_ENV: new_pin, "CUSTOM": "keep"}}
+    expected = {**existing, "command": new_command, "env": {setup.PIN_ENV: new_pin, "CUSTOM": "keep"}}
+    if client == "claude":
+        kind = {"vaws-task": "task", "remote-dev": "remote", "vaws-knowledge": "knowledge"}[provider]
+        expected.update(args=[str(workspace / ".agents/scripts/vaws_claude_entry.py"), kind], env={"CUSTOM": "keep"})
+    assert servers[key] == expected
     assert servers["foreign"] == {"command": "unchanged"}
     hooks = json.loads(plan["files"][hook_path])["hooks"]["SessionStart"]
     assert hooks[0] == {"hooks": [{"command": "foreign literal %PATH% $value", "custom": "untouched"}]}
     assert len(hooks) == 2 and hooks[1]["hooks"][0]["custom"] == "kept"
     arguments = setup.hook_argv(hooks[1]["hooks"][0]["command"])
-    assert arguments[arguments.index("--environment-receipt") + 1] == new_pin
+    if client == "claude":
+        assert arguments[1:3] == [str(workspace / ".agents/scripts/vaws_claude_entry.py"), "session"]
+        assert "--environment-receipt" not in arguments  # selected from actual native cwd at launch
+    else:
+        assert arguments[arguments.index("--environment-receipt") + 1] == new_pin
     for output, content in plan["files"].items():
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(content, encoding="utf-8")

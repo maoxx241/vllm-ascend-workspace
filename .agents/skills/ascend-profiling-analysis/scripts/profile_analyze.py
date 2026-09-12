@@ -626,7 +626,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     manifest = input_info["manifest"]
     if manifest is not None:
         args.execution_id = args.execution_id or manifest.get("execution_id")
-        args.context_file = args.context_file or manifest.get("context_file")
+        # A collection report describes evidence; it does not associate this
+        # native session with the collecting task. Keep native/explicit context.
         args.host = args.host or manifest.get("host")
         args.port = args.port or manifest.get("port")
     if manifest is not None and not args.hardware_model:

@@ -32,6 +32,7 @@ def test_only_declared_local_arguments_are_translated():
 
 def test_invocation_preserves_flags_module_arguments_and_explicit_owner_environment():
     environment = {'VAWS_AGENT_SESSIONS_DIR': '/mnt/d/shared/agent-sessions',
+                   'VAWS_GITHUB_IDENTITY_FILE': '/mnt/d/shared/github.json',
                    'VAWS_COORDINATOR_STATE_DIR': '/mnt/d/shared/coordinator',
                    'VAWS_CONTEXT_FILE': '/mnt/d/shared/context.json',
                    'CODEX_THREAD_ID': 'this-native-session', 'REMOTE_DEV_DEFAULT_USER': 'root',
@@ -47,6 +48,7 @@ def test_invocation_preserves_flags_module_arguments_and_explicit_owner_environm
     assert arguments[9:] == ['business.cli', '--context-file', 'D:\\shared\\context.json',
                              '--command', 'cat /mnt/d/remote']
     assert child['VAWS_AGENT_SESSIONS_DIR'] == r'D:\shared\agent-sessions'
+    assert child['VAWS_GITHUB_IDENTITY_FILE'] == r'D:\shared\github.json'
     assert child['VAWS_COORDINATOR_STATE_DIR'] == r'D:\shared\coordinator'
     assert child['VAWS_CONTEXT_FILE'] == r'D:\shared\context.json'
     assert child['REMOTE_DEV_STATE_DIR'] == r'D:\shared\remote-dev'
@@ -151,8 +153,7 @@ import vaws_managed_entry as entry
 import vaws_environment
 if os.environ.get('OWNER_FIXTURE_CHILD') != '1':
     entry.windows_mounted_workspace = lambda root: True
-    entry.managed_python = lambda root: sys.executable
-    vaws_environment.windows_ready = lambda root: {'python': sys.executable}
+    vaws_environment.windows_ready = lambda root, **kwargs: {'python': sys.executable}
     def invocation(*args, **kwargs):
         return [sys.executable, '-B', '-X', 'utf8', __file__, *sys.argv[1:]], {**os.environ, 'OWNER_FIXTURE_CHILD': '1'}
     entry.managed_invocation = invocation

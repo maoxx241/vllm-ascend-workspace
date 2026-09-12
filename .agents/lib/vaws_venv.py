@@ -1,4 +1,4 @@
-"""Select the immutable environment pinned by this client or current inputs.
+"""Select the immutable environment pinned by this client or worktree session.
 
 The bootstrap command is ``uv run --no-project python .agents/scripts/vaws_deps.py sync``. Windows
 and WSL environments coexist in the per-user content-addressed store. Interpreter
@@ -28,14 +28,16 @@ def configure_windows_stdio() -> None:
 
 
 def ensure_workspace_interpreter(
-    *, repo_root: Path, packages: tuple[str, ...] = SENTINEL_PACKAGES,
+    *, repo_root: Path, packages: tuple[str, ...] = SENTINEL_PACKAGES, use_saved: bool = True,
 ) -> None:
     """Choose by dependency identity; importability alone never selects a runtime."""
     configure_windows_stdio()
     if os.environ.get(SKIP_ENV) == "1":
         return
     try:
-        receipt = native_ready(repo_root)
+        # Native GUI shells need not inherit the hook/MCP process's pin. Their
+        # worktree selection remains valid while the Agent edits dependencies.
+        receipt = native_ready(repo_root, use_saved=use_saved)
     except EnvironmentError as exc:
         sys.stderr.write(f"{exc}; run `{REMEDY}` before starting a new client.\n")
         raise SystemExit(2) from exc

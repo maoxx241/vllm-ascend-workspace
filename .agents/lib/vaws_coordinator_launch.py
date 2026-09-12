@@ -2,7 +2,8 @@
 
 The coordinator package does not read former checkout-root environment
 variables and does not locate this tree by path. It reads
-``VAWS_AGENT_SESSIONS_DIR`` and optional ``VAWS_COORDINATOR_STATE_DIR``.
+``VAWS_AGENT_SESSIONS_DIR``, optional ``VAWS_COORDINATOR_STATE_DIR`` and the
+initialized user snapshot through ``VAWS_GITHUB_IDENTITY_FILE``.
 """
 from __future__ import annotations
 
@@ -49,6 +50,13 @@ def coordinator_environment(base: Mapping[str, str] | None = None, *, repo_root:
     env["VAWS_AGENT_SESSIONS_DIR"] = str(sessions)
     if "VAWS_COORDINATOR_STATE_DIR" in env:
         env["VAWS_COORDINATOR_STATE_DIR"] = _absolute_path(env["VAWS_COORDINATOR_STATE_DIR"], repo_root)
+    identity = env.get("VAWS_GITHUB_IDENTITY_FILE")
+    if identity:
+        env["VAWS_GITHUB_IDENTITY_FILE"] = _absolute_path(identity, repo_root)
+    else:
+        snapshot = shared_workspace_root(repo_root) / ".vaws-local/github.json"
+        if snapshot.is_file():
+            env["VAWS_GITHUB_IDENTITY_FILE"] = str(snapshot)
     env.pop("VAWS_HOST_QUEUE_MODULE", None)
     return env
 

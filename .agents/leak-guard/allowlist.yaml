@@ -93,8 +93,8 @@ allowlist:
     match: glm450919
     justification: Trace-directory token for a GLM-4.5 capture date, matched by the employee-id shape by coincidence; it names a public model and a date.
 
-  - id: repo-init-github-ssh-user
-    path_glob: .agents/skills/repo-init/**
+  - id: workspace-github-ssh-user
+    path_glob: .agents/**
     categories: [email]
     match: git@github.com
     justification: The fixed SSH user of github.com in clone URLs; it is a service account name shared by every GitHub user, not a personal address.
@@ -118,6 +118,12 @@ allowlist:
     categories: [secret-key]
     match: '"do-not-store"'
     justification: Literal used by a test that asserts secret-shaped fields are rejected; the value is the assertion, not a credential.
+
+  - id: workspace-identity-copy-test-value
+    path_glob: .agents/tests/test_workspace_entry.py
+    categories: [secret-key]
+    match: '"do-not-copy"'
+    justification: Fabricated value used to assert that identity copying drops a token field; no real credential is present.
 
 
 

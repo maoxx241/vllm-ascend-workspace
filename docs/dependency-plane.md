@@ -33,6 +33,18 @@ records their resolved commits. Read exact installed/locked identities through
 `vaws_deps.py status` instead of maintaining a second SHA table. Acceptance
 uses installed packages, including their public APIs and packaged data.
 
+The [workspace updater](forks-and-updates.md) consumes this exact
+combination from the official default branch. It invokes that revision's sync
+entry in an isolated checkout and prepares its pinned vaws-top wheel.
+Configured Codex/Cursor native worktree setup prepares once after the client
+creates a directory and before the Agent starts. It fixes the chosen environment
+and that directory's MCP/hook wiring. The callback does not create another editing
+copy or run from SessionStart/resume. Existing directories, resumed sessions and
+running services keep their selected environments; there is no periodic updater.
+Component releases do not trigger unrelated per-component upgrades. The optional
+CLI launcher uses the same updater, without becoming an Agent task prerequisite.
+Setup wiring has contract tests; real GUI new-session acceptance remains pending.
+
 ## Loader
 
 `.agents/lib/vaws_dependency.py` answers three questions. It does not run

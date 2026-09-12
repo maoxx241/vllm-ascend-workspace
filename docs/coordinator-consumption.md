@@ -3,7 +3,7 @@
 Status: current
 
 The local task registry, environment/runtime pool, NPU and port leases, and
-the four `vaws_*` tools live in
+the `vaws_*` tools live in
 [`vaws-coordinator`](https://github.com/vllm-ascend-workspace/vaws-coordinator).
 This workspace imports that package. It does not clone a checkout, does not
 own request association, and does not tick the pool.
@@ -13,10 +13,14 @@ See [target-state.md](target-state.md) and [dependency-plane.md](dependency-plan
 ## 1. Public actions
 
 Configure clients with `uv run --no-project python .agents/scripts/vaws_client_setup.py --client CLIENT --apply`.
-The native hook supplies `context_file`; never guess the task from cwd or
-history. For local Codex commands, the package can also resolve the actual
-`CODEX_THREAD_ID` when the hook did not export `VAWS_CONTEXT_FILE`. Conflicting
-native IDs fail explicitly. MCP callers still supply their attachment context.
+Native hooks attach the session automatically. Codex, Claude, Cursor and Grok
+task-tool hooks inject `context_file`; an Agent does not need a preliminary
+session call. Kimi Code currently supplies context in its prompt hook but has
+no tool-input rewrite, so it is not equivalent to those adapters. Local Codex
+commands can resolve the actual `CODEX_THREAD_ID`, and Claude exports context
+through its session environment. Never guess the task from cwd or history.
+See [MCP and shell context](native-workspace-isolation.md#context-in-mcp-and-shell)
+for the remaining shell-entry limits.
 
 Kimi Code reads hooks from `~/.kimi-code/config.toml` (or `KIMI_CODE_HOME`)
 and discovers project `.kimi-code/mcp.json`. Setup returns its executable and
@@ -25,10 +29,11 @@ contract and is not the Kimi Code client supported by this setup.
 
 | Tool | Meaning |
 |---|---|
-| `vaws_session` | Inspect this native attachment's VAWS task; bind actual worktrees |
+| `vaws_session` | Optional inspection or explicit source-default override; native attachment already binds the actual worktree |
 | `vaws_run` | Submit `command` plus optional `sources` / `env` / `environment` / `resources` / `topology` / `timeout_seconds` / `service` / `restart`. Skills do not pass `request_id` / `profile_key` / `runtime_id` / a Python path |
 | `vaws_execution` | Status, tail, stop, or read the ordinary endpoint of one owned execution |
 | `vaws_finish` | Close admission; stop owned executions; keep container, roots, evidence |
+| `vaws_message` | Send text to a returned coordination reference or reply_reference; sender and delivery bookkeeping are automatic |
 
 Task MCP/CLI status may reuse a snapshot for two seconds. Use `refresh: true`
 or `python -m vaws_coordinator.vaws execution --refresh` for a new observation. Compact results retain
@@ -89,6 +94,7 @@ not a per-model launch snippet.
 |---|---|---|
 | `VAWS_AGENT_SESSIONS_DIR` | `<shared workspace>/.vaws-local/agent-sessions` | One local task registry directory for the package |
 | `VAWS_COORDINATOR_STATE_DIR` | unset; package default under `.vaws-local/coordinator` | Coordinator-owned pool and machine directory |
+| `VAWS_GITHUB_IDENTITY_FILE` | confirmed `.vaws-local/github.json` when present | Bind the initialized user without per-call identity arguments |
 
 There is no workspace `leases.json` and no `session.json` resource authority.
 
@@ -108,7 +114,8 @@ a state directory already owned through Windows IPC.
 
 ## 3. User container
 
-Each host has one persistent user container.
+Each host has one persistent container per user, named `vaws-<github-login>`
+by default. Initialization supplies the user automatically; SSH still uses root.
 Bootstrap, recipe execution, and runtime registration belong to the
 coordinator (`python -m vaws_coordinator provision --host ... --image ...
 --user ...`). Container-user configuration belongs to coordinator provisioning;
@@ -124,8 +131,7 @@ ledger or paper over unfinished package behavior.
 ```python
 from vaws_coordinator.task_client import TaskClient
 
-client = TaskClient(context_file)  # native session hook; never cwd/history
-client.sources({"vllm": "/actual/vllm", "vllm-ascend": "/actual/vllm-ascend"})
+client = TaskClient()  # native context/environment; never cwd/history
 reply = client.run(
     command='"$VAWS_PYTHON" -m vllm.entrypoints.cli.main serve ... --port "$VAWS_SERVICE_PORT"',
     env=None,
@@ -144,6 +150,11 @@ client.observe(reply["execution_id"], "target", role="decode")
 client.observe(reply["execution_id"], "stop")
 client.finish()
 ```
+
+Native context supplies the attachment and its source defaults. An explicit
+`TaskClient(context_file)` is for an intentional association or a client without
+a native context channel. Use a run's `sources` only when that operation needs
+different inputs; routine skills do not fill identity or source records.
 
 `preparing` is observable pending state during long environment setup. Skills
 retain that phase and the same `execution_id`. Workflows that need a running

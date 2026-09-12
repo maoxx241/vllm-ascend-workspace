@@ -9,7 +9,8 @@ client configuration from tests.
 Three logical providers are written when needed:
 
 * `vaws-task` -> `python -m vaws_coordinator task-server`, which serves
-  `vaws_session` / `vaws_run` / `vaws_execution` / `vaws_finish`. Local
+  `vaws_session` / `vaws_run` / `vaws_execution` / `vaws_finish` and optional
+  `vaws_message`. Local
   attach/finish need no manager.
 * `remote-dev` -> `python -m remote_dev.mcp.server`, which serves `remote_*`.
 * `vaws-knowledge` -> `python -m vaws_knowledge.server.mcp_server`, which
@@ -43,7 +44,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / ".agents/lib"))
 from vaws_venv import ensure_workspace_interpreter
 
-ensure_workspace_interpreter(repo_root=ROOT)
+ensure_workspace_interpreter(repo_root=ROOT, use_saved=False)
 
 import tomllib  # noqa: E402
 
@@ -52,6 +53,7 @@ from vaws_knowledge_service import knowledge_owner_env, knowledge_owner_path, kn
 from vaws_local_owner import managed_path as _managed_path, managed_python as _managed_python, managed_receipt, windows_interop_env, windows_mounted_workspace, accessible_windows_path
 from vaws_environment import PIN_ENV, native_ready, windows_ready, read_receipt
 from vaws_local_state import agent_sessions_root
+from vaws_native_task_env import user_task_env
 from vaws_remote_dev import state_dir
 
 CLIENTS = {"claude", "grok", "kimi", "codex", "cursor"}
@@ -61,6 +63,7 @@ TASK_SERVER_NAME = "vaws-task"
 REMOTE_DEV_SERVER_NAME = "remote-dev"
 KNOWLEDGE_SERVER_NAME = "vaws-knowledge"
 HOOK_TIMEOUT_SECONDS = 12
+TASK_TOOL_MATCHER = r"(?:^|:|__)vaws_(session|run|execution|finish|message)$"
 
 
 def remote_dev_server_args():
@@ -114,6 +117,7 @@ def task_server_env():
     keys = (
         "VAWS_AGENT_SESSIONS_DIR",
         "VAWS_COORDINATOR_STATE_DIR",
+        "VAWS_GITHUB_IDENTITY_FILE",
     )
     result = {key: managed_path(env[key]) for key in keys if key in env}
     result[PIN_ENV] = managed_receipt(ROOT)["receipt"]
@@ -133,8 +137,10 @@ def existing_task_env(client, project, *, kimi_config=None):
                 servers = json.loads(path.read_text(encoding="utf-8")).get("mcpServers") or {}
             except json.JSONDecodeError:
                 return {}
-            entry = servers.get(TASK_SERVER_NAME) or servers.get("vaws_task") or {}
-            return dict(entry.get("env") or {})
+            entry = servers.get(TASK_SERVER_NAME) or servers.get("vaws_task")
+            if entry is not None:
+                return dict(entry.get("env") or {})
+        return user_task_env(client, project, kimi_config=kimi_config)
     if client in {"codex", "grok"}:
         path = project / ("." + client) / "config.toml"
         if path.is_file():
@@ -212,7 +218,7 @@ def shared_kimi_servers(servers, project):
     if not executable or not cwd or ntpath.splitdrive(executable)[0].casefold() != ntpath.splitdrive(cwd)[0].casefold():
         return servers
     command = "./" + ntpath.relpath(executable, cwd).replace("\\", "/")
-    path_keys = {"VAWS_AGENT_SESSIONS_DIR", "VAWS_COORDINATOR_STATE_DIR", "REMOTE_DEV_STATE_DIR",
+    path_keys = {"VAWS_AGENT_SESSIONS_DIR", "VAWS_COORDINATOR_STATE_DIR", "VAWS_GITHUB_IDENTITY_FILE", "REMOTE_DEV_STATE_DIR",
                  "VAWS_KNOWLEDGE_CONFIG", "VAWS_KNOWLEDGE_PROJECT_ROOTS", "VAWS_KNOWLEDGE_CANDIDATE_ROOT", "VAWS_KNOWLEDGE_STATE", PIN_ENV}
     return {name: {**entry, "command": command,
                    "env": windows_interop_env({**{key: (native(value) or value) if key in path_keys else value
@@ -231,6 +237,10 @@ def hook_command(client, project, env=None):
         "--agent-sessions-dir", env["VAWS_AGENT_SESSIONS_DIR"],
         "--environment-receipt", managed_receipt(ROOT)["receipt"],
     ]
+    if env.get("VAWS_GITHUB_IDENTITY_FILE"):
+        argv += ["--github-identity-file", env["VAWS_GITHUB_IDENTITY_FILE"]]
+    if env.get("VAWS_COORDINATOR_STATE_DIR"):
+        argv += ["--coordinator-state-dir", managed_path(env["VAWS_COORDINATOR_STATE_DIR"])]
     return local_hook_command(argv)
 
 
@@ -270,14 +280,20 @@ def hook_argv(command):
 def hook_groups(client, project, env=None):
     command = hook_command(client, project, env)
     if client == "cursor":
-        return {
+        groups = {
             event[0].lower() + event[1:]: [{"command": command}]
             for event in EVENTS if event not in {"PreToolUse", "UserPromptSubmit"}
         }
-    return {
+        groups["preToolUse"] = [{"command": command, "timeout": HOOK_TIMEOUT_SECONDS,
+                                 "matcher": TASK_TOOL_MATCHER}]
+        return groups
+    groups = {
         event: [{"hooks": [{"type": "command", "command": command, "timeout": HOOK_TIMEOUT_SECONDS}]}]
-        for event in EVENTS
+        for event in EVENTS if not (client == "kimi" and event == "PreToolUse")
     }
+    if "PreToolUse" in groups:
+        groups["PreToolUse"][0]["matcher"] = TASK_TOOL_MATCHER
+    return groups
 
 
 OWNED_HOOK_SCRIPT = ROOT / ".agents/hooks/vaws_session.py"
@@ -432,6 +448,13 @@ def merge_hook_event(existing, desired, client, project):
             if entries:
                 updated_group = dict(group)
                 updated_group["hooks"] = entries
+                # Older generated groups ran for every tool. Narrow only an
+                # entirely owned group; user matchers and mixed groups retain
+                # their existing scope.
+                if ("matcher" not in group and desired[0].get("matcher")
+                        and all(owned_hook_command(entry.get("command", ""), client, project, expected=expected)
+                                for entry in entries)):
+                    updated_group["matcher"] = desired[0]["matcher"]
                 result.append(updated_group)
             continue
         command = group.get("command", "")
@@ -440,6 +463,8 @@ def merge_hook_event(existing, desired, client, project):
                 continue
             updated = dict(group)
             updated["command"] = desired_command
+            if desired[0].get("matcher"):
+                updated.setdefault("matcher", desired[0]["matcher"])
             result.append(updated)
             replaced = True
         else:
@@ -481,17 +506,35 @@ def owned_environment_server(existing, checkout):
     return server_command_identity(existing.get("command", ""), checkout) == hook_path_identity(receipt["python"])
 
 
+def legacy_generated_toml_server(text, name, key, existing, checkout):
+    """Recognize the old generated block, not an arbitrary local Python server."""
+    if existing.get("args") not in (task_server_args(), knowledge_server_args(), remote_dev_server_args()):
+        return False
+    command = server_command_identity(existing.get("command", ""), checkout)
+    if command not in {server_command_identity(ROOT / relative, checkout)
+                       for relative in (".venv/bin/python", ".venv/Scripts/python.exe")}:
+        return False
+    blocks = re.findall(r"^# BEGIN VAWS " + re.escape(name) + r"\n(.*?)^# END VAWS "
+                        + re.escape(name) + r"(?:\n|\Z)", text, re.M | re.S)
+    if len(blocks) != 1:
+        return False
+    try:
+        return tomllib.loads(blocks[0]) == {"mcp_servers": {key: existing}}
+    except tomllib.TOMLDecodeError:
+        return False
+
+
 def managed_environment_change(existing, desired, *, checkout):
     return (existing.get("args") == desired.get("args") and owned_environment_server(existing, checkout)
             and (existing.get("command") != desired.get("command")
                  or existing.get("env", {}).get(PIN_ENV) != desired.get("env", {}).get(PIN_ENV)))
 
 
-def knowledge_owner_defaults(existing, desired, checkout):
+def knowledge_owner_defaults(existing, desired, checkout, *, legacy=False):
     """Normalize generated knowledge paths without replacing custom locations."""
     environment = dict(existing.get("env") or {})
     if (existing.get("args") == desired.get("args") == knowledge_server_args()
-            and owned_environment_server(existing, checkout)):
+            and (legacy or owned_environment_server(existing, checkout))):
         if desired.get("env", {}).get("VAWS_KNOWLEDGE_CONFIG"):
             defaults = {"VAWS_KNOWLEDGE_PROJECT_ROOTS": ".agents/knowledge",
                         "VAWS_KNOWLEDGE_CANDIDATE_ROOT": ".vaws-local/knowledge/candidate",
@@ -610,14 +653,25 @@ def toml_server_body(key, entry):
     return body
 
 
-def fill_toml_server_env(text, key, existing, desired, *, checkout=None):
+def fill_toml_server_env(text, key, existing, desired, *, checkout=None, legacy=False):
     """Add missing defaults to an ordinary env table; preserve user values/text."""
     desired_env = dict(desired.get("env") or {})
-    normalized = knowledge_owner_defaults(existing, desired, ROOT if checkout is None else checkout)
+    checkout = ROOT if checkout is None else checkout
+    normalized = knowledge_owner_defaults(existing, desired, checkout, legacy=legacy)
+    if legacy and existing.get("args") == remote_dev_server_args():
+        defaults = {"REMOTE_DEV_DEFAULT_ROOT": "/vllm-workspace", "REMOTE_DEV_DEFAULT_CWD": "/vllm-workspace",
+                    "REMOTE_DEV_RUNTIME_ENV_FILE": "/etc/profile.d/vaws-ascend-env.sh"}
+        for name, value in defaults.items():
+            if normalized.get(name) == value and name not in desired_env:
+                normalized.pop(name)
+        resolver = normalized.get("REMOTE_DEV_RESOLVERS", "")
+        if (isinstance(resolver, str) and resolver.endswith(":setup") and server_command_identity(resolver[:-6], checkout)
+                == server_command_identity(ROOT / ".agents/lib/vaws_remote_dev_plugin.py", checkout)):
+            normalized.pop("REMOTE_DEV_RESOLVERS")
     removals = set(existing.get("env", {})) - set(normalized)
     replacements = {name: value for name, value in normalized.items()
                     if value != existing.get("env", {}).get(name)}
-    if owned_environment_server(existing, ROOT if checkout is None else checkout) and PIN_ENV in desired_env:
+    if (legacy or owned_environment_server(existing, checkout)) and PIN_ENV in desired_env:
         replacements[PIN_ENV] = desired_env[PIN_ENV]
     if "WSLENV" in desired_env:
         desired_env["WSLENV"] = windows_interop_env({**desired_env, **existing.get("env", {})})["WSLENV"]
@@ -671,7 +725,8 @@ def configuration(client, project, *, kimi_config=None, task_only=False):
     return build_plan(client, project, kimi_config=kimi_config, task_only=task_only)["files"]
 
 
-def build_plan(client, project, *, kimi_config=None, task_only=False):
+def build_plan(client, project, *, kimi_config=None, task_only=False, kimi_session_setup=False,
+               cursor_global_mcp=False, codex_global_hooks=False):
     project = project.expanduser().resolve(strict=True)
     env = launch_env(client, project, kimi_config=kimi_config)
     groups = hook_groups(client, project, env)
@@ -724,12 +779,14 @@ def build_plan(client, project, *, kimi_config=None, task_only=False):
             if matching:
                 for alias in matching:
                     before = text
+                    legacy = legacy_generated_toml_server(text, name, alias, existing[alias], project)
                     if (existing[alias].get("args") == entry.get("args")
-                            and owned_environment_server(existing[alias], project)
+                            and (legacy or owned_environment_server(existing[alias], project))
                             and editable_toml_server_env(text, alias, existing[alias])):
                         try:
                             candidate = update_toml_server_command(text, alias, entry["command"])
-                            candidate = fill_toml_server_env(candidate, alias, existing[alias], entry, checkout=project)
+                            candidate = fill_toml_server_env(candidate, alias, existing[alias], entry,
+                                                             checkout=project, legacy=legacy)
                             rendered = tomllib.loads(candidate)["mcp_servers"][alias]
                         except tomllib.TOMLDecodeError:
                             candidate = before
@@ -751,17 +808,48 @@ def build_plan(client, project, *, kimi_config=None, task_only=False):
         if changed:
             files[path] = text
     if client == "kimi":
+        from vaws_kimi_config import add_kimi_user_mcp, kimi_session_setup_enabled, migrate_kimi_hooks
         path = kimi_config or kimi_home() / "config.toml"
-        command = groups["SessionStart"][0]["hooks"][0]["command"]
+        original = path.read_text(encoding="utf-8") if path.exists() else ""
+        project_key = hashlib.sha256(str(project).encode()).hexdigest()[:16]
+        # Official Kimi 0.42 does not understand SessionSetup. Preserve an
+        # explicit extension choice on repair, and never enable it implicitly.
+        extended = kimi_session_setup or kimi_session_setup_enabled(original, project, ROOT, parse_command=hook_argv)
+        command = local_hook_command(["uv", "run", "--no-project", "python",
+                                      str(ROOT / ".agents/scripts/vaws_kimi_session_setup.py"),
+                                      "--project", str(project)]) if extended else groups["SessionStart"][0]["hooks"][0]["command"]
+        events = [*( ["SessionSetup"] if extended else []), *groups]
         body = "\n".join(
             "[[hooks]]\nevent = " + json.dumps(event) + "\ncommand = " + json.dumps(command)
-            + "\ntimeout = " + str(HOOK_TIMEOUT_SECONDS) + "\n"
-            for event in EVENTS
+            + "\ntimeout = " + str(600 if event == "SessionSetup" else HOOK_TIMEOUT_SECONDS) + "\n"
+            for event in events
         )
-        project_key = hashlib.sha256(str(project).encode()).hexdigest()[:16]
-        files[path] = managed_toml_text(path.read_text(encoding="utf-8") if path.exists() else "", "session-" + project_key, body)
+        files[path] = managed_toml_text(original, "session-" + project_key, body)
+        if extended:
+            files[path] = migrate_kimi_hooks(files[path], project, ROOT, parse_command=hook_argv)
+            add_kimi_user_mcp(files, notes, project, ROOT, path.parent,
+                              owned_server=owned_environment_server)
+    from vaws_native_setup_config import add_native_setup
+    add_native_setup(files, notes, client, project, ROOT)
+    if client == "codex":
+        from vaws_codex_config import add_codex_setup
+        add_codex_setup(files, notes, project, ROOT, shell_command=local_hook_command,
+                        parse_command=hook_argv, enable=codex_global_hooks)
+    if client == "cursor":
+        from vaws_cursor_mcp_config import add_cursor_global_mcp
+        add_cursor_global_mcp(files, notes, project, ROOT, owned_server=owned_environment_server,
+                              enable=cursor_global_mcp)
+    if client == "claude":
+        from vaws_claude_config import add_claude_setup
+        add_claude_setup(files, notes, project, ROOT, shell_command=local_hook_command,
+                         parse_command=hook_argv, owned_server=owned_environment_server)
+    executable_files = []
+    if client == "grok":
+        from vaws_grok_setup_config import plan_grok_setup
+        executable_files = plan_grok_setup(files, notes, project, ROOT)
     return {
         "files": files,
+        "executable_files": executable_files,
         "mcp_servers": {name: entry["args"] for name, entry in servers.items()},
         "notes": notes,
         "task_registry": str(agent_sessions_root()),
@@ -786,9 +874,14 @@ def apply_plan(plan):
     """Write a reviewed/generated native configuration, retaining private backups."""
     changed = []
     for path, content in plan["files"].items():
-        if path.exists() and path.read_text(encoding="utf-8") == content:
+        mode = 0o700 if path in plan.get("executable_files", []) else 0o600
+        payload = content.encode("utf-8")
+        if path.exists() and path.read_bytes() == payload:
+            if os.name != "nt" and mode == 0o700 and path.stat().st_mode & 0o777 != mode:
+                path.chmod(mode)
+                changed.append({"path": str(path), "action": "executable-mode-repaired"})
             continue
-        item = {"path": str(path), "sha256": hashlib.sha256(content.encode()).hexdigest()}
+        item = {"path": str(path), "sha256": hashlib.sha256(payload).hexdigest()}
         path.parent.mkdir(parents=True, exist_ok=True)
         if path.exists():
             BACKUP_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -797,26 +890,141 @@ def apply_plan(plan):
             backup.chmod(0o600)
             item["backup"] = str(backup)
         temporary = path.with_name(path.name + ".vaws-" + str(time.time_ns()))
-        temporary.write_text(content, encoding="utf-8")
-        temporary.chmod(0o600)
+        # Match the planned bytes on every OS. CRLF translation breaks Git's
+        # shell hooks and makes the reported content hash differ on Windows.
+        temporary.write_bytes(payload)
+        temporary.chmod(mode)
         os.replace(temporary, path)
         changed.append(item)
     return changed
 
 
-def main():
+def setup_installed_clients(args):
+    """One-time initialization; each installed client keeps its existing builder."""
+    from vaws_client_inventory import installed_clients
+    from vaws_native_mode_config import add_grok_import_dedup, add_native_mode, grok_native_defaults, kimi_session_setup_capability
+
+    clients = {}
+    for client, installation in installed_clients().items():
+        row = {"installation": installation, "files": [], "notes": [],
+               "native_worktree": {"status": "not_configured", "missing_action": None}}
+        clients[client] = row
+        if not installation["installed"]:
+            row.update(state="skipped", reason="not_installed")
+            continue
+        phase, current_path = "plan", None
+        try:
+            capability = None
+            if client == "kimi":
+                executable = installation.get("executable")
+                capability = (kimi_session_setup_capability(executable) if executable else
+                              {"supported": False, "reason": "kimi_executable_unavailable"})
+                row["capability"] = capability
+                if not capability["supported"]:
+                    path = args.kimi_config or kimi_home() / "config.toml"
+                    if path.is_file() and any(hook.get("event") == "SessionSetup"
+                            for hook in tomllib.loads(path.read_text(encoding="utf-8")).get("hooks", [])
+                            if isinstance(hook, dict)):
+                        row.update(state="blocked", reason="unsupported_existing_session_setup")
+                        row["native_worktree"] = {"status": "unavailable",
+                            "missing_action": "Install a Kimi client supporting SessionSetup; existing configuration was preserved."}
+                        continue
+            elif client == "grok":
+                capability = grok_native_defaults(installation.get("executable"), args.project)
+                row["capability"] = capability
+            plan = build_plan(client, args.project, kimi_config=args.kimi_config, task_only=args.task_only,
+                              kimi_session_setup=bool(client == "kimi" and capability and capability["supported"]),
+                              codex_global_hooks=client == "codex", cursor_global_mcp=client == "cursor")
+            row["notes"] = plan["notes"]
+            add_native_mode(plan["files"], plan["notes"], client, args.project,
+                            capability=capability, kimi_tui_config=kimi_home() / "tui.toml")
+            if client == "grok":
+                add_grok_import_dedup(plan["files"], plan["notes"], args.project, ROOT,
+                                      owned_server=owned_environment_server)
+            row["mcp_servers"] = plan["mcp_servers"]
+            row["launch_argv"], row["launch_cwd"] = plan["launch_argv"], plan["launch_cwd"]
+            phase = "apply" if args.apply else "preview"
+            for path, content in plan["files"].items():
+                current_path = str(path)
+                if args.apply:
+                    row["files"].extend(apply_plan({**plan, "files": {path: content}}))
+                elif not path.exists() or path.read_bytes() != content.encode("utf-8"):
+                    row["files"].append({"path": str(path), "sha256": hashlib.sha256(content.encode()).hexdigest()})
+            row["state"] = "configured" if args.apply else "preview"
+            native = {"status": "wiring_configured" if args.apply else "wiring_planned", "missing_action": None}
+            if client in {"codex", "cursor"}:
+                native["default_mode"] = "not_verified"
+                native["missing_action"] = (
+                    "During initialization, use a supported native tool once to select Worktree mode and the VAWS local environment; "
+                    "use Computer Use only if no public setter exists and UI access is permitted. Skip if already selected; this is not a recurring session check."
+                    if client == "codex" else
+                    "During initialization, use a supported native tool once to select New Worktree as the default; "
+                    "use Computer Use only if no public setter exists and UI access is permitted. Skip if already selected; this is not a recurring session check.")
+                row["notes"].append({"client": client, "reason": "native-default-mode-requires-one-time-setting",
+                                     "detail": native["missing_action"]})
+            elif client == "grok":
+                preference = next((note for note in reversed(plan["notes"])
+                                   if note.get("reason") == "native-worktree-preferences"), None)
+                native.update(scope="/new and /fork", initial_cli_start="not_verified")
+                if preference is None:
+                    native.update(status="preferences_preserved", missing_action="Integrate the existing Grok user preference table once; see notes.")
+                elif capability["supported"]:
+                    native.update(scope="new native sessions and /fork", initial_cli_start=(
+                        "native_default_enabled" if args.apply else "native_default_planned"))
+                else:
+                    native["missing_action"] = "Bare startup needs the native default-worktree patch and one startup/resume acceptance of the installed binary; the configured preference alone does not prove this."
+            elif client == "claude":
+                native.update(default_mode="unsupported", missing_action="Claude has no supported ordinary CLI default-worktree setting; WorktreeCreate handles native worktree creation.")
+            elif not capability["supported"]:
+                native.update(status="session_setup_unavailable", missing_action="Install a Kimi client with the native SessionSetup extension, then rerun initialization.")
+            row["native_worktree"] = native
+        except Exception as exc:
+            row.update(state="failed", error={"phase": phase, "path": current_path,
+                                               "type": type(exc).__name__, "message": str(exc)})
+            row["native_worktree"] = {"status": "not_configured",
+                                      "missing_action": "Repair this client's reported configuration error and rerun initialization."}
+    result = {"state": "partial" if any(row["state"] in {"failed", "blocked"} for row in clients.values()) else
+                       "wiring_configured" if args.apply else "preview",
+              "clients": clients, "trust_granted": False, "connected": False}
+    if args.apply:
+        from vaws_local_state import shared_workspace_root, utc_now_iso
+        from vaws_session_state import write_json
+        path = shared_workspace_root(args.project) / ".vaws-local/client-initialization.json"
+        record = {"state": result["state"], "attempted_at": utc_now_iso(), "project": str(args.project.resolve()),
+                  "clients": {name: {key: value for key, value in row.items()
+                                     if key in {"state", "reason", "files", "native_worktree", "error"}}
+                              for name, row in clients.items()}}
+        try:
+            write_json(path, record)
+            result["record"] = str(path)
+        except OSError as exc:
+            result.update(state="partial", record_error={"path": str(path), "message": str(exc)})
+    return result
+
+
+def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--client", choices=sorted(CLIENTS), required=True)
+    parser.add_argument("--client", choices=sorted(CLIENTS | {"all"}), required=True,
+                        help="One client for scoped wiring, or all for one-time initialization of installed clients")
     parser.add_argument("--project", type=Path, default=Path.cwd())
     parser.add_argument("--kimi-config", type=Path, help="Explicit Kimi Code configuration file to edit for scoped session hooks")
+    parser.add_argument("--kimi-session-setup", action="store_true", help="Enable the Kimi native SessionSetup extension after installing the patched client")
+    parser.add_argument("--cursor-global-mcp", action="store_true", help="Install generated Cursor providers once in its native user MCP configuration")
+    parser.add_argument("--codex-global-hooks", action="store_true", help="Install fixed Codex user hooks for this Git worktree family; native review remains separate")
     parser.add_argument(
         "--task-only",
         action="store_true",
         help="Write only the vaws-task entry; skip remote-dev and vaws-knowledge",
     )
     parser.add_argument("--apply", action="store_true", help="Write with private backups; default is preview")
-    args = parser.parse_args()
-    plan = build_plan(args.client, args.project, kimi_config=args.kimi_config, task_only=args.task_only)
+    args = parser.parse_args(argv)
+    if args.client == "all":
+        result = setup_installed_clients(args)
+        print(json.dumps(result, ensure_ascii=False))
+        return 1 if result["state"] == "partial" else 0
+    plan = build_plan(args.client, args.project, kimi_config=args.kimi_config, task_only=args.task_only,
+                      kimi_session_setup=args.kimi_session_setup, cursor_global_mcp=args.cursor_global_mcp,
+                      codex_global_hooks=args.codex_global_hooks)
     changed = apply_plan(plan) if args.apply else [
         {"path": str(path), "sha256": hashlib.sha256(content.encode()).hexdigest()}
         for path, content in plan["files"].items()
@@ -840,7 +1048,8 @@ def main():
             "Do not treat this helper as a rewrite of hand-managed providers."
         ),
     }))
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

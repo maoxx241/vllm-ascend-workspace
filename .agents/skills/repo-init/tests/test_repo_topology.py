@@ -61,7 +61,7 @@ def github_payload(
         "id": repo_id,
         "full_name": full_name,
         "name": name,
-        "owner": {"login": owner},
+        "owner": {"login": owner, "type": "User"},
         "fork": is_fork,
         "default_branch": "main",
         "ssh_url": ssh_url or f"git@github.com:{full_name}.git",

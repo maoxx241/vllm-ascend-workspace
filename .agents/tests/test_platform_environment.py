@@ -18,7 +18,7 @@ def test_runtime_bootstrap_accepts_current_receipt_without_import_probes(monkeyp
     monkeypatch.setenv(environments.PIN_ENV, "before")
     monkeypatch.setenv(vaws_venv.REEXEC_ENV, "current")
     receipt = {"key": "current", "root": sys.prefix, "python": sys.executable, "receipt": "pinned"}
-    monkeypatch.setattr(vaws_venv, "native_ready", lambda root: receipt)
+    monkeypatch.setattr(vaws_venv, "native_ready", lambda root, **kwargs: receipt)
     if os.name == "nt" and not sys.flags.utf8_mode:
         pytest.skip("this fixture needs the test runner's UTF-8 mode")
     vaws_venv.ensure_workspace_interpreter(repo_root=ROOT, packages=("not_installed_optional_package",))
@@ -70,7 +70,7 @@ def test_nested_child_can_enable_utf8_with_inherited_environment_marker():
         "import os,sys; from pathlib import Path; "
         f"sys.path.insert(0,{str(ROOT / '.agents/lib')!r}); import vaws_venv; "
         "receipt={'key':'nested','root':sys.prefix,'python':sys.executable,'receipt':'fixture'}; "
-        "vaws_venv.native_ready=lambda root:receipt; "
+        "vaws_venv.native_ready=lambda root,**kwargs:receipt; "
         "os.environ[vaws_venv.REEXEC_ENV]='nested'; "
         "vaws_venv.ensure_workspace_interpreter(repo_root=Path.cwd()); "
         "print('nested-utf8',sys.flags.utf8_mode)"

@@ -22,11 +22,10 @@ from vaws_task_target import PENDING, task_client
 
 def collect_measurement(client, benchmark, sources, entry, *, context_file, service, warmups, startup_timeout, fixed_dataset=None):
     from performance_regression import PerformanceRegressionError, emit_progress
-    client.sources(sources)
     config = assemble_config(context_file=context_file, service=service, **benchmark)
     execution_id = None
     try:
-        reply = call_serve_start(config)
+        reply = call_serve_start(config, sources=sources)
         execution_id = reply.get("execution_id")
         if not execution_id:
             raise PerformanceRegressionError(f"service submission returned no execution: {reply}")
@@ -99,7 +98,6 @@ def collect_experiment(config_path: Path, *, output_dir=None, context_file=None)
     if not config.get("thresholds"):
         raise PerformanceRegressionError("metric-specific thresholds are required")
     client = task_client(context_file)
-    original = {name: row["path"] for name, row in client.context["session"].get("sources", {}).items()}
     output = report_directory(ROOT, "performance-collection", output_dir)
     if output.exists() and any(output.iterdir()):
         raise PerformanceRegressionError(f"output directory is not empty: {output}")
@@ -118,12 +116,6 @@ def collect_experiment(config_path: Path, *, output_dir=None, context_file=None)
             paths.append(path)
     except Exception as exc:
         failure = f"{type(exc).__name__}: {exc}"
-    finally:
-        if original:
-            try:
-                client.sources(original)
-            except Exception as exc:
-                failure = f"{failure or ''}; source restoration: {exc}".strip("; ")
     report = build_report(config_path, paths, output_dir=output / "report", collection_error=failure)
     if failure:
         report["collection_error"] = failure

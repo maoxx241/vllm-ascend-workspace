@@ -12,10 +12,11 @@ import re
 import sys
 from collections.abc import Sequence
 
-from vaws_local_owner import managed_path, managed_python, windows_interop_env, windows_mounted_workspace
+from vaws_local_owner import accessible_windows_path, managed_path, windows_interop_env, windows_mounted_workspace
 
 PATH_ENV = frozenset({
     "VAWS_AGENT_SESSIONS_DIR", "VAWS_COORDINATOR_STATE_DIR", "VAWS_CONTEXT_FILE",
+    "VAWS_GITHUB_IDENTITY_FILE",
     "VAWS_PARENT_CONTEXT", "VAWS_ATTACH_CONTEXT", "REMOTE_DEV_STATE_DIR",
 })
 IDENTITY_ENV = frozenset({"CODEX_THREAD_ID", "CODEX_SESSION_ID"})
@@ -149,9 +150,9 @@ def ensure_managed_entry(*, repo_root: Path, entry_file: str,
     from vaws_environment import EnvironmentError, windows_ready
 
     try:
-        receipt = windows_ready(repo_root)
+        receipt = windows_ready(repo_root, use_saved=True)
         command, environment = managed_invocation(entry_file, receipt, local_options=local_options,
-                                                  owner_python=managed_python(repo_root))
+                                                  owner_python=accessible_windows_path(receipt["python"]))
         if not Path(command[0]).is_file():
             raise ManagedEntryError("the prepared Windows owner interpreter is missing")
     except (EnvironmentError, ManagedEntryError, ValueError) as exc:

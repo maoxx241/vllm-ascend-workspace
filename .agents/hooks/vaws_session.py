@@ -26,6 +26,8 @@ _pin, _ = _bootstrap.parse_known_args()
 if _pin.environment_receipt:
     os.environ[PIN_ENV] = _pin.environment_receipt
 
+# The native client has already selected its directory and environment.
+# Updates belong before creation of a new editing copy, never in task hooks.
 ensure_workspace_interpreter(repo_root=ROOT)
 
 from vaws_coordinator_launch import CoordinatorUnavailable, exec_module  # noqa: E402
@@ -38,9 +40,15 @@ def main() -> int:
     parser.add_argument("--project", type=Path)
     parser.add_argument("--agent-sessions-dir", default="")
     parser.add_argument("--environment-receipt", help=argparse.SUPPRESS)
+    parser.add_argument("--github-identity-file", help=argparse.SUPPRESS)
+    parser.add_argument("--coordinator-state-dir", help=argparse.SUPPRESS)
     args = parser.parse_args()
     if args.agent_sessions_dir.strip():
         os.environ["VAWS_AGENT_SESSIONS_DIR"] = str(Path(args.agent_sessions_dir).expanduser())
+    if args.github_identity_file:
+        os.environ["VAWS_GITHUB_IDENTITY_FILE"] = str(Path(args.github_identity_file).expanduser())
+    if args.coordinator_state_dir:
+        os.environ["VAWS_COORDINATOR_STATE_DIR"] = str(Path(args.coordinator_state_dir).expanduser())
     forwarded = ["--client", args.client]
     if args.project is not None:
         forwarded += ["--project", str(args.project)]
