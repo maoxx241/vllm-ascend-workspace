@@ -16,7 +16,7 @@ VAWS 启动 CLI 或填写会话记录。已有目录和恢复会话保留代码�
 
 | 客户端 | 已接入的生命周期 | 当前边界 |
 |---|---|---|
-| Codex App | 选定 local environment 的 setup 准备客户端新建 worktree；用户级 SessionStart 关联 VAWS | 一次选择 Worktree 和 VAWS 环境，使用 --codex-global-hooks 并原生审阅固定 hook。创建任务 API 使用原生保存的环境选择；仅写配置文件或 Git key 不等于选定。 |
+| Codex App | 选定 local environment 的 setup 准备客户端新建 worktree；用户级 SessionStart 关联 VAWS | 一次选择 Worktree 和 VAWS 环境；客户端按主机和项目目录记住模式，后续同项目会话沿用。使用 --codex-global-hooks 并原生审阅固定 hook。创建任务 API 使用原生保存的环境选择；仅写配置文件或 Git key 不等于选定。 |
 | Cursor | worktrees.json 的 setup-worktree 准备新目录；sessionStart / preToolUse 自动关联 | 一次将 Default Environment 选为 New Worktree，并使用 --cursor-global-mcp 安装用户级 VAWS providers；新目录无需重复启用项目 MCP。 |
 | Claude Code | WorktreeCreate 创建并准备目录；SessionStart 关联；MCP/Hook 启动时读取实际目录的固定环境 | 使用原生 worktree 模式。2.1.269 已验证新建与从母仓恢复；旧 2.1.143 跨目录恢复存在客户端问题。 |
 | Grok | 原生 Git worktree 创建触发项目 post-checkout；SessionStart / PreToolUse 自动关联 | 一次将 cli.worktree_type 设为 git，new_session_worktree_mode / fork_worktree_mode 设为 always。它们是全局偏好，项目 setup 只说明选择。已有 Git hook 保留给其 owner 集成。 |

@@ -164,7 +164,7 @@ def role_env(service: Mapping[str, Any]) -> dict[str, str]:
     return reject_reserved_env({str(k): str(v) for k, v in dict(service.get("env") or {}).items()})
 
 
-def role_shell_command(service: Mapping[str, Any], *, preflight_only=False) -> str:
+def role_shell_command(service: Mapping[str, Any]) -> str:
     extra = [str(item) for item in service.get("args") or []]
     return build_serve_command(
         model=str(service["model"]),
@@ -172,7 +172,6 @@ def role_shell_command(service: Mapping[str, Any], *, preflight_only=False) -> s
         tp=service.get("tp"),
         dp=service.get("dp"),
         extra_args=extra,
-        preflight_only=preflight_only,
     )
 
 
@@ -185,7 +184,6 @@ def topology_from_config(config: Mapping[str, Any]) -> dict[str, Any]:
             "name": str(service["name"]),
             "npu_count": npu_count,
             "command": role_shell_command(service),
-            "preflight": role_shell_command(service, preflight_only=True),
             "service_port": int(service["port"]) if service.get("port") is not None else 0,
         }
         env = role_env(service)

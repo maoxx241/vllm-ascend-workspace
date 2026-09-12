@@ -69,6 +69,13 @@ reserve NPUs or wait behind an NPU request. NPU workloads explicitly request
 `resources.npu_count` or devices. Source-free commands reuse an existing image
 interpreter; they do not install vLLM or create a task virtual environment.
 
+For user-authorized sharing, `resources={"devices": [id],
+"allow_external_busy": True}` permits external occupancy on one explicit card.
+Other managed leases and holds still block admission; device visibility, owned
+process completion and service-port release remain required. `topology.host`
+selects the host. The serving entry exposes these as `--host`, `--devices` and
+`--allow-external-busy` before the vLLM argument separator.
+
 A long-running service uses `timeout_seconds=None`, `resources.service_port=0`
 (or an explicit port), and a task-scoped business name (`service`). The same
 spec reconnects; a changed spec without `restart=True` is an error. `--relaunch`

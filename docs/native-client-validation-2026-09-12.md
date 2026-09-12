@@ -302,10 +302,27 @@ one-time operation is selecting the environment in the native app.
 The tools available during this acceptance had no environment-selection
 setter, and computer use explicitly disallowed operating the Codex interface.
 No private bridge, application state file or database was modified to work
-around that restriction. Native startup with a selected environment remains a
-separate acceptance case; API worktree creation alone does not prove it.
+around that restriction. API worktree creation alone does not prove selection.
+The user subsequently selected the native environment, as recorded below.
 
 The code inspected was in the installed app's `app.asar`: the native task
 creation handler reads the app selection, while the worktree creator receives
 that selection as a request argument and writes the per-worktree Git key.
 This is an observation of the installed app, not a public configuration API.
+
+A subsequent user-created session used a detached native worktree at canonical
+main `b63c782`. The native creation log recorded `hasLocalEnvironment=true`,
+and its Git configuration pointed to the copied VAWS environment file. Setup
+selected an immutable dependency environment and generated that revision's
+client wiring. A real no-argument MCP call still returned a missing-context
+result: this main revision predates the stable user-hook migration and Codex
+metadata fix in `8c2f380`. This case establishes native directory creation and
+environment execution, while leaving main-based VAWS attachment pending the
+feature's integration. No running worktree was moved to hide that distinction.
+
+Read-only inspection also confirmed that the installed app stores the composer
+mode by host and project path. After the user's Worktree selection, this
+project's saved mode was `worktree`; later tasks from the same project reuse
+that choice. This is the app's existing preference, not a VAWS launcher or a
+new `config.toml` field. No private application preference was written. A
+different project or an explicit Local choice retains its own native behavior.

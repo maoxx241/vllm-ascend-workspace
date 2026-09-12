@@ -129,7 +129,6 @@ def build_serve_command(
     wrap_script_content: str = "",
     runtime_dir: str = "",
     expected_vllm: str = "",
-    preflight_only: bool = False,
 ) -> str:
     argv = [
         '"$VAWS_PYTHON"',
@@ -167,18 +166,6 @@ def build_serve_command(
             f'if [ -n "$actual" ] && [ "$actual" != {shlex.quote(expected_vllm)} ]; then '
             f'echo "preset expects vllm {expected_vllm}, selected interpreter has $actual" >&2; exit 1; fi'
         )
-    if preflight_only:
-        parse_only = "\n".join([
-            "import sys",
-            "from vllm.entrypoints.cli.serve import cmd_init",
-            "from vllm.utils.argparse_utils import FlexibleArgumentParser",
-            "parser = FlexibleArgumentParser(prog='vllm')",
-            "subparsers = parser.add_subparsers(dest='subparser')",
-            "for command in cmd_init(): command.subparser_init(subparsers)",
-            "parser.parse_args(sys.argv[1:])",
-        ])
-        lines.append('"$VAWS_PYTHON" -c ' + shlex.quote(parse_only) + " " + " ".join(argv[3:]))
-        return "\n".join(lines)
     if wrap_script or wrap_script_content:
         if runtime_dir:
             lines.extend([f"runtime_dir={shlex.quote(runtime_dir)}", 'mkdir -m 700 -- "$runtime_dir"'])
@@ -340,9 +327,11 @@ def startup_failure_details(client, execution_id: str | None) -> dict[str, Any]:
 
 def merge_with_previous(previous: dict[str, Any], **overrides: Any) -> dict[str, Any]:
     merged = dict(previous)
-    for key in ("model", "served_model_name", "tp", "dp", "devices", "recipe", "python_abi", "cann"):
+    for key in ("model", "served_model_name", "tp", "dp", "devices", "host", "recipe", "python_abi", "cann"):
         if overrides.get(key) not in (None, ""):
             merged[key] = overrides[key]
+    if overrides.get("allow_external_busy") is not None:
+        merged["allow_external_busy"] = overrides["allow_external_busy"]
     env = dict(merged.get("env") or {})
     for key in overrides.get("unset_env") or []:
         env.pop(key, None)
@@ -419,6 +408,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--tp", "--tensor-parallel-size", dest="tp", type=int)
     parser.add_argument("--dp", "--data-parallel-size", dest="dp", type=int)
     parser.add_argument("--devices")
+    parser.add_argument("--host", help="coordinator placement host (before --)")
+    parser.add_argument("--allow-external-busy", action=argparse.BooleanOptionalAction, default=None,
+                        help="allow an explicitly selected single card to have external workers when authorized")
     parser.add_argument("--extra-env", action="append", default=[])
     parser.add_argument("--unset-env", action="append", default=[])
     parser.add_argument("--unset-args", action="append", default=[])
@@ -451,7 +443,7 @@ def _parse_extra_env(items: list[str]) -> dict[str, str]:
 
 def write_business_report(task_id: str, payload: dict[str, Any]) -> None:
     report = {key: payload.get(key) for key in (
-        "model", "served_model_name", "tp", "dp", "devices", "env", "extra_args",
+        "model", "served_model_name", "tp", "dp", "devices", "host", "allow_external_busy", "env", "extra_args",
         "wrap_script", "wrap_script_content", "runtime_dir", "execution_id", "service", "recipe", "python_abi", "cann",
     )}
     save_serving_state(task_id, report)
@@ -506,6 +498,8 @@ def main(argv: list[str] | None = None) -> int:
                 tp=args.tp,
                 dp=args.dp,
                 devices=args.devices,
+                host=args.host,
+                allow_external_busy=args.allow_external_busy,
                 recipe=args.recipe,
                 python_abi=args.python_abi,
                 cann=args.cann,
@@ -524,6 +518,8 @@ def main(argv: list[str] | None = None) -> int:
             args.recipe = merged.get("recipe") or args.recipe
             args.python_abi = merged.get("python_abi") or args.python_abi
             args.cann = merged.get("cann") or args.cann
+            args.host = merged.get("host") or args.host
+            args.allow_external_busy = merged.get("allow_external_busy", False)
         else:
             if not args.model:
                 print_json({"status": "needs_input", "error": "--model is required for a fresh start"})
@@ -547,6 +543,20 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         device_list = parse_devices_csv(devices) if devices else []
         npu_count = args.npu_count if args.npu_count is not None else (int(tp) * int(dp or 1) if tp is not None else 1)
+        if args.allow_external_busy and (len(device_list) != 1 or int(tp or 1) * int(dp or 1) != 1):
+            print_json({"status": "needs_input", "error": "--allow-external-busy requires one explicit --devices card and TP1/DP1"})
+            return 1
+        if args.allow_external_busy:
+            parallel_flags = {"--tensor-parallel-size", "-tp", "--data-parallel-size", "-dp",
+                              "--pipeline-parallel-size", "-pp", "--data-parallel-size-local", "-dpl",
+                              "--decode-context-parallel-size", "-dcp", "--prefill-context-parallel-size", "-pcp",
+                              "--nnodes", "--config"}
+            options = [arg.split("=", 1)[0].replace("_", "-") for arg in launch_extra_args if arg.startswith("-")]
+            # vLLM accepts abbreviated options and YAML configuration, which
+            # could otherwise replace the single-card topology after validation.
+            if any(flag.startswith(option) for option in options for flag in parallel_flags):
+                print_json({"status": "needs_input", "error": "shared single-card serving takes TP/DP through wrapper --tp/--dp; extra parallel-size overrides and --config are unsupported"})
+                return 1
         command = build_serve_command(
             model=model,
             served_model_name=served_model_name,
@@ -564,6 +574,8 @@ def main(argv: list[str] | None = None) -> int:
             "tp": tp,
             "dp": dp,
             "devices": devices,
+            "host": args.host,
+            "allow_external_busy": bool(args.allow_external_busy),
             "env": launch_env,
             "extra_args": launch_extra_args,
             "wrap_script": wrap_script or None,
@@ -584,6 +596,7 @@ def main(argv: list[str] | None = None) -> int:
             npu_count=None if device_list else npu_count,
             devices=device_list or None,
             service_port=int(args.port) if args.port is not None else 0,
+            allow_external_busy=bool(args.allow_external_busy),
         )
         environment = named_environment(
             recipe=args.recipe,
@@ -599,16 +612,13 @@ def main(argv: list[str] | None = None) -> int:
             client,
             command,
             sources=args.sources,
-            preflight=build_serve_command(
-                model=model, served_model_name=served_model_name, tp=tp, dp=dp,
-                extra_args=launch_extra_args, preflight_only=True,
-                expected_vllm=str((preset or {}).get("vllm_version") or "")),
             env=launch_env,
             environment=environment,
             resources=resources,
             timeout_seconds=None,
             service=args.service,
             restart=bool(args.relaunch),
+            **({"topology": {"host": args.host}} if args.host else {}),
         )
         business_report["execution_id"] = reply.get("execution_id")
         write_business_report(task_id, business_report)
