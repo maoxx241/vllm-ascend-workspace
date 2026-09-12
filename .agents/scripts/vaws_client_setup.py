@@ -899,7 +899,7 @@ def apply_plan(plan):
 def setup_installed_clients(args):
     """One-time initialization; each installed client keeps its existing builder."""
     from vaws_client_inventory import installed_clients
-    from vaws_native_mode_config import add_native_mode, kimi_session_setup_capability
+    from vaws_native_mode_config import add_native_mode, grok_native_defaults, kimi_session_setup_capability
 
     clients = {}
     for client, installation in installed_clients().items():
@@ -955,9 +955,16 @@ def setup_installed_clients(args):
             elif client == "grok":
                 preference = next((note for note in reversed(plan["notes"])
                                    if note.get("reason") == "native-worktree-preferences"), None)
-                native.update(scope="/new and /fork", initial_cli_start="unchanged")
+                capability = grok_native_defaults(installation.get("executable"), args.project)
+                row["capability"] = capability
+                native.update(scope="/new and /fork", initial_cli_start="not_verified")
                 if preference is None:
                     native.update(status="preferences_preserved", missing_action="Integrate the existing Grok user preference table once; see notes.")
+                elif capability["supported"]:
+                    native.update(scope="new native sessions and /fork", initial_cli_start=(
+                        "native_default_enabled" if args.apply else "native_default_planned"))
+                else:
+                    native["missing_action"] = "Bare startup needs the native default-worktree patch and one startup/resume acceptance of the installed binary; the configured preference alone does not prove this."
             elif client == "claude":
                 native.update(default_mode="unsupported", missing_action="Claude has no supported ordinary CLI default-worktree setting; WorktreeCreate handles native worktree creation.")
             elif not capability["supported"]:

@@ -25,7 +25,7 @@ VAWS 启动 CLI 或填写会话记录。已有目录和恢复会话保留代码�
 | Codex App | 选定 local environment 的 setup 准备客户端新建 worktree；用户级 SessionStart 关联 VAWS | 一次选择 Worktree 和 VAWS 环境；客户端按主机和项目目录记住模式，后续同项目会话沿用。使用 --codex-global-hooks 并原生审阅固定 hook。创建任务 API 使用原生保存的环境选择；仅写配置文件或 Git key 不等于选定。 |
 | Cursor | worktrees.json 的 setup-worktree 准备新目录；sessionStart / preToolUse 自动关联 | 一次将 Default Environment 选为 New Worktree，并使用 --cursor-global-mcp 安装用户级 VAWS providers；新目录无需重复启用项目 MCP。 |
 | Claude Code | WorktreeCreate 创建并准备目录；SessionStart 关联；MCP/Hook 启动时读取实际目录的固定环境 | 使用原生 worktree 模式。2.1.269 已验证新建与从母仓恢复；旧 2.1.143 跨目录恢复存在客户端问题。 |
-| Grok | 原生 Git worktree 创建触发项目 post-checkout；SessionStart / PreToolUse 自动关联 | 一次将 cli.worktree_type 设为 git，new_session_worktree_mode / fork_worktree_mode 设为 always。它们是全局偏好，项目 setup 只说明选择。已有 Git hook 保留给其 owner 集成。 |
+| Grok | 原生 Git worktree 创建触发项目 post-checkout；SessionStart / PreToolUse 自动关联 | 全客户端初始化一次将 cli.worktree_type 设为 git，new_session_worktree_mode / fork_worktree_mode 设为 always。普通启动还需要已验收的原生补丁；单客户端接线保留全局偏好。已有 Git hook 保留给其 owner 集成。 |
 | Kimi Code | 官方 0.42.0 的 SessionStart 只关联；带 SessionSetup 扩展的个人 fork 能在创建 workspace/MCP 前准备目录 | 扩展需单独安装并显式启用，不能将官方版本描述为已支持。新建、恢复、Bash/MCP 与子 Agent 使用原生身份。 |
 
 Codex 的[本地环境 setup](https://learn.chatgpt.com/docs/environments/local-environment)
@@ -40,7 +40,8 @@ Codex 按配置来源和定义内容记录 hook 信任。初始化将本仓生�
 设置，再运行组件 hook。新目录和依赖版本不会改变这条入口定义，正常会话无需
 重复信任。配置生成本身不授予信任；新定义仍需按原生机制审阅。
 
-Grok 的普通启动可使用其原生自动 worktree 偏好；Git 创建回调只处理 Grok
+Grok 的原生补丁让普通新会话也消费自动 worktree 偏好，恢复沿用原目录；
+官方版本的相同偏好只覆盖 /new 和 /fork。Git 创建回调只处理 Grok
 目录下刚创建的 linked worktree，普通 checkout 和其他客户端目录不受影响。
 默认的复制模式不触发这个回调。正式版 1.0.30 在 worktree 内连续 /new 或
 /fork 的目录判断仍有客户端缺陷；已安装的个人修复版基于公开源码 1.0.24，

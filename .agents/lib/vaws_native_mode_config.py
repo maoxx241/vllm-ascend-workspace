@@ -8,6 +8,7 @@ with its own read-only config doctor, rather than inferred from a version.
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -15,6 +16,34 @@ import re
 import subprocess
 import tempfile
 import tomllib
+
+
+def grok_native_defaults(executable: str | Path | None, project: Path) -> dict:
+    """Reuse acceptance of one installed binary during explicit initialization.
+
+    The personal build may share an upstream version number. Its installation
+    receipt identifies the actual bytes tested for bare startup and resume;
+    another executable or an update requires fresh evidence, not a version guess.
+    """
+    from vaws_local_state import shared_workspace_root
+    receipt_path = shared_workspace_root(project) / ".vaws-local/client-installations/grok-native.json"
+    unavailable = {"supported": False, "reason": "native-default-build-unverified"}
+    if not executable or not receipt_path.is_file():
+        return unavailable
+    try:
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+        binary = Path(executable).resolve()
+        if (Path(receipt["binary"]).resolve() != binary
+                or receipt.get("capabilities", {}).get("bare_worktree_default") is not True):
+            return unavailable
+        with binary.open("rb") as stream:
+            actual = hashlib.file_digest(stream, "sha256").hexdigest()
+        if actual != receipt["sha256"]:
+            return {**unavailable, "reason": "native-default-build-changed"}
+        return {"supported": True, "reason": "accepted-native-default-build",
+                "receipt": str(receipt_path), "sha256": actual}
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return unavailable
 
 
 def _set_scalar(text: str, table: str, key: str, value: str) -> str:
@@ -90,7 +119,10 @@ def add_native_mode(files: dict[Path, str], notes: list, client: str,
                   "action": "planned" if updated != text else "configured",
                   "reason": "native-worktree-preferences", "settings": values,
                   "detail": "Grok loads these preferences only from user configuration. "
-                            "They affect /new and /fork; initial bare CLI startup is unchanged."})
+                            "They affect /new and /fork in the inspected stock client. "
+                            "Automatic bare startup also requires the native startup-default patch; "
+                            "only an installed binary receipt with matching hash and startup/resume "
+                            "acceptance can establish that capability."})
 
 
 def kimi_session_setup_capability(executable: str | Path) -> dict:

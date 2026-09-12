@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import os
+import hashlib
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -11,7 +13,7 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
-from vaws_native_mode_config import add_native_mode, kimi_session_setup_capability
+from vaws_native_mode_config import add_native_mode, grok_native_defaults, kimi_session_setup_capability
 
 
 class NativeModeConfigTests(unittest.TestCase):
@@ -142,6 +144,39 @@ class KimiCapabilityTests(unittest.TestCase):
                 self.assertFalse(result["supported"])
                 self.assertEqual(result["reason"], "native-session-setup-probe-failed")
                 self.assertTrue(result["error"])
+
+
+class GrokInstalledEvidenceTests(unittest.TestCase):
+    def test_acceptance_is_bound_to_the_installed_bytes(self):
+        with tempfile.TemporaryDirectory() as folder:
+            project = Path(folder)
+            binary = project / "grok"
+            binary.write_bytes(b"accepted native build")
+            receipt = project / ".vaws-local/client-installations/grok-native.json"
+            self.assertFalse(grok_native_defaults(binary, project)["supported"])
+            receipt.parent.mkdir(parents=True)
+            record = {"binary": str(binary), "sha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
+                      "capabilities": {"bare_worktree_default": True}}
+            receipt.write_text(json.dumps(record))
+            self.assertTrue(grok_native_defaults(binary, project)["supported"])
+            binary.write_bytes(b"different build with the same version")
+            result = grok_native_defaults(binary, project)
+            self.assertFalse(result["supported"])
+            self.assertEqual(result["reason"], "native-default-build-changed")
+
+    def test_another_executable_or_incomplete_record_is_not_acceptance(self):
+        with tempfile.TemporaryDirectory() as folder:
+            project = Path(folder)
+            binary = project / "grok"
+            binary.write_bytes(b"a native build")
+            receipt = project / ".vaws-local/client-installations/grok-native.json"
+            receipt.parent.mkdir(parents=True)
+            for record in ({"binary": str(project / "other"), "capabilities": {"bare_worktree_default": True}},
+                           {"binary": str(binary), "capabilities": {}},
+                           {"binary": str(binary), "capabilities": []}, []):
+                with self.subTest(record=record):
+                    receipt.write_text(json.dumps(record))
+                    self.assertFalse(grok_native_defaults(binary, project)["supported"])
 
 
 if __name__ == "__main__":

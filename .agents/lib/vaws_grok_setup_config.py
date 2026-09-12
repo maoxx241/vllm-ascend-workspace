@@ -51,5 +51,5 @@ def plan_grok_setup(files: dict[Path, str], notes: list, project: Path, root: Pa
                    + "  " + "0" * 40 + "|" + "0" * 64 + ") ;;\n  *) exit 0 ;;\nesac\n"
                    + "exec " + command + ' "$@"\n')
     notes.append({"action": "initialization-choice", "reason": "grok-native-worktree-preferences",
-                  "detail": 'Grok user preferences need cli.worktree_type="git" and hints.new_session_worktree_mode/hints.fork_worktree_mode="always". These affect every Grok project; setup does not change them. Git mode starts from the selected commit and does not copy uncommitted changes.'})
+                  "detail": 'Grok user preferences need cli.worktree_type="git" and hints.new_session_worktree_mode/hints.fork_worktree_mode="always". These affect every Grok project; one-time --client all initialization sets them, while scoped project wiring preserves them. Git mode starts from the selected commit and does not copy uncommitted changes.'})
     return [path]

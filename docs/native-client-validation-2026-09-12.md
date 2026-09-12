@@ -352,6 +352,27 @@ The computer-use tool explicitly denied access to the Codex interface. No
 private application state was written to bypass that restriction; the user's
 existing selection remains the actual basis for this machine's default.
 
+Claude Code 2.1.269 has no supported ordinary CLI default-worktree setting.
+Its WorktreeCreate hook prepares a worktree after the native client chooses
+that mode. A shell alias that always appends `--worktree` also affects resume
+and can select a new directory before the old session is restored, so it was
+not installed. The earlier native creation/resume acceptance above remains
+valid; it does not establish a bare-CLI default.
+
+Grok's existing `always` hint originally covered `/new` and `/fork`, but not
+ordinary startup. The personal native patch
+[`cc1a1d1`](https://github.com/maoxx241/grok-build/commit/cc1a1d1c6793d412fed01bb1e972f28915f53d6d)
+consumes the same hint for new TUI and headless sessions before materializing
+the workspace. Explicit worktree choices, resume and continue retain their
+existing paths. All 31 affected Rust tests passed and the binary was built
+and installed with its predecessor preserved. A real logged-in headless
+invocation without `--worktree` created a new Git worktree; shell cwd/HEAD
+and the no-argument VAWS task call agreed. Exact-ID resume from the mother
+checkout retained the same native ID, VAWS task, cwd and HEAD. The raw
+`grok-native-live/bare-start*` and `bare-resume*` evidence remains local.
+Initialization reports this capability only when the selected binary matches
+the installed, accepted artifact; a version string alone is insufficient.
+
 Read-only native-code inspection also found that Codex's default Worktree
 creation can use an old local main or cached origin/main without fetching the
 canonical upstream. The consumer now recognizes a detached local-default-tip

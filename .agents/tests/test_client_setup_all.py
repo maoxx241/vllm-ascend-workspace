@@ -109,7 +109,7 @@ def test_all_preview_selects_native_options_by_installed_capability(local_setup,
     assert options["kimi"]["kimi_session_setup"] is supported
     assert probes == ["/tools/kimi"]
     assert result["clients"]["codex"]["native_worktree"]["default_mode"] == "not_verified"
-    assert result["clients"]["grok"]["native_worktree"]["initial_cli_start"] == "unchanged"
+    assert result["clients"]["grok"]["native_worktree"]["initial_cli_start"] == "not_verified"
     assert result["clients"]["claude"]["native_worktree"]["default_mode"] == "unsupported"
     assert not list(project.iterdir())
     assert not (project.parent / ".grok/config.toml").exists()
