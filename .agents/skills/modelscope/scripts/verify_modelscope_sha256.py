@@ -13,6 +13,7 @@ from typing import Any
 from urllib.parse import quote
 
 import requests
+from _modelscope_common import file_signature
 
 DEFAULT_IGNORE_OFFICIAL = (".gitattributes",)
 
@@ -33,6 +34,8 @@ class FileCheck:
     sha256_expected: str
     sha256_actual: str | None
     status: str
+    revision: str = ""
+    signature: list[int] | None = None
 
 
 def parse_model_spec(value: str) -> ModelSpec:
@@ -175,7 +178,8 @@ def verify_model(
         expected_size = int(file_info.get("Size", 0))
         expected_sha = str(file_info.get("Sha256", "")).lower()
 
-        if not local_path.exists():
+        signature = file_signature(local_path)
+        if signature is None:
             checks.append(
                 FileCheck(
                     model_id=spec.model_id,
@@ -186,11 +190,12 @@ def verify_model(
                     sha256_expected=expected_sha,
                     sha256_actual=None,
                     status="missing",
+                    revision=revision,
                 )
             )
             continue
 
-        actual_size = local_path.stat().st_size
+        actual_size = signature[0]
         if actual_size != expected_size:
             checks.append(
                 FileCheck(
@@ -202,12 +207,16 @@ def verify_model(
                     sha256_expected=expected_sha,
                     sha256_actual=None,
                     status="size_mismatch",
+                    revision=revision,
+                    signature=signature,
                 )
             )
             continue
 
         actual_sha = sha256_file(local_path, chunk_size)
         status = "ok" if actual_sha == expected_sha else "sha256_mismatch"
+        if file_signature(local_path) != signature:
+            status = "changed_during_verification"
         checks.append(
             FileCheck(
                 model_id=spec.model_id,
@@ -218,6 +227,8 @@ def verify_model(
                 sha256_expected=expected_sha,
                 sha256_actual=actual_sha,
                 status=status,
+                revision=revision,
+                signature=signature,
             )
         )
 
@@ -241,6 +252,7 @@ def verify_model(
         "missing": sum(1 for check in checks if check.status == "missing"),
         "size_mismatch": sum(1 for check in checks if check.status == "size_mismatch"),
         "sha256_mismatch": sum(1 for check in checks if check.status == "sha256_mismatch"),
+        "changed_during_verification": sum(1 for check in checks if check.status == "changed_during_verification"),
         "extra_file_count": len(extra_files),
         "extra_files": extra_files,
     }
@@ -281,12 +293,7 @@ def write_outputs(
     report = {
         "generated_at_epoch": int(time.time()),
         "summaries": summaries,
-        "all_ok": all(
-            summary["missing"] == 0
-            and summary["size_mismatch"] == 0
-            and summary["sha256_mismatch"] == 0
-            for summary in summaries
-        ),
+        "all_ok": bool(checks) and all(check.status == "ok" for check in checks),
         "checks": [asdict(check) for check in checks],
     }
     with json_path.open("w", encoding="utf-8") as handle:
@@ -344,10 +351,7 @@ def main() -> int:
     print(f"Wrote verification TSV     : {tsv_path}")
     print(f"Wrote verification JSON    : {json_path}")
 
-    failed = any(
-        summary["missing"] or summary["size_mismatch"] or summary["sha256_mismatch"]
-        for summary in summaries
-    )
+    failed = not all_checks or any(check.status != "ok" for check in all_checks)
     return 1 if failed else 0
 
 

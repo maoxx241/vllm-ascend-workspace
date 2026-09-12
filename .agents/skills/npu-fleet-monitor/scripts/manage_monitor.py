@@ -18,6 +18,7 @@ import os
 import shlex
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import time
@@ -36,6 +37,7 @@ from vaws_venv import ensure_workspace_interpreter  # noqa: E402
 ensure_workspace_interpreter(repo_root=REPO_ROOT)
 
 from vaws_local_state import STATE_DIRNAME, shared_inventory_path, shared_workspace_root  # noqa: E402
+from vaws_process_identity import process_identity, same_process  # noqa: E402
 
 VAWS_TOP_REPO = "vllm-ascend-workspace/vaws-top"
 VAWS_TOP_SKILL_PATH = ".agents/skills/vaws-top/SKILL.md"
@@ -201,6 +203,11 @@ def pid_alive(pid: int) -> bool:
         from vaws_windows import pid_alive as windows_pid_alive
         return windows_pid_alive(pid)
     try:
+        if (Path("/proc") / str(pid) / "stat").read_text().rsplit(")", 1)[1].split()[0] == "Z":
+            return False
+    except (OSError, IndexError):
+        pass
+    try:
         os.kill(pid, 0)
     except ProcessLookupError:
         return False
@@ -213,6 +220,24 @@ def log_tail(path: Path, lines: int = 20) -> str:
     if not path.is_file():
         return ""
     return "\n".join(path.read_text(encoding="utf-8", errors="replace").splitlines()[-lines:])
+
+
+def process_group_remains(pid: int) -> bool:
+    """Observe a POSIX group without assuming a dead leader still proves ownership."""
+    if os.name == "nt":
+        return False  # Windows uses taskkill /T rather than POSIX process groups.
+    result = subprocess.run(["ps", "-ax", "-o", "pgid=", "-o", "stat="],
+                            capture_output=True, text=True, timeout=10, check=False)
+    if result.returncode:
+        return True  # Unknown is not proof that the whole group stopped.
+    return any(len(fields := line.split()) >= 2 and fields[0] == str(pid) and not fields[1].startswith("Z")
+               for line in result.stdout.splitlines())
+
+
+def port_is_listening(port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.settimeout(1)
+        return probe.connect_ex((BIND, port)) == 0
 
 
 def start_process(command: list[str], *, env: dict[str, str], cwd: Path, log_path: Path) -> subprocess.Popen[bytes]:
@@ -278,6 +303,9 @@ def do_start(args: argparse.Namespace, base: Path, spec: str) -> dict[str, Any]:
     log_path = base / LOG_NAME
     existing = read_pidfile(pidfile)
     if existing and pid_alive(existing["pid"]):
+        if not same_process(existing["pid"], existing.get("identity")):
+            return {"ok": False, "pid": existing["pid"], "already_running": False,
+                    "ownership": "unverified", "detail": "live PID does not match the saved process identity"}
         port = int(existing.get("port", args.port))
         ok, payload, error = health(port)
         return {
@@ -289,6 +317,12 @@ def do_start(args: argparse.Namespace, base: Path, spec: str) -> dict[str, Any]:
             "health_error": error,
             "already_running": True,
         }
+    if existing and process_group_remains(existing["pid"]):
+        return {"ok": False, "already_running": False, "ownership": "unverified",
+                "detail": "recorded leader exited but its process group remains"}
+    if port_is_listening(args.port):
+        return {"ok": False, "port": args.port, "already_running": False,
+                "detail": "loopback port is already listening without a matching monitor record"}
     require_uvx()
     base.mkdir(parents=True, exist_ok=True)
     state_dir = base / "data"
@@ -301,10 +335,20 @@ def do_start(args: argparse.Namespace, base: Path, spec: str) -> dict[str, Any]:
         "spec": spec,
         "started_at": time.time(),
         "log": str(log_path),
+        "identity": process_identity(process.pid),
     }
     pidfile.write_text(json.dumps(record, sort_keys=True) + "\n", encoding="utf-8")
     ok, payload, error = health(args.port, args.wait_seconds, alive=lambda: process.poll() is None)
-    result = {"ok": ok, "pid": process.pid, "port": args.port, "health": payload, "health_error": error, "already_running": False}
+    # uvx may exec the installed command during startup. Record its final command
+    # only while the birth identity still belongs to the child we launched.
+    current = process_identity(process.pid)
+    initial = record.get("identity")
+    if current and initial and current["started"] == initial["started"]:
+        record["identity"] = current
+        pidfile.write_text(json.dumps(record, sort_keys=True) + "\n", encoding="utf-8")
+    owned = bool(current) and current == record.get("identity")
+    result = {"ok": ok and owned, "pid": process.pid, "port": args.port, "health": payload, "health_error": error, "already_running": False,
+              "ownership": "verified" if owned else "unverified"}
     if not ok:
         if process.poll() is not None:
             pidfile.unlink(missing_ok=True)
@@ -321,17 +365,31 @@ def do_stop(base: Path, *, timeout: float = 15) -> dict[str, Any]:
     pid = existing["pid"]
     port = int(existing.get("port", DEFAULT_PORT))
     if not pid_alive(pid):
+        if process_group_remains(pid):
+            return {"ok": False, "stopped": False, "pid": pid, "port": port,
+                    "ownership": "unverified", "group_remaining": True,
+                    "detail": "recorded leader exited but its process group remains"}
         pidfile.unlink(missing_ok=True)
         return {"ok": True, "stopped": False, "pid": pid, "port": port, "detail": "stale pidfile removed"}
+    if not same_process(pid, existing.get("identity")):
+        return {"ok": False, "stopped": False, "pid": pid, "port": port,
+                "ownership": "unverified", "detail": "live PID does not match the saved process identity"}
     progress(f"Stopping monitor process group {pid}")
     _stop_group(pid, force=False)
     deadline = time.monotonic() + timeout
     while pid_alive(pid) and time.monotonic() < deadline:
         time.sleep(0.2)
     if pid_alive(pid):
+        if not same_process(pid, existing.get("identity")):
+            return {"ok": False, "stopped": False, "pid": pid, "port": port,
+                    "ownership": "unverified", "detail": "process identity changed while stopping"}
         _stop_group(pid, force=True)
         time.sleep(0.5)
     stopped = not pid_alive(pid)
+    if stopped and process_group_remains(pid):
+        return {"ok": False, "stopped": False, "pid": pid, "port": port,
+                "ownership": "unverified", "group_remaining": True,
+                "detail": "leader exited; remaining group was not force-killed without a matching live leader"}
     if stopped:
         pidfile.unlink(missing_ok=True)
     return {"ok": stopped, "stopped": stopped, "pid": pid, "port": port}
@@ -360,9 +418,10 @@ def do_status(base: Path, port: int) -> dict[str, Any]:
     pid = existing["pid"] if existing else None
     if existing:
         port = int(existing.get("port", port))
-    running = bool(pid) and pid_alive(pid)
+    running = bool(pid) and same_process(pid, existing.get("identity"))
     ok, payload, error = health(port)
-    result = {"ok": ok, "pid": pid if running else None, "running": running, "port": port, "health": payload, "health_error": error}
+    result = {"ok": ok and running, "pid": pid if running else None, "running": running, "port": port, "health": payload, "health_error": error,
+              "ownership": "verified" if running else "unverified"}
     if running and existing and existing.get("spec"):
         result["spec"] = existing["spec"]
     return result
@@ -426,7 +485,7 @@ def main(argv: list[str] | None = None) -> int:
             extra = do_start(args, base, spec)
         elif args.action == "restart":
             stopped = do_stop(base)
-            extra = do_start(args, base, spec)
+            extra = do_start(args, base, spec) if stopped["ok"] else dict(stopped)
             extra["stopped_previous"] = stopped
         elif args.action == "stop":
             extra = do_stop(base)

@@ -67,7 +67,7 @@ def parse_npu_smi_hbm(data: dict[str, dict]) -> dict[int, dict]:
 # vLLM log parsing
 # ---------------------------------------------------------------------------
 
-_WEIGHT_RE = re.compile(r"Loading model weights took\s+([\d.]+)\s*G[Bi]")
+_WEIGHT_RE = re.compile(r"Loading model weights took\s+([\d.]+)\s*(GiB|GB)\b")
 _KV_AVAIL_RE = re.compile(r"Available KV cache memory:\s+([\d.]+)\s*GiB")
 _KV_TOKENS_RE = re.compile(r"GPU KV cache size:\s+([\d,]+)\s*tokens")
 _WEIGHT_LOAD_TIME_RE = re.compile(r"Loading weights took\s+([\d.]+)\s*seconds")
@@ -85,7 +85,10 @@ def parse_vllm_logs(log_text: str) -> dict[str, Any]:
     for line in log_text.splitlines():
         m = _WEIGHT_RE.search(line)
         if m:
-            info["weights_gb"] = float(m.group(1))
+            value = float(m.group(1))
+            info["weights_gib"] = value if m.group(2) == "GiB" else value * 10**9 / 1024**3
+            info["weight_log_value"] = value
+            info["weight_log_unit"] = m.group(2)
 
         m = _KV_AVAIL_RE.search(line)
         if m:
@@ -139,7 +142,7 @@ def parse_vllm_logs(log_text: str) -> dict[str, Any]:
 def parse_npu_module_mem_csv(csv_path: Path) -> dict[str, float]:
     """Parse npu_module_mem CSV, return {component: max_reserved_mb}."""
     components: dict[str, float] = {}
-    with open(csv_path) as f:
+    with open(csv_path, encoding="utf-8-sig", newline="") as f:
         reader = csv.DictReader(f)
         for row in reader:
             comp = row.get("Component", "").strip()
@@ -161,7 +164,7 @@ def parse_npu_module_mem_csv(csv_path: Path) -> dict[str, float]:
 def parse_npu_mem_csv(csv_path: Path) -> dict[str, list[dict]]:
     """Parse npu_mem CSV, return {event: [{timestamp, hbm_kb}]}."""
     events: dict[str, list[dict]] = {}
-    with open(csv_path) as f:
+    with open(csv_path, encoding="utf-8-sig", newline="") as f:
         reader = csv.DictReader(f)
         for row in reader:
             event = row.get("event", "").strip()
@@ -298,6 +301,7 @@ def compute_weight_from_manifest(
 
     return {
         "source": "safetensors_manifest",
+        "per_device_basis": "inferred_from_tensor_names_and_sharding_rules",
         "total_bytes": total_bytes,
         "total_gib": round(total_bytes / (1024**3), 4),
         "per_device_bytes": per_device_bytes,
@@ -309,21 +313,20 @@ def compute_weight_from_manifest(
     }
 
 
-def format_weight_breakdown(weight_info: dict, vllm_gb: float = 0) -> list[str]:
+def format_weight_breakdown(weight_info: dict, vllm_gib: float = 0) -> list[str]:
     """Format the per-category weight breakdown as text lines."""
     lines = []
-    lines.append("[权重精确分析] (数据源: safetensors 文件头)")
+    lines.append("[权重文件字节数与分片估计] (文件头字节数精确；设备分片根据名称推断)")
     per_dev_gib = weight_info['per_device_gib']
     per_dev_gb = per_dev_gib * 1024**3 / 10**9
     lines.append(f"  总权重(文件): {weight_info['total_gib']:.4f} GiB | "
                  f"每设备(理论分片): {per_dev_gib:.4f} GiB ({per_dev_gb:.4f} GB)")
     lines.append(f"  分片策略: TP={weight_info['tp']}, DP={weight_info['dp']}, "
                  f"EP={weight_info['ep']}")
-    if vllm_gb:
-        vllm_gib = vllm_gb * 10**9 / 1024**3
+    if vllm_gib:
         diff_gib = per_dev_gib - vllm_gib
         diff_pct = abs(diff_gib) / vllm_gib * 100 if vllm_gib else 0
-        lines.append(f"  vLLM 实际加载: {vllm_gb:.4f} GB ({vllm_gib:.4f} GiB)")
+        lines.append(f"  vLLM 加载日志: {vllm_gib:.4f} GiB (已按日志单位换算)")
         sign = "+" if diff_gib > 0 else ""
         lines.append(f"  差值(safetensors vs vLLM): {sign}{diff_gib:.4f} GiB ({diff_pct:.1f}%)")
         if diff_gib > 0.1:
@@ -531,7 +534,7 @@ def generate_device_report(
     ready = after_ready_hbm.get(dev_id, {})
     infer = after_infer_hbm.get(dev_id, {})
 
-    total_mb = ready.get("total_mb", 32768)
+    total_mb = ready.get("total_mb", 0)
     used_mb = ready.get("used_mb", 0)
     baseline_mb = baseline.get("used_mb", 0)
 
@@ -553,8 +556,8 @@ def generate_device_report(
         report.components.append(MemoryComponent(
             name="固定开销 (driver/runtime)",
             value_mb=0,
-            source="不可用 (attach 模式无基线数据)",
-            evidence="服务已在运行，无法获取空载基线; 可通过 --baseline-from 复用历史数据",
+            source="不可用 (未采集空载基线)",
+            evidence="没有本次运行的空载基线；不能把缺失值视作实际零开销",
         ))
 
     # msprof component breakdown
@@ -569,17 +572,17 @@ def generate_device_report(
     # safetensors-precise, then config theory.  vLLM's DeviceMemoryProfiler
     # captures the real memory delta during weight loading, which accounts
     # for weight sharing, dtype conversion, and load-time filtering.
-    weights_gb = vllm_info.get("weights_gb", 0)
+    weights_gib = vllm_info.get("weights_gib", 0)
     precise_gib = weight_precise.get("per_device_gib", 0) if weight_precise else 0
     theory_gib = weight_theory.get("per_device_weight_gib", 0)
 
-    if weights_gb:
-        weights_mb = weights_gb * 1024
+    if weights_gib:
+        weights_mb = weights_gib * 1024
         weight_source = "vLLM DeviceMemoryProfiler"
-        weight_evidence = f"vllm_serve.log: Loading model weights took {weights_gb:.4f} GB"
+        weight_evidence = f"vllm_serve.log: {vllm_info.get('weight_log_value')} {vllm_info.get('weight_log_unit')} = {weights_gib:.4f} GiB"
     elif precise_gib:
         weights_mb = precise_gib * 1024
-        weight_source = "safetensors 文件头精确计算"
+        weight_source = "safetensors 文件头 + 按名称推断的分片估计"
         weight_evidence = f"weight_manifest.json: per_device = {precise_gib:.4f} GiB"
     else:
         weights_mb = 0
@@ -588,14 +591,14 @@ def generate_device_report(
 
     weight_corr = []
     if precise_gib:
-        weight_corr.append(f"safetensors 精确值: {precise_gib:.4f} GiB")
-    if weights_gb:
-        weight_corr.append(f"vLLM 日志: {weights_gb:.4f} GB")
-    if precise_gib and weights_gb:
-        diff_pct = abs(weights_gb - precise_gib) / precise_gib * 100 if precise_gib else 0
+        weight_corr.append(f"safetensors 分片估计: {precise_gib:.4f} GiB")
+    if weights_gib:
+        weight_corr.append(f"vLLM 日志换算: {weights_gib:.4f} GiB")
+    if precise_gib and weights_gib:
+        diff_pct = abs(weights_gib - precise_gib) / precise_gib * 100 if precise_gib else 0
         weight_corr.append(f"safetensors vs vLLM 误差: {diff_pct:.1f}%")
-    elif theory_gib and weights_gb:
-        diff_pct = abs(weights_gb - theory_gib) / theory_gib * 100 if theory_gib else 0
+    elif theory_gib and weights_gib:
+        diff_pct = abs(weights_gib - theory_gib) / theory_gib * 100 if theory_gib else 0
         weight_corr.append(f"config 理论值: {theory_gib:.2f} GiB / 误差: {diff_pct:.1f}%")
 
     report.components.append(MemoryComponent(
@@ -671,16 +674,9 @@ def generate_device_report(
             evidence=f"vllm_serve.log: graph capture = {graph_gib:.2f} GiB, {graph_sizes} sizes",
         ))
 
-    # Activation estimate (delta between inference and ready states)
+    # A snapshot after a request is not a sampled activation peak and is not
+    # additive to the earlier ready-state allocation breakdown.
     infer_mb = infer.get("used_mb", used_mb)
-    activation_mb = max(0, infer_mb - used_mb)
-    if activation_mb > 0:
-        report.components.append(MemoryComponent(
-            name="激活峰值",
-            value_mb=activation_mb,
-            source="npu-smi delta (inference - ready)",
-            evidence=f"after_infer={infer_mb} MB - after_ready={used_mb} MB = {activation_mb} MB",
-        ))
 
     # Compute unattributed and try to sub-attribute it
     component_sum = sum(c.value_mb for c in report.components)
@@ -691,6 +687,8 @@ def generate_device_report(
 
     # Cross-validation
     report.cross_validation = {
+        "post_inference_delta_mb": infer_mb - used_mb if infer else None,
+        "sampling_note": "component maxima may come from different times; residual is diagnostic, not an exact simultaneous balance",
         "npu_smi_used_mb": used_mb,
         "component_sum_mb": round(component_sum, 1),
         "unattributed_mb": round(unattributed, 1),
@@ -770,15 +768,14 @@ def format_report_text(
     mode = manifest.get("mode", "standalone")
     lines.append(f"采集模式: {'attach (挂载已有服务)' if mode == 'attach' else 'standalone (独立管理服务)'}")
     lines.append(f"msprof 采集: {'是' if manifest.get('msprof_enabled') else '否'}")
-    if mode == "attach":
-        baseline_src = manifest.get("baseline_source", "unavailable")
-        if baseline_src == "unavailable":
-            lines.append("基线数据: 不可用 (attach 模式，建议通过 --baseline-from 复用历史基线)")
-        else:
-            lines.append(f"基线数据: 复用自 {baseline_src}")
-        svc_ref = manifest.get("serving_state_ref", "")
-        if svc_ref:
-            lines.append(f"服务状态: {svc_ref}")
+    baseline_src = manifest.get("baseline_source", "unavailable")
+    if baseline_src == "unavailable":
+        lines.append("基线数据: 不可用；固定开销仍未知")
+    else:
+        lines.append(f"基线数据: 复用自 {baseline_src}")
+    svc_ref = manifest.get("serving_state_ref", "")
+    if svc_ref:
+        lines.append(f"服务状态: {svc_ref}")
     lines.append("")
 
     for r in reports:
@@ -797,6 +794,8 @@ def format_report_text(
 
         lines.append("[交叉验证]")
         cv = r.cross_validation
+        if cv.get("post_inference_delta_mb") is not None:
+            lines.append(f"  推理后 HBM 变化:       {cv['post_inference_delta_mb']:,.1f} MB (非激活峰值)")
         lines.append(f"  npu-smi 已用:          {cv.get('npu_smi_used_mb', 0):,.0f} MB")
         lines.append(f"  组件加总:              {cv.get('component_sum_mb', 0):,.1f} MB")
         lines.append(f"  未归因:                {cv.get('unattributed_mb', 0):,.1f} MB "
@@ -819,16 +818,16 @@ def format_report_text(
         lines.append("=" * 70)
 
     if weight_precise and weight_precise.get("categories"):
-        vllm_gb = 0
+        vllm_gib = 0
         for r in reports:
             for c in r.components:
-                if "权重" in c.name:
-                    vllm_gb = c.value_mb / 1024
+                if "权重" in c.name and c.source == "vLLM DeviceMemoryProfiler":
+                    vllm_gib = c.value_mb / 1024
                     break
-            if vllm_gb:
+            if vllm_gib:
                 break
         lines.append("")
-        lines.extend(format_weight_breakdown(weight_precise, vllm_gb))
+        lines.extend(format_weight_breakdown(weight_precise, vllm_gib))
         lines.append("=" * 70)
 
     return "\n".join(lines)
@@ -887,7 +886,7 @@ def main() -> None:
         partial = parse_npu_module_mem_csv(csv_path)
         devs = prof_device_map.get(csv_path.name, [])
 
-        if devs:
+        if len(devs) == 1:
             for dev_id in devs:
                 if dev_id not in per_device_msprof:
                     per_device_msprof[dev_id] = {}
@@ -908,13 +907,8 @@ def main() -> None:
     if weight_manifest_path.exists():
         weight_manifest = json.loads(weight_manifest_path.read_text(encoding="utf-8"))
 
-    mc = manifest.get("model_config", {})
-    has_experts = bool(
-        mc.get("num_experts", 0)
-        or mc.get("text_config", {}).get("num_experts", 0)
-    )
     ep_flag = manifest.get("enable_expert_parallel")
-    enable_ep = ep_flag if ep_flag is not None else has_experts
+    enable_ep = bool(ep_flag)
     weight_precise = compute_weight_from_manifest(weight_manifest, tp, dp, enable_ep) if weight_manifest else {}
 
     model_config = manifest.get("model_config", {})
@@ -930,16 +924,14 @@ def main() -> None:
     after_infer_hbm = parse_npu_smi_hbm(manifest.get("after_infer_hbm", {}))
 
     # Generate per-device reports
-    total_devices = tp * dp
-    devices = sorted(set(list(baseline_hbm.keys()) + list(after_ready_hbm.keys())))
-    if not devices:
-        devices = list(range(total_devices))
+    raw_devices = manifest.get("devices")
+    selected = [int(value) for value in raw_devices.split(",") if value.strip()] if isinstance(raw_devices, str) else raw_devices
+    observed = set(after_ready_hbm)
+    devices = sorted(observed.intersection(selected) if selected else observed)
 
     reports = []
     for dev_id in devices:
-        if isinstance(dev_id, int) and dev_id >= total_devices:
-            continue
-        device_msprof = per_device_msprof.get(dev_id, global_msprof)
+        device_msprof = per_device_msprof.get(dev_id, {})
         report = generate_device_report(
             dev_id=dev_id,
             baseline_hbm=baseline_hbm,
@@ -956,7 +948,7 @@ def main() -> None:
 
     # Format and save report
     text_report = format_report_text(reports, manifest, weight_precise)
-    (run_dir / "report.txt").write_text(text_report)
+    (run_dir / "report.txt").write_text(text_report, encoding="utf-8")
 
     json_report = {
         "manifest": manifest,
@@ -968,7 +960,7 @@ def main() -> None:
         "devices": [asdict(r) for r in reports],
     }
     json_str = json.dumps(json_report, indent=2, ensure_ascii=False)
-    (run_dir / "report.json").write_text(json_str)
+    (run_dir / "report.json").write_text(json_str, encoding="utf-8")
 
     if args.format == "json":
         print(json_str)

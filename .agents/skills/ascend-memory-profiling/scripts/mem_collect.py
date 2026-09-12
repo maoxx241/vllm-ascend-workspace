@@ -29,13 +29,11 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 import shlex
 import subprocess
 import sys
 import time
-import uuid
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -56,38 +54,18 @@ from vaws_coordinator.device_inventory import parse_npu_smi_hbm  # noqa: E402
 
 from _common import (
     ENV_PREAMBLE,
-    MSPROF_WRAPPER_REMOTE_PATH,
     SshEndpoint,
     check_msprof_available,
     ensure_run_dir,
     get_machine_alias,
     load_serving_state,
+    msprof_wrapper_script,
     progress,
     resolve_execution_target,
     run_msprof_export,
     selected_python,
     ssh_exec,
-    ssh_upload,
-    ssh_write_text,
-    upload_msprof_wrapper,
 )
-
-
-def unique_remote_tmp(prefix: str, session_id: str | None = None) -> str:
-    sid = re.sub(r"[^A-Za-z0-9_.-]+", "_", session_id or "legacy").strip("._-") or "legacy"
-    return f"/tmp/{prefix}_{sid}_{os.getpid()}_{uuid.uuid4().hex[:8]}"
-
-
-_ENV_ERROR_PATTERNS = [
-    "Failed to infer device type",
-    "No module named 'vllm_ascend'",
-    "No module named 'vllm'",
-    "No module named 'torch_npu'",
-    "cannot open shared object file",
-    "libhccl.so",
-    "ImportError",
-    "ModuleNotFoundError",
-]
 
 
 def _emit_env_recovery_hint(log_text: str, session_id: str | None = None) -> None:
@@ -144,45 +122,8 @@ def collect_npu_smi(ep: SshEndpoint, label: str, local_path: Path) -> dict:
     """Run npu-smi info and save output, return parsed HBM data."""
     progress(f"Collecting npu-smi snapshot: {label}")
     r = ssh_exec(ep, f"{ENV_PREAMBLE} npu-smi info", timeout=30)
-    (local_path / f"{label}_npu_smi.txt").write_text(r.stdout)
+    (local_path / f"{label}_npu_smi.txt").write_text(r.stdout, encoding="utf-8")
     return parse_npu_smi_hbm(r.stdout)
-
-
-def build_serve_command(args: argparse.Namespace, python: str) -> str:
-    """Build the vLLM serve command string."""
-    parts = [
-        python, "-m", "vllm.entrypoints.openai.api_server",
-        "--model", args.model,
-        "--tensor-parallel-size", str(args.tp),
-        "--trust-remote-code",
-        "--gpu-memory-utilization", str(args.gpu_memory_utilization),
-        "--max-model-len", str(args.max_model_len),
-        "--port", str(args.port),
-    ]
-    if args.dp > 1:
-        parts.extend(["--data-parallel-size", str(args.dp)])
-    if args.enable_expert_parallel:
-        parts.append("--enable-expert-parallel")
-    if args.enforce_eager:
-        parts.append("--enforce-eager")
-    if args.speculative_config:
-        parts.extend(["--speculative-config", shlex.quote(args.speculative_config)])
-    if args.compilation_config:
-        parts.extend(["--compilation-config", shlex.quote(args.compilation_config)])
-    if args.additional_config:
-        parts.extend(["--additional-config", shlex.quote(args.additional_config)])
-    if args.quantization:
-        parts.extend(["--quantization", args.quantization])
-    parts.extend(args.extra_serve_args)
-    return " ".join(parts)
-
-
-def _compute_devices(args: argparse.Namespace) -> str:
-    """Compute ASCEND_RT_VISIBLE_DEVICES string."""
-    if args.devices:
-        return args.devices
-    total = args.tp * args.dp
-    return ",".join(str(i) for i in range(total))
 
 
 def wait_for_health(ep: SshEndpoint, port: int, timeout: int) -> float:
@@ -254,16 +195,6 @@ def send_inference(
         return {"raw": r.stdout[:500]}
 
 
-def collect_vllm_logs(ep: SshEndpoint, remote_dir: str, local_path: Path) -> str:
-    """Fetch vLLM serve logs from remote."""
-    for logname in ["msprof_stdout.log", "vllm_serve.log"]:
-        r = ssh_exec(ep, f"cat {remote_dir}/{logname} 2>/dev/null", check=False)
-        if r.stdout.strip():
-            (local_path / "vllm_serve.log").write_text(r.stdout)
-            return r.stdout
-    return ""
-
-
 def _discover_prof_device_map(
     ep: SshEndpoint,
     search_root: str,
@@ -275,7 +206,7 @@ def _discover_prof_device_map(
     """
     r = ssh_exec(
         ep,
-        f"find {search_root} -maxdepth 1 -name 'PROF_*' -type d",
+        f"find {shlex.quote(search_root)} -maxdepth 1 -name 'PROF_*' -type d",
         check=False,
     )
     prof_dirs = [d.strip() for d in r.stdout.strip().splitlines() if d.strip()]
@@ -320,7 +251,7 @@ def collect_msprof_csvs(
     search_root = f"{remote_dir}/msprof_data" if msprof_data_subdir else remote_dir
     prof_device_map = _discover_prof_device_map(ep, search_root)
 
-    r = ssh_exec(ep, f"find {search_root} -name '*.csv' -size +100c", check=False)
+    r = ssh_exec(ep, f"find {shlex.quote(search_root)} -name '*.csv' -size +100c", check=False)
     csvs = [f.strip() for f in r.stdout.strip().splitlines() if f.strip()]
     manifest: dict[str, Any] = {}
     csv_device_map: dict[str, list[int]] = {}
@@ -337,7 +268,7 @@ def collect_msprof_csvs(
                 while local_csv.exists():
                     local_csv = csv_dir / f"{stem}_{idx}{suffix}"
                     idx += 1
-            local_csv.write_text(r2.stdout)
+            local_csv.write_text(r2.stdout, encoding="utf-8")
             manifest[local_csv.name] = str(local_csv.relative_to(local_path))
 
             for prof_name, devs in prof_device_map.items():
@@ -351,9 +282,9 @@ def collect_msprof_csvs(
 
 def collect_model_config(ep: SshEndpoint, model_path: str, local_path: Path) -> dict:
     """Fetch model config.json for theoretical weight calculation."""
-    r = ssh_exec(ep, f"cat {model_path}/config.json 2>/dev/null", check=False)
+    r = ssh_exec(ep, f"cat {shlex.quote(model_path.rstrip('/') + '/config.json')} 2>/dev/null", check=False)
     if r.stdout.strip():
-        (local_path / "model_config.json").write_text(r.stdout)
+        (local_path / "model_config.json").write_text(r.stdout, encoding="utf-8")
         try:
             return json.loads(r.stdout)
         except json.JSONDecodeError:
@@ -366,9 +297,7 @@ def collect_weight_manifest(ep: SshEndpoint, python: str, model_path: str, local
     progress("Inspecting model weight files (safetensors headers)...")
     inspector_src = (Path(__file__).parent / "weight_inspector.py").read_text(encoding="utf-8")
 
-    remote_script = "/tmp/_vaws_weight_inspector.py"
-    ssh_write_text(ep, inspector_src, remote_script)
-    r = ssh_exec(ep, f"{python} {remote_script} {shlex.quote(model_path)}", check=False, timeout=120)
+    r = ssh_exec(ep, f"{shlex.quote(python)} -c {shlex.quote(inspector_src)} {shlex.quote(model_path)}", check=False, timeout=120)
 
     if r.returncode != 0:
         progress(f"WARNING: weight inspector failed: {r.stderr[:500]}")
@@ -377,7 +306,7 @@ def collect_weight_manifest(ep: SshEndpoint, python: str, model_path: str, local
     try:
         manifest = json.loads(r.stdout)
         (local_path / "weight_manifest.json").write_text(
-            json.dumps(manifest, indent=2, ensure_ascii=False)
+            json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8"
         )
         progress(f"Weight manifest: {manifest.get('total_tensors', 0)} tensors, "
                  f"{manifest.get('total_gib', 0)} GiB total")
@@ -390,6 +319,8 @@ def collect_weight_manifest(ep: SshEndpoint, python: str, model_path: str, local
 def _resolve_attach_state(args: argparse.Namespace, target: dict) -> dict:
     """Merge coordinator facts with optional local business launch config."""
     report = load_serving_state(args.session_id, service=args.service) or {}
+    if report and report.get("execution_id") != target.get("execution_id"):
+        raise RuntimeError("serving configuration belongs to another execution; use its matching collection or launch receipt")
     live = bool(target.get("live"))
     return {
         **report,
@@ -437,7 +368,7 @@ def _load_baseline_from(baseline_path: str, run_dir: Path) -> dict:
     return {}
 
 
-def _collect_serving_logs(ep: SshEndpoint, serving_state: dict, local_path: Path) -> str:
+def _collect_serving_logs(ep: SshEndpoint, serving_state: dict, local_path: Path, target: dict | None = None) -> str:
     """Fetch vLLM logs from the serving skill's runtime directory.
 
     Combines both stdout and stderr since critical memory info (weight load
@@ -445,6 +376,9 @@ def _collect_serving_logs(ep: SshEndpoint, serving_state: dict, local_path: Path
     and progress bars go to stderr.
     """
     combined = []
+    if target and target.get("client") and target.get("execution_id"):
+        reply = target["client"].observe(target["execution_id"], "tail")
+        combined.extend([str(reply.get("tail") or reply.get("stdout") or ""), str(reply.get("stderr") or "")])
     for key in ("log_stdout", "log_stderr"):
         remote_log = serving_state.get(key, "")
         if not remote_log:
@@ -454,7 +388,7 @@ def _collect_serving_logs(ep: SshEndpoint, serving_state: dict, local_path: Path
             combined.append(r.stdout)
     full_log = "\n".join(combined)
     if full_log.strip():
-        (local_path / "vllm_serve.log").write_text(full_log)
+        (local_path / "vllm_serve.log").write_text(full_log, encoding="utf-8")
     return full_log
 
 
@@ -472,7 +406,7 @@ def main() -> None:
         args._python = selected_python(target)
         _main_attach(args, target["record"], target["endpoint"], target)
         return
-    _main_standalone(args)
+    raise SystemExit(_main_standalone(args))
 
 
 def _main_attach(
@@ -499,7 +433,7 @@ def _main_attach(
     tp = args.tp if args.tp is not None else (svc_tp or 1)
     dp = args.dp if args.dp is not None else (svc_dp or 1)
     port = args.port if args.port is not None else svc_port
-    devices = args.devices or svc_devices or ",".join(str(i) for i in range(tp * dp))
+    devices = (target or {}).get("devices") or args.devices or svc_devices or ""
 
     svc_status = serving_state.get("status", "unknown")
     service_alive = svc_status in ("ready", "started")
@@ -518,20 +452,22 @@ def _main_attach(
         run_dir = Path(args.resume_run)
         if not run_dir.exists():
             raise SystemExit(f"--resume-run directory does not exist: {run_dir}")
+        prior_path = run_dir / "manifest.json"
+        if prior_path.exists() and json.loads(prior_path.read_text(encoding="utf-8")).get("execution_id") != args.execution_id:
+            raise RuntimeError("--resume-run belongs to another execution")
         progress(f"Resuming into existing run: {run_dir}")
     else:
         run_dir = ensure_run_dir(tag=args.tag or f"attach_{model_tag}")
-    remote_dir = unique_remote_tmp("vaws_memprof_attach", args.session_id)
 
     progress(f"Output directory: {run_dir}")
-    ssh_exec(ep, f"mkdir -p {remote_dir}")
 
     python = getattr(args, "_python", None) or selected_python(target or {})
 
     # Detect msprof: serving used our wrapper → msprof data at runtime_dir/msprof_data
-    svc_wrap = serving_state.get("wrap_script", "")
+    svc_wrap = serving_state.get("wrap_script") or ""
     svc_runtime_dir = serving_state.get("runtime_dir", "")
-    msprof_used = MSPROF_WRAPPER_REMOTE_PATH in svc_wrap
+    msprof_used = ("# VAWS memory profiler wrapper" in (serving_state.get("wrap_script_content") or "")
+                   or bool(re.fullmatch(r"/tmp/_vaws_msprof_wrap(?:_[A-Za-z0-9_.-]+)?\.sh", svc_wrap)))
     msprof_data_dir = f"{svc_runtime_dir}/msprof_data" if msprof_used and svc_runtime_dir else ""
     if not msprof_used:
         progress(
@@ -542,7 +478,7 @@ def _main_attach(
     manifest: dict = {
         "mode": "attach",
         "session_id": args.session_id,
-        "session_file": args.session_file,
+        "execution_id": args.execution_id,
         "model": model,
         "tp": tp,
         "dp": dp,
@@ -552,13 +488,13 @@ def _main_attach(
         "msprof_enabled": msprof_used,
         "msprof_output_dir": msprof_data_dir,
         "run_dir": str(run_dir),
-        "serving_state_ref": f".vaws-local/tasks/{args.session_id}/serving.json",
         "serving_runtime_dir": svc_runtime_dir,
         "speculative_config": args.speculative_config,
         "compilation_config": args.compilation_config,
         "additional_config": args.additional_config,
         "quantization": args.quantization,
         "enforce_eager": args.enforce_eager,
+        "enable_expert_parallel": args.enable_expert_parallel,
         "image_url": args.image_url,
         "service_alive": service_alive,
     }
@@ -577,7 +513,7 @@ def _main_attach(
         try:
             wait_for_health(ep, port, timeout=args.health_timeout)
         except TimeoutError:
-            log_text = _collect_serving_logs(ep, serving_state, run_dir)
+            log_text = _collect_serving_logs(ep, serving_state, run_dir, target)
             _emit_env_recovery_hint(log_text, args.session_id)
             raise SystemExit(
                 f"Service on port {port} is not responding to /health after "
@@ -585,7 +521,7 @@ def _main_attach(
             )
 
         manifest["after_ready_hbm"] = collect_npu_smi(ep, "after_ready", run_dir)
-        _collect_serving_logs(ep, serving_state, run_dir)
+        _collect_serving_logs(ep, serving_state, run_dir, target)
 
         api_model = served_model_name or model
         manifest["inference_response"] = send_inference(
@@ -597,7 +533,7 @@ def _main_attach(
         # health check, npu-smi, and inference
         manifest["after_ready_hbm"] = {}
         manifest["after_infer_hbm"] = {}
-        _collect_serving_logs(ep, serving_state, run_dir)
+        _collect_serving_logs(ep, serving_state, run_dir, target)
 
     # Model config + weight manifest (always possible regardless of service state)
     manifest["model_config"] = collect_model_config(ep, model, run_dir)
@@ -634,13 +570,18 @@ def _main_attach(
     existing_manifest_path = run_dir / "manifest.json"
     if args.resume_run and existing_manifest_path.exists():
         existing = json.loads(existing_manifest_path.read_text(encoding="utf-8"))
-        for key, val in manifest.items():
-            if val in (None, {}, [], "", False, 0) and existing.get(key) not in (None, {}, [], "", False, 0):
-                continue
-            existing[key] = val
+        if existing.get("execution_id") != args.execution_id:
+            raise RuntimeError("--resume-run belongs to another execution")
+        if not manifest.get("baseline_hbm") and existing.get("baseline_hbm"):
+            manifest["baseline_hbm"] = existing["baseline_hbm"]
+            manifest["baseline_source"] = existing.get("baseline_source")
+        existing.update(manifest)
+        if not service_alive:
+            existing.pop("msprof_csvs_pending", None)
         manifest = existing
 
-    (run_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False))
+    manifest["component_data_available"] = any(name.endswith(".csv") for name in manifest.get("msprof_csvs", {}))
+    (run_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
     progress(f"Data saved to {run_dir}")
     print(json.dumps(manifest, indent=2, ensure_ascii=False))
 
@@ -690,124 +631,116 @@ def _extract_serve_config_from_extra_args(
             i += 1
 
 
-def _main_standalone(args: argparse.Namespace) -> None:
-    """Standalone mode: one TaskClient.run via serve_start, then profile and stop."""
+
+def standalone_start_command(args: argparse.Namespace, wrapper: Path) -> list[str]:
+    serving = ROOT / ".agents/skills/vllm-ascend-serving/scripts/serving.py"
+    cmd = [sys.executable, str(serving), "start", "--model", args.model,
+           "--service", args.service, "--wrap-script-local", str(wrapper)]
+    for flag, value in (("--context-file", args.context_file), ("--tp", args.tp),
+                        ("--dp", args.dp), ("--port", args.port), ("--devices", args.devices),
+                        ("--health-timeout", args.health_timeout)):
+        if value is not None and value != "":
+            cmd.extend([flag, str(value)])
+    extra = ["--trust-remote-code", "--gpu-memory-utilization", str(args.gpu_memory_utilization),
+             "--max-model-len", str(args.max_model_len)]
+    for flag, value in (("--speculative-config", args.speculative_config),
+                        ("--compilation-config", args.compilation_config),
+                        ("--additional-config", args.additional_config), ("--quantization", args.quantization)):
+        if value:
+            extra.extend([flag, str(value)])
+    for flag, enabled in (("--enable-expert-parallel", args.enable_expert_parallel), ("--enforce-eager", args.enforce_eager)):
+        if enabled:
+            extra.append(flag)
+    return [*cmd, "--", *extra, *args.extra_serve_args]
+
+
+def stop_profile_execution(target: dict, timeout: float = 30) -> None:
+    from vaws_task_target import DONE
+    client, execution_id = target["client"], target["execution_id"]
+    result = client.observe(execution_id, "stop", False)
+    deadline = time.monotonic() + timeout
+    while result.get("state") not in DONE or result.get("resources_released") is not True:
+        if time.monotonic() >= deadline:
+            raise RuntimeError("profile execution is still stopping; inspect the owned execution before export")
+        time.sleep(0.5)
+        result = client.observe(execution_id, "status")
+
+
+def _main_standalone(args: argparse.Namespace) -> int:
+    """One managed profiled service; collect only its runtime and execution."""
     if not args.model:
         raise SystemExit("--model is required in standalone mode")
-    serving = ROOT / ".agents" / "skills" / "vllm-ascend-serving" / "scripts"
-    cmd = [
-        sys.executable,
-        str(serving / "serving.py"), "start",
-        "--model", args.model,
-        "--service", args.service or "vllm-memprof",
-    ]
-    if args.context_file:
-        cmd.extend(["--context-file", args.context_file])
-    if args.tp is not None:
-        cmd.extend(["--tp", str(args.tp)])
-    if args.dp is not None:
-        cmd.extend(["--dp", str(args.dp)])
-    if args.port is not None:
-        cmd.extend(["--port", str(args.port)])
-    if args.devices:
-        cmd.extend(["--devices", args.devices])
-    if args.health_timeout:
-        cmd.extend(["--health-timeout", str(args.health_timeout)])
-    progress("Starting managed vLLM execution for standalone memory profiling")
-    proc = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True, check=False)
+    run_dir = ensure_run_dir(tag=args.tag or Path(args.model).name)
+    wrapper = run_dir / "msprof_wrapper.sh"
+    wrapper.write_text(msprof_wrapper_script(args.msprof_mem_freq), encoding="utf-8")
+    progress("Starting managed vLLM execution with memory profiling")
+    proc = subprocess.run(standalone_start_command(args, wrapper), cwd=str(ROOT),
+                          capture_output=True, text=True, encoding="utf-8", check=False)
     if proc.stderr:
         sys.stderr.write(proc.stderr)
     try:
         start_result = json.loads(proc.stdout) if proc.stdout.strip() else {}
-    except json.JSONDecodeError:
-        raise SystemExit(f"serve_start produced non-JSON: {proc.stdout[:1000]}")
-    if start_result.get("status") != "ready":
-        print(json.dumps({"status": "failed", "phase": "serve_start", "serve_result": start_result}, indent=2))
-        sys.exit(1)
-    target = resolve_execution_target(
-        context_file=args.context_file,
-        execution_id=start_result.get("execution_id"),
-        service=args.service or "vllm-memprof",
-    )
-    args.session_id = target["task_id"]
-    args.execution_id = target["execution_id"]
-    args._python = selected_python(target)
-    ep = target["endpoint"]
-    tp = args.tp if args.tp is not None else start_result.get("tp") or 1
-    dp = args.dp if args.dp is not None else start_result.get("dp") or 1
-    port = start_result.get("port") or target.get("service_port")
-    args.tp = tp
-    args.dp = dp
-    args.port = port
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"serving start produced non-JSON: {proc.stdout[:1000]}") from exc
+    execution_id = start_result.get("execution_id")
+    target, stopped = None, False
+    manifest = {"mode": "standalone", "status": "incomplete", "execution_id": execution_id,
+        "model": args.model, "run_dir": str(run_dir), "baseline_hbm": {},
+        "baseline_source": "unavailable", "msprof_enabled": False, "component_data_available": False}
     try:
-        model_tag = Path(args.model).name.replace("/", "_")
-        run_dir = ensure_run_dir(tag=args.tag or model_tag)
-        remote_dir = unique_remote_tmp("vaws_memprof", args.session_id)
-        progress(f"Output directory: {run_dir}")
-        ssh_exec(ep, f"mkdir -p {remote_dir}")
-        python = args._python
-        progress(f"Python: {python}")
-        check_msprof_available(ep)
-
-        manifest: dict = {
-            "mode": "standalone",
-            "session_id": args.session_id,
-            "session_file": args.session_file,
-            "model": args.model,
-            "tp": tp,
-            "dp": dp,
-            "devices": _compute_devices(args),
-            "gpu_memory_utilization": args.gpu_memory_utilization,
-            "max_model_len": args.max_model_len,
-            "msprof_enabled": True,
-            "run_dir": str(run_dir),
-            "speculative_config": args.speculative_config,
-            "compilation_config": args.compilation_config,
-            "additional_config": args.additional_config,
-            "quantization": args.quantization,
-            "enforce_eager": args.enforce_eager,
-            "image_url": args.image_url,
-        }
-
-        manifest["baseline_hbm"] = {}
-        manifest["startup_seconds"] = start_result.get("readiness", {}).get("elapsed_seconds")
+        if execution_id:
+            from vaws_task_target import task_client
+            target = {"client": task_client(args.context_file), "execution_id": execution_id}
+            target = resolve_execution_target(context_file=args.context_file,
+                execution_id=execution_id, service=args.service)
+        if proc.returncode or start_result.get("status") != "ready" or not target:
+            raise RuntimeError(f"managed profiling service did not become ready: {start_result}")
+        remote_dir = start_result.get("runtime_dir")
+        if not isinstance(remote_dir, str) or not remote_dir.startswith("/tmp/vaws-serve."):
+            raise RuntimeError("profiled service has no runtime directory in its launch receipt")
+        args.session_id, args.execution_id = target["task_id"], execution_id
+        args._python = selected_python(target)
+        args.tp = args.tp if args.tp is not None else start_result.get("tp") or 1
+        args.dp = args.dp if args.dp is not None else start_result.get("dp") or 1
+        args.port = start_result.get("port") or target.get("service_port")
+        ep = target["endpoint"]
+        manifest.update({"session_id": args.session_id, "tp": args.tp, "dp": args.dp,
+            "devices": target.get("devices") or start_result.get("devices"),
+            "port": args.port, "msprof_enabled": True, "serving_runtime_dir": remote_dir,
+            "msprof_output_dir": f"{remote_dir}/msprof_data",
+            "startup_seconds": start_result.get("readiness", {}).get("elapsed_seconds")})
+        for name in ("gpu_memory_utilization", "max_model_len", "speculative_config", "compilation_config",
+                     "additional_config", "quantization", "enforce_eager", "enable_expert_parallel", "image_url"):
+            manifest[name] = getattr(args, name)
         manifest["after_ready_hbm"] = collect_npu_smi(ep, "after_ready", run_dir)
-        manifest["inference_response"] = send_inference(ep, args, port=port)
+        log = target["client"].observe(execution_id, "tail")
+        log_text = str(log.get("tail") or log.get("stdout") or "") + str(log.get("stderr") or "")
+        (run_dir / "vllm_serve.log").write_text(log_text, encoding="utf-8")
+        manifest["inference_response"] = send_inference(ep, args, port=args.port,
+            model_name=start_result.get("served_model_name") or args.model)
         manifest["after_infer_hbm"] = collect_npu_smi(ep, "after_infer", run_dir)
-        stop_cmd = [
-            sys.executable,
-            str(serving / "serving.py"), "stop",
-            "--service", args.service or "vllm-memprof",
-            "--force",
-        ]
-        if args.context_file:
-            stop_cmd.extend(["--context-file", args.context_file])
-        if args.execution_id:
-            stop_cmd.extend(["--execution-id", str(args.execution_id)])
-        subprocess.run(stop_cmd, cwd=str(ROOT), capture_output=True, text=True, check=False)
-        time.sleep(2)
-        run_msprof_export(ep, f"{remote_dir}/msprof_data")
-        manifest["msprof_csvs"] = collect_msprof_csvs(ep, remote_dir, run_dir)
         manifest["model_config"] = collect_model_config(ep, args.model, run_dir)
-        manifest["weight_manifest_collected"] = bool(
-            collect_weight_manifest(ep, python, args.model, run_dir)
-        )
-        (run_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False))
-        progress(f"Collection complete. Data saved to {run_dir}")
-        print(json.dumps(manifest, indent=2, ensure_ascii=False))
-    except Exception:
-        stop_cmd = [
-            sys.executable,
-            str(serving / "serving.py"), "stop",
-            "--service", args.service or "vllm-memprof",
-            "--force",
-        ]
-        if args.context_file:
-            stop_cmd.extend(["--context-file", args.context_file])
-        if getattr(args, "execution_id", None):
-            stop_cmd.extend(["--execution-id", str(args.execution_id)])
-        subprocess.run(stop_cmd, cwd=str(ROOT), capture_output=True, text=True, check=False)
+        manifest["weight_manifest_collected"] = bool(collect_weight_manifest(ep, args._python, args.model, run_dir))
+        stop_profile_execution(target)
+        stopped = True
+        manifest["prof_directories"] = run_msprof_export(ep, manifest["msprof_output_dir"])
+        manifest["msprof_csvs"] = collect_msprof_csvs(ep, remote_dir, run_dir)
+        manifest["component_data_available"] = any(name.endswith(".csv") for name in manifest["msprof_csvs"])
+        manifest["status"] = "complete" if manifest["component_data_available"] else "incomplete"
+    except Exception as exc:
+        manifest.update(status="failed", error=str(exc))
         raise
+    finally:
+        if target and not stopped:
+            try:
+                stop_profile_execution(target)
+            except Exception as exc:
+                manifest["stop_error"] = str(exc)
+                progress(f"Profile execution stop did not complete: {exc}")
+        (run_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
+    progress(f"Collection {manifest['status']}. Data saved to {run_dir}")
+    print(json.dumps(manifest, indent=2, ensure_ascii=False))
+    return 0 if manifest["status"] == "complete" else 1
 
 
 if __name__ == "__main__":

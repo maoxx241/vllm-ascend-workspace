@@ -14,7 +14,7 @@ if str(LIB_DIR) not in sys.path:
     sys.path.insert(0, str(LIB_DIR))
 
 from vaws_remote_dev import ssh_exec as remote_ssh_exec  # noqa: E402
-from vaws_remote_target import SshEndpoint  # noqa: E402
+from vaws_remote_target import SshEndpoint, ssh_endpoint_from_mapping  # noqa: E402
 from vaws_result_envelope import emit_skill_json, progress as envelope_progress  # noqa: E402
 from vaws_validate import parse_device_csv  # noqa: E402
 
@@ -79,11 +79,7 @@ def endpoint_from_reply(reply: dict[str, Any]) -> SshEndpoint:
     endpoint = target.get("endpoint") if isinstance(target.get("endpoint"), dict) else reply.get("endpoint")
     if not isinstance(endpoint, dict) or not endpoint.get("host"):
         raise RuntimeError("coordinator reply has no ordinary endpoint")
-    return SshEndpoint(
-        host=str(endpoint["host"]),
-        port=int(endpoint.get("port") or 22),
-        user=str(endpoint.get("user") or "root"),
-    )
+    return ssh_endpoint_from_mapping(endpoint)
 
 
 def service_port_of(reply: dict[str, Any]) -> int | None:

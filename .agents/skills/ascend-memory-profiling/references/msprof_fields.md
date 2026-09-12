@@ -1,6 +1,10 @@
 # msprof Memory CSV Field Reference
 
-Based on Ascend CANN documentation and empirical verification.
+Reading guide for observed CANN exports. Field names and units vary by release:
+inspect the actual CSV header before applying a conversion. Typical ranges below
+are historical examples, not expected values or acceptance thresholds. A PROF
+directory containing multiple devices does not by itself assign each component
+row to a physical device.
 
 ## 1. `npu_module_mem_*.csv` -- Component-Level Memory
 

@@ -5,9 +5,8 @@ description: "Download, resume, status-check, and SHA256-verify ModelScope model
 
 # ModelScope
 
-Use the bundled scripts from this skill directory. On Windows, invoke them with
-`uv run python`; the manager launches a hidden worker, observes it without sending
-a signal, and uses UTF-8 for redirected command output. Prefer the compact manager first:
+Use the bundled manager with `uv run --no-project python` on each platform.
+It starts downloads and verification in a background worker and reports compact status.
 
 - `scripts/modelscope_auto.py` - status, auto-resume, background download, and post-download verification
 - `scripts/download_from_modelscope.py` - low-level single-model downloader
@@ -33,7 +32,7 @@ Represent every model as `MODEL_ID=LOCAL_DIR`.
 For `$modelscope download`, resume, repair-after-approval, or “check and continue if incomplete”, run:
 
 ```bash
-python3 "$SKILL_DIR/scripts/modelscope_auto.py" ensure \
+uv run --no-project python "$SKILL_DIR/scripts/modelscope_auto.py" ensure \
   --model "$MODEL_ID=$LOCAL_DIR" \
   --revision "$REVISION"
 ```
@@ -43,10 +42,15 @@ python3 "$SKILL_DIR/scripts/modelscope_auto.py" ensure \
 - If a task is active, leave it running and report compact status.
 - If official files are incomplete and no task is active, start a detached background worker in the same `LOCAL_DIR`.
 - If files are complete but verification is missing or stale, start detached SHA256 verification.
-- If verification reports real missing, size mismatch, or SHA256 mismatch, report it and ask before repair.
+- If verification reports a real mismatch, use the existing authorization to decide whether to repair; ask only if replacing those files was not authorized.
 - It preserves partial files and never deletes weights.
 
 The manager writes `download.pid`, `download.launch.log`, `download.log`, `verify.log`, `modelscope_sha256.report.json`, `modelscope_sha256.tsv`, and `SHA256SUMS` in `LOCAL_DIR`.
+
+Pass `--auto-install` when the requested download needs a missing ModelScope SDK.
+It resolves that dependency in an isolated uv environment and records the actual
+SDK version and interpreter in the download log; it does not install into the
+selected workspace environment. Use `--help` for optional concurrency settings.
 
 Proxy options:
 
@@ -59,7 +63,7 @@ Proxy options:
 For explicit status only:
 
 ```bash
-python3 "$SKILL_DIR/scripts/modelscope_auto.py" status \
+uv run --no-project python "$SKILL_DIR/scripts/modelscope_auto.py" status \
   --model "$MODEL_ID=$LOCAL_DIR" \
   --revision "$REVISION"
 ```
@@ -68,12 +72,19 @@ If the user asks for all tasks, require a root and run `--root ROOT`; the script
 
 Report only the compact script output: state, percent, local/expected size, PID, verification state, and directory. Include log paths only when useful.
 
+Completion requires every expected file to have the expected size. A SHA256
+report is reused only while the model ID, revision, official sizes/hashes and
+local file signatures still match. An old report or a changed file requires
+verification again; status does not rehash large weight files.
+The download record also retains the worker's birth time and command. A reused
+PID alone does not count as an active download.
+
 ## Verify
 
 For explicit verification:
 
 ```bash
-python3 "$SKILL_DIR/scripts/modelscope_auto.py" verify \
+uv run --no-project python "$SKILL_DIR/scripts/modelscope_auto.py" verify \
   --model "$MODEL_ID=$LOCAL_DIR" \
   --revision "$REVISION"
 ```
@@ -85,4 +96,4 @@ Verification ignores `.gitattributes` by default because it is Git metadata, not
 - Keep responses short.
 - Do not paste large command output or progress bars.
 - Summarize each model as `state`, percent, PID, verification result, and paths.
-- If network or filesystem sandboxing blocks a required command, rerun with approval as needed.
+- If the execution policy rejects a required operation, report the exact rejection and do not bypass it.

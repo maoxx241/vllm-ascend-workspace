@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -30,14 +32,56 @@ class ServingPresetTests(unittest.TestCase):
         self.assertEqual(serve_start.classify_stage("Uvicorn running on http://0.0.0.0:30001"), "http-up")
         self.assertIsNone(serve_start.classify_stage("unrelated log line"))
 
-    def test_shipped_dsv4_flash_preset_is_valid_and_pinned(self):
+    def test_shipped_dsv4_flash_preset_preserves_managed_sources(self):
         preset = serve_start.load_preset("dsv4-flash")
-        self.assertEqual(preset["vllm_version"], "0.26.0")
+        self.assertNotIn("vllm_version", preset)
+        self.assertNotIn("PYTHONPATH", preset["env"])
+        self.assertNotIn("VLLM_VERSION", preset["env"])
         self.assertEqual(preset["tp"], 8)
         self.assertIn("--quantization", preset["serve_args"])
 
 
 class ServeCommandTests(unittest.TestCase):
+    def test_local_wrapper_and_execution_runtime_survive_the_business_receipt(self):
+        client = SimpleNamespace(run=mock.Mock(return_value={"state": "queued", "execution_id": "exec-one"}))
+        with tempfile.TemporaryDirectory() as tmp:
+            wrapper = Path(tmp) / "wrapper.sh"
+            wrapper.write_text("#!/bin/bash\nexec bash \"$1\"\n", encoding="utf-8")
+            with mock.patch.object(serve_start, "task_client", return_value=client), \
+                 mock.patch.object(serve_start, "task_id_of", return_value="task-one"), \
+                 mock.patch.object(serve_start, "load_serving_state", return_value=None), \
+                 mock.patch.object(serve_start, "save_serving_state") as save, \
+                 mock.patch.object(serve_start, "print_json") as printed:
+                self.assertEqual(serve_start.main(["--model", "/data/m", "--no-wait", "--wrap-script-local", str(wrapper)]), 0)
+            report = save.call_args.args[1]
+            self.assertEqual(report["execution_id"], "exec-one")
+            self.assertEqual(report["wrap_script_content"], wrapper.read_text(encoding="utf-8"))
+            self.assertIn(report["runtime_dir"], client.run.call_args.args[0])
+            self.assertEqual(printed.call_args.args[0]["runtime_dir"], report["runtime_dir"])
+
+    def test_nonpositive_device_requests_fail_before_task_or_run(self):
+        for flag in ("--npu-count", "--tp", "--dp"):
+            with self.subTest(flag=flag), mock.patch.object(serve_start, "task_client") as client, mock.patch.object(serve_start, "print_json"):
+                self.assertEqual(serve_start.main(["--model", "/data/m", flag, "0"]), 1)
+            client.assert_not_called()
+
+    @unittest.skipIf(os.name == "nt", "Bash execution fixture runs on Linux")
+    def test_inline_wrapper_executes_the_same_quoted_serve_command(self):
+        with tempfile.TemporaryDirectory(prefix="serving wrapper ") as tmp:
+            runtime = Path(tmp) / "run with space"
+            fake = Path(tmp) / "selected python"
+            fake.write_text('#!/bin/bash\nprintf "%s\\n" "$@"\n', encoding="utf-8")
+            fake.chmod(0o700)
+            command = serve_start.build_serve_command(model="/models/a 'quoted' model", served_model_name="one",
+                tp=1, dp=None, extra_args=["--enforce-eager"], runtime_dir=str(runtime),
+                wrap_script_content='#!/bin/bash\nprintf wrapped > "$2/proof"\nexec bash "$1"\n')
+            result = subprocess.run(["bash", "-c", command], text=True, capture_output=True,
+                env={**os.environ, "VAWS_PYTHON": str(fake), "VAWS_SERVICE_PORT": "8000"})
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual((runtime / "proof").read_text(), "wrapped")
+            self.assertIn("/models/a 'quoted' model", result.stdout.splitlines())
+            self.assertIn("--enforce-eager", result.stdout.splitlines())
+
     def test_command_uses_quoted_vaws_python_and_port(self):
         command = serve_start.build_serve_command(
             model="/data/model",
@@ -74,7 +118,7 @@ class ServeCommandTests(unittest.TestCase):
 class QueuedStatusTests(unittest.TestCase):
     def test_rejected_start_keeps_previous_business_settings(self):
         client = SimpleNamespace(run=mock.Mock(side_effect=ValueError("service has different options")))
-        with mock.patch.object(serve_start, "task_client", return_value=client), mock.patch.object(serve_start, "task_id_of", return_value="task-1"), mock.patch.object(serve_start, "load_serving_state", return_value=None), mock.patch.object(serve_start, "save_serving_state") as save, mock.patch.object(serve_start, "load_workspace_identity", return_value=None), mock.patch.object(serve_start, "effective_workspace_alias", return_value=None), mock.patch.object(serve_start, "print_json"):
+        with mock.patch.object(serve_start, "task_client", return_value=client), mock.patch.object(serve_start, "task_id_of", return_value="task-1"), mock.patch.object(serve_start, "load_serving_state", return_value=None), mock.patch.object(serve_start, "save_serving_state") as save, mock.patch.object(serve_start, "print_json"):
             rc = serve_start.main(["--model", "/data/m", "--service", "one"])
         self.assertEqual(rc, 2)
         save.assert_not_called()
@@ -85,7 +129,7 @@ class QueuedStatusTests(unittest.TestCase):
             observe=mock.Mock(return_value={"stdout": "ModuleNotFoundError: No module named 'vllm.example'",
                                            "stderr": "RuntimeError: Engine core initialization failed"}),
         )
-        with mock.patch.object(serve_start, "task_client", return_value=client), mock.patch.object(serve_start, "task_id_of", return_value="task-1"), mock.patch.object(serve_start, "load_serving_state", return_value=None), mock.patch.object(serve_start, "save_serving_state"), mock.patch.object(serve_start, "load_workspace_identity", return_value=None), mock.patch.object(serve_start, "effective_workspace_alias", return_value=None), mock.patch.object(serve_start, "wait_for_ready") as probe, mock.patch.object(serve_start, "print_json") as printed:
+        with mock.patch.object(serve_start, "task_client", return_value=client), mock.patch.object(serve_start, "task_id_of", return_value="task-1"), mock.patch.object(serve_start, "load_serving_state", return_value=None), mock.patch.object(serve_start, "save_serving_state"), mock.patch.object(serve_start, "wait_for_ready") as probe, mock.patch.object(serve_start, "print_json") as printed:
             rc = serve_start.main(["--model", "/data/m"])
         self.assertEqual(rc, 1)
         self.assertIn("No module named 'vllm.example'", printed.call_args.args[0]["error"])
@@ -128,7 +172,7 @@ class QueuedStatusTests(unittest.TestCase):
             run=fake_run,
             observe=mock.Mock(side_effect=AssertionError("must not probe queued work")),
         )
-        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(serve_start, "task_client", return_value=client), mock.patch.object(serve_start, "task_id_of", return_value="task-1"), mock.patch.object(serve_start, "load_serving_state", return_value=None), mock.patch.object(serve_start, "save_serving_state"), mock.patch.object(serve_start, "load_workspace_identity", return_value=None), mock.patch.object(serve_start, "effective_workspace_alias", return_value=None), mock.patch.object(serve_start, "print_json") as printed:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(serve_start, "task_client", return_value=client), mock.patch.object(serve_start, "task_id_of", return_value="task-1"), mock.patch.object(serve_start, "load_serving_state", return_value=None), mock.patch.object(serve_start, "save_serving_state"), mock.patch.object(serve_start, "print_json") as printed:
             rc = serve_start.main(["--model", "/data/m", "--no-wait"])
         self.assertEqual(rc, 0)
         payload = printed.call_args[0][0]
@@ -162,7 +206,7 @@ class QueuedStatusTests(unittest.TestCase):
             "env": {},
             "extra_args": [],
         }
-        with mock.patch.object(serve_start, "task_client", return_value=client), mock.patch.object(serve_start, "task_id_of", return_value="task-1"), mock.patch.object(serve_start, "load_serving_state", return_value=previous), mock.patch.object(serve_start, "save_serving_state"), mock.patch.object(serve_start, "load_workspace_identity", return_value=None), mock.patch.object(serve_start, "effective_workspace_alias", return_value=None), mock.patch.object(serve_start, "print_json"):
+        with mock.patch.object(serve_start, "task_client", return_value=client), mock.patch.object(serve_start, "task_id_of", return_value="task-1"), mock.patch.object(serve_start, "load_serving_state", return_value=previous), mock.patch.object(serve_start, "save_serving_state"), mock.patch.object(serve_start, "print_json"):
             rc = serve_start.main(["--relaunch", "--no-wait"])
         self.assertEqual(rc, 0)
         self.assertTrue(captured["restart"])
@@ -193,7 +237,7 @@ class QueuedStatusTests(unittest.TestCase):
             run=fake_run,
             observe=mock.Mock(side_effect=AssertionError("must not probe preparing work")),
         )
-        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(serve_start, "task_client", return_value=client), mock.patch.object(serve_start, "task_id_of", return_value="task-1"), mock.patch.object(serve_start, "load_serving_state", return_value=None), mock.patch.object(serve_start, "save_serving_state"), mock.patch.object(serve_start, "load_workspace_identity", return_value=None), mock.patch.object(serve_start, "effective_workspace_alias", return_value=None), mock.patch.object(serve_start, "print_json") as printed:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(serve_start, "task_client", return_value=client), mock.patch.object(serve_start, "task_id_of", return_value="task-1"), mock.patch.object(serve_start, "load_serving_state", return_value=None), mock.patch.object(serve_start, "save_serving_state"), mock.patch.object(serve_start, "print_json") as printed:
             rc = serve_start.main(["--model", "/data/m", "--no-wait"])
         self.assertEqual(rc, 0)
         payload = printed.call_args[0][0]
