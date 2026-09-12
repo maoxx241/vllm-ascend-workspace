@@ -142,16 +142,19 @@ Python 在调用前就会求值实参，禁用状态也一样。写 `capture("q"
 - `shape_match` / `dtype_match` 逐条给出。
 - `nonfinite_introduced`：右侧非有限计数大于左侧。
 - `stat_divergence`：逐个统计量按 `abs(left - right) > atol + rtol * abs(right)` 判断，默认 `atol=0`、`rtol=0`，即要求逐位相同。两侧同为 NaN 视为一致。
-- `first_divergent`：按左侧顺序最早满足 shape 不匹配、引入非有限、或统计量分叉的记录，带 `reasons` 列表。
+- `first_divergent`：按左侧顺序最早满足 shape/dtype 不匹配、引入非有限、或统计量分叉的记录，带 `reasons` 列表。
 - `only_in_left` / `only_in_right`：单侧独有的 key。**两者非空时先怀疑两轮跑的不是同一条路径**，而不是急着看数值。
 
-`verdict` 取三值：
+`verdict` 描述已捕获摘要的比较：
 
 | verdict | 含义 |
 |---------|------|
-| `DIVERGENT` | 公共 stage 上出现形状不符、新增非有限值或统计量超差 |
+| `DIVERGENT` | 公共 stage 上出现 shape/dtype 不符、新增非有限值或统计量超差 |
 | `COVERAGE_MISMATCH` | 公共 stage 全部对齐，但存在单侧独有的 stage |
 | `ALIGNED` | 两侧 stage 集合相同且全部对齐 |
+| `INCONCLUSIVE` | 没有公共记录，或公共记录缺少可比较的统计量 |
+
+摘要对齐只说明这些统计量一致，不能证明张量逐元素相同。
 
 单侧独有的 stage **不是**一致性证据，最常见的原因是两轮没跑同一条插桩路径——例如图模式 replay 直接跳过了 Python 打点。所以覆盖不对称单独成一档，不会被折叠进 `ALIGNED`。
 
@@ -168,7 +171,9 @@ Python 在调用前就会求值实参，禁用状态也一样。写 `capture("q"
 | 整数或 bool dtype | `exact_equal` + `mismatch_count` |
 | 浮点 | `exact_equal`、`mismatch_count`、`max_abs_diff`、`mean_abs_diff`、`allclose`、`cosine`、`rel_l2` |
 
-`first_mismatch` 是最早失败的条目。`verdict` 同样是三值：`FAIL`、`COVERAGE_MISMATCH`、`PASS`，判定优先级与 `diff` 一致。
+`first_mismatch` 是最早失败的条目。`verdict` 为 `FAIL`、`COVERAGE_MISMATCH`、
+`PASS` 或 `INCONCLUSIVE`。空 payload、超出元素预算或不支持的非张量值不能建立通过结论。
+dtype 差异属于 mismatch；整数比较保留 Python 整数值，不经过会丢失 int64 低位的 float64 转换。
 
 非有限值不参与任何 diff 指标：一侧出现 NaN 时答案已经是"就是这个 stage"，把它平均进去只会藏住结论。
 
@@ -181,7 +186,7 @@ Python 在调用前就会求值实参，禁用状态也一样。写 `capture("q"
 | 码 | 含义 |
 |----|------|
 | 0 | 执行成功。有无分叉看 `verdict` 字段。 |
-| 1 | 仅当传了 `--fail-on-divergence` 且 `verdict` 为 `DIVERGENT`、`FAIL` 或 `COVERAGE_MISMATCH`。 |
+| 1 | 仅当传了 `--fail-on-divergence` 且结果不是 `ALIGNED`/`PASS`，包括 `INCONCLUSIVE`。 |
 | 2 | 输入不可用：文件缺失、JSON 非法、没有 `records`、`tensors` 子命令缺 torch。 |
 
 发现分叉默认**不**改变退出码——分叉是结论，不是错误。需要 gating 时才加 `--fail-on-divergence`。
@@ -200,3 +205,6 @@ Python 在调用前就会求值实参，禁用状态也一样。写 `capture("q"
 3. `storage_ptr` 只在同一进程同一次运行内可比。跨进程比较地址无意义，只能比较"是否共享"这一结构性事实。
 4. 探针不限制总输出大小。`DUMP_PROBE_TENSOR` 加 `DUMP_PROBE_ROWS` 是唯一的预算手段。
 5. `arm()` 的 label 计数不跨进程共享。多引擎进程各自独立计数，需要对齐时用 `DUMP_PROBE_RANKS` 锁定单个 rank。
+6. 单算子回放为 candidate/reference 分别复制输入，并在同一次调用中保留对同一对象的重复引用。
+   `preserve_format` 尽可能保留复制时的 stride/layout/dtype，但原始 capture 已经裁行并做 contiguous；
+   storage view 的别名、设备内部格式或特定非连续布局需要在定制复现中重建，不能由值比较推断。

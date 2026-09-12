@@ -4,7 +4,7 @@
 Git and gh are injected through ``probe.run``. No GitHub API, no initialized
 submodule, and no developer HOME are required.
 
-``uv sync`` is a SKILL.md checkpoint question, not a field on the probe
+Dependency installation is handled by its owner, not a field on the probe
 payload. These tests cover the required-step reporting the probe actually
 emits (topology + submodule initialization).
 """
@@ -178,59 +178,22 @@ class ForkTopologyTests(unittest.TestCase):
         self.assertEqual(personal["classification"], "user-fork")
 
 
-class RequiredStepReportingTests(unittest.TestCase):
-    def test_compact_payload_reports_required_topology_and_submodule_steps(self) -> None:
-        original_detect = probe.detect_git_username_candidate
-        original_question = probe.fixed_machine_username_question
-        probe.detect_git_username_candidate = lambda repo_root=None: {  # type: ignore[method-assign]
-            "available": False,
-            "candidate": None,
-            "source": None,
-            "raw_value": None,
+class ProbeSummaryTests(unittest.TestCase):
+    def test_compact_summary_is_read_only_and_has_no_setup_decisions(self) -> None:
+        from unittest.mock import patch
+        payload = {
+            "platform": {"kind": "windows", "machine": "AMD64"},
+            "gh": {"installed": True, "logged_in": True, "user_login": "alice"},
+            "submodules": [{"state": "-", "path": "vllm"}],
+            "repos": {},
         }
-        probe.fixed_machine_username_question = lambda repo_root=None: {"options": []}  # type: ignore[method-assign]
-        try:
-            compact = probe.compact_payload(
-                {
-                    "platform": {"kind": "macos", "machine": "arm64"},
-                    "repo_root": None,
-                    "workspace_profile": {
-                        "exists": False,
-                        "choice_required": True,
-                        "username_rules": "letters and digits",
-                        "default_generated_pattern": "agent#####",
-                        "machine_username": None,
-                    },
-                    "workspace_identity": {"alias_choice_required": True},
-                    "gh": {"installed": False, "logged_in": False},
-                    "gh_install_plan": {
-                        "preferred": {"label": "Homebrew"},
-                        "fallback": {"label": "user-space installer"},
-                    },
-                    "submodules": [
-                        {"state": "-", "path": "vllm", "detail": ""},
-                        {"state": "-", "path": "vllm-ascend", "detail": ""},
-                    ],
-                    "repos": {},
-                    "forks": {},
-                }
-            )
-        finally:
-            probe.detect_git_username_candidate = original_detect  # type: ignore[method-assign]
-            probe.fixed_machine_username_question = original_question  # type: ignore[method-assign]
-        checkpoint = compact["decision_checkpoint"]
-        self.assertTrue(checkpoint["required_for_broad_init"])
-        self.assertFalse(checkpoint["repo_topology"]["required"])
-        self.assertEqual(
-            checkpoint["repo_topology"]["options"],
-            ["keep-current", "recommended-fork-mode", "community-only"],
-        )
-        self.assertFalse(checkpoint["submodules"]["required"])
-        self.assertFalse(checkpoint["submodules"]["initialized"])
-        self.assertTrue(checkpoint["machine_username"]["required"])
-        self.assertTrue(checkpoint["workspace_alias"]["required"])
-        self.assertEqual(checkpoint["defaults"]["uv_sync"], True)
-        self.assertEqual(checkpoint["defaults"]["vllm_alignment"], "ci-pinned")
+        with patch.object(probe, "run", side_effect=AssertionError("summary must not probe again")):
+            compact = probe.compact_payload(payload)
+        self.assertFalse(compact["submodules"]["all_initialized"])
+        self.assertEqual(compact["gh"]["user_login"], "alice")
+        self.assertNotIn("decision_checkpoint", compact)
+        self.assertNotIn("workspace_identity", compact)
+        self.assertNotIn("workspace_profile", compact)
 
     def test_real_git_feeds_initialized_clean_first_row(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

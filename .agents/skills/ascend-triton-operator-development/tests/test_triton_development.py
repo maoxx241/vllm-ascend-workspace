@@ -115,14 +115,33 @@ class DevelopmentTests(unittest.TestCase):
             result = development._finalize_report(
                 output,
                 kernel=kernel,
-                semantic_report=output / "semantic-report.md",
-                sketch=output / "sketch.md",
                 validation_manifest=validation_path,
                 updated_at=NOW,
             )
-            self.assertEqual(result["status"], "passed")
+            self.assertEqual(result["status"], "inconclusive")
+            self.assertFalse((output / "semantic-report.md").exists())
+            self.assertFalse((output / "sketch.md").exists())
             self.assertEqual(len(result["kernel_sha256"]), 64)
 
+
+
+# This suite exercises report semantics, not coordinator Git snapshotting.
+# Real code-identity tests belong to the coordinator package.
+from unittest.mock import patch as _patch_report_code
+_REPORT_CODE = {"source_head": "1" * 40, "snapshot_commit": "2" * 40, "dirty": True}
+_report_code_patch = _patch_report_code("vaws_coordinator.code_identity.manifest_code", return_value=_REPORT_CODE)
+
+
+def setup_module():
+    _report_code_patch.start()
+
+
+def teardown_module():
+    _report_code_patch.stop()
+
+
+setUpModule = setup_module
+tearDownModule = teardown_module
 
 if __name__ == "__main__":
     unittest.main()

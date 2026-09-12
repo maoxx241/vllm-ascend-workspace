@@ -43,7 +43,7 @@ def passed_manifest(path: Path, run_id: str, parent: str, kernel: Path, case_ids
     matrix_path = path.parent / f"{path.stem}-case-matrix.json"
     matrix_path.write_text(json.dumps(matrix), encoding="utf-8")
     analysis_path = path.parent / f"{path.stem}-analysis.json"
-    analysis_path.write_text(json.dumps({"status": "passed", "results": [
+    analysis_path.write_text(json.dumps({"status": "inconclusive", "numerical_status": "passed", "candidate_execution": "unknown", "results": [
         {"case_id": case_id, "status": "passed"} for case_id in case_ids]}), encoding="utf-8")
     manifest = new_manifest(
         run_type="correctness",
@@ -68,7 +68,7 @@ def passed_manifest(path: Path, run_id: str, parent: str, kernel: Path, case_ids
     )
     manifest = transition_status(manifest, "running", updated_at=NOW)
     manifest = add_artifact(manifest, name="analysis", kind="analysis", uri=str(analysis_path), updated_at=NOW)
-    manifest = transition_status(manifest, "passed", updated_at=NOW)
+    manifest = transition_status(manifest, "inconclusive", updated_at=NOW)
     write_manifest(path, manifest)
 
 
@@ -118,7 +118,9 @@ class OptimizationTests(unittest.TestCase):
             self.assertEqual(recorded["decision"], "KEEP")
             self.assertTrue(recorded["target_met"])
             analyzed = optimization._analyze_report(output, updated_at=NOW)
-            self.assertEqual(analyzed["status"], "passed")
+            self.assertEqual(analyzed["status"], "inconclusive")
+            self.assertEqual(analyzed["measurement_status"], "passed")
+            self.assertEqual(analyzed["candidate_execution"], "unknown")
 
     def test_parent_hash_mismatch_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -148,6 +150,25 @@ class OptimizationTests(unittest.TestCase):
             with self.assertRaisesRegex(optimization.OptimizationError, "current best"):
                 optimization._record_result(output, result_path=result_path, recorded_at=NOW)
 
+
+
+# This suite exercises report semantics, not coordinator Git snapshotting.
+# Real code-identity tests belong to the coordinator package.
+from unittest.mock import patch as _patch_report_code
+_REPORT_CODE = {"source_head": "1" * 40, "snapshot_commit": "2" * 40, "dirty": True}
+_report_code_patch = _patch_report_code("vaws_coordinator.code_identity.manifest_code", return_value=_REPORT_CODE)
+
+
+def setup_module():
+    _report_code_patch.start()
+
+
+def teardown_module():
+    _report_code_patch.stop()
+
+
+setUpModule = setup_module
+tearDownModule = teardown_module
 
 if __name__ == "__main__":
     unittest.main()

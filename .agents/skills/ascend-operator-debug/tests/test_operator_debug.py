@@ -167,5 +167,23 @@ class OperatorDebugTests(unittest.TestCase):
             self.assertTrue((output / "report.md").is_file())
 
 
+from unittest.mock import patch as _patch_report_code
+_report_code_patch = _patch_report_code("vaws_coordinator.code_identity.manifest_code", return_value={
+    "source_head": "1" * 40, "snapshot_commit": "2" * 40, "dirty": True,
+})
+
+
+def setUpModule():
+    _report_code_patch.start()
+
+
+def tearDownModule():
+    _report_code_patch.stop()
+
+
+setup_module = setUpModule
+teardown_module = tearDownModule
+
+
 if __name__ == "__main__":
     unittest.main()

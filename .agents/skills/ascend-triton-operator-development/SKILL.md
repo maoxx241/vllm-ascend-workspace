@@ -11,20 +11,24 @@ Resolve semantics from the reference and callers before selecting a grid or tile
 
 ## Agent entry
 
-Run from the repository root using the platform's Python launcher. The workspace
-selects its installed platform environment automatically.
+Run from the repository root. The entry reuses the installed platform environment.
 
 ```text
-python .agents/skills/ascend-triton-operator-development/scripts/triton_development.py --config operator.json --kernel kernel.py --validation-manifest validation/manifest.json
+uv run --no-project python .agents/skills/ascend-triton-operator-development/scripts/triton_development.py --config operator.json --kernel kernel.py --validation-manifest validation/manifest.json
 ```
 
 The business config contains op_name, mode, source, reference, target, cases and tolerances. The report consumes the actual kernel and validation manifest, checking kernel identity and passing case coverage. Optional --semantic-report and --sketch attach useful design artifacts.
 
 Run ascend-triton-kernel-validation for the candidate. Continue to optimization only after the planned correctness cases pass.
 
+The report aggregates supplied evidence. Imported numerical results and latency
+measurements do not by themselves prove candidate NPU execution; this remains
+unknown in the aggregate status. Keep the measured outcomes and use existing
+runner or profiler evidence in the task assessment. That report limitation adds
+no prerequisite for work already supported by valid execution evidence.
+
 Read the relevant detail only when needed:
 
-- [behavior](references/behavior.md)
 - [semantic review](references/semantic-review.md)
 - [architecture and codegen](references/architecture-and-codegen.md)
 

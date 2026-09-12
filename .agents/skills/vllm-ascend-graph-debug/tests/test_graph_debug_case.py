@@ -54,6 +54,21 @@ def record(*, layer: int, sample: list[float]) -> dict:
 
 
 class GraphCompareTests(unittest.TestCase):
+    def test_metadata_only_snapshots_do_not_establish_value_agreement(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            eager, graph = Path(tmp) / "eager.jsonl", Path(tmp) / "graph.jsonl"
+            meta = {"step": 0, "layer": 0, "rank": 0, "tag": "out", "shape": [2], "dtype": "float32"}
+            write_snapshot(eager, [meta])
+            write_snapshot(graph, [meta])
+            comparison = graph_debug.compare_snapshots(eager, graph, atol=0, rtol=0)
+            self.assertEqual(comparison["status"], "inconclusive")
+            self.assertEqual(len(comparison["evidence_gaps"]), 2)
+
+    def test_shape_difference_is_visible_with_matching_samples(self):
+        differences = graph_debug._compare_record({**record(layer=0, sample=[1.0]), "shape": [2, 2]},
+            {**record(layer=0, sample=[1.0]), "shape": [4]}, atol=0, rtol=0)
+        self.assertEqual(differences[0]["field"], "shape")
+
     def test_snapshot_comparison_reports_first_sorted_divergence(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -86,20 +101,17 @@ class GraphCompareTests(unittest.TestCase):
             )
             self.assertEqual(comparison["status"], "exact-match")
 
-    def test_compare_case_requires_recorded_identity(self) -> None:
+    def test_missing_identity_preserves_divergence_without_attribution(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            case_dir = Path(tmp) / "case"
-            eager = Path(tmp) / "eager.jsonl"
-            graph = Path(tmp) / "graph.jsonl"
+            eager, graph = Path(tmp) / "eager.jsonl", Path(tmp) / "graph.jsonl"
             write_snapshot(eager, [record(layer=0, sample=[1.0])])
-            write_snapshot(graph, [record(layer=0, sample=[1.0])])
-            with self.assertRaisesRegex(
-                graph_debug.GraphDebugError, "no recorded identity"
-            ):
-                graph_debug.build_report(eager, graph, output_dir=case_dir,
-                    atol=0.0,
-                    rtol=0.0,
-                )
+            write_snapshot(graph, [record(layer=0, sample=[2.0])])
+            result = graph_debug.build_report(eager, graph, output_dir=Path(tmp) / "report")
+            comparison = json.loads(Path(result["comparison"]).read_text(encoding="utf-8"))
+            self.assertEqual(comparison["status"], "inconclusive")
+            self.assertEqual(comparison["observed_status"], "diverged")
+            self.assertEqual(comparison["first_divergence"]["key"]["layer"], 0)
+            self.assertEqual(comparison["comparability"]["verdict"], "not-comparable")
 
     def test_compare_case_consumes_comparable_certificate(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -152,6 +164,25 @@ class GraphCompareTests(unittest.TestCase):
             with self.assertRaisesRegex(graph_debug.GraphDebugError, "duplicate"):
                 graph_debug.load_snapshots(path)
 
+
+
+# This suite exercises report semantics, not coordinator Git snapshotting.
+# Real code-identity tests belong to the coordinator package.
+from unittest.mock import patch as _patch_report_code
+_REPORT_CODE = {"source_head": "1" * 40, "snapshot_commit": "2" * 40, "dirty": True}
+_report_code_patch = _patch_report_code("vaws_coordinator.code_identity.manifest_code", return_value=_REPORT_CODE)
+
+
+def setup_module():
+    _report_code_patch.start()
+
+
+def teardown_module():
+    _report_code_patch.stop()
+
+
+setUpModule = setup_module
+tearDownModule = teardown_module
 
 if __name__ == "__main__":
     unittest.main()

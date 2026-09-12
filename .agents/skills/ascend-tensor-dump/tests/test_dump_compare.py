@@ -11,10 +11,13 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
+import sys
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "dump_compare.py"
 _spec = importlib.util.spec_from_file_location("dump_compare_under_test", SCRIPT)
@@ -217,6 +220,24 @@ class ScanTests(TempCase):
 
 
 class DiffTests(TempCase):
+    def test_missing_summary_and_empty_capture_are_inconclusive(self):
+        for rows in ([], [record("a", 0, summary=None)]):
+            left = self.write("left.json", manifest(rows))
+            right = self.write("right.json", manifest(rows))
+            code, result = self.run_cli(["diff", "--left", str(left), "--right", str(right), "--fail-on-divergence"])
+            self.assertEqual(result["verdict"], "INCONCLUSIVE")
+            self.assertEqual(code, 1)
+
+    def test_dtype_difference_is_a_divergence(self):
+        left = self.write("left.json", manifest([record("a", 0)]))
+        right = self.write("right.json", manifest([record("a", 0, dtype="torch.float32")]))
+        _, result = self.run_cli(["diff", "--left", str(left), "--right", str(right)])
+        self.assertEqual(result["first_divergent"]["reasons"], ["dtype"])
+
+    def test_nonfinite_tolerance_is_rejected(self):
+        with self.assertRaisesRegex(dump_compare.DumpCompareError, "finite"):
+            dump_compare.diff_manifests(Path("left"), Path("right"), atol=float("nan"), rtol=0)
+
     def test_identical_manifests_are_aligned(self) -> None:
         records = [record("attn", 0), record("mlp", 1)]
         left = self.write("l.json", manifest(records))
@@ -417,6 +438,27 @@ class MetricTests(unittest.TestCase):
 
 
 class PayloadTests(unittest.TestCase):
+    def test_empty_payload_does_not_pass(self):
+        result = dump_compare.compare_tensor_payloads({}, {}, atol=0, rtol=0, max_elements=10)
+        self.assertEqual(result["verdict"], "INCONCLUSIVE")
+
+    def test_int64_comparison_retains_bits_above_float64_precision(self):
+        class Tensor:
+            dtype = "torch.int64"
+            def __init__(self, value, size=1): self.value, self.shape = value, (size,)
+            def numel(self): return self.shape[0]
+            def reshape(self, *args): return self
+            def tolist(self): return [self.value]
+            def to(self, dtype): raise AssertionError("integer values must not pass through float64")
+        with patch.dict(sys.modules, {"torch": SimpleNamespace(Tensor=Tensor)}):
+            result = dump_compare.compare_tensor_payloads({"tensors": [("out", Tensor(2**53))]},
+                {"tensors": [("out", Tensor(2**53+1))]}, atol=0, rtol=0, max_elements=10)
+            too_large = dump_compare.compare_tensor_payloads({"tensors": [("out", Tensor(1, 2))]},
+                {"tensors": [("out", Tensor(1, 2))]}, atol=0, rtol=0, max_elements=1)
+        self.assertEqual(result["verdict"], "FAIL")
+        self.assertEqual(result["items"][0]["metrics"]["mismatch_count"], 1)
+        self.assertEqual(too_large["verdict"], "INCONCLUSIVE")
+
     def test_all_three_sources_are_flattened_into_one_key_space(self) -> None:
         payload = {
             "tensors": [("attn", "T1"), ("attn", "T2")],

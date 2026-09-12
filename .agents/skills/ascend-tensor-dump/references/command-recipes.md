@@ -1,16 +1,12 @@
 # Command recipes
 
-所有远端操作优先用 `.remote-dev` companion 工具，不要拼裸 SSH。以下命令都在会话容器内执行。
+在实际业务 worktree 中插桩，再通过 coordinator 的 sources 绑定运行。
+显式远端文件操作使用 remote-dev companion。探针与算子回放在管理的 Ascend
+Python 环境中执行；比较命令在持有 dump 文件的环境中执行，本地示例从仓库根目录运行。
 
 ## 1. 装探针
 
-把探针写进被测包，**路径必须是容器内可见的路径**。
-
-```
-remote.write
-  path: /vllm-workspace/vllm-ascend/vllm_ascend/dump_probe.py
-  content: <.agents/skills/ascend-tensor-dump/assets/dump_probe.py 的内容>
-```
+把 `assets/dump_probe.py` 复制到实际业务 worktree 的被测包中，并绑定这棵源码。
 
 确认它在服务实际 import 的那棵树里：
 
@@ -19,7 +15,7 @@ python -c "import vllm_ascend, pathlib; print(pathlib.Path(vllm_ascend.__file__)
 ls -l $(python -c "import vllm_ascend, pathlib; print(pathlib.Path(vllm_ascend.__file__).parent)")/dump_probe.py
 ```
 
-两条路径不一致时停下来。写到宿主机 `/workspace` 而服务跑在容器另一棵树上，会让同步看起来成功但探针永远不执行。
+路径不一致时修正源码绑定或导入路径。宿主机与容器中的同名路径不一定是同一棵源码。
 
 ## 2. 插桩
 
@@ -74,26 +70,20 @@ curl -s http://127.0.0.1:8000/v1/completions \
        "temperature":0,"seed":0}'
 ```
 
-`max_tokens=1` 就够定位首个分叉。先把输出长度压到最小，再考虑加长。
+首 token 已复现的问题可以用 `max_tokens=1`。若问题发生在后续 decode，保留到故障位置所需的输出长度。
 
 ## 4. 探针开关对照
 
-这一步不能跳。
-
-```bash
-# 关掉探针重跑同一条请求
-DUMP_PROBE=0 curl -s ... | tee /tmp/probe-off.json
-# 开着探针重跑
-DUMP_PROBE=1 curl -s ... | tee /tmp/probe-on.json
-diff /tmp/probe-off.json /tmp/probe-on.json
-```
-
-两次输出不同就说明探针改变了被测行为——回去检查 forward 内是否有同步或 D2H。
+怀疑插桩的同步或复制会改变症状时，比较探针关闭和开启时的相同请求。
+开关必须作用于服务进程：可以使用 `DUMP_PROBE_ENABLE_FILE` 哨兵；改变
+`DUMP_PROBE` 则需要在服务启动环境中设置。给 curl 设置环境变量不会修改已运行服务。
+比较响应中的 token/text 和关键数值，不要直接 diff 含随机请求 ID 的完整响应。
+输出差异也可能来自原问题的非确定性，应结合重复观测区分。
 
 ## 5. 读摘要
 
 ```bash
-python .agents/skills/ascend-tensor-dump/scripts/dump_compare.py scan \
+uv run --no-project python .agents/skills/ascend-tensor-dump/scripts/dump_compare.py scan \
   --manifest /vllm-workspace/dumps/baseline/*.json \
   --max-abs-limit 1e4
 ```
@@ -109,12 +99,14 @@ python .agents/skills/ascend-tensor-dump/scripts/dump_compare.py scan \
 跑两轮，只改一个变量（graph/eager、特性开关、prefix on/off、baseline/candidate 代码）。
 
 ```bash
-python .agents/skills/ascend-tensor-dump/scripts/dump_compare.py diff \
+uv run --no-project python .agents/skills/ascend-tensor-dump/scripts/dump_compare.py diff \
   --left  /vllm-workspace/dumps/eager/cmpl-abc-rank0.json \
   --right /vllm-workspace/dumps/graph/cmpl-abc-rank0.json
 ```
 
-先看 verdict。`COVERAGE_MISMATCH` 说明两轮走的不是同一条代码路径（`only_in_left` / `only_in_right` 给出具体 stage），此时任何数值结论都不成立，先把路径对齐。
+先看 verdict。`COVERAGE_MISMATCH` 表示两侧记录集合不同（`only_in_left` /
+`only_in_right` 给出 stage），可能来自路径或捕获方式不同。公共 stage 的数值仍可用于
+局部诊断；缺失 stage 不能证明一致，需按当前问题决定是否补采。
 
 再看 `first_divergent.reasons`。
 
@@ -135,7 +127,8 @@ export DUMP_PROBE_TENSOR='layers\.23\.self_attn'
 export DUMP_PROBE_ROWS=32
 ```
 
-`DUMP_PROBE_ROWS` 必须设。不设会把整个 prefill 的 token 维度全存下来。它只作用于 2 维及以上的张量——1 维权重整存，否则回放时算子会拿 `gamma[:8]` 去配 `[1, 1024]` 的激活。
+按张量大小和回放语义选择 `DUMP_PROBE_ROWS`。它只作用于 2 维及以上的张量；
+`0` 保留完整张量。裁剪会改变算子输入，应确认所需 token 范围和对应参数仍然匹配。
 
 比较：
 
@@ -178,10 +171,10 @@ dump_probe.finish()
 
 对照的 eager 一侧照常用 `capture()`，服务加 `--enforce-eager`。
 
-关于两侧怎么比，有三点实测结论，别搞错：
+两侧配对时注意捕获路径：
 
 1. **图 slot 不进 `records`。** 它们落在 manifest 的 `graph_slots` 字典和 `.pt` 的 `graph:` key 空间里，所以 `diff`（只配对 `records`）看不到它们。用 `scan` 看声明了哪些 slot，用 `tensors` 比数值。
-2. **eager 和 graph 的 manifest `diff` 必然是 `COVERAGE_MISMATCH`。** 图内的 `capture()` 在 replay 时不执行，eager 那一侧的逐层记录在图侧根本不存在。实测 114 对 2。这个 verdict 是正确结果，不是工具出错——它恰好在提醒你别拿残缺记录做数值结论。真正跨模式可比的，只有 model runner 那种本来就在图外的 stage。
+2. 图内的 Python `capture()` 在 replay 时不执行，可能导致 eager 和 graph 的记录集合不同。图外共同 stage 或语义对齐的 graph slot 可以比较；单侧缺失的记录保留为覆盖差异。
 3. **`graph:` key 和 `capture()` 的 stage key 不会自动配对**，前缀不同，即使名字取一样也不会。跨模式的整张量对拍需要自己后处理。`tensors` 更适合用在同模式的两轮之间：graph 比 graph（换 build、换配置），eager 比 eager。
 
 ## 9. 单算子回放
@@ -208,7 +201,7 @@ if residual is not None:
 vllm-ascend 的算子包装常按 `enable_custom_op()` 二选一，走哪一支取决于 build 而不是模型或请求。插到没走的那一支上会一无所获，而且 `py_compile` 查不出来——它只验语法。不确定就先求一次：
 
 ```bash
-remote.bash command: "python3 -c 'from vllm_ascend.utils import enable_custom_op; print(enable_custom_op())'"
+python -c 'from vllm_ascend.utils import enable_custom_op; print(enable_custom_op())'
 ```
 
 顺带一句：在死分支里写 `from vllm_ascend import dump_probe` 这种内联 import，会把"模块级 import 漏了"的问题一起藏到运行时。
@@ -246,11 +239,9 @@ python dump_compare.py tensors \
 
 ## 10. 收尾
 
-```bash
-# 确认插桩已经清干净
-remote.grep pattern: "dump_probe\.(capture|arm|finish|graph_slot)" path: /vllm-workspace/vllm-ascend
-```
+检查实际业务 worktree 的 diff，移除本次临时插桩。原有长期调试代码不属于本次清理。
 
 `capture_graph` 和 `graph_slot` 必须删除，不能只关环境变量：图内 copy 一旦 capture 进去，每次 replay 都在付这笔开销。
 
-删完重启服务，重跑最小复现和原始复现，再把结论写回对应的 case。
+若继续使用已捕获图的服务，重启以移除旧图中的 copy 节点。验证受本次改动影响的复现，
+把有用证据和剩余限制写入正常任务总结；无需另建 case 记录。

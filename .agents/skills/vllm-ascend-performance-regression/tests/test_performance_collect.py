@@ -58,7 +58,12 @@ def test_source_comparison_derives_code_variables_but_retains_workload_confounde
         if row["state"] == "candidate":
             row["observation"]["engine_args"] = {"enforce_eager": True}
             write(path, row)
-    assert performance.build_report(config_path, paths, output_dir=tmp_path / "confounded")["status"] == "inconclusive"
+    report = performance.build_report(config_path, paths, output_dir=tmp_path / "confounded")
+    assert report["status"] == "inconclusive"
+    comparison = json.loads((tmp_path / "confounded" / "comparison.json").read_text())
+    assert comparison["observed_status"] == "passed"
+    assert comparison["metrics"]["throughput"]["baseline"]["mean"] == 100
+    assert comparison["comparability"]["verdict"] == "not-comparable"
 
 
 def test_normalization_keeps_runtime_observation():
@@ -112,3 +117,21 @@ def test_submission_timeout_resolves_owned_service_for_cleanup():
                 service="unique-owned-service", warmups=1, startup_timeout=1)
     client.resolve_execution.assert_called_once_with(service="unique-owned-service")
     client.observe.assert_called_once_with("submitted-before-timeout", "stop")
+
+# This suite exercises report semantics, not coordinator Git snapshotting.
+# Real code-identity tests belong to the coordinator package.
+from unittest.mock import patch as _patch_report_code
+_REPORT_CODE = {"source_head": "1" * 40, "snapshot_commit": "2" * 40, "dirty": True}
+_report_code_patch = _patch_report_code("vaws_coordinator.code_identity.manifest_code", return_value=_REPORT_CODE)
+
+
+def setup_module():
+    _report_code_patch.start()
+
+
+def teardown_module():
+    _report_code_patch.stop()
+
+
+setUpModule = setup_module
+tearDownModule = teardown_module

@@ -33,7 +33,6 @@ from vaws_comparability import (  # noqa: E402
     issue_certificate,
     merge_identities,
 )
-from vaws_coordinator.code_identity import manifest_code  # noqa: E402
 from vaws_coordinator.run_manifest import (  # noqa: E402
     RunManifestError,
     add_artifact,
@@ -303,12 +302,12 @@ def validate_config(config: Mapping[str, Any]) -> None:
         if rule.get("direction") not in {"higher", "lower"}:
             errors.append(f"thresholds.{metric}.direction must be higher or lower")
         limit = rule.get("max_relative_regression")
-        if not isinstance(limit, (int, float)) or isinstance(limit, bool) or limit < 0:
+        if not isinstance(limit, (int, float)) or isinstance(limit, bool) or not math.isfinite(limit) or limit < 0:
             errors.append(
                 f"thresholds.{metric}.max_relative_regression must be non-negative"
             )
     max_cv = config.get("max_cv", 0.1)
-    if not isinstance(max_cv, (int, float)) or isinstance(max_cv, bool) or max_cv < 0:
+    if not isinstance(max_cv, (int, float)) or isinstance(max_cv, bool) or not math.isfinite(max_cv) or max_cv < 0:
         errors.append("max_cv must be non-negative")
     if errors:
         raise PerformanceRegressionError("; ".join(errors))
@@ -944,9 +943,20 @@ def _analyze_report(output_dir: Path, *, updated_at: str | None = None) -> dict[
 
 def _inconclusive_report(output, reason):
     timestamp = utc_now()
-    comparison = {"status": "inconclusive", "reason": reason}
+    try:
+        comparison = analyze_documents(_load_json(output / "experiment-config.json", "config"),
+                                       _load_json(output / "schedule.json", "schedule"),
+                                       _load_json(output / "measurements.json", "measurements"))
+    except (PerformanceRegressionError, OSError, KeyError, ValueError):
+        comparison = {}
+    comparison = {**comparison, "observed_status": comparison.get("status", "unknown"),
+                  "status": "inconclusive", "reason": reason}
+    certificate_path = output / "comparability-certificate.json"
+    if certificate_path.is_file():
+        comparison["comparability"] = _load_json(certificate_path, "comparability")
     _write_json(output / "comparison.json", comparison)
-    _atomic_write(output / "report.md", "# Performance comparison\n\nStatus: **inconclusive**\n\n" + reason + "\n")
+    report = render_report(comparison) if "metrics" in comparison else "# Performance comparison\n\nStatus: **inconclusive**\n"
+    _atomic_write(output / "report.md", report + "\nAttribution limitation: " + reason + "\n")
     manifest = load_manifest(output / "manifest.json")
     if manifest["status"] == "planned":
         manifest = transition_status(manifest, "running", updated_at=timestamp)

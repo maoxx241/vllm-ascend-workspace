@@ -15,11 +15,10 @@ help, the Agent can use the knowledge MCP tools independently; this is optional.
 
 ## Agent entry
 
-Run from the repository root using the platform's Python launcher. The workspace
-selects its installed platform environment automatically.
+Run from the repository root. The entry reuses the installed platform environment.
 
 ```text
-python .agents/skills/ascend-profiling-collection/scripts/collect_torch_profile_case.py --model /models/example --served-model-name example --tp 1 --tag case --mode enforce_eager --request-kind text --benchmark-output-tokens 128
+uv run --no-project python .agents/skills/ascend-profiling-collection/scripts/collect_torch_profile_case.py --model /models/example --served-model-name example --tp 1 --tag case --mode enforce_eager --request-kind text --benchmark-output-tokens 128
 ```
 
 The workflow starts or observes the managed service, controls /start_profile and /stop_profile, runs analyse(), verifies expected rank outputs and records workload success. DB export is the default. Large traces stay near the data; the resulting manifest can be passed directly to analysis.

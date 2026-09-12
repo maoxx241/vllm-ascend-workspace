@@ -25,7 +25,6 @@ from vaws_venv import ensure_workspace_interpreter  # noqa: E402
 ensure_workspace_interpreter(repo_root=ROOT)
 
 
-from vaws_coordinator.code_identity import manifest_code  # noqa: E402
 from vaws_coordinator.run_manifest import (  # noqa: E402
     RunManifestError,
     add_artifact,
@@ -117,7 +116,7 @@ def _require_validation_coverage(
         raise OptimizationError("validation case set does not match the optimization case set")
     analysis = _load_json(_artifact_path(manifest_path, _artifact(manifest, "analysis")), "validation analysis")
     results = analysis.get("results", [])
-    if (analysis.get("status") != "passed" or len(results) != len(case_ids)
+    if (analysis.get("numerical_status", analysis.get("status")) != "passed" or len(results) != len(case_ids)
             or {row.get("case_id") for row in results} != case_ids
             or any(row.get("status") != "passed" for row in results)):
         raise OptimizationError("validation needs passing results for every optimization case")
@@ -218,8 +217,8 @@ def _prepare_report(
         raise OptimizationError(f"kernel does not exist: {kernel_path}")
     validation_path = Path(config["validation_manifest"])
     validation = load_manifest(validation_path)
-    if validation["run_type"] != "correctness" or validation["status"] != "passed":
-        raise OptimizationError("starting validation manifest must be passed correctness evidence")
+    if validation["run_type"] != "correctness" or validation["status"] not in {"passed", "inconclusive"}:
+        raise OptimizationError("starting validation must contain complete numerical correctness evidence")
     timestamp = created_at or utc_now()
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "round-artifacts").mkdir()
@@ -293,8 +292,6 @@ def _record_result(output_dir: Path, *, result_path: Path, recorded_at: str | No
         raise OptimizationError(f"schema_version must be {SCHEMA_VERSION}")
     if result.get("round") != state["next_round"]:
         raise OptimizationError(f"round must be {state['next_round']}")
-    if result["round"] > config["max_rounds"]:
-        raise OptimizationError("round budget exhausted")
     if result.get("parent_kernel_sha256") != state["current_best_sha256"]:
         raise OptimizationError("parent_kernel_sha256 does not match current best")
     for field in ("hypothesis", "change"):
@@ -326,7 +323,7 @@ def _record_result(output_dir: Path, *, result_path: Path, recorded_at: str | No
     worst_regression = None
     cumulative = 0.0
     measurements: dict[str, dict[str, Any]] | None = None
-    if verification_manifest["status"] == "passed":
+    if verification_manifest["status"] in {"passed", "inconclusive"}:
         measurements = _measurement_map(result.get("measurements"), case_ids, "measurements")
         improvement, worst_regression = _weighted_improvement(state["current_best_measurements"], measurements, config["cases"])
         objective = config["objective"]
@@ -389,10 +386,15 @@ def _analyze_report(output_dir: Path, *, updated_at: str | None = None) -> dict[
         status = "failed"
     else:
         status = "inconclusive"
+    measurement_status = status
+    if status == "passed":
+        status = "inconclusive"
     cumulative, _ = _weighted_improvement(state["original_baseline"], state["current_best_measurements"], config["cases"])
     analysis = {
         "schema_version": SCHEMA_VERSION,
         "status": status,
+        "measurement_status": measurement_status,
+        "candidate_execution": "unknown",
         "op_name": config["op_name"],
         "best_kernel": {"path": state["current_best_path"], "sha256": state["current_best_sha256"]},
         "relative_improvement_vs_original": cumulative,
@@ -408,6 +410,8 @@ def _analyze_report(output_dir: Path, *, updated_at: str | None = None) -> dict[
         output_dir / "report.md",
         "# Ascend Triton optimization report\n\n"
         f"- Status: **{status}**\n"
+        f"- Supplied measurements: **{measurement_status}**\n"
+        "- Candidate NPU execution: **unknown**; assess existing runner/profiler evidence.\n"
         f"- Operator: `{config['op_name']}`\n"
         f"- Best kernel: `{state['current_best_path']}`\n"
         f"- Improvement vs original: {cumulative:.4%}\n"
@@ -423,7 +427,7 @@ def _analyze_report(output_dir: Path, *, updated_at: str | None = None) -> dict[
         manifest = add_artifact(manifest, name=name, kind=kind, uri=uri, updated_at=timestamp)
     manifest = transition_status(manifest, status, updated_at=timestamp)
     write_manifest(output_dir / "manifest.json", manifest)
-    return {"status": status, "target_met": state["target_met"], "best_kernel_sha256": state["current_best_sha256"], "analysis": str((output_dir / "analysis.json").resolve())}
+    return {"status": status, "measurement_status": measurement_status, "candidate_execution": "unknown", "target_met": state["target_met"], "best_kernel_sha256": state["current_best_sha256"], "analysis": str((output_dir / "analysis.json").resolve())}
 
 
 def build_report(config_path: Path, result_paths: list[Path], *, output_dir: Path | None = None, workspace_root: Path = ROOT) -> dict[str, Any]:

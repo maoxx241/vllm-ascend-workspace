@@ -3,12 +3,10 @@
 From the repository root:
 
 ```text
-python .agents/skills/ascend-triton-kernel-validation/scripts/triton_validation.py --config validation.json --kernel kernel.py --results case-results.json
+uv run --no-project python .agents/skills/ascend-triton-kernel-validation/scripts/triton_validation.py --config validation.json --kernel kernel.py --results case-results.json
 ```
 
-The config contains op_name, reference, target, cases and tolerances. The tool checks kernel source for missing launches and computation fallback, combines observed case results, and emits coverage, analysis and a manifest automatically.
+The config contains op_name, reference, target, cases and tolerances. The report combines supplied numerical results and records their coverage. `lint_triton_source.py` provides limited syntactic observations about ModelNew.forward wrappers; it cannot prove a launch or absence of computation fallback. Candidate execution remains unknown unless assessed from actual runner or profiler evidence.
 
-Use `--help` for exact argument details. Report output directories are optional
-where supported; the script creates a fresh directory under `.vaws-local/`.
-Schema versions and report identifiers are generated internally. Input files
-describe business cases or contain observed results, rather than task ownership.
+Use `--help` for argument details. Reports create their own identifiers and
+output directories; reuse existing observed inputs rather than creating task records.

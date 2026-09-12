@@ -9,7 +9,6 @@ Use the companion PowerShell script on Windows.
 
 from __future__ import annotations
 
-import io
 import json
 import os
 import pathlib

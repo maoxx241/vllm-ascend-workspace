@@ -1,116 +1,75 @@
-# Behavior Reference
+# Capture behavior and result interpretation
 
-## Relationship to remote-dev
+The collection entry opens a torch-profiler window, sends the requested workload,
+closes the window, exports rank data and returns observed results. Coordinator
+owns managed service execution; remote-dev owns explicit endpoint I/O. Collection
+leaves a supplied live execution running and stops a service it started itself.
+On a workload exception it closes the profile window it opened, including when
+using an existing service.
 
-Stated once in SKILL.md ("Remote substrate rule"): remote-dev companion tools
-(`remote_*` MCP tools, launched via `uv run remote-dev` or MCP)
-for ad hoc remote read/edit/bash/search/patch work; this skill owns the
-collection workflow and keeps its scripts as the managed VAWS compatibility
-backend.
+## Workload and control
 
-## Why profiler control lives here, not in the serving skill
-
-`/start_profile` and `/stop_profile` only exist because vLLM has a built-in torch profiler. Moving the control client into `vllm-ascend-serving` would force serving to grow profiling-specific knobs (multi-rank long timeout, multi-api-server quirks). The serving skill stays simple by treating `--profiler-config` as an opaque blob it forwards to `vllm serve`. Anything that flips, waits on, or interprets the profiler window belongs here.
-
-## Knowledge use
-
-Collection and its failure reporting use the actual workload, rank outputs and
-errors. They do not query knowledge or start an embedding service. Related notes
-are optional context available through the knowledge MCP tools when useful;
-they add no preflight or completion step to this workflow.
-
-## Mode → vLLM flag mapping
-
-| `--mode` | Forwarded to `vllm serve` |
-| --- | --- |
+| Mode | Forwarded serving option |
+|---|---|
 | `enforce_eager` | `--enforce-eager` |
 | `full_decode_only` | `--compilation-config '{"cudagraph_mode":"FULL_DECODE_ONLY"}'` |
 | `piecewise_graph` | `--compilation-config '{"cudagraph_mode":"PIECEWISE"}'` |
 
-`CUDAGraphMode` enum values come from `vllm/vllm/config/compilation.py`. Add a new mode here only after verifying the underlying enum value still exists in the active `vllm/` submodule.
+Zero speculative tokens omits speculative configuration. Positive values pass
+`method` and `num_speculative_tokens`. Use the active vLLM version's supported
+mode and method for the actual case.
 
-## Speculative config
+Profiler control has its own timeout because all ranks participate in setup and
+finalization. Workload requests have a separate timeout. The default wave uses
+10 requests at concurrency 5 followed by a short tail request for a steady decode
+sample. Choose token counts and concurrency for the question being investigated.
+`workload_status` records wave success rate, its configured threshold and the tail
+request result. A failed workload does not prove representative steady load.
 
-`--speculative-tokens 0` (the default) means **omit** `--speculative-config` entirely. A positive value writes:
+Requests use a temporary local forward owned by remote-dev. Image encoding uses
+Pillow on Windows, macOS and Linux and preserves the source image. Multimodal
+payloads are built locally. `--api-server-count 1` can help isolate profiler
+control routing when investigating an empty capture.
 
-```json
-{"method": "<--speculative-method>", "num_speculative_tokens": <N>}
-```
+## Export and coverage
 
-Old prototypes always wrote a config block with `num_speculative_tokens=3`; that became confusing for non-MTP cases. The collection skill is now explicit.
+| Export | Requested output | Verification |
+|---|---|---|
+| `db` (default) | `Constant.Db` | A nonempty `ascend_pytorch_profiler_*.db` for each observed rank |
+| `text` | `Constant.Text` | `kernel_details.csv` and `trace_view.json` exist |
+| `both` | Both exports | Both text files plus a nonempty DB |
 
-## Control-plane timeout
+DB export avoids large text artifacts when they are unnecessary. The constant
+comes from the installed container's torch_npu profiler package. An unsupported
+export is reported with its actual rank error; use text export when that runtime
+requires it. Existing usable output can be analysed without another capture.
 
-`/start_profile` and `/stop_profile` setup/finalization touches every rank. With TP=8 it is normal to see 60+ seconds of latency on each call. The default `--profile-control-timeout 600` covers most cases; bump to 1200–1800 for large-scale runs. `--request-timeout` is independent and applies only to the chat-completions requests during the profile window.
+Collection compares observed rank count with the requested topology. The result
+retains each rank's output paths and `analysis_status`; `missing_kernel_details`
+also covers a missing/empty DB in DB mode, with `expected_output_kind` identifying
+the expected format. A failed overall collection means the requested workload or
+coverage was not established. Surviving rank data can still answer narrower or
+failure-diagnosis questions. Do not discard it or automatically re-collect.
 
-## Request wave shape
+Inspect capture paths, rank logs and export errors to distinguish absent device
+records from a failed post-processing step. Re-running `analyse()` can recover an
+export failure; it cannot recreate device events that were never recorded.
+Re-collect only when the missing evidence matters to the current question.
 
-The default wave is `--benchmark-total-requests 10` at `--benchmark-concurrency 5`, followed by exactly one `--followup-output-tokens 5` tail request. The follow-up exists so the resulting trace contains a clean steady-state step that is not contaminated by the wave's tail decay. The analysis skill relies on this shape for its tail-step detection.
+The workflow waits internally for the post-stop flush window. Per-rank export is
+bounded by the analysis timeout and parallelism options. Its result reports
+collection and export timing; the Agent need not repeat output checks already
+performed by the tool.
 
-## Workload transport
+## Artifacts and lifecycle
 
-Chat requests are sent from the local machine through an ephemeral `ssh -L` tunnel. This is so multimodal (`--request-kind vl`) payloads — base64 image data URLs — can be assembled locally without round-tripping through SSH heredocs. For `--request-kind text` the tunnel is still used (consistency); request bodies stay small so there is no transport cost.
+A fresh local directory under `.vaws-local/ascend-profiling-collection/runs/`
+contains the manifest; large profiler artifacts remain in the container. Optional
+`--archive-dir` copies verified outputs near the data and reports archive failures
+separately. The manifest records actual task/execution identity when resolved;
+service names are labels, not task identifiers.
 
-The `sips` image resizer is macOS-only. The collection skill assumes the agent runs on a Mac workstation. If the workstation is ever Linux, swap `_parse_sips_dimensions` / `_build_image_data_url` for a PIL implementation.
-
-## Multi-api-server interactions
-
-`--api-server-count` is exposed because vLLM's multi-api-server mode has historically had control-plane routing quirks: a `/start_profile` POST may be answered by an API server that is not the one driving the worker processes. When investigating a "trace empty" symptom, set `--api-server-count 1` to eliminate this variable before blaming the profiler.
-
-## Workload success gate
-
-The gate rule and threshold are defined in SKILL.md ("Failure policy"); the
-per-status acceptance checklist is in `acceptance.md` §4. The rationale:
-
-A profile window that ran with no real model traffic produces a trace that
-*looks* fine to `analyse()` (the analyse outputs land, only they describe
-nothing useful). The gate prevents that root from leaking into downstream
-analysis. Lower the threshold only when you explicitly expect flakiness in
-the wave.
-
-## Output verification
-
-`analyse()` is invoked per rank as `analyse(dir, export_type=...)`; `--analyse-export` (default `db`) selects the export and the matching verification contract:
-
-| `--analyse-export` | analyse() call | Produced per rank | Verified per rank |
-| --- | --- | --- | --- |
-| `db` (default) | `analyse(dir, export_type=Constant.Db)` | `ASCEND_PROFILER_OUTPUT/ascend_pytorch_profiler_*.db` only — every text export (`trace_view.json` + all CSVs) is skipped | newest db exists and is non-empty |
-| `text` | `analyse(dir, export_type=Constant.Text)` | `kernel_details.csv`, `trace_view.json`, ... (historical exports) | `kernel_details.csv` + `trace_view.json` exist |
-| `both` | `analyse(dir, export_type=[Constant.Text, Constant.Db])` | everything | same as `text` |
-
-`db` is the default because the analysis skill rebuilds the kernel_details event stream directly from the db (`normalize --source db`, golden-verified equivalent to kernel_details.csv), and db-only export avoids writing ~2.5 GB/rank of `trace_view.json` plus ~122 MB/rank of `kernel_details.csv` that nobody reads.
-
-The `Constant` import path is `torch_npu.profiler.analysis.prof_common_func._constant` — verified against the container's torch_npu, whose own `profiler.py` imports it as `from .analysis.prof_common_func._constant import Constant` (`Constant.Db == "db"`, `Constant.Text == "text"`). The import runs inside the generated per-rank payload so it always resolves against the container's torch_npu. On old CANN without db export support, analyse() raises (`is_support_export_db()`); that surfaces as a rank failure with the torch_npu error in `analyse_parallel.log` — use `--analyse-export text` on such hosts.
-
-Anything short of the verified contract fails the run per SKILL.md ("Failure policy").
-
-Historical captures show `analyse()` "succeeding" but producing no usable output because the profile window was too short or `FRAMEWORK/torch.op_range` never made it to disk. The skill turns that into `analysis_status == missing_kernel_details` and fails the run. In db mode the enum means "the rank's db was not produced (or is empty)"; in text/both mode it means `kernel_details.csv` is missing. The enum set is deliberately unchanged — the analysis skill gates on these names — and the manifest's `expected_output_kind` field (`db` / `csv`) records which artifact the enum refers to. Re-collection is the only fix; offline `analyse()` cannot recover the missing device data.
-
-The rank-count gate (`--expected-ranks`, rule in SKILL.md "Failure policy")
-exists because a partial capture (e.g. only rank 0 dumped) can look "clean"
-when every directory that *did* land is complete, masking a topology
-failure.
-
-## Post-stop flush window
-
-The orchestrator sleeps `POST_STOP_FLUSH_SECONDS` (5s) between `/stop_profile` returning and `serving.py stop` being called. `/stop_profile` should already block until profiler threads quiesce, but historical traces show flush latency on some CANN versions. This delay is internal to collection; callers do not schedule flush or teardown steps.
-
-## Local state layout
-
-```
-.vaws-local/ascend-profiling-collection/runs/
-  <YYYYmmdd_HHMMSS>_<tag>/
-    manifest.json
-```
-
-One directory per invocation. Nothing else is ever written here. The remote profiling root (`<runtime_dir>/<torch_profiler_dir>`) lives on the container and is referenced from the manifest via `remote_profile_root`.
-
-## Managed source preparation
-
-Coordinator prepares the bound sources and environment for the single service run. Collection does not synchronize, install or rebuild into a live execution root. See `docs/coordinator-consumption.md` for the package entry points.
-
-`serving.py start`, `profile_control.py`, and `serving.py stop` address a named `--service` or `--execution-id`. Two collections on the same host must use distinct service names so they do not stop each other.
-
-## Manifest schema versioning
-
-`schema_version` starts at 1. Bump only when a field is renamed or removed. Adding new fields (e.g. richer profiler config knobs) does not require a bump; the analysis skill should treat unknown fields as advisory.
+Status and cleanup address the same task-owned execution reference. A stop error
+retains the relevant reference for recovery. When only profile export is missing,
+reuse the capture rather than allocating another service to repeat successful
+work. Knowledge remains optional context and adds no collection prerequisite.

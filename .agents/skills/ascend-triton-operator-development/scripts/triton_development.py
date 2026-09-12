@@ -23,7 +23,6 @@ from vaws_venv import ensure_workspace_interpreter  # noqa: E402
 ensure_workspace_interpreter(repo_root=ROOT)
 
 
-from vaws_coordinator.code_identity import manifest_code  # noqa: E402
 from vaws_coordinator.run_manifest import (  # noqa: E402
     RunManifestError,
     TERMINAL_STATUSES,
@@ -181,22 +180,6 @@ def _prepare_report(
     }
     _write_json(output_dir / "task-config.json", config)
     _write_json(output_dir / "task-contract.json", contract)
-    _atomic_write(
-        output_dir / "semantic-report.md",
-        "# Semantic report\n\n"
-        "## Contract\n\n- [ ] Inputs, outputs, dynamic ranges, layouts, strides, and side effects recorded.\n\n"
-        "## Loads and stores\n\n- [ ] Every load/store pointer and mask explained.\n\n"
-        "## Padding and numerical semantics\n\n- [ ] Identities, accumulation dtype, atomics, aliases, and tail behavior explained.\n\n"
-        "## Grid mapping\n\n- [ ] Logical tasks and target physical-core mapping explained.\n",
-    )
-    _atomic_write(
-        output_dir / "sketch.md",
-        "# Kernel sketch\n\n"
-        "## Logical work\n\n"
-        "## Grid and per-core scheduling\n\n"
-        "## Tiling and UB peak live set\n\n"
-        "## Masks, padding, dtype, and specialization\n\n",
-    )
     manifest = new_manifest(
         run_type="debug",
         run_id=config["run_id"],
@@ -280,10 +263,13 @@ def _finalize_report(
         "inconclusive": "inconclusive",
         "cancelled": "inconclusive",
     }[validation["status"]]
+    if terminal == "passed":
+        terminal = "inconclusive"
     timestamp = updated_at or utc_now()
     result = {
         "schema_version": SCHEMA_VERSION,
         "status": terminal,
+        "candidate_execution": "unknown",
         "kernel": {"path": str(kernel.resolve()), "sha256": kernel_hash},
         "semantic_report": {"path": str(semantic_report.resolve()), "sha256": sha256_file(semantic_report)} if semantic_report else None,
         "sketch": {"path": str(sketch.resolve()), "sha256": sha256_file(sketch)} if sketch else None,
@@ -309,6 +295,7 @@ def _finalize_report(
     report = (
         "# Ascend Triton development report\n\n"
         f"- Status: **{terminal}**\n"
+        "- Candidate NPU execution: **unknown** in imported report evidence.\n"
         f"- Kernel: `{kernel.resolve()}`\n"
         f"- Kernel SHA256: `{result['kernel']['sha256']}`\n"
         f"- Validation: `{validation['run_id']}` ({validation['status']})\n"

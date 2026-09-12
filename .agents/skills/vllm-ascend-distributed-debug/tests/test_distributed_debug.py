@@ -113,7 +113,7 @@ class DistributedDebugTests(unittest.TestCase):
             [event(0, "collective_enter")],
         )
         self.assertIn(
-            "collective-participant-mismatch", analysis["confirmed_findings"]
+            "collective-participant-mismatch", analysis["evidence_gaps"]
         )
         finding = next(
             row
@@ -121,6 +121,14 @@ class DistributedDebugTests(unittest.TestCase):
             if row["code"] == "collective-participant-mismatch"
         )
         self.assertEqual(finding["evidence"]["missing"], [1])
+        self.assertEqual(analysis["status"], "inconclusive")
+
+    def test_duplicate_endpoints_are_reported_instead_of_rejected_before_analysis(self):
+        case = config()
+        case["network_endpoints"].append(dict(case["network_endpoints"][0]))
+        distributed.validate_config(case)
+        analysis = distributed.analyze_evidence(case, case["network_endpoints"], [])
+        self.assertIn("endpoint-collision", analysis["confirmed_findings"])
 
     def test_missing_rank_events_are_evidence_gap(self) -> None:
         case = config()
@@ -247,6 +255,24 @@ class DistributedDebugTests(unittest.TestCase):
         self.assertEqual(
             distributed.ANALYSIS_TO_MANIFEST_STATUS[analysis["status"]], "failed"
         )
+
+
+from unittest.mock import patch as _patch_report_code
+_report_code_patch = _patch_report_code("vaws_coordinator.code_identity.manifest_code", return_value={
+    "source_head": "1" * 40, "snapshot_commit": "2" * 40, "dirty": True,
+})
+
+
+def setUpModule():
+    _report_code_patch.start()
+
+
+def tearDownModule():
+    _report_code_patch.stop()
+
+
+setup_module = setUpModule
+teardown_module = tearDownModule
 
 
 if __name__ == "__main__":

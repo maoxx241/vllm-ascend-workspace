@@ -10,62 +10,8 @@ Windows, macOS, Linux and WSL use the same entry:
 uv run --no-project python .agents/skills/repo-init/scripts/repo_init_probe.py --compact
 ```
 
-## Broad-init machine profile
-
-Get the exact three-option machine-username question:
-
-```bash
-uv run --no-project python .agents/skills/repo-init/scripts/repo_init_profile.py plan
-```
-
-Apply the Git-username option:
-
-```bash
-uv run --no-project python .agents/skills/repo-init/scripts/repo_init_profile.py apply --choice git-username
-```
-
-Apply the random `agent#####` option:
-
-```bash
-uv run --no-project python .agents/skills/repo-init/scripts/repo_init_profile.py apply --choice random
-```
-
-Apply the custom option after the user gave the literal username:
-
-```bash
-uv run --no-project python .agents/skills/repo-init/scripts/repo_init_profile.py apply --choice custom --custom-username alice123
-```
-
-Apply the unified alias choice after the machine profile exists:
-
-```bash
-uv run --no-project python .agents/skills/repo-init/scripts/repo_init_profile.py apply-alias --choice machine-username
-uv run --no-project python .agents/skills/repo-init/scripts/repo_init_profile.py apply-alias --choice custom --custom-alias team42
-uv run --no-project python .agents/skills/repo-init/scripts/repo_init_profile.py apply-alias --choice none
-```
-
-Inspect or maintain only the local identity:
-
-```bash
-uv run --no-project python .agents/scripts/workspace_identity.py summary
-uv run --no-project python .agents/scripts/workspace_identity.py ensure
-uv run --no-project python .agents/scripts/workspace_identity.py set-alias team42
-uv run --no-project python .agents/scripts/workspace_identity.py decline-alias
-```
-
-## Low-level profile helper
-
-Validate one user-provided name:
-
-```bash
-uv run --no-project python .agents/scripts/workspace_profile.py validate alice123
-```
-
-Read the current profile summary:
-
-```bash
-uv run --no-project python .agents/scripts/workspace_profile.py summary
-```
+Add `--include-forks` when personal fork discovery is needed. The probe does not
+create workspace state or ask setup questions.
 
 ## Submodules
 
@@ -90,11 +36,10 @@ workflow `vllm_version` or docs `main_vllm_commit` value.
 ## External dependency plane
 
 The three in-process packages are not submodules. Install them with `uv run --no-project python .agents/scripts/vaws_deps.py sync`.
-Name capabilities from `doctor`; do not re-derive them.
+Use `doctor` when a capability or dependency pin needs diagnosis.
 
 ```bash
 uv run --no-project python .agents/scripts/vaws_deps.py sync
-uv run --no-project python .agents/scripts/vaws_deps.py doctor
 ```
 
 `uv.lock` is the only pin. The packages are public git+https. `uvx vaws-top`
@@ -108,13 +53,12 @@ workspaces. To prepare dev dependencies:
 
 ```text
 uv run --no-project python .agents/scripts/vaws_deps.py sync --locked --group dev
-uv run --no-project python .agents/scripts/vaws_deps.py doctor
 ```
 
 For offline preparation, exact tool/lock checks and restoring a transferred
 cache, use [Windows installation](../../../../docs/windows-installation.md).
 Keep the default knowledge package installed; cache placement does not require
-changing machine identity, forks or native client settings.
+changing forks or native client settings.
 
 ## Quiet main comparison
 
@@ -151,7 +95,7 @@ uv run --no-project python .agents/skills/repo-init/scripts/repo_topology.py con
 ```bash
 uv run --no-project python .agents/skills/repo-init/scripts/repo_topology.py ensure-main   --repo vllm-ascend   --remote origin
 ```
-# Knowledge setup and background updates
+## Knowledge setup and background updates
 
 For an explicit knowledge preparation retry or configuration change, run
 `uv run --no-project python .agents/scripts/knowledge_setup.py`. Default setup prepares local knowledge

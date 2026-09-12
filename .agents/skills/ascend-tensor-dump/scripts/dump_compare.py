@@ -49,6 +49,11 @@ def emit_progress(phase: str, **details: Any) -> None:
     print(json.dumps({"phase": phase, **details}, ensure_ascii=False), file=sys.stderr)
 
 
+def _validate_tolerances(atol: float, rtol: float) -> None:
+    if not math.isfinite(atol) or not math.isfinite(rtol) or min(atol, rtol) < 0:
+        raise DumpCompareError("atol and rtol must be finite and non-negative")
+
+
 def load_manifest(path: Path) -> dict[str, Any]:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -228,7 +233,8 @@ def _stat_diverged(
         if math.isnan(left_value) and math.isnan(right_value):
             continue
         tolerance = atol + rtol * abs(right_value)
-        if abs(left_value - right_value) > tolerance:
+        differs = left_value != right_value if not (math.isfinite(left_value) and math.isfinite(right_value)) else abs(left_value - right_value) > tolerance
+        if differs:
             diverged[name] = {
                 "left": left_value,
                 "right": right_value,
@@ -264,6 +270,7 @@ def diff_manifests(
     atol: float,
     rtol: float,
 ) -> dict[str, Any]:
+    _validate_tolerances(atol, rtol)
     left = load_manifest(left_path)
     right = load_manifest(right_path)
 
@@ -275,6 +282,7 @@ def diff_manifests(
 
     stages: list[dict[str, Any]] = []
     first_divergent: dict[str, Any] | None = None
+    evidence_gaps: list[str] = []
 
     for key in order:
         if key not in right_keyed:
@@ -288,6 +296,9 @@ def diff_manifests(
         dtype_match = left_record.get("dtype") == right_record.get("dtype")
         left_summary = left_record.get("summary")
         right_summary = right_record.get("summary")
+        if any(not isinstance(item, dict) or not all(isinstance(item.get(name), (int, float)) for name in STAT_NAMES)
+               for item in (left_summary, right_summary)):
+            evidence_gaps.append(key)
         stat_divergence = _stat_diverged(
             left_summary, right_summary, atol=atol, rtol=rtol
         )
@@ -307,11 +318,13 @@ def diff_manifests(
         stages.append(entry)
 
         if first_divergent is None and (
-            not shape_match or nonfinite_introduced or stat_divergence
+            not shape_match or not dtype_match or nonfinite_introduced or stat_divergence
         ):
             reasons = []
             if not shape_match:
                 reasons.append("shape")
+            if not dtype_match:
+                reasons.append("dtype")
             if nonfinite_introduced:
                 reasons.append("nonfinite")
             if stat_divergence:
@@ -338,11 +351,13 @@ def diff_manifests(
         "only_in_right": only_in_right,
         "first_divergent": first_divergent,
         "stages": stages,
+        "evidence_gaps": evidence_gaps,
+        "claim": "Comparison of captured summaries; matching statistics do not establish tensor equality.",
         "verdict": _verdict(
             diverged=first_divergent is not None,
             coverage_mismatch=bool(only_in_left or only_in_right),
             diverged_name="DIVERGENT",
-            clean_name="ALIGNED",
+            clean_name="INCONCLUSIVE" if evidence_gaps or not stages else "ALIGNED",
         ),
     }
 
@@ -395,6 +410,10 @@ def to_floats(tensor: Any, *, max_elements: int) -> tuple[list[float], dict[str,
             "lower DUMP_PROBE_ROWS or raise the limit deliberately"
         )
         return [], info
+    # Python integers retain int64 precision; float64 conversion would erase
+    # differences above 2**53 before exact integer comparison.
+    if "int" in info["dtype"] or "bool" in info["dtype"]:
+        return tensor.reshape(-1).tolist(), info
     return tensor.reshape(-1).to(torch.float64).tolist(), info
 
 
@@ -454,6 +473,9 @@ def compare_tensor_payloads(
     rtol: float,
     max_elements: int,
 ) -> dict[str, Any]:
+    _validate_tolerances(atol, rtol)
+    if max_elements < 1:
+        raise DumpCompareError("max-elements must be positive")
     left_flat = flatten_payload(left_payload, label="left")
     right_flat = flatten_payload(right_payload, label="right")
     only_in_left = sorted(set(left_flat) - set(right_flat))
@@ -461,6 +483,7 @@ def compare_tensor_payloads(
 
     items: list[dict[str, Any]] = []
     first_mismatch: dict[str, Any] | None = None
+    evidence_gaps: list[str] = []
 
     for key in left_flat:
         if key not in right_flat:
@@ -485,6 +508,8 @@ def compare_tensor_payloads(
             }
         elif not shape_match:
             entry["metrics"] = {"comparable": False, "reason": "shape mismatch"}
+        elif not dtype_match:
+            entry["metrics"] = {"comparable": False, "reason": "dtype mismatch"}
         elif "skipped" in left_info or "skipped" in right_info:
             entry["metrics"] = {"comparable": False, "reason": "too large"}
         else:
@@ -501,9 +526,13 @@ def compare_tensor_payloads(
         items.append(entry)
 
         metrics = entry["metrics"]
+        incomplete = metrics.get("reason") in {"at least one side is not a tensor", "too large"}
+        if incomplete:
+            evidence_gaps.append(key)
         failed = (
             not shape_match
-            or metrics.get("comparable") is False
+            or not dtype_match
+            or (metrics.get("comparable") is False and not incomplete)
             or metrics.get("allclose") is False
             or (metrics.get("allclose") is None and metrics.get("exact_equal") is False)
         )
@@ -520,11 +549,12 @@ def compare_tensor_payloads(
         "only_in_right": only_in_right,
         "first_mismatch": first_mismatch,
         "items": items,
+        "evidence_gaps": evidence_gaps,
         "verdict": _verdict(
             diverged=first_mismatch is not None,
             coverage_mismatch=bool(only_in_left or only_in_right),
             diverged_name="FAIL",
-            clean_name="PASS",
+            clean_name="INCONCLUSIVE" if evidence_gaps or not items else "PASS",
         ),
     }
 
@@ -643,6 +673,7 @@ def main(argv: list[str] | None = None) -> int:
         "DIVERGENT",
         "FAIL",
         "COVERAGE_MISMATCH",
+        "INCONCLUSIVE",
     }:
         return 1
     return 0

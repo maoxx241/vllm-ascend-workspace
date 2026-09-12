@@ -169,6 +169,20 @@ def _aggregate_metrics(
     return agg
 
 
+def _cleanup_owned_service(config) -> dict[str, Any]:
+    """Keep cleanup errors separate from completed benchmark evidence."""
+    attempts = []
+    for force in (False, True):
+        try:
+            reply = call_serve_stop(config, force=force)
+        except Exception as exc:
+            reply = {"status": "failed", "error": f"{type(exc).__name__}: {exc}"}
+        attempts.append({"force": force, **reply})
+        if reply.get("status") in {"stopped", "not_found"}:
+            return {"status": "stopped", "execution_id": config.execution_id, "attempts": attempts}
+    return {"status": "cleanup_failed", "execution_id": config.execution_id, "attempts": attempts}
+
+
 def main(argv: list[str] | None = None) -> int:
     raw_argv = argv if argv is not None else sys.argv[1:]
     main_argv, manual_serve_args, manual_bench_args = _split_sections(raw_argv)
@@ -319,19 +333,24 @@ def main(argv: list[str] | None = None) -> int:
                 )
             except Exception as e:
                 emit_progress("bench", f"{run_label}: benchmark failed: {e}")
-                if started_service:
-                    call_serve_stop(config, force=True)
-                print_json({
+                failed_result = {
                     "status": "failed",
                     "phase": "bench_run",
                     "run": i + 1,
                     "error": str(e),
                     "completed_runs": [
-                        {"run": j + 1, "warmup": j < warmup_runs, "metrics": m}
+                        {"run": j + 1, "warmup": j < warmup_runs, "metrics": m,
+                         "raw_result": all_raw[j], "observation": all_raw[j].get("observation", {})}
                         for j, m in enumerate(all_metrics)
                     ],
                     "config": config.summary_dict(),
-                })
+                    "execution_id": config.execution_id,
+                }
+                result_path = write_local_result(config, failed_result)
+                if started_service:
+                    failed_result["cleanup"] = _cleanup_owned_service(config)
+                    write_local_result(config, failed_result, path=result_path)
+                print_json(failed_result)
                 return 1
 
             metrics = extract_metrics(raw_result)
@@ -340,28 +359,10 @@ def main(argv: list[str] | None = None) -> int:
             throughput = metrics.get("output_throughput", "N/A")
             emit_progress("bench", f"{run_label}{tag}: throughput={throughput}")
 
-        cleanup_warning: str | None = None
-        stop_result = {"status": "left_running"}
-        if started_service:
-            emit_progress("stop", "stopping service")
-            stop_result = call_serve_stop(config)
-            if stop_result.get("status") not in ("stopped", "not_found"):
-                emit_progress("stop", "graceful stop failed, retrying with force")
-                stop_result = call_serve_stop(config, force=True)
-                if stop_result.get("status") not in ("stopped", "not_found"):
-                    cleanup_warning = f"service may still be running: {stop_result}"
-
-        # Benchmark data is valid, but if the service could not be stopped it is
-        # still holding NPU memory. Do not report a clean "ok" in that case:
-        # surface a distinct status and a non-zero exit so callers/automation
-        # notice the leaked service instead of it being masked by a warning.
-        final_status = "cleanup_failed" if cleanup_warning else "ok"
-        exit_code = 1 if cleanup_warning else 0
-
         if total_runs == 1:
             emit_progress("done", f"benchmark complete, throughput={all_metrics[0].get('output_throughput', 'N/A')}")
             result_json: dict[str, Any] = {
-                "status": final_status,
+                "status": "ok",
                 "task_id": config.task_id,
                 "execution_id": config.execution_id,
                 "model": args.model,
@@ -371,10 +372,6 @@ def main(argv: list[str] | None = None) -> int:
                 "observation": all_raw[0].get("observation", {}),
                 "timestamp": now_utc(),
             }
-            if cleanup_warning:
-                result_json["cleanup_warning"] = cleanup_warning
-            write_local_result(config, result_json)
-            print_json(result_json)
         else:
             aggregated = _aggregate_metrics(all_metrics, warmup_runs)
             emit_progress(
@@ -383,7 +380,7 @@ def main(argv: list[str] | None = None) -> int:
                 f"mean throughput={aggregated.get('output_throughput', {}).get('mean', 'N/A')}",
             )
             result_json = {
-                "status": final_status,
+                "status": "ok",
                 "task_id": config.task_id,
                 "execution_id": config.execution_id,
                 "model": args.model,
@@ -391,30 +388,33 @@ def main(argv: list[str] | None = None) -> int:
                 "warmup_runs": warmup_runs,
                 "aggregated": aggregated,
                 "per_run": [
-                    {"run": j + 1, "warmup": j < warmup_runs, "metrics": m, "observation": all_raw[j].get("observation", {})}
+                    {"run": j + 1, "warmup": j < warmup_runs, "metrics": m, "observation": all_raw[j].get("observation", {}), "raw_result": all_raw[j]}
                     for j, m in enumerate(all_metrics)
                 ],
                 "config": config.summary_dict(),
                 "timestamp": now_utc(),
             }
-            if cleanup_warning:
-                result_json["cleanup_warning"] = cleanup_warning
-            write_local_result(config, result_json)
-            print_json(result_json)
-        return exit_code
+        # Persist the measured data before attempting a service shutdown.
+        result_path = write_local_result(config, result_json)
+        if started_service:
+            emit_progress("stop", "stopping service")
+            result_json["cleanup"] = _cleanup_owned_service(config)
+            if result_json["cleanup"]["status"] == "cleanup_failed":
+                result_json["status"] = "cleanup_failed"
+            write_local_result(config, result_json, path=result_path)
+        print_json(result_json)
+        return 0 if result_json["status"] == "ok" else 1
 
     except Exception as e:
-        try:
-            if "config" in locals() and locals().get("started_service"):
-                call_serve_stop(config, force=True)
-        except Exception:
-            pass
-        print_json({
+        error_result = {
             "status": "failed",
             "phase": "unexpected",
             "error": str(e),
             "traceback": traceback.format_exc(),
-        })
+        }
+        if "config" in locals() and locals().get("started_service"):
+            error_result["cleanup"] = _cleanup_owned_service(config)
+        print_json(error_result)
         return 2
 
 

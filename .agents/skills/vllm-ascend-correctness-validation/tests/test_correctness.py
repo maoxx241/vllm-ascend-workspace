@@ -119,6 +119,11 @@ def init_run(root: Path, **overrides) -> Path:
 
 
 class ComparisonTests(unittest.TestCase):
+    def test_aisbench_without_metric_rules_is_not_agreement(self):
+        row = correctness.compare_case({"id": "case-1", "mode": "aisbench"},
+            result("case-1", {}), result("case-1", {}))
+        self.assertEqual(row["classification"], "infrastructure_failure")
+
     def test_exact_token_match_passes(self) -> None:
         config = {"schema_version": 1, "cases": [case()]}
         baseline = {
@@ -283,6 +288,19 @@ class ComparisonTests(unittest.TestCase):
             )
             manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
             self.assertNotEqual(manifest["status"], "passed")
+
+    def test_report_keeps_output_difference_when_execution_identity_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cases_path = write_json(root / "cases.json", {"schema_version": 1, "cases": [case()]})
+            baseline = write_json(root / "baseline.json", result_document("base", [result("case-1", {"text": "left"})], observation=False))
+            candidate = write_json(root / "candidate.json", result_document("candidate", [result("case-1", {"text": "right"})], observation=False))
+            report = correctness.build_report(cases_path, baseline_path=baseline, candidate_path=candidate, output_dir=root / "report")
+            comparison = json.loads(Path(report["comparison"]).read_text(encoding="utf-8"))
+            self.assertEqual(report["status"], "inconclusive")
+            self.assertEqual(comparison["observed_status"], "failed")
+            self.assertEqual(len(comparison["cases"]), 1)
+            self.assertIn("no execution block", comparison["reason"])
 
     def test_missing_observation_cannot_pass(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -628,6 +646,16 @@ class HarnessTests(unittest.TestCase):
 
 
 class AisbenchAdapterTests(unittest.TestCase):
+    def test_existing_csv_normalizes_without_a_service_and_rejects_nonfinite_metric(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "summary.csv"
+            path.write_text("dataset,metric,vaws-correctness\ngsm8k,accuracy,NaN\nmath,accuracy,80\n", encoding="utf-8")
+            normalized = aisbench.normalize_summary(path, label="existing")
+            self.assertEqual(normalized["execution"], {})
+            self.assertNotIn("observation", normalized)
+            self.assertEqual(normalized["cases"][0]["status"], "error")
+            self.assertEqual(normalized["cases"][1]["metrics"], {"accuracy": 80})
+
     def test_prepare_does_not_modify_benchmark_tree_or_embed_api_key(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -700,6 +728,25 @@ class AisbenchAdapterTests(unittest.TestCase):
                     summary, label="baseline", execution={"engine_args": {}}
                 )
 
+
+
+# This suite exercises report semantics, not coordinator Git snapshotting.
+# Real code-identity tests belong to the coordinator package.
+from unittest.mock import patch as _patch_report_code
+_REPORT_CODE = {"source_head": "1" * 40, "snapshot_commit": "2" * 40, "dirty": True}
+_report_code_patch = _patch_report_code("vaws_coordinator.code_identity.manifest_code", return_value=_REPORT_CODE)
+
+
+def setup_module():
+    _report_code_patch.start()
+
+
+def teardown_module():
+    _report_code_patch.stop()
+
+
+setUpModule = setup_module
+tearDownModule = teardown_module
 
 if __name__ == "__main__":
     unittest.main()

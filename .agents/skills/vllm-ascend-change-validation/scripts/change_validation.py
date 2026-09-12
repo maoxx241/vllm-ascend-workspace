@@ -10,13 +10,10 @@ import re
 import subprocess
 import sys
 import tempfile
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 ROOT = Path(__file__).resolve().parents[4]
-SKILL_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_VALIDATION_RULES = SKILL_ROOT / "references" / "validation-rules.yaml"
 LIB = ROOT / ".agents" / "lib"
 if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
@@ -25,7 +22,6 @@ from vaws_venv import ensure_workspace_interpreter  # noqa: E402
 
 ensure_workspace_interpreter(repo_root=ROOT)
 
-from vaws_session_state import load_json_object  # noqa: E402
 from vaws_coordinator.run_manifest import (  # noqa: E402
     RunManifestError,
     add_artifact,
@@ -36,21 +32,11 @@ from vaws_coordinator.run_manifest import (  # noqa: E402
 )
 
 SCHEMA_VERSION = 1
-SAFE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,127}$")
 DIFF_HEADER_RE = re.compile(r"^diff --git a/(.+) b/(.+)$")
-PLAN_PRIORITIES = frozenset({"required", "recommended"})
 
 
 class ChangeValidationError(ValueError):
     """Raised when change-validation input or state is invalid."""
-
-
-def utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
-
-
-def emit_progress(phase: str, **details: Any) -> None:
-    print(json.dumps({"phase": phase, **details}, ensure_ascii=False), file=sys.stderr)
 
 
 def _atomic_write(path: Path, text: str) -> None:
@@ -165,526 +151,155 @@ def parse_diff(diff_text: str) -> dict[str, Any]:
     }
 
 
-def _safe_item_id(check: str) -> str:
-    slug = re.sub(r"[^a-z0-9]+", "-", check.lower()).strip("-")
-    if not slug:
-        raise ChangeValidationError(f"cannot generate plan id from {check!r}")
-    return slug[:120]
+def summarize_evidence(path: Path, *, baseline: str, candidate: str) -> dict[str, Any]:
+    """Describe an existing run and the scope its recorded artifacts establish.
 
+    Parent IDs and file-path keywords do not decide whether the evidence proves
+    the requested change. Missing artifacts or attribution stay visible without
+    preventing a report of the usable evidence.
+    """
+    from vaws_comparability import consume_certificate, ComparabilityError
 
-def build_plan(
-    diff_summary: Mapping[str, Any],
-    knowledge_document: Mapping[str, Any],
-) -> tuple[dict[str, Any], dict[str, Any]]:
-    path_haystack = str(diff_summary.get("matching_paths", ""))
-    content_haystack = str(diff_summary.get("matching_text", ""))
-    impacts: list[dict[str, Any]] = []
-    item_map: dict[str, dict[str, Any]] = {}
-    routes: list[dict[str, str]] = []
-    for entry in knowledge_document.get("entries", []):
-        if not isinstance(entry, Mapping) or entry.get("status") == "deprecated":
-            continue
-        rule = entry.get("rule", {})
-        if not isinstance(rule, Mapping):
-            continue
-        path_patterns = rule.get("path_patterns", [])
-        content_patterns = rule.get("content_patterns", [])
-        matched_path_patterns = [
-            pattern
-            for pattern in path_patterns
-            if isinstance(pattern, str) and re.search(pattern, path_haystack)
-        ]
-        matched_content_patterns = [
-            pattern
-            for pattern in content_patterns
-            if isinstance(pattern, str) and re.search(pattern, content_haystack)
-        ]
-        if not matched_path_patterns and not matched_content_patterns:
-            continue
-        category = str(rule.get("category", entry.get("id", "uncategorized")))
-        impacts.append(
-            {
-                "category": category,
-                "rule_id": entry["id"],
-                "matched_path_patterns": matched_path_patterns,
-                "matched_content_patterns": matched_content_patterns,
-                "source": entry.get("source"),
-                "status": entry.get("status"),
-            }
-        )
-        for priority, field in (
-            ("required", "required_checks"),
-            ("recommended", "recommended_checks"),
-        ):
-            for check in rule.get(field, []):
-                item_id = _safe_item_id(str(check))
-                item = item_map.setdefault(
-                    item_id,
-                    {
-                        "id": item_id,
-                        "check": str(check),
-                        "priority": priority,
-                        "sources": [],
-                        "rationale": [],
-                        "status": "planned",
-                    },
-                )
-                if priority == "required":
-                    item["priority"] = "required"
-                item["sources"].append(entry["id"])
-                item["rationale"].append(category)
-        for key, value in rule.items():
-            if key.startswith("route_on_") and isinstance(value, str):
-                routes.append({"condition": key.removeprefix("route_on_"), "skill": value})
+    child = load_manifest(path)
+    artifacts = {row["name"]: row for row in child.get("artifacts", [])}
+    limitations: list[str] = []
+    availability = []
+    for name, artifact in artifacts.items():
+        target = Path(artifact["uri"])
+        if not target.is_absolute():
+            target = path.parent / target
+        exists = target.exists()
+        availability.append({"name": name, "path": str(target), "available": exists})
+        if not exists:
+            limitations.append(f"artifact unavailable: {name}")
 
-    manual_review = False
-    if not item_map:
-        manual_review = True
-        item_map["correctness-targeted-smoke"] = {
-            "id": "correctness-targeted-smoke",
-            "check": "correctness:targeted-smoke",
-            "priority": "required",
-            "sources": ["fallback-no-rule-match"],
-            "rationale": ["unclassified-change"],
-            "status": "planned",
-        }
-    for item in item_map.values():
-        item["sources"] = sorted(set(item["sources"]))
-        item["rationale"] = sorted(set(item["rationale"]))
-    impact_document = {
-        "schema_version": SCHEMA_VERSION,
-        "manual_review_required": manual_review,
-        "impacts": sorted(impacts, key=lambda row: (row["category"], row["rule_id"])),
-        "routes": sorted(
-            {f"{route['condition']}:{route['skill']}": route for route in routes}.values(),
-            key=lambda row: (row["condition"], row["skill"]),
-        ),
-    }
-    plan_document = {
-        "schema_version": SCHEMA_VERSION,
-        "manual_review_required": manual_review,
-        "items": sorted(
-            item_map.values(),
-            key=lambda item: (item["priority"] != "required", item["id"]),
-        ),
-    }
-    return impact_document, plan_document
+    def document(name: str) -> dict[str, Any]:
+        item = next((row for row in availability if row["name"] == name), None)
+        if item is None or not item["available"]:
+            return {}
+        try:
+            return _load_json(Path(item["path"]), name)
+        except ChangeValidationError as exc:
+            limitations.append(str(exc))
+            return {}
 
-
-def render_report(
-    *,
-    run_state: Mapping[str, Any],
-    diff_summary: Mapping[str, Any],
-    impact: Mapping[str, Any],
-    plan: Mapping[str, Any],
-    links: Mapping[str, Any],
-    final_status: str,
-) -> str:
-    coverage: dict[str, list[Mapping[str, Any]]] = {}
-    for link in links.get("runs", []):
-        for item_id in link.get("covers", []):
-            coverage.setdefault(item_id, []).append(link)
-    lines = [
-        "# PR validation report",
-        "",
-        "## Change summary",
-        "",
-        f"- Goal: {run_state.get('goal') or 'Not provided'}",
-        f"- Baseline: `{run_state['baseline']}`",
-        f"- Candidate: `{run_state['candidate']}`",
-        f"- Target repositories: {', '.join(run_state.get('target_repositories', [])) or 'Not provided'}",
-        f"- Files changed: {diff_summary['file_count']}",
-        f"- Lines: +{diff_summary['additions']} / -{diff_summary['deletions']}",
-        f"- Validation status: **{final_status}**",
-        "",
-        "## Impact modules",
-        "",
-    ]
-    if impact.get("impacts"):
-        for row in impact["impacts"]:
-            lines.append(f"- `{row['category']}` via `{row['rule_id']}`")
+    comparison = document("comparison")
+    certificate = document("comparability-certificate")
+    revision_match = "unknown"
+    observed_scope: dict[str, Any] = {}
+    if certificate:
+        try:
+            certificate = consume_certificate(certificate)
+        except ComparabilityError as exc:
+            limitations.append(str(exc))
+            certificate = exc.certificate or {}
+        if certificate:
+            matches = {}
+            for side, revision in (("baseline", baseline), ("candidate", candidate)):
+                observed = {
+                    key: row["value"]
+                    for key, row in certificate[side]["identity"].items()
+                    if key.startswith("workspace_snapshot.") and row.get("origin") == "observed"
+                    and row.get("value") not in (None, "")
+                }
+                observed_scope[side] = observed
+                matches[side] = revision in observed.values()
+            if not all(observed_scope.values()):
+                limitations.append("recorded source revisions are missing for at least one side")
+            elif all(matches.values()):
+                revision_match = "matched"
+            else:
+                revision_match = "mismatched"
+                limitations.append("recorded source revisions do not match the requested baseline/candidate")
     else:
-        lines.append("- No domain rule matched; manual review is required.")
-    lines.extend(
-        [
-            "",
-            "## Validation matrix",
-            "",
-            "| Requirement | Priority | Evidence | Result |",
-            "|---|---|---|---|",
-        ]
-    )
-    for item in plan["items"]:
-        evidence = coverage.get(item["id"], [])
-        evidence_text = ", ".join(f"`{row['run_id']}`" for row in evidence) or "missing"
-        statuses = ", ".join(str(row["status"]) for row in evidence) or "not run"
-        lines.append(
-            f"| `{item['check']}` | {item['priority']} | {evidence_text} | {statuses} |"
-        )
-    lines.extend(["", "## Known limitations and missing coverage", ""])
-    missing = [
-        item
-        for item in plan["items"]
-        if item["priority"] == "required" and not coverage.get(item["id"])
-    ]
-    nonpassing = [
-        link for link in links.get("runs", []) if link.get("status") != "passed"
-    ]
-    if not missing and not nonpassing and not plan.get("manual_review_required"):
-        lines.append("- None recorded.")
-    for item in missing:
-        lines.append(f"- Required evidence missing: `{item['check']}`.")
-    for link in nonpassing:
-        lines.append(
-            f"- Linked run `{link['run_id']}` is `{link['status']}` and does not prove acceptance."
-        )
-    if plan.get("manual_review_required"):
-        lines.append("- Change classification requires manual review.")
-    lines.extend(["", "## Reproduction and artifacts", ""])
-    for link in links.get("runs", []):
-        lines.append(f"- `{link['run_id']}`: `{link['manifest']}`")
-    return "\n".join(lines) + "\n"
-
-
-def _prepare_report(
-    output_dir: Path,
-    *,
-    run_id: str,
-    baseline: str,
-    candidate: str,
-    goal: str,
-    target_repositories: Sequence[str],
-    diff_text: str,
-    knowledge_path: Path,
-    created_at: str | None = None,
-    code: Mapping[str, Any] | None = None,
-    workspace_root: Path | None = None,
-) -> dict[str, Any]:
-    if output_dir.exists() and any(output_dir.iterdir()):
-        raise ChangeValidationError(f"output directory is not empty: {output_dir}")
-    if not SAFE_ID_RE.fullmatch(run_id):
-        raise ChangeValidationError("run-id must be a lowercase safe identifier")
-    knowledge = load_json_object(knowledge_path)
-    diff_summary = parse_diff(diff_text)
-    if diff_summary["file_count"] == 0:
-        raise ChangeValidationError("diff contains no changed files")
-    impact, validation_plan = build_plan(diff_summary, knowledge)
-    timestamp = created_at or utc_now()
-    run_state = {
-        "schema_version": SCHEMA_VERSION,
-        "run_id": run_id,
-        "baseline": baseline,
-        "candidate": candidate,
-        "goal": goal,
-        "target_repositories": list(target_repositories),
-        "status": "planned",
-        "created_at": timestamp,
-        "updated_at": timestamp,
-    }
-    links = {"schema_version": SCHEMA_VERSION, "runs": []}
-    output_dir.mkdir(parents=True, exist_ok=True)
-    _write_json(output_dir / "run.json", run_state)
-    stored_summary = dict(diff_summary)
-    stored_summary.pop("matching_paths", None)
-    stored_summary.pop("matching_text", None)
-    _write_json(output_dir / "diff-summary.json", stored_summary)
-    _write_json(output_dir / "impact-analysis.json", impact)
-    _write_json(output_dir / "validation-plan.json", validation_plan)
-    _write_json(output_dir / "linked-runs.json", links)
-    report = render_report(
-        run_state=run_state,
-        diff_summary=stored_summary,
-        impact=impact,
-        plan=validation_plan,
-        links=links,
-        final_status="planned",
-    )
-    _atomic_write(output_dir / "pr-validation-report.md", report)
-    manifest = new_manifest(
-        run_type="change-validation",
-        run_id=run_id,
-        code=code,
-        workspace_root=workspace_root or ROOT,
-        workspace_snapshot={
-            "baseline": baseline,
-            "candidate": candidate,
-        },
-        created_at=timestamp,
-    )
-    for name, kind, uri in (
-        ("diff-summary", "diff-summary", "diff-summary.json"),
-        ("impact-analysis", "impact-analysis", "impact-analysis.json"),
-        ("validation-plan", "validation-plan", "validation-plan.json"),
-        ("linked-runs", "linked-runs", "linked-runs.json"),
-        ("pr-report", "report", "pr-validation-report.md"),
-    ):
-        manifest = add_artifact(
-            manifest, name=name, kind=kind, uri=uri, updated_at=timestamp
-        )
-    write_manifest(output_dir / "manifest.json", manifest)
-    return {
-        "status": "planned",
-        "run_id": run_id,
-        "file_count": diff_summary["file_count"],
-        "impact_count": len(impact["impacts"]),
-        "required_count": sum(
-            item["priority"] == "required" for item in validation_plan["items"]
-        ),
-        "recommended_count": sum(
-            item["priority"] == "recommended" for item in validation_plan["items"]
-        ),
-    }
-
-
-CHECK_PREFIX_RUN_TYPES = {
-    "correctness": "correctness",
-    "performance": "performance",
-}
-
-
-def required_run_type_for_check(check: str) -> str | None:
-    prefix, separator, rest = check.partition(":")
-    if not separator or not rest:
-        return None
-    return CHECK_PREFIX_RUN_TYPES.get(prefix)
-
-
-def check_child_evidence(child: Mapping[str, Any], *, parent_run_id: str) -> dict[str, Any]:
-    """Check that a child can cover a plan item.
-
-    A missing or different ``parent_run_id`` is recorded as a post-hoc link.
-    It is not itself grounds for rejection. A ``passed`` child still needs
-    artifacts: a passed string without evidence cannot cover a requirement.
-    The child manifest is never rewritten.
-    """
-    notes: list[str] = []
-    child_parent = child.get("parent_run_id")
-    association = "planned"
-    if child_parent is None:
-        association = "post-hoc"
-        notes.append("linked after the fact; child has no parent_run_id")
-    elif child_parent != parent_run_id:
-        association = "post-hoc"
-        notes.append(
-            f"child parent_run_id is {child_parent!r}, not this plan; linked by actual evidence"
-        )
-    if child["status"] == "passed" and not child.get("artifacts"):
-        raise ChangeValidationError(
-            f"child run {child['run_id']!r} is passed but links no artifacts; "
-            "a passed manifest without evidence cannot cover a plan item"
-        )
-    return {"association": association, "notes": notes}
-
-
-def check_cover_run_types(
-    child: Mapping[str, Any],
-    *,
-    covers: Sequence[str],
-    plan_items: Sequence[Mapping[str, Any]],
-) -> None:
-    """Reject a child whose run_type cannot cover the named plan items.
-
-    `correctness:*` items require a `correctness` manifest; `performance:*`
-    items require `performance`. `build:`, `test:`, `compatibility:`, and
-    `operator:` have no run type yet and are not checked. A `debug` manifest
-    covering `correctness:eager` is the hole this closes.
-    """
-    by_id = {item["id"]: item for item in plan_items}
-    for item_id in covers:
-        item = by_id.get(item_id)
-        if item is None:
-            continue
-        expected = required_run_type_for_check(str(item["check"]))
-        if expected is None:
-            continue
-        if child["run_type"] != expected:
-            raise ChangeValidationError(
-                f"child run {child['run_id']!r} has run_type "
-                f"{child['run_type']!r} but plan item {item_id!r} "
-                f"({item['check']}) requires run_type {expected!r}; "
-                "a debug manifest cannot cover a correctness requirement"
-            )
-
-
-def _link_evidence(
-    output_dir: Path,
-    *,
-    child_manifest_path: Path,
-    covers: Sequence[str],
-    updated_at: str | None = None,
-) -> dict[str, Any]:
-    plan = _load_json(output_dir / "validation-plan.json", "validation plan")
-    valid_ids = {item["id"] for item in plan["items"]}
-    unknown = sorted(set(covers) - valid_ids)
-    if unknown:
-        raise ChangeValidationError(f"unknown plan item ids: {', '.join(unknown)}")
-    child = load_manifest(child_manifest_path)
-    parent = load_manifest(output_dir / "manifest.json")
-    evidence_meta = check_child_evidence(child, parent_run_id=parent["run_id"])
-    check_cover_run_types(child, covers=covers, plan_items=plan["items"])
-    for artifact in child.get("artifacts", []):
-        path = Path(artifact["uri"])
-        if not path.is_absolute():
-            path = child_manifest_path.parent / path
-        if not path.exists():
-            raise ChangeValidationError(f"evidence artifact is unavailable: {artifact['name']}")
+        limitations.append("no existing comparability evidence establishes the requested code pair")
+    if comparison and comparison.get("status") != child["status"]:
+        limitations.append("comparison status disagrees with its manifest")
+    if not artifacts:
+        limitations.append("the run links no artifacts")
     if child["status"] not in {"passed", "failed", "inconclusive", "cancelled"}:
-        raise ChangeValidationError("evidence must be a completed run")
-    links = _load_json(output_dir / "linked-runs.json", "linked runs")
-    if any(link["run_id"] == child["run_id"] for link in links["runs"]):
-        raise ChangeValidationError(f"child run is already linked: {child['run_id']}")
-    timestamp = updated_at or utc_now()
-    link = {
+        limitations.append("the run has not completed")
+    return {
         "run_id": child["run_id"],
         "run_type": child["run_type"],
         "status": child["status"],
-        "manifest": str(child_manifest_path.resolve()),
-        "covers": sorted(set(covers)),
-        "linked_at": timestamp,
-        "association": evidence_meta["association"],
-        "notes": evidence_meta["notes"],
-    }
-    links["runs"].append(link)
-    links["runs"].sort(key=lambda row: row["run_id"])
-    _write_json(output_dir / "linked-runs.json", links)
-    parent = add_artifact(
-        parent,
-        name=f"linked-run-{child['run_id']}",
-        kind="linked-run-manifest",
-        uri=str(child_manifest_path.resolve()),
-        updated_at=timestamp,
-    )
-    write_manifest(output_dir / "manifest.json", parent)
-    return link
-
-
-def _finalize_report(
-    output_dir: Path, *, updated_at: str | None = None
-) -> dict[str, Any]:
-    run_state = _load_json(output_dir / "run.json", "run state")
-    if run_state.get("status") != "planned":
-        raise ChangeValidationError(f"run is already {run_state.get('status')}")
-    diff_summary = _load_json(output_dir / "diff-summary.json", "diff summary")
-    impact = _load_json(output_dir / "impact-analysis.json", "impact analysis")
-    plan = _load_json(output_dir / "validation-plan.json", "validation plan")
-    links = _load_json(output_dir / "linked-runs.json", "linked runs")
-    coverage: dict[str, list[Mapping[str, Any]]] = {}
-    for link in links["runs"]:
-        for item_id in link["covers"]:
-            coverage.setdefault(item_id, []).append(link)
-    required = [item for item in plan["items"] if item["priority"] == "required"]
-    missing = [item["id"] for item in required if not coverage.get(item["id"])]
-    child_statuses = {link["status"] for link in links["runs"]}
-    if "failed" in child_statuses:
-        status = "failed"
-    elif (
-        missing
-        or plan.get("manual_review_required")
-        or any(child_status != "passed" for child_status in child_statuses)
-    ):
-        status = "inconclusive"
-    else:
-        status = "passed"
-    for item in plan["items"]:
-        evidence = coverage.get(item["id"], [])
-        item["status"] = (
-            "passed"
-            if evidence and all(link["status"] == "passed" for link in evidence)
-            else "missing"
-            if not evidence
-            else "nonpassing"
-        )
-    _write_json(output_dir / "validation-plan.json", plan)
-    timestamp = updated_at or utc_now()
-    run_state["status"] = status
-    run_state["updated_at"] = timestamp
-    _write_json(output_dir / "run.json", run_state)
-    _atomic_write(
-        output_dir / "pr-validation-report.md",
-        render_report(
-            run_state=run_state,
-            diff_summary=diff_summary,
-            impact=impact,
-            plan=plan,
-            links=links,
-            final_status=status,
-        ),
-    )
-    manifest = load_manifest(output_dir / "manifest.json")
-    manifest = transition_status(manifest, "running", updated_at=timestamp)
-    manifest = transition_status(manifest, status, updated_at=timestamp)
-    write_manifest(output_dir / "manifest.json", manifest)
-    return {
-        "status": status,
-        "run_id": run_state["run_id"],
-        "missing_required": missing,
-        "linked_runs": len(links["runs"]),
-        "report": str((output_dir / "pr-validation-report.md").resolve()),
+        "manifest": str(path.resolve()),
+        "revision_match": revision_match,
+        "observed_scope": observed_scope,
+        "artifacts": availability,
+        "limitations": limitations,
     }
 
 
-def _evidence_checks(path: Path, *, baseline: str, candidate: str) -> set[str]:
-    """Infer only checks whose scope the producing report actually records."""
-    from vaws_comparability import consume_certificate, ComparabilityError
-    child = load_manifest(path)
-    artifacts = {row["name"]: row for row in child.get("artifacts", [])}
-    def document(name):
-        if name not in artifacts:
-            return {}
-        target = Path(artifacts[name]["uri"])
-        return _load_json(target if target.is_absolute() else path.parent / target, name)
-    comparison = document("comparison")
-    certificate = document("comparability-certificate")
-    if not comparison or not certificate:
-        return set()
-    try:
-        certificate = consume_certificate(certificate)
-    except ComparabilityError:
-        return set()
-    for side, revision in (("baseline", baseline), ("candidate", candidate)):
-        observed = [row["value"] for key, row in certificate[side]["identity"].items()
-                    if key.startswith("workspace_snapshot.") and row.get("origin") == "observed"]
-        # Arbitrary labels, a report's own workspace commit, and a parent run ID
-        # cannot establish that the requested code revisions were measured.
-        if revision not in observed:
-            return set()
-    if comparison.get("status") != child["status"]:
-        raise ChangeValidationError("comparison status disagrees with its manifest")
-    checks = set()
-    if child["run_type"] == "performance":
-        checks.add("performance:online-serving")
-    if child["run_type"] == "correctness":
-        cases = document("cases").get("cases", [])
-        if not cases or not comparison.get("cases"):
-            return set()
-        modes = {row.get("mode") for row in cases}
-        if modes == {"online-chat"}:
-            checks.add("correctness:online-chat")
-        identity = certificate["candidate"]["identity"]
-        eager = identity.get("engine_args.enforce_eager", {})
-        if eager.get("origin") == "observed":
-            if eager.get("value") == "true":
-                checks.add("correctness:eager")
-            elif eager.get("value") == "false":
-                checks.add("correctness:graph")
-    return checks
+def render_report(summary: Mapping[str, Any]) -> str:
+    lines = [
+        "# Change validation evidence", "",
+        f"- Goal: {summary['goal'] or 'Not provided'}",
+        f"- Baseline: `{summary['baseline']}`",
+        f"- Candidate: `{summary['candidate']}`",
+        f"- Files changed: {summary['diff']['file_count']}",
+        f"- Supplied evidence: **{summary['evidence_status']}**", "",
+        "This report describes existing evidence. It does not determine which tests",
+        "the change needs or establish complete validation from path keywords.",
+        "The Agent assesses coverage against the changed behavior and its callers.", "",
+        "| Run | Kind | Reported outcome | Source pair |",
+        "|---|---|---|---|",
+    ]
+    for row in summary["runs"]:
+        lines.append(f"| `{row['run_id']}` | {row['run_type']} | {row['status']} | {row['revision_match']} |")
+    if not summary["runs"]:
+        lines.extend(["", "No execution evidence was supplied. This does not create an extra test requirement."])
+    for row in summary["runs"]:
+        lines.extend(["", f"## {row['run_id']}", "", f"Manifest: `{row['manifest']}`"])
+        lines.extend(f"- {reason}" for reason in row["limitations"])
+        for artifact in row["artifacts"]:
+            qualifier = "available" if artifact["available"] else "unavailable"
+            lines.append(f"- {artifact['name']}: `{artifact['path']}` ({qualifier})")
+    return "\n".join(lines) + "\n"
 
 
 def build_report(*, diff_text: str, baseline: str, candidate: str, evidence=(),
-                 goal="", target_repositories=(), output_dir=None, workspace_root=ROOT,
-                 rules_path=DEFAULT_VALIDATION_RULES):
-    from uuid import uuid4
+                 goal="", target_repositories=(), output_dir=None, workspace_root=ROOT):
     from vaws_report import report_directory
+
+    diff = parse_diff(diff_text)
+    if not diff["files"]:
+        raise ChangeValidationError("diff contains no changed files")
+    diff.pop("matching_paths", None)
+    diff.pop("matching_text", None)
+    runs = [summarize_evidence(Path(path), baseline=baseline, candidate=candidate) for path in evidence]
+    statuses = {row["status"] for row in runs}
+    evidence_status = ("none" if not statuses else "failed" if "failed" in statuses
+                       else "passed" if statuses == {"passed"} and not any(row["limitations"] for row in runs)
+                       else "incomplete")
+    summary = {
+        "schema_version": SCHEMA_VERSION,
+        "status": "inconclusive",
+        "evidence_status": evidence_status,
+        "assessment": "Coverage of the changed behavior requires Agent judgment; this report imposes no test plan.",
+        "baseline": baseline, "candidate": candidate, "goal": goal,
+        "target_repositories": list(target_repositories), "diff": diff, "runs": runs,
+    }
     output = report_directory(workspace_root, "vllm-ascend-change-validation", output_dir)
-    _prepare_report(output, run_id=f"change-{uuid4().hex[:12]}", baseline=baseline,
-                    candidate=candidate, goal=goal, target_repositories=target_repositories,
-                    diff_text=diff_text, knowledge_path=rules_path, workspace_root=workspace_root)
-    items = _load_json(output / "validation-plan.json", "validation plan")["items"]
-    for path in evidence:
-        checks = _evidence_checks(path, baseline=baseline, candidate=candidate)
-        _link_evidence(output, child_manifest_path=path,
-                       covers=[row["id"] for row in items if row["check"] in checks])
-    return {**_finalize_report(output), "manifest": str((output / "manifest.json").resolve())}
+    if output.exists() and any(output.iterdir()):
+        raise ChangeValidationError(f"output directory is not empty: {output}")
+    output.mkdir(parents=True, exist_ok=True)
+    _atomic_write(output / "change.diff", diff_text)
+    _write_json(output / "evidence-summary.json", summary)
+    _atomic_write(output / "pr-validation-report.md", render_report(summary))
+    manifest = new_manifest(run_type="change-validation", workspace_root=workspace_root,
+                            workspace_snapshot={"baseline": baseline, "candidate": candidate})
+    for name, kind, uri in (("diff", "diff", "change.diff"),
+                            ("evidence-summary", "summary", "evidence-summary.json"),
+                            ("pr-report", "report", "pr-validation-report.md")):
+        manifest = add_artifact(manifest, name=name, kind=kind, uri=uri)
+    for index, row in enumerate(runs):
+        manifest = add_artifact(manifest, name=f"evidence-{index + 1}", kind="run-manifest", uri=row["manifest"])
+    manifest = transition_status(manifest, "inconclusive")
+    write_manifest(output / "manifest.json", manifest)
+    return {"status": "inconclusive", "evidence_status": evidence_status, "linked_runs": len(runs),
+            "assessment": summary["assessment"], "summary": str(output / "evidence-summary.json"),
+            "report": str(output / "pr-validation-report.md"), "manifest": str(output / "manifest.json")}
 
 
 def build_parser():
@@ -709,7 +324,7 @@ def main(argv=None):
             workspace, baseline=args.baseline, candidate=args.candidate)
         revisions = [args.baseline, args.candidate]
         if args.repo_root:
-            revisions = [subprocess.check_output(["git", "-C", str(workspace), "rev-parse", "--verify", f"{ref}^{{commit}}"], text=True).strip() for ref in revisions]
+            revisions = [subprocess.check_output(["git", "-C", str(workspace), "rev-parse", "--verify", f"{ref}^{{commit}}"], text=True).strip() if ref != "WORKTREE" else ref for ref in revisions]
         result = build_report(diff_text=diff, baseline=revisions[0], candidate=revisions[1],
                               evidence=args.evidence, goal=args.goal, target_repositories=args.target_repository,
                               output_dir=args.output_dir, workspace_root=workspace)

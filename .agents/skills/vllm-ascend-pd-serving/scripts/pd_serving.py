@@ -27,14 +27,11 @@ ensure_workspace_interpreter(repo_root=ROOT)
 from remote_dev.diagnostics import open_http, http_connection, http_failure
 from vaws_coordinator.presentation import execution_summary
 from vaws_task_target import (  # noqa: E402
-    DONE,
-    PENDING,
     RUNNING,
     named_environment,
     reject_reserved_env,
     run_command,
     task_client,
-    task_id_of,
 )
 
 SERVING_SCRIPTS = ROOT / ".agents" / "skills" / "vllm-ascend-serving" / "scripts"

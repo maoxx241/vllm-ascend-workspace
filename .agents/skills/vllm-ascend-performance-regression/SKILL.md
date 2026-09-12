@@ -11,11 +11,10 @@ Choose the workload and metrics that reflect the user-visible change. Set thresh
 
 ## Agent entry
 
-Run from the repository root using the platform's Python launcher. The workspace
-selects its installed platform environment automatically.
+Run from the repository root. The entry reuses the installed platform environment.
 
 ```text
-python .agents/skills/vllm-ascend-performance-regression/scripts/performance_regression.py --config experiment.json
+uv run --no-project python .agents/skills/vllm-ascend-performance-regression/scripts/performance_regression.py --config experiment.json
 ```
 
 The business config names baseline.sources and candidate.sources (actual vllm and vllm-ascend worktrees), benchmark options, runs, warmups and thresholds. The collector binds each source, waits for its managed service, warms each launch, alternates A/B order, records runtime observations, and releases owned executions. --results accepts existing measurement files for report-only use. Missing runtime evidence yields an inconclusive report.
@@ -24,6 +23,5 @@ For a single-state throughput measurement use benchmark. For root-cause timing a
 
 Read the relevant detail only when needed:
 
-- [behavior](references/behavior.md)
 
 - [Experiment input example](references/inputs.md)
