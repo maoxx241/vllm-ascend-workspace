@@ -64,7 +64,7 @@ Agent 按任务选择工具或技能；执行引用、状态推进和报告由�
 
 规范仓库是 `vllm-ascend-workspace/vllm-ascend-workspace`。`vllm/`、`vllm-ascend/` 是指向社区上游的 Git 子模块。首次使用由 `AGENTS.md` 和原生客户端入口提示 GitHub 身份，无需调用 `repo-init`；开发 Fork 必须属于个人账号，`origin` 指向个人 Fork，`upstream` 保留官方来源。
 
-配置后，独立进程定期检测 VAWS 正式 Release，准备其锁定依赖并同步个人 Fork。新会话可采用准备好的版本，已有任务和未提交文件保留。见[个人 Fork 与自动更新](docs/forks-and-updates.md)。第一版已接通共享 root 下的用户容器命名、随正常调用投递的留言和算子产物缓存；权重沿用服务器现有路径，初始化后无需 Agent 填写身份、轮询或登记成果。见[身份与协调](docs/identity-and-agent-coordination.md)。
+配置后，独立进程默认每 5 分钟检测 VAWS 主仓默认分支，准备最新提交的锁定依赖并同步个人 Fork，无需等待 Release。新会话可采用准备好的版本，已有任务和未提交文件保留。见[个人 Fork 与自动更新](docs/forks-and-updates.md)。第一版已接通共享 root 下的用户容器命名、随正常调用投递的留言和算子产物缓存；权重沿用服务器现有路径，初始化后无需 Agent 填写身份、轮询或登记成果。见[身份与协调](docs/identity-and-agent-coordination.md)。
 
 `.agents/skills/` 保存业务技能，`.agents/lib/` 保存共享消费代码，`.agents/scripts/` 保存客户端接线和维护工具。客户端投影统一指向规范技能。运行状态和私人配置放在未跟踪的 `.vaws-local/`，凭据不入库。公开知识只使用包生成的脱敏副本。
 

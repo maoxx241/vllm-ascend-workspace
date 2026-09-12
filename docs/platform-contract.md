@@ -28,10 +28,10 @@ to own their UI's Local/Worktree choice; a session hook cannot move a running
 parent application.
 
 The entry also checks first-use/update configuration locally. A configured
-background watcher prepares official releases without modifying an existing
-editing directory. Default new CLI copies may use the prepared release's source
-and client wiring. Existing GUI checkouts change only through an explicit apply
-at a task boundary. See [forks and updates](forks-and-updates.md).
+background watcher prepares official default-branch commits without modifying an
+existing editing directory. Default new CLI copies may use the prepared revision's
+source and client wiring. Existing GUI checkouts can change through explicit
+maintenance with apply. See [forks and updates](forks-and-updates.md).
 
 The child CLI receives the selected native environment through PATH and
 VIRTUAL_ENV. Its bare `python` and `uv run --no-project python` use that environment;

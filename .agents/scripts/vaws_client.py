@@ -108,15 +108,15 @@ def main(argv=None) -> int:
             try:
                 source = prepared_source(ROOT) or ROOT
             except (OSError, RuntimeError, ValueError, TypeError) as exc:
-                print(json.dumps({"workspace_updates": {"state": "release_source_pending", "error": str(exc)}},
+                print(json.dumps({"workspace_updates": {"state": "update_source_pending", "error": str(exc)}},
                                  ensure_ascii=False), file=sys.stderr, flush=True)
         if source != ROOT:
-            # Run the release's own client wiring as well as its dependencies.
+            # Run the prepared revision's client wiring and dependencies.
             # The existing checkout remains unchanged for any active GUI task.
             try:
                 launcher = source / ".agents/scripts/vaws_client.py"
                 if not launcher.is_file():
-                    raise WorkspaceCopyError("prepared release has no native client launcher")
+                    raise WorkspaceCopyError("prepared revision has no native client launcher")
                 prepared = native_ready(source)
                 from vaws_local_owner import windows_mounted_workspace
                 if windows_mounted_workspace(source):
@@ -131,7 +131,7 @@ def main(argv=None) -> int:
                     environment.pop(name, None)
                 os.execvpe(prepared["python"], [prepared["python"], str(launcher), *values], environment)
             except (OSError, RuntimeError, ValueError) as exc:
-                print(json.dumps({"workspace_updates": {"state": "release_launch_pending", "error": str(exc)}},
+                print(json.dumps({"workspace_updates": {"state": "update_launch_pending", "error": str(exc)}},
                                  ensure_ascii=False), file=sys.stderr, flush=True)
                 source = ROOT
         ensure_workspace_interpreter(repo_root=source)

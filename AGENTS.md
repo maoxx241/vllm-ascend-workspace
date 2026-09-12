@@ -21,7 +21,7 @@ remotes, not replacements for community upstreams.
 This applies without invoking a Skill. On first use, if no confirmed
 `.vaws-local/github.json` exists, inspect `.agents/scripts/workspace_forks.py`
 and ask once for the user's personal GitHub username, explaining that setup
-creates personal development forks and enables release preparation. The current
+creates personal development forks and enables upstream update preparation. The current
 authenticated login is a suggestion, not consent. Reuse an explicit answer;
 do not infer identity from the OS account or remotes. Continue independent
 local/read-only work while the answer is pending; a deferred choice is not a
@@ -36,13 +36,14 @@ forks, must belong to personal GitHub Users. Organization forks, redirected
 names and unrelated same-name repositories do not qualify. Canonical project
 repositories remain upstreams; `.gitmodules` keeps community URLs.
 
-Native CLI/session entries start configured release preparation without waiting
+Native CLI/session entries start configured upstream preparation without waiting
 for downloads. The background watcher never changes an existing editing
-checkout or running environment. New CLI editing copies can use a prepared
-release. Explicit maintenance of an existing checkout can use
+checkout or running environment. It periodically tracks the canonical default
+branch and its pinned components; no Release is required. New CLI editing copies
+can use a prepared revision. Explicit maintenance of an existing checkout can use
 `.agents/scripts/workspace_update.py apply`; this is not a per-task Agent step.
 Dirty sources and divergence stay for judgment when an update is needed.
-See [forks and releases](docs/forks-and-updates.md).
+See [forks and updates](docs/forks-and-updates.md).
 
 Servers use shared root access. The coordinator binds the
 initialized GitHub user to a fixed `vaws-<github-login>` container, with naming,

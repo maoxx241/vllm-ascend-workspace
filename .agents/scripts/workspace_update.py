@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check or apply stable VAWS releases; watch polls at most once per interval."""
+"""Check or apply the VAWS default branch; watch polls at most once per interval."""
 from __future__ import annotations
 
 import argparse

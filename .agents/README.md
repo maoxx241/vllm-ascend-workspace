@@ -6,7 +6,7 @@ skills. Runtime behavior belongs to the four installed components; see
 
 - `skills/repo-init/` initializes or repairs workspace configuration and clients.
 - `scripts/workspace_forks.py` configures verified personal GitHub forks without
-  a Skill or installed runtime. `scripts/workspace_update.py` prepares releases
+  a Skill or installed runtime. `scripts/workspace_update.py` prepares upstream updates
   independently of native tasks; see [forks and updates](../docs/forks-and-updates.md).
 - `skills/npu-fleet-monitor/` starts, checks or stops the local uvx monitor.
 - Other `skills/` directories add vLLM-Ascend business methods such as serving,

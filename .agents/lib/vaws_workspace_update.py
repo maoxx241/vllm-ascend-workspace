@@ -1,4 +1,4 @@
-"""Bounded, release-only workspace updates; existing processes keep their pins.
+"""Track the canonical default branch; existing processes keep their pins.
 
 Git's fast-forward checks protect both branches. Preparation is reusable, and a
 small receipt allows an interrupted checkout/push to be finished on the next run.
@@ -187,6 +187,14 @@ class WorkspaceUpdater:
         self.state = read_json(self.base / "state.json")
 
     def save(self, **fields):
+        if fields.get("status") in ("preparing", "prepared", "ready", "current"):
+            # Successful progress supersedes the last failure; raw logs remain.
+            self.state.pop("reason", None)
+            self.state.pop("error_log", None)
+        if "target" in fields:
+            # Older receipts described Releases; the target is now a branch SHA.
+            self.state.pop("tag", None)
+            self.state.pop("release_id", None)
         self.state.update(fields)
         self.state["checked_at"] = datetime.now(timezone.utc).isoformat()
         write_json(self.base / "state.json", self.state)
@@ -219,16 +227,6 @@ class WorkspaceUpdater:
         if not isinstance(branch, str) or not branch:
             raise Deferred("canonical_default_branch_unavailable")
         git(self.root, "check-ref-format", f"refs/heads/{branch}")
-        try:
-            release = client.api(f"repos/{CANONICAL}/releases/latest")
-        except GitHubAPIError as exc:
-            if exc.status == 404:
-                raise Deferred("no_stable_release", status="pending") from exc
-            raise
-        tag = release.get("tag_name")
-        if release.get("draft") or release.get("prerelease") or not isinstance(tag, str) or not tag:
-            raise Deferred("no_stable_release", status="pending")
-        git(self.root, "check-ref-format", f"refs/tags/{tag}")
         fork_name = (identity.get("forks") or {}).get("workspace") or f"{login}/{CANONICAL.rsplit('/', 1)[1]}"
         try:
             fork = client.api(f"repos/{fork_name}")
@@ -244,20 +242,18 @@ class WorkspaceUpdater:
         ):
             raise Deferred("personal_origin_required")
         # Use a private ref, not FETCH_HEAD (which an unrelated fetch can change).
-        reference = "refs/vaws/releases/" + hashlib.sha256(tag.encode()).hexdigest()
+        reference = "refs/vaws/upstream/" + hashlib.sha256(branch.encode()).hexdigest()
         verified_git_url(self.root, UPSTREAM, CANONICAL)
-        git(self.root, "fetch", "--no-tags", UPSTREAM, f"refs/tags/{tag}:{reference}")
+        git(self.root, "fetch", "--no-tags", UPSTREAM, f"refs/heads/{branch}:{reference}")
         sha = git(self.root, "rev-parse", f"{reference}^{{commit}}")
-        if self.state.get("release_id") == release.get("id") and self.state.get("tag") == tag:
-            if self.state.get("target") and self.state["target"] != sha:
-                raise Deferred("release_tag_changed")
         verified_git_url(self.root, urls[0], fork_name)
         git(self.root, "fetch", "--no-tags", urls[0], f"refs/heads/{branch}:refs/vaws/fork-default")
         remote_sha = git(self.root, "rev-parse", "refs/vaws/fork-default")
         if not ancestor(self.root, remote_sha, sha):
             raise Deferred("fork_not_fast_forward")
-        return {"tag": tag, "target": sha, "branch": branch, "release_id": release.get("id"),
-                "url": release.get("html_url"), "fork": fork_name, "push_url": urls[0]}
+        return {"target": sha, "branch": branch, "channel": "default_branch",
+                "url": f"https://github.com/{CANONICAL}/commit/{sha}",
+                "fork": fork_name, "push_url": urls[0]}
 
     def safe_inputs(self, release: dict) -> dict[str, str]:
         clean_checkout(self.root, branch=release["branch"])
@@ -313,7 +309,7 @@ class WorkspaceUpdater:
                      "VAWS_SKIP_VENV_REEXEC", "VAWS_VENV_REEXEC", "PYTHONPATH"):
             environment.pop(name, None)
         interpreter = getattr(sys, "_base_executable", sys.executable)
-        print(f"preparing locked packages for {release['tag']}", file=sys.stderr, flush=True)
+        print(f"preparing locked packages for {release['branch']} at {target[:12]}", file=sys.stderr, flush=True)
         command = [interpreter, str(stage / ".agents/scripts/vaws_deps.py"), "sync", "--locked"]
         prepared = run(command, cwd=stage, timeout=1800, env=environment)
         if prepared.stderr:
@@ -322,7 +318,7 @@ class WorkspaceUpdater:
         if not payload.get("ok") or not payload.get("receipt"):
             raise Deferred("dependencies_pending")
         environment["VAWS_ENV_RECEIPT"] = payload["receipt"]["receipt"]
-        print("caching the released monitor package; existing services keep running", file=sys.stderr, flush=True)
+        print("caching the pinned monitor package; existing services keep running", file=sys.stderr, flush=True)
         monitor = run([interpreter, str(stage / ".agents/skills/npu-fleet-monitor/scripts/manage_monitor.py"), "deploy"],
                       cwd=stage, timeout=600, env=environment)
         if monitor.stderr:
@@ -331,7 +327,7 @@ class WorkspaceUpdater:
             raise Deferred("monitor_package_pending")
         target_links = gitlinks(self.root, target)
         for path in active:
-            # Never follow a submodule branch; cache precisely the released gitlink.
+            # Never follow a submodule branch; cache precisely the workspace gitlink.
             url = f"https://github.com/{SUBMODULES[path]}.git"
             verified_git_url(self.root / path, url, SUBMODULES[path])
             git(self.root / path, "fetch", "--no-tags", url, target_links[path])
@@ -366,7 +362,7 @@ class WorkspaceUpdater:
         clean_checkout(destination, branch=None, expected={target})
 
     def activate_environment(self, prepared: dict) -> None:
-        # Use the prepared release's implementation, and publish only the next
+        # Use the prepared revision's implementation, and publish only the next
         # client selection. Running native clients retain their explicit pin.
         stage = Path(prepared["stage"])
         code = ("import sys;sys.path.insert(0,sys.argv[1]);"
@@ -381,7 +377,7 @@ class WorkspaceUpdater:
 
     def activate(self) -> dict:
         if self.state.get("phase") not in ("ready", "local_updated", "submodules_updated"):
-            return {"status": "pending", "reason": "no_prepared_release"}
+            return {"status": "pending", "reason": "no_prepared_update"}
         release = self.state
         active = self.safe_inputs(release)
         prepared = self.state["prepared"]
@@ -402,7 +398,7 @@ class WorkspaceUpdater:
         self.safe_inputs(release)
         self.activate_environment(prepared)
         self.save(phase="active", active=release["target"], status="current")
-        return {"status": "applied", "tag": release["tag"], "target": release["target"],
+        return {"status": "applied", "branch": release["branch"], "target": release["target"],
                 "knowledge": prepared.get("knowledge", {})}
 
     def step(self, *, apply: bool = False, activate: bool = True) -> dict:
@@ -419,16 +415,18 @@ class WorkspaceUpdater:
                 return result
             active = self.safe_inputs(release) if activate else self.preparation_inputs(release)
             if self.state.get("active") == release["target"] and git(self.root, "rev-parse", "HEAD") == release["target"]:
+                self.save(status="current")
                 return {"status": "current", **public}
             if self.state.get("target") == release["target"] and self.state.get("phase") in (
                 "ready", "local_updated", "submodules_updated"):
+                self.save(status="ready")
                 return self.activate() if activate else {"status": "ready", **public}
             if self.state.get("target") == release["target"] and self.state.get("phase") == "prepared":
                 self.validate_prepared(release, self.state["prepared"])
             else:
-                self.save(**public, phase="preparing", original_submodules=active)
+                self.save(**public, phase="preparing", status="preparing", original_submodules=active)
                 prepared = self.prepare(release, active)
-                self.save(phase="prepared", prepared=prepared)
+                self.save(phase="prepared", status="prepared", prepared=prepared)
                 # Dependencies may take minutes; explicit activation must check
                 # again, while background preparation never edits this tree.
                 if activate:
@@ -464,10 +462,10 @@ def activate_prepared(root: Path) -> dict:
 
 
 def prepared_source(root: Path) -> Path | None:
-    """Read a prepared release for a new editing copy; never modify this root.
+    """Read a prepared revision for a new editing copy; never modify this root.
 
     A personal branch, local commit or unfinished edit continues from its own
-    source instead of silently being replaced by a released tree.
+    source instead of silently being replaced by the upstream tree.
     """
     try:
         updater = WorkspaceUpdater(root)

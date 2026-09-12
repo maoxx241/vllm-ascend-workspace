@@ -126,7 +126,7 @@ planning parent is not itself grounds for rejection.
 
 ## 5. Shared contracts
 
-Workspace install/client wiring owns the bounded personal-fork and release
+Workspace install/client wiring owns the bounded personal-fork and default-branch
 consumption operations in [forks and updates](forks-and-updates.md). GitHub
 configuration is distinct from native task identity and shared root login. Background
 preparation reuses component pins without changing active checkouts/processes.

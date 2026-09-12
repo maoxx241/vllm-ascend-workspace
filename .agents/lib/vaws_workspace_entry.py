@@ -1,7 +1,7 @@
-"""Nonblocking first-use notice and release watcher wiring for native clients.
+"""Nonblocking first-use notice and upstream watcher wiring for native clients.
 
 This entry does no network I/O or installation. Existing GUI session hooks only
-start preparation; the CLI launcher can copy an already prepared release into a
+start preparation; the CLI launcher can copy an already prepared revision into a
 new editing directory. Ordinary tasks remain available.
 """
 from __future__ import annotations
@@ -55,7 +55,7 @@ def workspace_entry(root: Path, *, announce: bool = True) -> dict:
             except FileExistsError:
                 return {"state": "identity_pending"}
             return {"state": "needs_github_user", "message":
-                    "First use: provide your personal GitHub username to configure personal forks and release updates. "
+                    "First use: provide your personal GitHub username to configure personal forks and upstream updates. "
                     "The Agent can run workspace_forks.py; a repo-init skill is not required. "
                     "Local work remains available."}
         identity = json.loads(identity_path.read_text(encoding="utf-8"))

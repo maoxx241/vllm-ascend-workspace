@@ -8,7 +8,7 @@ command recipe. Superseded designs and duplicate inventories are retained in Git
 
 ## Current contracts
 
-- [forks-and-updates.md](forks-and-updates.md) — Skill-independent first use, verified personal forks and release preparation.
+- [forks-and-updates.md](forks-and-updates.md) — Skill-independent first use, verified personal forks and default-branch update preparation.
 - [identity-and-agent-coordination.md](identity-and-agent-coordination.md) — shared-root user attribution, opportunistic message delivery and compiled-output reuse; first-version boundaries are explicit.
 
 - [platform-contract.md](platform-contract.md) — common Windows/macOS/Linux entry points, literal process arguments, native owners and immutable environments.
@@ -32,6 +32,7 @@ command recipe. Superseded designs and duplicate inventories are retained in Git
 
 ## Dated design and validation evidence
 
+- [shared-root-host-validation-2026-09-12.md](shared-root-host-validation-2026-09-12.md) — four-host managed CPU work, shared weights, busy NPU queue, real SSH messages, native cache reuse and default-branch update preparation.
 - [shared-root-first-version-validation-2026-09-12.md](shared-root-first-version-validation-2026-09-12.md) — personal Fork setup, installed shared-root coordinator, messages, compiled-output reuse and idle daemon upgrade; local evidence and hardware limits.
 - [core-workflow-validation-2026-09-12.md](core-workflow-validation-2026-09-12.md) — fixed execution inputs, native rebuild/reuse/switchback, Windows/WSL clients and real-host validation, with explicit scope limits.
 - [workflow-usability-validation-2026-09-11.md](workflow-usability-validation-2026-09-11.md) — skill boundary audit, bounded service startup, source reuse and real four-host fleet lifecycle observations.

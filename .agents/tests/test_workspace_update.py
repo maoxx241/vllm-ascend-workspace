@@ -11,7 +11,6 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 import vaws_workspace_update as updates
-from vaws_github import GitHubAPIError
 
 REAL_PREPARE = updates.WorkspaceUpdater.prepare
 
@@ -33,7 +32,6 @@ def commit(root, content):
 class API:
     def __init__(self):
         self.calls = []
-        self.no_release = False
         self.owner_type = "User"
 
     def api(self, endpoint):
@@ -43,9 +41,7 @@ class API:
         if endpoint == f"repos/{updates.CANONICAL}":
             return {"full_name": updates.CANONICAL, "default_branch": "stable"}
         if endpoint.endswith("/releases/latest"):
-            if self.no_release:
-                raise GitHubAPIError("Not Found", status=404)
-            return {"id": 1, "tag_name": "v1.0.0", "draft": False, "prerelease": False}
+            pytest.fail("updates must not require a GitHub Release")
         return {"full_name": "alice/vllm-ascend-workspace", "fork": True,
                 "owner": {"login": "alice", "type": self.owner_type},
                 "parent": {"full_name": updates.CANONICAL}}
@@ -64,9 +60,9 @@ def fixture(tmp_path, monkeypatch):
     git(tmp_path, "clone", str(fork), str(root))
     url = "https://github.com/alice/vllm-ascend-workspace.git"
     git(root, "remote", "set-url", "origin", url)
-    new = commit(upstream, "released")
+    released = commit(upstream, "released")
     git(upstream, "tag", "v1.0.0")
-    later = commit(upstream, "unreleased main development")
+    new = commit(upstream, "unreleased main development")
     updates.write_json(root / ".vaws-local/github.json", {"schema": "vaws.github.v1", "login": "alice"})
     api = API()
     real_run = updates.run
@@ -97,7 +93,7 @@ def fixture(tmp_path, monkeypatch):
     monkeypatch.setattr(updates.WorkspaceUpdater, "prepare", prepare)
     activated = []
     monkeypatch.setattr(updates.WorkspaceUpdater, "activate_environment", lambda self, prepared: activated.append(prepared))
-    return {"root": root, "upstream": upstream, "fork": fork, "old": old, "new": new, "later": later,
+    return {"root": root, "upstream": upstream, "fork": fork, "old": old, "new": new, "released": released,
             "api": api, "calls": calls, "prepares": prepares, "activated": activated, "url": url}
 
 
@@ -105,12 +101,14 @@ def updater(fixture):
     return updates.WorkspaceUpdater(fixture["root"], client=fixture["api"])
 
 
-def test_apply_uses_release_commit_and_metadata_default_branch(fixture):
+def test_apply_uses_default_branch_head_even_with_older_release_tag(fixture):
     result = updater(fixture).step(apply=True)
     assert result["status"] == "applied"
     assert git(fixture["root"], "rev-parse", "HEAD") == fixture["new"]
     assert git(fixture["fork"], "rev-parse", "stable") == fixture["new"]
-    assert fixture["new"] != fixture["later"]
+    assert fixture["new"] != fixture["released"]
+    assert result["branch"] == "stable"
+    assert not any("releases" in endpoint for endpoint in fixture["api"].calls)
     assert fixture["activated"]
     assert all("--force" not in call and "reset" not in call and "stash" not in call for call in fixture["calls"])
 
@@ -124,6 +122,52 @@ def test_watch_prepares_and_syncs_fork_without_mutating_live_checkout(fixture):
     assert not fixture["activated"]
     updates.watch(fixture["root"], once=True, emit=emitted.append)
     assert len(fixture["prepares"]) == 1
+
+
+def test_watch_follows_new_default_branch_commits_without_tags(fixture):
+    root = fixture["root"]
+    assert updater(fixture).step(apply=True, activate=False)["status"] == "ready"
+    next_head = commit(fixture["upstream"], "next untagged change")
+    result = updater(fixture).step(apply=True, activate=False)
+    assert result["status"] == "ready"
+    assert result["target"] == next_head
+    assert result["channel"] == "default_branch"
+    assert result["url"].endswith(f"/commit/{next_head}")
+    assert fixture["prepares"] == [fixture["new"], next_head]
+    assert git(fixture["fork"], "rev-parse", "stable") == next_head
+    assert git(root, "rev-parse", "HEAD") == fixture["old"]
+    assert not fixture["activated"]
+
+
+def test_successful_preparation_and_reuse_clear_stale_failure_but_keep_logs(fixture, monkeypatch):
+    base = fixture["root"] / ".vaws-local/updates"
+    log = base / "logs/previous-failure.json"
+    evidence = {"stderr": "previous download failed"}
+    updates.write_json(log, evidence)
+    updates.write_json(base / "state.json", {
+        "status": "pending", "reason": "no_stable_release", "error_log": str(log)})
+    original = updates.WorkspaceUpdater.prepare
+
+    def prepare(self, release, active):
+        state = updates.read_json(base / "state.json")
+        assert state["status"] == state["phase"] == "preparing"
+        assert "reason" not in state and "error_log" not in state
+        return original(self, release, active)
+
+    monkeypatch.setattr(updates.WorkspaceUpdater, "prepare", prepare)
+    assert updater(fixture).step(apply=True, activate=False)["status"] == "ready"
+    state = updates.read_json(base / "state.json")
+    assert state["status"] == state["phase"] == "ready"
+    assert "reason" not in state and "error_log" not in state
+    # A transient check failure after readiness must also clear on reuse.
+    updates.write_json(base / "state.json", {
+        **state, "status": "deferred", "reason": "network_unavailable", "error_log": str(log)})
+    assert updater(fixture).step(apply=True, activate=False)["status"] == "ready"
+    state = updates.read_json(base / "state.json")
+    assert state["status"] == "ready"
+    assert "reason" not in state and "error_log" not in state
+    assert len(fixture["prepares"]) == 1
+    assert updates.read_json(log) == evidence
 
 
 def test_updates_follow_the_saved_github_assigned_fork_name(fixture, monkeypatch):
@@ -208,16 +252,23 @@ def test_fork_divergence_defers_without_force(fixture):
     assert git(fixture["fork"], "rev-parse", "stable") == personal
 
 
-def test_unconfigured_and_no_release_are_normal_pending(fixture):
-    fixture["api"].no_release = True
-    result = updater(fixture).step(apply=True)
-    assert result == {"status": "pending", "reason": "no_stable_release"}
-    assert not (fixture["root"] / ".vaws-local/updates/logs").exists()
+def test_check_works_without_any_tags_or_releases_and_does_not_prepare(fixture):
+    git(fixture["upstream"], "tag", "-d", "v1.0.0")
+    result = updater(fixture).step()
+    assert result["status"] == "available"
+    assert result["target"] == fixture["new"]
+    assert not fixture["prepares"]
+    assert git(fixture["root"], "rev-parse", "HEAD") == fixture["old"]
+    assert git(fixture["fork"], "rev-parse", "stable") == fixture["old"]
+
+
+def test_unconfigured_is_normal_pending_without_network(fixture):
     (fixture["root"] / ".vaws-local/github.json").unlink()
     fixture["api"].calls.clear()
     result = updater(fixture).step(apply=True)
     assert result["reason"] == "github_identity_required"
     assert not fixture["api"].calls
+    assert not (fixture["root"] / ".vaws-local/updates/logs").exists()
 
 
 def test_non_personal_fork_never_pushes(fixture):
@@ -358,11 +409,10 @@ def subfixture(fixture):
     git(root / "vllm", "checkout", "--detach", module_old)
     base = commit(root, "workspace with old module")
     git(upstream, "fetch", str(root), base)
-    git(upstream, "checkout", "--detach", base)
+    git(upstream, "checkout", "-B", "stable", base)
     git(upstream, "update-index", "--cacheinfo", f"160000,{module_new},vllm")
     git(upstream, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "released module pin")
     target = git(upstream, "rev-parse", "HEAD")
-    git(upstream, "tag", "-f", "v1.0.0", target)
     return {**fixture, "old": base, "new": target, "module_old": module_old, "module_new": module_new}
 
 
@@ -429,7 +479,7 @@ def test_prepared_source_is_read_only_and_preserves_business_sources(fixture):
     assert updates.prepared_source(root) is None
 
 
-def test_prepare_uses_release_scripts_locked_pins_and_deploy_only(fixture, monkeypatch):
+def test_prepare_uses_target_scripts_locked_pins_and_deploy_only(fixture, monkeypatch):
     root = fixture["root"]
     monkeypatch.setenv("VAWS_ENV_RECEIPT", "old-client-pin")
     monkeypatch.setenv("VAWS_TOP_FROM", "local-custom-monitor")
