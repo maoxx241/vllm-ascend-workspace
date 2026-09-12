@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import fields
 from typing import Any
+
+from remote_dev.core.endpoint import Endpoint as SshEndpoint
 
 
 OPTIONAL_ASCEND_ENV_FILE = "/etc/profile.d/vaws-ascend-env.sh"
@@ -13,39 +15,12 @@ class RemoteTargetError(RuntimeError):
     """Deterministic user-facing endpoint failure."""
 
 
-@dataclass(frozen=True)
-class SshEndpoint:
-    host: str
-    port: int
-    user: str = "root"
-
-    def destination(self) -> str:
-        return f"{self.user}@{self.host}"
-
-    def known_hosts_key(self) -> str:
-        return self.host if self.port == 22 else f"[{self.host}]:{self.port}"
-
-    def to_dict(self, *, plane: str | None = None) -> dict[str, Any]:
-        payload: dict[str, Any] = {
-            "host": self.host,
-            "port": self.port,
-            "user": self.user,
-            "destination": self.destination(),
-            "known_hosts_key": self.known_hosts_key(),
-        }
-        if plane:
-            payload["plane"] = plane
-        return payload
-
-
 def ssh_endpoint_from_mapping(data: dict[str, Any] | None) -> SshEndpoint:
     if not isinstance(data, dict) or not data.get("host"):
         raise RemoteTargetError("endpoint mapping is missing host")
-    return SshEndpoint(
-        host=str(data["host"]),
-        port=int(data.get("port") or 22),
-        user=str(data.get("user") or "root"),
-    )
+    values = {field.name: data[field.name] for field in fields(SshEndpoint) if field.name in data}
+    values.setdefault("port", 22)
+    return SshEndpoint(**values)
 
 
 def json_dumps(data: Any) -> str:

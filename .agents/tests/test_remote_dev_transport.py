@@ -172,6 +172,22 @@ class ConsumerArgvTests(unittest.TestCase):
 
 
 class EndpointPolicyTests(unittest.TestCase):
+    def test_mapping_endpoint_retains_authentication_and_execution_policy(self):
+        from dataclasses import asdict
+        from vaws_remote_target import ssh_endpoint_from_mapping
+
+        mapping = dict(host=HOST, port=PORT, user="worker", identity_file="selected-key",
+                       root="/bound-root", cwd="/case", runtime_env=False,
+                       runtime_env_file="/runtime/custom.sh", connect_timeout_ms=4000,
+                       ssh_mux=False, keepalive=True, kind="direct-endpoint",
+                       alias="selected", source={"execution": "bound"})
+        endpoint = ssh_endpoint_from_mapping(mapping)
+        self.assertEqual(asdict(remote_dev.endpoint_from(endpoint)), mapping)
+        argv = remote_dev.ssh_argv(endpoint)
+        self.assertEqual(argv[argv.index("-i") + 1], "selected-key")
+        self.assertEqual(argv[argv.index("-l") + 1], "worker")
+        self.assertIn("ConnectTimeout=4", argv)
+
     def test_native_endpoint_overrides_preserve_routing_and_runtime_policy(self):
         Endpoint = remote_dev.require_transport()["Endpoint"]
         original = Endpoint(HOST, PORT, root="/bound-root", cwd="/old-cwd",

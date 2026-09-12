@@ -10,7 +10,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 import yaml
@@ -163,6 +163,46 @@ class ModelScopeTraeProjectionTests(unittest.TestCase):
             )
         self.assertEqual(self.foreign.read_text(encoding="utf-8"), "foreign-skill-body\n")
         self.assertEqual(sync.check_modelscope_trae(), [])
+
+    def test_foreign_skill_at_canonical_name_is_preserved_and_reported(self) -> None:
+        target = self.claude_skills / "modelscope" / "SKILL.md"
+        target.write_text("# My personal ModelScope skill\n", encoding="utf-8")
+        with redirect_stderr(io.StringIO()) as error:
+            self.assertEqual(sync.main([]), 1)
+        self.assertIn("not a generated shim", error.getvalue())
+        self.assertEqual(target.read_text(encoding="utf-8"), "# My personal ModelScope skill\n")
+
+    def test_projection_rejects_linked_directories_without_writing_outside(self) -> None:
+        outside = self.root / "outside"
+        outside.mkdir()
+        sentinel = outside / "SKILL.md"
+        sentinel.write_text("outside content\n", encoding="utf-8")
+        for target, generate in (
+            (self.claude_skills / "modelscope", sync.sync_shims),
+            (self.projected, sync.sync_modelscope_trae),
+        ):
+            with self.subTest(target=target):
+                if target.exists():
+                    (target / "SKILL.md").unlink()
+                    target.rmdir()
+                if os.name == "nt":
+                    proc = subprocess.run(
+                        ["cmd", "/c", "mklink", "/J", str(target), str(outside)],
+                        capture_output=True,
+                    )
+                    self.assertEqual(proc.returncode, 0, proc.stderr)
+                else:
+                    target.symlink_to(outside, target_is_directory=True)
+                try:
+                    with self.assertRaisesRegex(sync.ProjectionConflict, "linked projection path"):
+                        generate()
+                    self.assertEqual(sentinel.read_text(encoding="utf-8"), "outside content\n")
+                    self.assertEqual(list(outside.iterdir()), [sentinel])
+                finally:
+                    if os.name == "nt":
+                        target.rmdir()
+                    else:
+                        target.unlink()
 
     def test_generate_is_idempotent(self) -> None:
         sync.sync_modelscope_trae()

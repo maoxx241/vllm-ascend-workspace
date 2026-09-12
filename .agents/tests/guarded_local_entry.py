@@ -1,4 +1,4 @@
-"""Test-only guard: deny network and remote-dev/MCP imports.
+"""Test-only guard: deny network and remote transport/MCP imports.
 
 Usable as a sitecustomize module (survives `os.execve` of the same
 interpreter) or as `python guarded_local_entry.py <script> ...`.
@@ -36,7 +36,7 @@ class NoForeignProvider(importlib.abc.MetaPathFinder):
         if fullname == "vaws_coordinator.service" and os.environ.get("ACCEPTANCE_FORBID_COORDINATOR_SERVICE"):
             events.append({"kind": "forbidden_import", "module": fullname})
             raise ImportError("local-only task lifecycle must not start the coordinator service")
-        if fullname == "core" or fullname.startswith("core.") or fullname == "mcp" or fullname.startswith("mcp."):
+        if fullname == "remote_dev.core.ssh_transport" or fullname == "remote_dev.mcp" or fullname.startswith("remote_dev.mcp.") or fullname == "mcp" or fullname.startswith("mcp."):
             events.append({"kind": "forbidden_import", "module": fullname})
             raise ImportError("local task entry must not import an external provider or MCP SDK")
 
