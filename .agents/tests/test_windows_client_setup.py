@@ -85,7 +85,7 @@ def test_kimi_code_uses_native_home_and_discovers_scoped_project_mcp(tmp_path, m
     assert setup.kimi_home() / "config.toml" in plan["files"]
     assert plan["launch_argv"] == ["kimi"]
     assert plan["launch_cwd"] == str(project)
-    assert setup.kimi_home() / "mcp.json" not in plan["files"]
+    assert json.loads(plan["files"][setup.kimi_home() / "mcp.json"])["mcpServers"]["existing"] == {}
     servers = json.loads(plan["files"][project / ".kimi-code/mcp.json"])["mcpServers"]
     assert servers["vaws-task"]["toolTimeoutMs"] == 600000
     assert "type" not in servers["vaws-task"]

@@ -69,6 +69,11 @@ def main(argv=None) -> int:
     args, options = parser.parse_known_args(argv)
     try:
         target = workspace(Path.cwd(), os.environ.get("CLAUDE_PROJECT_DIR"))
+        if args.kind in PROVIDERS:
+            import asyncio
+            from vaws_mcp_runtime import serve
+            asyncio.run(serve(args.kind, target))
+            return 0
         command, environment = launch_plan(args.kind, target, options, os.environ)
         # Claude exposes this file only to SessionStart. Use the native
         # channel for subsequent shell tools, alongside the coordinator's

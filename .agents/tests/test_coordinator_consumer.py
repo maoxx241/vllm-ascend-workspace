@@ -473,7 +473,8 @@ class ClientSetupTests(unittest.TestCase):
         self.assertEqual(data["mcp_servers"]["remote_dev"]["command"], "user-command")
         self.assertEqual(data["mcp_servers"]["remote_dev"]["args"], ["user-argument"])
         self.assertEqual(data["mcp_servers"]["other"], {"command": "other-command"})
-        self.assertEqual(data["mcp_servers"]["vaws_task"]["args"], ["-m", "vaws_coordinator", "task-server"])
+        self.assertEqual(data["mcp_servers"]["vaws_task"]["args"],
+                         [str(self.setup.ROOT / ".agents/scripts/vaws_native_mcp.py"), "task"])
         config.write_text(files[config])
         self.assertNotIn(config, self.setup.configuration("codex", self.project))
 

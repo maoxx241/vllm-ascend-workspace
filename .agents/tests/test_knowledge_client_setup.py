@@ -34,7 +34,7 @@ def test_all_clients_receive_knowledge_access_and_only_supported_summary_events(
     monkeypatch.setattr(setup, "managed_python", lambda: sys.executable)
     monkeypatch.setenv("KIMI_CODE_HOME", str(tmp_path / "kimi-home"))
     plan = setup.build_plan(client, tmp_path, kimi_config=tmp_path / "kimi-config.toml")
-    assert plan["mcp_servers"]["vaws-knowledge"] == ["-m", "vaws_knowledge.server.mcp_server"]
+    assert plan["mcp_servers"]["vaws-knowledge"] == [str(tmp_path / ".agents/scripts/vaws_native_mcp.py"), "knowledge"]
     if client == "kimi":
         hooks = setup.tomllib.loads(plan["files"][tmp_path / "kimi-config.toml"])["hooks"]
         assert "SessionStart" in {entry["event"] for entry in hooks}
