@@ -5,8 +5,8 @@ Status: current
 Run the workspace's local Python tests with visible progress and retained evidence:
 
 ```powershell
-python .agents/scripts/vaws_deps.py sync --locked --group dev
-uv run python .agents/scripts/local_tests.py --jobs 2 --timeout 600
+uv run --no-project python .agents/scripts/vaws_deps.py sync --locked --group dev
+uv run --no-project python .agents/scripts/local_tests.py --jobs 2 --timeout 600
 ```
 
 The default selection runs each workspace test file separately and each skill's
@@ -15,9 +15,9 @@ repository-relative files/directories to narrow the selection. These commands
 run local control-plane tests; device execution remains in managed remote runs.
 
 ```powershell
-uv run python .agents/scripts/local_tests.py .agents/tests/test_local_tests.py --heartbeat 5
-uv run python .agents/scripts/local_tests.py .agents/tests --pytest-arg=-x
-uv run python .agents/scripts/local_tests.py --rerun-failed .vaws-local/test-runs/<run>/summary.json
+uv run --no-project python .agents/scripts/local_tests.py .agents/tests/test_local_tests.py --heartbeat 5
+uv run --no-project python .agents/scripts/local_tests.py .agents/tests --pytest-arg=-x
+uv run --no-project python .agents/scripts/local_tests.py --rerun-failed .vaws-local/test-runs/<run>/summary.json
 ```
 
 The runner prints start, periodic running and completion lines to stderr with the

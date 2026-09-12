@@ -91,7 +91,7 @@ class EnvironmentTests(unittest.TestCase):
             "VAWS_AGENT_SESSIONS_DIR": "/tmp/explicit-registry",
             "VAWS_HOST_QUEUE_MODULE": "/tmp/host.py",
         })
-        self.assertEqual(env["VAWS_AGENT_SESSIONS_DIR"], str(Path("/tmp/explicit-registry").resolve()))
+        self.assertEqual(Path(env["VAWS_AGENT_SESSIONS_DIR"]).resolve(), Path("/tmp/explicit-registry").resolve())
         self.assertNotIn("VAWS_HOST_QUEUE_MODULE", env)
 
     def test_relative_registry_path_uses_the_shared_workspace(self) -> None:

@@ -6,7 +6,6 @@ from contextlib import contextmanager
 import hashlib
 import json
 import math
-import os
 from pathlib import Path
 import signal
 import subprocess
@@ -14,6 +13,8 @@ import sys
 import time
 import uuid
 import xml.etree.ElementTree as ET
+
+from remote_dev.core.local_process import OwnedProcess
 
 SCHEMA = 2
 FINAL = {"passed", "failed", "timed_out", "interrupted", "error", "not_run"}
@@ -49,32 +50,15 @@ def junit_counts(path: Path) -> dict:
 
 @contextmanager
 def owned_process(command: list[str], **kwargs):
-    if os.name == "nt":
-        from vaws_windows import owned_process as windows_process
-        with windows_process(command, **kwargs) as process:
-            yield process
-        return
-    process = subprocess.Popen(command, start_new_session=True, **kwargs)
-    try:
-        yield process
-    finally:
-        # Always drain this group, including grandchildren left by a failed test.
-        try:
-            os.killpg(process.pid, signal.SIGTERM)
-        except ProcessLookupError:
-            pass
-        try:
-            process.wait(timeout=0.5)
-        except subprocess.TimeoutExpired:
-            pass
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        process.wait(timeout=5)
+    # The CLI has already entered its prepared dependency environment. Reuse
+    # the package's Windows job and POSIX group ownership, including cleanup
+    # after the direct child exits, instead of maintaining another signal path.
+    with OwnedProcess(command, **kwargs) as owner:
+        yield owner.process
 
 
 def select_cases(root: Path, selections: list[str], split: str) -> list[str]:
+    root = Path(root).resolve()
     selections = selections or [".agents/tests", *[
         str(path.relative_to(root)) for path in sorted((root / ".agents/skills").glob("*/tests"))
     ]]

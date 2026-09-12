@@ -84,7 +84,7 @@ class LocalTestRunnerTests(unittest.TestCase):
         with redirect_stdout(output):
             code = runner.main(self.root, ["--rerun-failed", first["summary"]])
         second = json.loads(output.getvalue())
-        self.assertEqual(code, 0)
+        self.assertEqual(code, 0, second)
         self.assertEqual([(row["case"], row["status"]) for row in second["cases"]], [("test_flaky.py", "passed")])
         self.assertNotEqual(second["summary"], first["summary"])
         output = io.StringIO()
@@ -92,6 +92,34 @@ class LocalTestRunnerTests(unittest.TestCase):
             code = runner.main(self.root, ["--rerun-failed", second["summary"]])
         self.assertEqual(code, 0)
         self.assertEqual(json.loads(output.getvalue())["status"], "nothing_to_rerun")
+
+    def test_rerun_resolves_checkout_alias_without_accepting_outside_paths(self):
+        physical = self.root / "physical checkout"
+        physical.mkdir()
+        (physical / ".vaws-local").mkdir()
+        (physical / "test_flaky.py").write_text(
+            "from pathlib import Path\ndef test_flaky():\n    assert Path('.vaws-local/fixed').exists()\n",
+            encoding="utf-8")
+        first, code = runner.run(physical, ["test_flaky.py"], progress=io.StringIO())
+        self.assertEqual(code, 1)
+        alias = self.root / "checkout alias"
+        if os.name == "nt":
+            import _winapi
+            _winapi.CreateJunction(str(physical), str(alias))
+            self.addCleanup(os.rmdir, alias)
+        else:
+            alias.symlink_to(physical, target_is_directory=True)
+        (physical / ".vaws-local/fixed").touch()
+        output = io.StringIO()
+        with redirect_stdout(output):
+            code = runner.main(alias, ["--rerun-failed", first["summary"]])
+        result = json.loads(output.getvalue())
+        self.assertEqual(code, 0, result)
+        self.assertEqual([(row["case"], row["status"]) for row in result["cases"]],
+                         [("test_flaky.py", "passed")])
+        (self.root / "outside.py").write_text("def test_outside(): pass\n", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "inside the repository"):
+            runner.select_cases(alias, ["../outside.py"], "file")
 
     def test_crashed_pytest_child_drains_grandchild_and_preserves_exit(self):
         self.write("test_crash.py", """import os, subprocess, sys
