@@ -777,14 +777,13 @@ def build_plan(client, project, *, kimi_config=None, task_only=False, kimi_sessi
         if changed:
             files[path] = text
     if client == "kimi":
+        from vaws_kimi_config import add_kimi_user_mcp, kimi_session_setup_enabled, migrate_kimi_hooks
         path = kimi_config or kimi_home() / "config.toml"
         original = path.read_text(encoding="utf-8") if path.exists() else ""
         project_key = hashlib.sha256(str(project).encode()).hexdigest()[:16]
-        marker = "# BEGIN VAWS session-" + project_key + "\n"
-        previous = original.split(marker, 1)[-1].split("# END VAWS session-" + project_key, 1)[0] if marker in original else ""
         # Official Kimi 0.42 does not understand SessionSetup. Preserve an
         # explicit extension choice on repair, and never enable it implicitly.
-        extended = kimi_session_setup or 'event = "SessionSetup"' in previous
+        extended = kimi_session_setup or kimi_session_setup_enabled(original, project, ROOT, parse_command=hook_argv)
         command = local_hook_command(["uv", "run", "--no-project", "python",
                                       str(ROOT / ".agents/scripts/vaws_kimi_session_setup.py"),
                                       "--project", str(project)]) if extended else groups["SessionStart"][0]["hooks"][0]["command"]
@@ -796,7 +795,7 @@ def build_plan(client, project, *, kimi_config=None, task_only=False, kimi_sessi
         )
         files[path] = managed_toml_text(original, "session-" + project_key, body)
         if extended:
-            from vaws_kimi_config import add_kimi_user_mcp
+            files[path] = migrate_kimi_hooks(files[path], project, ROOT, parse_command=hook_argv)
             add_kimi_user_mcp(files, notes, project, ROOT, path.parent,
                               owned_server=owned_environment_server)
     from vaws_native_setup_config import add_native_setup
