@@ -26,7 +26,8 @@ remotes, not replacements for community upstreams.
 | Workspace initialization or client wiring | `.agents/skills/repo-init/SKILL.md` |
 | Start a native CLI in an independent editing directory | `.agents/scripts/vaws_client.py CLIENT` |
 | Local fleet monitor lifecycle | `.agents/skills/npu-fleet-monitor/SKILL.md`; observation is not allocation |
-| Knowledge lookup and capture | `knowledge_query`, `knowledge_explain`, `knowledge_capture` |
+| Current knowledge lookup and capture | `knowledge_query`, `knowledge_explain`, `knowledge_capture` |
+| Historical experience lookup and capture | `experience_query`, `experience_explain`, `experience_capture` |
 
 Bind default business worktrees with `vaws_session(sources=...)`, or pass
 `sources` to one `vaws_run`; an empty map runs without project sources.
@@ -61,6 +62,11 @@ conditions, evidence and uncertainty in the text without a schema. Configured
 hooks reuse the normal summary; manual capture can reuse useful existing text.
 No second summary or publishing follow-up is required. Storage and maintenance
 details are in the [knowledge contract](docs/target-state.md#54-knowledge).
+Knowledge and experience use separate stores and queries. Knowledge describes
+current conclusions and requires evidence against current code when updated.
+Experience preserves past actions, observations and outcomes; historical commands
+are clues to investigate, not current instructions. Summary hooks save experiences.
+Writing into either store does not certify a claim or promote historical content.
 For explicit knowledge maintenance, the optional package skill is available
 through its configured interpreter with `python -m vaws_knowledge skill`.
 

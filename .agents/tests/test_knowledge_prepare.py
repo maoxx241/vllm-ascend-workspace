@@ -47,6 +47,8 @@ def test_windows_owner_receives_native_paths_and_explicit_environment(monkeypatc
         "VAWS_KNOWLEDGE_CONFIG": "/mnt/d/work/.vaws-local/knowledge/service.json",
         "VAWS_KNOWLEDGE_PROJECT_ROOTS": "/mnt/d/work/.agents/knowledge",
         "VAWS_KNOWLEDGE_CANDIDATE_ROOT": "/mnt/d/work/.vaws-local/knowledge/candidate",
+        "VAWS_EXPERIENCE_PROJECT_ROOTS": "/mnt/d/work/.agents/experiences",
+        "VAWS_EXPERIENCE_CANDIDATE_ROOT": "/mnt/d/work/.vaws-local/experience/candidate",
         "VAWS_KNOWLEDGE_STATE": "/mnt/d/work/.vaws-local/knowledge/instance",
         "VAWS_KNOWLEDGE_ORIGIN_REPO": "example/repo",
     })
@@ -55,6 +57,8 @@ def test_windows_owner_receives_native_paths_and_explicit_environment(monkeypatc
     assert environment["VAWS_KNOWLEDGE_PROJECT_ROOTS"] == r"D:\work\.agents\knowledge"
     assert environment["VAWS_KNOWLEDGE_CONFIG"] == r"D:\work\.vaws-local\knowledge\service.json"
     assert environment["VAWS_KNOWLEDGE_STATE"] == r"D:\work\.vaws-local\knowledge\instance"
+    assert environment["VAWS_EXPERIENCE_PROJECT_ROOTS"] == r"D:\work\.agents\experiences"
+    assert environment["VAWS_EXPERIENCE_CANDIDATE_ROOT"] == r"D:\work\.vaws-local\experience\candidate"
     assert environment["VAWS_KNOWLEDGE_ORIGIN_REPO"] == "example/repo"
     assert environment[envs.PIN_ENV] == receipt
     assert "CUSTOM/w" in environment["WSLENV"]

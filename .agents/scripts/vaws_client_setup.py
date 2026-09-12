@@ -13,7 +13,8 @@ Three logical providers are written when needed:
   attach/finish need no manager.
 * `remote-dev` -> `python -m remote_dev.mcp.server`, which serves `remote_*`.
 * `vaws-knowledge` -> `python -m vaws_knowledge.server.mcp_server`, which
-  serves `knowledge_query` / `knowledge_explain` / `knowledge_capture`.
+  serves `knowledge_query` / `knowledge_explain` / `knowledge_capture` and
+  `experience_query` / `experience_explain` / `experience_capture`.
 
 `--task-only` writes only the vaws-task entry; it skips remote-dev and
 vaws-knowledge.
@@ -495,6 +496,8 @@ def knowledge_owner_defaults(existing, desired, checkout):
         if desired.get("env", {}).get("VAWS_KNOWLEDGE_CONFIG"):
             defaults = {"VAWS_KNOWLEDGE_PROJECT_ROOTS": ".agents/knowledge",
                         "VAWS_KNOWLEDGE_CANDIDATE_ROOT": ".vaws-local/knowledge/candidate",
+                        "VAWS_EXPERIENCE_PROJECT_ROOTS": ".agents/experiences",
+                        "VAWS_EXPERIENCE_CANDIDATE_ROOT": ".vaws-local/experience/candidate",
                         "VAWS_KNOWLEDGE_STATE": ".vaws-local/knowledge/instance"}
             for key, relative in defaults.items():
                 if key in environment and key not in desired.get("env", {}) and (
@@ -502,7 +505,8 @@ def knowledge_owner_defaults(existing, desired, checkout):
                 ):
                     environment.pop(key)
         for key in ("VAWS_KNOWLEDGE_CONFIG", "VAWS_KNOWLEDGE_PROJECT_ROOTS",
-                    "VAWS_KNOWLEDGE_CANDIDATE_ROOT", "VAWS_KNOWLEDGE_STATE"):
+                    "VAWS_KNOWLEDGE_CANDIDATE_ROOT", "VAWS_KNOWLEDGE_STATE",
+                    "VAWS_EXPERIENCE_PROJECT_ROOTS", "VAWS_EXPERIENCE_CANDIDATE_ROOT"):
             value = desired.get("env", {}).get(key)
             if key in environment and value is not None and (
                 server_command_identity(environment[key], checkout) == server_command_identity(value, checkout)

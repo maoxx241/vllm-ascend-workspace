@@ -137,6 +137,8 @@ def test_service_config_replaces_only_generated_default_root_environment(format,
         "env": {
             "VAWS_KNOWLEDGE_PROJECT_ROOTS": ".agents/knowledge",
             "VAWS_KNOWLEDGE_CANDIDATE_ROOT": "/custom/candidate" if custom_candidate else str(tmp_path / ".vaws-local/knowledge/candidate"),
+            "VAWS_EXPERIENCE_PROJECT_ROOTS": ".agents/experiences",
+            "VAWS_EXPERIENCE_CANDIDATE_ROOT": "/custom/experience" if custom_candidate else str(tmp_path / ".vaws-local/experience/candidate"),
             "VAWS_KNOWLEDGE_STATE": str(tmp_path / ".vaws-local/knowledge/instance"),
             "CUSTOM": "keep",
         },
@@ -155,7 +157,10 @@ def test_service_config_replaces_only_generated_default_root_environment(format,
     assert environment["VAWS_KNOWLEDGE_CONFIG"] == desired["env"]["VAWS_KNOWLEDGE_CONFIG"]
     assert "VAWS_KNOWLEDGE_PROJECT_ROOTS" not in environment
     assert "VAWS_KNOWLEDGE_STATE" not in environment
+    assert "VAWS_EXPERIENCE_PROJECT_ROOTS" not in environment
+    assert ("VAWS_EXPERIENCE_CANDIDATE_ROOT" in environment) is custom_candidate
     assert ("VAWS_KNOWLEDGE_CANDIDATE_ROOT" in environment) is custom_candidate
     if custom_candidate:
         assert environment["VAWS_KNOWLEDGE_CANDIDATE_ROOT"] == "/custom/candidate"
+        assert environment["VAWS_EXPERIENCE_CANDIDATE_ROOT"] == "/custom/experience"
     assert environment["CUSTOM"] == "keep"

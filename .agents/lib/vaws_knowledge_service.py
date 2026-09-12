@@ -16,6 +16,8 @@ if TYPE_CHECKING:
 
 PROJECT_ROOT_RELATIVE = ".agents/knowledge"
 CANDIDATE_ROOT_RELATIVE = ".vaws-local/knowledge/candidate"
+EXPERIENCE_PROJECT_ROOT_RELATIVE = ".agents/experiences"
+EXPERIENCE_CANDIDATE_ROOT_RELATIVE = ".vaws-local/experience/candidate"
 
 
 def origin_repo_from_url(url: str) -> str:
@@ -62,6 +64,8 @@ def knowledge_server_env(repo_root: Path) -> dict[str, str]:
     else:
         result["VAWS_KNOWLEDGE_PROJECT_ROOTS"] = str(repo_root / PROJECT_ROOT_RELATIVE)
         result["VAWS_KNOWLEDGE_CANDIDATE_ROOT"] = str(repo_root / CANDIDATE_ROOT_RELATIVE)
+        result["VAWS_EXPERIENCE_PROJECT_ROOTS"] = str(repo_root / EXPERIENCE_PROJECT_ROOT_RELATIVE)
+        result["VAWS_EXPERIENCE_CANDIDATE_ROOT"] = str(repo_root / EXPERIENCE_CANDIDATE_ROOT_RELATIVE)
         result["VAWS_KNOWLEDGE_STATE"] = str(repo_root / ".vaws-local/knowledge/instance")
     return result
 
@@ -80,7 +84,8 @@ def knowledge_owner_env(repo_root: Path) -> dict[str, str]:
     environment["VAWS_ENV_RECEIPT"] = managed_receipt(repo_root)["receipt"]
     if windows_mounted_workspace(repo_root):
         for key in ("VAWS_KNOWLEDGE_CONFIG", "VAWS_KNOWLEDGE_PROJECT_ROOTS",
-                    "VAWS_KNOWLEDGE_CANDIDATE_ROOT", "VAWS_KNOWLEDGE_STATE"):
+                    "VAWS_KNOWLEDGE_CANDIDATE_ROOT", "VAWS_KNOWLEDGE_STATE",
+                    "VAWS_EXPERIENCE_PROJECT_ROOTS", "VAWS_EXPERIENCE_CANDIDATE_ROOT"):
             if key in environment:
                 environment[key] = knowledge_owner_path(repo_root, environment[key])
         if os.environ.get("WSLENV"):
@@ -126,6 +131,7 @@ def service_config(
     *,
     project_root: Path | None = None,
     candidate_root: Path | None = None,
+    kind: str = "knowledge",
 ) -> ServiceConfig:
     from vaws_knowledge.server.layers import load_config
 
@@ -140,27 +146,44 @@ def service_config(
                 "candidate": {"root": str(repo_root / CANDIDATE_ROOT_RELATIVE)},
             },
             "identity": knowledge_identity(repo_root),
+            "experience": {"layers": {
+                "project": {"roots": [str(repo_root / EXPERIENCE_PROJECT_ROOT_RELATIVE)]},
+                "candidate": {"root": str(repo_root / EXPERIENCE_CANDIDATE_ROOT_RELATIVE)},
+            }},
         }
     if os.environ.get("VAWS_KNOWLEDGE_BACKEND"):
         mapping["backend"] = os.environ["VAWS_KNOWLEDGE_BACKEND"]
-    if project_root is not None:
-        mapping.setdefault("layers", {})["project"] = {"roots": [str(project_root)]}
-    if candidate_root is not None:
-        mapping.setdefault("layers", {})["candidate"] = {"root": str(candidate_root)}
+    if kind not in {"knowledge", "experience"}:
+        raise ValueError(f"unknown reference kind: {kind}")
+    if project_root is not None or candidate_root is not None:
+        selected = mapping if kind == "knowledge" else mapping.setdefault("experience", {})
+        if project_root is not None:
+            selected.setdefault("layers", {})["project"] = {"roots": [str(project_root)]}
+        if candidate_root is not None:
+            selected.setdefault("layers", {})["candidate"] = {"root": str(candidate_root)}
     return load_config(
         mapping,
         env={},
         path=config_path if config_path.is_file() else None,
         base_dir=repo_root,
-    )
+    ).for_kind(kind)
 
 
 def query_knowledge(*, knowledge_dir: Path, query: str, limit: int = 3) -> dict[str, Any]:
     """Keep index availability distinct from a successful query with zero results."""
-    repo = knowledge_dir.parent.parent if knowledge_dir.parent.name == ".agents" else knowledge_dir.parent
+    return _query_references(directory=knowledge_dir, query=query, limit=limit, kind="knowledge")
+
+
+def query_experience(*, experience_dir: Path, query: str, limit: int = 3) -> dict[str, Any]:
+    """Look up historical cases separately from current knowledge."""
+    return _query_references(directory=experience_dir, query=query, limit=limit, kind="experience")
+
+
+def _query_references(*, directory: Path, query: str, limit: int, kind: str) -> dict[str, Any]:
+    repo = directory.parent.parent if directory.parent.name == ".agents" else directory.parent
     try:
         from vaws_knowledge.server.query import query as package_query
-        result = package_query(service_config(repo, project_root=knowledge_dir), text=query, limit=limit)
+        result = package_query(service_config(repo, project_root=directory, kind=kind), text=query, limit=limit)
         return result.to_dict()
     except Exception as exc:
-        return {"results": [], "unavailable": True, "degraded": True, "index_detail": str(exc)}
+        return {"kind": kind, "results": [], "unavailable": True, "degraded": True, "index_detail": str(exc)}
