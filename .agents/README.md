@@ -11,8 +11,7 @@ skills. Runtime behavior belongs to the four installed components; see
   of truth; the client skill catalog provides discovery.
 - `scripts/vaws.py` forwards session/run/execution/finish to coordinator.
   Bind actual worktrees through session; use native Git for source inspection.
-- `scripts/workspace_profile.py` and repo-init manage the local username
-  document. Provisioning and runtime ownership remain in coordinator.
+- Provisioning and native task identity remain in coordinator.
 - Direct remote I/O and optional source publication use their installed owner
   APIs. Managed runs prepare their bound sources internally.
 - Knowledge lookup and capture use the package tools. `scripts/knowledge_setup.py`
@@ -42,8 +41,8 @@ management workflow before business work.
 
 `.claude/skills/` contains generated routing shims. ModelScope's Trae package is
 also generated; remaining Trae stubs link to their canonical skill. Regenerate
-with `python3 .agents/scripts/sync_claude_skills.py` and verify with `--check`.
-`python3 .agents/scripts/skill_catalog.py --help` lists catalog checks.
+with `uv run --no-project python .agents/scripts/sync_claude_skills.py` and verify with `--check`.
+`uv run --no-project python .agents/scripts/skill_catalog.py --help` lists catalog checks.
 
 Local control-plane tests belong in `.agents/tests/` or the owning business
 skill. Preserve caller coverage when moving code out of a retired skill; device

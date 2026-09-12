@@ -24,7 +24,7 @@ Agent 按任务选择工具或技能；执行引用、状态推进和报告由�
 
 ## 设计与职责
 
-后续变更以[核心设计原则](docs/target-state.md#11-agent-only-design-principles)为依据：
+后续变更以[九条设计原则](docs/design-principles.md)为依据：
 
 - 代码与命令入口完全围绕 Agent 使用设计。
 - 封闭世界故障进入所属组件代码与回归测试；有用经验可用普通 Markdown 留存，保留条件、证据和不确定性。知识按需参考，查库和录入不成为任务步骤。
@@ -38,7 +38,7 @@ Agent 按任务选择工具或技能；执行引用、状态推进和报告由�
 | 技能                       | 用途                                             | 何时使用               |
 | ------------------------ | ---------------------------------------------- | ------------------ |
 | **repo-init**            | 安装 GitHub CLI、登录 GitHub、初始化子模块、安装锁定的平台依赖、配置 Fork 和远程仓库拓扑 | 首次 clone 后初始化工作区   |
-| **npu-fleet-monitor**    | 从独立 vaws-top 仓库构建、拉起、检查或停止本地 NPU 监控页面            | 需要持续查看设备、主机和历史资源状态时 |
+| **npu-fleet-monitor**    | 使用已发布的 vaws-top 包拉起、检查或停止本地 NPU 监控页面            | 需要持续查看设备、主机和历史资源状态时 |
 | **modelscope**           | 下载、续传、查看进度并 SHA256 校验 ModelScope 模型权重                  | 需要把模型权重下载到明确目录时 |
 | **vllm-ascend-serving**  | 在远程容器上一键拉起 vLLM Ascend 推理服务，由 coordinator 管理执行和资源 | 需要在远程机器上起推理服务时     |
 | **vllm-ascend-benchmark** | 在远程容器上运行 `vllm bench serve` 性能基准测试，支持多轮预热和统计聚合     | 需要测量吞吐或延迟时 |
@@ -54,7 +54,7 @@ Agent 按任务选择工具或技能；执行引用、状态推进和报告由�
 | **ascend-operator-debug** | 将模型故障缩减为单算子并运行 dtype/shape/layout/mode 矩阵 | 需要最小化算子复现时 |
 | **ascend-triton-operator-development** | 从 PyTorch 或 GPU Triton 语义生成首个正确的 Ascend Triton 实现 | 新建或迁移 Triton 算子时 |
 | **ascend-triton-kernel-validation** | 检测 PyTorch fallback 并执行显式正确性矩阵 | 验证 Triton 候选实现时 |
-| **ascend-triton-kernel-optimization** | 在正确性门禁后执行 profiler 驱动的优化实验 | 优化已正确的 Triton kernel 时 |
+| **ascend-triton-kernel-optimization** | 根据正确性和 profiler 证据优化已选 kernel | 优化已正确的 Triton kernel 时 |
 | **ascend-triton-workflow** | 编排开发、验证、优化和 Run Manifest 证据 | 交付完整 Triton 算子生命周期时 |
 | **vllm-ascend-pd-serving** | 启动和观察一个 prefill/decode 拓扑，并做 HTTP smoke | 部署 PD 分离服务时 |
 

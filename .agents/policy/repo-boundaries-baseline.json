@@ -1,7 +1,0 @@
-{
-  "version": 1,
-  "generated_on": "2026-09-07",
-  "note": "Accepted boundary violations as of 2026-09-07, the day before the three extractions land. Every row is a real coupling that the guard would otherwise fail on; each names the extraction expected to remove it. Rules: nothing may be added here to make a new violation pass without a reviewed reason; a row whose violation no longer exists is a hard failure in --mode enforce, so a fix must delete its row in the same commit. Regenerate the mechanical parts with `--write-baseline`, which preserves removed_by and why and leaves new rows as \"unassigned\" (also a hard failure), then attribute them by hand.",
-  "accepted": [],
-  "accepted_counts_by_extraction": {}
-}

@@ -20,10 +20,9 @@ vaws-knowledge.
 
 Preservation: existing user-managed servers and unknown fields are kept.
 Generated task servers in this checkout move to the shared native owner when
-needed; user-managed launchers remain unchanged. A same-name entry whose command/args point at a path
-inside this checkout that no longer exists is rewritten (`rewritten-stale`).
-TOML follows the same rule. Stale `mcp__remote-dev__vaws_*` permission
-rules are reported, never silently rewritten.
+needed; user-managed launchers remain unchanged. A missing executable or script
+does not establish VAWS ownership. JSON and TOML keep unrelated aliases and
+native permission settings unchanged.
 """
 from __future__ import annotations
 
@@ -62,12 +61,6 @@ TASK_SERVER_NAME = "vaws-task"
 REMOTE_DEV_SERVER_NAME = "remote-dev"
 KNOWLEDGE_SERVER_NAME = "vaws-knowledge"
 HOOK_TIMEOUT_SECONDS = 12
-STALE_TOOL_PREFIX_MARKERS = (
-    "mcp__remote-dev__vaws_",
-    "mcp__remote_dev__vaws_",
-    "mcp__remote-dev__vaws.",
-    "mcp__remote_dev__vaws.",
-)
 
 
 def remote_dev_server_args():
@@ -456,39 +449,7 @@ def merge_hook_event(existing, desired, client, project):
     return result
 
 
-def _looks_like_path(value):
-    if not isinstance(value, str) or not value or value.startswith("-"):
-        return False
-    return value.startswith("/") or value.startswith(".") or "/" in value or value.endswith(".py")
 
-
-def checkout_missing_refs(entry, checkout):
-    """Paths inside ``checkout`` that the entry names but that no longer exist."""
-
-    root = Path(checkout).expanduser().resolve()
-    missing = []
-    values = [entry.get("command"), *(entry.get("args") or [])]
-    for value in values:
-        if not _looks_like_path(value):
-            continue
-        path = Path(value).expanduser()
-        if not path.is_absolute():
-            path = root / path
-        try:
-            resolved = path.resolve()
-            resolved.relative_to(root)
-        except (OSError, ValueError):
-            continue
-        if not path.exists() and not resolved.exists():
-            missing.append(str(value))
-    return missing
-
-
-def is_stale_scaffold_entry(existing, checkout, *, desired=None):
-    if (desired is not None and existing.get("args") == desired.get("args")
-            and owned_environment_server(existing, checkout)):
-        return False
-    return bool(checkout_missing_refs(existing, checkout))
 
 
 def server_command_identity(command, checkout):
@@ -500,16 +461,8 @@ def server_command_identity(command, checkout):
 
 
 def owned_workspace_interpreter(command, checkout):
-    commands = {hook_path_identity(ROOT / suffix) for suffix in (
-        ".vaws-local/venvs/linux/bin/python", ".vaws-local/venvs/win32/Scripts/python.exe",
-        ".venv/bin/python", ".venv/Scripts/python.exe")}
-    if server_command_identity(command, checkout) in commands:
-        return True
-    value = str(command).replace("\\", "/")
-    if not re.match(r"^(?:[a-zA-Z]:/|/)", value):
-        value = str(checkout).replace("\\", "/") + "/" + value
-    value = posixpath.normpath(value).casefold()
-    prefix = posixpath.normpath(str(ROOT).replace("\\", "/")).casefold() + "/.vaws-local/env-links/"
+    value = server_command_identity(command, checkout)
+    prefix = hook_path_identity(ROOT).rstrip("/") + "/.vaws-local/env-links/"
     return value.startswith(prefix) and bool(re.fullmatch(r"[0-9a-f]{64}/(?:scripts/python.exe|bin/python)", value[len(prefix):]))
 
 
@@ -575,13 +528,10 @@ def update_toml_server_command(text, key, command):
 
 
 def merge_server_entry(existing, desired, *, checkout=None):
-    """Fill missing keys from `desired`; keep a living user command/args/type.
-
-    A same-name entry whose command/args point at a path inside this checkout
-    that no longer exists is a leftover scaffold row, not a hand-written
-    server, and is rewritten.
-    """
+    """Update generated environment entries; preserve user-managed entries."""
     checkout = ROOT if checkout is None else checkout
+    if existing.get("args") != desired.get("args") or not owned_environment_server(existing, checkout):
+        return dict(existing), "preserved"
     existing = {**existing, "env": knowledge_owner_defaults(existing, desired, checkout)} if "env" in existing else existing
     if managed_environment_change(existing, desired, checkout=checkout):
         environment = {**desired.get("env", {}), **existing.get("env", {})}
@@ -593,18 +543,6 @@ def merge_server_entry(existing, desired, *, checkout=None):
         if "WSLENV" in desired.get("env", {}):
             environment = windows_interop_env(environment)
         return {**desired, **existing, "command": desired["command"], "env": environment}, "updated-managed"
-    if is_stale_scaffold_entry(existing, checkout, desired=desired):
-        merged = dict(desired)
-        for key, value in existing.items():
-            if key not in {"command", "args", "type", "env"}:
-                merged.setdefault(key, value)
-        desired_env = dict(desired.get("env") or {})
-        existing_env = dict(existing.get("env") or {})
-        if desired_env or existing_env:
-            merged["env"] = {**desired_env, **existing_env}
-            if "WSLENV" in desired_env:
-                merged["env"] = windows_interop_env(merged["env"])
-        return merged, "rewritten-stale"
     merged = {**desired, **existing}
     desired_env = dict(desired.get("env") or {})
     existing_env = dict(existing.get("env") or {})
@@ -618,9 +556,6 @@ def merge_server_entry(existing, desired, *, checkout=None):
     )
     return merged, "preserved" if preserved else None
 
-
-def stale_prefix_hits(text):
-    return [marker for marker in STALE_TOOL_PREFIX_MARKERS if marker in text]
 
 
 def mcp_server_aliases(name):
@@ -650,46 +585,18 @@ def merge_json(path, *, hooks=None, mcp=None, notes=None, client=None, project=N
             if not found_keys:
                 servers[name] = dict(desired)
                 continue
-            stale_keys = [
-                alias for alias in found_keys
-                if is_stale_scaffold_entry(servers[alias], checkout, desired=desired)
-            ]
-            if stale_keys:
+            for source_key in found_keys:
                 merged, action = merge_server_entry(
-                    servers[stale_keys[0]], desired, checkout=checkout
+                    servers[source_key], desired, checkout=checkout
                 )
-                for alias in aliases:
-                    servers.pop(alias, None)
-                servers[name] = merged
-                notes.append({
-                    "path": str(path),
-                    "server": name,
-                    "action": "rewritten-stale",
-                    "fields": ["command", "args", "type"],
-                    "reason": "stale-checkout-path",
-                })
-                continue
-            source_key = found_keys[0]
-            merged, action = merge_server_entry(
-                servers[source_key], desired, checkout=checkout
-            )
-            servers[source_key] = merged
-            if action in {"preserved", "updated-managed"}:
-                notes.append({
-                    "path": str(path),
-                    "server": name,
-                    "action": action,
-                    "fields": ["command", "args", "type"],
-                    "reason": "shared-native-owner" if action == "updated-managed" else "existing-named-server",
-                })
+                servers[source_key] = merged
+                if action in {"preserved", "updated-managed"}:
+                    notes.append({
+                        "path": str(path), "server": name, "alias": source_key,
+                        "action": action,
+                        "reason": "shared-native-owner" if action == "updated-managed" else "existing-named-server",
+                    })
     text = json.dumps(value, indent=2, ensure_ascii=False) + "\n"
-    for marker in stale_prefix_hits(text):
-        notes.append({
-            "path": str(path),
-            "action": "reported",
-            "marker": marker,
-            "reason": "stale-tool-prefix-permission",
-        })
     return text
 
 
@@ -752,6 +659,14 @@ def fill_toml_server_env(text, key, existing, desired, *, checkout=None):
     return text  # a hand-written inline env remains user-owned
 
 
+def editable_toml_server_env(text, key, existing):
+    """Only edit supported env tables, so interpreter and pin move together."""
+    if "env" not in existing:
+        return True
+    headers = {f"[mcp_servers.{key}.env]", f"[mcp_servers.{json.dumps(key)}.env]"}
+    return any(line.strip() in headers for line in text.splitlines())
+
+
 def configuration(client, project, *, kimi_config=None, task_only=False):
     return build_plan(client, project, kimi_config=kimi_config, task_only=task_only)["files"]
 
@@ -807,54 +722,25 @@ def build_plan(client, project, *, kimi_config=None, task_only=False):
             aliases = mcp_server_aliases(name)
             matching = [alias for alias in aliases if alias in existing]
             if matching:
-                generated = next((alias for alias in matching if
-                    managed_environment_change(existing[alias], entry, checkout=project)), None)
-                if generated is not None:
-                    updated = update_toml_server_command(text, generated, entry["command"])
-                    updated = fill_toml_server_env(updated, generated, existing[generated], entry, checkout=project)
-                    if updated != text:
-                        text = updated
-                        changed = True
-                        notes.append({"path": str(path), "server": name, "action": "updated-managed",
-                                      "reason": "shared-native-owner"})
-                        continue
-                if any(is_stale_scaffold_entry(existing[alias], project, desired=entry) for alias in matching):
-                    text = managed_toml_text(
-                        drop_toml_server_tables(text, *aliases),
-                        name,
-                        toml_server_body(key, entry),
-                    )
+                for alias in matching:
+                    before = text
+                    if (existing[alias].get("args") == entry.get("args")
+                            and owned_environment_server(existing[alias], project)
+                            and editable_toml_server_env(text, alias, existing[alias])):
+                        text = update_toml_server_command(text, alias, entry["command"])
+                        text = fill_toml_server_env(text, alias, existing[alias], entry, checkout=project)
+                    updated = text != before
+                    changed = changed or updated
                     notes.append({
-                        "path": str(path),
-                        "server": name,
-                        "action": "rewritten-stale",
-                        "reason": "stale-checkout-path",
+                        "path": str(path), "server": name, "alias": alias,
+                        "action": "updated-managed" if updated else "preserved",
+                        "reason": "shared-native-owner" if updated else "existing-named-server",
                     })
-                    changed = True
-                    continue
-                if name == KNOWLEDGE_SERVER_NAME or (name == TASK_SERVER_NAME and "WSLENV" in entry.get("env", {})
-                        and server_command_identity(existing[matching[0]].get("command", ""), project) == server_command_identity(entry["command"], project)):
-                    updated_text = fill_toml_server_env(text, matching[0], existing[matching[0]], entry, checkout=project)
-                    changed = changed or updated_text != text
-                    text = updated_text
-                notes.append({
-                    "path": str(path),
-                    "server": name,
-                    "action": "preserved",
-                    "reason": "existing-named-server",
-                })
                 continue
             text = managed_toml_text(text, name, toml_server_body(key, entry))
             changed = True
         if changed:
             files[path] = text
-        for marker in stale_prefix_hits(text or (path.read_text(encoding="utf-8") if path.exists() else "")):
-            notes.append({
-                "path": str(path),
-                "action": "reported",
-                "marker": marker,
-                "reason": "stale-tool-prefix-permission",
-            })
     if client == "kimi":
         path = kimi_config or kimi_home() / "config.toml"
         command = groups["SessionStart"][0]["hooks"][0]["command"]
@@ -874,27 +760,6 @@ def build_plan(client, project, *, kimi_config=None, task_only=False):
         "launch_cwd": str(project),
     }
 
-
-def drop_toml_server_tables(original, *names):
-    """Remove ``[mcp_servers.<name>]`` and dotted children for each name."""
-
-    text = original
-    for name in names:
-        if not name:
-            continue
-        prefix = f"[mcp_servers.{name}"
-        kept = []
-        skipping = False
-        for line in text.splitlines(keepends=True):
-            stripped = line.strip()
-            if stripped.startswith("[") and stripped.endswith("]"):
-                skipping = stripped.startswith(prefix) and (
-                    stripped == prefix + "]" or stripped.startswith(prefix + ".")
-                )
-            if not skipping:
-                kept.append(line)
-        text = "".join(kept)
-    return text
 
 
 def managed_toml_text(original, name, text):
@@ -955,14 +820,8 @@ def main():
         "notes": plan["notes"],
         "launch_argv": plan["launch_argv"],
         "launch_cwd": plan["launch_cwd"],
-        "stale_tool_prefix_permissions": [
-            note for note in plan["notes"] if note.get("reason") == "stale-tool-prefix-permission"
-        ],
         "preserved_servers": [
             note for note in plan["notes"] if note.get("reason") == "existing-named-server"
-        ],
-        "rewritten_servers": [
-            note for note in plan["notes"] if note.get("action") == "rewritten-stale"
         ],
         "trust_granted": False,
         "connected": False,

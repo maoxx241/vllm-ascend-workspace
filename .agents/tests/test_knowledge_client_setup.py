@@ -77,19 +77,20 @@ def test_grok_summary_preserves_foreign_stop_and_existing_session_hook(tmp_path,
 def test_generated_knowledge_owner_and_paths_migrate_without_changing_custom_values(client, tmp_path, monkeypatch):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    old_python = workspace / ".venv/bin/python"
+    old_relative = ".vaws-local/env-links/" + "a" * 64 + "/bin/python"
+    old_python = workspace / old_relative
     old_python.parent.mkdir(parents=True)
     old_python.touch()
     monkeypatch.setattr(setup, "ROOT", workspace)
     monkeypatch.setattr(setup, "managed_python", lambda: sys.executable)
     desired = {
-        "command": str(workspace / ".vaws-local/venvs/win32/Scripts/python.exe"),
+        "command": str(workspace / ".vaws-local/env-links" / ("b" * 64) / "Scripts/python.exe"),
         "args": setup.knowledge_server_args(),
         "env": {"VAWS_KNOWLEDGE_PROJECT_ROOTS": str(workspace / ".agents/knowledge"),
                 "VAWS_KNOWLEDGE_CANDIDATE_ROOT": str(workspace / ".vaws-local/knowledge/candidate")},
     }
     monkeypatch.setattr(setup, "desired_mcp_servers", lambda **kwargs: {"vaws-knowledge": desired})
-    existing = {"command": "./.venv/bin/python", "args": setup.knowledge_server_args(),
+    existing = {"command": "./" + old_relative, "args": setup.knowledge_server_args(),
                 "env": {"VAWS_KNOWLEDGE_PROJECT_ROOTS": ".agents/knowledge", "CUSTOM": "keep"},
                 "enabled_tools": ["knowledge_query"]}
     if client in {"claude", "cursor"}:
@@ -119,7 +120,7 @@ def test_generated_knowledge_owner_and_paths_migrate_without_changing_custom_val
 def test_custom_knowledge_provider_and_storage_are_preserved(tmp_path):
     existing = {"command": "custom-provider", "args": setup.knowledge_server_args(),
                 "env": {"VAWS_KNOWLEDGE_CANDIDATE_ROOT": "/custom/candidate"}}
-    desired = {"command": str(tmp_path / ".vaws-local/venvs/win32/Scripts/python.exe"),
+    desired = {"command": str(tmp_path / ".vaws-local/env-links" / ("b" * 64) / "Scripts/python.exe"),
                "args": setup.knowledge_server_args(), "env": {"VAWS_KNOWLEDGE_CANDIDATE_ROOT": str(tmp_path / "candidate")}}
     merged, action = setup.merge_server_entry(existing, desired, checkout=tmp_path)
     assert action == "preserved"
@@ -131,7 +132,7 @@ def test_custom_knowledge_provider_and_storage_are_preserved(tmp_path):
 def test_service_config_replaces_only_generated_default_root_environment(format, custom_candidate, tmp_path, monkeypatch):
     monkeypatch.setattr(setup, "ROOT", tmp_path)
     existing = {
-        "command": str(tmp_path / ".vaws-local/venvs/linux/bin/python"),
+        "command": str(tmp_path / ".vaws-local/env-links" / ("a" * 64) / "bin/python"),
         "args": setup.knowledge_server_args(),
         "env": {
             "VAWS_KNOWLEDGE_PROJECT_ROOTS": ".agents/knowledge",
@@ -141,7 +142,7 @@ def test_service_config_replaces_only_generated_default_root_environment(format,
         },
     }
     desired = {
-        "command": str(tmp_path / ".vaws-local/venvs/win32/Scripts/python.exe"),
+        "command": str(tmp_path / ".vaws-local/env-links" / ("b" * 64) / "Scripts/python.exe"),
         "args": setup.knowledge_server_args(),
         "env": {"VAWS_KNOWLEDGE_CONFIG": str(tmp_path / ".vaws-local/knowledge/service.json")},
     }

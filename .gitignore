@@ -13,15 +13,11 @@ venv/
 *.log
 *.out
 docs/superpowers/
-.claude/settings.json
-.claude/settings.local.json
+.claude/settings*.json
 .codex/*
-!.codex/
-!.codex/config.example.toml
 .kimi-code/mcp.json
 .grok/*
-!.grok/
-!.grok/config.example.toml
+.mcp.json
 .vaws-local/
 .vaws-runtime/
 .remote-code-parity/
@@ -31,8 +27,8 @@ docs/superpowers/
 .machine-inventory.json
 .worktrees/
 
-# Cursor IDE — share MCP configuration, rules, and skills only
+# Generated MCP configuration contains local environment paths.
+# Share client guidance and skill projections only.
 .cursor/*
-!.cursor/mcp.json
 !.cursor/rules/
 !.cursor/skills/

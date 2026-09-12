@@ -2,7 +2,7 @@
   "version": 1,
   "doc": "docs/tracked-path-guard.md",
   "checker": ".agents/scripts/tracked_path_check.py",
-  "why": "A tracked Markdown, YAML, JSON, or TOML file must not name an in-tree path that does not exist. After the multi-repo split, routing docs that still point at `\u002eremote-dev/state/` or a deleted coordinator tree are drift, not history.",
+  "why": "A tracked Markdown, YAML, JSON, or TOML file must not name an in-tree path that does not exist. After the multi-repo split, routing docs that still point at `.remote-dev/state/` or a deleted coordinator tree are drift, not history.",
   "format_note": "JSON, not YAML, so the guard stays stdlib-only and can run in every existing CI job without a pip install step.",
   "scan": {
     "include_suffixes": [
@@ -12,7 +12,7 @@
       ".json",
       ".toml"
     ],
-    "include_suffixes_why": "These are the tracked routing and policy surfaces an agent actually reads. Python is already covered by repo_boundary_check.py.",
+    "include_suffixes_why": "Tracked documentation and configuration can route readers to missing files.",
     "skip_roots": [
       "vllm",
       "vllm-ascend"
@@ -24,14 +24,6 @@
     "fixture_paths_why": "This guard's own tests must name dead paths as fixtures to prove detection. Nothing else belongs here: a file that genuinely needs an exemption needs a baseline row or a skip_paths entry with a why.",
     "skip_paths": [
       {
-        "path": ".agents/policy/repo-boundaries.json",
-        "why": "Rule why-strings name the departed paths whose in-tree form the boundary guard forbids. Editing them would change a sibling-owned policy."
-      },
-      {
-        "path": ".agents/tests/fixtures/cli-surface-inventory.json",
-        "why": "Historical CLI overlay fixture that intentionally names deleted \u002eremote-dev tools as substrate targets."
-      },
-      {
         "path": ".agents/policy/tracked-paths.json",
         "why": "This policy names scan roots and allow prefixes; those strings are not claims the prefixes exist as files."
       },
@@ -40,19 +32,15 @@
         "why": "The baseline must repeat the dead token it is accepting; scanning it would make every row a new violation."
       },
       {
-        "path": ".grok/config.example.toml",
-        "why": "Sibling-owned client example that names the untracked local `.grok/config.toml` copy target."
-      },
-      {
         "path": ".agents/skills/ascend-profiling-analysis/scripts/ascend_profile/knowledge/known_counterexamples.md",
-        "why": "Sibling-owned skill-script knowledge file. It names a retired helper under scripts/; this package cannot edit .agents/skills/*/scripts/."
+        "why": "Historical counterexamples in the profiling-analysis skill; excluded from this review and retained unchanged."
       }
     ],
     "skip_paths_why": "A handful of tracked policy/fixture files must name departed or external paths as data. They are listed here with a why, not hidden in the fixture exemption."
   },
   "token_prefixes": [
     ".agents/",
-    "\u002eremote-dev/",
+    ".remote-dev/",
     ".claude/",
     ".codex/",
     ".cursor/",
@@ -75,68 +63,16 @@
     {
       "prefix": "<",
       "why": "Placeholder tokens such as <session-id> or <vaws-top>/scripts/vaws-top.py are not real paths."
-    },
-    {
-      "prefix": ".agents/scripts/vaws_deps.py",
-      "why": "Sibling package lands the dependency-plane command; routing documents it before the script exists in this tree."
-    },
-    {
-      "prefix": ".agents/coordinator/",
-      "why": "Extracted to vaws-coordinator. Naming the departed root is not a claim the directory is still in this tree."
-    },
-    {
-      "prefix": ".agents/skills/vaws-top/",
-      "why": "Published path descriptor of the external vaws-top repository, not an in-tree skill."
-    },
-    {
-      "prefix": ".agents/scripts/remote_dev.py",
-      "why": "Deleted launcher. Dated audits and historical CLI census still name it."
-    },
-    {
-      "prefix": ".agents/lib/vaws_coordinator.py",
-      "why": "Renamed to vaws_coordinator_launch.py. Dated audits still name the old path."
-    },
-    {
-      "prefix": ".agents/lib/vaws_knowledge.py",
-      "why": "Historical name of the retired v1 knowledge store. Routing text may still name it."
-    },
-    {
-      "prefix": ".agents/lib/vaws_run_manifest.py",
-      "why": "Moved to vaws_coordinator.run_manifest. P6 and dated audits still name the old path as absent."
-    },
-    {
-      "prefix": ".agents/lib/vaws_code_identity.py",
-      "why": "Moved to vaws_coordinator.code_identity. Dated docs may still name the old path."
-    },
-    {
-      "prefix": ".agents/maturation/",
-      "why": "docs/target-state.md must name the deleted harness P13 forbids. The specification is not a routing claim that the directory still exists."
-    },
-    {
-      "prefix": ".agents/skills/remote-toolbox/",
-      "why": "docs/target-state.md must name the deleted skill package P13 forbids, distinct from vaws_remote_toolbox.py."
-    },
-    {
-      "prefix": ".agents/lib/vaws_remote_toolbox.py",
-      "why": "docs/target-state.md deletion inventory must name the library G3b removes. The specification is not a routing claim that the file still exists."
-    },
-    {
-      "prefix": ".agents/lib/vaws_ssh.py",
-      "why": "docs/target-state.md deletion inventory must name the SSH helper G3b removes."
-    },
-    {
-      "prefix": ".agents/scripts/remote_toolbox_stress.py",
-      "why": "docs/target-state.md and the frozen CLI historical table name the deleted stress harness."
     }
   ],
-  "allow_prefixes_why": "\u002eremote-dev/state/ is deliberately absent: that path is post-migration drift and must fail. Placeholders and untracked state roots are the only silent exceptions.",
+  "allow_prefixes_why": ".remote-dev/state/ is deliberately absent: that path is post-migration drift and must fail. Placeholders and untracked state roots are the only silent exceptions.",
   "rules": [
     {
       "id": "missing-path",
       "kind": "missing-in-tree-path",
       "severity": "error",
       "title": "Tracked docs must not name a missing in-tree path",
-      "why": "A reader who follows a `.agents/`, `docs/`, or `\u002eremote-dev/` path that is not in this tree is being routed at the pre-migration layout."
+      "why": "A reader who follows a `.agents/`, `docs/`, or `.remote-dev/` path that is not in this tree is being routed at the pre-migration layout."
     }
   ]
 }

@@ -9,8 +9,7 @@ with total cost of achieving the user's actual goal taking priority. Use tools
 for bounded operations, keep open judgment with the Agent, and treat knowledge
 as reference. Reuse valid work and internalize routine checks and recordkeeping.
 Capabilities participate on demand; these principles add no per-task checklist.
-The [core redesign](docs/vaws-core-redesign.md) includes future proposals;
-current implemented execution entries are listed below.
+Current execution entries are listed below.
 
 The canonical repository is `vllm-ascend-workspace/vllm-ascend-workspace`.
 `vllm/` and `vllm-ascend/` are Git submodules; keep `.gitmodules` on

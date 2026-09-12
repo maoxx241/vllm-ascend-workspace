@@ -3,8 +3,8 @@
 Status: current
 
 Tools produce compact outcomes and retain detailed evidence so an Agent can
-continue from a failure without recreating it. The Agent-only design principles
-in [target-state.md](target-state.md) govern this contract.
+continue from a failure without recreating it. The
+[design principles](design-principles.md) govern this contract.
 
 The complete Result Envelope v1 is implemented by
 `.agents/lib/vaws_result_envelope.py` and
@@ -16,8 +16,10 @@ The retained record identifies the attempted command, outcome, failure layer,
 observed environment, evidence references, bounded previews and any retry or
 child-result facts. Environment values that were not observed remain unknown.
 Credential values are excluded. Attribution requires evidence; unknown failures
-remain low confidence. Truncated previews point to retained text. Fan-out outcome
-is derived from its parts, and nested failures retain their originating evidence.
+remain low confidence. Truncated previews point to retained text. A failed child
+operation can invalidate business success, but successful transport calls do not
+erase a business failure or cancellation. Nested failures retain their originating
+evidence. A timeout alone does not establish a transport-layer cause.
 The library and maintainer tests enforce these invariants.
 
 Coordinator is authoritative for task identity, execution phase and resource

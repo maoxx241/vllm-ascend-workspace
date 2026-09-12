@@ -9,7 +9,6 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
-import re
 import shlex
 import subprocess
 import sys
@@ -19,9 +18,6 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-_MCP_SERVER_TABLE = re.compile(r"^\[mcp_servers\.([^.\]]+)\]\s*$", re.M)
-_PACKAGED_REMOTE_ARGS = ["-m", "remote_dev.mcp.server"]
-_STALE_RELATIVE_ARGS = [".agents/scripts/remote_dev.py", "server"]
 
 ROOT = Path(__file__).resolve().parents[2]
 LIB = ROOT / ".agents" / "lib"
@@ -79,6 +75,21 @@ def isolated_env():
 
 
 class EnvironmentTests(unittest.TestCase):
+    def test_resource_requests_preserve_explicit_zero_and_device_choices(self) -> None:
+        from vaws_task_target import run_command, service_resources
+
+        client = mock.Mock()
+        for inputs, expected in (
+            ({}, {"npu_count": 1, "service_port": 0}),
+            ({"npu_count": 0}, {"npu_count": 0, "service_port": 0}),
+            ({"devices": []}, {"devices": [], "service_port": 0}),
+            ({"devices": [], "npu_count": 0, "service_port": None}, {"devices": [], "npu_count": 0}),
+            ({"devices": [2, 3], "npu_count": 1}, {"devices": [2, 3], "npu_count": 1, "service_port": 0}),
+        ):
+            with self.subTest(inputs=inputs):
+                run_command(client, "true", resources=service_resources(**inputs))
+                client.run.assert_called_with("true", resources=expected)
+
     def test_environment_fills_the_single_registry(self) -> None:
         env = coordinator.coordinator_environment({})
         self.assertTrue(env["VAWS_AGENT_SESSIONS_DIR"].endswith("agent-sessions"))
@@ -363,211 +374,54 @@ class ClientSetupTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         return json.loads(proc.stdout)
 
-    def _mcp_tables(self, text):
-        return _MCP_SERVER_TABLE.findall(text)
-
-    def _remote_tables(self, text):
-        return [name for name in self._mcp_tables(text) if name.replace("_", "-") == "remote-dev"]
-
-    def _write_stale_toml(self, project, client, table):
-        config = project / f".{client}" / "config.toml"
-        config.parent.mkdir(parents=True)
-        config.write_text(
-            f"[mcp_servers.{table}]\n"
-            'command = "python3"\n'
-            f"args = {json.dumps(_STALE_RELATIVE_ARGS)}\n"
-            "[mcp_servers.unrelated-external]\n"
-            'command = "/usr/bin/true"\n'
-            'args = ["ok"]\n'
-        )
-        return config
-
-    def _assert_stale_remote_rewritten(self, payload, config, stale_table):
-        self.assertTrue(
-            any(
-                note.get("action") == "rewritten-stale" and note.get("server") == "remote-dev"
-                for note in payload["rewritten_servers"]
-            ),
-            payload,
-        )
-        text = config.read_text(encoding="utf-8")
-        self.assertNotIn(f"[mcp_servers.{stale_table}]", text)
-        self.assertEqual(self._remote_tables(text), ["remote_dev"])
-        self.assertIn("unrelated-external", self._mcp_tables(text))
-        data = tomllib.loads(text)
-        self.assertNotIn("remote-dev", data["mcp_servers"])
-        self.assertEqual(data["mcp_servers"]["remote_dev"]["args"], _PACKAGED_REMOTE_ARGS)
-        self.assertEqual(data["mcp_servers"]["unrelated-external"]["command"], "/usr/bin/true")
-
-    def test_json_rewrites_stale_checkout_paths(self) -> None:
-        gone = self.project / ".agents" / "scripts" / "remote_dev.py"
+    def test_json_preserves_missing_custom_command_and_both_aliases(self) -> None:
         path = self.project / ".mcp.json"
-        path.write_text(json.dumps({
-            "mcpServers": {
-                "remote-dev": {
-                    "command": "python3",
-                    "args": [str(gone), "server"],
-                    "type": "stdio",
-                }
-            }
-        }))
-        plan = self.setup.build_plan("claude", self.project)
-        data = json.loads(plan["files"][path])
-        entry = data["mcpServers"]["remote-dev"]
-        self.assertEqual(entry["args"], _PACKAGED_REMOTE_ARGS)
-        self.assertNotIn("remote_dev", data["mcpServers"])
-        self.assertTrue(
-            any(note.get("action") == "rewritten-stale" for note in plan["notes"])
-        )
+        servers = {
+            "remote-dev": {"command": "python", "args": [str(self.project / "not-installed.py")], "env": {"CUSTOM": "keep"}},
+            "remote_dev": {"command": "custom-server", "args": ["--live"], "enabled": True},
+        }
+        path.write_text(json.dumps({"mcpServers": servers}))
+        self._apply_client("claude", self.project)
+        actual = json.loads(path.read_text(encoding="utf-8"))["mcpServers"]
+        for alias, expected in servers.items():
+            self.assertEqual(actual[alias], expected)
+        self.assertIn("vaws-task", actual)
 
-    def test_json_apply_drops_underscore_stale_key(self) -> None:
-        path = self.project / ".mcp.json"
-        path.write_text(json.dumps({
-            "mcpServers": {
-                "remote_dev": {
-                    "command": "python3",
-                    "args": list(_STALE_RELATIVE_ARGS),
-                    "type": "stdio",
-                },
-                "unrelated-external": {"command": "/usr/bin/true", "args": ["ok"]},
-            }
-        }))
-        payload = self._apply_client("claude", self.project)
-        self.assertTrue(
-            any(note.get("action") == "rewritten-stale" for note in payload["rewritten_servers"]),
-            payload,
-        )
-        data = json.loads(path.read_text(encoding="utf-8"))
-        self.assertNotIn("remote_dev", data["mcpServers"])
-        self.assertEqual(data["mcpServers"]["remote-dev"]["args"], _PACKAGED_REMOTE_ARGS)
-        self.assertEqual(data["mcpServers"]["unrelated-external"]["command"], "/usr/bin/true")
-
-    def test_toml_rewrites_stale_checkout_paths(self) -> None:
-        gone = self.project / ".agents" / "scripts" / "remote_dev.py"
-        config = self.project / ".codex" / "config.toml"
-        config.parent.mkdir()
-        config.write_text(
-            "[mcp_servers.remote_dev]\n"
-            'command = "python3"\n'
-            f'args = {json.dumps([str(gone), "server"])}\n'
-        )
-        plan = self.setup.build_plan("codex", self.project)
-        text = plan["files"][config]
-        data = tomllib.loads(text)
-        self.assertEqual(data["mcp_servers"]["remote_dev"]["args"], _PACKAGED_REMOTE_ARGS)
-        self.assertNotIn("remote-dev", data["mcp_servers"])
-        self.assertEqual(self._remote_tables(text), ["remote_dev"])
-        self.assertTrue(
-            any(note.get("action") == "rewritten-stale" for note in plan["notes"])
-        )
-
-    def test_toml_apply_drops_hyphen_stale_table(self) -> None:
+    def test_toml_preserves_missing_custom_command_and_both_aliases(self) -> None:
         for client in ("codex", "grok"):
             with self.subTest(client=client):
                 project = self.project / client
                 project.mkdir()
-                config = self._write_stale_toml(project, client, "remote-dev")
-                payload = self._apply_client(client, project)
-                self._assert_stale_remote_rewritten(payload, config, "remote-dev")
-
-    def test_toml_apply_drops_underscore_stale_table(self) -> None:
-        for client in ("codex", "grok"):
-            with self.subTest(client=client):
-                project = self.project / f"{client}-underscore"
-                project.mkdir()
-                config = self._write_stale_toml(project, client, "remote_dev")
-                payload = self._apply_client(client, project)
-                self._assert_stale_remote_rewritten(payload, config, "remote-dev")
+                config = project / f".{client}" / "config.toml"
+                config.parent.mkdir()
+                original = (
+                    "# Keep the custom provider until its script is installed.\n"
+                    '[mcp_servers."remote-dev"]\ncommand = "python"\n'
+                    f'args = {json.dumps([str(project / "not-installed.py")])}\n'
+                    '[mcp_servers.remote_dev]\ncommand = "custom-server"\nargs = ["--live"]\n'
+                )
+                config.write_text(original)
+                expected = tomllib.loads(original)["mcp_servers"]
+                self._apply_client(client, project)
                 text = config.read_text(encoding="utf-8")
-                self.assertEqual(text.count("[mcp_servers.remote_dev]"), 1)
+                actual = tomllib.loads(text)["mcp_servers"]
+                for alias, entry in expected.items():
+                    self.assertEqual(actual[alias], entry)
+                self.assertIn("# Keep the custom provider", text)
+                self.assertIn("vaws_task", actual)
 
-    def test_toml_apply_repairs_hyphen_and_underscore_duplicate(self) -> None:
-        config = self.project / ".codex" / "config.toml"
-        config.parent.mkdir()
-        config.write_text(
-            "[mcp_servers.remote-dev]\n"
-            'command = "python3"\n'
-            f"args = {json.dumps(_STALE_RELATIVE_ARGS)}\n"
-            "[mcp_servers.remote_dev]\n"
-            'command = "python3"\n'
-            f"args = {json.dumps(_PACKAGED_REMOTE_ARGS)}\n"
-        )
-        payload = self._apply_client("codex", self.project)
-        self.assertTrue(
-            any(note.get("action") == "rewritten-stale" for note in payload["rewritten_servers"]),
-            payload,
-        )
-        text = config.read_text(encoding="utf-8")
-        self.assertNotIn("[mcp_servers.remote-dev]", text)
-        self.assertEqual(self._remote_tables(text), ["remote_dev"])
-        data = tomllib.loads(text)
-        self.assertEqual(data["mcp_servers"]["remote_dev"]["args"], _PACKAGED_REMOTE_ARGS)
-
-    def test_toml_apply_preserves_external_and_living_checkout_paths(self) -> None:
-        hyphen = self.project / "hyphen-external"
-        hyphen.mkdir()
-        hyphen_config = hyphen / ".codex" / "config.toml"
-        hyphen_config.parent.mkdir(parents=True)
-        hyphen_config.write_text(
-            "[mcp_servers.remote-dev]\n"
-            'command = "python3"\n'
-            'args = ["/usr/bin/true"]\n'
-            "[mcp_servers.unrelated-external]\n"
-            'command = "/usr/bin/true"\n'
-            'args = ["ok"]\n'
-        )
-        payload = self._apply_client("codex", hyphen)
-        self.assertTrue(
-            any(
-                note.get("action") == "preserved" and note.get("server") == "remote-dev"
-                for note in payload["preserved_servers"]
-            ),
-            payload,
-        )
-        self.assertFalse(
-            any(note.get("server") == "remote-dev" for note in payload["rewritten_servers"]),
-            payload,
-        )
-        hyphen_text = hyphen_config.read_text(encoding="utf-8")
-        self.assertIn("[mcp_servers.remote-dev]", hyphen_text)
-        self.assertNotIn("[mcp_servers.remote_dev]", hyphen_text)
-        self.assertIn("unrelated-external", self._mcp_tables(hyphen_text))
-        self.assertEqual(
-            tomllib.loads(hyphen_text)["mcp_servers"]["remote-dev"]["args"],
-            ["/usr/bin/true"],
-        )
-
-        living = self.project / "living-checkout"
-        living.mkdir()
-        kept = living / ".agents" / "scripts" / "remote_dev.py"
-        kept.parent.mkdir(parents=True)
-        kept.write_text("# still here\n")
-        living_config = living / ".codex" / "config.toml"
-        living_config.parent.mkdir(parents=True)
-        living_config.write_text(
-            "[mcp_servers.remote_dev]\n"
-            'command = "python3"\n'
-            f'args = {json.dumps([str(kept), "server"])}\n'
-        )
-        payload = self._apply_client("codex", living)
-        self.assertTrue(
-            any(
-                note.get("action") == "preserved" and note.get("server") == "remote-dev"
-                for note in payload["preserved_servers"]
-            ),
-            payload,
-        )
-        self.assertFalse(
-            any(note.get("server") == "remote-dev" for note in payload["rewritten_servers"]),
-            payload,
-        )
-        living_text = living_config.read_text(encoding="utf-8")
-        self.assertIn("[mcp_servers.remote_dev]", living_text)
-        self.assertNotIn("[mcp_servers.remote-dev]", living_text)
-        self.assertEqual(
-            tomllib.loads(living_text)["mcp_servers"]["remote_dev"]["args"],
-            [str(kept), "server"],
-        )
+    def test_environment_link_owner_accepts_windows_and_wsl_spelling(self) -> None:
+        key = "a" * 64
+        with mock.patch.object(self.setup, "ROOT", Path("C:/workspace")):
+            for command in (
+                f"C:/workspace/.vaws-local/env-links/{key}/Scripts/python.exe",
+                f"/mnt/c/workspace/.vaws-local/env-links/{key}/Scripts/python.exe",
+                f"../.vaws-local/env-links/{key}/Scripts/python.exe",
+            ):
+                self.assertTrue(self.setup.owned_workspace_interpreter(command, "C:/workspace/child"), command)
+            self.assertFalse(self.setup.owned_workspace_interpreter(
+                f"C:/workspace-other/.vaws-local/env-links/{key}/Scripts/python.exe", "C:/workspace"))
+            self.assertFalse(self.setup.owned_workspace_interpreter("C:/workspace/.venv/Scripts/python.exe", "C:/workspace"))
 
     def test_json_setup_is_idempotent_on_fixtures(self) -> None:
         first = self.setup.configuration("claude", self.project)
@@ -598,7 +452,7 @@ class ClientSetupTests(unittest.TestCase):
         config.write_text(files[config])
         self.assertNotIn(config, self.setup.configuration("codex", self.project))
 
-    def test_stale_tool_prefix_permissions_are_reported_not_rewritten(self) -> None:
+    def test_permission_settings_remain_unchanged(self) -> None:
         settings = self.project / ".claude/settings.local.json"
         settings.parent.mkdir()
         settings.write_text(json.dumps({
@@ -608,7 +462,6 @@ class ClientSetupTests(unittest.TestCase):
         plan = self.setup.build_plan("claude", self.project)
         text = plan["files"][settings]
         self.assertIn("mcp__remote-dev__vaws_session", text)
-        self.assertTrue(any(note.get("reason") == "stale-tool-prefix-permission" for note in plan["notes"]))
         self.assertIn("mcp__remote-dev__vaws_session", json.loads(text)["permissions"]["allow"])
 
     def test_preview_does_not_write(self) -> None:

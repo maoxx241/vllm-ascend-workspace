@@ -5,9 +5,12 @@ Status: current
 Run the workspace's local Python tests with visible progress and retained evidence:
 
 ```powershell
-uv run --no-project python .agents/scripts/vaws_deps.py sync --locked --group dev
+uv run --no-project python .agents/scripts/vaws_deps.py sync --packages-only --locked --group dev
 uv run --no-project python .agents/scripts/local_tests.py --jobs 2 --timeout 600
 ```
+
+`--packages-only` prepares the test dependencies without preparing or starting
+the knowledge service. Ordinary workspace setup keeps the full default sync.
 
 The default selection runs each workspace test file separately and each skill's
 test directory as one suite. Use `--split file` to isolate every file, or provide

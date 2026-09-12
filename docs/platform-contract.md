@@ -27,6 +27,11 @@ process cwd is set before its first tool call. Native desktop clients continue
 to own their UI's Local/Worktree choice; a session hook cannot move a running
 parent application.
 
+The child CLI receives the selected native environment through PATH and
+VIRTUAL_ENV. Its bare `python` and `uv run --no-project python` use that environment;
+no shell activation or global environment edit is required. Dependency updates
+prepare another environment through sync rather than changing a published one.
+
 ## Commands and files
 
 Internal commands pass an argument vector, explicit cwd and environment to the
@@ -53,6 +58,8 @@ A shared Windows-mounted WSL workspace has one Windows coordinator and knowledge
 owner. It must use a verified Windows environment, not a path constructed using
 Linux's Python ABI. Independent native editing copies have ordinary `.git`
 directories, avoiding absolute linked-worktree pointers from the other OS.
+Empty uninitialized submodules remain uninitialized; source is not fetched merely
+to start a workspace editing task. Initialized submodules keep independent state.
 
 Prepared dependency environments have content identities including lock inputs,
 effective dependency selection and the actual Python platform/ABI. Published
@@ -70,8 +77,8 @@ completed package environment when model/index preparation is unavailable.
 
 ## Verification boundaries
 
-Native Windows and macOS CI exercise the same behavior tests. Linux CI also
-covers the minimum supported Python where relevant. WSL is supplementary evidence
+Native Windows and macOS CI exercise the same behavior tests on Python 3.13.
+Linux CI covers the declared minimum Python 3.11. WSL is supplementary evidence
 for Windows/Linux interoperability; it is not a substitute for macOS execution.
 Behavior cases cover literal arguments, UTF-8, cwd, process lifetime, independent
 indexes and fixed environment selection. Duplicate help-string checks and

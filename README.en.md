@@ -24,7 +24,7 @@ The Agent selects the relevant tool or skill. Tools generate execution reference
 
 ## Ownership and design
 
-[Core design principles](docs/target-state.md#11-agent-only-design-principles) govern subsequent changes:
+[The nine design principles](docs/design-principles.md) govern subsequent changes:
 
 - Agent consumption is the design target for every code and command entry.
 - Deterministic failures belong in component code and regression tests. Useful lessons may be saved as ordinary Markdown with their conditions, evidence and uncertainty. Knowledge is optional reference; lookup and capture add no required task steps.
@@ -38,7 +38,7 @@ The workspace owns project materials, client wiring and business skills. `remote
 | Skill                  | Purpose                                                                                      | When to use                                                |
 | ---------------------- | -------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
 | **repo-init**          | Install GitHub CLI, authenticate, initialize submodules, install locked platform dependencies, configure forks and remote topology | After first clone                                          |
-| **npu-fleet-monitor**  | Build, start, inspect, or stop the local NPU dashboard from the standalone vaws-top repository | When continuously monitoring fleet resources and history  |
+| **npu-fleet-monitor**  | Start, inspect, or stop the local NPU dashboard using the published vaws-top package | When continuously monitoring fleet resources and history |
 | **modelscope**       | Download, resume, status-check, and SHA256-verify ModelScope model weights                  | When model weights need to be downloaded into an explicit local directory |
 | **vllm-ascend-serving** | Launch a vLLM Ascend inference service on a remote container, through coordinator-owned execution | When you need an inference service on a remote machine |
 | **vllm-ascend-benchmark** | Run `vllm bench serve` performance benchmarks on a remote container, with multi-run warmup and statistical aggregation | When measuring throughput/latency; use performance-regression for code comparisons |
@@ -54,7 +54,7 @@ The workspace owns project materials, client wiring and business skills. `remote
 | **ascend-operator-debug** | Reduce a model failure to one operator and run an explicit input/mode matrix | When building an isolated operator reproducer |
 | **ascend-triton-operator-development** | Produce a first correct Ascend Triton candidate from PyTorch or GPU Triton semantics | When creating or migrating a Triton operator |
 | **ascend-triton-kernel-validation** | Detect PyTorch fallback and execute an explicit correctness matrix | When validating an Ascend Triton candidate |
-| **ascend-triton-kernel-optimization** | Run profiler-driven optimization after correctness gates pass | When tuning a correct Ascend Triton kernel |
+| **ascend-triton-kernel-optimization** | Optimize the selected kernel using correctness and profiler evidence | When tuning a correct Ascend Triton kernel |
 | **ascend-triton-workflow** | Orchestrate development, validation, optimization, and Run Manifest evidence | When delivering an end-to-end Triton operator workflow |
 | **vllm-ascend-pd-serving** | Start and observe one prefill/decode topology with HTTP smoke checks | When deploying disaggregated PD serving |
 

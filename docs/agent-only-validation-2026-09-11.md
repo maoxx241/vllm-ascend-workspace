@@ -2,7 +2,7 @@
 
 Status: 2026-09-11 validation evidence
 
-This change applies the [core design principles](target-state.md#11-agent-only-design-principles)
+This change applies the [design principles](design-principles.md)
 to workspace entries, business reports and their runtime owner. The workspace
 delivery is [PR #143](https://github.com/vllm-ascend-workspace/vllm-ascend-workspace/pull/143);
 the owner dependency is merged [coordinator PR #15](https://github.com/vllm-ascend-workspace/vaws-coordinator/pull/15).

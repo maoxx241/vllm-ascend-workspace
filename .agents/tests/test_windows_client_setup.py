@@ -53,7 +53,7 @@ def test_foreign_encoded_command_is_not_owned():
 
 
 def test_wsl_hooks_share_windows_task_owner_and_keep_literal_paths(monkeypatch, selected_environment):
-    monkeypatch.setattr(setup, "managed_python", lambda: "/mnt/d/work/.vaws-local/venvs/win32/Scripts/python.exe")
+    monkeypatch.setattr(setup, "managed_python", lambda: "/mnt/d/work/.vaws-local/env-links/" + "a" * 64 + "/Scripts/python.exe")
     monkeypatch.setattr(setup, "ROOT", PurePosixPath("/mnt/d/work"))
     monkeypatch.setattr(setup, "windows_mounted_workspace", lambda root: True)
     monkeypatch.setattr(setup, "local_hook_command", lambda argv: __import__("shlex").join(argv))
@@ -93,9 +93,9 @@ def test_kimi_code_uses_native_home_and_discovers_scoped_project_mcp(tmp_path, m
 
 def test_generated_task_owner_migrates_without_rewriting_user_provider_or_policy(monkeypatch):
     monkeypatch.setattr(setup,"ROOT",PurePosixPath("/mnt/d/work"))
-    existing={"command":"/mnt/d/work/.vaws-local/venvs/linux/bin/python", "args":setup.task_server_args(),
+    existing={"command":"/mnt/d/work/.vaws-local/env-links/" + "a" * 64 + "/bin/python", "args":setup.task_server_args(),
               "env":{"CUSTOM":"kept"}, "enabled_tools":["vaws_execution"]}
-    desired={"command":"/mnt/d/work/.vaws-local/venvs/win32/Scripts/python.exe", "args":setup.task_server_args(),"env":{}}
+    desired={"command":"/mnt/d/work/.vaws-local/env-links/" + "b" * 64 + "/Scripts/python.exe", "args":setup.task_server_args(),"env":{}}
     merged,action=setup.merge_server_entry(existing,desired)
     assert action == "updated-managed"
     assert merged["command"] == desired["command"]
@@ -113,8 +113,8 @@ def test_wsl_setup_replaces_native_spelling_and_keeps_one_owned_hook(monkeypatch
     import shlex
     monkeypatch.setattr(setup, "ROOT", PurePosixPath("/mnt/d/work"))
     monkeypatch.setattr(setup, "OWNED_HOOK_SCRIPT", PurePosixPath("/mnt/d/work/.agents/hooks/vaws_session.py"))
-    native = {"command": r"D:\work\.vaws-local\venvs\win32\Scripts\python.exe", "args": setup.task_server_args()}
-    desired = {"command": "/mnt/d/work/.vaws-local/venvs/win32/Scripts/python.exe", "args": setup.task_server_args()}
+    native = {"command": "D:\\work\\.vaws-local\\env-links\\" + "a" * 64 + "\\Scripts\\python.exe", "args": setup.task_server_args()}
+    desired = {"command": "/mnt/d/work/.vaws-local/env-links/" + "a" * 64 + "/Scripts/python.exe", "args": setup.task_server_args()}
     assert setup.merge_server_entry(native, desired)[0]["command"] == desired["command"]
     old_command = shlex.join([native["command"], r"D:\work\.agents\hooks\vaws_session.py", "--client", "codex", "--project", r"D:\work\project"])
     new_command = shlex.join([desired["command"], r"D:\work\.agents\hooks\vaws_session.py", "--client", "codex", "--project", r"D:\work\project"])
@@ -127,11 +127,11 @@ def test_wsl_setup_replaces_native_spelling_and_keeps_one_owned_hook(monkeypatch
 
 def test_shared_kimi_migrates_generated_servers_and_preserves_custom_values(monkeypatch):
     monkeypatch.setattr(setup, "ROOT", PurePosixPath("/mnt/d/work"))
-    existing = {"command": "/mnt/d/work/.vaws-local/venvs/linux/bin/python",
+    existing = {"command": "/mnt/d/work/.vaws-local/env-links/" + "a" * 64 + "/bin/python",
                 "args": setup.remote_dev_server_args(),
                 "env": {"REMOTE_DEV_STATE_DIR": "/mnt/d/work/.vaws-local/remote-dev-state", "CUSTOM": "keep"},
                 "disabledTools": ["remote_run"]}
-    desired = {"command": "./.vaws-local/venvs/win32/Scripts/python.exe",
+    desired = {"command": "./.vaws-local/env-links/" + "b" * 64 + "/Scripts/python.exe",
                "args": setup.remote_dev_server_args(),
                "env": {"REMOTE_DEV_STATE_DIR": r"D:\work\.vaws-local\remote-dev-state"}}
     merged, action = setup.merge_server_entry(existing, desired, checkout=PurePosixPath("/mnt/d/work"))
@@ -172,19 +172,17 @@ def test_existing_json_task_alias_keeps_its_custom_registry(tmp_path):
     "./.vaws-local/venvs/win32/Scripts/python.exe",
     "../work/.venv/bin/python",
 ])
-def test_legacy_owner_uses_configuration_project_not_setup_cwd(command, tmp_path, monkeypatch):
+def test_old_layout_alone_does_not_establish_provider_ownership(command, tmp_path, monkeypatch):
     monkeypatch.setattr(setup, "ROOT", PurePosixPath("/mnt/d/work"))
     monkeypatch.chdir(tmp_path)
-    desired = {"command": "/mnt/d/work/.vaws-local/venvs/win32/Scripts/python.exe",
+    desired = {"command": "/mnt/d/work/.vaws-local/env-links/" + "b" * 64 + "/Scripts/python.exe",
                "args": setup.task_server_args()}
     existing = {"command": command, "args": setup.task_server_args()}
     merged, action = setup.merge_server_entry(existing, desired, checkout=PurePosixPath("/mnt/d/work"))
-    assert action == "updated-managed" and merged["command"] == desired["command"]
-    if command.startswith("./") or command.startswith(".\\"):
-        assert not setup.managed_environment_change(existing, desired, checkout=PurePosixPath("/mnt/d/other"))
+    assert action == "preserved" and merged == existing
 
 
-@pytest.mark.parametrize("customization", ["different-checkout", "custom-provider", "extra-args", "wrapper"])
+@pytest.mark.parametrize("customization", ["different-checkout", "custom-provider", "extra-args", "wrapper", "another-known-provider"])
 def test_live_custom_task_launcher_is_preserved(customization, tmp_path, monkeypatch):
     workspace, other = tmp_path / "workspace", tmp_path / "other"
     workspace.mkdir()
@@ -193,7 +191,7 @@ def test_live_custom_task_launcher_is_preserved(customization, tmp_path, monkeyp
     interpreter.parent.mkdir(parents=True)
     interpreter.touch()
     monkeypatch.setattr(setup, "ROOT", workspace)
-    desired = {"command": str(workspace / ".vaws-local/venvs/win32/Scripts/python.exe"),
+    desired = {"command": str(workspace / ".vaws-local/env-links" / ("b" * 64) / "Scripts/python.exe"),
                "args": setup.task_server_args()}
     existing = {"command": str(interpreter), "args": setup.task_server_args(), "enabled_tools": ["vaws_execution"]}
     checkout = workspace
@@ -208,6 +206,9 @@ def test_live_custom_task_launcher_is_preserved(customization, tmp_path, monkeyp
         (other / "my-provider").touch()
     elif customization == "extra-args":
         existing["args"] = [*setup.task_server_args(), "--custom-option"]
+    elif customization == "another-known-provider":
+        existing["command"] = str(workspace / ".vaws-local/env-links" / ("a" * 64) / "bin/python")
+        existing["args"] = setup.knowledge_server_args()
     else:
         existing["args"] = ["-c", "import runpy; runpy.run_module('vaws_coordinator')"]
     merged, action = setup.merge_server_entry(existing, desired, checkout=checkout)
@@ -217,10 +218,11 @@ def test_live_custom_task_launcher_is_preserved(customization, tmp_path, monkeyp
 
 @pytest.mark.parametrize("client", ["claude", "cursor", "codex", "grok"])
 @pytest.mark.parametrize("relative", [False, True])
-def test_setup_migrates_live_legacy_task_entry_and_preserves_configuration(client, relative, tmp_path, monkeypatch):
+def test_setup_updates_owned_task_entry_and_preserves_configuration(client, relative, tmp_path, monkeypatch):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    interpreter = workspace / ".venv/bin/python"
+    old_relative = ".vaws-local/env-links/" + "a" * 64 + "/bin/python"
+    interpreter = workspace / old_relative
     interpreter.parent.mkdir(parents=True)
     interpreter.touch()
     unrelated_cwd = tmp_path / "setup-cwd"
@@ -228,12 +230,12 @@ def test_setup_migrates_live_legacy_task_entry_and_preserves_configuration(clien
     monkeypatch.chdir(unrelated_cwd)
     monkeypatch.setattr(setup, "ROOT", workspace)
     monkeypatch.setattr(setup, "managed_python", lambda: sys.executable)
-    desired = {"command": str(workspace / ".vaws-local/venvs/win32/Scripts/python.exe"),
+    desired = {"command": str(workspace / ".vaws-local/env-links" / ("b" * 64) / "Scripts/python.exe"),
                "args": setup.task_server_args(), "env": {"DEFAULT": "added", "WSLENV": "DEFAULT/w"}}
     Path(desired["command"]).parent.mkdir(parents=True)
     Path(desired["command"]).touch()
     monkeypatch.setattr(setup, "desired_mcp_servers", lambda **kwargs: {"vaws-task": desired})
-    existing = {"command": "./.venv/bin/python" if relative else str(interpreter),
+    existing = {"command": "./" + old_relative if relative else str(interpreter),
                 "args": setup.task_server_args(), "enabled_tools": ["vaws_execution"],
                 "env": {"CUSTOM": "keep", "VAWS_AGENT_SESSIONS_DIR": str(tmp_path / "custom-registry")}}
     if client in {"claude", "cursor"}:
@@ -266,6 +268,32 @@ def test_setup_migrates_live_legacy_task_entry_and_preserves_configuration(clien
         output.write_text(content, encoding="utf-8")
     repeated = setup.build_plan(client, workspace, task_only=True)
     assert repeated["files"].get(path, rendered) == rendered
+
+
+@pytest.mark.parametrize("customization", ["inline-env", "another-known-provider"])
+def test_toml_custom_entry_preserves_interpreter_and_pin_together(customization, tmp_path, monkeypatch):
+    monkeypatch.setattr(setup, "ROOT", tmp_path)
+    old_python = str(tmp_path / ".vaws-local/env-links" / ("a" * 64) / "Scripts/python.exe")
+    new_python = str(tmp_path / ".vaws-local/env-links" / ("b" * 64) / "Scripts/python.exe")
+    existing = {"command": old_python,
+                "args": setup.knowledge_server_args() if customization == "another-known-provider" else setup.task_server_args(),
+                "env": {setup.PIN_ENV: "old-pin", "CUSTOM": "keep"}}
+    desired = {"command": new_python, "args": setup.task_server_args(),
+               "env": {setup.PIN_ENV: "new-pin", "DEFAULT": "added"}}
+    monkeypatch.setattr(setup, "desired_mcp_servers", lambda **kwargs: {"vaws-task": desired})
+    path = tmp_path / ".codex/config.toml"
+    path.parent.mkdir()
+    if customization == "inline-env":
+        content = ("[mcp_servers.vaws_task]\ncommand = " + json.dumps(old_python)
+                   + "\nargs = " + json.dumps(existing["args"])
+                   + '\nenv = { VAWS_ENV_RECEIPT = "old-pin", CUSTOM = "keep" }\n')
+    else:
+        content = setup.toml_server_body("vaws_task", existing)
+    path.write_text(content, encoding="utf-8")
+    plan = setup.build_plan("codex", tmp_path, task_only=True)
+    rendered = plan["files"].get(path, content)
+    assert rendered == content
+    assert setup.tomllib.loads(rendered)["mcp_servers"]["vaws_task"] == existing
 
 
 @pytest.mark.parametrize("client", ["claude", "codex"])

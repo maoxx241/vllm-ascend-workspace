@@ -25,7 +25,7 @@ immutable environment in the operating system's user data directory. Its key
 includes dependency inputs, Python identity, platform, architecture and selected
 groups/extras. Workspaces with identical inputs reuse that environment; changing
 dependencies prepares a new one. `uv.lock` records the resolved commits.
-CI validates the lock by running `vaws_deps.py sync --locked`. Do not copy those
+CI validates the lock with `vaws_deps.py sync --packages-only --locked --group dev`. Do not copy those
 SHAs into workflows.
 
 Sources may select release tags or validated commit revisions; `uv.lock`
@@ -69,8 +69,8 @@ uv run --no-project python .agents/scripts/vaws_deps.py sync
 not a package and is not part of `status` or its exit code.
 
 `status` and `doctor` print one JSON object on stdout. Progress goes to
-stderr. `doctor` is Result Envelope v1 (`vaws.result-envelope.v1`). That
-envelope is not `remote-dev.result.v1`. A missing `uvx` degrades
+stderr. Doctor defaults to a compact projection with a reference to its complete
+Result Envelope v1; `--full` returns the full record. A missing `uvx` degrades
 `fleet_observation`; the remedy is
 `uv run --no-project python .agents/skills/npu-fleet-monitor/scripts/manage_monitor.py deploy`.
 
@@ -87,6 +87,12 @@ After a successful install, `sync` runs the installed knowledge package's
 normal use. The JSON retains the dependency install result and reports
 `knowledge.status` and `knowledge.ready` separately. Pending knowledge does not
 change a successful dependency install's exit code or block ordinary tools.
+
+For package installation alone, `sync --packages-only` skips knowledge model and
+index preparation. The result records that preparation was not requested; it
+does not infer whether an existing knowledge instance is ready. Local CI uses
+this mode because its knowledge tests use in-memory or mocked owners. Ordinary
+sync still prepares knowledge, and real provider readiness is checked separately.
 
 Entry scripts select a prepared platform environment. Interpreter flags and `-m`
 module calls survive re-execution; native Windows launches use UTF-8 and retain
