@@ -163,6 +163,22 @@ when code or conditions change; experiences can preserve old implementations as
 historical context. Correct mistaken interpretations while retaining the observed
 evidence. Historical commands are investigation clues, not current guidance.
 
+Knowledge is maintained by fixed semantic category/entry paths; equal text does
+not merge different entries. Experience retains a stable case ID. Corrections
+keep the public path, including existing filenames: optional capture `ref`
+updates a local candidate even when its title changes, while `public_relpath`
+selects a classified knowledge entry or an existing shared experience. New
+knowledge paths can be created explicitly; shared corrections use the normal
+redacted contribution PR rather than writing a release.
+
+Optional `experience_feedback(ref, vote)` records `+1` when a published case
+helped or `-1` when it misled the work. No reason or extra summary is required.
+The package reuses configured GitHub sharing and one feedback Issue per public
+experience, with reactions per GitHub account. Repeated votes do not accumulate;
+switching the vote replaces that account's previous reaction. Feedback neither
+changes the case text nor certifies correctness, freshness or current applicability.
+It is not a task completion step.
+
 Both interfaces are optional. A title and non-empty Markdown body suffice; no frontmatter,
 fixed headings, labels, evidence form or task association is required. Preserve
 known conditions, evidence and uncertainty. Neither lookup nor capture is a

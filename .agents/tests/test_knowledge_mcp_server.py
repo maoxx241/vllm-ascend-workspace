@@ -14,7 +14,7 @@ sys.path.insert(0, str(ROOT / ".agents" / "lib"))
 from vaws_knowledge_service import knowledge_server_env  # noqa: E402
 
 TOOLS = {"knowledge_query", "knowledge_explain", "knowledge_capture",
-         "experience_query", "experience_explain", "experience_capture"}
+         "experience_query", "experience_explain", "experience_capture", "experience_feedback"}
 
 
 def _rpc(method: str, request_id: int, params: dict | None = None) -> dict:

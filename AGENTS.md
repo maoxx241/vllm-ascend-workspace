@@ -28,6 +28,7 @@ remotes, not replacements for community upstreams.
 | Local fleet monitor lifecycle | `.agents/skills/npu-fleet-monitor/SKILL.md`; observation is not allocation |
 | Current knowledge lookup and capture | `knowledge_query`, `knowledge_explain`, `knowledge_capture` |
 | Historical experience lookup and capture | `experience_query`, `experience_explain`, `experience_capture` |
+| Optional published-experience feedback | `experience_feedback(ref, vote)` with `+1` or `-1`; no reason required |
 
 Bind default business worktrees with `vaws_session(sources=...)`, or pass
 `sources` to one `vaws_run`; an empty map runs without project sources.

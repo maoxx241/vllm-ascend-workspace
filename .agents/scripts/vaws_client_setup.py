@@ -14,7 +14,7 @@ Three logical providers are written when needed:
 * `remote-dev` -> `python -m remote_dev.mcp.server`, which serves `remote_*`.
 * `vaws-knowledge` -> `python -m vaws_knowledge.server.mcp_server`, which
   serves `knowledge_query` / `knowledge_explain` / `knowledge_capture` and
-  `experience_query` / `experience_explain` / `experience_capture`.
+  `experience_query` / `experience_explain` / `experience_capture` / `experience_feedback`.
 
 `--task-only` writes only the vaws-task entry; it skips remote-dev and
 vaws-knowledge.
