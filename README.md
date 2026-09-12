@@ -10,7 +10,7 @@
 
 > 初始化这个工作区，配好 vLLM Ascend 的开发环境。
 
-`repo-init` 技能复用已有配置，安装锁定依赖并接通所选客户端。Windows PowerShell 与 WSL 可以共享同一个检出目录，启动入口自动选择各自的平台环境。Agent 使用的安装方法见 [dependency-plane.md](docs/dependency-plane.md) 和 [windows-installation.md](docs/windows-installation.md)。
+`repo-init` 技能复用已有配置，安装锁定依赖并接通所选客户端。Windows、macOS、Linux 使用同一个原生客户端入口；默认先建立独立 Git 副本，再启动 Agent。已准备的依赖按内容复用，存活客户端固定原环境。Windows 与 WSL 可共享源码，并使用同一个 Windows 托管任务 owner。参见[平台入口](docs/platform-contract.md)。Agent 使用的安装方法见 [dependency-plane.md](docs/dependency-plane.md) 和 [windows-installation.md](docs/windows-installation.md)。
 
 日常工作只需说明目标和影响结果的输入，例如：
 

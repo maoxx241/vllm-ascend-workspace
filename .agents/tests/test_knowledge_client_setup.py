@@ -3,13 +3,21 @@ import importlib.util
 import json
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
+from client_setup_fixtures import selected_runtime
 
 ROOT = Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location("knowledge_client_setup", ROOT / ".agents/scripts/vaws_client_setup.py")
 setup = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(setup)
+with patch("vaws_venv.ensure_workspace_interpreter"):
+    spec.loader.exec_module(setup)
+
+
+@pytest.fixture(autouse=True)
+def selected_environment(monkeypatch, tmp_path):
+    return selected_runtime(monkeypatch, setup, tmp_path)
 
 HOOK_FILES = {
     "codex": ".codex/hooks.json",
@@ -21,6 +29,8 @@ HOOK_FILES = {
 
 @pytest.mark.parametrize("client", ["codex", "claude", "cursor", "grok", "kimi"])
 def test_all_clients_receive_knowledge_access_and_only_supported_summary_events(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(setup, "ROOT", tmp_path)
+    monkeypatch.setattr(setup, "OWNED_HOOK_SCRIPT", tmp_path / ".agents/hooks/vaws_session.py")
     monkeypatch.setattr(setup, "managed_python", lambda: sys.executable)
     monkeypatch.setenv("KIMI_CODE_HOME", str(tmp_path / "kimi-home"))
     plan = setup.build_plan(client, tmp_path, kimi_config=tmp_path / "kimi-config.toml")
@@ -43,6 +53,8 @@ def test_all_clients_receive_knowledge_access_and_only_supported_summary_events(
 
 
 def test_grok_summary_preserves_foreign_stop_and_existing_session_hook(tmp_path, monkeypatch):
+    monkeypatch.setattr(setup, "ROOT", tmp_path)
+    monkeypatch.setattr(setup, "OWNED_HOOK_SCRIPT", tmp_path / ".agents/hooks/vaws_session.py")
     monkeypatch.setattr(setup, "managed_python", lambda: sys.executable)
     path = tmp_path / HOOK_FILES["grok"]
     path.parent.mkdir(parents=True)

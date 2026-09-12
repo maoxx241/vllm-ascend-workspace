@@ -1,81 +1,53 @@
-"""A native module entry keeps arguments and selects the platform installation."""
-import json
+"""Native entries select by immutable environment identity, without import probes."""
+import importlib.util
 import os
 from pathlib import Path
 import shutil
 import subprocess
 import sys
-import tempfile
 
+import pytest
+import vaws_environment as environments
 import vaws_venv
 
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def test_runtime_bootstrap_does_not_require_optional_knowledge(monkeypatch):
-    for key in (vaws_venv.SKIP_ENV, vaws_venv.REEXEC_ENV):
-        monkeypatch.delenv(key, raising=False)
-    monkeypatch.setattr(vaws_venv.importlib.util, "find_spec",
-                        lambda name: None if name == "vaws_knowledge" else object())
-    monkeypatch.setattr(vaws_venv, "workspace_venv_python",
-                        lambda root: (_ for _ in ()).throw(AssertionError("runtime should already be usable")))
-    vaws_venv.ensure_workspace_interpreter(repo_root=ROOT)
+def test_runtime_bootstrap_accepts_current_receipt_without_import_probes(monkeypatch):
+    monkeypatch.delenv(vaws_venv.SKIP_ENV, raising=False)
+    monkeypatch.setenv(environments.PIN_ENV, "before")
+    monkeypatch.setenv(vaws_venv.REEXEC_ENV, "current")
+    receipt = {"key": "current", "root": sys.prefix, "python": sys.executable, "receipt": "pinned"}
+    monkeypatch.setattr(vaws_venv, "native_ready", lambda root: receipt)
+    if os.name == "nt" and not sys.flags.utf8_mode:
+        pytest.skip("this fixture needs the test runner's UTF-8 mode")
+    vaws_venv.ensure_workspace_interpreter(repo_root=ROOT, packages=("not_installed_optional_package",))
+    assert os.environ[environments.PIN_ENV] == "pinned"
+    assert vaws_venv.REEXEC_ENV not in os.environ
 
 
-def test_explicit_knowledge_entry_selects_its_package_environment(monkeypatch, tmp_path):
-    for key in (vaws_venv.SKIP_ENV, vaws_venv.REEXEC_ENV):
-        monkeypatch.delenv(key, raising=False)
-    monkeypatch.setattr(vaws_venv.importlib.util, "find_spec", lambda name: None)
-    import pytest
+def test_explicit_entry_requires_ready_identity_even_with_reexec_boolean(monkeypatch, tmp_path):
+    monkeypatch.delenv(vaws_venv.SKIP_ENV, raising=False)
+    monkeypatch.delenv(environments.PIN_ENV, raising=False)
+    monkeypatch.setenv(vaws_venv.REEXEC_ENV, "1")
     with pytest.raises(SystemExit) as failure:
-        vaws_venv.ensure_workspace_interpreter(repo_root=tmp_path, packages=("vaws_knowledge",))
+        vaws_venv.ensure_workspace_interpreter(repo_root=tmp_path, packages=("json",))
     assert failure.value.code == 2
 
 
-def test_native_module_entry_preserves_unicode_arguments_and_python_flags():
-    base = Path(sys.base_prefix) / ("python.exe" if os.name == "nt" else "bin/python3")
-    assert base.is_file()
-    with tempfile.TemporaryDirectory(prefix="agent module ") as temporary:
-        directory = Path(temporary)
-        module = directory / "agent_entry.py"
-        module.write_text(
-            "from pathlib import Path\nimport json,sys\n"
-            "from vaws_venv import ensure_workspace_interpreter\n"
-            f"ensure_workspace_interpreter(repo_root=Path({str(ROOT)!r}))\n"
-            "import vaws_coordinator\n"
-            "print(json.dumps({'args':sys.argv[1:], 'utf8':sys.flags.utf8_mode, 'python':sys.executable},ensure_ascii=False))\n",
-            encoding="utf-8",
-        )
-        environment = dict(os.environ)
-        for key in ("VAWS_SKIP_VENV_REEXEC", "VAWS_VENV_REEXEC", "VIRTUAL_ENV"):
-            environment.pop(key, None)
-        environment["PYTHONPATH"] = os.pathsep.join((str(directory), str(ROOT / ".agents/lib")))
-        environment["PYTHONNOUSERSITE"] = "1"
-        reply = subprocess.run([str(base), "-X", "utf8", "-m", "agent_entry", "中文 path", "--business-option"],
-            env=environment, cwd=directory, capture_output=True, encoding="utf-8", timeout=30)
-        assert reply.returncode == 0, reply.stderr
-        data = json.loads(reply.stdout)
-        assert data["args"] == ["中文 path", "--business-option"]
-        assert data["utf8"] == 1
-        assert Path(data["python"]).absolute() == vaws_venv.workspace_venv_python(ROOT).absolute()
-
-
 def test_bootstrap_does_not_need_installed_packages(monkeypatch):
-    import importlib.util
     spec = importlib.util.spec_from_file_location("bootstrap_under_test", ROOT / ".agents/scripts/vaws_deps.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     calls = []
-    def execute(command, **kwargs):
-        calls.append((command, kwargs))
-        return subprocess.CompletedProcess(command, 0)
-    monkeypatch.setattr(module, "ensure_workspace_interpreter", lambda **kwargs: (_ for _ in ()).throw(AssertionError("bootstrap tried to re-exec")))
+    receipt = {"root": str(ROOT), "key": "f" * 64, "receipt": "ready-receipt"}
+    monkeypatch.setattr(module, "ensure_workspace_interpreter", lambda **kwargs: pytest.fail("bootstrap tried to re-exec"))
+    monkeypatch.setattr(module, "prepare_environment", lambda root, **kwargs: calls.append((root, kwargs)) or receipt)
     monkeypatch.setattr(module, "prepare_knowledge", lambda root: {"status": "pending", "ready": False})
-    monkeypatch.setattr(module.subprocess, "run", execute)
+    import vaws_environment_link
+    monkeypatch.setattr(vaws_environment_link, "link_environment", lambda *args, **kwargs: ROOT)
     assert module.main(["sync", "--locked", "--group", "dev"]) == 0
-    command, kwargs = calls[0]
-    assert command == ["uv", "sync", "--locked", "--group", "dev"]
-    assert Path(kwargs["env"]["UV_PROJECT_ENVIRONMENT"]) == ROOT / ".vaws-local/venvs" / sys.platform
+    assert calls == [(ROOT, {"install_options": ["--locked", "--group", "dev"]})]
 
 
 def test_shared_checkout_text_identity_does_not_depend_on_git_autocrlf(tmp_path):
@@ -86,9 +58,26 @@ def test_shared_checkout_text_identity_does_not_depend_on_git_autocrlf(tmp_path)
     for line_ending in (b"\n", b"\r\n"):
         source.write_bytes(b"print('platform independent')" + line_ending)
         for autocrlf in ("true", "false", "input"):
-            result = subprocess.run(
-                ["git", "-c", f"core.autocrlf={autocrlf}", "hash-object", "--path=entry.py", "entry.py"],
-                cwd=tmp_path, capture_output=True, text=True, check=True,
-            )
+            result = subprocess.run(["git", "-c", f"core.autocrlf={autocrlf}", "hash-object", "--path=entry.py", "entry.py"],
+                                    cwd=tmp_path, capture_output=True, text=True, check=True)
             identities.add(result.stdout.strip())
     assert len(identities) == 1
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows nested interpreter UTF-8 handoff")
+def test_nested_child_can_enable_utf8_with_inherited_environment_marker():
+    code = (
+        "import os,sys; from pathlib import Path; "
+        f"sys.path.insert(0,{str(ROOT / '.agents/lib')!r}); import vaws_venv; "
+        "receipt={'key':'nested','root':sys.prefix,'python':sys.executable,'receipt':'fixture'}; "
+        "vaws_venv.native_ready=lambda root:receipt; "
+        "os.environ[vaws_venv.REEXEC_ENV]='nested'; "
+        "vaws_venv.ensure_workspace_interpreter(repo_root=Path.cwd()); "
+        "print('nested-utf8',sys.flags.utf8_mode)"
+    )
+    environment = dict(os.environ, PYTHONUTF8="0")
+    environment.pop(vaws_venv.SKIP_ENV, None)
+    result = subprocess.run([sys.executable, "-c", code], env=environment,
+                            capture_output=True, text=True, timeout=15)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "nested-utf8 1"

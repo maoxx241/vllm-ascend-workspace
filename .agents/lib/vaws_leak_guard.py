@@ -34,13 +34,13 @@ if str(LIB) not in sys.path:
 
 # Reuse, rather than restate, the secret-shaped patterns that already gate
 # knowledge candidates. This module only adds the categories they miss.
-# Imported lazily so --install/--status can run before `python .agents/scripts/vaws_deps.py sync`; every scan
+# Imported lazily so --install/--status can run before `uv run --no-project python .agents/scripts/vaws_deps.py sync`; every scan
 # path calls require_knowledge_redact() and refuses if the package is absent.
 KNOWLEDGE_PACKAGE = "vaws_knowledge"
-KNOWLEDGE_REMEDY = "python .agents/scripts/vaws_deps.py sync"
+KNOWLEDGE_REMEDY = "uv run --no-project python .agents/scripts/vaws_deps.py sync"
 KNOWLEDGE_MISSING = (
     "vaws_knowledge is not importable; the leak scanner requires the "
-    "installed vaws-knowledge package. Install it with `python .agents/scripts/vaws_deps.py sync` "
+    "installed vaws-knowledge package. Install it with `uv run --no-project python .agents/scripts/vaws_deps.py sync` "
     "(or `uv run python3 .agents/scripts/tracked_leak_scan.py`, which syncs first)."
 )
 _knowledge_redact = None

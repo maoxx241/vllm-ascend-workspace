@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Hermetic tests for ascend-profiling-collection tunnel, bracket, and manifest logic.
 
-No network, no NPU, no developer HOME. Tunnel argv is checked with the real
-``ssh -G`` parser (fail if ``ssh`` is missing). Orchestration uses injected
-collaborators.
+No network, no NPU, no developer HOME. Tunnel ownership is checked at the
+remote-dev public API boundary. Orchestration uses injected collaborators.
 """
 
 from __future__ import annotations
@@ -13,8 +12,6 @@ import importlib.util
 import io
 import json
 import os
-import shutil
-import subprocess
 import sys
 import tempfile
 import unittest
@@ -85,32 +82,6 @@ class ImageEncodingTests(unittest.TestCase):
             collect._build_image_data_url(Path("missing.png"), 0)
 
 
-class FakeProcess:
-    def __init__(self, returncode: int | None = None, stderr: str = "") -> None:
-        self.returncode = returncode
-        self.stderr = io.StringIO(stderr)
-        self.terminated = False
-        self.killed = False
-        self.pid = 1_000_001
-
-    def poll(self) -> int | None:
-        return self.returncode
-
-    def terminate(self) -> None:
-        self.terminated = True
-        if self.returncode is None:
-            self.returncode = 0
-
-    def kill(self) -> None:
-        self.killed = True
-        self.returncode = -9
-
-    def wait(self, timeout: float | None = None) -> int:
-        if self.returncode is None:
-            self.returncode = 0
-        return self.returncode
-
-
 def fake_endpoint():
     return common.SshEndpoint(host="192.0.2.10", port=46001, user="root")
 
@@ -148,108 +119,45 @@ def collect_argv(tmp: str, **overrides: object) -> list[str]:
     return argv
 
 
-def _parse_ssh_g(text: str) -> dict[str, list[str]]:
-    parsed: dict[str, list[str]] = {}
-    for line in text.splitlines():
-        if not line.strip():
-            continue
-        key, _, value = line.partition(" ")
-        parsed.setdefault(key.lower(), []).append(value)
-    return parsed
+class TunnelOwnershipTests(unittest.TestCase):
+    """The skill consumes one package-owned forward and releases its context."""
 
+    class ForwardError(Exception):
+        pass
 
-def _effective_ssh_config(cmd: list[str], home: str) -> tuple[dict[str, list[str]], str]:
-    ssh = shutil.which("ssh")
-    if ssh is None:
-        raise AssertionError(
-            "ssh binary is required to parse tunnel argv; a skipped parser "
-            "test is how a dead tunnel survives"
-        )
-    result = subprocess.run(
-        [ssh, "-G", "-F", os.devnull, *cmd[1:]],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        env={**os.environ, "HOME": home},
-        check=False,
-    )
-    if result.returncode != 0:
-        raise AssertionError(
-            f"ssh -G failed (rc={result.returncode}): {(result.stderr or '')[:2000]}"
-        )
-    return _parse_ssh_g(result.stdout), result.stdout
+    def test_open_local_tunnel_delegates_endpoint_and_closes_forward(self) -> None:
+        endpoint = fake_endpoint()
+        lifecycle = []
 
-
-class TunnelArgvTests(unittest.TestCase):
-    """Assert the ``open_local_forward`` path, not a skill-built argv.
-
-    ``common.subprocess`` and ``ssh_transport.subprocess`` are the same
-    stdlib module, so two nested ``patch.object(..., "Popen")`` mocks
-    cannot be distinguished — the inner patch shadows the outer. One
-    Popen mock records every spawn. The skill must spawn ssh exactly
-    once, and that argv must be the package forward. A second skill-side
-    ``subprocess.Popen(["ssh", ...])`` makes ``len(calls) == 1`` fail.
-    If the package argv loses ``ExitOnForwardFailure`` or puts
-    ``-N``/``-L`` after ``--``, the real ``ssh -G`` parse fails the same
-    way the pre-migration hand-rolled command did.
-    """
-
-    def test_open_local_tunnel_uses_unmuxed_keepalive_forward(self) -> None:
-        import remote_dev.core.ssh_transport as ssh_transport
-
-        calls: list[list[str]] = []
-
-        def fake_popen(cmd, **_kwargs):
-            calls.append(list(cmd))
-            return FakeProcess()
-
-        connect_sock = mock.MagicMock()
-        connect_sock.__enter__.return_value = connect_sock
-        connect_sock.connect.return_value = None
+        @contextlib.contextmanager
+        def forward(_endpoint, _port):
+            lifecycle.append("enter")
+            try:
+                yield SimpleNamespace(local_port=34567, local_host="127.0.0.1")
+            finally:
+                lifecycle.append("exit")
 
         with (
-            mock.patch.object(ssh_transport.subprocess, "Popen", side_effect=fake_popen),
-            mock.patch.object(ssh_transport.socket, "socket", return_value=connect_sock),
-            mock.patch.object(ssh_transport, "_find_free_local_port", return_value=34567),
-            mock.patch.object(ssh_transport.os, "killpg", side_effect=ProcessLookupError, create=True),
-            mock.patch.object(ssh_transport, "_kill_windows_tree"),
+            mock.patch.object(common, "require_transport", return_value={"RemoteExecutionError": self.ForwardError}),
+            mock.patch.object(common, "open_local_forward", side_effect=forward) as open_forward,
         ):
-            with common.open_local_tunnel(fake_endpoint(), 8000) as tunnel:
+            with common.open_local_tunnel(endpoint, 8000) as tunnel:
                 self.assertEqual(tunnel["local_port"], 34567)
                 self.assertEqual(tunnel["base_url"], "http://127.0.0.1:34567")
+                self.assertEqual(lifecycle, ["enter"])
+            open_forward.assert_called_once_with(endpoint, 8000)
+        self.assertEqual(lifecycle, ["enter", "exit"])
 
-        self.assertEqual(len(calls), 1, calls)
-        cmd = calls[0]
-        self.assertEqual(cmd[0], "ssh")
-        sep = cmd.index("--")
-        self.assertEqual(cmd[sep + 1 :], ["192.0.2.10"])
-        for token in ("ExitOnForwardFailure=yes", "-N", "-L"):
-            self.assertLess(cmd.index(token), sep, token)
-
-        with tempfile.TemporaryDirectory() as home:
-            cfg, raw = _effective_ssh_config(cmd, home)
-        self.assertEqual(cfg.get("exitonforwardfailure"), ["yes"])
-        forwards = [item.replace("[", "").replace("]", "") for item in cfg.get("localforward") or []]
-        self.assertTrue(
-            any("127.0.0.1:34567" in item and "127.0.0.1:8000" in item for item in forwards),
-            raw,
-        )
-        self.assertEqual(cfg.get("sessiontype"), ["none"])
-        self.assertEqual(cfg.get("controlmaster"), ["false"])
-        self.assertEqual(cfg.get("serveraliveinterval"), ["30"])
-        self.assertEqual(cfg.get("serveralivecountmax"), ["10"])
-
-    def test_open_local_tunnel_raises_when_ssh_exits_before_listen(self) -> None:
-        import remote_dev.core.ssh_transport as ssh_transport
-
-        def fake_popen(cmd, **_kwargs):
-            return FakeProcess(returncode=255, stderr="bind: Address already in use")
-
-        with mock.patch.object(ssh_transport.subprocess, "Popen", side_effect=fake_popen):
-            with self.assertRaisesRegex(RuntimeError, r"exited early"):
+    def test_open_local_tunnel_translates_package_startup_failure(self) -> None:
+        failure = self.ForwardError("forward exited early")
+        with (
+            mock.patch.object(common, "require_transport", return_value={"RemoteExecutionError": self.ForwardError}),
+            mock.patch.object(common, "open_local_forward", side_effect=failure),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "exited early") as raised:
                 with common.open_local_tunnel(fake_endpoint(), 8000):
                     self.fail("context must not yield after the tunnel dies")
+        self.assertIs(raised.exception.__cause__, failure)
 
 
 class ProfileControlTests(unittest.TestCase):

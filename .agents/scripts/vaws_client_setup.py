@@ -50,7 +50,8 @@ import tomllib  # noqa: E402
 
 from vaws_coordinator_launch import coordinator_environment
 from vaws_knowledge_service import knowledge_owner_env, knowledge_owner_path, knowledge_owner_python
-from vaws_local_owner import managed_path as _managed_path, managed_python as _managed_python, windows_interop_env
+from vaws_local_owner import managed_path as _managed_path, managed_python as _managed_python, managed_receipt, windows_interop_env, windows_mounted_workspace, accessible_windows_path
+from vaws_environment import PIN_ENV, native_ready, windows_ready, read_receipt
 from vaws_local_state import agent_sessions_root
 from vaws_remote_dev import state_dir
 
@@ -96,6 +97,7 @@ def remote_dev_env():
     return {
         "REMOTE_DEV_DEFAULT_USER": "root",
         "REMOTE_DEV_STATE_DIR": str(state_dir()),
+        PIN_ENV: native_ready(ROOT)["receipt"],
     }
 
 
@@ -110,7 +112,7 @@ def managed_python():
 
 def managed_path(value):
     """Arguments to a Windows Python process use its native mounted-drive paths."""
-    return _managed_path(value, windows=managed_python() != sys.executable)
+    return _managed_path(value, windows=windows_mounted_workspace(ROOT))
 
 
 def task_server_env():
@@ -121,7 +123,8 @@ def task_server_env():
         "VAWS_COORDINATOR_STATE_DIR",
     )
     result = {key: managed_path(env[key]) for key in keys if key in env}
-    return windows_interop_env(result) if os.name != "nt" and managed_python() != sys.executable else result
+    result[PIN_ENV] = managed_receipt(ROOT)["receipt"]
+    return windows_interop_env(result) if windows_mounted_workspace(ROOT) else result
 
 
 def existing_task_env(client, project, *, kimi_config=None):
@@ -161,7 +164,7 @@ def desired_mcp_servers(*, task_only=False):
     servers = {}
     if not task_only:
         servers[REMOTE_DEV_SERVER_NAME] = {
-            "command": sys.executable,
+            "command": native_ready(ROOT)["python"],
             "args": remote_dev_server_args(),
             "type": "stdio",
             "timeout": 600000,
@@ -193,9 +196,17 @@ def shared_kimi_servers(servers, project):
     Other clients keep their platform-native remote-dev interpreter. Knowledge
     uses the same native Windows owner for a mounted Windows workspace.
     """
-    candidate = ROOT / ".vaws-local/venvs/win32/Scripts/python.exe"
-    if not candidate.is_file():
+    if os.name != "nt" and not windows_mounted_workspace(ROOT):
         return servers
+    receipt = windows_ready(ROOT) if windows_mounted_workspace(ROOT) else native_ready(ROOT)
+    from vaws_environment_link import link_environment
+    if os.name == "nt":
+        alias = link_environment(ROOT, key=receipt["key"], environment_root=Path(receipt["root"]))
+    else:
+        alias = ROOT / ".vaws-local/env-links" / receipt["key"]
+    candidate = alias / "Scripts/python.exe"
+    if not candidate.is_file():
+        raise ValueError("the shared Windows launch alias is missing; run dependency sync in Windows")
 
     def native(value):
         value = str(value)
@@ -209,10 +220,10 @@ def shared_kimi_servers(servers, project):
         return servers
     command = "./" + ntpath.relpath(executable, cwd).replace("\\", "/")
     path_keys = {"VAWS_AGENT_SESSIONS_DIR", "VAWS_COORDINATOR_STATE_DIR", "REMOTE_DEV_STATE_DIR",
-                 "VAWS_KNOWLEDGE_CONFIG", "VAWS_KNOWLEDGE_PROJECT_ROOTS", "VAWS_KNOWLEDGE_CANDIDATE_ROOT"}
+                 "VAWS_KNOWLEDGE_CONFIG", "VAWS_KNOWLEDGE_PROJECT_ROOTS", "VAWS_KNOWLEDGE_CANDIDATE_ROOT", "VAWS_KNOWLEDGE_STATE", PIN_ENV}
     return {name: {**entry, "command": command,
-                   "env": windows_interop_env({key: (native(value) or value) if key in path_keys else value
-                           for key, value in entry.get("env", {}).items()})}
+                   "env": windows_interop_env({**{key: (native(value) or value) if key in path_keys else value
+                           for key, value in entry.get("env", {}).items()}, PIN_ENV: receipt["receipt"]})}
             for name, entry in servers.items()}
 
 
@@ -225,6 +236,7 @@ def hook_command(client, project, env=None):
         "--client", client,
         "--project", managed_path(project),
         "--agent-sessions-dir", env["VAWS_AGENT_SESSIONS_DIR"],
+        "--environment-receipt", managed_receipt(ROOT)["receipt"],
     ]
     return local_hook_command(argv)
 
@@ -472,7 +484,10 @@ def checkout_missing_refs(entry, checkout):
     return missing
 
 
-def is_stale_scaffold_entry(existing, checkout):
+def is_stale_scaffold_entry(existing, checkout, *, desired=None):
+    if (desired is not None and existing.get("args") == desired.get("args")
+            and owned_environment_server(existing, checkout)):
+        return False
     return bool(checkout_missing_refs(existing, checkout))
 
 
@@ -488,30 +503,42 @@ def owned_workspace_interpreter(command, checkout):
     commands = {hook_path_identity(ROOT / suffix) for suffix in (
         ".vaws-local/venvs/linux/bin/python", ".vaws-local/venvs/win32/Scripts/python.exe",
         ".venv/bin/python", ".venv/Scripts/python.exe")}
-    return server_command_identity(command, checkout) in commands
+    if server_command_identity(command, checkout) in commands:
+        return True
+    value = str(command).replace("\\", "/")
+    if not re.match(r"^(?:[a-zA-Z]:/|/)", value):
+        value = str(checkout).replace("\\", "/") + "/" + value
+    value = posixpath.normpath(value).casefold()
+    prefix = posixpath.normpath(str(ROOT).replace("\\", "/")).casefold() + "/.vaws-local/env-links/"
+    return value.startswith(prefix) and bool(re.fullmatch(r"[0-9a-f]{64}/(?:scripts/python.exe|bin/python)", value[len(prefix):]))
 
 
-def managed_task_command_change(existing, desired, *, checkout=None):
-    """Move this checkout's generated task server to its current native owner."""
-    checkout = ROOT if checkout is None else checkout
-    return (existing.get("args") == desired.get("args") == task_server_args()
-            and owned_workspace_interpreter(existing.get("command", ""), checkout)
-            and existing["command"] != desired["command"])
+def owned_environment_server(existing, checkout):
+    if existing.get("args") not in (task_server_args(), knowledge_server_args(), remote_dev_server_args()):
+        return False
+    if owned_workspace_interpreter(existing.get("command", ""), checkout):
+        return True
+    pin = existing.get("env", {}).get(PIN_ENV)
+    if not pin:
+        return False
+    try:
+        receipt = read_receipt(pin)
+    except (OSError, ValueError, RuntimeError):
+        return False
+    return server_command_identity(existing.get("command", ""), checkout) == hook_path_identity(receipt["python"])
 
 
-def managed_knowledge_command_change(existing, desired, *, checkout=None):
-    """Move only this checkout's generated knowledge entry to its database owner."""
-    checkout = ROOT if checkout is None else checkout
-    return (existing.get("args") == desired.get("args") == knowledge_server_args()
-            and owned_workspace_interpreter(existing.get("command", ""), checkout)
-            and existing["command"] != desired["command"])
+def managed_environment_change(existing, desired, *, checkout):
+    return (existing.get("args") == desired.get("args") and owned_environment_server(existing, checkout)
+            and (existing.get("command") != desired.get("command")
+                 or existing.get("env", {}).get(PIN_ENV) != desired.get("env", {}).get(PIN_ENV)))
 
 
 def knowledge_owner_defaults(existing, desired, checkout):
     """Normalize generated knowledge paths without replacing custom locations."""
     environment = dict(existing.get("env") or {})
     if (existing.get("args") == desired.get("args") == knowledge_server_args()
-            and owned_workspace_interpreter(existing.get("command", ""), checkout)):
+            and owned_environment_server(existing, checkout)):
         if desired.get("env", {}).get("VAWS_KNOWLEDGE_CONFIG"):
             defaults = {"VAWS_KNOWLEDGE_PROJECT_ROOTS": ".agents/knowledge",
                         "VAWS_KNOWLEDGE_CANDIDATE_ROOT": ".vaws-local/knowledge/candidate",
@@ -529,17 +556,6 @@ def knowledge_owner_defaults(existing, desired, checkout):
             ):
                 environment[key] = value
     return environment
-
-
-def shared_kimi_command_change(existing, desired, checkout):
-    """Migrate only known workspace interpreters to the shared Kimi launcher."""
-    if not str(desired.get("command", "")).startswith("./"):
-        return False
-    modules = (task_server_args(), remote_dev_server_args(), knowledge_server_args())
-    if existing.get("args") != desired.get("args") or desired.get("args") not in modules:
-        return False
-    return (owned_workspace_interpreter(existing.get("command", ""), checkout)
-            and existing["command"] != desired["command"])
 
 
 def update_toml_server_command(text, key, command):
@@ -567,23 +583,17 @@ def merge_server_entry(existing, desired, *, checkout=None):
     """
     checkout = ROOT if checkout is None else checkout
     existing = {**existing, "env": knowledge_owner_defaults(existing, desired, checkout)} if "env" in existing else existing
-    if shared_kimi_command_change(existing, desired, checkout) or managed_knowledge_command_change(existing, desired, checkout=checkout):
-        existing_env = dict(existing.get("env") or {})
-        # Preserve custom values; rewrite only another spelling of a generated
-        # default path so the shared Windows process receives a native path.
+    if managed_environment_change(existing, desired, checkout=checkout):
+        environment = {**desired.get("env", {}), **existing.get("env", {})}
+        if PIN_ENV in desired.get("env", {}):
+            environment[PIN_ENV] = desired["env"][PIN_ENV]
         for key, value in desired.get("env", {}).items():
-            if key in existing_env and hook_path_identity(existing_env[key]) == hook_path_identity(value):
-                existing_env[key] = value
-        merged_env = {**desired.get("env", {}), **existing_env}
+            if key != PIN_ENV and key in environment and hook_path_identity(environment[key]) == hook_path_identity(value):
+                environment[key] = value
         if "WSLENV" in desired.get("env", {}):
-            merged_env = windows_interop_env(merged_env)
-        return {**desired, **existing, "command": desired["command"], "env": merged_env}, "updated-managed"
-    if managed_task_command_change(existing, desired, checkout=checkout):
-        merged_env = {**desired.get("env", {}), **existing.get("env", {})}
-        if "WSLENV" in desired.get("env", {}):
-            merged_env = windows_interop_env(merged_env)
-        return {**desired, **existing, "command": desired["command"], "env": merged_env}, "updated-managed"
-    if is_stale_scaffold_entry(existing, checkout):
+            environment = windows_interop_env(environment)
+        return {**desired, **existing, "command": desired["command"], "env": environment}, "updated-managed"
+    if is_stale_scaffold_entry(existing, checkout, desired=desired):
         merged = dict(desired)
         for key, value in existing.items():
             if key not in {"command", "args", "type", "env"}:
@@ -642,7 +652,7 @@ def merge_json(path, *, hooks=None, mcp=None, notes=None, client=None, project=N
                 continue
             stale_keys = [
                 alias for alias in found_keys
-                if is_stale_scaffold_entry(servers[alias], checkout)
+                if is_stale_scaffold_entry(servers[alias], checkout, desired=desired)
             ]
             if stale_keys:
                 merged, action = merge_server_entry(
@@ -700,6 +710,8 @@ def fill_toml_server_env(text, key, existing, desired, *, checkout=None):
     removals = set(existing.get("env", {})) - set(normalized)
     replacements = {name: value for name, value in normalized.items()
                     if value != existing.get("env", {}).get(name)}
+    if owned_environment_server(existing, ROOT if checkout is None else checkout) and PIN_ENV in desired_env:
+        replacements[PIN_ENV] = desired_env[PIN_ENV]
     if "WSLENV" in desired_env:
         desired_env["WSLENV"] = windows_interop_env({**desired_env, **existing.get("env", {})})["WSLENV"]
         replacements["WSLENV"] = desired_env["WSLENV"]
@@ -754,6 +766,7 @@ def build_plan(client, project, *, kimi_config=None, task_only=False):
         summary_command = local_hook_command([
             knowledge_owner_python(ROOT), knowledge_owner_path(ROOT, ROOT / ".agents/hooks/knowledge_summary.py"),
             "--client", client, "--project", knowledge_owner_path(ROOT, project),
+            "--environment-receipt", managed_receipt(ROOT)["receipt"],
         ])
         if client == "cursor":
             groups["afterAgentResponse"] = [{"command": summary_command}]
@@ -794,20 +807,18 @@ def build_plan(client, project, *, kimi_config=None, task_only=False):
             aliases = mcp_server_aliases(name)
             matching = [alias for alias in aliases if alias in existing]
             if matching:
-                generated = next((alias for alias in matching if (
-                    managed_task_command_change(existing[alias], entry, checkout=project)
-                    or managed_knowledge_command_change(existing[alias], entry, checkout=project))), None)
+                generated = next((alias for alias in matching if
+                    managed_environment_change(existing[alias], entry, checkout=project)), None)
                 if generated is not None:
                     updated = update_toml_server_command(text, generated, entry["command"])
-                    if name == KNOWLEDGE_SERVER_NAME or "WSLENV" in entry.get("env", {}):
-                        updated = fill_toml_server_env(updated, generated, existing[generated], entry, checkout=project)
+                    updated = fill_toml_server_env(updated, generated, existing[generated], entry, checkout=project)
                     if updated != text:
                         text = updated
                         changed = True
                         notes.append({"path": str(path), "server": name, "action": "updated-managed",
                                       "reason": "shared-native-owner"})
                         continue
-                if any(is_stale_scaffold_entry(existing[alias], project) for alias in matching):
+                if any(is_stale_scaffold_entry(existing[alias], project, desired=entry) for alias in matching):
                     text = managed_toml_text(
                         drop_toml_server_tables(text, *aliases),
                         name,
@@ -897,6 +908,28 @@ def managed_toml_text(original, name, text):
     return result
 
 
+def apply_plan(plan):
+    """Write a reviewed/generated native configuration, retaining private backups."""
+    changed = []
+    for path, content in plan["files"].items():
+        if path.exists() and path.read_text(encoding="utf-8") == content:
+            continue
+        item = {"path": str(path), "sha256": hashlib.sha256(content.encode()).hexdigest()}
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if path.exists():
+            BACKUP_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
+            backup = BACKUP_DIR / (hashlib.sha256(str(path).encode()).hexdigest()[:16] + "-" + str(time.time_ns()))
+            backup.write_bytes(path.read_bytes())
+            backup.chmod(0o600)
+            item["backup"] = str(backup)
+        temporary = path.with_name(path.name + ".vaws-" + str(time.time_ns()))
+        temporary.write_text(content, encoding="utf-8")
+        temporary.chmod(0o600)
+        os.replace(temporary, path)
+        changed.append(item)
+    return changed
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--client", choices=sorted(CLIENTS), required=True)
@@ -910,25 +943,11 @@ def main():
     parser.add_argument("--apply", action="store_true", help="Write with private backups; default is preview")
     args = parser.parse_args()
     plan = build_plan(args.client, args.project, kimi_config=args.kimi_config, task_only=args.task_only)
-    changed = []
-    for path, content in plan["files"].items():
-        if path.exists() and path.read_text(encoding="utf-8") == content:
-            continue
-        item = {"path": str(path), "sha256": hashlib.sha256(content.encode()).hexdigest()}
-        if args.apply:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            if path.exists():
-                directory = BACKUP_DIR
-                directory.mkdir(parents=True, exist_ok=True, mode=0o700)
-                backup = directory / (hashlib.sha256(str(path).encode()).hexdigest()[:16] + "-" + str(time.time_ns()))
-                backup.write_bytes(path.read_bytes())
-                backup.chmod(0o600)
-                item["backup"] = str(backup)
-            temporary = path.with_name(path.name + ".vaws-" + str(time.time_ns()))
-            temporary.write_text(content)
-            temporary.chmod(0o600)
-            os.replace(temporary, path)
-        changed.append(item)
+    changed = apply_plan(plan) if args.apply else [
+        {"path": str(path), "sha256": hashlib.sha256(content.encode()).hexdigest()}
+        for path, content in plan["files"].items()
+        if not path.exists() or path.read_text(encoding="utf-8") != content
+    ]
     print(json.dumps({
         "state": "configured" if args.apply else "preview",
         "files": changed,

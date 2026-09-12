@@ -18,6 +18,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / ".agents" / "lib"))
 from vaws_venv import ensure_workspace_interpreter  # noqa: E402
+from vaws_environment import PIN_ENV  # noqa: E402
+
+_bootstrap = argparse.ArgumentParser(add_help=False)
+_bootstrap.add_argument("--environment-receipt")
+_pin, _ = _bootstrap.parse_known_args()
+if _pin.environment_receipt:
+    os.environ[PIN_ENV] = _pin.environment_receipt
 
 ensure_workspace_interpreter(repo_root=ROOT)
 
@@ -30,6 +37,7 @@ def main() -> int:
     parser.add_argument("--client", required=True)
     parser.add_argument("--project", type=Path)
     parser.add_argument("--agent-sessions-dir", default="")
+    parser.add_argument("--environment-receipt", help=argparse.SUPPRESS)
     args = parser.parse_args()
     if args.agent_sessions_dir.strip():
         os.environ["VAWS_AGENT_SESSIONS_DIR"] = str(Path(args.agent_sessions_dir).expanduser())

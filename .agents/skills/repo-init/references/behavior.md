@@ -62,7 +62,7 @@ Before mutating, ask only for choices that are still missing and affect the resu
 - unified workspace alias choice when its decision is pending
 - machine username choice when the profile is missing
 
-Authorized broad init defaults: keep current remotes if present, initialize submodules, run `python .agents/scripts/vaws_deps.py sync`, CI-pinned vllm alignment. Topology / skip-sync / keep-current remain available as overrides, not as required confirmations.
+Authorized broad init defaults: keep current remotes if present, initialize submodules, run `uv run --no-project python .agents/scripts/vaws_deps.py sync`, CI-pinned vllm alignment. Topology / skip-sync / keep-current remain available as overrides, not as required confirmations.
 
 If a username was not provided and a choice is needed, `repo_init_profile.py plan` offers:
 
@@ -113,17 +113,16 @@ The three in-process packages are not submodules. After the approved
 submodule work, run:
 
 ```
-python .agents/scripts/vaws_deps.py sync
+uv run --no-project python .agents/scripts/vaws_deps.py sync
 ```
 
-or `python3 .agents/scripts/vaws_deps.py sync`.
 
 Rules:
 
 - this step is required for remote-dev / coordinator / knowledge work
 - the packages are public git+https installs; `uv.lock` is the only pin
-- `uvx vaws-top` is a separate service and is not part of `python .agents/scripts/vaws_deps.py sync`
-- do not reimplement capability logic; after install or skip, run `python3 .agents/scripts/vaws_deps.py doctor` and name available / unavailable capabilities from that report
+- `uvx vaws-top` is a separate service and is not part of `uv run --no-project python .agents/scripts/vaws_deps.py sync`
+- do not reimplement capability logic; after install or skip, run `uv run --no-project python .agents/scripts/vaws_deps.py doctor` and name available / unavailable capabilities from that report
 
 After a successful install, `sync` calls the installed knowledge package's
 `prepare --project ROOT` entry. It prepares the local model and index and reports
@@ -132,7 +131,7 @@ index or shared update does not turn a successful package install into a failure
 MCP starts internal maintenance while alive; ordinary Agent work does not call
 prepare or sequence index and shared-update operations.
 
-`python3 .agents/scripts/knowledge_setup.py` retries preparation when requested.
+`uv run --no-project python .agents/scripts/knowledge_setup.py` retries preparation when requested.
 It preserves existing publishing choices; a new configuration enables local
 knowledge and shared downloads without a fork or GitHub login. Explicit
 `--contribute` configures public contribution, while `--read-only` disables it.
@@ -205,5 +204,5 @@ A successful run usually ends with:
 - recursive submodules initialized for authorized broad init or the requested submodule setup
 - remotes matching the user's selected topology
 - local `main` tracking the selected working remote where the user approved branch movement
-- package installation (`python .agents/scripts/vaws_deps.py sync`) completed for authorized package-dependent setup; an explicitly skipped install leaves those capabilities unavailable
+- package installation (`uv run --no-project python .agents/scripts/vaws_deps.py sync`) completed for authorized package-dependent setup; an explicitly skipped install leaves those capabilities unavailable
 - finish names capabilities from `vaws_deps.py doctor`, not from a re-derived list

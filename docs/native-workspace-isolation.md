@@ -1,6 +1,6 @@
 # 原生会话、本地工作树与执行隔离
 
-Status: proposed target design, 2026-09-12. Current behavior and remaining work are identified below.
+Status: current
 
 不同会话拥有不同任务 ID，并不意味着它们拥有不同的本地工作目录。两个
 会话从同一 checkout 启动，仍会修改同一份文件、Git index、锁文件和虚拟
@@ -61,48 +61,54 @@ hook 对配置项目的识别需要比较 Git common directory，支持仓库目
 自动来源。自动来源不覆盖同一任务的其他 attachment，已经接受的执行
 快照不变。旧记录没有来源 provenance 时，不能猜测它原本属于自动发现。
 
-这些 hook 和 attachment 修复属于本轮包变更；它们只接纳和准确记录已由
-客户端选择的 worktree，并不自动把所有新会话移动到独立目录。
+hook 和 attachment 接纳已经选择的工作目录。消费者现在还提供统一的
+CLI 启动入口，在客户端进程创建前完成隔离：
 
-顶层 workspace 的 worktree 也不自动保证 `vllm` / `vllm-ascend` 业务仓库
-已经独立初始化。绑定必须指向实际业务 checkout；不能共享另一个会话的
-index。[Git 官方文档](https://git-scm.com/docs/git-worktree)仍明确指出
-submodule 的 worktree 支持不完整。复制当前工作状态时，需要保留 staged、
-unstaged 和所需 untracked 内容，并验证原始 index 未变；不支持的递归状态
-应明确失败，不能悄悄降为只复制 HEAD。
+```text
+uv run --no-project python .agents/scripts/vaws_client.py codex
+uv run --no-project python .agents/scripts/vaws_client.py kimi --workspace PATH
+```
 
-Windows/WSL 还有可访问性边界。本轮共享 Windows 所有者支持 mounted-drive
-来源；Grok WSL 默认在 Linux home 下创建的 worktree 不属于这个已支持范围。
-这里的缺口是路径适配和来源关联，不代表 Windows 完全不能读取 Linux
-文件：独立 Git 副本可通过 WSL UNC 读取，但本轮适配器没有这个合同。
+默认创建新目录；显式目录已经存在时直接复用，不再复制。原生参数和恢复
+ID 放在 `--` 之后。新客户端不继承父进程的任务关联，真实 native hook
+负责其任务身份。桌面客户端的 Local/Worktree 选择仍由原生 UI 控制。
+
+新目录使用普通 Git clone 的独立 `.git`，本地对象可以通过 Git 复用，
+文件和 index 各自独立。入口保存当前 HEAD、staged、unstaged、普通
+untracked 内容和已初始化的递归 submodule，再比较真实 diff、status 和
+文件内容。暂存区冲突、稀疏 index 或未初始化的 submodule 会明确失败。
+被忽略的内容和私有 `.vaws-local` 运行状态不复制。已有目标绝不覆盖；
+失败的未完成目录保留供检查，不标记为 ready。
+
+Windows/WSL 仍有可访问性边界。共享 Windows 所有者支持 mounted-drive
+来源；Grok 自己在 Linux home 下创建的 worktree 不属于该范围。新的统一
+CLI 默认在项目的 mounted drive 下创建目录，不依赖 Grok 的默认位置。
 
 把 linked worktree 放到挂载盘也不自动解决问题。Windows Git 写入的
 `D:/...` 内部指针与 Linux Git 写入的 `/mnt/d/...` 指针，可能不被另一端
 理解。本机两端 Git 均未提供创建相对路径 worktree 的 CLI 选项。因此当前
-确定支持的是所有者原生 Git 能读取的 linked worktree；不能把“WSL Grok
-加一个 `--cwd`”写成已贯通的双平台隔离方案。后续需选定 Git 发现/捕获
-所有者，或实现有原生 provenance 的独立副本方案，并验证两端操作。外层
-路径字符串转换不足以替代这项验证，也不能启动第二个协调器绕开所有权。
+统一入口会把 mounted-drive 上的复制交给准备好的 Windows 解释器、Git
+和文件 API，再返回 WSL 可用的独立目录。这样也保留 Windows 目录符号
+链接的类型，避免 Linux 创建的 reparse point 在 Windows 下不可读。
+复制固定有效的 Git 换行和文件模式设置，防止两个平台把同一文件识别为
+不同修改。这里只代理一次有明确输入输出的复制，不启动管理服务。
 
-## 本地依赖环境仍需要独立改造
+## 本地依赖环境
 
-当前 `.vaws-local/venvs/<platform>` 位于各 checkout 内。入口确实指向各自
-worktree 时，它们可以隔离；两个会话使用同一目录或生成配置共同指向主目录
-解释器时，依赖仍共享。当前 `sync` 会原地更新这个环境，单凭包可 import
-也不能证明它匹配当前 lock。此部分尚未改为不可变环境。
+环境现在按平台、架构、真实 Python 版本与 ABI、lock 和有效依赖选择
+确定内容键，保存在用户目录中。相同输入复用同一完成环境。显式 `sync`
+构建缺失环境；普通入口只读取 ready receipt，不运行安装或 doctor。
 
-后续改造应按平台、架构、Python ABI、完整 lock 内容和依赖 group/extra
-选择内容键环境，使用共享包下载缓存。新环境在最终路径构建，验证后发布
-ready 标记；虚拟环境通常不可搬迁，不能直接重命名带旧 shebang 的安装目录。
-并发构建由短暂构建锁协调，不建立任务租约系统。
+安装使用固定读取的输入，在最终路径构建，验证后发布 ready 标记。并发
+构建只按内容键加构建锁。解释器先解析到实际的完整版本路径，避免 uv 的
+可变 minor-version 别名在以后升级时改变旧环境。失败的未发布环境可以
+重试；已发布环境不原地升级、不搬迁，也不由任务结束自动删除。
 
-hooks 和 MCP 进程启动后固定使用所选绝对解释器。新 lock 创建或选择另一
-环境，保留运行进程和 daemon 正在引用的旧环境；不原地升级已发布环境，
-不因新客户端版本不同而替换活跃 daemon。生成的客户端配置、WSL Windows
-所有者选择与解释器检查应一起迁移。该方案不要求每次任务启动执行 sync、
-doctor 或完整检查；相同输入只需查找已完成环境。
+hooks 和 MCP 固定解释器与 receipt。Windows/WSL 共用配置需要相对命令时，
+使用按内容键建立且永不改向的目录 junction。项目只保留显式 setup 的
+平台选择配置，不记录任务租约。WSL 读取实际 Windows receipt，不用 Linux
+ABI 猜 Windows 环境。新本地目录只继承这些依赖选择，不复制运行状态。
 
-验收应覆盖两客户端首条工具命令的不同 cwd/index、同名文件与锁文件并行
-编辑、明确 ID 恢复原目录、多个 attachment 的默认来源互不覆盖，以及依赖
-变化时旧进程模块身份不变。没有完成这些验证之前，不宣称“每个 session
-自动获得完全独立的 workspace”。
+测试覆盖首次子进程 cwd、并行 index 和同名文件、明确目录恢复、两端 Git
+状态一致、目录链接实际可读，以及依赖变化后旧进程和子进程仍加载旧环境。
+完整跨平台合同见 [platform-contract.md](platform-contract.md)。

@@ -430,7 +430,7 @@ def gh_install_plan(platform_info: Dict[str, Any]) -> Dict[str, Any]:
             }
         fallback = {
             "label": "user-space installer",
-            "commands": ["python3 .agents/skills/repo-init/scripts/install_gh_user.py"],
+            "commands": ["uv run --no-project python .agents/skills/repo-init/scripts/install_gh_user.py"],
             "requires_privilege": False,
         }
     elif kind in {"linux", "wsl"} and has_apt:
@@ -451,7 +451,7 @@ def gh_install_plan(platform_info: Dict[str, Any]) -> Dict[str, Any]:
         }
         fallback = {
             "label": "user-space installer",
-            "commands": ["python3 .agents/skills/repo-init/scripts/install_gh_user.py"],
+            "commands": ["uv run --no-project python .agents/skills/repo-init/scripts/install_gh_user.py"],
             "requires_privilege": False,
         }
     elif kind == "windows" and has_winget:
@@ -480,7 +480,7 @@ def gh_install_plan(platform_info: Dict[str, Any]) -> Dict[str, Any]:
         else:
             fallback = {
                 "label": "user-space installer",
-                "commands": ["python3 .agents/skills/repo-init/scripts/install_gh_user.py"],
+                "commands": ["uv run --no-project python .agents/skills/repo-init/scripts/install_gh_user.py"],
                 "requires_privilege": False,
             }
 

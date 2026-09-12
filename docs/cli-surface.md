@@ -26,6 +26,7 @@ by tests rather than repeated as instructions in every task.
 ## Current entries
 
 <!-- current-cli-surface-table -->
+
 | Entry point | Style | Verbs | Responsibility | Support role | Current target | Proposed |
 |---|---|---|---|---|---|---|
 | `.agents/hooks/knowledge_summary.py` | argparse | - | mechanics | hook | .agents/hooks/knowledge_summary.py | - |
@@ -41,6 +42,7 @@ by tests rather than repeated as instructions in every task.
 | `.agents/scripts/tracked_leak_scan.py` | argparse | - | mechanics | supported | .agents/scripts/tracked_leak_scan.py | vaws lint |
 | `.agents/scripts/tracked_path_check.py` | argparse | - | mechanics | supported | .agents/scripts/tracked_path_check.py | vaws lint |
 | `.agents/scripts/vaws.py` | argparse | status, env, hook, task-server | mechanics | supported | .agents/scripts/vaws.py | vaws task |
+| `.agents/scripts/vaws_client.py` | argparse | - | mechanics | supported | .agents/scripts/vaws_client.py | - |
 | `.agents/scripts/vaws_client_setup.py` | argparse | - | mechanics | supported | .agents/scripts/vaws_client_setup.py | vaws workspace |
 | `.agents/scripts/vaws_deps.py` | argparse | status, doctor, sync | mechanics | supported | .agents/scripts/vaws_deps.py | vaws workspace |
 | `.agents/scripts/workspace_identity.py` | argparse | summary, ensure, validate-alias, set-alias, decline-alias | mechanics | supported | .agents/scripts/workspace_identity.py | vaws workspace |
@@ -92,11 +94,15 @@ by tests rather than repeated as instructions in every task.
 | `.agents/skills/vllm-ascend-graph-debug/scripts/graph_debug_case.py` | argparse | - | mixed | supported | .agents/skills/vllm-ascend-graph-debug/scripts/graph_debug_case.py | guidance |
 | `.agents/skills/vllm-ascend-pd-serving/scripts/pd_serving.py` | argparse | start, status, stop, smoke | mixed | supported | .agents/skills/vllm-ascend-pd-serving/scripts/pd_serving.py | vaws serve |
 | `.agents/skills/vllm-ascend-performance-regression/scripts/performance_regression.py` | argparse | - | mixed | supported | .agents/skills/vllm-ascend-performance-regression/scripts/performance_regression.py | guidance |
+| `.agents/skills/vllm-ascend-serving/scripts/_serving_start.py` | argparse | - | mixed | internal | .agents/skills/vllm-ascend-serving/scripts/serving.py | - |
+| `.agents/skills/vllm-ascend-serving/scripts/_serving_status.py` | argparse | - | mixed | internal | .agents/skills/vllm-ascend-serving/scripts/serving.py | - |
+| `.agents/skills/vllm-ascend-serving/scripts/_serving_stop.py` | argparse | - | mixed | internal | .agents/skills/vllm-ascend-serving/scripts/serving.py | - |
 | `.agents/skills/vllm-ascend-serving/scripts/serving.py` | argparse | start, status, stop | mixed | supported | .agents/skills/vllm-ascend-serving/scripts/serving.py | - |
 | `.trae/skills/modelscope/scripts/download_from_modelscope.py` | argparse | - | mechanics | payload | .agents/skills/modelscope/scripts/download_from_modelscope.py | - |
 | `.trae/skills/modelscope/scripts/modelscope_auto.py` | argparse | ensure, status, verify, worker | mechanics | generated | .agents/skills/modelscope/scripts/modelscope_auto.py | - |
 | `.trae/skills/modelscope/scripts/modelscope_download_status.py` | argparse | - | mechanics | generated | .agents/skills/modelscope/scripts/modelscope_download_status.py | - |
 | `.trae/skills/modelscope/scripts/verify_modelscope_sha256.py` | argparse | - | mechanics | payload | .agents/skills/modelscope/scripts/verify_modelscope_sha256.py | - |
+
 <!-- /current-cli-surface-table -->
 
 ## Historical inventory

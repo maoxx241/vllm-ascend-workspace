@@ -7,13 +7,22 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from unittest.mock import patch
+from types import SimpleNamespace
 
 import pytest
+from client_setup_fixtures import selected_runtime
 
 ROOT = Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location("windows_client_setup", ROOT / ".agents/scripts/vaws_client_setup.py")
 setup = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(setup)
+with patch("vaws_venv.ensure_workspace_interpreter"):
+    spec.loader.exec_module(setup)
+
+
+@pytest.fixture(autouse=True)
+def selected_environment(monkeypatch, tmp_path):
+    return selected_runtime(monkeypatch, setup, tmp_path)
 
 
 @pytest.mark.skipif(os.name != "nt", reason="native Windows shell execution")
@@ -43,9 +52,10 @@ def test_foreign_encoded_command_is_not_owned():
     assert not setup.owned_hook_command("powershell.exe -EncodedCommand Zg==", "codex", ROOT)
 
 
-def test_wsl_hooks_share_windows_task_owner_and_keep_literal_paths(monkeypatch):
+def test_wsl_hooks_share_windows_task_owner_and_keep_literal_paths(monkeypatch, selected_environment):
     monkeypatch.setattr(setup, "managed_python", lambda: "/mnt/d/work/.vaws-local/venvs/win32/Scripts/python.exe")
     monkeypatch.setattr(setup, "ROOT", PurePosixPath("/mnt/d/work"))
+    monkeypatch.setattr(setup, "windows_mounted_workspace", lambda root: True)
     monkeypatch.setattr(setup, "local_hook_command", lambda argv: __import__("shlex").join(argv))
     registry = r"D:\work\.vaws-local\agent-sessions"
     command = setup.hook_command("grok", PurePosixPath("/mnt/d/work/client 中文"), {"VAWS_AGENT_SESSIONS_DIR": registry})
@@ -53,7 +63,8 @@ def test_wsl_hooks_share_windows_task_owner_and_keep_literal_paths(monkeypatch):
     assert argv[0].startswith("/mnt/d/")
     assert argv[1] == r"D:\work\.agents\hooks\vaws_session.py"
     assert argv[argv.index("--project") + 1] == "D:\\work\\client 中文"
-    assert argv[-1] == registry
+    assert argv[argv.index("--agent-sessions-dir") + 1] == registry
+    assert argv[argv.index("--environment-receipt") + 1] == selected_environment["receipt"]
     assert setup.managed_path(registry) == registry
     assert setup.hook_path_identity("/mnt/d/work/client 中文") == setup.hook_path_identity("D:\\work\\client 中文")
     with pytest.raises(ValueError, match="mounted Windows drive"):
@@ -68,6 +79,8 @@ def test_kimi_code_uses_native_home_and_discovers_scoped_project_mcp(tmp_path, m
     (setup.kimi_home() / "mcp.json").write_text('{"mcpServers":{"existing":{}}}')
     project = tmp_path / "project"
     project.mkdir()
+    monkeypatch.setattr(setup, "ROOT", project)
+    monkeypatch.setattr(setup, "OWNED_HOOK_SCRIPT", project / ".agents/hooks/vaws_session.py")
     plan = setup.build_plan("kimi", project, task_only=True)
     assert setup.kimi_home() / "config.toml" in plan["files"]
     assert plan["launch_argv"] == ["kimi"]
@@ -89,7 +102,7 @@ def test_generated_task_owner_migrates_without_rewriting_user_provider_or_policy
     assert merged["enabled_tools"] == existing["enabled_tools"]
     assert merged["env"]["CUSTOM"] == "kept"
     custom={**existing,"command":"/usr/bin/python3"}
-    assert not setup.managed_task_command_change(custom,desired)
+    assert setup.merge_server_entry(custom, desired)[0]["command"] == custom["command"]
     text='[mcp_servers.vaws_task]\ncommand="old"\nargs=["-m","vaws_coordinator","task-server"]\nenabled_tools=["vaws_execution"]\n[mcp_servers.other]\ncommand="untouched"\n'
     value=setup.tomllib.loads(setup.update_toml_server_command(text,"vaws_task",desired["command"]))
     assert value["mcp_servers"]["vaws_task"]["enabled_tools"] == ["vaws_execution"]
@@ -165,9 +178,10 @@ def test_legacy_owner_uses_configuration_project_not_setup_cwd(command, tmp_path
     desired = {"command": "/mnt/d/work/.vaws-local/venvs/win32/Scripts/python.exe",
                "args": setup.task_server_args()}
     existing = {"command": command, "args": setup.task_server_args()}
-    assert setup.managed_task_command_change(existing, desired, checkout=PurePosixPath("/mnt/d/work"))
+    merged, action = setup.merge_server_entry(existing, desired, checkout=PurePosixPath("/mnt/d/work"))
+    assert action == "updated-managed" and merged["command"] == desired["command"]
     if command.startswith("./") or command.startswith(".\\"):
-        assert not setup.managed_task_command_change(existing, desired, checkout=PurePosixPath("/mnt/d/other"))
+        assert not setup.managed_environment_change(existing, desired, checkout=PurePosixPath("/mnt/d/other"))
 
 
 @pytest.mark.parametrize("customization", ["different-checkout", "custom-provider", "extra-args", "wrapper"])
@@ -252,3 +266,92 @@ def test_setup_migrates_live_legacy_task_entry_and_preserves_configuration(clien
         output.write_text(content, encoding="utf-8")
     repeated = setup.build_plan(client, workspace, task_only=True)
     assert repeated["files"].get(path, rendered) == rendered
+
+
+@pytest.mark.parametrize("client", ["claude", "codex"])
+@pytest.mark.parametrize("provider,args", [
+    ("vaws-task", ["-m", "vaws_coordinator", "task-server"]),
+    ("remote-dev", ["-m", "remote_dev.mcp.server"]),
+    ("vaws-knowledge", ["-m", "vaws_knowledge.server.mcp_server"]),
+])
+def test_generated_provider_and_hooks_move_to_new_pin_preserving_user_fields(client, provider, args, tmp_path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setattr(setup, "ROOT", workspace)
+    hook_script = workspace / ".agents/hooks/vaws_session.py"
+    monkeypatch.setattr(setup, "OWNED_HOOK_SCRIPT", hook_script)
+    old_command = str(workspace / ".vaws-local/env-links" / ("a" * 64) / "Scripts/python.exe")
+    new_command = str(workspace / ".vaws-local/env-links" / ("b" * 64) / "Scripts/python.exe")
+    old_pin = str(tmp_path / "environments" / ("a" * 64) / ".vaws-ready.json")
+    new_pin = str(tmp_path / "environments" / ("b" * 64) / ".vaws-ready.json")
+    monkeypatch.setattr(setup, "managed_receipt", lambda root: {"receipt": new_pin})
+    monkeypatch.setattr(setup, "managed_python", lambda: new_command)
+    desired = {"command": new_command, "args": args, "env": {setup.PIN_ENV: new_pin}}
+    monkeypatch.setattr(setup, "desired_mcp_servers", lambda **kwargs: {provider: desired})
+    existing = {"command": old_command, "args": args, "enabled_tools": ["chosen_tool"],
+                "custom_policy": "keep", "env": {setup.PIN_ENV: old_pin, "CUSTOM": "keep"}}
+    key = provider.replace("-", "_")
+    path = workspace / (".mcp.json" if client == "claude" else ".codex/config.toml")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if client == "claude":
+        path.write_text(json.dumps({"mcpServers": {key: existing, "foreign": {"command": "unchanged"}}}), encoding="utf-8")
+    else:
+        text = setup.toml_server_body(key, existing).replace(
+            f"\n[mcp_servers.{key}.env]", '\nenabled_tools = ["chosen_tool"]\ncustom_policy = "keep"\n' + f"[mcp_servers.{key}.env]")
+        path.write_text("# user comment\n" + text + "\n[mcp_servers.foreign]\ncommand = 'unchanged'\n", encoding="utf-8")
+    hook_path = workspace / (".claude/settings.local.json" if client == "claude" else ".codex/hooks.json")
+    hook_path.parent.mkdir(parents=True, exist_ok=True)
+    old_hook = setup.local_hook_command([old_command, str(hook_script), "--client", client,
+                                        "--project", str(workspace), "--environment-receipt", old_pin])
+    hook_path.write_text(json.dumps({"hooks": {"SessionStart": [
+        {"hooks": [{"command": "foreign literal %PATH% $value", "custom": "untouched"}]},
+        {"hooks": [{"command": old_hook, "custom": "kept"}]},
+    ]}}), encoding="utf-8")
+    plan = setup.build_plan(client, workspace)
+    rendered = plan["files"][path]
+    servers = json.loads(rendered)["mcpServers"] if client == "claude" else setup.tomllib.loads(rendered)["mcp_servers"]
+    assert servers[key] == {**existing, "command": new_command, "env": {setup.PIN_ENV: new_pin, "CUSTOM": "keep"}}
+    assert servers["foreign"] == {"command": "unchanged"}
+    hooks = json.loads(plan["files"][hook_path])["hooks"]["SessionStart"]
+    assert hooks[0] == {"hooks": [{"command": "foreign literal %PATH% $value", "custom": "untouched"}]}
+    assert len(hooks) == 2 and hooks[1]["hooks"][0]["custom"] == "kept"
+    arguments = setup.hook_argv(hooks[1]["hooks"][0]["command"])
+    assert arguments[arguments.index("--environment-receipt") + 1] == new_pin
+    for output, content in plan["files"].items():
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(content, encoding="utf-8")
+    repeated = setup.build_plan(client, workspace)
+    assert all(content == path.read_text(encoding="utf-8") for path, content in repeated["files"].items())
+
+
+@pytest.mark.parametrize("args", [
+    ["-m", "vaws_coordinator", "task-server"], ["-m", "remote_dev.mcp.server"],
+    ["-m", "vaws_knowledge.server.mcp_server"],
+])
+def test_foreign_provider_keeps_its_own_pin_and_policy(args, tmp_path):
+    existing = {"command": "user-provider", "args": args, "env": {setup.PIN_ENV: "user-pin", "CUSTOM": "keep"},
+                "enabled_tools": ["chosen"]}
+    desired = {"command": "new-managed-provider", "args": args, "env": {setup.PIN_ENV: "new-managed-pin"}}
+    result, action = setup.merge_server_entry(existing, desired, checkout=tmp_path)
+    assert action == "preserved" and result == existing
+
+
+@pytest.mark.skipif(os.name != "nt", reason="native Windows junction and mounted-drive rendering")
+def test_shared_kimi_windows_and_wsl_use_identical_per_key_relative_alias(tmp_path, monkeypatch):
+    monkeypatch.setattr(setup, "ROOT", tmp_path)
+    servers = {"vaws-task": {"command": sys.executable, "args": setup.task_server_args(),
+                            "env": {"VAWS_AGENT_SESSIONS_DIR": str(tmp_path / "sessions")}}}
+    windows = setup.shared_kimi_servers(servers, tmp_path)
+    expected = "./.vaws-local/env-links/" + "d" * 64 + "/Scripts/python.exe"
+    assert windows["vaws-task"]["command"] == expected
+
+    class MountedPath(PurePosixPath):
+        def is_file(self):
+            return Path(self.parts[2] + ":/", *self.parts[3:]).is_file()
+
+    mounted = MountedPath("/mnt", tmp_path.drive[0].lower(), *tmp_path.parts[1:])
+    monkeypatch.setattr(setup, "ROOT", mounted)
+    monkeypatch.setattr(setup, "os", SimpleNamespace(name="posix"))
+    monkeypatch.setattr(setup, "windows_mounted_workspace", lambda root: True)
+    wsl = setup.shared_kimi_servers(servers, mounted)
+    assert wsl == windows

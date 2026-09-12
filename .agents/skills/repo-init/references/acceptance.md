@@ -39,7 +39,7 @@ A successful run should satisfy all applicable items below.
 - for broad init, the skill stops after the first probe summary only for missing choices:
   - unified alias choice if the identity decision is pending
   - machine username choice if the profile is missing
-- authorized init defaults to keep-current remotes, submodule init, `python .agents/scripts/vaws_deps.py sync`, and CI-pinned vllm alignment unless the user overrides them
+- authorized init defaults to keep-current remotes, submodule init, `uv run --no-project python .agents/scripts/vaws_deps.py sync`, and CI-pinned vllm alignment unless the user overrides them
 - when a machine username is missing, the helper suggests three options:
   - `git-username`
   - `random`
@@ -96,10 +96,10 @@ A successful run should satisfy all applicable items below.
 - knowledge PRs use human review and merge; ordinary development requires no fork or publishing follow-up
 - lookup and capture remain optional; unavailable knowledge does not block independent work, and authors use ordinary Markdown without a required schema
 
-- offers `python .agents/scripts/vaws_deps.py sync` (or `python3 .agents/scripts/vaws_deps.py sync`) as a required step for package-dependent work
-- skipping `python .agents/scripts/vaws_deps.py sync` still completes `repo-init` for local documentation and Git work
+- offers `uv run --no-project python .agents/scripts/vaws_deps.py sync` as a required step for package-dependent work
+- skipping `uv run --no-project python .agents/scripts/vaws_deps.py sync` still completes `repo-init` for local documentation and Git work
 - the three in-process packages are public git+https installs; `uv.lock` is the only pin
-- after install or skip, runs `python3 .agents/scripts/vaws_deps.py doctor`
+- after install or skip, runs `uv run --no-project python .agents/scripts/vaws_deps.py doctor`
 - the finish summary names available and unavailable capabilities from `doctor`'s report, without re-deriving them
 
 ## Manual regression checklist

@@ -49,6 +49,33 @@ class WindowsBootstrapTests(unittest.TestCase):
         self.assertEqual(result.returncode, 7, result.stderr)
         self.assertEqual(result.stdout, "中文 🙂\n".encode())
 
+    def test_foreground_hop_retains_parent_console_with_stdin_and_exit_status(self):
+        child_code = (
+            "import ctypes,json,os,sys;"
+            "kernel=ctypes.WinDLL('kernel32',use_last_error=True);"
+            "pids=(ctypes.c_ulong*128)();count=kernel.GetConsoleProcessList(pids,128);"
+            "print(json.dumps({'owner':int(os.environ['CONSOLE_OWNER_PID']),"
+            "'console_pids':list(pids)[:count],'input':sys.stdin.read()},ensure_ascii=False));"
+            "sys.exit(7)"
+        )
+        child = [sys.executable, "-X", "utf8", "-c", child_code]
+        command = self.command(child)
+        command[-1] = "import os;os.environ['CONSOLE_OWNER_PID']=str(os.getpid());" + command[-1]
+        # A hidden parent console makes the actual inheritance contract testable
+        # on headless CI without opening a visible terminal. Pipe-only tests
+        # cannot detect a child unexpectedly detaching into its own console.
+        startup = subprocess.STARTUPINFO()
+        startup.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        startup.wShowWindow = subprocess.SW_HIDE
+        result = subprocess.run(command, input="终端 stdin 🙂\n", capture_output=True,
+                                encoding="utf-8", timeout=15, startupinfo=startup,
+                                creationflags=subprocess.CREATE_NEW_CONSOLE,
+                                env={**os.environ, "PYTHONUTF8": "1"})
+        self.assertEqual(result.returncode, 7, result.stderr)
+        observed = json.loads(result.stdout)
+        self.assertIn(observed["owner"], observed["console_pids"])
+        self.assertEqual(observed["input"], "终端 stdin 🙂\n")
+
     def test_killing_launcher_terminates_child_and_grandchild(self):
         with tempfile.TemporaryDirectory() as tmp:
             marker = Path(tmp) / "进程.json"

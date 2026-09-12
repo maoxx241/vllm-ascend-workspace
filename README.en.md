@@ -10,7 +10,7 @@ Open this checkout in an Agent client and ask:
 
 > Initialize this workspace for vLLM Ascend development.
 
-The `repo-init` skill reuses existing configuration, installs locked packages and configures the selected client. Windows PowerShell and WSL can share the checkout: bootstrap selects separate platform environments automatically. Agent installation recipes are in [dependency-plane.md](docs/dependency-plane.md) and [windows-installation.md](docs/windows-installation.md).
+The `repo-init` skill reuses existing configuration, installs locked packages and configures the selected client. Windows, macOS and Linux use one native client entry, which creates an independent Git copy before starting the Agent. Prepared dependencies are reused by content and pinned for live clients. Windows and WSL can share source files and one Windows managed-task owner. See the [platform entry](docs/platform-contract.md). Agent installation recipes are in [dependency-plane.md](docs/dependency-plane.md) and [windows-installation.md](docs/windows-installation.md).
 
 For daily work, describe the outcome and the inputs that matter:
 

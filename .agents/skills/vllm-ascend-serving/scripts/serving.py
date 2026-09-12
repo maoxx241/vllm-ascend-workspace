@@ -11,6 +11,10 @@ ROOT = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(ROOT / '.agents/lib'))
 from vaws_venv import ensure_workspace_interpreter
 
+if __name__ == "__main__":
+    from vaws_managed_entry import ensure_managed_entry
+    ensure_managed_entry(repo_root=ROOT, entry_file=__file__)
+
 ensure_workspace_interpreter(repo_root=ROOT)
 
 

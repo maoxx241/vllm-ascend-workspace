@@ -1049,4 +1049,7 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
+    if not build_parser().parse_args().results:
+        from vaws_managed_entry import ensure_managed_entry
+        ensure_managed_entry(repo_root=ROOT, entry_file=__file__, local_options=("--config", "--output-dir"))
     raise SystemExit(main())

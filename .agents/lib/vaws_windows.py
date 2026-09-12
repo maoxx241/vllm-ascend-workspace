@@ -29,13 +29,16 @@ def pid_alive(pid: int) -> bool:
 
 
 @contextmanager
-def owned_process(command: list[str], *, release_on_exit: bool = False, **kwargs):
+def owned_process(command: list[str], *, release_on_exit: bool = False,
+                  preserve_console: bool = False, **kwargs):
     """Own a child tree, including children of the Windows venv redirector.
 
     Start suspended so even the Windows venv redirector cannot launch children
     outside the job. All Win32 declarations preserve 64-bit process handles.
     Closing the context kills descendants unless a caller explicitly releases
     them after a normal exit. The job also closes on abrupt parent termination.
+    Foreground clients and interpreter hops preserve their parent's console;
+    background helpers use a hidden process by default.
     """
     size_t = ctypes.c_size_t
 
@@ -87,8 +90,10 @@ def owned_process(command: list[str], *, release_on_exit: bool = False, **kwargs
         limits = ExtendedLimits()
         limits.basic.flags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
         check(set_limits(job, 9, ctypes.byref(limits), ctypes.sizeof(limits)))
-        process = subprocess.Popen(command, **kwargs,
-                                   creationflags=subprocess.CREATE_NO_WINDOW | 0x00000004)  # CREATE_SUSPENDED
+        flags = 0x00000004  # CREATE_SUSPENDED
+        if not preserve_console:
+            flags |= subprocess.CREATE_NO_WINDOW
+        process = subprocess.Popen(command, **kwargs, creationflags=flags)
         handle = check(open_process(0x0101, False, process.pid))  # SET_QUOTA | TERMINATE
         try:
             check(assign_job(job, handle))
@@ -131,5 +136,5 @@ def owned_process(command: list[str], *, release_on_exit: bool = False, **kwargs
 def run_owned(command: list[str], *, env: dict[str, str]) -> int:
     """Bootstrap a package CLI, preserving services on a normal CLI exit."""
     with owned_process(command, env=env, stdin=sys.stdin, stdout=sys.stdout,
-                       stderr=sys.stderr, release_on_exit=True) as process:
+                       stderr=sys.stderr, release_on_exit=True, preserve_console=True) as process:
         return process.wait()

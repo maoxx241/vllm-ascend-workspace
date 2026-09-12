@@ -25,6 +25,7 @@ remotes, not replacements for community upstreams.
 | Explicit remote endpoint I/O | remote-dev companion tools with ordinary host/port/user/cwd |
 | Managed environments, NPU runs and services | `vaws_session`, `vaws_run`, `vaws_execution`, `vaws_finish` |
 | Workspace initialization or client wiring | `.agents/skills/repo-init/SKILL.md` |
+| Start a native CLI in an independent editing directory | `.agents/scripts/vaws_client.py CLIENT` |
 | Local fleet monitor lifecycle | `.agents/skills/npu-fleet-monitor/SKILL.md`; observation is not allocation |
 | Knowledge lookup and capture | `knowledge_query`, `knowledge_explain`, `knowledge_capture` |
 
@@ -72,14 +73,19 @@ human. Native client hook trust is not granted by setup.
 
 ## Verification and maintenance
 
-Use `python3 .agents/scripts/vaws_deps.py doctor` to inspect installed
-capabilities; `python .agents/scripts/vaws_deps.py sync` consumes `pyproject.toml` and `uv.lock`. vaws-top is a
+Use `uv run --no-project python .agents/scripts/vaws_deps.py doctor` to inspect installed
+capabilities; `uv run --no-project python .agents/scripts/vaws_deps.py sync` prepares or reuses
+an immutable environment from `pyproject.toml` and `uv.lock`. vaws-top is a
 separate uvx service. Pin drift is reported, not a new execution gate.
 
 Pure Python control-plane, configuration and documentation checks run locally.
 `torch`/`torch_npu`/vLLM device execution runs in a remote Ascend container.
 Run checks affected by the change; existing evidence can support a conclusion
 without recreating a plan or repeating unrelated experiments.
+
+The same `uv run --no-project python` prefix works in PowerShell, bash and zsh.
+Native paths, process ownership and managed Windows/WSL owner selection stay
+inside the tools; see [docs/platform-contract.md](docs/platform-contract.md).
 
 Managed executions record their fixed inputs and lifecycle automatically;
 cross-workflow business measurements use Run Manifest v1 from

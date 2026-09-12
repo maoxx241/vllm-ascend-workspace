@@ -5,7 +5,7 @@ Subcommands:
 
     status [name...]    JSON inspect payload; exit 1 unless every name is ready
     doctor              Result Envelope v1 capability report
-    sync                wrap ``uv sync`` (progress on stderr, JSON on stdout)
+    sync                prepare/reuse an immutable locked environment
 
 Progress goes to stderr. Each command prints one JSON object on stdout.
 """
@@ -14,7 +14,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import subprocess
 import sys
 from pathlib import Path
 
@@ -23,7 +22,8 @@ LIB = ROOT / ".agents" / "lib"
 if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
-from vaws_venv import REMEDY, configure_windows_stdio, ensure_workspace_interpreter, workspace_venv_root
+from vaws_venv import REMEDY, configure_windows_stdio, ensure_workspace_interpreter
+from vaws_environment import EnvironmentError, PIN_ENV, prepare_environment
 from vaws_knowledge_service import prepare_knowledge
 
 
@@ -94,41 +94,30 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 
 def cmd_sync(args: argparse.Namespace) -> int:
     extra = list(args.passthrough or [])
-    command = ["uv", "sync", *extra]
-    environment = os.environ.copy()
-    environment["UV_PROJECT_ENVIRONMENT"] = str(workspace_venv_root(ROOT))
-    progress(f"running {' '.join(command)}")
+    progress("selecting or preparing the immutable locked dependency environment")
     try:
-        proc = subprocess.run(
-            command,
-            cwd=str(ROOT),
-            env=environment,
-            check=False,
-            stdout=sys.stderr,
-        )
-    except FileNotFoundError:
-        payload = {
-            "ok": False,
-            "command": command,
-            "error": "uv is not on PATH",
-            "remedy": REMEDY,
-        }
-        _print(payload)
+        receipt = prepare_environment(ROOT, install_options=extra)
+    except (EnvironmentError, OSError) as exc:
+        _print({"ok": False, "error": str(exc), "remedy": REMEDY})
         return 1
-    payload = {
-        "ok": proc.returncode == 0,
-        "command": command,
-        "returncode": proc.returncode,
-        "environment": str(workspace_venv_root(ROOT)),
-        "remedy": None if proc.returncode == 0 else REMEDY,
-    }
-    if proc.returncode == 0:
-        progress("dependencies installed; preparing local knowledge model and index")
+    if os.name == "nt":
+        from vaws_environment_link import link_environment
+        link_environment(ROOT, key=receipt["key"], environment_root=Path(receipt["root"]))
+    payload = {"ok": True, "returncode": 0, "environment": receipt["root"], "receipt": receipt, "remedy": None}
+    progress("dependencies ready; preparing local knowledge model and index")
+    previous_pin = os.environ.get(PIN_ENV)
+    os.environ[PIN_ENV] = receipt["receipt"]
+    try:
         payload["knowledge"] = prepare_knowledge(ROOT)
-        if not payload["knowledge"].get("ready"):
-            progress("dependencies are ready; knowledge preparation is pending and does not block ordinary tools")
+    finally:
+        if previous_pin is None:
+            os.environ.pop(PIN_ENV, None)
+        else:
+            os.environ[PIN_ENV] = previous_pin
+    if not payload["knowledge"].get("ready"):
+        progress("dependencies are ready; knowledge preparation is pending and does not block ordinary tools")
     _print(payload)
-    return 0 if proc.returncode == 0 else 1
+    return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -144,7 +133,7 @@ def build_parser() -> argparse.ArgumentParser:
     doctor.add_argument("passthrough", nargs=argparse.REMAINDER, help=argparse.SUPPRESS)
     doctor.set_defaults(func=cmd_doctor)
 
-    sync = sub.add_parser("sync", help="wrap uv sync; progress on stderr, JSON on stdout")
+    sync = sub.add_parser("sync", help="prepare a locked environment; progress on stderr, JSON on stdout")
     sync.add_argument("passthrough", nargs=argparse.REMAINDER, help=argparse.SUPPRESS)
     sync.set_defaults(func=cmd_sync)
     return parser

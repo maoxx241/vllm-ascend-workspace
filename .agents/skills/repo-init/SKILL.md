@@ -10,8 +10,9 @@ covers project identity, submodules, dependency installation, client wiring
 and knowledge setup. A narrow request changes only the relevant part.
 
 Start with `scripts/repo_init_probe.py --compact` to inspect the current state.
-Use `python3` on POSIX or `py -3` on Windows before the environment exists;
-the bootstrap selects a separate environment for Windows and WSL in the same checkout.
+Use `uv run --no-project python` on Windows, macOS and Linux before the
+environment exists. The bootstrap prepares or reuses an immutable environment;
+no shell activation or platform-specific Python command is needed.
 
 ## Decisions that matter
 
@@ -37,8 +38,8 @@ the bootstrap selects a separate environment for Windows and WSL in the same che
    submodule to enforce a default.
 3. Configure missing or explicitly requested forks/remotes with
    `repo_topology.py`. Do not rewrite established fetch/push settings.
-4. Run `python .agents/scripts/vaws_deps.py sync` for package-dependent work and inspect capabilities with
-   `python3 .agents/scripts/vaws_deps.py doctor`. Successful installation also
+4. Run `uv run --no-project python .agents/scripts/vaws_deps.py sync` for package-dependent work and inspect capabilities with
+   `uv run --no-project python .agents/scripts/vaws_deps.py doctor`. Successful installation also
    prepares the knowledge model and index. The result reports knowledge readiness
    separately; pending preparation leaves ordinary tools usable. For Windows cache placement
    or offline transfer, follow the linked installation recipe in
