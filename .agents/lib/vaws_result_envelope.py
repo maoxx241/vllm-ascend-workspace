@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Shared Result Envelope v1: the agent-facing diagnosability contract.
 
-Every workspace entry point should return one envelope on ``stdout``, in
-success and in failure, so that an agent can locate the failing layer
-without re-running the operation.
+Entry points using this library return one envelope on ``stdout`` in success
+and failure, retaining evidence an agent can inspect without re-running the
+operation. Other entry points keep their owner-defined result protocols.
 
 Design notes live in ``docs/agent-feedback-contract.md``. The machine
 readable contract is ``.agents/schemas/result-envelope-v1.schema.json``;
