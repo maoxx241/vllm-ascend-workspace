@@ -725,9 +725,11 @@ class HookAdapterTests(unittest.TestCase):
                 check=False,
             )
             self.assertEqual(proc.returncode, 0, proc.stderr)
-            self.assertEqual(len(list((registry / "contexts").glob("*.json"))), 1, proc.stderr)
+            contexts = list((registry / "contexts").glob("*.json"))
+            self.assertEqual(len(contexts), 1, proc.stderr)
             hint = json.loads(proc.stdout)["hookSpecificOutput"]["additionalContext"]
-            context_file = Path(hint.splitlines()[1])
+            context_file = contexts[0]
+            self.assertIn(str(context_file), hint)
             self.assertTrue(context_file.is_file())
             self.assertEqual(context_file.parent.parent.resolve(), registry.resolve())
 
