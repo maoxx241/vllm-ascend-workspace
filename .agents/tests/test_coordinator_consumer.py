@@ -845,7 +845,9 @@ class HookAdapterTests(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, proc.stderr)
             self.assertEqual(len(list((registry / "contexts").glob("*.json"))), 1, proc.stderr)
             hint = json.loads(proc.stdout)["hookSpecificOutput"]["additionalContext"]
-            self.assertIn(str(registry), hint)
+            context_file = Path(hint.splitlines()[1])
+            self.assertTrue(context_file.is_file())
+            self.assertEqual(context_file.parent.parent.resolve(), registry.resolve())
 
 
 class NoInTreeTaskWriterTests(unittest.TestCase):

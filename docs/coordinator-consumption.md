@@ -49,6 +49,16 @@ commits including dirty edits without modifying HEAD or the user's index.
 Later local edits and changes to session defaults affect future runs only.
 The returned source snapshot identifies the accepted inputs.
 
+Source defaults have explicit provenance: per-run sources override explicit
+task-wide defaults, which override this attachment's native-cwd sources.
+Resuming or moving a native attachment refreshes its cwd and its automatic
+sources without changing other attachments or accepted executions. A saved
+mapping without provenance requires explicit rebinding or per-run sources.
+The hook recognizes owner-accessible linked worktrees of the configured Git
+repository; it does not create worktrees or move the client's cwd. See
+[native workspace isolation](native-workspace-isolation.md) for current client
+and Windows/WSL boundaries and the remaining local environment proposal.
+
 Device count defaults to zero. Ordinary commands and CPU compilation do not
 reserve NPUs or wait behind an NPU request. NPU workloads explicitly request
 `resources.npu_count` or devices. Source-free commands reuse an existing image

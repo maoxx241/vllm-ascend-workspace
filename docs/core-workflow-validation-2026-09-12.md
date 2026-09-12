@@ -1,6 +1,6 @@
 # 核心执行流程与真实客户端验证
 
-Status: dated validation evidence, 2026-09-12. Final native reuse checks in progress.
+Status: dated validation evidence, 2026-09-12.
 
 本轮按照[九条设计原则](design-principles.md)调整 remote-dev 0.7 与
 coordinator 0.4。当前调用合同见 [coordinator-consumption.md](coordinator-consumption.md)
@@ -20,6 +20,7 @@ coordinator 0.4。当前调用合同见 [coordinator-consumption.md](coordinator
 | Grok 搜索遇到不支持的参数 | 明确返回错误及修正线索，精简重复连接策略参数 |
 | Codex/Kimi 查询刚提交的执行 | 正常 queued/preparing 返回成功；健康 runtime 事实压缩，异常与完整记录保留 |
 | Windows、WSL 共用工作区 | 托管入口使用同一 Windows 所有者；Kimi 共享配置可在两个系统实际启动 |
+| 从未提交托管执行的本地任务结束 | 本地事务关闭 admission，与并发提交原子互斥；不导入 service 或启动 daemon |
 
 旧产物不能仅凭路径或版本标签复用：候选必须匹配当前构建输入，复制后的
 native 文件及生成 metadata 必须符合原始 manifest 的 hash。缺失证明会退回
@@ -38,10 +39,17 @@ native 文件及生成 metadata 必须符合原始 manifest 的 hash。缺失证
 真实 C++ 编译开始后请求取消，相关 preparation job 的 fresh status 均为
 quiet、无存活进程、descendants drained。独立观察中，停止至最终确认约
 5.021 s；容器启动身份未变，取消前仍存活的既有长期进程全部保留。
+最终独立审计的 31 个原生准备/业务作业均 fresh quiet，无存活或身份未知
+的受管进程，descendants drained。原生实验涉及的两个既有容器身份保留。
+完整验收 registry 的 22 次执行全部进入终态且资源释放，包含保留的失败和
+取消记录；没有将这些终态记录都计为成功测试。
 
 Windows 与 WSL 的安装版 remote-dev 均完成四容器环境函数、PATH、cwd、
 管道退出码、PTY 输入及停止检查。300,055-byte 生成脚本两端均实际完成，
 单次约 4.8 s。
+
+另从已完成执行通过正式 artifact-pull 下载编译产物；远端执行记录、远端
+manifest 和本地文件 SHA256 一致，文件为 AArch64 ELF。下载没有重放编译。
 
 ## 真实客户端负载
 
@@ -82,14 +90,44 @@ MCP 配置经过 Windows → WSL → Windows 启动、环境变量、session 及
 
 两台机器的较早基线通过实际 vLLM/vllm-ascend/native 扩展导入，以及
 NPU 张量 `[2,4,6]` 烟测；导入路径来自各自执行根。最终严格证明下的
-完整基线、Python-only、native 修改及切回基线结果待本轮收尾补齐。
+完整基线耗时 832.058 s，记录 1103 个产物 hash；Python-only 修改耗时
+228.367 s，加载新 Python 标记而所有产物 hash 与基线相同，无 venv 或
+install 阶段。native 修改耗时 840.821 s，实际扩展返回新增常量 `7`，
+主 `.so` hash 和 native 构建键改变，依赖键保持相同，使用独立解释器。
+切回基线耗时 220.215 s，SCM 与源码 ID 恢复，全部 1103 个产物 hash 及
+主 `.so` 与基线完全一致，无 venv 或 install 阶段。四轮均成功并释放资源。
+这些是各一次真实运行的耗时；缓存复用结论来自构建阶段与完整产物身份，
+不是仅根据时间更短作推断。
+
+vLLM 的源码 SCM 版本及 `vllm.__version__` 为 0.27.1；既有
+`VLLM_TARGET_DEVICE=empty` 安装配方将 distribution 版本写为
+0.27.1+empty。记录保留这个差异，不把它误报为丢失源码身份。
 这些检查不等于完整模型服务、四节点推理或吞吐回归。
+
+## 本地工作区隔离
+
+真实 Grok 并行请求的首条工具命令位于两个不同目录；按原 ID 恢复会回到
+原目录，父 checkout 的 HEAD、index 和文件内容未变。实际客户端目录隔离
+与 VAWS 仓库关联是不同事实：Grok 本机创建的是独立 Git 副本，默认 Linux
+home 路径也不在本轮 Windows 所有者的 mounted-drive 来源范围内。
+
+本轮修正 owner-accessible linked worktree 的 hook 范围及 attachment
+cwd/自动来源更新；没有宣称 hook 可以移动客户端目录。固定平台路径的
+本地 venv 仍会被同目录会话共享，内容键不可变环境尚属后续改造。
+完整边界和方案见 [原生工作区隔离](native-workspace-isolation.md)。
 
 ## CI
 
 保留跨平台行为测试、干净 wheel 安装和消费者完整测试。真实 GitHub
 Windows CI 揭示相同计时 tick 下的 LRU 淘汰错误，已改为完成顺序并保留
 固定时钟回归。测试所需 jsonschema 显式声明为 test extra。
+最后 attachment/source 补丁的协调器完整测试为 Windows 326 passed、
+7 skipped，WSL 331 passed、2 skipped；两端均另含 50 个通过的 subtests。
+
+独立 Windows 消费者工作树完整运行 57 个 suites，1610 个 JUnit cases，
+0 failures/errors、3 skipped；Linux 消费者 CI 通过。首轮 Windows CI
+暴露测试把临时目录的 8.3 短路径与已规范化长路径作字符串比较，已改为
+检查实际 context 文件及其归属目录，相关 39 项测试通过。
 
 移除重复 compile/schema gate、只检查声明存在的测试，以及把源码 pin
 字符串再抄一遍的测试。公共 CLI 表删除选项和引用数量，保留入口与职责

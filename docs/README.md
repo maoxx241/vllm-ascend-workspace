@@ -9,6 +9,7 @@ implemented behavior or a new runtime requirement for current clients.
 
 ## Proposed target designs
 
+- [native-workspace-isolation.md](native-workspace-isolation.md) — native cwd and Git worktree ownership, current attachment/source fixes, and the remaining immutable local environment proposal.
 - [vaws-core-redesign.md](vaws-core-redesign.md) — breaking redesign direction; fixed execution inputs and scoped reuse are implemented in coordinator 0.4, while remaining proposals are distinguished from the current API.
 
 ## Current contracts
@@ -33,7 +34,7 @@ implemented behavior or a new runtime requirement for current clients.
 
 ## Dated validation evidence
 
-- [core-workflow-validation-2026-09-12.md](core-workflow-validation-2026-09-12.md) — fixed execution inputs, scoped reuse, Windows/WSL clients and real-host validation, with explicit limits for remaining native-build checks.
+- [core-workflow-validation-2026-09-12.md](core-workflow-validation-2026-09-12.md) — fixed execution inputs, native rebuild/reuse/switchback, Windows/WSL clients and real-host validation, with explicit scope limits.
 - [workflow-usability-validation-2026-09-11.md](workflow-usability-validation-2026-09-11.md) — skill boundary audit, bounded service startup, source reuse and real four-host fleet lifecycle observations.
 - [agent-only-validation-2026-09-11.md](agent-only-validation-2026-09-11.md) — Agent-only entry consolidation and Windows PowerShell/WSL acceptance, including corrections and hardware limits.
 - [installation-feedback-2026-09-11.md](installation-feedback-2026-09-11.md) — fresh/cached Windows installation timings, cache relocation and dependency extras decision.
