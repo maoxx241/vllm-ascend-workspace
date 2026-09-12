@@ -270,7 +270,8 @@ def test_setup_updates_owned_task_entry_and_preserves_configuration(client, rela
     assert repeated["files"].get(path, rendered) == rendered
 
 
-@pytest.mark.parametrize("customization", ["inline-env", "another-known-provider"])
+@pytest.mark.parametrize("customization", ["inline-env", "another-known-provider", "quoted-header",
+                                          "commented-header", "quoted-command", "quoted-pin", "multiline-command"])
 def test_toml_custom_entry_preserves_interpreter_and_pin_together(customization, tmp_path, monkeypatch):
     monkeypatch.setattr(setup, "ROOT", tmp_path)
     old_python = str(tmp_path / ".vaws-local/env-links" / ("a" * 64) / "Scripts/python.exe")
@@ -289,6 +290,16 @@ def test_toml_custom_entry_preserves_interpreter_and_pin_together(customization,
                    + '\nenv = { VAWS_ENV_RECEIPT = "old-pin", CUSTOM = "keep" }\n')
     else:
         content = setup.toml_server_body("vaws_task", existing)
+        if customization == "quoted-header":
+            content = content.replace("[mcp_servers.vaws_task]", "[mcp_servers.'vaws_task']")
+        elif customization == "commented-header":
+            content = content.replace("[mcp_servers.vaws_task]", "[mcp_servers.vaws_task] # user comment")
+        elif customization == "quoted-command":
+            content = content.replace("command =", "'command' =")
+        elif customization == "quoted-pin":
+            content = content.replace("VAWS_ENV_RECEIPT =", "'VAWS_ENV_RECEIPT' =")
+        elif customization == "multiline-command":
+            content = content.replace("command = " + json.dumps(old_python), "command = '''\n" + old_python + "'''")
     path.write_text(content, encoding="utf-8")
     plan = setup.build_plan("codex", tmp_path, task_only=True)
     rendered = plan["files"].get(path, content)

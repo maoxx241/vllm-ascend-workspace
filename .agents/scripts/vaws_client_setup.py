@@ -727,8 +727,17 @@ def build_plan(client, project, *, kimi_config=None, task_only=False):
                     if (existing[alias].get("args") == entry.get("args")
                             and owned_environment_server(existing[alias], project)
                             and editable_toml_server_env(text, alias, existing[alias])):
-                        text = update_toml_server_command(text, alias, entry["command"])
-                        text = fill_toml_server_env(text, alias, existing[alias], entry, checkout=project)
+                        try:
+                            candidate = update_toml_server_command(text, alias, entry["command"])
+                            candidate = fill_toml_server_env(candidate, alias, existing[alias], entry, checkout=project)
+                            rendered = tomllib.loads(candidate)["mcp_servers"][alias]
+                        except tomllib.TOMLDecodeError:
+                            candidate = before
+                            rendered = existing[alias]
+                        desired_pin = entry.get("env", {}).get(PIN_ENV)
+                        if (rendered.get("command") == entry["command"]
+                                and (desired_pin is None or rendered.get("env", {}).get(PIN_ENV) == desired_pin)):
+                            text = candidate
                     updated = text != before
                     changed = changed or updated
                     notes.append({
