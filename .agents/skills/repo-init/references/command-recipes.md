@@ -2,6 +2,17 @@
 
 Prefer the helper scripts in `scripts/` and `.agents/scripts/` when possible.
 
+## Codex native initialization
+
+```text
+uv run --no-project python .agents/scripts/vaws_client_setup.py --client codex --codex-global-hooks --apply
+```
+
+This installs stable user hooks scoped to the current Git worktree family and
+migrates its generated project hooks. Review the native hook definitions once,
+then select Worktree mode and the VAWS local environment. Later directory setup
+reuses the installed hooks without this option; it does not grant trust.
+
 ## Probe
 
 Windows, macOS, Linux and WSL use the same entry:

@@ -52,6 +52,10 @@ or alias questionnaire.
   once during initialization; writing setup files does not select the UI mode.
   New worktree setup and session attachment then run through the client without
   an Agent launcher call. See the [client boundaries](../../../docs/native-workspace-isolation.md).
+  Codex's `--codex-global-hooks` option installs a fixed user hook scoped to
+  this Git worktree family. Review its native hook definitions once during
+  initialization; configuration generation does not grant trust. The same
+  definitions serve later worktrees and read each directory's saved environment.
   Cursor's `--cursor-global-mcp` option installs the fixed VAWS providers once
   in the user configuration, avoiding separate project MCP setup for every new
   directory. Select New Worktree as its default environment. Claude uses WorktreeCreate in native worktree mode. Grok uses

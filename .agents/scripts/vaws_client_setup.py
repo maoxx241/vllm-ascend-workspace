@@ -506,17 +506,35 @@ def owned_environment_server(existing, checkout):
     return server_command_identity(existing.get("command", ""), checkout) == hook_path_identity(receipt["python"])
 
 
+def legacy_generated_toml_server(text, name, key, existing, checkout):
+    """Recognize the old generated block, not an arbitrary local Python server."""
+    if existing.get("args") not in (task_server_args(), knowledge_server_args(), remote_dev_server_args()):
+        return False
+    command = server_command_identity(existing.get("command", ""), checkout)
+    if command not in {server_command_identity(ROOT / relative, checkout)
+                       for relative in (".venv/bin/python", ".venv/Scripts/python.exe")}:
+        return False
+    blocks = re.findall(r"^# BEGIN VAWS " + re.escape(name) + r"\n(.*?)^# END VAWS "
+                        + re.escape(name) + r"(?:\n|\Z)", text, re.M | re.S)
+    if len(blocks) != 1:
+        return False
+    try:
+        return tomllib.loads(blocks[0]) == {"mcp_servers": {key: existing}}
+    except tomllib.TOMLDecodeError:
+        return False
+
+
 def managed_environment_change(existing, desired, *, checkout):
     return (existing.get("args") == desired.get("args") and owned_environment_server(existing, checkout)
             and (existing.get("command") != desired.get("command")
                  or existing.get("env", {}).get(PIN_ENV) != desired.get("env", {}).get(PIN_ENV)))
 
 
-def knowledge_owner_defaults(existing, desired, checkout):
+def knowledge_owner_defaults(existing, desired, checkout, *, legacy=False):
     """Normalize generated knowledge paths without replacing custom locations."""
     environment = dict(existing.get("env") or {})
     if (existing.get("args") == desired.get("args") == knowledge_server_args()
-            and owned_environment_server(existing, checkout)):
+            and (legacy or owned_environment_server(existing, checkout))):
         if desired.get("env", {}).get("VAWS_KNOWLEDGE_CONFIG"):
             defaults = {"VAWS_KNOWLEDGE_PROJECT_ROOTS": ".agents/knowledge",
                         "VAWS_KNOWLEDGE_CANDIDATE_ROOT": ".vaws-local/knowledge/candidate",
@@ -635,14 +653,25 @@ def toml_server_body(key, entry):
     return body
 
 
-def fill_toml_server_env(text, key, existing, desired, *, checkout=None):
+def fill_toml_server_env(text, key, existing, desired, *, checkout=None, legacy=False):
     """Add missing defaults to an ordinary env table; preserve user values/text."""
     desired_env = dict(desired.get("env") or {})
-    normalized = knowledge_owner_defaults(existing, desired, ROOT if checkout is None else checkout)
+    checkout = ROOT if checkout is None else checkout
+    normalized = knowledge_owner_defaults(existing, desired, checkout, legacy=legacy)
+    if legacy and existing.get("args") == remote_dev_server_args():
+        defaults = {"REMOTE_DEV_DEFAULT_ROOT": "/vllm-workspace", "REMOTE_DEV_DEFAULT_CWD": "/vllm-workspace",
+                    "REMOTE_DEV_RUNTIME_ENV_FILE": "/etc/profile.d/vaws-ascend-env.sh"}
+        for name, value in defaults.items():
+            if normalized.get(name) == value and name not in desired_env:
+                normalized.pop(name)
+        resolver = normalized.get("REMOTE_DEV_RESOLVERS", "")
+        if (isinstance(resolver, str) and resolver.endswith(":setup") and server_command_identity(resolver[:-6], checkout)
+                == server_command_identity(ROOT / ".agents/lib/vaws_remote_dev_plugin.py", checkout)):
+            normalized.pop("REMOTE_DEV_RESOLVERS")
     removals = set(existing.get("env", {})) - set(normalized)
     replacements = {name: value for name, value in normalized.items()
                     if value != existing.get("env", {}).get(name)}
-    if owned_environment_server(existing, ROOT if checkout is None else checkout) and PIN_ENV in desired_env:
+    if (legacy or owned_environment_server(existing, checkout)) and PIN_ENV in desired_env:
         replacements[PIN_ENV] = desired_env[PIN_ENV]
     if "WSLENV" in desired_env:
         desired_env["WSLENV"] = windows_interop_env({**desired_env, **existing.get("env", {})})["WSLENV"]
@@ -697,7 +726,7 @@ def configuration(client, project, *, kimi_config=None, task_only=False):
 
 
 def build_plan(client, project, *, kimi_config=None, task_only=False, kimi_session_setup=False,
-               cursor_global_mcp=False):
+               cursor_global_mcp=False, codex_global_hooks=False):
     project = project.expanduser().resolve(strict=True)
     env = launch_env(client, project, kimi_config=kimi_config)
     groups = hook_groups(client, project, env)
@@ -750,12 +779,14 @@ def build_plan(client, project, *, kimi_config=None, task_only=False, kimi_sessi
             if matching:
                 for alias in matching:
                     before = text
+                    legacy = legacy_generated_toml_server(text, name, alias, existing[alias], project)
                     if (existing[alias].get("args") == entry.get("args")
-                            and owned_environment_server(existing[alias], project)
+                            and (legacy or owned_environment_server(existing[alias], project))
                             and editable_toml_server_env(text, alias, existing[alias])):
                         try:
                             candidate = update_toml_server_command(text, alias, entry["command"])
-                            candidate = fill_toml_server_env(candidate, alias, existing[alias], entry, checkout=project)
+                            candidate = fill_toml_server_env(candidate, alias, existing[alias], entry,
+                                                             checkout=project, legacy=legacy)
                             rendered = tomllib.loads(candidate)["mcp_servers"][alias]
                         except tomllib.TOMLDecodeError:
                             candidate = before
@@ -800,6 +831,10 @@ def build_plan(client, project, *, kimi_config=None, task_only=False, kimi_sessi
                               owned_server=owned_environment_server)
     from vaws_native_setup_config import add_native_setup
     add_native_setup(files, notes, client, project, ROOT)
+    if client == "codex":
+        from vaws_codex_config import add_codex_setup
+        add_codex_setup(files, notes, project, ROOT, shell_command=local_hook_command,
+                        parse_command=hook_argv, enable=codex_global_hooks)
     if client == "cursor":
         from vaws_cursor_mcp_config import add_cursor_global_mcp
         add_cursor_global_mcp(files, notes, project, ROOT, owned_server=owned_environment_server,
@@ -868,6 +903,7 @@ def main():
     parser.add_argument("--kimi-config", type=Path, help="Explicit Kimi Code configuration file to edit for scoped session hooks")
     parser.add_argument("--kimi-session-setup", action="store_true", help="Enable the Kimi native SessionSetup extension after installing the patched client")
     parser.add_argument("--cursor-global-mcp", action="store_true", help="Install generated Cursor providers once in its native user MCP configuration")
+    parser.add_argument("--codex-global-hooks", action="store_true", help="Install fixed Codex user hooks for this Git worktree family; native review remains separate")
     parser.add_argument(
         "--task-only",
         action="store_true",
@@ -876,7 +912,8 @@ def main():
     parser.add_argument("--apply", action="store_true", help="Write with private backups; default is preview")
     args = parser.parse_args()
     plan = build_plan(args.client, args.project, kimi_config=args.kimi_config, task_only=args.task_only,
-                      kimi_session_setup=args.kimi_session_setup, cursor_global_mcp=args.cursor_global_mcp)
+                      kimi_session_setup=args.kimi_session_setup, cursor_global_mcp=args.cursor_global_mcp,
+                      codex_global_hooks=args.codex_global_hooks)
     changed = apply_plan(plan) if args.apply else [
         {"path": str(path), "sha256": hashlib.sha256(content.encode()).hexdigest()}
         for path, content in plan["files"].items()

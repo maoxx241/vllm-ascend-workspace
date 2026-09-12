@@ -220,7 +220,62 @@ by ID restored its worktree and history. All validation TUI processes exited
 normally; the consolidated result is `kimi-final-validation.json` alongside
 the raw transcripts.
 
-## Codex local environment selection
+## Codex hooks and local environment selection
+
+A user-supplied Local session on workspace `360c876` exposed a separate
+initialization failure: its VAWS MCP provider was available, but a no-argument
+call failed because the native attachment did not exist. The installed desktop
+runtime was Codex `0.154.0-alpha.6.2`. Its official `hooks/list` API reported six
+enabled project hooks with `trustStatus=untrusted` and no configuration errors.
+Codex requires native review of each new hook definition; merely writing a
+configuration file does not authorize its execution. See the
+[official hook documentation](https://learn.chatgpt.com/docs/hooks).
+
+The `--codex-global-hooks` initialization option now installs a fixed user hook
+for this Git worktree family. Its command and source remain stable when a new
+directory selects another environment. The adapter uses the native payload's
+actual cwd to read that directory's saved receipt and task-provider settings;
+it neither creates a worktree nor guesses an identity. New-directory setup
+automatically removes duplicate generated project hooks. Custom hooks and
+inline user configuration remain intact. The optional Stop event uses the
+same adapter for the selected knowledge component.
+
+Real linked-worktree fixtures retained old environments, dirty lock files,
+native IDs and custom registry settings. The installed runtime's `hooks/list`
+confirmed identical keys and hashes across cwd changes, and a changed hash
+when the command changed. Sixty-two affected consumer tests passed. The
+legacy generated local-venv MCP configuration also migrated to the selected
+immutable environment, removing only exact obsolete generated defaults while
+preserving custom providers and settings.
+
+For this authorized installation, the seven generated definitions were
+reviewed through the native `hooks/list` and `config/batchWrite` API. Both
+pre-existing hook trust entries were preserved. A native archive/unarchive
+of the idle supplied session refreshed its provider from the old environment
+to coordinator `f635153` and produced the SessionStart context automatically.
+The conversation, cwd and HEAD were preserved. Raw installation, exact catalog
+hashes, backups and protocol evidence remain under
+`.vaws-local/implementation/20260912-shared-root/codex-hook-audit/`.
+
+The refreshed session exposed a second gap in code-mode MCP calls. A temporary
+byte-preserving stdio probe observed the native caller in
+`_meta.x-codex-turn-metadata.thread_id`, with empty tool arguments. Coordinator
+now reads that exact field and looks up the existing attachment. It does not
+infer an identity from other metadata fields, cwd or the server process's
+environment, and does not create an attachment from an MCP call. Seventy-four
+affected package tests passed, including alternating native callers through
+one server and the existing Kimi metadata behavior.
+
+The final real call through `functions.exec` supplied `{}` and succeeded with
+coordinator `fc3973c`. It selected the same VAWS task and context produced by
+SessionStart, bound the actual main checkout, and reported zero executions.
+Native shell cwd and HEAD agreed with the automatic source. Updating the
+component preserved all seven native hook keys, hashes and trusted states.
+The temporary provider configuration was restored and probe processes were
+released; `user-session-calls.json` and the referenced package result retain
+the actual requests and loaded revision. This establishes Local-session
+association on the tested desktop version. The supplied session remains Local;
+it does not establish selection of a native worktree environment.
 
 The native `create_thread` worktree API can create a task without selecting a
 local environment. Merely creating the local-environment TOML file does

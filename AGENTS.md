@@ -45,7 +45,9 @@ automatically attach the native identity and actual cwd to VAWS; resume keeps
 the existing task, code and selected environment. There is no periodic watcher
 or update during work. A plain Local chat does not acquire a worktree from a hook.
 Native setup has contract tests and real-client acceptance evidence. Codex needs
-one native VAWS environment selection; Cursor uses New Worktree by default and
+one native VAWS environment selection and `--codex-global-hooks` initialization
+with native review of the fixed user hooks; later worktrees reuse their definitions.
+Cursor uses New Worktree by default and
 the one-time `--cursor-global-mcp` setup. Claude uses WorktreeCreate; Grok uses native Git worktrees; Kimi needs the
 explicit native SessionSetup extension. Verified versions and remaining client
 boundaries are in [native client acceptance](docs/native-client-validation-2026-09-12.md).

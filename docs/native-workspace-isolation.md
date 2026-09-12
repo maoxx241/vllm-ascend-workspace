@@ -16,7 +16,7 @@ VAWS 启动 CLI 或填写会话记录。已有目录和恢复会话保留代码�
 
 | 客户端 | 已接入的生命周期 | 当前边界 |
 |---|---|---|
-| Codex App | 选定 local environment 的 setup 准备客户端新建 worktree；SessionStart 关联 VAWS | 一次选择 Worktree 和 VAWS 环境。创建任务 API 使用原生保存的环境选择；仅写配置文件或 Git key 不等于选定。 |
+| Codex App | 选定 local environment 的 setup 准备客户端新建 worktree；用户级 SessionStart 关联 VAWS | 一次选择 Worktree 和 VAWS 环境，使用 --codex-global-hooks 并原生审阅固定 hook。创建任务 API 使用原生保存的环境选择；仅写配置文件或 Git key 不等于选定。 |
 | Cursor | worktrees.json 的 setup-worktree 准备新目录；sessionStart / preToolUse 自动关联 | 一次将 Default Environment 选为 New Worktree，并使用 --cursor-global-mcp 安装用户级 VAWS providers；新目录无需重复启用项目 MCP。 |
 | Claude Code | WorktreeCreate 创建并准备目录；SessionStart 关联；MCP/Hook 启动时读取实际目录的固定环境 | 使用原生 worktree 模式。2.1.269 已验证新建与从母仓恢复；旧 2.1.143 跨目录恢复存在客户端问题。 |
 | Grok | 原生 Git worktree 创建触发项目 post-checkout；SessionStart / PreToolUse 自动关联 | 一次将 cli.worktree_type 设为 git，new_session_worktree_mode / fork_worktree_mode 设为 always。它们是全局偏好，项目 setup 只说明选择。已有 Git hook 保留给其 owner 集成。 |
@@ -27,6 +27,12 @@ Codex 的[本地环境 setup](https://learn.chatgpt.com/docs/environments/local-
 准备目录。Claude 的[WorktreeCreate](https://code.claude.com/docs/en/hooks#worktreecreate)
 返回客户端采用的路径；部分版本提前读取 MCP 配置，因此生成的薄启动入口只按
 实际 cwd 读取已经选好的 receipt，再执行对应组件，不在启动时更新代码。
+
+Codex 按配置来源和定义内容记录 hook 信任。初始化将本仓生成的 hook 迁移到
+用户级固定入口，保留自定义 hook；新 worktree 的 setup 自动去掉重复的项目入口。
+固定入口只处理同一 Git 公共目录的原生 cwd，读取该目录已经选好的环境和任务
+设置，再运行组件 hook。新目录和依赖版本不会改变这条入口定义，正常会话无需
+重复信任。配置生成本身不授予信任；新定义仍需按原生机制审阅。
 
 Grok 的普通启动可使用其原生自动 worktree 偏好；Git 创建回调只处理 Grok
 目录下刚创建的 linked worktree，普通 checkout 和其他客户端目录不受影响。
@@ -51,8 +57,11 @@ SessionSetup：在原生 workspace/MCP 创建前消费返回 cwd；恢复沿用�
 
 ## Context in MCP and shell
 
-MCP 工具参数和 shell 子进程环境是不同的入口。Codex、Claude、Cursor、Grok
-的 task-tool hook 可在内部注入 context。Kimi 扩展直接在 MCP tools/call 的
+MCP 工具参数和 shell 子进程环境是不同的入口。Claude、Cursor、Grok
+的 task-tool hook 可在内部注入 context。Codex 的原生 MCP 调用通过
+`_meta.x-codex-turn-metadata.thread_id` 传递真实调用者，coordinator 查找
+SessionStart 已建立的关联；`functions.exec` 内的调用也无需手动传 context。
+直接工具调用仍可使用已有的 task-tool hook。Kimi 扩展直接在 MCP tools/call 的
 _meta 携带原生 session/agent ID，coordinator 查找已有的对应 attachment；
 不使用共享 MCP 进程自己的 session，也不从目录猜测用户或任务。
 

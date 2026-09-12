@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import tomllib
 
 from vaws_claude_config import owned_entry
 from vaws_local_owner import accessible_windows_path
@@ -25,6 +26,11 @@ def task_settings(server: dict) -> dict[str, str]:
 
 def task_env(client: str, project: Path, *, kimi_config: Path | None = None) -> dict[str, str]:
     """A project provider overrides a same-name user provider in native clients."""
+    if client == "codex" and (path := project / ".codex/config.toml").is_file():
+        servers = tomllib.loads(path.read_text(encoding="utf-8")).get("mcp_servers", {})
+        for name in ("vaws_task", "vaws-task"):
+            if isinstance(server := servers.get(name), dict):
+                return task_settings(server)
     relative = {"cursor": ".cursor/mcp.json", "kimi": ".kimi-code/mcp.json"}.get(client)
     if relative and (path := project / relative).is_file():
         servers = servers_at(path)

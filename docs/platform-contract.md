@@ -26,6 +26,10 @@ callback checks upstream once, advances an eligible new checkout and fixes its
 dependency environment and MCP/hook wiring. SessionStart attaches the native
 identity and actual cwd to VAWS automatically. Cursor preToolUse injects context
 internally and can establish that same attachment if it runs first.
+Codex initialization uses `--codex-global-hooks` and native review of the fixed
+user definitions. These hooks only handle the configured Git worktree family,
+read the actual directory's saved environment and retain their source and command
+across new worktrees. Setup preserves native trust and unrelated custom hooks.
 
 Native Local chats retain their selected directory. Session hooks cannot move
 the parent application. Resume retains the original task, code and environment;
