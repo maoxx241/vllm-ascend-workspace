@@ -70,6 +70,7 @@ def test_bootstrap_does_not_need_installed_packages(monkeypatch):
         calls.append((command, kwargs))
         return subprocess.CompletedProcess(command, 0)
     monkeypatch.setattr(module, "ensure_workspace_interpreter", lambda **kwargs: (_ for _ in ()).throw(AssertionError("bootstrap tried to re-exec")))
+    monkeypatch.setattr(module, "prepare_knowledge", lambda root: {"status": "pending", "ready": False})
     monkeypatch.setattr(module.subprocess, "run", execute)
     assert module.main(["sync", "--locked", "--group", "dev"]) == 0
     command, kwargs = calls[0]
