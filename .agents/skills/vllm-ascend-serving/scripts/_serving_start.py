@@ -534,6 +534,17 @@ def main(argv: list[str] | None = None) -> int:
         if args.allow_external_busy and (len(device_list) != 1 or int(tp or 1) * int(dp or 1) != 1):
             print_json({"status": "needs_input", "error": "--allow-external-busy requires one explicit --devices card and TP1/DP1"})
             return 1
+        if args.allow_external_busy:
+            parallel_flags = {"--tensor-parallel-size", "-tp", "--data-parallel-size", "-dp",
+                              "--pipeline-parallel-size", "-pp", "--data-parallel-size-local", "-dpl",
+                              "--decode-context-parallel-size", "-dcp", "--prefill-context-parallel-size", "-pcp",
+                              "--nnodes", "--config"}
+            options = [arg.split("=", 1)[0].replace("_", "-") for arg in launch_extra_args if arg.startswith("-")]
+            # vLLM accepts abbreviated options and YAML configuration, which
+            # could otherwise replace the single-card topology after validation.
+            if any(flag.startswith(option) for option in options for flag in parallel_flags):
+                print_json({"status": "needs_input", "error": "shared single-card serving takes TP/DP through wrapper --tp/--dp; extra parallel-size overrides and --config are unsupported"})
+                return 1
         command = build_serve_command(
             model=model,
             served_model_name=served_model_name,

@@ -18,6 +18,8 @@ sharing uses `--allow-external-busy`, one `--devices` card and TP1/DP1. The
 coordinator keeps lease, owned process, port and release checks. The default
 requires an idle card. Host and sharing settings survive named relaunch;
 `--no-allow-external-busy` explicitly restores exclusive admission.
+Shared mode takes TP/DP through the wrapper; extra parallel-size options and
+vLLM `--config` files are rejected so they cannot override the single-card request.
 
 The managed service process parses vLLM arguments once during startup. There
 is no extra remote import solely to parse the same arguments before launch.

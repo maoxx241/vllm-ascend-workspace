@@ -68,7 +68,16 @@ class ServeCommandTests(unittest.TestCase):
 
     def test_shared_service_requires_one_explicit_card_and_single_rank(self):
         for options in ([], ["--npu-count", "1"], ["--devices", "0,1"],
-                        ["--devices", "0", "--tp", "2"], ["--devices", "0", "--dp", "2"]):
+                        ["--devices", "0", "--tp", "2"], ["--devices", "0", "--dp", "2"],
+                        ["--devices", "0", "--", "--tensor-parallel-size", "2"],
+                        ["--devices", "0", "--", "--data-parallel-size=2"],
+                        ["--devices", "0", "--", "-tp", "2"],
+                        ["--devices", "0", "--", "-dp=2"],
+                        ["--devices", "0", "--", "--tensor_parallel_size", "2"],
+                        ["--devices", "0", "--", "--pipeline-parallel-size", "2"],
+                        ["--devices", "0", "--", "--tensor_p=2"],
+                        ["--devices", "0", "--", "-t", "2"],
+                        ["--devices", "0", "--", "--config", "remote.yaml"]):
             with self.subTest(options=options):
                 client = SimpleNamespace(run=mock.Mock())
                 with mock.patch.object(serve_start, "task_client", return_value=client), \
