@@ -202,11 +202,23 @@ def pid_alive(pid: int) -> bool:
     if os.name == "nt":
         from vaws_windows import pid_alive as windows_pid_alive
         return windows_pid_alive(pid)
-    try:
-        if (Path("/proc") / str(pid) / "stat").read_text().rsplit(")", 1)[1].split()[0] == "Z":
-            return False
-    except (OSError, IndexError):
-        pass
+    if sys.platform == "darwin":
+        # kill(pid, 0) also succeeds for unreaped zombies on macOS. A dead
+        # leader must reach the remaining-group check instead of being treated
+        # as a live process whose command identity unexpectedly disappeared.
+        try:
+            result = subprocess.run(["ps", "-p", str(pid), "-o", "stat="],
+                                    capture_output=True, text=True, timeout=10, check=False)
+            if result.returncode == 0 and result.stdout.strip().startswith("Z"):
+                return False
+        except (OSError, subprocess.SubprocessError):
+            pass
+    else:
+        try:
+            if (Path("/proc") / str(pid) / "stat").read_text().rsplit(")", 1)[1].split()[0] == "Z":
+                return False
+        except (OSError, IndexError):
+            pass
     try:
         os.kill(pid, 0)
     except ProcessLookupError:

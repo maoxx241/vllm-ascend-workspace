@@ -10,6 +10,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
@@ -153,6 +154,32 @@ class EnvironmentTests(unittest.TestCase):
 
 
 class PidfileTests(unittest.TestCase):
+    def test_darwin_zombie_is_dead_even_when_signal_zero_would_succeed(self) -> None:
+        for state, expected in (("Z", False), ("Z+", False), ("S+", True)):
+            with self.subTest(state=state), mock.patch.object(MODULE.os, "name", "posix"), \
+                 mock.patch.object(MODULE.sys, "platform", "darwin"), \
+                 mock.patch.object(MODULE.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, state + "\n", "")), \
+                 mock.patch.object(MODULE.os, "kill") as probe:
+                self.assertEqual(MODULE.pid_alive(42), expected)
+                if expected:
+                    probe.assert_called_once_with(42, 0)
+                else:
+                    probe.assert_not_called()
+
+    @unittest.skipIf(os.name == "nt", "native POSIX zombie regression")
+    def test_native_ps_branch_identifies_unreaped_child_without_proc(self) -> None:
+        child = subprocess.Popen([sys.executable, "-c", "pass"])
+        try:
+            with mock.patch.object(MODULE.sys, "platform", "darwin"):
+                deadline = time.monotonic() + 5
+                while MODULE.pid_alive(child.pid) and time.monotonic() < deadline:
+                    time.sleep(0.02)
+                self.assertFalse(MODULE.pid_alive(child.pid))
+            # The kernel still knows the PID until this parent reaps it.
+            os.kill(child.pid, 0)
+        finally:
+            child.wait(timeout=5)
+
     def test_darwin_identity_uses_native_birth_time_and_complete_command(self) -> None:
         import vaws_process_identity as identity
         result = subprocess.CompletedProcess([], 0, "S Sat Sep 12 10:20:30 2026 /path with spaces/python worker\n", "")
