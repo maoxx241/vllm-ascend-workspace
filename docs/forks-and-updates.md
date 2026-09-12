@@ -70,10 +70,13 @@ Codex 本地环境 setup、Cursor setup-worktree，以及客户端已有的原�
 [Codex 本地环境](https://learn.chatgpt.com/docs/environments/local-environment) 和
 [Cursor worktrees](https://cursor.com/docs/configuration/worktrees)。
 
-原生回调仅对可识别的默认分支基线采用主仓更新；显式业务分支、旧提交和带改动
-来源保留原选择。detached 新目录恰好匹配默认 tip 时，客户端没有提供用户选择 ref
-的标记，无法再区分显式选择；结果记录这个边界。原生回调不初始化尚未拉取的子模块，
-也不覆盖准备期间发生的编辑。普通 fallback 在另一个目录准备主仓，不改母仓的业务分支。
+原生回调可采用主仓更新的基线包括：新目录精确复制母仓当前 HEAD，或 Codex 的
+detached 新目录精确匹配可识别的本地默认 tip。母仓处于 feature 分支或有未完成
+改动，本身不阻止这个干净的新目录采用主仓。不同于这两类基线的显式 HEAD、
+fork 来源、已选环境及新目录中的编辑继续保留。客户端没有提供用户选择 ref
+的完整标记，显式选择恰好同一基线时无法再区分；结果记录这个边界。回调不初始化
+尚未拉取的子模块，也不覆盖准备期间发生的编辑。普通 fallback 在另一个目录
+准备主仓，不改母仓的业务分支。
 
 更新不可用时可使用可用的本地版本，并返回未更新原因。若本地依赖或接线也无法
 准备，则返回实际失败及证据，不报告已就绪。不自动 stash、reset、rebase 或强推。
