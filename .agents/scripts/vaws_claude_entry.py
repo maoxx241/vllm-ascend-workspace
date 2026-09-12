@@ -70,6 +70,8 @@ def main(argv=None) -> int:
     try:
         target = workspace(Path.cwd(), os.environ.get("CLAUDE_PROJECT_DIR"))
         if args.kind in PROVIDERS:
+            from vaws_venv import ensure_workspace_interpreter
+            ensure_workspace_interpreter(repo_root=ROOT)
             import asyncio
             from vaws_mcp_runtime import serve
             asyncio.run(serve(args.kind, target))
