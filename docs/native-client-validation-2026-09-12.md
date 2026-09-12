@@ -3,7 +3,7 @@
 Status: dated validation evidence, 2026-09-12
 
 This records native client startup and task association, using local Git
-fixtures and the already signed-in clients. It does not establish remote NPU
+worktrees, fixtures and the already signed-in clients. It does not establish remote NPU
 execution or support for untested client versions. Raw transcripts and local
 identifiers remain under untracked `.vaws-local/implementation/`.
 
@@ -84,7 +84,9 @@ read an ignored acceptance file; the second reported that file absent. Shell
 `TaskClient()` also resolved the first session through the native
 `CURSOR_CONVERSATION_ID`, without an explicit context argument or environment
 activation. The MCP result, shell result, actual pwd and source HEAD agreed.
-No managed execution or remote host was involved.
+No managed execution or remote host was involved. Returning to the first GUI
+conversation retained its file, VAWS task, cwd, HEAD and environment key after
+the mother checkout had advanced; its receipt hash was unchanged.
 
 The selected dependency environment remained fixed in each directory. These
 real tasks used workspace `1cd163c` and coordinator `dbff0ef`; later consumer
@@ -151,11 +153,29 @@ The transcripts `create.jsonl`, `resume.jsonl`, `child.jsonl` and
 `mcp-fresh.jsonl` are under
 `.vaws-local/implementation/20260912-shared-root/kimi-validation/`.
 The extended client is available in the
-[personal source fork](https://github.com/maoxx241/kimi-code/tree/codex/native-session-setup).
+[personal source fork](https://github.com/maoxx241/kimi-code/tree/50d1d46e5a15a427453e811e28ad5ad60875cf24).
 It was built with the project's native macOS build script, yielding a
 standalone executable rather than a required Node launcher. The official
-binary is retained for rollback. An official client update may replace the
-extension; setup does not add a watcher to prevent normal updates.
+binary is retained for rollback. The official `upgrade.auto_install` preference
+was set to false for this extension installation, with the prior value recorded.
+Version notices and explicit `kimi update` remain available; installing an
+official version replaces the extension. No update watcher was added.
+
+The installed normal `kimi` entry also completed a fresh model task on workspace
+`d580e1f` with coordinator `f635153`. Its no-argument MCP call and Bash cwd
+agreed, exactly one native attachment was present, and no extra context text
+was injected into the user prompt. It created an ordinary untracked proof file
+for the following fork acceptance. The model/provider and native approval
+settings were retained. Explicit-ID resume through the actual TUI, started from
+the mother checkout, reopened the original worktree and its MCP providers.
+
+Setup now retains the explicit extension choice even when Kimi's own settings
+writer removes TOML comments. It replaces earlier generated hooks from the
+same Git family and preserves custom hooks and independent projects. Three
+end-to-end migration cases passed after the final parser adjustment. The six
+hooks belonging to an older independent test fixture were removed separately
+as test cleanup, with a local backup; the general migration does not remove
+unrelated project hooks.
 
 Independent review found three concrete lifecycle gaps: plain continue from
 the mother checkout still used an exact cwd match; nonzero setup failures and
@@ -168,11 +188,44 @@ real Git-family fixture including pagination, and one delayed-child-hook case
 that proves the turn is not enqueued until attachment completes. The review
 record is `kimi-independent-review.json` beside the Kimi source directory.
 
+Native fork preparation also preserves staged, unstaged and ordinary untracked
+files, including initialized submodules, through the existing workspace-copy
+implementation. It uses linked worktrees and retains the source HEAD and saved
+environment, whether the source is clean or dirty. Forty-three affected Python
+tests passed, including real Git fixtures and unchanged source-index checks.
+This preservation applies only to conversation forks; ordinary new sessions
+continue using startup update preparation.
+
+Native SDK and file-history checks covered complete forks, forks at a selected
+conversation turn, independent child sessions and cross-worktree resume. The
+target has its own metadata, runtime binding and retained file-history blobs;
+deleting the source session did not remove the fork's retained snapshots.
+Directory preparation runs inside the existing source-agent pause, after
+pending file history has settled. An active source is rejected before setup
+creates a directory. The final affected results were 20 SDK, 5 file-history,
+21 lifecycle and 69 TUI/family tests, with core and CLI type checks passing.
+
+The final installed client at `50d1d46` passed a real TUI `/fork`, followed by
+explicit-ID TUI resume from the mother directory. Its read-only model task
+confirmed a new cwd and a new VAWS task through Bash and no-argument MCP.
+The tracked README edit and ordinary untracked proof file matched the parent;
+HEAD, index tree and environment matched, while the parent's files, diff,
+index and HEAD remained unchanged. Evidence is `native-fork-filesystem.json`,
+`native-tui-fork.raw` and `native-tui-fork-resume.raw` in the Kimi validation
+directory. The installation receipt records the exact binary hash and official
+backup under untracked `.vaws-local/client-installations/`.
+
 ## Codex local environment selection
 
 The native `create_thread` worktree API can create a task without selecting a
 local environment. Merely creating the local-environment TOML file does
 not establish that selection for this installed app.
+
+One real API-created worktree task read the local README and inspected its
+cwd and HEAD on canonical main `b63c782`. Its native log recorded
+`hasLocalEnvironment=false`, so setup was skipped and `vaws_session` was not
+available. That is a recorded incomplete integration case, not a successful
+native-environment acceptance.
 
 Read-only inspection of the installed app established two separate values:
 

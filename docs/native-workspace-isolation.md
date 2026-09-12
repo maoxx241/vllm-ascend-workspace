@@ -37,6 +37,9 @@ Grok 的普通启动可使用其原生自动 worktree 偏好；Git 创建回调�
 Kimi 官方[会话 hook](https://moonshotai.github.io/kimi-code/en/customization/hooks)
 执行时 cwd 已经确定，现有插件不能替换它。个人客户端扩展增加一个有界的
 SessionSetup：在原生 workspace/MCP 创建前消费返回 cwd；恢复沿用原目录。
+原生分叉使用新目录和新身份，保留当前暂存、未暂存、普通未跟踪内容、已初始化
+子模块和会话历史。分叉沿用原 HEAD 与已选环境，不检查上游；普通新会话继续
+执行启动时更新。历史位置分叉保持客户端原有的对话截断语义，不回滚当前文件。
 消费端通过 `vaws_client_setup.py --client kimi --kimi-session-setup --apply`
 显式接入，普通官方客户端配置不会包含未知事件。现有信任策略仍由客户端处理。
 扩展模式同时配置用户级 VAWS providers，避免每个新目录重复进行项目 MCP
