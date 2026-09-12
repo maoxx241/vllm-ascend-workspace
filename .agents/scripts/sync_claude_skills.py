@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generate Claude Code skill shims and the ModelScope Trae projection.
 
-`.claude/skills/<name>/SKILL.md` shims come from `.agents/skills`. The six
+`.claude/skills/<name>/SKILL.md` shims come from `.agents/skills`. The seven
 `.trae/skills/modelscope` files are copied byte-for-byte from
 `.agents/skills/modelscope`. Edit ModelScope only in that canonical package;
 this command regenerates the Trae projection.
@@ -15,7 +15,6 @@ import sys
 
 import argparse
 import json
-import shutil
 from pathlib import Path
 
 
@@ -174,8 +173,20 @@ def sync_shims() -> None:
         target = target_dir / "SKILL.md"
         target.write_text(expected_skill_body(skill_dir), encoding="utf-8", newline="\n")
     for existing in CLAUDE_SKILLS.iterdir():
-        if existing.is_dir() and not (AGENTS_SKILLS / existing.name / "SKILL.md").exists():
-            shutil.rmtree(existing)
+        if (
+            not existing.is_dir()
+            or existing.is_symlink()
+            or existing.resolve().parent != CLAUDE_SKILLS.resolve()
+            or (AGENTS_SKILLS / existing.name / "SKILL.md").exists()
+        ):
+            continue
+        target = existing / "SKILL.md"
+        if target.is_symlink() or list(existing.iterdir()) != [target]:
+            continue
+        marker = f"<!-- Generated from .agents/skills/{existing.name}/SKILL.md. Do not edit. -->"
+        if target.is_file() and marker in target.read_text(encoding="utf-8").splitlines():
+            target.unlink()
+            existing.rmdir()
 
 
 def sync_modelscope_trae() -> None:

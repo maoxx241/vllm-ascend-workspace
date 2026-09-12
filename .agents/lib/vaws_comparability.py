@@ -642,11 +642,6 @@ def consume_certificate(certificate: Mapping[str, Any]) -> dict[str, Any]:
     return rebuilt
 
 
-def require_comparable(certificate: Mapping[str, Any]) -> dict[str, Any]:
-    """Alias for :func:`consume_certificate`."""
-    return consume_certificate(certificate)
-
-
 def format_undeclared_fields(certificate: Mapping[str, Any]) -> str:
     """Stable clause used by correctness when confounders are execution keys."""
     keys = [row["key"] for row in certificate.get("confounders", [])]

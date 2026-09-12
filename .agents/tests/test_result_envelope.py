@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for Result Envelope v1, its taxonomy, redaction, and the lint.
+"""Tests for Result Envelope v1, its taxonomy and the lint.
 
 Fixtures use RFC 5737 documentation addresses and ``*.invalid`` hostnames so
 that a realistic-looking failure never puts a real endpoint in a tracked
@@ -28,25 +28,18 @@ from vaws_result_envelope import (  # noqa: E402
     COMPACT_SCHEMA_VERSION,
     ENVIRONMENT_FIELDS,
     LAYERS,
-    REDACTED_HOME,
-    REDACTED_HOST,
-    REDACTED_SECRET,
     SCHEMA_VERSION,
     EnvelopeError,
-    EnvelopeRedactionError,
-    assert_publishable,
     child_digest,
     compact_view,
     compose_child,
     default_exit_code,
-    dumps_publishable,
     emit,
     emit_agent_view,
     escalate_child_layer,
     evidence_ref,
     failure_from_parts,
     knowledge_reference,
-    leak_findings,
     make_attempt,
     make_attempts,
     make_command,
@@ -61,8 +54,6 @@ from vaws_result_envelope import (  # noqa: E402
     outcome_from_parts,
     progress,
     propagate_child_ruled_out,
-    read_envelope,
-    redact,
     text_preview,
     unknown_failure,
     validate_envelope,
@@ -401,13 +392,11 @@ class PartialSuccessTests(unittest.TestCase):
         failure = failure_from_parts(parts)
         self.assertEqual(failure["layer"], "unknown")
 
-    def test_outcome_must_agree_with_parts(self) -> None:
+    def test_success_cannot_hide_a_failed_part(self) -> None:
         with self.assertRaisesRegex(EnvelopeError, "disagrees with parts"):
             base_envelope(
-                outcome="failure",
-                failure=failure_from_parts(self._parts()),
+                outcome="success",
                 parts=self._parts(),
-                next_step=make_next_step(actions=["inspect node-3"]),
             )
 
     def test_failing_part_must_carry_a_layer(self) -> None:
@@ -966,144 +955,9 @@ class ReproducibilityTests(unittest.TestCase):
             )
 
 
-class RedactionTests(unittest.TestCase):
-    def _identity_envelope(self) -> dict:
-        command = make_command(
-            argv=[
-                "ssh",
-                "-p",
-                "22",
-                "root@198.51.100.7",
-                "python3",
-                "/home/example-user/work/run.py",
-            ]
-        )
-        return base_envelope(
-            outcome="failure",
-            summary="ssh to the container failed",
-            command=command,
-            attempt=make_attempt(
-                command=command,
-                reproduce=command["display"],
-                started_at=NOW,
-            ),
-            failure=make_failure(
-                layer="transport",
-                reason_code="ssh_connect_failed",
-                message="ssh: connect to host 198.51.100.7 port 22: refused",
-                attribution_basis=["ssh exited 255 before the remote shell ran"],
-            ),
-            next_step=make_next_step(actions=["verify the container ssh port"]),
-            extensions={"env": {"HF_TOKEN": "hf_realsecretvaluegoeshere"}},
-        )
-
-    def test_routable_host_and_home_path_are_redacted(self) -> None:
-        envelope = self._identity_envelope()
-        self.assertTrue(leak_findings(envelope))
-        redacted = redact(envelope)
-        text = json.dumps(redacted)
-        self.assertNotIn("198.51.100.7", text)
-        self.assertNotIn("/home/example-user", text)
-        self.assertIn(REDACTED_HOST, text)
-        self.assertIn(REDACTED_HOME, text)
-        self.assertEqual(leak_findings(redacted), [])
-
-    def test_secret_like_keys_are_replaced_not_previewed(self) -> None:
-        redacted = redact(self._identity_envelope())
-        self.assertEqual(
-            redacted["extensions"]["env"]["HF_TOKEN"], REDACTED_SECRET
-        )
-
-    def test_documentation_addresses_are_redacted_too(self) -> None:
-        """Redaction does not reason about whether an address is 'safe'."""
-        command = make_command(
-            argv=["ssh", "root@192.0.2.10", "true"],
-        )
-        envelope = base_envelope(
-            command=command,
-            attempt=make_attempt(
-                command=command, reproduce=command["display"], started_at=NOW
-            ),
-        )
-        redacted = redact(envelope)
-        self.assertNotIn("192.0.2.10", json.dumps(redacted))
-        assert_publishable(redacted)
-
-    def test_shared_weight_paths_survive_redaction(self) -> None:
-        """Model paths name no user and are load-bearing for comparison."""
-        command = make_command(
-            argv=[
-                "python3",
-                ".agents/skills/vllm-ascend-benchmark/scripts/bench_run.py",
-                "--model",
-                "/home/weights/Qwen3.5-35B",
-            ]
-        )
-        envelope = base_envelope(
-            command=command,
-            attempt=make_attempt(
-                command=command, reproduce=command["display"], started_at=NOW
-            ),
-        )
-        redacted = redact(envelope)
-        self.assertIn("/home/weights/Qwen3.5-35B", json.dumps(redacted))
-        assert_publishable(redacted)
-
-    def test_loopback_and_invalid_hostnames_are_publishable(self) -> None:
-        command = make_command(
-            argv=["curl", "http://127.0.0.1:8000/health"],
-        )
-        envelope = base_envelope(
-            command=command,
-            attempt=make_attempt(
-                command=command, reproduce=command["display"], started_at=NOW
-            ),
-            extensions={"base_url": "http://container-1.example.invalid:8000"},
-        )
-        assert_publishable(envelope)
-
-    def test_publishable_dump_refuses_a_surviving_leak(self) -> None:
-        envelope = base_envelope(extensions={"note": "see 2001:db8:1:2::5 host"})
-        with self.assertRaises(EnvelopeRedactionError):
-            assert_publishable(envelope)
-        # A pattern redaction cannot reach is caught at serialization time.
-        self.assertIn(
-            "<redacted-host>", dumps_publishable(envelope)
-        )
-
-    def test_assert_publishable_reports_a_json_path(self) -> None:
-        envelope = base_envelope(extensions={"host": "203.0.113.9"})
-        with self.assertRaises(EnvelopeRedactionError) as ctx:
-            assert_publishable(envelope)
-        self.assertIn("$.extensions.host", str(ctx.exception))
 
 
 class VersioningTests(unittest.TestCase):
-    def test_same_version_is_validated_strictly(self) -> None:
-        envelope = base_envelope()
-        view = read_envelope(envelope)
-        self.assertEqual(view["compat_warnings"], [])
-
-    def test_future_version_is_read_leniently(self) -> None:
-        envelope = base_envelope(
-            outcome="failure",
-            failure=make_failure(
-                layer="transport",
-                reason_code="ssh_connect_failed",
-                message="refused",
-                attribution_basis=["ssh exited 255"],
-            ),
-            next_step=make_next_step(actions=["check the port"]),
-        )
-        future = json.loads(json.dumps(envelope))
-        future["schema_version"] = "vaws.result-envelope.v2"
-        future["outcome"] = "degraded"
-        future["failure"]["layer"] = "scheduler"
-        view = read_envelope(future)
-        self.assertEqual(view["outcome"], "failure")
-        self.assertEqual(view["failure"]["layer"], "unknown")
-        self.assertEqual(len(view["compat_warnings"]), 3)
-
     def test_schema_document_matches_the_library_contract(self) -> None:
         schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
         self.assertEqual(

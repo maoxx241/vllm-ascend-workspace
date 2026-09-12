@@ -114,6 +114,17 @@ class BuildInputOwnershipTests(unittest.TestCase):
 
 
 class LauncherTests(unittest.TestCase):
+    def test_available_package_launch_does_not_read_the_lock(self) -> None:
+        with mock.patch.object(coordinator, "find_spec", return_value=object()), mock.patch.object(
+            coordinator, "inspect", side_effect=AssertionError("startup must not scan dependency pins")
+        ):
+            coordinator.require_package()
+
+    def test_unavailable_package_explains_the_setup_remedy(self) -> None:
+        with mock.patch.object(coordinator, "find_spec", return_value=None):
+            with self.assertRaisesRegex(coordinator.CoordinatorUnavailable, "vaws_deps.py sync"):
+                coordinator.require_package()
+
     def test_status_reports_the_installed_package(self) -> None:
         proc = subprocess.run(
             [sys.executable, str(SCRIPTS / "vaws.py"), "status"],
@@ -123,7 +134,6 @@ class LauncherTests(unittest.TestCase):
         self.assertEqual(payload["name"], "vaws-coordinator")
         self.assertIn(payload["state"], {"missing", "off_spec", "ready"})
         self.assertEqual(payload["remedy"], "uv run --no-project python .agents/scripts/vaws_deps.py sync")
-        self.assertIsNone(payload["manager_state_dir_default"])
 
     def test_status_without_package_reports_missing(self) -> None:
         proc = subprocess.run(

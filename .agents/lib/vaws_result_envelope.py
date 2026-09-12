@@ -10,13 +10,8 @@ readable contract is ``.agents/schemas/result-envelope-v1.schema.json``;
 this module is the authoritative validator because ``jsonschema`` is not
 guaranteed to be installed on a client machine.
 
-Two serialization modes exist on purpose:
-
-* ``dumps(envelope)`` keeps full runtime fidelity (hosts, ports, absolute
-  paths) and is only ever safe to write under untracked ``.vaws-local/``.
-* ``dumps_publishable(envelope)`` redacts first and refuses to emit if a
-  leak pattern survives redaction. Use it for anything that may end up in
-  a tracked file, a PR body, or a knowledge candidate.
+Results retain full runtime evidence under untracked ``.vaws-local/``.
+Public knowledge contribution uses a copy prepared by the knowledge package.
 """
 
 from __future__ import annotations
@@ -30,10 +25,9 @@ import uuid
 from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, Literal, Mapping, MutableMapping, Sequence
+from typing import Any, Literal, Mapping, MutableMapping, Sequence
 
 SCHEMA_VERSION = "vaws.result-envelope.v1"
-SCHEMA_MAJOR = 1
 ACCEPTED_SCHEMA_VERSIONS = frozenset({SCHEMA_VERSION})
 
 PROGRESS_SENTINEL = "__VAWS_PROGRESS__="
@@ -321,10 +315,6 @@ class EnvelopeError(ValueError):
     """Raised when an envelope violates the v1 contract."""
 
 
-class EnvelopeRedactionError(EnvelopeError):
-    """Raised when a publishable serialization would still leak identity."""
-
-
 def utc_now() -> str:
     return (
         datetime.now(timezone.utc)
@@ -391,167 +381,6 @@ def evidence_ref(
         "sha256": sha256,
         "note": note,
     }
-
-
-# ---------------------------------------------------------------------------
-# Redaction
-# ---------------------------------------------------------------------------
-
-#: Only literals that identify nothing survive redaction. RFC 5737
-#: documentation ranges are deliberately *not* on this list: a redactor that
-#: has to reason about whether an address is "safe" is a redactor that will
-#: eventually be wrong, and loopback is the only address a diagnosis actually
-#: needs to keep.
-_SAFE_IPV4 = (
-    re.compile(r"^127\."),
-    re.compile(r"^0\.0\.0\.0$"),
-    re.compile(r"^255\.255\.255\.255$"),
-)
-_IPV4_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
-_IPV6_RE = re.compile(r"\b(?:[0-9A-Fa-f]{1,4}:){2,7}[0-9A-Fa-f]{1,4}\b")
-_USER_AT_HOST_RE = re.compile(r"\b[\w.+-]{1,64}@[\w.-]{1,255}\b")
-_HOME_PATH_RE = re.compile(r"(?:/Users|/home)/[^/\s\"']+")
-_WINDOWS_HOME_RE = re.compile(r"[A-Za-z]:\\\\?Users\\\\?[^\\\s\"']+")
-#: Shared data roots that live under ``/home`` on Ascend hosts but name no
-#: user. Model paths are load-bearing diagnostic information — losing them
-#: would make two results incomparable for the sake of hiding nothing.
-_SAFE_HOME_PREFIXES = (
-    "/home/weights",
-    "/home/models",
-    "/home/data",
-    "/home/cache",
-    "/home/shared",
-)
-_SECRET_KEY_RE = re.compile(
-    r"(?:^|_)(?:api_?key|access_?key|auth|credential|pass(?:word)?|secret|token)"
-    r"(?:_|$)",
-    re.IGNORECASE,
-)
-_SECRET_VALUE_RES = (
-    re.compile(r"\b(?:gh[pousr]|github_pat)_[A-Za-z0-9_]{16,}\b"),
-    re.compile(r"\bBearer\s+[A-Za-z0-9._\-]{12,}\b", re.IGNORECASE),
-    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
-)
-_SAFE_HOST_SUFFIXES = (".invalid", ".example", ".example.com", ".localhost")
-
-REDACTED_HOST = "<redacted-host>"
-REDACTED_USER = "<redacted-user>"
-REDACTED_SECRET = "<redacted-secret>"
-REDACTED_HOME = "<redacted-home>"
-
-
-def _ipv4_is_safe(value: str) -> bool:
-    return any(pattern.search(value) for pattern in _SAFE_IPV4)
-
-
-def _home_path_is_safe(value: str) -> bool:
-    return value.startswith(_SAFE_HOME_PREFIXES)
-
-
-def _host_is_safe(value: str) -> bool:
-    lowered = value.lower()
-    if lowered in {"localhost", "example.invalid"}:
-        return True
-    return any(lowered.endswith(suffix) for suffix in _SAFE_HOST_SUFFIXES)
-
-
-def redact_text(value: str) -> str:
-    """Replace runtime identity with stable placeholders.
-
-    Loopback addresses and ``*.invalid`` / ``*.example`` hostnames survive:
-    they identify nothing and a diagnosis is much harder to read without
-    them. Everything else that looks like an address, a ``user@host`` pair, a
-    home directory or a credential is replaced.
-    """
-    result = value
-    for pattern in _SECRET_VALUE_RES:
-        result = pattern.sub(REDACTED_SECRET, result)
-
-    def _mask_user_at_host(match: re.Match[str]) -> str:
-        text = match.group(0)
-        user, _, host = text.partition("@")
-        if _host_is_safe(host) or (
-            _IPV4_RE.fullmatch(host) and _ipv4_is_safe(host)
-        ):
-            return f"{REDACTED_USER}@{host}"
-        return f"{REDACTED_USER}@{REDACTED_HOST}"
-
-    result = _USER_AT_HOST_RE.sub(_mask_user_at_host, result)
-    result = _IPV4_RE.sub(
-        lambda m: m.group(0) if _ipv4_is_safe(m.group(0)) else REDACTED_HOST,
-        result,
-    )
-    result = _IPV6_RE.sub(
-        lambda m: m.group(0) if m.group(0) in {"::1"} else REDACTED_HOST,
-        result,
-    )
-    result = _HOME_PATH_RE.sub(
-        lambda m: m.group(0) if _home_path_is_safe(m.group(0)) else REDACTED_HOME,
-        result,
-    )
-    result = _WINDOWS_HOME_RE.sub(REDACTED_HOME, result)
-    return result
-
-
-def _redact_value(key: str | None, value: Any) -> Any:
-    if isinstance(value, Mapping):
-        return {str(k): _redact_value(str(k), v) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_redact_value(key, item) for item in value]
-    if isinstance(value, str):
-        if key is not None and _SECRET_KEY_RE.search(key):
-            return REDACTED_SECRET
-        return redact_text(value)
-    return value
-
-
-def redact(envelope: Mapping[str, Any]) -> dict[str, Any]:
-    """Return a deep copy with runtime identity replaced by placeholders."""
-    return _redact_value(None, dict(envelope))
-
-
-def leak_findings(payload: Any, *, path: str = "$") -> list[str]:
-    """Report residual identity leaks as ``<json path>: <reason>`` strings."""
-    findings: list[str] = []
-    if isinstance(payload, Mapping):
-        for key, value in payload.items():
-            child = f"{path}.{key}"
-            if isinstance(key, str) and _SECRET_KEY_RE.search(key):
-                if value not in (None, REDACTED_SECRET):
-                    findings.append(f"{child}: secret-like key carries a value")
-            findings.extend(leak_findings(value, path=child))
-        return findings
-    if isinstance(payload, (list, tuple)):
-        for index, value in enumerate(payload):
-            findings.extend(leak_findings(value, path=f"{path}[{index}]"))
-        return findings
-    if isinstance(payload, str):
-        for candidate in _IPV4_RE.findall(payload):
-            if not _ipv4_is_safe(candidate):
-                findings.append(f"{path}: routable IPv4 literal")
-                break
-        for candidate in _IPV6_RE.findall(payload):
-            if candidate != "::1":
-                findings.append(f"{path}: IPv6 literal")
-                break
-        for candidate in _HOME_PATH_RE.findall(payload):
-            if not _home_path_is_safe(candidate):
-                findings.append(f"{path}: absolute user home path")
-                break
-        if _WINDOWS_HOME_RE.search(payload):
-            findings.append(f"{path}: absolute user home path")
-        for pattern in _SECRET_VALUE_RES:
-            if pattern.search(payload):
-                findings.append(f"{path}: secret-like value")
-                break
-        for match in _USER_AT_HOST_RE.finditer(payload):
-            _, _, host = match.group(0).partition("@")
-            if not _host_is_safe(host) and not (
-                _IPV4_RE.fullmatch(host) and _ipv4_is_safe(host)
-            ):
-                findings.append(f"{path}: user@host pair")
-                break
-    return findings
 
 
 # ---------------------------------------------------------------------------
@@ -1455,8 +1284,8 @@ def envelope_from_skill_payload(
             attributed = attributed or "unknown"
             mapped_reason = mapped_reason or "unattributed"
         elif status == "timeout":
-            attributed = attributed or "transport"
-            mapped_reason = mapped_reason or "remote_timeout"
+            attributed = attributed or "unknown"
+            mapped_reason = mapped_reason or "unattributed"
         else:
             attributed = attributed or "unknown"
             mapped_reason = mapped_reason or "unattributed"
@@ -1508,16 +1337,16 @@ def envelope_from_skill_payload(
         )
 
     derived = outcome_from_parts(parts) if parts else outcome
-    if parts and derived != outcome:
-        # Fan-out wins when remote-dev results were incorporated.
+    if parts and outcome == "success" and derived != outcome:
+        # A successful transport call does not prove the business operation
+        # passed. Failed suboperations can downgrade success, but never erase
+        # the caller's business failure, blocking reason, or cancellation.
         outcome = derived
         if outcome in FAILING_OUTCOMES and failure is None:
             failure = failure_from_parts(parts)
             next_step = make_next_step(
                 actions=["inspect parts and the original remote-dev outcomes in refs"]
             )
-        if outcome == "success":
-            failure = None
 
     command = make_command(argv=argv_list or [resolved_entry], cwd=".")
     target = payload.get("session_id") or payload.get("machine") or target_id
@@ -2014,7 +1843,7 @@ def validate_envelope(envelope: Mapping[str, Any]) -> None:
     parts = envelope.get("parts")
     if isinstance(parts, list) and parts:
         derived = outcome_from_parts(parts)
-        if derived != outcome:
+        if outcome == "success" and derived != "success":
             errors.append(
                 f"outcome {outcome!r} disagrees with parts (derived {derived!r})"
             )
@@ -2033,41 +1862,6 @@ def validate_envelope(envelope: Mapping[str, Any]) -> None:
 
     if errors:
         raise EnvelopeError("; ".join(errors))
-
-
-def read_envelope(
-    payload: Mapping[str, Any],
-    *,
-    accepted_versions: Iterable[str] = ACCEPTED_SCHEMA_VERSIONS,
-) -> dict[str, Any]:
-    """Lag-tolerant read path for consumers.
-
-    Consumers lag producers, so a reader must not crash on a newer producer.
-    An unrecognized ``schema_version`` or an unrecognized enum value is
-    downgraded to ``unknown`` and recorded in ``compat_warnings`` instead of
-    raising, while a same-version envelope is still validated strictly.
-    """
-    if not isinstance(payload, Mapping):
-        raise EnvelopeError("envelope root must be an object")
-    view = deepcopy(dict(payload))
-    warnings: list[str] = []
-    version = view.get("schema_version")
-    if version in set(accepted_versions):
-        validate_envelope(view)
-        view["compat_warnings"] = []
-        return view
-    warnings.append(f"unrecognized schema_version {version!r}; read leniently")
-    if view.get("outcome") not in OUTCOMES:
-        warnings.append(f"unrecognized outcome {view.get('outcome')!r}")
-        view["outcome"] = "failure"
-    failure = view.get("failure")
-    if isinstance(failure, Mapping) and failure.get("layer") not in LAYER_SET:
-        warnings.append(f"unrecognized failure layer {failure.get('layer')!r}")
-        failure = dict(failure)
-        failure["layer"] = "unknown"
-        view["failure"] = failure
-    view["compat_warnings"] = warnings
-    return view
 
 
 # ---------------------------------------------------------------------------
@@ -2129,26 +1923,6 @@ def write_full_record(envelope: Mapping[str, Any], directory: Path) -> Path:
 def dumps(envelope: Mapping[str, Any]) -> str:
     """Full-fidelity JSON. Safe only for untracked ``.vaws-local/`` writes."""
     return json.dumps(dict(envelope), ensure_ascii=False, indent=2, sort_keys=True)
-
-
-def dumps_publishable(envelope: Mapping[str, Any]) -> str:
-    """Redacted JSON, refusing to emit if a leak survives redaction."""
-    redacted = redact(envelope)
-    findings = leak_findings(redacted)
-    if findings:
-        raise EnvelopeRedactionError(
-            "redacted envelope still carries identity: " + "; ".join(findings)
-        )
-    return json.dumps(redacted, ensure_ascii=False, indent=2, sort_keys=True)
-
-
-def assert_publishable(envelope: Mapping[str, Any]) -> None:
-    """Raise unless the envelope is already free of runtime identity."""
-    findings = leak_findings(dict(envelope))
-    if findings:
-        raise EnvelopeRedactionError(
-            "envelope carries runtime identity: " + "; ".join(findings)
-        )
 
 
 def emit(

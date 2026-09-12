@@ -15,7 +15,6 @@ LIB_DIR = ROOT / ".agents" / "lib"
 if str(LIB_DIR) not in sys.path:
     sys.path.insert(0, str(LIB_DIR))
 
-from vaws_session_id import normalize_session_id  # noqa: E402
 from vaws_validate import (  # noqa: E402
     ValidationError,
     parse_device_csv,
@@ -53,20 +52,6 @@ class ValidatorTests(unittest.TestCase):
             with self.subTest(value=value):
                 with self.assertRaises(ValidationError):
                     parse_device_csv(value)
-
-
-class SessionIdTests(unittest.TestCase):
-    def test_long_session_ids_keep_hash_suffix(self) -> None:
-        raw_a = "feature-" + ("a" * 80) + "-111"
-        raw_b = "feature-" + ("a" * 80) + "-222"
-        sid_a = normalize_session_id(raw_a)
-        sid_b = normalize_session_id(raw_b)
-        self.assertIsNotNone(sid_a)
-        self.assertIsNotNone(sid_b)
-        assert sid_a is not None and sid_b is not None
-        self.assertLessEqual(len(sid_a), 64)
-        self.assertLessEqual(len(sid_b), 64)
-        self.assertNotEqual(sid_a, sid_b)
 
 
 class RunStateIsolationTests(unittest.TestCase):

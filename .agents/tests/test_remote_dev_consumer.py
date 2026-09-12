@@ -38,7 +38,8 @@ def load_script(name: str):
     spec = importlib.util.spec_from_file_location(f"_test_{name}", path)
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
-    spec.loader.exec_module(module)
+    with mock.patch("vaws_venv.ensure_workspace_interpreter"):
+        spec.loader.exec_module(module)
     return module
 
 
@@ -66,42 +67,41 @@ class ClientConfigurationTests(unittest.TestCase):
     REQUIRED_ENV = ("REMOTE_DEV_DEFAULT_USER", "REMOTE_DEV_STATE_DIR")
     FORBIDDEN_ENV = ("REMOTE_DEV_RESOLVERS", "REMOTE_DEV_RUNTIME_ENV_FILE")
 
-    def test_tracked_json_clients_use_the_package_and_inject_the_environment(self) -> None:
-        for relative in (".mcp.json", ".cursor/mcp.json"):
-            with self.subTest(file=relative):
-                servers = json.loads((ROOT / relative).read_text(encoding="utf-8"))["mcpServers"]
-                entry = servers["remote-dev"]
-                self.assertEqual(entry["args"], self.SERVER_ARGS)
-                self.assertTrue(entry["command"].endswith(".venv/bin/python") or entry["command"].endswith("python"), entry["command"])
-                self.assertEqual(servers["vaws-task"]["args"], self.TASK_ARGS)
-                for key in self.REQUIRED_ENV:
-                    self.assertIn(key, entry["env"])
-                for key in self.FORBIDDEN_ENV:
-                    self.assertNotIn(key, entry["env"])
-
-    def test_tracked_toml_examples_use_the_package_and_inject_the_environment(self) -> None:
-        for relative, server in ((".codex/config.example.toml", "remote_dev"), (".grok/config.example.toml", "remote-dev")):
-            with self.subTest(file=relative):
-                data = tomllib.loads((ROOT / relative).read_text(encoding="utf-8"))
-                entry = data["mcp_servers"][server]
-                self.assertEqual(entry["args"], self.SERVER_ARGS)
-                task = data["mcp_servers"].get("vaws_task") or data["mcp_servers"]["vaws-task"]
-                self.assertEqual(task["args"], self.TASK_ARGS)
-                for key in self.REQUIRED_ENV:
-                    self.assertIn(key, entry["env"])
-                for key in self.FORBIDDEN_ENV:
-                    self.assertNotIn(key, entry["env"])
-
-    def test_claude_and_codex_hooks_use_the_package_guards(self) -> None:
-        settings = json.loads((ROOT / ".claude/settings.example.json").read_text(encoding="utf-8"))
-        commands = [hook["command"] for group in settings["hooks"]["PreToolUse"] for hook in group["hooks"]]
-        self.assertTrue(commands)
-        self.assertTrue(all("remote_dev.hooks.claude_remote_guard" in command for command in commands), commands)
-        codex = (ROOT / ".codex/config.example.toml").read_text(encoding="utf-8")
-        self.assertIn("remote_dev.hooks.codex_remote_guard", codex)
-        self.assertNotIn(".agents/scripts/remote_dev.py", settings.__class__.__name__ or "")
-        self.assertNotIn("remote_dev.py", json.dumps(settings))
-        self.assertNotIn(".agents/scripts/remote_dev.py", codex)
+    def test_generated_clients_use_installed_servers_and_pinned_native_hooks(self) -> None:
+        setup = load_script("vaws_client_setup")
+        with tempfile.TemporaryDirectory() as tmp, pytest.MonkeyPatch.context() as runtime:
+            project = Path(tmp).resolve()
+            receipt = selected_runtime(runtime, setup, project)
+            for client, config_path, hook_path in (
+                ("claude", ".mcp.json", ".claude/settings.local.json"),
+                ("cursor", ".cursor/mcp.json", ".cursor/hooks.json"),
+                ("codex", ".codex/config.toml", ".codex/hooks.json"),
+                ("grok", ".grok/config.toml", ".grok/hooks/vaws-session.json"),
+            ):
+                with self.subTest(client=client):
+                    files = setup.configuration(client, project)
+                    if config_path.endswith(".toml"):
+                        servers = tomllib.loads(files[project / config_path])["mcp_servers"]
+                        entry, task = servers["remote_dev"], servers["vaws_task"]
+                    else:
+                        servers = json.loads(files[project / config_path])["mcpServers"]
+                        entry, task = servers["remote-dev"], servers["vaws-task"]
+                    self.assertEqual(entry["command"], sys.executable)
+                    self.assertEqual(entry["args"], self.SERVER_ARGS)
+                    self.assertEqual(task["args"], self.TASK_ARGS)
+                    self.assertEqual(entry["env"]["VAWS_ENV_RECEIPT"], receipt["receipt"])
+                    for key in self.REQUIRED_ENV:
+                        self.assertIn(key, entry["env"])
+                    for key in self.FORBIDDEN_ENV:
+                        self.assertNotIn(key, entry["env"])
+                    hooks = json.loads(files[project / hook_path])["hooks"]
+                    first = hooks["sessionStart" if client == "cursor" else "SessionStart"][0]
+                    command = first["command"] if client == "cursor" else first["hooks"][0]["command"]
+                    arguments = setup.hook_argv(command)
+                    self.assertEqual(arguments[0], sys.executable)
+                    self.assertEqual(Path(arguments[1]), ROOT / ".agents/hooks/vaws_session.py")
+                    self.assertEqual(arguments[arguments.index("--client") + 1], client)
+                    self.assertEqual(arguments[arguments.index("--environment-receipt") + 1], receipt["receipt"])
 
     def test_client_setup_emits_package_entry_with_environment(self) -> None:
         setup = load_script("vaws_client_setup")

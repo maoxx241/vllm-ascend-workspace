@@ -9,14 +9,14 @@ Properties:
   with a message that names the field;
 * the status machine matches its documented transition table exactly;
 * generated run ids are always safe ids;
-* the Python validator agrees with ``run-manifest-v1.schema.json`` on the
-  rules the schema states (known divergences are recorded as defects).
+* generated manifests satisfy the schema shipped by the same installed owner.
 """
 
 from __future__ import annotations
 
 import itertools
 import json
+from importlib.resources import files
 import sys
 import tempfile
 import unittest
@@ -40,7 +40,7 @@ def new_manifest(**kwargs):
     return _new_manifest(**kwargs)
 from test_property_support import Gen, run_cases  # noqa: E402
 
-SCHEMA = json.loads((ROOT / ".agents" / "schemas" / "run-manifest-v1.schema.json").read_text(encoding="utf-8"))
+SCHEMA = json.loads(files("vaws_coordinator").joinpath("schemas/run-manifest-v1.schema.json").read_text(encoding="utf-8"))
 SAFE_ID_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789._-"
 SAFE_ENV_WORDS = ("VLLM", "HCCL", "ASCEND", "PATH", "HOME", "RANK", "WORLD", "SIZE", "DEBUG", "LEVEL", "TOKENIZER", "AUTHORITY", "PASSAGE", "KEYRING", "SECRETARY")
 # Words the documented filter must reject when they appear as a whole
@@ -298,36 +298,19 @@ class InvalidManifestProperties(unittest.TestCase):
 class SchemaAgreementProperties(unittest.TestCase):
     """The Python validator and the JSON schema must draw the same boundary."""
 
-    def test_schema_and_validator_share_patterns_and_enums(self) -> None:
-        props = SCHEMA["properties"]
-        self.assertEqual(props["run_id"]["pattern"], rm.SAFE_ID_RE.pattern)
-        self.assertEqual(props["parent_run_id"]["oneOf"][1]["pattern"], rm.SAFE_ID_RE.pattern)
-        self.assertEqual(set(props["run_type"]["enum"]), set(rm.RUN_TYPES))
-        self.assertEqual(set(props["status"]["enum"]), set(rm.RUN_STATUSES))
-        self.assertEqual(props["created_at"]["pattern"], rm.RFC3339_UTC_RE.pattern)
-        self.assertEqual(props["code"]["properties"]["source_head"]["pattern"], rm.GIT_SHA_RE.pattern)
-        self.assertEqual(props["code"]["properties"]["snapshot_commit"]["pattern"], rm.GIT_SHA_RE.pattern)
-        self.assertEqual(set(SCHEMA["required"]), {
-            "schema_version", "run_id", "parent_run_id", "run_type", "code", "workspace_snapshot", "environment", "model",
-            "topology", "command", "environment_variables", "artifacts", "status", "created_at", "updated_at",
-        })
-
-    def test_manifests_generated_here_satisfy_the_schema_shape(self) -> None:
+    def test_generated_manifests_satisfy_the_installed_owner_schema(self) -> None:
+        from jsonschema.validators import validator_for
+        validator_type = validator_for(SCHEMA)
+        validator_type.check_schema(SCHEMA)
+        validator = validator_type(SCHEMA)
         def body(gen: Gen, _index: int) -> None:
             manifest = valid_manifest(gen)
-            self.assertEqual(set(manifest), set(SCHEMA["required"]))
-            self.assertEqual(manifest["schema_version"], SCHEMA["properties"]["schema_version"]["const"])
-            for item in manifest["artifacts"]:
-                self.assertTrue(set(item) <= set(SCHEMA["properties"]["artifacts"]["items"]["properties"]))
+            validate_manifest(manifest)
+            validator.validate(manifest)
 
         run_cases(50, body, label="schema shape")
 
-    def test_known_defect_validator_accepts_schema_version_true_and_float(self) -> None:
-        """KNOWN DEFECT (low): the schema says ``schema_version: {const: 1}``;
-        JSON Schema distinguishes ``1`` from ``true`` and (for const) from
-        ``1.0``. The Python check ``!= 1`` accepts ``True`` and ``1.0`` and
-        preserves them on write, so a manifest the library calls valid fails
-        external schema validation. Evidence: ``schema_version=True`` validates."""
+    def test_schema_version_rejects_boolean_and_float_coercion(self) -> None:
         manifest = new_manifest(run_type="debug", created_at="2026-07-25T12:00:00Z")
         self.assertEqual(SCHEMA["properties"]["schema_version"], {"const": 1})
         for value in (True, 1.0):
@@ -336,7 +319,7 @@ class SchemaAgreementProperties(unittest.TestCase):
                 with self.assertRaises(RunManifestError):
                     validate_manifest(bad)
 
-    def test_known_defect_validator_accepts_artifact_shapes_the_schema_forbids(self) -> None:
+    def test_unknown_artifact_fields_are_rejected(self) -> None:
         """Unknown artifact keys are rejected. ``sha256`` is no longer a field."""
         manifest = new_manifest(run_type="debug", created_at="2026-07-25T12:00:00Z")
         self.assertFalse(SCHEMA["properties"]["artifacts"]["items"]["additionalProperties"])
@@ -346,7 +329,7 @@ class SchemaAgreementProperties(unittest.TestCase):
                 with self.assertRaises(RunManifestError):
                     validate_manifest(dict(manifest, artifacts=[item]))
 
-    def test_known_defect_free_form_objects_may_validate_but_not_round_trip(self) -> None:
+    def test_non_json_keys_cannot_silently_change_during_round_trip(self) -> None:
         """Free-form objects must be JSON-native so write/load round-trips.
 
         The schema is the contract; the validator is a strict subset. Integer

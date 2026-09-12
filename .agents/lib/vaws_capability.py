@@ -13,8 +13,6 @@ from vaws_dependency import (
     REMEDY,
     USABLE_STATES,
     all_packages,
-    inspect,
-    require_package,
 )
 SHARED_AVAILABLE = "available"
 SHARED_ABSENT = "absent"
@@ -501,12 +499,3 @@ def dumps_doctor_view(envelope: Mapping[str, Any], *, full: bool = False, record
     view = compact_view(envelope, record_ref=record_ref)
     view["runtime"] = ((envelope.get("extensions") or {}).get("capability_report") or {}).get("runtime")
     return json.dumps(view, ensure_ascii=False, indent=2)
-
-
-def checkout_usable(name: str, env: Mapping[str, str] | None = None) -> bool:
-    del env
-    return inspect(name)["state"] in USABLE_STATES
-
-
-def package_required(name: str) -> dict[str, Any]:
-    return require_package(name)

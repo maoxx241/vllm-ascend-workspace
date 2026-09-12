@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import fnmatch
 import ipaddress
+import posixpath
 import re
 import subprocess
 import sys
@@ -214,10 +215,8 @@ ALLOWED_PATH_SEGMENT_PATTERNS: tuple[str, ...] = ()
 DEFAULT_EXCLUDED_PATH_GLOBS: tuple[str, ...] = (
     "vllm/**",
     "vllm-ascend/**",
-    ".vaws-local/**",
-    ".vaws-runtime/**",
-    ".remote-dev/state/**",
 )
+PRIVATE_STATE_ROOTS = (".vaws-local", ".vaws-runtime", ".remote-dev/state")
 
 # Internal-name rules. Each is data so a maintainer can extend coverage through
 # the policy file instead of patching this module.
@@ -258,176 +257,21 @@ DEFAULT_NAME_RULES: tuple[dict[str, str], ...] = (
 )
 
 
-# --------------------------------------------------------------------------
-# Minimal YAML reader
-# --------------------------------------------------------------------------
-
-
 def load_yaml_mapping(text: str) -> dict[str, Any]:
-    """Parse the policy file, preferring PyYAML and falling back to a subset.
-
-    The pre-commit hook must work on a checkout with nothing installed, so this
-    module never hard-depends on PyYAML. The fallback understands exactly the
-    shapes the policy file uses: nested mappings, lists of mappings, scalars,
-    and `#` comments.
-    """
-
-    try:  # pragma: no cover - depends on the local interpreter
-        import yaml  # type: ignore[import-not-found]
-    except ImportError:
-        return _parse_yaml_subset(text)
-    data = yaml.safe_load(text)
+    """Read policy through the YAML dependency already owned by knowledge."""
+    try:
+        import yaml
+    except ImportError as exc:
+        raise LeakGuardError(KNOWLEDGE_MISSING) from exc
+    try:
+        data = yaml.safe_load(text)
+    except yaml.YAMLError as exc:
+        raise LeakGuardError(f"invalid YAML policy: {exc}") from exc
     if data is None:
         return {}
     if not isinstance(data, dict):
         raise LeakGuardError("policy file root must be a mapping")
     return data
-
-
-def _scalar(raw: str) -> Any:
-    value = raw.strip()
-    if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
-        inner = value[1:-1]
-        return inner.replace('\\"', '"') if value[0] == '"' else inner
-    if value in {"", "~", "null"}:
-        return None
-    if value in {"true", "True"}:
-        return True
-    if value in {"false", "False"}:
-        return False
-    if value.startswith("[") and value.endswith("]"):
-        body = value[1:-1].strip()
-        return [_scalar(item) for item in _split_flow(body)] if body else []
-    if re.fullmatch(r"-?\d+", value):
-        return int(value)
-    return value
-
-
-def _split_flow(body: str) -> list[str]:
-    items: list[str] = []
-    depth = 0
-    quote = ""
-    current: list[str] = []
-    for char in body:
-        if quote:
-            current.append(char)
-            if char == quote:
-                quote = ""
-            continue
-        if char in {'"', "'"}:
-            quote = char
-            current.append(char)
-            continue
-        if char in "[{":
-            depth += 1
-        elif char in "]}":
-            depth -= 1
-        if char == "," and depth == 0:
-            items.append("".join(current))
-            current = []
-            continue
-        current.append(char)
-    if current:
-        items.append("".join(current))
-    return [item for item in (part.strip() for part in items) if item]
-
-
-def _strip_comment(line: str) -> str:
-    quote = ""
-    for index, char in enumerate(line):
-        if quote:
-            if char == quote:
-                quote = ""
-            continue
-        if char in {'"', "'"}:
-            quote = char
-            continue
-        if char == "#" and (index == 0 or line[index - 1] in " \t"):
-            return line[:index]
-    return line
-
-
-def _parse_yaml_subset(text: str) -> dict[str, Any]:
-    lines: list[tuple[int, str]] = []
-    for raw in text.splitlines():
-        body = _strip_comment(raw).rstrip()
-        if not body.strip():
-            continue
-        lines.append((len(body) - len(body.lstrip(" ")), body.strip()))
-    value, index = _parse_block(lines, 0, 0)
-    if index != len(lines):
-        raise LeakGuardError(f"policy file has unsupported YAML at line {index + 1}")
-    if value is None:
-        return {}
-    if not isinstance(value, dict):
-        raise LeakGuardError("policy file root must be a mapping")
-    return value
-
-
-def _parse_block(lines: list[tuple[int, str]], index: int, indent: int) -> tuple[Any, int]:
-    if index >= len(lines):
-        return None, index
-    if lines[index][1].startswith("- "):
-        return _parse_sequence(lines, index, lines[index][0])
-    return _parse_mapping(lines, index, indent)
-
-
-def _parse_mapping(lines: list[tuple[int, str]], index: int, indent: int) -> tuple[Any, int]:
-    result: dict[str, Any] = {}
-    while index < len(lines):
-        line_indent, body = lines[index]
-        if line_indent < indent:
-            break
-        if line_indent > indent:
-            raise LeakGuardError(f"policy file has inconsistent indentation: {body!r}")
-        if ":" not in body:
-            raise LeakGuardError(f"policy file line is not a mapping entry: {body!r}")
-        key, _, rest = body.partition(":")
-        key = key.strip()
-        rest = rest.strip()
-        index += 1
-        if rest:
-            result[key] = _scalar(rest)
-            continue
-        if index < len(lines) and lines[index][0] > line_indent:
-            child, index = _parse_block(lines, index, lines[index][0])
-            result[key] = child
-        elif index < len(lines) and lines[index][0] == line_indent and lines[index][1].startswith("- "):
-            child, index = _parse_sequence(lines, index, line_indent)
-            result[key] = child
-        else:
-            result[key] = None
-    return result, index
-
-
-def _parse_sequence(lines: list[tuple[int, str]], index: int, indent: int) -> tuple[Any, int]:
-    result: list[Any] = []
-    while index < len(lines):
-        line_indent, body = lines[index]
-        if line_indent != indent or not body.startswith("- "):
-            break
-        item = body[2:].strip()
-        index += 1
-        if ":" in item and not (item.startswith('"') or item.startswith("'")):
-            key, _, rest = item.partition(":")
-            entry: dict[str, Any] = {}
-            if rest.strip():
-                entry[key.strip()] = _scalar(rest)
-            else:
-                if index < len(lines) and lines[index][0] > indent:
-                    child, index = _parse_block(lines, index, lines[index][0])
-                    entry[key.strip()] = child
-                else:
-                    entry[key.strip()] = None
-            child_indent = indent + 2
-            while index < len(lines) and lines[index][0] >= child_indent and not lines[index][1].startswith("- "):
-                nested, index = _parse_mapping(lines, index, lines[index][0])
-                if isinstance(nested, dict):
-                    entry.update(nested)
-            result.append(entry)
-            continue
-        result.append(_scalar(item))
-    return result, index
 
 
 # --------------------------------------------------------------------------
@@ -1130,7 +974,22 @@ def tracked_files(repo_root: Path) -> list[str]:
         if mode == "160000":  # submodule gitlink; content is not ours to police
             continue
         paths.append(path)
+    require_public_paths(paths)
     return sorted(paths)
+
+
+def require_public_paths(paths: Sequence[str]) -> None:
+    """Reject private runtime roots before reading their contents."""
+    for path in paths:
+        normalized = posixpath.normpath(path.replace("\\", "/"))
+        if normalized.startswith("/") or re.match(r"^[a-zA-Z]:", normalized) or normalized == ".." or normalized.startswith("../"):
+            raise LeakGuardError("scan paths must stay relative to the repository")
+        normalized = "/".join(part.rstrip(" .").casefold() for part in normalized.split("/"))
+        for root in PRIVATE_STATE_ROOTS:
+            if normalized == root or normalized.startswith(root + "/"):
+                # Report the fixed root only; even a private filename can carry
+                # identifiers. This restriction is independent of allowlists.
+                raise LeakGuardError(f"private runtime state under {root}/ must not be tracked or scanned for publication")
 
 
 def _is_binary(data: bytes) -> bool:
@@ -1166,6 +1025,7 @@ def scan_files(
     *,
     progress: ProgressFn = _noop,
 ) -> ScanResult:
+    require_public_paths(paths)
     require_knowledge_redact()
     result = ScanResult()
     total = len(paths)
@@ -1303,6 +1163,8 @@ def scan_diff(diff_text: str, policy: Policy) -> ScanResult:
                 parsed = _parse_unified_file_header(line)
                 if line.startswith("+++ "):
                     path = parsed
+                    if path != "/dev/null":
+                        require_public_paths([path])
                 continue
             hunk = DIFF_HUNK_RE.match(line)
             if hunk:
@@ -1350,6 +1212,7 @@ def scan_diff(diff_text: str, policy: Policy) -> ScanResult:
 
 
 def staged_diff(repo_root: Path) -> str:
+    _require_public_diff_paths(repo_root, ["--cached"])
     raw = run_git(
         ["diff", "--cached", "--unified=0", "--no-color", "--diff-filter=ACMR"],
         repo_root=repo_root,
@@ -1361,12 +1224,19 @@ def staged_diff(repo_root: Path) -> str:
 def range_diff(repo_root: Path, commit_range: str) -> str:
     if not re.fullmatch(r"[A-Za-z0-9_./^~@{}-]{1,200}", commit_range):
         raise LeakGuardError(f"unsafe commit range: {commit_range!r}")
+    _require_public_diff_paths(repo_root, [commit_range])
     raw = run_git(
         ["diff", "--unified=0", "--no-color", "--diff-filter=ACMR", commit_range],
         repo_root=repo_root,
     )
     assert isinstance(raw, str)
     return raw
+
+
+def _require_public_diff_paths(repo_root: Path, selection: Sequence[str]) -> None:
+    raw = run_git(["diff", *selection, "--name-only", "--no-renames", "-z", "--diff-filter=ACMR"], repo_root=repo_root)
+    assert isinstance(raw, str)
+    require_public_paths([path for path in raw.split("\0") if path])
 
 
 def unused_entry_ids(policy: Policy) -> list[str]:
