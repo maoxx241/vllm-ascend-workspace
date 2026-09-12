@@ -253,6 +253,18 @@ def native_ready(repo_root: Path, *, pin: str | Path | None = None) -> dict:
     return _lookup(Path(repo_root), sys.platform)
 
 
+def saved_ready(repo_root: Path, *, target_platform: str | None = None) -> dict:
+    """Resume the checkout's saved environment, independent of parent pins or edits."""
+    repo_root = Path(repo_root)
+    target_platform = target_platform or sys.platform
+    configuration = _configured(repo_root, target_platform)
+    if configuration is not None:
+        if "receipt" not in configuration:
+            raise EnvironmentError(f"saved environment selection has no receipt: {_selection_path(repo_root, target_platform)}")
+        return read_receipt(configuration["receipt"], expected_platform=target_platform)
+    return _lookup(repo_root, target_platform, require_configuration=target_platform == "win32")
+
+
 def windows_ready(repo_root: Path) -> dict:
     """Read native Windows facts from WSL; never synthesize Windows ABI facts."""
     if pin := os.environ.get(MANAGED_PIN_ENV):

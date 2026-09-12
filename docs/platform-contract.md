@@ -22,16 +22,21 @@ uv run --no-project python .agents/scripts/vaws_client.py kimi --workspace PATH
 
 The client entry uses an installed native CLI. It creates an independent editing
 directory by default and reuses an explicitly supplied existing directory.
-Client-specific arguments, including native resume IDs, follow `--`. The actual
-process cwd is set before its first tool call. Native desktop clients continue
+Client-specific arguments, including native resume IDs, follow `--`. A resume
+invocation must also supply the original `--workspace PATH`; native IDs
+are passed through and do not make this entry look up or guess a historical directory.
+The process cwd is set before its first tool call. Native desktop clients continue
 to own their UI's Local/Worktree choice; a session hook cannot move a running
 parent application.
 
-The entry also checks first-use/update configuration locally. A configured
-background watcher prepares official default-branch commits without modifying an
-existing editing directory. Default new CLI copies may use the prepared revision's
-source and client wiring. Existing GUI checkouts can change through explicit
-maintenance with apply. See [forks and updates](forks-and-updates.md).
+Before creating a new editing directory, the configured entry checks upstream
+once and prepares its exact default-branch revision and pinned dependencies.
+The new copy can use that revision's source, client wiring and immutable environment;
+preparation failures retain usable local versions. Existing `--workspace` directories
+and resumed sessions keep their code and selected environment. There is no periodic
+watcher. GUI hooks do not update the cwd already chosen by the native application;
+this entry does not provide universal GUI startup updating. Explicit maintenance can
+use apply. See [forks and updates](forks-and-updates.md).
 
 The child CLI receives the selected native environment through PATH and
 VIRTUAL_ENV. Its bare `python` and `uv run --no-project python` use that environment;
@@ -76,8 +81,10 @@ also pins its managed owner environment independently, so a later lock edit in a
 WSL shell cannot switch the owner used by an already running task. Project-relative
 launch aliases are also per identity and never redirected to another version.
 
-Setup and normal startup have different costs: explicit sync prepares missing
-dependencies, while startup only resolves a completed environment. Knowledge
+Setup and startup have different costs: explicit sync prepares missing
+dependencies. Creating a new CLI editing directory may prepare an upstream update
+once before launch; reopening an existing directory only resolves its selected
+completed environment. Knowledge
 preparation remains an optional capability after sync and does not invalidate a
 completed package environment when model/index preparation is unavailable.
 

@@ -87,13 +87,12 @@ def common_dir(root: Path) -> Path:
 
 
 @contextmanager
-def update_lock(root: Path, *, watcher: bool = False):
-    """One publisher/watcher per Git repository, including linked worktrees."""
+def update_lock(root: Path):
+    """Serialize updates for a Git repository, including linked worktrees."""
     from vaws_local_owner import windows_mounted_workspace
     if windows_mounted_workspace(root):
         raise Deferred("windows_owner_required", "run workspace_update.py with the native Windows owner")
-    name = "vaws-update-watch.lock" if watcher else "vaws-update.lock"
-    with (common_dir(root) / name).open("a+b") as handle:
+    with (common_dir(root) / "vaws-update.lock").open("a+b") as handle:
         acquired = False
         try:
             if os.name == "nt":
@@ -401,7 +400,7 @@ class WorkspaceUpdater:
         return {"status": "applied", "branch": release["branch"], "target": release["target"],
                 "knowledge": prepared.get("knowledge", {})}
 
-    def step(self, *, apply: bool = False, activate: bool = True) -> dict:
+    def step(self, *, apply: bool = False, activate: bool = True, for_session: bool = False) -> dict:
         try:
             release = self.discover()
             public = {key: value for key, value in release.items() if key != "push_url"}
@@ -413,7 +412,10 @@ class WorkspaceUpdater:
                 except Deferred as exc:
                     result["local_apply_deferred"] = exc.reason
                 return result
-            active = self.safe_inputs(release) if activate else self.preparation_inputs(release)
+            # A new session must be able to adopt this revision before spending
+            # time preparing it. Explicit preparation can still cache updates
+            # while the editing source is dirty or on a business branch.
+            active = self.safe_inputs(release) if activate or for_session else self.preparation_inputs(release)
             if self.state.get("active") == release["target"] and git(self.root, "rev-parse", "HEAD") == release["target"]:
                 self.save(status="current")
                 return {"status": "current", **public}
@@ -428,7 +430,7 @@ class WorkspaceUpdater:
                 prepared = self.prepare(release, active)
                 self.save(phase="prepared", status="prepared", prepared=prepared)
                 # Dependencies may take minutes; explicit activation must check
-                # again, while background preparation never edits this tree.
+                # again, while preparation alone never edits this tree.
                 if activate:
                     self.safe_inputs(release)
             # Explicit target prevents branch.<name>.pushRemote/pushDefault from
@@ -489,29 +491,3 @@ def prepared_source(root: Path) -> Path | None:
         return stage
     except (OSError, ValueError, RuntimeError, KeyError, subprocess.SubprocessError):
         return None
-
-
-def watch(root: Path, *, interval: float = 300, once: bool = False, emit=print, sleep=time.sleep) -> None:
-    failures = 0
-    with update_lock(root, watcher=True):
-        while True:
-            config = read_json(root / ".vaws-local/updates/config.json")
-            if config.get("enabled") is False:
-                emit(json.dumps({"status": "disabled"}))
-                return
-            try:
-                with update_lock(root):
-                    result = WorkspaceUpdater(root).step(apply=True, activate=False)
-            except Deferred as exc:
-                result = {"status": exc.status, "reason": exc.reason}
-            emit(json.dumps(result, ensure_ascii=False))
-            if once:
-                return
-            failures = min(failures + 1, 4) if result["status"] == "deferred" else 0
-            delay = max(1, float(config.get("interval_seconds", interval))) * (2 ** failures)
-            deadline = time.monotonic() + min(delay, 3600)
-            while time.monotonic() < deadline:
-                sleep(min(1, max(0, deadline - time.monotonic())))
-                if read_json(root / ".vaws-local/updates/config.json").get("enabled") is False:
-                    emit(json.dumps({"status": "disabled"}))
-                    return

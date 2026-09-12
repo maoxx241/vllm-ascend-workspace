@@ -36,11 +36,14 @@ forks, must belong to personal GitHub Users. Organization forks, redirected
 names and unrelated same-name repositories do not qualify. Canonical project
 repositories remain upstreams; `.gitmodules` keeps community URLs.
 
-Native CLI/session entries start configured upstream preparation without waiting
-for downloads. The background watcher never changes an existing editing
-checkout or running environment. It periodically tracks the canonical default
-branch and its pinned components; no Release is required. New CLI editing copies
-can use a prepared revision. Explicit maintenance of an existing checkout can use
+Before `vaws_client.py` creates a new editing directory, it checks the canonical
+default branch once and prepares that revision and its pinned components; no
+Release is required. Eligible new copies use the prepared source and immutable
+environment. Existing `--workspace` directories and resumed sessions retain their
+code and selected environment. There is no periodic watcher or update during work.
+Preparation failure leaves usable local versions available. Native GUI clients
+own their Worktree choice; a session hook cannot replace their selected cwd.
+Explicit maintenance of an existing checkout can use
 `.agents/scripts/workspace_update.py apply`; this is not a per-task Agent step.
 Dirty sources and divergence stay for judgment when an update is needed.
 See [forks and updates](docs/forks-and-updates.md).

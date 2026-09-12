@@ -1,8 +1,7 @@
-"""Nonblocking first-use notice and upstream watcher wiring for native clients.
+"""Local first-use notice and one upstream preparation before a new CLI copy.
 
-This entry does no network I/O or installation. Existing GUI session hooks only
-start preparation; the CLI launcher can copy an already prepared revision into a
-new editing directory. Ordinary tasks remain available.
+Only prepare_session does network I/O. Hooks and existing editing directories
+never call it; ordinary task calls have no update work.
 """
 from __future__ import annotations
 
@@ -10,13 +9,12 @@ import json
 import os
 from pathlib import Path
 import subprocess
-import sys
 import time
 
 
-def copy_workspace_identity(source: Path, target: Path, *, disable_updates: bool = False) -> None:
+def copy_workspace_identity(source: Path, target: Path) -> None:
     """Copy a non-secret setup snapshot; never copy task identity or replace it."""
-    from vaws_github import atomic_json, load_github_identity
+    from vaws_github import load_github_identity
     identity = load_github_identity(source)
     if identity:
         destination = target / ".vaws-local/github.json"
@@ -28,13 +26,6 @@ def copy_workspace_identity(source: Path, target: Path, *, disable_updates: bool
                 stream.write("\n")
         except FileExistsError:
             pass
-    if disable_updates:
-        # A prepared checkout shares the originating repository's watcher.
-        path = target / ".vaws-local/updates/config.json"
-        configuration = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
-        if not isinstance(configuration, dict):
-            raise ValueError("prepared update configuration must be a JSON object")
-        atomic_json(path, {**configuration, "enabled": False})
 
 
 def workspace_entry(root: Path, *, announce: bool = True) -> dict:
@@ -68,49 +59,7 @@ def workspace_entry(root: Path, *, announce: bool = True) -> dict:
             return {"state": "configuration_invalid", "message": "Update configuration must be a JSON object."}
         if config.get("enabled") is False:
             return {"state": "disabled"}
-        result = {"state": "configured"}
-        # The watcher's common-Git OS lock is the authority. This local TTL only
-        # avoids spawning duplicate contenders on rapid hook events.
-        launch = state / "last-launch.json"
-        try:
-            previous = json.loads(launch.read_text(encoding="utf-8"))
-            age = time.time() - float(previous["at"])
-            if 0 <= age < 60:
-                return result
-        except (OSError, ValueError, TypeError, KeyError):
-            pass
-        command = [getattr(sys, "_base_executable", sys.executable), str(root / ".agents/scripts/workspace_update.py"),
-                   "--root", str(root), "watch"]
-        from vaws_local_owner import windows_mounted_workspace, accessible_windows_path, managed_path
-        if windows_mounted_workspace(root):
-            # NTFS accessed by WSL and native Windows must have one lock owner.
-            # Launch native Python; its watcher takes the Windows OS lock.
-            from vaws_environment import windows_ready
-            receipt = windows_ready(root)
-            command = [accessible_windows_path(receipt["python"]),
-                       managed_path(root / ".agents/scripts/workspace_update.py", windows=True),
-                       "--root", managed_path(root, windows=True), "watch"]
-        options = {"start_new_session": True} if os.name != "nt" else {
-            "creationflags": subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP}
-        environment = dict(os.environ)
-        for name in ("VAWS_ENV_RECEIPT", "VAWS_MANAGED_ENV_RECEIPT", "VAWS_CONTEXT_FILE",
-                     "VAWS_PARENT_CONTEXT", "VAWS_ATTACH_CONTEXT", "CODEX_THREAD_ID", "CODEX_SESSION_ID",
-                     "VAWS_RELEASE_LAUNCH", "VAWS_VENV_REEXEC", "VAWS_SKIP_VENV_REEXEC", "VIRTUAL_ENV",
-                     "PYTHONHOME", "PYTHONPATH"):
-            environment.pop(name, None)
-        if windows_mounted_workspace(root):
-            # WSLENV otherwise forwards stale parent pins even when Python's
-            # subprocess env has removed their Linux values.
-            forwarded = environment.get("WSLENV", "").split(":")
-            environment["WSLENV"] = ":".join(item for item in forwarded
-                                              if item.split("/", 1)[0] in environment)
-        with (state / "watch.log").open("ab") as stream:
-            process = subprocess.Popen(command, cwd=root, env=environment,
-                                       stdin=subprocess.DEVNULL, stdout=stream, stderr=stream,
-                                       close_fds=True, **options)
-        launch.write_text(json.dumps({"at": time.time(), "pid": process.pid}), encoding="utf-8")
-        result["watcher"] = "requested"
-        return result
+        return {"state": "configured"}
     except Exception as exc:
         # This optional entry cannot prevent the user's native session. Retain
         # concrete diagnostics instead of converting an update failure into a
@@ -118,9 +67,43 @@ def workspace_entry(root: Path, *, announce: bool = True) -> dict:
         return {"state": "unavailable", "error": str(exc)}
 
 
-def report_workspace_entry(root: Path, *, announce: bool = True) -> None:
-    if os.name == "nt" and hasattr(sys.stderr, "reconfigure"):
-        sys.stderr.reconfigure(encoding="utf-8")
-    result = workspace_entry(root, announce=announce)
-    if result.get("state") not in {"configured", "identity_pending", "disabled"}:
-        print(json.dumps({"workspace_updates": result}, ensure_ascii=False), file=sys.stderr, flush=True)
+def prepare_session(root: Path) -> dict:
+    """One synchronous preparation, before a new editing directory is created.
+
+    Uses the updater's ordinary Git lock. Failure keeps the available local
+    version usable and leaves detailed updater evidence under .vaws-local.
+    """
+    result = workspace_entry(root)
+    if result["state"] != "configured":
+        return result
+    try:
+        from vaws_local_owner import windows_mounted_workspace, accessible_windows_path, managed_path
+        if windows_mounted_workspace(root):
+            # Shared NTFS Git state has one native Windows lock/process owner.
+            from vaws_environment import windows_ready
+            receipt = windows_ready(root)
+            command = [accessible_windows_path(receipt["python"]), "-c",
+                       "import json,sys;from pathlib import Path;root=Path(sys.argv[1]);"
+                       "sys.path.insert(0,str(root/'.agents/lib'));"
+                       "from vaws_workspace_entry import prepare_session;"
+                       "print(json.dumps(prepare_session(root),ensure_ascii=False))",
+                       managed_path(root, windows=True)]
+            environment = dict(os.environ)
+            for name in ("VAWS_ENV_RECEIPT", "VAWS_MANAGED_ENV_RECEIPT", "VAWS_CONTEXT_FILE",
+                         "VAWS_PARENT_CONTEXT", "VAWS_ATTACH_CONTEXT", "CODEX_THREAD_ID", "CODEX_SESSION_ID",
+                         "VAWS_RELEASE_LAUNCH", "VAWS_VENV_REEXEC", "VAWS_SKIP_VENV_REEXEC", "VIRTUAL_ENV",
+                         "PYTHONHOME", "PYTHONPATH"):
+                environment.pop(name, None)
+            environment["WSLENV"] = ":".join(item for item in environment.get("WSLENV", "").split(":")
+                                                if item.split("/", 1)[0] in environment)
+            process = subprocess.run(command, cwd=root, env=environment, stdin=subprocess.DEVNULL,
+                                     stdout=subprocess.PIPE, text=True, encoding="utf-8", check=True)
+            return json.loads(process.stdout)
+        from vaws_workspace_update import Deferred, WorkspaceUpdater, update_lock
+        try:
+            with update_lock(root):
+                return WorkspaceUpdater(root).step(apply=True, activate=False, for_session=True)
+        except Deferred as exc:
+            return {"status": exc.status, "reason": exc.reason}
+    except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
+        return {"status": "deferred", "reason": "session_update_pending", "error": str(exc)}

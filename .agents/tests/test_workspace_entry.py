@@ -1,4 +1,4 @@
-"""Startup must stay offline and cannot mutate a live GUI checkout."""
+"""New CLI copies update once; existing sessions and GUI hooks stay unchanged."""
 import json
 from pathlib import Path
 import sys
@@ -31,31 +31,24 @@ def test_hidden_gui_hook_does_not_consume_visible_first_use_notice(tmp_path):
     assert entry.workspace_entry(tmp_path)["state"] == "needs_github_user"
 
 
-def test_gui_starts_only_background_watcher_and_throttles(tmp_path, monkeypatch):
-    root = tmp_path / "工作目录 with spaces"
-    configure(root)
-    calls = []
-    monkeypatch.setattr(entry.subprocess, "Popen", lambda cmd, **kwargs: calls.append((cmd, kwargs)) or types.SimpleNamespace(pid=123))
-    monkeypatch.setitem(sys.modules, "vaws_workspace_update", types.SimpleNamespace(
-        activate_prepared=lambda *a: (_ for _ in ()).throw(AssertionError("GUI activation"))))
-    assert entry.workspace_entry(root)["watcher"] == "requested"
-    assert entry.workspace_entry(root)["state"] == "configured"
-    assert len(calls) == 1
-    command, options = calls[0]
-    assert command[-3:] == ["--root", str(root.resolve()), "watch"]
-    assert options["stdin"] == entry.subprocess.DEVNULL
-    assert "VAWS_CONTEXT_FILE" not in options["env"]
-    assert options.get("shell") is None
-
-
-def test_entry_never_activates_existing_checkout(tmp_path, monkeypatch):
+def test_local_entry_never_starts_children_or_updates(tmp_path, monkeypatch):
     configure(tmp_path)
-    order = []
-    monkeypatch.setitem(sys.modules, "vaws_workspace_update", types.SimpleNamespace(
-        activate_prepared=lambda root: order.append("activate") or {"state": "applied"}))
-    monkeypatch.setattr(entry.subprocess, "Popen", lambda *a, **k: order.append("watch") or types.SimpleNamespace(pid=123))
+    monkeypatch.setattr(entry.subprocess, "Popen", lambda *a, **k: pytest.fail("background process"))
+    monkeypatch.setitem(sys.modules, "vaws_workspace_update", types.SimpleNamespace())
     assert entry.workspace_entry(tmp_path)["state"] == "configured"
-    assert order == ["watch"]
+    assert entry.workspace_entry(tmp_path, announce=False)["state"] == "configured"
+
+
+def test_prepare_is_one_bounded_call_and_never_activates(tmp_path, monkeypatch):
+    configure(tmp_path)
+    from contextlib import nullcontext
+    calls = []
+    monkeypatch.setitem(sys.modules, "vaws_workspace_update", types.SimpleNamespace(
+        Deferred=RuntimeError, update_lock=lambda root: nullcontext(),
+        WorkspaceUpdater=lambda root: types.SimpleNamespace(
+            step=lambda **kwargs: calls.append(kwargs) or {"status": "ready"})))
+    assert entry.prepare_session(tmp_path) == {"status": "ready"}
+    assert calls == [{"apply": True, "activate": False, "for_session": True}]
 
 
 def test_disabled_or_invalid_config_does_not_break_startup(tmp_path, monkeypatch):
@@ -70,19 +63,7 @@ def test_disabled_or_invalid_config_does_not_break_startup(tmp_path, monkeypatch
     assert entry.workspace_entry(tmp_path)["state"] == "unavailable"
 
 
-def test_watcher_does_not_inherit_client_identity_or_release_flags(tmp_path, monkeypatch):
-    configure(tmp_path)
-    for key in ("VAWS_RELEASE_LAUNCH", "VAWS_ENV_RECEIPT", "VAWS_MANAGED_ENV_RECEIPT",
-                "VAWS_CONTEXT_FILE", "VAWS_PARENT_CONTEXT", "CODEX_THREAD_ID", "VAWS_VENV_REEXEC"):
-        monkeypatch.setenv(key, "parent-value")
-    calls = []
-    monkeypatch.setattr(entry.subprocess, "Popen", lambda cmd, **kwargs: calls.append(kwargs) or types.SimpleNamespace(pid=123))
-    assert entry.workspace_entry(tmp_path)["watcher"] == "requested"
-    assert all(key not in calls[0]["env"] for key in ("VAWS_RELEASE_LAUNCH", "VAWS_ENV_RECEIPT",
-               "VAWS_MANAGED_ENV_RECEIPT", "VAWS_CONTEXT_FILE", "VAWS_PARENT_CONTEXT", "CODEX_THREAD_ID", "VAWS_VENV_REEXEC"))
-
-
-def test_windows_owner_watcher_uses_native_paths(tmp_path, monkeypatch):
+def test_windows_owner_preparation_uses_native_paths_and_clears_parent_pins(tmp_path, monkeypatch):
     configure(tmp_path)
     import vaws_local_owner as owner
     import vaws_environment as envs
@@ -94,12 +75,15 @@ def test_windows_owner_watcher_uses_native_paths(tmp_path, monkeypatch):
     monkeypatch.setenv("WSLENV", "VAWS_ENV_RECEIPT/w:VISIBLE/w")
     monkeypatch.setenv("VISIBLE", "retained")
     calls = []
-    monkeypatch.setattr(entry.subprocess, "Popen", lambda cmd, **kwargs: calls.append((cmd, kwargs)) or types.SimpleNamespace(pid=123))
-    assert entry.workspace_entry(tmp_path)["watcher"] == "requested"
+    monkeypatch.setattr(entry.subprocess, "run", lambda cmd, **kwargs: calls.append((cmd, kwargs)) or types.SimpleNamespace(stdout='{"status":"ready"}'))
+    assert entry.prepare_session(tmp_path)["status"] == "ready"
     command, options = calls[0]
     assert command[0] == "/mnt/c/Python/python.exe"
-    assert command[1] == "C:\\Workspace\\workspace_update.py"
-    assert command[-1] == "watch"
+    assert command[1] == "-c"
+    assert "prepare_session(root)" in command[2]
+    assert command[-1] == "C:\\Workspace\\" + tmp_path.name
+    assert "VAWS_ENV_RECEIPT" not in options["env"]
+    assert not options.get("start_new_session")
     assert options["env"]["WSLENV"] == "VISIBLE/w"
 
 
@@ -108,7 +92,7 @@ def client_fixture(tmp_path, monkeypatch):
     root = tmp_path / "root"
     stage = tmp_path / "release"
     target = tmp_path / "copy"
-    for path in (root, stage, target):
+    for path in (root, stage):
         path.mkdir()
     launcher = stage / ".agents/scripts/vaws_client.py"
     launcher.parent.mkdir(parents=True)
@@ -118,17 +102,19 @@ def client_fixture(tmp_path, monkeypatch):
     spec.loader.exec_module(client)
     monkeypatch.setattr(client, "ROOT", root)
     monkeypatch.setattr(client, "resolve_client", lambda _: ["native-client"])
-    monkeypatch.setattr(client, "prepare_workspace", lambda *a, **k: {"workspace": str(target)})
+    monkeypatch.setattr(client, "prepare_workspace", lambda *a, **k: {"state": "ready", "workspace": str(target)})
     monkeypatch.setattr(client, "ensure_workspace_interpreter", lambda **kwargs: None)
-    monkeypatch.setattr(entry, "report_workspace_entry", lambda *a, **k: None)
+    monkeypatch.delenv("VAWS_RELEASE_LAUNCH", raising=False)
+    monkeypatch.setattr(entry, "prepare_session", lambda *a, **k: {"status": "ready"})
     import vaws_environment as envs
     import vaws_workspace_update as updates
     monkeypatch.setattr(updates, "prepared_source", lambda _: stage)
     receipt = {"python": sys.executable, "root": sys.prefix, "platform": sys.platform, "receipt": "new-pin", "key": "new"}
     monkeypatch.setattr(envs, "native_ready", lambda _: receipt)
+    monkeypatch.setattr(envs, "saved_ready", lambda *a, **k: receipt)
     monkeypatch.setattr(envs, "select_environment", lambda *args: None)
     monkeypatch.setitem(sys.modules, "vaws_client_setup", types.SimpleNamespace(
-        build_plan=lambda *a: {}, apply_plan=lambda *a: {}, launch_env=lambda *a: {}))
+        build_plan=lambda *a: {}, apply_plan=lambda *a: {}, launch_env=lambda *a: {}, existing_task_env=lambda *a: {}))
     launches = []
     monkeypatch.setattr(client, "run_client", lambda command, cwd, environment: launches.append((command, cwd, environment)) or 0)
     return client, root, stage, receipt, launches
@@ -157,7 +143,7 @@ def test_new_release_runs_its_own_launcher_with_prepared_interpreter(client_fixt
     assert not {"VAWS_ENV_RECEIPT", "VAWS_MANAGED_ENV_RECEIPT", "VAWS_VENV_REEXEC"} & environment.keys()
     assert not launches
     assert json.loads((stage / ".vaws-local/github.json").read_text())["login"] == "alice"
-    assert json.loads((stage / ".vaws-local/updates/config.json").read_text())["enabled"] is False
+    assert not (stage / ".vaws-local/updates/config.json").exists()
 
 
 def test_optional_release_exec_failure_continues_original_workspace(client_fixture, monkeypatch, capsys):
@@ -240,15 +226,71 @@ def test_release_handoff_really_executes_prepared_python(tmp_path):
         "sys.path.insert(0,sys.argv[1]);import vaws_client as c\n"
         "import vaws_workspace_entry as e;import vaws_workspace_update as u;import vaws_environment as d\n"
         "c.ROOT=Path(sys.argv[2]);c.resolve_client=lambda name:['unused-native-command']\n"
-        "e.report_workspace_entry=lambda *a,**k:None;u.prepared_source=lambda root:Path(sys.argv[3])\n"
+        "e.prepare_session=lambda *a,**k:{'status':'ready'};u.prepared_source=lambda root:Path(sys.argv[3])\n"
         "d.native_ready=lambda root:{'python':sys.argv[4]}\n"
         "raise SystemExit(c.main(['codex','--','literal 中文','$(never-shell)']))\n",
         encoding="utf-8")
     result = subprocess.run([sys.executable, str(driver), str(scripts), str(root), str(stage), str(executable)],
-                            env={**os.environ, "VAWS_ENV_RECEIPT": "old-pin", "VAWS_MANAGED_ENV_RECEIPT": "old-owner-pin"},
+                            env={**os.environ, "VAWS_RELEASE_LAUNCH": "", "VAWS_ENV_RECEIPT": "old-pin", "VAWS_MANAGED_ENV_RECEIPT": "old-owner-pin"},
                             capture_output=True, encoding="utf-8", timeout=30)
     assert result.returncode == 0, result.stderr
     observed = json.loads(result.stdout)
     assert Path(observed["prefix"]).resolve() == environment_root.resolve()
     assert observed["argv"] == ["codex", "--", "literal 中文", "$(never-shell)"]
     assert observed["pin"] is None and observed["hop"] == "1"
+
+
+def test_new_explicit_directory_checks_once_before_copy_and_interpreter_hop(client_fixture, monkeypatch):
+    client, root, stage, receipt, launches = client_fixture
+    import vaws_workspace_update as updates
+    events = []
+    monkeypatch.setattr(entry, "prepare_session", lambda _: events.append("check") or {"status": "ready"})
+    monkeypatch.setattr(updates, "prepared_source", lambda _: None)
+    original = client.prepare_workspace
+    monkeypatch.setattr(client, "prepare_workspace", lambda *a, **k: events.append("copy") or original(*a, **k))
+    target = root.parent / "copy"
+    assert client.main(["codex", "--workspace", str(target)]) == 0
+    assert events == ["check", "copy"]
+    assert launches[0][2]["VAWS_ENV_RECEIPT"] == receipt["receipt"]
+    # A ready-interpreter reexec re-enters the launcher with its internal marker.
+    events.clear()
+    assert client.main(["codex"]) == 0
+    assert events == ["copy"]
+
+
+def test_new_explicit_directory_can_adopt_prepared_revision(client_fixture, monkeypatch):
+    client, root, stage, receipt, launches = client_fixture
+    class Handoff(BaseException):
+        pass
+    seen = []
+    def execute(python, arguments, environment):
+        seen.append(arguments)
+        raise Handoff
+    monkeypatch.setattr(client.os, "execvpe", execute)
+    target = root.parent / "explicit new path"
+    with pytest.raises(Handoff):
+        client.main(["codex", "--workspace", str(target)])
+    assert seen[0][1] == str(stage / ".agents/scripts/vaws_client.py")
+    assert seen[0][-2:] == ["--workspace", str(target)]
+
+
+def test_offline_check_uses_available_source_without_second_attempt(client_fixture, monkeypatch, capsys):
+    client, root, stage, receipt, launches = client_fixture
+    import vaws_workspace_update as updates
+    monkeypatch.setattr(entry, "prepare_session", lambda _: {"status": "deferred", "reason": "network_unavailable"})
+    monkeypatch.setattr(updates, "prepared_source", lambda _: None)
+    assert client.main(["codex"]) == 0
+    assert len(launches) == 1
+    assert "network_unavailable" in capsys.readouterr().err
+
+
+def test_broken_optional_identity_does_not_block_local_client(client_fixture, monkeypatch, capsys):
+    client, root, stage, receipt, launches = client_fixture
+    import vaws_workspace_update as updates
+    configure(root)
+    (root / ".vaws-local/github.json").write_text("invalid JSON")
+    monkeypatch.setattr(entry, "prepare_session", lambda _: {"state": "unavailable"})
+    monkeypatch.setattr(updates, "prepared_source", lambda _: None)
+    assert client.main(["codex"]) == 0
+    assert len(launches) == 1
+    assert "identity_copy_pending" in capsys.readouterr().err

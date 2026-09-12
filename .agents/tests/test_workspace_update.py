@@ -1,6 +1,7 @@
 """Real Git branch safety with fixture remotes; no GitHub writes or NPU work."""
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -113,18 +114,22 @@ def test_apply_uses_default_branch_head_even_with_older_release_tag(fixture):
     assert all("--force" not in call and "reset" not in call and "stash" not in call for call in fixture["calls"])
 
 
-def test_watch_prepares_and_syncs_fork_without_mutating_live_checkout(fixture):
-    emitted = []
-    updates.watch(fixture["root"], once=True, emit=emitted.append)
-    assert json.loads(emitted[-1])["status"] == "ready"
+def test_prepare_command_syncs_fork_once_without_mutating_live_checkout(fixture, capsys):
+    script = Path(__file__).resolve().parents[1] / "scripts/workspace_update.py"
+    spec = importlib.util.spec_from_file_location("workspace_update_command", script)
+    command = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(command)
+    assert command.main(["--root", str(fixture["root"]), "prepare"]) == 0
+    assert json.loads(capsys.readouterr().out)["status"] == "ready"
     assert git(fixture["root"], "rev-parse", "HEAD") == fixture["old"]
     assert git(fixture["fork"], "rev-parse", "stable") == fixture["new"]
     assert not fixture["activated"]
-    updates.watch(fixture["root"], once=True, emit=emitted.append)
+    assert command.main(["--root", str(fixture["root"]), "prepare"]) == 0
+    assert json.loads(capsys.readouterr().out)["status"] == "ready"
     assert len(fixture["prepares"]) == 1
 
 
-def test_watch_follows_new_default_branch_commits_without_tags(fixture):
+def test_prepare_follows_new_default_branch_commits_without_tags(fixture):
     root = fixture["root"]
     assert updater(fixture).step(apply=True, activate=False)["status"] == "ready"
     next_head = commit(fixture["upstream"], "next untagged change")
@@ -137,6 +142,23 @@ def test_watch_follows_new_default_branch_commits_without_tags(fixture):
     assert git(fixture["fork"], "rev-parse", "stable") == next_head
     assert git(root, "rev-parse", "HEAD") == fixture["old"]
     assert not fixture["activated"]
+
+
+@pytest.mark.parametrize("change, reason", [("dirty", "dirty_checkout"), ("branch", "working_branch")])
+def test_session_skips_preparation_when_it_would_keep_business_source(fixture, change, reason):
+    root = fixture["root"]
+    if change == "dirty":
+        (root / "README").write_text("unfinished session edit", encoding="utf-8")
+    else:
+        git(root, "checkout", "-b", "business")
+    result = updater(fixture).step(apply=True, activate=False, for_session=True)
+    assert result["status"] == "deferred"
+    assert result["reason"] == reason
+    assert not fixture["prepares"]
+    assert not fixture["activated"]
+    assert git(root, "rev-parse", "HEAD") == fixture["old"]
+    assert git(fixture["fork"], "rev-parse", "stable") == fixture["old"]
+    assert fixture["api"].calls.count(f"repos/{updates.CANONICAL}") == 1
 
 
 def test_successful_preparation_and_reuse_clear_stale_failure_but_keep_logs(fixture, monkeypatch):
@@ -189,7 +211,7 @@ def test_updates_follow_the_saved_github_assigned_fork_name(fixture, monkeypatch
     assert f"repos/{name}" in fixture["api"].calls
 
 
-def test_watch_prepares_while_business_checkout_is_dirty(fixture):
+def test_prepare_preserves_dirty_business_checkout(fixture):
     root = fixture["root"]
     git(root, "checkout", "-b", "business")
     business_head = commit(root, "local business commit")
@@ -199,9 +221,7 @@ def test_watch_prepares_while_business_checkout_is_dirty(fixture):
     (root / "notes.txt").write_text("untracked notes", encoding="utf-8")
     staged = git(root, "diff", "--cached")
     working = git(root, "diff")
-    emitted = []
-    updates.watch(root, once=True, emit=emitted.append)
-    assert json.loads(emitted[-1])["status"] == "ready"
+    assert updater(fixture).step(apply=True, activate=False)["status"] == "ready"
     assert git(fixture["fork"], "rev-parse", "stable") == fixture["new"]
     assert git(root, "rev-parse", "HEAD") == business_head
     assert git(root, "symbolic-ref", "--short", "HEAD") == "business"
@@ -359,13 +379,8 @@ def test_activation_waits_if_user_edited_after_prepare(fixture):
     assert not fixture["activated"]
 
 
-def test_disabled_watch_does_nothing_and_lock_is_shared(fixture):
+def test_update_lock_is_shared_across_linked_worktrees(fixture):
     root = fixture["root"]
-    updates.write_json(root / ".vaws-local/updates/config.json", {"enabled": False})
-    emitted = []
-    updates.watch(root, once=True, emit=emitted.append)
-    assert json.loads(emitted[0])["status"] == "disabled"
-    assert not fixture["api"].calls
     linked = root.parent / "linked"
     git(root, "worktree", "add", "--detach", str(linked), "HEAD")
     with updates.update_lock(root):

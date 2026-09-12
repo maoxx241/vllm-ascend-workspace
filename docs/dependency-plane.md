@@ -36,9 +36,9 @@ uses installed packages, including their public APIs and packaged data.
 The [workspace updater](forks-and-updates.md) consumes this exact
 combination from the official default branch. It invokes that revision's sync
 entry in an isolated checkout and prepares its pinned vaws-top wheel.
-Preparation happens independently of native task startup; existing clients
-and services keep their pins. Component releases do not trigger unrelated
-per-component upgrades.
+The CLI prepares once before creating a new editing directory. Existing directories,
+resumed sessions and running services keep their selected environments; there is
+no periodic updater. Component releases do not trigger unrelated per-component upgrades.
 
 ## Loader
 

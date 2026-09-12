@@ -26,10 +26,8 @@ _pin, _ = _bootstrap.parse_known_args()
 if _pin.environment_receipt:
     os.environ[PIN_ENV] = _pin.environment_receipt
 
-from vaws_workspace_entry import report_workspace_entry
-# Hook stderr is not guaranteed visible. AGENTS.md and the CLI own first-use
-# prompting; this hook only starts already-configured background preparation.
-report_workspace_entry(ROOT, announce=False)
+# The native client has already selected its directory and environment.
+# Updates belong before creation of a new editing copy, never in task hooks.
 ensure_workspace_interpreter(repo_root=ROOT)
 
 from vaws_coordinator_launch import CoordinatorUnavailable, exec_module  # noqa: E402

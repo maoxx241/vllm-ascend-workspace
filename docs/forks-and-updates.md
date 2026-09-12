@@ -2,23 +2,24 @@
 
 Status: current
 
-目标是首次真正使用仓库时即可建立个人开发配置，后续周期性跟上主仓。
+目标是首次真正使用仓库时即可建立个人开发配置，在新会话创建编辑目录前跟上主仓。
 不要求知道或调用某个 Skill。仅将身份校验、Git fast-forward、锁定依赖准备
-这些边界明确的操作工具化。常规更新由入口和后台进程消化；只有需要处理的
+这些边界明确的操作工具化。常规更新由客户端启动入口消化；只有需要处理的
 特殊 remote、分叉历史或版本切换取舍才交给 Agent。遵循[九条设计原则](design-principles.md)。
 
 ## 首次使用入口
 
 | 使用方式 | 首次发现 | 更新方式 |
 |---|---|---|
-| 直接打开仓库使用 Agent | 根 AGENTS.md 指向通用工具并说明一次身份确认 | 初始化接通客户端入口；没有可执行 hook 时，当前目录仍需显式维护 |
-| 原生 CLI 入口 | 本地配置检查，缺身份时一次可见提示 | 后台准备，新建编辑副本可使用准备好的主仓提交 |
-| 已配置的桌面客户端 | session hook 唤起已配置的更新器；AGENTS.md 负责身份问答 | 不改变正在打开的目录 |
-| 无 Agent / 无 hook | 直接调用通用脚本 | 显式运行 watch，或另由本机进程管理器托管 |
+| 直接打开仓库使用 Agent | 根 AGENTS.md 指向通用工具并说明一次身份确认 | 初始化接通客户端入口；已打开的目录保持原版本 |
+| 原生 CLI 入口 | 本地配置检查，缺身份时一次可见提示 | 新建编辑目录前检查和准备一次；已有目录复用原版本 |
+| 已配置的桌面客户端 | AGENTS.md 负责身份问答；session hook 关联实际会话 | Worktree 选择由原生客户端管理，hook 不更新其已选目录 |
+| 无 Agent / 无 hook | 直接调用通用脚本 | 显式 check、prepare 或 apply，无常驻进程 |
 
 Git clone 不会执行仓库代码；AGENTS.md 不是操作系统 hook，因此不声称仅 clone
-就会运行程序。入口只做本地检查，下载和安装在独立进程中进行。身份待确认、
-离线、更新失败都不妨碍轻量 Review、目录查询或其他独立本地工作。
+就会运行程序。CLI 在开始新会话前完成本轮检查和必要准备，启动后不再检查更新。
+身份待确认、离线或准备失败时，保留可用的本地版本；轻量 Review、目录查询
+和其他独立本地工作不需要先完成更新。
 
 首次确认个人 GitHub 用户名。`gh` 登录是候选，不能静默代替用户选择。
 确认结果位于未跟踪的 `.vaws-local/github.json`，不包含凭据。
@@ -71,39 +72,47 @@ workspace Release，也不各自追逐所有组件仓库的最新分支头。
 
 ```text
 uv run --no-project python .agents/scripts/workspace_update.py check
-uv run --no-project python .agents/scripts/workspace_update.py watch
+uv run --no-project python .agents/scripts/workspace_update.py prepare
 uv run --no-project python .agents/scripts/workspace_update.py apply
 ```
 
-配置个人身份后，原生入口唤起独立 watcher，默认约每 5 分钟检测官方仓库
+配置个人身份后，`vaws_client.py` 在新建编辑目录前检测一次官方仓库
 default_branch 的最新提交（当前为 main），不依赖 tag 或 Release。
-只有联网且进程运行时有该检测时效；睡眠、离线或进程终止后，由下次原生入口
-补启动。它不是秒级推送，也没有声称已经安装开机启动服务。
+从主工作区入口创建新会话。由业务副本再创建目录时保留该副本的来源，
+包括准备版本生成的 detached HEAD 副本。已有 `--workspace` 目录及恢复会话
+不检查更新，继续使用原代码和选定环境。
+恢复调用必须带原来的 `--workspace PATH`；原生 resume ID 只透传给客户端，
+入口不会按 ID 猜测历史目录。
+没有每五分钟轮询、常驻 watcher 或工作中的版本切换。
 
-后台在独立目录准备本轮取得的精确提交 SHA，调用该版本的既有
+`check` 只检查版本；`prepare` 在独立目录准备本轮取得的精确提交 SHA，调用该版本的既有
 `vaws_deps.py sync --locked` 复用不可变环境，并缓存/验证 vaws-top wheel。
 准备成功后，个人 Fork 默认分支仅 fast-forward 到该提交。主仓继续前进时，
-下一轮准备新的提交；同一提交已准备完成则直接复用，不重复下载依赖。
+下次新建会话再检查；同一提交已准备完成则直接复用，不重复下载依赖。
 沿用早期 `.vaws-local/updates/releases/<SHA>` 缓存目录名以复用已有准备结果，
 目录名不代表必须有 Release。
 
-watcher 不改现有工作目录。默认 CLI 新建编辑副本时，若现有来源是干净、
+准备过程不改现有工作目录。CLI 新建编辑副本时，若现有来源是干净、
 可快进的默认分支，可使用准备好的主仓提交作为新副本来源并运行其客户端接线。
+更新失败时沿用已有可用版本，不把半成品交给新客户端。原生 GUI 已经确定的
+工作目录不由 hook 修改；当前没有覆盖所有桌面客户端的创建 worktree 前更新入口。
 已有目录的显式维护可用 apply：要求干净默认分支、没有 merge/rebase，
 已初始化子模块无业务改动；只采用工作区固定的 gitlink，未初始化子模块保持原样。
-有业务分支、脏文件或分叉时保留原来源，原因保存在更新状态中。正常任务无需
+新会话来源有业务分支、脏文件或分叉时，仍检查一次主仓版本，但提前跳过
+用不上的依赖准备并保留原来源；原因保存在更新状态中。正常任务无需
 检查更新状态或运行 apply；仅在主动维护该目录或任务需要新版本时处理。
 
 不自动 stash/reset/rebase/强推。运行中的 MCP、hook、coordinator 和服务
-继续使用旧环境；新会话选择新版本。新 coordinator 客户端遇到较旧 daemon
-时使用既有 restart-if-idle 自动切换；忙碌时保留旧实例，旧客户端不会将新版
+继续使用旧环境；新建 CLI 编辑目录可以选择准备好的新版本，恢复会话沿用原环境。
+新 coordinator 客户端遇到较旧 daemon 时使用既有 restart-if-idle 自动切换；
+忙碌时保留旧实例，旧客户端不会将新版
 降级。monitor 继续使用其既有实例管理机制。知识准备 pending 不阻止独立工具。
 
 ## 可观察性
 
 `.vaws-local/updates/state.json` 保留检测到的默认分支、精确提交、当前步骤、准备结果和
-未完成原因，watch 输出在同目录 watch.log；失败命令证据保留在 logs 子目录。
-配置该目录 config.json 为 `{"enabled": false}` 暂停自动更新，watcher 下一轮退出。
+未完成原因；命令返回本轮结果，失败命令证据保留在 logs 子目录。
+配置该目录 config.json 为 `{"enabled": false}` 暂停新建会话时的自动更新。
 显式命令仍可用于检查和修复。状态只记录安装结果，不接管任务和设备权属。
 
 同一 Git 公共目录通过 OS 锁串行执行更新；Windows 挂载目录从 WSL 发起时
@@ -112,12 +121,7 @@ watcher 不改现有工作目录。默认 CLI 新建编辑副本时，若现有�
 
 ## 参考与取舍
 
-GitHub 推荐 webhook。普通电脑没有固定公网接收端，第一版采用有界轮询，
-不引入托管 GitHub App。明确需要秒级通知时再增加接收层。
-[GitHub REST 最佳实践](https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api)
-给出条件请求和限流退避建议。
-
-Fork 的 Actions 不会自动订阅上游提交，定时工作也可能延迟或停用。
-参见 [Actions 事件文档](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows)。
+新会话需要选择代码和环境，因此更新放在创建编辑目录之前；会话启动后版本固定。
+这个边界无需定时进程、通知接收层或 Agent 轮询，也不增加每任务维护命令。
 依赖组合和安装复用遵循 [uv locking/syncing](https://docs.astral.sh/uv/concepts/projects/sync/)，
 运行进程由 workspace 已有不可变环境机制保护。

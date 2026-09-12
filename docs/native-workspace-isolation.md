@@ -9,8 +9,12 @@ uv run --no-project python .agents/scripts/vaws_client.py codex
 uv run --no-project python .agents/scripts/vaws_client.py kimi --workspace PATH
 ```
 
-默认创建独立 Git 副本；显式目录已经存在时直接复用，不覆盖其中内容。
+默认创建独立 Git 副本；配置后在创建前检查一次主仓并准备该提交和锁定依赖。
+本次会话固定选定版本，工作中没有周期检查或代码切换。显式目录已经存在时
+直接复用其代码和环境，不检查更新或覆盖其中内容。
 原生参数和恢复 ID 放在 `--` 之后。客户端必须已安装在当前操作系统中。
+恢复调用必须带原来的 `--workspace PATH`；恢复 ID 只透传给原生客户端，
+入口不会根据 ID 查找或猜测历史目录。
 桌面客户端的 Local/Worktree 选择仍由其原生 UI 管理。
 
 ## 目录、身份与固定输入
@@ -51,8 +55,9 @@ SessionStart hook 可以记录实际 cwd 和关联来源，其子进程不能通
 ## 固定的本地环境
 
 依赖环境由平台、架构、实际 Python/ABI、lock 和有效依赖选择决定内容键。
-相同输入复用已经完成的环境；显式 sync 构建缺失环境。普通启动读取 ready
-receipt，不安装依赖或运行全量 doctor。已发布环境不原地升级或搬迁。
+相同输入复用已经完成的环境；显式 sync 构建缺失环境。新建 CLI 编辑目录前
+的单次更新可准备新环境；已有目录和恢复会话读取原环境的 ready receipt，
+不安装依赖或运行全量 doctor。已发布环境不原地升级或搬迁。
 
 原生客户端子进程的 PATH 前置该环境的 Scripts/bin，并设置 VIRTUAL_ENV、
 清除冲突的 PYTHONHOME。裸 python 与公共 uv 入口因此使用同一套本地依赖，

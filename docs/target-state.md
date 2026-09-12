@@ -101,7 +101,10 @@ inspect it. Prepared environments have permanent content addresses; an update
 prepares a new environment without modifying one used by a running client or daemon.
 
 `vaws_client.py CLIENT` starts an installed native CLI in an independent editing
-copy, or an explicitly supplied workspace. Client setup generates platform-correct
+copy, or an explicitly supplied workspace. Before creating a new directory, it
+checks upstream once and prepares that revision and its pinned dependencies.
+Existing directories and resumed sessions retain their code and selected environment.
+Client setup generates platform-correct
 MCP and hook entries, fixing the chosen environment. Shared Windows-mounted WSL
 workspaces retain one Windows coordinator/knowledge owner while explicit remote
 I/O can use the native Linux provider. Native and managed environments are pinned
@@ -128,8 +131,10 @@ planning parent is not itself grounds for rejection.
 
 Workspace install/client wiring owns the bounded personal-fork and default-branch
 consumption operations in [forks and updates](forks-and-updates.md). GitHub
-configuration is distinct from native task identity and shared root login. Background
-preparation reuses component pins without changing active checkouts/processes.
+configuration is distinct from native task identity and shared root login. A new
+CLI editing directory can adopt the revision prepared at startup; component pins
+are reused and active checkouts/processes remain unchanged. There is no periodic
+updater; native GUI hooks cannot change the application's selected working directory.
 The [identity and coordination implementation](identity-and-agent-coordination.md)
 uses shared root access and fixed per-user container names. Packages consume the
 initialized user and handle container binding, notifications and routine reuse
