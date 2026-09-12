@@ -27,7 +27,7 @@ The Agent selects the relevant tool or skill. Tools generate execution reference
 [Core design principles](docs/target-state.md#11-agent-only-design-principles) govern subsequent changes:
 
 - Agent consumption is the design target for every code and command entry.
-- Deterministic failures belong in component code and regression tests; contextual lessons belong in knowledge with their conditions and uncertainty.
+- Deterministic failures belong in component code and regression tests. Useful lessons may be saved as ordinary Markdown with their conditions, evidence and uncertainty. Knowledge is optional reference; lookup and capture add no required task steps.
 - Each runtime owner handles its own lifecycle, validation and records. Business calls accept business inputs and evidence.
 - Simplification is measured across the whole task. Unreleased APIs may change directly; retired interfaces have no compatibility aliases.
 

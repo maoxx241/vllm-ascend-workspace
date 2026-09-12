@@ -12,6 +12,26 @@ import vaws_venv
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def test_runtime_bootstrap_does_not_require_optional_knowledge(monkeypatch):
+    for key in (vaws_venv.SKIP_ENV, vaws_venv.REEXEC_ENV):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setattr(vaws_venv.importlib.util, "find_spec",
+                        lambda name: None if name == "vaws_knowledge" else object())
+    monkeypatch.setattr(vaws_venv, "workspace_venv_python",
+                        lambda root: (_ for _ in ()).throw(AssertionError("runtime should already be usable")))
+    vaws_venv.ensure_workspace_interpreter(repo_root=ROOT)
+
+
+def test_explicit_knowledge_entry_selects_its_package_environment(monkeypatch, tmp_path):
+    for key in (vaws_venv.SKIP_ENV, vaws_venv.REEXEC_ENV):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setattr(vaws_venv.importlib.util, "find_spec", lambda name: None)
+    import pytest
+    with pytest.raises(SystemExit) as failure:
+        vaws_venv.ensure_workspace_interpreter(repo_root=tmp_path, packages=("vaws_knowledge",))
+    assert failure.value.code == 2
+
+
 def test_native_module_entry_preserves_unicode_arguments_and_python_flags():
     base = Path(sys.base_prefix) / ("python.exe" if os.name == "nt" else "bin/python3")
     assert base.is_file()
@@ -50,6 +70,7 @@ def test_bootstrap_does_not_need_installed_packages(monkeypatch):
         calls.append((command, kwargs))
         return subprocess.CompletedProcess(command, 0)
     monkeypatch.setattr(module, "ensure_workspace_interpreter", lambda **kwargs: (_ for _ in ()).throw(AssertionError("bootstrap tried to re-exec")))
+    monkeypatch.setattr(module, "prepare_knowledge", lambda root: {"status": "pending", "ready": False})
     monkeypatch.setattr(module.subprocess, "run", execute)
     assert module.main(["sync", "--locked", "--group", "dev"]) == 0
     command, kwargs = calls[0]

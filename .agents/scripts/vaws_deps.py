@@ -24,6 +24,7 @@ if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
 from vaws_venv import REMEDY, configure_windows_stdio, ensure_workspace_interpreter, workspace_venv_root
+from vaws_knowledge_service import prepare_knowledge
 
 
 def progress(message: str) -> None:
@@ -121,6 +122,11 @@ def cmd_sync(args: argparse.Namespace) -> int:
         "environment": str(workspace_venv_root(ROOT)),
         "remedy": None if proc.returncode == 0 else REMEDY,
     }
+    if proc.returncode == 0:
+        progress("dependencies installed; preparing local knowledge model and index")
+        payload["knowledge"] = prepare_knowledge(ROOT)
+        if not payload["knowledge"].get("ready"):
+            progress("dependencies are ready; knowledge preparation is pending and does not block ordinary tools")
     _print(payload)
     return 0 if proc.returncode == 0 else 1
 

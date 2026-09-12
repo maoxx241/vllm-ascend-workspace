@@ -7,7 +7,11 @@ description: Analyze existing Ascend profiler databases, kernel_details.csv, tra
 
 Analyze existing Ascend profiler data and produce evidence-linked step, layer, operator and cross-rank findings.
 
-Tie findings to actual rank/time/row evidence and retain uncertainty in model structure or hardware context. Use config.json or verified profile-visible evidence for model dimensions. Contextual diagnoses belong in project knowledge; deterministic classification and validation belong in the analyzer code or policy data with tests.
+Tie findings to actual rank/time/row evidence and retain uncertainty in model structure or hardware context. Use config.json or verified profile-visible evidence for model dimensions. Knowledge provides optional context; it does not override current measurements, configuration or source evidence. Missing references do not block analysis. Deterministic classification and validation belong in the analyzer code or policy data with tests.
+
+Report generation preserves existing reference links and performs no knowledge
+lookup or index startup. The Agent can query the knowledge MCP tools separately
+when a finding warrants more context.
 
 ## Agent entry
 

@@ -396,7 +396,7 @@ def test_analysis_summary_consumed_when_present(tmp_path):
         "findings": [{
             "finding_type": "device_idle_bubble", "severity": "high",
             "summary": "step 内存在 device idle 空泡", "occurrences": 2,
-            "knowledge_refs": [{"id": "kn-1", "title": "bubble 排查手册", "url": "https://example.invalid/kn-1"}],
+            "knowledge_refs": [{"ref": "notes/bubble.md", "title": "bubble 排查观察", "excerpt": "仅在当前 trace 有对应等待证据时参考。"}],
         }],
     }), encoding="utf-8")
     out = report_dir / "report.html"
@@ -407,8 +407,10 @@ def test_analysis_summary_consumed_when_present(tmp_path):
     assert ov["layer_validation"]["status"] == "degraded"
     assert ov["layer_validation"]["expected_layers"] == 61
     # knowledge_refs surfaced in the static L1 section
-    assert "Knowledge refs" in html
-    assert "bubble 排查手册" in html
+    assert "相关参考" in html
+    assert "bubble 排查观察" in html
+    assert "notes/bubble.md" in html
+    assert "仅在当前 trace 有对应等待证据时参考。" in html
     # and attached to the matching findings group in the asset
     findings = _read_gz(report_dir / "assets" / "findings.json.gz")
     assert findings["groups"][0].get("knowledge_refs"), "knowledge_refs must reach the findings asset"

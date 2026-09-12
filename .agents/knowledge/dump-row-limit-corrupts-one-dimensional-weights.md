@@ -4,13 +4,11 @@ Status: historical, unverified. Confidence: low.
 
 Imported from the project note dated 2026-09-07. The source did not provide a complete reproducible evidence chain. Claims of verification in the historical description are not current support guarantees.
 
-Known conditions and unknown dimensions are preserved below. Recheck actual code, model configuration and runtime facts before applying this note.
-
 ## Avoidance
 
 When a captured input set is meant to be replayable, verify the captured shapes against the manifest's recorded shapes before replaying. A parameter whose captured shape equals the row limit is corrupt, not small.
 
-## Fingerprints
+## Search terms
 
 - aclnnAddRmsNorm failed error code 561103 gamma shape
 - shape of gamma should be equal to the last 1 dim of x1
@@ -28,81 +26,14 @@ Row limiting slices dim 0. For an activation that is the token axis and slicing 
 
 Standalone replay of a captured operator call fails with a shape complaint against a parameter rather than an activation, for example aclnnAddRmsNorm error 561103 reporting gamma [8] against x1 [1, 1024]. The manifest records the true shapes, so nothing looks wrong until the replay runs.
 
-## Recorded conditions
+## Recorded context
 
-{
-  "soc": {
-    "range": {
-      "min": null,
-      "max": null
-    }
-  },
-  "cann": {
-    "range": {
-      "min": null,
-      "max": null
-    }
-  },
-  "driver": {
-    "range": {
-      "min": null,
-      "max": null
-    }
-  },
-  "python_abi": {
-    "range": {
-      "min": null,
-      "max": null
-    }
-  },
-  "torch": {
-    "range": {
-      "min": null,
-      "max": null
-    }
-  },
-  "torch_npu": {
-    "values": [
-      "2.10.0.post4"
-    ]
-  },
-  "vllm": {
-    "range": {
-      "min": null,
-      "max": null
-    }
-  },
-  "vllm_ascend": {
-    "values": [
-      "0.19.1rc2"
-    ]
-  },
-  "model": {
-    "range": {
-      "min": null,
-      "max": null
-    }
-  },
-  "topology": {
-    "range": {
-      "min": null,
-      "max": null
-    }
-  },
-  "execution_mode": {
-    "range": {
-      "min": null,
-      "max": null
-    }
-  },
-  "component": {
-    "values": [
-      "tensor-dump-instrumentation",
-      "captured-tensor-row-limiting"
-    ]
-  }
-}
+- torch npu: 2.10.0.post4.
+- vllm ascend: 0.19.1rc2.
+- component: tensor-dump-instrumentation, captured-tensor-row-limiting.
 
-## Provenance
+Other environment and version details were not recorded.
+
+## Source
 
 Source: vllm-ascend-workspace/vllm-ascend-workspace; legacy identifier: dump-row-limit-corrupts-one-dimensional-weights; first observed: 2026-09-07.

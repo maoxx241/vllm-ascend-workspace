@@ -27,10 +27,12 @@ actual Run Manifest artifacts internally; callers provide business inputs and
 observed outputs rather than identifiers, transitions or coverage declarations.
 
 Deterministic failure handling belongs to the owning component's code and tests.
-Contextual explanations belong in Markdown knowledge with their conditions and
-uncertainty. Knowledge lookup returns availability separately from an empty result.
-Ordinary task summaries feed configured capture hooks; they require no second
-completion ceremony. Public contribution uses only package-prepared redacted copies.
+Useful contextual explanations may be kept as ordinary Markdown with their
+conditions, evidence and uncertainty. Knowledge is optional reference; lookup
+returns availability separately from an empty result. Configured capture hooks
+reuse ordinary task summaries. Neither lookup nor capture is a completion step,
+and no second summary is needed. Public contribution uses only package-prepared
+redacted copies.
 
 For implementation details see [coordinator consumption](coordinator-consumption.md),
 [dependency selection](dependency-plane.md) and the schema. Envelope lint and local

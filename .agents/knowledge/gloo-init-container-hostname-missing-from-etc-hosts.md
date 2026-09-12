@@ -4,13 +4,11 @@ Status: historical, unverified. Confidence: low.
 
 Imported from the project note dated 2026-09-03. The source did not provide a complete reproducible evidence chain. Claims of verification in the historical description are not current support guarantees.
 
-Known conditions and unknown dimensions are preserved below. Recheck actual code, model configuration and runtime facts before applying this note.
-
 ## Avoidance
 
 Do not debug gloo/HCCL env vars (GLOO_SOCKET_IFNAME etc.) before checking /etc/hosts; the hostname mapping is the root cause in this container family.
 
-## Fingerprints
+## Search terms
 
 - gloo makedeviceforhostname
 - name or service not known hostname
@@ -28,84 +26,14 @@ Fresh session containers do not map their own hostname in /etc/hosts. PyTorch's 
 
 vllm serve crashes or hangs during distributed init with gloo backend errors mentioning the container hostname (e.g. 'Name or service not known' / gloo::makeDeviceForHostname), even on single-node TP>1.
 
-## Recorded conditions
+## Recorded context
 
-{
-  "soc": {
-    "values": [
-      "A3"
-    ]
-  },
-  "cann": {
-    "range": {
-      "min": null,
-      "max": null
-    }
-  },
-  "driver": {
-    "range": {
-      "min": null,
-      "max": null
-    }
-  },
-  "python_abi": {
-    "range": {
-      "min": null,
-      "max": null
-    }
-  },
-  "torch": {
-    "range": {
-      "min": null,
-      "max": null
-    }
-  },
-  "torch_npu": {
-    "range": {
-      "min": null,
-      "max": null
-    }
-  },
-  "vllm": {
-    "range": {
-      "min": null,
-      "max": null
-    }
-  },
-  "vllm_ascend": {
-    "range": {
-      "min": null,
-      "max": null
-    }
-  },
-  "model": {
-    "range": {
-      "min": null,
-      "max": null
-    }
-  },
-  "topology": {
-    "values": [
-      "tp2",
-      "tp4",
-      "tp8",
-      "tp16"
-    ]
-  },
-  "execution_mode": {
-    "range": {
-      "min": null,
-      "max": null
-    }
-  },
-  "component": {
-    "values": [
-      "service-bootstrap",
-      "gloo-distributed-init"
-    ]
-  }
-}
+- soc: A3.
+- topology: tp2, tp4, tp8, tp16.
+- component: service-bootstrap, gloo-distributed-init.
 
-## Provenance
+Other environment and version details were not recorded.
+
+## Source
 
 Source: vllm-ascend-workspace/vllm-ascend-workspace; legacy identifier: gloo-init-container-hostname-missing-from-etc-hosts; first observed: 2026-09-03.

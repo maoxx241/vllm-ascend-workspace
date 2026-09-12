@@ -1,4 +1,4 @@
-"""Workspace capability report built on the knowledge degradation shape.
+"""Workspace capability report for installed runtime and reference tools.
 
 Capabilities are what an agent can do, not which files exist.
 """
@@ -81,7 +81,6 @@ CAPABILITY_ORDER = (
     "host_npu_authority",
     "fleet_observation",
     "shared_knowledge",
-    "conformance_kit",
 )
 CAPABILITY_DEPS = {
     "remote_endpoints": ("vaws-remote-dev",),
@@ -89,7 +88,6 @@ CAPABILITY_DEPS = {
     "host_npu_authority": ("vaws-coordinator",),
     "fleet_observation": ("uvx", "vaws-top"),
     "shared_knowledge": ("vaws-knowledge",),
-    "conformance_kit": ("vaws-knowledge",),
 }
 FLEET_REMEDY = (
     "python3 .agents/skills/npu-fleet-monitor/scripts/manage_monitor.py deploy"
@@ -299,23 +297,6 @@ def evaluate_capabilities(
         degradation=[shared_entry] if shared_entry else [],
     )
 
-    kit = deps["vaws-knowledge"]
-    kit_ok = _usable(kit["state"])
-    kit_deg: list[dict[str, Any]] = []
-    if kit["state"] != "ready":
-        kit_deg.append(
-            _dep_degradation(
-                kit,
-                effect="the vaws-knowledge engine is not available to knowledge client tests",
-            )
-        )
-    capabilities["conformance_kit"] = _capability(
-        available=kit_ok,
-        degraded=bool(kit_deg),
-        depends_on=CAPABILITY_DEPS["conformance_kit"],
-        degradation=kit_deg,
-    )
-
     flat: list[dict[str, Any]] = []
     for name in CAPABILITY_ORDER:
         flat.extend(capabilities[name]["degradation"])
@@ -420,7 +401,7 @@ def build_doctor_envelope(
     command = make_command(
         argv=argv,
         cwd=str(repo_root),
-        env_keys=["HOME", "CI", "VAWS_SKIP_VENV_REEXEC", "VAWS_KNOWLEDGE_KIT_ROOT"],
+        env_keys=["HOME", "CI", "VAWS_SKIP_VENV_REEXEC"],
     )
     attempt = make_attempt(command=command, reproduce=command["display"])
     environment = make_environment(source="unknown")

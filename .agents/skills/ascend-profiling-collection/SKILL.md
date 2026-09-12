@@ -9,6 +9,10 @@ Collect one torch-profiler case, bracket a real workload, export per-rank data a
 
 Choose a capture window and workload that expose the suspected bottleneck. Keep token counts and concurrency representative. For multimodal cases pass the local image and target height; encoding is platform-independent.
 
+Collection starts from the supplied workload and records actual results. It does
+not query knowledge before startup or on failure. If related experience would
+help, the Agent can use the knowledge MCP tools independently; this is optional.
+
 ## Agent entry
 
 Run from the repository root using the platform's Python launcher. The workspace

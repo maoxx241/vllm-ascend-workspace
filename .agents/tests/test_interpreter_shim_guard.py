@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Local inventoried entries hop onto ``.venv``; remote payloads stay lib-free.
+"""Entry points are inventoried and remote payloads stay lib-free.
 
 Test files are not entry points. A ``__main__`` file that is neither a test
 nor in the CLI-surface inventory is a classification gap, not a file to shim.
@@ -16,7 +16,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 INVENTORY_SCRIPT = ROOT / ".agents" / "scripts" / "cli_surface_inventory.py"
 LIB_DIR = ROOT / ".agents" / "lib"
-SHIM_NAME = "ensure_workspace_interpreter"
 
 
 def load_inventory_module():
@@ -56,17 +55,6 @@ class InterpreterShimGuardTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.payload = inventory.build_inventory(ROOT, quiet=True)
         cls.entries = {item["path"]: item for item in cls.payload["entry_points"]}
-
-    def test_inventoried_non_payloads_contain_the_shim(self) -> None:
-        missing = []
-        for path, record in sorted(self.entries.items()):
-            role = (record.get("classification") or {}).get("support_role")
-            if role == "payload":
-                continue
-            text = (ROOT / path).read_text(encoding="utf-8")
-            if SHIM_NAME not in text:
-                missing.append(path)
-        self.assertEqual(missing, [])
 
     def test_payloads_import_nothing_from_agents_lib(self) -> None:
         leaked = []

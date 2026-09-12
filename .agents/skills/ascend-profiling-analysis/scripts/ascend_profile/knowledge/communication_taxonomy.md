@@ -1,8 +1,9 @@
 # HCCL Communication Taxonomy
 
-This file is the contract every analysis stage in this repo uses when it
-talks about HCCL collective operators, communication-side fused kernels,
-and per-task synchronization primitives.
+This reference explains HCCL collective operators, communication-side fused
+kernels, and per-task synchronization primitives. Consult it when those
+events occur in a trace; it does not establish what a particular capture
+contains or which path the current HCCL version uses.
 
 Sources:
 - CANN HCCL user guide §"通信算子下发" / §"通信算子执行" / §"典型算子行为分析"

@@ -16,9 +16,17 @@ skills. Runtime behavior belongs to the four installed components; see
 - Direct remote I/O and optional source publication use their installed owner
   APIs. Managed runs prepare their bound sources internally.
 - Knowledge lookup and capture use the package tools. `scripts/knowledge_setup.py`
-  configures project Markdown, candidate storage and client wiring.
+  retries package preparation or changes the requested sharing configuration.
+  Dependency sync prepares the model and index; MCP maintains them while alive.
+  New setup keeps public contribution disabled, and preserves existing choices.
 
-For explicit knowledge editing, read the installed package skill through its
+Knowledge is optional reference, using ordinary Markdown with a title and body.
+Keep known conditions, evidence and uncertainty in the text. Lookup, capture and
+public review add no required steps to ordinary tasks; configured hooks reuse
+the existing summary. The [knowledge contract](../docs/target-state.md#54-knowledge)
+describes the shared conventions.
+
+For explicit knowledge maintenance, the package skill is available through its
 configured interpreter with `python -m vaws_knowledge skill`.
 The optional `curate-knowledge` skill is shipped by that package, not maintained
 in this workspace. Native clients can install it into a chosen skill directory
