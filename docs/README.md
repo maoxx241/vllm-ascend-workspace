@@ -8,11 +8,11 @@ command recipe. Superseded designs and duplicate inventories are retained in Git
 
 ## Current contracts
 
-- [forks-and-updates.md](forks-and-updates.md) — Skill-independent first use, verified personal forks and one upstream update before creating a new CLI editing directory.
+- [forks-and-updates.md](forks-and-updates.md) — Skill-independent first use, personal forks and upstream preparation in native new-worktree setup before the Agent starts.
 - [identity-and-agent-coordination.md](identity-and-agent-coordination.md) — shared-root user attribution, opportunistic message delivery and compiled-output reuse; first-version boundaries are explicit.
 
 - [platform-contract.md](platform-contract.md) — common Windows/macOS/Linux entry points, literal process arguments, native owners and immutable environments.
-- [native-workspace-isolation.md](native-workspace-isolation.md) — independent native editing directories, exact Git state copying, attachment ownership and fixed local dependency environments.
+- [native-workspace-isolation.md](native-workspace-isolation.md) — native worktree setup, per-client capability boundaries, automatic attachments and fixed local environments; CLI copying is optional.
 
 - [design-principles.md](design-principles.md) — nine governing principles; total Agent task cost takes priority, tools stay bounded, knowledge is advisory, and valid work is reused.
 - [windows-installation.md](windows-installation.md) — PowerShell setup, same-filesystem uv cache and verified offline transfer.

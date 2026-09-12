@@ -283,6 +283,20 @@ class ScaffoldSetupTests(unittest.TestCase):
         result = tomllib.loads(setup.configuration("kimi", self.root, kimi_config=kimi)[kimi])
         self.assertTrue(all(item["timeout"] >= 12 for item in result["hooks"]))
 
+    def test_cursor_native_setup_supplies_context_only_to_task_tools(self):
+        import re
+        files = setup.configuration("cursor", self.root)
+        hooks = json.loads(files[self.root / ".cursor/hooks.json"])["hooks"]
+        hook = hooks["preToolUse"][0]
+        for name in ("vaws_run", "MCP:vaws_execution", "mcp__vaws_task__vaws_message"):
+            self.assertIsNotNone(re.search(hook["matcher"], name))
+        for name in ("read_file", "MCP:knowledge_query", "vaws_run_unrelated"):
+            self.assertIsNone(re.search(hook["matcher"], name))
+        self.assertGreaterEqual(hook["timeout"], 12)
+        native = json.loads(files[self.root / ".cursor/worktrees.json"])
+        self.assertIn("ROOT_WORKTREE_PATH", native["setup-worktree"][0])
+        self.assertNotIn("vaws_worktree_setup", hooks["sessionStart"][0]["command"])
+
 
 if __name__ == "__main__":
     unittest.main()

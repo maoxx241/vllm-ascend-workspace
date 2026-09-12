@@ -100,15 +100,26 @@ This is a `package = false` uv project. Dependency preparation uses
 inspect it. Prepared environments have permanent content addresses; an update
 prepares a new environment without modifying one used by a running client or daemon.
 
-`vaws_client.py CLIENT` starts an installed native CLI in an independent editing
-copy, or an explicitly supplied workspace. Before creating a new directory, it
-checks upstream once and prepares that revision and its pinned dependencies.
+Native client lifecycle integration is the default. Initialization wires the
+selected client once; its Worktree mode and environment are selected in the native
+UI. Codex local-environment setup and Cursor worktree setup prepare the new
+directory created by that client before the Agent starts. The callback checks
+upstream once and fixes an eligible revision, dependencies and client wiring.
+SessionStart automatically creates or resumes the VAWS attachment; Cursor
+preToolUse injects context internally and handles hook ordering idempotently.
 Existing directories and resumed sessions retain their code and selected environment.
-Client setup generates platform-correct
-MCP and hook entries, fixing the chosen environment. Shared Windows-mounted WSL
+Ordinary Local chats are not silently moved into worktrees. Codex/Cursor setup
+wiring has contract tests; real GUI new-session acceptance remains pending.
+Other clients' capabilities are recorded in the editing-isolation contract.
+
+`vaws_client.py CLIENT` is an optional installed-CLI convenience, not a per-task
+Agent step. Client setup generates platform-correct MCP and hook entries, fixing
+the chosen environment. Shared Windows-mounted WSL
 workspaces retain one Windows coordinator/knowledge owner while explicit remote
 I/O can use the native Linux provider. Native and managed environments are pinned
 independently. User arguments, cwd, stdin and exit codes survive these boundaries.
+Native new-worktree setup on a Windows mounted drive requires the Windows owner;
+invocation from WSL `/mnt` is not supported by this callback.
 
 Generated configuration contains local paths and remains untracked. Client trust
 and approval settings belong to the client and the user's authorization; setup
@@ -132,9 +143,10 @@ planning parent is not itself grounds for rejection.
 Workspace install/client wiring owns the bounded personal-fork and default-branch
 consumption operations in [forks and updates](forks-and-updates.md). GitHub
 configuration is distinct from native task identity and shared root login. A new
-CLI editing directory can adopt the revision prepared at startup; component pins
-are reused and active checkouts/processes remain unchanged. There is no periodic
-updater; native GUI hooks cannot change the application's selected working directory.
+directory created by the native client can adopt the prepared revision during
+setup, before its first Agent operation. Component pins are reused and existing
+editing directories/processes remain unchanged. There is no periodic updater;
+session hooks record the application's selected cwd rather than replacing it.
 The [identity and coordination implementation](identity-and-agent-coordination.md)
 uses shared root access and fixed per-user container names. Packages consume the
 initialized user and handle container binding, notifications and routine reuse

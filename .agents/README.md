@@ -6,16 +6,25 @@ skills. Runtime behavior belongs to the four installed components; see
 
 - `skills/repo-init/` initializes or repairs workspace configuration and clients.
 - `scripts/workspace_forks.py` configures verified personal GitHub forks without
-  a Skill or installed runtime. Before creating a new editing directory,
-  `scripts/vaws_client.py` checks and prepares upstream once using the same
-  updater as `scripts/workspace_update.py`. Existing directories and resumed sessions keep
-  their code and environment; see [forks and updates](../docs/forks-and-updates.md).
+  a Skill or installed runtime.
+- `scripts/vaws_client_setup.py` wires native lifecycle callbacks. Codex local
+  environment setup and Cursor worktree setup call `scripts/vaws_worktree_setup.py`
+  in the new directory created by the client, before the Agent starts. It checks
+  upstream once and fixes eligible source, dependencies and wiring; SessionStart
+  attaches the native task automatically. Resume keeps its code and environment.
+  Contract tests cover the wiring; real GUI acceptance remains pending. See
+  [native client boundaries](../docs/native-workspace-isolation.md).
+- `scripts/vaws_client.py` is an optional convenience for launching installed
+  CLIs; ordinary native sessions do not require the Agent to call it.
+  `scripts/workspace_update.py` provides explicit maintenance using the same
+  updater; see [forks and updates](../docs/forks-and-updates.md).
 - `skills/npu-fleet-monitor/` starts, checks or stops the local uvx monitor.
 - Other `skills/` directories add vLLM-Ascend business methods such as serving,
   measurements, profiling and debugging. Their `SKILL.md` files are the source
   of truth; the client skill catalog provides discovery.
-- `scripts/vaws.py` forwards session/run/execution/finish to coordinator.
-  Bind actual worktrees through session; use native Git for source inspection.
+- `scripts/vaws.py` optionally forwards session/run/execution/finish to coordinator.
+  Native hooks bind the actual cwd; explicit source overrides remain available.
+  Use native Git for source inspection.
 - Provisioning and native task identity remain in coordinator.
 - Direct remote I/O and optional source publication use their installed owner
   APIs. Managed runs prepare their bound sources internally.

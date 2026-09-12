@@ -274,10 +274,13 @@ def hook_argv(command):
 def hook_groups(client, project, env=None):
     command = hook_command(client, project, env)
     if client == "cursor":
-        return {
+        groups = {
             event[0].lower() + event[1:]: [{"command": command}]
             for event in EVENTS if event not in {"PreToolUse", "UserPromptSubmit"}
         }
+        groups["preToolUse"] = [{"command": command, "timeout": HOOK_TIMEOUT_SECONDS,
+                                 "matcher": r"(?:^|:|__)vaws_(session|run|execution|finish|message)$"}]
+        return groups
     return {
         event: [{"hooks": [{"type": "command", "command": command, "timeout": HOOK_TIMEOUT_SECONDS}]}]
         for event in EVENTS
@@ -764,6 +767,8 @@ def build_plan(client, project, *, kimi_config=None, task_only=False):
         )
         project_key = hashlib.sha256(str(project).encode()).hexdigest()[:16]
         files[path] = managed_toml_text(path.read_text(encoding="utf-8") if path.exists() else "", "session-" + project_key, body)
+    from vaws_native_setup_config import add_native_setup
+    add_native_setup(files, notes, client, project, ROOT)
     return {
         "files": files,
         "mcp_servers": {name: entry["args"] for name, entry in servers.items()},

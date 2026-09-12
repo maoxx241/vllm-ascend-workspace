@@ -119,7 +119,11 @@ workspace; a missing Windows interpreter is reported as pending. Independent
 Linux workspaces use their own environment. Knowledge PR review and merge remain
 manual. Ordinary development requires no maintenance commands.
 
-## Start an isolated native client
+## Optional isolated CLI entry
+
+Prefer the native client's Worktree mode and setup callback for normal new
+sessions. The following launcher is an optional terminal convenience; neither
+users nor Agents need it for configured native session attachment.
 
 ```text
 uv run --no-project python .agents/scripts/vaws_client.py codex

@@ -36,13 +36,16 @@ forks, must belong to personal GitHub Users. Organization forks, redirected
 names and unrelated same-name repositories do not qualify. Canonical project
 repositories remain upstreams; `.gitmodules` keeps community URLs.
 
-Before `vaws_client.py` creates a new editing directory, it checks the canonical
-default branch once and prepares that revision and its pinned components; no
-Release is required. Eligible new copies use the prepared source and immutable
-environment. Existing `--workspace` directories and resumed sessions retain their
-code and selected environment. There is no periodic watcher or update during work.
-Preparation failure leaves usable local versions available. Native GUI clients
-own their Worktree choice; a session hook cannot replace their selected cwd.
+Initialize the selected native client's Worktree mode/environment once. Codex
+local-environment setup and Cursor worktree setup then prepare the new directory
+created by the client, before the Agent starts: check the canonical default
+branch once, adopt an eligible revision and pin its components and client wiring.
+No Release or per-session Agent command is required. Normal SessionStart hooks
+automatically attach the native identity and actual cwd to VAWS; resume keeps
+the existing task, code and selected environment. There is no periodic watcher
+or update during work. A plain Local chat does not acquire a worktree from a hook.
+Codex/Cursor setup wiring has contract tests; real GUI new-session acceptance
+remains pending. Other clients' supported boundaries are documented below.
 Explicit maintenance of an existing checkout can use
 `.agents/scripts/workspace_update.py apply`; this is not a per-task Agent step.
 Dirty sources and divergence stay for judgment when an update is needed.
@@ -69,12 +72,12 @@ adding personal/public categories, sharing permissions or publication steps.
 | Explicit remote endpoint I/O | remote-dev companion tools with ordinary host/port/user/cwd |
 | Managed environments, NPU runs and services | `vaws_session`, `vaws_run`, `vaws_execution`, `vaws_finish` |
 | Workspace initialization or client wiring | `.agents/skills/repo-init/SKILL.md` |
-| Start a native CLI in an independent editing directory | `.agents/scripts/vaws_client.py CLIENT` |
 | Local fleet monitor lifecycle | `.agents/skills/npu-fleet-monitor/SKILL.md`; observation is not allocation |
 | Knowledge lookup and capture | `knowledge_query`, `knowledge_explain`, `knowledge_capture` |
 
-Bind default business worktrees with `vaws_session(sources=...)`, or pass
-`sources` to one `vaws_run`; an empty map runs without project sources.
+Native attachments automatically bind their actual working directory as the
+default source. `vaws_session` is optional for inspection or explicit source
+overrides; a run can also pass `sources`, with an empty map using no project sources.
 Admission fixes source inputs for each execution. Coordinator
 prepares managed sources, environments, devices and ports through one `run`.
 Read status, tail or stop an owned execution through its package reference;

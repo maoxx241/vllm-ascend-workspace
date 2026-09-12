@@ -16,32 +16,32 @@ ask the user's shell to activate a virtual environment.
 ```text
 uv run --no-project python .agents/scripts/vaws_deps.py sync --group dev
 uv run --no-project python .agents/scripts/vaws_deps.py status
-uv run --no-project python .agents/scripts/vaws_client.py codex
-uv run --no-project python .agents/scripts/vaws_client.py kimi --workspace PATH
 ```
 
-The client entry uses an installed native CLI. It creates an independent editing
-directory by default and reuses an explicitly supplied existing directory.
-Client-specific arguments, including native resume IDs, follow `--`. A resume
-invocation must also supply the original `--workspace PATH`; native IDs
-are passed through and do not make this entry look up or guess a historical directory.
-The process cwd is set before its first tool call. Native desktop clients continue
-to own their UI's Local/Worktree choice; a session hook cannot move a running
-parent application.
+Ordinary use starts in the native client. Initialization wires the selected
+client once; the user selects its Worktree mode and environment through the
+native UI. Codex local-environment setup and Cursor worktree setup run after
+the client creates the new directory and before the Agent operates in it. The
+callback checks upstream once, advances an eligible new checkout and fixes its
+dependency environment and MCP/hook wiring. SessionStart attaches the native
+identity and actual cwd to VAWS automatically. Cursor preToolUse injects context
+internally and can establish that same attachment if it runs first.
 
-Before creating a new editing directory, the configured entry checks upstream
-once and prepares its exact default-branch revision and pinned dependencies.
-The new copy can use that revision's source, client wiring and immutable environment;
-preparation failures retain usable local versions. Existing `--workspace` directories
-and resumed sessions keep their code and selected environment. There is no periodic
-watcher. GUI hooks do not update the cwd already chosen by the native application;
-this entry does not provide universal GUI startup updating. Explicit maintenance can
-use apply. See [forks and updates](forks-and-updates.md).
+Native Local chats retain their selected directory. Session hooks cannot move
+the parent application. Resume retains the original task, code and environment;
+there is no periodic watcher or update during work. Setup contract tests cover
+Codex/Cursor wiring, but real GUI new-session acceptance remains pending.
+Other client capabilities and sources are listed in
+[native client boundaries](native-workspace-isolation.md). Explicit maintenance
+can use apply; see [forks and updates](forks-and-updates.md).
 
-The child CLI receives the selected native environment through PATH and
-VIRTUAL_ENV. Its bare `python` and `uv run --no-project python` use that environment;
-no shell activation or global environment edit is required. Dependency updates
-prepare another environment through sync rather than changing a published one.
+`vaws_client.py CLIENT` remains an optional launcher for installed CLIs. It
+creates an independent editing copy or reuses an explicit `--workspace PATH`;
+native arguments follow `--`. Resuming through this convenience launcher needs
+the original path, because the launcher does not guess it from a resume ID.
+It sets its child process cwd, PATH and VIRTUAL_ENV before launch. Those child
+environment guarantees do not imply that a GUI setup subprocess can change
+its parent's environment. Ordinary native sessions need no Agent launcher call.
 
 ## Commands and files
 
@@ -67,7 +67,10 @@ stopped; managed execution status remains with its execution owner.
 Native paths are converted at the boundary to the process that will read them.
 A shared Windows-mounted WSL workspace has one Windows coordinator and knowledge
 owner. It must use a verified Windows environment, not a path constructed using
-Linux's Python ABI. Independent native editing copies have ordinary `.git`
+Linux's Python ABI. Native new-worktree setup on a mounted Windows workspace
+must run with the Windows owner. Invoking this callback from a WSL `/mnt` path
+is currently unsupported; this change does not claim mixed-OS linked-worktree
+support. The optional CLI's independent editing copies have ordinary `.git`
 directories, avoiding absolute linked-worktree pointers from the other OS.
 Empty uninitialized submodules remain uninitialized; source is not fetched merely
 to start a workspace editing task. Initialized submodules keep independent state.
@@ -81,10 +84,10 @@ also pins its managed owner environment independently, so a later lock edit in a
 WSL shell cannot switch the owner used by an already running task. Project-relative
 launch aliases are also per identity and never redirected to another version.
 
-Setup and startup have different costs: explicit sync prepares missing
-dependencies. Creating a new CLI editing directory may prepare an upstream update
-once before launch; reopening an existing directory only resolves its selected
-completed environment. Knowledge
+Setup and ordinary task work have different costs: explicit sync prepares missing
+dependencies. Native new-worktree setup may prepare an upstream update once before
+the Agent starts; reopening an existing directory resolves its selected completed
+environment. Knowledge
 preparation remains an optional capability after sync and does not invalidate a
 completed package environment when model/index preparation is unavailable.
 

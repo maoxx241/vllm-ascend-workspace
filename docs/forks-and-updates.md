@@ -2,22 +2,27 @@
 
 Status: current
 
-目标是首次真正使用仓库时即可建立个人开发配置，在新会话创建编辑目录前跟上主仓。
+目标是首次真正使用仓库时即可建立个人开发配置，在原生客户端的新 worktree
+交给 Agent 前跟上主仓。
 不要求知道或调用某个 Skill。仅将身份校验、Git fast-forward、锁定依赖准备
-这些边界明确的操作工具化。常规更新由客户端启动入口消化；只有需要处理的
+这些边界明确的操作工具化。常规更新由客户端生命周期回调消化；只有需要处理的
 特殊 remote、分叉历史或版本切换取舍才交给 Agent。遵循[九条设计原则](design-principles.md)。
 
 ## 首次使用入口
 
 | 使用方式 | 首次发现 | 更新方式 |
 |---|---|---|
-| 直接打开仓库使用 Agent | 根 AGENTS.md 指向通用工具并说明一次身份确认 | 初始化接通客户端入口；已打开的目录保持原版本 |
-| 原生 CLI 入口 | 本地配置检查，缺身份时一次可见提示 | 新建编辑目录前检查和准备一次；已有目录复用原版本 |
-| 已配置的桌面客户端 | AGENTS.md 负责身份问答；session hook 关联实际会话 | Worktree 选择由原生客户端管理，hook 不更新其已选目录 |
+| 首次直接打开仓库使用 Agent | 根 AGENTS.md 说明一次身份确认 | 初始化接通所选客户端的 Worktree 模式和环境；已打开的目录保持原版本 |
+| 已配置的 Codex / Cursor 原生 Worktree 会话 | 客户端创建目录并调用 setup | Agent 开始前检查主仓、准备新目录及配套环境；SessionStart 自动关联 VAWS |
+| 已有目录、恢复会话或普通 Local 会话 | 客户端提供原生 ID 和实际 cwd | 保留代码和环境；不会由 session hook 另建目录或切换目录 |
+| 可选 CLI 入口 | 本地配置检查，缺身份时一次可见提示 | 新建编辑副本前检查和准备一次；已有目录复用原版本 |
 | 无 Agent / 无 hook | 直接调用通用脚本 | 显式 check、prepare 或 apply，无常驻进程 |
 
 Git clone 不会执行仓库代码；AGENTS.md 不是操作系统 hook，因此不声称仅 clone
-就会运行程序。CLI 在开始新会话前完成本轮检查和必要准备，启动后不再检查更新。
+就会运行程序。初始化时一次选好原生 Worktree 模式和环境，后续新会话由客户端
+自动执行 setup，不要求 Agent 调用启动脚本。Codex / Cursor 接线已实现并有
+契约测试，真实 GUI 新会话验收仍待完成；其他客户端的能力边界见
+[原生客户端与编辑隔离](native-workspace-isolation.md)。
 身份待确认、离线或准备失败时，保留可用的本地版本；轻量 Review、目录查询
 和其他独立本地工作不需要先完成更新。
 
@@ -76,14 +81,22 @@ uv run --no-project python .agents/scripts/workspace_update.py prepare
 uv run --no-project python .agents/scripts/workspace_update.py apply
 ```
 
-配置个人身份后，`vaws_client.py` 在新建编辑目录前检测一次官方仓库
-default_branch 的最新提交（当前为 main），不依赖 tag 或 Release。
-从主工作区入口创建新会话。由业务副本再创建目录时保留该副本的来源，
-包括准备版本生成的 detached HEAD 副本。已有 `--workspace` 目录及恢复会话
-不检查更新，继续使用原代码和选定环境。
-恢复调用必须带原来的 `--workspace PATH`；原生 resume ID 只透传给客户端，
-入口不会按 ID 猜测历史目录。
-没有每五分钟轮询、常驻 watcher 或工作中的版本切换。
+配置个人身份和客户端后，原生客户端创建新 worktree，再在 Agent 首次操作前
+调用 `vaws_worktree_setup.py`。Codex 使用选定本地环境的 setup；Cursor 使用
+生成的 `<project>/.cursor/worktrees.json` 中的 setup-worktree。两者把实际源目录和新目录传给
+回调，由回调检测一次官方 default_branch 的最新提交（当前为 main），不依赖
+tag 或 Release。原生回调机制分别见
+[Codex 本地环境](https://learn.chatgpt.com/docs/environments/local-environment) 和
+[Cursor worktrees](https://cursor.com/docs/configuration/worktrees)。
+
+回调只处理客户端刚创建的目录，不另建一份 worktree，也不通过 SessionStart
+切换父客户端 cwd。采用新版后，在该目录固定不可变环境和所选客户端的 MCP/hook
+接线，再交还客户端。已有 setup 命令继续保留，VAWS 准备置于其前，使安装和
+构建脚本读取本次选择的版本。SessionStart 负责自动建立或恢复 VAWS 关联；Cursor 的
+preToolUse 在内部补入 context，先后触发的关联操作保持幂等，无需 Agent 处理
+hook 顺序。已有环境选择的目录重复 setup 时只复用和修复接线，不再检查更新。
+恢复原会话使用原生客户端的恢复功能，保留原目录和版本。没有每五分钟轮询、
+常驻 watcher 或工作中的版本切换。
 
 `check` 只检查版本；`prepare` 在独立目录准备本轮取得的精确提交 SHA，调用该版本的既有
 `vaws_deps.py sync --locked` 复用不可变环境，并缓存/验证 vaws-top wheel。
@@ -92,18 +105,23 @@ default_branch 的最新提交（当前为 main），不依赖 tag 或 Release�
 沿用早期 `.vaws-local/updates/releases/<SHA>` 缓存目录名以复用已有准备结果，
 目录名不代表必须有 Release。
 
-准备过程不改现有工作目录。CLI 新建编辑副本时，若现有来源是干净、
-可快进的默认分支，可使用准备好的主仓提交作为新副本来源并运行其客户端接线。
-更新失败时沿用已有可用版本，不把半成品交给新客户端。原生 GUI 已经确定的
-工作目录不由 hook 修改；当前没有覆盖所有桌面客户端的创建 worktree 前更新入口。
+准备过程不改源工作目录。若来源是干净、可快进的默认分支，新 worktree
+与来源 HEAD 一致且没有本地改动，setup 可将这个尚未交给 Agent 的目录快进到
+准备好的主仓提交。客户端显式选择旧提交、业务分支或带改动来源时保留该选择；
+未初始化的子模块不因启动会话而拉取。回调再次检查新目录，避免覆盖准备期间
+发生的编辑。更新不可用时保留本地代码；若连本地依赖或客户端接线也无法准备，
+setup 返回失败事实，由原生客户端显示，不报告为已就绪。
 已有目录的显式维护可用 apply：要求干净默认分支、没有 merge/rebase，
 已初始化子模块无业务改动；只采用工作区固定的 gitlink，未初始化子模块保持原样。
-新会话来源有业务分支、脏文件或分叉时，仍检查一次主仓版本，但提前跳过
-用不上的依赖准备并保留原来源；原因保存在更新状态中。正常任务无需
-检查更新状态或运行 apply；仅在主动维护该目录或任务需要新版本时处理。
+不适合自动更新的来源跳过用不上的依赖准备，返回保留原因。正常任务无需检查
+更新状态或运行 apply；仅在主动维护该目录或任务需要新版本时处理。
+
+`vaws_client.py` 保留为可选 CLI 便利入口。它在创建独立编辑副本前使用同一
+更新器；恢复时必须带原来的 `--workspace PATH`，原生 resume ID 只透传给
+客户端，不用于猜测历史目录。这不是日常原生会话的前置步骤。
 
 不自动 stash/reset/rebase/强推。运行中的 MCP、hook、coordinator 和服务
-继续使用旧环境；新建 CLI 编辑目录可以选择准备好的新版本，恢复会话沿用原环境。
+继续使用旧环境；新的原生 worktree 可以采用准备好的新版本，恢复会话沿用原环境。
 新 coordinator 客户端遇到较旧 daemon 时使用既有 restart-if-idle 自动切换；
 忙碌时保留旧实例，旧客户端不会将新版
 降级。monitor 继续使用其既有实例管理机制。知识准备 pending 不阻止独立工具。
@@ -115,13 +133,15 @@ default_branch 的最新提交（当前为 main），不依赖 tag 或 Release�
 配置该目录 config.json 为 `{"enabled": false}` 暂停新建会话时的自动更新。
 显式命令仍可用于检查和修复。状态只记录安装结果，不接管任务和设备权属。
 
-同一 Git 公共目录通过 OS 锁串行执行更新；Windows 挂载目录从 WSL 发起时
-使用已有 Windows Python owner，避免 Windows/WSL 各持不同种类的文件锁。
-实现具有三平台 CI 覆盖入口，实际跨系统验收仍以 CI/实机结果为准。
+同一 Git 公共目录通过 OS 锁串行执行更新。共享 Windows 挂载目录的原生 setup
+需要由 Windows owner 执行；本轮不支持从 WSL 的 /mnt 路径运行这项回调，
+也不扩展混合系统 linked-worktree 承诺。已有更新器的 Windows owner 转发
+不等于原生 GUI 回调已通过跨系统验收。
 
 ## 参考与取舍
 
-新会话需要选择代码和环境，因此更新放在创建编辑目录之前；会话启动后版本固定。
+新会话需要选择代码和环境，因此更新放在客户端创建目录之后、交给 Agent 之前；
+会话开始工作后版本固定。
 这个边界无需定时进程、通知接收层或 Agent 轮询，也不增加每任务维护命令。
 依赖组合和安装复用遵循 [uv locking/syncing](https://docs.astral.sh/uv/concepts/projects/sync/)，
 运行进程由 workspace 已有不可变环境机制保护。
