@@ -65,7 +65,7 @@ def test_inline_python_is_never_replayed():
 
 
 def test_missing_owner_identity_clears_windows_parent_environment():
-    environment = {'WSLENV': 'CODEX_THREAD_ID/u:VAWS_CONTEXT_FILE/p:USER_CHOICE/up'}
+    environment = {'WSLENV': 'CODEX_THREAD_ID/u:VAWS_CONTEXT_FILE/p:VAWS_ENV_RECEIPT/u:VAWS_MANAGED_ENV_RECEIPT/up:USER_CHOICE/up'}
     _, child = entry.managed_invocation(__file__, receipt(), environment=environment,
                                        original=['python', '-m', 'business.cli'])
     fixed = entry.PATH_ENV | entry.IDENTITY_ENV
@@ -74,6 +74,9 @@ def test_missing_owner_identity_clears_windows_parent_environment():
     assert {key + '/w' for key in fixed} <= entries
     assert 'CODEX_THREAD_ID/u' not in entries
     assert 'VAWS_CONTEXT_FILE/p' not in entries
+    assert 'VAWS_ENV_RECEIPT/u' not in entries
+    assert 'VAWS_MANAGED_ENV_RECEIPT/up' not in entries
+    assert {'VAWS_ENV_RECEIPT/w', 'VAWS_MANAGED_ENV_RECEIPT/w'} <= entries
     assert 'USER_CHOICE/up' in entries
 
 

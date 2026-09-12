@@ -120,7 +120,7 @@ def managed_invocation(entry_file: str, receipt: dict, *, local_options: Sequenc
     forwarded[PIN_ENV] = receipt["receipt"]
     forwarded[MANAGED_PIN_ENV] = receipt["receipt"]
     if env.get("WSLENV"):
-        fixed = PATH_ENV | IDENTITY_ENV
+        fixed = PATH_ENV | IDENTITY_ENV | {PIN_ENV, MANAGED_PIN_ENV}
         forwarded["WSLENV"] = ":".join(part for part in env["WSLENV"].split(":")
                                        if part and part.split("/", 1)[0] not in fixed)
     env.update(windows_interop_env(forwarded))
