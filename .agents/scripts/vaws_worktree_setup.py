@@ -114,7 +114,7 @@ def advance_worktree(target: Path, prepared: Path, original: str,
     return {path: links[path] for path in active}
 
 
-def prepare_worktree(client: str, source: Path, target: Path) -> dict:
+def prepare_worktree(client: str, source: Path, target: Path, *, preserve_source: bool = False) -> dict:
     from vaws_local_owner import windows_mounted_workspace
     if windows_mounted_workspace(target):
         raise ValueError("run native worktree setup with the Windows owner for this mounted workspace")
@@ -122,12 +122,28 @@ def prepare_worktree(client: str, source: Path, target: Path) -> dict:
     # A repeated native setup or handoff reuses the existing selection even if
     # the user has since edited the lock. It never triggers another update.
     selection = target / ".vaws-local/environment-selection" / f"{sys.platform}.json"
+    identity = {}
+    if preserve_source and not selection.is_file():
+        # A native conversation fork inherits the source's selected runtime,
+        # including when its tracked lock has newer uncommitted edits.
+        try:
+            inherited = saved_ready(source)
+        except EnvironmentError:
+            pass  # Prepare this copied HEAD normally if the old runtime is gone.
+        else:
+            try:
+                copy_workspace_identity(source, target)
+            except (OSError, ValueError, RuntimeError) as exc:
+                identity = {"status": "unavailable", "error": str(exc)}
+            select_environment(target, inherited)
     if selection.is_file():
         receipt = saved_ready(target)
         # Dependency sync can save a selection before wiring completes. Repair
         # that bounded step without changing the saved version or its inputs.
         configure_target(client, target, receipt, environment)
-        return {"status": "reused", "workspace": str(target), "environment": receipt["key"]}
+        return {"status": "reused", "workspace": str(target), "environment": receipt["key"],
+                **({"update": {"status": "kept", "reason": "fork_source"}} if preserve_source else {}),
+                **({"identity": identity} if identity else {})}
 
     original = git(target, "rev-parse", "HEAD")
     branch = git(target, "symbolic-ref", "--quiet", "--short", "HEAD", check=False) or None
@@ -137,6 +153,8 @@ def prepare_worktree(client: str, source: Path, target: Path) -> dict:
     # Native clients may create a task from an explicitly selected older or
     # business commit. Preserve that choice, as well as copied local edits.
     try:
+        if preserve_source:
+            raise Deferred("fork_source")
         clean_checkout(target, branch=branch)
         active = active_submodules(target, original)
         if original == git(source, "rev-parse", "HEAD"):

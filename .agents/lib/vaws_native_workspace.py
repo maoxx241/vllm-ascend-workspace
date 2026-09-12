@@ -1,4 +1,4 @@
-"""Create a portable, independent native editing checkout before client startup.
+"""Copy native editing state before client startup.
 
 Git owns objects and indexes. This module owns only a bounded copy operation;
 it does not allocate tasks, infer session identity, or manage workspace leases.
@@ -117,7 +117,18 @@ def _capture(source: Path) -> dict:
             "working_diff": git(source, "diff", "--no-ext-diff", "--no-textconv", "--binary").hex()}
 
 
-def _copy_repository(source: Path, destination: Path, snapshot: dict) -> None:
+def _copy_repository(source: Path, destination: Path, snapshot: dict, *, linked: bool = False) -> None:
+    if linked:
+        git(source, "worktree", "add", "--detach", "--no-checkout", str(destination), snapshot["head"])
+        # Ordinary linked trees already share the source's repository config.
+        # If per-worktree config is enabled, preserve only the captured file
+        # interpretation settings in this new tree, without editing the source.
+        if git(source, "config", "--type=bool", "--default", "false", "--get", "extensions.worktreeConfig").strip() == b"true":
+            for key, value in snapshot["configuration"].items():
+                git(destination, "config", "--worktree", key, value)
+        git(destination, "read-tree", snapshot["tree"])
+        _copy_contents(source, destination, snapshot, linked=True)
+        return
     # Local clone copies/hardlinks objects, with independent refs and .git dirs.
     # Unlike linked-worktree absolute gitdir pointers, these are readable by
     # native Windows Git and WSL Git on the same mounted filesystem.
@@ -145,6 +156,10 @@ def _copy_repository(source: Path, destination: Path, snapshot: dict) -> None:
             if push_urls != urls:
                 for url in push_urls:
                     git(destination, "remote", "set-url", "--add", "--push", remote, url)
+    _copy_contents(source, destination, snapshot)
+
+
+def _copy_contents(source: Path, destination: Path, snapshot: dict, *, linked: bool = False) -> None:
     for name, state in snapshot["files"].items():
         if state is None or state[0] == "link":
             continue
@@ -156,7 +171,7 @@ def _copy_repository(source: Path, destination: Path, snapshot: dict) -> None:
             if child["directory"]:
                 (destination / name).mkdir(parents=True)
         else:
-            _copy_repository(source / name, destination / name, child)
+            _copy_repository(source / name, destination / name, child, linked=linked)
     # Targets, including submodules, exist before links are created. Explicit
     # Windows link types also preserve directory and dangling-directory links.
     for name, state in snapshot["files"].items():
@@ -231,11 +246,12 @@ def _copy_with_windows(source: Path, destination: Path, *, python: str) -> dict:
         raise WorkspaceCopyError(f"invalid Windows copy response: {exc}") from exc
 
 
-def create_workspace(source: Path, destination: Path) -> dict:
+def create_workspace(source: Path, destination: Path, *, linked: bool = False) -> dict:
     """Copy HEAD, staged/working content and ordinary untracked files.
 
-    Ignored files are excluded. Initialized submodules receive independent Git
-    directories; uninitialized gitlinks remain uninitialized without fetching.
+    Ignored files are excluded. Git storage is independent by default; native
+    forks can retain the source's worktree family for the root and initialized
+    submodules. Uninitialized gitlinks stay uninitialized without fetching.
     Existing destinations are never replaced. A failed copy stays
     visible for diagnosis and is never published as ready.
     """
@@ -243,6 +259,8 @@ def create_workspace(source: Path, destination: Path) -> dict:
     from vaws_local_owner import windows_mounted_workspace
 
     if windows_mounted_workspace(source):
+        if linked:
+            raise WorkspaceCopyError("create linked worktrees with the native Windows owner for this mounted workspace")
         # WSL-created NTFS symlinks can use Linux-only reparse points. Native
         # Windows owns the whole operation, including Git pointer interpretation.
         # Lookup is read-only; an unavailable environment is never synthesized.
@@ -260,7 +278,7 @@ def create_workspace(source: Path, destination: Path) -> dict:
         raise WorkspaceCopyError("source must be the repository root")
     before = _capture(source)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    _copy_repository(source, destination, before)
+    _copy_repository(source, destination, before, linked=linked)
     if _capture(source) != before:
         raise WorkspaceCopyError(f"source changed while copying; incomplete workspace kept at {destination}")
     if _capture(destination) != before:
@@ -273,3 +291,8 @@ def create_workspace(source: Path, destination: Path) -> dict:
     record.parent.mkdir(parents=True, exist_ok=True)
     record.write_text(json.dumps(receipt, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return receipt
+
+
+def create_linked_workspace(source: Path, destination: Path) -> dict:
+    """Fork current editing state inside its existing native Git worktree family."""
+    return create_workspace(source, destination, linked=True)

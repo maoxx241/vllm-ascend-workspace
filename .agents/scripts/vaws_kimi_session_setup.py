@@ -22,6 +22,7 @@ from vaws_environment import PIN_ENV, MANAGED_PIN_ENV, saved_ready
 from vaws_workspace_update import common_dir, git
 from vaws_worktree_setup import prepare_worktree, unpinned_environment
 from vaws_native_task_env import task_env
+from vaws_native_workspace import create_linked_workspace
 
 
 def scoped_source(project: Path, cwd: Path) -> Path | None:
@@ -39,10 +40,18 @@ def setup(project: Path, source: Path, payload: dict) -> dict:
     target = project / ".vaws-local/workspaces" / ("kimi-" + hashlib.sha256(native.encode()).hexdigest()[:20])
     if not target.exists():
         target.parent.mkdir(parents=True, exist_ok=True)
-        git(source, "worktree", "add", "--detach", str(target), "HEAD")
+        if payload.get("source") == "fork":
+            create_linked_workspace(source, target)
+        else:
+            git(source, "worktree", "add", "--detach", str(target), "HEAD")
     elif common_dir(target).resolve() != common_dir(project).resolve():
         raise ValueError("Kimi setup target exists outside this Git worktree family")
-    result = prepare_worktree("kimi", source, target)
+    elif payload.get("source") == "fork" and not (target / ".vaws-local/native-workspace.json").is_file():
+        raise ValueError(f"Kimi fork copy did not finish; incomplete worktree kept at {target}")
+    if payload.get("source") == "fork":
+        result = prepare_worktree("kimi", source, target, preserve_source=True)
+    else:
+        result = prepare_worktree("kimi", source, target)
     print(json.dumps({"kimi_session_setup": result}, ensure_ascii=False), file=sys.stderr, flush=True)
     return {"hookSpecificOutput": {"cwd": str(target)}}
 
