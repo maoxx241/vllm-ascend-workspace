@@ -17,6 +17,8 @@ def guidance(client: str | None = None) -> str:
     selection = (" Replace CLIENT with your native client: codex, cursor, claude, grok or kimi."
                  if client is None else "")
     return (
+        "On first use, complete AGENTS.md's First use, forks and updates setup before "
+        "this new-session step.\n\n"
         "For a new native session, use an independent native worktree when startup supplied "
         "its selected environment. Otherwise make the first repository action "
         f"`uv run --no-project python .agents/scripts/vaws_start.py --client {name}`."

@@ -1,4 +1,6 @@
 <!-- BEGIN VAWS session-start -->
+On first use, complete AGENTS.md's First use, forks and updates setup before this new-session step.
+
 For a new native session, use an independent native worktree when startup supplied its selected environment. Otherwise make the first repository action `uv run --no-project python .agents/scripts/vaws_start.py --client CLIENT`. Replace CLIENT with your native client: codex, cursor, claude, grok or kimi. Add `--context-file PATH` when the native hook supplied that context and the command cannot obtain it from the client environment (official Kimi needs it).
 
 Use the returned `workspace` as W: shell tools use W as cwd (or `cd W && ...`), and file, search and patch tools use absolute paths under W. Sources and the selected environment are already bound; do not repeat session setup. Official Kimi calls to the task, remote-dev and knowledge MCP providers also carry the returned `context_file`. Other clients receive context through hooks; if a tool reports missing context, pass the existing `context_file`. Use configured knowledge tools when useful.
@@ -55,6 +57,10 @@ Native worktree setup is an optional optimization; official clients also use
 the shared new-session entry. Client trust remains native. Do not
 rerun all-client setup, poll its record or repeat questions for ordinary work.
 Explicit initialization or repair can rerun the same idempotent entry.
+Complete dependency and client setup before the first business session. If the
+running client does not load the new hooks/providers immediately, reopen the
+project or start a new native session once and complete its trust prompts.
+This is part of initialization, not a recurring session check.
 
 Each new native task selects its editing workspace, checks upstream once and
 fixes its component environment. Existing native worktree callbacks can perform
