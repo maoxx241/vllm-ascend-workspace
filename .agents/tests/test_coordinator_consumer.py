@@ -30,6 +30,7 @@ if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
 import vaws_coordinator_launch as coordinator  # noqa: E402
+from client_setup_fixtures import native_task_entry
 
 _GONE_COORDINATOR_ROOT = "VAWS_" + "COORDINATOR_ROOT"
 
@@ -134,33 +135,25 @@ class LauncherTests(unittest.TestCase):
         self.assertEqual(payload["state"], "missing")
         self.assertEqual(payload["remedy"], "uv run --no-project python .agents/scripts/vaws_deps.py sync")
 
-    def test_task_server_and_task_ops_without_package_fail_closed(self) -> None:
-        env = isolated_env()
-        python = isolated_python()
-        proc = subprocess.run(
-            [python, str(SCRIPTS / "vaws.py"), "task-server"],
-            capture_output=True, text=True, env=env, check=False,
-        )
-        self.assertEqual(proc.returncode, 2, proc.stderr)
-        self.assertIn("uv run --no-project python .agents/scripts/vaws_deps.py sync", proc.stderr)
-        for operation in ("attach", "session", "run", "execution", "finish"):
-            argv = [python, str(SCRIPTS / "vaws.py"), operation]
-            if operation == "attach":
-                argv += ["--client", "codex", "--native-session-id", "n1"]
-            elif operation == "run":
-                argv += ["--request-id", "r1", "--command", "true"]
-            elif operation == "execution":
-                argv += ["--execution-id", "e1"]
-            else:
-                argv += ["--json", "{}"]
-            child = subprocess.run(argv, capture_output=True, text=True, env=env, check=False)
-            self.assertEqual(child.returncode, 1, (operation, child.stderr))
-            self.assertNotIn("Traceback", child.stderr)
-            payload = json.loads(child.stdout)["result"]
-            self.assertEqual(payload["outcome"], "blocked")
-            self.assertEqual(payload["status"], "unavailable")
-            self.assertIn("vaws-coordinator", payload["summary"] + json.dumps(payload))
-            self.assertIn("uv run --no-project python .agents/scripts/vaws_deps.py sync", payload["summary"] + json.dumps(payload) + child.stderr)
+    def test_unprepared_native_task_entries_require_setup_before_creating_state(self) -> None:
+        # Normal startup now resolves an immutable environment before package
+        # invocation. Exercise that reachable boundary without the old bypass.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            entry = native_task_entry(ROOT, root / 'unprepared-checkout', prepared=False)
+            env = {key: value for key, value in isolated_env().items() if not key.startswith('VAWS_')}
+            registry = root / 'registry'
+            env['VAWS_AGENT_SESSIONS_DIR'] = str(registry)
+            env['VAWS_ENV_HOME'] = str(root / 'empty-ready-store')
+            python = isolated_python()
+            for operation in ('task-server', 'attach', 'session', 'run', 'execution', 'finish'):
+                with self.subTest(operation=operation):
+                    child = subprocess.run([python, str(entry), operation], input='',
+                                           capture_output=True, text=True, env=env, check=False)
+                    self.assertEqual(child.returncode, 2, (operation, child.stderr))
+                    self.assertNotIn('Traceback', child.stderr)
+                    self.assertIn('uv run --no-project python .agents/scripts/vaws_deps.py sync', child.stderr)
+            self.assertFalse(registry.exists())
 
     def test_hook_without_package_does_not_write_a_registry(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

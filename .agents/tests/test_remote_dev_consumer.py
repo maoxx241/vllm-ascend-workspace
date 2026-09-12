@@ -16,6 +16,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
 LIB = ROOT / ".agents" / "lib"
 SCRIPTS = ROOT / ".agents" / "scripts"
@@ -23,6 +25,7 @@ if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
 import vaws_remote_dev as remote_dev  # noqa: E402
+from client_setup_fixtures import selected_runtime
 
 requires_package = unittest.skipUnless(
     importlib.util.find_spec("remote_dev") is not None,
@@ -102,9 +105,9 @@ class ClientConfigurationTests(unittest.TestCase):
 
     def test_client_setup_emits_package_entry_with_environment(self) -> None:
         setup = load_script("vaws_client_setup")
-        setup.managed_python = lambda: sys.executable
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory() as tmp, pytest.MonkeyPatch.context() as runtime:
             project = Path(tmp).resolve()
+            selected_runtime(runtime, setup, project)
             files = setup.configuration("claude", project)
             servers = json.loads(files[project / ".mcp.json"])["mcpServers"]
             mcp = servers["remote-dev"]
@@ -122,9 +125,9 @@ class ClientConfigurationTests(unittest.TestCase):
 
     def test_client_setup_keeps_user_environment_values(self) -> None:
         setup = load_script("vaws_client_setup")
-        setup.managed_python = lambda: sys.executable
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory() as tmp, pytest.MonkeyPatch.context() as runtime:
             project = Path(tmp).resolve()
+            selected_runtime(runtime, setup, project)
             (project / ".mcp.json").write_text(json.dumps({"mcpServers": {"remote-dev": {"env": {"REMOTE_DEV_RUNTIME_ENV_FILE": "/etc/profile.d/custom.sh"}}}}))
             mcp = json.loads(setup.configuration("claude", project)[project / ".mcp.json"])["mcpServers"]["remote-dev"]
             self.assertNotIn("REMOTE_DEV_RESOLVERS", mcp["env"])

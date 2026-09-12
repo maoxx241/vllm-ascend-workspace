@@ -23,6 +23,7 @@ SCRIPTS = ROOT / ".agents" / "scripts"
 TESTS = Path(__file__).resolve().parent
 if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
+from client_setup_fixtures import native_task_entry
 
 PACKAGE_PRESENT = importlib.util.find_spec("vaws_coordinator") is not None
 if PACKAGE_PRESENT:
@@ -52,7 +53,8 @@ class OfficialStdioTests(unittest.TestCase):
 
     async def _run(self) -> None:
         with tempfile.TemporaryDirectory(prefix="coordinator-official-stdio-") as temporary:
-            temp = Path(temporary)
+            temp = Path(temporary).resolve()
+            entry = native_task_entry(ROOT, temp / 'native-checkout', prepared=True)
             worktree = temp / "actual-business-worktree"
             worktree.mkdir()
             for arguments in (
@@ -86,7 +88,7 @@ class OfficialStdioTests(unittest.TestCase):
                 child_env = {**environment, "ACCEPTANCE_GUARD_REPORT": str(guard)}
                 command = [
                     sys.executable,
-                    str(SCRIPTS / "vaws.py"),
+                    str(entry),
                     "attach",
                     "--client",
                     "codex",
@@ -118,7 +120,7 @@ class OfficialStdioTests(unittest.TestCase):
             reports.append(server_guard)
             parameters = StdioServerParameters(
                 command=sys.executable,
-                args=[str(SCRIPTS / "vaws.py"), "task-server"],
+                args=[str(entry), "task-server"],
                 cwd=str(temp),
                 env={**environment, "ACCEPTANCE_GUARD_REPORT": str(server_guard)},
             )

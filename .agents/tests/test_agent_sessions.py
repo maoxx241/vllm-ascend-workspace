@@ -16,6 +16,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest import mock
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / ".agents/lib"))
 
@@ -39,6 +41,7 @@ if PACKAGE_PRESENT:
 else:
     AgentSessions = load_context = TaskClient = hooks = None  # type: ignore[misc, assignment]
 setup = module_at("native_session_setup", ROOT / ".agents/scripts/vaws_client_setup.py")
+from client_setup_fixtures import selected_runtime
 
 
 @requires_coordinator
@@ -229,11 +232,11 @@ class ScaffoldSetupTests(unittest.TestCase):
     """Hook wrapper and client-setup contracts that stay in this repository."""
 
     def setUp(self):
-        owner = mock.patch.object(setup, "managed_python", return_value=sys.executable)
-        owner.start()
-        self.addCleanup(owner.stop)
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name).resolve()
+        runtime = pytest.MonkeyPatch()
+        self.addCleanup(runtime.undo)
+        selected_runtime(runtime, setup, self.root)
 
     def tearDown(self):
         self.temp.cleanup()
