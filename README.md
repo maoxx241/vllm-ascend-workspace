@@ -10,7 +10,7 @@
 
 > 初始化这个工作区，配好 vLLM Ascend 的开发环境。
 
-初始化复用已有配置，安装锁定依赖并接通所选客户端；可以使用 `repo-init` 技能，但不以调用 Skill 为前提。一次选好原生 Worktree 模式和环境后，由客户端创建新目录、运行 setup，再让 Agent 开始工作。VAWS 会话关联、依赖复用和版本固定由接线处理，日常无需 Agent 运行启动 CLI。当前接入 Codex 本地环境 setup 和 Cursor worktree setup，已提供契约测试，尚待真实 GUI 新会话验收；其他客户端边界见[原生客户端与编辑隔离](docs/native-workspace-isolation.md)。安装与平台行为见 [dependency-plane.md](docs/dependency-plane.md) 和 [platform-contract.md](docs/platform-contract.md)。
+初始化复用已有配置，安装锁定依赖，并通过 `vaws_client_setup.py --client all --apply` 一次检测和配置已安装的 Agent 客户端；不以调用 `repo-init` Skill 为前提。原生支持的默认模式由配置处理，仍需客户端界面完成的选择会在初始化时明确列出，由可用的客户端工具或 computer use 完成。配置后的新会话由客户端创建 worktree、运行 setup，再让 Agent 开始工作；日常无需 Agent 运行启动 CLI。已验证版本及实际边界见[原生客户端验收](docs/native-client-validation-2026-09-12.md)和[原生客户端与编辑隔离](docs/native-workspace-isolation.md)。安装与平台行为见 [dependency-plane.md](docs/dependency-plane.md) 和 [platform-contract.md](docs/platform-contract.md)。
 
 日常工作只需说明目标和影响结果的输入，例如：
 

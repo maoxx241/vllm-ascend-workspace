@@ -18,9 +18,9 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / ".agents/lib"))
 
 from vaws_environment import EnvironmentError, PIN_ENV, MANAGED_PIN_ENV, native_ready, saved_ready, select_environment, _inputs
-from vaws_workspace_entry import copy_workspace_identity, prepare_session
-from vaws_workspace_update import (Deferred, SUBMODULES, clean_checkout, common_dir,
-                                   git, gitlinks, initialized, prepared_source, run)
+from vaws_workspace_entry import copy_workspace_identity, prepare_session, workspace_entry
+from vaws_workspace_update import (Deferred, SUBMODULES, WorkspaceUpdater, clean_checkout, common_dir,
+                                   git, gitlinks, initialized, prepared_source, run, update_lock)
 
 
 def native_paths(client: str, environment: dict, cwd: Path) -> tuple[Path, Path]:
@@ -114,6 +114,46 @@ def advance_worktree(target: Path, prepared: Path, original: str,
     return {path: links[path] for path in active}
 
 
+def default_branch_snapshot(source: Path, original: str) -> dict | None:
+    """Recognize the local default-branch tip, not the user's selected ref.
+
+    Codex passes only source/target paths to setup. An explicit selection of
+    this exact tip is indistinguishable from the default; the result records
+    that boundary. Other commits and named target branches are not eligible.
+    """
+    branches = set()
+    for remote in ("origin", "upstream"):
+        reference = git(source, "symbolic-ref", "--quiet", f"refs/remotes/{remote}/HEAD", check=False)
+        prefix = f"refs/remotes/{remote}/"
+        if reference.startswith(prefix):
+            branches.add(reference[len(prefix):])
+    if len(branches) != 1:
+        return None
+    reference = "refs/heads/" + branches.pop()
+    if git(source, "rev-parse", "--verify", reference + "^{commit}", check=False) != original:
+        return None
+    return {"kind": "local_default_branch_snapshot", "ref": reference, "head": original,
+            "native_ref_selection": "unavailable"}
+
+
+def prepare_default_snapshot(source: Path, baseline: dict) -> tuple[dict, Path | None]:
+    """Use existing preparation without requiring the editing source on main."""
+    result = workspace_entry(source)
+    if result["state"] != "configured":
+        return result, None
+    with update_lock(source):
+        updater = WorkspaceUpdater(source)
+        result = updater.step(apply=True, activate=False)
+        if result.get("status") not in {"ready", "current"}:
+            return result, None
+        if "refs/heads/" + result["branch"] != baseline["ref"]:
+            return {"status": "kept", "reason": "default_branch_changed"}, None
+        if updater.state.get("phase") not in {"ready", "active"}:
+            return result, None
+        prepared = updater.validate_prepared(updater.state, updater.state["prepared"])
+        return result, prepared
+
+
 def prepare_worktree(client: str, source: Path, target: Path, *, preserve_source: bool = False) -> dict:
     from vaws_local_owner import windows_mounted_workspace
     if windows_mounted_workspace(target):
@@ -148,6 +188,7 @@ def prepare_worktree(client: str, source: Path, target: Path, *, preserve_source
     original = git(target, "rev-parse", "HEAD")
     branch = git(target, "symbolic-ref", "--quiet", "--short", "HEAD", check=False) or None
     result = {"status": "kept", "reason": "explicit_source"}
+    baseline = None
     prepared = None
     submodules = {}
     # Native clients may create a task from an explicitly selected older or
@@ -157,7 +198,11 @@ def prepare_worktree(client: str, source: Path, target: Path, *, preserve_source
             raise Deferred("fork_source")
         clean_checkout(target, branch=branch)
         active = active_submodules(target, original)
-        if original == git(source, "rev-parse", "HEAD"):
+        if client == "codex" and branch is None:
+            baseline = default_branch_snapshot(source, original)
+        if baseline is not None:
+            result, prepared = prepare_default_snapshot(source, baseline)
+        elif original == git(source, "rev-parse", "HEAD"):
             result = prepare_session(source)
             prepared = prepared_source(source)
         if prepared is not None:
@@ -167,6 +212,8 @@ def prepare_worktree(client: str, source: Path, target: Path, *, preserve_source
     except Deferred as exc:
         result = {"status": "kept", "reason": exc.reason}
         prepared = None
+    if baseline is not None:
+        result = {**result, "baseline": baseline}
     identity = {}
     try:
         copy_workspace_identity(source, target)

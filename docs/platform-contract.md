@@ -18,9 +18,13 @@ uv run --no-project python .agents/scripts/vaws_deps.py sync --group dev
 uv run --no-project python .agents/scripts/vaws_deps.py status
 ```
 
-Ordinary use starts in the native client. Initialization wires the selected
-client once; the user selects its Worktree mode and environment through the
-native UI. Codex local-environment setup and Cursor worktree setup run after
+Ordinary use starts in the native client. One-time initialization uses
+`vaws_client_setup.py --client all --apply` to detect installed clients and
+prepare supported native defaults and wiring together. It reports remaining
+native choices at that time, so they can be completed through client tools or
+computer use before business work. Writing files alone does not establish a
+worktree mode or trust, and an unsupported native interface remains explicit.
+Codex local-environment setup and Cursor worktree setup run after
 the client creates the new directory and before the Agent operates in it. The
 callback checks upstream once, advances an eligible new checkout and fixes its
 dependency environment and MCP/hook wiring. SessionStart attaches the native

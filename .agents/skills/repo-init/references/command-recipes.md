@@ -2,6 +2,21 @@
 
 Prefer the helper scripts in `scripts/` and `.agents/scripts/` when possible.
 
+## Initialize installed clients together
+
+```text
+uv run --no-project python .agents/scripts/vaws_deps.py sync
+uv run --no-project python .agents/scripts/vaws_client_setup.py --client all --apply
+```
+
+The second command detects installed clients, configures their providers/hooks
+and supported native defaults, and returns each client's remaining native
+initialization actions. Resolve them during this first setup using the client's
+own tools or computer use. Unavailable interfaces remain explicit; a configured
+MCP entry does not prove that new sessions default to a worktree. The primary
+worktree keeps `.vaws-local/client-initialization.json` for inspection. Ordinary
+tasks do not rerun this initialization or read its record as a prerequisite.
+
 ## Codex native initialization
 
 ```text

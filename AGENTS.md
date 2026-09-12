@@ -21,7 +21,8 @@ remotes, not replacements for community upstreams.
 This applies without invoking a Skill. On first use, if no confirmed
 `.vaws-local/github.json` exists, inspect `.agents/scripts/workspace_forks.py`
 and ask once for the user's personal GitHub username, explaining that setup
-creates personal development forks and enables upstream update preparation. The current
+creates personal development forks and configures the installed native clients
+once for upstream updates and worktree sessions. The current
 authenticated login is a suggestion, not consent. Reuse an explicit answer;
 do not infer identity from the OS account or remotes. Continue independent
 local/read-only work while the answer is pending; a deferred choice is not a
@@ -36,7 +37,20 @@ forks, must belong to personal GitHub Users. Organization forks, redirected
 names and unrelated same-name repositories do not qualify. Canonical project
 repositories remain upstreams; `.gitmodules` keeps community URLs.
 
-Initialize the selected native client's Worktree mode/environment once. Codex
+After identity setup, initialize the installed clients together with
+`uv run --no-project python .agents/scripts/vaws_deps.py sync`, then
+`uv run --no-project python .agents/scripts/vaws_client_setup.py --client all --apply`.
+The latter detects actual installed clients, prepares their hooks/providers and
+supported native defaults, and records the result in the primary worktree's
+`.vaws-local/client-initialization.json`. It does not require invoking a Skill.
+Complete any returned native UI choices once during this initialization, using
+available client tools or computer use; unsupported operations remain explicit
+in the result. Writing wiring files alone does not establish a default mode or
+native trust. An existing initialization attempt is not a per-task gate: do not
+rerun all-client setup, poll its record or repeat questions for ordinary work.
+Explicit initialization or repair can rerun the same idempotent entry.
+
+Codex
 local-environment setup and Cursor worktree setup then prepare the new directory
 created by the client, before the Agent starts: check the canonical default
 branch once, adopt an eligible revision and pin its components and client wiring.

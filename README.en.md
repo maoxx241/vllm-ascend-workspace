@@ -10,7 +10,7 @@ Open this checkout in an Agent client and ask:
 
 > Initialize this workspace for vLLM Ascend development.
 
-The `repo-init` skill reuses existing configuration, installs locked packages and configures the selected client. Windows, macOS and Linux use one native client entry, which creates an independent Git copy before starting the Agent. Prepared dependencies are reused by content and pinned for live clients. Windows and WSL can share source files and one Windows managed-task owner. See the [platform entry](docs/platform-contract.md). Agent installation recipes are in [dependency-plane.md](docs/dependency-plane.md) and [windows-installation.md](docs/windows-installation.md).
+Initialization reuses configuration, installs locked packages and runs `vaws_client_setup.py --client all --apply` to detect and configure installed Agent clients together. Invoking a Skill is optional. The result identifies supported native defaults and any remaining native choices, which can be completed once through client tools or computer use. Configured clients create worktrees and run setup before Agent work; ordinary sessions need no VAWS launcher command. Versions and real acceptance boundaries are in [native client acceptance](docs/native-client-validation-2026-09-12.md) and [native workspace isolation](docs/native-workspace-isolation.md). Installation and platform behavior are in [dependency-plane.md](docs/dependency-plane.md) and [platform-contract.md](docs/platform-contract.md).
 
 For daily work, describe the outcome and the inputs that matter:
 

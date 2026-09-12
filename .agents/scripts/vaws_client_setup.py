@@ -896,9 +896,101 @@ def apply_plan(plan):
     return changed
 
 
-def main():
+def setup_installed_clients(args):
+    """One-time initialization; each installed client keeps its existing builder."""
+    from vaws_client_inventory import installed_clients
+    from vaws_native_mode_config import add_native_mode, kimi_session_setup_capability
+
+    clients = {}
+    for client, installation in installed_clients().items():
+        row = {"installation": installation, "files": [], "notes": [],
+               "native_worktree": {"status": "not_configured", "missing_action": None}}
+        clients[client] = row
+        if not installation["installed"]:
+            row.update(state="skipped", reason="not_installed")
+            continue
+        phase, current_path = "plan", None
+        try:
+            capability = None
+            if client == "kimi":
+                executable = installation.get("executable")
+                capability = (kimi_session_setup_capability(executable) if executable else
+                              {"supported": False, "reason": "kimi_executable_unavailable"})
+                row["capability"] = capability
+                if not capability["supported"]:
+                    path = args.kimi_config or kimi_home() / "config.toml"
+                    if path.is_file() and any(hook.get("event") == "SessionSetup"
+                            for hook in tomllib.loads(path.read_text(encoding="utf-8")).get("hooks", [])
+                            if isinstance(hook, dict)):
+                        row.update(state="blocked", reason="unsupported_existing_session_setup")
+                        row["native_worktree"] = {"status": "unavailable",
+                            "missing_action": "Install a Kimi client supporting SessionSetup; existing configuration was preserved."}
+                        continue
+            plan = build_plan(client, args.project, kimi_config=args.kimi_config, task_only=args.task_only,
+                              kimi_session_setup=bool(capability and capability["supported"]),
+                              codex_global_hooks=client == "codex", cursor_global_mcp=client == "cursor")
+            row["notes"] = plan["notes"]
+            add_native_mode(plan["files"], plan["notes"], client, args.project)
+            row["mcp_servers"] = plan["mcp_servers"]
+            row["launch_argv"], row["launch_cwd"] = plan["launch_argv"], plan["launch_cwd"]
+            phase = "apply" if args.apply else "preview"
+            for path, content in plan["files"].items():
+                current_path = str(path)
+                if args.apply:
+                    row["files"].extend(apply_plan({**plan, "files": {path: content}}))
+                elif not path.exists() or path.read_text(encoding="utf-8") != content:
+                    row["files"].append({"path": str(path), "sha256": hashlib.sha256(content.encode()).hexdigest()})
+            row["state"] = "configured" if args.apply else "preview"
+            native = {"status": "wiring_configured" if args.apply else "wiring_planned", "missing_action": None}
+            if client in {"codex", "cursor"}:
+                native["default_mode"] = "not_verified"
+                native["missing_action"] = (
+                    "During initialization, use a supported native tool once to select Worktree mode and the VAWS local environment; "
+                    "use Computer Use only if no public setter exists and UI access is permitted. Skip if already selected; this is not a recurring session check."
+                    if client == "codex" else
+                    "During initialization, use a supported native tool once to select New Worktree as the default; "
+                    "use Computer Use only if no public setter exists and UI access is permitted. Skip if already selected; this is not a recurring session check.")
+                row["notes"].append({"client": client, "reason": "native-default-mode-requires-one-time-setting",
+                                     "detail": native["missing_action"]})
+            elif client == "grok":
+                preference = next((note for note in reversed(plan["notes"])
+                                   if note.get("reason") == "native-worktree-preferences"), None)
+                native.update(scope="/new and /fork", initial_cli_start="unchanged")
+                if preference is None:
+                    native.update(status="preferences_preserved", missing_action="Integrate the existing Grok user preference table once; see notes.")
+            elif client == "claude":
+                native.update(default_mode="unsupported", missing_action="Claude has no supported ordinary CLI default-worktree setting; WorktreeCreate handles native worktree creation.")
+            elif not capability["supported"]:
+                native.update(status="session_setup_unavailable", missing_action="Install a Kimi client with the native SessionSetup extension, then rerun initialization.")
+            row["native_worktree"] = native
+        except Exception as exc:
+            row.update(state="failed", error={"phase": phase, "path": current_path,
+                                               "type": type(exc).__name__, "message": str(exc)})
+            row["native_worktree"] = {"status": "not_configured",
+                                      "missing_action": "Repair this client's reported configuration error and rerun initialization."}
+    result = {"state": "partial" if any(row["state"] in {"failed", "blocked"} for row in clients.values()) else
+                       "wiring_configured" if args.apply else "preview",
+              "clients": clients, "trust_granted": False, "connected": False}
+    if args.apply:
+        from vaws_local_state import shared_workspace_root, utc_now_iso
+        from vaws_session_state import write_json
+        path = shared_workspace_root(args.project) / ".vaws-local/client-initialization.json"
+        record = {"state": result["state"], "attempted_at": utc_now_iso(), "project": str(args.project.resolve()),
+                  "clients": {name: {key: value for key, value in row.items()
+                                     if key in {"state", "reason", "files", "native_worktree", "error"}}
+                              for name, row in clients.items()}}
+        try:
+            write_json(path, record)
+            result["record"] = str(path)
+        except OSError as exc:
+            result.update(state="partial", record_error={"path": str(path), "message": str(exc)})
+    return result
+
+
+def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--client", choices=sorted(CLIENTS), required=True)
+    parser.add_argument("--client", choices=sorted(CLIENTS | {"all"}), required=True,
+                        help="One client for scoped wiring, or all for one-time initialization of installed clients")
     parser.add_argument("--project", type=Path, default=Path.cwd())
     parser.add_argument("--kimi-config", type=Path, help="Explicit Kimi Code configuration file to edit for scoped session hooks")
     parser.add_argument("--kimi-session-setup", action="store_true", help="Enable the Kimi native SessionSetup extension after installing the patched client")
@@ -910,7 +1002,11 @@ def main():
         help="Write only the vaws-task entry; skip remote-dev and vaws-knowledge",
     )
     parser.add_argument("--apply", action="store_true", help="Write with private backups; default is preview")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
+    if args.client == "all":
+        result = setup_installed_clients(args)
+        print(json.dumps(result, ensure_ascii=False))
+        return 1 if result["state"] == "partial" else 0
     plan = build_plan(args.client, args.project, kimi_config=args.kimi_config, task_only=args.task_only,
                       kimi_session_setup=args.kimi_session_setup, cursor_global_mcp=args.cursor_global_mcp,
                       codex_global_hooks=args.codex_global_hooks)
@@ -937,7 +1033,8 @@ def main():
             "Do not treat this helper as a rewrite of hand-managed providers."
         ),
     }))
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

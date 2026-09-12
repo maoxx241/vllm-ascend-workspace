@@ -326,3 +326,45 @@ project's saved mode was `worktree`; later tasks from the same project reuse
 that choice. This is the app's existing preference, not a VAWS launcher or a
 new `config.toml` field. No private application preference was written. A
 different project or an explicit Local choice retains its own native behavior.
+
+## Installed-client initialization follow-up
+
+The user's next acceptance requirement was a single initialization for all
+installed clients. The actual Codex Worktree preference above was selected by
+the user; it did not demonstrate scripted default-mode setup. The consumer now
+provides `vaws_client_setup.py --client all --apply`, using actual executable or
+recognized desktop-app evidence, existing client planners, private backups,
+and per-client outcomes. It records the attempt once for the Git worktree
+family. Missing native actions are reported during initialization and do not
+become a check or command for ordinary tasks.
+
+Kimi's installed config doctor accepts a SessionSetup fixture and rejects an
+unknown event; initialization uses that capability rather than guessing from a
+version string. An unsupported client with existing SessionSetup configuration
+is left unchanged and reported blocked. The planner does not silently write an
+unsupported event or prevent other clients from being configured.
+
+Computer use verified Cursor's application setting at Agents > Default
+Environment as New Worktree. Codex's installed desktop exposes no public
+setter for its saved composer mode or selected local environment. Creating an
+environment file makes it discoverable but does not select it for a new task.
+The computer-use tool explicitly denied access to the Codex interface. No
+private application state was written to bypass that restriction; the user's
+existing selection remains the actual basis for this machine's default.
+
+Read-only native-code inspection also found that Codex's default Worktree
+creation can use an old local main or cached origin/main without fetching the
+canonical upstream. The consumer now recognizes a detached local-default-tip
+snapshot and prepares upstream without modifying a feature or dirty mother
+checkout. It still fast-forwards only the new directory and retains saved
+selections on resume. Since setup lacks a selected-ref marker, an explicit
+selection of that exact tip is indistinguishable; the result reports this
+boundary. The affected setup, entry and update tests passed, including staged
+and unstaged mother changes, non-default refs, target edits and divergence.
+
+The latest canonical consumer changes were integrated with the native-session
+work. Coordinator `03b3047` merges the tested identity/cache work with canonical
+`631066c`, preserving the latter's preparation and startup optimizations.
+Its complete local macOS/Python 3.13 CPU suite passed 647 tests and 52 subtests,
+with 9 skips, using remote-dev `2de5cc3`. This is control-plane integration
+evidence, not a new claim of device or cross-platform runtime acceptance.

@@ -136,6 +136,110 @@ def test_explicit_old_revision_is_not_updated(fixture):
     assert not f.calls["prepare"]
 
 
+def default_snapshot_fixture(tmp_path, monkeypatch):
+    f = make_repository(tmp_path, monkeypatch, detached=True)
+    git(f.source, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+    git(f.source, "checkout", "-b", "feature/current-task")
+    (f.source / "README").write_text("current business work\n")
+    commit(f.source, "business source ahead of main")
+    calls = []
+    class Updater:
+        def __init__(self, source):
+            assert source == f.source
+            self.state = {"phase": "ready", "target": f.new, "prepared": {"stage": str(f.stage)}}
+        def step(self, **options):
+            calls.append(options)
+            # Preparation may cache upstream while the editing source is on
+            # a business branch; neither activate nor for_session may be true.
+            assert options == {"apply": True, "activate": False}
+            return {"status": "ready", "branch": "main", "target": f.new}
+        def validate_prepared(self, state, prepared):
+            assert state is self.state and prepared == self.state["prepared"]
+            return f.stage
+    monkeypatch.setattr(setup, "workspace_entry", lambda _: {"state": "configured"})
+    monkeypatch.setattr(setup, "WorkspaceUpdater", Updater)
+    return f, calls
+
+
+@pytest.mark.parametrize("source_at_default_tip", [False, True])
+def test_codex_default_main_updates_while_source_has_unfinished_business_work(tmp_path, monkeypatch, source_at_default_tip):
+    f, calls = default_snapshot_fixture(tmp_path, monkeypatch)
+    if source_at_default_tip:
+        git(f.source, "update-ref", "refs/heads/feature/current-task", f.old)
+    (f.source / "README").write_text("staged work\n")
+    git(f.source, "add", "README")
+    (f.source / "README").write_text("unstaged work\n")
+    before, index = snapshot(f.source), (f.source / ".git/index").read_bytes()
+    source_head = git(f.source, "rev-parse", "HEAD")
+    result = setup.prepare_worktree("codex", f.source, f.target)
+    assert result["head"] == f.new and result["environment"] == "new-environment"
+    assert result["update"]["baseline"] == {
+        "kind": "local_default_branch_snapshot", "ref": "refs/heads/main", "head": f.old,
+        "native_ref_selection": "unavailable"}
+    assert calls == [{"apply": True, "activate": False}]
+    assert not f.calls["prepare"]
+    assert git(f.source, "rev-parse", "HEAD") == source_head
+    assert snapshot(f.source) == before and (f.source / ".git/index").read_bytes() == index
+
+
+@pytest.mark.parametrize("choice", ["old-commit", "business-commit", "named-branch", "unknown-default",
+                                    "conflicting-defaults", "dirty", "selected", "fork"])
+def test_default_snapshot_does_not_expand_existing_preservation_boundaries(tmp_path, monkeypatch, choice):
+    f, calls = default_snapshot_fixture(tmp_path, monkeypatch)
+    if choice == "old-commit":
+        git(f.source, "update-ref", "refs/heads/main", f.new)
+    elif choice == "business-commit":
+        (f.target / "README").write_text("independent business commit\n")
+        commit(f.target, "explicit business revision")
+    elif choice == "named-branch":
+        git(f.target, "checkout", "-b", "feature/explicit")
+    elif choice == "unknown-default":
+        git(f.source, "symbolic-ref", "--delete", "refs/remotes/origin/HEAD")
+    elif choice == "conflicting-defaults":
+        git(f.source, "symbolic-ref", "refs/remotes/upstream/HEAD", "refs/remotes/upstream/develop")
+    elif choice == "dirty":
+        (f.target / "README").write_text("unfinished target edit\n")
+    elif choice in {"selected", "fork"}:
+        path = (f.source if choice == "fork" else f.target) / ".vaws-local/environment-selection" / f"{sys.platform}.json"
+        path.parent.mkdir(parents=True)
+        path.write_text(json.dumps(f.receipt_old))
+    head, content = git(f.target, "rev-parse", "HEAD"), (f.target / "README").read_bytes()
+    result = setup.prepare_worktree("codex", f.source, f.target, preserve_source=choice == "fork")
+    assert git(f.target, "rev-parse", "HEAD") == head
+    assert (f.target / "README").read_bytes() == content
+    assert result["environment"] == "old-environment"
+    assert not calls and not f.calls["prepare"]
+
+
+@pytest.mark.parametrize("change", ["edit-during-prepare", "diverged-upstream", "disabled"])
+def test_default_snapshot_adoption_still_requires_clean_fast_forward(tmp_path, monkeypatch, change):
+    f, calls = default_snapshot_fixture(tmp_path, monkeypatch)
+    if change == "edit-during-prepare":
+        original_prepare = setup.prepare_default_snapshot
+        def intervening_edit(*args):
+            result = original_prepare(*args)
+            (f.target / "README").write_text("edit during native setup\n")
+            return result
+        monkeypatch.setattr(setup, "prepare_default_snapshot", intervening_edit)
+    elif change == "diverged-upstream":
+        # The local default tip has a commit absent from canonical history.
+        (f.target / "README").write_text("local default commit\n")
+        original = commit(f.target, "local default diverged")
+        git(f.source, "update-ref", "refs/heads/main", original)
+    else:
+        monkeypatch.setattr(setup, "workspace_entry", lambda _: {"state": "disabled"})
+    head = git(f.target, "rev-parse", "HEAD")
+    result = setup.prepare_worktree("codex", f.source, f.target)
+    assert result["head"] == head and result["environment"] == "old-environment"
+    if change == "edit-during-prepare":
+        assert result["update"]["reason"] == "dirty_checkout"
+        assert (f.target / "README").read_text() == "edit during native setup\n"
+    elif change == "diverged-upstream":
+        assert result["update"]["reason"] == "command_failed"
+    else:
+        assert result["update"]["state"] == "disabled" and not calls
+
+
 def test_business_source_keeps_its_code(fixture, monkeypatch):
     f = fixture
     git(f.source, "branch", "-m", "feature/business")

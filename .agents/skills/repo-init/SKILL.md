@@ -47,9 +47,16 @@ or alias questionnaire.
   `uv run --no-project python .agents/scripts/vaws_deps.py sync`. Reuse a ready
   environment. `doctor` is available for unresolved capability or pin questions;
   it is not an extra step after an already conclusive result.
-- Run the selected client's `.agents/scripts/vaws_client_setup.py --apply`
-  entry. For Codex/Cursor, complete the native Worktree mode/environment choice
-  once during initialization; writing setup files does not select the UI mode.
+- For first initialization, run
+  `.agents/scripts/vaws_client_setup.py --client all --apply` once. It detects
+  installed clients, prepares hooks/providers and supported native defaults,
+  and records completed changes and remaining native actions in the primary
+  worktree's `.vaws-local/client-initialization.json`. Complete those native
+  actions during initialization using available client tools or computer use;
+  do not defer discovery to the first business task or silently call wiring a
+  mode selection. The record is not a recurring task gate. Explicit single-client
+  repair still uses `--client CLIENT --apply`. For Codex/Cursor, the native
+  Worktree mode/environment choice is separate from writing setup files.
   New worktree setup and session attachment then run through the client without
   an Agent launcher call. See the [client boundaries](../../../docs/native-workspace-isolation.md).
   Codex's `--codex-global-hooks` option installs a fixed user hook scoped to
