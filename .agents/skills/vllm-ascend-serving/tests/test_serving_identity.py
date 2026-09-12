@@ -42,6 +42,44 @@ class ServingPresetTests(unittest.TestCase):
 
 
 class ServeCommandTests(unittest.TestCase):
+    def test_shared_single_card_placement_and_relaunch_settings(self):
+        previous = None
+        for options, shared in ((["--model", "/data/m", "--host", "worker-one", "--devices", "6",
+                                  "--tp", "1", "--dp", "1", "--allow-external-busy"], True),
+                                (["--relaunch"], True),
+                                (["--relaunch", "--no-allow-external-busy"], False)):
+            with self.subTest(options=options):
+                client = SimpleNamespace(run=mock.Mock(return_value={"state": "queued", "execution_id": "exec-one"}))
+                with mock.patch.object(serve_start, "task_client", return_value=client), \
+                     mock.patch.object(serve_start, "task_id_of", return_value="task-one"), \
+                     mock.patch.object(serve_start, "load_serving_state", return_value=previous), \
+                     mock.patch.object(serve_start, "save_serving_state") as save, \
+                     mock.patch.object(serve_start, "print_json"):
+                    self.assertEqual(serve_start.main([*options, "--no-wait"]), 0)
+                request = client.run.call_args.kwargs
+                self.assertEqual(request["topology"], {"host": "worker-one"})
+                self.assertEqual(request["resources"]["devices"], [6])
+                self.assertNotIn("npu_count", request["resources"])
+                self.assertEqual(request["resources"].get("allow_external_busy", False), shared)
+                self.assertNotIn("preflight", request)
+                previous = save.call_args.args[1]
+                self.assertEqual(previous["host"], "worker-one")
+                self.assertEqual(previous["allow_external_busy"], shared)
+
+    def test_shared_service_requires_one_explicit_card_and_single_rank(self):
+        for options in ([], ["--npu-count", "1"], ["--devices", "0,1"],
+                        ["--devices", "0", "--tp", "2"], ["--devices", "0", "--dp", "2"]):
+            with self.subTest(options=options):
+                client = SimpleNamespace(run=mock.Mock())
+                with mock.patch.object(serve_start, "task_client", return_value=client), \
+                     mock.patch.object(serve_start, "task_id_of", return_value="task-one"), \
+                     mock.patch.object(serve_start, "load_serving_state", return_value=None), \
+                     mock.patch.object(serve_start, "save_serving_state") as save, \
+                     mock.patch.object(serve_start, "print_json"):
+                    self.assertEqual(serve_start.main(["--model", "/data/m", "--allow-external-busy", *options]), 1)
+                client.run.assert_not_called()
+                save.assert_not_called()
+
     def test_local_wrapper_and_execution_runtime_survive_the_business_receipt(self):
         client = SimpleNamespace(run=mock.Mock(return_value={"state": "queued", "execution_id": "exec-one"}))
         with tempfile.TemporaryDirectory() as tmp:
