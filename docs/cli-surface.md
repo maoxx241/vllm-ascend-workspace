@@ -26,77 +26,77 @@ by tests rather than repeated as instructions in every task.
 ## Current entries
 
 <!-- current-cli-surface-table -->
-| Entry point | Style | Verbs | Options | Refs | Responsibility | Support role | Current target | Proposed |
-|---|---|---|---|---|---|---|---|---|
-| `.agents/hooks/knowledge_summary.py` | argparse | - | 2 | script:1, test:1 | mechanics | hook | .agents/hooks/knowledge_summary.py | - |
-| `.agents/hooks/tracked_leak_precommit.py` | argparse | - | 8 | docs:1, policy:1, test:1 | mechanics | hook | .agents/hooks/tracked_leak_precommit.py | - |
-| `.agents/hooks/vaws_session.py` | argparse | - | 4 | policy:1, script:1, test:2 | mechanics | hook | .agents/hooks/vaws_session.py | - |
-| `.agents/scripts/cli_surface_inventory.py` | argparse | - | 3 | policy:1, test:3 | mechanics | harness | .agents/scripts/cli_surface_inventory.py | vaws lint |
-| `.agents/scripts/envelope_lint.py` | argparse | scan, check, run | 5 | test:3 | mechanics | harness | .agents/scripts/envelope_lint.py | vaws lint |
-| `.agents/scripts/knowledge_setup.py` | argparse | - | 2 | docs:1, routing:2, skill-doc:3, test:1 | mechanics | supported | .agents/scripts/knowledge_setup.py | - |
-| `.agents/scripts/local_tests.py` | delegated | - | 6 | docs:1, other:1 | mechanics | harness | .agents/scripts/local_tests.py | - |
-| `.agents/scripts/repo_boundary_check.py` | argparse | - | 6 | docs:1, other:1, policy:3, script:1, test:3 | mechanics | supported | .agents/scripts/repo_boundary_check.py | vaws lint |
-| `.agents/scripts/skill_catalog.py` | argparse | - | 2 | other:1, routing:1, test:2 | mechanics | supported | .agents/scripts/skill_catalog.py | vaws lint |
-| `.agents/scripts/sync_claude_skills.py` | argparse | - | 1 | mirror:2, other:1, policy:1, routing:1, skill-doc:1, test:2 | mechanics | supported | .agents/scripts/sync_claude_skills.py | vaws lint |
-| `.agents/scripts/tracked_leak_scan.py` | argparse | - | 10 | docs:1, hook:1, other:1, policy:1, script:1, test:3 | mechanics | supported | .agents/scripts/tracked_leak_scan.py | vaws lint |
-| `.agents/scripts/tracked_path_check.py` | argparse | - | 6 | docs:1, other:1, policy:1, test:2 | mechanics | supported | .agents/scripts/tracked_path_check.py | vaws lint |
-| `.agents/scripts/vaws.py` | argparse | status, env, hook, task-server | 1 | docs:1, other:1, policy:1, routing:1, test:4 | mechanics | supported | .agents/scripts/vaws.py | vaws task |
-| `.agents/scripts/vaws_client_setup.py` | argparse | - | 5 | docs:4, policy:1, script:1, skill-doc:2, test:3 | mechanics | supported | .agents/scripts/vaws_client_setup.py | vaws workspace |
-| `.agents/scripts/vaws_deps.py` | argparse | status, doctor, sync | 1 | client-config:1, docs:8, other:1, policy:1, routing:1, script:4, skill-doc:4, test:7 | mechanics | supported | .agents/scripts/vaws_deps.py | vaws workspace |
-| `.agents/scripts/workspace_identity.py` | argparse | summary, ensure, validate-alias, set-alias, decline-alias | 1 | skill-doc:1 | mechanics | supported | .agents/scripts/workspace_identity.py | vaws workspace |
-| `.agents/scripts/workspace_profile.py` | argparse | summary, validate, ensure | 4 | routing:1, script:1, skill-doc:4 | mechanics | supported | .agents/scripts/workspace_profile.py | vaws workspace |
-| `.agents/skills/ascend-memory-profiling/scripts/mem_analyze.py` | argparse | - | 1 | skill-doc:1 | mixed | supported | .agents/skills/ascend-memory-profiling/scripts/mem_analyze.py | vaws profile |
-| `.agents/skills/ascend-memory-profiling/scripts/mem_collect.py` | argparse | - | 26 | script:1, skill-doc:1, test:1 | mechanics | supported | .agents/skills/ascend-memory-profiling/scripts/mem_collect.py | vaws profile |
-| `.agents/skills/ascend-memory-profiling/scripts/weight_inspector.py` | argparse | - | 0 | script:1 | mechanics | payload | .agents/skills/ascend-memory-profiling/scripts/weight_inspector.py | - |
-| `.agents/skills/ascend-operator-debug/scripts/operator_debug.py` | argparse | - | 3 | skill-doc:2, test:1 | mixed | supported | .agents/skills/ascend-operator-debug/scripts/operator_debug.py | guidance |
-| `.agents/skills/ascend-profiling-analysis/scripts/ascend_profile/analyze.py` | argparse | - | 14 | script:2, skill-doc:7, test:1 | mechanics | payload | .agents/skills/ascend-profiling-analysis/scripts/ascend_profile/analyze.py | - |
-| `.agents/skills/ascend-profiling-analysis/scripts/ascend_profile/classify.py` | argparse | - | 1 | skill-doc:2 | mechanics | internal | .agents/skills/ascend-profiling-analysis/scripts/ascend_profile/analyze.py | - |
-| `.agents/skills/ascend-profiling-analysis/scripts/ascend_profile/cross_rank.py` | argparse | - | 1 | skill-doc:3, test:1 | mechanics | internal | .agents/skills/ascend-profiling-analysis/scripts/ascend_profile/analyze.py | - |
-| `.agents/skills/ascend-profiling-analysis/scripts/ascend_profile/diagnostics.py` | argparse | - | 1 | script:3, skill-doc:5, test:2 | mixed | payload | .agents/skills/ascend-profiling-analysis/scripts/ascend_profile/diagnostics.py | - |
-| `.agents/skills/ascend-profiling-analysis/scripts/ascend_profile/html_report.py` | bare-argv | - | 0 | skill-doc:1 | mechanics | internal | .agents/skills/ascend-profiling-analysis/scripts/ascend_profile/analyze.py | - |
-| `.agents/skills/ascend-profiling-analysis/scripts/ascend_profile/html_report_v2/__main__.py` | bare | - | 0 | - | mechanics | internal | .agents/skills/ascend-profiling-analysis/scripts/ascend_profile/analyze.py | - |
-| `.agents/skills/ascend-profiling-analysis/scripts/ascend_profile/normalize.py` | argparse | - | 4 | skill-doc:1 | mechanics | internal | .agents/skills/ascend-profiling-analysis/scripts/ascend_profile/analyze.py | - |
-| `.agents/skills/ascend-profiling-analysis/scripts/ascend_profile/report.py` | argparse | - | 6 | script:3, skill-doc:3, test:2 | mechanics | internal | .agents/skills/ascend-profiling-analysis/scripts/ascend_profile/analyze.py | - |
-| `.agents/skills/ascend-profiling-analysis/scripts/ascend_profile/segment.py` | argparse | - | 3 | script:2, skill-doc:7, test:1 | mechanics | internal | .agents/skills/ascend-profiling-analysis/scripts/ascend_profile/analyze.py | - |
-| `.agents/skills/ascend-profiling-analysis/scripts/ascend_profile/summarize.py` | argparse | - | 8 | skill-doc:4, test:1 | mechanics | internal | .agents/skills/ascend-profiling-analysis/scripts/ascend_profile/analyze.py | - |
-| `.agents/skills/ascend-profiling-analysis/scripts/ascend_profile/sweep.py` | argparse | - | 13 | script:2, skill-doc:4 | mechanics | payload | .agents/skills/ascend-profiling-analysis/scripts/ascend_profile/sweep.py | - |
-| `.agents/skills/ascend-profiling-analysis/scripts/dev/golden_db_vs_csv.py` | argparse | - | 4 | skill-doc:1 | mechanics | harness | .agents/skills/ascend-profiling-analysis/scripts/dev/golden_db_vs_csv.py | - |
-| `.agents/skills/ascend-profiling-analysis/scripts/profile_analyze.py` | argparse | - | 29 | script:1, skill-doc:4, test:1 | mechanics | supported | .agents/skills/ascend-profiling-analysis/scripts/profile_analyze.py | vaws profile |
-| `.agents/skills/ascend-profiling-analysis/scripts/profile_sweep.py` | argparse | - | 20 | script:1, skill-doc:4 | mechanics | supported | .agents/skills/ascend-profiling-analysis/scripts/profile_sweep.py | vaws profile |
-| `.agents/skills/ascend-profiling-collection/scripts/collect_torch_profile_case.py` | argparse | - | 33 | skill-doc:2, test:1 | mechanics | supported | .agents/skills/ascend-profiling-collection/scripts/collect_torch_profile_case.py | vaws profile |
-| `.agents/skills/ascend-profiling-collection/scripts/profile_control.py` | argparse | - | 5 | script:1, skill-doc:2, test:1 | mechanics | internal | .agents/skills/ascend-profiling-collection/scripts/collect_torch_profile_case.py | - |
-| `.agents/skills/ascend-profiling-collection/scripts/run_remote_analyse.py` | argparse | - | 10 | script:1, skill-doc:2 | mechanics | internal | .agents/skills/ascend-profiling-collection/scripts/collect_torch_profile_case.py | - |
-| `.agents/skills/ascend-tensor-dump/assets/replay_op.py` | argparse | - | 9 | other:1, script:1, skill-doc:3, test:1 | mechanics | payload | .agents/skills/ascend-tensor-dump/assets/replay_op.py | - |
-| `.agents/skills/ascend-tensor-dump/scripts/dump_compare.py` | argparse | scan, diff, tensors | 8 | script:1, skill-doc:2, test:1 | mechanics | supported | .agents/skills/ascend-tensor-dump/scripts/dump_compare.py | guidance |
-| `.agents/skills/ascend-triton-kernel-optimization/scripts/triton_optimization.py` | argparse | - | 3 | skill-doc:2, test:1 | mixed | supported | .agents/skills/ascend-triton-kernel-optimization/scripts/triton_optimization.py | guidance |
-| `.agents/skills/ascend-triton-kernel-validation/scripts/triton_validation.py` | argparse | - | 4 | skill-doc:2, test:1 | mixed | supported | .agents/skills/ascend-triton-kernel-validation/scripts/triton_validation.py | guidance |
-| `.agents/skills/ascend-triton-kernel-validation/scripts/validate_triton_impl.py` | argparse | - | 1 | test:1 | mechanics | supported | .agents/skills/ascend-triton-kernel-validation/scripts/validate_triton_impl.py | vaws lint |
-| `.agents/skills/ascend-triton-operator-development/scripts/triton_development.py` | argparse | - | 0 | skill-doc:2, test:1 | mixed | supported | .agents/skills/ascend-triton-operator-development/scripts/triton_development.py | guidance |
-| `.agents/skills/ascend-triton-workflow/scripts/triton_workflow.py` | argparse | - | 2 | skill-doc:2, test:1 | mixed | supported | .agents/skills/ascend-triton-workflow/scripts/triton_workflow.py | guidance |
-| `.agents/skills/modelscope/scripts/download_from_modelscope.py` | argparse | - | 12 | mirror:2, script:2, skill-doc:1, test:2 | mechanics | payload | .agents/skills/modelscope/scripts/download_from_modelscope.py | - |
-| `.agents/skills/modelscope/scripts/modelscope_auto.py` | argparse | ensure, status, verify, worker | 11 | mirror:1, script:1, skill-doc:1, test:3 | mechanics | supported | .agents/skills/modelscope/scripts/modelscope_auto.py | vaws model |
-| `.agents/skills/modelscope/scripts/modelscope_download_status.py` | argparse | - | 3 | mirror:1, script:1, skill-doc:1, test:2 | mechanics | internal | .agents/skills/modelscope/scripts/modelscope_auto.py | - |
-| `.agents/skills/modelscope/scripts/verify_modelscope_sha256.py` | argparse | - | 8 | mirror:2, script:2, skill-doc:1, test:2 | mechanics | payload | .agents/skills/modelscope/scripts/verify_modelscope_sha256.py | - |
-| `.agents/skills/npu-fleet-monitor/scripts/manage_monitor.py` | argparse | deploy, start, status, restart, stop | 6 | docs:2, policy:1, script:1, skill-doc:1, test:3 | mechanics | supported | .agents/skills/npu-fleet-monitor/scripts/manage_monitor.py | vaws machine |
-| `.agents/skills/repo-init/scripts/install_gh_user.py` | bare | - | 0 | script:1 | mechanics | supported | .agents/skills/repo-init/scripts/install_gh_user.py | vaws workspace |
-| `.agents/skills/repo-init/scripts/repo_init_probe.py` | argparse | - | 1 | policy:1, skill-doc:4 | mechanics | supported | .agents/skills/repo-init/scripts/repo_init_probe.py | vaws workspace |
-| `.agents/skills/repo-init/scripts/repo_init_profile.py` | argparse | plan, apply, apply-alias | 3 | skill-doc:4 | mechanics | supported | .agents/skills/repo-init/scripts/repo_init_profile.py | vaws workspace |
-| `.agents/skills/repo-init/scripts/repo_topology.py` | argparse | compare-main, configure, ensure-main | 8 | skill-doc:4 | mechanics | supported | .agents/skills/repo-init/scripts/repo_topology.py | vaws workspace |
-| `.agents/skills/repo-init/scripts/resolve_vllm_ci_pin.py` | argparse | - | 1 | skill-doc:4 | mechanics | supported | .agents/skills/repo-init/scripts/resolve_vllm_ci_pin.py | vaws workspace |
-| `.agents/skills/vllm-ascend-benchmark/scripts/bench_run.py` | argparse | - | 16 | skill-doc:2, test:1 | mechanics | supported | .agents/skills/vllm-ascend-benchmark/scripts/bench_run.py | vaws bench |
-| `.agents/skills/vllm-ascend-change-validation/scripts/change_validation.py` | argparse | - | 8 | docs:1, skill-doc:2, test:1 | mixed | supported | .agents/skills/vllm-ascend-change-validation/scripts/change_validation.py | guidance |
-| `.agents/skills/vllm-ascend-correctness-validation/scripts/aisbench_adapter.py` | argparse | prepare, normalize | 22 | script:1, skill-doc:5, test:1 | mechanics | supported | .agents/skills/vllm-ascend-correctness-validation/scripts/aisbench_adapter.py | vaws bench |
-| `.agents/skills/vllm-ascend-correctness-validation/scripts/correctness_run.py` | argparse | - | 2 | docs:1, skill-doc:3, test:1 | mixed | supported | .agents/skills/vllm-ascend-correctness-validation/scripts/correctness_run.py | vaws bench |
-| `.agents/skills/vllm-ascend-correctness-validation/scripts/remote_correctness_harness.py` | argparse | - | 2 | script:1, skill-doc:4, test:1 | mechanics | payload | .agents/skills/vllm-ascend-correctness-validation/scripts/remote_correctness_harness.py | - |
-| `.agents/skills/vllm-ascend-distributed-debug/scripts/distributed_debug.py` | argparse | - | 3 | skill-doc:2, test:1 | mixed | supported | .agents/skills/vllm-ascend-distributed-debug/scripts/distributed_debug.py | guidance |
-| `.agents/skills/vllm-ascend-graph-debug/scripts/graph_debug_case.py` | argparse | - | 4 | docs:1, skill-doc:2, test:1 | mixed | supported | .agents/skills/vllm-ascend-graph-debug/scripts/graph_debug_case.py | guidance |
-| `.agents/skills/vllm-ascend-pd-serving/scripts/pd_serving.py` | argparse | start, status, stop, smoke | 6 | docs:1, skill-doc:2, test:1 | mixed | supported | .agents/skills/vllm-ascend-pd-serving/scripts/pd_serving.py | vaws serve |
-| `.agents/skills/vllm-ascend-performance-regression/scripts/performance_regression.py` | argparse | - | 4 | docs:1, skill-doc:2, test:1 | mixed | supported | .agents/skills/vllm-ascend-performance-regression/scripts/performance_regression.py | guidance |
-| `.agents/skills/vllm-ascend-serving/scripts/serving.py` | argparse | start, status, stop | 0 | docs:1, script:4, skill-doc:8, test:4 | mixed | supported | .agents/skills/vllm-ascend-serving/scripts/serving.py | - |
-| `.trae/skills/modelscope/scripts/download_from_modelscope.py` | argparse | - | 12 | mirror:2, script:2, skill-doc:1, test:2 | mechanics | payload | .agents/skills/modelscope/scripts/download_from_modelscope.py | - |
-| `.trae/skills/modelscope/scripts/modelscope_auto.py` | argparse | ensure, status, verify, worker | 11 | mirror:1, script:1, skill-doc:1, test:3 | mechanics | generated | .agents/skills/modelscope/scripts/modelscope_auto.py | - |
-| `.trae/skills/modelscope/scripts/modelscope_download_status.py` | argparse | - | 3 | mirror:1, script:1, skill-doc:1, test:2 | mechanics | generated | .agents/skills/modelscope/scripts/modelscope_download_status.py | - |
-| `.trae/skills/modelscope/scripts/verify_modelscope_sha256.py` | argparse | - | 8 | mirror:2, script:2, skill-doc:1, test:2 | mechanics | payload | .agents/skills/modelscope/scripts/verify_modelscope_sha256.py | - |
+| Entry point | Style | Verbs | Responsibility | Support role | Current target | Proposed |
+|---|---|---|---|---|---|---|
+| `.agents/hooks/knowledge_summary.py` | argparse | - | mechanics | hook | .agents/hooks/knowledge_summary.py | - |
+| `.agents/hooks/tracked_leak_precommit.py` | argparse | - | mechanics | hook | .agents/hooks/tracked_leak_precommit.py | - |
+| `.agents/hooks/vaws_session.py` | argparse | - | mechanics | hook | .agents/hooks/vaws_session.py | - |
+| `.agents/scripts/cli_surface_inventory.py` | argparse | - | mechanics | harness | .agents/scripts/cli_surface_inventory.py | vaws lint |
+| `.agents/scripts/envelope_lint.py` | argparse | scan, check, run | mechanics | harness | .agents/scripts/envelope_lint.py | vaws lint |
+| `.agents/scripts/knowledge_setup.py` | argparse | - | mechanics | supported | .agents/scripts/knowledge_setup.py | - |
+| `.agents/scripts/local_tests.py` | delegated | - | mechanics | harness | .agents/scripts/local_tests.py | - |
+| `.agents/scripts/repo_boundary_check.py` | argparse | - | mechanics | supported | .agents/scripts/repo_boundary_check.py | vaws lint |
+| `.agents/scripts/skill_catalog.py` | argparse | - | mechanics | supported | .agents/scripts/skill_catalog.py | vaws lint |
+| `.agents/scripts/sync_claude_skills.py` | argparse | - | mechanics | supported | .agents/scripts/sync_claude_skills.py | vaws lint |
+| `.agents/scripts/tracked_leak_scan.py` | argparse | - | mechanics | supported | .agents/scripts/tracked_leak_scan.py | vaws lint |
+| `.agents/scripts/tracked_path_check.py` | argparse | - | mechanics | supported | .agents/scripts/tracked_path_check.py | vaws lint |
+| `.agents/scripts/vaws.py` | argparse | status, env, hook, task-server | mechanics | supported | .agents/scripts/vaws.py | vaws task |
+| `.agents/scripts/vaws_client_setup.py` | argparse | - | mechanics | supported | .agents/scripts/vaws_client_setup.py | vaws workspace |
+| `.agents/scripts/vaws_deps.py` | argparse | status, doctor, sync | mechanics | supported | .agents/scripts/vaws_deps.py | vaws workspace |
+| `.agents/scripts/workspace_identity.py` | argparse | summary, ensure, validate-alias, set-alias, decline-alias | mechanics | supported | .agents/scripts/workspace_identity.py | vaws workspace |
+| `.agents/scripts/workspace_profile.py` | argparse | summary, validate, ensure | mechanics | supported | .agents/scripts/workspace_profile.py | vaws workspace |
+| `.agents/skills/ascend-memory-profiling/scripts/mem_analyze.py` | argparse | - | mixed | supported | .agents/skills/ascend-memory-profiling/scripts/mem_analyze.py | vaws profile |
+| `.agents/skills/ascend-memory-profiling/scripts/mem_collect.py` | argparse | - | mechanics | supported | .agents/skills/ascend-memory-profiling/scripts/mem_collect.py | vaws profile |
+| `.agents/skills/ascend-memory-profiling/scripts/weight_inspector.py` | argparse | - | mechanics | payload | .agents/skills/ascend-memory-profiling/scripts/weight_inspector.py | - |
+| `.agents/skills/ascend-operator-debug/scripts/operator_debug.py` | argparse | - | mixed | supported | .agents/skills/ascend-operator-debug/scripts/operator_debug.py | guidance |
+| `.agents/skills/ascend-profiling-analysis/scripts/ascend_profile/analyze.py` | argparse | - | mechanics | payload | .agents/skills/ascend-profiling-analysis/scripts/ascend_profile/analyze.py | - |
+| `.agents/skills/ascend-profiling-analysis/scripts/ascend_profile/classify.py` | argparse | - | mechanics | internal | .agents/skills/ascend-profiling-analysis/scripts/ascend_profile/analyze.py | - |
+| `.agents/skills/ascend-profiling-analysis/scripts/ascend_profile/cross_rank.py` | argparse | - | mechanics | internal | .agents/skills/ascend-profiling-analysis/scripts/ascend_profile/analyze.py | - |
+| `.agents/skills/ascend-profiling-analysis/scripts/ascend_profile/diagnostics.py` | argparse | - | mixed | payload | .agents/skills/ascend-profiling-analysis/scripts/ascend_profile/diagnostics.py | - |
+| `.agents/skills/ascend-profiling-analysis/scripts/ascend_profile/html_report.py` | bare-argv | - | mechanics | internal | .agents/skills/ascend-profiling-analysis/scripts/ascend_profile/analyze.py | - |
+| `.agents/skills/ascend-profiling-analysis/scripts/ascend_profile/html_report_v2/__main__.py` | bare | - | mechanics | internal | .agents/skills/ascend-profiling-analysis/scripts/ascend_profile/analyze.py | - |
+| `.agents/skills/ascend-profiling-analysis/scripts/ascend_profile/normalize.py` | argparse | - | mechanics | internal | .agents/skills/ascend-profiling-analysis/scripts/ascend_profile/analyze.py | - |
+| `.agents/skills/ascend-profiling-analysis/scripts/ascend_profile/report.py` | argparse | - | mechanics | internal | .agents/skills/ascend-profiling-analysis/scripts/ascend_profile/analyze.py | - |
+| `.agents/skills/ascend-profiling-analysis/scripts/ascend_profile/segment.py` | argparse | - | mechanics | internal | .agents/skills/ascend-profiling-analysis/scripts/ascend_profile/analyze.py | - |
+| `.agents/skills/ascend-profiling-analysis/scripts/ascend_profile/summarize.py` | argparse | - | mechanics | internal | .agents/skills/ascend-profiling-analysis/scripts/ascend_profile/analyze.py | - |
+| `.agents/skills/ascend-profiling-analysis/scripts/ascend_profile/sweep.py` | argparse | - | mechanics | payload | .agents/skills/ascend-profiling-analysis/scripts/ascend_profile/sweep.py | - |
+| `.agents/skills/ascend-profiling-analysis/scripts/dev/golden_db_vs_csv.py` | argparse | - | mechanics | harness | .agents/skills/ascend-profiling-analysis/scripts/dev/golden_db_vs_csv.py | - |
+| `.agents/skills/ascend-profiling-analysis/scripts/profile_analyze.py` | argparse | - | mechanics | supported | .agents/skills/ascend-profiling-analysis/scripts/profile_analyze.py | vaws profile |
+| `.agents/skills/ascend-profiling-analysis/scripts/profile_sweep.py` | argparse | - | mechanics | supported | .agents/skills/ascend-profiling-analysis/scripts/profile_sweep.py | vaws profile |
+| `.agents/skills/ascend-profiling-collection/scripts/collect_torch_profile_case.py` | argparse | - | mechanics | supported | .agents/skills/ascend-profiling-collection/scripts/collect_torch_profile_case.py | vaws profile |
+| `.agents/skills/ascend-profiling-collection/scripts/profile_control.py` | argparse | - | mechanics | internal | .agents/skills/ascend-profiling-collection/scripts/collect_torch_profile_case.py | - |
+| `.agents/skills/ascend-profiling-collection/scripts/run_remote_analyse.py` | argparse | - | mechanics | internal | .agents/skills/ascend-profiling-collection/scripts/collect_torch_profile_case.py | - |
+| `.agents/skills/ascend-tensor-dump/assets/replay_op.py` | argparse | - | mechanics | payload | .agents/skills/ascend-tensor-dump/assets/replay_op.py | - |
+| `.agents/skills/ascend-tensor-dump/scripts/dump_compare.py` | argparse | scan, diff, tensors | mechanics | supported | .agents/skills/ascend-tensor-dump/scripts/dump_compare.py | guidance |
+| `.agents/skills/ascend-triton-kernel-optimization/scripts/triton_optimization.py` | argparse | - | mixed | supported | .agents/skills/ascend-triton-kernel-optimization/scripts/triton_optimization.py | guidance |
+| `.agents/skills/ascend-triton-kernel-validation/scripts/triton_validation.py` | argparse | - | mixed | supported | .agents/skills/ascend-triton-kernel-validation/scripts/triton_validation.py | guidance |
+| `.agents/skills/ascend-triton-kernel-validation/scripts/validate_triton_impl.py` | argparse | - | mechanics | supported | .agents/skills/ascend-triton-kernel-validation/scripts/validate_triton_impl.py | vaws lint |
+| `.agents/skills/ascend-triton-operator-development/scripts/triton_development.py` | argparse | - | mixed | supported | .agents/skills/ascend-triton-operator-development/scripts/triton_development.py | guidance |
+| `.agents/skills/ascend-triton-workflow/scripts/triton_workflow.py` | argparse | - | mixed | supported | .agents/skills/ascend-triton-workflow/scripts/triton_workflow.py | guidance |
+| `.agents/skills/modelscope/scripts/download_from_modelscope.py` | argparse | - | mechanics | payload | .agents/skills/modelscope/scripts/download_from_modelscope.py | - |
+| `.agents/skills/modelscope/scripts/modelscope_auto.py` | argparse | ensure, status, verify, worker | mechanics | supported | .agents/skills/modelscope/scripts/modelscope_auto.py | vaws model |
+| `.agents/skills/modelscope/scripts/modelscope_download_status.py` | argparse | - | mechanics | internal | .agents/skills/modelscope/scripts/modelscope_auto.py | - |
+| `.agents/skills/modelscope/scripts/verify_modelscope_sha256.py` | argparse | - | mechanics | payload | .agents/skills/modelscope/scripts/verify_modelscope_sha256.py | - |
+| `.agents/skills/npu-fleet-monitor/scripts/manage_monitor.py` | argparse | deploy, start, status, restart, stop | mechanics | supported | .agents/skills/npu-fleet-monitor/scripts/manage_monitor.py | vaws machine |
+| `.agents/skills/repo-init/scripts/install_gh_user.py` | bare | - | mechanics | supported | .agents/skills/repo-init/scripts/install_gh_user.py | vaws workspace |
+| `.agents/skills/repo-init/scripts/repo_init_probe.py` | argparse | - | mechanics | supported | .agents/skills/repo-init/scripts/repo_init_probe.py | vaws workspace |
+| `.agents/skills/repo-init/scripts/repo_init_profile.py` | argparse | plan, apply, apply-alias | mechanics | supported | .agents/skills/repo-init/scripts/repo_init_profile.py | vaws workspace |
+| `.agents/skills/repo-init/scripts/repo_topology.py` | argparse | compare-main, configure, ensure-main | mechanics | supported | .agents/skills/repo-init/scripts/repo_topology.py | vaws workspace |
+| `.agents/skills/repo-init/scripts/resolve_vllm_ci_pin.py` | argparse | - | mechanics | supported | .agents/skills/repo-init/scripts/resolve_vllm_ci_pin.py | vaws workspace |
+| `.agents/skills/vllm-ascend-benchmark/scripts/bench_run.py` | argparse | - | mechanics | supported | .agents/skills/vllm-ascend-benchmark/scripts/bench_run.py | vaws bench |
+| `.agents/skills/vllm-ascend-change-validation/scripts/change_validation.py` | argparse | - | mixed | supported | .agents/skills/vllm-ascend-change-validation/scripts/change_validation.py | guidance |
+| `.agents/skills/vllm-ascend-correctness-validation/scripts/aisbench_adapter.py` | argparse | prepare, normalize | mechanics | supported | .agents/skills/vllm-ascend-correctness-validation/scripts/aisbench_adapter.py | vaws bench |
+| `.agents/skills/vllm-ascend-correctness-validation/scripts/correctness_run.py` | argparse | - | mixed | supported | .agents/skills/vllm-ascend-correctness-validation/scripts/correctness_run.py | vaws bench |
+| `.agents/skills/vllm-ascend-correctness-validation/scripts/remote_correctness_harness.py` | argparse | - | mechanics | payload | .agents/skills/vllm-ascend-correctness-validation/scripts/remote_correctness_harness.py | - |
+| `.agents/skills/vllm-ascend-distributed-debug/scripts/distributed_debug.py` | argparse | - | mixed | supported | .agents/skills/vllm-ascend-distributed-debug/scripts/distributed_debug.py | guidance |
+| `.agents/skills/vllm-ascend-graph-debug/scripts/graph_debug_case.py` | argparse | - | mixed | supported | .agents/skills/vllm-ascend-graph-debug/scripts/graph_debug_case.py | guidance |
+| `.agents/skills/vllm-ascend-pd-serving/scripts/pd_serving.py` | argparse | start, status, stop, smoke | mixed | supported | .agents/skills/vllm-ascend-pd-serving/scripts/pd_serving.py | vaws serve |
+| `.agents/skills/vllm-ascend-performance-regression/scripts/performance_regression.py` | argparse | - | mixed | supported | .agents/skills/vllm-ascend-performance-regression/scripts/performance_regression.py | guidance |
+| `.agents/skills/vllm-ascend-serving/scripts/serving.py` | argparse | start, status, stop | mixed | supported | .agents/skills/vllm-ascend-serving/scripts/serving.py | - |
+| `.trae/skills/modelscope/scripts/download_from_modelscope.py` | argparse | - | mechanics | payload | .agents/skills/modelscope/scripts/download_from_modelscope.py | - |
+| `.trae/skills/modelscope/scripts/modelscope_auto.py` | argparse | ensure, status, verify, worker | mechanics | generated | .agents/skills/modelscope/scripts/modelscope_auto.py | - |
+| `.trae/skills/modelscope/scripts/modelscope_download_status.py` | argparse | - | mechanics | generated | .agents/skills/modelscope/scripts/modelscope_download_status.py | - |
+| `.trae/skills/modelscope/scripts/verify_modelscope_sha256.py` | argparse | - | mechanics | payload | .agents/skills/modelscope/scripts/verify_modelscope_sha256.py | - |
 <!-- /current-cli-surface-table -->
 
 ## Historical inventory

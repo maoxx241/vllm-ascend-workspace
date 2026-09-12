@@ -33,6 +33,9 @@ def audit(event, args):
 
 class NoForeignProvider(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
+        if fullname == "vaws_coordinator.service" and os.environ.get("ACCEPTANCE_FORBID_COORDINATOR_SERVICE"):
+            events.append({"kind": "forbidden_import", "module": fullname})
+            raise ImportError("local-only task lifecycle must not start the coordinator service")
         if fullname == "core" or fullname.startswith("core.") or fullname == "mcp" or fullname.startswith("mcp."):
             events.append({"kind": "forbidden_import", "module": fullname})
             raise ImportError("local task entry must not import an external provider or MCP SDK")

@@ -2,25 +2,30 @@
 
 Status: current
 
+The proposed complete replacement is described in
+[VAWS core and coordinator redesign](vaws-core-redesign.md). Fixed execution
+inputs and scoped reuse are implemented in coordinator 0.4; the complete
+proposal is not an implemented API. This document describes the current contract.
+
 This is the single approved contract for the four external components and
 this consumer workspace. It supersedes earlier split notes that treated the
 workspace as a fifth runtime layer, injected a VAWS resolver into remote-dev,
 or kept request/recovery/interpreter/queue logic in `.agents/`.
 
-The Agent-only principles below govern future implementation decisions.
+The nine [design principles](design-principles.md) govern design decisions,
+with total cost of achieving the user's actual goal taking priority.
 Existing wrappers, workflows and schemas are migration inputs, not reasons to
 preserve their burden. Changes to ownership or public semantics update this
 contract; ordinary implementation choices need no new design or approval step.
 
-The next implementation direction is specified in
-[agent-first-openviking-spec.md](agent-first-openviking-spec.md): permissive
-Agent workflows, automatic execution records, and OpenViking-backed local
-knowledge. This document defines the target; package pins and that spec's
-implementation status distinguish shipped behavior from planned changes.
-Existing YAML and workflow restrictions are migration work, not requirements
-to retain in the new design.
+The earlier [Agent/OpenViking spec](agent-first-openviking-spec.md) records
+permissive workflows, execution records and local knowledge work. Its execution
+architecture direction is superseded by the proposed redesign linked above.
+Package pins and implementation evidence distinguish shipped behavior from
+planned changes. Existing workflows and component packaging are revisable
+design choices, not principles that override total Agent task cost.
 
-## 1. Axioms
+## 1. Current architecture conventions
 
 1. **Four components, one consumer workspace.** remote-dev, vaws-coordinator,
    vaws-knowledge, and vaws-top are the runtime owners. This repository is
@@ -54,62 +59,21 @@ to retain in the new design.
 
 ### 1.1 Agent-only design principles
 
-**The consuming Agent is the sole operator of code and commands.** Humans
-express intent and make substantive choices; a human-operated CLI is not a
-product requirement. Each capability has one authoritative semantic interface
-owned by its component. MCP and native-process adapters may expose that same
-interface for different clients; they do not create parallel workflows.
-Remove duplicate entry points and obsolete wrappers with their callers.
-Internal hooks, payloads and maintenance helpers need not be discoverable in
-ordinary business work. Do not replace them with a new umbrella runtime.
+The canonical [nine design principles](design-principles.md) replace the earlier
+expanded list. Efficiency means the total cost of completing the user's actual
+goal, including understanding, operation, waiting, diagnosis and rework.
+Stability is a means of reducing that cost.
 
-**Closed-world problems belong in components.** When explicit inputs and
-observable state are sufficient to decide correct behaviour, the owner
-implements and tests it: resource ownership, process cleanup, dependency and
-argument validation, retry bounds, persistence and evidence integrity. The
-Agent must not reproduce those checks or follow a prose recovery protocol.
-Business comparisons may still need an intentional experimental difference;
-the component obtains available facts and asks only for the actual choice.
+Use bounded tools on demand, retain open judgment with the Agent, reuse valid
+results with checks proportional to change, and expose progress and evidence.
+Skills provide concise information; knowledge is conditional reference, not an
+execution gate. Ordinary native or explicit remote work need not enter a managed
+workflow. Existing component boundaries describe the current implementation;
+future changes are assessed against these principles.
 
-**Open-world lessons belong in knowledge.** Context-dependent diagnoses,
-experimental approaches and applicability judgments are retrieved when useful,
-with their conditions, source evidence, alternatives and uncertainty intact.
-A past incident is not a universal prohibition. Skills provide concise task
-routing and business guidance; they are neither incident archives nor a
-second implementation of component guarantees. Missing knowledge remains
-unknown and does not block independent work.
-
-**Complex implementation must be self-contained.** An operation's owner
-advances its lifecycle and performs the required validation and recording.
-The Agent supplies business inputs and follows an authoritative execution or
-result reference. It does not initialize management records, reconcile
-execution/manifest/business states, normalize intermediate records, or link
-and finalize them just to complete ordinary work. Preserve meaningful
-business results and raw evidence without creating another execution authority.
-Compact output alone does not satisfy this principle if the call sequence is
-still exposed.
-
-**Reduce burden across the whole task.** Reuse native context, explicit source
-bindings, configuration and observations. Obtain machine facts within the
-owning component and retain completed work after failure. Default feedback
-explains the result or current activity, relevant progress, the reason for a
-wait/failure, whether it will advance automatically, and any necessary Agent
-action; details remain readable by reference. Unknown facts stay unknown.
-Do not re-run business work solely to populate a management field.
-
-**Keep component boundaries; remove consumption overhead.** Cross-repository
-development and release coordination are accepted costs of independent
-owners. Simplify their integration without merging their responsibilities or
-introducing a workspace scheduler. During this unreleased phase, replacement
-and deletion happen together rather than maintaining old and new paths.
-This authorizes source/interface cleanup, not destruction of user data,
-unrelated worktrees or live resources.
-
-Use these principles when choosing implementations and reviewing changes.
-Representative tasks and existing evidence can show whether required reads,
-decisions, calls, repeated input, waiting and rework decrease while correctness
-is preserved. They do not require a new Agent checklist, mandatory plan,
-measurement service or approval gate for every task.
+These are design criteria, not an additional Agent checklist, mandatory plan,
+measurement service or approval step. They authorize revising interfaces and
+implementation, not destroying user data, unrelated worktrees or live resources.
 
 ## 2. Ownership
 
@@ -164,13 +128,21 @@ Public task actions, reused not replaced:
 | Action | Agent supplies | Package does |
 |---|---|---|
 | `session` | native context; optional worktree binds | associate the real native task; do not guess from cwd/history |
-| `run` | command plus `env` / `environment` / `resources` / `topology` / `timeout_seconds` / `service` / `restart` | choose hosts, prepare/reuse the user container and task root, allocate devices/ports, launch, wait, finish. No required skill `request_id` / `profile_key` / `runtime_id` / Python path |
+| `run` | command plus optional `sources` / `env` / `environment` / `resources` / `topology` / `timeout_seconds` / `service` / `restart` | capture fixed execution inputs, prepare or reuse sources and environment, allocate requested devices/ports, launch, supervise and release. No required skill `request_id` / `profile_key` / `runtime_id` / Python path |
 | `execution` | business execution reference | refresh facts, tail, stop, return the ordinary endpoint |
 | `finish` | close this task | stop owned executions; keep container, roots, evidence |
 
 Services use a **task-scoped business name**. The package owns execution
 association and reconnect. Skills may write business reports; those reports
 are not recovery authority.
+
+Session worktrees are defaults for future runs. Admission freezes each run's
+sources, including dirty edits, so later edits cannot change an accepted run.
+An explicit empty source map supports generic commands; NPU allocation defaults
+to zero. Each execution has a private source view while compatible dependency
+environments and native artifacts can be reused. Python-only edits preserve
+native reuse; native inputs and environment compatibility determine invalidation.
+The concrete consumer contract is in [coordinator-consumption.md](coordinator-consumption.md).
 
 Queued / waiting / starting / uncertain are not running and may have no
 service port. The package advances them. Skills report those facts and may

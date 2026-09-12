@@ -127,6 +127,7 @@ class ClientConfigurationTests(unittest.TestCase):
 
     def test_client_setup_emits_package_entry_with_environment(self) -> None:
         setup = load_script("vaws_client_setup")
+        setup.managed_python = lambda: sys.executable
         with tempfile.TemporaryDirectory() as tmp:
             project = Path(tmp).resolve()
             files = setup.configuration("claude", project)
@@ -146,6 +147,7 @@ class ClientConfigurationTests(unittest.TestCase):
 
     def test_client_setup_keeps_user_environment_values(self) -> None:
         setup = load_script("vaws_client_setup")
+        setup.managed_python = lambda: sys.executable
         with tempfile.TemporaryDirectory() as tmp:
             project = Path(tmp).resolve()
             (project / ".mcp.json").write_text(json.dumps({"mcpServers": {"remote-dev": {"env": {"REMOTE_DEV_RUNTIME_ENV_FILE": "/etc/profile.d/custom.sh"}}}}))

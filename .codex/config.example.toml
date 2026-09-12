@@ -1,9 +1,11 @@
-# Copy to config.toml and replace the absolute workspace path below.
+# Linux example. Prefer vaws_client_setup.py --client codex --apply to generate
+# paths for this platform, including the Windows coordinator owner in shared WSL.
+# For manual setup, copy to config.toml and replace the workspace path.
 # Interactive MCP confirmation must remain available; headless runs need
 # explicit, invocation-scoped approvals for the exact tools they will use.
 #
 # remote-dev and vaws-coordinator are installed workspace packages
-# (`python .agents/scripts/vaws_deps.py sync`). The MCP servers run as `python -m ...` under `.venv`.
+# (`python .agents/scripts/vaws_deps.py sync`). MCP entries use platform environments.
 approval_policy = "on-request"
 
 [mcp_servers.remote_dev]

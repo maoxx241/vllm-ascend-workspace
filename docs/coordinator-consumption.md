@@ -18,10 +18,15 @@ history. For local Codex commands, the package can also resolve the actual
 `CODEX_THREAD_ID` when the hook did not export `VAWS_CONTEXT_FILE`. Conflicting
 native IDs fail explicitly. MCP callers still supply their attachment context.
 
+Kimi Code reads hooks from `~/.kimi-code/config.toml` (or `KIMI_CODE_HOME`)
+and discovers project `.kimi-code/mcp.json`. Setup returns its executable and
+working directory. The legacy Python `kimi-cli` has a different configuration
+contract and is not the Kimi Code client supported by this setup.
+
 | Tool | Meaning |
 |---|---|
 | `vaws_session` | Inspect this native attachment's VAWS task; bind actual worktrees |
-| `vaws_run` | Submit `command` plus `env` / `environment` / `resources` / `topology` / `timeout_seconds` / `service` / `restart`. Skills do not pass `request_id` / `profile_key` / `runtime_id` / a Python path |
+| `vaws_run` | Submit `command` plus optional `sources` / `env` / `environment` / `resources` / `topology` / `timeout_seconds` / `service` / `restart`. Skills do not pass `request_id` / `profile_key` / `runtime_id` / a Python path |
 | `vaws_execution` | Status, tail, stop, or read the ordinary endpoint of one owned execution |
 | `vaws_finish` | Close admission; stop owned executions; keep container, roots, evidence |
 
@@ -36,6 +41,18 @@ their existing behavior.
 
 Package CLI: `python -m vaws_coordinator.vaws session|run|execution|finish`.
 MCP: `python -m vaws_coordinator task-server`.
+
+`sources` omitted uses the attachment's selected worktrees; `sources={}` runs
+without project sources. An explicit map selects sources for that execution.
+Names are not restricted to vLLM repositories. Admission captures fixed Git
+commits including dirty edits without modifying HEAD or the user's index.
+Later local edits and changes to session defaults affect future runs only.
+The returned source snapshot identifies the accepted inputs.
+
+Device count defaults to zero. Ordinary commands and CPU compilation do not
+reserve NPUs or wait behind an NPU request. NPU workloads explicitly request
+`resources.npu_count` or devices. Source-free commands reuse an existing image
+interpreter; they do not install vLLM or create a task virtual environment.
 
 A long-running service uses `timeout_seconds=None`, `resources.service_port=0`
 (or an explicit port), and a task-scoped business name (`service`). The same
@@ -58,6 +75,20 @@ not a per-model launch snippet.
 | `VAWS_HOST_QUEUE_MODULE` | unset | Host NPU authority is the package module |
 
 There is no workspace `leases.json` and no `session.json` resource authority.
+
+For a Windows checkout shared with WSL, generated WSL clients use the Windows
+workspace interpreter for task tools and session hooks. Source and context
+paths on mounted drives are normalized by the coordinator. Explicit remote
+tools normally use the client's native interpreter. Kimi Code is the shared
+project-config exception: when the project and Windows environment are on the
+same mounted drive, all three MCP entries use a project-relative Windows
+Python command. The same `.kimi-code/mcp.json` then runs from the project cwd
+in Windows and WSL without being rewritten between launches. Kimi session
+hooks remain in each platform's own Kimi home configuration. Existing custom
+server commands and environment values are preserved. Windows MCP entries
+include the `WSLENV` forwarding list so explicit state and custom environment
+values reach a Windows process launched from WSL. A Linux daemon refuses
+a state directory already owned through Windows IPC.
 
 ## 3. User container
 
@@ -130,9 +161,13 @@ until="running")` ends at running or a terminal failure; `until="released"`
 requires terminal state and confirmed resource release. Timeouts retain the last
 observed facts.
 
-Binding a different business worktree automatically returns idle runtime bindings.
-Live jobs or unreleased leases still prevent the change. Containers and unrelated
-worktrees are preserved.
+Changing selected business worktrees updates the session defaults while live
+executions retain their accepted inputs and private source views. Each execution
+has its own source root. Valid dependency environments and native artifacts can
+be reused by content and environment compatibility; Python-only source edits do
+not force native recompilation. Native edits invalidate native reuse. A changed
+service source snapshot requires `restart=True`, even if its command is unchanged.
+Containers and unrelated worktrees are preserved.
 
 After successful preflight, coordinator records an immutable `launch_observation`
 with source commits, environment profile and environment digest, native build key,
@@ -140,6 +175,12 @@ machine, devices and launch command. The target API retains that receipt after
 stop; it does not reconstruct it from a subsequently changed binding. Managed
 payloads receive it in reserved `VAWS_EXECUTION_OBSERVATION`. It describes the
 attested launch and does not claim to detect later runtime mutations.
+
+The package also writes a `vaws.managed-run.v2` execution record with accepted
+source snapshots, environment, process facts and resource release state. Business
+workflows may add Run Manifest v1 measurements through the existing package
+library. Polling does not recapture mutable worktrees or create fictitious
+two-repository evidence for a source-free command.
 
 PD starts directly with `pd_serving.py start --config topology.json`. Its status
 and stop operations consume a service or execution reference. Local smoke and

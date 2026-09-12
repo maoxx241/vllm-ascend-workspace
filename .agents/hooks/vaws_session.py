@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
-"""Compatibility adapter: exec the coordinator's native session hook.
+"""Launch the coordinator's native session hook with workspace dependencies.
 
 The hook that writes the local task registry lives in the vaws-coordinator
-package. This file remains at the historical path so already-installed client
-hook commands keep working. It never writes the registry itself.
+package. This entry selects the workspace interpreter and passes the native
+client event through; it never writes the registry itself.
 
 Generated setup commands may pass ``--agent-sessions-dir`` so a GUI client
-does not need the setup shell's environment. ``--coordinator-root`` is
-accepted and ignored (the package does not read that variable).
+does not need the setup shell's environment.
 """
 from __future__ import annotations
 
@@ -30,7 +29,6 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--client", required=True)
     parser.add_argument("--project", type=Path)
-    parser.add_argument("--coordinator-root", default="")
     parser.add_argument("--agent-sessions-dir", default="")
     args = parser.parse_args()
     if args.agent_sessions_dir.strip():

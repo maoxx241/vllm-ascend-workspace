@@ -939,20 +939,17 @@ def build_inventory(repo_root: Path, *, quiet: bool = False) -> dict:
 
 def render_markdown(payload: dict) -> str:
     lines = [
-        "| Entry point | Style | Verbs | Options | Refs | Responsibility | Support role | Current target | Proposed |",
-        "|---|---|---|---|---|---|---|---|---|",
+        "| Entry point | Style | Verbs | Responsibility | Support role | Current target | Proposed |",
+        "|---|---|---|---|---|---|---|",
     ]
     for record in payload["entry_points"]:
         cls = record["classification"] or {}
         verbs = ", ".join(record["verbs"]) or "-"
-        refs = ", ".join(f"{k}:{v}" for k, v in record["reference_kinds"].items()) or "-"
         lines.append(
-            "| `{path}` | {style} | {verbs} | {n_opts} | {refs} | {resp} | {role} | {target} | {proposed} |".format(
+            "| `{path}` | {style} | {verbs} | {resp} | {role} | {target} | {proposed} |".format(
                 path=record["path"],
                 style=record["parser_style"],
                 verbs=verbs,
-                n_opts=len(record["options"]),
-                refs=refs,
                 resp=cls.get("responsibility", "unclassified"),
                 role=cls.get("support_role", "-"),
                 target=cls.get("target", "-"),

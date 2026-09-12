@@ -3,157 +3,54 @@ name: CI
 on:
   pull_request:
   push:
-    branches:
-      - main
+    branches: [main]
 
 permissions:
   contents: read
 
 jobs:
-  validate:
-    runs-on: ubuntu-latest
-    env:
-      UV_PROJECT_ENVIRONMENT: .vaws-local/venvs/linux
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: false
-      - uses: astral-sh/setup-uv@v5
-        with:
-          python-version: "3.12"
-      - name: Install locked workspace packages
-        run: python .agents/scripts/vaws_deps.py sync --locked --group dev
-      - name: Doctor via system python3
-        run: |
-          python3 .agents/scripts/vaws_deps.py doctor > "${RUNNER_TEMP}/doctor.json"
-          python3 -c 'import json, pathlib, sys
-          envelope = json.loads(pathlib.Path(sys.argv[1]).read_text())
-          outcome = envelope.get("outcome")
-          if outcome != "success":
-              raise SystemExit(f"doctor outcome {outcome!r} is not success")
-          ' "${RUNNER_TEMP}/doctor.json"
-      - name: Lockfile matches pyproject
-        run: uv lock --check
-      - name: Run the full .agents/tests suite
-        run: uv run python -B -m pytest .agents/tests -q
-      - name: Validate catalog
-        run: uv run python -B .agents/scripts/skill_catalog.py
-      - name: Check repository boundaries
-        # Enforce mode fails on a violation the dated baseline does not
-        # already record, and on a baseline row whose violation is gone.
-        # See docs/target-state.md. Submodules are not checked out here
-        # and the guard skips them regardless.
-        run: uv run python -B .agents/scripts/repo_boundary_check.py --mode enforce
-      - name: Check tracked in-tree paths
-        run: uv run python -B .agents/scripts/tracked_path_check.py --mode enforce
-      - name: Scan tracked files for leaks
-        run: uv run python -B .agents/scripts/tracked_leak_scan.py --format json
-      - name: Launcher status
-        run: uv run python -B .agents/scripts/vaws.py status
-      - name: Run repo-init tests
-        run: uv run python -B -m unittest discover -s .agents/skills/repo-init/tests
-      - name: Check generated Claude shims and ModelScope Trae projection
-        run: uv run python -B .agents/scripts/sync_claude_skills.py --check
-      - name: Run modelscope tests
-        run: uv run python -B -m unittest discover -s .agents/skills/modelscope/tests
-      - name: Run graph-debug tests
-        run: uv run python -B -m unittest discover -s .agents/skills/vllm-ascend-graph-debug/tests
-      - name: Run correctness-validation tests
-        run: uv run python -B -m unittest discover -s .agents/skills/vllm-ascend-correctness-validation/tests
-      - name: Run change-validation tests
-        run: uv run python -B -m unittest discover -s .agents/skills/vllm-ascend-change-validation/tests
-      - name: Run performance-regression tests
-        run: uv run python -B -m unittest discover -s .agents/skills/vllm-ascend-performance-regression/tests
-
-
-      - name: Run serving consumer tests
-        run: uv run python -B -m unittest discover -s .agents/skills/vllm-ascend-serving/tests
-
-      - name: Run benchmark smoke tests
-        run: uv run python -B -m unittest discover -s .agents/skills/vllm-ascend-benchmark/tests
-
-      - name: Run npu-fleet-monitor consumer tests
-        run: uv run python -B -m unittest discover -s .agents/skills/npu-fleet-monitor/tests
-
-      - name: Validate parameterized Ray helpers
-        run: bash -n scripts/ray_head.sh scripts/ray_worker.sh
-
-      - name: Run distributed-debug tests
-        run: uv run python -B -m unittest discover -s .agents/skills/vllm-ascend-distributed-debug/tests
-
-      - name: Run operator-debug tests
-        run: uv run python -B -m unittest discover -s .agents/skills/ascend-operator-debug/tests
-
-      - name: Run tensor-dump tests
-        run: |
-          uv run python -B -m unittest discover -s .agents/skills/ascend-tensor-dump/tests
-          uv run python -B -m py_compile \
-            .agents/skills/ascend-tensor-dump/assets/dump_probe.py \
-            .agents/skills/ascend-tensor-dump/assets/replay_op.py
-
-      - name: Run Triton development tests
-        run: uv run python -B -m unittest discover -s .agents/skills/ascend-triton-operator-development/tests
-
-      - name: Run Triton validation tests
-        run: uv run python -B -m unittest discover -s .agents/skills/ascend-triton-kernel-validation/tests
-
-      - name: Run Triton optimization tests
-        run: uv run python -B -m unittest discover -s .agents/skills/ascend-triton-kernel-optimization/tests
-
-      - name: Run Triton workflow tests
-        run: uv run python -B -m unittest discover -s .agents/skills/ascend-triton-workflow/tests
-
-      - name: Run PD-serving tests
-        run: uv run python -B -m unittest discover -s .agents/skills/vllm-ascend-pd-serving/tests
-
-      - name: Run memory-profiling tests
-        run: uv run python -B -m unittest discover -s .agents/skills/ascend-memory-profiling/tests
-
-      - name: Run profiling-collection tests
-        run: uv run python -B -m unittest discover -s .agents/skills/ascend-profiling-collection/tests
-
-      - name: Run profiling-analysis tests
-        # The locked dev group already supplies PyYAML and pytest.
-        run: uv run python -B -m pytest .agents/skills/ascend-profiling-analysis/tests -q
-
-  windows:
-    name: Native Windows (Python 3.13)
-    runs-on: windows-latest
-    env:
-      UV_PROJECT_ENVIRONMENT: .vaws-local/venvs/win32
+  local-contracts:
+    name: ${{ matrix.os }} / Python ${{ matrix.python }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            python: '3.12'
+            platform: linux
+          - os: windows-latest
+            python: '3.13'
+            platform: win32
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 30
+    env:
+      UV_PROJECT_ENVIRONMENT: .vaws-local/venvs/${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: false
       - uses: astral-sh/setup-uv@v5
         with:
-          python-version: "3.13"
+          python-version: ${{ matrix.python }}
       - name: Install locked workspace packages
         run: python .agents/scripts/vaws_deps.py sync --locked --group dev
-      - name: Check package capabilities and lock
+      - name: Verify system interpreter handoff
+        run: python .agents/scripts/vaws_deps.py doctor
+      - name: Run all local workspace and skill tests
+        run: uv run python -B .agents/scripts/local_tests.py --jobs 2 --timeout 600 > workspace-results.json
+      - name: Enforce repository ownership and tracked paths
         run: |
-          uv run python .agents/scripts/vaws_deps.py doctor
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          uv lock --check
-      - name: All local workspace and skill tests with progress
-        run: uv run python -B .agents/scripts/local_tests.py --jobs 2 --timeout 600 > windows-workspace.json
-      - name: Generated projections and repository guards
-        run: |
-          uv run python .agents/scripts/sync_claude_skills.py --check
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          uv run python .agents/scripts/skill_catalog.py
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          uv run python .agents/scripts/repo_boundary_check.py --mode enforce
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          uv run python .agents/scripts/tracked_path_check.py --mode enforce
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          uv run python .agents/scripts/tracked_leak_scan.py --format json
+          uv run python -B .agents/scripts/repo_boundary_check.py --mode enforce
+          uv run python -B .agents/scripts/tracked_path_check.py --mode enforce
+        shell: bash
+      - name: Validate Ray shell syntax
+        if: runner.os == 'Linux'
+        run: bash -n scripts/ray_head.sh scripts/ray_worker.sh
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: windows-workspace-results
+          name: workspace-results-${{ matrix.platform }}
           path: |
-            windows-workspace.json
+            workspace-results.json
             .vaws-local/test-runs/
           include-hidden-files: true

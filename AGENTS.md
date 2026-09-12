@@ -4,11 +4,13 @@ This is the vLLM-Ascend consumer workspace: project materials, client wiring
 and business skills. Runtime owners are remote-dev, vaws-coordinator,
 vaws-knowledge and vaws-top. See [docs/target-state.md](docs/target-state.md).
 
-All design and implementation decisions follow its Agent-only principles.
-Commands are consumed by Agents. Put deterministic guarantees in component
-code/tests and contextual lessons in knowledge; internalize lifecycle and
-recordkeeping. Remove replaced interfaces and migrate callers together without
-compatibility layers. These principles add no per-task checklist or gate.
+Design decisions follow the nine [design principles](docs/design-principles.md),
+with total cost of achieving the user's actual goal taking priority. Use tools
+for bounded operations, keep open judgment with the Agent, and treat knowledge
+as reference. Reuse valid work and internalize routine checks and recordkeeping.
+Capabilities participate on demand; these principles add no per-task checklist.
+The [core redesign](docs/vaws-core-redesign.md) includes future proposals;
+current implemented execution entries are listed below.
 
 The canonical repository is `vllm-ascend-workspace/vllm-ascend-workspace`.
 `vllm/` and `vllm-ascend/` are Git submodules; keep `.gitmodules` on
@@ -26,7 +28,9 @@ remotes, not replacements for community upstreams.
 | Local fleet monitor lifecycle | `.agents/skills/npu-fleet-monitor/SKILL.md`; observation is not allocation |
 | Knowledge lookup and capture | `knowledge_query`, `knowledge_explain`, `knowledge_capture` |
 
-Bind actual business worktrees with `vaws_session(sources=...)`. Coordinator
+Bind default business worktrees with `vaws_session(sources=...)`, or pass
+`sources` to one `vaws_run`; an empty map runs without project sources.
+Admission fixes source inputs for each execution. Coordinator
 prepares managed sources, environments, devices and ports through one `run`.
 Read status, tail or stop an owned execution through its package reference;
 a live service does not require acquiring the same NPUs again. Explicit
@@ -77,7 +81,8 @@ Pure Python control-plane, configuration and documentation checks run locally.
 Run checks affected by the change; existing evidence can support a conclusion
 without recreating a plan or repeating unrelated experiments.
 
-New cross-workflow executions use Run Manifest v1 from
+Managed executions record their fixed inputs and lifecycle automatically;
+cross-workflow business measurements use Run Manifest v1 from
 `vaws_coordinator.run_manifest`, saved by tools under untracked `.vaws-local/`.
 Tools record execution facts; agents do not fill management records manually. Skill scripts put progress on stderr and their
 result on stdout. Keep runtime state under untracked `.vaws-local/`, including

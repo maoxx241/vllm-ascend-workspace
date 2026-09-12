@@ -24,7 +24,8 @@ names public git+https sources because `vaws-coordinator` depends on
 environment under `.vaws-local/venvs/<sys.platform>`. Windows uses `win32` and WSL
 uses `linux`, so a shared checkout retains both installations. `uv.lock` records
 the resolved commits.
-CI runs `uv lock --check`. Do not copy those SHAs into workflows.
+CI validates the lock by running `vaws_deps.py sync --locked`. Do not copy those
+SHAs into workflows.
 
 Sources may select release tags or validated commit revisions; `uv.lock`
 records their resolved commits. Read exact installed/locked identities through
@@ -81,8 +82,14 @@ Entry scripts select the platform environment when their packages are missing.
 An explicitly supplied interpreter with usable packages is respected. Interpreter
 flags and `-m` module calls survive re-execution; native Windows launches use UTF-8
 and retain child-process ownership. A missing installation returns the bootstrap
-command as its remedy. Client setup writes the selected interpreter's full path
-into native MCP/hook configuration.
+command as its remedy. Client setup selects the interpreter for each MCP/hook
+entry. In a checkout shared by Windows and WSL, managed task entries use the
+installed Windows coordinator and Windows paths so both clients share one owner.
+Same-drive Kimi project MCP entries use a project-relative Windows interpreter
+path, which launches from either platform; other entries use absolute paths.
+Run `vaws_client_setup.py --client CLIENT --project PATH --apply` to generate the
+platform configuration. Known generated task entries from this checkout's old
+`.venv` are migrated, while custom launchers and policy remain unchanged.
 
 Use the platform Python launcher (`py -3` on Windows, `python3` on WSL) for the
 bootstrap or workspace entry scripts. The [Windows installation guide](windows-installation.md)

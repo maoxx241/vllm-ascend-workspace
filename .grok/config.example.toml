@@ -1,10 +1,12 @@
-# Copy to .grok/config.toml and replace the absolute workspace path below.
+# Linux example. Prefer vaws_client_setup.py --client grok --apply to generate
+# paths for this platform, including the Windows coordinator owner in shared WSL.
+# For manual setup, copy to .grok/config.toml and replace the workspace path.
 # Native Grok config also works when Claude-compatible MCP import is disabled.
 #
 # remote-dev and vaws-coordinator are installed workspace packages
-# (`uv sync`). The MCP servers run as `python -m ...` under `.venv`.
+# (`python .agents/scripts/vaws_deps.py sync`). MCP entries use platform environments.
 [mcp_servers.remote-dev]
-command = "/absolute/path/to/vllm-ascend-workspace/.venv/bin/python"
+command = "/absolute/path/to/vllm-ascend-workspace/.vaws-local/venvs/linux/bin/python"
 args = ["-m", "remote_dev.mcp.server"]
 enabled = true
 startup_timeout_sec = 20
@@ -16,7 +18,7 @@ REMOTE_DEV_STATE_DIR = "/absolute/path/to/vllm-ascend-workspace/.vaws-local/remo
 REMOTE_DEV_SSH_MUX_DIR = "~/.ssh/vaws-mux"
 
 [mcp_servers.vaws-task]
-command = "/absolute/path/to/vllm-ascend-workspace/.venv/bin/python"
+command = "/absolute/path/to/vllm-ascend-workspace/.vaws-local/venvs/linux/bin/python"
 args = ["-m", "vaws_coordinator", "task-server"]
 enabled = true
 startup_timeout_sec = 20
@@ -26,7 +28,7 @@ tool_timeout_sec = 600
 VAWS_AGENT_SESSIONS_DIR = "/absolute/path/to/vllm-ascend-workspace/.vaws-local/agent-sessions"
 
 [mcp_servers.vaws-knowledge]
-command = "/absolute/path/to/vllm-ascend-workspace/.venv/bin/python"
+command = "/absolute/path/to/vllm-ascend-workspace/.vaws-local/venvs/linux/bin/python"
 args = ["-m", "vaws_knowledge.server.mcp_server"]
 enabled = true
 startup_timeout_sec = 20
