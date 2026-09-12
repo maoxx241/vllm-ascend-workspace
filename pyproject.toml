@@ -22,7 +22,7 @@ package = false
 
 [tool.uv.sources]
 vaws-remote-dev = { git = "https://github.com/vllm-ascend-workspace/remote-dev", rev = "64a29a705e4969ed235dc67db453e7e15fa23446" }
-vaws-coordinator = { git = "https://github.com/maoxx241/vaws-coordinator", rev = "5d2bea73dc1221ab1a4824ffe8e988830228dd11" }
+vaws-coordinator = { git = "https://github.com/maoxx241/vaws-coordinator", rev = "7a6716de5cb05b5f1b2dc4aebee094645cbc6942" }
 vaws-knowledge = { git = "https://github.com/vllm-ascend-workspace/vaws-knowledge", rev = "c95293836a3b595c13a80189197d44a2980c9fbd" }
 
 [tool.pytest.ini_options]

@@ -36,6 +36,18 @@ Kimi 边界依据 [0.42.0 的 session hook 实现](https://github.com/MoonshotAI
 hook 在 cwd 确定后执行，完成结果不能替换 cwd。未支持的能力保留为客户端
 适配缺口，不通过要求 Agent 手动搬目录、轮询或额外填表来补齐。
 
+## Context in MCP and shell
+
+MCP 工具参数和 shell 子进程环境是不同的入口，自动接入程度不能混为一谈。
+Codex、Claude、Cursor、Grok 的 task-tool hook 可在内部注入 context；
+Kimi Code 当前只把关联文本提供给 Agent，没有工具参数改写能力。
+
+普通 skill CLI 复用 `VAWS_CONTEXT_FILE`；Codex 还可按真实原生 thread ID
+解析同一关联，Claude 的 SessionStart 可通过 `CLAUDE_ENV_FILE` 导出环境。
+Cursor 的 MCP 参数注入不会修改 shell 环境，Grok/Kimi 的现有接线也没有
+等价的 shell 注入能力。这些客户端的 shell CLI 自动关联仍是适配缺口；
+已有明确 context 可用于显式调用，但不能从 cwd、最近任务或任意用户名称推断。
+
 ## 目录、身份与固定输入
 
 | 对象 | 所有者与边界 |

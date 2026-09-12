@@ -48,7 +48,11 @@ or alias questionnaire.
   environment. `doctor` is available for unresolved capability or pin questions;
   it is not an extra step after an already conclusive result.
 - Run the selected client's `.agents/scripts/vaws_client_setup.py --apply`
-  entry. Preserve unrelated client configuration and native hook trust.
+  entry. For Codex/Cursor, complete the native Worktree mode/environment choice
+  once during initialization; writing setup files does not select the UI mode.
+  New worktree setup and session attachment then run through the client without
+  an Agent launcher call. See the [client boundaries](../../../docs/native-workspace-isolation.md).
+  Preserve unrelated client configuration and native hook trust.
 
 Successful dependency setup also prepares knowledge. Pending model/index work
 leaves ordinary tools usable. Knowledge MCP maintains itself while alive;

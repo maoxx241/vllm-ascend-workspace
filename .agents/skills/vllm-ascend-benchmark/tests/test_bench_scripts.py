@@ -399,6 +399,21 @@ class StreamingTimeoutTests(unittest.TestCase):
             1200 + _common._SERVE_START_TIMEOUT_MARGIN,
         )
 
+    def test_call_serve_start_forwards_sources_as_one_argument(self):
+        cfg = _common.BenchConfig(model="/m")
+        sources = {"vllm": '/src/实验 with "quotes"', "vllm-ascend": r"C:\src\ascend"}
+        for selected in (None, {}, sources):
+            with self.subTest(sources=selected), mock.patch.object(
+                _common, "_run_json_command_streaming",
+                return_value=(0, {"status": "ready"}, '{"status": "ready"}', ""),
+            ) as command:
+                _common.call_serve_start(cfg, sources=selected)
+            argv = command.call_args.args[0]
+            if selected is None:
+                self.assertNotIn("--sources", argv)
+            else:
+                self.assertEqual(json.loads(argv[argv.index("--sources") + 1]), selected)
+
     def test_call_serve_start_timeout_falls_back_to_serving_default(self):
         cfg = _common.BenchConfig(model="/m", execution_id="owned")
         with mock.patch.object(

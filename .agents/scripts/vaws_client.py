@@ -31,11 +31,15 @@ NATIVE_IDENTITY_ENV = {"VAWS_CONTEXT_FILE", "VAWS_PARENT_CONTEXT", "VAWS_ATTACH_
 
 
 def resolve_client(client: str) -> list[str]:
-    executable = shutil.which(CLIENT_COMMANDS[client])
-    if not executable and client == "kimi":
+    executable = None
+    if client == "kimi":
+        # Match client setup's Kimi Code selection when legacy kimi-cli also
+        # provides a `kimi` command on PATH with a different config contract.
         candidate = Path(os.environ.get("KIMI_CODE_HOME", str(Path.home() / ".kimi-code"))) / "bin" / ("kimi.exe" if os.name == "nt" else "kimi")
         if candidate.is_file():
             executable = str(candidate)
+    if not executable:
+        executable = shutil.which(CLIENT_COMMANDS[client])
     if not executable:
         raise WorkspaceCopyError(f"{client} is not installed in this environment; install its native CLI before starting it")
     return [executable]
@@ -142,7 +146,7 @@ def main(argv=None) -> int:
         # An interpreter hop may execute main again. Carry the one-time startup
         # decision through that hop; run_client removes this internal marker.
         os.environ["VAWS_RELEASE_LAUNCH"] = "1"
-        ensure_workspace_interpreter(repo_root=source)
+        ensure_workspace_interpreter(repo_root=source, use_saved=False)
         receipt = prepare_workspace(args.client, args.workspace, source=source)
         target = Path(receipt["workspace"])
         if not existing:

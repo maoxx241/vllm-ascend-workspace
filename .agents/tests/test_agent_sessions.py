@@ -297,6 +297,56 @@ class ScaffoldSetupTests(unittest.TestCase):
         self.assertIn("ROOT_WORKTREE_PATH", native["setup-worktree"][0])
         self.assertNotIn("vaws_worktree_setup", hooks["sessionStart"][0]["command"])
 
+    def test_task_pretool_matchers_migrate_generated_hooks_and_preserve_user_scope(self):
+        import re
+        paths = {"codex": ".codex/hooks.json", "claude": ".claude/settings.local.json",
+                 "grok": ".grok/hooks/vaws-session.json", "cursor": ".cursor/hooks.json"}
+        for client, relative in paths.items():
+            with self.subTest(client=client):
+                event = "preToolUse" if client == "cursor" else "PreToolUse"
+                wanted = setup.hook_groups(client, self.root)[event]
+                for name in ("vaws_session", "MCP:vaws_run", "vaws_task__vaws_message"):
+                    self.assertIsNotNone(re.search(wanted[0]["matcher"], name))
+                for name in ("Bash", "read_file", "MCP:knowledge_query", "vaws_run_other"):
+                    self.assertIsNone(re.search(wanted[0]["matcher"], name))
+                old = {key: value for key, value in wanted[0].items() if key != "matcher"}
+                settings = self.root / relative
+                settings.parent.mkdir(parents=True, exist_ok=True)
+                user = {"matcher": "Bash", "hooks": [{"command": "user-hook"}]}
+                settings.write_text(json.dumps({"hooks": {event: [user, old]}}))
+                files = setup.configuration(client, self.root)
+                groups = json.loads(files[settings])["hooks"][event]
+                self.assertEqual(groups[0], user)
+                self.assertEqual(groups[1]["matcher"], wanted[0]["matcher"])
+                settings.write_text(files[settings])
+                self.assertEqual(setup.configuration(client, self.root)[settings], files[settings])
+
+                custom = {**wanted[0], "matcher": "custom-user-scope"}
+                self.assertEqual(setup.merge_hook_event([custom], wanted, client, self.root)[0]["matcher"],
+                                 "custom-user-scope")
+                if client != "cursor":
+                    mixed = {"hooks": [{"command": "user-hook"}, *old["hooks"]]}
+                    merged = setup.merge_hook_event([mixed], wanted, client, self.root)
+                    self.assertNotIn("matcher", merged[0])
+                    self.assertEqual(merged[0]["hooks"][0], {"command": "user-hook"})
+
+    def test_kimi_removes_ineffective_pretool_hook_and_preserves_user_hooks(self):
+        import hashlib
+        import tomllib
+        settings = self.root / "kimi-private.toml"
+        project_key = hashlib.sha256(str(self.root).encode()).hexdigest()[:16]
+        command = setup.hook_command("kimi", self.root)
+        user = '[[hooks]]\nevent = "PreToolUse"\ncommand = "user-hook"\n'
+        old = '[[hooks]]\nevent = "PreToolUse"\ncommand = ' + json.dumps(command) + '\n'
+        settings.write_text(setup.managed_toml_text(user, "session-" + project_key, old))
+        files = setup.configuration("kimi", self.root, kimi_config=settings)
+        hooks = tomllib.loads(files[settings])["hooks"]
+        self.assertEqual([item for item in hooks if item["event"] == "PreToolUse"],
+                         [{"event": "PreToolUse", "command": "user-hook"}])
+        self.assertIn("SessionStart", {item["event"] for item in hooks})
+        settings.write_text(files[settings])
+        self.assertEqual(setup.configuration("kimi", self.root, kimi_config=settings)[settings], files[settings])
+
 
 if __name__ == "__main__":
     unittest.main()

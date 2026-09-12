@@ -44,7 +44,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / ".agents/lib"))
 from vaws_venv import ensure_workspace_interpreter
 
-ensure_workspace_interpreter(repo_root=ROOT)
+ensure_workspace_interpreter(repo_root=ROOT, use_saved=False)
 
 import tomllib  # noqa: E402
 
@@ -62,6 +62,7 @@ TASK_SERVER_NAME = "vaws-task"
 REMOTE_DEV_SERVER_NAME = "remote-dev"
 KNOWLEDGE_SERVER_NAME = "vaws-knowledge"
 HOOK_TIMEOUT_SECONDS = 12
+TASK_TOOL_MATCHER = r"(?:^|:|__)vaws_(session|run|execution|finish|message)$"
 
 
 def remote_dev_server_args():
@@ -279,12 +280,15 @@ def hook_groups(client, project, env=None):
             for event in EVENTS if event not in {"PreToolUse", "UserPromptSubmit"}
         }
         groups["preToolUse"] = [{"command": command, "timeout": HOOK_TIMEOUT_SECONDS,
-                                 "matcher": r"(?:^|:|__)vaws_(session|run|execution|finish|message)$"}]
+                                 "matcher": TASK_TOOL_MATCHER}]
         return groups
-    return {
+    groups = {
         event: [{"hooks": [{"type": "command", "command": command, "timeout": HOOK_TIMEOUT_SECONDS}]}]
-        for event in EVENTS
+        for event in EVENTS if not (client == "kimi" and event == "PreToolUse")
     }
+    if "PreToolUse" in groups:
+        groups["PreToolUse"][0]["matcher"] = TASK_TOOL_MATCHER
+    return groups
 
 
 OWNED_HOOK_SCRIPT = ROOT / ".agents/hooks/vaws_session.py"
@@ -439,6 +443,13 @@ def merge_hook_event(existing, desired, client, project):
             if entries:
                 updated_group = dict(group)
                 updated_group["hooks"] = entries
+                # Older generated groups ran for every tool. Narrow only an
+                # entirely owned group; user matchers and mixed groups retain
+                # their existing scope.
+                if ("matcher" not in group and desired[0].get("matcher")
+                        and all(owned_hook_command(entry.get("command", ""), client, project, expected=expected)
+                                for entry in entries)):
+                    updated_group["matcher"] = desired[0]["matcher"]
                 result.append(updated_group)
             continue
         command = group.get("command", "")
@@ -447,6 +458,8 @@ def merge_hook_event(existing, desired, client, project):
                 continue
             updated = dict(group)
             updated["command"] = desired_command
+            if desired[0].get("matcher"):
+                updated.setdefault("matcher", desired[0]["matcher"])
             result.append(updated)
             replaced = True
         else:
@@ -763,7 +776,7 @@ def build_plan(client, project, *, kimi_config=None, task_only=False):
         body = "\n".join(
             "[[hooks]]\nevent = " + json.dumps(event) + "\ncommand = " + json.dumps(command)
             + "\ntimeout = " + str(HOOK_TIMEOUT_SECONDS) + "\n"
-            for event in EVENTS
+            for event in groups
         )
         project_key = hashlib.sha256(str(project).encode()).hexdigest()[:16]
         files[path] = managed_toml_text(path.read_text(encoding="utf-8") if path.exists() else "", "session-" + project_key, body)

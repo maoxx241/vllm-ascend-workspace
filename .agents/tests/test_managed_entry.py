@@ -153,8 +153,7 @@ import vaws_managed_entry as entry
 import vaws_environment
 if os.environ.get('OWNER_FIXTURE_CHILD') != '1':
     entry.windows_mounted_workspace = lambda root: True
-    entry.managed_python = lambda root: sys.executable
-    vaws_environment.windows_ready = lambda root: {'python': sys.executable}
+    vaws_environment.windows_ready = lambda root, **kwargs: {'python': sys.executable}
     def invocation(*args, **kwargs):
         return [sys.executable, '-B', '-X', 'utf8', __file__, *sys.argv[1:]], {**os.environ, 'OWNER_FIXTURE_CHILD': '1'}
     entry.managed_invocation = invocation

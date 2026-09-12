@@ -245,11 +245,17 @@ def _lookup(repo_root: Path, target_platform: str, *, require_configuration=Fals
     return read_receipt(store / _key(identity, input_id, selection) / READY_NAME, expected_platform=target_platform)
 
 
-def native_ready(repo_root: Path, *, pin: str | Path | None = None) -> dict:
-    """Look up readiness without probes, installs, selection writes or services."""
+def native_ready(repo_root: Path, *, pin: str | Path | None = None, use_saved: bool = False) -> dict:
+    """Read readiness; business entries reuse the saved session selection.
+
+    Setup and maintenance leave use_saved false to inspect current inputs.
+    Explicit process pins always take precedence.
+    """
     selected = pin or os.environ.get(PIN_ENV)
     if selected:
         return read_receipt(selected, expected_platform=sys.platform)
+    if use_saved:
+        return saved_ready(repo_root)
     return _lookup(Path(repo_root), sys.platform)
 
 
@@ -265,7 +271,7 @@ def saved_ready(repo_root: Path, *, target_platform: str | None = None) -> dict:
     return _lookup(repo_root, target_platform, require_configuration=target_platform == "win32")
 
 
-def windows_ready(repo_root: Path) -> dict:
+def windows_ready(repo_root: Path, *, use_saved: bool = False) -> dict:
     """Read native Windows facts from WSL; never synthesize Windows ABI facts."""
     if pin := os.environ.get(MANAGED_PIN_ENV):
         return read_receipt(pin, expected_platform="win32")
@@ -273,6 +279,8 @@ def windows_ready(repo_root: Path) -> dict:
         value = read_receipt(pin)
         if value["platform"] == "win32":
             return value
+    if use_saved:
+        return saved_ready(repo_root, target_platform="win32")
     return _lookup(Path(repo_root), "win32", require_configuration=True)
 
 

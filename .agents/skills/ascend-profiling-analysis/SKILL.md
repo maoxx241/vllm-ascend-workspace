@@ -19,7 +19,7 @@ Run from the repository root using the platform's Python launcher. The workspace
 selects its installed platform environment automatically.
 
 ```text
-python .agents/skills/ascend-profiling-analysis/scripts/profile_analyze.py --manifest collection/manifest.json
+uv run --no-project python .agents/skills/ascend-profiling-analysis/scripts/profile_analyze.py --manifest collection/manifest.json
 ```
 
 Use --remote-profile-root for an existing root and profile_sweep.py for multiple roots. The normal fast mode returns analysis_summary.json and compact report artifacts. --mode full adds detailed HTML/XLSX outputs. Remote parsing keeps large traces near their storage; explicit remote endpoints and execution references select the analysis target.

@@ -66,6 +66,23 @@ def test_analyze_wrapper_input_is_mutually_exclusive() -> None:
     assert "--manifest" in flags and "--remote-profile-root" in flags
 
 
+def test_collection_manifest_does_not_select_another_tasks_context() -> None:
+    manifest = {"execution_id": "recorded-execution", "context_file": "/other/task-context.json",
+                "host": "recorded.example", "port": 2201}
+    for explicit in (None, "/explicit/task-context.json"):
+        argv = ["--manifest", "collection.json"]
+        if explicit:
+            argv += ["--context-file", explicit]
+        with mock.patch.object(profile_analyze, "_resolve_input", return_value={
+            "remote_profile_root": "/profiles/case", "manifest": manifest,
+        }), mock.patch.object(common, "resolve_wrapper_target", return_value=(None, 2)) as resolve:
+            assert profile_analyze.main(argv) == 2
+        arguments = resolve.call_args.kwargs
+        assert arguments["context_file"] == explicit
+        assert arguments["execution_id"] == "recorded-execution"
+        assert arguments["host"] == "recorded.example" and arguments["port"] == 2201
+
+
 def test_sweep_wrapper_has_required_args() -> None:
     parser = profile_sweep._build_parser()
     opts = _option_set(parser)

@@ -21,10 +21,11 @@ Use serving.py status or serving.py stop with --execution-id or --service. A ser
 
 Start follows preparation and HTTP/models/first-token readiness within
 --health-timeout. Use --no-wait when an immediate execution receipt is wanted.
-After a bounded wait, continue with the same reference. Codex local commands
-can resolve their actual native thread identity through the coordinator when
-the hook has not exported VAWS_CONTEXT_FILE; other clients supply their native
-context explicitly.
+After a bounded wait, continue with the same reference. The CLI reuses its
+native context: Codex can resolve its actual thread ID and Claude exports the
+context through its session environment. MCP input injection does not imply
+shell environment injection; other client boundaries are recorded in
+[native context support](../../../docs/native-workspace-isolation.md#context-in-mcp-and-shell).
 
 Use pd-serving for prefill/decode topology, benchmark for measurement, and profiling-collection for profiler-window control.
 

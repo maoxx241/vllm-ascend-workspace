@@ -42,6 +42,21 @@ class ServingPresetTests(unittest.TestCase):
 
 
 class ServeCommandTests(unittest.TestCase):
+    def test_sources_override_applies_only_to_the_submitted_execution(self):
+        for sources in (None, {}, {"vllm": "/src/实验 with space"}):
+            client = SimpleNamespace(run=mock.Mock(return_value={"state": "queued", "execution_id": "exec-one"}))
+            args = ["--model", "/data/m", "--no-wait"]
+            if sources is not None:
+                args.extend(["--sources", json.dumps(sources)])
+            with self.subTest(sources=sources), \
+                 mock.patch.object(serve_start, "task_client", return_value=client), \
+                 mock.patch.object(serve_start, "task_id_of", return_value="task-one"), \
+                 mock.patch.object(serve_start, "load_serving_state", return_value=None), \
+                 mock.patch.object(serve_start, "save_serving_state"), \
+                 mock.patch.object(serve_start, "print_json"):
+                self.assertEqual(serve_start.main(args), 0)
+            self.assertEqual(client.run.call_args.kwargs["sources"], sources)
+
     def test_local_wrapper_and_execution_runtime_survive_the_business_receipt(self):
         client = SimpleNamespace(run=mock.Mock(return_value={"state": "queued", "execution_id": "exec-one"}))
         with tempfile.TemporaryDirectory() as tmp:

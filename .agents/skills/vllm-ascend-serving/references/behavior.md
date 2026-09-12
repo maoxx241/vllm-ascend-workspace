@@ -16,6 +16,11 @@ Use serving.py status or serving.py stop with --execution-id or --service. A ser
 
 Reuse the native task context and actual business source bindings. Choose model, parallelism and serving options from the request. Resource state and HTTP/models/first-token readiness are separate observations.
 
+An optional `--sources` repository-to-path JSON map selects sources for one
+launch; omission keeps native task defaults and `{}` selects no project sources.
+The performance collector supplies this internally for each A/B run without
+changing the task's default sources.
+
 Use pd-serving for prefill/decode topology, benchmark for measurement, and profiling-collection for profiler-window control.
 
 Progress is written to stderr; stdout contains the structured result. Remote

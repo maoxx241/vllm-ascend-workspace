@@ -82,6 +82,78 @@ def test_saved_ready_uses_checkout_selection_despite_changed_lock_and_parent_pin
     assert envs.saved_ready(checkout, target_platform='win32') == managed
 
 
+def test_business_bootstrap_uses_saved_environment_after_dependency_edit(tmp_path, monkeypatch):
+    import vaws_venv
+
+    checkout = tmp_path / 'checkout'
+    project(checkout)
+    original = ready_fixture(checkout, sys.platform)
+    monkeypatch.setenv(envs.PIN_ENV, '')
+    monkeypatch.delenv(vaws_venv.SKIP_ENV, raising=False)
+    monkeypatch.setattr(sys, 'prefix', original['root'])
+    monkeypatch.setattr(vaws_venv.os, 'execve', lambda *args: pytest.fail('business call changed environment'))
+    (checkout / 'uv.lock').write_text('version = 1\n# dependency edits in the native session\n', encoding='utf-8')
+    with pytest.raises(envs.EnvironmentError):
+        envs.native_ready(checkout)  # Maintenance still detects the changed inputs.
+    vaws_venv.ensure_workspace_interpreter(repo_root=checkout)
+    assert os.environ[envs.PIN_ENV] == original['receipt']
+    newer = ready_fixture(checkout, sys.platform)
+    assert newer['key'] != original['key']
+    vaws_venv.ensure_workspace_interpreter(repo_root=checkout)
+    assert os.environ[envs.PIN_ENV] == original['receipt']  # An explicit session pin wins.
+
+
+def test_managed_business_owner_reuses_selection_without_changing_setup_lookup(tmp_path, monkeypatch):
+    checkout = tmp_path / 'checkout'
+    project(checkout)
+    native = ready_fixture(checkout, 'linux')
+    owner = ready_fixture(checkout, 'win32')
+    monkeypatch.setenv(envs.PIN_ENV, native['receipt'])
+    monkeypatch.delenv(envs.MANAGED_PIN_ENV, raising=False)
+    (checkout / 'uv.lock').write_text('version = 1\n# in-session edit\n', encoding='utf-8')
+    assert envs.windows_ready(checkout, use_saved=True) == owner
+    with pytest.raises(envs.EnvironmentError):
+        envs.windows_ready(checkout)
+    newer = ready_fixture(checkout, 'win32')
+    monkeypatch.setenv(envs.MANAGED_PIN_ENV, owner['receipt'])
+    assert newer['key'] != owner['key']
+    assert envs.windows_ready(checkout, use_saved=True) == owner
+
+
+@pytest.mark.parametrize('explicit_pin', [False, True])
+def test_client_setup_selects_current_inputs_unless_explicitly_pinned(tmp_path, monkeypatch, explicit_pin):
+    import vaws_venv
+
+    checkout = tmp_path / 'checkout'
+    project(checkout)
+    original = ready_fixture(checkout, sys.platform)
+    (checkout / 'uv.lock').write_text('version = 1\n# changed setup inputs\n', encoding='utf-8')
+    current = ready_fixture(checkout, sys.platform)
+    envs.select_environment(checkout, original)
+    assert envs.saved_ready(checkout) == original
+    monkeypatch.setenv(envs.PIN_ENV, '')
+    monkeypatch.delenv(vaws_venv.SKIP_ENV, raising=False)
+    selected = original if explicit_pin else current
+    if explicit_pin:
+        monkeypatch.setenv(envs.PIN_ENV, original['receipt'])
+    monkeypatch.setattr(sys, 'prefix', selected['root'])
+    enter = vaws_venv.ensure_workspace_interpreter
+
+    class BootstrapObserved(Exception):
+        pass
+
+    def bootstrap(**kwargs):
+        assert kwargs['use_saved'] is False
+        enter(**{**kwargs, 'repo_root': checkout})
+        assert os.environ[envs.PIN_ENV] == selected['receipt']
+        raise BootstrapObserved
+
+    monkeypatch.setattr(vaws_venv, 'ensure_workspace_interpreter', bootstrap)
+    spec = importlib.util.spec_from_file_location('setup_bootstrap_fixture', ROOT / '.agents/scripts/vaws_client_setup.py')
+    with pytest.raises(BootstrapObserved):
+        spec.loader.exec_module(importlib.util.module_from_spec(spec))
+
+
 def test_saved_ready_without_selection_looks_up_native_but_requires_windows_configuration(tmp_path, monkeypatch):
     checkout = tmp_path / 'checkout'
     project(checkout)
@@ -118,6 +190,7 @@ def test_new_client_clears_parent_pins_and_selects_current_native_and_owner(tmp_
     monkeypatch.setenv(envs.MANAGED_PIN_ENV, old_owner['receipt'])
     def enter_native(**kwargs):
         assert envs.PIN_ENV not in os.environ and envs.MANAGED_PIN_ENV not in os.environ
+        assert kwargs['use_saved'] is False
         os.environ[envs.PIN_ENV] = native['receipt']
     monkeypatch.setattr(client, 'ensure_workspace_interpreter', enter_native)
     monkeypatch.setattr(envs, 'native_ready', lambda root: native)

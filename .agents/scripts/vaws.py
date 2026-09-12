@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Launch the installed coordinator package and the four local-first task operations.
+"""Optional CLI forwarding to the installed coordinator package.
 
-Every task-facing call goes through this launcher so one place injects the
-scaffold environment the package needs:
+This entry supplies the workspace configuration needed by package CLI calls.
+Native MCP tools and skill scripts use the package directly; they do not need
+to invoke this launcher first.
 
     VAWS_AGENT_SESSIONS_DIR   the single local task registry
     VAWS_COORDINATOR_STATE_DIR
@@ -21,7 +22,7 @@ Subcommands:
                         exec ``python -m vaws_coordinator.vaws`` of the same name
 
 Progress goes to stderr. ``status`` and ``env --json`` print one JSON object on
-stdout. ``hook``, ``task-server`` and the four task operations replace this
+stdout. ``hook``, ``task-server`` and task operations replace this
 process when the package is present.
 """
 from __future__ import annotations

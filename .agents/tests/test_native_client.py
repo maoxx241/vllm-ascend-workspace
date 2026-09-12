@@ -9,6 +9,32 @@ import sys
 from pathlib import Path
 
 
+def test_kimi_code_install_precedes_legacy_path_command(tmp_path, monkeypatch):
+    scripts = Path(__file__).resolve().parents[1] / "scripts"
+    monkeypatch.syspath_prepend(str(scripts))
+    import vaws_client
+
+    home = tmp_path / "Kimi Code home"
+    binary = home / "bin" / ("kimi.exe" if os.name == "nt" else "kimi")
+    binary.parent.mkdir(parents=True)
+    binary.touch()
+    monkeypatch.setenv("KIMI_CODE_HOME", str(home))
+    monkeypatch.setattr(shutil, "which", lambda _: "legacy-kimi-on-path")
+
+    assert vaws_client.resolve_client("kimi") == [str(binary)]
+
+
+def test_kimi_path_command_remains_available_without_dedicated_install(tmp_path, monkeypatch):
+    scripts = Path(__file__).resolve().parents[1] / "scripts"
+    monkeypatch.syspath_prepend(str(scripts))
+    import vaws_client
+
+    monkeypatch.setenv("KIMI_CODE_HOME", str(tmp_path / "missing-home"))
+    monkeypatch.setattr(shutil, "which", lambda _: "kimi-on-path")
+
+    assert vaws_client.resolve_client("kimi") == ["kimi-on-path"]
+
+
 def test_native_child_cwd_literal_arguments_and_fresh_identity(tmp_path):
     workspace = tmp_path / "工作目录 with spaces"
     workspace.mkdir()

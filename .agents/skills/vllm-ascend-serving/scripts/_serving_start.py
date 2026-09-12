@@ -397,9 +397,21 @@ def wait_for_launch(client, reply: dict[str, Any], deadline: float) -> dict[str,
     return reply
 
 
+def parse_sources(value: str) -> dict[str, str]:
+    try:
+        sources = json.loads(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("sources must be a JSON object of repository names and paths") from exc
+    if not isinstance(sources, dict) or not all(isinstance(path, str) and path for path in sources.values()):
+        raise argparse.ArgumentTypeError("sources must be a JSON object of repository names and paths")
+    return sources
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter, allow_abbrev=False)
     parser.add_argument("--context-file")
+    parser.add_argument("--sources", type=parse_sources,
+                        help="optional repository-to-path JSON for this run; omitted uses native task defaults")
     parser.add_argument("--service", default=SERVICE_NAME, help="task-scoped business name")
     parser.add_argument("--preset")
     parser.add_argument("--model")
@@ -586,6 +598,7 @@ def main(argv: list[str] | None = None) -> int:
         reply = run_command(
             client,
             command,
+            sources=args.sources,
             preflight=build_serve_command(
                 model=model, served_model_name=served_model_name, tp=tp, dp=dp,
                 extra_args=launch_extra_args, preflight_only=True,

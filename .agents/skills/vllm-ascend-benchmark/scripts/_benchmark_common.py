@@ -570,7 +570,7 @@ def assemble_config(
 # Serving skill wrappers
 # ---------------------------------------------------------------------------
 
-def call_serve_start(config: BenchConfig) -> dict[str, Any]:
+def call_serve_start(config: BenchConfig, *, sources: dict[str, str] | None = None) -> dict[str, Any]:
     """Call serving.py start and return its JSON output.
 
     The subprocess is bounded by the effective health timeout (config value,
@@ -579,7 +579,10 @@ def call_serve_start(config: BenchConfig) -> dict[str, Any]:
     raised error carries the watchdog note from ``_run_json_command_streaming``.
     """
     script = str(SERVING_SCRIPTS / "serving.py")
-    cmd = [sys.executable, script, "start"] + config.to_serve_start_args()
+    cmd = [sys.executable, script, "start"]
+    if sources is not None:
+        cmd.extend(["--sources", json.dumps(sources, ensure_ascii=False)])
+    cmd.extend(config.to_serve_start_args())
 
     health_timeout = (
         config.health_timeout
