@@ -75,7 +75,7 @@ def configure_target(client: str, target: Path, receipt: dict, environment: dict
     if client == "kimi":
         # One installed Kimi lifecycle adapter routes each native event to its
         # selected environment; a new worktree must not append global hooks.
-        arguments += ["--kimi-config", str(target / ".vaws-local/kimi-hooks.toml")]
+        arguments += ["--kimi-config", str(target / ".vaws-local/kimi-hooks.toml"), "--kimi-session-setup"]
     run(arguments, cwd=target, env={**environment, PIN_ENV: receipt["receipt"]}, timeout=120)
 
 

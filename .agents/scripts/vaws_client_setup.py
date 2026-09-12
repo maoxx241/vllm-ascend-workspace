@@ -691,7 +691,8 @@ def configuration(client, project, *, kimi_config=None, task_only=False):
     return build_plan(client, project, kimi_config=kimi_config, task_only=task_only)["files"]
 
 
-def build_plan(client, project, *, kimi_config=None, task_only=False, kimi_session_setup=False):
+def build_plan(client, project, *, kimi_config=None, task_only=False, kimi_session_setup=False,
+               cursor_global_mcp=False):
     project = project.expanduser().resolve(strict=True)
     env = launch_env(client, project, kimi_config=kimi_config)
     groups = hook_groups(client, project, env)
@@ -789,8 +790,16 @@ def build_plan(client, project, *, kimi_config=None, task_only=False, kimi_sessi
             for event in events
         )
         files[path] = managed_toml_text(original, "session-" + project_key, body)
+        if extended:
+            from vaws_kimi_config import add_kimi_user_mcp
+            add_kimi_user_mcp(files, notes, project, ROOT, path.parent,
+                              owned_server=owned_environment_server)
     from vaws_native_setup_config import add_native_setup
     add_native_setup(files, notes, client, project, ROOT)
+    if client == "cursor":
+        from vaws_cursor_mcp_config import add_cursor_global_mcp
+        add_cursor_global_mcp(files, notes, project, ROOT, owned_server=owned_environment_server,
+                              enable=cursor_global_mcp)
     if client == "claude":
         from vaws_claude_config import add_claude_setup
         add_claude_setup(files, notes, project, ROOT, shell_command=local_hook_command,
@@ -854,6 +863,7 @@ def main():
     parser.add_argument("--project", type=Path, default=Path.cwd())
     parser.add_argument("--kimi-config", type=Path, help="Explicit Kimi Code configuration file to edit for scoped session hooks")
     parser.add_argument("--kimi-session-setup", action="store_true", help="Enable the Kimi native SessionSetup extension after installing the patched client")
+    parser.add_argument("--cursor-global-mcp", action="store_true", help="Install generated Cursor providers once in its native user MCP configuration")
     parser.add_argument(
         "--task-only",
         action="store_true",
@@ -862,7 +872,7 @@ def main():
     parser.add_argument("--apply", action="store_true", help="Write with private backups; default is preview")
     args = parser.parse_args()
     plan = build_plan(args.client, args.project, kimi_config=args.kimi_config, task_only=args.task_only,
-                      kimi_session_setup=args.kimi_session_setup)
+                      kimi_session_setup=args.kimi_session_setup, cursor_global_mcp=args.cursor_global_mcp)
     changed = apply_plan(plan) if args.apply else [
         {"path": str(path), "sha256": hashlib.sha256(content.encode()).hexdigest()}
         for path, content in plan["files"].items()
