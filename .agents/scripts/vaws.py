@@ -37,6 +37,13 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / ".agents" / "lib"))
 from vaws_venv import ensure_workspace_interpreter  # noqa: E402
 
+if __name__ == "__main__" and sys.argv[1:2] and sys.argv[1] in {
+    "attach", "session", "run", "execution", "finish", "hook", "task-server",
+}:
+    from vaws_managed_entry import ensure_managed_entry
+    ensure_managed_entry(repo_root=ROOT, entry_file=__file__,
+                         local_options=("--project", "--parent-context", "--association"))
+
 ensure_workspace_interpreter(repo_root=ROOT)
 
 from vaws_coordinator_launch import (  # noqa: E402

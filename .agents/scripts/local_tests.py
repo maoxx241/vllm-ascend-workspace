@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run local tests with per-file/suite progress, retained logs and safe retries."""
+"""Run selected local tests with per-file/suite progress and retained logs."""
 from pathlib import Path
 import sys
 

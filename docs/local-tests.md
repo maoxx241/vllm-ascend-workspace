@@ -5,8 +5,8 @@ Status: current
 Run the workspace's local Python tests with visible progress and retained evidence:
 
 ```powershell
-python .agents/scripts/vaws_deps.py sync --locked --group dev
-uv run python .agents/scripts/local_tests.py --jobs 2 --timeout 600
+uv run --no-project python .agents/scripts/vaws_deps.py sync --locked --group dev
+uv run --no-project python .agents/scripts/local_tests.py --jobs 2 --timeout 600
 ```
 
 The default selection runs each workspace test file separately and each skill's
@@ -15,9 +15,9 @@ repository-relative files/directories to narrow the selection. These commands
 run local control-plane tests; device execution remains in managed remote runs.
 
 ```powershell
-uv run python .agents/scripts/local_tests.py .agents/tests/test_local_tests.py --heartbeat 5
-uv run python .agents/scripts/local_tests.py .agents/tests --pytest-arg=-x
-uv run python .agents/scripts/local_tests.py --rerun-failed .vaws-local/test-runs/<run>/summary.json
+uv run --no-project python .agents/scripts/local_tests.py .agents/tests/test_local_tests.py --heartbeat 5
+uv run --no-project python .agents/scripts/local_tests.py .agents/tests --pytest-arg=-x
+uv run --no-project python .agents/scripts/local_tests.py --rerun-failed .vaws-local/test-runs/<run>/summary.json
 ```
 
 The runner prints start, periodic running and completion lines to stderr with the
@@ -34,20 +34,17 @@ show `running`. A zero exit without a valid, nonempty JUnit report is an error.
 The runner exits 0 only when every case passed, 1 on test failure, 2 on an input
 or setup error, and 128 plus the signal number on a handled interruption.
 
-`--rerun-failed` reuses successful rows only when the original selection, pytest
-arguments, repository source bytes, submodule state, installed dependency records
-and file metadata,
-editable source trees, interpreter/platform and environment hash still match.
-Missing or changed logs/JUnit rerun the affected case. Changed inputs rerun the
-entire original selection. Ignored runtime files and external services are not
-part of the source fingerprint; request a fresh run when those test inputs change.
-Environment values are hashed, not copied into receipts.
+Each invocation runs the selected cases against the current code. It does not
+scan business source submodules or installed dependencies before starting, and
+it does not cache successful test results. Use a narrow selection for iteration;
+previous logs remain evidence of the code that was tested at that time.
 
-Installed packages use their METADATA, RECORD, source metadata, and each installed
-file's size, timestamps and identity. They are not rehashed byte by byte; manual
-changes that deliberately preserve all those fields require a fresh run. Source
-worktrees, including editable dependencies, are hashed by content. Preparation
-has its own progress and elapsed time so large installations are visible.
+`--rerun-failed` selects only unsuccessful or unfinished cases from a previous
+summary and runs them again. Its new summary describes those cases alone; it does
+not report earlier passing cases as newly verified. The original pytest arguments
+are retained unless `--pytest-arg` replaces them. If no cases need rerunning, the
+command exits 0 with `status: nothing_to_rerun` and does not launch pytest. Summary
+schema v2 stores this selection without whole-workspace fingerprints.
 
 Windows child trees belong to a job object created before the interpreter is
 resumed. POSIX children use a dedicated process group. Completion, failure,

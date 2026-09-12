@@ -21,6 +21,12 @@
     }
   ],
   "classification": {
+    ".agents/scripts/vaws_client.py": {
+      "responsibility": "mechanics",
+      "support_role": "supported",
+      "target_kind": "self",
+      "note": "prepare or reuse an independent editing checkout and launch a native client in its actual cwd"
+    },
     ".agents/scripts/local_tests.py": {
       "responsibility": "mechanics",
       "support_role": "harness",
@@ -487,6 +493,27 @@
       "target_kind": "local-entry",
       "note": "Trae byte-copy of the canonical payload verify script; inherits payload (no shim, no .agents/lib)",
       "target": ".agents/skills/modelscope/scripts/verify_modelscope_sha256.py"
+    },
+    ".agents/skills/vllm-ascend-serving/scripts/_serving_start.py": {
+      "responsibility": "mixed",
+      "support_role": "internal",
+      "target_kind": "local-entry",
+      "note": "internal start implementation behind the supported serving entry",
+      "target": ".agents/skills/vllm-ascend-serving/scripts/serving.py"
+    },
+    ".agents/skills/vllm-ascend-serving/scripts/_serving_status.py": {
+      "responsibility": "mixed",
+      "support_role": "internal",
+      "target_kind": "local-entry",
+      "note": "internal status implementation behind the supported serving entry",
+      "target": ".agents/skills/vllm-ascend-serving/scripts/serving.py"
+    },
+    ".agents/skills/vllm-ascend-serving/scripts/_serving_stop.py": {
+      "responsibility": "mixed",
+      "support_role": "internal",
+      "target_kind": "local-entry",
+      "note": "internal stop implementation behind the supported serving entry",
+      "target": ".agents/skills/vllm-ascend-serving/scripts/serving.py"
     },
     ".agents/skills/vllm-ascend-serving/scripts/serving.py": {
       "responsibility": "mixed",

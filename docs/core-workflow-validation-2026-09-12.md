@@ -82,7 +82,8 @@ running、日志标记、cancelled 与资源释放。Kimi Windows 同类流程
 整个结构为 2859 → 1070 bytes。异常、版本差异、完整记录和 target
 请求继续保留原始细节。
 
-五客户端 session hook 在 Windows/WSL 完成真实往返；同一份 Kimi
+五客户端已安装的 session hook 适配器在 Windows/WSL 完成事件协议回放；
+这不等同于各原生客户端已信任并加载项目 hook。同一份 Kimi
 MCP 配置经过 Windows → WSL → Windows 启动、环境变量、session 及远端
 读取验证。production 再次预览均无变更，原有用户配置与信任设置保留。
 

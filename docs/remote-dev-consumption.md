@@ -11,11 +11,12 @@ configuration. remote-dev stays independently usable with explicit
 ## 1. Installing
 
 ```bash
-python .agents/scripts/vaws_deps.py sync
-.vaws-local/venvs/linux/bin/python -c "import remote_dev.result, remote_dev.core.endpoint; print('ok')"
+uv run --no-project python .agents/scripts/vaws_deps.py sync
+uv run --no-project python .agents/scripts/vaws_deps.py status vaws-remote-dev
 ```
 
-MCP: `.vaws-local/venvs/linux/bin/python -m remote_dev.mcp.server`.
+Client setup selects the prepared interpreter and pins its ready receipt for
+`-m remote_dev.mcp.server`; no mutable workspace venv is required.
 
 ## 2. What this workspace may inject
 
@@ -39,13 +40,13 @@ user. They do not resolve `session_id` / `machine` through a consumer plugin.
 
 ## 4. Client wiring
 
-`python3 .agents/scripts/vaws_client_setup.py` writes the `remote-dev` MCP
+`uv run --no-project python .agents/scripts/vaws_client_setup.py` writes the `remote-dev` MCP
 entry as `python -m remote_dev.mcp.server` with the env above. It must not
 point the server at a workspace resolver.
 
 Clients normally use their native platform interpreter. Kimi Code shares
 `.kimi-code/mcp.json` between Windows and WSL in a mounted Windows project, so
-setup uses the same project-relative Windows workspace Python for remote-dev,
+setup uses the same project-relative, per-environment Windows Python link for remote-dev,
 coordinator and knowledge. Start Kimi in that project directory; WSL launches
 the Windows executable through its normal interoperability support. Generated
 state paths use Windows spelling, and custom server commands and environment

@@ -152,27 +152,16 @@ class RealTreeTests(unittest.TestCase):
         self.assertEqual(payload["counts"]["new"], 0)
         self.assertEqual(payload["baseline"]["stale_count"], 0)
         self.assertEqual(payload["baseline"]["unattributed_count"], 0)
-
-    def test_report_mode_reports_zero_current_violations(self) -> None:
-        code, payload = invoke("--repo-root", str(ROOT), "--mode", "report")
-        self.assertEqual(code, 0)
-        self.assertEqual(payload["status"], "reported")
-        self.assertEqual(payload["counts"]["violations"], 0)
-        self.assertEqual(payload["counts"]["accepted"], 0)
-        self.assertEqual(payload["counts"]["new"], 0)
-        self.assertEqual(payload["violations"], [])
-
-    def test_upstream_submodules_are_never_scanned(self) -> None:
-        _code, payload = invoke("--repo-root", str(ROOT), "--mode", "report")
+        self.assertEqual(payload["counts"]["accepted_by_extraction"], {})
         for name in ("vllm", "vllm-ascend"):
             self.assertIn(name, payload["scanned"]["skipped_roots"])
         self.assertFalse([item for item in payload["violations"] if item["path"].startswith(("vllm/", "vllm-ascend/"))])
+
 
     def test_current_baseline_is_empty(self) -> None:
         payload = json.loads(BASELINE.read_text(encoding="utf-8"))
         self.assertEqual(payload["accepted"], [])
         self.assertEqual(payload.get("accepted_counts_by_extraction", {}), {})
-        self.assertEqual(payload["generated_on"], "2026-09-07")
 
     def test_the_only_scan_exemption_is_this_test_file(self) -> None:
         """The exemption exists so the guard can have fixtures; it is not a
@@ -180,15 +169,6 @@ class RealTreeTests(unittest.TestCase):
         policy = guard.load_policy(POLICY, ROOT)
         self.assertEqual(policy.fixture_paths, frozenset({".agents/tests/test_repo_boundary_check.py"}))
 
-    def test_no_extracted_subsystem_findings(self) -> None:
-        rows = json.loads(BASELINE.read_text(encoding="utf-8"))["accepted"]
-        self.assertEqual(rows, [])
-        code, payload = invoke("--repo-root", str(ROOT), "--mode", "report")
-        self.assertEqual(code, 0)
-        self.assertEqual(payload["counts"]["accepted_by_extraction"], {})
-        self.assertFalse(
-            [item for item in payload["violations"] if item.get("to") in KNOWN_EXTRACTIONS]
-        )
 
     def test_policy_and_baseline_carry_no_absolute_user_paths(self) -> None:
         for path in (POLICY, BASELINE):

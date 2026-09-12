@@ -9,8 +9,7 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Sequence
 
-from vaws_local_owner import managed_path, managed_python, windows_interop_env, windows_mounted_workspace
-from vaws_venv import workspace_venv_python
+from vaws_local_owner import managed_path, managed_python, managed_receipt, windows_interop_env, windows_mounted_workspace
 
 if TYPE_CHECKING:
     from vaws_knowledge.server.layers import ServiceConfig
@@ -69,9 +68,7 @@ def knowledge_server_env(repo_root: Path) -> dict[str, str]:
 
 def knowledge_owner_python(repo_root: Path) -> str:
     """A Windows-mounted workspace has one Windows knowledge database owner."""
-    return managed_python(
-        repo_root, interpreter=str(workspace_venv_python(repo_root)), require_windows=True,
-    )
+    return managed_python(repo_root)
 
 
 def knowledge_owner_path(repo_root: Path, value: object) -> str:
@@ -80,6 +77,7 @@ def knowledge_owner_path(repo_root: Path, value: object) -> str:
 
 def knowledge_owner_env(repo_root: Path) -> dict[str, str]:
     environment = knowledge_server_env(repo_root)
+    environment["VAWS_ENV_RECEIPT"] = managed_receipt(repo_root)["receipt"]
     if windows_mounted_workspace(repo_root):
         for key in ("VAWS_KNOWLEDGE_CONFIG", "VAWS_KNOWLEDGE_PROJECT_ROOTS",
                     "VAWS_KNOWLEDGE_CANDIDATE_ROOT", "VAWS_KNOWLEDGE_STATE"):
@@ -93,7 +91,10 @@ def knowledge_owner_env(repo_root: Path) -> dict[str, str]:
 
 def run_knowledge_cli(repo_root: Path, arguments: Sequence[str]) -> tuple[int, dict[str, Any]]:
     """Run the installed owner without importing its runtime into the caller."""
-    executable = knowledge_owner_python(repo_root)
+    try:
+        executable = knowledge_owner_python(repo_root)
+    except (OSError, ValueError, RuntimeError) as exc:
+        return 1, {"status": "pending", "ready": False, "reason": str(exc)}
     if not Path(executable).is_file():
         return 1, {"status": "pending", "ready": False,
                    "reason": "knowledge owner interpreter is not installed", "interpreter": executable}

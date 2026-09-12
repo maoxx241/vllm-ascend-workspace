@@ -3,13 +3,21 @@ import importlib.util
 import json
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
+from client_setup_fixtures import selected_runtime
 
 ROOT = Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location("knowledge_client_setup", ROOT / ".agents/scripts/vaws_client_setup.py")
 setup = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(setup)
+with patch("vaws_venv.ensure_workspace_interpreter"):
+    spec.loader.exec_module(setup)
+
+
+@pytest.fixture(autouse=True)
+def selected_environment(monkeypatch, tmp_path):
+    return selected_runtime(monkeypatch, setup, tmp_path)
 
 HOOK_FILES = {
     "codex": ".codex/hooks.json",

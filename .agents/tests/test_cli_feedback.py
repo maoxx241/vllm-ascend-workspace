@@ -38,14 +38,17 @@ sys.addaudithook(audit)
                 (["--help"], 0),
                 (["status", "--help"], 0),
                 (["env", "--help"], 0),
+                (["attach", "--help"], 0),
                 (["session", "--help"], 0),
                 (["run", "--help"], 0),
+                (["execution", "--help"], 0),
+                (["finish", "--help"], 0),
                 (["--unknown-option"], 2),
             ]
             for argv, expected in cases:
                 with self.subTest(argv=argv):
                     result = subprocess.run(
-                        [sys.executable, str(SCRIPT), *argv], cwd=ROOT, env=env,
+                        [sys.executable, "-X", "utf8", str(SCRIPT), *argv], cwd=ROOT, env=env,
                         capture_output=True, encoding="utf-8", timeout=15,
                     )
                     self.assertEqual(result.returncode, expected, result.stderr)

@@ -1,24 +1,22 @@
-"""Local pytest subprocesses with progress, receipts and conservative pass reuse."""
+"""Run selected local pytest suites with progress, retained results and owned children."""
 from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager
 import hashlib
-import importlib.metadata
 import json
 import math
-import os
 from pathlib import Path
-import platform
 import signal
 import subprocess
 import sys
 import time
-from urllib.parse import unquote, urlparse
 import uuid
 import xml.etree.ElementTree as ET
 
-SCHEMA = 1
+from remote_dev.core.local_process import OwnedProcess
+
+SCHEMA = 2
 FINAL = {"passed", "failed", "timed_out", "interrupted", "error", "not_run"}
 
 
@@ -30,68 +28,6 @@ def digest_file(path: Path) -> str:
         for block in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
-
-
-def digest_json(value) -> str:
-    return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
-
-
-def source_digest(root: Path, on_progress=None) -> str:
-    """Hash actual tracked/untracked source bytes, recursively including gitlinks."""
-    names = subprocess.check_output(
-        ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"], cwd=root,
-    ).decode("utf-8", errors="surrogateescape").split("\0")
-    # Uninitialized submodules still have meaningful pinned source identities.
-    index = subprocess.check_output(["git", "ls-files", "--stage", "-z"], cwd=root)
-    values = [("gitlink", row.decode("utf-8", errors="surrogateescape"))
-              for row in index.split(b"\0") if row.startswith(b"160000 ")]
-    for number, name in enumerate(sorted(set(names) - {""})):
-        if on_progress and number % 128 == 0:
-            on_progress(f"source files checked: {number}")
-        path = root / name
-        value = source_digest(path, on_progress) if path.is_dir() and (path / ".git").exists() else digest_file(path)
-        values.append((name, value, os.readlink(path) if path.is_symlink() else None))
-    return digest_json(values)
-
-
-def installed_file_signature(path: Path):
-    try:
-        stat = path.stat()
-        return [stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_ino]
-    except FileNotFoundError:
-        return "missing"
-
-
-def fingerprint(root: Path, cases: list[str], pytest_args: list[str], on_progress=None) -> dict:
-    """Hash sources; identify installed dependencies by RECORD and file metadata."""
-    packages = []
-    for dist in importlib.metadata.distributions():
-        files = []
-        for number, path in enumerate(sorted(dist.files or [], key=str)):
-            if str(path).endswith(".pyc"):
-                continue
-            if on_progress and number % 128 == 0:
-                on_progress(f"checking dependency {dist.metadata['Name']}: {number} files")
-            files.append((str(path), installed_file_signature(Path(dist.locate_file(path)))))
-        metadata = [dist.read_text(name) for name in ("METADATA", "RECORD", "direct_url.json")]
-        direct = json.loads(dist.read_text("direct_url.json") or "{}")
-        editable = None
-        if direct.get("dir_info", {}).get("editable"):
-            parsed = urlparse(direct["url"])
-            path = unquote(parsed.path)
-            if os.name == "nt" and len(path) > 2 and path[0] == "/" and path[2] == ":":
-                path = path[1:]
-            editable = source_digest(Path(path), on_progress)
-        packages.append((dist.metadata["Name"], dist.version, digest_json([files, metadata]), editable))
-    parts = {
-        "root": str(root), "sources": source_digest(root, on_progress),
-        "dependencies": digest_json(sorted(packages)),
-        "dependency_method": "installed RECORD, metadata and file stat; editable source bytes",
-        "python": [sys.executable, sys.version], "platform": platform.platform(),
-        "environment": digest_json(dict(os.environ)),
-        "cases": cases, "pytest_args": pytest_args,
-    }
-    return {"digest": digest_json(parts), "parts": parts}
 
 
 def write_receipt(path: Path, receipt: dict) -> None:
@@ -114,32 +50,15 @@ def junit_counts(path: Path) -> dict:
 
 @contextmanager
 def owned_process(command: list[str], **kwargs):
-    if os.name == "nt":
-        from vaws_windows import owned_process as windows_process
-        with windows_process(command, **kwargs) as process:
-            yield process
-        return
-    process = subprocess.Popen(command, start_new_session=True, **kwargs)
-    try:
-        yield process
-    finally:
-        # Always drain this group, including grandchildren left by a failed test.
-        try:
-            os.killpg(process.pid, signal.SIGTERM)
-        except ProcessLookupError:
-            pass
-        try:
-            process.wait(timeout=0.5)
-        except subprocess.TimeoutExpired:
-            pass
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        process.wait(timeout=5)
+    # The CLI has already entered its prepared dependency environment. Reuse
+    # the package's Windows job and POSIX group ownership, including cleanup
+    # after the direct child exits, instead of maintaining another signal path.
+    with OwnedProcess(command, **kwargs) as owner:
+        yield owner.process
 
 
 def select_cases(root: Path, selections: list[str], split: str) -> list[str]:
+    root = Path(root).resolve()
     selections = selections or [".agents/tests", *[
         str(path.relative_to(root)) for path in sorted((root / ".agents/skills").glob("*/tests"))
     ]]
@@ -159,63 +78,23 @@ def select_cases(root: Path, selections: list[str], split: str) -> list[str]:
     return sorted(found)
 
 
-def reusable(row: dict) -> bool:
-    try:
-        return (row["status"] == "passed" and row["pytest_exit_code"] == 0
-                and all(digest_file(Path(row[key])) == row[key + "_sha256"]
-                        and row[key + "_sha256"] != "missing" for key in ("log", "junit"))
-                and junit_counts(Path(row["junit"])) == row["counts"])
-    except (KeyError, TypeError, OSError, ValueError, ET.ParseError):
-        return False
-
-
 def run(root: Path, cases: list[str], *, jobs: int = 1, timeout: float = 600,
         heartbeat: float = 10, pytest_args: list[str] | None = None,
-        previous: dict | None = None, progress=sys.stderr) -> tuple[dict, int]:
+        progress=sys.stderr) -> tuple[dict, int]:
     pytest_args = pytest_args or []
     started = time.monotonic()
     output = root / ".vaws-local/test-runs" / (time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:8])
     output.mkdir(parents=True)
     receipt_path = output / "summary.json"
-    print(f"[prepare] fingerprinting sources and dependencies; summary={receipt_path}", file=progress, flush=True)
-    preparation = {"schema_version": SCHEMA, "summary": str(receipt_path),
-                   "status": "preparing", "cases": [], "elapsed_seconds": 0.0}
-    write_receipt(receipt_path, preparation)
-    last_progress = started
-
-    def preparing(message):
-        nonlocal last_progress
-        now = time.monotonic()
-        if now - last_progress >= heartbeat:
-            last_progress = now
-            preparation.update(elapsed_seconds=round(now - started, 3), preparation=message)
-            print(f"[prepare] {message}; {now - started:.1f}s", file=progress, flush=True)
-            write_receipt(receipt_path, preparation)
-
-    try:
-        identity = fingerprint(root, cases, pytest_args, on_progress=preparing)
-    except BaseException as exc:
-        preparation.update(status="error", error=str(exc), elapsed_seconds=round(time.monotonic() - started, 3))
-        write_receipt(receipt_path, preparation)
-        raise
-    same = bool(previous and previous.get("fingerprint") == identity)
-    old = {row["case"]: row for row in previous.get("cases", [])} if same else {}
     receipt = {"schema_version": SCHEMA, "summary": str(receipt_path), "status": "running",
-               "preparation_seconds": round(time.monotonic() - started, 3),
-               "fingerprint": identity, "reuse_allowed": same,
-               "reuse_reason": "inputs match" if same else "new run or inputs changed",
+               "root": str(root.resolve()), "pytest_args": pytest_args,
                "settings": {"jobs": jobs, "timeout_seconds": timeout, "heartbeat_seconds": heartbeat},
-               "cases": [], "elapsed_seconds": 0.0}
-    for index, case in enumerate(cases):
-        prior = old.get(case)
-        if prior and reusable(prior):
-            receipt["cases"].append(dict(prior, reused=True))
-            print(f"[reuse] {case}", file=progress, flush=True)
-        else:
-            receipt["cases"].append({"case": case, "status": "not_run", "reused": False,
-                "log": str(output / f"{index:04d}.log"), "junit": str(output / f"{index:04d}.xml"),
-                "pytest_exit_code": None, "elapsed_seconds": 0.0})
-    pending = [row for row in receipt["cases"] if not row["reused"]]
+               "cases": [{"case": case, "status": "not_run",
+                          "log": str(output / f"{index:04d}.log"),
+                          "junit": str(output / f"{index:04d}.xml"),
+                          "pytest_exit_code": None, "elapsed_seconds": 0.0}
+                         for index, case in enumerate(cases)], "elapsed_seconds": 0.0}
+    pending = list(receipt["cases"])
     active = []
     interrupted = []
     handlers = {}
@@ -303,34 +182,35 @@ def main(root: Path, argv: list[str] | None = None) -> int:
     parser.add_argument("--jobs", type=int, default=1)
     parser.add_argument("--timeout", type=float, default=600, help="seconds per subprocess")
     parser.add_argument("--heartbeat", type=float, default=10, help="seconds between progress lines")
-    parser.add_argument("--rerun-failed", type=Path, help="previous summary; changed inputs rerun all original cases")
+    parser.add_argument("--rerun-failed", type=Path, help="select unfinished or unsuccessful cases from a previous summary; previous passes are not revalidated")
     parser.add_argument("--pytest-arg", action="append", default=[], help="repeatable pytest argument; use = for options")
     args = parser.parse_args(argv)
     if (not 1 <= args.jobs <= 32 or not math.isfinite(args.timeout) or args.timeout <= 0
             or not math.isfinite(args.heartbeat) or args.heartbeat <= 0):
         parser.error("jobs must be 1..32; timeout and heartbeat must be positive and finite")
     try:
-        previous = None
+        extra = args.pytest_arg
+        paths = args.paths
         if args.rerun_failed:
-            if args.paths:
-                parser.error("--rerun-failed uses the original selection; omit paths")
+            if paths:
+                parser.error("--rerun-failed selects cases from the summary; omit paths")
             previous = json.loads(args.rerun_failed.read_text(encoding="utf-8"))
             if not isinstance(previous, dict) or previous.get("schema_version") != SCHEMA:
                 raise ValueError("unsupported previous summary schema")
-            parts = previous["fingerprint"]["parts"]
-            if (not isinstance(parts["cases"], list) or not all(isinstance(value, str) for value in parts["cases"])
-                    or not isinstance(parts["pytest_args"], list)
-                    or not all(isinstance(value, str) for value in parts["pytest_args"])
-                    or not isinstance(previous["cases"], list)
-                    or not all(isinstance(row, dict) and isinstance(row.get("case"), str) for row in previous["cases"])):
+            rows = previous.get("cases")
+            original_args = previous.get("pytest_args")
+            if (not isinstance(rows, list) or not all(isinstance(row, dict)
+                    and isinstance(row.get("case"), str) and row.get("status") in FINAL | {"running"} for row in rows)
+                    or not isinstance(original_args, list) or not all(isinstance(arg, str) for arg in original_args)):
                 raise ValueError("malformed previous summary")
-            cases = select_cases(root, parts["cases"], "suite")
-            extra = args.pytest_arg or parts["pytest_args"]
-        else:
-            cases = select_cases(root, args.paths, args.split)
-            extra = args.pytest_arg
+            paths = [row["case"] for row in rows if row["status"] != "passed"]
+            if not paths:
+                print(json.dumps({"schema_version": SCHEMA, "status": "nothing_to_rerun", "cases": [], "previous_summary": str(args.rerun_failed)}))
+                return 0
+            extra = extra or original_args
+        cases = select_cases(root, paths, args.split)
         result, code = run(root, cases, jobs=args.jobs, timeout=args.timeout,
-                           heartbeat=args.heartbeat, pytest_args=extra, previous=previous)
+                           heartbeat=args.heartbeat, pytest_args=extra)
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as exc:
         print(json.dumps({"schema_version": SCHEMA, "status": "error", "error": str(exc)}))
         return 2

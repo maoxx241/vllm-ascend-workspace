@@ -738,4 +738,8 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
+    _owner_args = build_parser().parse_args()
+    if not (_owner_args.host and _owner_args.port):
+        from vaws_managed_entry import ensure_managed_entry
+        ensure_managed_entry(repo_root=ROOT, entry_file=__file__)
     raise SystemExit(main())

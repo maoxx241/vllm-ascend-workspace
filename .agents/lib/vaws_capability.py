@@ -90,7 +90,7 @@ CAPABILITY_DEPS = {
     "shared_knowledge": ("vaws-knowledge",),
 }
 FLEET_REMEDY = (
-    "python3 .agents/skills/npu-fleet-monitor/scripts/manage_monitor.py deploy"
+    "uv run --no-project python .agents/skills/npu-fleet-monitor/scripts/manage_monitor.py deploy"
 )
 SOURCE_REPOS = {
     "vaws-remote-dev": "vllm-ascend-workspace/remote-dev",

@@ -1,108 +1,18 @@
-#!/usr/bin/env python3
-"""Entries that import installed packages must hop onto ``.venv``.
+"""Tests must not disable interpreter selection for subsequent test modules.
 
-CI runs these scripts under ``uv run``, which hides a missing hop. This
-test uses a system interpreter that cannot see the workspace packages.
+Actual bootstrap handoff runs through the public entry in CI. Receipt selection,
+flags, nested children and native owner behavior have dedicated process tests.
 """
-
 from __future__ import annotations
 
 import ast
-import os
 import re
-import subprocess
-import sys
 import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-# Names from vaws_venv: either one disables the hop this file is testing.
 SKIP_ENV = "VAWS_SKIP_VENV_REEXEC"
-REEXEC_ENV = "VAWS_VENV_REEXEC"
-SENTINEL = ("vaws_knowledge", "remote_dev", "vaws_coordinator")
-WRAPPERS = ("vaws_knowledge_service",)
-IMPORT_RE = re.compile(
-    r"^\s*(?:import|from)\s+("
-    + "|".join(re.escape(name) for name in (*SENTINEL, *WRAPPERS))
-    + r")\b",
-    re.MULTILINE,
-)
 TEST_FILE_RE = re.compile(r"^(test_.*|.*_test|selftest_.*|conftest)\.py$")
-
-
-def _system_python() -> str:
-    here = Path(sys.executable).resolve()
-    base = Path(sys.base_prefix) / ("python.exe" if os.name == "nt" else "bin/python3")
-    if base.is_file() and base.resolve() != here:
-        return str(base)
-    for candidate in ("/usr/bin/python3", "/bin/python3"):
-        path = Path(candidate)
-        if path.is_file() and path.resolve() != here:
-            return candidate
-    raise unittest.SkipTest("no system interpreter outside the workspace venv")
-
-
-def _entry_roots() -> list[Path]:
-    roots = [ROOT / ".agents" / "scripts", ROOT / ".agents" / "hooks"]
-    skills = ROOT / ".agents" / "skills"
-    if skills.is_dir():
-        roots.extend(sorted(skills.glob("*/scripts")))
-    return roots
-
-
-def _is_entry(path: Path) -> bool:
-    if path.name.startswith("_") or path.suffix != ".py":
-        return False
-    text = path.read_text(encoding="utf-8")
-    return 'if __name__ == "__main__"' in text or "if __name__ == '__main__'" in text
-
-
-def _imports_installed_package(path: Path) -> bool:
-    return bool(IMPORT_RE.search(path.read_text(encoding="utf-8")))
-
-
-def packaged_entries() -> list[Path]:
-    found: list[Path] = []
-    for root in _entry_roots():
-        if not root.is_dir():
-            continue
-        for path in sorted(root.glob("*.py")):
-            if TEST_FILE_RE.match(path.name):
-                continue  # Test runners execute cases; they are not --help CLIs.
-            if _is_entry(path) and _imports_installed_package(path):
-                found.append(path)
-    return found
-
-
-class VenvReexecEntryTests(unittest.TestCase):
-    def test_packaged_entries_help_without_module_not_found(self) -> None:
-        interpreter = _system_python()
-        entries = packaged_entries()
-        self.assertTrue(entries)
-        self.assertIn(ROOT / ".agents/scripts/knowledge_setup.py", entries)
-        env = os.environ.copy()
-        env.pop("VIRTUAL_ENV", None)
-        env.pop("PYTHONPATH", None)
-        env.pop(SKIP_ENV, None)
-        env.pop(REEXEC_ENV, None)
-        env["PYTHONNOUSERSITE"] = "1"
-        failures: list[str] = []
-        for path in entries:
-            completed = subprocess.run(
-                [interpreter, str(path), "--help"],
-                check=False,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                input="",
-                timeout=30,
-                env=env,
-                cwd=str(ROOT),
-            )
-            blob = completed.stdout + completed.stderr
-            if completed.returncode != 0 or "ModuleNotFoundError" in blob:
-                failures.append(f"{path.relative_to(ROOT)}: exit={completed.returncode} {blob[-1000:]}")
-        self.assertEqual(failures, [])
 
 
 def _const_str(node: ast.AST | None) -> str | None:

@@ -39,7 +39,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--client", required=True)
     parser.add_argument("--project", required=True, type=Path)
+    parser.add_argument("--environment-receipt", help=argparse.SUPPRESS)
     args = parser.parse_args()
+    if args.environment_receipt:
+        os.environ["VAWS_ENV_RECEIPT"] = args.environment_receipt
     try:
         # This optional hook must not interrupt a completed response when the
         # package or workspace environment is unavailable.

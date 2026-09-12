@@ -930,4 +930,12 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
+    _owner_args = _build_parser().parse_args()
+    if not (_owner_args.host and _owner_args.port):
+        from vaws_managed_entry import ensure_managed_entry
+        _local = ["--manifest", "--local-output-dir"]
+        _local.extend(option for option, value in (("--model-config", _owner_args.model_config),
+                                                   ("--hardware-profile", _owner_args.hardware_profile))
+                      if value and Path(value).is_file())
+        ensure_managed_entry(repo_root=_ROOT, entry_file=__file__, local_options=_local)
     raise SystemExit(main())

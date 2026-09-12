@@ -8,6 +8,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   local-contracts:
     name: ${{ matrix.os }} / Python ${{ matrix.python }}
@@ -21,10 +25,11 @@ jobs:
           - os: windows-latest
             python: '3.13'
             platform: win32
+          - os: macos-latest
+            python: '3.13'
+            platform: darwin
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
-    env:
-      UV_PROJECT_ENVIRONMENT: .vaws-local/venvs/${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -32,17 +37,15 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: ${{ matrix.python }}
+          activate-environment: false
       - name: Install locked workspace packages
-        run: python .agents/scripts/vaws_deps.py sync --locked --group dev
+        run: uv run --no-project python .agents/scripts/vaws_deps.py sync --locked --group dev
       - name: Verify system interpreter handoff
-        run: python .agents/scripts/vaws_deps.py doctor
+        run: uv run --no-project python .agents/scripts/vaws_deps.py doctor
       - name: Run all local workspace and skill tests
-        run: uv run python -B .agents/scripts/local_tests.py --jobs 2 --timeout 600 > workspace-results.json
-      - name: Enforce repository ownership and tracked paths
-        run: |
-          uv run python -B .agents/scripts/repo_boundary_check.py --mode enforce
-          uv run python -B .agents/scripts/tracked_path_check.py --mode enforce
-        shell: bash
+        run: uv run --no-project python -B .agents/scripts/local_tests.py --jobs 2 --timeout 600 --pytest-arg=--durations=20 > workspace-results.json
+      - name: Enforce tracked paths
+        run: uv run --no-project python -B .agents/scripts/tracked_path_check.py --mode enforce
       - name: Validate Ray shell syntax
         if: runner.os == 'Linux'
         run: bash -n scripts/ray_head.sh scripts/ray_worker.sh

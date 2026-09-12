@@ -445,4 +445,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
+    if build_parser().parse_args().action == "normalize":
+        from vaws_managed_entry import ensure_managed_entry
+        ensure_managed_entry(repo_root=ROOT, entry_file=__file__, local_options=("--summary-csv", "--output"))
     raise SystemExit(main())

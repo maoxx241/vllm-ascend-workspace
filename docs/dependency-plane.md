@@ -20,10 +20,11 @@ names public git+https sources because `vaws-coordinator` depends on
 | `vaws-knowledge` | `vaws_knowledge` | from `pyproject.toml` | process-in import + MCP |
 | `vaws-top` | — | uvx only | fleet dashboard; not imported |
 
-`python .agents/scripts/vaws_deps.py sync` runs uv with an automatically selected
-environment under `.vaws-local/venvs/<sys.platform>`. Windows uses `win32` and WSL
-uses `linux`, so a shared checkout retains both installations. `uv.lock` records
-the resolved commits.
+`uv run --no-project python .agents/scripts/vaws_deps.py sync` prepares a locked,
+immutable environment in the operating system's user data directory. Its key
+includes dependency inputs, Python identity, platform, architecture and selected
+groups/extras. Workspaces with identical inputs reuse that environment; changing
+dependencies prepares a new one. `uv.lock` records the resolved commits.
 CI validates the lock by running `vaws_deps.py sync --locked`. Do not copy those
 SHAs into workflows.
 
@@ -54,14 +55,14 @@ git.
 
 `off_spec` warns but does not block execution. `missing` makes capabilities
 that depend on the package unavailable. The remedy for every package gap is
-`python .agents/scripts/vaws_deps.py sync`.
+`uv run --no-project python .agents/scripts/vaws_deps.py sync`.
 
 ## Commands
 
 ```bash
-python3 .agents/scripts/vaws_deps.py status
-python3 .agents/scripts/vaws_deps.py doctor
-python3 .agents/scripts/vaws_deps.py sync
+uv run --no-project python .agents/scripts/vaws_deps.py status
+uv run --no-project python .agents/scripts/vaws_deps.py doctor
+uv run --no-project python .agents/scripts/vaws_deps.py sync
 ```
 
 `status` inspects only the three `pyproject.toml` packages. `vaws-top` is
@@ -71,12 +72,15 @@ not a package and is not part of `status` or its exit code.
 stderr. `doctor` is Result Envelope v1 (`vaws.result-envelope.v1`). That
 envelope is not `remote-dev.result.v1`. A missing `uvx` degrades
 `fleet_observation`; the remedy is
-`python3 .agents/skills/npu-fleet-monitor/scripts/manage_monitor.py deploy`.
+`uv run --no-project python .agents/skills/npu-fleet-monitor/scripts/manage_monitor.py deploy`.
 
-`sync` is the bootstrap and works before packages are installed. It forwards uv
-options such as `--locked`, `--group dev`, cache placement and offline mode. It
-sets `UV_PROJECT_ENVIRONMENT` itself. An ordinary command never installs packages
-as a side effect.
+`sync` is the bootstrap and works before packages are installed. It accepts
+`--locked`, groups/extras, `--python`, cache placement, link mode and offline
+options; unsupported flags and mutable local dependencies fail explicitly. It
+installs at the final path under a per-key OS lock and publishes the ready receipt
+last. The selected base Python and store paths are resolved to physical paths so
+an interpreter alias change cannot replace a running client's dependencies.
+An ordinary command reads the ready receipt and never installs packages.
 
 After a successful install, `sync` runs the installed knowledge package's
 `prepare --project ROOT` command. This prepares the model and local index before
@@ -84,22 +88,22 @@ normal use. The JSON retains the dependency install result and reports
 `knowledge.status` and `knowledge.ready` separately. Pending knowledge does not
 change a successful dependency install's exit code or block ordinary tools.
 
-Entry scripts select the platform environment when their packages are missing.
-An explicitly supplied interpreter with usable packages is respected. Interpreter
-flags and `-m` module calls survive re-execution; native Windows launches use UTF-8
-and retain child-process ownership. A missing installation returns the bootstrap
-command as its remedy. Client setup selects the interpreter for each MCP/hook
-entry. In a checkout shared by Windows and WSL, managed task entries use the
-installed Windows coordinator and Windows paths so both clients share one owner.
-Same-drive Kimi project MCP entries use a project-relative Windows interpreter
-path, which launches from either platform; other entries use absolute paths.
-Run `vaws_client_setup.py --client CLIENT --project PATH --apply` to generate the
-platform configuration. Known generated task entries from this checkout's old
-`.venv` are migrated, while custom launchers and policy remain unchanged.
+Entry scripts select a prepared platform environment. Interpreter flags and `-m`
+module calls survive re-execution; native Windows launches use UTF-8 and retain
+child-process ownership. A missing installation returns the bootstrap command
+as its remedy. Native client setup pins each MCP/hook process to its ready
+receipt, so later syncs do not change its imported dependencies.
 
-Use the platform Python launcher (`py -3` on Windows, `python3` on WSL) for the
-bootstrap or workspace entry scripts. The [Windows installation guide](windows-installation.md)
-also covers same-filesystem caching and offline transfer.
+In a checkout shared by Windows and WSL, managed tasks and knowledge use the
+prepared Windows owner. A managed CLI switches owner before reading stdin or
+performing work; local analysis and explicit endpoint I/O stay native. Same-drive
+Kimi project MCP entries use a permanent per-environment junction with a relative
+Windows interpreter path. Run `uv run --no-project python
+.agents/scripts/vaws_client_setup.py --client CLIENT --project PATH --apply` to
+generate configuration; managed entries retain custom fields and foreign
+launchers. The [platform contract](platform-contract.md) describes the common
+native client entry. The [Windows installation guide](windows-installation.md)
+covers caching and offline transfer.
 
 ## Capabilities
 
@@ -120,7 +124,7 @@ release wheel.
 
 The installed `vaws-knowledge` package provides the engine and a bootstrap
 corpus. Dependency installation prepares the local model and index. For an
-explicit retry or configuration change, `python3 .agents/scripts/knowledge_setup.py`
+explicit retry or configuration change, `uv run --no-project python .agents/scripts/knowledge_setup.py`
 uses the same package preparation entry. New setup enables local knowledge and
 shared downloads; it does not create a fork or enable public contribution.
 Existing publishing configuration is preserved. `--contribute` explicitly enables

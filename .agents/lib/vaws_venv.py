@@ -1,39 +1,22 @@
-"""Select the platform-specific workspace environment when packages are missing.
+"""Select the immutable environment pinned by this client or current inputs.
 
-The bootstrap command is ``python .agents/scripts/vaws_deps.py sync``. Windows
-and WSL environments coexist below .vaws-local/venvs. Original interpreter
+The bootstrap command is ``uv run --no-project python .agents/scripts/vaws_deps.py sync``. Windows
+and WSL environments coexist in the per-user content-addressed store. Interpreter
 flags and module entry points survive the hop. Native Windows owns the child
 process tree and emits UTF-8 JSON independently of the terminal code page.
 """
 from __future__ import annotations
 
-import importlib.util
 import os
 import sys
 from pathlib import Path
 
+from vaws_environment import EnvironmentError, PIN_ENV, native_ready
+
 REEXEC_ENV = "VAWS_VENV_REEXEC"
 SKIP_ENV = "VAWS_SKIP_VENV_REEXEC"
 SENTINEL_PACKAGES = ("remote_dev", "vaws_coordinator")
-REMEDY = "python .agents/scripts/vaws_deps.py sync"
-
-
-def workspace_venv_root(repo_root: Path) -> Path:
-    """Keep native Windows and WSL interpreters separate in a shared checkout."""
-    return Path(repo_root) / ".vaws-local" / "venvs" / sys.platform
-
-
-def workspace_venv_python(repo_root: Path) -> Path:
-    root = workspace_venv_root(repo_root)
-    if os.name == "nt":
-        windows = root / "Scripts" / "python.exe"
-        return windows
-    posix = root / "bin" / "python"
-    return posix
-
-
-def _packages_importable(packages: tuple[str, ...] = SENTINEL_PACKAGES) -> bool:
-    return all(importlib.util.find_spec(name) is not None for name in packages)
+REMEDY = "uv run --no-project python .agents/scripts/vaws_deps.py sync"
 
 
 def configure_windows_stdio() -> None:
@@ -47,22 +30,33 @@ def configure_windows_stdio() -> None:
 def ensure_workspace_interpreter(
     *, repo_root: Path, packages: tuple[str, ...] = SENTINEL_PACKAGES,
 ) -> None:
-    """Select this platform's managed environment when it has been installed."""
+    """Choose by dependency identity; importability alone never selects a runtime."""
     configure_windows_stdio()
     if os.environ.get(SKIP_ENV) == "1":
         return
-    if os.environ.get(REEXEC_ENV) == "1":
-        return
-    available = _packages_importable(packages)
+    try:
+        receipt = native_ready(repo_root)
+    except EnvironmentError as exc:
+        sys.stderr.write(f"{exc}; run `{REMEDY}` before starting a new client.\n")
+        raise SystemExit(2) from exc
+    venv_python = Path(receipt["python"])
     needs_utf8 = os.name == "nt" and not sys.flags.utf8_mode
-    if available:
+    # POSIX bin/python is a symlink to the base executable. Comparing resolved
+    # executables alone would falsely accept an unrelated base environment.
+    same_environment = Path(sys.prefix).resolve() == Path(receipt["root"]).resolve()
+    if same_environment and not needs_utf8:
+        os.environ[PIN_ENV] = receipt["receipt"]
+        os.environ.pop(REEXEC_ENV, None)
         return
-    venv_python = workspace_venv_python(repo_root)
-    if Path(sys.executable).absolute() == venv_python.absolute() and not needs_utf8:
-        return
+    if not same_environment and os.environ.get(REEXEC_ENV) == receipt["key"]:
+        sys.stderr.write("the selected interpreter did not enter its ready environment\n")
+        raise SystemExit(2)
     if venv_python.is_file():
         env = os.environ.copy()
-        env[REEXEC_ENV] = "1"
+        env[REEXEC_ENV] = receipt["key"]
+        env[PIN_ENV] = receipt["receipt"]
+        env.pop("PYTHONHOME", None)
+        env.pop("VIRTUAL_ENV", None)
         executable = os.fsdecode(venv_python)
         original = getattr(sys, "orig_argv", None)
         if original is None:
@@ -78,7 +72,7 @@ def ensure_workspace_interpreter(
             raise SystemExit(run_owned(argv, env=env))
         os.execve(executable, argv, env)
     sys.stderr.write(
-        "workspace packages are not importable and the workspace venv python is missing; "
+        "the selected ready interpreter is missing; "
         f"install them with `{REMEDY}` "
         "before running the entry again.\n"
     )

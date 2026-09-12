@@ -9,10 +9,12 @@ implemented behavior or a new runtime requirement for current clients.
 
 ## Proposed target designs
 
-- [native-workspace-isolation.md](native-workspace-isolation.md) — native cwd and Git worktree ownership, current attachment/source fixes, and the remaining immutable local environment proposal.
 - [vaws-core-redesign.md](vaws-core-redesign.md) — breaking redesign direction; fixed execution inputs and scoped reuse are implemented in coordinator 0.4, while remaining proposals are distinguished from the current API.
 
 ## Current contracts
+
+- [platform-contract.md](platform-contract.md) — common Windows/macOS/Linux entry points, literal process arguments, native owners and immutable environments.
+- [native-workspace-isolation.md](native-workspace-isolation.md) — independent native editing directories, exact Git state copying, attachment ownership and fixed local dependency environments.
 
 - [design-principles.md](design-principles.md) — nine governing principles; total Agent task cost takes priority, tools stay bounded, knowledge is advisory, and valid work is reused.
 - [windows-installation.md](windows-installation.md) — PowerShell setup, same-filesystem uv cache and verified offline transfer.

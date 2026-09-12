@@ -8,21 +8,22 @@ Python, uv and Git first. The validated combination is Python 3.13.12 and uv
 be validated again for another platform, interpreter or uv version. See the
 [installation measurements](installation-feedback-2026-09-11.md).
 
-## Online installation with a cache on the workspace drive
+## Online installation with a reusable user cache
 
 ```powershell
 $workspaceRoot = (Get-Location).Path
-$cachePath = Join-Path $workspaceRoot '.vaws-local\uv-cache'
-python .agents/scripts/vaws_deps.py sync --locked --group dev --python 3.13 --no-python-downloads --cache-dir $cachePath --link-mode hardlink
+$cachePath = Join-Path $env:LOCALAPPDATA 'vaws\offline-preparation-cache'
+uv run --no-project python .agents/scripts/vaws_deps.py sync --locked --group dev --python 3.13 --cache-dir $cachePath --link-mode hardlink
 if ($LASTEXITCODE -ne 0) { throw 'Dependency installation failed' }
-& .\.vaws-local\venvs\win32\Scripts\python.exe .agents/scripts/vaws_deps.py doctor
+uv run --no-project python .agents/scripts/vaws_deps.py doctor
 if ($LASTEXITCODE -ne 0) { throw 'Dependency inspection failed' }
 ```
 
 `--cache-dir` applies to this command. Keep using the same cache path on later
-syncs. A local cache on the same filesystem as the platform environment permits hardlinks;
-cross-filesystem installations fall back to copying. This matters when the
-workspace is on a different drive from the default user cache. A junction or
+syncs. The default environment store is under local application data, outside the
+checkout. A cache on the same filesystem permits hardlinks; cross-filesystem
+installations fall back to copying. The ready receipt records the physical store
+path, including MSIX application-data redirection where present. A junction or
 mounted directory can still cross filesystems despite sharing a drive letter.
 Use `--link-mode copy` when the destination filesystem cannot hardlink.
 No global uv settings need to change. See
@@ -31,8 +32,9 @@ and [uv sync options](https://docs.astral.sh/uv/reference/cli/#uv-sync).
 
 `--group dev` includes the local test dependencies. Omitting it does not remove
 the three required runtime packages or the default knowledge capability.
-`--no-python-downloads` makes a missing interpreter visible immediately; install
-Python before continuing.
+The environment builder resolves the selected Python to its physical versioned
+path. Install that Python before preparing an offline bundle. It accepts only
+options represented in the immutable build contract; unknown options fail.
 
 ## Prepare an offline bundle while online
 
@@ -46,7 +48,8 @@ $bundlePath = Join-Path $workspaceRoot ('.vaws-local\offline-bundle-' + (Get-Dat
 if (Test-Path -LiteralPath $bundlePath) { throw 'Choose a new bundle directory' }
 New-Item -ItemType Directory -Path $bundlePath -ErrorAction Stop | Out-Null
 Copy-Item -LiteralPath $cachePath -Destination (Join-Path $bundlePath 'uv-cache') -Recurse -Force -ErrorAction Stop
-$pythonIdentity = & .\.vaws-local\venvs\win32\Scripts\python.exe -c 'import platform, sysconfig; print(platform.python_version(), sysconfig.get_platform())'
+$receipt = uv run --no-project python -c 'import sys,json; from pathlib import Path; sys.path.insert(0,".agents/lib"); from vaws_environment import native_ready; print(json.dumps(native_ready(Path.cwd())))' | ConvertFrom-Json
+$pythonIdentity = & $receipt.python -c 'import platform, sysconfig; print(platform.python_version(), sysconfig.get_platform())'
 if ($LASTEXITCODE -ne 0) { throw 'Cannot read Python identity' }
 $manifest = [ordered]@{
     uv = (uv --version)
@@ -78,23 +81,25 @@ $workspaceRoot = (Get-Location).Path
 # $bundlePath is the actual transferred bundle directory selected by the Agent.
 $manifest = Get-Content -LiteralPath (Join-Path $bundlePath 'manifest.json') -Raw -ErrorAction Stop | ConvertFrom-Json
 if ((uv --version) -ne $manifest.uv) { throw 'Install the uv version recorded in manifest.json' }
-$pythonIdentity = py -3.13 -c 'import platform, sysconfig; print(platform.python_version(), sysconfig.get_platform())'
+$preparedPython = uv python find --offline 3.13
+if ($LASTEXITCODE -ne 0) { throw 'Install the prepared Python interpreter first' }
+$pythonIdentity = & $preparedPython -c 'import platform, sysconfig; print(platform.python_version(), sysconfig.get_platform())'
 if ($LASTEXITCODE -ne 0) { throw 'Install the prepared Python interpreter first' }
 if ($pythonIdentity -ne $manifest.python) { throw 'Python version or platform differs from the prepared cache' }
 if ((Get-FileHash -LiteralPath 'pyproject.toml' -Algorithm SHA256).Hash -ne $manifest.pyproject_sha256) { throw 'pyproject.toml differs from the bundle' }
 if ((Get-FileHash -LiteralPath 'uv.lock' -Algorithm SHA256).Hash -ne $manifest.lock_sha256) { throw 'uv.lock differs from the bundle' }
-$cachePath = Join-Path $workspaceRoot ('.vaws-local\offline-cache-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
+$cachePath = Join-Path $env:LOCALAPPDATA ('vaws\offline-cache-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
 if (Test-Path -LiteralPath $cachePath) { throw 'Choose a new cache directory' }
 New-Item -ItemType Directory -Path (Split-Path -Parent $cachePath) -Force -ErrorAction Stop | Out-Null
 Copy-Item -LiteralPath (Join-Path $bundlePath 'uv-cache') -Destination $cachePath -Recurse -Force -ErrorAction Stop
-python .agents/scripts/vaws_deps.py sync --locked --group dev --python 3.13 --offline --no-python-downloads --cache-dir $cachePath --link-mode hardlink
+uv run --offline --no-project --python $preparedPython python .agents/scripts/vaws_deps.py sync --locked --group dev --python $preparedPython --offline --cache-dir $cachePath --link-mode hardlink
 if ($LASTEXITCODE -ne 0) { throw 'Offline sync failed; retain the output and prepare the missing cache entries online' }
-& .\.vaws-local\venvs\win32\Scripts\python.exe .agents/scripts/vaws_deps.py doctor
+uv run --no-project python .agents/scripts/vaws_deps.py doctor
 if ($LASTEXITCODE -ne 0) { throw 'Dependency inspection failed' }
 ```
 
-The `py` command assumes the Windows Python launcher is installed; an explicit
-path to the same interpreter can replace it. `--offline` limits uv to local and
+The destination must have the same Python build available to uv; an explicit
+path to that interpreter can replace `uv python find`. `--offline` limits uv to local and
 cached data. A failure means the bundle, interpreter or selected dependencies
 are incomplete; prepare those on a connected machine with the same lock and
 retry. A changed lock needs a new prepared cache. Preserve the failed output.

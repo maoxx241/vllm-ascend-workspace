@@ -46,6 +46,10 @@ if str(LIB) not in sys.path:
 
 from vaws_venv import ensure_workspace_interpreter  # noqa: E402
 
+if __name__ == "__main__":
+    from vaws_managed_entry import ensure_managed_entry
+    ensure_managed_entry(repo_root=ROOT, entry_file=__file__)
+
 ensure_workspace_interpreter(repo_root=ROOT)
 
 import traceback

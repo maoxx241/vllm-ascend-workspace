@@ -41,6 +41,10 @@ if str(_LIB) not in sys.path:
 
 from vaws_venv import ensure_workspace_interpreter  # noqa: E402
 
+if __name__ == "__main__":
+    from vaws_managed_entry import ensure_managed_entry
+    ensure_managed_entry(repo_root=_ROOT, entry_file=__file__, local_options=("--image-path",))
+
 ensure_workspace_interpreter(repo_root=_ROOT)
 
 import argparse

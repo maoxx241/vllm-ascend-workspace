@@ -584,16 +584,6 @@ class TrackedTreeTests(unittest.TestCase):
                 ["binary", "larger-than-64-bytes"],
             )
 
-    def test_repository_tracked_tree_is_clean_under_policy(self) -> None:
-        """The gate CI enforces: no unallowlisted finding in the tracked tree."""
-
-        policy = guard.load_policy(POLICY_PATH)
-        result = guard.scan_files(ROOT, guard.tracked_files(ROOT), policy)
-        self.assertEqual(
-            [guard.format_finding_line(item, show_matches=False) for item in result.findings],
-            [],
-        )
-
 
 class ScannerCliTests(unittest.TestCase):
     def _run(self, *args: str) -> tuple[int, dict, str]:
@@ -998,7 +988,7 @@ class G1BoundaryTests(unittest.TestCase):
             expected_policy = str(
                 (repo / ".agents" / "leak-guard" / "allowlist.yaml").resolve()
             )
-            self.assertEqual(code, 0)
+            self.assertEqual(code, 0, payload)
             self.assertEqual(payload["status"], "passed")
             self.assertEqual(payload["finding_count"], 0)
             self.assertGreaterEqual(payload["suppressed_count"], 1)

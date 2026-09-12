@@ -16,17 +16,26 @@ def windows_mounted_workspace(repo_root: Path) -> bool:
     )
 
 
-def managed_python(
-    repo_root: Path, *, interpreter: str | None = None, require_windows: bool = False,
-) -> str:
-    """Reuse the existing native owner; knowledge never falls back to a second DB."""
-    candidate = repo_root / ".vaws-local/venvs/win32/Scripts/python.exe"
-    if require_windows:
-        if windows_mounted_workspace(repo_root):
-            return str(candidate)
-    elif os.name != "nt" and os.environ.get("WSL_DISTRO_NAME") and candidate.is_file():
-        return str(candidate)
-    return interpreter or sys.executable
+def managed_python(repo_root: Path) -> str:
+    """Reuse the prepared native owner; never infer it from an old venv path."""
+    from vaws_environment import native_ready, windows_ready
+    if windows_mounted_workspace(repo_root):
+        receipt = windows_ready(repo_root)
+        return accessible_windows_path(receipt["python"])
+    return str(native_ready(repo_root)["python"])
+
+
+def managed_receipt(repo_root: Path) -> dict:
+    from vaws_environment import native_ready, windows_ready
+    return windows_ready(repo_root) if windows_mounted_workspace(repo_root) else native_ready(repo_root)
+
+
+def accessible_windows_path(value: object) -> str:
+    text = str(value)
+    match = re.fullmatch(r"([a-zA-Z]):[\\/](.*)", text)
+    if os.name != "nt" and os.environ.get("WSL_DISTRO_NAME") and match:
+        return "/mnt/" + match[1].lower() + "/" + match[2].replace("\\", "/")
+    return text
 
 
 def managed_path(value: object, *, windows: bool) -> str:
