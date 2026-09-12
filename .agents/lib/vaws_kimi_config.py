@@ -6,6 +6,7 @@ from pathlib import Path
 
 from vaws_claude_config import KINDS, owned_entry
 from vaws_environment import PIN_ENV
+from vaws_local_owner import managed_path, managed_receipt, windows_mounted_workspace
 
 DERIVED_ENV = {PIN_ENV, "REMOTE_DEV_STATE_DIR", "VAWS_KNOWLEDGE_CONFIG",
                "VAWS_KNOWLEDGE_PROJECT_ROOTS", "VAWS_KNOWLEDGE_CANDIDATE_ROOT", "VAWS_KNOWLEDGE_STATE"}
@@ -19,7 +20,8 @@ def add_kimi_user_mcp(files: dict, notes: list, project: Path, root: Path, home:
         existing = user_path.read_text(encoding="utf-8") if user_path.exists() else "{}"
     user = json.loads(existing)
     user_servers = user.setdefault("mcpServers", {})
-    entry = str(root / ".agents/scripts/vaws_native_mcp.py")
+    entry = managed_path(root / ".agents/scripts/vaws_native_mcp.py", windows=windows_mounted_workspace(root))
+    bootstrap = managed_receipt(root)["python"]
     for name, server in list(local.get("mcpServers", {}).items()):
         kind = KINDS.get(tuple(server.get("args", [])))
         if kind is None or not owned_server(server, project):
@@ -33,7 +35,7 @@ def add_kimi_user_mcp(files: dict, notes: list, project: Path, root: Path, home:
                 notes.append({"path": str(user_path), "server": name, "action": "preserved",
                               "reason": "custom-user-provider"})
                 continue
-        wanted = {**server, **(prior or {}), "command": server["command"], "args": [entry, kind]}
+        wanted = {**server, **(prior or {}), "command": bootstrap, "args": [entry, kind]}
         wanted["env"] = {key: value for key, value in {**server.get("env", {}), **(prior or {}).get("env", {})}.items()
                          if key not in DERIVED_ENV}
         user_servers[name] = wanted

@@ -32,6 +32,8 @@ command recipe. Superseded designs and duplicate inventories are retained in Git
 
 ## Dated design and validation evidence
 
+- [native-client-validation-2026-09-12.md](native-client-validation-2026-09-12.md) — native worktree preparation, real client tasks and resume behavior, plus supported client extension boundaries.
+
 - [shared-root-host-validation-2026-09-12.md](shared-root-host-validation-2026-09-12.md) — four-host managed CPU work, shared weights, busy NPU queue, real SSH messages, native cache reuse and default-branch update preparation.
 - [shared-root-first-version-validation-2026-09-12.md](shared-root-first-version-validation-2026-09-12.md) — personal Fork setup, installed shared-root coordinator, messages, compiled-output reuse and idle daemon upgrade; local evidence and hardware limits.
 - [core-workflow-validation-2026-09-12.md](core-workflow-validation-2026-09-12.md) — fixed execution inputs, native rebuild/reuse/switchback, Windows/WSL clients and real-host validation, with explicit scope limits.

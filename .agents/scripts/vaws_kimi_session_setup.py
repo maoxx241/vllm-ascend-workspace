@@ -21,6 +21,7 @@ sys.path.insert(0, str(ROOT / ".agents/scripts"))
 from vaws_environment import PIN_ENV, MANAGED_PIN_ENV, saved_ready
 from vaws_workspace_update import common_dir, git
 from vaws_worktree_setup import prepare_worktree, unpinned_environment
+from vaws_native_task_env import task_env
 
 
 def scoped_source(project: Path, cwd: Path) -> Path | None:
@@ -49,6 +50,7 @@ def setup(project: Path, source: Path, payload: dict) -> dict:
 def forward(source: Path, payload: dict) -> int:
     receipt = saved_ready(source)
     environment = unpinned_environment()
+    environment.update(task_env("kimi", source))
     environment[PIN_ENV] = receipt["receipt"]
     command = [receipt["python"], str(source / ".agents/hooks/vaws_session.py"),
                "--client", "kimi", "--project", str(source),

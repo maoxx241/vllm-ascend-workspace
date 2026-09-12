@@ -41,11 +41,14 @@ def main() -> int:
     parser.add_argument("--agent-sessions-dir", default="")
     parser.add_argument("--environment-receipt", help=argparse.SUPPRESS)
     parser.add_argument("--github-identity-file", help=argparse.SUPPRESS)
+    parser.add_argument("--coordinator-state-dir", help=argparse.SUPPRESS)
     args = parser.parse_args()
     if args.agent_sessions_dir.strip():
         os.environ["VAWS_AGENT_SESSIONS_DIR"] = str(Path(args.agent_sessions_dir).expanduser())
     if args.github_identity_file:
         os.environ["VAWS_GITHUB_IDENTITY_FILE"] = str(Path(args.github_identity_file).expanduser())
+    if args.coordinator_state_dir:
+        os.environ["VAWS_COORDINATOR_STATE_DIR"] = str(Path(args.coordinator_state_dir).expanduser())
     forwarded = ["--client", args.client]
     if args.project is not None:
         forwarded += ["--project", str(args.project)]

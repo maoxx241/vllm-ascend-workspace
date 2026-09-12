@@ -124,8 +124,7 @@ ledger or paper over unfinished package behavior.
 ```python
 from vaws_coordinator.task_client import TaskClient
 
-client = TaskClient(context_file)  # native session hook; never cwd/history
-client.sources({"vllm": "/actual/vllm", "vllm-ascend": "/actual/vllm-ascend"})
+client = TaskClient()  # native context/environment; never cwd/history
 reply = client.run(
     command='"$VAWS_PYTHON" -m vllm.entrypoints.cli.main serve ... --port "$VAWS_SERVICE_PORT"',
     env=None,
@@ -144,6 +143,11 @@ client.observe(reply["execution_id"], "target", role="decode")
 client.observe(reply["execution_id"], "stop")
 client.finish()
 ```
+
+Native context supplies the attachment and its source defaults. An explicit
+`TaskClient(context_file)` is for an intentional association or a client without
+a native context channel. Use a run's `sources` only when that operation needs
+different inputs; routine skills do not fill identity or source records.
 
 `preparing` is observable pending state during long environment setup. Skills
 retain that phase and the same `execution_id`. Workflows that need a running

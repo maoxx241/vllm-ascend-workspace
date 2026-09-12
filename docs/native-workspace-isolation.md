@@ -16,37 +16,52 @@ VAWS 启动 CLI 或填写会话记录。已有目录和恢复会话保留代码�
 
 | 客户端 | 已接入的生命周期 | 当前边界 |
 |---|---|---|
-| Codex App | 选定 local environment 的 setup 回调准备客户端新建的 worktree；SessionStart 关联 VAWS | 初始化时需选 Worktree 模式和该环境；接线与契约测试已实现，真实 GUI 新会话尚未验收 |
-| Cursor | 生成的 `<project>/.cursor/worktrees.json` setup-worktree 回调准备新目录；sessionStart / preToolUse 幂等关联并内部注入 context | 使用客户端 Worktree 模式；接线与契约测试已实现，真实 GUI 新会话尚未验收 |
-| Claude Code | 现有 SessionStart 关联及工具输入注入；原生提供 WorktreeCreate 扩展 | 本轮未接入整套版本更新；创建回调后的新版 MCP 配置重载尚未确认 |
-| Grok 1.0.25 | 现有 SessionStart 关联和 PreToolUse 输入注入；原生 /new、/fork 可设自动 worktree | 未找到创建前更新回调；相关偏好为全局配置，不在项目初始化中静默修改 |
-| Kimi Code 0.42.0 | 普通 startup/resume 的 SessionStart 关联；UserPromptSubmit 提供 context | 未提供 worktree 创建回调或工具输入注入；fork 不发 SessionStart，子 Agent hook 缺稳定 child ID，不能声称已覆盖 |
+| Codex App | 选定 local environment 的 setup 准备客户端新建 worktree；SessionStart 关联 VAWS | 一次选择 Worktree 和 VAWS 环境。创建任务 API 使用原生保存的环境选择；仅写配置文件或 Git key 不等于选定。 |
+| Cursor | worktrees.json 的 setup-worktree 准备新目录；sessionStart / preToolUse 自动关联 | 一次将 Default Environment 选为 New Worktree，并使用 --cursor-global-mcp 安装用户级 VAWS providers；新目录无需重复启用项目 MCP。 |
+| Claude Code | WorktreeCreate 创建并准备目录；SessionStart 关联；MCP/Hook 启动时读取实际目录的固定环境 | 使用原生 worktree 模式。2.1.269 已验证新建与从母仓恢复；旧 2.1.143 跨目录恢复存在客户端问题。 |
+| Grok | 原生 Git worktree 创建触发项目 post-checkout；SessionStart / PreToolUse 自动关联 | 一次将 cli.worktree_type 设为 git，new_session_worktree_mode / fork_worktree_mode 设为 always。它们是全局偏好，项目 setup 只说明选择。已有 Git hook 保留给其 owner 集成。 |
+| Kimi Code | 官方 0.42.0 的 SessionStart 只关联；带 SessionSetup 扩展的个人 fork 能在创建 workspace/MCP 前准备目录 | 扩展需单独安装并显式启用，不能将官方版本描述为已支持。新建、恢复、Bash/MCP 与子 Agent 使用原生身份。 |
 
-Codex 通过[本地环境 setup](https://learn.chatgpt.com/docs/environments/local-environment)
-配置准备操作，目录由其[原生 worktree 功能](https://learn.chatgpt.com/docs/environments/git-worktrees)
-创建。Cursor 的[worktree setup](https://cursor.com/docs/configuration/worktrees)
-和[preToolUse 返回值](https://cursor.com/docs/hooks#pretooluse)分别提供准备时点
-和参数注入。Claude 的[WorktreeCreate](https://code.claude.com/docs/en/hooks#worktreecreate)
-允许客户端消费返回的路径；这项能力本身不证明新版依赖和 MCP 已接通。
+Codex 的[本地环境 setup](https://learn.chatgpt.com/docs/environments/local-environment)
+和 Cursor 的[worktree setup](https://cursor.com/docs/configuration/worktrees)在工作开始前
+准备目录。Claude 的[WorktreeCreate](https://code.claude.com/docs/en/hooks#worktreecreate)
+返回客户端采用的路径；部分版本提前读取 MCP 配置，因此生成的薄启动入口只按
+实际 cwd 读取已经选好的 receipt，再执行对应组件，不在启动时更新代码。
 
-Grok 边界依据该版本内置 help 和用户文档：SessionStart 输出被忽略，
-`new_session_worktree_mode` 只描述 /new 的偏好，不能当作所有启动方式的默认值。
-Kimi 边界依据 [0.42.0 的 session hook 实现](https://github.com/MoonshotAI/kimi-code/blob/6954d2c8bf94a5c7fc29cc6ae35b15d042cc4dcb/packages/agent-core-v2/src/features/externalHooks/session/sessionExternalHooksService.ts)
-及[官方 hook 合同](https://moonshotai.github.io/kimi-code/en/customization/hooks)：
-hook 在 cwd 确定后执行，完成结果不能替换 cwd。未支持的能力保留为客户端
-适配缺口，不通过要求 Agent 手动搬目录、轮询或额外填表来补齐。
+Grok 的普通启动可使用其原生自动 worktree 偏好；Git 创建回调只处理 Grok
+目录下刚创建的 linked worktree，普通 checkout 和其他客户端目录不受影响。
+默认的复制模式不触发这个回调。正式版 1.0.30 在 worktree 内连续 /new 或
+/fork 的目录判断仍有客户端缺陷；已安装的个人修复版基于公开源码 1.0.24，
+保留官方二进制供回退。补丁来源与实测范围见验收记录。
+
+Kimi 官方[会话 hook](https://moonshotai.github.io/kimi-code/en/customization/hooks)
+执行时 cwd 已经确定，现有插件不能替换它。个人客户端扩展增加一个有界的
+SessionSetup：在原生 workspace/MCP 创建前消费返回 cwd；恢复沿用原目录。
+消费端通过 `vaws_client_setup.py --client kimi --kimi-session-setup --apply`
+显式接入，普通官方客户端配置不会包含未知事件。现有信任策略仍由客户端处理。
+扩展模式同时配置用户级 VAWS providers，避免每个新目录重复进行项目 MCP
+初始化。Cursor 的用户级入口通过原生 `${workspaceFolder}` 获得目录，Kimi
+通过原生进程 cwd 获得目录；两者只读取该目录已准备的环境 receipt，再启动
+固定的三个组件。自定义服务器保留，工作目录不会被用于推断任务身份。
+实际通过的任务、所用版本和剩余边界见
+[原生客户端验收](native-client-validation-2026-09-12.md)。
 
 ## Context in MCP and shell
 
-MCP 工具参数和 shell 子进程环境是不同的入口，自动接入程度不能混为一谈。
-Codex、Claude、Cursor、Grok 的 task-tool hook 可在内部注入 context；
-Kimi Code 当前只把关联文本提供给 Agent，没有工具参数改写能力。
+MCP 工具参数和 shell 子进程环境是不同的入口。Codex、Claude、Cursor、Grok
+的 task-tool hook 可在内部注入 context。Kimi 扩展直接在 MCP tools/call 的
+_meta 携带原生 session/agent ID，coordinator 查找已有的对应 attachment；
+不使用共享 MCP 进程自己的 session，也不从目录猜测用户或任务。
 
-普通 skill CLI 复用 `VAWS_CONTEXT_FILE`；Codex 还可按真实原生 thread ID
-解析同一关联，Claude 的 SessionStart 可通过 `CLAUDE_ENV_FILE` 导出环境。
-Cursor 的 MCP 参数注入不会修改 shell 环境，Grok/Kimi 的现有接线也没有
-等价的 shell 注入能力。这些客户端的 shell CLI 自动关联仍是适配缺口；
-已有明确 context 可用于显式调用，但不能从 cwd、最近任务或任意用户名称推断。
+普通 skill CLI 复用 VAWS_CONTEXT_FILE。Codex、Cursor、Grok、Kimi 扩展还能按
+客户端提供的真实原生 ID 解析同一关联；Claude 通过 CLAUDE_ENV_FILE 导出
+context 和固定 receipt。Kimi 字面 main 表示根 Agent，其余 child ID 必须精确
+对应已存在的 attachment。Cursor shell 提供的 CURSOR_CONVERSATION_ID
+支持原生 UUID 会话自动关联；被编码或截断的非 UUID 值直接返回事实，不猜测
+原始身份。MCP 与 shell 的无参调用已分别验证，Agent 无需搬运 context 参数。
+
+MCP 同时在 text 和 structuredContent 返回相同的紧凑事实；full=true 才展开
+完整记录。只读取 text 的客户端也能看到任务、来源、失败原因和原始记录引用。
 
 ## 目录、身份与固定输入
 
@@ -97,6 +112,9 @@ WSL 原生 Python 与 Windows 托管 owner 分别固定，避免运行中修改 
 setup 需要由 Windows owner 执行；当前从 WSL 的 /mnt 目录调用会返回该边界，
 不自动混用两端的 Git linked-worktree 指针。Linux home 中的原生目录不自动
 获得 Windows owner 可访问性。本轮不扩大混合系统原生 worktree 的支持承诺。
+Kimi 用户级 provider 使用 Windows owner 的绝对解释器和入口路径，避免换
+worktree 后解析母目录的相对链接；该配置供原生 Windows 客户端执行，不能
+同时当作 WSL Linux 客户端的启动命令。路径生成测试不替代 Windows 实机验收。
 独立 Linux、macOS 和 Windows 的行为以相应测试与实机证据为准。完整合同见
 [platform-contract.md](platform-contract.md)。
 

@@ -52,7 +52,14 @@ or alias questionnaire.
   once during initialization; writing setup files does not select the UI mode.
   New worktree setup and session attachment then run through the client without
   an Agent launcher call. See the [client boundaries](../../../docs/native-workspace-isolation.md).
-  Preserve unrelated client configuration and native hook trust.
+  Cursor's `--cursor-global-mcp` option installs the fixed VAWS providers once
+  in the user configuration, avoiding separate project MCP setup for every new
+  directory. Select New Worktree as its default environment. Claude uses WorktreeCreate in native worktree mode. Grok uses
+  its native Git worktree preference and the project Git creation callback. Kimi
+  requires an explicitly installed SessionSetup extension for automatic directories.
+  Configuration files alone do not prove environment selection or enabled MCPs;
+  one small real task can verify the requested setup. Preserve unrelated client
+  configuration and native hook trust.
 
 Successful dependency setup also prepares knowledge. Pending model/index work
 leaves ordinary tools usable. Knowledge MCP maintains itself while alive;

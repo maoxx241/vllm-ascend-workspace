@@ -29,8 +29,9 @@ internally and can establish that same attachment if it runs first.
 
 Native Local chats retain their selected directory. Session hooks cannot move
 the parent application. Resume retains the original task, code and environment;
-there is no periodic watcher or update during work. Setup contract tests cover
-Codex/Cursor wiring, but real GUI new-session acceptance remains pending.
+there is no periodic watcher or update during work. Setup contract tests and
+real-client evidence are recorded in [native client acceptance](native-client-validation-2026-09-12.md);
+client environment selection and MCP enablement are one-time initialization choices.
 Other client capabilities and sources are listed in
 [native client boundaries](native-workspace-isolation.md). Explicit maintenance
 can use apply; see [forks and updates](forks-and-updates.md).

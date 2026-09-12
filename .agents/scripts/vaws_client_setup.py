@@ -53,6 +53,7 @@ from vaws_knowledge_service import knowledge_owner_env, knowledge_owner_path, kn
 from vaws_local_owner import managed_path as _managed_path, managed_python as _managed_python, managed_receipt, windows_interop_env, windows_mounted_workspace, accessible_windows_path
 from vaws_environment import PIN_ENV, native_ready, windows_ready, read_receipt
 from vaws_local_state import agent_sessions_root
+from vaws_native_task_env import user_task_env
 from vaws_remote_dev import state_dir
 
 CLIENTS = {"claude", "grok", "kimi", "codex", "cursor"}
@@ -136,8 +137,10 @@ def existing_task_env(client, project, *, kimi_config=None):
                 servers = json.loads(path.read_text(encoding="utf-8")).get("mcpServers") or {}
             except json.JSONDecodeError:
                 return {}
-            entry = servers.get(TASK_SERVER_NAME) or servers.get("vaws_task") or {}
-            return dict(entry.get("env") or {})
+            entry = servers.get(TASK_SERVER_NAME) or servers.get("vaws_task")
+            if entry is not None:
+                return dict(entry.get("env") or {})
+        return user_task_env(client, project, kimi_config=kimi_config)
     if client in {"codex", "grok"}:
         path = project / ("." + client) / "config.toml"
         if path.is_file():
@@ -236,6 +239,8 @@ def hook_command(client, project, env=None):
     ]
     if env.get("VAWS_GITHUB_IDENTITY_FILE"):
         argv += ["--github-identity-file", env["VAWS_GITHUB_IDENTITY_FILE"]]
+    if env.get("VAWS_COORDINATOR_STATE_DIR"):
+        argv += ["--coordinator-state-dir", managed_path(env["VAWS_COORDINATOR_STATE_DIR"])]
     return local_hook_command(argv)
 
 

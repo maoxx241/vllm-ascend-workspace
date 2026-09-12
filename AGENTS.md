@@ -44,8 +44,11 @@ No Release or per-session Agent command is required. Normal SessionStart hooks
 automatically attach the native identity and actual cwd to VAWS; resume keeps
 the existing task, code and selected environment. There is no periodic watcher
 or update during work. A plain Local chat does not acquire a worktree from a hook.
-Codex/Cursor setup wiring has contract tests; real GUI new-session acceptance
-remains pending. Other clients' supported boundaries are documented below.
+Native setup has contract tests and real-client acceptance evidence. Codex needs
+one native VAWS environment selection; Cursor uses New Worktree by default and
+the one-time `--cursor-global-mcp` setup. Claude uses WorktreeCreate; Grok uses native Git worktrees; Kimi needs the
+explicit native SessionSetup extension. Verified versions and remaining client
+boundaries are in [native client acceptance](docs/native-client-validation-2026-09-12.md).
 Explicit maintenance of an existing checkout can use
 `.agents/scripts/workspace_update.py apply`; this is not a per-task Agent step.
 Dirty sources and divergence stay for judgment when an update is needed.

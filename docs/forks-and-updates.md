@@ -20,8 +20,9 @@ Status: current
 
 Git clone 不会执行仓库代码；AGENTS.md 不是操作系统 hook，因此不声称仅 clone
 就会运行程序。初始化时一次选好原生 Worktree 模式和环境，后续新会话由客户端
-自动执行 setup，不要求 Agent 调用启动脚本。Codex / Cursor 接线已实现并有
-契约测试，真实 GUI 新会话验收仍待完成；其他客户端的能力边界见
+自动执行 setup，不要求 Agent 调用启动脚本。原生配置文件、客户端的环境选择与
+MCP 启用是不同的初始化状态，不能仅凭写文件宣称接通。实际验收记录见
+[原生客户端验收](native-client-validation-2026-09-12.md)，各客户端的能力边界见
 [原生客户端与编辑隔离](native-workspace-isolation.md)。
 身份待确认、离线或准备失败时，保留可用的本地版本；轻量 Review、目录查询
 和其他独立本地工作不需要先完成更新。
