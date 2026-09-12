@@ -13,7 +13,7 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
-from vaws_native_mode_config import add_native_mode, grok_native_defaults, kimi_session_setup_capability
+from vaws_native_mode_config import add_grok_import_dedup, add_native_mode, grok_native_defaults, kimi_session_setup_capability
 
 
 class NativeModeConfigTests(unittest.TestCase):
@@ -100,6 +100,118 @@ class NativeModeConfigTests(unittest.TestCase):
         add_native_mode(files, notes, "kimi", self.project, user_home=self.user_dir)
         self.assertFalse(files)
         self.assertFalse(notes)
+
+
+class GrokImportDedupTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.user_dir = Path(self.temporary.name)
+        self.project = self.user_dir / "project"
+        self.path = self.user_dir / ".grok/config.toml"
+        self.cursor_path = self.user_dir / ".cursor/mcp.json"
+        self.native_path = self.project / ".grok/config.toml"
+        self.args = {"remote-dev": ["-m", "remote_dev.mcp.server"],
+                     "vaws-task": ["-m", "vaws_coordinator", "task-server"],
+                     "vaws-knowledge": ["-m", "vaws_knowledge.server.mcp_server"]}
+        self.imports = {name: {"command": "python", "args": [
+            str(self.project / ".agents/scripts/vaws_native_mcp.py"), kind],
+            "env": {"VAWS_MCP_WORKSPACE": "${workspaceFolder}"}}
+            for name, kind in (("remote-dev", "remote"), ("vaws-task", "task"), ("vaws-knowledge", "knowledge"))}
+        self.native = {name.replace("-", "_"): {"command": "/prepared/python", "args": args}
+                       for name, args in self.args.items()}
+
+    def plan(self, text="", *, imports=None, native=None, project_imports=None):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_text(text)
+        self.cursor_path.parent.mkdir(parents=True, exist_ok=True)
+        self.cursor_path.write_text(json.dumps({"mcpServers": self.imports if imports is None else imports}))
+        native = self.native if native is None else native
+        native_text = "\n".join("[mcp_servers." + json.dumps(name) + "]\n" +
+                              "".join(key + " = " + json.dumps(value) + "\n" for key, value in entry.items())
+                              for name, entry in native.items())
+        files, notes = {self.native_path: native_text}, []
+        if project_imports is not None:
+            files[self.project / ".cursor/mcp.json"] = json.dumps({"mcpServers": project_imports})
+        self.run_plan(files, notes)
+        return files, notes
+
+    def run_plan(self, files, notes):
+        # The environment owner independently validates receipt/interpreter
+        # ownership. These fixtures exercise how its decision affects the plan.
+        with patch("vaws_native_mode_config.Path.home", return_value=self.user_dir), \
+                patch.dict(os.environ, {"GROK_HOME": str(self.path.parent)}):
+            add_grok_import_dedup(files, notes, self.project, self.project,
+                                  owned_server=lambda entry, project: entry.get("command") == "/prepared/python")
+
+    def test_keeps_user_config_and_other_imports_without_writing(self):
+        before = '# personal\nbanner = """\ndisabled_mcp_servers = ["text"]\n"""\ndisabled_mcp_servers = [\n"custom-disabled",\n]\n[compat.cursor]\nmcps = true\n'
+        imports = {**self.imports, "custom-server": {"command": "my-server"}}
+        files, notes = self.plan(before, imports=imports)
+        after = tomllib.loads(files[self.path])
+        self.assertEqual(after["disabled_mcp_servers"], ["custom-disabled", *self.args])
+        self.assertEqual({key: value for key, value in after.items() if key != "disabled_mcp_servers"},
+                         {key: value for key, value in tomllib.loads(before).items() if key != "disabled_mcp_servers"})
+        self.assertIn("# personal\n", files[self.path])
+        self.assertEqual(self.path.read_text(), before)
+        self.assertEqual(json.loads(self.cursor_path.read_text())["mcpServers"], imports)
+        self.assertEqual(notes[-1]["servers"], list(self.args))
+
+    def test_second_plan_is_idempotent_and_single_client_mode_does_not_dedup(self):
+        files, notes = self.plan('disabled_mcp_servers = ["remote-dev"]\n')
+        before = files.copy()
+        self.run_plan(files, notes)
+        self.assertEqual(files, before)
+        self.assertEqual(notes[-1]["action"], "configured")
+        mode_files, mode_notes = {}, []
+        add_native_mode(mode_files, mode_notes, "grok", self.project, user_home=self.user_dir)
+        self.assertEqual(tomllib.loads(mode_files[self.path])["disabled_mcp_servers"], ["remote-dev"])
+
+    def test_custom_cursor_entries_and_project_overrides_are_preserved(self):
+        custom = {"remote-dev": {"command": "custom", "args": ["other"]}}
+        custom_workspace = {**self.imports["remote-dev"], "env": {"VAWS_MCP_WORKSPACE": "/custom/project"}}
+        for imports, project_imports in (({**self.imports, **custom}, None), (self.imports, custom),
+                                        ({**self.imports, "remote-dev": custom_workspace}, None)):
+            with self.subTest(project_override=project_imports is not None):
+                files, _ = self.plan(imports=imports, project_imports=project_imports)
+                self.assertEqual(tomllib.loads(files[self.path])["disabled_mcp_servers"],
+                                 ["vaws-task", "vaws-knowledge"])
+
+    def test_only_an_enabled_owned_matching_replacement_is_sufficient(self):
+        for replacement in (None, {"command": "custom", "args": self.args["remote-dev"]},
+                            {**self.native["remote_dev"], "enabled": False},
+                            {**self.native["remote_dev"], "args": self.args["vaws-task"]}):
+            with self.subTest(replacement=replacement):
+                native = {key: value for key, value in self.native.items() if key != "remote_dev"}
+                if replacement is not None:
+                    native["remote_dev"] = replacement
+                files, _ = self.plan(native=native)
+                self.assertNotIn("remote-dev", tomllib.loads(files[self.path])["disabled_mcp_servers"])
+        files, _ = self.plan('disabled_mcp_servers = ["remote_dev"]\n')
+        self.assertEqual(tomllib.loads(files[self.path])["disabled_mcp_servers"],
+                         ["remote_dev", "vaws-task", "vaws-knowledge"])
+
+    def test_existing_same_name_grok_servers_are_preserved(self):
+        custom = {"command": "custom", "args": []}
+        for text, native in (('[mcp_servers."remote-dev"]\ncommand = "custom"\n', self.native),
+                             ("", {**self.native, "remote-dev": custom})):
+            with self.subTest(user_definition=bool(text)):
+                files, _ = self.plan(text, native=native)
+                self.assertNotIn("remote-dev", tomllib.loads(files[self.path])["disabled_mcp_servers"])
+
+    def test_unknown_or_wrong_kind_cursor_provider_is_not_disabled(self):
+        imports = dict(self.imports)
+        imports["remote-dev"] = {**imports["remote-dev"], "args": [
+            str(self.project / ".agents/scripts/vaws_native_mcp.py"), "task"]}
+        imports["vaws-task"] = {**imports["vaws-task"], "args": [
+            str(self.user_dir / "other/.agents/scripts/vaws_native_mcp.py"), "task"]}
+        files, _ = self.plan(imports=imports)
+        self.assertEqual(tomllib.loads(files[self.path])["disabled_mcp_servers"], ["vaws-knowledge"])
+
+    def test_invalid_disabled_list_is_preserved(self):
+        files, notes = self.plan('disabled_mcp_servers = "custom"\n')
+        self.assertNotIn(self.path, files)
+        self.assertEqual(notes[-1]["reason"], "grok-compat-mcp-needs-integration")
 
 
 class KimiCapabilityTests(unittest.TestCase):

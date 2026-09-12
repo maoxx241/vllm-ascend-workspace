@@ -125,6 +125,85 @@ def add_native_mode(files: dict[Path, str], notes: list, client: str,
                             "acceptance can establish that capability."})
 
 
+def _disabled_servers_text(text: str, values: list[str]) -> str:
+    """Replace the root disabled list, retaining unrelated TOML and comments."""
+    key = "disabled_mcp_servers"
+    line = key + " = " + json.dumps(values) + "\n"
+    original = tomllib.loads(text)
+    if key not in original:
+        return line + text
+    for match in re.finditer(r"(?m)^[ \t]*disabled_mcp_servers[ \t]*=", text):
+        for newline in re.finditer(r"\n|\Z", text[match.end():]):
+            end = match.end() + newline.end()
+            try:
+                prefix = tomllib.loads(text[:end])
+            except tomllib.TOMLDecodeError:
+                continue
+            if prefix.get(key) == original[key]:
+                return text[:match.start()] + line + text[end:]
+            break
+    raise ValueError("disabled_mcp_servers syntax requires manual integration")
+
+
+def add_grok_import_dedup(files: dict, notes: list, project: Path, root: Path, *, owned_server) -> None:
+    """During all-client initialization, skip our duplicate Cursor imports in Grok.
+
+    Grok merges imported providers by their exact names. Its native underscore
+    providers supersede our Cursor-only launchers; other imported servers remain.
+    """
+    from vaws_cursor_mcp_config import KINDS, document, owned_entry
+
+    user_dir = Path.home()
+    path = Path(os.environ.get("GROK_HOME", str(user_dir / ".grok"))).expanduser() / "config.toml"
+    project_path = project / ".grok/config.toml"
+    try:
+        text = files[path] if path in files else path.read_text(encoding="utf-8") if path.exists() else ""
+        original = tomllib.loads(text)
+        local_text = (files[project_path] if project_path in files else
+                      project_path.read_text(encoding="utf-8") if project_path.exists() else "")
+        local = tomllib.loads(local_text)
+        user_servers = original.get("mcp_servers", {})
+        local_servers = local.get("mcp_servers", {})
+        disabled = original.get("disabled_mcp_servers", [])
+        if (not isinstance(user_servers, dict) or not isinstance(local_servers, dict)
+                or not isinstance(disabled, list) or not all(isinstance(name, str) for name in disabled)):
+            raise ValueError("invalid Grok MCP configuration shape")
+        native = {**user_servers, **local_servers}
+        cursor = {**document(user_dir / ".cursor/mcp.json", files).get("mcpServers", {}),
+                  **document(project / ".cursor/mcp.json", files).get("mcpServers", {})}
+        duplicates = []
+        for name, kind in (("remote-dev", "remote"), ("vaws-task", "task"), ("vaws-knowledge", "knowledge")):
+            alias = name.replace("-", "_")
+            imported, replacement = cursor.get(name), native.get(alias)
+            if (name in native or alias in disabled or not isinstance(imported, dict)
+                    or not owned_entry(imported, root) or imported["args"][1] != kind
+                    or not isinstance(imported.get("env"), dict)
+                    or imported["env"].get("VAWS_MCP_WORKSPACE") != "${workspaceFolder}"
+                    or not isinstance(replacement, dict) or replacement.get("enabled") is False
+                    or replacement.get("args") != next(list(args) for args, value in KINDS.items() if value == kind)
+                    or not owned_server(replacement, project)):
+                continue
+            duplicates.append(name)
+        if not duplicates:
+            return
+        updated_names = disabled + [name for name in duplicates if name not in disabled]
+        if updated_names != disabled:
+            candidate = _disabled_servers_text(text, updated_names)
+            expected = {**original, "disabled_mcp_servers": updated_names}
+            if tomllib.loads(candidate) != expected:
+                raise ValueError("Grok disabled list edit changed unrelated settings")
+            files[path] = candidate
+        notes.append({"client": "grok", "path": str(path), "scope": "user",
+                      "action": "planned" if updated_names != disabled else "configured",
+                      "reason": "duplicate-cursor-mcp-imports", "servers": duplicates,
+                      "detail": "Disable only these VAWS Cursor imports across Grok projects; "
+                                "Cursor workspace variables are unavailable in Grok. "
+                                "Native underscore providers and other Cursor imports remain configured."})
+    except (OSError, UnicodeError, ValueError, TypeError) as exc:
+        notes.append({"client": "grok", "path": str(path), "action": "preserved",
+                      "reason": "grok-compat-mcp-needs-integration", "detail": str(exc)})
+
+
 def kimi_session_setup_capability(executable: str | Path) -> dict:
     """Ask the actual installed parser whether the SessionSetup extension exists.
 

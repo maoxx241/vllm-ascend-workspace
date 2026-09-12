@@ -899,7 +899,7 @@ def apply_plan(plan):
 def setup_installed_clients(args):
     """One-time initialization; each installed client keeps its existing builder."""
     from vaws_client_inventory import installed_clients
-    from vaws_native_mode_config import add_native_mode, grok_native_defaults, kimi_session_setup_capability
+    from vaws_native_mode_config import add_grok_import_dedup, add_native_mode, grok_native_defaults, kimi_session_setup_capability
 
     clients = {}
     for client, installation in installed_clients().items():
@@ -931,6 +931,9 @@ def setup_installed_clients(args):
                               codex_global_hooks=client == "codex", cursor_global_mcp=client == "cursor")
             row["notes"] = plan["notes"]
             add_native_mode(plan["files"], plan["notes"], client, args.project)
+            if client == "grok":
+                add_grok_import_dedup(plan["files"], plan["notes"], args.project, ROOT,
+                                      owned_server=owned_environment_server)
             row["mcp_servers"] = plan["mcp_servers"]
             row["launch_argv"], row["launch_cwd"] = plan["launch_argv"], plan["launch_cwd"]
             phase = "apply" if args.apply else "preview"

@@ -338,6 +338,13 @@ and per-client outcomes. It records the attempt once for the Git worktree
 family. Missing native actions are reported during initialization and do not
 become a check or command for ordinary tasks.
 
+After integrating current main, the primary checkout reused its prepared
+locked environment and completed an actual all-client apply for Codex,
+Cursor, Claude, Grok and Kimi without a configuration error. The generated
+initialization record and full apply output remain local. This establishes
+client wiring; the default-mode observations and limitations below are
+reported separately.
+
 Kimi's installed config doctor accepts a SessionSetup fixture and rejects an
 unknown event; initialization uses that capability rather than guessing from a
 version string. An unsupported client with existing SessionSetup configuration

@@ -47,6 +47,11 @@ Grok 的原生补丁让普通新会话也消费自动 worktree 偏好，恢复�
 /fork 的目录判断仍有客户端缺陷；已安装的个人修复版基于公开源码 1.0.24，
 保留官方二进制供回退。补丁来源与实测范围见验收记录。
 
+Grok 还会兼容导入 Cursor MCP，但不能消费 Cursor 的 workspaceFolder 替换。
+全客户端初始化在确认三个 VAWS Cursor 入口由本仓生成、且已有有效 Grok
+入口时，将这些重复名称加入 Grok 用户级 disabled_mcp_servers。Cursor
+配置和其他兼容导入保留；自定义同名入口交给 Agent 判断。
+
 Kimi 官方[会话 hook](https://moonshotai.github.io/kimi-code/en/customization/hooks)
 执行时 cwd 已经确定，现有插件不能替换它。个人客户端扩展增加一个有界的
 SessionSetup：在原生 workspace/MCP 创建前消费返回 cwd；恢复沿用原目录。
