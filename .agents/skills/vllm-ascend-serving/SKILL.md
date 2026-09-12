@@ -28,6 +28,12 @@ context explicitly.
 
 Use pd-serving for prefill/decode topology, benchmark for measurement, and profiling-collection for profiler-window control.
 
+Use `--host` before `--` to select a coordinator placement host. When the user
+authorizes sharing an occupied card, pass one explicit `--devices` card and
+`--allow-external-busy` with TP1/DP1. Coordinator still owns the execution and
+lease. Relaunch preserves these settings; `--no-allow-external-busy` restores
+exclusive admission.
+
 Read the relevant detail only when needed:
 
 - [behavior](references/behavior.md)

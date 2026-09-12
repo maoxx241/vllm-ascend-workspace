@@ -81,6 +81,7 @@ def service_resources(
     npu_count: int | None = None,
     devices: list[int] | None = None,
     service_port: int | None = 0,
+    allow_external_busy: bool = False,
 ) -> dict[str, Any]:
     """Preserve explicit resource requests for TaskClient.run validation."""
     resources: dict[str, Any] = {}
@@ -92,6 +93,8 @@ def service_resources(
         resources["npu_count"] = 1
     if service_port is not None:
         resources["service_port"] = service_port
+    if allow_external_busy:
+        resources["allow_external_busy"] = True
     return resources
 
 
