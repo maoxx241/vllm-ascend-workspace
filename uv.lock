@@ -4248,8 +4248,8 @@ dependencies = [
 
 [[package]]
 name = "vaws-knowledge"
-version = "0.5.0"
-source = { git = "https://github.com/vllm-ascend-workspace/vaws-knowledge?rev=c95293836a3b595c13a80189197d44a2980c9fbd#c95293836a3b595c13a80189197d44a2980c9fbd" }
+version = "0.6.0"
+source = { git = "https://github.com/vllm-ascend-workspace/vaws-knowledge?rev=cf5824dff7bc21b783ce6e12c605d7530b8ef651#cf5824dff7bc21b783ce6e12c605d7530b8ef651" }
 dependencies = [
     { name = "fastembed" },
     { name = "openviking" },
@@ -4285,7 +4285,7 @@ dev = [
 requires-dist = [
     { name = "pillow", specifier = ">=11" },
     { name = "vaws-coordinator", git = "https://github.com/vllm-ascend-workspace/vaws-coordinator?rev=6caa71ef6664d6d6b9cbb0e859893efec182d7f4" },
-    { name = "vaws-knowledge", git = "https://github.com/vllm-ascend-workspace/vaws-knowledge?rev=c95293836a3b595c13a80189197d44a2980c9fbd" },
+    { name = "vaws-knowledge", git = "https://github.com/vllm-ascend-workspace/vaws-knowledge?rev=cf5824dff7bc21b783ce6e12c605d7530b8ef651" },
     { name = "vaws-remote-dev", git = "https://github.com/vllm-ascend-workspace/remote-dev?rev=2de5cc32c5f3dd517e698cadfb1f9ed23589b1aa" },
 ]
 
