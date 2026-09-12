@@ -691,7 +691,7 @@ def configuration(client, project, *, kimi_config=None, task_only=False):
     return build_plan(client, project, kimi_config=kimi_config, task_only=task_only)["files"]
 
 
-def build_plan(client, project, *, kimi_config=None, task_only=False):
+def build_plan(client, project, *, kimi_config=None, task_only=False, kimi_session_setup=False):
     project = project.expanduser().resolve(strict=True)
     env = launch_env(client, project, kimi_config=kimi_config)
     groups = hook_groups(client, project, env)
@@ -772,18 +772,36 @@ def build_plan(client, project, *, kimi_config=None, task_only=False):
             files[path] = text
     if client == "kimi":
         path = kimi_config or kimi_home() / "config.toml"
-        command = groups["SessionStart"][0]["hooks"][0]["command"]
+        original = path.read_text(encoding="utf-8") if path.exists() else ""
+        project_key = hashlib.sha256(str(project).encode()).hexdigest()[:16]
+        marker = "# BEGIN VAWS session-" + project_key + "\n"
+        previous = original.split(marker, 1)[-1].split("# END VAWS session-" + project_key, 1)[0] if marker in original else ""
+        # Official Kimi 0.42 does not understand SessionSetup. Preserve an
+        # explicit extension choice on repair, and never enable it implicitly.
+        extended = kimi_session_setup or 'event = "SessionSetup"' in previous
+        command = local_hook_command(["uv", "run", "--no-project", "python",
+                                      str(ROOT / ".agents/scripts/vaws_kimi_session_setup.py"),
+                                      "--project", str(project)]) if extended else groups["SessionStart"][0]["hooks"][0]["command"]
+        events = [*( ["SessionSetup"] if extended else []), *groups]
         body = "\n".join(
             "[[hooks]]\nevent = " + json.dumps(event) + "\ncommand = " + json.dumps(command)
-            + "\ntimeout = " + str(HOOK_TIMEOUT_SECONDS) + "\n"
-            for event in groups
+            + "\ntimeout = " + str(600 if event == "SessionSetup" else HOOK_TIMEOUT_SECONDS) + "\n"
+            for event in events
         )
-        project_key = hashlib.sha256(str(project).encode()).hexdigest()[:16]
-        files[path] = managed_toml_text(path.read_text(encoding="utf-8") if path.exists() else "", "session-" + project_key, body)
+        files[path] = managed_toml_text(original, "session-" + project_key, body)
     from vaws_native_setup_config import add_native_setup
     add_native_setup(files, notes, client, project, ROOT)
+    if client == "claude":
+        from vaws_claude_config import add_claude_setup
+        add_claude_setup(files, notes, project, ROOT, shell_command=local_hook_command,
+                         parse_command=hook_argv, owned_server=owned_environment_server)
+    executable_files = []
+    if client == "grok":
+        from vaws_grok_setup_config import plan_grok_setup
+        executable_files = plan_grok_setup(files, notes, project, ROOT)
     return {
         "files": files,
+        "executable_files": executable_files,
         "mcp_servers": {name: entry["args"] for name, entry in servers.items()},
         "notes": notes,
         "task_registry": str(agent_sessions_root()),
@@ -808,7 +826,11 @@ def apply_plan(plan):
     """Write a reviewed/generated native configuration, retaining private backups."""
     changed = []
     for path, content in plan["files"].items():
+        mode = 0o700 if path in plan.get("executable_files", []) else 0o600
         if path.exists() and path.read_text(encoding="utf-8") == content:
+            if mode == 0o700 and path.stat().st_mode & 0o777 != mode:
+                path.chmod(mode)
+                changed.append({"path": str(path), "action": "executable-mode-repaired"})
             continue
         item = {"path": str(path), "sha256": hashlib.sha256(content.encode()).hexdigest()}
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -820,7 +842,7 @@ def apply_plan(plan):
             item["backup"] = str(backup)
         temporary = path.with_name(path.name + ".vaws-" + str(time.time_ns()))
         temporary.write_text(content, encoding="utf-8")
-        temporary.chmod(0o600)
+        temporary.chmod(mode)
         os.replace(temporary, path)
         changed.append(item)
     return changed
@@ -831,6 +853,7 @@ def main():
     parser.add_argument("--client", choices=sorted(CLIENTS), required=True)
     parser.add_argument("--project", type=Path, default=Path.cwd())
     parser.add_argument("--kimi-config", type=Path, help="Explicit Kimi Code configuration file to edit for scoped session hooks")
+    parser.add_argument("--kimi-session-setup", action="store_true", help="Enable the Kimi native SessionSetup extension after installing the patched client")
     parser.add_argument(
         "--task-only",
         action="store_true",
@@ -838,7 +861,8 @@ def main():
     )
     parser.add_argument("--apply", action="store_true", help="Write with private backups; default is preview")
     args = parser.parse_args()
-    plan = build_plan(args.client, args.project, kimi_config=args.kimi_config, task_only=args.task_only)
+    plan = build_plan(args.client, args.project, kimi_config=args.kimi_config, task_only=args.task_only,
+                      kimi_session_setup=args.kimi_session_setup)
     changed = apply_plan(plan) if args.apply else [
         {"path": str(path), "sha256": hashlib.sha256(content.encode()).hexdigest()}
         for path, content in plan["files"].items()

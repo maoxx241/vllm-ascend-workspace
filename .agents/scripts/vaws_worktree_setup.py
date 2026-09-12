@@ -70,9 +70,13 @@ def ready_for_target(source: Path, target: Path, environment: dict) -> dict:
 def configure_target(client: str, target: Path, receipt: dict, environment: dict) -> None:
     # The selected revision owns its wiring. No shared editing directory or
     # already-running client's hook/MCP commands are rewritten.
-    run([receipt["python"], str(target / ".agents/scripts/vaws_client_setup.py"),
-         "--client", client, "--project", str(target), "--apply"],
-        cwd=target, env={**environment, PIN_ENV: receipt["receipt"]}, timeout=120)
+    arguments = [receipt["python"], str(target / ".agents/scripts/vaws_client_setup.py"),
+                 "--client", client, "--project", str(target), "--apply"]
+    if client == "kimi":
+        # One installed Kimi lifecycle adapter routes each native event to its
+        # selected environment; a new worktree must not append global hooks.
+        arguments += ["--kimi-config", str(target / ".vaws-local/kimi-hooks.toml")]
+    run(arguments, cwd=target, env={**environment, PIN_ENV: receipt["receipt"]}, timeout=120)
 
 
 def active_submodules(target: Path, revision: str) -> dict[str, str]:

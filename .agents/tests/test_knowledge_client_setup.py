@@ -47,6 +47,9 @@ def test_all_clients_receive_knowledge_access_and_only_supported_summary_events(
     group = payload["hooks"][event][0]
     command = group["command"] if client == "cursor" else group["hooks"][0]["command"]
     arguments = setup.hook_argv(command)
+    if client == "claude":
+        assert arguments[1:3] == [str(tmp_path / ".agents/scripts/vaws_claude_entry.py"), "summary"]
+        return  # The exec entry supplies the actual native cwd and saved environment.
     assert Path(arguments[1]).name == "knowledge_summary.py"
     assert arguments[arguments.index("--client") + 1] == client
     assert arguments[arguments.index("--project") + 1] == str(tmp_path.resolve())
