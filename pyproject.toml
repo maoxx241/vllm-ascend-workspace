@@ -6,7 +6,7 @@ dependencies = [
   "Pillow>=11",
   "vaws-remote-dev==0.7.0",
   "vaws-coordinator==0.4.0",
-  "vaws-knowledge==0.3.2",
+  "vaws-knowledge==0.5.0",
 ]
 
 [dependency-groups]
@@ -23,7 +23,7 @@ package = false
 [tool.uv.sources]
 vaws-remote-dev = { git = "https://github.com/vllm-ascend-workspace/remote-dev", rev = "862e9ae4ab5e4bb8252a99cfee8629dbfeeb2597" }
 vaws-coordinator = { git = "https://github.com/vllm-ascend-workspace/vaws-coordinator", rev = "1dfd9f74a03a27a45117d9e79a32ff3550bd65ea" }
-vaws-knowledge = { git = "https://github.com/vllm-ascend-workspace/vaws-knowledge", rev = "89c273b6f3bf184614ec2463d40f91e8f048d45b" }
+vaws-knowledge = { git = "https://github.com/vllm-ascend-workspace/vaws-knowledge", rev = "e28e77e200e277ef7a6d082441858238dbe9be27" }
 
 [tool.pytest.ini_options]
 pythonpath = [".agents/lib"]
