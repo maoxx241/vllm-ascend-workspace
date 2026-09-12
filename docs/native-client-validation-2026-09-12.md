@@ -214,6 +214,11 @@ index and HEAD remained unchanged. Evidence is `native-fork-filesystem.json`,
 `native-tui-fork.raw` and `native-tui-fork-resume.raw` in the Kimi validation
 directory. The installation receipt records the exact binary hash and official
 backup under untracked `.vaws-local/client-installations/`.
+The subsequent TUI `/new` created a clean independent directory and empty
+history with all three providers connected. Returning to the original parent
+by ID restored its worktree and history. All validation TUI processes exited
+normally; the consolidated result is `kimi-final-validation.json` alongside
+the raw transcripts.
 
 ## Codex local environment selection
 
