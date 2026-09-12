@@ -74,7 +74,7 @@ def _set_scalar(text: str, table: str, key: str, value: str | bool) -> str:
 
 def add_native_mode(files: dict[Path, str], notes: list, client: str,
                     project: Path, *, user_home: Path | None = None,
-                    capability: dict | None = None, kimi_config: Path | None = None) -> None:
+                    capability: dict | None = None, kimi_tui_config: Path | None = None) -> None:
     """Append planned files/notes; the existing setup owner applies and backs up.
 
     Call only for explicitly requested one-time initialization, never from a
@@ -91,9 +91,9 @@ def add_native_mode(files: dict[Path, str], notes: list, client: str,
         return
     accepted = bool(capability and capability.get("supported") is True)
     if client == "kimi":
-        if not accepted or kimi_config is None:
+        if not accepted or kimi_tui_config is None:
             return
-        path = kimi_config
+        path = kimi_tui_config
         values = {"upgrade": {"auto_install": False}}
         reason = "preserve-native-session-extension"
         detail = ("Native automatic installation is disabled for the verified SessionSetup extension "

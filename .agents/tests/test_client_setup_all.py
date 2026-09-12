@@ -141,7 +141,13 @@ def test_all_preserves_verified_extensions_before_applying(local_setup, monkeypa
     project, _ = local_setup
     monkeypatch.setattr(inventory, "installed_clients", lambda: installations("grok", "kimi"))
     grok = project.parent / ".grok/config.toml"
-    kimi = project.parent / "custom-kimi/config.toml"
+    kimi_home = project.parent / "native-kimi-home"
+    monkeypatch.setenv("KIMI_CODE_HOME", str(kimi_home))
+    kimi = kimi_home / "tui.toml"
+    runtime_config = project.parent / "custom-kimi/config.toml"
+    runtime_config.parent.mkdir()
+    runtime_text = 'default_model = "keep-my-model"\n'
+    runtime_config.write_text(runtime_text)
     for path, text in ((grok, "[cli]\nauto_update = true\n"), (kimi, "[upgrade]\nauto_install = true\n")):
         path.parent.mkdir(parents=True)
         path.write_text(text)
@@ -154,12 +160,15 @@ def test_all_preserves_verified_extensions_before_applying(local_setup, monkeypa
 
     monkeypatch.setattr(modes, "grok_native_defaults", grok_capability)
     monkeypatch.setattr(modes, "kimi_session_setup_capability", lambda exe: {"supported": supported})
-    assert setup.main(["--client", "all", "--project", str(project), "--kimi-config", str(kimi), "--apply"]) == 0
+    assert setup.main(["--client", "all", "--project", str(project), "--kimi-config", str(runtime_config), "--apply"]) == 0
     result = json.loads(capsys.readouterr().out)
     assert probes == [("/tools/grok", project)]
     assert result["clients"]["grok"]["capability"]["supported"] is supported
     assert tomllib.loads(grok.read_text())["cli"]["auto_update"] is not supported
     assert tomllib.loads(kimi.read_text())["upgrade"]["auto_install"] is not supported
+    assert runtime_config.read_text() == runtime_text
+    assert not (runtime_config.parent / "tui.toml").exists()
+    assert not (kimi_home / "config.toml").exists()
     assert not (project.parent / ".kimi-code/config.toml").exists()
 
 

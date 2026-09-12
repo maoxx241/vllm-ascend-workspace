@@ -49,7 +49,9 @@ Grok 的原生补丁让普通新会话也消费自动 worktree 偏好，恢复�
 
 全客户端初始化保护已确认的个人客户端扩展：Grok 的安装记录与实际二进制
 匹配且已有启动/恢复验收时，设置原生 `[cli] auto_update = false`；Kimi 的实际
-parser 确认支持 SessionSetup 时，在所选配置文件设置 `[upgrade] auto_install = false`。
+parser 确认支持 SessionSetup 时，在原生 `$KIMI_CODE_HOME/tui.toml`（默认
+`~/.kimi-code/tui.toml`）设置 `[upgrade] auto_install = false`；这与运行配置
+`config.toml` 和 `--kimi-config` 无关。
 这避免官方自动安装覆盖已验收补丁。官方版或未确认构建保留原有更新设置；
 单客户端和每会话接线不调整这些偏好。
 

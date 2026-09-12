@@ -937,7 +937,7 @@ def setup_installed_clients(args):
                               codex_global_hooks=client == "codex", cursor_global_mcp=client == "cursor")
             row["notes"] = plan["notes"]
             add_native_mode(plan["files"], plan["notes"], client, args.project,
-                            capability=capability, kimi_config=args.kimi_config or kimi_home() / "config.toml")
+                            capability=capability, kimi_tui_config=kimi_home() / "tui.toml")
             if client == "grok":
                 add_grok_import_dedup(plan["files"], plan["notes"], args.project, ROOT,
                                       owned_server=owned_environment_server)

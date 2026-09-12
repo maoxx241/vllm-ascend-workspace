@@ -105,14 +105,14 @@ class NativeModeConfigTests(unittest.TestCase):
         for client, table, key in (("grok", "cli", "auto_update"), ("kimi", "upgrade", "auto_install")):
             for initial in (True, None):
                 with self.subTest(client=client, initial=initial):
-                    path = self.user_dir / (".grok" if client == "grok" else "custom-kimi") / "config.toml"
+                    path = self.user_dir / (".grok/config.toml" if client == "grok" else "custom-kimi/tui.toml")
                     path.parent.mkdir(parents=True, exist_ok=True)
                     before = "# keep user settings\n[" + table + "]\ncustom = 42\n"
                     if initial is not None:
                         before += key + " = true\n"
                     path.write_text(before, encoding="utf-8")
                     files, notes = {}, []
-                    options = {"user_home": self.user_dir, "capability": {"supported": True}, "kimi_config": path}
+                    options = {"user_home": self.user_dir, "capability": {"supported": True}, "kimi_tui_config": path}
                     add_native_mode(files, notes, client, self.project, **options)
                     after = tomllib.loads(files[path])
                     self.assertIs(after[table][key], False)
@@ -129,13 +129,13 @@ class NativeModeConfigTests(unittest.TestCase):
         for client, table, key in (("grok", "cli", "auto_update"), ("kimi", "upgrade", "auto_install")):
             for capability in (None, {"supported": False}):
                 with self.subTest(client=client, capability=capability):
-                    path = self.user_dir / (".grok" if client == "grok" else "custom-kimi") / "config.toml"
+                    path = self.user_dir / (".grok/config.toml" if client == "grok" else "custom-kimi/tui.toml")
                     path.parent.mkdir(parents=True, exist_ok=True)
                     before = "[" + table + "]\n" + key + " = true\n"
                     path.write_text(before, encoding="utf-8")
                     files, notes = {}, []
                     add_native_mode(files, notes, client, self.project, user_home=self.user_dir,
-                                    capability=capability, kimi_config=path)
+                                    capability=capability, kimi_tui_config=path)
                     self.assertIs(tomllib.loads(files.get(path, before))[table][key], True)
                     self.assertEqual(path.read_text(), before)
 
