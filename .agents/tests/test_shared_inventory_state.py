@@ -17,8 +17,9 @@ from vaws_local_state import agent_sessions_root, shared_inventory_path, shared_
 class SharedInventoryStateTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
-        self.primary = Path(self.temp.name) / "primary"
-        self.linked = Path(self.temp.name) / "linked"
+        root = Path(self.temp.name).resolve()
+        self.primary = root / "primary"
+        self.linked = root / "linked"
         subprocess.run(["git", "init", str(self.primary)], check=True, stdout=subprocess.DEVNULL)
         subprocess.run(["git", "-C", str(self.primary), "config", "user.email", "test@example.com"], check=True)
         subprocess.run(["git", "-C", str(self.primary), "config", "user.name", "Test"], check=True)
